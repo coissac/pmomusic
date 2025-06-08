@@ -2,7 +2,6 @@ package ssdp
 
 import (
 	"log"
-	"net"
 	"time"
 
 	"github.com/koron/go-ssdp"
@@ -31,13 +30,4 @@ func AnnounceRenderer(usn, location string) {
 
 	// Un jour on voudra faire ça à l'arrêt :
 	// adv.Close() // envoie le ssdp:byebye
-}
-func GetLocalIP() string {
-	conn, err := net.Dial("udp", "239.255.255.250:1900")
-	if err != nil {
-		return "127.0.0.1"
-	}
-	defer conn.Close()
-	localAddr := conn.LocalAddr().(*net.UDPAddr)
-	return localAddr.IP.String()
 }

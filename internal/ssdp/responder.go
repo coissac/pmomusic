@@ -43,14 +43,19 @@ func StartSSDPResponder(usn, location string) {
 			st := extractHeader(data, "ST")
 			log.Printf("🔎 M-SEARCH from %s, ST=%s\n", src.String(), st)
 
-			if st == "ssdp:all" || st == serviceType {
-				go sendSSDPResponse(src, usn, location)
+			if st == "ssdp:all" ||
+				st == serviceType ||
+				strings.HasPrefix(st, "urn:schemas-upnp-org:service:") ||
+				strings.HasPrefix(st, "urn:av-openhome-org:service:") ||
+				strings.HasPrefix(st, "urn:bubblesoftapps-com:service:") {
+
+				go sendSSDPResponse(src, usn, location, st)
 			}
 		}
 	}
 }
 
-func sendSSDPResponse(dst *net.UDPAddr, usn, location string) {
+func sendSSDPResponse(dst *net.UDPAddr, usn, location, st string) {
 	resp := fmt.Sprintf(
 		"HTTP/1.1 200 OK\r\n"+
 			"CACHE-CONTROL: max-age=1800\r\n"+
@@ -63,11 +68,12 @@ func sendSSDPResponse(dst *net.UDPAddr, usn, location string) {
 			"\r\n",
 		time.Now().Format(time.RFC1123),
 		location,
-		serviceType,
+		st,
 		usn,
-		serviceType,
+		st,
 	)
 
+	// envoie UDP
 	conn, err := net.DialUDP("udp4", nil, dst)
 	if err != nil {
 		log.Println("Failed to dial UDP to respond:", err)

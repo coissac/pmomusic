@@ -1,0 +1,81 @@
+<?xml version="1.0"?>
+<scpd xmlns="urn:schemas-upnp-org:service-1-0">
+  <specVersion>
+    <major>1</major>
+    <minor>0</minor>
+  </specVersion>
+  <actionList>
+    <action>
+      <name>SetAVTransportURI</name>
+      <argumentList>
+        <argument>
+          <name>InstanceID</name>
+          <direction>in</direction>
+          <relatedStateVariable>A_ARG_TYPE_InstanceID</relatedStateVariable>
+        </argument>
+        <argument>
+          <name>CurrentURI</name>
+          <direction>in</direction>
+          <relatedStateVariable>AVTransportURI</relatedStateVariable>
+        </argument>
+        <argument>
+          <name>CurrentURIMetaData</name>
+          <direction>in</direction>
+          <relatedStateVariable>AVTransportURIMetaData</relatedStateVariable>
+        </argument>
+      </argumentList>
+    </action>
+
+    <action>
+      <name>Play</name>
+      <argumentList>
+        <argument>
+          <name>InstanceID</name>
+          <direction>in</direction>
+          <relatedStateVariable>A_ARG_TYPE_InstanceID</relatedStateVariable>
+        </argument>
+        <argument>
+          <name>Speed</name>
+          <direction>in</direction>
+          <relatedStateVariable>TransportPlaySpeed</relatedStateVariable>
+        </argument>
+      </argumentList>
+    </action>
+
+    <action>
+      <name>Stop</name>
+      <argumentList>
+        <argument>
+          <name>InstanceID</name>
+          <direction>in</direction>
+          <relatedStateVariable>A_ARG_TYPE_InstanceID</relatedStateVariable>
+        </argument>
+      </argumentList>
+    </action>
+  </actionList>
+
+  <serviceStateTable>
+    <stateVariable sendEvents="no">
+      <name>A_ARG_TYPE_InstanceID</name>
+      <dataType>ui4</dataType>
+    </stateVariable>
+
+    <stateVariable sendEvents="no">
+      <name>AVTransportURI</name>
+      <dataType>string</dataType>
+    </stateVariable>
+
+    <stateVariable sendEvents="no">
+      <name>AVTransportURIMetaData</name>
+      <dataType>string</dataType>
+    </stateVariable>
+
+    <stateVariable sendEvents="no">
+      <name>TransportPlaySpeed</name>
+      <dataType>string</dataType>
+      <allowedValueList>
+        <allowedValue>1</allowedValue>
+      </allowedValueList>
+    </stateVariable>
+  </serviceStateTable>
+</scpd>
