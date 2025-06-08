@@ -4,7 +4,7 @@ import (
 	"fmt"
 )
 
-func generateDeviceDescription(usn, ip string, port uint) string {
+func generateDeviceDescription(device *DeviceDescription) string {
 	return fmt.Sprintf(`<?xml version="1.0"?>
 <root xmlns="urn:schemas-upnp-org:device-1-0">
   <specVersion>
@@ -45,7 +45,28 @@ func generateDeviceDescription(usn, ip string, port uint) string {
         <eventSubURL>/upnp/event/ConnectionManager</eventSubURL>
         <SCPDURL>/scpd/ConnectionManager.xml</SCPDURL>
       </service>
+      <service>
+        <serviceType>urn:av-openhome-org:service:Product:1</serviceType>
+        <serviceId>urn:av-openhome-org:serviceId:Product</serviceId>
+        <controlURL>/upnp/control/Product</controlURL>
+        <eventSubURL>/upnp/event/Product</eventSubURL>
+        <SCPDURL>/scpd/Product.xml</SCPDURL>
+      </service>
+      <service>
+    		<serviceType>urn:av-openhome-org:service:Playlist:1</serviceType>
+    		<serviceId>urn:av-openhome-org:serviceId:Playlist</serviceId>
+    		<controlURL>/upnp/control/Playlist</controlURL>
+    		<eventSubURL>/upnp/event/Playlist</eventSubURL>
+    		<SCPDURL>/scpd/Playlist.xml</SCPDURL>
+      </service>
+      <service>
+    		<serviceType>urn:av-openhome-org:service:Info:1</serviceType>
+    		<serviceId>urn:av-openhome-org:serviceId:Info</serviceId>
+    		<controlURL>/upnp/control/Info</controlURL>
+    		<eventSubURL>/upnp/event/Info</eventSubURL>
+    		<SCPDURL>/scpd/Info.xml</SCPDURL>
+      </service>
     </serviceList>
   </device>
-</root>`, ip, port, usn, ip, port)
+</root>`, device.IP, device.Port, device.USN, device.IP, device.Port)
 }

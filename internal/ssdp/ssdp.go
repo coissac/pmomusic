@@ -2,17 +2,19 @@ package ssdp
 
 import (
 	"log"
+	"strconv"
 	"time"
 
+	"gargoton.petite-maison-orange.fr/eric/pmomusic/internal/upnp"
 	"github.com/koron/go-ssdp"
 )
 
-func AnnounceRenderer(usn, location string) {
+func AnnounceRenderer(device *upnp.DeviceDescription) {
 	st := "urn:schemas-upnp-org:device:MediaRenderer:1"
 	server := "pmomusic/1.0 UPnP/1.1 DLNARenderer/1.0"
 	maxAge := 1800
 
-	_, err := ssdp.Advertise(st, usn+"::"+st, location, server, maxAge)
+	_, err := ssdp.Advertise(st, device.USN+"::"+st, device.IP+":"+strconv.Itoa(int(device.Port)), server, maxAge)
 	if err != nil {
 		log.Println("SSDP advertise error:", err)
 		return

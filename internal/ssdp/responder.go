@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strconv"
 	"strings"
 	"time"
+
+	"gargoton.petite-maison-orange.fr/eric/pmomusic/internal/upnp"
 )
 
 const (
@@ -13,8 +16,19 @@ const (
 	serviceType = "urn:schemas-upnp-org:device:MediaRenderer:1"
 )
 
+func fromUDPAddress(src *net.UDPAddr) string {
+	from := src.String()
+
+	hostnames, err := net.LookupAddr(src.IP.String())
+	if err == nil {
+		from = strings.TrimSuffix(hostnames[0], ".") + ":" + strconv.Itoa(src.Port)
+	}
+
+	return from
+}
+
 // StartSSDPResponder listens for M-SEARCH requests and responds if they match
-func StartSSDPResponder(usn, location string) {
+func StartSSDPResponder(device *upnp.DeviceDescription) {
 	addr, err := net.ResolveUDPAddr("udp4", ssdpAddr)
 	if err != nil {
 		log.Fatal("Failed to resolve SSDP address:", err)
@@ -41,7 +55,8 @@ func StartSSDPResponder(usn, location string) {
 		data := string(buf[:n])
 		if strings.HasPrefix(data, "M-SEARCH * HTTP/1.1") {
 			st := extractHeader(data, "ST")
-			log.Printf("🔎 M-SEARCH from %s, ST=%s\n", src.String(), st)
+
+			log.Printf("🔎 M-SEARCH from %s, ST=%s\n", fromUDPAddress(src), st)
 
 			if st == "ssdp:all" ||
 				st == serviceType ||
@@ -49,27 +64,27 @@ func StartSSDPResponder(usn, location string) {
 				strings.HasPrefix(st, "urn:av-openhome-org:service:") ||
 				strings.HasPrefix(st, "urn:bubblesoftapps-com:service:") {
 
-				go sendSSDPResponse(src, usn, location, st)
+				go sendSSDPResponse(src, device, st)
 			}
 		}
 	}
 }
 
-func sendSSDPResponse(dst *net.UDPAddr, usn, location, st string) {
+func sendSSDPResponse(dst *net.UDPAddr, device *upnp.DeviceDescription, st string) {
 	resp := fmt.Sprintf(
 		"HTTP/1.1 200 OK\r\n"+
 			"CACHE-CONTROL: max-age=1800\r\n"+
 			"DATE: %s\r\n"+
 			"EXT:\r\n"+
-			"LOCATION: %s\r\n"+
+			"LOCATION: %s:%d\r\n"+
 			"SERVER: pmomusic/1.0 UPnP/1.1 DLNARenderer/1.0\r\n"+
 			"ST: %s\r\n"+
 			"USN: %s::%s\r\n"+
 			"\r\n",
 		time.Now().Format(time.RFC1123),
-		location,
+		device.IP, device.Port,
 		st,
-		usn,
+		device.USN,
 		st,
 	)
 

@@ -13,6 +13,9 @@ import (
 //go:embed xml/*.xml
 var embeddedXML embed.FS
 
+//go:embed html/*.html
+var embeddedHTML embed.FS
+
 // ServeStaticXML mounts handlers for SCPD XML files.
 func ServeStaticXML(mux *http.ServeMux) {
 	subFS, err := fs.Sub(embeddedXML, "xml")
@@ -22,13 +25,28 @@ func ServeStaticXML(mux *http.ServeMux) {
 	mux.Handle("/scpd/", http.StripPrefix("/scpd/", http.FileServer(http.FS(subFS))))
 }
 
-func StartHTTPServer(usn, ip string, port uint) {
+func ServeStaticHTML(mux *http.ServeMux) {
+	subFS, err := fs.Sub(embeddedHTML, "html")
+	if err != nil {
+		panic("failed to create sub FS: " + err.Error())
+	}
+	mux.Handle("/", http.FileServer(http.FS(subFS)))
+}
+
+func StartHTTPServer(device *DeviceDescription) {
 	mux := http.NewServeMux()
 
 	// Device description
 	mux.HandleFunc("/description.xml", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/xml")
-		w.Write([]byte(generateDeviceDescription(usn, ip, port)))
+		xml, err := device.GenerateXML()
+		if err != nil {
+			w.WriteHeader(500)
+			w.Write([]byte(err.Error()))
+			return
+		}
+
+		w.Write([]byte(xml))
 	})
 
 	// SOAP control endpoints
@@ -38,8 +56,9 @@ func StartHTTPServer(usn, ip string, port uint) {
 
 	// Serve static SCPD XML files
 	ServeStaticXML(mux)
+	ServeStaticHTML(mux)
 
-	addr := fmt.Sprintf("%s:%d", ip, port)
+	addr := fmt.Sprintf("%s:%d", device.IP, device.Port)
 	log.Printf("Serving UPnP fake renderer at http://%s", addr)
 	log.Fatal(http.ListenAndServe(addr, mux))
 }
