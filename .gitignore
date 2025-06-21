@@ -1,4 +1,5 @@
 /bin/
 /pkg/
 /vendor/
-*.log
+**/*.log
+**/*.old
