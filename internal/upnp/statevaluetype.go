@@ -379,8 +379,134 @@ func (t StateVarType) Cmp(v1, v2 interface{}) int {
 //
 //	range := ValueRange{min: uint16(10), max: uint16(100)}
 //	StateType_UI2.InRange(uint16(50), range) // true
-func (t StateVarType) InRange(val interface{}, interval ValueRange) bool {
-	return t.Cmp(val, interval.min) >= 0 && t.Cmp(val, interval.max) <= 0
+func (t StateVarType) InRange(val interface{}, interval *ValueRange) bool {
+	return interval == nil || t.Cmp(val, interval.min) >= 0 && t.Cmp(val, interval.max) <= 0
+}
+
+// ValueRange creates a valid value range for the UPnP type.
+//
+// This method casts the provided min and max values to the UPnP type and returns
+// a ValueRange struct suitable for range validation. If either value cannot be
+// cast to the type, it returns an error.
+//
+// Parameters:
+//
+//	min: Minimum value of the range (inclusive)
+//	max: Maximum value of the range (inclusive)
+//
+// Returns:
+//
+//	ValueRange: Valid range structure if cast succeeds
+//	error: If min or max cannot be cast to the type
+//
+// Example:
+//
+//	// Create a range for UI2 (uint16) values
+//	r, err := StateType_UI2.ValueRange(10, 100)
+//	if err != nil { /* handle error */ }
+//	valid := StateType_UI2.InRange(50, r) // true
+//
+// Notes:
+//   - The range is inclusive: [min, max]
+//   - Values must be comparable using the type's comparison logic
+//   - For time types, min and max must be valid time values
+func (t StateVarType) ValueRange(min, max interface{}) (*ValueRange, error) {
+	cmin, error := t.Cast(min)
+	if error != nil {
+		return nil, fmt.Errorf("min value %v is not castable to type %s", min, t.String())
+	}
+	cmax, error := t.Cast(max)
+	if error != nil {
+		return nil, fmt.Errorf("max value %v is not castable to type %s", min, t.String())
+	}
+
+	return &ValueRange{min: cmin, max: cmax}, nil
+}
+
+// NewAtomicValue crée une valeur simple
+func (t StateVarType) NewAtomicValue(name string) *StateValue {
+	return &StateValue{
+		name:     name,
+		baseType: t,
+		modifier: ModifierAtomic,
+	}
+}
+
+// NewListValue crée une liste
+func (t StateVarType) NewListValue(name string, elementType StateVarType) *StateValue {
+	return &StateValue{
+		name:        name,
+		baseType:    t,
+		modifier:    ModifierList,
+		elementType: elementType,
+	}
+}
+
+// NewMapValue crée une map
+func (t StateVarType) NewMapValue(
+	name string,
+	keyType StateVarType,
+	valueType StateVarType,
+) *StateValue {
+	return &StateValue{
+		name:        name,
+		baseType:    t,
+		modifier:    ModifierMap,
+		keyType:     keyType,
+		elementType: valueType, // elementType = valeur de la map
+	}
+}
+
+// NewStructValue crée une valeur de type struct
+func (t StateVarType) NewStructValue(name string, fields map[string]StateVarType) *StateValue {
+	return &StateValue{
+		name:         name,
+		baseType:     t,
+		modifier:     ModifierStruct,
+		structFields: fields,
+	}
+}
+
+func (t StateVarType) DefaultValue() interface{} {
+	switch t {
+	case StateType_Unknown:
+
+	case StateType_UI1, StateType_UI2, StateType_UI4:
+		return uint64(0)
+
+	case StateType_I1, StateType_I2, StateType_I4, StateType_Int:
+		return int64(0)
+
+	case StateType_R4, StateType_R8, StateType_Number, StateType_Fixed14_4:
+		return float64(0)
+
+	case StateType_Char, StateType_String:
+		return ""
+	case StateType_Boolean:
+		return false
+
+	case StateType_BinBase64:
+		return ""
+	case StateType_BinHex:
+		return ""
+	case StateType_Date:
+		return time.Unix(int64(1718985600), 0).UTC()
+	case StateType_DateTime:
+		return time.Unix(int64(1718985600), 0).UTC()
+	case StateType_DateTimeTZ:
+		return time.Unix(int64(1718985600), 0).UTC()
+	case StateType_Time:
+		return time.Unix(int64(1718985600), 0).UTC()
+	case StateType_TimeTZ:
+		return time.Unix(int64(1718985600), 0).UTC()
+	case StateType_UUID:
+		return ""
+	case StateType_URI:
+		return ""
+
+	}
+
+	return nil
 }
 
 // toInt converts various types to signed integer with specified bit size.
