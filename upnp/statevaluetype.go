@@ -9,10 +9,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
-	"math"
 	"net/url"
 	"reflect"
-	"strconv"
 	"strings"
 	"time"
 
@@ -105,13 +103,129 @@ var typeStrings = [...]string{
 	"uri",
 }
 
-// String returns the UPnP XML name of the type.
-// Returns "unknown" for unrecognized types.
+// String returns a string representation of the StateVarType. It defaults to
+// "unknown" if the type is not recognized.
 func (t StateVarType) String() string {
 	if int(t) >= 0 && int(t) < len(typeStrings) {
 		return typeStrings[t]
 	}
 	return "unknown"
+}
+
+// IsNumeric checks whether a given StateVarType represents a numeric type or
+// not. Numeric types are defined as those that can be used to store number-like
+// values. The following types are considered numeric: UI1, UI2, UI4, I1, I2,
+// I4, Int, R4, R8, Number and Fixed14_4.
+//
+// t: StateVarType to check if it's a numeric type or not.
+//
+// Returns true if the given StateVarType represents a numeric type; false
+// otherwise.
+func (t StateVarType) IsNumeric() bool {
+	switch t {
+	case StateType_UI1, StateType_UI2, StateType_UI4,
+		StateType_I1, StateType_I2, StateType_I4,
+		StateType_Int,
+		StateType_R4, StateType_R8,
+		StateType_Number,
+		StateType_Fixed14_4:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsInteger checks if the state variable type is integer or not.
+//
+// It returns a boolean value indicating whether the provided StateVarType (t)
+// is an integer type or not. The function takes one parameter, t of type
+// StateVarType, which represents the state variable type to be checked.
+//
+// Parameters: - t (StateVarType): The StateVarType to check for comparability.
+//
+// Returns: bool: If the state variable type is any of the defined integer types
+// (StateType_UI1, StateType_UI2, StateType_UI4, StateType_I1, StateType_I2,
+// StateType_I4, StateType_Int), it returns true. Otherwise, it returns false.
+func (t StateVarType) IsInteger() bool {
+	switch t {
+	case StateType_UI1, StateType_UI2, StateType_UI4,
+		StateType_I1, StateType_I2, StateType_I4,
+		StateType_Int:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsComparable function checks if a StateVarType is comparable or not.
+//
+// It returns false for binary types (StateType_BinBase64 and StateType_BinHex)
+// as they are non-comparable. For all other types, it returns true indicating
+// that these types can be compared.
+//
+// Parameters: - t (StateVarType): The StateVarType to check for comparability.
+//
+// Returns: bool: A boolean value indicating whether the given StateVarType is
+// comparable or not. True means it's comparable, False means it isn't.
+func (t StateVarType) IsComparable() bool {
+	// Tous les types sauf les binaires sont comparables
+	switch t {
+	case StateType_BinBase64, StateType_BinHex:
+		return false
+	default:
+		return true
+	}
+}
+
+// Add performs addition operation on two interfaces if both are of numeric
+// type, otherwise it returns an error. If the types are not numeric, it checks
+// and converts them into float64 before performing the addition. The function
+// then casts the result back to its original type using Cast method from
+// StateVarType t and returns this value or any encountered error.
+//
+// Parameters:
+//
+//	a (interface{}): First operand for addition operation. Can be of any type.
+//	b (interface{}): Second operand for addition operation. Can be of any type.
+//
+// Returns:
+//
+//	interface{}: Result of the addition, casted back to its original type using StateVarType t if no error encountered.
+//	error: Encountered error in case any conversion or casting fails. This includes non-numeric types for this operation.
+func (t StateVarType) Add(a, b interface{}) (interface{}, error) {
+	af, bf, err := valuesToNumericOperands(t, a, b)
+	if err != nil {
+		return nil, err
+	}
+
+	return t.Cast(af + bf)
+}
+
+func (t StateVarType) Sub(a, b interface{}) (interface{}, error) {
+	af, bf, err := valuesToNumericOperands(t, a, b)
+	if err != nil {
+		return nil, err
+	}
+
+	return t.Cast(af - bf)
+}
+
+func (t StateVarType) Mul(a, b interface{}) (interface{}, error) {
+	af, bf, err := valuesToNumericOperands(t, a, b)
+	if err != nil {
+		return nil, err
+	}
+
+	return t.Cast(af * bf)
+}
+
+func (t StateVarType) Div(a, b interface{}) (interface{}, error) {
+	af, bf, err := valuesToNumericOperands(t, a, b)
+	if err != nil {
+		return nil, err
+	}
+
+	return t.Cast(af / bf)
 }
 
 // ParseStateVarType converts a UPnP type name to its StateVarType constant.
@@ -135,64 +249,64 @@ func ParseStateVarType(s string) StateVarType {
 func (t StateVarType) Cast(val interface{}) (interface{}, error) {
 	switch t {
 	case StateType_UI1:
-		v, ok := toUint(val, 8)
-		if !ok {
+		v, err := toUint(val, 8)
+		if err != nil {
 			return nil, fmt.Errorf("cannot cast %v (%T) to UI1", val, val)
 		}
 		return uint8(v), nil
 
 	case StateType_UI2:
-		v, ok := toUint(val, 16)
-		if !ok {
+		v, err := toUint(val, 16)
+		if err != nil {
 			return nil, fmt.Errorf("cannot cast %v (%T) to UI2", val, val)
 		}
 		return uint16(v), nil
 
 	case StateType_UI4:
-		v, ok := toUint(val, 32)
-		if !ok {
+		v, err := toUint(val, 32)
+		if err != nil {
 			return nil, fmt.Errorf("cannot cast %v (%T) to UI4", val, val)
 		}
 		return uint32(v), nil
 
 	case StateType_I1:
-		v, ok := toInt(val, 8)
-		if !ok {
+		v, err := toInt(val, 8)
+		if err != nil {
 			return nil, fmt.Errorf("cannot cast %v (%T) to I1", val, val)
 		}
 		return int8(v), nil
 
 	case StateType_I2:
-		v, ok := toInt(val, 16)
-		if !ok {
+		v, err := toInt(val, 16)
+		if err != nil {
 			return nil, fmt.Errorf("cannot cast %v (%T) to I2", val, val)
 		}
 		return int16(v), nil
 
 	case StateType_I4, StateType_Int:
-		v, ok := toInt(val, 32)
-		if !ok {
+		v, err := toInt(val, 32)
+		if err != nil {
 			return nil, fmt.Errorf("cannot cast %v (%T) to I4", val, val)
 		}
 		return int32(v), nil
 
 	case StateType_R4:
-		v, ok := toFloat(val, 32)
-		if !ok {
+		v, err := toFloat(val, 32)
+		if err != nil {
 			return nil, fmt.Errorf("cannot cast %v (%T) to R4", val, val)
 		}
 		return float32(v), nil
 
 	case StateType_R8, StateType_Number, StateType_Fixed14_4:
-		v, ok := toFloat(val, 64)
-		if !ok {
+		v, err := toFloat(val, 64)
+		if err != nil {
 			return nil, fmt.Errorf("cannot cast %v (%T) to R8", val, val)
 		}
 		return v, nil
 
 	case StateType_Boolean:
-		b, ok := toBool(val)
-		if !ok {
+		b, err := toBool(val)
+		if err != nil {
 			return nil, fmt.Errorf("cannot cast %v (%T) to Boolean", val, val)
 		}
 		return b, nil
@@ -383,87 +497,12 @@ func (t StateVarType) InRange(val interface{}, interval *ValueRange) bool {
 	return interval == nil || t.Cmp(val, interval.min) >= 0 && t.Cmp(val, interval.max) <= 0
 }
 
-// ValueRange creates a valid value range for the UPnP type.
-//
-// This method casts the provided min and max values to the UPnP type and returns
-// a ValueRange struct suitable for range validation. If either value cannot be
-// cast to the type, it returns an error.
-//
-// Parameters:
-//
-//	min: Minimum value of the range (inclusive)
-//	max: Maximum value of the range (inclusive)
-//
-// Returns:
-//
-//	ValueRange: Valid range structure if cast succeeds
-//	error: If min or max cannot be cast to the type
-//
-// Example:
-//
-//	// Create a range for UI2 (uint16) values
-//	r, err := StateType_UI2.ValueRange(10, 100)
-//	if err != nil { /* handle error */ }
-//	valid := StateType_UI2.InRange(50, r) // true
-//
-// Notes:
-//   - The range is inclusive: [min, max]
-//   - Values must be comparable using the type's comparison logic
-//   - For time types, min and max must be valid time values
-func (t StateVarType) ValueRange(min, max interface{}) (*ValueRange, error) {
-	cmin, error := t.Cast(min)
-	if error != nil {
-		return nil, fmt.Errorf("min value %v is not castable to type %s", min, t.String())
-	}
-	cmax, error := t.Cast(max)
-	if error != nil {
-		return nil, fmt.Errorf("max value %v is not castable to type %s", min, t.String())
-	}
-
-	return &ValueRange{min: cmin, max: cmax}, nil
-}
-
 // NewAtomicValue crée une valeur simple
 func (t StateVarType) NewAtomicValue(name string) *StateValue {
 	return &StateValue{
-		name:     name,
-		baseType: t,
-		modifier: ModifierAtomic,
-	}
-}
-
-// NewListValue crée une liste
-func (t StateVarType) NewListValue(name string, elementType StateVarType) *StateValue {
-	return &StateValue{
-		name:        name,
-		baseType:    t,
-		modifier:    ModifierList,
-		elementType: elementType,
-	}
-}
-
-// NewMapValue crée une map
-func (t StateVarType) NewMapValue(
-	name string,
-	keyType StateVarType,
-	valueType StateVarType,
-) *StateValue {
-	return &StateValue{
-		name:        name,
-		baseType:    t,
-		modifier:    ModifierMap,
-		keyType:     keyType,
-		elementType: valueType, // elementType = valeur de la map
-	}
-}
-
-// NewStructValue crée une valeur de type struct
-func (t StateVarType) NewStructValue(name string, fields map[string]StateVarType) *StateValue {
-	return &StateValue{
-		name:         name,
-		baseType:     t,
-		modifier:     ModifierStruct,
-		structFields: fields,
+		name:            name,
+		valueType:       t,
+		eventConditions: make(map[string]StateConditionFunc),
 	}
 }
 
@@ -507,376 +546,6 @@ func (t StateVarType) DefaultValue() interface{} {
 	}
 
 	return nil
-}
-
-// toInt converts various types to signed integer with specified bit size.
-// Handles overflow/underflow. Returns converted value and success status.
-func toInt(v interface{}, bits int) (int64, bool) {
-	min := minInt(bits)
-	max := maxInt(bits)
-
-	switch val := v.(type) {
-	case int:
-		if int64(val) < min || int64(val) > max {
-			return 0, false
-		}
-		return int64(val), true
-	case int8:
-		if int64(val) < min || int64(val) > max {
-			return 0, false
-		}
-		return int64(val), true
-	case int16:
-		if int64(val) < min || int64(val) > max {
-			return 0, false
-		}
-		return int64(val), true
-	case int32:
-		if int64(val) < min || int64(val) > max {
-			return 0, false
-		}
-		return int64(val), true
-	case int64:
-		if val < min || val > max {
-			return 0, false
-		}
-		return val, true
-	case uint:
-		if uint64(val) > uint64(max) {
-			return 0, false
-		}
-		return int64(val), true
-	case uint8:
-		if uint64(val) > uint64(max) {
-			return 0, false
-		}
-		return int64(val), true
-	case uint16:
-		if uint64(val) > uint64(max) {
-			return 0, false
-		}
-		return int64(val), true
-	case uint32:
-		if uint64(val) > uint64(max) {
-			return 0, false
-		}
-		return int64(val), true
-	case uint64:
-		if val > uint64(max) {
-			return 0, false
-		}
-		return int64(val), true
-	case float32:
-		r := int64(math.Round(float64(val)))
-		if r < min || r > max {
-			return 0, false
-		}
-		return r, true
-	case float64:
-		r := int64(math.Round(val))
-		if r < min || r > max {
-			return 0, false
-		}
-		return r, true
-	case string:
-		// Try int parse direct
-		if i, err := strconv.ParseInt(val, 10, bits); err == nil {
-			if i < min || i > max {
-				return 0, false
-			}
-			return i, true
-		}
-		// Try float parse then round + bounds check
-		if f, err := strconv.ParseFloat(val, 64); err == nil {
-			r := int64(math.Round(f))
-			if r < min || r > max {
-				return 0, false
-			}
-			return r, true
-		}
-		return 0, false
-	default:
-		return 0, false
-	}
-}
-
-// toUint converts various types to unsigned integer with specified bit size.
-// Handles numeric types and strings. Returns converted value and success status.
-func toUint(v interface{}, bits int) (uint64, bool) {
-	max := maxUint(bits)
-
-	switch val := v.(type) {
-	case uint:
-		if uint64(val) > max {
-			return 0, false
-		}
-		return uint64(val), true
-	case uint8:
-		if uint64(val) > max {
-			return 0, false
-		}
-		return uint64(val), true
-	case uint16:
-		if uint64(val) > max {
-			return 0, false
-		}
-		return uint64(val), true
-	case uint32:
-		if uint64(val) > max {
-			return 0, false
-		}
-		return uint64(val), true
-	case uint64:
-		if val > max {
-			return 0, false
-		}
-		return val, true
-
-	case int:
-		if val < 0 || uint64(val) > max {
-			return 0, false
-		}
-		return uint64(val), true
-	case int8:
-		if val < 0 || uint64(val) > max {
-			return 0, false
-		}
-		return uint64(val), true
-	case int16:
-		if val < 0 || uint64(val) > max {
-			return 0, false
-		}
-		return uint64(val), true
-	case int32:
-		if val < 0 || uint64(val) > max {
-			return 0, false
-		}
-		return uint64(val), true
-	case int64:
-		if val < 0 || uint64(val) > max {
-			return 0, false
-		}
-		return uint64(val), true
-
-	case float32:
-		r := uint64(math.Round(float64(val)))
-		if r > max {
-			return 0, false
-		}
-		return r, true
-	case float64:
-		r := uint64(math.Round(val))
-		if r > max {
-			return 0, false
-		}
-		return r, true
-
-	case string:
-		// Try parse float first (handles int and float strings)
-		f, err := strconv.ParseFloat(val, 64)
-		if err != nil || f < 0 {
-			return 0, false
-		}
-		r := uint64(math.Round(f))
-		if r > max {
-			return 0, false
-		}
-		return r, true
-
-	default:
-		return 0, false
-	}
-}
-
-// maxUint returns maximum unsigned integer value for specified bit size
-func maxUint(bits int) uint64 {
-	switch bits {
-	case 8:
-		return math.MaxUint8
-	case 16:
-		return math.MaxUint16
-	case 32:
-		return math.MaxUint32
-	case 64:
-		return math.MaxUint64
-	default:
-		return math.MaxUint64 // fallback
-	}
-}
-
-// minInt returns minimum signed integer value for specified bit size
-func minInt(bits int) int64 {
-	switch bits {
-	case 8:
-		return math.MinInt8
-	case 16:
-		return math.MinInt16
-	case 32:
-		return math.MinInt32
-	case 64:
-		return math.MinInt64
-	default:
-		return math.MinInt64 // fallback
-	}
-}
-
-// maxInt returns maximum signed integer value for specified bit size
-func maxInt(bits int) int64 {
-	switch bits {
-	case 8:
-		return math.MaxInt8
-	case 16:
-		return math.MaxInt16
-	case 32:
-		return math.MaxInt32
-	case 64:
-		return math.MaxInt64
-	default:
-		return math.MaxInt64 // fallback
-	}
-}
-
-// toFloat converts various types to float (32 or 64 bits).
-// Checks float32 boundaries when converting to 32-bit float.
-func toFloat(v interface{}, bits int) (float64, bool) {
-	switch val := v.(type) {
-	case float32:
-		f := float64(val)
-		if bits == 32 && (f > math.MaxFloat32 || f < -math.MaxFloat32) {
-			return 0, false
-		}
-		return f, true
-	case float64:
-		if bits == 32 && (val > math.MaxFloat32 || val < -math.MaxFloat32) {
-			return 0, false
-		}
-		return val, true
-	case int, int8, int16, int32, int64:
-		f := float64(reflect.ValueOf(val).Int())
-		if bits == 32 && (f > math.MaxFloat32 || f < -math.MaxFloat32) {
-			return 0, false
-		}
-		return f, true
-	case uint, uint8, uint16, uint32, uint64:
-		f := float64(reflect.ValueOf(val).Uint())
-		if bits == 32 && (f > math.MaxFloat32 || f < -math.MaxFloat32) {
-			return 0, false
-		}
-		return f, true
-	case string:
-		f, err := strconv.ParseFloat(val, bits)
-		if err != nil {
-			return 0, false
-		}
-		if bits == 32 && (f > math.MaxFloat32 || f < -math.MaxFloat32) {
-			return 0, false
-		}
-		return f, true
-	default:
-		return 0, false
-	}
-}
-
-// toBool converts various types to boolean following UPnP rules:
-// true: 1, "true"; false: 0, "false"
-func toBool(val interface{}) (bool, bool) {
-	switch v := val.(type) {
-	case bool:
-		return v, true
-
-	case int:
-		if v == 0 {
-			return false, true
-		} else if v == 1 {
-			return true, true
-		}
-	case int8:
-		if v == 0 {
-			return false, true
-		} else if v == 1 {
-			return true, true
-		}
-	case int16:
-		if v == 0 {
-			return false, true
-		} else if v == 1 {
-			return true, true
-		}
-	case int32:
-		if v == 0 {
-			return false, true
-		} else if v == 1 {
-			return true, true
-		}
-	case int64:
-		if v == 0 {
-			return false, true
-		} else if v == 1 {
-			return true, true
-		}
-
-	case uint:
-		if v == 0 {
-			return false, true
-		} else if v == 1 {
-			return true, true
-		}
-	case uint8:
-		if v == 0 {
-			return false, true
-		} else if v == 1 {
-			return true, true
-		}
-	case uint16:
-		if v == 0 {
-			return false, true
-		} else if v == 1 {
-			return true, true
-		}
-	case uint32:
-		if v == 0 {
-			return false, true
-		} else if v == 1 {
-			return true, true
-		}
-	case uint64:
-		if v == 0 {
-			return false, true
-		} else if v == 1 {
-			return true, true
-		}
-
-	case float32:
-		if v == 0.0 {
-			return false, true
-		} else if v == 1.0 {
-			return true, true
-		}
-	case float64:
-		if v == 0.0 {
-			return false, true
-		} else if v == 1.0 {
-			return true, true
-		}
-
-	case string:
-		return parseUPnPBoolean(v)
-	}
-
-	return false, false
-}
-
-// parseUPnPBoolean parses boolean from string:
-// "1"/"true" → true, "0"/"false" → false
-func parseUPnPBoolean(s string) (bool, bool) {
-	switch strings.TrimSpace(strings.ToLower(s)) {
-	case "1", "true":
-		return true, true
-	case "0", "false":
-		return false, true
-	default:
-		return false, false
-	}
 }
 
 // decodeBinary decodes Base64 or Hex-encoded binary strings to byte slices

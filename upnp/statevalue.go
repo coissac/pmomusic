@@ -1,75 +1,39 @@
 package upnp
 
 import (
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
+	"net/url"
 	"reflect"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/beevik/etree"
+	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 )
 
 type EventType string
 
-const (
-	EventEnabled     EventType = "yes"
-	EventDisabled    EventType = "no"
-	EventConditional EventType = "conditional"
-)
-
 type StateConditionFunc func(instance *StateValueInstance) bool
+type StringValueParser func(value string) (interface{}, error)
+type ValueSerializer func(value interface{}) (string, error)
 
-type TypeModifier int
-
-const (
-	ModifierAtomic TypeModifier = iota // Valeur simple (par défaut)
-	ModifierList                       // Liste d'éléments
-	ModifierMap                        // Tableau associatif
-	ModifierStruct                     // Structure nommée
-)
-
-// StateValue represents a UPnP state variable with value constraints and eventing capabilities.
-// It encapsulates:
-//   - Value type (StateVarType)
-//   - Value range constraints (min/max)
-//   - Allowed value list
-//   - Eventing configuration
-//     graph TD
-//     A[StateValue] --> B[baseType: Type sérialisé]
-//     A --> C[modifier: Structure des données]
-//     C --> D[Liste]
-//     C --> E[Map]
-//     C --> F[Structure]
-//     D --> G[elementType: Type des éléments]
-//     E --> H[keyType: Type des clés]
-//     E --> I[elementType: Type des valeurs]
-//
-// Usage:
-//
-//	state := StateValue{
-//	    name: "Volume",
-//	    baseType: StateType_UI2,
-//	}
-//	state.SetRange(0, 100)   // Set 0-100 range
-//	state.AppendAllowedValue(25, 50, 75)  // Add specific allowed values
 type StateValue struct {
-	name            string
-	baseType        StateVarType // Renommé pour plus de clarté
-	modifier        TypeModifier
-	step            interface{}
-	minDelta        interface{}
+	name            string       // Name of the state value (e.g., "Volume", "Brightness")
+	valueType       StateVarType // Type of state value, see the upnp/statevaluetype package for more information on this.
+	step            interface{}  // Step size for incremental state values (e.g., "10")
 	modifiable      bool
-	eventConditions []StateConditionFunc
+	eventConditions map[string]StateConditionFunc
 	description     string
 	defaultValue    interface{}
 	valueRange      *ValueRange
 	allowedValues   []interface{}
 	sendEvents      bool
-	elementType     StateVarType            // Pour listes et valeurs de maps
-	keyType         StateVarType            // Type des clés (pour les maps)
-	structFields    map[string]StateVarType // Champs (pour les structures)
-
+	parse           StringValueParser
+	marshal         ValueSerializer
 }
 
 // Name returns the state variable's name (e.g., "Volume", "Brightness").
@@ -79,21 +43,57 @@ func (state *StateValue) Name() string {
 
 // Type returns the UPnP data type of the state variable.
 func (state *StateValue) Type() StateVarType {
-	return state.baseType
+	return state.valueType
 }
 
-func (state *StateValue) AddEventCondition(condition StateConditionFunc) {
-	state.eventConditions = append(state.eventConditions, condition)
+func (state *StateValue) AddEventCondition(name string, condition StateConditionFunc) {
+	state.eventConditions[name] = condition
+}
+
+func (state *StateValue) DeleteEventConditions(name string) error {
+	if _, ok := state.eventConditions[name]; !ok {
+		return fmt.Errorf("%s: no such event condition (%s)", state.name, name)
+	}
+	delete(state.eventConditions, name)
+	return nil
 }
 
 // ClearEventConditions réinitialise toutes les conditions
 func (state *StateValue) ClearEventConditions() {
-	state.eventConditions = nil
+	state.eventConditions = make(map[string]StateConditionFunc)
+}
+
+func (sv *StateValue) SetMinDelta(minDelta interface{}) error {
+	if minDelta == nil {
+		return fmt.Errorf("%s: nil is an invalid minimum delta value", sv.name)
+	}
+
+	minDelta, err := sv.Cast(minDelta)
+	if err != nil {
+		return fmt.Errorf("%s: invalid minimum delta value %v : %v", sv.name, minDelta,err)
+	}
+
+	mdf := func(instance *StateValueInstance) bool {
+		o := instance.previousValue
+		n := instance.value
+
+		
+		r,err := instance.model.valueType.ValueRange(o, n)
+
+		if err != nil {
+			return false
+		}
+
+		return instance.model.valueType.InRange()
+	}
+
+	sv.eventConditions["MinDelta"] = mdf
+	return nil
 }
 
 func (state *StateValue) SetDefault(value interface{}) error {
 	if state.IsValidValue(value) {
-		cvalue, _ := state.baseType.Cast(value)
+		cvalue, _ := state.valueType.Cast(value)
 		state.defaultValue = cvalue
 		log.Debugf("🐞 Setting default value for %v to %v", state.name, cvalue)
 		return nil
@@ -107,7 +107,7 @@ func (state *StateValue) HasDefault() bool {
 
 func (state *StateValue) DefaultValue() interface{} {
 	if !state.HasDefault() {
-		return state.baseType.DefaultValue()
+		return state.valueType.DefaultValue()
 	}
 
 	return state.DefaultValue()
@@ -156,7 +156,7 @@ func (state *StateValue) SetRange(min, max interface{}) error {
 	if min == nil || max == nil {
 		return fmt.Errorf("min and max must not be nil")
 	}
-	limits, err := state.baseType.ValueRange(min, max)
+	limits, err := state.valueType.ValueRange(min, max)
 	if err != nil {
 		return fmt.Errorf("setting range: %v", err)
 	}
@@ -180,7 +180,7 @@ func (state *StateValue) UpdateMinimalValue(value interface{}) error {
 	if state.valueRange == nil {
 		return fmt.Errorf("no range set for value %v", state.name)
 	}
-	cvalue, err := state.baseType.Cast(value)
+	cvalue, err := state.valueType.Cast(value)
 	if err != nil {
 		return fmt.Errorf("casting value: %v", err)
 	}
@@ -204,7 +204,7 @@ func (state *StateValue) UpdateMaximalValue(value interface{}) error {
 	if state.valueRange == nil {
 		return fmt.Errorf("no range set for value %v", state.name)
 	}
-	cvalue, err := state.baseType.Cast(value)
+	cvalue, err := state.valueType.Cast(value)
 	if err != nil {
 		return fmt.Errorf("casting value: %v", err)
 	}
@@ -225,7 +225,7 @@ func (state *StateValue) UpdateMaximalValue(value interface{}) error {
 //
 //	bool: True if within range or no range defined
 func (state *StateValue) IsValueInRange(value interface{}) bool {
-	return state.baseType.InRange(value, state.valueRange)
+	return state.valueType.InRange(value, state.valueRange)
 }
 
 // IsSendingEvents indicates if state changes trigger UPnP events.
@@ -273,7 +273,7 @@ func (state *StateValue) AllowedValues() []interface{} {
 func (state *StateValue) AppendAllowedValue(value ...interface{}) error {
 	state.allowedValues = slices.Grow(state.allowedValues, len(value))
 	for _, v := range value {
-		cv, err := state.baseType.Cast(v)
+		cv, err := state.valueType.Cast(v)
 		if err != nil {
 			return fmt.Errorf("casting allowed value: %v", err)
 		}
@@ -299,7 +299,7 @@ func (state *StateValue) IsValueAllowed(value interface{}) bool {
 		return true // No list = any value valid
 	}
 
-	cvalue, err := state.baseType.Cast(value)
+	cvalue, err := state.valueType.Cast(value)
 	if err != nil {
 		return false
 	}
@@ -322,7 +322,7 @@ func (state *StateValue) IsValueAllowed(value interface{}) bool {
 //
 //	bool: True if value passes all applicable constraints
 func (state *StateValue) IsValidValue(value interface{}) bool {
-	cvalue, err := state.baseType.Cast(value)
+	cvalue, err := state.valueType.Cast(value)
 	if err != nil {
 		return false
 	}
@@ -355,7 +355,7 @@ func (state *StateValue) SetModifiable() {
 
 func (state *StateValue) SetStep(step interface{}) error {
 	// Validation que le step correspond au type de la variable
-	if _, err := state.baseType.Cast(step); err != nil {
+	if _, err := state.valueType.Cast(step); err != nil {
 		return fmt.Errorf("invalid step type: %v", err)
 	}
 	state.step = step
@@ -381,4 +381,134 @@ func (state *StateValue) NewInstance() *StateValueInstance {
 		lastChange: time.Now(),
 		lastEvent:  time.Unix(int64(1718985600), 0).UTC(),
 	}
+}
+
+// ToXMLElement generates the complete XML representation of the state variable
+// Returns an etree.Element that can be serialized to XML
+func (sv *StateValue) ToXMLElement() *etree.Element {
+	// Create root <stateVariable> element
+	elem := etree.NewElement("stateVariable")
+	elem.CreateAttr("name", sv.name)
+
+	// Add sendEvents attribute (UPnP eventing capability)
+	if sv.sendEvents {
+		elem.CreateAttr("sendEvents", "yes") // Enable event notifications
+	} else {
+		elem.CreateAttr("sendEvents", "no") // Disable event notifications
+	}
+
+	// Add data type element
+	dataType := elem.CreateElement("dataType")
+	dataType.SetText(sv.valueType.String()) // Set UPnP type name (e.g., "ui1", "boolean")
+
+	// Add default value if specified
+	if sv.defaultValue != nil {
+		defaultValue := elem.CreateElement("defaultValue")
+		// Convert value to UPnP-compatible string representation
+		defaultValue.SetText(sv.valueToString(sv.defaultValue))
+	}
+
+	// Add value range constraints if defined
+	if sv.valueRange != nil {
+		rangeElem := elem.CreateElement("allowedValueRange")
+
+		// Minimum boundary value
+		min := rangeElem.CreateElement("minimum")
+		min.SetText(sv.valueToString(sv.valueRange.min))
+
+		// Maximum boundary value
+		max := rangeElem.CreateElement("maximum")
+		max.SetText(sv.valueToString(sv.valueRange.max))
+
+		// Add step value if defined (for incremental controls)
+		if sv.step != nil {
+			step := rangeElem.CreateElement("step")
+			step.SetText(sv.valueToString(sv.step))
+		}
+	}
+
+	// Add allowed value list if defined
+	if len(sv.allowedValues) > 0 {
+		allowedList := elem.CreateElement("allowedValueList")
+		for _, value := range sv.allowedValues {
+			// Create individual <allowedValue> elements
+			allowed := allowedList.CreateElement("allowedValue")
+			allowed.SetText(sv.valueToString(value))
+		}
+	}
+
+	// Add description if available
+	if sv.description != "" {
+		desc := elem.CreateElement("description")
+		desc.SetText(sv.description) // Human-readable description
+	}
+
+	return elem
+}
+
+// valueToString converts a value to its UPnP-compatible string representation
+// Handles type-specific formatting for proper XML serialization
+func (sv *StateValue) valueToString(val interface{}) string {
+	if val == nil {
+		return "" // Safeguard against nil values
+	}
+
+	// Type-specific formatting for UPnP compliance
+	switch sv.valueType {
+	case StateType_Boolean:
+		// Boolean: "1" for true, "0" for false (UPnP standard)
+		if b, ok := val.(bool); ok && b {
+			return "1"
+		}
+		return "0"
+
+	case StateType_Date:
+		// Date: YYYY-MM-DD format
+		if t, ok := val.(time.Time); ok {
+			return t.Format("2006-01-02")
+		}
+
+	case StateType_DateTime, StateType_DateTimeTZ:
+		// DateTime: ISO 8601 format with timezone
+		if t, ok := val.(time.Time); ok {
+			return t.Format(time.RFC3339)
+		}
+
+	case StateType_Time, StateType_TimeTZ:
+		// Time: HH:MM:SS format
+		if t, ok := val.(time.Time); ok {
+			return t.Format("15:04:05")
+		}
+
+	case StateType_BinBase64:
+		// Binary: Base64 encoding
+		if b, ok := val.([]byte); ok {
+			return base64.StdEncoding.EncodeToString(b)
+		}
+
+	case StateType_BinHex:
+		// Binary: Hex encoding
+		if b, ok := val.([]byte); ok {
+			return hex.EncodeToString(b)
+		}
+
+	case StateType_URI:
+		// URI: Full URL string
+		if u, ok := val.(*url.URL); ok {
+			return u.String()
+		}
+
+	case StateType_UUID:
+		// UUID: Canonical string representation
+		if u, ok := val.(uuid.UUID); ok {
+			return u.String()
+		}
+	}
+
+	// Default conversion for unsupported types or fallback
+	return fmt.Sprintf("%v", val)
+}
+
+func (sv *StateValue) Cast(val interface{}) (interface{}, error) {
+	return sv.valueType.Cast(val)
 }
