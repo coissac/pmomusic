@@ -75,3 +75,14 @@ func toFloat(v interface{}, bits int) (float64, error) {
 
 	return f, nil
 }
+
+func cmpFloat64(a, b float64) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	default:
+		return 0
+	}
+}

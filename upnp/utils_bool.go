@@ -47,3 +47,13 @@ func toBool(val interface{}) (bool, error) {
 		return false, errors.New("numeric value cannot be converted to bool unless 0 or 1")
 	}
 }
+
+func cmpBool(a, b bool) int {
+	if a == b {
+		return 0
+	}
+	if !a && b {
+		return -1
+	}
+	return 1
+}

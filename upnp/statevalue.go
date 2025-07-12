@@ -36,9 +36,127 @@ type StateValue struct {
 	marshal         ValueSerializer
 }
 
+// IsNumeric checks whether a given StateValue model represents a numeric value or
+// not. Numeric types are defined as those that can be used to store number-like
+// values. The following types are considered numeric: UI1, UI2, UI4, I1, I2,
+// I4, Int, R4, R8, Number and Fixed14_4.
+//
+// t: StateVarType to check if it's a numeric type or not.
+//
+// Returns true if the given StateValue represents a numeric value; false
+// otherwise.
+func (sv StateValue) IsNumeric() bool {
+	return sv.valueType.IsNumeric()
+}
+
+// BitSize returns the number of bits that will be used to represent values
+// when this type is used in an UPnP State Variable. The returned value can be
+// either 8, 16, 24, 32, or 64, depending on whether t is Byte, Boolean, I2, Ui2,
+// I4, Ui4 respectively. If none of these types match, it will return -1.
+func (sv StateValue) BitSize() int {
+	return sv.valueType.BitSize()
+}
+
+// IsInteger checks if the state variable type is integer or not.
+//
+// It returns a boolean value indicating whether the provided StateValue
+// is an integer type or not.
+//
+// Returns: bool: If the state variable type is any of the defined integer types
+// (UI1, UI2, UI4, I1, I2, I4, Int), it returns true. Otherwise, it returns false.
+func (sv StateValue) IsInteger() bool {
+	return sv.valueType.IsInteger()
+}
+
+// IsUnsignedInt checks if the state value type represents an unsigned integer.
+// The method returns a boolean indicating whether the state value type is an
+// unsigned integer.
+func (sv StateValue) IsUnsignedInt() bool {
+	return sv.valueType.IsUnsignedInt()
+}
+
+// IsSignedInt checks if the state value type is a signed int.
+//
+// The return value will be a boolean indicating whether the state value type is
+// a signed integer (true) or not (false).
+func (sv StateValue) IsSignedInt() bool {
+	return sv.valueType.IsSignedInt()
+}
+
+// IsFloat returns true if the StateValue's value type represents a floating point
+// number; false otherwise.
+func (sv StateValue) IsFloat() bool {
+	return sv.valueType.IsFloat()
+}
+
+// IsBool checks if the state value is of boolean type.
+//
+// Parameters:
+//
+//	None
+//
+// Returns:
+//
+//	(bool) : Indicates whether the StateValue is of boolean type or not.
+func (sv StateValue) IsBool() bool {
+	return sv.valueType.IsBool()
+}
+
+// isString checks if the underlying value type of a StateValue object represents a string.
+//
+// Parameters:
+//   - None.
+//
+// Returns:
+//
+//	bool: True if the underlying value type is a string, false otherwise.
+func (sv StateValue) IsString() bool {
+	return sv.valueType.IsString()
+}
+
+func (sv StateValue) IsTime() bool {
+	return sv.valueType.IsTime()
+}
+
+func (sv StateValue) IsURI() bool {
+	return sv.valueType.IsURI()
+}
+
+func (sv StateValue) IsBinary() bool {
+	return sv.valueType.IsBinary()
+}
+
+// IsComparable function checks if a state variable is comparable or not.
+//
+// It returns false for binary types (bin.base64 and bin.hex)
+// as they are non-comparable. For all other types, it returns true indicating
+// that these types can be compared.
+// //
+// Returns: bool: A boolean value indicating whether the given StateValue is
+// comparable or not. True means it's comparable, False means it isn't.
+func (sv StateValue) IsComparable() bool {
+	return sv.valueType.IsComparable()
+}
+
+func (sv StateValue) Add(a, b interface{}) (interface{}, error) {
+	return sv.valueType.Add(a, b)
+}
+
+func (sv StateValue) Sub(a, b interface{}) (interface{}, error) {
+	return sv.valueType.Sub(a, b)
+}
+
+func (sv StateValue) Mul(a, b interface{}) (interface{}, error) {
+	return sv.valueType.Mul(a, b)
+}
+
+func (sv StateValue) Div(a, b interface{}) (interface{}, error) {
+	return sv.valueType.Div(a, b)
+}
+
 // Name returns the state variable's name (e.g., "Volume", "Brightness").
-func (state *StateValue) Name() string {
-	return state.name
+func (sv StateValue) Name() string {
+	return sv.name
 }
 
 // Type returns the UPnP data type of the state variable.
@@ -70,35 +188,37 @@ func (sv *StateValue) SetMinDelta(minDelta interface{}) error {
 
 	minDelta, err := sv.Cast(minDelta)
 	if err != nil {
-		return fmt.Errorf("%s: invalid minimum delta value %v : %v", sv.name, minDelta,err)
+		return fmt.Errorf("%s: invalid minimum delta value %v : %v", sv.name, minDelta, err)
 	}
 
-	mdf := func(instance *StateValueInstance) bool {
-		o := instance.previousValue
-		n := instance.value
+	// mdf := func(instance *StateValueInstance) bool {
+	// 	o := instance.previousValue
+	// 	n := instance.value
 
-		
-		r,err := instance.model.valueType.ValueRange(o, n)
+	// 	r,err := instance.model.valueType.ValueRange(o, n)
 
-		if err != nil {
-			return false
-		}
+	// 	if err != nil {
+	// 		return false
+	// 	}
 
-		return instance.model.valueType.InRange()
-	}
+	// 	return instance.model.valueType.InRange()
+	// }
 
-	sv.eventConditions["MinDelta"] = mdf
+	// sv.eventConditions["MinDelta"] = mdf
 	return nil
 }
 
 func (state *StateValue) SetDefault(value interface{}) error {
-	if state.IsValidValue(value) {
+	var err error
+	var valid bool
+
+	if valid, err = state.IsValidValue(value); valid && err == nil {
 		cvalue, _ := state.valueType.Cast(value)
 		state.defaultValue = cvalue
 		log.Debugf("🐞 Setting default value for %v to %v", state.name, cvalue)
 		return nil
 	}
-	return fmt.Errorf("invalid default value for %v (%v)", state.name, value)
+	return fmt.Errorf("invalid default value for %v (%v) : %v", state.name, value, err)
 }
 
 func (state *StateValue) HasDefault() bool {
@@ -224,7 +344,7 @@ func (state *StateValue) UpdateMaximalValue(value interface{}) error {
 // Returns:
 //
 //	bool: True if within range or no range defined
-func (state *StateValue) IsValueInRange(value interface{}) bool {
+func (state *StateValue) IsValueInRange(value interface{}) (bool, error) {
 	return state.valueType.InRange(value, state.valueRange)
 }
 
@@ -294,22 +414,22 @@ func (state *StateValue) AppendAllowedValue(value ...interface{}) error {
 // Returns:
 //
 //	bool: True if value is permitted or no list defined
-func (state *StateValue) IsValueAllowed(value interface{}) bool {
+func (state *StateValue) IsValueAllowed(value interface{}) (bool, error) {
 	if !state.HasAllowedValues() {
-		return true // No list = any value valid
+		return true, nil // No list = any value valid
 	}
 
 	cvalue, err := state.valueType.Cast(value)
 	if err != nil {
-		return false
+		return false, err
 	}
 
 	for _, allowed := range state.allowedValues {
 		if reflect.DeepEqual(cvalue, allowed) {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // IsValidValue performs full validation against all constraints.
@@ -321,12 +441,22 @@ func (state *StateValue) IsValueAllowed(value interface{}) bool {
 // Returns:
 //
 //	bool: True if value passes all applicable constraints
-func (state *StateValue) IsValidValue(value interface{}) bool {
+func (state *StateValue) IsValidValue(value interface{}) (bool, error) {
 	cvalue, err := state.valueType.Cast(value)
 	if err != nil {
-		return false
+		return false, err
 	}
-	return state.IsValueInRange(cvalue) && state.IsValueAllowed(cvalue)
+
+	inrange, err1 := state.IsValueInRange(cvalue)
+	allowed, err2 := state.IsValueAllowed(cvalue)
+	if err1 != nil || err2 != nil {
+		if err1 != nil {
+			err = err1
+		} else {
+			err = err2
+		}
+	}
+	return inrange && allowed, err
 }
 
 func (state *StateValue) HasDescription() bool {

@@ -53,7 +53,7 @@ func (t StateVarType) ValueRange(min, max interface{}) (*ValueRange, error) {
 		return nil, fmt.Errorf("max value %v is not castable to type %s", min, t.String())
 	}
 
-	if t.Cmp(cmin, cmax) > 0 {
+	if cmp, err := t.Cmp(cmin, cmax); err != nil && cmp > 0 {
 		cmax, cmin = cmin, cmax
 	}
 
