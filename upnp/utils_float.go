@@ -6,6 +6,8 @@ import (
 	"strconv"
 )
 
+// maxFloat returns the maximum value for floating point numbers given number of bits.
+// If bits is neither 32 nor 64, it defaults to returning the maximum float64 value.
 func maxFloat(bits int) float64 {
 	switch bits {
 	case 32:
@@ -17,6 +19,9 @@ func maxFloat(bits int) float64 {
 	}
 }
 
+// minFloat returns the minimum float value for the given number of bits.
+// If bits are not recognized as either 32 or 64, it will default to the maximum
+// possible float64 value.
 func minFloat(bits int) float64 {
 	switch bits {
 	case 32:
@@ -76,6 +81,8 @@ func toFloat(v interface{}, bits int) (float64, error) {
 	return f, nil
 }
 
+// cmpFloat64 compares two float64 values and returns an integer indicating their relation.
+// If a is less than b, it returns -1; if a is greater than b, it returns 1; otherwise, it returns 0.
 func cmpFloat64(a, b float64) int {
 	switch {
 	case a < b:

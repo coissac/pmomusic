@@ -5,6 +5,8 @@ import (
 	"time"
 )
 
+// toTime converts the given value to a time.Time type if possible, otherwise it returns an error.
+// The supported types for conversion are: time.Time, string, int64 and float64.
 func toTime(v interface{}) (time.Time, error) {
 	switch val := v.(type) {
 	case time.Time:
@@ -43,6 +45,8 @@ func toTime(v interface{}) (time.Time, error) {
 	}
 }
 
+// cmpTime compares two time.Times, returning -1 if the first is before the second,
+// 1 if the first is after the second, and 0 if they're equal.
 func cmpTime(a, b time.Time) int {
 	switch {
 	case a.Before(b):

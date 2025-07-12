@@ -48,12 +48,14 @@ func toBool(val interface{}) (bool, error) {
 	}
 }
 
+// cmpBool compares two boolean values 'a' and 'b'. If they are equal it returns 0, if 'a' is false and 'b' is true it returns -1 else it returns 1.
 func cmpBool(a, b bool) int {
-	if a == b {
+	if a == b { // if both booleans are the same, return 0
 		return 0
 	}
-	if !a && b {
+	if !a && b { // if 'a' is false and 'b' is true, return -1
 		return -1
 	}
-	return 1
+	// otherwise, return 1
+	return 1 // if 'a' is true or 'a' and 'b' are not the same
 }

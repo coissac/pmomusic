@@ -115,6 +115,7 @@ func checkIntBounds(v int64, bits int) (int64, error) {
 	return v, nil
 }
 
+// cmpInt compares two integers 'a' and 'b'. If 'a' is less than 'b', it returns -1, if 'a' is greater than 'b' it returns 1, else it returns 0.
 func cmpInt(a, b int64) int {
 	switch {
 	case a < b:
@@ -126,6 +127,10 @@ func cmpInt(a, b int64) int {
 	}
 }
 
+// cmpUint compares two unsigned integers, a and b. 
+// It returns -1 if a < b.
+// It returns 1 if a > b.
+// It returns 0 if a == b.
 func cmpUint(a, b uint64) int {
 	switch {
 	case a < b:

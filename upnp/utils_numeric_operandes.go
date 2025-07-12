@@ -2,6 +2,8 @@ package upnp
 
 import "fmt"
 
+// valuesToNumericOperands takes two interface{} values, casts them to a numeric type based on a given StateVarType, and returns their float64 equivalents.
+// If any error occurs during casting or conversion to float64, it is returned along with zero values for the operands.
 func valuesToNumericOperands(t StateVarType, a interface{}, b interface{}) (float64, float64, error) {
 	var err error
 	if !t.IsNumeric() {
