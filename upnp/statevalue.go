@@ -36,19 +36,6 @@ type StateValue struct {
 	marshal         ValueSerializer
 }
 
-// IsNumeric checks whether a given StateValue model represents a numeric value or
-// not. Numeric types are defined as those that can be used to store number-like
-// values. The following types are considered numeric: UI1, UI2, UI4, I1, I2,
-// I4, Int, R4, R8, Number and Fixed14_4.
-//
-// t: StateVarType to check if it's a numeric type or not.
-//
-// Returns true if the given StateValue represents a numeric value; false
-// otherwise.
-func (sv StateValue) IsNumeric() bool {
-	return sv.valueType.IsNumeric()
-}
-
 // BitSize returns the number of bits that will be used to represent values
 // when this type is used in an UPnP State Variable. The returned value can be
 // either 8, 16, 24, 32, or 64, depending on whether t is Byte, Boolean, I2, Ui2,

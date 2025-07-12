@@ -86,6 +86,12 @@ func (t StateVarType) IsFloat() bool {
 	}
 }
 
+// IsBool checks if a StateVarType is of type Boolean. It returns true if the
+// StateVarType equals to StateType_Boolean, false otherwise.
+func (t StateVarType) IsBool() bool {
+	return t == StateType_Boolean
+}
+
 // IsString reports whether or not the state variable type represents a string
 // value.
 //
@@ -98,12 +104,6 @@ func (t StateVarType) IsString() bool {
 	default:
 		return false
 	}
-}
-
-// IsBool checks if a StateVarType is of type Boolean. It returns true if the
-// StateVarType equals to StateType_Boolean, false otherwise.
-func (t StateVarType) IsBool() bool {
-	return t == StateType_Boolean
 }
 
 // IsTime checks whether a given StateVarType is of time type or not. It accepts

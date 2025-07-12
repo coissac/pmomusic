@@ -7,6 +7,26 @@ import (
 	"strings"
 )
 
+// Cmp compares two values of a given type 'StateVarType'. The comparison is
+// made based on the specific type of 'a' and 'b'. It returns an integer
+// indicating whether 'a' is less than, equal to, or greater than 'b'. If 'a' is
+// less than 'b', it returns -1. If they are equal, it returns 0. If 'a' is
+// greater than 'b', it returns 1. It also returns an error if any of the values
+// can't be cast to the required type or if comparison isn't supported for the
+// given type 'StateVarType'.
+//
+//   - t: StateVarType representing the specific type to use for comparison.
+//   - a, b: The values to compare. They should be of type interface{} as they could be
+//     any valid Go type.
+//
+// Returns: An integer indicating the result of the comparison (-1 if 'a' is
+// less than 'b', 0 if they are equal, and 1 if 'a' is greater than 'b'). It
+// also returns an error if any values can't be cast or if comparison isn't
+// supported for the given type.
+//
+// Example:
+//
+//	result, err := t.Cmp(int32(5), int32(7)) // Returns -1 and nil error as 5 is less than 7.
 func (t StateVarType) Cmp(a, b interface{}) (int, error) {
 	a, err1 := t.Cast(a)
 	b, err2 := t.Cast(b)

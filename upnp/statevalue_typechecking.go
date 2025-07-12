@@ -1,5 +1,18 @@
 package upnp
 
+// IsNumeric checks whether a given StateValue model represents a numeric value or
+// not. Numeric types are defined as those that can be used to store number-like
+// values. The following types are considered numeric: UI1, UI2, UI4, I1, I2,
+// I4, Int, R4, R8, Number and Fixed14_4.
+//
+// t: StateVarType to check if it's a numeric type or not.
+//
+// Returns true if the given StateValue represents a numeric value; false
+// otherwise.
+func (sv StateValue) IsNumeric() bool {
+	return sv.valueType.IsNumeric()
+}
+
 // IsInteger checks if the state variable type is integer or not.
 //
 // It returns a boolean value indicating whether the provided StateValue
@@ -11,19 +24,19 @@ func (sv StateValue) IsInteger() bool {
 	return sv.valueType.IsInteger()
 }
 
-// IsUnsignedInt checks if the state value type represents an unsigned integer.
-// The method returns a boolean indicating whether the state value type is an
-// unsigned integer.
-func (sv StateValue) IsUnsignedInt() bool {
-	return sv.valueType.IsUnsignedInt()
-}
-
 // IsSignedInt checks if the state value type is a signed int.
 //
 // The return value will be a boolean indicating whether the state value type is
 // a signed integer (true) or not (false).
 func (sv StateValue) IsSignedInt() bool {
 	return sv.valueType.IsSignedInt()
+}
+
+// IsUnsignedInt checks if the state value type represents an unsigned integer.
+// The method returns a boolean indicating whether the state value type is an
+// unsigned integer.
+func (sv StateValue) IsUnsignedInt() bool {
+	return sv.valueType.IsUnsignedInt()
 }
 
 // IsFloat returns true if the StateValue's value type represents a floating point
@@ -98,6 +111,17 @@ func (sv StateValue) IsString() bool {
 // Outputs: false
 func (sv StateValue) IsTime() bool {
 	return sv.valueType.IsTime()
+}
+
+// IsUUID checks if the state value type is a UUID (Universally Unique
+// Identifier).
+//
+// It returns true if the underlying type of the StateValue object represents a
+// UUID; false otherwise.
+//
+// Returns: bool: Indicates whether the StateValue is of UUID type or not.
+func (sv StateValue) IsUUID() bool {
+	return sv.valueType.IsUUID()
 }
 
 // IsURI checks if the state value type is a URI.
