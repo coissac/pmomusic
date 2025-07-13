@@ -1,4 +1,4 @@
-package stateVariables
+package statevariables
 
 // Add performs addition operation on the given parameters 'a' and 'b'. It calls the
 // corresponding method from valueType which is assumed to be an interface that

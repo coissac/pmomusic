@@ -1,4 +1,4 @@
-package stateVariables
+package statevariables
 
 // IsNumeric checks whether a given StateValue model represents a numeric value or
 // not. Numeric types are defined as those that can be used to store number-like

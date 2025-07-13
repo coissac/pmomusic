@@ -1,4 +1,4 @@
-package stateVariables
+package statevariables
 
 // Cast transforms any given value into an interface suitable for use in a StateValue object, using
 // the underlying type's specific casting rules. It will return an error if the transformation fails or

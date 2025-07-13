@@ -1,4 +1,4 @@
-package stateVariables
+package statevariables
 
 var TransferStatus = func() *StateVariable {
 

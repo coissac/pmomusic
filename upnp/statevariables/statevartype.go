@@ -1,7 +1,7 @@
 // package stateVariables provides comprehensive handling of UPnP state variable types.
 // It includes type identification, value casting, comparison, and range validation
 // for all standard UPnP state variable types.
-package stateVariables
+package statevariables
 
 import (
 	"strings"

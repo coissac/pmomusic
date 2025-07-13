@@ -1,4 +1,4 @@
-package stateVariables
+package statevariables
 
 func (sv StateVariable) Cmp(a, b interface{}) (int, error) {
 	return sv.valueType.Cmp(a, b)
