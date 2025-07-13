@@ -1,4 +1,4 @@
-package upnp
+package stateVariables
 
 import (
 	"encoding/base64"
@@ -17,11 +17,11 @@ import (
 
 type EventType string
 
-type StateConditionFunc func(instance *StateValueInstance) bool
+type StateConditionFunc func(instance *StateVarInstance) bool
 type StringValueParser func(value string) (interface{}, error)
 type ValueSerializer func(value interface{}) (string, error)
 
-type StateValue struct {
+type StateVariable struct {
 	name            string       // Name of the state value (e.g., "Volume", "Brightness")
 	valueType       StateVarType // Type of state value, see the upnp/statevaluetype package for more information on this.
 	step            interface{}  // Step size for incremental state values (e.g., "10")
@@ -40,25 +40,25 @@ type StateValue struct {
 // when this type is used in an UPnP State Variable. The returned value can be
 // either 8, 16, 24, 32, or 64, depending on whether t is Byte, Boolean, I2, Ui2,
 // I4, Ui4 respectively. If none of these types match, it will return -1.
-func (sv StateValue) BitSize() int {
+func (sv StateVariable) BitSize() int {
 	return sv.valueType.BitSize()
 }
 
 // Name returns the state variable's name (e.g., "Volume", "Brightness").
-func (sv StateValue) Name() string {
+func (sv StateVariable) Name() string {
 	return sv.name
 }
 
 // Type returns the UPnP data type of the state variable.
-func (state *StateValue) Type() StateVarType {
+func (state *StateVariable) Type() StateVarType {
 	return state.valueType
 }
 
-func (state *StateValue) AddEventCondition(name string, condition StateConditionFunc) {
+func (state *StateVariable) AddEventCondition(name string, condition StateConditionFunc) {
 	state.eventConditions[name] = condition
 }
 
-func (state *StateValue) DeleteEventConditions(name string) error {
+func (state *StateVariable) DeleteEventConditions(name string) error {
 	if _, ok := state.eventConditions[name]; !ok {
 		return fmt.Errorf("%s: no such event condition (%s)", state.name, name)
 	}
@@ -67,11 +67,11 @@ func (state *StateValue) DeleteEventConditions(name string) error {
 }
 
 // ClearEventConditions réinitialise toutes les conditions
-func (state *StateValue) ClearEventConditions() {
+func (state *StateVariable) ClearEventConditions() {
 	state.eventConditions = make(map[string]StateConditionFunc)
 }
 
-func (sv *StateValue) SetMinDelta(minDelta interface{}) error {
+func (sv *StateVariable) SetMinDelta(minDelta interface{}) error {
 	if minDelta == nil {
 		return fmt.Errorf("%s: nil is an invalid minimum delta value", sv.name)
 	}
@@ -98,7 +98,7 @@ func (sv *StateValue) SetMinDelta(minDelta interface{}) error {
 	return nil
 }
 
-func (state *StateValue) SetDefault(value interface{}) error {
+func (state *StateVariable) SetDefault(value interface{}) error {
 	var err error
 	var valid bool
 
@@ -111,11 +111,11 @@ func (state *StateValue) SetDefault(value interface{}) error {
 	return fmt.Errorf("invalid default value for %v (%v) : %v", state.name, value, err)
 }
 
-func (state *StateValue) HasDefault() bool {
+func (state *StateVariable) HasDefault() bool {
 	return state.defaultValue != nil
 }
 
-func (state *StateValue) DefaultValue() interface{} {
+func (state *StateVariable) DefaultValue() interface{} {
 	if !state.HasDefault() {
 		return state.valueType.DefaultValue()
 	}
@@ -125,13 +125,13 @@ func (state *StateValue) DefaultValue() interface{} {
 
 // HasRange indicates if a value range constraint is defined.
 // Returns true if min/max boundaries are set.
-func (state *StateValue) HasRange() bool {
+func (state *StateVariable) HasRange() bool {
 	return state.valueRange != nil
 }
 
 // Maximum returns the upper bound of the value range.
 // Returns nil if no range is defined.
-func (state *StateValue) Maximum() interface{} {
+func (state *StateVariable) Maximum() interface{} {
 	if state.valueRange == nil {
 		return nil
 	}
@@ -140,7 +140,7 @@ func (state *StateValue) Maximum() interface{} {
 
 // Minimum returns the lower bound of the value range.
 // Returns nil if no range is defined.
-func (state *StateValue) Minimum() interface{} {
+func (state *StateVariable) Minimum() interface{} {
 	if state.valueRange == nil {
 		return nil
 	}
@@ -162,7 +162,7 @@ func (state *StateValue) Minimum() interface{} {
 // Example:
 //
 //	err := volumeState.SetRange(0, 100)  // 0-100 range for volume
-func (state *StateValue) SetRange(min, max interface{}) error {
+func (state *StateVariable) SetRange(min, max interface{}) error {
 	if min == nil || max == nil {
 		return fmt.Errorf("min and max must not be nil")
 	}
@@ -186,7 +186,7 @@ func (state *StateValue) SetRange(min, max interface{}) error {
 // Returns:
 //
 //	error: If no range exists or value can't be cast
-func (state *StateValue) UpdateMinimalValue(value interface{}) error {
+func (state *StateVariable) UpdateMinimalValue(value interface{}) error {
 	if state.valueRange == nil {
 		return fmt.Errorf("no range set for value %v", state.name)
 	}
@@ -210,7 +210,7 @@ func (state *StateValue) UpdateMinimalValue(value interface{}) error {
 // Returns:
 //
 //	error: If no range exists or value can't be cast
-func (state *StateValue) UpdateMaximalValue(value interface{}) error {
+func (state *StateVariable) UpdateMaximalValue(value interface{}) error {
 	if state.valueRange == nil {
 		return fmt.Errorf("no range set for value %v", state.name)
 	}
@@ -234,35 +234,35 @@ func (state *StateValue) UpdateMaximalValue(value interface{}) error {
 // Returns:
 //
 //	bool: True if within range or no range defined
-func (state *StateValue) IsValueInRange(value interface{}) (bool, error) {
+func (state *StateVariable) IsValueInRange(value interface{}) (bool, error) {
 	return state.valueType.InRange(value, state.valueRange)
 }
 
 // IsSendingEvents indicates if state changes trigger UPnP events.
-func (state *StateValue) IsSendingEvents() bool {
+func (state *StateVariable) IsSendingEvents() bool {
 	return state.sendEvents
 }
 
 // SetSendingEvents enables event notifications for state changes.
-func (state *StateValue) SetSendingEvents() {
+func (state *StateVariable) SetSendingEvents() {
 	state.sendEvents = true
 	log.Debugf("🐞 Enabling event sending for %s", state.name)
 }
 
 // UnsetSendingEvents disables event notifications for state changes.
-func (state *StateValue) UnsetSendingEvents() {
+func (state *StateVariable) UnsetSendingEvents() {
 	state.sendEvents = false
 	log.Debugf("🐞 Disabling event sending for %s", state.name)
 }
 
 // HasAllowedValues indicates if an allowed value list is defined.
-func (state *StateValue) HasAllowedValues() bool {
+func (state *StateVariable) HasAllowedValues() bool {
 	return len(state.allowedValues) > 0
 }
 
 // AllowedValues returns the list of permitted values.
 // Returns an empty slice if no values are defined.
-func (state *StateValue) AllowedValues() []interface{} {
+func (state *StateVariable) AllowedValues() []interface{} {
 	return state.allowedValues
 }
 
@@ -280,7 +280,7 @@ func (state *StateValue) AllowedValues() []interface{} {
 // Example:
 //
 //	err := state.AppendAllowedValue("PLAYING", "PAUSED", "STOPPED")
-func (state *StateValue) AppendAllowedValue(value ...interface{}) error {
+func (state *StateVariable) AppendAllowedValue(value ...interface{}) error {
 	state.allowedValues = slices.Grow(state.allowedValues, len(value))
 	for _, v := range value {
 		cv, err := state.valueType.Cast(v)
@@ -304,7 +304,7 @@ func (state *StateValue) AppendAllowedValue(value ...interface{}) error {
 // Returns:
 //
 //	bool: True if value is permitted or no list defined
-func (state *StateValue) IsValueAllowed(value interface{}) (bool, error) {
+func (state *StateVariable) IsValueAllowed(value interface{}) (bool, error) {
 	if !state.HasAllowedValues() {
 		return true, nil // No list = any value valid
 	}
@@ -331,7 +331,7 @@ func (state *StateValue) IsValueAllowed(value interface{}) (bool, error) {
 // Returns:
 //
 //	bool: True if value passes all applicable constraints
-func (state *StateValue) IsValidValue(value interface{}) (bool, error) {
+func (state *StateVariable) IsValidValue(value interface{}) (bool, error) {
 	cvalue, err := state.valueType.Cast(value)
 	if err != nil {
 		return false, err
@@ -349,31 +349,31 @@ func (state *StateValue) IsValidValue(value interface{}) (bool, error) {
 	return inrange && allowed, err
 }
 
-func (state *StateValue) HasDescription() bool {
+func (state *StateVariable) HasDescription() bool {
 	return len(state.description) > 0
 }
 
-func (state *StateValue) Description() string {
+func (state *StateVariable) Description() string {
 	return state.description
 }
 
-func (state *StateValue) SetDescription(desc string) {
+func (state *StateVariable) SetDescription(desc string) {
 	state.description = strings.TrimSpace(desc)
 }
 
-func (state *StateValue) IsConstant() bool {
+func (state *StateVariable) IsConstant() bool {
 	return !state.modifiable
 }
 
-func (state *StateValue) SetConstant() {
+func (state *StateVariable) SetConstant() {
 	state.modifiable = false
 }
 
-func (state *StateValue) SetModifiable() {
+func (state *StateVariable) SetModifiable() {
 	state.modifiable = true
 }
 
-func (state *StateValue) SetStep(step interface{}) error {
+func (state *StateVariable) SetStep(step interface{}) error {
 	// Validation que le step correspond au type de la variable
 	if _, err := state.valueType.Cast(step); err != nil {
 		return fmt.Errorf("invalid step type: %v", err)
@@ -382,20 +382,43 @@ func (state *StateValue) SetStep(step interface{}) error {
 	return nil
 }
 
-func (state *StateValue) UnsetStep() {
+func (state *StateVariable) UnsetStep() {
 	state.step = nil
 }
 
-func (state *StateValue) HasStep() bool {
+func (state *StateVariable) HasStep() bool {
 	return state.step != nil
 }
 
-func (state *StateValue) Step() interface{} {
+func (state *StateVariable) Step() interface{} {
 	return state.step
 }
 
-func (state *StateValue) NewInstance() *StateValueInstance {
-	return &StateValueInstance{
+func (state *StateVariable) SetAllowedValues(allowed ...interface{}) {
+	state.ClearAllowedValues()
+	state.AppendAllowedValues(allowed...)
+}
+
+func (state *StateVariable) AppendAllowedValues(allowed ...interface{}) error {
+	state.allowedValues = slices.Grow(state.allowedValues, len(allowed))
+
+	var err error
+	for _, val := range allowed {
+		val, err = state.valueType.Cast(val)
+		if err != nil {
+			return err
+		}
+		state.allowedValues = append(state.allowedValues, val)
+	}
+	return nil
+}
+
+func (state *StateVariable) ClearAllowedValues() {
+	state.allowedValues = make([]interface{}, 0)
+}
+
+func (state *StateVariable) NewInstance() *StateVarInstance {
+	return &StateVarInstance{
 		model:      state,
 		value:      state.DefaultValue(),
 		lastChange: time.Now(),
@@ -405,7 +428,7 @@ func (state *StateValue) NewInstance() *StateValueInstance {
 
 // ToXMLElement generates the complete XML representation of the state variable
 // Returns an etree.Element that can be serialized to XML
-func (sv *StateValue) ToXMLElement() *etree.Element {
+func (sv *StateVariable) ToXMLElement() *etree.Element {
 	// Create root <stateVariable> element
 	elem := etree.NewElement("stateVariable")
 	elem.CreateAttr("name", sv.name)
@@ -468,7 +491,7 @@ func (sv *StateValue) ToXMLElement() *etree.Element {
 
 // valueToString converts a value to its UPnP-compatible string representation
 // Handles type-specific formatting for proper XML serialization
-func (sv *StateValue) valueToString(val interface{}) string {
+func (sv *StateVariable) valueToString(val interface{}) string {
 	if val == nil {
 		return "" // Safeguard against nil values
 	}

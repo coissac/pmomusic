@@ -1,4 +1,4 @@
-package upnp
+package stateVariables
 
 // Add performs addition operation on the given parameters 'a' and 'b'. It calls the
 // corresponding method from valueType which is assumed to be an interface that
@@ -15,25 +15,25 @@ package upnp
 //	} else {
 //		// Use result
 //	}
-func (sv StateValue) Add(a, b interface{}) (interface{}, error) {
+func (sv StateVariable) Add(a, b interface{}) (interface{}, error) {
 	return sv.valueType.Add(a, b)
 }
 
 // Sub performs subtraction operation on the given parameters 'a' and 'b'. It follows
 // similar semantics as in the Add method, but for subtraction instead of addition.
-func (sv StateValue) Sub(a, b interface{}) (interface{}, error) {
+func (sv StateVariable) Sub(a, b interface{}) (interface{}, error) {
 	return sv.valueType.Sub(a, b)
 }
 
 // Mul performs multiplication operation on the given parameters 'a' and 'b'. It follows
 // similar semantics as in the Add method, but for multiplication instead of addition.
-func (sv StateValue) Mul(a, b interface{}) (interface{}, error) {
+func (sv StateVariable) Mul(a, b interface{}) (interface{}, error) {
 	return sv.valueType.Mul(a, b)
 }
 
 // Div performs division operation on the given parameters 'a' and 'b'. It follows similar
 // semantics as in the Add method, but for division instead of addition. Please note that
 // division by zero is undefined and will result in an error being returned from valueType.Div call.
-func (sv StateValue) Div(a, b interface{}) (interface{}, error) {
+func (sv StateVariable) Div(a, b interface{}) (interface{}, error) {
 	return sv.valueType.Div(a, b)
 }

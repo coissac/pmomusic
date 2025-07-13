@@ -1,4 +1,4 @@
-package upnp
+package stateVariables
 
 import (
 	"errors"
@@ -127,7 +127,7 @@ func cmpInt(a, b int64) int {
 	}
 }
 
-// cmpUint compares two unsigned integers, a and b. 
+// cmpUint compares two unsigned integers, a and b.
 // It returns -1 if a < b.
 // It returns 1 if a > b.
 // It returns 0 if a == b.

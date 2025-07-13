@@ -1,7 +1,7 @@
-// Package upnp provides comprehensive handling of UPnP state variable types.
+// package stateVariables provides comprehensive handling of UPnP state variable types.
 // It includes type identification, value casting, comparison, and range validation
 // for all standard UPnP state variable types.
-package upnp
+package stateVariables
 
 import (
 	"strings"
@@ -143,8 +143,8 @@ func (t StateVarType) BitSize() int {
 // empty map for event conditions. If name is an empty string, it will cause panic in later
 // usage. Name is typically used to identify or represent a specific value or condition
 // associated with the variable type 't'.
-func (t StateVarType) NewStateValue(name string) *StateValue {
-	return &StateValue{
+func (t StateVarType) NewStateValue(name string) *StateVariable {
+	return &StateVariable{
 		name:            name,
 		valueType:       t,
 		eventConditions: make(map[string]StateConditionFunc),

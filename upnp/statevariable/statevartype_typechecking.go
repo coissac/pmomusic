@@ -1,4 +1,4 @@
-package upnp
+package stateVariables
 
 // IsNumeric checks whether a given StateVarType represents a numeric type or
 // not. Numeric types are defined as those that can be used to store number-like

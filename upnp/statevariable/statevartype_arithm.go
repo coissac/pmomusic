@@ -1,4 +1,4 @@
-package upnp
+package stateVariables
 
 // Add performs addition operation on two interfaces if both are of numeric
 // type, otherwise it returns an error. If the types are not numeric, it checks

@@ -1,4 +1,4 @@
-package upnp
+package stateVariables
 
 import (
 	"encoding/base64"

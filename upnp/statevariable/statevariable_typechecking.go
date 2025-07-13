@@ -1,4 +1,4 @@
-package upnp
+package stateVariables
 
 // IsNumeric checks whether a given StateValue model represents a numeric value or
 // not. Numeric types are defined as those that can be used to store number-like
@@ -9,7 +9,7 @@ package upnp
 //
 // Returns true if the given StateValue represents a numeric value; false
 // otherwise.
-func (sv StateValue) IsNumeric() bool {
+func (sv StateVariable) IsNumeric() bool {
 	return sv.valueType.IsNumeric()
 }
 
@@ -20,7 +20,7 @@ func (sv StateValue) IsNumeric() bool {
 //
 // Returns: bool: If the state variable type is any of the defined integer types
 // (UI1, UI2, UI4, I1, I2, I4, Int), it returns true. Otherwise, it returns false.
-func (sv StateValue) IsInteger() bool {
+func (sv StateVariable) IsInteger() bool {
 	return sv.valueType.IsInteger()
 }
 
@@ -28,20 +28,20 @@ func (sv StateValue) IsInteger() bool {
 //
 // The return value will be a boolean indicating whether the state value type is
 // a signed integer (true) or not (false).
-func (sv StateValue) IsSignedInt() bool {
+func (sv StateVariable) IsSignedInt() bool {
 	return sv.valueType.IsSignedInt()
 }
 
 // IsUnsignedInt checks if the state value type represents an unsigned integer.
 // The method returns a boolean indicating whether the state value type is an
 // unsigned integer.
-func (sv StateValue) IsUnsignedInt() bool {
+func (sv StateVariable) IsUnsignedInt() bool {
 	return sv.valueType.IsUnsignedInt()
 }
 
 // IsFloat returns true if the StateValue's value type represents a floating point
 // number; false otherwise.
-func (sv StateValue) IsFloat() bool {
+func (sv StateVariable) IsFloat() bool {
 	return sv.valueType.IsFloat()
 }
 
@@ -54,7 +54,7 @@ func (sv StateValue) IsFloat() bool {
 // Returns:
 //
 //	(bool) : Indicates whether the StateValue is of boolean type or not.
-func (sv StateValue) IsBool() bool {
+func (sv StateVariable) IsBool() bool {
 	return sv.valueType.IsBool()
 }
 
@@ -82,7 +82,7 @@ func (sv StateValue) IsBool() bool {
 //
 //	state := upnp.StateValue{valueType: upnp.TypeInt}
 //	fmt.Println(state.IsString())  // Outputs: false
-func (sv StateValue) IsString() bool {
+func (sv StateVariable) IsString() bool {
 	return sv.valueType.IsString()
 }
 
@@ -109,7 +109,7 @@ func (sv StateValue) IsString() bool {
 //	fmt.Println(state.IsTime())
 //
 // Outputs: false
-func (sv StateValue) IsTime() bool {
+func (sv StateVariable) IsTime() bool {
 	return sv.valueType.IsTime()
 }
 
@@ -120,7 +120,7 @@ func (sv StateValue) IsTime() bool {
 // UUID; false otherwise.
 //
 // Returns: bool: Indicates whether the StateValue is of UUID type or not.
-func (sv StateValue) IsUUID() bool {
+func (sv StateVariable) IsUUID() bool {
 	return sv.valueType.IsUUID()
 }
 
@@ -129,7 +129,7 @@ func (sv StateValue) IsUUID() bool {
 // a Uniform Resource Identifier (URI) or not.
 //
 // Returns: bool: Indicates whether the StateValue is of URI type or not.
-func (sv StateValue) IsURI() bool {
+func (sv StateVariable) IsURI() bool {
 	return sv.valueType.IsURI()
 }
 
@@ -141,7 +141,7 @@ func (sv StateValue) IsURI() bool {
 // Returns: bool: If the underlying value type of the StateValue object is
 // either TypeBinBase64 or TypeBinHex, this method will return true; otherwise,
 // it returns false.
-func (sv StateValue) IsBinary() bool {
+func (sv StateVariable) IsBinary() bool {
 	return sv.valueType.IsBinary()
 }
 
@@ -153,6 +153,6 @@ func (sv StateValue) IsBinary() bool {
 // //
 // Returns: bool: A boolean value indicating whether the given StateValue is
 // comparable or not. True means it's comparable, False means it isn't.
-func (sv StateValue) IsComparable() bool {
+func (sv StateVariable) IsComparable() bool {
 	return sv.valueType.IsComparable()
 }

@@ -1,4 +1,4 @@
-package upnp
+package stateVariables
 
 import (
 	"sync"
@@ -7,8 +7,8 @@ import (
 	"github.com/beevik/etree"
 )
 
-type StateValueInstance struct {
-	model         *StateValue
+type StateVarInstance struct {
+	model         *StateVariable
 	value         interface{}
 	previousValue interface{}
 	lastChange    time.Time
@@ -16,21 +16,21 @@ type StateValueInstance struct {
 	mu            sync.RWMutex
 }
 
-func (instance *StateValueInstance) Cast(val interface{}) (interface{}, error) {
+func (instance *StateVarInstance) Cast(val interface{}) (interface{}, error) {
 	return instance.model.Cast(val)
 }
 
-func (instance *StateValueInstance) Model() *StateValue {
+func (instance *StateVarInstance) Model() *StateVariable {
 	return instance.model
 }
 
-func (instance *StateValueInstance) Value() interface{} {
+func (instance *StateVarInstance) Value() interface{} {
 	instance.mu.RLock()
 	defer instance.mu.RUnlock()
 	return instance.value
 }
 
-func (instance *StateValueInstance) SetValue(val interface{}) error {
+func (instance *StateVarInstance) SetValue(val interface{}) error {
 	cval, err := instance.Cast(val)
 
 	if err != nil {
@@ -44,14 +44,14 @@ func (instance *StateValueInstance) SetValue(val interface{}) error {
 	return nil
 }
 
-func (instance *StateValueInstance) Incr() {
+func (instance *StateVarInstance) Incr() {
 	instance.mu.Lock()
 	defer instance.mu.Unlock()
 
 }
 
 // ShouldTriggerEvent vérifie toutes les conditions
-func (instance *StateValueInstance) ShouldTriggerEvent() bool {
+func (instance *StateVarInstance) ShouldTriggerEvent() bool {
 	for _, condition := range instance.model.eventConditions {
 		if !condition(instance) {
 			return false
@@ -60,7 +60,7 @@ func (instance *StateValueInstance) ShouldTriggerEvent() bool {
 	return true
 }
 
-func (sv *StateValueInstance) GenerateEvent() *etree.Element {
+func (sv *StateVarInstance) GenerateEvent() *etree.Element {
 
 	// Construire le XML d'événement
 	propSet := etree.NewElement("e:propertyset")
