@@ -55,7 +55,7 @@ func toTime(v interface{}) (time.Time, error) {
 func parseUPnPTime(t StateVarType, s string) (time.Time, error) {
 	s = strings.TrimSpace(s)
 
-	layouts := []string{}
+	var layouts []string = nil
 
 	switch t {
 	case StateType_Date:
@@ -86,6 +86,7 @@ func parseUPnPTime(t StateVarType, s string) (time.Time, error) {
 			return ts, nil
 		}
 	}
+
 	return time.Time{}, fmt.Errorf("invalid %v value: %q", t, s)
 }
 

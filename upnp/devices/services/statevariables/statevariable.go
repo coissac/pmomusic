@@ -49,6 +49,10 @@ func (sv StateVariable) Name() string {
 	return sv.name
 }
 
+func (sv StateVariable) TypeID() string {
+	return "StateVariable"
+}
+
 // Type returns the UPnP data type of the state variable.
 func (state *StateVariable) Type() StateVarType {
 	return state.valueType
@@ -431,7 +435,6 @@ func (state *StateVariable) NewInstance() *StateVarInstance {
 func (sv *StateVariable) ToXMLElement() *etree.Element {
 	// Create root <stateVariable> element
 	elem := etree.NewElement("stateVariable")
-	elem.CreateAttr("name", sv.name)
 
 	// Add sendEvents attribute (UPnP eventing capability)
 	if sv.sendEvents {
@@ -439,6 +442,9 @@ func (sv *StateVariable) ToXMLElement() *etree.Element {
 	} else {
 		elem.CreateAttr("sendEvents", "no") // Disable event notifications
 	}
+
+	name := elem.CreateElement("name")
+	name.SetText(sv.Name())
 
 	// Add data type element
 	dataType := elem.CreateElement("dataType")
