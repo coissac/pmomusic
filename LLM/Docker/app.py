@@ -6,16 +6,17 @@ import hashlib
 import textwrap
 import requests
 import httpx
+import socket
 from fastapi.responses import StreamingResponse
-from fastapi import FastAPI, Query, HTTPException, Request
+from fastapi import FastAPI, Query, HTTPException, Request, Body
 from langchain_community.vectorstores import Chroma
 from langchain_ollama import OllamaEmbeddings
 from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 from unstructured.cleaners.core import clean_extra_whitespace, clean_non_ascii_chars, replace_unicode_quotes
 from datetime import datetime, timezone, timedelta
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, PrivateAttr, ValidationError
 from typing import Optional, List, Dict, Any
 
 
@@ -23,6 +24,7 @@ from typing import Optional, List, Dict, Any
 PERSIST_DIR = os.environ.get("CHROMA_PERSIST_DIR", "/chroma_db")
 CACHE_DIR = os.environ.get("RESPONSE_CACHE_DIR", "/response_cache")
 MODEL_NAME = os.environ.get("OLLAMA_MODEL", "llama3:13b")
+EMBED_MODEL = os.environ.get("EMBED_MODEL", "mxbai-embed-large:latest")
 SRC_PATH=os.environ.get("SRC_PATH", ".")
 
 # Configuration
@@ -33,6 +35,37 @@ DDGS_SEARCH_ENABLED = True
 
 os.makedirs(PERSIST_DIR, exist_ok=True)
 os.makedirs(CACHE_DIR, exist_ok=True)
+
+# Configuration de l'URL de base d'Ollama
+def get_ollama_base_url():
+    """Détermine dynamiquement l'URL d'Ollama"""
+    # 1. Vérifier la variable d'environnement
+    if "OLLAMA_BASE_URL" in os.environ:
+        return os.environ["OLLAMA_BASE_URL"]
+    
+    # 2. Tester la connectivité locale
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(1)
+            s.connect(("localhost", 11434))
+        return "http://localhost:11434"
+    except (socket.timeout, ConnectionRefusedError):
+        pass
+    
+    # 3. Essayer l'adresse spéciale Docker
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(1)
+            s.connect(("host.docker.internal", 11434))
+        return "http://host.docker.internal:11434"
+    except (socket.timeout, ConnectionRefusedError):
+        pass
+    # 4. Fallback pour les environnements cloud
+    return "http://127.0.0.1:11434"
+
+
+OLLAMA_BASE_URL = get_ollama_base_url()
+
 
 # --- Nettoyage du code ---
 def clean_code_content(content: str) -> str:
@@ -62,20 +95,35 @@ def hash_code_dir(paths: list) -> str:
 from typing import List
 
 class NomicEmbeddingsWrapper(OllamaEmbeddings):
-    """Wrapper automatique pour les préfixes Nomic"""
+    """Wrapper Ollama pour les embeddings de code, compatible Chroma."""
+    _cached_dim: int = PrivateAttr()  # attribut interne non validé par Pydantic
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Calcul de la dimension une seule fois
+        self._cached_dim = 768 #len(super().embed_query("Hello"))
 
     def _prefix_text(self, text: str, is_document: bool) -> str:
+        """Ajoute un préfixe pour distinguer document vs query."""
         prefix = "search_document: " if is_document else "search_query: "
         return prefix + text
-    
+
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        """Embeds documents en ajoutant le préfixe, retourne liste de vecteurs float."""
         prefixed_texts = [self._prefix_text(t, is_document=True) for t in texts]
-        return super().embed_documents(prefixed_texts)
-    
+        embeddings = super().embed_documents(prefixed_texts)
+        # Normaliser les embeddings vides pour éviter les erreurs Chroma
+        return [e if e else [0.0] * self.model_dimensions for e in embeddings]
+
     def embed_query(self, text: str) -> List[float]:
-        return super().embed_query(self._prefix_text(text, is_document=False))
+        """Embeds une query en ajoutant le préfixe."""
+        emb = super().embed_query(self._prefix_text(text, is_document=False))
+        # Normaliser embedding vide
+        return emb if emb else [0.0] * self.model_dimensions
 
-
+    @property
+    def model_dimensions(self) -> int:
+        return self._cached_dim
 
 # --- FastAPI ---
 app = FastAPI()
@@ -131,8 +179,11 @@ def build_vectorstore():
     splits = go_splitter.split_documents(all_docs)
     print(f"🔹 {len(splits)} chunks créés", file=sys.stderr)
 
-    embedding = NomicEmbeddingsWrapper(model="nomic-embed-text", base_url=OLLAMA_BASE_URL)
+    embedding = NomicEmbeddingsWrapper(model=EMBED_MODEL, base_url=OLLAMA_BASE_URL)
 
+    splits = [doc for doc in splits if doc.page_content.strip()]
+
+    print(f"🔹 {len(splits)} fragments non vides à intégrer", file=sys.stderr)
     # Créer ou recharger Chroma
     vectorstore = Chroma.from_documents(
         documents=splits,
@@ -186,10 +237,7 @@ class GenerateRequest(BaseModel):
     prompt: str
     system: Optional[str] = None
     template: Optional[str] = None
-    context: Optional[List[int]] = None
-    stream: bool = False
-    raw: bool = False
-    format: Optional[str] = None
+    stream: Optional[bool] = False
     options: Optional[Dict[str, Any]] = None
 
 class ChatMessage(BaseModel):
@@ -247,39 +295,33 @@ def build_enhanced_prompt(original_prompt: str, rag_context: str, web_context: s
 {original_prompt}
 """
 
+
 # Endpoints compatibles Ollama
 @app.post("/api/generate")
-async def generate(request: GenerateRequest):
-    """Endpoint /api/generate avec enrichissement RAG"""
-    start_time = time.time()
-    
-    # Récupération des contextes
-    rag_context = await perform_rag_search(request.prompt)
-    web_context = await perform_web_search(request.prompt)
-    
-    # Construction du prompt enrichi
-    enhanced_prompt = build_enhanced_prompt(
-        original_prompt=request.prompt,
-        rag_context=rag_context,
-        web_context=web_context
-    )
-    
-    # Préparation de la requête pour le vrai Ollama
-    ollama_payload = {
-        "model": request.model,
-        "prompt": enhanced_prompt,
-        "system": request.system,
-        "template": request.template,
-        "context": request.context,
-        "stream": request.stream,
-        "raw": request.raw,
-        "format": request.format,
-        "options": request.options
-    }
-    
-    # Appel au vrai serveur Ollama
-    async with httpx.AsyncClient() as client:
-        try:
+async def generate_endpoint(request_data: GenerateRequest = Body(...)):
+    """Endpoint pour la génération avec gestion du streaming"""
+    try:
+        # Récupération des contextes RAG et web
+        rag_context = await perform_rag_search(request_data.prompt)
+        web_context = await perform_web_search(request_data.prompt)
+        
+        # Construction du prompt enrichi
+        enhanced_prompt = build_enhanced_prompt(
+            original_prompt=request_data.prompt,
+            rag_context=rag_context,
+            web_context=web_context
+        )
+        
+        # Préparation du payload pour Ollama
+        ollama_payload = {
+            "model": request_data.model,
+            "prompt": enhanced_prompt,
+            "stream": request_data.stream,
+            "options": request_data.options or {}
+        }
+        
+        # Appel à Ollama
+        async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{OLLAMA_BASE_URL}/api/generate",
                 json=ollama_payload,
@@ -287,17 +329,71 @@ async def generate(request: GenerateRequest):
             )
             response.raise_for_status()
             
-            # Si streaming, retourner le flux directement
-            if request.stream:
-                return response.iter_lines()
+            # Gestion des réponses NON-STREAMING
+            if not request_data.stream:
+                result = response.json()
+                return {
+                    "model": result["model"],
+                    "response": result["response"],
+                    "done": result["done"],
+                    "context": result.get("context"),
+                    "total_duration": result.get("total_duration")
+                }
             
-            # Pour les réponses non-streamées
-            result = response.json()
-            result["context"] = None  # Reset du contexte pour éviter les fuites
-            return result
-            
-        except httpx.RequestError as e:
-            raise HTTPException(500, f"Erreur de connexion à Ollama: {str(e)}")
+            # Gestion des réponses STREAMING
+            else:
+                async def generate():
+                    """Générateur pour le streaming des résultats"""
+                    full_response = ""
+                    async for line in response.aiter_lines():
+                        if line.strip():
+                            try:
+                                chunk = json.loads(line)
+                                
+                                # 1. Format SSE valide avec double newline
+                                yield f"data: {json.dumps(chunk)}\n\n"
+                                
+                                # 2. Accumuler la réponse complète pour les logs
+                                full_response += chunk.get("response", "")
+                                
+                                # 3. Envoyer périodiquement un keep-alive
+                                if random.random() < 0.1:  # 10% des chunks
+                                    yield ": keep-alive\n\n"
+                                
+                                # 4. Fin du stream
+                                if chunk.get("done", False):
+                                    break
+                            except json.JSONDecodeError:
+                                print(f"⚠️ Ligne JSON invalide: {line}")
+                                yield f"event: error\ndata: Invalid JSON line\n\n"
+                    
+                    # 5. Envoyer un message de fin explicite
+                    yield "event: end\ndata: Stream completed\n\n"
+                    
+                    # 6. Log de la réponse complète
+                    print(f"🔹 Réponse complète ({len(full_response)} caractères): {full_response[:200]}...", file=sys.stderr)
+                    
+                    # Log de la réponse complète (optionnel)
+                    print(f"🔹 Réponse complète: {full_response}")
+                
+                # 7. Configuration de la réponse avec des headers spécifiques
+                return StreamingResponse(
+                    generate(),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no"  # Important pour Nginx
+                    }
+                )    
+                        
+    except httpx.RequestError as e:
+        raise HTTPException(500, f"Erreur de connexion à Ollama: {str(e)}")
+    except json.JSONDecodeError as e:
+        raise HTTPException(500, f"Erreur de décodage JSON: {str(e)}")
+    except Exception as e:
+        raise HTTPException(500, f"Erreur interne: {str(e)}")
+
 
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
@@ -385,3 +481,16 @@ async def enable_web_search(enabled: bool = True):
     global DDGS_SEARCH_ENABLED
     DDGS_SEARCH_ENABLED = enabled
     return {"status": "success", "web_search_enabled": enabled}
+
+# Endpoint de debug simplifié
+@app.post("/debug")
+async def debug_endpoint(request: Request):
+    """Endpoint de débogage simplifié"""
+    try:
+        body = await request.json()
+        return {
+            "status": "success",
+            "received_body": body
+        }
+    except json.JSONDecodeError:
+        raise HTTPException(400, "Invalid JSON format")
