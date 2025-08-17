@@ -1,0 +1,23 @@
+services:
+  code-llm:
+    build: .
+    container_name: code-llm
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # Variables Ollama / FastAPI
+      OLLAMA_API_URL: "http://localhost:11434/api/generate"
+      OLLAMA_MODEL: "deepseek-coder:33b"
+      CHROMA_PERSIST_DIR: "/chroma_db"
+      RESPONSE_CACHE_DIR: "/response_cache"
+      PYTHONUNBUFFERED: 1
+      OLLAMA_NUM_PARALLEL: 6
+    volumes:
+      - "/Users/coissac/.ollama/models:/app/ollama:/models"       # modèles persistants
+      - "/Users/coissac/Sync/maison/Petite_maisons/src/pmomusic:/code"       # code Go à indexer
+      - "./app.py:/app/app.py"
+#      - ./chroma_db:/chroma_db
+#      - ./response_cache:/response_cache
+    stdin_open: true
+    tty: true
