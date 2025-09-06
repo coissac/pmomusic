@@ -1,6 +1,9 @@
 package objectstore
 
-import "iter"
+import (
+	"fmt"
+	"iter"
+)
 
 type Object interface {
 	Name() string
@@ -9,7 +12,15 @@ type Object interface {
 
 type ObjectSet[T Object] map[string]T
 
-func (m *ObjectSet[T]) Insert(obj T) {
+func (m *ObjectSet[T]) Insert(obj T) error {
+	if m.Contains(obj) {
+		return fmt.Errorf("object %s already present in set", obj.Name())
+	}
+	(*m)[obj.Name()] = obj
+	return nil
+}
+
+func (m *ObjectSet[T]) InsertOrReplace(obj T) {
 	(*m)[obj.Name()] = obj
 }
 

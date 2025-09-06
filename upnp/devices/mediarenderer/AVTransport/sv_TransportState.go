@@ -1,4 +1,4 @@
-package mediarenderer
+package avtransport
 
 import sv "gargoton.petite-maison-orange.fr/eric/pmomusic/upnp/devices/services/statevariables"
 
@@ -9,8 +9,10 @@ var TransportState = func() *sv.StateVariable {
 	ts.SetAllowedValues(
 		"STOPPED",
 		"PLAYING",
-		"PAUSED_PLAYBACK",
+		"RECORDING",
 		"TRANSITIONING",
+		"PAUSED_PLAYBACK",
+		"PAUSED_RECORDING",
 		"NO_MEDIA_PRESENT",
 	)
 

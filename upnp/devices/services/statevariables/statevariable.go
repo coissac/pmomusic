@@ -1,17 +1,13 @@
 package statevariables
 
 import (
-	"encoding/base64"
-	"encoding/hex"
 	"fmt"
-	"net/url"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
 	"time"
 
-	"github.com/beevik/etree"
-	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -124,7 +120,7 @@ func (state *StateVariable) DefaultValue() interface{} {
 		return state.valueType.DefaultValue()
 	}
 
-	return state.DefaultValue()
+	return state.defaultValue
 }
 
 // HasRange indicates if a value range constraint is defined.
@@ -228,20 +224,6 @@ func (state *StateVariable) UpdateMaximalValue(value interface{}) error {
 	return nil
 }
 
-// IsValueInRange checks if a value falls within the defined range.
-// Always returns true if no range is set.
-//
-// Parameters:
-//
-//	value: Value to check
-//
-// Returns:
-//
-//	bool: True if within range or no range defined
-func (state *StateVariable) IsValueInRange(value interface{}) (bool, error) {
-	return state.valueType.InRange(value, state.valueRange)
-}
-
 // IsSendingEvents indicates if state changes trigger UPnP events.
 func (state *StateVariable) IsSendingEvents() bool {
 	return state.sendEvents
@@ -296,61 +278,6 @@ func (state *StateVariable) AppendAllowedValue(value ...interface{}) error {
 
 	log.Debugf("🐞 Added allowed values to %s: %v", state.name, value)
 	return nil
-}
-
-// IsValueAllowed checks if a value exists in the allowed value list.
-// Always returns true if no allowed values are defined.
-//
-// Parameters:
-//
-//	value: Value to check
-//
-// Returns:
-//
-//	bool: True if value is permitted or no list defined
-func (state *StateVariable) IsValueAllowed(value interface{}) (bool, error) {
-	if !state.HasAllowedValues() {
-		return true, nil // No list = any value valid
-	}
-
-	cvalue, err := state.valueType.Cast(value)
-	if err != nil {
-		return false, err
-	}
-
-	for _, allowed := range state.allowedValues {
-		if reflect.DeepEqual(cvalue, allowed) {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-// IsValidValue performs full validation against all constraints.
-// Checks (in order):
-//  1. Value can be cast to the type
-//  2. Value is within range (if defined)
-//  3. Value is in allowed list (if defined)
-//
-// Returns:
-//
-//	bool: True if value passes all applicable constraints
-func (state *StateVariable) IsValidValue(value interface{}) (bool, error) {
-	cvalue, err := state.valueType.Cast(value)
-	if err != nil {
-		return false, err
-	}
-
-	inrange, err1 := state.IsValueInRange(cvalue)
-	allowed, err2 := state.IsValueAllowed(cvalue)
-	if err1 != nil || err2 != nil {
-		if err1 != nil {
-			err = err1
-		} else {
-			err = err2
-		}
-	}
-	return inrange && allowed, err
 }
 
 func (state *StateVariable) HasDescription() bool {
@@ -421,139 +348,72 @@ func (state *StateVariable) ClearAllowedValues() {
 	state.allowedValues = make([]interface{}, 0)
 }
 
+// bool: True if within range or no range defined
+func (state *StateVariable) IsValueInRange(value interface{}) (bool, error) {
+	return state.valueType.InRange(value, state.valueRange)
+}
+
+func (state *StateVariable) IsValueAllowed(value interface{}) (bool, error) {
+	if !state.HasAllowedValues() {
+		return true, nil // No list = any value valid
+	}
+	cvalue, err := state.Cast(value)
+	if err != nil {
+		return false, err
+	}
+
+	for _, allowed := range state.allowedValues {
+		if reflect.DeepEqual(cvalue, allowed) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (state *StateVariable) IsValidValue(value interface{}) (bool, error) {
+	cvalue, err := state.Cast(value)
+	if err != nil {
+		return false, err
+	}
+
+	inrange, err1 := state.IsValueInRange(cvalue)
+	allowed, err2 := state.IsValueAllowed(cvalue)
+	if err1 != nil || err2 != nil {
+		if err1 != nil {
+			err = err1
+		} else {
+			err = err2
+		}
+	}
+	return inrange && allowed, err
+}
+
 func (state *StateVariable) NewInstance() *StateVarInstance {
-	return &StateVarInstance{
-		model:      state,
+	instance := &StateVarInstance{
+		model:        state,
+		name:         state.name,
+		modifiable:   state.modifiable,
+		description:  state.description,
+		step:         state.step,
+		defaultValue: state.defaultValue,
+
+		eventConditions: maps.Clone(state.eventConditions),
+		allowedValues:   slices.Clone(state.allowedValues),
+		sendEvents:      state.sendEvents,
+		parse:           state.parse,
+		marshal:         state.marshal,
+
 		value:      state.DefaultValue(),
 		lastChange: time.Now(),
 		lastEvent:  time.Unix(int64(1718985600), 0).UTC(),
 	}
-}
 
-// ToXMLElement generates the complete XML representation of the state variable
-// Returns an etree.Element that can be serialized to XML
-func (sv *StateVariable) ToXMLElement() *etree.Element {
-	// Create root <stateVariable> element
-	elem := etree.NewElement("stateVariable")
-
-	// Add sendEvents attribute (UPnP eventing capability)
-	if sv.sendEvents {
-		elem.CreateAttr("sendEvents", "yes") // Enable event notifications
-	} else {
-		elem.CreateAttr("sendEvents", "no") // Disable event notifications
-	}
-
-	name := elem.CreateElement("name")
-	name.SetText(sv.Name())
-
-	// Add data type element
-	dataType := elem.CreateElement("dataType")
-	dataType.SetText(sv.valueType.String()) // Set UPnP type name (e.g., "ui1", "boolean")
-
-	// Add default value if specified
-	if sv.defaultValue != nil {
-		defaultValue := elem.CreateElement("defaultValue")
-		// Convert value to UPnP-compatible string representation
-		defaultValue.SetText(sv.valueToString(sv.defaultValue))
-	}
-
-	// Add value range constraints if defined
-	if sv.valueRange != nil {
-		rangeElem := elem.CreateElement("allowedValueRange")
-
-		// Minimum boundary value
-		min := rangeElem.CreateElement("minimum")
-		min.SetText(sv.valueToString(sv.valueRange.min))
-
-		// Maximum boundary value
-		max := rangeElem.CreateElement("maximum")
-		max.SetText(sv.valueToString(sv.valueRange.max))
-
-		// Add step value if defined (for incremental controls)
-		if sv.step != nil {
-			step := rangeElem.CreateElement("step")
-			step.SetText(sv.valueToString(sv.step))
+	if state.HasRange() {
+		instance.valueRange = &ValueRange{
+			min: state.valueRange.min,
+			max: state.valueRange.max,
 		}
 	}
 
-	// Add allowed value list if defined
-	if len(sv.allowedValues) > 0 {
-		allowedList := elem.CreateElement("allowedValueList")
-		for _, value := range sv.allowedValues {
-			// Create individual <allowedValue> elements
-			allowed := allowedList.CreateElement("allowedValue")
-			allowed.SetText(sv.valueToString(value))
-		}
-	}
-
-	// Add description if available
-	if sv.description != "" {
-		desc := elem.CreateElement("description")
-		desc.SetText(sv.description) // Human-readable description
-	}
-
-	return elem
-}
-
-// valueToString converts a value to its UPnP-compatible string representation
-// Handles type-specific formatting for proper XML serialization
-func (sv *StateVariable) valueToString(val interface{}) string {
-	if val == nil {
-		return "" // Safeguard against nil values
-	}
-
-	// Type-specific formatting for UPnP compliance
-	switch sv.valueType {
-	case StateType_Boolean:
-		// Boolean: "1" for true, "0" for false (UPnP standard)
-		if b, ok := val.(bool); ok && b {
-			return "1"
-		}
-		return "0"
-
-	case StateType_Date:
-		// Date: YYYY-MM-DD format
-		if t, ok := val.(time.Time); ok {
-			return t.Format("2006-01-02")
-		}
-
-	case StateType_DateTime, StateType_DateTimeTZ:
-		// DateTime: ISO 8601 format with timezone
-		if t, ok := val.(time.Time); ok {
-			return t.Format(time.RFC3339)
-		}
-
-	case StateType_Time, StateType_TimeTZ:
-		// Time: HH:MM:SS format
-		if t, ok := val.(time.Time); ok {
-			return t.Format("15:04:05")
-		}
-
-	case StateType_BinBase64:
-		// Binary: Base64 encoding
-		if b, ok := val.([]byte); ok {
-			return base64.StdEncoding.EncodeToString(b)
-		}
-
-	case StateType_BinHex:
-		// Binary: Hex encoding
-		if b, ok := val.([]byte); ok {
-			return hex.EncodeToString(b)
-		}
-
-	case StateType_URI:
-		// URI: Full URL string
-		if u, ok := val.(*url.URL); ok {
-			return u.String()
-		}
-
-	case StateType_UUID:
-		// UUID: Canonical string representation
-		if u, ok := val.(uuid.UUID); ok {
-			return u.String()
-		}
-	}
-
-	// Default conversion for unsupported types or fallback
-	return fmt.Sprintf("%v", val)
+	return instance
 }

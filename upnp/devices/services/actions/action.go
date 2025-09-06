@@ -1,6 +1,6 @@
 package actions
 
-import "github.com/beevik/etree"
+import "maps"
 
 type Action struct {
 	name string
@@ -10,7 +10,8 @@ type Action struct {
 
 func NewAction(name string) *Action {
 	ac := &Action{
-		name: name,
+		name:      name,
+		arguments: make(ArgumentSet),
 	}
 
 	return ac
@@ -28,12 +29,10 @@ func (a *Action) AddArgument(arg *Argument) {
 	a.arguments.Insert(arg)
 }
 
-func (a *Action) ToXMLElement() *etree.Element {
-	elem := etree.NewElement("action")
-
-	name := elem.CreateElement("name")
-	name.SetText(a.Name())
-
-	elem.AddChild(a.arguments.ToXMLElement())
-	return elem
+func (a *Action) NewInstance() *ActionInstance {
+	ac := &ActionInstance{
+		model:     a,
+		arguments: maps.Clone(a.arguments),
+	}
+	return ac
 }
