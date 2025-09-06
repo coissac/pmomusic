@@ -7,8 +7,9 @@ services:
       - "8000:8000"
     environment:
       # Variables Ollama / FastAPI
-      OLLAMA_API_URL: "http://localhost:11434/api/generate"
-      OLLAMA_MODEL: "deepseek-coder:33b"
+      OLLAMA_HOST: "http://host.docker.internal:11434"
+      GENERATE_MODEL: "deepseek-coder:6.7b-instruct"
+      CHAT_MODEL: "gpt-oss:20b"
       CHROMA_PERSIST_DIR: "/chroma_db"
       RESPONSE_CACHE_DIR: "/response_cache"
       PYTHONUNBUFFERED: 1

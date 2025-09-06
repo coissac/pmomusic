@@ -34,10 +34,11 @@ COPY start.sh .
 RUN chmod +x start.sh
 
 # Variables d'environnement par défaut
-ENV OLLAMA_API_URL="http://localhost:11434/api/generate"
-ENV OLLAMA_MODEL="deepseek-coder:33b"
+ENV OLLAMA_HOST="http://host.docker.internal:11434"
+ENV GENERATE_MODEL="deepseek-coder:6.7b-instruct"
 ENV CHROMA_PERSIST_DIR="/chroma_db"
 ENV RESPONSE_CACHE_DIR="/response_cache"
+ENV EMBED_MODEL="nomic-embed-text"
 
 # Exposer FastAPI
 EXPOSE 8000

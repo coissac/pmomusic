@@ -2,20 +2,22 @@
 set -e
 
 # Lancer Ollama en arrière-plan
-export OLLAMA_MODELS=/models
-echo "🔹 Démarrage de Ollama..." 1>&2
-ollama serve | sed 's/^/ 🔹[Ollama server] /'  &
+# export OLLAMA_MODELS=/models
+# echo "🔹 Démarrage de Ollama..." 1>&2
+# ollama serve 2>&1 \
+# | grep -vF "decode: cannot decode batches with this context (use llama_encode() instead)" \
+# | sed 's/^/ 🔹[Ollama server] /' 1>&2 &
 
-sleep 10
+# sleep 10
+
+if [[ -n "$1" ]] ; then 
+    eval $*
+fi
 
 echo "🔹 Preaload Ollama models: "
 ollama ls  | sed 's/^/ 🔹 /' 1>&2
 
-# Attendre Ollama
-sleep 5
-
-# Vérifier / précharger le modèle Nomic Embed Text
-EMBED_MODEL="nomic-embed-text:latest"
+# Vérifier / précharger le modèle d'embedding
 
 echo "🔹 Vérification du modèle d'embedding: $EMBED_MODEL" 1>&2
 if ! ollama list | grep -q "$EMBED_MODEL"; then

@@ -1,10 +1,11 @@
 fastapi==0.116.1
 uvicorn[standard]==0.23.2
 chromadb==1.0.15
-duckduckgo-search==8.1.1
+ddgs==9.5.4
 langchain==0.3.27
 langchain-community==0.3.27
 sentence-transformers==5.1.0
+langchain-chroma==0.2.5
 unstructured==0.7.10
 langchain-ollama==0.3.6
 requests==2.32.1
