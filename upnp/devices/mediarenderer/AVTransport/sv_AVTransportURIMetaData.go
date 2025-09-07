@@ -1,10 +1,25 @@
 package avtransport
 
-import sv "gargoton.petite-maison-orange.fr/eric/pmomusic/upnp/devices/services/statevariables"
+import (
+	"gargoton.petite-maison-orange.fr/eric/pmomusic/didl"
+	sv "gargoton.petite-maison-orange.fr/eric/pmomusic/upnp/devices/services/statevariables"
+	log "github.com/sirupsen/logrus"
+)
+
+func _AVTransportURIMetaDataParser(value string) (interface{}, error) {
+	log.Warnf("[avtransport] Parsing AVTransport)")
+	didl, err := didl.Parse(value)
+	if err != nil {
+		return value, err
+	}
+
+	return didl, nil
+}
 
 var AVTransportURIMetaData = func() *sv.StateVariable {
 
 	ts := sv.StateType_String.NewStateValue("AVTransportURIMetaData")
+	ts.SetValueParser(_AVTransportURIMetaDataParser)
 
 	return ts
 }()
