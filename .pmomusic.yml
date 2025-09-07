@@ -1,0 +1,9 @@
+devices:
+    mediarenderer:
+        fakerenderer:
+            udn: d7eaad15-7d21-4411-926a-bc1eea0713db
+    mediaserver:
+        qobuz:
+            udn: 28963b75-4c5f-4da7-b10e-ffafd
+host:
+    http_port: "8080"

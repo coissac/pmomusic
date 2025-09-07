@@ -13,6 +13,7 @@ import (
 )
 
 func main() {
+	log.SetLevel(log.DebugLevel) // → niveau debug
 
 	ctx, stop := signal.NotifyContext(
 		context.Background(),
