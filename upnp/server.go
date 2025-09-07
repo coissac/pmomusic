@@ -78,8 +78,6 @@ func (s *Server) Start() error {
 
 		s.mu.RLock()
 
-		pmolog.LoggerWeb(mux)
-
 		mux.HandleFunc("/", s.ServeDebugIndex)
 
 		s.httpSrv = &http.Server{
@@ -124,6 +122,8 @@ func (s *Server) Run(ctx context.Context) error {
 	if err := s.Start(); err != nil {
 		return fmt.Errorf("❌ failed to start server: %w", err)
 	}
+
+	pmolog.LoggerWeb(ctx, s.httpSrv.Handler.(*http.ServeMux))
 
 	s.sspd = ssdp.NewSSDPServer()
 	if err := s.sspd.Start(ctx); err != nil {
