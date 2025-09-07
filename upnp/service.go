@@ -81,6 +81,10 @@ func (svc *Service) NewInstance() *ServiceInstance {
 
 		statevariables: make(sv.StateVarInstanceSet),
 		actions:        make(actions.ActionInstanceSet),
+
+		subscribers:   make(map[string]string),
+		changedBuffer: make(map[string]interface{}),
+		seqid:         make(map[string]uint32),
 	}
 
 	for v := range svc.stateTable.All() {

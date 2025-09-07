@@ -1,14 +1,20 @@
 package upnp
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
 
 	"gargoton.petite-maison-orange.fr/eric/pmomusic/soap"
 	"gargoton.petite-maison-orange.fr/eric/pmomusic/upnp/devices/services/actions"
 	"gargoton.petite-maison-orange.fr/eric/pmomusic/upnp/devices/services/statevariables"
 	"github.com/beevik/etree"
+	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -20,7 +26,17 @@ type ServiceInstance struct {
 	device         *DeviceInstance
 	statevariables statevariables.StateVarInstanceSet
 	actions        actions.ActionInstanceSet
+	subscribers    map[string]string // SID → Callback URL
+	changedBuffer  map[string]interface{}
+	seqid          map[string]uint32
+	cbmu           sync.Mutex
+	mu             sync.Mutex
 }
+
+const (
+	MethodSubscribe   = "SUBSCRIBE"
+	MethodUnsubscribe = "UNSUBSCRIBE"
+)
 
 func (si *ServiceInstance) Name() string {
 	return si.name
@@ -115,6 +131,71 @@ func (svc *ServiceInstance) SPCDElement() *etree.Element {
 	return elem
 }
 
+func (svc *ServiceInstance) AddSubscriber(sid, callback string) {
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+	if svc.subscribers == nil {
+		svc.subscribers = make(map[string]string)
+	}
+	svc.subscribers[sid] = callback
+}
+
+func (svc *ServiceInstance) RenewSubscriber(sid, timeout string) {
+	// Pour l'instant juste log, on peut étendre avec expiration
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+	log.Infof("Renewed SID %s for timeout %s", sid, timeout)
+}
+
+func (svc *ServiceInstance) RemoveSubscriber(sid string) {
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+	delete(svc.subscribers, sid)
+}
+
+// Envoi d'un événement initial (optionnel)
+func (svc *ServiceInstance) SendInitialEvent(sid string) {
+	svc.mu.Lock()
+	callback := svc.subscribers[sid]
+	svc.mu.Unlock()
+	if callback == "" {
+		return
+	}
+
+	// Ici tu peux construire un SOAP Event XML minimal
+	body := `<e:propertyset xmlns:e="urn:schemas-upnp-org:event-1-0"><e:property><Status>Initial</Status></e:property></e:propertyset>`
+
+	callback = strings.TrimSpace(callback)
+	callback = strings.Trim(callback, "<>") // retire les < et >
+
+	// parser pour valider
+	u, err := url.Parse(callback)
+	if err != nil {
+		log.Errorf("Invalid callback URL: %v", err)
+		return
+	}
+
+	req, err := http.NewRequest("NOTIFY", u.String(), strings.NewReader(body))
+	if err != nil {
+		log.Errorf("Failed to create NOTIFY request: %v", err)
+		return
+	}
+
+	req.Header.Set("Content-Type", "text/xml; charset=\"utf-8\"")
+	req.Header.Set("NT", "upnp:event")
+	req.Header.Set("NTS", "upnp:propchange")
+	req.Header.Set("SID", sid)
+	req.Header.Set("SEQ", "0")
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Errorf("Failed to send initial event to %s: %v", callback, err)
+		return
+	}
+	defer resp.Body.Close()
+	log.Infof("✅ Initial event sent to %s, status=%s", callback, resp.Status)
+}
+
 func (svc *ServiceInstance) ToXMLElement() *etree.Element {
 	elem := etree.NewElement("service")
 
@@ -136,11 +217,146 @@ func (svc *ServiceInstance) ToXMLElement() *etree.Element {
 	return elem
 }
 
+func (svc *ServiceInstance) EventToBeSent(name string, value interface{}) {
+	svc.cbmu.Lock()
+	defer svc.cbmu.Unlock()
+
+	svc.changedBuffer[name] = value
+}
+
+func (svc *ServiceInstance) nextSeq(sid string) string {
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+
+	svc.seqid[sid]++
+	return fmt.Sprintf("%d", svc.seqid[sid])
+}
+
+func (svc *ServiceInstance) NotifySubscribers() {
+	svc.cbmu.Lock()
+	if len(svc.subscribers) == 0 || len(svc.changedBuffer) == 0 {
+		svc.cbmu.Unlock()
+		return
+	}
+
+	// Copier et réinitialiser le buffer
+	changed := svc.changedBuffer
+	svc.changedBuffer = make(map[string]interface{})
+	svc.cbmu.Unlock()
+
+	for sid, callback := range svc.subscribers {
+		go func(sid, callback string, changed map[string]interface{}) {
+			callback = strings.TrimSpace(callback)
+			callback = strings.Trim(callback, "<>")
+
+			u, err := url.Parse(callback)
+			if err != nil {
+				log.Errorf("Invalid callback URL %s: %v", callback, err)
+				return
+			}
+
+			body := `<e:propertyset xmlns:e="urn:schemas-upnp-org:event-1-0">`
+			for name, val := range changed {
+				body += fmt.Sprintf("<e:property><%s>%v</%s></e:property>", name, val, name)
+			}
+			body += "</e:propertyset>"
+
+			req, err := http.NewRequest("NOTIFY", u.String(), strings.NewReader(body))
+			if err != nil {
+				log.Errorf("Failed to create NOTIFY request to %s: %v", callback, err)
+				return
+			}
+
+			req.Header.Set("Content-Type", `text/xml; charset="utf-8"`)
+			req.Header.Set("NT", "upnp:event")
+			req.Header.Set("NTS", "upnp:propchange")
+			req.Header.Set("SID", sid)
+			req.Header.Set("SEQ", svc.nextSeq(sid))
+
+			client := &http.Client{}
+			resp, err := client.Do(req)
+			if err != nil {
+				log.Errorf("Failed to notify subscriber %s: %v", callback, err)
+				return
+			}
+			defer resp.Body.Close()
+
+			log.Infof("✅ Notified subscriber %s of changes: %v", callback, changed)
+		}(sid, callback, changed)
+	}
+}
+
+func (svc *ServiceInstance) StartNotifier(ctx context.Context, interval time.Duration) {
+	log.Infof("✅ Starting notifier for %s:%s every %.2f s", svc.device.Name(), svc.Name(), interval.Seconds())
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				log.Infof("✅ Notifier stopped for %s:%s", svc.device.Name(), svc.Name())
+				return
+			case <-ticker.C:
+				svc.NotifySubscribers()
+			}
+		}
+	}()
+}
+
 func (svc *ServiceInstance) EventSubHandler() func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		log.Infof("Event Subscription handler for %s:%s", svc.device.Name(), svc.Name())
-		// corps vide volontairement
+		log.Infof("📡 Event Subscription request for %s:%s", svc.device.Name(), svc.Name())
+
+		sid := r.Header.Get("SID")
+		timeout := r.Header.Get("Timeout")
+		callback := r.Header.Get("Callback")
+
+		switch r.Method {
+		case MethodSubscribe:
+			if sid == "" {
+				// Nouvelle subscription
+				sid = fmt.Sprintf("uuid:%s", uuid.New().String())
+				if callback != "" {
+					svc.AddSubscriber(sid, callback)
+				}
+				if timeout == "" {
+					timeout = "Second-1800"
+				}
+				log.Infof("🔔 New subscription: SID=%s, Callback=%s, Timeout=%s", sid, callback, timeout)
+				go svc.SendInitialEvent(sid) // envoyer l’état initial
+			} else {
+				// Renouvellement
+				svc.RenewSubscriber(sid, timeout)
+				log.Infof("♻️ Renew subscription: SID=%s, Timeout=%s", sid, timeout)
+			}
+
+			w.Header().Set("SID", sid)
+			w.Header().Set("Timeout", timeout)
+			w.WriteHeader(http.StatusOK)
+
+		case MethodUnsubscribe:
+			if sid != "" {
+				svc.RemoveSubscriber(sid)
+				log.Infof("❌ Unsubscribe SID=%s", sid)
+			}
+			w.WriteHeader(http.StatusOK)
+
+		default:
+			log.Warnf("Unsupported EventSub method: %s", r.Method)
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		}
+
+		// Debug log headers
+		for k, v := range r.Header {
+			log.Debugf("Header: %s=%v", k, v)
+		}
+
+		// Lire le body au besoin
+		body, err := io.ReadAll(r.Body)
+		if err == nil && len(body) > 0 {
+			log.Debugf("Body: %s", string(body))
+		}
 	}
 }
 
