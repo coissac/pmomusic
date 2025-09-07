@@ -147,9 +147,6 @@ func (svc *ServiceInstance) EventSubHandler() func(w http.ResponseWriter, r *htt
 func (svc *ServiceInstance) ControlHandler() func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		log.Infof("📡 Control request for %s:%s", svc.device.Name(), svc.Name())
-		log.Infof("➡️ Method: %s URL: %s", r.Method, r.URL.Path)
-		log.Infof("Header SOAPACTION: %s", r.Header.Get("SOAPACTION"))
-		log.Infof("Header Content-Type: %s", r.Header.Get("Content-Type"))
 
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -158,14 +155,85 @@ func (svc *ServiceInstance) ControlHandler() func(w http.ResponseWriter, r *http
 			return
 		}
 
-		soap.ParseSOAPGeneric(body)
+		// Callback générique pour décoder chaque paramètre
+		decoder := func(action, param, value string) (string, interface{}, error) {
+			// 1️⃣ Chercher si le param correspond à une StateVarInstance
 
-		// Réponse minimale SOAP
+			sv, ok := svc.statevariables[param]
+			log.Warnf("Look for a variable named : %s -> %v", param, ok)
+
+			if ok {
+				if sv.HasParser() {
+					v, err := sv.ParseValue(value)
+					if err != nil {
+						return param, value, err
+					}
+					return param, v, err
+				}
+				v, err := sv.Cast(value)
+				if err != nil {
+					return param, value, err
+				}
+				return param, v, nil
+			}
+
+			// 2️⃣ Chercher si le param correspond à une ActionInstance et appliquer un parseur associé
+			act, ok := svc.actions[action]
+			log.Debugf("Look for an action named  :  %s -> %v", action, ok)
+
+			if ok {
+				if argument, ok := act.Arguments(param); ok {
+					sv_name := argument.StateVariable().Name()
+					sv := svc.statevariables[sv_name]
+					v, err := sv.ParseValue(value)
+
+					log.Debugf("It corresponds to variable : %s with a parser %v", sv_name, sv.HasParser())
+
+					if err != nil {
+						return param, value, err
+					}
+					return param, v, nil
+				}
+			}
+
+			// 3️⃣ Sinon, valeur brute
+			return param, value, nil
+		}
+
+		env, err := soap.ParseSOAPEnvelope(body)
+
+		if err != nil {
+			log.Errorf("❌ Failed to parse SOAP enveloppe: %v", err)
+			soapResp, _ := soap.BuildSOAPFault("s:Client", "Invalid Args", err.Error())
+			w.Header().Set("Content-Type", `text/xml; charset="utf-8"`)
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write(soapResp)
+			return
+		}
+
+		req, err := soap.ParseUPnPAction(env, decoder)
+		if err != nil {
+			log.Errorf("❌ Failed to parse SOAP Action: %v", err)
+			soapResp, _ := soap.BuildSOAPFault("s:Client", "Invalid Args", err.Error())
+			w.Header().Set("Content-Type", `text/xml; charset="utf-8"`)
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write(soapResp)
+			return
+		}
+
+		log.Infof("➡️ SOAP Action: %s", req.Name)
+		for k, v := range req.Args {
+			if mi, ok := v.(Markdownable); ok {
+				v = mi.ToMarkdown()
+			}
+			log.Infof("    %s:%s = %v", req.Name, k, v)
+		}
+
+		// Ici tu peux appeler l'action correspondante sur svc.actions[req.Name] et récupérer le résultat
+		// Exemple de réponse minimale :
+		resp, _ := soap.BuildUPnPResponse(svc.ServiceType(), req.Name, map[string]string{})
 		w.Header().Set("Content-Type", `text/xml; charset="utf-8"`)
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`<?xml version="1.0"?>
-<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
-  <s:Body/>
-</s:Envelope>`))
+		_, _ = w.Write(resp)
 	}
 }

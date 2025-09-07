@@ -3,6 +3,7 @@ package statevariables
 import (
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/url"
 	"reflect"
@@ -86,6 +87,17 @@ func (instance *StateVarInstance) HasAllowedValues() bool {
 
 func (instance *StateVarInstance) AllowedValues() []interface{} {
 	return instance.allowedValues
+}
+
+func (instance *StateVarInstance) HasParser() bool {
+	return instance.parse != nil
+}
+
+func (instance *StateVarInstance) ParseValue(value string) (interface{}, error) {
+	if instance.parse == nil {
+		return value, errors.New("Not parsed value")
+	}
+	return instance.parse(value)
 }
 
 // IsValueInRange checks if a value falls within the defined range.
