@@ -7,7 +7,7 @@ import (
 )
 
 func _AVTransportURIMetaDataParser(value string) (interface{}, error) {
-	log.Warnf("[avtransport] Parsing AVTransport)")
+	log.Debug("[avtransport] Parsing AVTransport)")
 	didl, err := didl.Parse(value)
 	if err != nil {
 		return value, err
