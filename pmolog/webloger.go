@@ -2,331 +2,174 @@ package pmolog
 
 import (
 	"container/ring"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/sirupsen/logrus"
 )
 
-// Structure pour gérer les connexions SSE
+const bufferSize = 1000
+
+// ---------- SSE Broker ----------
+
 type SSEBroker struct {
 	clients map[chan string]bool
-	mutex   sync.Mutex
+	mu      sync.RWMutex
 }
 
-// Buffer circulaire pour stocker les 1000 derniers messages
 var (
-	logBuffer   = ring.New(1000)
+	broker      = &SSEBroker{clients: make(map[chan string]bool)}
+	logBuffer   = ring.New(bufferSize)
 	bufferMutex sync.Mutex
 )
 
-// Initialiser le broker SSE
-var broker = &SSEBroker{
-	clients: make(map[chan string]bool),
-}
+// ---------- Hook for Logrus ----------
 
-// Hook personnalisé pour Logrus qui envoie les logs aux clients SSE
 type SSELogHook struct{}
 
-func (hook *SSELogHook) Levels() []logrus.Level {
-	return logrus.AllLevels
-}
+func (SSELogHook) Levels() []logrus.Level { return logrus.AllLevels }
 
-func (hook *SSELogHook) Fire(entry *logrus.Entry) error {
-	// Formater le log avec le niveau et le message
-	logLine := fmt.Sprintf("[%s] %s", entry.Level.String(), entry.Message)
+func (SSELogHook) Fire(entry *logrus.Entry) error {
+	msg := map[string]string{
+		"time":    time.Now().Format(time.RFC3339),
+		"level":   entry.Level.String(),
+		"content": entry.Message,
+	}
+	b, _ := json.Marshal(msg)
 
-	// Ajouter le message au buffer circulaire
+	// add to buffer
 	bufferMutex.Lock()
-	logBuffer.Value = logLine
+	logBuffer.Value = string(b)
 	logBuffer = logBuffer.Next()
 	bufferMutex.Unlock()
 
-	// Envoyer le log à tous les clients connectés
-	broker.mutex.Lock()
-	for client := range broker.clients {
+	// broadcast
+	broker.mu.RLock()
+	for ch := range broker.clients {
 		select {
-		case client <- logLine:
-		default:
-			// Client saturé, on skip
+		case ch <- string(b):
+		default: // skip if full
 		}
 	}
-	broker.mutex.Unlock()
-
+	broker.mu.RUnlock()
 	return nil
 }
 
-// Handler SSE qui envoie les logs en temps réel
+// ---------- SSE Handler ----------
+
 func sseHandler(w http.ResponseWriter, r *http.Request) {
-	// Configurer les en-têtes SSE
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
-	// Créer un canal pour ce client
-	messageChan := make(chan string, 10)
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		return
+	}
 
-	// Ajouter le client au broker
-	broker.mutex.Lock()
-	broker.clients[messageChan] = true
-	broker.mutex.Unlock()
+	ch := make(chan string, 20)
+	broker.mu.Lock()
+	broker.clients[ch] = true
+	broker.mu.Unlock()
 
-	// Envoyer d'abord les 1000 derniers messages stockés
+	// replay buffer
 	bufferMutex.Lock()
-	logBuffer.Do(func(value interface{}) {
-		if value != nil {
-			if msg, ok := value.(string); ok {
-				// Déterminer le niveau de log pour le style CSS
-				level := "info"
-				if len(msg) > 7 {
-					switch msg[1:6] {
-					case "ERROR":
-						level = "error"
-					case "WARNI":
-						level = "warning"
-					case "DEBUG":
-						level = "debug"
-					}
-				}
-
-				// Formater le message en JSON pour inclure le niveau
-				jsonMsg := fmt.Sprintf("{\"content\": \"%s\", \"level\": \"%s\"}", escapeJSONString(msg), level)
-				fmt.Fprintf(w, "event: message\ndata: %s\n\n", jsonMsg)
-			}
+	logBuffer.Do(func(v interface{}) {
+		if v != nil {
+			fmt.Fprintf(w, "event: message\ndata: %s\n\n", v.(string))
 		}
 	})
-	w.(http.Flusher).Flush()
+	flusher.Flush()
 	bufferMutex.Unlock()
 
-	// Envoyer les logs au client au fur et à mesure
+	// stream new messages
 	for {
 		select {
-		case msg := <-messageChan:
-			// Déterminer le niveau de log pour le style CSS
-			level := "info"
-			if len(msg) > 7 {
-				switch msg[1:6] {
-				case "ERROR":
-					level = "error"
-				case "WARNI":
-					level = "warning"
-				case "DEBUG":
-					level = "debug"
-				}
-			}
-
-			// Formater le message en JSON pour inclure le niveau
-			jsonMsg := fmt.Sprintf("{\"content\": \"%s\", \"level\": \"%s\"}", escapeJSONString(msg), level)
-			fmt.Fprintf(w, "event: message\ndata: %s\n\n", jsonMsg)
-			w.(http.Flusher).Flush()
+		case msg := <-ch:
+			fmt.Fprintf(w, "event: message\ndata: %s\n\n", msg)
+			flusher.Flush()
 		case <-r.Context().Done():
-			// Supprimer le client quand la connexion est fermée
-			broker.mutex.Lock()
-			delete(broker.clients, messageChan)
-			broker.mutex.Unlock()
-			close(messageChan)
+			broker.mu.Lock()
+			delete(broker.clients, ch)
+			broker.mu.Unlock()
+			close(ch)
 			return
 		}
 	}
 }
 
-// Fonction pour échapper les chaînes JSON
-func escapeJSONString(s string) string {
-	// Échapper les guillemets et les antislashes
-	escaped := ""
-	for _, c := range s {
-		switch c {
-		case '"':
-			escaped += "\\\""
-		case '\\':
-			escaped += "\\\\"
-		case '\n':
-			escaped += "\\n"
-		case '\r':
-			escaped += "\\r"
-		case '\t':
-			escaped += "\\t"
-		default:
-			escaped += string(c)
-		}
-	}
-	return escaped
-}
+// ---------- HTML ----------
 
-// Page HTML pour afficher les logs avec support Markdown
-var indexHTML = `
-<!DOCTYPE html>
+var indexHTML = `<!DOCTYPE html>
 <html>
 <head>
-    <title>Logs en temps réel</title>
-    <style>
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; 
-            background: #0d1117; 
-            color: #e6edf3; 
-            margin: 0; 
-            padding: 20px; 
-        }
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-        h1 {
-            color: #58a6ff;
-            border-bottom: 1px solid #30363d;
-            padding-bottom: 10px;
-        }
-        #logs {
-            background: #161b22;
-            border: 1px solid #30363d;
-            border-radius: 6px;
-            padding: 15px;
-            height: 70vh;
-            overflow-y: auto;
-            font-size: 14px;
-            line-height: 1.5;
-        }
-        .log-line {
-            margin: 8px 0;
-            padding: 8px 12px;
-            border-radius: 6px;
-            border-left: 4px solid #58a6ff;
-        }
-        .log-line.error {
-            border-left-color: #f85149;
-            background-color: rgba(248, 81, 73, 0.1);
-        }
-        .log-line.warning {
-            border-left-color: #d29922;
-            background-color: rgba(210, 153, 34, 0.1);
-        }
-        .log-line.info {
-            border-left-color: #58a6ff;
-            background-color: rgba(56, 139, 253, 0.1);
-        }
-        .log-line.debug {
-            border-left-color: #8957e5;
-            background-color: rgba(137, 87, 229, 0.1);
-        }
-        .timestamp {
-            color: #7d8590;
-            font-size: 12px;
-            margin-right: 10px;
-        }
-        /* Styles Markdown */
-        .markdown-body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-        }
-        .markdown-body code {
-            background-color: rgba(240, 246, 252, 0.15);
-            border-radius: 6px;
-            padding: 0.2em 0.4em;
-            font-family: ui-monospace, SFMono-Regular, SF Mono, Consolas, Liberation Mono, Menlo, monospace;
-        }
-        .markdown-body pre {
-            background-color: rgba(240, 246, 252, 0.15);
-            border-radius: 6px;
-            padding: 16px;
-            overflow: auto;
-        }
-        .markdown-body pre code {
-            background: none;
-            padding: 0;
-        }
-        .markdown-body blockquote {
-            border-left: 4px solid #30363d;
-            padding-left: 16px;
-            margin-left: 0;
-            color: #7d8590;
-        }
-        .markdown-body a {
-            color: #58a6ff;
-            text-decoration: none;
-        }
-        .markdown-body a:hover {
-            text-decoration: underline;
-        }
-    </style>
-    <!-- Marked.js pour le rendu Markdown -->
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <meta charset="utf-8">
+  <title>🚀 Real-Time Logs</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+  <style>
+    body { background:#0d1117; color:#e6edf3; font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Oxygen,Ubuntu,Cantarell,sans-serif; margin:0; padding:20px; }
+    h1 { color:#58a6ff; border-bottom:1px solid #30363d; padding-bottom:10px; }
+    #logs { height:70vh; overflow-y:auto; background:#161b22; border:1px solid #30363d; border-radius:8px; padding:15px; }
+    .log { margin:6px 0; padding:6px 10px; border-left:4px solid; border-radius:6px; }
+    .log.error   { border-color:#f85149; background:rgba(248,81,73,0.1); }
+    .log.warning { border-color:#d29922; background:rgba(210,153,34,0.1); }
+    .log.info    { border-color:#58a6ff; background:rgba(56,139,253,0.1); }
+    .log.debug   { border-color:#8957e5; background:rgba(137,87,229,0.1); }
+    .time { color:#7d8590; font-size:12px; margin-right:10px; }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 </head>
 <body>
-    <div class="container">
-        <h1>📝 Logs en temps réel (1000 derniers messages)</h1>
-        <div id="logs"></div>
-    </div>
-    
-    <script>
-        const eventSource = new EventSource('/log-sse');
-        const logsContainer = document.getElementById('logs');
-        
-        // Configuration de Marked.js
-        marked.setOptions({
-            breaks: true,
-            highlight: function(code, lang) {
-                // Simplement retourner le code non highlighté pour l'instant
-                return code;
-            }
-        });
-        
-        // Fonction pour ajouter un message aux logs
-        function addLogMessage(data) {
-            const logLine = document.createElement('div');
-            logLine.className = 'log-line ' + data.level;
-            
-            // Ajouter un timestamp
-            const timestamp = new Date().toLocaleTimeString();
-            const timestampSpan = document.createElement('span');
-            timestampSpan.className = 'timestamp';
-            timestampSpan.textContent = timestamp;
-            logLine.appendChild(timestampSpan);
-            
-            // Traiter le contenu Markdown
-            const contentDiv = document.createElement('div');
-            contentDiv.className = 'markdown-body';
-            contentDiv.innerHTML = marked.parse(data.content);
-            logLine.appendChild(contentDiv);
-            
-            logsContainer.appendChild(logLine);
-            
-            // Défilement automatique
-            logsContainer.scrollTop = logsContainer.scrollHeight;
-        }
-        
-        eventSource.addEventListener('message', function(event) {
-            const data = JSON.parse(event.data);
-            addLogMessage(data);
-        });
-        
-        eventSource.onerror = function(error) {
-            console.error('Erreur SSE:', error);
-        };
-    </script>
-</body>
-</html>
-`
+  <h1>📝 Logs en temps réel</h1>
+  <div id="logs"></div>
+  <script>
+    const logs=document.getElementById('logs');
+    const es=new EventSource('/log-sse');
+    const maxLogs=500;
 
-// Handler pour servir la page HTML
+    marked.setOptions({ breaks:true, highlight: (code,lang)=>hljs.highlightAuto(code).value });
+
+    es.addEventListener('message', e=>{
+      const d=JSON.parse(e.data);
+      const line=document.createElement('div');
+      line.className='log '+d.level;
+
+      const t=document.createElement('span');
+      t.className='time';
+      t.textContent=new Date(d.time).toLocaleTimeString();
+      line.appendChild(t);
+
+      const c=document.createElement('div');
+      c.innerHTML=marked.parse(d.content);
+      line.appendChild(c);
+
+      logs.appendChild(line);
+      if(logs.children.length>maxLogs) logs.removeChild(logs.firstChild);
+      logs.scrollTop=logs.scrollHeight;
+    });
+
+    es.onerror=e=>console.error("SSE error",e);
+  </script>
+</body>
+</html>`
+
+// ---------- Handlers ----------
+
 func indexHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprint(w, indexHTML)
 }
 
 func LoggerWeb(mux *http.ServeMux) {
-	// Configurer Logrus pour le développement
-	logrus.SetFormatter(&logrus.TextFormatter{
-		ForceColors:   true,
-		FullTimestamp: true,
-	})
-
-	// Ajouter le hook SSE à Logrus
-	logrus.AddHook(&SSELogHook{})
-
+	logrus.SetFormatter(&logrus.TextFormatter{ForceColors: true, FullTimestamp: true})
+	logrus.AddHook(SSELogHook{})
 	mux.HandleFunc("/log", indexHandler)
 	mux.HandleFunc("/log-sse", sseHandler)
-
 	logrus.Info("Web logger connected")
-
 }
