@@ -3,69 +3,98 @@ package pmolog
 import (
 	"container/ring"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
 )
 
-const bufferSize = 1000
+//go:embed index.html
+var indexHTML string
 
-// ---------- SSE Broker ----------
+const (
+	bufferSize        = 1000
+	clientChanSize    = 50
+	heartbeatInterval = 15 * time.Second
+)
+
+// ---------- Enhanced SSE Broker ----------
+
+type Client struct {
+	messageChan chan string
+	filters     map[string]bool
+	searchTerm  string
+}
 
 type SSEBroker struct {
-	clients map[chan string]bool
+	clients map[*Client]bool
 	mu      sync.RWMutex
 }
 
 var (
-	broker      = &SSEBroker{clients: make(map[chan string]bool)}
+	broker      = &SSEBroker{clients: make(map[*Client]bool)}
 	logBuffer   = ring.New(bufferSize)
-	bufferMutex sync.Mutex
+	bufferMutex sync.RWMutex
 )
 
-// ---------- Hook for Logrus ----------
+// ---------- Enhanced Hook for Logrus ----------
 
 type SSELogHook struct{}
 
 func (SSELogHook) Levels() []logrus.Level { return logrus.AllLevels }
 
 func (SSELogHook) Fire(entry *logrus.Entry) error {
-	msg := map[string]string{
-		"time":    time.Now().Format(time.RFC3339),
+	msg := map[string]interface{}{
+		"time":    time.Now().Format(time.RFC3339Nano),
 		"level":   entry.Level.String(),
 		"content": entry.Message,
+		"fields":  entry.Data,
 	}
 	b, _ := json.Marshal(msg)
 
-	// add to buffer
+	// Add to buffer
 	bufferMutex.Lock()
 	logBuffer.Value = string(b)
 	logBuffer = logBuffer.Next()
 	bufferMutex.Unlock()
 
-	// broadcast
+	// Broadcast to clients
 	broker.mu.RLock()
-	for ch := range broker.clients {
+	for client := range broker.clients {
+		// Apply client-side filtering before sending
+		if !client.filters[strings.ToLower(msg["level"].(string))] {
+			continue
+		}
+
+		if client.searchTerm != "" &&
+			!strings.Contains(strings.ToLower(msg["content"].(string)), client.searchTerm) &&
+			!strings.Contains(strings.ToLower(msg["level"].(string)), client.searchTerm) {
+			continue
+		}
+
 		select {
-		case ch <- string(b):
-		default: // skip if full
+		case client.messageChan <- string(b):
+		default:
+			// Skip if client channel is full (client is too slow)
 		}
 	}
 	broker.mu.RUnlock()
 	return nil
 }
 
-// ---------- SSE Handler ----------
+// ---------- Enhanced SSE Handler ----------
 
 func sseHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("X-Accel-Buffering", "no") // Disable buffering for nginx
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -73,152 +102,110 @@ func sseHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ch := make(chan string, 20)
+	// Parse query parameters for initial filters
+	query := r.URL.Query()
+	filters := map[string]bool{
+		"error":   query.Get("error") != "false",
+		"warning": query.Get("warning") != "false",
+		"info":    query.Get("info") != "false",
+		"debug":   query.Get("debug") != "false",
+	}
+	searchTerm := strings.ToLower(query.Get("search"))
+
+	// Create client
+	client := &Client{
+		messageChan: make(chan string, clientChanSize),
+		filters:     filters,
+		searchTerm:  searchTerm,
+	}
+
+	// Register client
 	broker.mu.Lock()
-	broker.clients[ch] = true
+	broker.clients[client] = true
 	broker.mu.Unlock()
 
-	// replay buffer
-	bufferMutex.Lock()
+	// Send initial heartbeat to prevent connection timeout
+	fmt.Fprintf(w, "event: heartbeat\ndata: %s\n\n", time.Now().Format(time.RFC3339))
+	flusher.Flush()
+
+	// Replay buffer
+	bufferMutex.RLock()
 	logBuffer.Do(func(v interface{}) {
 		if v != nil {
-			fmt.Fprintf(w, "event: message\ndata: %s\n\n", v.(string))
+			// Apply filtering to historical messages
+			var msg map[string]interface{}
+			if err := json.Unmarshal([]byte(v.(string)), &msg); err == nil {
+				if !filters[strings.ToLower(msg["level"].(string))] {
+					return
+				}
+
+				if searchTerm != "" &&
+					!strings.Contains(strings.ToLower(msg["content"].(string)), searchTerm) &&
+					!strings.Contains(strings.ToLower(msg["level"].(string)), searchTerm) {
+					return
+				}
+
+				fmt.Fprintf(w, "event: message\ndata: %s\n\n", v.(string))
+			}
 		}
 	})
 	flusher.Flush()
-	bufferMutex.Unlock()
+	bufferMutex.RUnlock()
 
-	// stream new messages
+	// Create a ticker for heartbeats
+	heartbeat := time.NewTicker(heartbeatInterval)
+	defer heartbeat.Stop()
+
+	// Stream new messages
 	for {
 		select {
-		case msg := <-ch:
+		case msg := <-client.messageChan:
 			fmt.Fprintf(w, "event: message\ndata: %s\n\n", msg)
+			flusher.Flush()
+		case <-heartbeat.C:
+			fmt.Fprintf(w, "event: heartbeat\ndata: %s\n\n", time.Now().Format(time.RFC3339))
 			flusher.Flush()
 		case <-r.Context().Done():
 			broker.mu.Lock()
-			delete(broker.clients, ch)
+			delete(broker.clients, client)
 			broker.mu.Unlock()
-			close(ch)
+			close(client.messageChan)
 			return
 		}
 	}
 }
 
-// ---------- HTML Dashboard ----------
-
-var indexHTML = `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>🚀 Real-Time Logs</title>
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
-  <style>
-    body { background:#0d1117; color:#e6edf3; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Oxygen,Ubuntu,Cantarell,sans-serif; margin:0; }
-    header { display:flex; align-items:center; justify-content:space-between; padding:10px 20px; background:#161b22; border-bottom:1px solid #30363d; }
-    h1 { margin:0; font-size:20px; color:#58a6ff; }
-    #controls { display:flex; gap:15px; align-items:center; }
-    #logs { height:75vh; overflow-y:auto; background:#161b22; border:1px solid #30363d; border-radius:8px; padding:15px; margin:15px; }
-    .log { margin:6px 0; padding:6px 10px; border-left:4px solid; border-radius:6px; }
-    .log.error   { border-color:#f85149; background:rgba(248,81,73,0.1); }
-    .log.warning { border-color:#d29922; background:rgba(210,153,34,0.1); }
-    .log.info    { border-color:#58a6ff; background:rgba(56,139,253,0.1); }
-    .log.debug   { border-color:#8957e5; background:rgba(137,87,229,0.1); }
-    .time { color:#7d8590; font-size:12px; margin-right:10px; }
-    input[type="checkbox"] { margin-right:4px; }
-    #search { padding:4px 8px; border-radius:4px; border:none; }
-    button { background:#238636; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer; }
-    button:hover { background:#2ea043; }
-  </style>
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-</head>
-<body>
-  <header>
-    <h1>📝 Logs en temps réel</h1>
-    <div id="controls">
-      <label><input type="checkbox" value="error" checked>❌ Error</label>
-      <label><input type="checkbox" value="warning" checked>⚠️ Warning</label>
-      <label><input type="checkbox" value="info" checked>ℹ️ Info</label>
-      <label><input type="checkbox" value="debug" checked>🐛 Debug</label>
-      <input id="search" type="text" placeholder="Search...">
-      <label><input type="checkbox" id="autoscroll" checked> Auto-scroll</label>
-      <button id="clear">Clear</button>
-    </div>
-  </header>
-  <div id="logs"></div>
-  <script>
-    const logs=document.getElementById('logs');
-    const es=new EventSource('/log-sse');
-    const maxLogs=500;
-    const filters={error:true,warning:true,info:true,debug:true};
-    let searchTerm="";
-    let autoScroll=true;
-
-    marked.setOptions({ breaks:true, highlight: (code,lang)=>hljs.highlightAuto(code).value });
-
-    es.addEventListener('message', e=>{
-      const d=JSON.parse(e.data);
-      if(!filters[d.level]) return;
-      if(searchTerm && !d.content.toLowerCase().includes(searchTerm)) return;
-
-      const line=document.createElement('div');
-      line.className='log '+d.level;
-
-      const t=document.createElement('span');
-      t.className='time';
-      t.textContent=new Date(d.time).toLocaleTimeString();
-      line.appendChild(t);
-
-      const c=document.createElement('div');
-      c.innerHTML=marked.parse(d.content);
-      line.appendChild(c);
-
-      logs.appendChild(line);
-      if(logs.children.length>maxLogs) logs.removeChild(logs.firstChild);
-      if(autoScroll) logs.scrollTop=logs.scrollHeight;
-    });
-
-    // controls
-    document.querySelectorAll('input[type=checkbox][value]').forEach(cb=>{
-      cb.addEventListener('change',()=>{ filters[cb.value]=cb.checked; });
-    });
-    document.getElementById('search').addEventListener('input',e=>{
-      searchTerm=e.target.value.toLowerCase();
-    });
-    document.getElementById('clear').addEventListener('click',()=>{ logs.innerHTML=""; });
-    document.getElementById('autoscroll').addEventListener('change',e=>{ autoScroll=e.target.checked; });
-
-    es.onerror=e=>console.error("SSE error",e);
-  </script>
-</body>
-</html>`
-
 // ---------- Handlers ----------
 
 func indexHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+
 	fmt.Fprint(w, indexHTML)
 }
 
 // LoggerWeb installe les routes et arrête le broker quand ctx est annulé.
 func LoggerWeb(ctx context.Context, mux *http.ServeMux) {
-	logrus.SetFormatter(&logrus.TextFormatter{ForceColors: true, FullTimestamp: true})
+	logrus.SetFormatter(&logrus.TextFormatter{
+		ForceColors:   true,
+		FullTimestamp: true,
+	})
 	logrus.AddHook(SSELogHook{})
 
 	mux.HandleFunc("/log", indexHandler)
 	mux.HandleFunc("/log-sse", sseHandler)
 
-	// goroutine d'arrêt
+	// Goroutine d'arrêt
 	go func() {
 		<-ctx.Done()
 		broker.mu.Lock()
-		for ch := range broker.clients {
-			close(ch)
-			delete(broker.clients, ch)
+		for client := range broker.clients {
+			close(client.messageChan)
+			delete(broker.clients, client)
 		}
 		broker.mu.Unlock()
 		logrus.Info("Web logger stopped")
 	}()
 
-	logrus.Info("Web logger connected")
+	logrus.Info("Web logger connected at /log")
 }
