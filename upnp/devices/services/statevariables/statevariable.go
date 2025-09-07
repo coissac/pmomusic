@@ -147,6 +147,10 @@ func (state *StateVariable) Minimum() interface{} {
 	return state.valueRange.min
 }
 
+func (state *StateVariable) SetValueParser(parser StringValueParser) {
+	state.parse = parser
+}
+
 // SetRange defines the inclusive value range [min, max].
 // Validates and casts values to the state variable's type.
 //

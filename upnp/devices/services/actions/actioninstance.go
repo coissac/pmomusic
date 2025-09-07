@@ -16,6 +16,11 @@ func (a *ActionInstance) TypeID() string {
 	return "ActionInstance"
 }
 
+func (a *ActionInstance) Arguments(name string) (*Argument, bool) {
+	arg, ok := a.arguments[name]
+	return arg, ok
+}
+
 func (a *ActionInstance) ToXMLElement() *etree.Element {
 	elem := etree.NewElement("action")
 
