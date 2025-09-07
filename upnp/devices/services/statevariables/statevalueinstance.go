@@ -12,7 +12,13 @@ import (
 
 	"github.com/beevik/etree"
 	"github.com/google/uuid"
+	log "github.com/sirupsen/logrus"
 )
+
+type notifiable interface {
+	Name() string
+	EventToBeSent(name string, value interface{})
+}
 
 type StateVarInstance struct {
 	model           *StateVariable
@@ -27,12 +33,12 @@ type StateVarInstance struct {
 	sendEvents      bool
 	parse           StringValueParser
 	marshal         ValueSerializer
-
-	value         interface{}
-	previousValue interface{}
-	lastChange    time.Time
-	lastEvent     time.Time
-	mu            sync.RWMutex
+	service         notifiable
+	value           interface{}
+	previousValue   interface{}
+	lastChange      time.Time
+	lastEvent       time.Time
+	mu              sync.RWMutex
 }
 
 func (instance *StateVarInstance) Name() string {
@@ -102,13 +108,11 @@ func (instance *StateVarInstance) ParseValue(value string) (interface{}, error) 
 
 // IsValueInRange checks if a value falls within the defined range.
 // Always returns true if no range is set.
-
 // Parameters:
-
-// 	value: Value to check
-
+//
+//	value: Value to check
+//
 // Returns:
-
 // bool: True if within range or no range defined
 func (instance *StateVarInstance) IsValueInRange(value interface{}) (bool, error) {
 	return instance.model.valueType.InRange(value, instance.valueRange)
@@ -186,27 +190,73 @@ func (instance *StateVarInstance) SetValue(val interface{}) error {
 		return err
 	}
 
+	if ok, err := instance.IsValidValue(cval); !ok || err != nil {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("Not valid value %v for variable %s", cval, instance.Name())
+	}
+
 	instance.mu.Lock()
 	defer instance.mu.Unlock()
 	instance.previousValue = instance.value
 	instance.value = cval
+
+	if instance.ShouldTriggerEvent() {
+		instance.service.EventToBeSent(instance.Name(), instance.Value())
+	}
+
 	return nil
 }
 
-func (instance *StateVarInstance) Incr() {
-	instance.mu.Lock()
-	defer instance.mu.Unlock()
+func (instance *StateVarInstance) Incr() error {
+	if instance.HasStep() {
+		value, err := instance.model.valueType.Add(instance.Value(), instance.Step())
+		if err != nil {
+			return err
+		}
+		return instance.SetValue(value)
+	}
+	return fmt.Errorf(
+		"no step for variable %s:%s",
+		instance.service.Name(),
+		instance.Name(),
+	)
+}
 
+func (instance *StateVarInstance) Decr() error {
+	if instance.HasStep() {
+		value, err := instance.model.valueType.Sub(instance.Value(), instance.Step())
+		if err != nil {
+			return err
+		}
+		return instance.SetValue(value)
+	}
+	return fmt.Errorf(
+		"no step for variable %s:%s",
+		instance.service.Name(),
+		instance.Name(),
+	)
 }
 
 // ShouldTriggerEvent vérifie toutes les conditions
 func (instance *StateVarInstance) ShouldTriggerEvent() bool {
-	for _, condition := range instance.model.eventConditions {
-		if !condition(instance) {
-			return false
+	if instance.IsSendingEvents() {
+		for name, condition := range instance.model.eventConditions {
+			if !condition(instance) {
+				log.Debugf(
+					"State variable %s:%s event condition %s not true",
+					instance.service.Name(),
+					instance.Name(),
+					name,
+				)
+				return false
+			}
 		}
+
+		return true
 	}
-	return true
+	return false
 }
 
 func (sv *StateVarInstance) GenerateEvent() *etree.Element {

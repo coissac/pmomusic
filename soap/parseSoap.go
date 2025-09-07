@@ -48,24 +48,6 @@ type Fault struct {
 
 // ----- Utils -----
 
-func prettyPrintXML(raw string) string {
-	var out bytes.Buffer
-	dec := xml.NewDecoder(bytes.NewReader([]byte(raw)))
-	enc := xml.NewEncoder(&out)
-	enc.Indent("", "  ")
-	for {
-		t, err := dec.Token()
-		if err != nil {
-			break
-		}
-		if err := enc.EncodeToken(t); err != nil {
-			break
-		}
-	}
-	enc.Flush()
-	return out.String()
-}
-
 // ----- Parseurs -----
 
 func ParseSOAPEnvelope(body []byte) (*Envelope, error) {

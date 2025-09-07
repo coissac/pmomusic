@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"gargoton.petite-maison-orange.fr/eric/pmomusic/pmolog"
 	"gargoton.petite-maison-orange.fr/eric/pmomusic/soap"
 	"gargoton.petite-maison-orange.fr/eric/pmomusic/upnp/devices/services/actions"
 	"gargoton.petite-maison-orange.fr/eric/pmomusic/upnp/devices/services/statevariables"
@@ -162,38 +163,48 @@ func (svc *ServiceInstance) SendInitialEvent(sid string) {
 		return
 	}
 
-	// Ici tu peux construire un SOAP Event XML minimal
-	body := `<e:propertyset xmlns:e="urn:schemas-upnp-org:event-1-0"><e:property><Status>Initial</Status></e:property></e:propertyset>`
+	changed := make(map[string]interface{})
+	for name, sv := range svc.statevariables {
+		if sv.IsSendingEvents() { // sendEvents="yes"
+			changed[name] = sv.Value()
+		}
+	}
 
-	callback = strings.TrimSpace(callback)
-	callback = strings.Trim(callback, "<>") // retire les < et >
-
-	// parser pour valider
-	u, err := url.Parse(callback)
-	if err != nil {
-		log.Errorf("Invalid callback URL: %v", err)
+	if len(changed) == 0 {
 		return
 	}
 
-	req, err := http.NewRequest("NOTIFY", u.String(), strings.NewReader(body))
-	if err != nil {
-		log.Errorf("Failed to create NOTIFY request: %v", err)
-		return
-	}
+	go func() {
+		callback = strings.TrimSpace(callback)
+		callback = strings.Trim(callback, "<>")
 
-	req.Header.Set("Content-Type", "text/xml; charset=\"utf-8\"")
-	req.Header.Set("NT", "upnp:event")
-	req.Header.Set("NTS", "upnp:propchange")
-	req.Header.Set("SID", sid)
-	req.Header.Set("SEQ", "0")
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Errorf("Failed to send initial event to %s: %v", callback, err)
-		return
-	}
-	defer resp.Body.Close()
-	log.Infof("✅ Initial event sent to %s, status=%s", callback, resp.Status)
+		body := `<e:propertyset xmlns:e="urn:schemas-upnp-org:event-1-0">`
+		for name, val := range changed {
+			body += fmt.Sprintf("<e:property><%s>%v</%s></e:property>", name, val, name)
+		}
+		body += "</e:propertyset>"
+
+		req, _ := http.NewRequest("NOTIFY", callback, strings.NewReader(body))
+		req.Header.Set("Content-Type", `text/xml; charset="utf-8"`)
+		req.Header.Set("NT", "upnp:event")
+		req.Header.Set("NTS", "upnp:propchange")
+		req.Header.Set("SID", sid)
+		req.Header.Set("SEQ", "0") // initial event
+
+		client := &http.Client{}
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Errorf("Failed to send initial event to %s: %v", callback, err)
+			return
+		}
+		defer resp.Body.Close()
+		log.Infof(
+			"✅ Initial event sent to %s, status=%s\n<details>\n\n```xml\n%s\n```\n</details>\n",
+			callback,
+			resp.Status,
+			pmolog.PrettyPrintXML(body),
+		)
+	}()
 }
 
 func (svc *ServiceInstance) ToXMLElement() *etree.Element {
