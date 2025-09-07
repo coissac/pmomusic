@@ -1,6 +1,7 @@
 package pmolog
 
 import (
+	"container/ring"
 	"fmt"
 	"net/http"
 	"sync"
@@ -13,6 +14,12 @@ type SSEBroker struct {
 	clients map[chan string]bool
 	mutex   sync.Mutex
 }
+
+// Buffer circulaire pour stocker les 1000 derniers messages
+var (
+	logBuffer   = ring.New(1000)
+	bufferMutex sync.Mutex
+)
 
 // Initialiser le broker SSE
 var broker = &SSEBroker{
@@ -29,6 +36,12 @@ func (hook *SSELogHook) Levels() []logrus.Level {
 func (hook *SSELogHook) Fire(entry *logrus.Entry) error {
 	// Formater le log avec le niveau et le message
 	logLine := fmt.Sprintf("[%s] %s", entry.Level.String(), entry.Message)
+
+	// Ajouter le message au buffer circulaire
+	bufferMutex.Lock()
+	logBuffer.Value = logLine
+	logBuffer = logBuffer.Next()
+	bufferMutex.Unlock()
 
 	// Envoyer le log à tous les clients connectés
 	broker.mutex.Lock()
@@ -60,9 +73,32 @@ func sseHandler(w http.ResponseWriter, r *http.Request) {
 	broker.clients[messageChan] = true
 	broker.mutex.Unlock()
 
-	// Envoyer un message de bienvenue
-	fmt.Fprintf(w, "event: message\ndata: %s\n\n", "{\"content\": \"Connexion établie. Attente des logs...\", \"level\": \"info\"}")
+	// Envoyer d'abord les 1000 derniers messages stockés
+	bufferMutex.Lock()
+	logBuffer.Do(func(value interface{}) {
+		if value != nil {
+			if msg, ok := value.(string); ok {
+				// Déterminer le niveau de log pour le style CSS
+				level := "info"
+				if len(msg) > 7 {
+					switch msg[1:6] {
+					case "ERROR":
+						level = "error"
+					case "WARNI":
+						level = "warning"
+					case "DEBUG":
+						level = "debug"
+					}
+				}
+
+				// Formater le message en JSON pour inclure le niveau
+				jsonMsg := fmt.Sprintf("{\"content\": \"%s\", \"level\": \"%s\"}", escapeJSONString(msg), level)
+				fmt.Fprintf(w, "event: message\ndata: %s\n\n", jsonMsg)
+			}
+		}
+	})
 	w.(http.Flusher).Flush()
+	bufferMutex.Unlock()
 
 	// Envoyer les logs au client au fur et à mesure
 	for {
@@ -218,7 +254,7 @@ var indexHTML = `
 </head>
 <body>
     <div class="container">
-        <h1>📝 Logs en temps réel</h1>
+        <h1>📝 Logs en temps réel (1000 derniers messages)</h1>
         <div id="logs"></div>
     </div>
     
@@ -235,8 +271,8 @@ var indexHTML = `
             }
         });
         
-        eventSource.addEventListener('message', function(event) {
-            const data = JSON.parse(event.data);
+        // Fonction pour ajouter un message aux logs
+        function addLogMessage(data) {
             const logLine = document.createElement('div');
             logLine.className = 'log-line ' + data.level;
             
@@ -257,6 +293,11 @@ var indexHTML = `
             
             // Défilement automatique
             logsContainer.scrollTop = logsContainer.scrollHeight;
+        }
+        
+        eventSource.addEventListener('message', function(event) {
+            const data = JSON.parse(event.data);
+            addLogMessage(data);
         });
         
         eventSource.onerror = function(error) {
@@ -274,14 +315,14 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func LoggerWeb(mux *http.ServeMux) {
-	// Ajouter le hook SSE à Logrus
-	logrus.AddHook(&SSELogHook{})
-
 	// Configurer Logrus pour le développement
 	logrus.SetFormatter(&logrus.TextFormatter{
 		ForceColors:   true,
 		FullTimestamp: true,
 	})
+
+	// Ajouter le hook SSE à Logrus
+	logrus.AddHook(&SSELogHook{})
 
 	mux.HandleFunc("/log", indexHandler)
 	mux.HandleFunc("/log-sse", sseHandler)
