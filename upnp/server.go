@@ -131,8 +131,11 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	for d := range s.devices.All() {
-		log.Infof("coucou from %s", d.Name())
 		d.RegisterSSPD()
+
+		for svc := range d.services.All() {
+			svc.StartNotifier(ctx, 1*time.Second)
+		}
 	}
 
 	// attente d’annulation du contexte
