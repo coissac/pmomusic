@@ -26,7 +26,7 @@ func (m *ServiceInstanceSet) All() iter.Seq[*ServiceInstance] {
 }
 
 func (m *ServiceInstanceSet) ToXMLElement() *etree.Element {
-	elem := etree.NewElement("ServiceList")
+	elem := etree.NewElement("serviceList")
 
 	for sv := range m.All() {
 		elem.AddChild(sv.ToXMLElement())

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"runtime"
 	"sync"
 	"time"
 
@@ -13,6 +14,8 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"gargoton.petite-maison-orange.fr/eric/pmomusic/netutils"
+	"gargoton.petite-maison-orange.fr/eric/pmomusic/pmolog"
+	"gargoton.petite-maison-orange.fr/eric/pmomusic/ssdp"
 )
 
 type Server struct {
@@ -22,6 +25,7 @@ type Server struct {
 
 	Logger  *log.Logger
 	httpSrv *http.Server
+	sspd    *ssdp.SSDPServer
 
 	devices   DeviceInstanceSet
 	mu        sync.RWMutex
@@ -74,6 +78,8 @@ func (s *Server) Start() error {
 
 		s.mu.RLock()
 
+		pmolog.LoggerWeb(mux)
+
 		mux.HandleFunc("/", s.ServeDebugIndex)
 
 		s.httpSrv = &http.Server{
@@ -116,7 +122,17 @@ func (s *Server) Stop(ctx context.Context) error {
 
 func (s *Server) Run(ctx context.Context) error {
 	if err := s.Start(); err != nil {
-		return fmt.Errorf("failed to start server: %w", err)
+		return fmt.Errorf("❌ failed to start server: %w", err)
+	}
+
+	s.sspd = ssdp.NewSSDPServer()
+	if err := s.sspd.Start(ctx); err != nil {
+		return fmt.Errorf("❌ failed to start SSDP server: %w", err)
+	}
+
+	for d := range s.devices.All() {
+		log.Infof("coucou from %s", d.Name())
+		d.RegisterSSPD()
 	}
 
 	// attente d’annulation du contexte
@@ -156,7 +172,18 @@ func (s *Server) ServeXML(gen func() *etree.Element) func(w http.ResponseWriter,
 			http.Error(w, "failed to generate XML", http.StatusInternalServerError)
 			return
 		}
-		w.Header().Set("Content-Type", `text/xml; charset="utf-8"`)
+
+		osName := runtime.GOOS
+		arch := runtime.GOARCH
+
+		w.Header().Set("Server", fmt.Sprintf(
+			"%s/%s UPnP/1.1 PMOMusic/1.0",
+			osName, arch,
+		))
+		w.Header().Set("Connection", "close")
+		w.Header().Set("Cache-Control", "max-age=1800")
+		w.Header().Set("EXT", "")
+		w.Header().Set("Content-Type", "text/xml; charset=\"utf-8\"")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(xmlStr))
 	}

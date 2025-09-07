@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/user"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -346,12 +347,23 @@ func (conf *Config) GetBaseURL() string {
 func (conf *Config) GetHTTPPort() int {
 	port, _ := conf.GetValue([]string{"host", "http_port"})
 
-	iport, ok := port.(int)
-	if !ok {
+	switch val := port.(type) {
+	case int:
+		return val
+	case int64:
+		return int(val)
+	case float64:
+		return int(val)
+	case string:
+		i, err := strconv.Atoi(val)
+		if err == nil {
+			return i
+		}
+	default:
 		return 1900
 	}
 
-	return iport
+	return 1900
 }
 
 func (conf *Config) GetDeviceUDN(devtype DeviceType, name string) string {

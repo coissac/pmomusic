@@ -4,6 +4,7 @@ import (
 	"context"
 	"os/signal"
 	"syscall"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 
@@ -28,4 +29,7 @@ func main() {
 	if err := server.Run(ctx); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
+
+	time.Sleep(2 * time.Second)
+
 }

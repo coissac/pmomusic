@@ -3,7 +3,9 @@ package upnp
 import (
 	"fmt"
 	"net/http"
+	"runtime"
 
+	"gargoton.petite-maison-orange.fr/eric/pmomusic/ssdp"
 	"github.com/beevik/etree"
 	log "github.com/sirupsen/logrus"
 )
@@ -107,6 +109,43 @@ func (di *DeviceInstance) RegisterURLs() error {
 	return nil
 }
 
+func (di *DeviceInstance) NT() string {
+	return fmt.Sprintf("uuid:%s::urn:%s", di.UDN(), di.ServiceType())
+}
+
+func (di *DeviceInstance) RegisterSSPD() {
+
+	osName := runtime.GOOS
+	arch := runtime.GOARCH
+
+	dev := &ssdp.Device{
+		UUID:       di.UDN(),
+		DeviceType: di.ServiceType(),
+		Location:   fmt.Sprintf("%s%s", di.server.BaseURL(), di.DescriptionURL()),
+		Server: fmt.Sprintf(
+			"%s/%s UPnP/1.1 PMOMusic/1.0",
+			osName, arch,
+		),
+		NTs: make([]string, 0, 2+len(di.services)),
+	}
+
+	dev.NTs = append(
+		dev.NTs,
+		"upnp:rootdevice",
+		di.ServiceType(),
+	)
+
+	for s := range di.services.All() {
+		dev.NTs = append(dev.NTs, s.ServiceType())
+	}
+
+	di.server.sspd.AddDevice(dev)
+}
+
+func (di *DeviceInstance) UnregisterSSPD() {
+	di.server.sspd.RemoveDevice(di.UDN())
+}
+
 func (di *DeviceInstance) ToXMLElement() *etree.Element {
 	elem := etree.NewElement("root")
 	elem.CreateAttr("xmlns", "urn:schemas-upnp-org:device-1-0")
@@ -120,7 +159,7 @@ func (di *DeviceInstance) ToXMLElement() *etree.Element {
 	device.CreateElement("friendlyName").SetText(di.FriendlyName())
 	device.CreateElement("manufacturer").SetText(di.Manufacturer())
 	device.CreateElement("modelName").SetText(di.ModelName())
-	device.CreateElement("UDN").SetText(di.UDN())
+	device.CreateElement("UDN").SetText("uuid:" + di.UDN())
 
 	if len(di.services) > 0 {
 		device.AddChild(di.services.ToXMLElement())

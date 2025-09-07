@@ -27,13 +27,12 @@ func (hook *SSELogHook) Levels() []logrus.Level {
 }
 
 func (hook *SSELogHook) Fire(entry *logrus.Entry) error {
-	// Formater le log
+	// Formater le log avec le niveau et le message
 	logLine := fmt.Sprintf("[%s] %s", entry.Level.String(), entry.Message)
 
 	// Envoyer le log à tous les clients connectés
 	broker.mutex.Lock()
 	for client := range broker.clients {
-		// Non-bloquant pour éviter qu'un client lent ne bloque tout
 		select {
 		case client <- logLine:
 		default:
@@ -62,14 +61,29 @@ func sseHandler(w http.ResponseWriter, r *http.Request) {
 	broker.mutex.Unlock()
 
 	// Envoyer un message de bienvenue
-	fmt.Fprintf(w, "data: %s\n\n", "Connexion établie. Attente des logs...")
+	fmt.Fprintf(w, "event: message\ndata: %s\n\n", "{\"content\": \"Connexion établie. Attente des logs...\", \"level\": \"info\"}")
 	w.(http.Flusher).Flush()
 
 	// Envoyer les logs au client au fur et à mesure
 	for {
 		select {
 		case msg := <-messageChan:
-			fmt.Fprintf(w, "data: %s\n\n", msg)
+			// Déterminer le niveau de log pour le style CSS
+			level := "info"
+			if len(msg) > 7 {
+				switch msg[1:6] {
+				case "ERROR":
+					level = "error"
+				case "WARNI":
+					level = "warning"
+				case "DEBUG":
+					level = "debug"
+				}
+			}
+
+			// Formater le message en JSON pour inclure le niveau
+			jsonMsg := fmt.Sprintf("{\"content\": \"%s\", \"level\": \"%s\"}", escapeJSONString(msg), level)
+			fmt.Fprintf(w, "event: message\ndata: %s\n\n", jsonMsg)
 			w.(http.Flusher).Flush()
 		case <-r.Context().Done():
 			// Supprimer le client quand la connexion est fermée
@@ -82,43 +96,168 @@ func sseHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Page HTML pour afficher les logs
+// Fonction pour échapper les chaînes JSON
+func escapeJSONString(s string) string {
+	// Échapper les guillemets et les antislashes
+	escaped := ""
+	for _, c := range s {
+		switch c {
+		case '"':
+			escaped += "\\\""
+		case '\\':
+			escaped += "\\\\"
+		case '\n':
+			escaped += "\\n"
+		case '\r':
+			escaped += "\\r"
+		case '\t':
+			escaped += "\\t"
+		default:
+			escaped += string(c)
+		}
+	}
+	return escaped
+}
+
+// Page HTML pour afficher les logs avec support Markdown
 var indexHTML = `
 <!DOCTYPE html>
 <html>
 <head>
     <title>Logs en temps réel</title>
     <style>
-        body { font-family: monospace; background: #000; color: #0f0; }
-        .log-line { margin: 2px 0; }
-        .error { color: #f00; }
-        .warning { color: #ff0; }
-        .info { color: #0f0; }
-        .debug { color: #0af; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; 
+            background: #0d1117; 
+            color: #e6edf3; 
+            margin: 0; 
+            padding: 20px; 
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #58a6ff;
+            border-bottom: 1px solid #30363d;
+            padding-bottom: 10px;
+        }
+        #logs {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 15px;
+            height: 70vh;
+            overflow-y: auto;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        .log-line {
+            margin: 8px 0;
+            padding: 8px 12px;
+            border-radius: 6px;
+            border-left: 4px solid #58a6ff;
+        }
+        .log-line.error {
+            border-left-color: #f85149;
+            background-color: rgba(248, 81, 73, 0.1);
+        }
+        .log-line.warning {
+            border-left-color: #d29922;
+            background-color: rgba(210, 153, 34, 0.1);
+        }
+        .log-line.info {
+            border-left-color: #58a6ff;
+            background-color: rgba(56, 139, 253, 0.1);
+        }
+        .log-line.debug {
+            border-left-color: #8957e5;
+            background-color: rgba(137, 87, 229, 0.1);
+        }
+        .timestamp {
+            color: #7d8590;
+            font-size: 12px;
+            margin-right: 10px;
+        }
+        /* Styles Markdown */
+        .markdown-body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+        }
+        .markdown-body code {
+            background-color: rgba(240, 246, 252, 0.15);
+            border-radius: 6px;
+            padding: 0.2em 0.4em;
+            font-family: ui-monospace, SFMono-Regular, SF Mono, Consolas, Liberation Mono, Menlo, monospace;
+        }
+        .markdown-body pre {
+            background-color: rgba(240, 246, 252, 0.15);
+            border-radius: 6px;
+            padding: 16px;
+            overflow: auto;
+        }
+        .markdown-body pre code {
+            background: none;
+            padding: 0;
+        }
+        .markdown-body blockquote {
+            border-left: 4px solid #30363d;
+            padding-left: 16px;
+            margin-left: 0;
+            color: #7d8590;
+        }
+        .markdown-body a {
+            color: #58a6ff;
+            text-decoration: none;
+        }
+        .markdown-body a:hover {
+            text-decoration: underline;
+        }
     </style>
+    <!-- Marked.js pour le rendu Markdown -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
-    <h1>Logs en temps réel</h1>
-    <div id="logs"></div>
+    <div class="container">
+        <h1>📝 Logs en temps réel</h1>
+        <div id="logs"></div>
+    </div>
     
     <script>
         const eventSource = new EventSource('/log-sse');
         const logsContainer = document.getElementById('logs');
         
-        eventSource.onmessage = function(event) {
+        // Configuration de Marked.js
+        marked.setOptions({
+            breaks: true,
+            highlight: function(code, lang) {
+                // Simplement retourner le code non highlighté pour l'instant
+                return code;
+            }
+        });
+        
+        eventSource.addEventListener('message', function(event) {
+            const data = JSON.parse(event.data);
             const logLine = document.createElement('div');
-            logLine.className = 'log-line';
-            logLine.textContent = event.data;
+            logLine.className = 'log-line ' + data.level;
             
-            // Ajouter des classes CSS en fonction du niveau de log
-            if (event.data.includes('[error]')) logLine.classList.add('error');
-            else if (event.data.includes('[warning]')) logLine.classList.add('warning');
-            else if (event.data.includes('[info]')) logLine.classList.add('info');
-            else if (event.data.includes('[debug]')) logLine.classList.add('debug');
+            // Ajouter un timestamp
+            const timestamp = new Date().toLocaleTimeString();
+            const timestampSpan = document.createElement('span');
+            timestampSpan.className = 'timestamp';
+            timestampSpan.textContent = timestamp;
+            logLine.appendChild(timestampSpan);
+            
+            // Traiter le contenu Markdown
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'markdown-body';
+            contentDiv.innerHTML = marked.parse(data.content);
+            logLine.appendChild(contentDiv);
             
             logsContainer.appendChild(logLine);
+            
+            // Défilement automatique
             logsContainer.scrollTop = logsContainer.scrollHeight;
-        };
+        });
         
         eventSource.onerror = function(error) {
             console.error('Erreur SSE:', error);
