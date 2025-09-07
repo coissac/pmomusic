@@ -223,10 +223,7 @@ USN: uuid:%s::%s
 		if _, err := s.conn.WriteToUDP([]byte(resp), src); err != nil {
 			log.Warnf("❌ Failed to send M-SEARCH response to %v: %v", src, err)
 		} else {
-			//			log.Warnf("✅ M-Search response sent : %x", resp)
-			//			log.Warnf("✅ M-Search response sent : %s", resp)
-
-			log.Infof("📡 Responded to M-SEARCH from %v with ST=%s", src, st)
+			log.Infof("📡 Responded to M-SEARCH from %v with ST=%s\n<details>\n\n```\n%s\n```\n</details>\n\n", src, st, resp)
 		}
 	}
 }
