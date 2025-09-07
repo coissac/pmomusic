@@ -7,17 +7,17 @@ import (
 
 func (d *DIDLLite) ToMarkdown() string {
 	var buf strings.Builder
-	buf.WriteString("# DIDL-Lite Document\n\n")
+	buf.WriteString("### DIDL-Lite Document\n\n")
 
 	if len(d.Containers) > 0 {
-		buf.WriteString("## Containers\n\n")
+		buf.WriteString("#### Containers\n\n")
 		for _, c := range d.Containers {
 			c.markdown(&buf, 0)
 		}
 	}
 
 	if len(d.Items) > 0 {
-		buf.WriteString("## Items\n\n")
+		buf.WriteString("#### Items\n\n")
 		for _, i := range d.Items {
 			i.markdown(&buf, 0)
 		}

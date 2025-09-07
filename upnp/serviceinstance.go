@@ -160,7 +160,7 @@ func (svc *ServiceInstance) ControlHandler() func(w http.ResponseWriter, r *http
 			// 1️⃣ Chercher si le param correspond à une StateVarInstance
 
 			sv, ok := svc.statevariables[param]
-			log.Warnf("Look for a variable named : %s -> %v", param, ok)
+			log.Debugf("Look for a variable named : %s -> %v", param, ok)
 
 			if ok {
 				if sv.HasParser() {
@@ -221,13 +221,7 @@ func (svc *ServiceInstance) ControlHandler() func(w http.ResponseWriter, r *http
 			return
 		}
 
-		log.Infof("➡️ SOAP Action: %s", req.Name)
-		for k, v := range req.Args {
-			if mi, ok := v.(Markdownable); ok {
-				v = mi.ToMarkdown()
-			}
-			log.Infof("    %s:%s = %v", req.Name, k, v)
-		}
+		log.Info(req.ToMarkdown())
 
 		// Ici tu peux appeler l'action correspondante sur svc.actions[req.Name] et récupérer le résultat
 		// Exemple de réponse minimale :

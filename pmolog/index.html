@@ -6,6 +6,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
   <style>
     :root {
+      /* 🎨 Dark theme (default) */
       --bg-primary: #0d1117;
       --bg-secondary: #161b22;
       --border: #30363d;
@@ -17,12 +18,26 @@
       --debug: #8957e5;
       --success: #3fb950;
     }
+    body.light {
+      /* 🎨 Light theme */
+      --bg-primary: #f6f8fa;
+      --bg-secondary: #ffffff;
+      --border: #d0d7de;
+      --text-primary: #24292f;
+      --text-secondary: #57606a;
+      --error: #cf222e;
+      --warning: #9a6700;
+      --info: #0969da;
+      --debug: #8250df;
+      --success: #1a7f37;
+    }
     body { 
       background: var(--bg-primary); 
       color: var(--text-primary); 
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; 
       margin: 0; 
       line-height: 1.5;
+      transition: background 0.3s, color 0.3s;
     }
     header { 
       display: flex; 
@@ -63,6 +78,7 @@
       border-left: 4px solid; 
       border-radius: 6px; 
       background: rgba(255, 255, 255, 0.03);
+      transition: background 0.3s;
     }
     .log.error   { border-color: var(--error); }
     .log.warning { border-color: var(--warning); }
@@ -86,7 +102,6 @@
     .level-debug { background: var(--debug); color: white; }
     .log-content { 
       margin-top: 6px;
-      white-space: pre-wrap;
       font-family: ui-monospace, SFMono-Regular, SF Mono, Consolas, Liberation Mono, Menlo, monospace;
     }
     .log-fields {
@@ -144,6 +159,97 @@
       padding: 0 2px;
       border-radius: 2px;
     }
+
+    /* 🔥 Markdown styling */
+    .log-content a {
+      color: var(--info);
+      text-decoration: underline;
+    }
+    .log-content details {
+      margin: 6px 0;
+      padding: 6px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+    .log-content pre code {
+      display: block;
+      padding: 8px;
+      background: var(--bg-primary);
+      border-radius: 6px;
+      overflow-x: auto;
+    }
+    .log-content h1, 
+    .log-content h2, 
+    .log-content h3 {
+      color: var(--info);
+      margin-top: 10px;
+    }
+    .log-content ul {
+      margin-left: 20px;
+      list-style: disc;
+      margin-block-start: 0em;
+      margin-block-end: 0em;
+    }
+
+    .log-content p {
+        margin-block-start: 0em;
+        margin-block-end: 0em;
+    }
+
+    /* 🌗 Toggle theme button */
+    #theme-toggle {
+      background: none;
+      border: 1px solid var(--border);
+      padding: 4px 10px;
+      border-radius: 6px;
+      color: var(--text-primary);
+      cursor: pointer;
+      font-size: 14px;
+    }
+    #theme-toggle:hover {
+      background: var(--bg-primary);
+    }
+
+    /* Style global des <details> */
+    .log details {
+        margin-top: 6px;
+        margin-bottom: 6px;
+        padding-left: 60px;      /* Indentation à gauche */
+        border-left: 2px solid var(--border); /* Ligne pour visualiser l'indent */
+    }
+
+    /* Style du <summary> */
+    .log summary {
+        cursor: pointer;
+        font-weight: bold;
+        list-style: none;
+        color: var(--info);
+        margin-bottom: 4px;
+    }
+
+    /* Éviter que le triangle de <summary> déforme le texte */
+    .log summary::-webkit-details-marker {
+        display: none;
+    }
+
+    /* Optionnel : triangle personnalisé */
+    .log summary::before {
+        content: "▶️";
+        display: inline-block;
+        margin-right: 6px;
+        transition: transform 0.2s ease;
+    }
+
+    /* Triangle pivotant quand ouvert */
+    .log details[open] summary::before {
+        transform: rotate(90deg);
+    }
+
+    /* Contenu du <details> */
+    .log details > *:not(summary) {
+        margin-left: 12px;  /* Décalage supplémentaire pour le contenu interne */
+    }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
@@ -163,6 +269,7 @@
         <label><input type="checkbox" id="autoscroll" checked> Auto-scroll</label>
         <button id="clear">Clear</button>
         <button id="export">Export</button>
+        <button id="theme-toggle">🌙 Dark</button>
       </div>
     </div>
     <div id="status">
@@ -173,11 +280,25 @@
   </header>
   <div id="logs"></div>
   <script>
+    // 🎨 Theme toggle
+    const themeToggle = document.getElementById("theme-toggle");
     const logsContainer = document.getElementById('logs');
     const statusIndicator = document.getElementById('status-indicator');
     const statusText = document.getElementById('status-text');
     const logCountElement = document.getElementById('log-count');
     const maxLogs = 1000;
+    function updateTheme() {
+      if (document.body.classList.contains("light")) {
+        themeToggle.textContent = "🌙 Dark";
+      } else {
+        themeToggle.textContent = "☀️ Light";
+      }
+    }
+    themeToggle.addEventListener("click", () => {
+      document.body.classList.toggle("light");
+      updateTheme();
+    });
+    updateTheme();
     let eventSource = null;
     let filters = {
       error: true,
