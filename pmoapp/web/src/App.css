@@ -1,0 +1,123 @@
+/* App.css ou index.css */
+@import "tailwindcss";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Styles custom */
+.log-container {
+  @apply p-4 space-y-2 min-h-screen;
+}
+
+.log-entry {
+  @apply rounded-lg p-2 font-mono shadow-md;
+}
+
+.log-entry.info { @apply bg-gray-800 text-green-400; }
+.log-entry.warning { @apply bg-gray-800 text-yellow-400; }
+.log-entry.error { @apply bg-gray-800 text-red-400; }
+.log-entry.debug { @apply bg-gray-800 text-purple-400; }
+
+
+/* Styles pour le thème sombre */
+.dark .log-entry {
+  background: linear-gradient(90deg, rgba(30, 30, 30, 0.5), transparent);
+  border-left: 4px solid;
+}
+
+.dark .log-entry.error {
+  border-color: #f87171;
+  background: linear-gradient(90deg, rgba(248, 113, 113, 0.1), transparent);
+}
+
+.dark .log-entry.warning {
+  border-color: #fbbf24;
+  background: linear-gradient(90deg, rgba(251, 191, 36, 0.1), transparent);
+}
+
+.dark .log-entry.info {
+  border-color: #60a5fa;
+  background: linear-gradient(90deg, rgba(96, 165, 250, 0.1), transparent);
+}
+
+.dark .log-entry.debug {
+  border-color: #a78bfa;
+  background: linear-gradient(90deg, rgba(167, 139, 250, 0.1), transparent);
+}
+
+/* Styles pour le thème clair */
+.light .log-entry {
+  background: linear-gradient(90deg, rgba(240, 240, 240, 0.5), transparent);
+  border-left: 4px solid;
+}
+
+.light .log-entry.error {
+  border-color: #dc2626;
+  background: linear-gradient(90deg, rgba(220, 38, 38, 0.1), transparent);
+}
+
+.light .log-entry.warning {
+  border-color: #d97706;
+  background: linear-gradient(90deg, rgba(217, 119, 6, 0.1), transparent);
+}
+
+.light .log-entry.info {
+  border-color: #2563eb;
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0.1), transparent);
+}
+
+.light .log-entry.debug {
+  border-color: #7c3aed;
+  background: linear-gradient(90deg, rgba(124, 58, 237, 0.1), transparent);
+}
+
+/* Animation pour les nouveaux logs */
+@keyframes highlight {
+  0% { opacity: 0.5; }
+  100% { opacity: 1; }
+}
+
+.log-entry:first-child {
+  animation: highlight 0.5s ease;
+}
+
+/* Styles pour la barre de défilement */
+.log-container::-webkit-scrollbar {
+  width: 8px;
+}
+
+.log-container::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.log-container::-webkit-scrollbar-thumb {
+  background: rgba(156, 163, 175, 0.5);
+  border-radius: 4px;
+}
+
+.log-container::-webkit-scrollbar-thumb:hover {
+  background: rgba(156, 163, 175, 0.7);
+}
+
+.dark .log-container::-webkit-scrollbar-thumb {
+  background: rgba(75, 85, 99, 0.5);
+}
+
+.dark .log-container::-webkit-scrollbar-thumb:hover {
+  background: rgba(75, 85, 99, 0.7);
+}
+
+/* Amélioration de l'apparence des détails */
+details summary::-webkit-details-marker {
+  display: none;
+}
+
+details summary {
+  list-style: none;
+  transition: color 0.2s ease;
+}
+
+details[open] summary {
+  margin-bottom: 0.5rem;
+}

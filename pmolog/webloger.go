@@ -3,7 +3,6 @@ package pmolog
 import (
 	"container/ring"
 	"context"
-	_ "embed"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -13,9 +12,6 @@ import (
 
 	"github.com/sirupsen/logrus"
 )
-
-//go:embed index.html
-var indexHTML string
 
 const (
 	bufferSize        = 1000
@@ -175,15 +171,6 @@ func sseHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// ---------- Handlers ----------
-
-func indexHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-
-	fmt.Fprint(w, indexHTML)
-}
-
 // LoggerWeb installe les routes et arrête le broker quand ctx est annulé.
 func LoggerWeb(ctx context.Context, mux *http.ServeMux) {
 	logrus.SetFormatter(&logrus.TextFormatter{
@@ -192,7 +179,6 @@ func LoggerWeb(ctx context.Context, mux *http.ServeMux) {
 	})
 	logrus.AddHook(SSELogHook{})
 
-	mux.HandleFunc("/log", indexHandler)
 	mux.HandleFunc("/log-sse", sseHandler)
 
 	// Goroutine d'arrêt
