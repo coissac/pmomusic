@@ -14,6 +14,7 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"gargoton.petite-maison-orange.fr/eric/pmomusic/netutils"
+	"gargoton.petite-maison-orange.fr/eric/pmomusic/pmoapp"
 	"gargoton.petite-maison-orange.fr/eric/pmomusic/pmolog"
 	"gargoton.petite-maison-orange.fr/eric/pmomusic/ssdp"
 )
@@ -78,7 +79,7 @@ func (s *Server) Start() error {
 
 		s.mu.RLock()
 
-		mux.HandleFunc("/", s.ServeDebugIndex)
+		pmoapp.Handler(mux)
 
 		s.httpSrv = &http.Server{
 			Addr:    fmt.Sprintf(":%d", s.HTTPPort),
