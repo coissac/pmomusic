@@ -1,4 +1,4 @@
-package didl
+package pmodidl
 
 import "encoding/xml"
 
@@ -40,6 +40,7 @@ type Item struct {
 	Album               string `xml:"urn:schemas-upnp-org:metadata-1-0/upnp/ album,omitempty"`
 	Genre               string `xml:"urn:schemas-upnp-org:metadata-1-0/upnp/ genre,omitempty"`
 	AlbumArt            string `xml:"urn:schemas-upnp-org:metadata-1-0/upnp/ albumArtURI,omitempty"`
+	AlbumArtPk          string
 	Date                string `xml:"http://purl.org/dc/elements/1.1/ date,omitempty"`
 	OriginalTrackNumber string `xml:"urn:schemas-upnp-org:metadata-1-0/upnp/ originalTrackNumber,omitempty"`
 
