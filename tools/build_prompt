@@ -1,0 +1,26 @@
+#!/bin/bash
+
+cat << EOF
+Est-ce que ces packages te semblent fonctionnel.
+Il ne s'agit pas de l'enrichir de nouvelle fonctionnalité, ni de l'optimiser d'avantage. Juste de le finaliser en detectant vrais bug. Ce package doit être thread safe, uniquement stéréo.
+Ne signale que les bugs conduisant à un disfonctionnement
+
+Regénère des version complètes et corrigées des fichiers nécessaires
+
+EOF
+
+echo ============== Debut des sources des packages ===============
+
+for package in $*; do
+	pushd $package 2>&1 >/dev/null
+	for f in *.go; do
+		echo "------- $package/$f ------"
+		cat $f
+		echo "-----------------"
+	done
+	popd 2>&1 >/dev/null
+done
+
+echo ============== Fin des sources des packages ===============
+
+echo ============== Analyse des bugs par chatgpt ===============

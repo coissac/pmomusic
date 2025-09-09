@@ -1,0 +1,806 @@
+------- /pmoupnp/devices/services/statevariables/statevartype_arithm.go ------
+package statevariables
+
+// Add performs addition operation on two interfaces if both are of numeric
+// type, otherwise it returns an error. If the types are not numeric, it checks
+// and converts them into float64 before performing the addition. The function
+// then casts the result back to its original type using Cast method from
+// StateVarType t and returns this value or any encountered error.
+//
+// Parameters:
+//
+//	a (interface{}): First operand for addition operation. Can be of any type.
+//	b (interface{}): Second operand for addition operation. Can be of any type.
+//
+// Returns:
+//
+//	interface{}: Result of the addition, casted back to its original type using StateVarType t if no error encountered.
+//	error: Encountered error in case any conversion or casting fails. This includes non-numeric types for this operation.
+func (t StateVarType) Add(a, b interface{}) (interface{}, error) {
+	af, bf, err := valuesToNumericOperands(t, a, b)
+	if err != nil {
+		return nil, err
+	}
+
+	return t.Cast(af + bf)
+}
+
+// Sub subtracts 'b' from 'a'. It converts both values to numeric types
+// and then performs a subtraction operation, casting the result back to its
+// original type. If either conversion fails or an unsupported type is used,
+// it returns an error.
+func (t StateVarType) Sub(a, b interface{}) (interface{}, error) {
+	af, bf, err := valuesToNumericOperands(t, a, b)
+	if err != nil {
+		return nil, err
+	}
+
+	return t.Cast(af - bf)
+}
+
+// Mul takes in two interface types 'a' and 'b', multiplies them together
+// and returns the result along with any error encountered during this
+// process. If either of the inputs is not compatible with numeric values, an
+// error will be returned. The multiplication operation is performed between two
+// numbers represented as 'float64' types (since Go does not support generic
+// types on its own). The resulting value will be cast to the type represented
+// by the receiver of this method 't'. If a casting error occurs, it will also
+// be returned along with nil for the result.
+func (t StateVarType) Mul(a, b interface{}) (interface{}, error) {
+	af, bf, err := valuesToNumericOperands(t, a, b)
+	if err != nil {
+		return nil, err
+	}
+
+	return t.Cast(af * bf)
+}
+
+// Div performs division between the provided arguments 'a' and 'b'. The function casts both operands to their numeric equivalents using valuesToNumericOperands() before performing the division.
+//
+// Parameters:
+//   - a: first operand of type interface{}, can be of any type, will be converted if necessary
+//   - b: second operand of type interface{}, can be of any type, will be converted if necessary
+//
+// Returns:
+//   - result: the division result in numeric form after casting it with function t.Cast()
+//   - err: error that might occur during the conversion or division operation
+func (t StateVarType) Div(a, b interface{}) (interface{}, error) {
+	af, bf, err := valuesToNumericOperands(t, a, b)
+	if err != nil {
+		return nil, err
+	}
+
+	return t.Cast(af / bf)
+}
+-----------------
+------- /pmoupnp/devices/services/statevariables/statevartype_cast.go ------
+package statevariables
+
+import (
+	"fmt"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+// Cast converts a value to the Go type corresponding to the UPnP type.
+// Supports conversion from various primitive types and strings.
+// Returns an error for unsupported conversions or invalid values.
+//
+// Examples:
+//   - StateType_UI2.Cast(42)        // uint16(42), nil
+//   - StateType_Boolean.Cast("true") // true, nil
+//   - StateType_UI1.Cast(300)        // nil, error (overflow)
+func (t StateVarType) Cast(val interface{}) (interface{}, error) {
+	switch t {
+	case StateType_UI1:
+		v, err := toUint(val, 8)
+		if err != nil {
+			return nil, fmt.Errorf("cannot cast %v (%T) to UI1", val, val)
+		}
+		return uint8(v), nil
+
+	case StateType_UI2:
+		v, err := toUint(val, 16)
+		if err != nil {
+			return nil, fmt.Errorf("cannot cast %v (%T) to UI2", val, val)
+		}
+		return uint16(v), nil
+
+	case StateType_UI4:
+		v, err := toUint(val, 32)
+		if err != nil {
+			return nil, fmt.Errorf("cannot cast %v (%T) to UI4", val, val)
+		}
+		return uint32(v), nil
+
+	case StateType_I1:
+		v, err := toInt(val, 8)
+		if err != nil {
+			return nil, fmt.Errorf("cannot cast %v (%T) to I1", val, val)
+		}
+		return int8(v), nil
+
+	case StateType_I2:
+		v, err := toInt(val, 16)
+		if err != nil {
+			return nil, fmt.Errorf("cannot cast %v (%T) to I2", val, val)
+		}
+		return int16(v), nil
+
+	case StateType_I4, StateType_Int:
+		v, err := toInt(val, 32)
+		if err != nil {
+			return nil, fmt.Errorf("cannot cast %v (%T) to I4", val, val)
+		}
+		return int32(v), nil
+
+	case StateType_R4:
+		v, err := toFloat(val, 32)
+		if err != nil {
+			return nil, fmt.Errorf("cannot cast %v (%T) to R4", val, val)
+		}
+		return float32(v), nil
+
+	case StateType_R8, StateType_Number, StateType_Fixed14_4:
+		v, err := toFloat(val, 64)
+		if err != nil {
+			return nil, fmt.Errorf("cannot cast %v (%T) to R8", val, val)
+		}
+		return v, nil
+
+	case StateType_Boolean:
+		b, err := toBool(val)
+		if err != nil {
+			return nil, fmt.Errorf("cannot cast %v (%T) to Boolean", val, val)
+		}
+		return b, nil
+
+	case StateType_Char:
+		switch s := val.(type) {
+		case string:
+			if len(s) != 1 {
+				return nil, fmt.Errorf("invalid Char: string too long %q", s)
+			}
+			return rune(s[0]), nil
+		case rune:
+			return s, nil
+		default:
+			return nil, fmt.Errorf("cannot cast %v (%T) to Char", val, val)
+		}
+
+	case StateType_String:
+		return fmt.Sprint(val), nil
+
+	case StateType_UUID:
+		switch val := val.(type) {
+		case uuid.UUID:
+			return val, nil
+		case string:
+			u, err := uuid.Parse(strings.TrimSpace(val))
+			if err != nil {
+				return nil, fmt.Errorf("invalid UUID %v: %v", val, err)
+			}
+			return u, nil
+		default:
+			return nil, fmt.Errorf("cannot cast %v (%T) to UUID", val, val)
+		}
+
+	case StateType_URI:
+		switch val := val.(type) {
+		case *url.URL:
+			return val, nil
+		case string:
+			u, err := url.Parse(strings.TrimSpace(val))
+			if err != nil {
+				return nil, fmt.Errorf("invalid URI %v: %v", val, err)
+			}
+			return u, nil
+		default:
+			return nil, fmt.Errorf("cannot cast %v (%T) to URI", val, val)
+		}
+
+	case StateType_BinBase64, StateType_BinHex:
+		switch v := val.(type) {
+		case []byte:
+			return v, nil
+		case string:
+			return decodeBinary(t, v)
+		default:
+			return nil, fmt.Errorf("cannot cast %v (%T) to binary", val, val)
+		}
+
+	case StateType_Date, StateType_DateTime, StateType_DateTimeTZ,
+		StateType_Time, StateType_TimeTZ:
+		switch v := val.(type) {
+		case time.Time:
+			return v, nil
+		case string:
+			return parseUPnPTime(t, v)
+		default:
+			return nil, fmt.Errorf("cannot cast %v (%T) to time", val, val)
+		}
+
+	default:
+		return nil, fmt.Errorf("unsupported type: %v", t)
+	}
+}
+-----------------
+------- /pmoupnp/devices/services/statevariables/statevartype_cmp.go ------
+package statevariables
+
+import (
+	"bytes"
+	"fmt"
+	"log"
+	"strings"
+)
+
+// Cmp compares two values of a given type 'StateVarType'. The comparison is
+// made based on the specific type of 'a' and 'b'. It returns an integer
+// indicating whether 'a' is less than, equal to, or greater than 'b'. If 'a' is
+// less than 'b', it returns -1. If they are equal, it returns 0. If 'a' is
+// greater than 'b', it returns 1. It also returns an error if any of the values
+// can't be cast to the required type or if comparison isn't supported for the
+// given type 'StateVarType'.
+//
+//   - t: StateVarType representing the specific type to use for comparison.
+//   - a, b: The values to compare. They should be of type interface{} as they could be
+//     any valid Go type.
+//
+// Returns: An integer indicating the result of the comparison (-1 if 'a' is
+// less than 'b', 0 if they are equal, and 1 if 'a' is greater than 'b'). It
+// also returns an error if any values can't be cast or if comparison isn't
+// supported for the given type.
+//
+// Example:
+//
+//	result, err := t.Cmp(int32(5), int32(7)) // Returns -1 and nil error as 5 is less than 7.
+func (t StateVarType) Cmp(a, b interface{}) (int, error) {
+	a, err1 := t.Cast(a)
+	b, err2 := t.Cast(b)
+
+	if err1 != nil || err2 != nil {
+		log.Fatalf("Failed to cast for comparison: %v vs %v (errors: %v, %v)", a, b, err1, err2)
+	}
+
+	switch {
+	case t.IsInteger():
+		ai, err := toInt(a, t.BitSize())
+		if err != nil {
+			return 0, fmt.Errorf("invalid int value for a: %w", err)
+		}
+		bi, err := toInt(b, t.BitSize())
+		if err != nil {
+			return 0, fmt.Errorf("invalid int value for b: %w", err)
+		}
+		return cmpInt(ai, bi), nil
+
+	case t.IsUnsignedInt():
+		ai, err := toUint(a, t.BitSize())
+		if err != nil {
+			return 0, fmt.Errorf("invalid uint value for a: %w", err)
+		}
+		bi, err := toUint(b, t.BitSize())
+		if err != nil {
+			return 0, fmt.Errorf("invalid uint value for b: %w", err)
+		}
+		return cmpUint(ai, bi), nil
+
+	case t.IsFloat():
+		af, err := toFloat(a, t.BitSize())
+		if err != nil {
+			return 0, fmt.Errorf("invalid float value for a: %w", err)
+		}
+		bf, err := toFloat(b, t.BitSize())
+		if err != nil {
+			return 0, fmt.Errorf("invalid float value for b: %w", err)
+		}
+		return cmpFloat64(af, bf), nil
+
+	case t == StateType_Boolean:
+		ab, err := toBool(a)
+		if err != nil {
+			return 0, fmt.Errorf("invalid bool value for a: %w", err)
+		}
+		bb, err := toBool(b)
+		if err != nil {
+			return 0, fmt.Errorf("invalid bool value for b: %w", err)
+		}
+		return cmpBool(ab, bb), nil
+
+	case t == StateType_String || t == StateType_Char:
+		as, err := toString(a)
+		if err != nil {
+			return 0, fmt.Errorf("invalid string value for a")
+		}
+		bs, err := toString(b)
+		if err != nil {
+			return 0, fmt.Errorf("invalid string value for b")
+		}
+		return strings.Compare(as, bs), nil
+
+	case t.IsTime():
+		at, err := toTime(a)
+		if err != nil {
+			return 0, fmt.Errorf("invalid time value for a")
+		}
+		bt, err := toTime(b)
+		if err != nil {
+			return 0, fmt.Errorf("invalid time value for b")
+		}
+		return cmpTime(at, bt), nil
+
+	default:
+		return 0, fmt.Errorf("comparison not supported for type %v", t)
+	}
+}
+
+func (t StateVarType) Equal(a, b interface{}) (bool, error) {
+	switch {
+	case t.IsInteger():
+		ai, err1 := toInt(a, 64)
+		bi, err2 := toInt(b, 64)
+		if err1 != nil || err2 != nil {
+			return false, fmt.Errorf("invalid integer value for type %s", t.String())
+		}
+		return ai == bi, nil
+
+	case t.IsFloat():
+		af, err := toFloat(a, 64)
+		if err != nil {
+			return false, fmt.Errorf("invalid float value for type %s: %v", t.String(), err)
+		}
+		bf, err := toFloat(b, 64)
+		if err != nil {
+			return false, fmt.Errorf("invalid float value for type %s: %v", t.String(), err)
+		}
+		return af == bf, nil
+
+	case t.IsString():
+		as, ok1 := a.(string)
+		bs, ok2 := b.(string)
+		if !ok1 || !ok2 {
+			return false, fmt.Errorf("invalid string value for type %s", t.String())
+		}
+		return as == bs, nil
+
+	case t.IsBool():
+		ab, err1 := toBool(a)
+		bb, err2 := toBool(b)
+		if err1 != nil || err2 != nil {
+			return false, fmt.Errorf("invalid boolean value for type %s", t.String())
+		}
+		return ab == bb, nil
+
+	case t.IsTime():
+		at, err1 := toTime(a)
+		bt, err2 := toTime(b)
+		if err1 != nil || err2 != nil {
+			return false, fmt.Errorf("invalid time.Time value for type %s", t.String())
+		}
+		return at.Equal(bt), nil
+
+	case t.IsUUID():
+		au, err1 := toUUID(a)
+		bu, err2 := toUUID(b)
+		if err1 != nil || err2 != nil {
+			return false, fmt.Errorf("invalid uuid.UUID value for type %s", t.String())
+		}
+		return au == bu, nil
+
+	case t.IsURI():
+		au, err1 := toURI(a)
+		bu, err2 := toURI(b)
+		if err1 != nil || err2 != nil {
+			return false, fmt.Errorf("invalid *url.URL value for type %s", t.String())
+		}
+		return au.String() == bu.String(), nil
+
+	case t.IsBinary():
+		ab, err1 := toBinary(a)
+		bb, err2 := toBinary(b)
+		if err1 != nil || err2 != nil {
+			return false, fmt.Errorf("invalid []byte value for type %s", t.String())
+		}
+		return bytes.Equal(ab, bb), nil
+
+	default:
+		return false, fmt.Errorf("equality not supported for type %s", t.String())
+	}
+}
+
+// InRange checks if a value falls within an inclusive range [min, max].
+// Uses the type's comparison logic. Returns true if val is between min and max (inclusive).
+//
+// Example:
+//
+//	range := ValueRange{min: uint16(10), max: uint16(100)}
+//	StateType_UI2.InRange(uint16(50), range) // true
+func (t StateVarType) InRange(val interface{}, interval *ValueRange) (bool, error) {
+	if interval == nil {
+		return true, nil
+	}
+	cmp1, err1 := t.Cmp(val, interval.min)
+	cmp2, err2 := t.Cmp(val, interval.max)
+	if err1 != nil || err2 != nil {
+		err := err1
+		if err == nil {
+			err = err2
+		}
+		return false, err
+	}
+	return cmp1 >= 0 && cmp2 <= 0, nil
+}
+-----------------
+------- /pmoupnp/devices/services/statevariables/statevartype_typechecking.go ------
+package statevariables
+
+// IsNumeric checks whether a given StateVarType represents a numeric type or
+// not. Numeric types are defined as those that can be used to store number-like
+// values. The following types are considered numeric: UI1, UI2, UI4, I1, I2,
+// I4, Int, R4, R8, Number and Fixed14_4.
+//
+// t: StateVarType to check if it's a numeric type or not.
+//
+// Returns true if the given StateVarType represents a numeric type; false
+// otherwise.
+func (t StateVarType) IsNumeric() bool {
+	switch t {
+	case StateType_UI1, StateType_UI2, StateType_UI4,
+		StateType_I1, StateType_I2, StateType_I4,
+		StateType_Int,
+		StateType_R4, StateType_R8,
+		StateType_Number,
+		StateType_Fixed14_4:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsInteger checks if the state variable type is integer or not.
+//
+// It returns a boolean value indicating whether the provided StateVarType (t)
+// is an integer type or not. The function takes one parameter, t of type
+// StateVarType, which represents the state variable type to be checked.
+//
+// Parameters: - t (StateVarType): The StateVarType to check for comparability.
+//
+// Returns: bool: If the state variable type is any of the defined integer types
+// (StateType_UI1, StateType_UI2, StateType_UI4, StateType_I1, StateType_I2,
+// StateType_I4, StateType_Int), it returns true. Otherwise, it returns false.
+func (t StateVarType) IsInteger() bool {
+	switch t {
+	case StateType_UI1, StateType_UI2, StateType_UI4,
+		StateType_I1, StateType_I2, StateType_I4,
+		StateType_Int:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsSignedInt checks if the state variable type is a signed integer type.
+// The function returns true for StateType_I1, StateType_I2, StateType_I4, and
+// StateType_Int, otherwise it will return false. This method is part of the
+// StateVarType enumeration in statevaluetype package. It takes no parameters
+// but operates on the receiver 't' of type StateVarType.
+//
+// The returned value is a boolean.
+func (t StateVarType) IsSignedInt() bool {
+	switch t {
+	case StateType_I1, StateType_I2, StateType_I4, StateType_Int:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsUnsignedInt checks if the state variable type is an unsigned integer. It
+// returns a boolean indicating whether or not the current StateVarType
+// represents an unsigned integer type, namely: StateType_UI1, StateType_UI2,
+// and StateType_UI4.
+func (t StateVarType) IsUnsignedInt() bool {
+	switch t {
+	case StateType_UI1, StateType_UI2, StateType_UI4:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsFloat returns a boolean indicating whether the given state variable type
+// represents a float number. If the state variable type is one of R4, R8, Number or
+// Fixed14_4 it returns true; otherwise, it returns false.
+func (t StateVarType) IsFloat() bool {
+	switch t {
+	case StateType_R4, StateType_R8, StateType_Number, StateType_Fixed14_4:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsBool checks if a StateVarType is of type Boolean. It returns true if the
+// StateVarType equals to StateType_Boolean, false otherwise.
+func (t StateVarType) IsBool() bool {
+	return t == StateType_Boolean
+}
+
+// IsString reports whether or not the state variable type represents a string
+// value.
+//
+// This method returns true if the StateVarType is either StateType_String or
+// StateType_Char, otherwise it returns false.
+func (t StateVarType) IsString() bool {
+	switch t {
+	case StateType_String, StateType_Char:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsTime checks whether a given StateVarType is of time type or not. It accepts
+// a StateVarType parameter 't' and returns a boolean value based on the check.
+//
+// The possible values for 't' are: StateType_Date, StateType_DateTime,
+// StateType_DateTimeTZ, StateType_Time, StateType_TimeTZ. If 't' is any of
+// these types, the function returns true; otherwise, it returns false.
+func (t StateVarType) IsTime() bool {
+	switch t {
+	case StateType_Date, StateType_DateTime, StateType_DateTimeTZ,
+		StateType_Time, StateType_TimeTZ:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsUUID reports whether the receiver represents a UUID (Universally Unique
+// Identifier). The StateVarType should be of type StateType_UUID to return
+// true. Otherwise, it returns false.
+func (t StateVarType) IsUUID() bool {
+	return t == StateType_UUID
+}
+
+// IsURI checks if the given state variable type is a URI.
+//
+// This function returns true if and only if the receiver (StateVarType t)
+// equals StateType_URI, which represents URIs in UPnP protocol. Otherwise, it
+// returns false.
+func (t StateVarType) IsURI() bool {
+	return t == StateType_URI
+}
+
+// IsBinary checks if the given StateVarType is binary type or not. It returns
+// true for types StateType_BinBase64 and StateType_BinHex, otherwise it returns
+// false.
+func (t StateVarType) IsBinary() bool {
+	switch t {
+	case StateType_BinBase64, StateType_BinHex:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsComparable function checks if a StateVarType is comparable or not.
+//
+// It returns false for binary types (StateType_BinBase64 and StateType_BinHex)
+// as they are non-comparable. For all other types, it returns true indicating
+// that these types can be compared.
+//
+// Parameters: - t (StateVarType): The StateVarType to check for comparability.
+//
+// Returns: bool: A boolean value indicating whether the given StateVarType is
+// comparable or not. True means it's comparable, False means it isn't.
+func (t StateVarType) IsComparable() bool {
+	// Tous les types sauf les binaires sont comparables
+	switch t {
+	case StateType_BinBase64, StateType_BinHex:
+		return false
+	default:
+		return true
+	}
+}
+-----------------
+------- /pmoupnp/devices/services/statevariables/statevartype.go ------
+// package stateVariables provides comprehensive handling of UPnP state variable types.
+// It includes type identification, value casting, comparison, and range validation
+// for all standard UPnP state variable types.
+package statevariables
+
+import (
+	"strings"
+	"time"
+)
+
+// StateVarType represents UPnP state variable types with corresponding Go type mappings.
+type StateVarType int
+
+// Constants defining all supported UPnP state variable types
+const (
+	StateType_Unknown    StateVarType = iota
+	StateType_UI1                     // Unsigned 8-bit integer (Go: uint8)
+	StateType_UI2                     // Unsigned 16-bit integer (Go: uint16)
+	StateType_UI4                     // Unsigned 32-bit integer (Go: uint32)
+	StateType_I1                      // Signed 8-bit integer (Go: int8)
+	StateType_I2                      // Signed 16-bit integer (Go: int16)
+	StateType_I4                      // Signed 32-bit integer (Go: int32)
+	StateType_Int                     // Synonymous with i4 (Go: int32)
+	StateType_R4                      // 32-bit floating point (Go: float32)
+	StateType_R8                      // 64-bit floating point (Go: float64)
+	StateType_Number                  // Synonymous with r8 (Go: float64)
+	StateType_Fixed14_4               // Fixed-point decimal (Go: float64)
+	StateType_Char                    // Single Unicode character (Go: rune)
+	StateType_String                  // Character string (Go: string)
+	StateType_Boolean                 // Boolean value (Go: bool)
+	StateType_BinBase64               // Base64-encoded binary (Go: []byte)
+	StateType_BinHex                  // Hex-encoded binary (Go: []byte)
+	StateType_Date                    // Date (YYYY-MM-DD) (Go: time.Time)
+	StateType_DateTime                // DateTime without timezone (Go: time.Time)
+	StateType_DateTimeTZ              // DateTime with timezone (Go: time.Time)
+	StateType_Time                    // Time without timezone (Go: time.Time)
+	StateType_TimeTZ                  // Time with timezone (Go: time.Time)
+	StateType_UUID                    // Universally unique identifier (Go: uuid.UUID)
+	StateType_URI                     // Uniform Resource Identifier (Go: *url.URL)
+)
+
+// typeNames maps UPnP XML type names to StateVarType constants
+var typeNames = map[string]StateVarType{
+	"ui1":         StateType_UI1,
+	"ui2":         StateType_UI2,
+	"ui4":         StateType_UI4,
+	"i1":          StateType_I1,
+	"i2":          StateType_I2,
+	"i4":          StateType_I4,
+	"int":         StateType_Int,
+	"r4":          StateType_R4,
+	"r8":          StateType_R8,
+	"number":      StateType_Number,
+	"fixed.14.4":  StateType_Fixed14_4,
+	"char":        StateType_Char,
+	"string":      StateType_String,
+	"boolean":     StateType_Boolean,
+	"bin.base64":  StateType_BinBase64,
+	"bin.hex":     StateType_BinHex,
+	"date":        StateType_Date,
+	"dateTime":    StateType_DateTime,
+	"dateTime.tz": StateType_DateTimeTZ,
+	"time":        StateType_Time,
+	"time.tz":     StateType_TimeTZ,
+	"uuid":        StateType_UUID,
+	"uri":         StateType_URI,
+}
+
+// typeStrings provides string representations for StateVarType constants
+var typeStrings = [...]string{
+	"unknown",
+	"ui1",
+	"ui2",
+	"ui4",
+	"i1",
+	"i2",
+	"i4",
+	"int",
+	"r4",
+	"r8",
+	"number",
+	"fixed.14.4",
+	"char",
+	"string",
+	"boolean",
+	"bin.base64",
+	"bin.hex",
+	"date",
+	"dateTime",
+	"dateTime.tz",
+	"time",
+	"time.tz",
+	"uuid",
+	"uri",
+}
+
+// StateVarTypeFactory takes a string and attempts to build from it a valid
+// StateVarType. The input string is cleaned before processing -
+// leading/trailing spaces are trimmed, the case is lowered for comparison with
+// known types, and if no match is found 'StateType_Unknown' is returned.
+func StateVarTypeFactory(s string) StateVarType {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if val, ok := typeNames[s]; ok {
+		return val
+	}
+	return StateType_Unknown
+}
+
+// String returns a string representation of the StateVarType. It defaults to
+// "unknown" if the type is not recognized.
+func (t StateVarType) String() string {
+	if int(t) >= 0 && int(t) < len(typeStrings) {
+		return typeStrings[t]
+	}
+	return "unknown"
+}
+
+// BitSize returns the bit size of the StateVarType value, or -1 if not numeric.
+// The possible return values are 8 for StateTypes I1, UI1, and 64 for others.
+func (t StateVarType) BitSize() int {
+	// If t isn't numeric, return -1
+	if !t.IsNumeric() {
+		return -1
+	}
+
+	// Check the value of t and return the appropriate bit size
+	switch t {
+	case StateType_I1, StateType_UI1:
+		return 8
+	case StateType_I2, StateType_UI2:
+		return 16
+	case StateType_I4, StateType_UI4, StateType_Int, StateType_R4:
+		return 32
+	case StateType_R8, StateType_Number, StateType_Fixed14_4:
+		return 64
+	default:
+		return 64
+	}
+}
+
+// NewStateValue creates and returns a new StateValue struct instance with the given name
+// and the receiver's state variable type. The created StateValue is initialized with an
+// empty map for event conditions. If name is an empty string, it will cause panic in later
+// usage. Name is typically used to identify or represent a specific value or condition
+// associated with the variable type 't'.
+func (t StateVarType) NewStateValue(name string) *StateVariable {
+	return &StateVariable{
+		name:            name,
+		valueType:       t,
+		eventConditions: make(map[string]StateConditionFunc),
+	}
+}
+
+func (t StateVarType) DefaultValue() interface{} {
+	switch t {
+	case StateType_Unknown:
+
+	case StateType_UI1, StateType_UI2, StateType_UI4:
+		return uint64(0)
+
+	case StateType_I1, StateType_I2, StateType_I4, StateType_Int:
+		return int64(0)
+
+	case StateType_R4, StateType_R8, StateType_Number, StateType_Fixed14_4:
+		return float64(0)
+
+	case StateType_Char, StateType_String:
+		return ""
+	case StateType_Boolean:
+		return false
+
+	case StateType_BinBase64:
+		return ""
+	case StateType_BinHex:
+		return ""
+	case StateType_Date:
+		return time.Unix(int64(1718985600), 0).UTC()
+	case StateType_DateTime:
+		return time.Unix(int64(1718985600), 0).UTC()
+	case StateType_DateTimeTZ:
+		return time.Unix(int64(1718985600), 0).UTC()
+	case StateType_Time:
+		return time.Unix(int64(1718985600), 0).UTC()
+	case StateType_TimeTZ:
+		return time.Unix(int64(1718985600), 0).UTC()
+	case StateType_UUID:
+		return ""
+	case StateType_URI:
+		return ""
+
+	}
+
+	return nil
+}
+-----------------

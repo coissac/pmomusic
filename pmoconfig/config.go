@@ -137,7 +137,7 @@ func LoadConfig(filename string) *Config {
 	}
 
 	if err := yaml.Unmarshal(data, &cfg.config); err != nil {
-		log.Panicf("invalid YAML config: %w", err)
+		log.Panicf("invalid YAML config: %v", err)
 	}
 
 	cfg.config = lowerKeysMap(cfg.config)
