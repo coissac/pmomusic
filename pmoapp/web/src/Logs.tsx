@@ -13,6 +13,8 @@ type LogsProps = {
   theme: "light" | "dark";
 };
 
+
+
 export function Logs({ logs, theme }: LogsProps) {
   const levelClass = (level: LogEntry["level"]) => {
     switch (level) {
