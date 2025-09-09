@@ -1,8 +1,0 @@
-host:
-  http_port: "1900"
-devices:
-  mediarenderer:
-    mpd_renderer:
-  mediaserver:
-    qobuz:
-      udn: "uuid:28963b75-4c5f-4da7-b10e-ffafd"

@@ -13,19 +13,19 @@ type LogsProps = {
   theme: "light" | "dark";
 };
 
-export function Logs({ logs, theme }: LogsProps) {
+export function Logs({ logs }: LogsProps) {
   const levelClass = (level: LogEntry["level"]) => {
     switch (level) {
       case "info":
-        return "info";
+        return "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200";
       case "warn":
-        return "warning";
+        return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200";
       case "error":
-        return "error";
+        return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200";
       case "debug":
-        return "debug";
+        return "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200";
       default:
-        return "info";
+        return "bg-gray-100 dark:bg-gray-800";
     }
   };
 
@@ -36,19 +36,20 @@ export function Logs({ logs, theme }: LogsProps) {
   };
 
   return (
-    <div className={`log-container ${theme}`}>
+    <div className="p-4 space-y-2">
       {logs.map((log) => (
-        <div key={log.id} className={`log-entry ${levelClass(log.level)}`}>
+        <div
+          key={log.id}
+          className={`rounded-lg shadow p-3 ${levelClass(log.level)}`}
+        >
           <ReactMarkdown
             rehypePlugins={[rehypeRaw]}
             children={decodeMessage(log.message)}
             components={{
-              code({ node, className, children, ...props }) {
+              code({ className, children, ...props }) {
                 return (
                   <code
-                    className={`bg-gray-700 text-white px-1 py-0.5 rounded ${
-                      className || ""
-                    }`}
+                    className={`bg-black/20 px-1 py-0.5 rounded ${className || ""}`}
                     {...props}
                   >
                     {children}
