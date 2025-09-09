@@ -8,8 +8,8 @@ import (
 
 	log "github.com/sirupsen/logrus"
 
-	"gargoton.petite-maison-orange.fr/eric/pmomusic/upnp"
-	"gargoton.petite-maison-orange.fr/eric/pmomusic/upnp/devices/mediarenderer"
+	"gargoton.petite-maison-orange.fr/eric/pmomusic/pmoupnp"
+	"gargoton.petite-maison-orange.fr/eric/pmomusic/pmoupnp/devices/mediarenderer"
 )
 
 func main() {
@@ -23,7 +23,7 @@ func main() {
 	defer stop()
 
 	// Crée le serveur avec baseURL auto-déduite depuis l’IP locale
-	server := upnp.NewServer("pmomusic")
+	server := pmoupnp.NewServer("pmomusic")
 
 	server.RegisterDevice("", mediarenderer.FakeRenderer)
 
