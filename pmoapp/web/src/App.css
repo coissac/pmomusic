@@ -1,9 +1,9 @@
 /* App.css ou index.css */
 @import "tailwindcss";
 
-@tailwind base;
+/* @tailwind base;
 @tailwind components;
-@tailwind utilities;
+@tailwind utilities; */
 
 /* Styles custom */
 .log-container {

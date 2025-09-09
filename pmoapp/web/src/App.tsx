@@ -39,7 +39,7 @@ export default function App() {
   return (
     <div className={theme}>
       <header className="flex items-center justify-between p-4 bg-neutral-800">
-        <h1 className="text-xl font-bold">Mon Logger</h1>
+        <h1 className="text-xl font-bold">PMO-Music logs</h1>
         <button
           className="px-4 py-2 bg-blue-600 rounded hover:bg-blue-500"
           onClick={toggleTheme}
