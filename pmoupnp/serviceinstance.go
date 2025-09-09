@@ -1,4 +1,4 @@
-package upnp
+package pmoupnp
 
 import (
 	"context"
@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"gargoton.petite-maison-orange.fr/eric/pmomusic/pmolog"
+	"gargoton.petite-maison-orange.fr/eric/pmomusic/pmoupnp/devices/services/actions"
+	"gargoton.petite-maison-orange.fr/eric/pmomusic/pmoupnp/devices/services/statevariables"
 	"gargoton.petite-maison-orange.fr/eric/pmomusic/soap"
-	"gargoton.petite-maison-orange.fr/eric/pmomusic/upnp/devices/services/actions"
-	"gargoton.petite-maison-orange.fr/eric/pmomusic/upnp/devices/services/statevariables"
 	"github.com/beevik/etree"
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"

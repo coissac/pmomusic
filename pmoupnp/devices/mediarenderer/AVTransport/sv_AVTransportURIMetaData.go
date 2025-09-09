@@ -2,7 +2,7 @@ package avtransport
 
 import (
 	"gargoton.petite-maison-orange.fr/eric/pmomusic/didl"
-	sv "gargoton.petite-maison-orange.fr/eric/pmomusic/upnp/devices/services/statevariables"
+	sv "gargoton.petite-maison-orange.fr/eric/pmomusic/pmoupnp/devices/services/statevariables"
 	log "github.com/sirupsen/logrus"
 )
 

@@ -1,6 +1,6 @@
 package avtransport
 
-import sv "gargoton.petite-maison-orange.fr/eric/pmomusic/upnp/devices/services/statevariables"
+import sv "gargoton.petite-maison-orange.fr/eric/pmomusic/pmoupnp/devices/services/statevariables"
 
 var SeekMode = func() *sv.StateVariable {
 

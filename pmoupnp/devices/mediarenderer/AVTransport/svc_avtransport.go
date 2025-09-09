@@ -1,9 +1,9 @@
 package avtransport
 
-import "gargoton.petite-maison-orange.fr/eric/pmomusic/upnp"
+import "gargoton.petite-maison-orange.fr/eric/pmomusic/pmoupnp"
 
-var AVTransport = func() *upnp.Service {
-	svc := upnp.NewService("AVTransport")
+var AVTransport = func() *pmoupnp.Service {
+	svc := pmoupnp.NewService("AVTransport")
 
 	svc.AddAction(SetAVTransportURI)
 	svc.AddAction(Play)

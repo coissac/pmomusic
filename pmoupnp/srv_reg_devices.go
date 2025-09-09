@@ -1,4 +1,4 @@
-package upnp
+package pmoupnp
 
 import (
 	"gargoton.petite-maison-orange.fr/eric/pmomusic/pmoconfig"

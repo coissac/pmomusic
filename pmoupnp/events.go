@@ -1,4 +1,4 @@
-package upnp
+package pmoupnp
 
 import "github.com/beevik/etree"
 

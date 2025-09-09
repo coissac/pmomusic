@@ -1,9 +1,9 @@
 package renderingcontrol
 
-import "gargoton.petite-maison-orange.fr/eric/pmomusic/upnp"
+import "gargoton.petite-maison-orange.fr/eric/pmomusic/pmoupnp"
 
-var RenderingControl = func() *upnp.Service {
-	svc := upnp.NewService("RenderingControl")
+var RenderingControl = func() *pmoupnp.Service {
+	svc := pmoupnp.NewService("RenderingControl")
 
 	svc.AddVariable(InstanceID)
 	svc.AddVariable(Channel)
