@@ -1,6 +1,7 @@
 package upnp
 
 import (
+	"gargoton.petite-maison-orange.fr/eric/pmomusic/pmoconfig"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -16,8 +17,8 @@ func (s *Server) RegisterDevice(name string, d *Device) {
 		name = d.Name()
 	}
 
-	config := GetConfig()
-	udn := config.GetDeviceUDN(d.DeviceType(), name)
+	config := pmoconfig.GetConfig()
+	udn := config.GetDeviceUDN(string(d.DeviceType()), name)
 
 	instance := d.NewInstance(s, udn)
 
