@@ -15,6 +15,8 @@ import (
 
 	"gargoton.petite-maison-orange.fr/eric/pmomusic/netutils"
 	"gargoton.petite-maison-orange.fr/eric/pmomusic/pmoapp"
+	"gargoton.petite-maison-orange.fr/eric/pmomusic/pmoconfig"
+	"gargoton.petite-maison-orange.fr/eric/pmomusic/pmocover"
 	"gargoton.petite-maison-orange.fr/eric/pmomusic/pmolog"
 	"gargoton.petite-maison-orange.fr/eric/pmomusic/ssdp"
 )
@@ -35,7 +37,7 @@ type Server struct {
 }
 
 func NewServer(name string, opts ...ServerOption) *Server {
-	config := GetConfig()
+	config := pmoconfig.GetConfig()
 
 	baseURL := config.GetBaseURL()
 	httpPort := config.GetHTTPPort()
@@ -79,6 +81,14 @@ func (s *Server) Start() error {
 
 		s.mu.RLock()
 
+		cover_cache, err := pmocover.GetCoverCache()
+		if err != nil {
+			log.Panicf("❌ Cannot initialize the Cover Cache")
+		}
+
+		log.Info("✅ Cover cache activated")
+
+		cover_cache.ServeMux(mux)
 		pmoapp.Handler(mux)
 
 		s.httpSrv = &http.Server{

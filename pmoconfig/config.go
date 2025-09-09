@@ -1,4 +1,4 @@
-package upnp
+package pmoconfig
 
 import (
 	_ "embed"
@@ -366,7 +366,7 @@ func (conf *Config) GetHTTPPort() int {
 	return 1900
 }
 
-func (conf *Config) GetDeviceUDN(devtype DeviceType, name string) string {
+func (conf *Config) GetDeviceUDN(devtype, name string) string {
 	udn, error := conf.GetValue([]string{"devices", string(devtype), name, "udn"})
 
 	if error != nil {
@@ -376,4 +376,35 @@ func (conf *Config) GetDeviceUDN(devtype DeviceType, name string) string {
 	}
 
 	return udn.(string)
+}
+
+func (conf *Config) GetCoverCacheDir() string {
+	cachedir, _ := conf.GetValue([]string{"host", "cover_cache", "directory"})
+	if cachedir == nil {
+		cachedir = "./.pmomusic_covers"
+	}
+
+	sdir, ok := cachedir.(string)
+
+	if ok && sdir != "" {
+		return sdir
+	}
+
+	return "./.pmomusic_covers"
+}
+
+func (conf *Config) GetCoverCacheSize() int {
+	size, _ := conf.GetValue([]string{"host", "cover_cache", "size"})
+	if size == nil {
+		return 2000
+	}
+
+	switch v := size.(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	default:
+		return 2000
+	}
 }
