@@ -1,14 +1,14 @@
 package avtransport
 
 import (
-	"gargoton.petite-maison-orange.fr/eric/pmomusic/didl"
+	"gargoton.petite-maison-orange.fr/eric/pmomusic/pmodidl"
 	sv "gargoton.petite-maison-orange.fr/eric/pmomusic/pmoupnp/devices/services/statevariables"
 	log "github.com/sirupsen/logrus"
 )
 
 func _AVTransportURIMetaDataParser(value string) (interface{}, error) {
 	log.Debug("[avtransport] Parsing AVTransport)")
-	didl, err := didl.Parse(value)
+	didl, err := pmodidl.Parse(value)
 	if err != nil {
 		return value, err
 	}

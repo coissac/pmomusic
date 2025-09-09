@@ -116,3 +116,9 @@ func (db *DB) GetAll() ([]*CacheEntry, error) {
 	}
 	return entries, nil
 }
+
+// Delete supprime une entrée spécifique
+func (db *DB) Delete(pk string) error {
+	_, err := db.conn.Exec(`DELETE FROM covers WHERE pk = ?`, pk)
+	return err
+}

@@ -1,4 +1,4 @@
-package didl
+package pmodidl
 
 import (
 	"fmt"
