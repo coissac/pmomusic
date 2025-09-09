@@ -3,7 +3,7 @@ package actions
 import (
 	"iter"
 
-	"gargoton.petite-maison-orange.fr/eric/pmomusic/upnp/objectstore"
+	"gargoton.petite-maison-orange.fr/eric/pmomusic/pmoupnp/objectstore"
 	"github.com/beevik/etree"
 )
 

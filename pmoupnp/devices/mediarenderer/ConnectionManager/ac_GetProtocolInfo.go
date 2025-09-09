@@ -1,6 +1,6 @@
 package connectionmanager
 
-import "gargoton.petite-maison-orange.fr/eric/pmomusic/upnp/devices/services/actions"
+import "gargoton.petite-maison-orange.fr/eric/pmomusic/pmoupnp/devices/services/actions"
 
 var GetProtocolInfo = func() *actions.Action {
 

@@ -1,6 +1,6 @@
 package renderingcontrol
 
-import sv "gargoton.petite-maison-orange.fr/eric/pmomusic/upnp/devices/services/statevariables"
+import sv "gargoton.petite-maison-orange.fr/eric/pmomusic/pmoupnp/devices/services/statevariables"
 
 var Channel = func() *sv.StateVariable {
 

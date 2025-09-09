@@ -1,9 +1,9 @@
 package connectionmanager
 
-import "gargoton.petite-maison-orange.fr/eric/pmomusic/upnp"
+import "gargoton.petite-maison-orange.fr/eric/pmomusic/pmoupnp"
 
-var ConnectionManager = func() *upnp.Service {
-	svc := upnp.NewService("ConnectionManager")
+var ConnectionManager = func() *pmoupnp.Service {
+	svc := pmoupnp.NewService("ConnectionManager")
 
 	svc.AddVariable(AVTransportID)
 	svc.AddVariable(ConnectionID)

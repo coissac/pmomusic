@@ -1,6 +1,6 @@
 package avtransport
 
-import "gargoton.petite-maison-orange.fr/eric/pmomusic/upnp/devices/services/actions"
+import "gargoton.petite-maison-orange.fr/eric/pmomusic/pmoupnp/devices/services/actions"
 
 var Play = func() *actions.Action {
 

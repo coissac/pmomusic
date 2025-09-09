@@ -1,15 +1,15 @@
 package mediarenderer
 
 import (
-	"gargoton.petite-maison-orange.fr/eric/pmomusic/upnp"
-	avtransport "gargoton.petite-maison-orange.fr/eric/pmomusic/upnp/devices/mediarenderer/AVTransport"
-	connectionmanager "gargoton.petite-maison-orange.fr/eric/pmomusic/upnp/devices/mediarenderer/ConnectionManager"
-	renderingcontrol "gargoton.petite-maison-orange.fr/eric/pmomusic/upnp/devices/mediarenderer/RenderingControl"
+	"gargoton.petite-maison-orange.fr/eric/pmomusic/pmoupnp"
+	avtransport "gargoton.petite-maison-orange.fr/eric/pmomusic/pmoupnp/devices/mediarenderer/AVTransport"
+	connectionmanager "gargoton.petite-maison-orange.fr/eric/pmomusic/pmoupnp/devices/mediarenderer/ConnectionManager"
+	renderingcontrol "gargoton.petite-maison-orange.fr/eric/pmomusic/pmoupnp/devices/mediarenderer/RenderingControl"
 )
 
-var FakeRenderer = func() *upnp.Device {
+var FakeRenderer = func() *pmoupnp.Device {
 
-	renderer := upnp.NewDevice("FakeRenderer", "MediaRenderer")
+	renderer := pmoupnp.NewDevice("FakeRenderer", "MediaRenderer")
 
 	renderer.AddService(avtransport.AVTransport)
 	renderer.AddService(connectionmanager.ConnectionManager)

@@ -1,123 +1,207 @@
 /* App.css ou index.css */
 @import "tailwindcss";
 
-/* @tailwind base;
-@tailwind components;
-@tailwind utilities; */
+/* Styles de base améliorés */
+:root {
+  font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  line-height: 1.6;
+  font-weight: 400;
+  color-scheme: light dark;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
 
-/* Styles custom */
+/* Styles pour le conteneur principal */
 .log-container {
-  @apply p-4 space-y-2 min-h-screen;
+  @apply p-4 space-y-3 min-h-screen;
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
+/* Styles généraux pour les entrées de log améliorées */
 .log-entry {
-  @apply rounded-lg p-2 font-mono shadow-md;
-}
-
-.log-entry.info { @apply bg-gray-800 text-green-400; }
-.log-entry.warning { @apply bg-gray-800 text-yellow-400; }
-.log-entry.error { @apply bg-gray-800 text-red-400; }
-.log-entry.debug { @apply bg-gray-800 text-purple-400; }
-
-
-/* Styles pour le thème sombre */
-.dark .log-entry {
-  background: linear-gradient(90deg, rgba(30, 30, 30, 0.5), transparent);
+  @apply rounded-xl p-4 font-mono shadow-lg transition-all duration-300 ease-out;
   border-left: 4px solid;
+  backdrop-filter: blur(10px);
+  transform-origin: center top;
 }
 
-.dark .log-entry.error {
-  border-color: #f87171;
-  background: linear-gradient(90deg, rgba(248, 113, 113, 0.1), transparent);
-}
-
-.dark .log-entry.warning {
-  border-color: #fbbf24;
-  background: linear-gradient(90deg, rgba(251, 191, 36, 0.1), transparent);
-}
-
-.dark .log-entry.info {
-  border-color: #60a5fa;
-  background: linear-gradient(90deg, rgba(96, 165, 250, 0.1), transparent);
-}
-
-.dark .log-entry.debug {
-  border-color: #a78bfa;
-  background: linear-gradient(90deg, rgba(167, 139, 250, 0.1), transparent);
-}
-
-/* Styles pour le thème clair */
-.light .log-entry {
-  background: linear-gradient(90deg, rgba(240, 240, 240, 0.5), transparent);
-  border-left: 4px solid;
-}
-
-.light .log-entry.error {
-  border-color: #dc2626;
-  background: linear-gradient(90deg, rgba(220, 38, 38, 0.1), transparent);
-}
-
-.light .log-entry.warning {
-  border-color: #d97706;
-  background: linear-gradient(90deg, rgba(217, 119, 6, 0.1), transparent);
-}
-
-.light .log-entry.info {
-  border-color: #2563eb;
-  background: linear-gradient(90deg, rgba(37, 99, 235, 0.1), transparent);
-}
-
-.light .log-entry.debug {
-  border-color: #7c3aed;
-  background: linear-gradient(90deg, rgba(124, 58, 237, 0.1), transparent);
-}
-
-/* Animation pour les nouveaux logs */
-@keyframes highlight {
-  0% { opacity: 0.5; }
-  100% { opacity: 1; }
+/* Animation d'entrée pour les nouveaux logs */
+@keyframes slideIn {
+  0% {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .log-entry:first-child {
-  animation: highlight 0.5s ease;
+  animation: slideIn 0.4s ease-out;
 }
 
-/* Styles pour la barre de défilement */
-.log-container::-webkit-scrollbar {
-  width: 8px;
+/* Styles pour le thème sombre - améliorés */
+.dark .log-entry {
+  background: linear-gradient(90deg, rgba(30, 30, 30, 0.7), rgba(30, 30, 30, 0.4));
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
 }
 
-.log-container::-webkit-scrollbar-track {
-  background: transparent;
+.dark .log-entry.info {
+  border-color: #3b82f6;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
 }
 
-.log-container::-webkit-scrollbar-thumb {
-  background: rgba(156, 163, 175, 0.5);
-  border-radius: 4px;
+.dark .log-entry.warning {
+  border-color: #f59e0b;
+  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.15);
 }
 
-.log-container::-webkit-scrollbar-thumb:hover {
-  background: rgba(156, 163, 175, 0.7);
+.dark .log-entry.error {
+  border-color: #ef4444;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.15);
 }
 
-.dark .log-container::-webkit-scrollbar-thumb {
-  background: rgba(75, 85, 99, 0.5);
+.dark .log-entry.debug {
+  border-color: #8b5cf6;
+  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.15);
 }
 
-.dark .log-container::-webkit-scrollbar-thumb:hover {
-  background: rgba(75, 85, 99, 0.7);
+.dark .log-entry:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.3);
 }
 
-/* Amélioration de l'apparence des détails */
-details summary::-webkit-details-marker {
-  display: none;
+/* Styles pour les éléments de détail et code */
+.dark details {
+  @apply mt-3 rounded-lg overflow-hidden;
+  background: rgba(20, 20, 20, 0.6);
 }
 
-details summary {
-  list-style: none;
-  transition: color 0.2s ease;
+.dark summary {
+  @apply p-2 cursor-pointer font-semibold flex items-center;
+  background: rgba(0, 0, 0, 0.2);
+  user-select: none;
 }
 
-details[open] summary {
-  margin-bottom: 0.5rem;
+.dark summary::before {
+  content: "►";
+  @apply mr-2 text-xs transition-transform;
+}
+
+.dark details[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.dark pre {
+  @apply p-4 overflow-x-auto;
+  background: rgba(10, 10, 10, 0.8) !important;
+  border-left: 3px solid rgba(255, 255, 255, 0.1);
+}
+
+.dark code {
+  @apply text-sm;
+  font-family: 'Fira Code', 'Monaco', 'Cascadia Code', monospace;
+}
+
+/* Styles pour les éléments spécifiques dans les logs */
+.dark .bg-black {
+  background: rgba(0, 0, 0, 0.3) !important;
+}
+
+.dark ul {
+  @apply mt-2 space-y-1;
+}
+
+.dark li {
+  @apply flex;
+}
+
+.dark li strong {
+  @apply min-w-[100px] text-neutral-300;
+}
+
+.dark img {
+  @apply rounded-lg mt-2 max-h-24 border border-neutral-700;
+}
+
+/* Amélioration du header */
+.dark header {
+  @apply sticky top-0 z-10 shadow-md border-b border-neutral-700;
+  background: rgba(23, 23, 23, 0.95);
+  backdrop-filter: blur(10px);
+}
+
+.dark button {
+  @apply transition-all duration-200;
+}
+
+.dark button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+}
+
+/* Barre de défilement personnalisée */
+.dark ::-webkit-scrollbar {
+  width: 10px;
+}
+
+.dark ::-webkit-scrollbar-track {
+  background: rgba(30, 30, 30, 0.5);
+  border-radius: 5px;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(90, 90, 90, 0.5);
+  border-radius: 5px;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(120, 120, 120, 0.6);
+}
+
+/* Styles pour les messages spécifiques */
+.log-entry .emoji {
+  @apply mr-2;
+}
+
+.log-entry .ip-address {
+  @apply font-bold text-amber-400;
+}
+
+.log-entry .success {
+  @apply text-green-400;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .log-entry {
+    @apply p-3;
+  }
+  
+  .dark header {
+    @apply flex-col space-y-2 items-start;
+  }
+  
+  .dark header h1 {
+    @apply text-lg;
+  }
+  
+  .dark pre {
+    @apply text-xs;
+  }
+}
+
+/* Animation de pulse pour les logs actifs */
+@keyframes pulseSubtle {
+  0% { opacity: 0.9; }
+  50% { opacity: 1; }
+  100% { opacity: 0.9; }
+}
+
+.log-entry:first-child {
+  animation: slideIn 0.4s ease-out, pulseSubtle 3s infinite;
 }
