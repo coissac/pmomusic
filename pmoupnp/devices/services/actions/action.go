@@ -3,8 +3,7 @@ package actions
 import "maps"
 
 type Action struct {
-	name string
-
+	name      string
 	arguments ArgumentSet
 }
 
