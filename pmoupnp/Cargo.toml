@@ -1,0 +1,13 @@
+[package]
+name = "pmoupnp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chrono = "0.4.42"
+url = "2.5.7"
+uuid = "1.18.1"
+hex = "0.4.3"
+base64 = "0.22.1"
+thiserror = "2.0.16"
+xmltree = "0.11.0"
