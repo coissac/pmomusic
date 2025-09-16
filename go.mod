@@ -13,12 +13,21 @@ require (
 	github.com/chai2010/webp v1.4.0 // indirect
 	github.com/disintegration/imaging v1.6.2 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/faiface/beep v1.1.0 // indirect
+	github.com/gopxl/beep v1.4.1
+	github.com/hajimehoshi/go-mp3 v0.3.4 // indirect
+	github.com/icza/bitio v1.1.0 // indirect
+	github.com/jfreymuth/oggvorbis v1.0.5 // indirect
+	github.com/jfreymuth/vorbis v1.0.2 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-sqlite3 v1.14.32 // indirect
+	github.com/mewkiz/flac v1.0.8 // indirect
+	github.com/mewkiz/pkg v0.0.0-20230226050401-4010bf0fec14 // indirect
 	github.com/ncruces/go-strftime v0.1.9 // indirect
+	github.com/pkg/errors v0.9.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	golang.org/x/exp v0.0.0-20250620022241-b7579e27df2b // indirect
-	golang.org/x/image v0.0.0-20211028202545-6944b10bf410 // indirect
+	golang.org/x/image v0.31.0 // indirect
 	golang.org/x/sys v0.34.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	modernc.org/libc v1.66.3 // indirect
