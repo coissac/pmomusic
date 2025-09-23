@@ -1,0 +1,17 @@
+
+[package]
+name = "pmoconfig"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pmoutils ={ path = "../pmoutils" }
+
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9.33"
+lazy_static = "1.4.0"
+dirs = "6.0.0"
+log = "0.4.20"
+anyhow = "1.0.75"
+uuid = { version = "1.18.1", features = ["v4"] }
+tracing = "0.1.41"
