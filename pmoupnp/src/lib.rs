@@ -3,6 +3,7 @@ mod object_trait;
 pub mod variable_types;
 pub mod state_variables;
 pub mod value_ranges;
+pub mod server;
 
 pub use crate::object_trait::UpnpObject;
 
