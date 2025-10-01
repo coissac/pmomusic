@@ -10,9 +10,12 @@ use std::{
 };
 
 use axum::{
-    extract::{Query, State},
-    response::{sse::{Event, KeepAlive, Sse}, IntoResponse},
     Json,
+    extract::{Query, State},
+    response::{
+        IntoResponse,
+        sse::{Event, KeepAlive, Sse},
+    },
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
@@ -59,8 +62,6 @@ impl LogState {
     }
 }
 
-
-
 /// Query params pour /log-sse
 #[derive(Debug, Deserialize)]
 pub struct LogQuery {
@@ -85,7 +86,7 @@ pub async fn log_sse(
     Query(params): Query<LogQuery>,
 ) -> impl IntoResponse {
     let mut rx = state.subscribe();
-    
+
     // Récupérer l'historique du buffer
     let history = state.dump();
 

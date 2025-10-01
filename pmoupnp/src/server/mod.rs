@@ -10,38 +10,8 @@
 //! - ⚛️ **Applications SPA** : Support pour Vue.js/React avec `add_spa()`
 //! - 🔀 **Redirections** : Redirigez des routes avec `add_redirect()`
 //! - 🎯 **Handlers personnalisés** : Support SSE, WebSocket, etc. avec `add_handler_with_state()`
+//! - 📚 **Documentation API** : OpenAPI/Swagger automatique avec `add_openapi()`
 //! - ⚡ **Gestion gracieuse** : Arrêt propre sur Ctrl+C
-//!
-//! ## Exemple d'utilisation
-//!
-//! ```rust,no_run
-//! use pmoupnp::server::{ServerBuilder, Server};
-//! use rust_embed::RustEmbed;
-//!
-//! #[derive(RustEmbed, Clone)]
-//! #[folder = "static/"]
-//! struct Assets;
-//!
-//! #[tokio::main]
-//! async fn main() {
-//!     let mut server = ServerBuilder::new("MyAPI", "http://localhost:3000", 3000)
-//!         .build();
-//!
-//!     // Route JSON simple
-//!     server.add_route("/api/hello", || async {
-//!         serde_json::json!({"message": "Hello World"})
-//!     }).await;
-//!
-//!     // Redirection
-//!     server.add_redirect("/", "/app").await;
-//!
-//!     // Application Vue.js
-//!     server.add_spa::<Assets>("/app").await;
-//!
-//!     server.start().await;
-//!     server.wait().await;
-//! }
-//! ```
 
 pub mod logs;
 
@@ -55,13 +25,18 @@ use rust_embed::RustEmbed;
 use serde::Serialize;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::{signal, sync::RwLock, task::JoinHandle};
-use tracing::{info,warn,debug,error};
+use tracing::{debug, error, info, warn};
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
 /// Info serveur sérialisable
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, utoipa::ToSchema)]
 pub struct ServerInfo {
+    /// Nom du serveur
     pub name: String,
+    /// URL de base
     pub base_url: String,
+    /// Port HTTP
     pub http_port: u16,
 }
 
@@ -71,6 +46,7 @@ pub struct Server {
     base_url: String,
     http_port: u16,
     router: Arc<RwLock<Router>>,
+    api_router: Arc<RwLock<Option<Router>>>,
     join_handle: Option<JoinHandle<()>>,
 }
 
@@ -99,6 +75,7 @@ impl Server {
             base_url: base_url.into(),
             http_port,
             router: Arc::new(RwLock::new(Router::new())),
+            api_router: Arc::new(RwLock::new(None)),
             join_handle: None,
         }
     }
@@ -111,7 +88,6 @@ impl Server {
         return Self::new("PMO-Music-Server", url, port);
     }
 
-    /// Ajoute une route dynamique
     /// Ajoute une route JSON dynamique
     ///
     /// Crée un endpoint qui retourne du JSON. La closure fournie sera appelée
@@ -193,9 +169,9 @@ impl Server {
         E: RustEmbed + Clone + Send + Sync + 'static,
     {
         let serve = ServeEmbed::<E>::new();
-        
+
         let mut r = self.router.write().await;
-        
+
         if path == "/" {
             *r = std::mem::take(&mut *r).fallback_service(serve);
         } else {
@@ -253,9 +229,9 @@ impl Server {
             axum_embed::FallbackBehavior::Ok,
             Some("index.html".to_string()),
         );
-        
+
         let mut r = self.router.write().await;
-        
+
         if path == "/" {
             *r = std::mem::take(&mut *r).fallback_service(serve);
         } else {
@@ -343,9 +319,7 @@ impl Server {
         T: 'static,
         S: Clone + Send + Sync + 'static,
     {
-        let route = Router::new()
-            .route("/", get(handler))
-            .with_state(state);
+        let route = Router::new().route("/", get(handler)).with_state(state);
 
         let mut r = self.router.write().await;
         *r = std::mem::take(&mut *r).nest(path, route);
@@ -413,6 +387,54 @@ impl Server {
         }
     }
 
+    /// Ajoute une API documentée avec OpenAPI
+    ///
+    /// Monte un routeur d'API sous `/api` et active Swagger UI sur `/swagger-ui`
+    ///
+    /// # Arguments
+    ///
+    /// * `api_router` - Router Axum contenant les routes API
+    /// * `openapi` - Spécification OpenAPI générée par utoipa
+    ///
+    /// # Exemple
+    ///
+    /// ```rust,no_run
+    /// use utoipa::OpenApi;
+    /// use axum::{Router, Json, routing::get};
+    ///
+    /// #[derive(utoipa::OpenApi)]
+    /// #[openapi(
+    ///     paths(get_users),
+    ///     components(schemas(User))
+    /// )]
+    /// struct ApiDoc;
+    ///
+    /// #[utoipa::path(
+    ///     get,
+    ///     path = "/users",
+    ///     responses((status = 200, description = "List users"))
+    /// )]
+    /// async fn get_users() -> Json<Vec<User>> {
+    ///     Json(vec![])
+    /// }
+    ///
+    /// let api_router = Router::new()
+    ///     .route("/users", get(get_users));
+    ///
+    /// server.add_openapi(api_router, ApiDoc::openapi()).await;
+    /// ```
+    pub async fn add_openapi(&mut self, api_router: Router, openapi: utoipa::openapi::OpenApi) {
+        // Stocker le routeur API
+        let mut api_r = self.api_router.write().await;
+        *api_r = Some(api_router);
+
+        // Ajouter Swagger UI
+        let swagger = SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", openapi);
+
+        let mut r = self.router.write().await;
+        *r = std::mem::take(&mut *r).merge(swagger);
+    }
+
     /// Démarre le serveur HTTP
     ///
     /// Lance le serveur sur le port configuré et met en place la gestion
@@ -431,7 +453,18 @@ impl Server {
     /// ```
     pub async fn start(&mut self) {
         let addr = SocketAddr::from(([0, 0, 0, 0], self.http_port));
-        info!("Server {} running at [http://{}:{}](http://{}:{})", self.name, self.base_url, self.http_port, self.base_url, self.http_port);
+        info!(
+            "Server {} running at [http://{}:{}](http://{}:{})",
+            self.name, self.base_url, self.http_port, self.base_url, self.http_port
+        );
+
+        // Merger le routeur API si présent
+        let api_router = self.api_router.read().await;
+        if let Some(api_r) = api_router.as_ref() {
+            let mut r = self.router.write().await;
+            *r = std::mem::take(&mut *r).nest("/api", api_r.clone());
+        }
+        drop(api_router);
 
         let router = self.router.clone();
 
@@ -499,7 +532,7 @@ impl ServerBuilder {
         Self {
             name: "PMO-Music-Server".to_string(),
             base_url: config.get_base_url(),
-            http_port: config.get_http_port()
+            http_port: config.get_http_port(),
         }
     }
 

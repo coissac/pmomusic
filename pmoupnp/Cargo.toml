@@ -31,3 +31,6 @@ axum-server = "0.7.2"
 axum-embed = "0.1.0"
 rust-embed = "8.7.2"
 anyhow = "1.0"
+utoipa = { version = "5.4.0", features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "9.0.2", features = ["axum"] }
+validator = { version = "0.20.0", features = ["derive"] }

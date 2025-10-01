@@ -1,6 +1,6 @@
-use std::convert::TryFrom;
-use chrono::NaiveDateTime;
 use crate::variable_types::{StateValue, StateValueError};
+use chrono::NaiveDateTime;
+use std::convert::TryFrom;
 
 impl TryFrom<&StateValue> for NaiveDateTime {
     type Error = StateValueError;
@@ -9,8 +9,15 @@ impl TryFrom<&StateValue> for NaiveDateTime {
         match value {
             StateValue::DateTime(v) => Ok(v.clone()),
             StateValue::String(v) => NaiveDateTime::parse_from_str(&v, "%Y-%m-%dT%H:%M:%S")
-                .map_err(|e| StateValueError::ParseError(format!("Cannot parse DateTime from string '{}': {}", v, e))),
-            _ => Err(StateValueError::TypeError("Cannot cast to NaiveDateTime".into())),
+                .map_err(|e| {
+                    StateValueError::ParseError(format!(
+                        "Cannot parse DateTime from string '{}': {}",
+                        v, e
+                    ))
+                }),
+            _ => Err(StateValueError::TypeError(
+                "Cannot cast to NaiveDateTime".into(),
+            )),
         }
     }
 }
@@ -24,7 +31,6 @@ impl TryFrom<StateValue> for NaiveDateTime {
 }
 
 impl From<NaiveDateTime> for StateValue {
-
     fn from(value: NaiveDateTime) -> Self {
         StateValue::DateTime(value)
     }

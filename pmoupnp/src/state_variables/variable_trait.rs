@@ -49,7 +49,7 @@ pub trait UpnpVariable {
             .clone()
             .unwrap_or_else(|| self.get_definition().as_state_var_type().default_value())
     }
-    
+
     fn has_allowed_values(&self) -> bool {
         return self.get_definition().allowed_values.read().unwrap().len() > 0;
     }

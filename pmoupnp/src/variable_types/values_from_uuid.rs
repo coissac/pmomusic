@@ -12,10 +12,8 @@ impl TryFrom<StateValue> for Uuid {
             StateValue::UUID(v) => Ok(v),
 
             // Si c'est une String, on tente un parse
-            StateValue::String(v) => {
-                Uuid::parse_str(&v)
-                    .map_err(|_| StateValueError::TypeError("Invalid UUID string".into()))
-            }
+            StateValue::String(v) => Uuid::parse_str(&v)
+                .map_err(|_| StateValueError::TypeError("Invalid UUID string".into())),
 
             // Autres types : erreur
             _ => Err(StateValueError::TypeError("Cannot cast to Uuid".into())),
@@ -24,7 +22,6 @@ impl TryFrom<StateValue> for Uuid {
 }
 
 impl From<Uuid> for StateValue {
-
     fn from(value: Uuid) -> Self {
         StateValue::UUID(value)
     }

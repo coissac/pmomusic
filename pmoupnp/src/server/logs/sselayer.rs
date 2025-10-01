@@ -1,6 +1,6 @@
+use tracing::field::{Field, Visit};
 use tracing::{Event, Subscriber};
-use tracing_subscriber::{layer::Context, Layer};
-use tracing::field::{Visit, Field};
+use tracing_subscriber::{Layer, layer::Context};
 
 use super::{LogEntry, LogState};
 use std::time::SystemTime;
@@ -26,7 +26,8 @@ impl Visit for LogVisitor {
             if !self.message.is_empty() {
                 self.message.push(' ');
             }
-            self.message.push_str(&format!("{}={:?}", field.name(), value));
+            self.message
+                .push_str(&format!("{}={:?}", field.name(), value));
         }
     }
 }

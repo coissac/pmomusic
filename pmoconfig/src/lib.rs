@@ -16,7 +16,7 @@ const DEFAULT_CONFIG: &str = include_str!("pmomusic.yaml");
 
 lazy_static! {
     static ref CONFIG: Arc<Config> =
-         Arc::new(Config::load_config("").expect("Failed to load PMOMusic configuration")) ;
+        Arc::new(Config::load_config("").expect("Failed to load PMOMusic configuration"));
 }
 
 const ENV_CONFIG_FILE: &str = "PMOMUSIC_CONFIG";

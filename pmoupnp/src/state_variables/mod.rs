@@ -1,26 +1,33 @@
 mod errors;
-mod variable_trait;
-mod variable_methods;
 mod instance_methods;
+mod variable_methods;
+mod variable_trait;
 
-use std::{collections::HashMap, sync::{Arc, RwLock}};
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+};
 
+pub use crate::state_variables::variable_trait::UpnpVariable;
 use chrono::{DateTime, Utc};
-pub use errors::{StateVariableError};
-pub use crate::state_variables::variable_trait::UpnpVariable; 
+pub use errors::StateVariableError;
 
-
-use crate::{value_ranges::ValueRange, variable_types::{StateValue, StateVarType}, UpnpObjectType};
+use crate::{
+    UpnpObjectType,
+    value_ranges::ValueRange,
+    variable_types::{StateValue, StateVarType},
+};
 
 /// Type pour les fonctions de condition d'événement
 pub type StateConditionFunc = Arc<dyn Fn(&StateVarInstance) -> bool + Send + Sync>;
 
 /// Type pour les fonctions de parsing de valeurs depuis des chaînes
-pub type StringValueParser = Arc<dyn Fn(&str) -> Result<StateValue, StateVariableError> + Send + Sync>;
+pub type StringValueParser =
+    Arc<dyn Fn(&str) -> Result<StateValue, StateVariableError> + Send + Sync>;
 
 /// Type pour les fonctions de sérialisation de valeurs vers des chaînes
-pub type ValueSerializer = Arc<dyn Fn(&StateValue) -> Result<String, StateVariableError> + Send + Sync>;
-
+pub type ValueSerializer =
+    Arc<dyn Fn(&StateValue) -> Result<String, StateVariableError> + Send + Sync>;
 
 pub struct StateVariable {
     object: UpnpObjectType,

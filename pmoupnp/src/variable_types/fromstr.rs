@@ -1,6 +1,5 @@
-use std::str::FromStr;
 use crate::variable_types::StateVarType;
-
+use std::str::FromStr;
 
 impl FromStr for StateVarType {
     type Err = String; // Type d'erreur personnalisé
@@ -30,7 +29,7 @@ impl FromStr for StateVarType {
             "time.tz" => Ok(StateVarType::TimeTZ),
             "uuid" => Ok(StateVarType::UUID),
             "uri" => Ok(StateVarType::URI),
-            _ => Err(format!("Type inconnu: {}", s)),        
+            _ => Err(format!("Type inconnu: {}", s)),
         }
     }
 }
