@@ -30,6 +30,8 @@ mod values_from_uri;
 mod values_from_uuid;
 mod values_from_vec_u8;
 
+mod values_from_str;
+
 use std::fmt::Debug;
 
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};

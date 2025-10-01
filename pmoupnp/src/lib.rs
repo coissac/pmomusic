@@ -6,6 +6,8 @@ pub mod value_ranges;
 pub mod variable_types;
 pub mod actions;
 
+pub mod mediarenderer;
+
 pub use crate::object_trait::{UpnpXml,UpnpObject};
 
 #[derive(Debug,Clone)]
