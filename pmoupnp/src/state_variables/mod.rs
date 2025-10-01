@@ -1,6 +1,7 @@
 mod errors;
 mod instance_methods;
 mod variable_methods;
+mod var_set_methods;
 mod variable_trait;
 
 use std::{
@@ -42,6 +43,11 @@ pub struct StateVariable {
     send_events: bool,
     parse: Option<StringValueParser>,
     marshal: Option<ValueSerializer>,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct StateVariableSet {
+    instances: HashMap<String, StateVariable>,
 }
 
 pub struct StateVarInstance {

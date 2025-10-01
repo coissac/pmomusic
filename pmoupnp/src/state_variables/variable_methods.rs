@@ -1,25 +1,16 @@
 use std::{
-    collections::HashMap,
-    sync::{Arc, RwLock},
+    collections::HashMap, fmt, sync::{Arc, RwLock}
 };
 
 use xmltree::{Element, XMLNode};
 
 use crate::{
-    UpnpObject, UpnpObjectType,
-    state_variables::{
-        StateConditionFunc, StateVariable, StringValueParser, ValueSerializer,
-        variable_trait::UpnpVariable,
-    },
-    value_ranges::ValueRange,
-    variable_types::{StateValue, StateValueError, StateVarType, UpnpVarType},
+    object_trait::UpnpXml, state_variables::{
+        variable_trait::UpnpVariable, StateConditionFunc, StateVariable, StringValueParser, ValueSerializer
+    }, value_ranges::ValueRange, variable_types::{StateValue, StateValueError, StateVarType, UpnpVarType}, UpnpObject, UpnpObjectType
 };
 
-impl UpnpObject for StateVariable {
-    fn as_upnp_object_type(&self) -> &UpnpObjectType {
-        return &self.object;
-    }
-
+impl UpnpXml for StateVariable  {
     fn to_xml_element(&self) -> Element {
         // Création de l'élément racine <stateVariable>
         let mut root = Element::new("stateVariable");
@@ -91,6 +82,13 @@ impl UpnpObject for StateVariable {
 
         root
     }
+
+}
+
+impl UpnpObject for StateVariable {
+    fn as_upnp_object_type(&self) -> &UpnpObjectType {
+        return &self.object;
+    }
 }
 
 impl Clone for StateVariable {
@@ -130,6 +128,37 @@ impl Clone for StateVariable {
             parse: self.parse.clone(),
             marshal: self.marshal.clone(),
         }
+    }
+}
+
+impl fmt::Debug for StateVariable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StateVariable")
+            .field("object", &self.object)
+            .field("value_type", &self.value_type)
+            .field("step", &self.step)
+            .field("modifiable", &self.modifiable)
+            .field(
+                "event_conditions",
+                &format_args!(
+                    "len={}",
+                    self.event_conditions.read().map(|m| m.len()).unwrap_or(0)
+                ),
+            )
+            .field("description", &self.description)
+            .field("default_value", &self.default_value)
+            .field("value_range", &self.value_range)
+            .field(
+                "allowed_values",
+                &format_args!(
+                    "len={}",
+                    self.allowed_values.read().map(|v| v.len()).unwrap_or(0)
+                ),
+            )
+            .field("send_events", &self.send_events)
+            .field("parse", &self.parse.as_ref().map(|_| "Some(StringValueParser)").unwrap_or("None"))
+            .field("marshal", &self.marshal.as_ref().map(|_| "Some(ValueSerializer)").unwrap_or("None"))
+            .finish()
     }
 }
 

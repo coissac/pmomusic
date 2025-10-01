@@ -3,6 +3,7 @@ use xmltree::Element;
 
 use crate::{
     UpnpObject, UpnpObjectType,
+    object_trait::UpnpXml,
     state_variables::{StateVarInstance, StateVariable, UpnpVariable},
     variable_types::StateValue,
 };
@@ -13,13 +14,15 @@ impl UpnpVariable for StateVarInstance {
     }
 }
 
+impl UpnpXml for StateVarInstance {
+    fn to_xml_element(&self) -> Element {
+        self.get_definition().to_xml_element()
+    }
+}
+
 impl UpnpObject for StateVarInstance {
     fn as_upnp_object_type(&self) -> &UpnpObjectType {
         return &self.object;
-    }
-
-    fn to_xml_element(&self) -> Element {
-        self.get_definition().to_xml_element()
     }
 }
 

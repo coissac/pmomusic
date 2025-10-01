@@ -2,18 +2,8 @@ use xmltree::{Element, EmitterConfig};
 
 use crate::UpnpObjectType;
 
-pub trait UpnpObject {
-    fn as_upnp_object_type(&self) -> &UpnpObjectType;
+pub trait UpnpXml {
     fn to_xml_element(&self) -> Element;
-
-    fn get_name(&self) -> &String {
-        return &self.as_upnp_object_type().name;
-    }
-
-    fn get_object_type(&self) -> &String {
-        &self.as_upnp_object_type().object_type
-    }
-
     fn to_xml(&self) -> String {
         let elem = self.to_xml_element();
 
@@ -34,4 +24,17 @@ pub trait UpnpObject {
 
         xml_string
     }
+}
+pub trait UpnpObject : UpnpXml {
+    fn as_upnp_object_type(&self) -> &UpnpObjectType;
+
+    fn get_name(&self) -> &String {
+        return &self.as_upnp_object_type().name;
+    }
+
+    fn get_object_type(&self) -> &String {
+        &self.as_upnp_object_type().object_type
+    }
+
+
 }
