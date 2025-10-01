@@ -295,7 +295,7 @@ impl StateVariable {
         self.description = description;
     }
 
-    pub fn set_default(&mut self, value: StateValue) -> Result<(), StateValueError> {
+    pub fn set_default(&mut self, value: &StateValue) -> Result<(), StateValueError> {
         if self.as_state_var_type() != value.as_state_var_type() {
             return Err(StateValueError::TypeError(
                 "value does not have the right type".to_string(),
@@ -353,7 +353,7 @@ impl StateVariable {
         self.send_events = false;
     }
 
-    pub fn set_value_parseur(&mut self, parser: StringValueParser) -> Result<(), StateValueError> {
+    pub fn set_value_parser(&mut self, parser: StringValueParser) -> Result<(), StateValueError> {
         if self.as_state_var_type() == StateVarType::String {
             self.parse = Some(parser);
             return Ok(());

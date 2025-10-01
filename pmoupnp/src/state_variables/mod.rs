@@ -10,6 +10,7 @@ use std::{
 };
 
 pub use crate::state_variables::variable_trait::UpnpVariable;
+use bevy_reflect::Reflect;
 use chrono::{DateTime, Utc};
 pub use errors::StateVariableError;
 
@@ -24,7 +25,7 @@ pub type StateConditionFunc = Arc<dyn Fn(&StateVarInstance) -> bool + Send + Syn
 
 /// Type pour les fonctions de parsing de valeurs depuis des chaînes
 pub type StringValueParser =
-    Arc<dyn Fn(&str) -> Result<StateValue, StateVariableError> + Send + Sync>;
+    Arc<dyn Fn(&str) -> Result<Box<dyn Reflect>, StateVariableError> + Send + Sync>;
 
 /// Type pour les fonctions de sérialisation de valeurs vers des chaînes
 pub type ValueSerializer =

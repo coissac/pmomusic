@@ -400,6 +400,7 @@ button.active {
 .message {
   color: #d4d4d4;
   word-break: break-word;
+  text-align: left;
 }
 
 @media (max-width: 768px) {

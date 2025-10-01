@@ -7,13 +7,15 @@ mod action_instance_set;
 mod argument;
 mod arg_set_methods;
 
+mod macros;
+
 
 use std::collections::HashMap;
 use crate::{state_variables::StateVariable, UpnpObjectType};
 
 
 #[derive(Debug, Clone)]
-struct Action {
+pub struct Action {
     object: UpnpObjectType,
     arguments: ArgumentSet,
 }

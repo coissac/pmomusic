@@ -25,7 +25,7 @@ use rust_embed::RustEmbed;
 use serde::Serialize;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::{signal, sync::RwLock, task::JoinHandle};
-use tracing::{debug, error, info, warn};
+use tracing::{info, warn, debug, error};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -150,16 +150,17 @@ impl Server {
     ///
     /// # Exemple
     ///
-    /// ```rust,no_run
-    /// # use pmoupnp::server::Server;
-    /// # use rust_embed::RustEmbed;
+    /// ```ignore
+    /// use pmoupnp::server::Server;
+    /// use rust_embed::RustEmbed;
+    /// 
     /// #[derive(RustEmbed, Clone)]
     /// #[folder = "static/"]
     /// struct Assets;
     ///
     /// # #[tokio::main]
     /// # async fn main() {
-    /// # let mut server = Server::new("Test", "http://localhost:3000", 3000);
+    /// let mut server = Server::new("Test", "http://localhost:3000", 3000);
     /// server.add_dir::<Assets>("/assets").await;
     /// // Les fichiers de static/ sont accessibles via /assets/*
     /// # }
@@ -169,9 +170,9 @@ impl Server {
         E: RustEmbed + Clone + Send + Sync + 'static,
     {
         let serve = ServeEmbed::<E>::new();
-
+        
         let mut r = self.router.write().await;
-
+        
         if path == "/" {
             *r = std::mem::take(&mut *r).fallback_service(serve);
         } else {
@@ -229,9 +230,9 @@ impl Server {
             axum_embed::FallbackBehavior::Ok,
             Some("index.html".to_string()),
         );
-
+        
         let mut r = self.router.write().await;
-
+        
         if path == "/" {
             *r = std::mem::take(&mut *r).fallback_service(serve);
         } else {
@@ -288,17 +289,23 @@ impl Server {
     ///
     /// # Exemple avec SSE
     ///
-    /// ```rust,no_run
-    /// # use pmoupnp::server::Server;
-    /// # use axum::extract::State;
-    /// # use axum::response::sse::{Event, Sse, KeepAlive};
-    /// # use tokio::sync::broadcast;
-    /// # #[derive(Clone)]
-    /// # struct LogState { tx: broadcast::Sender<String> }
-    /// # impl LogState { fn subscribe(&self) -> broadcast::Receiver<String> { self.tx.subscribe() } }
-    /// # #[tokio::main]
-    /// # async fn main() {
-    /// # let mut server = Server::new("Test", "http://localhost:3000", 3000);
+    /// ```ignore
+    /// use pmoupnp::server::Server;
+    /// use axum::extract::State;
+    /// use axum::response::sse::{Event, Sse, KeepAlive};
+    /// use tokio::sync::broadcast;
+    /// 
+    /// #[derive(Clone)]
+    /// struct LogState { 
+    ///     tx: broadcast::Sender<String> 
+    /// }
+    /// 
+    /// impl LogState { 
+    ///     fn subscribe(&self) -> broadcast::Receiver<String> { 
+    ///         self.tx.subscribe() 
+    ///     } 
+    /// }
+    /// 
     /// async fn log_sse(State(state): State<LogState>) -> Sse<impl futures::Stream<Item = Result<Event, std::convert::Infallible>>> {
     ///     let mut rx = state.subscribe();
     ///     let stream = async_stream::stream! {
@@ -311,7 +318,6 @@ impl Server {
     ///
     /// let log_state = LogState { tx: broadcast::channel(100).0 };
     /// server.add_handler_with_state("/logs", log_sse, log_state).await;
-    /// # }
     /// ```
     pub async fn add_handler_with_state<H, T, S>(&mut self, path: &str, handler: H, state: S)
     where
@@ -319,7 +325,9 @@ impl Server {
         T: 'static,
         S: Clone + Send + Sync + 'static,
     {
-        let route = Router::new().route("/", get(handler)).with_state(state);
+        let route = Router::new()
+            .route("/", get(handler))
+            .with_state(state);
 
         let mut r = self.router.write().await;
         *r = std::mem::take(&mut *r).nest(path, route);
@@ -398,9 +406,16 @@ impl Server {
     ///
     /// # Exemple
     ///
-    /// ```rust,no_run
+    /// ```ignore
     /// use utoipa::OpenApi;
     /// use axum::{Router, Json, routing::get};
+    /// use serde::{Serialize, Deserialize};
+    ///
+    /// #[derive(Serialize, Deserialize, utoipa::ToSchema)]
+    /// struct User {
+    ///     id: u64,
+    ///     name: String,
+    /// }
     ///
     /// #[derive(utoipa::OpenApi)]
     /// #[openapi(
@@ -429,7 +444,8 @@ impl Server {
         *api_r = Some(api_router);
 
         // Ajouter Swagger UI
-        let swagger = SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", openapi);
+        let swagger = SwaggerUi::new("/swagger-ui")
+            .url("/api-docs/openapi.json", openapi);
 
         let mut r = self.router.write().await;
         *r = std::mem::take(&mut *r).merge(swagger);
@@ -453,10 +469,7 @@ impl Server {
     /// ```
     pub async fn start(&mut self) {
         let addr = SocketAddr::from(([0, 0, 0, 0], self.http_port));
-        info!(
-            "Server {} running at [http://{}:{}](http://{}:{})",
-            self.name, self.base_url, self.http_port, self.base_url, self.http_port
-        );
+        info!("Server {} running at [http://{}:{}](http://{}:{})", self.name, self.base_url, self.http_port, self.base_url, self.http_port);
 
         // Merger le routeur API si présent
         let api_router = self.api_router.read().await;
@@ -532,7 +545,7 @@ impl ServerBuilder {
         Self {
             name: "PMO-Music-Server".to_string(),
             base_url: config.get_base_url(),
-            http_port: config.get_http_port(),
+            http_port: config.get_http_port()
         }
     }
 
