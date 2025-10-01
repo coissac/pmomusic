@@ -2,10 +2,9 @@ use chrono::{DateTime, Utc};
 use xmltree::Element;
 
 use crate::{
-    state_variables::{StateVarInstance, StateVariable, UpnpVariable}, 
-    variable_types::StateValue, 
-    UpnpObject, 
-    UpnpObjectType
+    UpnpObject, UpnpObjectType,
+    state_variables::{StateVarInstance, StateVariable, UpnpVariable},
+    variable_types::StateValue,
 };
 
 impl UpnpVariable for StateVarInstance {
@@ -35,7 +34,7 @@ impl StateVarInstance {
             value: from.get_default(),
             old_value: from.get_default(),
             last_modified: Utc::now(),
-            last_notification: Utc::now()
+            last_notification: Utc::now(),
         }
     }
 
@@ -54,5 +53,4 @@ impl StateVarInstance {
     pub fn last_modified(&self) -> DateTime<Utc> {
         self.last_modified
     }
-
 }

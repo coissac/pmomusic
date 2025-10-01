@@ -1,8 +1,8 @@
-use crate::variable_types::{type_trait::UpnpVarType, StateVarType};
+use crate::variable_types::{StateVarType, type_trait::UpnpVarType};
 
 impl UpnpVarType for StateVarType {
     fn as_state_var_type(&self) -> StateVarType {
-        *self 
+        *self
     }
 
     fn bit_size(&self) -> Option<usize> {
@@ -62,10 +62,7 @@ impl UpnpVarType for StateVarType {
     fn is_float(&self) -> bool {
         matches!(
             self,
-            StateVarType::R4 
-            | StateVarType::R8 
-            | StateVarType::Number 
-            | StateVarType::Fixed14_4
+            StateVarType::R4 | StateVarType::R8 | StateVarType::Number | StateVarType::Fixed14_4
         )
     }
 
@@ -74,10 +71,13 @@ impl UpnpVarType for StateVarType {
     }
 
     fn is_string(&self) -> bool {
-        matches!(self, StateVarType::String 
-            | StateVarType::Char 
-            | StateVarType::BinHex 
-            | StateVarType::BinBase64)
+        matches!(
+            self,
+            StateVarType::String
+                | StateVarType::Char
+                | StateVarType::BinHex
+                | StateVarType::BinBase64
+        )
     }
 
     fn is_time(&self) -> bool {

@@ -1,5 +1,5 @@
-use std::net::UdpSocket;
 use get_if_addrs::get_if_addrs;
+use std::net::UdpSocket;
 
 pub fn guess_local_ip() -> String {
     // On tente de deviner l'IP locale
@@ -17,7 +17,6 @@ pub fn guess_local_ip() -> String {
     }
 }
 
-
 fn list_all_ips() -> std::collections::HashMap<String, Vec<String>> {
     let mut result = std::collections::HashMap::new();
 
@@ -28,13 +27,17 @@ fn list_all_ips() -> std::collections::HashMap<String, Vec<String>> {
                 continue;
             }
             if ip.is_ipv4() {
-                result.entry(iface.name)
-                      .or_insert_with(Vec::new)
-                      .push(ip.to_string());
+                result
+                    .entry(iface.name)
+                    .or_insert_with(Vec::new)
+                    .push(ip.to_string());
             }
         }
     } else {
-        result.insert("error".to_string(), vec!["Failed to get interfaces".to_string()]);
+        result.insert(
+            "error".to_string(),
+            vec!["Failed to get interfaces".to_string()],
+        );
     }
 
     result

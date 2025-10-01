@@ -20,7 +20,7 @@ impl UpnpObject for StateVariable {
         return &self.object;
     }
 
-fn to_xml_element(&self) -> Element {
+    fn to_xml_element(&self) -> Element {
         // Création de l'élément racine <stateVariable>
         let mut root = Element::new("stateVariable");
         root.attributes.insert(
@@ -65,11 +65,15 @@ fn to_xml_element(&self) -> Element {
             let mut range_elem = Element::new("allowedValueRange");
 
             let mut min_elem = Element::new("minimum");
-            min_elem.children.push(XMLNode::Text(range.get_minimum().to_string()));
+            min_elem
+                .children
+                .push(XMLNode::Text(range.get_minimum().to_string()));
             range_elem.children.push(XMLNode::Element(min_elem));
 
             let mut max_elem = Element::new("maximum");
-            max_elem.children.push(XMLNode::Text(range.get_maximum().to_string()));
+            max_elem
+                .children
+                .push(XMLNode::Text(range.get_maximum().to_string()));
             range_elem.children.push(XMLNode::Element(max_elem));
 
             if let Some(step) = &self.step {

@@ -1,36 +1,36 @@
-mod type_methods;
-mod value_methods;
-mod type_trait;
-mod value_trait;
-mod fromstr;
 mod cast;
+mod default_value;
 mod display_type;
 mod display_value;
-mod default_value;
 mod errors;
+mod fromstr;
+mod type_methods;
+mod type_trait;
+mod value_methods;
+mod value_trait;
 
 mod values_from_type;
 
-mod values_from_u8;
-mod values_from_u16;
-mod values_from_u32;
-mod values_from_i8;
 mod values_from_i16;
 mod values_from_i32;
 mod values_from_i64;
+mod values_from_i8;
+mod values_from_u16;
+mod values_from_u32;
+mod values_from_u8;
 
 mod values_from_f32;
 mod values_from_f64;
 
-mod values_from_uri;
-mod values_from_uuid;
+mod values_from_datetime;
 mod values_from_naivedate;
 mod values_from_naivedatetime;
 mod values_from_naivetime;
-mod values_from_datetime;
+mod values_from_uri;
+mod values_from_uuid;
 mod values_from_vec_u8;
 
-use std::fmt::{Debug};
+use std::fmt::Debug;
 
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
 use url::Url;
@@ -92,5 +92,3 @@ pub enum StateValue {
     UUID(Uuid),
     URI(Url),
 }
-
-

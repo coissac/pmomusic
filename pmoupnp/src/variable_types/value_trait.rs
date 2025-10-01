@@ -1,2 +1,1 @@
-pub trait UpnpValue {
-}
+pub trait UpnpValue {}
