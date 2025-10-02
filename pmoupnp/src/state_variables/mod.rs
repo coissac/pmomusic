@@ -2,22 +2,22 @@ mod errors;
 mod instance_methods;
 mod variable_methods;
 mod var_set_methods;
+mod var_inst_set_methods;
 mod variable_trait;
 
 use std::{
     collections::HashMap,
-    sync::{Arc, RwLock},
+    sync::Arc,
 };
 
 pub use crate::state_variables::variable_trait::UpnpVariable;
 use bevy_reflect::Reflect;
 use chrono::{DateTime, Utc};
 pub use errors::StateVariableError;
+use tokio::sync::RwLock;
 
 use crate::{
-    UpnpObjectType,
-    value_ranges::ValueRange,
-    variable_types::{StateValue, StateVarType},
+    value_ranges::ValueRange, variable_types::{StateValue, StateVarType}, UpnpObjectSet, UpnpObjectType, UpnpSet
 };
 
 /// Type pour les fonctions de condition d'événement
@@ -46,16 +46,16 @@ pub struct StateVariable {
     marshal: Option<ValueSerializer>,
 }
 
-#[derive(Debug, Default, Clone)]
-pub struct StateVariableSet {
-    instances: HashMap<String, StateVariable>,
-}
+pub type StateVariableSet = UpnpObjectSet<StateVariable>;
 
 pub struct StateVarInstance {
     object: UpnpObjectType,
-    definition: StateVariable,
-    value: StateValue,
-    old_value: StateValue,
-    last_modified: DateTime<Utc>,
-    last_notification: DateTime<Utc>,
+    model: StateVariable,
+    value: RwLock<StateValue>,
+    old_value: RwLock<StateValue>,
+    last_modified: RwLock<DateTime<Utc>>,
+    last_notification: RwLock<DateTime<Utc>>,
 }
+
+pub type StateVarInstanceSet = UpnpObjectSet<StateVarInstance>;
+

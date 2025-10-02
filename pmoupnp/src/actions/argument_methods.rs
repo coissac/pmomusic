@@ -1,11 +1,19 @@
+use std::sync::Arc;
+
 use xmltree::{Element, XMLNode};
 
 use crate::{
-    UpnpObject, UpnpObjectType, UpnpXml, actions::Argument, state_variables::StateVariable,
+    actions::{Argument, ArgumentInstance}, state_variables::StateVariable, UpnpInstance, UpnpModel, UpnpObject, UpnpObjectType, UpnpTyped, UpnpTypedObject
 };
 
-impl UpnpXml for Argument {
-    fn to_xml_element(&self) -> Element {
+impl UpnpTyped for Argument {
+    fn as_upnp_object_type(&self) -> &UpnpObjectType {
+        &self.object
+    }
+}
+
+impl UpnpObject for Argument {
+    async fn to_xml_element(&self) -> Element {
         let mut parent = Element::new("argumentList");
 
         if self.is_in() && self.is_out() {
@@ -34,14 +42,14 @@ impl UpnpXml for Argument {
     }
 }
 
-impl UpnpObject for Argument {
-    fn as_upnp_object_type(&self) -> &UpnpObjectType {
-        return &self.object;
-    }
+impl UpnpModel for Argument {
+    type Instance = ArgumentInstance;
 }
 
+
+
 impl Argument {
-    fn new(name: String, state_variable: StateVariable) -> Self {
+    fn new(name: String, state_variable: Arc<StateVariable>) -> Self {
         Self {
             object: UpnpObjectType {
                 name,
@@ -53,19 +61,19 @@ impl Argument {
         }
     }
 
-    pub fn new_in(name: String, state_variable: StateVariable) -> Self {
+    pub fn new_in(name: String, state_variable: Arc<StateVariable>) -> Self {
         let mut arg = Self::new(name, state_variable);
         arg.is_in = true;
         arg
     }
 
-    pub fn new_out(name: String, state_variable: StateVariable) -> Self {
+    pub fn new_out(name: String, state_variable: Arc<StateVariable>) -> Self {
         let mut arg = Self::new(name, state_variable);
         arg.is_out = true;
         arg
     }
 
-    pub fn new_in_out(name: String, state_variable: StateVariable) -> Self {
+    pub fn new_in_out(name: String, state_variable: Arc<StateVariable>) -> Self {
         let mut arg = Self::new(name, state_variable);
         arg.is_in = true;
         arg.is_out = true;
