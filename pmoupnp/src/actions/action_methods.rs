@@ -1,13 +1,18 @@
+use std::sync::Arc;
+
 use xmltree::{Element,XMLNode};
 
-use crate::UpnpXml;
+use crate::actions::ActionInstance;
+use crate::UpnpModel;
+use crate::UpnpObject;
 use crate::actions::Action;
 use crate::actions::Argument;
 use crate::actions::ArgumentSet;
-use crate::{UpnpObject, UpnpObjectType};
+use crate::UpnpTyped;
+use crate::{UpnpTypedObject, UpnpObjectType};
 
-impl UpnpXml for Action {
-    fn to_xml_element(&self) -> Element {
+impl UpnpObject for Action {
+    async fn to_xml_element(&self) -> Element {
         let mut action_elem = Element::new("action");
 
         // <name>
@@ -18,13 +23,20 @@ impl UpnpXml for Action {
         action_elem.children.push(XMLNode::Element(name_elem));
 
         // <argumentList>
-        let args_elem = self.arguments.to_xml_element();
+        let args_elem = self.arguments.to_xml_element().await;
         action_elem.children.push(XMLNode::Element(args_elem));
 
         action_elem
     }
 }
-impl UpnpObject for Action {
+
+impl UpnpModel for Action {
+
+    type Instance = ActionInstance;
+}
+
+
+impl UpnpTyped for Action {
     fn as_upnp_object_type(&self) -> &UpnpObjectType {
         return &self.object;
     }
@@ -41,7 +53,7 @@ impl Action {
         }
     }
 
-    pub fn add_argument(&mut self, arg: Argument) {
+    pub fn add_argument(&mut self, arg: Arc<Argument>) {
         self.arguments.insert(arg);
     }
 

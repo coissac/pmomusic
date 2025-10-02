@@ -1,14 +1,19 @@
+use std::sync::Arc;
+
 use xmltree::{Element, XMLNode};
 
 use crate::actions::Action;
 use crate::actions::Argument;
 use crate::actions::ArgumentSet;
 use crate::actions::ActionInstance;
-use crate::UpnpXml;
-use crate::{UpnpObject, UpnpObjectType};
+use crate::UpnpInstance;
+use crate::UpnpObject;
+use crate::UpnpTyped;
+use crate::UpnpTypedInstance;
+use crate::{UpnpTypedObject, UpnpObjectType};
 
-impl UpnpXml for ActionInstance {
-fn to_xml_element(&self) -> Element {
+impl UpnpObject for ActionInstance {
+async fn to_xml_element(&self) -> Element {
         let mut elem = Element::new("action");
 
         // <name>
@@ -17,21 +22,24 @@ fn to_xml_element(&self) -> Element {
         elem.children.push(XMLNode::Element(name_elem));
 
         // déplacer tous les enfants de args_elem dans un nouvel Element
-        let args_container = self.arguments_set().to_xml_element();
+        let args_container = self.arguments_set().to_xml_element().await;
         elem.children.push(XMLNode::Element(args_container));
 
         elem
     }  
 }
-impl UpnpObject for ActionInstance {
+
+impl UpnpTyped for ActionInstance {
     fn as_upnp_object_type(&self) -> &UpnpObjectType {
         return &self.object;
     }
 }
 
-impl ActionInstance {
+impl UpnpInstance for ActionInstance {
 
-    pub fn new(action: &Action) -> Self {
+    type Model = Action;
+
+    fn new(action: &Action) -> Self {
         Self {
             object: UpnpObjectType {
                 name: action.get_name().clone(),
@@ -41,8 +49,21 @@ impl ActionInstance {
         }
     }
 
-    pub fn arguments(&self, name: &str) -> Option<&Argument> {
-        self.model.arguments.get(name)
+}
+
+
+impl UpnpTypedInstance for ActionInstance {
+
+    fn get_model(&self) -> &Self::Model {
+        &self.model
+    }
+}
+
+impl ActionInstance {
+
+
+    pub async fn arguments(&self, name: &str) -> Option<Arc<Argument>> {
+        self.model.arguments.get_by_name(name).await
     }
 
     pub fn arguments_set(&self) -> &ArgumentSet {

@@ -1,17 +1,37 @@
 use std::{
-    collections::HashMap, fmt, sync::{Arc, RwLock}
+    collections::HashMap,
+    fmt,
+    sync::Arc,
 };
 
+use tokio::sync::RwLock;
 use xmltree::{Element, XMLNode};
 
 use crate::{
-    object_trait::UpnpXml, state_variables::{
-        variable_trait::UpnpVariable, StateConditionFunc, StateVariable, StringValueParser, ValueSerializer
-    }, value_ranges::ValueRange, variable_types::{StateValue, StateValueError, StateVarType, UpnpVarType}, UpnpObject, UpnpObjectType
+    UpnpObjectType, UpnpTyped,
+    object_trait::{UpnpModel, UpnpObject},
+    state_variables::{
+        StateConditionFunc, StateVarInstance, StateVariable, StringValueParser, ValueSerializer,
+        variable_trait::UpnpVariable,
+    },
+    value_ranges::ValueRange,
+    variable_types::{StateValue, StateValueError, StateVarType, UpnpVarType},
 };
 
-impl UpnpXml for StateVariable  {
-    fn to_xml_element(&self) -> Element {
+impl UpnpTyped for StateVariable {
+    fn as_upnp_object_type(&self) -> &UpnpObjectType {
+        &self.object
+    }
+}
+
+impl UpnpVarType for StateVariable {
+    fn as_state_var_type(&self) -> StateVarType {
+        self.value_type.as_state_var_type() // utilise ton From<&StateValue> existant
+    }
+}
+
+impl UpnpObject for StateVariable {
+    async fn to_xml_element(&self) -> Element {
         // Création de l'élément racine <stateVariable>
         let mut root = Element::new("stateVariable");
         root.attributes.insert(
@@ -39,16 +59,15 @@ impl UpnpXml for StateVariable  {
         }
 
         // <allowedValueList> si défini
-        if let Ok(av) = self.allowed_values.read() {
-            if !av.is_empty() {
-                let mut list_elem = Element::new("allowedValueList");
-                for val in av.iter() {
-                    let mut val_elem = Element::new("allowedValue");
-                    val_elem.children.push(XMLNode::Text(val.to_string()));
-                    list_elem.children.push(XMLNode::Element(val_elem));
-                }
-                root.children.push(XMLNode::Element(list_elem));
+        let av = self.allowed_values.read().await;
+        if !av.is_empty() {
+            let mut list_elem = Element::new("allowedValueList");
+            for val in av.iter() {
+                let mut val_elem = Element::new("allowedValue");
+                val_elem.children.push(XMLNode::Text(val.to_string()));
+                list_elem.children.push(XMLNode::Element(val_elem));
             }
+            root.children.push(XMLNode::Element(list_elem));
         }
 
         // <allowedValueRange> si défini
@@ -82,13 +101,10 @@ impl UpnpXml for StateVariable  {
 
         root
     }
-
 }
 
-impl UpnpObject for StateVariable {
-    fn as_upnp_object_type(&self) -> &UpnpObjectType {
-        return &self.object;
-    }
+impl UpnpModel for StateVariable {
+    type Instance = StateVarInstance;
 }
 
 impl Clone for StateVariable {
@@ -98,8 +114,7 @@ impl Clone for StateVariable {
             // si le lock est "poisoned" on panic - tu peux adapter la gestion si tu veux
             let guard = self
                 .event_conditions
-                .read()
-                .expect("RwLock poisoned during clone");
+                .blocking_read();
             // nécessite que Key: Clone, Value: Clone
             Arc::new(RwLock::new(guard.clone()))
         };
@@ -107,8 +122,7 @@ impl Clone for StateVariable {
         let allowed_values_clone = {
             let guard = self
                 .allowed_values
-                .read()
-                .expect("RwLock poisoned during clone");
+                .blocking_read();
             Arc::new(RwLock::new(guard.clone()))
         };
 
@@ -142,7 +156,7 @@ impl fmt::Debug for StateVariable {
                 "event_conditions",
                 &format_args!(
                     "len={}",
-                    self.event_conditions.read().map(|m| m.len()).unwrap_or(0)
+                    self.event_conditions.blocking_read().len()
                 ),
             )
             .field("description", &self.description)
@@ -152,19 +166,27 @@ impl fmt::Debug for StateVariable {
                 "allowed_values",
                 &format_args!(
                     "len={}",
-                    self.allowed_values.read().map(|v| v.len()).unwrap_or(0)
+                    self.allowed_values.blocking_read().len()
                 ),
             )
             .field("send_events", &self.send_events)
-            .field("parse", &self.parse.as_ref().map(|_| "Some(StringValueParser)").unwrap_or("None"))
-            .field("marshal", &self.marshal.as_ref().map(|_| "Some(ValueSerializer)").unwrap_or("None"))
+            .field(
+                "parse",
+                &self
+                    .parse
+                    .as_ref()
+                    .map(|_| "Some(StringValueParser)")
+                    .unwrap_or("None"),
+            )
+            .field(
+                "marshal",
+                &self
+                    .marshal
+                    .as_ref()
+                    .map(|_| "Some(ValueSerializer)")
+                    .unwrap_or("None"),
+            )
             .finish()
-    }
-}
-
-impl UpnpVarType for StateVariable {
-    fn as_state_var_type(&self) -> StateVarType {
-        self.value_type // utilise ton From<&StateValue> existant
     }
 }
 
@@ -276,18 +298,18 @@ impl StateVariable {
 
     pub fn add_event_condition(&self, name: String, func: StateConditionFunc) {
         // on lock en écriture
-        let mut guard = self.event_conditions.write().unwrap();
+        let mut guard = self.event_conditions.blocking_write();
         guard.insert(name, func);
         // le lock est automatiquement relâché ici (RAII)
     }
 
     pub fn remove_event_condition(&self, name: &str) {
-        let mut guard = self.event_conditions.write().unwrap();
+        let mut guard = self.event_conditions.blocking_write();
         guard.remove(name);
     }
 
     pub fn clear_event_conditions(&mut self) {
-        let mut guard = self.event_conditions.write().unwrap();
+        let mut guard = self.event_conditions.blocking_write();
         guard.clear()
     }
 
@@ -312,8 +334,7 @@ impl StateVariable {
     pub fn extend_allowed_values(&mut self, values: &[StateValue]) -> Result<(), StateValueError> {
         let mut av = self
             .allowed_values
-            .write()
-            .map_err(|_| StateValueError::TypeError("Lock poisoned".to_string()))?;
+            .blocking_write();
 
         for v in values {
             if self.as_state_var_type() == v.as_state_var_type() {
@@ -331,8 +352,7 @@ impl StateVariable {
     pub fn push_allowed_value(&mut self, value: &StateValue) -> Result<(), StateValueError> {
         let mut av = self
             .allowed_values
-            .write()
-            .map_err(|_| StateValueError::TypeError("Lock poisoned".to_string()))?;
+            .blocking_write();
 
         if self.as_state_var_type() == value.as_state_var_type() {
             av.push(value.clone());

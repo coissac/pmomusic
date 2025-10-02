@@ -1,5 +1,4 @@
 use std::convert::TryFrom;
-use url::Url;
 
 use crate::variable_types::{StateValue, StateValueError};
 

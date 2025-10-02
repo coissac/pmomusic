@@ -1,34 +1,25 @@
-use std::collections::HashMap;
+use xmltree::{Element, XMLNode};
 
-use crate::{state_variables::{StateVariable, StateVariableSet}, UpnpObject};
+use crate::{object_trait::UpnpModel, state_variables::{StateVarInstanceSet, StateVariableSet}, UpnInstanceSet, UpnpObject};
 
-impl StateVariableSet {
-    pub fn new() -> Self {
-        Self {
-            instances: HashMap::new(),
+
+impl UpnpObject for StateVariableSet {
+
+    async fn to_xml_element(&self) -> Element {
+        let mut elem = Element::new("serviceStateTable");
+        
+        for state_var in self.get_all() {
+            let state_var_elem = state_var.to_xml_element().await; // retourne un <stateVariable> complet
+            elem.children.push(XMLNode::Element(state_var_elem));
         }
-    }
 
-    pub fn insert(&mut self, instance: StateVariable) {
-        self.instances.insert(instance.get_name().clone(), instance);
+        elem
     }
-
-    pub fn contains(&self, name: &str) -> bool {
-        self.instances.contains_key(name)
-    }
-
-    pub fn get(&self, name: &str) -> Option<&StateVariable> {
-        self.instances.get(name)
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &StateVariable> {
-        self.instances.values()
-    }
-
-    pub fn all(&self) -> Vec<&StateVariable> {
-        self.instances.values().collect()
-    }
-
 
 }
+
+impl UpnpModel for StateVariableSet {
+    type Instance = StateVarInstanceSet;
+}
+
 

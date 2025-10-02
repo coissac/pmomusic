@@ -41,6 +41,8 @@ use uuid::Uuid;
 pub use errors::StateValueError;
 pub use type_trait::UpnpVarType;
 
+pub use crate::variable_types::value_trait::UpnpValue;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StateVarType {
     UI1,        // Unsigned 8-bit integer
@@ -68,7 +70,7 @@ pub enum StateVarType {
     URI,        // Uniform Resource Identifier
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub enum StateValue {
     UI1(u8),
     UI2(u16),

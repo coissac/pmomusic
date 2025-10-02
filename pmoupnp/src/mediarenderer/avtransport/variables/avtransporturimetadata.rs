@@ -25,9 +25,9 @@ fn avtransporturimetadataparser(value: &str) -> Result<Box<dyn Reflect>, StateVa
     Ok(Box::new(didl) as Box<dyn Reflect>)
 }
 
-pub static AVTRANSPORTURIMETADATA: Lazy<StateVariable> = Lazy::new(|| -> StateVariable {
+pub static AVTRANSPORTURIMETADATA: Lazy<Arc<StateVariable>> = Lazy::new(|| -> Arc<StateVariable> {
     let mut sv = StateVariable::new(StateVarType::String, "AVTransportURIMetaData".to_string());
 
     sv.set_value_parser(Arc::new(avtransporturimetadataparser)).expect("Failed to set parser");
-    sv
+    Arc::new(sv)
 });
