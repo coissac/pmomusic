@@ -12,7 +12,7 @@ pub mod variable_types;
 
 use std::{collections::HashMap, sync::Arc};
 
-use tokio::sync::RwLock;
+use std::sync::RwLock;
 
 pub use crate::object_trait::*;
 

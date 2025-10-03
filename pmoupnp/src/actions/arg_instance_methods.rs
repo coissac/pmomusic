@@ -4,8 +4,8 @@ use crate::{actions::{Argument, ArgumentInstance}, UpnpInstance, UpnpObject, Upn
 
 
 impl UpnpObject for ArgumentInstance {
-    async fn to_xml_element(&self) -> Element {
-        self.get_model().to_xml_element().await
+    fn to_xml_element(&self) -> Element {
+        self.get_model().to_xml_element()
     }
 }
 

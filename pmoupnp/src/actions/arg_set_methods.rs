@@ -1,11 +1,9 @@
 use crate::actions::ArgInstanceSet;
-use crate::{UpnpModel, UpnpTypedObject};
+use crate::UpnpModel;
 use crate::{
     UpnpObject,
     actions::{ArgumentSet},
 };
-use std::collections::HashMap;
-use std::sync::RwLock;
 use xmltree::Element;
 
 impl UpnpObject for ArgumentSet {

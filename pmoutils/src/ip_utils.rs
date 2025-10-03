@@ -76,7 +76,7 @@ pub fn guess_local_ip() -> String {
 /// - Seules les adresses IPv4 sont retournées
 /// - Les adresses de loopback (127.x.x.x) sont filtrées
 /// - Les adresses IPv6 sont ignorées
-fn list_all_ips() -> std::collections::HashMap<String, Vec<String>> {
+pub fn list_all_ips() -> std::collections::HashMap<String, Vec<String>> {
     let mut result = std::collections::HashMap::new();
 
     if let Ok(interfaces) = get_if_addrs() {

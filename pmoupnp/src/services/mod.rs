@@ -9,7 +9,7 @@ use axum::{
     http::{StatusCode, HeaderMap},
     body::Body,
 };
-use tokio::sync::RwLock;
+use std::sync::RwLock;
 use tokio::time;
 use tracing::{info, warn, debug, error};
 

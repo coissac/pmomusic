@@ -3,7 +3,7 @@ use std::sync::Arc;
 use xmltree::{Element, XMLNode};
 
 use crate::{
-    actions::{Argument, ArgumentInstance}, state_variables::StateVariable, UpnpInstance, UpnpModel, UpnpObject, UpnpObjectType, UpnpTyped, UpnpTypedObject
+    actions::{Argument, ArgumentInstance}, state_variables::StateVariable, UpnpModel, UpnpObject, UpnpObjectType, UpnpTyped
 };
 
 impl UpnpTyped for Argument {
@@ -13,7 +13,7 @@ impl UpnpTyped for Argument {
 }
 
 impl UpnpObject for Argument {
-    async fn to_xml_element(&self) -> Element {
+    fn to_xml_element(&self) -> Element {
         let mut parent = Element::new("argumentList");
 
         if self.is_in() && self.is_out() {

@@ -1,11 +1,14 @@
 use std::fmt;
 
 use chrono::{DateTime, Utc};
-use tokio::sync::RwLock;
+use std::sync::RwLock;
 use xmltree::Element;
 
 use crate::{
-    object_trait::{UpnpInstance, UpnpObject}, state_variables::{StateVarInstance, StateVariable, UpnpVariable}, variable_types::{StateValue, StateValueError, UpnpVarType}, UpnpObjectType, UpnpTyped, UpnpTypedInstance, UpnpTypedObject
+    object_trait::{UpnpInstance, UpnpObject}, 
+    state_variables::{StateVarInstance, StateVariable, UpnpVariable}, 
+    variable_types::{StateValue, StateValueError, UpnpVarType}, 
+    UpnpObjectType, UpnpTyped, UpnpTypedInstance
 };
 
 impl UpnpVariable for StateVarInstance {
@@ -15,8 +18,8 @@ impl UpnpVariable for StateVarInstance {
 }
 
 impl UpnpObject for StateVarInstance {
-    async fn to_xml_element(&self) -> Element {
-        self.get_definition().to_xml_element().await
+    fn to_xml_element(&self) -> Element {
+        self.get_definition().to_xml_element()
     }
 }
 
@@ -76,10 +79,10 @@ impl Clone for StateVarInstance {
         Self {
             object: self.object.clone(),
             model: self.model.clone(),
-            value: RwLock::new(self.value.blocking_read().clone()),
-            old_value: RwLock::new(self.old_value.blocking_read().clone()),
-            last_modified: RwLock::new(self.last_modified.blocking_read().clone()),
-            last_notification: RwLock::new(self.last_notification.blocking_read().clone()),
+            value: RwLock::new(self.value.read().unwrap().clone()),
+            old_value: RwLock::new(self.old_value.read().unwrap().clone()),
+            last_modified: RwLock::new(self.last_modified.read().unwrap().clone()),
+            last_notification: RwLock::new(self.last_notification.read().unwrap().clone()),
         }
     }
 }
@@ -94,9 +97,9 @@ impl StateVarInstance {
         }
         
         // Mise à jour avec les locks
-        let mut old_val = self.old_value.write().await;
-        let mut val = self.value.write().await;
-        let mut modified = self.last_modified.write().await;
+        let mut old_val = self.old_value.write().unwrap();
+        let mut val = self.value.write().unwrap();
+        let mut modified = self.last_modified.write().unwrap();
         
         *old_val = val.clone();
         *val = new_value;
@@ -106,11 +109,11 @@ impl StateVarInstance {
     }
     /// Accès à la valeur
     pub fn value(&self) -> StateValue {
-        self.value.blocking_read().clone()
+        self.value.read().unwrap().clone()
     }
 
     /// Accès au timestamp
     pub fn last_modified(&self) -> DateTime<Utc> {
-        self.last_modified.blocking_read().clone()
+        self.last_modified.read().unwrap().clone()
     }
 }
