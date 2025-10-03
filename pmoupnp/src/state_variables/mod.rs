@@ -14,10 +14,12 @@ pub use crate::state_variables::variable_trait::UpnpVariable;
 use bevy_reflect::Reflect;
 use chrono::{DateTime, Utc};
 pub use errors::StateVariableError;
-use tokio::sync::RwLock;
+use std::sync::RwLock;
 
 use crate::{
-    value_ranges::ValueRange, variable_types::{StateValue, StateVarType}, UpnpObjectSet, UpnpObjectType, UpnpSet
+    value_ranges::ValueRange, 
+    variable_types::{StateValue, StateVarType}, 
+    UpnpObjectSet, UpnpObjectType,
 };
 
 /// Type pour les fonctions de condition d'événement

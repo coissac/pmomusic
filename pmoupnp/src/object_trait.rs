@@ -79,7 +79,7 @@ pub trait UpnpObject: Clone + Debug {
     /// # Returns
     ///
     /// Un [`Element`] xmltree représentant l'objet.
-    async fn to_xml_element(&self) -> Element;
+    fn to_xml_element(&self) -> Element;
 
     /// Convertit l'objet en chaîne XML formatée.
     ///
@@ -101,8 +101,8 @@ pub trait UpnpObject: Clone + Debug {
     /// //   <child>value</child>
     /// // </element>
     /// ```
-    async fn to_xml(&self) -> String {
-        let elem = self.to_xml_element().await;
+    fn to_xml(&self) -> String {
+        let elem = self.to_xml_element();
 
         let config = EmitterConfig::new()
             .perform_indent(true)
@@ -144,8 +144,8 @@ pub trait UpnpObject: Clone + Debug {
     /// // - **element**
     /// //   - **child**: `value`
     /// ```
-    async fn to_markdown(&self) -> String {
-        let elem = self.to_xml_element().await;
+    fn to_markdown(&self) -> String {
+        let elem = self.to_xml_element();
         let mut md = String::new();
 
         fn is_url(s: &str) -> bool {

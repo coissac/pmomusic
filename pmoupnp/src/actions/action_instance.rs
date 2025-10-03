@@ -10,10 +10,10 @@ use crate::UpnpInstance;
 use crate::UpnpObject;
 use crate::UpnpTyped;
 use crate::UpnpTypedInstance;
-use crate::{UpnpTypedObject, UpnpObjectType};
+use crate::UpnpObjectType;
 
 impl UpnpObject for ActionInstance {
-async fn to_xml_element(&self) -> Element {
+fn to_xml_element(&self) -> Element {
         let mut elem = Element::new("action");
 
         // <name>
@@ -22,7 +22,7 @@ async fn to_xml_element(&self) -> Element {
         elem.children.push(XMLNode::Element(name_elem));
 
         // déplacer tous les enfants de args_elem dans un nouvel Element
-        let args_container = self.arguments_set().to_xml_element().await;
+        let args_container = self.arguments_set().to_xml_element();
         elem.children.push(XMLNode::Element(args_container));
 
         elem
@@ -62,8 +62,8 @@ impl UpnpTypedInstance for ActionInstance {
 impl ActionInstance {
 
 
-    pub async fn arguments(&self, name: &str) -> Option<Arc<Argument>> {
-        self.model.arguments.get_by_name(name).await
+    pub fn arguments(&self, name: &str) -> Option<Arc<Argument>> {
+        self.model.arguments.get_by_name(name)
     }
 
     pub fn arguments_set(&self) -> &ArgumentSet {

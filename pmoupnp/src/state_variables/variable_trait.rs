@@ -124,7 +124,7 @@ pub trait UpnpVariable {
     ///
     /// Retourne `false` si le lock est empoisonné (poisoned).
     fn has_event_conditions(&self) -> bool {
-        let guard = self.get_definition().event_conditions.blocking_read();
+        let guard = self.get_definition().event_conditions.read().unwrap();
         !guard.is_empty()
     }
 
@@ -142,7 +142,7 @@ pub trait UpnpVariable {
     ///
     /// Retourne `false` si le lock est empoisonné (poisoned).
     fn has_event_condition(&self, name: &String) -> bool {
-        let guard = self.get_definition().event_conditions.blocking_read();
+        let guard = self.get_definition().event_conditions.read().unwrap();
         guard.contains_key(name)
     }
 
@@ -218,7 +218,7 @@ pub trait UpnpVariable {
     fn has_allowed_values(&self) -> bool {
         let guard = self.get_definition()
             .allowed_values
-            .blocking_read();
+            .read().unwrap();
 
         !guard.is_empty()
     }
@@ -252,7 +252,7 @@ pub trait UpnpVariable {
     fn is_an_allowed_value(&self, value: &StateValue) -> bool {
         let guard = self.get_definition()
             .allowed_values
-            .blocking_read();
+            .read().unwrap();
 
         guard.contains(value)
     }

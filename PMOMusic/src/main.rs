@@ -47,7 +47,7 @@ async fn main() {
 
     server.add_redirect("/", "/app").await;
 
-    info!("{}",SETAVTRANSPORTURI.to_markdown().await);
+    info!("{}",SETAVTRANSPORTURI.to_markdown());
 
     server.start().await;
     server.wait().await;

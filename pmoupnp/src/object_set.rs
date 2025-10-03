@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use tokio::sync::RwLock;
+use std::sync::RwLock;
 
 use crate::{UpnpDeepClone, UpnpObjectSet, UpnpObjectSetError, UpnpTypedObject};
 
@@ -11,7 +11,7 @@ use crate::{UpnpDeepClone, UpnpObjectSet, UpnpObjectSetError, UpnpTypedObject};
 /// Les modifications sur l'un des sets n'affectent pas l'autre.
 impl<T: UpnpTypedObject> UpnpDeepClone for UpnpObjectSet<T> {
     fn deep_clone(&self) -> Self {
-        let guard = self.objects.blocking_read();
+        let guard = self.objects.read().unwrap();
 
         let cloned_map: HashMap<String, Arc<T>> = guard
             .iter()
@@ -38,7 +38,7 @@ impl<T: UpnpTypedObject> UpnpDeepClone for UpnpObjectSet<T> {
 /// seront visibles depuis les deux sets.
 impl<T: UpnpTypedObject> Clone for UpnpObjectSet<T> {
     fn clone(&self) -> Self {
-        let guard = self.objects.blocking_read();
+        let guard = self.objects.read().unwrap();
 
         Self {
             objects: RwLock::new(guard.clone()),
@@ -47,13 +47,18 @@ impl<T: UpnpTypedObject> Clone for UpnpObjectSet<T> {
 }
 
 impl<T: UpnpTypedObject> UpnpObjectSet<T> {
-
+    /// Crée un nouveau `UpnpObjectSet` vide.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let set: UpnpObjectSet<MyObject> = UpnpObjectSet::new();
+    /// ```
     pub fn new() -> Self {
         Self {
             objects: RwLock::new(HashMap::new()),
         }
     }
-
 
     /// Insère un objet dans le set.
     ///
@@ -71,10 +76,10 @@ impl<T: UpnpTypedObject> UpnpObjectSet<T> {
     /// ```
     /// let mut set = UpnpObjectSet::new();
     /// let obj = Arc::new(MyObject::new("test"));
-    /// set.insert(obj).await?;
+    /// set.insert(obj)?;
     /// ```
-    pub async fn insert(&mut self, object: Arc<T>) -> Result<(), UpnpObjectSetError> {
-        let mut guard = self.objects.write().await;
+    pub fn insert(&mut self, object: Arc<T>) -> Result<(), UpnpObjectSetError> {
+        let mut guard = self.objects.write().unwrap();
         let key = object.get_name().to_string();
 
         if guard.contains_key(&key) {
@@ -100,11 +105,11 @@ impl<T: UpnpTypedObject> UpnpObjectSet<T> {
     /// let obj1 = Arc::new(MyObject::new("test"));
     /// let obj2 = Arc::new(MyObject::new("test")); // Même nom
     /// 
-    /// set.insert_or_replace(obj1).await;
-    /// set.insert_or_replace(obj2).await; // Remplace obj1
+    /// set.insert_or_replace(obj1);
+    /// set.insert_or_replace(obj2); // Remplace obj1
     /// ```
-    pub async fn insert_or_replace(&mut self, object: Arc<T>) {
-        let mut guard = self.objects.write().await;
+    pub fn insert_or_replace(&mut self, object: Arc<T>) {
+        let mut guard = self.objects.write().unwrap();
         let key: String = object.get_name().to_string();
 
         guard.insert(key, object);
@@ -128,18 +133,18 @@ impl<T: UpnpTypedObject> UpnpObjectSet<T> {
     /// let set = UpnpObjectSet::new();
     /// let obj = Arc::new(MyObject::new("test"));
     /// 
-    /// if set.contains(obj.clone()).await {
+    /// if set.contains(obj.clone()) {
     ///     println!("L'objet existe déjà");
     /// }
     /// ```
-    pub async fn contains(&self, object: Arc<T>) -> bool {
-        let guard = self.objects.read().await;
+    pub fn contains(&self, object: Arc<T>) -> bool {
+        let guard = self.objects.read().unwrap();
         let key: String = object.get_name().to_string();
 
         guard.contains_key(&key)
     }
 
-    /// Récupère un objet par son nom (version asynchrone).
+    /// Récupère un objet par son nom.
     ///
     /// # Arguments
     ///
@@ -155,16 +160,16 @@ impl<T: UpnpTypedObject> UpnpObjectSet<T> {
     /// ```
     /// let set = UpnpObjectSet::new();
     /// 
-    /// if let Some(obj) = set.get_by_name("test").await {
+    /// if let Some(obj) = set.get_by_name("test") {
     ///     println!("Objet trouvé: {}", obj.get_name());
     /// }
     /// ```
-    pub async fn get_by_name(&self, name: &str) -> Option<Arc<T>> {
-        let guard = self.objects.read().await;
+    pub fn get_by_name(&self, name: &str) -> Option<Arc<T>> {
+        let guard = self.objects.read().unwrap();
         guard.get(name).cloned()
     }
 
-    /// Retourne tous les objets du set (version asynchrone).
+    /// Retourne tous les objets du set.
     ///
     /// # Returns
     ///
@@ -176,43 +181,17 @@ impl<T: UpnpTypedObject> UpnpObjectSet<T> {
     /// ```
     /// let set = UpnpObjectSet::new();
     /// 
-    /// for obj in set.all().await {
-    ///     println!("Objet: {}", obj.get_name());
-    /// }
-    /// ```
-    pub async fn all(&self) -> Vec<Arc<T>> {
-        let guard = self.objects.read().await;
-        guard.values().cloned().collect()
-    }
-
-    /// Retourne tous les objets du set (version synchrone bloquante).
-    ///
-    /// Cette méthode bloque le thread appelant jusqu'à ce que le verrou de lecture
-    /// soit obtenu. Utilisez cette version uniquement dans du code synchrone.
-    /// Pour du code asynchrone, préférez [`all()`](Self::all).
-    ///
-    /// # Returns
-    ///
-    /// Un vecteur contenant des clones des `Arc` pointant vers tous les objets du set.
-    /// L'ordre des éléments n'est pas garanti.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// let set = UpnpObjectSet::new();
-    /// 
-    /// // Dans un contexte synchrone
-    /// for obj in set.get_all() {
+    /// for obj in set.all() {
     ///     println!("Objet: {}", obj.get_name());
     /// }
     /// ```
     ///
-    /// # Avertissement
+    /// # Thread-safety
     ///
-    /// N'appelez pas cette méthode depuis un contexte asynchrone car elle peut
-    /// bloquer l'executor Tokio. Utilisez [`all()`](Self::all) à la place.
-    pub fn get_all(&self) -> Vec<Arc<T>> {
-        let guard = self.objects.blocking_read();
+    /// Cette méthode acquiert un verrou de lecture. Plusieurs threads peuvent
+    /// appeler cette méthode simultanément sans blocage.
+    pub fn all(&self) -> Vec<Arc<T>> {
+        let guard = self.objects.read().unwrap();
         guard.values().cloned().collect()
     }
 }
