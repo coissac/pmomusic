@@ -108,30 +108,8 @@ use variables::{
     TRANSPORTPLAYSPEED, TRANSPORTSTATE, TRANSPORTSTATUS
 };
 
-/// Service AVTransport:1 conforme à la spécification UPnP AV.
-///
-/// Ce service permet de contrôler le transport de médias **audio** sur un MediaRenderer.
-///
-/// # Initialisation
-///
-/// Le service est initialisé paresseusement (lazy) au premier accès via la macro
-/// [`define_service!`]. Toutes les variables d'état et actions sont automatiquement
-/// enregistrées.
-///
-/// # Exemples
-///
-/// ```rust
-/// use pmoupnp::mediarenderer::avtransport::AVTTRANSPORT;
-///
-/// let service = &*AVTTRANSPORT;
-/// assert_eq!(service.name(), "AVTransport");
-/// assert_eq!(service.version(), 1);
-/// ```
-///
-/// # Voir aussi
-///
-/// - Module [`actions`] : Définition de toutes les actions UPnP
-/// - Module [`variables`] : Définition de toutes les variables d'état
+// Service AVTransport:1 conforme à la spécification UPnP AV pour MediaRenderer audio
+// Voir la documentation du module pour plus de détails
 define_service! {
     pub static AVTTRANSPORT = "AVTransport" {
         variables: [
