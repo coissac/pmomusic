@@ -26,14 +26,12 @@ impl TryFrom<&StateValue> for f64 {
 
             StateValue::Boolean(v) => Ok((*v as i32) as Self),
 
-            StateValue::String(s) => s.parse::<f64>().map_err(|_| {
-                StateValueError::TypeError(format!("Cannot parse '{}' as f64", s))
-            }),
+            StateValue::String(s) => s
+                .parse::<f64>()
+                .map_err(|_| StateValueError::TypeError(format!("Cannot parse '{}' as f64", s))),
 
             // --- Par défaut : erreur ---
-            _ => Err(StateValueError::TypeError(
-                "Cannot cast to f64".into(),
-            )),
+            _ => Err(StateValueError::TypeError("Cannot cast to f64".into())),
         }
     }
 }

@@ -2,7 +2,6 @@ use std::fmt;
 
 use crate::variable_types::StateVarType;
 
-
 impl fmt::Display for StateVarType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let s = match self {

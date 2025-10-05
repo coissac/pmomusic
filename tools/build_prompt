@@ -1,26 +1,32 @@
 #!/bin/bash
 
-cat << EOF
-Est-ce que ces packages te semblent fonctionnel.
-Il ne s'agit pas de l'enrichir de nouvelle fonctionnalité, ni de l'optimiser d'avantage. Juste de le finaliser en detectant vrais bug. Ce package doit être thread safe, uniquement stéréo.
-Ne signale que les bugs conduisant à un disfonctionnement
-
-Regénère des version complètes et corrigées des fichiers nécessaires
-
-EOF
-
-echo ============== Debut des sources des packages ===============
+echo "# Debut des sources des crates "
+echo 
 
 for package in $*; do
-	pushd $package 2>&1 >/dev/null
-	for f in *.go; do
-		echo "------- $package/$f ------"
-		cat $f
-		echo "-----------------"
+        find $package -type f \(    -name '*.rs' -o -name '*.go' \
+		                         -o -name '*.js' -o -name '*.ts' \
+								 -o -name '*.vue' -o -name '*.css' \
+								 -o -name '*.toml' \) -print \
+|   grep -v 'webapp/[^s]' \
+|	while  read -r file; do
+		case "$file" in
+		*.rs) language="rust" ;;
+		*.go) language="go" ;;
+		*.js) lanquage="javascript" ;;
+		*.ts) language="typescript" ;;
+		*.vue) language="vue" ;;
+		*.css) language="css" ;;
+		*.toml) language="toml" ;;
+		*) language="" ;;
+		esac
+		
+		echo "## fichier: \`$file\`"
+		echo
+		echo "\`\`\`$language"
+		cat $file
+		echo "\`\`\`"
+		echo 
 	done
-	popd 2>&1 >/dev/null
 done
 
-echo ============== Fin des sources des packages ===============
-
-echo ============== Analyse des bugs par chatgpt ===============

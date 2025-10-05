@@ -1,9 +1,8 @@
-use std::fmt;
-use base64::engine::general_purpose;
 use base64::Engine;
+use base64::engine::general_purpose;
+use std::fmt;
 
 use crate::variable_types::StateValue;
-
 
 impl fmt::Display for StateValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

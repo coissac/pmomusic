@@ -1,6 +1,6 @@
-use std::convert::TryFrom;
 use crate::variable_types::{StateValue, StateValueError};
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use std::convert::TryFrom;
 
 impl TryFrom<&StateValue> for Vec<u8> {
     type Error = StateValueError;
@@ -8,10 +8,11 @@ impl TryFrom<&StateValue> for Vec<u8> {
     fn try_from(value: &StateValue) -> Result<Self, Self::Error> {
         match value {
             // Déjà un vecteur binaire
-            StateValue::BinBase64(v) => STANDARD.decode(v).map_err(
-                |e| StateValueError::ParseError(format!("Base64 decode error: {}", e))),
-            StateValue::BinHex(v) => hex::decode(v).map_err(
-                |e| StateValueError::ParseError(format!("BinHex decode error: {}", e))),
+            StateValue::BinBase64(v) => STANDARD
+                .decode(v)
+                .map_err(|e| StateValueError::ParseError(format!("Base64 decode error: {}", e))),
+            StateValue::BinHex(v) => hex::decode(v)
+                .map_err(|e| StateValueError::ParseError(format!("BinHex decode error: {}", e))),
 
             // Conversion depuis une chaîne encodée
             StateValue::String(s) => {

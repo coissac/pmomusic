@@ -1,5 +1,5 @@
-use std::convert::TryFrom;
 use crate::variable_types::{StateValue, StateValueError};
+use std::convert::TryFrom;
 
 impl TryFrom<&StateValue> for i64 {
     type Error = StateValueError;
@@ -21,9 +21,9 @@ impl TryFrom<&StateValue> for i64 {
             StateValue::Boolean(v) => Ok(*v as i64),
 
             // chaîne → i64
-            StateValue::String(s) => s.parse::<i64>().map_err(|_| {
-                StateValueError::TypeError(format!("Cannot parse '{}' as i64", s))
-            }),
+            StateValue::String(s) => s
+                .parse::<i64>()
+                .map_err(|_| StateValueError::TypeError(format!("Cannot parse '{}' as i64", s))),
 
             _ => Err(StateValueError::TypeError("Cannot cast to i64".into())),
         }
