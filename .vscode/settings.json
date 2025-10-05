@@ -1,4 +1,7 @@
 {
     "makefile.configureOnOpen": false,
-    "git.enabled": false
+    "git.enabled": false,
+    "claude-code.environmentVariables": [
+        
+    ]
 }
