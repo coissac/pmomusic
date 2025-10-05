@@ -1,4 +1,4 @@
-use pmoupnp::{mediarenderer::avtransport::actions::{SETAVTRANSPORTURI}, server::{
+use pmoupnp::{mediarenderer::avtransport::{actions::SETAVTRANSPORTURI, AVTTRANSPORT}, server::{
     logs::{log_dump, log_sse, LogState, SseLayer}, ServerBuilder, Webapp
 }, UpnpObject}; // ton module pmoupnp::server
 use tracing_subscriber::Registry;
@@ -47,7 +47,8 @@ async fn main() {
 
     server.add_redirect("/", "/app").await;
 
-    info!("{}",SETAVTRANSPORTURI.to_markdown());
+    info!("{}",AVTTRANSPORT.to_markdown());
+    info!("{}",AVTTRANSPORT.scpd_xml());
 
     server.start().await;
     server.wait().await;

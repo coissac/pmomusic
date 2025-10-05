@@ -7,7 +7,6 @@ use once_cell::sync::Lazy;
 pub static TRANSPORTSTATE: Lazy<Arc<StateVariable>> = Lazy::new(|| -> Arc<StateVariable> {
     let mut sv = StateVariable::new(StateVarType::String, "TransportState".to_string());
 
-    sv.push_allowed_value(&StateValue::String("NO_MEDIA_PRESENT".to_string())).expect("Cannot add allowed value");
     sv.extend_allowed_values(&[ 
         StateValue::String("STOPPED".to_string()),
 		StateValue::String("PLAYING".to_string()),
@@ -18,6 +17,8 @@ pub static TRANSPORTSTATE: Lazy<Arc<StateVariable>> = Lazy::new(|| -> Arc<StateV
 		StateValue::String("NO_MEDIA_PRESENT".to_string()), 
         ]).expect("Cannt set default value");
         
+    sv.set_send_notification();
+
     Arc::new(sv)
 });
 

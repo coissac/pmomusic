@@ -1,7 +1,7 @@
 use xmltree::{Element, XMLNode};
 
-use crate::actions::ActionSet;
-use crate::UpnpObject;
+use crate::actions::{ActionInstanceSet, ActionSet};
+use crate::{UpnpModel, UpnpObject};
 
 impl UpnpObject for ActionSet {
          fn to_xml_element(&self) -> Element {
@@ -17,3 +17,7 @@ impl UpnpObject for ActionSet {
 
 }
 
+
+impl UpnpModel for ActionSet {
+    type Instance = ActionInstanceSet;
+}

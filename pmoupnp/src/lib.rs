@@ -4,7 +4,7 @@ mod object_set;
 pub mod actions;
 pub mod mediarenderer;
 pub mod server;
-// pub mod services;
+pub mod services;
 pub mod state_variables;
 pub mod value_ranges;
 pub mod variable_types;
@@ -27,6 +27,7 @@ pub struct UpnpObjectSet<T: UpnpTypedObject> {
     objects: RwLock<HashMap<String, Arc<T>>>,
 }
 
+#[derive(Debug)]
 pub enum UpnpObjectSetError {
     AlreadyExists(String),
 }
