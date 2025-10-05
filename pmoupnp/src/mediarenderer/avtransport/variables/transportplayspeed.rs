@@ -1,15 +1,9 @@
-use std::sync::Arc;
+use crate::define_variable;
 
-use crate::state_variables::StateVariable;
-use crate::variable_types::{StateValue, StateVarType};
-use once_cell::sync::Lazy;
-
-pub static TRANSPORTPLAYSPEED: Lazy<Arc<StateVariable>> = Lazy::new(|| -> Arc<StateVariable> {
-    let mut sv = StateVariable::new(StateVarType::String, "TransportPlaySpeed".to_string());
-
-    sv.push_allowed_value(&StateValue::String("1".to_string())).expect("Cannot add allowed value");
-    sv.set_default(&StateValue::String("1".to_string())).expect("Cannt set default value");
-
-    Arc::new(sv)
-});
+define_variable! {
+    pub static TRANSPORTPLAYSPEED: String = "TransportPlaySpeed" {
+        allowed: ["1"],
+        default: "1",
+    }
+}
 

@@ -1,5 +1,6 @@
 mod errors;
 mod instance_methods;
+mod macros;
 mod variable_methods;
 mod var_set_methods;
 mod var_inst_set_methods;

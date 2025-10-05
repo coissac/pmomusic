@@ -1,13 +1,9 @@
-use std::sync::Arc;
+use crate::define_variable;
 
-use crate::state_variables::StateVariable;
-use crate::variable_types::StateVarType;
-use once_cell::sync::Lazy;
+define_variable! {
+    pub static AVTRANSPORTURI: String = "AVTransportURI"
+}
 
-pub static AVTRANSPORTURI: Lazy<Arc<StateVariable>> = Lazy::new(|| -> Arc<StateVariable> {
-    Arc::new(StateVariable::new(StateVarType::String, "AVTransportURI".to_string()))
-});
-
-pub static AVTRANSPORTNEXTURI: Lazy<Arc<StateVariable>> = Lazy::new(|| -> Arc<StateVariable> {
-    Arc::new(StateVariable::new(StateVarType::String, "AVTransportNextURI".to_string()))
-});
+define_variable! {
+    pub static AVTRANSPORTNEXTURI: String = "AVTransportNextURI"
+}
