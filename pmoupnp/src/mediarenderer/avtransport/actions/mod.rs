@@ -1,3 +1,4 @@
+mod getcurrenttransportactions;
 mod getdevicecapabilities;
 mod getmediainfo;
 mod getpositioninfo;
@@ -12,6 +13,7 @@ mod setavtransportnexturi;
 mod setavtransporturi;
 mod stop;
 
+pub use getcurrenttransportactions::GETCURRENTTRANSPORTACTIONS;
 pub use getdevicecapabilities::GETDEVICECAPABILITIES;
 pub use getmediainfo::GETMEDIAINFO;
 pub use getpositioninfo::GETPOSITIONINFO;
