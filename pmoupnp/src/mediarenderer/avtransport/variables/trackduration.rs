@@ -1,30 +1,20 @@
-use std::sync::Arc;
+use crate::define_variable;
 
-use crate::state_variables::StateVariable;
-use crate::variable_types::StateVarType;
-use once_cell::sync::Lazy;
+define_variable! {
+    pub static CURRENTTRACKDURATION: String = "CurrentTrackDuration" {
+        evented: true,
+    }
+}
 
-pub static CURRENTTRACKDURATION: Lazy<Arc<StateVariable>> = Lazy::new(|| -> Arc<StateVariable> {
-    let mut sv = StateVariable::new(StateVarType::String, "CurrentTrackDuration".to_string());
+define_variable! {
+    pub static ABSOLUTETIMEPOSITION: String = "AbsoluteTimePosition" {
+        evented: true,
+    }
+}
 
-    sv.set_send_notification();
-
-    Arc::new(sv)
-});
-
-pub static ABSOLUTETIMEPOSITION: Lazy<Arc<StateVariable>> = Lazy::new(|| -> Arc<StateVariable> {
-    let mut sv = StateVariable::new(StateVarType::String, "AbsoluteTimePosition".to_string());
-
-    sv.set_send_notification();
-
-    Arc::new(sv)
-});
-
-pub static RELATIVETIMEPOSITION: Lazy<Arc<StateVariable>> = Lazy::new(|| -> Arc<StateVariable> {
-    let mut sv = StateVariable::new(StateVarType::String, "RelativeTimePosition".to_string());
-
-    sv.set_send_notification();
-
-    Arc::new(sv)
-});
+define_variable! {
+    pub static RELATIVETIMEPOSITION: String = "RelativeTimePosition" {
+        evented: true,
+    }
+}
 

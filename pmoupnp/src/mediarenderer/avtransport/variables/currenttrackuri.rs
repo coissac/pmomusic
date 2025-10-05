@@ -1,10 +1,5 @@
-use std::sync::Arc;
+use crate::define_variable;
 
-use crate::state_variables::StateVariable;
-use crate::variable_types::StateVarType;
-use once_cell::sync::Lazy;
-
-pub static CURRENTTRACKURI: Lazy<Arc<StateVariable>> = Lazy::new(|| -> Arc<StateVariable> {
-    let sv = StateVariable::new(StateVarType::String, "CurrentTrackURI".to_string());
-    Arc::new(sv)
-});
+define_variable! {
+    pub static CURRENTTRACKURI: String = "CurrentTrackURI"
+}

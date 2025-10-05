@@ -1,22 +1,14 @@
-use std::sync::Arc;
+use crate::define_variable;
 
-use crate::state_variables::StateVariable;
-use crate::variable_types::StateVarType;
-use once_cell::sync::Lazy;
+define_variable! {
+    pub static CURRENTTRACK: String = "CurrentTrack" {
+        evented: true,
+    }
+}
 
-pub static CURRENTTRACK: Lazy<Arc<StateVariable>> = Lazy::new(|| -> Arc<StateVariable> {
-    let mut sv = StateVariable::new(StateVarType::String, "CurrentTrack".to_string());
-
-    sv.set_send_notification();
-
-    Arc::new(sv)
-});
-
-pub static NUMBEROFTRACKS: Lazy<Arc<StateVariable>> = Lazy::new(|| -> Arc<StateVariable> {
-    let mut sv = StateVariable::new(StateVarType::String, "NumberOfTracks".to_string());
-
-    sv.set_send_notification();
-
-    Arc::new(sv)
-});
+define_variable! {
+    pub static NUMBEROFTRACKS: String = "NumberOfTracks" {
+        evented: true,
+    }
+}
 
