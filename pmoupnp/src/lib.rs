@@ -2,6 +2,7 @@ mod object_trait;
 mod object_set;
 
 pub mod actions;
+pub mod devices;
 pub mod mediarenderer;
 pub mod server;
 pub mod services;

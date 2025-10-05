@@ -400,15 +400,15 @@ impl Service {
         format!("/service/{}", self.name())
     }
 
-    pub fn scpd_url(&self) -> String {
+    pub fn scpd_route(&self) -> String {
         format!("{}/desc.xml", self.service_base_url())
     }
 
-    pub fn control_url(&self) -> String {
+    pub fn control_route(&self) -> String {
         format!("{}/control", self.service_base_url())
     }
 
-    pub fn event_url(&self) -> String {
+    pub fn event_route(&self) -> String {
         format!("{}/event", self.service_base_url())
     }
 
