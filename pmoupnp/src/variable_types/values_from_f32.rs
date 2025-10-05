@@ -2,7 +2,6 @@ use std::convert::TryFrom;
 
 use crate::variable_types::{StateValue, StateValueError};
 
-
 impl TryFrom<&StateValue> for f32 {
     type Error = StateValueError;
 
@@ -12,12 +11,8 @@ impl TryFrom<&StateValue> for f32 {
             // --- Signed integers ---
             StateValue::I1(v) => Ok(*v as f32),
             StateValue::I2(v) => Ok(*v as f32),
-            StateValue::I4(v) 
-                if *v > -MAX_EXACT &&
-                   *v < MAX_EXACT => Ok(*v as f32),
-            StateValue::Int(v) 
-                if *v >= -MAX_EXACT &&
-                   *v <= MAX_EXACT as i32 => Ok(*v as f32),
+            StateValue::I4(v) if *v > -MAX_EXACT && *v < MAX_EXACT => Ok(*v as f32),
+            StateValue::Int(v) if *v >= -MAX_EXACT && *v <= MAX_EXACT as i32 => Ok(*v as f32),
 
             // --- Unsigned integers ---
             StateValue::UI1(v) => Ok(*v as f32),
@@ -30,37 +25,38 @@ impl TryFrom<&StateValue> for f32 {
             // --- Floats ---
             StateValue::R4(v) => Ok(*v), // déjà un f32
             StateValue::R8(v)
-                if ! v.is_finite() || 
-                (*v <= f32::MAX as f64 && 
-                 *v >= f32::MIN as f64) => Ok(*v as f32),
+                if !v.is_finite() || (*v <= f32::MAX as f64 && *v >= f32::MIN as f64) =>
+            {
+                Ok(*v as f32)
+            }
             StateValue::R8(_) => Err(StateValueError::TypeError(
                 "Cannot cast R8 to f32: out of range".into(),
             )),
             StateValue::Number(v)
-                if ! v.is_finite() || 
-                (*v <= f32::MAX as f64 && 
-                 *v >= f32::MIN as f64) => Ok(*v as f32),
+                if !v.is_finite() || (*v <= f32::MAX as f64 && *v >= f32::MIN as f64) =>
+            {
+                Ok(*v as f32)
+            }
             StateValue::Number(_) => Err(StateValueError::TypeError(
                 "Cannot cast Number to f32: out of range".into(),
             )),
             StateValue::Fixed14_4(v)
-                if ! v.is_finite() || 
-                (*v <= f32::MAX as f64 && 
-                 *v >= f32::MIN as f64) => Ok(*v as f32),
+                if !v.is_finite() || (*v <= f32::MAX as f64 && *v >= f32::MIN as f64) =>
+            {
+                Ok(*v as f32)
+            }
             StateValue::Fixed14_4(_) => Err(StateValueError::TypeError(
                 "Cannot cast Fixed14_4 to f32: out of range".into(),
             )),
 
             StateValue::Boolean(v) => Ok((*v as i32) as Self),
 
-            StateValue::String(s) => s.parse::<f32>().map_err(|_| {
-                StateValueError::TypeError(format!("Cannot parse '{}' as f32", s))
-            }),
+            StateValue::String(s) => s
+                .parse::<f32>()
+                .map_err(|_| StateValueError::TypeError(format!("Cannot parse '{}' as f32", s))),
 
             // --- Par défaut : erreur ---
-            _ => Err(StateValueError::TypeError(
-                "Cannot cast to f32".into(),
-            )),
+            _ => Err(StateValueError::TypeError("Cannot cast to f32".into())),
         }
     }
 }
@@ -74,9 +70,7 @@ impl TryFrom<StateValue> for f32 {
 }
 
 impl From<f32> for StateValue {
-
     fn from(value: f32) -> Self {
         StateValue::R4(value)
     }
 }
-

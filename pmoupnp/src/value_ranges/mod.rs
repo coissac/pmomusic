@@ -1,6 +1,5 @@
 mod methods;
 
-
 use crate::variable_types::StateValue;
 
 #[derive(Debug, Clone)]

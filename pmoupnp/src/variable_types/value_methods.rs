@@ -2,7 +2,6 @@ use std::cmp::Ordering;
 
 use crate::variable_types::{StateValue, StateVarType, type_trait::UpnpVarType};
 
-
 impl UpnpVarType for StateValue {
     fn as_state_var_type(&self) -> StateVarType {
         StateVarType::from(self) // utilise ton From<&StateValue> existant

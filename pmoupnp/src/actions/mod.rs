@@ -1,0 +1,116 @@
+mod errors;
+
+mod action_instance;
+mod action_instance_set;
+mod action_methods;
+mod action_set_methods;
+mod arg_inst_set_methods;
+mod arg_instance_methods;
+mod arg_set_methods;
+mod argument_methods;
+
+mod macros;
+
+use crate::{
+    UpnpObjectSet, UpnpObjectType,
+    state_variables::{StateVarInstance, StateVariable},
+};
+use std::sync::{Arc, RwLock};
+
+pub use errors::ActionError;
+
+#[derive(Debug, Clone)]
+pub struct Action {
+    object: UpnpObjectType,
+    arguments: ArgumentSet,
+}
+
+pub type ActionSet = UpnpObjectSet<Action>;
+
+#[derive(Debug, Clone)]
+pub struct ActionInstance {
+    object: UpnpObjectType,
+    model: Action,
+    arguments: ArgInstanceSet,
+}
+
+pub type ActionInstanceSet = UpnpObjectSet<ActionInstance>;
+
+#[derive(Debug, Clone)]
+pub struct Argument {
+    object: UpnpObjectType,
+    state_variable: Arc<StateVariable>,
+    is_in: bool,
+    is_out: bool,
+}
+
+pub type ArgumentSet = UpnpObjectSet<Argument>;
+
+/// Instance d'un argument d'action UPnP.
+///
+/// Un `ArgumentInstance` représente un argument concret utilisé lors de l'exécution
+/// d'une action. Contrairement au modèle [`Argument`] qui définit la structure,
+/// l'instance maintient une liaison dynamique vers une [`StateVarInstance`] qui
+/// contient la valeur runtime.
+///
+/// # Cycle de vie
+///
+/// 1. **Création** : Instanciation via [`UpnpInstance::new`] avec `variable_instance = None`
+/// 2. **Liaison** : Association à une [`StateVarInstance`] via [`bind_variable`](Self::bind_variable)
+/// 3. **Utilisation** : Accès à la valeur runtime via [`get_variable_instance`](Self::get_variable_instance)
+///
+/// # Pourquoi `variable_instance` est optionnel ?
+///
+/// La liaison ne peut pas être faite dans le constructeur car :
+/// - Les `StateVarInstance` sont créées **après** les modèles
+/// - Les `ActionInstance` sont créées **avant** que toutes les variables soient disponibles
+/// - La validation des dépendances se fait en deux phases
+///
+/// # Thread-safety
+///
+/// Le champ `variable_instance` est protégé par un `RwLock` pour permettre :
+/// - La liaison après création (write lock)
+/// - L'accès concurrent en lecture (read lock)
+/// - L'utilisation dans un contexte multi-thread
+///
+/// # Examples
+///
+/// ```ignore
+/// use pmoupnp::actions::{Argument, ArgumentInstance};
+/// use pmoupnp::state_variables::StateVarInstance;
+/// use std::sync::Arc;
+///
+/// // Phase 1 : Créer l'instance (sans liaison)
+/// let arg_model = Argument::new_in("Volume".to_string(), volume_var);
+/// let arg_instance = ArgumentInstance::new(&arg_model);
+/// assert!(arg_instance.get_variable_instance().is_none());
+///
+/// // Phase 2 : Lier à une variable d'état
+/// let var_instance = Arc::new(StateVarInstance::new(&volume_var));
+/// arg_instance.bind_variable(var_instance.clone());
+/// assert!(arg_instance.get_variable_instance().is_some());
+///
+/// // Phase 3 : Utiliser la valeur runtime
+/// if let Some(var) = arg_instance.get_variable_instance() {
+///     println!("Current value: {}", var.value());
+/// }
+/// ```
+#[derive(Debug, Clone)]
+pub struct ArgumentInstance {
+    /// Métadonnées de l'objet UPnP
+    object: UpnpObjectType,
+
+    /// Référence vers le modèle définissant la structure
+    model: Argument,
+
+    /// Liaison optionnelle vers l'instance de variable d'état.
+    ///
+    /// - `None` : Pas encore liée (état initial après construction)
+    /// - `Some(Arc<StateVarInstance>)` : Liée et prête à l'emploi
+    ///
+    /// Protégée par `RwLock` pour permettre la liaison post-construction
+    /// et l'accès concurrent en lecture.
+    variable_instance: Arc<RwLock<Option<Arc<StateVarInstance>>>>,
+}
+
+pub type ArgInstanceSet = UpnpObjectSet<ArgumentInstance>;

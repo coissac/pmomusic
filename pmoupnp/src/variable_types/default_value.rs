@@ -24,18 +24,20 @@ impl StateVarType {
             StateVarType::BinBase64 => StateValue::BinBase64(String::new()),
             StateVarType::BinHex => StateValue::BinHex(String::new()),
             StateVarType::Date => StateValue::Date(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()),
-            StateVarType::DateTime => StateValue::DateTime(DateTime::from_timestamp(0, 0).unwrap().naive_utc().into()),
-            StateVarType::DateTimeTZ => StateValue::DateTimeTZ(
-                DateTime::from_naive_utc_and_offset(
-                    DateTime::from_timestamp(0, 0).unwrap().naive_utc(), 
-                    FixedOffset::east_opt(0).unwrap())
-            ),
+            StateVarType::DateTime => {
+                StateValue::DateTime(DateTime::from_timestamp(0, 0).unwrap().naive_utc().into())
+            }
+            StateVarType::DateTimeTZ => {
+                StateValue::DateTimeTZ(DateTime::from_naive_utc_and_offset(
+                    DateTime::from_timestamp(0, 0).unwrap().naive_utc(),
+                    FixedOffset::east_opt(0).unwrap(),
+                ))
+            }
             StateVarType::Time => StateValue::Time(NaiveTime::from_hms_opt(0, 0, 0).unwrap()),
-            StateVarType::TimeTZ => StateValue::TimeTZ(
-                DateTime::from_naive_utc_and_offset(
-                    DateTime::from_timestamp(0, 0).unwrap().naive_utc(), 
-                    FixedOffset::east_opt(0).unwrap())
-            ),
+            StateVarType::TimeTZ => StateValue::TimeTZ(DateTime::from_naive_utc_and_offset(
+                DateTime::from_timestamp(0, 0).unwrap().naive_utc(),
+                FixedOffset::east_opt(0).unwrap(),
+            )),
             StateVarType::UUID => StateValue::UUID(Uuid::nil()),
             StateVarType::URI => StateValue::URI(Url::parse("http://localhost").unwrap()),
         }

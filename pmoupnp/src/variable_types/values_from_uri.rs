@@ -13,8 +13,7 @@ impl TryFrom<StateValue> for Url {
 
             // Si c'est une String, on tente un parse
             StateValue::String(v) => {
-                Url::parse(&v)
-                    .map_err(|_| StateValueError::TypeError("Invalid URI string".into()))
+                Url::parse(&v).map_err(|_| StateValueError::TypeError("Invalid URI string".into()))
             }
 
             // Autres types : erreur
@@ -24,7 +23,6 @@ impl TryFrom<StateValue> for Url {
 }
 
 impl From<Url> for StateValue {
-
     fn from(value: Url) -> Self {
         StateValue::URI(value)
     }
