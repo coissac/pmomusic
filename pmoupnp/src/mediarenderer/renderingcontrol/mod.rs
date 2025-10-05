@@ -57,30 +57,8 @@ pub mod actions;
 use actions::{GETMUTE, GETVOLUME, SETMUTE, SETVOLUME};
 use variables::{A_ARG_TYPE_CHANNEL, A_ARG_TYPE_INSTANCE_ID, MUTE, VOLUME};
 
-/// Service RenderingControl:1 conforme à la spécification UPnP AV.
-///
-/// Ce service permet de contrôler les paramètres de rendu audio sur un MediaRenderer.
-///
-/// # Initialisation
-///
-/// Le service est initialisé paresseusement (lazy) au premier accès via la macro
-/// [`define_service!`]. Toutes les variables d'état et actions sont automatiquement
-/// enregistrées.
-///
-/// # Exemples
-///
-/// ```rust
-/// use pmoupnp::mediarenderer::renderingcontrol::RENDERINGCONTROL;
-///
-/// let service = &*RENDERINGCONTROL;
-/// assert_eq!(service.name(), "RenderingControl");
-/// assert_eq!(service.version(), 1);
-/// ```
-///
-/// # Voir aussi
-///
-/// - Module [`actions`] : Définition de toutes les actions UPnP
-/// - Module [`variables`] : Définition de toutes les variables d'état
+// Service RenderingControl:1 conforme à la spécification UPnP AV pour MediaRenderer audio
+// Voir la documentation du module pour plus de détails
 define_service! {
     pub static RENDERINGCONTROL = "RenderingControl" {
         variables: [
