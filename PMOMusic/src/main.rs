@@ -1,8 +1,9 @@
 use pmoupnp::{mediarenderer::avtransport::AVTTRANSPORT, UpnpObject};
 use pmoserver::{
     logs::{log_dump, log_sse, LogState, SseLayer},
-    ServerBuilder, Webapp
+    ServerBuilder
 };
+use pmoapp::Webapp;
 use tracing_subscriber::Registry;
 use tracing_subscriber::prelude::*;
 use tracing::info;
