@@ -10,6 +10,9 @@ pub mod state_variables;
 pub mod value_ranges;
 pub mod variable_types;
 
+// Re-exports
+pub use server::UpnpServer;
+
 
 use std::{collections::HashMap, sync::Arc};
 
