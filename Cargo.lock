@@ -1515,6 +1515,7 @@ dependencies = [
  "parking_lot",
  "pmoconfig",
  "pmodidl",
+ "pmoutils",
  "reqwest",
  "serde",
  "serde_json",

@@ -87,6 +87,11 @@ impl UpnpInstance for DeviceInstance {
             format!("uuid:{}_{}", model.udn_prefix(), uuid::Uuid::new_v4())
         };
 
+        // Obtenir l'IP locale et le port depuis la configuration
+        let local_ip = pmoutils::guess_local_ip();
+        let port = pmoconfig::get_config().get_http_port();
+        let server_base_url = format!("http://{}:{}", local_ip, port);
+
         Self {
             object: UpnpObjectType {
                 name: model.get_name().to_string(),
@@ -94,7 +99,7 @@ impl UpnpInstance for DeviceInstance {
             },
             model: Arc::new(model.clone()),
             udn,
-            server_base_url: "http://localhost:8080".to_string(),
+            server_base_url,
             services: RwLock::new(HashMap::new()),
             devices: RwLock::new(HashMap::new()),
         }
@@ -184,8 +189,9 @@ impl DeviceInstance {
     }
 
     /// Retourne la route du device (chemin relatif).
+    /// Utilise l'UDN pour garantir l'unicité si plusieurs devices du même type existent.
     pub fn route(&self) -> String {
-        format!("/device/{}", self.get_name())
+        format!("/device/{}", self.udn())
     }
 
     /// Retourne la route de description du device.
