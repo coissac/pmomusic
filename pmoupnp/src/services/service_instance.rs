@@ -395,11 +395,8 @@ impl ServiceInstance {
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
 
-        let mut xml = String::from_utf8_lossy(&xml_output).to_string();
-        
-        // Ajouter l'en-tête XML
-        xml.insert_str(0, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-        
+        let xml = String::from_utf8_lossy(&xml_output).to_string();
+
         (
             StatusCode::OK,
             [(axum::http::header::CONTENT_TYPE, "text/xml; charset=\"utf-8\"")],
