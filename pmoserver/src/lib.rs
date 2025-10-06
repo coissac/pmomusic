@@ -20,7 +20,6 @@
 //!
 //! - [`server`] : Implémentation du serveur principal et du builder
 //! - [`logs`] : Système de logs SSE pour monitoring en temps réel
-//! - `upnp_impl` : Implémentation du trait `pmoupnp::UpnpServer` (privé)
 //!
 //! ## Exemple d'utilisation
 //!
@@ -53,27 +52,25 @@
 //!
 //! ## Intégration UPnP
 //!
-//! Le serveur implémente automatiquement le trait `pmoupnp::UpnpServer`, permettant
-//! de connecter des devices UPnP :
+//! Le serveur peut être étendu avec UPnP via le trait `pmoupnp::UpnpServer`.
+//! L'implémentation est fournie par `pmoupnp` (feature `pmoserver`), permettant
+//! de connecter des devices UPnP sans que `pmoserver` dépende de `pmoupnp` :
 //!
 //! ```rust,no_run
-//! use pmoupnp::{UpnpServer, mediarenderer::device::MEDIA_RENDERER};
-//! use pmoupnp::devices::DeviceInstance;
+//! use pmoupnp::{UpnpServer, mediarenderer::MEDIA_RENDERER};
 //! use pmoserver::ServerBuilder;
-//! use std::sync::Arc;
 //!
 //! # async fn example() {
 //! let mut server = ServerBuilder::new("MediaRenderer").build();
-//! let device = Arc::new(DeviceInstance::new(&MEDIA_RENDERER));
+//! let device = MEDIA_RENDERER.create_instance();
 //!
-//! // Le device enregistre automatiquement ses routes
+//! // Le trait UpnpServer est automatiquement disponible (implémenté dans pmoupnp)
 //! device.register_urls(&mut server).await;
 //! # }
 //! ```
 
 pub mod server;
 pub mod logs;
-mod upnp_impl;
 
 pub use server::{Server, ServerBuilder, ServerInfo};
-pub use logs::{LogState, SseLayer, log_sse, log_dump};
+pub use logs::{LogState, SseLayer, log_sse, log_dump, init_logging, LoggingOptions};

@@ -5,3 +5,11 @@ edition = "2021"
 
 [dependencies]
 rust-embed = "8.5.0"
+
+[dependencies.pmoserver]
+path = "../pmoserver"
+optional = true
+
+[features]
+default = []
+pmoserver = ["dep:pmoserver"]

@@ -239,6 +239,8 @@
 //! - [Vite Documentation](https://vitejs.dev/)
 
 use rust_embed::RustEmbed;
+use std::future::Future;
+use std::pin::Pin;
 
 /// Structure représentant l'application web embarquée.
 ///
@@ -248,16 +250,72 @@ use rust_embed::RustEmbed;
 /// ## Exemple
 ///
 /// ```rust,no_run
-/// use pmoapp::Webapp;
+/// use pmoapp::{Webapp, WebAppExt};
 /// use pmoserver::ServerBuilder;
 ///
 /// # async fn example() {
 /// let mut server = ServerBuilder::new("MyApp").build();
 ///
-/// // Ajouter la webapp comme SPA sur le chemin /app
-/// server.add_spa::<Webapp>("/app").await;
+/// // Ajouter la webapp via le trait WebAppExt
+/// server.add_webapp::<Webapp>("/app").await;
 /// # }
 /// ```
 #[derive(RustEmbed, Clone)]
 #[folder = "webapp/dist"]
 pub struct Webapp;
+
+/// Trait pour étendre un serveur HTTP avec des fonctionnalités webapp.
+///
+/// Ce trait permet à `pmoapp` d'ajouter des méthodes d'extension sur des types
+/// de serveurs externes (comme `pmoserver::Server`) sans que ces crates dépendent de `pmoapp`.
+///
+/// # Architecture
+///
+/// Similaire au pattern utilisé par `pmoupnp` pour `UpnpServer`, ce trait permet
+/// une extension propre et découplée :
+///
+/// - `pmoserver` définit un serveur HTTP générique
+/// - `pmoapp` étend ce serveur avec des méthodes webapp via ce trait
+/// - Le serveur n'a pas besoin de connaître `pmoapp`
+///
+/// # Exemple d'implémentation
+///
+/// ```ignore
+/// impl WebAppExt for pmoserver::Server {
+///     fn add_webapp<W: RustEmbed>(&mut self, path: &str) -> ... {
+///         // Délègue à la méthode interne add_spa
+///         self.add_spa::<W>(path)
+///     }
+/// }
+/// ```
+pub trait WebAppExt {
+    /// Ajoute une Single Page Application au serveur.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Le chemin où monter la webapp (ex: "/app")
+    ///
+    /// # Type Parameter
+    ///
+    /// * `W` - Type RustEmbed contenant les fichiers de la webapp
+    fn add_webapp<W>(&mut self, path: &str) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>
+    where
+        W: RustEmbed + Clone + Send + Sync + 'static;
+
+    /// Ajoute une webapp avec une redirection automatique depuis la racine.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Le chemin où monter la webapp (ex: "/app")
+    ///
+    /// # Type Parameter
+    ///
+    /// * `W` - Type RustEmbed contenant les fichiers de la webapp
+    fn add_webapp_with_redirect<W>(&mut self, path: &str) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>
+    where
+        W: RustEmbed + Clone + Send + Sync + 'static;
+}
+
+// Implémentation du trait pour pmoserver::Server (feature-gated)
+#[cfg(feature = "pmoserver")]
+mod pmoserver_impl;
