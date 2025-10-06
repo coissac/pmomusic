@@ -23,8 +23,7 @@ use rust_embed::RustEmbed;
 use serde::Serialize;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::{signal, sync::RwLock, task::JoinHandle};
-use tracing::{info, warn, debug, error};
-use utoipa::OpenApi;
+use tracing::info;
 use utoipa_swagger_ui::SwaggerUi;
 
 /// Info serveur sérialisable
@@ -47,10 +46,6 @@ pub struct Server {
     api_router: Arc<RwLock<Option<Router>>>,
     join_handle: Option<JoinHandle<()>>,
 }
-
-#[derive(RustEmbed, Clone)]
-#[folder = "webapp/dist"]
-pub struct Webapp;
 
 impl Server {
     /// Crée une nouvelle instance de serveur
