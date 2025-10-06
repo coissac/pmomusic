@@ -75,5 +75,5 @@ pub mod server;
 pub mod logs;
 mod upnp_impl;
 
-pub use server::{Server, ServerBuilder, ServerInfo, Webapp};
+pub use server::{Server, ServerBuilder, ServerInfo};
 pub use logs::{LogState, SseLayer, log_sse, log_dump};

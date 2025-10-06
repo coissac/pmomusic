@@ -2,7 +2,7 @@
 # Variables de configuration
 CARGO = cargo
 NPM = npm
-WEBAPP_DIR = pmoupnp/webapp
+WEBAPP_DIR = pmoapp/webapp
 DIST_DIR = $(WEBAPP_DIR)/dist
 RUST_TARGET = target/release
 DOC_DIR = target/doc
@@ -29,13 +29,13 @@ build: webapp release
 	@echo "$(GREEN)✓ Build complet terminé$(NC)"
 
 ## release: Compile le binaire Rust en mode release
-release:
+release: webapp
 	@echo "$(YELLOW)→ Compilation Rust (release)...$(NC)"
 	$(CARGO) build --release
 	@echo "$(GREEN)✓ Binaire disponible : $(RUST_TARGET)/$(BINARY_NAME)$(NC)"
 
 ## debug: Compile le binaire Rust en mode debug
-debug:
+debug: webapp
 	@echo "$(YELLOW)→ Compilation Rust (debug)...$(NC)"
 	$(CARGO) build
 	@echo "$(GREEN)✓ Binaire disponible : target/debug/$(BINARY_NAME)$(NC)"
