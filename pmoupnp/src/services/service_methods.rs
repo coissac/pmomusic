@@ -35,17 +35,17 @@ impl UpnpObject for Service {
 
         // SCPDURL
         let mut SCPDURL = Element::new("SCPDURL");
-        SCPDURL.children.push(XMLNode::Text(self.scpd_url()));
+        SCPDURL.children.push(XMLNode::Text(self.scpd_route()));
         elem.children.push(XMLNode::Element(SCPDURL));
 
         // controlURL
         let mut controlURL = Element::new("controlURL");
-        controlURL.children.push(XMLNode::Text(self.control_url()));
+        controlURL.children.push(XMLNode::Text(self.control_route()));
         elem.children.push(XMLNode::Element(controlURL));
 
-        // SCPDURL
+        // eventSubURL
         let mut eventSubURL = Element::new("eventSubURL");
-        eventSubURL.children.push(XMLNode::Text(self.event_url()));
+        eventSubURL.children.push(XMLNode::Text(self.event_route()));
         elem.children.push(XMLNode::Element(eventSubURL));
 
         elem

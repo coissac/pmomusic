@@ -4,6 +4,8 @@ use std::{
     collections::HashMap,
     sync::{Arc, Mutex, RwLock},
     time::Duration,
+    pin::Pin,
+    future::Future,
 };
 use axum::{
     extract::{Request, State},
@@ -19,6 +21,7 @@ use crate::{
     services::{Service, ServiceError},
     actions::{ActionInstance, ActionInstanceSet},
     state_variables::{StateVarInstance, StateVarInstanceSet, UpnpVariable},
+    devices::DeviceInstance,
     UpnpObject, UpnpInstance, UpnpTyped, UpnpTypedInstance, UpnpObjectType,
 };
 
@@ -74,8 +77,8 @@ pub struct ServiceInstance {
     /// Identifiant du service
     identifier: String,
     
-    /// Device parent (optionnel)
-    device: Option<Arc<DeviceStub>>,
+    /// Device parent (optionnel) - utilisé via interior mutability
+    device: Arc<RwLock<Option<Arc<DeviceInstance>>>>,
     
     /// Variables d'état instanciées
     statevariables: StateVarInstanceSet,
@@ -93,31 +96,6 @@ pub struct ServiceInstance {
     seqid: Arc<Mutex<HashMap<String, u32>>>,
 }
 
-// Stub temporaire pour DeviceInstance
-// TODO: Remplacer par la vraie implémentation quand le module devices sera créé
-#[derive(Debug, Clone)]
-pub struct DeviceStub {
-    name: String,
-    udn: String,
-}
-
-impl DeviceStub {
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub fn base_route(&self) -> String {
-        format!("/device/{}", self.name)
-    }
-    
-    pub fn udn(&self) -> &str {
-        &self.udn
-    }
-
-    pub fn server_base_url(&self) -> String {
-        "http://localhost:8080".to_string()
-    }
-}
 
 impl std::fmt::Debug for ServiceInstance {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -195,7 +173,7 @@ impl UpnpInstance for ServiceInstance {
             },
             model: Arc::new(model.clone()),
             identifier: model.identifier().to_string(),
-            device: None,
+            device: Arc::new(RwLock::new(None)),
             statevariables,
             actions,
             subscribers: Arc::new(RwLock::new(HashMap::new())),
@@ -224,15 +202,15 @@ impl UpnpObject for ServiceInstance {
         elem.children.push(XMLNode::Element(service_id));
 
         let mut scpd_url = Element::new("SCPDURL");
-        scpd_url.children.push(XMLNode::Text(self.scpd_url()));
+        scpd_url.children.push(XMLNode::Text(self.scpd_route()));
         elem.children.push(XMLNode::Element(scpd_url));
 
         let mut control_url = Element::new("controlURL");
-        control_url.children.push(XMLNode::Text(self.control_url()));
+        control_url.children.push(XMLNode::Text(self.control_route()));
         elem.children.push(XMLNode::Element(control_url));
 
         let mut event_sub_url = Element::new("eventSubURL");
-        event_sub_url.children.push(XMLNode::Text(self.event_sub_url()));
+        event_sub_url.children.push(XMLNode::Text(self.event_route()));
         elem.children.push(XMLNode::Element(event_sub_url));
 
         elem
@@ -269,32 +247,43 @@ impl ServiceInstance {
         self.actions.get_by_name(name)
     }
 
-    /// Retourne la route de base du service.
-    pub fn base_route(&self) -> String {
-        match &self.device {
-            Some(device) => format!("{}/service/{}", device.base_route(), self.get_name()),
+    /// Définit le device parent pour ce service.
+    ///
+    /// Cette méthode doit être appelée après la création du service instance
+    /// pour établir la relation avec le device parent.
+    pub fn set_device(&self, device: Arc<DeviceInstance>) {
+        let mut dev = self.device.write().unwrap();
+        *dev = Some(device);
+    }
+
+    /// Retourne la route du service (chemin relatif).
+    pub fn route(&self) -> String {
+        let device = self.device.read().unwrap();
+        match device.as_ref() {
+            Some(device) => format!("{}/service/{}", device.route(), self.get_name()),
             None => format!("/service/{}", self.get_name()),
         }
     }
 
-    /// Retourne l'URL de contrôle SOAP.
-    pub fn control_url(&self) -> String {
-        format!("{}/control", self.base_route())
+    /// Retourne la route de contrôle SOAP.
+    pub fn control_route(&self) -> String {
+        format!("{}/control", self.route())
     }
 
-    /// Retourne l'URL de souscription aux événements.
-    pub fn event_sub_url(&self) -> String {
-        format!("{}/event", self.base_route())
+    /// Retourne la route de souscription aux événements.
+    pub fn event_route(&self) -> String {
+        format!("{}/event", self.route())
     }
 
-    /// Retourne l'URL de la description SCPD.
-    pub fn scpd_url(&self) -> String {
-        format!("{}/desc.xml", self.base_route())
+    /// Retourne la route de la description SCPD.
+    pub fn scpd_route(&self) -> String {
+        format!("{}/desc.xml", self.route())
     }
 
     /// Retourne l'USN (Unique Service Name).
     pub fn usn(&self) -> String {
-        match &self.device {
+        let device = self.device.read().unwrap();
+        match device.as_ref() {
             Some(device) => format!("uuid:{}::urn:{}", device.udn(), self.service_type()),
             None => format!("uuid::urn:{}", self.service_type()),
         }
@@ -310,23 +299,28 @@ impl ServiceInstance {
         &self.actions
     }
 
-    /// Enregistre les routes UPnP dans le serveur Axum.
+    /// Enregistre les routes UPnP dans le serveur.
     ///
     /// # Errors
     ///
     /// Retourne une erreur si l'enregistrement des routes échoue.
-    pub async fn register_urls(&self, server: &mut crate::server::Server) -> Result<(), ServiceError> {
+    pub async fn register_urls<S: crate::UpnpServer + ?Sized>(&self, server: &mut S) -> Result<(), ServiceError> {
+        let device = self.device.read().unwrap();
+        let device_name = device.as_ref().map(|d| d.get_name().clone()).unwrap_or_else(|| "unknown".to_string());
+        let server_url = device.as_ref().map(|d| d.base_url().to_string()).unwrap_or_default();
+        drop(device);
+
         info!(
             "✅ Service description for {}:{} available at : {}{}",
-            self.device.as_ref().map(|d| d.name()).unwrap_or("unknown"),
+            device_name,
             self.get_name(),
-            self.device.as_ref().map(|d| d.server_base_url()).unwrap_or_default(),
-            self.scpd_url(),
+            server_url,
+            self.scpd_route(),
         );
 
         // Handler SCPD
         let instance_scpd = self.clone();
-        server.add_handler(&self.scpd_url(), move || {
+        server.add_handler(&self.scpd_route(), move || {
             let instance = instance_scpd.clone();
             async move { instance.scpd_handler().await }
         }).await;
@@ -334,7 +328,7 @@ impl ServiceInstance {
         // Handler control
         let instance_control = self.clone();
         server.add_post_handler_with_state(
-            &self.control_url(),
+            &self.control_route(),
             control_handler,
             instance_control,
         ).await;
@@ -342,7 +336,7 @@ impl ServiceInstance {
         // Handler événements
         let instance_event = self.clone();
         server.add_handler_with_state(
-            &self.event_sub_url(),
+            &self.event_route(),
             event_sub_handler,
             instance_event,
         ).await;
@@ -574,11 +568,12 @@ impl ServiceInstance {
 }
 
 /// Handler Axum pour les événements (SUBSCRIBE/UNSUBSCRIBE).
-async fn event_sub_handler(
+fn event_sub_handler(
     State(instance): State<ServiceInstance>,
     headers: HeaderMap,
     req: Request<Body>,
-) -> Response {
+) -> Pin<Box<dyn Future<Output = Response> + Send>> {
+    Box::pin(async move {
     info!("📡 Event Subscription request for {}", instance.get_name());
 
     let method = req.method().as_str();
@@ -641,13 +636,15 @@ async fn event_sub_handler(
             StatusCode::METHOD_NOT_ALLOWED.into_response()
         }
     }
+    })
 }
 
 /// Handler Axum pour le contrôle SOAP.
-async fn control_handler(
+fn control_handler(
     State(instance): State<ServiceInstance>,
-    body: String,
-) -> Response {
+    _body: String,
+) -> Pin<Box<dyn Future<Output = Response> + Send>> {
+    Box::pin(async move {
     info!("📡 Control request for {}", instance.get_name());
 
     // TODO: Parser le SOAP et appeler l'action correspondante
@@ -669,6 +666,7 @@ async fn control_handler(
         [(axum::http::header::CONTENT_TYPE, "text/xml; charset=\"utf-8\"")],
         response_xml,
     ).into_response()
+    })
 }
 
 #[cfg(test)]
@@ -690,10 +688,10 @@ mod tests {
         let service = Service::new("AVTransport".to_string());
         let instance = ServiceInstance::new(&service);
         
-        assert_eq!(instance.base_route(), "/service/AVTransport");
-        assert_eq!(instance.control_url(), "/service/AVTransport/control");
-        assert_eq!(instance.event_sub_url(), "/service/AVTransport/event");
-        assert_eq!(instance.scpd_url(), "/service/AVTransport/desc.xml");
+        assert_eq!(instance.route(), "/service/AVTransport");
+        assert_eq!(instance.control_route(), "/service/AVTransport/control");
+        assert_eq!(instance.event_route(), "/service/AVTransport/event");
+        assert_eq!(instance.scpd_route(), "/service/AVTransport/desc.xml");
     }
 
     #[test]
