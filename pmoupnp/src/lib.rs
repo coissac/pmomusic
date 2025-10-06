@@ -2,12 +2,16 @@ mod object_trait;
 mod object_set;
 
 pub mod actions;
+pub mod devices;
 pub mod mediarenderer;
 pub mod server;
 pub mod services;
 pub mod state_variables;
 pub mod value_ranges;
 pub mod variable_types;
+
+// Re-exports
+pub use server::UpnpServer;
 
 
 use std::{collections::HashMap, sync::Arc};
