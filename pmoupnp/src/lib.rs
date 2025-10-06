@@ -6,6 +6,8 @@ pub mod devices;
 pub mod mediarenderer;
 pub mod server;
 pub mod services;
+pub mod soap;
+pub mod ssdp;
 pub mod state_variables;
 pub mod value_ranges;
 pub mod variable_types;
