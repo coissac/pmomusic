@@ -25,6 +25,7 @@ use std::{net::SocketAddr, sync::Arc};
 use tokio::{signal, sync::RwLock, task::JoinHandle};
 use tracing::info;
 use utoipa_swagger_ui::SwaggerUi;
+use crate::logs::{LogState, LoggingOptions, init_logging, log_sse, log_dump};
 
 /// Info serveur sérialisable
 #[derive(Clone, Serialize, utoipa::ToSchema)]
@@ -45,6 +46,7 @@ pub struct Server {
     router: Arc<RwLock<Router>>,
     api_router: Arc<RwLock<Option<Router>>>,
     join_handle: Option<JoinHandle<()>>,
+    log_state: Option<LogState>,
 }
 
 impl Server {
@@ -70,6 +72,7 @@ impl Server {
             router: Arc::new(RwLock::new(Router::new())),
             api_router: Arc::new(RwLock::new(None)),
             join_handle: None,
+            log_state: None,
         }
     }
 
@@ -507,6 +510,45 @@ impl Server {
             base_url: self.base_url.clone(),
             http_port: self.http_port,
         }
+    }
+
+    /// Initialise le système de logging et enregistre les routes de logs
+    ///
+    /// Cette méthode configure le système de tracing avec SSE et optionnellement la console,
+    /// puis enregistre automatiquement les routes `/log-sse` et `/log-dump`.
+    ///
+    /// # Arguments
+    ///
+    /// * `options` - Options de configuration du logging
+    ///
+    /// # Exemple
+    ///
+    /// ```rust,no_run
+    /// # use pmoserver::{ServerBuilder, logs::LoggingOptions};
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let mut server = ServerBuilder::new_configured().build();
+    ///
+    /// // Initialiser les logs avec console
+    /// server.init_logging(LoggingOptions::default()).await;
+    ///
+    /// // Ou sans console
+    /// server.init_logging(LoggingOptions {
+    ///     buffer_capacity: 1000,
+    ///     enable_console: false,
+    /// }).await;
+    ///
+    /// server.start().await;
+    /// # }
+    /// ```
+    pub async fn init_logging(&mut self, options: LoggingOptions) {
+        let log_state = init_logging(options);
+
+        // Enregistrer automatiquement les routes de logging
+        self.add_handler_with_state("/log-sse", log_sse, log_state.clone()).await;
+        self.add_handler_with_state("/log-dump", log_dump, log_state.clone()).await;
+
+        self.log_state = Some(log_state);
     }
 }
 

@@ -7,6 +7,7 @@ edition = "2024"
 pmoconfig = { path = "../pmoconfig" }
 pmodidl = { path = "../pmodidl"}
 pmoutils = { path = "../pmoutils" }
+pmoserver = { path = "../pmoserver" }
 
 url = "2.5.7"
 uuid = "1.18.1"

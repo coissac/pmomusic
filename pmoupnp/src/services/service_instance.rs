@@ -304,7 +304,7 @@ impl ServiceInstance {
     /// # Errors
     ///
     /// Retourne une erreur si l'enregistrement des routes échoue.
-    pub async fn register_urls<S: crate::UpnpServer + ?Sized>(&self, server: &mut S) -> Result<(), ServiceError> {
+    pub async fn register_urls(&self, server: &mut pmoserver::Server) -> Result<(), ServiceError> {
         let device = self.device.read().unwrap();
         let device_name = device.as_ref().map(|d| d.get_name().clone()).unwrap_or_else(|| "unknown".to_string());
         let server_url = device.as_ref().map(|d| d.base_url().to_string()).unwrap_or_default();

@@ -1,10 +1,11 @@
 //! Implémentation des traits UPnP pour Device.
 
+use std::sync::Arc;
 use xmltree::{Element, XMLNode};
 
 use crate::{
     devices::{Device, DeviceInstance},
-    UpnpObject, UpnpModel,
+    UpnpObject, UpnpModel, UpnpInstance,
 };
 
 impl UpnpObject for Device {
@@ -115,4 +116,19 @@ impl UpnpObject for Device {
 
 impl UpnpModel for Device {
     type Instance = DeviceInstance;
+
+    /// Crée une instance du device avec ses services déjà instanciés.
+    ///
+    /// Les services sont créés dans DeviceInstance::new(), cette méthode
+    /// établit uniquement les liens bidirectionnels parent-enfant.
+    fn create_instance(&self) -> Arc<DeviceInstance> {
+        let instance = Arc::new(DeviceInstance::new(self));
+
+        // Établir le lien parent pour chaque service
+        for service in instance.services() {
+            service.set_device(Arc::clone(&instance));
+        }
+
+        instance
+    }
 }
