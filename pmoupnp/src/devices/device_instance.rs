@@ -245,7 +245,7 @@ impl DeviceInstance {
     }
 
     /// Enregistre toutes les URLs du device et de ses services dans le serveur.
-    pub fn register_urls<'a>(&'a self, server: &'a mut crate::server::Server) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), DeviceError>> + 'a>> {
+    pub fn register_urls<'a, S: crate::UpnpServer + ?Sized>(&'a self, server: &'a mut S) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), DeviceError>> + 'a>> {
         Box::pin(async move {
             info!(
                 "✅ Device description for {} available at: {}{}",

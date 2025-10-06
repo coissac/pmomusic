@@ -13,8 +13,6 @@
 //! - 📚 **Documentation API** : OpenAPI/Swagger automatique avec `add_openapi()`
 //! - ⚡ **Gestion gracieuse** : Arrêt propre sur Ctrl+C
 
-pub mod logs;
-
 use axum::handler::Handler;
 use axum::response::Redirect;
 use axum::routing::get;

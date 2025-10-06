@@ -4,6 +4,8 @@ use std::{
     collections::HashMap,
     sync::{Arc, Mutex, RwLock},
     time::Duration,
+    pin::Pin,
+    future::Future,
 };
 use axum::{
     extract::{Request, State},
@@ -297,12 +299,12 @@ impl ServiceInstance {
         &self.actions
     }
 
-    /// Enregistre les routes UPnP dans le serveur Axum.
+    /// Enregistre les routes UPnP dans le serveur.
     ///
     /// # Errors
     ///
     /// Retourne une erreur si l'enregistrement des routes échoue.
-    pub async fn register_urls(&self, server: &mut crate::server::Server) -> Result<(), ServiceError> {
+    pub async fn register_urls<S: crate::UpnpServer + ?Sized>(&self, server: &mut S) -> Result<(), ServiceError> {
         let device = self.device.read().unwrap();
         let device_name = device.as_ref().map(|d| d.get_name().clone()).unwrap_or_else(|| "unknown".to_string());
         let server_url = device.as_ref().map(|d| d.base_url().to_string()).unwrap_or_default();
@@ -566,11 +568,12 @@ impl ServiceInstance {
 }
 
 /// Handler Axum pour les événements (SUBSCRIBE/UNSUBSCRIBE).
-async fn event_sub_handler(
+fn event_sub_handler(
     State(instance): State<ServiceInstance>,
     headers: HeaderMap,
     req: Request<Body>,
-) -> Response {
+) -> Pin<Box<dyn Future<Output = Response> + Send>> {
+    Box::pin(async move {
     info!("📡 Event Subscription request for {}", instance.get_name());
 
     let method = req.method().as_str();
@@ -633,13 +636,15 @@ async fn event_sub_handler(
             StatusCode::METHOD_NOT_ALLOWED.into_response()
         }
     }
+    })
 }
 
 /// Handler Axum pour le contrôle SOAP.
-async fn control_handler(
+fn control_handler(
     State(instance): State<ServiceInstance>,
-    body: String,
-) -> Response {
+    _body: String,
+) -> Pin<Box<dyn Future<Output = Response> + Send>> {
+    Box::pin(async move {
     info!("📡 Control request for {}", instance.get_name());
 
     // TODO: Parser le SOAP et appeler l'action correspondante
@@ -661,6 +666,7 @@ async fn control_handler(
         [(axum::http::header::CONTENT_TYPE, "text/xml; charset=\"utf-8\"")],
         response_xml,
     ).into_response()
+    })
 }
 
 #[cfg(test)]
