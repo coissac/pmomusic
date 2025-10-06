@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 pmoconfig = { path = "../pmoconfig" }
 pmodidl = { path = "../pmodidl"}
+pmoutils = { path = "../pmoutils" }
 
 url = "2.5.7"
 uuid = "1.18.1"
