@@ -37,7 +37,7 @@ use axum::{
     Json, Router,
 };
 use pmoserver::Server;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use std::sync::Arc;
 use utoipa::OpenApi;
 
@@ -52,11 +52,13 @@ async fn get_cover_image(
     let path = req.uri().path();
     let parts: Vec<&str> = path.split('/').collect();
 
-    if parts.len() < 4 {
+    warn!("{:?}",parts);
+
+    if parts.len() != 2 {
         return (StatusCode::BAD_REQUEST, "Invalid path").into_response();
     }
 
-    let pk = parts[3];
+    let pk = parts[1];
 
     match cache.get(pk).await {
         Ok(file_path) => {
@@ -83,12 +85,12 @@ async fn get_cover_variant(
     let path = req.uri().path();
     let parts: Vec<&str> = path.split('/').collect();
 
-    if parts.len() < 5 {
+    if parts.len() != 3 {
         return (StatusCode::BAD_REQUEST, "Invalid path").into_response();
     }
 
-    let pk = parts[3];
-    let size = match parts[4].parse::<usize>() {
+    let pk = parts[1];
+    let size = match parts[2].parse::<usize>() {
         Ok(s) => s,
         Err(_) => return (StatusCode::BAD_REQUEST, "Invalid size").into_response(),
     };
