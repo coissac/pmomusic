@@ -112,10 +112,7 @@ pub trait UpnpObject: Clone + Debug {
         elem.write_with_config(&mut buf, config)
             .expect("Failed to write XML");
 
-        let mut xml_string = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n".to_string();
-        xml_string.push_str(&String::from_utf8(buf).expect("Invalid UTF-8"));
-
-        xml_string
+        String::from_utf8(buf).expect("Invalid UTF-8")
     }
 
     /// Convertit l'objet en représentation Markdown.

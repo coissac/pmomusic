@@ -5,3 +5,4 @@ edition = "2024"
 
 [dependencies]
 get_if_addrs = "0.5.3"
+os_info = "3.8"

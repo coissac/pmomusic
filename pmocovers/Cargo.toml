@@ -1,0 +1,39 @@
+[package]
+name = "pmocovers"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Gestion d'images
+image = "0.25"
+webp = "0.3"
+
+# Base de données
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# HTTP client
+reqwest = { version = "0.12", features = ["blocking"] }
+
+# Cryptographie
+sha1 = "0.10"
+hex = "0.4"
+
+# Utilitaires
+anyhow = "1.0"
+chrono = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+
+# Async
+tokio = { version = "1.0", features = ["full"] }
+
+# Serveur HTTP (optionnel pour l'extension)
+pmoserver = { path = "../pmoserver", optional = true }
+pmoconfig = { path = "../pmoconfig", optional = true }
+axum = { version = "0.8", optional = true }
+utoipa = { version = "5.3", features = ["axum_extras"], optional = true }
+
+tracing = "0.1.41"
+
+[features]
+default = ["pmoserver"]
+pmoserver = ["dep:pmoserver", "dep:pmoconfig", "dep:axum", "dep:utoipa"]

@@ -2,7 +2,8 @@
   <div>
     <nav>
       <router-link to="/">Accueil</router-link> |
-      <router-link to="/logs">Logs</router-link>
+      <router-link to="/logs">Logs</router-link> |
+      <router-link to="/covers-cache">Cover Cache</router-link>
     </nav>
     <router-view />
   </div>
