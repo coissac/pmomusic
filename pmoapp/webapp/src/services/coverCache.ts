@@ -28,7 +28,7 @@ export interface ApiError {
  * Liste toutes les images en cache
  */
 export async function listImages(): Promise<CacheEntry[]> {
-  const response = await fetch("/api/covers/images");
+  const response = await fetch("/api/covers");
   if (!response.ok) {
     const error: ApiError = await response.json();
     throw new Error(error.message || "Failed to fetch images");
@@ -40,7 +40,7 @@ export async function listImages(): Promise<CacheEntry[]> {
  * Récupère les informations d'une image spécifique
  */
 export async function getImageInfo(pk: string): Promise<CacheEntry> {
-  const response = await fetch(`/api/covers/images/${pk}`);
+  const response = await fetch(`/api/covers/${pk}`);
   if (!response.ok) {
     const error: ApiError = await response.json();
     throw new Error(error.message || "Failed to fetch image info");
@@ -52,7 +52,7 @@ export async function getImageInfo(pk: string): Promise<CacheEntry> {
  * Ajoute une nouvelle image au cache depuis une URL
  */
 export async function addImage(url: string): Promise<AddImageResponse> {
-  const response = await fetch("/api/covers/images", {
+  const response = await fetch("/api/covers", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -71,7 +71,7 @@ export async function addImage(url: string): Promise<AddImageResponse> {
  * Supprime une image du cache
  */
 export async function deleteImage(pk: string): Promise<void> {
-  const response = await fetch(`/api/covers/images/${pk}`, {
+  const response = await fetch(`/api/covers/${pk}`, {
     method: "DELETE",
   });
 
@@ -85,7 +85,7 @@ export async function deleteImage(pk: string): Promise<void> {
  * Purge complètement le cache
  */
 export async function purgeCache(): Promise<void> {
-  const response = await fetch("/api/covers/images", {
+  const response = await fetch("/api/covers", {
     method: "DELETE",
   });
 
@@ -99,7 +99,7 @@ export async function purgeCache(): Promise<void> {
  * Consolide le cache (re-télécharge les images manquantes)
  */
 export async function consolidateCache(): Promise<void> {
-  const response = await fetch("/api/covers/images/consolidate", {
+  const response = await fetch("/api/covers/consolidate", {
     method: "POST",
   });
 

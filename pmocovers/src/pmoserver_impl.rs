@@ -116,29 +116,34 @@ impl CoverCacheExt for Server {
     async fn init_cover_cache(&mut self, cache_dir: &str, limit: usize) -> anyhow::Result<Arc<Cache>> {
         let cache = Arc::new(Cache::new(cache_dir, limit)?);
 
-        // Enregistrer les routes HTTP classiques
-        self.add_handler_with_state("/covers/images", get_cover_image, cache.clone()).await;
+        // Enregistrer les routes HTTP classiques pour servir les images
+        let image_router = Router::new()
+            .route("/{pk}", get(get_cover_image))
+            .route("/{pk}/{size}", get(get_cover_variant))
+            .with_state(cache.clone());
+
+        self.add_router("/covers/images", image_router).await;
         self.add_handler_with_state("/covers/stats", get_cover_stats, cache.clone()).await;
 
         // Router API RESTful
-        // Router API RESTful monté sur /api/covers
+        // Router API RESTful qui sera nesté sous /api/covers par add_openapi
         let api_router = Router::new()
             // Liste et ajout
             .route(
-                "/images/",
+                "/",
                 get(api::list_images)       // GET /api/covers
                     .post(api::add_image)   // POST /api/covers
                     .delete(api::purge_cache), // DELETE /api/covers
             )
             // Ressource unique
             .route(
-                "/images/{pk}",
+                "/{pk}",
                 get(api::get_image_info)      // GET /api/covers/{pk}
                     .delete(api::delete_image), // DELETE /api/covers/{pk}
             )
             // Action spécifique
             .route(
-                "/images/consolidate",
+                "/consolidate",
                 post(api::consolidate_cache), // POST /api/covers/consolidate
             )
             .with_state(cache.clone());
@@ -147,7 +152,9 @@ impl CoverCacheExt for Server {
         let openapi = crate::ApiDoc::openapi();
 
         // Enregistrer l'API avec Swagger UI
-        // /api/covers/images... et /swagger-ui/covers
+        // Le router sera nesté automatiquement sous /api/covers par add_openapi
+        // Routes finales: /api/covers, /api/covers/{pk}, /api/covers/consolidate
+        // Swagger UI sera disponible à /swagger-ui/covers
         self.add_openapi(api_router, openapi, "covers").await;
 
         Ok(cache)

@@ -131,6 +131,29 @@ impl Server {
         *r = std::mem::take(&mut *r).nest(path, route);
     }
 
+    /// Add a new router safely:
+    /// - If `path` starts with '/', it is merged at root level.
+    /// - Otherwise, it is nested under the given subpath.
+    pub async fn add_router(&mut self, path: &str, route: Router) {
+        let mut r = self.router.write().await;
+
+        // Take current router without losing content
+        let current = std::mem::take(&mut *r);
+
+        let combined = if path.starts_with('/') {
+            // Absolute path => merge directly at root
+            tracing::debug!("Merging router at root path: {}", path);
+            current.merge(route)
+        } else {
+            // Relative path => nest under the given path
+            let normalized = format!("/{}", path.trim_start_matches('/'));
+            tracing::debug!("Nesting router under: {}", normalized);
+            current.nest(&normalized, route)
+        };
+
+        *r = combined;
+    }
+    
     /// Ajoute un répertoire de fichiers statiques
     ///
     /// Sert des fichiers embarqués via `RustEmbed`. Les fichiers sont compilés
@@ -455,7 +478,7 @@ impl Server {
     ///
     /// Résultat :
     ///
-    /// - `/users` et `/products` sont accessibles via Axum.
+    /// - `/api/api1/users` et `/api/api2/products` sont accessibles via Axum.
     /// - `/swagger-ui/api1` et `/swagger-ui/api2` affichent la documentation Swagger correspondante.
     /// - `/api-docs/api1.json` et `/api-docs/api2.json` fournissent les spécifications OpenAPI respectives.
 
@@ -480,11 +503,15 @@ impl Server {
         let openapi_json_path_static: &'static str = Box::leak(openapi_json_path.into_boxed_str());
 
         let swagger = SwaggerUi::new(swagger_path_static).url(openapi_json_path_static, openapi);
-        
+
+        // Nester le router API sous /api/{name}
+        let base_path = format!("/api/{}", name);
+        let nested_router = Router::new().nest(&base_path, api_router);
+
         // Fusionner avec le router principal
         let mut r = self.router.write().await;
         let mut combined = std::mem::take(&mut *r);
-        combined = combined.merge(api_router).merge(swagger);
+        combined = combined.merge(nested_router).merge(swagger);
         *r = combined;
     }
     /// Démarre le serveur HTTP
