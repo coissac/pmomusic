@@ -1,6 +1,6 @@
 host:
   http_port: "8080"
-  cover_cache: 
+  cover_cache:
     directory: "./.pmomusic_covers"
     size: 2000
 devices:

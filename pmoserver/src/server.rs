@@ -13,6 +13,7 @@
 //! - 📚 **Documentation API** : OpenAPI/Swagger automatique avec `add_openapi()`
 //! - ⚡ **Gestion gracieuse** : Arrêt propre sur Ctrl+C
 
+use crate::logs::{LogState, LoggingOptions, init_logging, log_dump, log_sse};
 use axum::handler::Handler;
 use axum::response::Redirect;
 use axum::routing::get;
@@ -25,7 +26,6 @@ use std::{net::SocketAddr, sync::Arc};
 use tokio::{signal, sync::RwLock, task::JoinHandle};
 use tracing::info;
 use utoipa_swagger_ui::SwaggerUi;
-use crate::logs::{LogState, LoggingOptions, init_logging, log_sse, log_dump};
 
 /// Info serveur sérialisable
 #[derive(Clone, Serialize, utoipa::ToSchema)]
@@ -149,7 +149,7 @@ impl Server {
     /// ```ignore
     /// use pmoupnp::server::Server;
     /// use rust_embed::RustEmbed;
-    /// 
+    ///
     /// #[derive(RustEmbed, Clone)]
     /// #[folder = "static/"]
     /// struct Assets;
@@ -166,9 +166,9 @@ impl Server {
         E: RustEmbed + Clone + Send + Sync + 'static,
     {
         let serve = ServeEmbed::<E>::new();
-        
+
         let mut r = self.router.write().await;
-        
+
         if path == "/" {
             *r = std::mem::take(&mut *r).fallback_service(serve);
         } else {
@@ -226,9 +226,9 @@ impl Server {
             axum_embed::FallbackBehavior::Ok,
             Some("index.html".to_string()),
         );
-        
+
         let mut r = self.router.write().await;
-        
+
         if path == "/" {
             *r = std::mem::take(&mut *r).fallback_service(serve);
         } else {
@@ -290,18 +290,18 @@ impl Server {
     /// use axum::extract::State;
     /// use axum::response::sse::{Event, Sse, KeepAlive};
     /// use tokio::sync::broadcast;
-    /// 
+    ///
     /// #[derive(Clone)]
-    /// struct LogState { 
-    ///     tx: broadcast::Sender<String> 
+    /// struct LogState {
+    ///     tx: broadcast::Sender<String>
     /// }
-    /// 
-    /// impl LogState { 
-    ///     fn subscribe(&self) -> broadcast::Receiver<String> { 
-    ///         self.tx.subscribe() 
-    ///     } 
+    ///
+    /// impl LogState {
+    ///     fn subscribe(&self) -> broadcast::Receiver<String> {
+    ///         self.tx.subscribe()
+    ///     }
     /// }
-    /// 
+    ///
     /// async fn log_sse(State(state): State<LogState>) -> Sse<impl futures::Stream<Item = Result<Event, std::convert::Infallible>>> {
     ///     let mut rx = state.subscribe();
     ///     let stream = async_stream::stream! {
@@ -321,9 +321,7 @@ impl Server {
         T: 'static,
         S: Clone + Send + Sync + 'static,
     {
-        let route = Router::new()
-            .route("/", get(handler))
-            .with_state(state);
+        let route = Router::new().route("/", get(handler)).with_state(state);
 
         let mut r = self.router.write().await;
         *r = std::mem::take(&mut *r).nest(path, route);
@@ -391,14 +389,16 @@ impl Server {
         }
     }
 
-    /// Ajoute une API documentée avec OpenAPI
+    /// Ajoute une API documentée avec OpenAPI et Swagger UI
     ///
-    /// Monte un routeur d'API sous `/api` et active Swagger UI sur `/swagger-ui`
+    /// Cette méthode fusionne le `api_router` fourni avec le router principal du serveur.
+    /// Chaque appel peut ajouter une nouvelle API distincte, avec sa propre documentation Swagger.
     ///
     /// # Arguments
     ///
     /// * `api_router` - Router Axum contenant les routes API
-    /// * `openapi` - Spécification OpenAPI générée par utoipa
+    /// * `openapi` - Spécification OpenAPI générée par `utoipa`
+    /// * `name` - Nom unique pour cette API, utilisé pour différencier le chemin Swagger UI et le JSON OpenAPI
     ///
     /// # Exemple
     ///
@@ -418,7 +418,7 @@ impl Server {
     ///     paths(get_users),
     ///     components(schemas(User))
     /// )]
-    /// struct ApiDoc;
+    /// struct ApiDoc1;
     ///
     /// #[utoipa::path(
     ///     get,
@@ -429,24 +429,64 @@ impl Server {
     ///     Json(vec![])
     /// }
     ///
-    /// let api_router = Router::new()
-    ///     .route("/users", get(get_users));
+    /// #[derive(utoipa::OpenApi)]
+    /// #[openapi(
+    ///     paths(get_products),
+    ///     components(schemas(Product))
+    /// )]
+    /// struct ApiDoc2;
     ///
-    /// server.add_openapi(api_router, ApiDoc::openapi()).await;
+    /// #[utoipa::path(
+    ///     get,
+    ///     path = "/products",
+    ///     responses((status = 200, description = "List products"))
+    /// )]
+    /// async fn get_products() -> Json<Vec<Product>> {
+    ///     Json(vec![])
+    /// }
+    ///
+    /// let api_router1 = Router::new().route("/users", get(get_users));
+    /// let api_router2 = Router::new().route("/products", get(get_products));
+    ///
+    /// // Ajouter les deux API au serveur, chacune avec son nom unique
+    /// server.add_openapi(api_router1, ApiDoc1::openapi(), "api1").await;
+    /// server.add_openapi(api_router2, ApiDoc2::openapi(), "api2").await;
     /// ```
-    pub async fn add_openapi(&mut self, api_router: Router, openapi: utoipa::openapi::OpenApi) {
-        // Stocker le routeur API
+    ///
+    /// Résultat :
+    ///
+    /// - `/users` et `/products` sont accessibles via Axum.
+    /// - `/swagger-ui/api1` et `/swagger-ui/api2` affichent la documentation Swagger correspondante.
+    /// - `/api-docs/api1.json` et `/api-docs/api2.json` fournissent les spécifications OpenAPI respectives.
+
+    pub async fn add_openapi(
+        &mut self,
+        api_router: Router,
+        openapi: utoipa::openapi::OpenApi,
+        name: &str, // nom unique pour différencier Swagger et OpenAPI
+    ) {
+        use axum::routing::get;
+        use utoipa_swagger_ui::SwaggerUi;
+
+        // Stocker le router API dans self.api_router si tu veux y accéder plus tard
         let mut api_r = self.api_router.write().await;
-        *api_r = Some(api_router);
+        *api_r = Some(api_router.clone());
 
-        // Ajouter Swagger UI
-        let swagger = SwaggerUi::new("/swagger-ui")
-            .url("/api-docs/openapi.json", openapi);
+        // Générer des chemins uniques pour Swagger UI et OpenAPI JSON
+        let swagger_path = format!("/swagger-ui/{}", name);
+        let swagger_path_static: &'static str = Box::leak(swagger_path.into_boxed_str());
 
+        let openapi_json_path = format!("/api-docs/{}.json", name);
+        let openapi_json_path_static: &'static str = Box::leak(openapi_json_path.into_boxed_str());
+
+        let swagger = SwaggerUi::new(swagger_path_static).url(openapi_json_path_static, openapi);
+        
+        // Fusionner avec le router principal
         let mut r = self.router.write().await;
-        *r = std::mem::take(&mut *r).merge(swagger);
+        let mut combined = std::mem::take(&mut *r);
+        combined = combined.merge(api_router).merge(swagger);
+        *r = combined;
     }
-
     /// Démarre le serveur HTTP
     ///
     /// Lance le serveur sur le port configuré et met en place la gestion
@@ -465,7 +505,10 @@ impl Server {
     /// ```
     pub async fn start(&mut self) {
         let addr = SocketAddr::from(([0, 0, 0, 0], self.http_port));
-        info!("Server {} running at [http://{}:{}](http://{}:{})", self.name, self.base_url, self.http_port, self.base_url, self.http_port);
+        info!(
+            "Server {} running at [http://{}:{}](http://{}:{})",
+            self.name, self.base_url, self.http_port, self.base_url, self.http_port
+        );
 
         // Merger le routeur API si présent
         let api_router = self.api_router.read().await;
@@ -545,8 +588,10 @@ impl Server {
         let log_state = init_logging(options);
 
         // Enregistrer automatiquement les routes de logging
-        self.add_handler_with_state("/log-sse", log_sse, log_state.clone()).await;
-        self.add_handler_with_state("/log-dump", log_dump, log_state.clone()).await;
+        self.add_handler_with_state("/log-sse", log_sse, log_state.clone())
+            .await;
+        self.add_handler_with_state("/log-dump", log_dump, log_state.clone())
+            .await;
 
         self.log_state = Some(log_state);
     }
@@ -580,7 +625,7 @@ impl ServerBuilder {
         Self {
             name: "PMO-Music-Server".to_string(),
             base_url: config.get_base_url(),
-            http_port: config.get_http_port()
+            http_port: config.get_http_port(),
         }
     }
 

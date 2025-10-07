@@ -9,6 +9,7 @@ use pmoserver::{
     ServerBuilder
 };
 use pmoapp::{Webapp, WebAppExt};
+use pmocovers::CoverCacheExt;
 use tracing::info;
 
 #[tokio::main]
@@ -19,12 +20,25 @@ async fn main() {
     // Initialiser le logging et enregistrer les routes de logs
     server.init_logging(LoggingOptions::default()).await;
 
+        
+    info!("📡 Registering the cover cache...");
+    let cache = server.init_cover_cache_configured()
+    .await
+    .expect("Cannot initialise the image cache");
+
+    info!("✅ Cover cache ready at {}",
+        cache.cache_dir(),
+    );
+
+
+
     // Routes de base
     server
         .add_route("/info", || async {
             serde_json::json!({"version": "1.0.0"})
         })
         .await;
+
 
     // Ajouter la webapp via le trait WebAppExt
     info!("📡 Registering Web application...");
