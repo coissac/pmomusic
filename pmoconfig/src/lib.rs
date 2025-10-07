@@ -40,9 +40,12 @@ impl Clone for Config {
 }
 
 impl Config {
+
     pub fn load_config(filename: &str) -> Result<Self> {
         let mut path = filename.to_string();
         let mut data: Option<Vec<u8>> = None;
+
+        let mut default_value: Value = serde_yaml::from_str(DEFAULT_CONFIG)?;
 
         // Essayer de charger depuis différents emplacements
         if !filename.is_empty() {
@@ -97,8 +100,11 @@ impl Config {
             DEFAULT_CONFIG.as_bytes().to_vec()
         };
 
-        let mut config_value: Value = serde_yaml::from_slice(&yaml_data)?;
-        config_value = Self::lower_keys_value(config_value);
+
+        let external_value: Value = serde_yaml::from_slice(&yaml_data)?;
+        merge_yaml(&mut default_value, &external_value);
+        let mut config_value  = Self::lower_keys_value(default_value);
+
         Self::apply_env_overrides(&mut config_value);
 
         if path.is_empty() || !Self::is_writable(&path) {
@@ -175,8 +181,10 @@ impl Config {
     fn get_value_internal(data: &Value, path: &[&str]) -> Result<Value> {
         let mut current = data;
         for (i, key) in path.iter().enumerate() {
+
             if let Value::Mapping(map) = current {
                 let key = key.to_lowercase();
+
                 if let Some(next) = map.get(&Value::String(key)) {
                     current = next;
                 } else {
@@ -316,4 +324,18 @@ impl Config {
 /// Retourne l'instance globale
 pub fn get_config() -> Arc<Config> {
     CONFIG.clone()
+}
+
+fn merge_yaml(default: &mut Value, external: &Value) {
+    match (default, external) {
+        (Value::Mapping(dmap), Value::Mapping(emap)) => {
+            for (k, v) in emap {
+                match dmap.get_mut(k) {
+                    Some(dv) => merge_yaml(dv, v),
+                    None => { dmap.insert(k.clone(), v.clone()); }
+                }
+            }
+        }
+        (d, e) => *d = e.clone(), // pour les scalaires ou séquences, on remplace
+    }
 }

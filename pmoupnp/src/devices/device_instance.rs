@@ -87,6 +87,11 @@ impl UpnpInstance for DeviceInstance {
             format!("uuid:{}_{}", model.udn_prefix(), uuid::Uuid::new_v4())
         };
 
+        // Obtenir l'IP locale et le port depuis la configuration
+        let local_ip = pmoutils::guess_local_ip();
+        let port = pmoconfig::get_config().get_http_port();
+        let server_base_url = format!("http://{}:{}", local_ip, port);
+
         Self {
             object: UpnpObjectType {
                 name: model.get_name().to_string(),
@@ -94,7 +99,7 @@ impl UpnpInstance for DeviceInstance {
             },
             model: Arc::new(model.clone()),
             udn,
-            server_base_url: "http://localhost:8080".to_string(),
+            server_base_url,
             services: RwLock::new(HashMap::new()),
             devices: RwLock::new(HashMap::new()),
         }
@@ -184,8 +189,9 @@ impl DeviceInstance {
     }
 
     /// Retourne la route du device (chemin relatif).
+    /// Utilise l'UDN pour garantir l'unicité si plusieurs devices du même type existent.
     pub fn route(&self) -> String {
-        format!("/device/{}", self.get_name())
+        format!("/device/{}", self.udn())
     }
 
     /// Retourne la route de description du device.
@@ -245,7 +251,7 @@ impl DeviceInstance {
     }
 
     /// Enregistre toutes les URLs du device et de ses services dans le serveur.
-    pub fn register_urls<'a, S: crate::UpnpServer + ?Sized>(&'a self, server: &'a mut S) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), DeviceError>> + 'a>> {
+    pub fn register_urls<'a>(&'a self, server: &'a mut pmoserver::Server) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), DeviceError>> + 'a>> {
         Box::pin(async move {
             info!(
                 "✅ Device description for {} available at: {}{}",
@@ -316,15 +322,53 @@ impl DeviceInstance {
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
 
-        let mut xml = String::from_utf8_lossy(&xml_output).to_string();
-
-        // Ajouter l'en-tête XML
-        xml.insert_str(0, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+        let xml = String::from_utf8_lossy(&xml_output).to_string();
 
         (
             StatusCode::OK,
             [(axum::http::header::CONTENT_TYPE, "text/xml; charset=\"utf-8\"")],
             xml,
         ).into_response()
+    }
+
+    /// Crée un SsdpDevice configuré pour ce device UPnP.
+    ///
+    /// Cette méthode simplifie la création d'un device SSDP en configurant automatiquement :
+    /// - L'UDN du device
+    /// - Le type de device
+    /// - La location (URL de description)
+    /// - Le serveur (User-Agent avec OS/version détecté automatiquement)
+    /// - Les types de notification pour tous les services
+    ///
+    /// # Arguments
+    ///
+    /// * `app_name` - Nom de l'application (ex: "PMOMusic")
+    /// * `app_version` - Version de l'application (ex: "1.0")
+    ///
+    /// # Exemple
+    ///
+    /// ```ignore
+    /// let renderer_instance = MEDIA_RENDERER.create_instance();
+    /// let ssdp_device = renderer_instance.to_ssdp_device("PMOMusic", "1.0");
+    /// ssdp_server.add_device(ssdp_device);
+    /// ```
+    pub fn to_ssdp_device(&self, app_name: &str, app_version: &str) -> crate::ssdp::SsdpDevice {
+        let location = format!("{}{}", self.base_url(), self.description_route());
+        let os_string = pmoutils::get_os_string();
+        let server_string = format!("{} UPnP/1.1 {}/{}", os_string, app_name, app_version);
+
+        let mut ssdp_device = crate::ssdp::SsdpDevice::new(
+            self.udn().to_string(),
+            self.model.device_type(),
+            location,
+            server_string,
+        );
+
+        // Ajouter les types de notification pour chaque service
+        for service in self.services() {
+            ssdp_device.add_notification_type(service.service_type());
+        }
+
+        ssdp_device
     }
 }

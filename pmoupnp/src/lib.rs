@@ -1,17 +1,18 @@
 mod object_trait;
 mod object_set;
+mod server;
 
 pub mod actions;
 pub mod devices;
 pub mod mediarenderer;
-pub mod server;
 pub mod services;
+pub mod soap;
+pub mod ssdp;
 pub mod state_variables;
 pub mod value_ranges;
 pub mod variable_types;
 
-// Re-exports
-pub use server::UpnpServer;
+
 
 
 use std::{collections::HashMap, sync::Arc};
@@ -19,6 +20,7 @@ use std::{collections::HashMap, sync::Arc};
 use std::sync::RwLock;
 
 pub use crate::object_trait::*;
+pub use crate::server::UpnpServer;
 
 #[derive(Debug, Clone)]
 pub struct UpnpObjectType {

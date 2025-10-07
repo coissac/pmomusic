@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use std::sync::RwLock;
 
-use crate::{UpnpDeepClone, UpnpObjectSet, UpnpObjectSetError, UpnpSet, UpnpTypedObject};
+use crate::{UpnpDeepClone, UpnpObjectSet, UpnpObjectSetError, UpnpTypedObject};
 
 /// Implémentation du clonage profond pour `UpnpObjectSet`.
 ///

@@ -304,7 +304,7 @@ impl ServiceInstance {
     /// # Errors
     ///
     /// Retourne une erreur si l'enregistrement des routes échoue.
-    pub async fn register_urls<S: crate::UpnpServer + ?Sized>(&self, server: &mut S) -> Result<(), ServiceError> {
+    pub async fn register_urls(&self, server: &mut pmoserver::Server) -> Result<(), ServiceError> {
         let device = self.device.read().unwrap();
         let device_name = device.as_ref().map(|d| d.get_name().clone()).unwrap_or_else(|| "unknown".to_string());
         let server_url = device.as_ref().map(|d| d.base_url().to_string()).unwrap_or_default();
@@ -395,11 +395,8 @@ impl ServiceInstance {
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
 
-        let mut xml = String::from_utf8_lossy(&xml_output).to_string();
-        
-        // Ajouter l'en-tête XML
-        xml.insert_str(0, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-        
+        let xml = String::from_utf8_lossy(&xml_output).to_string();
+
         (
             StatusCode::OK,
             [(axum::http::header::CONTENT_TYPE, "text/xml; charset=\"utf-8\"")],

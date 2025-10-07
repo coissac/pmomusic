@@ -1,57 +1,69 @@
-use pmoupnp::{mediarenderer::avtransport::AVTTRANSPORT, UpnpObject};
+use pmoupnp::{
+    mediarenderer::MEDIA_RENDERER,
+    ssdp::SsdpServer,
+    UpnpServer,
+    UpnpModel,
+};
 use pmoserver::{
-    logs::{log_dump, log_sse, LogState, SseLayer},
+    logs::LoggingOptions,
     ServerBuilder
 };
-use pmoapp::Webapp;
-use tracing_subscriber::Registry;
-use tracing_subscriber::prelude::*;
+use pmoapp::{Webapp, WebAppExt};
+use pmocovers::CoverCacheExt;
 use tracing::info;
 
 #[tokio::main]
 async fn main() {
-    // Charger la config
-
+    // Créer le serveur
     let mut server = ServerBuilder::new_configured().build();
 
-    // Ajouter des routes
-    server
-        .add_route("/hello", || async {
-            serde_json::json!({"message": "Hello World"})
-        })
-        .await;
+    // Initialiser le logging et enregistrer les routes de logs
+    server.init_logging(LoggingOptions::default()).await;
 
+        
+    info!("📡 Registering the cover cache...");
+    let cache = server.init_cover_cache_configured()
+    .await
+    .expect("Cannot initialise the image cache");
+
+    info!("✅ Cover cache ready at {}",
+        cache.cache_dir(),
+    );
+
+
+
+    // Routes de base
     server
         .add_route("/info", || async {
             serde_json::json!({"version": "1.0.0"})
         })
         .await;
 
-    server.add_spa::<Webapp>("/app").await;
 
-    // Gère la sortie des logs et sur le serveur SSE pour l'interface web et sur la console
-    let log_state = LogState::new(1000);
-    let subscriber = Registry::default()
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_target(true)
-                .with_level(true)
-                .with_ansi(true), // Couleurs dans le terminal
-        )
-        .with(SseLayer::new(log_state.clone()));
-    tracing::subscriber::set_global_default(subscriber).unwrap();
+    // Ajouter la webapp via le trait WebAppExt
+    info!("📡 Registering Web application...");
+    server.add_webapp_with_redirect::<Webapp>("/app").await;
 
-    server
-        .add_handler_with_state("/log-sse", log_sse, log_state.clone())
-        .await;
-    server
-        .add_handler_with_state("/log-dump", log_dump, log_state.clone())
-        .await;
+    info!("📡 Registering MediaRenderer...");
+    let renderer_instance = server.register_device(MEDIA_RENDERER.clone())
+        .await
+        .expect("Failed to register MediaRenderer routes");
 
-    server.add_redirect("/", "/app").await;
+    info!("✅ MediaRenderer ready at {}{}",
+        renderer_instance.base_url(),
+        renderer_instance.description_route()
+    );
 
-    info!("{}",AVTTRANSPORT.to_markdown());
-    info!("{}",AVTTRANSPORT.scpd_xml());
+    // Créer et démarrer le serveur SSDP
+    info!("📡 Starting SSDP discovery...");
+    let mut ssdp_server = SsdpServer::new();
+    ssdp_server.start().expect("Failed to start SSDP server");
+
+    // Créer et enregistrer le device SSDP pour le MediaRenderer
+    let ssdp_device = renderer_instance
+        .to_ssdp_device("PMOMusic", "1.0");
+    ssdp_server.add_device(ssdp_device);
+    info!("✅ SSDP announcements sent for MediaRenderer");
 
     server.start().await;
     server.wait().await;

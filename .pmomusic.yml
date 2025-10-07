@@ -1,9 +1,15 @@
+host:
+  http_port: '8080'
+  cover_cache:
+    directory: ./.pmomusic_covers
+    size: 2000
 devices:
   mediarenderer:
+    mpd_renderer: null
     fakerenderer:
       udn: d7eaad15-7d21-4411-926a-bc1eea0713db
+    mediarenderer:
+      udn: f9ef6c21-0ed3-470c-9846-bc1ae85fea62
   mediaserver:
     qobuz:
       udn: 28963b75-4c5f-4da7-b10e-ffafd
-host:
-  http_port: '8080'

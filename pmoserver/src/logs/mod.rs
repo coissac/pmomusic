@@ -19,6 +19,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
+use tracing_subscriber::{Registry, layer::SubscriberExt};
 
 /// Représente une entrée de log
 #[derive(Debug, Clone, Serialize)]
@@ -156,4 +157,61 @@ fn filter_entry(entry: &LogEntry, q: &LogQuery) -> bool {
     }
 
     allowed
+}
+
+/// Options d'initialisation du système de logging
+#[derive(Debug, Clone)]
+pub struct LoggingOptions {
+    /// Capacité du buffer circulaire (nombre d'entrées conservées)
+    pub buffer_capacity: usize,
+    /// Activer la sortie vers stderr/stdout
+    pub enable_console: bool,
+}
+
+impl Default for LoggingOptions {
+    fn default() -> Self {
+        Self {
+            buffer_capacity: 1000,
+            enable_console: true,
+        }
+    }
+}
+
+/// Initialise le système de logging avec SSE et optionnellement la console
+///
+/// # Arguments
+/// * `options` - Options de configuration du logging
+///
+/// # Retourne
+/// Le `LogState` qui peut être utilisé pour ajouter les routes de logging au serveur
+///
+/// # Exemple
+/// ```rust,no_run
+/// use pmoserver::logs::{init_logging, LoggingOptions};
+///
+/// let log_state = init_logging(LoggingOptions {
+///     buffer_capacity: 1000,
+///     enable_console: true,
+/// });
+/// ```
+pub fn init_logging(options: LoggingOptions) -> LogState {
+    let log_state = LogState::new(options.buffer_capacity);
+
+    let subscriber = Registry::default().with(SseLayer::new(log_state.clone()));
+
+    if options.enable_console {
+        let subscriber = subscriber.with(
+            tracing_subscriber::fmt::layer()
+                .with_target(true)
+                .with_level(true)
+                .with_ansi(true),
+        );
+        tracing::subscriber::set_global_default(subscriber)
+            .expect("Failed to set global default subscriber");
+    } else {
+        tracing::subscriber::set_global_default(subscriber)
+            .expect("Failed to set global default subscriber");
+    }
+
+    log_state
 }
