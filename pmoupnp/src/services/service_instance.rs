@@ -1,4 +1,32 @@
 //! Implémentation de ServiceInstance.
+//!
+//! Ce module contient l'implémentation complète de [`ServiceInstance`],
+//! qui représente une instance active d'un service UPnP.
+//!
+//! # Composants principaux
+//!
+//! - [`ServiceInstance`] : Structure principale contenant l'état du service
+//! - [`event_sub_handler`] : Handler Axum pour les abonnements aux événements
+//! - [`control_handler`] : Handler Axum pour les appels SOAP
+//!
+//! # Gestion des événements
+//!
+//! L'instance gère automatiquement :
+//! - Les souscriptions aux événements (SUBSCRIBE/UNSUBSCRIBE)
+//! - L'envoi d'événements initiaux aux nouveaux abonnés
+//! - Les notifications périodiques des changements d'état
+//! - Le séquençage des messages par abonné
+//!
+//! # Architecture
+//!
+//! ```text
+//! ServiceInstance
+//! ├── Variables d'état (StateVarInstanceSet)
+//! ├── Actions (ActionInstanceSet)
+//! ├── Abonnés (HashMap<SID, Callback>)
+//! ├── Buffer de changements (Mutex<HashMap>)
+//! └── Séquences (Mutex<HashMap<SID, u32>>)
+//! ```
 
 use axum::{
     body::Body,
@@ -224,6 +252,16 @@ impl UpnpObject for ServiceInstance {
 
 impl ServiceInstance {
     /// Retourne l'identifiant du service.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use pmoupnp::services::Service;
+    /// # use pmoupnp::UpnpModel;
+    /// let service = Service::new("AVTransport".to_string());
+    /// let instance = service.create_instance();
+    /// assert_eq!(instance.identifier(), "AVTransport");
+    /// ```
     pub fn identifier(&self) -> &str {
         &self.identifier
     }
@@ -231,6 +269,16 @@ impl ServiceInstance {
     /// Retourne le type de service UPnP.
     ///
     /// Format: `urn:schemas-upnp-org:service:{name}:{version}`
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use pmoupnp::services::Service;
+    /// # use pmoupnp::UpnpModel;
+    /// let service = Service::new("AVTransport".to_string());
+    /// let instance = service.create_instance();
+    /// assert_eq!(instance.service_type(), "urn:schemas-upnp-org:service:AVTransport:1");
+    /// ```
     pub fn service_type(&self) -> String {
         self.model.service_type()
     }
@@ -238,16 +286,66 @@ impl ServiceInstance {
     /// Retourne l'ID de service UPnP.
     ///
     /// Format: `urn:upnp-org:serviceId:{identifier}`
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use pmoupnp::services::Service;
+    /// # use pmoupnp::UpnpModel;
+    /// let service = Service::new("AVTransport".to_string());
+    /// let instance = service.create_instance();
+    /// assert_eq!(instance.service_id(), "urn:upnp-org:serviceId:AVTransport");
+    /// ```
     pub fn service_id(&self) -> String {
         format!("urn:upnp-org:serviceId:{}", self.identifier)
     }
 
-    /// Raccourci pour obtenir une variable d'état par nom
+    /// Récupère une variable d'état par son nom.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Nom de la variable d'état
+    ///
+    /// # Returns
+    ///
+    /// `Some(Arc<StateVarInstance>)` si la variable existe, `None` sinon.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use pmoupnp::services::Service;
+    /// # use pmoupnp::UpnpModel;
+    /// # let service = Service::new("AVTransport".to_string());
+    /// # let instance = service.create_instance();
+    /// if let Some(var) = instance.get_variable("TransportState") {
+    ///     println!("Value: {}", var.value());
+    /// }
+    /// ```
     pub fn get_variable(&self, name: &str) -> Option<Arc<StateVarInstance>> {
         self.statevariables.get_by_name(name)
     }
 
-    /// Raccourci pour obtenir une action par nom
+    /// Récupère une action par son nom.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Nom de l'action
+    ///
+    /// # Returns
+    ///
+    /// `Some(Arc<ActionInstance>)` si l'action existe, `None` sinon.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use pmoupnp::services::Service;
+    /// # use pmoupnp::UpnpModel;
+    /// # let service = Service::new("AVTransport".to_string());
+    /// # let instance = service.create_instance();
+    /// if let Some(action) = instance.get_action("Play") {
+    ///     println!("Action found: {}", action.get_name());
+    /// }
+    /// ```
     pub fn get_action(&self, name: &str) -> Option<Arc<ActionInstance>> {
         self.actions.get_by_name(name)
     }
@@ -256,12 +354,44 @@ impl ServiceInstance {
     ///
     /// Cette méthode doit être appelée après la création du service instance
     /// pour établir la relation avec le device parent.
+    ///
+    /// # Arguments
+    ///
+    /// * `device` - Le device parent
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use pmoupnp::services::Service;
+    /// # use pmoupnp::devices::Device;
+    /// # use pmoupnp::UpnpModel;
+    /// # use std::sync::Arc;
+    /// # let service = Service::new("AVTransport".to_string());
+    /// # let device = Device::new("MediaRenderer".to_string());
+    /// let service_instance = service.create_instance();
+    /// let device_instance = Arc::new(device.create_instance());
+    /// service_instance.set_device(device_instance);
+    /// ```
     pub fn set_device(&self, device: Arc<DeviceInstance>) {
         let mut dev = self.device.write().unwrap();
         *dev = Some(device);
     }
 
     /// Retourne la route du service (chemin relatif).
+    ///
+    /// # Returns
+    ///
+    /// Chemin relatif incluant le device parent si présent.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use pmoupnp::services::Service;
+    /// # use pmoupnp::UpnpModel;
+    /// let service = Service::new("AVTransport".to_string());
+    /// let instance = service.create_instance();
+    /// assert_eq!(instance.route(), "/service/AVTransport");
+    /// ```
     pub fn route(&self) -> String {
         let device = self.device.read().unwrap();
         match device.as_ref() {
@@ -271,21 +401,64 @@ impl ServiceInstance {
     }
 
     /// Retourne la route de contrôle SOAP.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use pmoupnp::services::Service;
+    /// # use pmoupnp::UpnpModel;
+    /// let service = Service::new("AVTransport".to_string());
+    /// let instance = service.create_instance();
+    /// assert_eq!(instance.control_route(), "/service/AVTransport/control");
+    /// ```
     pub fn control_route(&self) -> String {
         format!("{}/control", self.route())
     }
 
     /// Retourne la route de souscription aux événements.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use pmoupnp::services::Service;
+    /// # use pmoupnp::UpnpModel;
+    /// let service = Service::new("AVTransport".to_string());
+    /// let instance = service.create_instance();
+    /// assert_eq!(instance.event_route(), "/service/AVTransport/event");
+    /// ```
     pub fn event_route(&self) -> String {
         format!("{}/event", self.route())
     }
 
     /// Retourne la route de la description SCPD.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use pmoupnp::services::Service;
+    /// # use pmoupnp::UpnpModel;
+    /// let service = Service::new("AVTransport".to_string());
+    /// let instance = service.create_instance();
+    /// assert_eq!(instance.scpd_route(), "/service/AVTransport/desc.xml");
+    /// ```
     pub fn scpd_route(&self) -> String {
         format!("{}/desc.xml", self.route())
     }
 
     /// Retourne l'USN (Unique Service Name).
+    ///
+    /// L'USN combine l'UUID du device parent et le type de service UPnP.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use pmoupnp::services::Service;
+    /// # use pmoupnp::UpnpModel;
+    /// let service = Service::new("AVTransport".to_string());
+    /// let instance = service.create_instance();
+    /// let usn = instance.usn();
+    /// // Format: uuid:{device-uuid}::urn:schemas-upnp-org:service:AVTransport:1
+    /// ```
     pub fn usn(&self) -> String {
         let device = self.device.read().unwrap();
         match device.as_ref() {
@@ -294,12 +467,34 @@ impl ServiceInstance {
         }
     }
 
-    /// Retourne les variables d'état.
+    /// Retourne une référence vers l'ensemble des variables d'état.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use pmoupnp::services::Service;
+    /// # use pmoupnp::UpnpModel;
+    /// let service = Service::new("AVTransport".to_string());
+    /// let instance = service.create_instance();
+    /// let vars = instance.statevariables();
+    /// println!("Variables count: {}", vars.all().len());
+    /// ```
     pub fn statevariables(&self) -> &StateVarInstanceSet {
         &self.statevariables
     }
 
-    /// Retourne les actions.
+    /// Retourne une référence vers l'ensemble des actions.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use pmoupnp::services::Service;
+    /// # use pmoupnp::UpnpModel;
+    /// let service = Service::new("AVTransport".to_string());
+    /// let instance = service.create_instance();
+    /// let actions = instance.actions();
+    /// println!("Actions count: {}", actions.all().len());
+    /// ```
     pub fn actions(&self) -> &ActionInstanceSet {
         &self.actions
     }
@@ -353,7 +548,25 @@ impl ServiceInstance {
         Ok(())
     }
 
-    /// Génère l'élément XML SCPD.
+    /// Génère l'élément XML SCPD (Service Control Protocol Description).
+    ///
+    /// Cette méthode crée un élément XML conforme à la spécification UPnP décrivant
+    /// le service, ses actions et ses variables d'état.
+    ///
+    /// # Returns
+    ///
+    /// Un élément `xmltree::Element` représentant le document SCPD.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use pmoupnp::services::Service;
+    /// # use pmoupnp::UpnpModel;
+    /// let service = Service::new("AVTransport".to_string());
+    /// let instance = service.create_instance();
+    /// let scpd = instance.scpd_element();
+    /// assert_eq!(scpd.name, "scpd");
+    /// ```
     pub fn scpd_element(&self) -> Element {
         let mut elem = Element::new("scpd");
         elem.attributes.insert(
@@ -388,7 +601,19 @@ impl ServiceInstance {
         elem
     }
 
-    /// Handler pour la description SCPD.
+    /// Handler HTTP pour la description SCPD.
+    ///
+    /// Génère et retourne le document XML SCPD décrivant le service.
+    /// Cette méthode est appelée lorsqu'un client accède à l'URL SCPD du service.
+    ///
+    /// # Returns
+    ///
+    /// Une réponse HTTP 200 avec le XML SCPD, ou 500 en cas d'erreur de sérialisation.
+    ///
+    /// # Format de réponse
+    ///
+    /// - Content-Type: `text/xml; charset="utf-8"`
+    /// - Body: Document SCPD formaté avec indentation
     async fn scpd_handler(&self) -> Response {
         let elem = self.scpd_element();
 
@@ -416,23 +641,100 @@ impl ServiceInstance {
     }
 
     /// Ajoute un abonné aux événements.
+    ///
+    /// # Arguments
+    ///
+    /// * `sid` - Identifiant de la souscription (SID)
+    /// * `callback` - URL de callback pour les notifications
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use pmoupnp::services::Service;
+    /// # use pmoupnp::UpnpModel;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// # let service = Service::new("AVTransport".to_string());
+    /// # let instance = service.create_instance();
+    /// instance.add_subscriber(
+    ///     "uuid:12345".to_string(),
+    ///     "<http://192.168.1.100:8080/callback>".to_string()
+    /// ).await;
+    /// # }
+    /// ```
     pub async fn add_subscriber(&self, sid: String, callback: String) {
         let mut subscribers = self.subscribers.write().unwrap();
         subscribers.insert(sid, callback);
     }
 
-    /// Renouvelle un abonnement.
+    /// Renouvelle un abonnement existant.
+    ///
+    /// # Arguments
+    ///
+    /// * `sid` - Identifiant de la souscription (SID)
+    /// * `timeout` - Nouvelle durée de validité (format "Second-{n}")
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use pmoupnp::services::Service;
+    /// # use pmoupnp::UpnpModel;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// # let service = Service::new("AVTransport".to_string());
+    /// # let instance = service.create_instance();
+    /// instance.renew_subscriber("uuid:12345", "Second-1800").await;
+    /// # }
+    /// ```
     pub async fn renew_subscriber(&self, sid: &str, timeout: &str) {
         info!("♻️ Renewed SID {} for timeout {}", sid, timeout);
     }
 
     /// Supprime un abonné.
+    ///
+    /// # Arguments
+    ///
+    /// * `sid` - Identifiant de la souscription (SID) à supprimer
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use pmoupnp::services::Service;
+    /// # use pmoupnp::UpnpModel;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// # let service = Service::new("AVTransport".to_string());
+    /// # let instance = service.create_instance();
+    /// instance.remove_subscriber("uuid:12345").await;
+    /// # }
+    /// ```
     pub async fn remove_subscriber(&self, sid: &str) {
         let mut subscribers = self.subscribers.write().unwrap();
         subscribers.remove(sid);
     }
 
     /// Envoie l'événement initial à un nouvel abonné.
+    ///
+    /// Lorsqu'un client s'abonne aux événements, cette méthode lui envoie
+    /// immédiatement les valeurs actuelles de toutes les variables d'état
+    /// qui envoient des notifications.
+    ///
+    /// # Arguments
+    ///
+    /// * `sid` - Identifiant de la souscription (SID)
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use pmoupnp::services::Service;
+    /// # use pmoupnp::UpnpModel;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// # let service = Service::new("AVTransport".to_string());
+    /// # let instance = service.create_instance();
+    /// instance.send_initial_event("uuid:12345".to_string()).await;
+    /// # }
+    /// ```
     pub async fn send_initial_event(&self, sid: String) {
         let callback = {
             let subscribers = self.subscribers.read().unwrap();
@@ -491,13 +793,42 @@ impl ServiceInstance {
         }
     }
 
-    /// Marque un changement à notifier.
+    /// Marque un changement de variable à notifier ultérieurement.
+    ///
+    /// Les changements sont mis en buffer et seront envoyés lors du prochain
+    /// appel à [`notify_subscribers`](Self::notify_subscribers).
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Nom de la variable d'état modifiée
+    /// * `value` - Nouvelle valeur de la variable
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use pmoupnp::services::Service;
+    /// # use pmoupnp::UpnpModel;
+    /// let service = Service::new("AVTransport".to_string());
+    /// let instance = service.create_instance();
+    /// instance.event_to_be_sent("TransportState".to_string(), "PLAYING".to_string());
+    /// ```
     pub fn event_to_be_sent(&self, name: String, value: String) {
         let mut buffer = self.changed_buffer.lock().unwrap();
         buffer.insert(name, value);
     }
 
     /// Récupère le prochain numéro de séquence pour un abonné.
+    ///
+    /// Chaque notification envoyée à un abonné doit avoir un numéro de séquence
+    /// unique et croissant.
+    ///
+    /// # Arguments
+    ///
+    /// * `sid` - Identifiant de la souscription (SID)
+    ///
+    /// # Returns
+    ///
+    /// Le prochain numéro de séquence sous forme de chaîne.
     fn next_seq(&self, sid: &str) -> String {
         let mut seqid = self.seqid.lock().unwrap();
         let counter = seqid.entry(sid.to_string()).or_insert(0);
@@ -505,7 +836,25 @@ impl ServiceInstance {
         counter.to_string()
     }
 
-    /// Notifie tous les abonnés des changements.
+    /// Notifie tous les abonnés des changements en attente.
+    ///
+    /// Cette méthode envoie les changements bufferisés à tous les abonnés actuels
+    /// via des requêtes HTTP NOTIFY. Les changements sont envoyés de manière
+    /// asynchrone dans des tâches séparées.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use pmoupnp::services::Service;
+    /// # use pmoupnp::UpnpModel;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// # let service = Service::new("AVTransport".to_string());
+    /// # let instance = service.create_instance();
+    /// instance.event_to_be_sent("TransportState".to_string(), "PLAYING".to_string());
+    /// instance.notify_subscribers().await;
+    /// # }
+    /// ```
     pub async fn notify_subscribers(&self) {
         let subscribers_copy = {
             let subscribers = self.subscribers.read().unwrap();
@@ -588,6 +937,26 @@ impl ServiceInstance {
 }
 
 /// Handler Axum pour les événements (SUBSCRIBE/UNSUBSCRIBE).
+///
+/// Gère les requêtes HTTP SUBSCRIBE et UNSUBSCRIBE selon la spécification
+/// UPnP Device Architecture.
+///
+/// # Opérations supportées
+///
+/// - `SUBSCRIBE` sans SID : Nouvelle souscription
+/// - `SUBSCRIBE` avec SID : Renouvellement d'abonnement
+/// - `UNSUBSCRIBE` : Annulation d'abonnement
+///
+/// # Arguments
+///
+/// * `instance` - L'instance du service
+/// * `headers` - En-têtes HTTP de la requête
+/// * `req` - La requête HTTP complète
+///
+/// # Returns
+///
+/// Une réponse HTTP avec le SID et le timeout pour SUBSCRIBE,
+/// ou une simple confirmation pour UNSUBSCRIBE.
 async fn event_sub_handler(
     State(instance): State<ServiceInstance>,
     headers: HeaderMap,
@@ -673,6 +1042,22 @@ async fn event_sub_handler(
 }
 
 /// Handler Axum pour le contrôle SOAP.
+///
+/// Gère les requêtes de contrôle SOAP pour invoquer des actions sur le service.
+///
+/// # Arguments
+///
+/// * `instance` - L'instance du service
+/// * `_body` - Corps de la requête SOAP (actuellement non utilisé)
+///
+/// # Returns
+///
+/// Une réponse SOAP avec le résultat de l'action.
+///
+/// # Note
+///
+/// Cette implémentation est actuellement un stub et retourne une réponse vide.
+/// Le parsing SOAP et l'exécution des actions doivent être implémentés.
 async fn control_handler(State(instance): State<ServiceInstance>, _body: String) -> Response {
     info!("📡 Control request for {}", instance.get_name());
 
