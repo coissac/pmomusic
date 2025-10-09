@@ -60,7 +60,7 @@ impl Server {
     /// # Exemple
     ///
     /// ```rust
-    /// # use pmoupnp::server::Server;
+    /// # use pmoserver::Server;
     /// let server = Server::new("MyAPI", "http://localhost:3000", 3000);
     /// ```
     pub fn new(name: impl Into<String>, base_url: impl Into<String>, http_port: u16) -> Self {
@@ -94,8 +94,8 @@ impl Server {
     ///
     /// # Exemple
     ///
-    /// ```rust,no_run
-    /// # use pmoupnp::server::Server;
+    /// ```rust,ignore
+    /// # use pmoserver::Server;
     /// # #[tokio::main]
     /// # async fn main() {
     /// # let mut server = Server::new("Test", "http://localhost:3000", 3000);
@@ -218,8 +218,8 @@ impl Server {
     ///
     /// # Exemple avec Vue.js
     ///
-    /// ```rust,no_run
-    /// # use pmoupnp::server::Server;
+    /// ```rust,ignore
+    /// # use pmoserver::Server;
     /// # use rust_embed::RustEmbed;
     /// #[derive(RustEmbed, Clone)]
     /// #[folder = "webapp/dist"]  // Build output de Vue.js
@@ -273,8 +273,8 @@ impl Server {
     ///
     /// # Exemple
     ///
-    /// ```rust,no_run
-    /// # use pmoupnp::server::Server;
+    /// ```rust,ignore
+    /// # use pmoserver::Server;
     /// # #[tokio::main]
     /// # async fn main() {
     /// # let mut server = Server::new("Test", "http://localhost:3000", 3000);
@@ -417,8 +417,8 @@ impl Server {
     ///
     /// # Exemple
     ///
-    /// ```rust,no_run
-    /// # use pmoupnp::server::Server;
+    /// ```rust,ignore
+    /// # use pmoserver::Server;
     /// # #[tokio::main]
     /// # async fn main() {
     /// # let mut server = Server::new("Test", "http://localhost:3000", 3000);
@@ -480,7 +480,7 @@ impl Server {
     ///
     /// # Exemple
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// # use pmoserver::{ServerBuilder, logs::LoggingOptions};
     /// # #[tokio::main]
     /// # async fn main() {
@@ -550,7 +550,7 @@ impl ServerBuilder {
     /// # Exemple
     ///
     /// ```rust
-    /// # use pmoupnp::server::ServerBuilder;
+    /// # use pmoserver::ServerBuilder;
     /// let mut server = ServerBuilder::new("MyAPI", "http://localhost:3000", 3000)
     ///     .build();
     /// ```

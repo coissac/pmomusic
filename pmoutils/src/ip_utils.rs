@@ -21,6 +21,8 @@ use std::net::UdpSocket;
 /// # Examples
 ///
 /// ```
+/// use pmoutils::guess_local_ip;
+///
 /// let ip = guess_local_ip();
 /// println!("IP locale détectée: {}", ip);
 /// // Affiche par exemple: "IP locale détectée: 192.168.1.42"
@@ -62,6 +64,8 @@ pub fn guess_local_ip() -> String {
 /// # Examples
 ///
 /// ```
+/// use pmoutils::ip_utils::list_all_ips;
+///
 /// let ips = list_all_ips();
 /// for (interface, addresses) in ips {
 ///     println!("Interface {}: {:?}", interface, addresses);

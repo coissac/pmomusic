@@ -146,14 +146,14 @@ impl Action {
     ///
     /// # Examples
     ///
-    /// ```rust,no_run
-    /// # use pmoupnp::actions::Action;
+    /// ```rust,ignore
+    /// # use pmoupnp::actions::{Action, ActionError};
     /// # use pmoupnp::action_handler;
     /// let mut action = Action::new("Play".to_string());
     ///
     /// let custom_handler = action_handler!(|instance, data| {
     ///     // Logique personnalisée
-    ///     data
+    ///     Ok::<(), ActionError>(())
     /// });
     ///
     /// action.set_handler(custom_handler);
