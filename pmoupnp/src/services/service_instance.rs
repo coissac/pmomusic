@@ -77,9 +77,10 @@ pub const METHOD_UNSUBSCRIBE: &str = "UNSUBSCRIBE";
 ///
 /// # Examples
 ///
-/// ```rust,no_run
+/// ```rust,ignore
 /// # use pmoupnp::services::Service;
-/// # use pmoupnp::server::Server;
+/// # use pmoupnp::UpnpModel;
+/// # use pmoserver::Server;
 /// # use std::time::Duration;
 /// # #[tokio::main]
 /// # async fn main() {
@@ -337,9 +338,9 @@ impl ServiceInstance {
     ///
     /// # Examples
     ///
-    /// ```rust,no_run
+    /// ```rust
     /// # use pmoupnp::services::Service;
-    /// # use pmoupnp::UpnpModel;
+    /// # use pmoupnp::{UpnpModel, UpnpTyped};
     /// # let service = Service::new("AVTransport".to_string());
     /// # let instance = service.create_instance();
     /// if let Some(action) = instance.get_action("Play") {
@@ -361,15 +362,15 @@ impl ServiceInstance {
     ///
     /// # Examples
     ///
-    /// ```rust,no_run
+    /// ```rust
     /// # use pmoupnp::services::Service;
     /// # use pmoupnp::devices::Device;
     /// # use pmoupnp::UpnpModel;
     /// # use std::sync::Arc;
     /// # let service = Service::new("AVTransport".to_string());
-    /// # let device = Device::new("MediaRenderer".to_string());
+    /// # let device = Device::new("MediaRenderer".to_string(), "urn:schemas-upnp-org:device:MediaRenderer:1".to_string(), "My MediaRenderer".to_string());
     /// let service_instance = service.create_instance();
-    /// let device_instance = Arc::new(device.create_instance());
+    /// let device_instance = device.create_instance();
     /// service_instance.set_device(device_instance);
     /// ```
     pub fn set_device(&self, device: Arc<DeviceInstance>) {

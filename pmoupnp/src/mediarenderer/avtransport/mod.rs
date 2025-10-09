@@ -66,6 +66,7 @@
 //!
 //! ```rust
 //! use pmoupnp::mediarenderer::avtransport::AVTTRANSPORT;
+//! use pmoupnp::UpnpTyped;
 //!
 //! // Accéder au service
 //! let service = &*AVTTRANSPORT;

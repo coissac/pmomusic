@@ -24,6 +24,7 @@
 //! use pmoupnp::services::Service;
 //! use pmoupnp::state_variables::StateVariable;
 //! use pmoupnp::variable_types::StateVarType;
+//! use pmoupnp::UpnpModel;
 //! use std::sync::Arc;
 //!
 //! // Créer un service
@@ -306,6 +307,7 @@ impl Service {
     ///
     /// ```rust
     /// # use pmoupnp::services::Service;
+    /// # use pmoupnp::UpnpTyped;
     /// let service = Service::new("AVTransport".to_string());
     /// for var in service.variables() {
     ///     println!("Variable: {}", var.get_name());
@@ -347,6 +349,7 @@ impl Service {
     ///
     /// ```rust
     /// # use pmoupnp::services::Service;
+    /// # use pmoupnp::UpnpTyped;
     /// let service = Service::new("AVTransport".to_string());
     /// for action in service.actions() {
     ///     println!("Action: {}", action.get_name());

@@ -122,8 +122,8 @@ impl ActionInstance {
     ///
     /// # Examples
     ///
-    /// ```rust,no_run
-    /// # use pmoupnp::actions::Action;
+    /// ```rust
+    /// # use pmoupnp::actions::{Action, ActionInstance};
     /// # use pmoupnp::UpnpInstance;
     /// # use std::sync::Arc;
     /// let action = Action::new("GetVolume".to_string());
@@ -192,7 +192,7 @@ impl ActionInstance {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// # use pmoupnp::actions::{Action, ActionData};
+    /// # use pmoupnp::actions::{Action, ActionData, ActionInstance};
     /// # use pmoupnp::UpnpInstance;
     /// # use std::collections::HashMap;
     /// # use std::sync::Arc;

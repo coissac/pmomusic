@@ -20,20 +20,21 @@
 //!
 //! ```rust
 //! use pmoupnp::action_handler;
+//! use pmoupnp::actions::ActionError;
 //! use std::collections::HashMap;
 //! use std::sync::Arc;
 //!
 //! // Créer un handler avec la macro
-//! let handler = action_handler!(|data| {
+//! let handler = action_handler!(|instance, data| {
 //!     // Traiter les données
-//!     data
+//!     Ok::<(), ActionError>(())
 //! });
 //!
 //! // Ou manuellement
-//! use pmoupnp::actions::{ActionData, ActionHandler};
-//! let manual_handler: ActionHandler = Arc::new(|data| {
+//! use pmoupnp::actions::{ActionData, ActionHandler, ActionInstance};
+//! let manual_handler: ActionHandler = Arc::new(|instance, data| {
 //!     Box::pin(async move {
-//!         data
+//!         Ok::<(), ActionError>(())
 //!     })
 //! });
 //! ```
@@ -144,22 +145,24 @@ pub type ActionFuture = Pin<Box<dyn Future<Output = Result<(), crate::actions::A
 ///
 /// ```rust
 /// use pmoupnp::action_handler;
+/// use pmoupnp::actions::ActionError;
 ///
 /// let handler = action_handler!(|instance, data| {
-///     // Logique métier - pas besoin de retourner quoi que ce soit
+///     // Logique métier
+///     Ok::<(), ActionError>(())
 /// });
 /// ```
 ///
 /// ## Manuellement
 ///
-/// ```rust,no_run
-/// use pmoupnp::actions::{ActionData, ActionHandler, ActionInstance};
+/// ```rust
+/// use pmoupnp::actions::{ActionData, ActionHandler, ActionInstance, ActionError};
 /// use std::sync::Arc;
 ///
 /// let handler: ActionHandler = Arc::new(|instance, data| {
 ///     Box::pin(async move {
 ///         // Votre logique async
-///         // Pas de return nécessaire
+///         Ok::<(), ActionError>(())
 ///     })
 /// });
 /// ```

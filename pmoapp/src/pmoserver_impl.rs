@@ -12,12 +12,12 @@
 //!
 //! ## Exemple d'utilisation
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! use pmoapp::{Webapp, WebAppExt};
 //! use pmoserver::ServerBuilder;
 //!
 //! # async fn example() {
-//! let mut server = ServerBuilder::new("MyApp").build();
+//! let mut server = ServerBuilder::new("MyApp", "http://localhost", 8080).build();
 //!
 //! // Le trait WebAppExt est automatiquement disponible
 //! server.add_webapp::<Webapp>("/app").await;

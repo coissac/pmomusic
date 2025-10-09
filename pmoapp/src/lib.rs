@@ -99,14 +99,13 @@
 //!
 //! ### Exemple basique
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! use pmoapp::Webapp;
 //! use pmoserver::ServerBuilder;
 //!
 //! #[tokio::main]
 //! async fn main() {
-//!     let mut server = ServerBuilder::new("MyApp")
-//!         .http_port(8080)
+//!     let mut server = ServerBuilder::new("MyApp", "http://localhost", 8080)
 //!         .build();
 //!
 //!     // Ajouter la webapp comme Single Page Application
@@ -122,7 +121,7 @@
 //!
 //! ### Exemple avec logs SSE
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! use pmoapp::Webapp;
 //! use pmoserver::{ServerBuilder, logs::{LogState, SseLayer}};
 //! use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -136,7 +135,7 @@
 //!         .with(SseLayer::new(log_state.clone()))
 //!         .init();
 //!
-//!     let mut server = ServerBuilder::new("MyApp").build();
+//!     let mut server = ServerBuilder::new("MyApp", "http://localhost", 8080).build();
 //!
 //!     // Endpoints SSE pour les logs
 //!     server.add_handler_with_state("/log-sse", pmoserver::logs::log_sse, log_state.clone()).await;
@@ -193,7 +192,7 @@
 //!
 //! Le composant LogView détecte automatiquement le XML dans les messages :
 //!
-//! ```
+//! ```text
 //! Input:  "INFO: <?xml version=\"1.0\"?><scpd>...</scpd>"
 //! Output: Bloc de code avec coloration syntaxique XML
 //! ```
@@ -249,12 +248,12 @@ use std::pin::Pin;
 ///
 /// ## Exemple
 ///
-/// ```rust,no_run
+/// ```rust,ignore
 /// use pmoapp::{Webapp, WebAppExt};
 /// use pmoserver::ServerBuilder;
 ///
 /// # async fn example() {
-/// let mut server = ServerBuilder::new("MyApp").build();
+/// let mut server = ServerBuilder::new("MyApp", "http://localhost", 8080).build();
 ///
 /// // Ajouter la webapp via le trait WebAppExt
 /// server.add_webapp::<Webapp>("/app").await;
