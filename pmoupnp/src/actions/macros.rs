@@ -24,6 +24,21 @@
 /// }
 /// ```
 ///
+/// ## Action avec handler personnalisé
+///
+/// ```ignore
+/// define_action! {
+///     pub static ACTION_NAME = "ActionName" {
+///         in "ParamName" => VARIABLE_REF,
+///         out "ResultParam" => RESULT_VAR,
+///     }
+///     with handler action_handler!(|instance, data| {
+///         // Logique personnalisée
+///         Ok(())
+///     })
+/// }
+/// ```
+///
 /// # Arguments
 ///
 /// - `ACTION_NAME` : Nom de la constante statique Rust
@@ -89,30 +104,42 @@
 /// - Initialisation paresseuse via `Lazy` (thread-safe)
 #[macro_export]
 macro_rules! define_action {
-    // Variante sans arguments
-    (pub static $name:ident = $action_name:literal) => {
-        pub static $name: once_cell::sync::Lazy<std::sync::Arc<$crate::actions::Action>> = 
+    // Variante sans arguments avec handler optionnel
+    (pub static $name:ident = $action_name:literal $(with handler $handler:expr)?) => {
+        pub static $name: once_cell::sync::Lazy<std::sync::Arc<$crate::actions::Action>> =
             once_cell::sync::Lazy::new(|| {
-                std::sync::Arc::new($crate::actions::Action::new($action_name.to_string()))
+                let mut ac = $crate::actions::Action::new($action_name.to_string());
+
+                $(
+                    ac.set_handler($handler);
+                )?
+
+                std::sync::Arc::new(ac)
             });
     };
     
-    // Variante avec arguments
+    // Variante avec arguments et handler optionnel
     (pub static $name:ident = $action_name:literal {
         $(
             $direction:ident $arg_name:literal => $var_ref:expr
         ),* $(,)?
-    }) => {
-        pub static $name: once_cell::sync::Lazy<std::sync::Arc<$crate::actions::Action>> = 
+    }
+    $(with handler $handler:expr)?
+    ) => {
+        pub static $name: once_cell::sync::Lazy<std::sync::Arc<$crate::actions::Action>> =
             once_cell::sync::Lazy::new(|| {
                 let mut ac = $crate::actions::Action::new($action_name.to_string());
-                
+
                 $(
                     ac.add_argument(
                         define_action!(@arg $direction $arg_name, $var_ref)
                     );
                 )*
-                
+
+                $(
+                    ac.set_handler($handler);
+                )?
+
                 std::sync::Arc::new(ac)
             });
     };

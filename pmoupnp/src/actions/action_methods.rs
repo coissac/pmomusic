@@ -1,16 +1,26 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use tracing::{debug, trace};
 use xmltree::{Element, XMLNode};
 
-use crate::UpnpModel;
-use crate::UpnpObject;
-use crate::UpnpObjectSetError;
-use crate::UpnpObjectType;
-use crate::UpnpTyped;
-use crate::actions::Action;
-use crate::actions::ActionInstance;
-use crate::actions::Argument;
-use crate::actions::ArgumentSet;
+use crate::{
+    action_handler,
+    UpnpModel,
+    UpnpObject,
+    UpnpObjectSetError,
+    UpnpObjectType,
+    UpnpTyped,
+    UpnpTypedInstance,
+};
+use crate::actions::{
+    Action,
+    ActionData,
+    ActionHandler,
+    ActionInstance,
+    Argument,
+    ArgumentSet,
+};
 
 impl UpnpObject for Action {
     fn to_xml_element(&self) -> Element {
@@ -42,6 +52,61 @@ impl UpnpTyped for Action {
 }
 
 impl Action {
+    /// Crée un handler par défaut pour une action.
+    ///
+    /// Ce handler logge simplement l'appel et les arguments d'entrée.
+    /// La méthode [`ActionInstance::run()`](crate::actions::ActionInstance::run) s'occupe
+    /// automatiquement de collecter les valeurs OUT après l'exécution.
+    ///
+    /// # Returns
+    ///
+    /// Un [`ActionHandler`] qui logge les entrées.
+    ///
+    /// # Comportement
+    ///
+    /// - Logge le nom de l'action
+    /// - Logge les arguments IN avec leurs valeurs
+    /// - Ne fait aucune modification (handler passif)
+    ///
+    /// # Note
+    ///
+    /// Ce handler est automatiquement assigné lors de la création d'une action.
+    /// Il peut être remplacé via [`set_handler`](Self::set_handler).
+    fn default_handler() -> ActionHandler {
+        action_handler!(|instance, data| {
+            use crate::UpnpTypedInstance;
+
+            debug!("🎬 Action '{}' called", instance.get_name());
+
+            // Logger les arguments d'entrée
+            for arg_inst in instance.arguments_set().all() {
+                let arg_model = arg_inst.as_ref().get_model();
+                if arg_model.is_in() {
+                    if let Some(value) = data.get(arg_inst.get_name()) {
+                        trace!("  IN  {} = {:?}", arg_inst.get_name(), value);
+                    }
+                }
+            }
+
+            Ok(()) // Succès - handler par défaut ne fait rien d'autre
+        })
+    }
+
+    /// Crée une nouvelle action UPnP.
+    ///
+    /// L'action est initialisée avec un handler par défaut qui logge les entrées
+    /// et retourne les valeurs des variables d'instance pour les arguments de sortie.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Nom de l'action
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use pmoupnp::actions::Action;
+    /// let mut action = Action::new("Play".to_string());
+    /// ```
     pub fn new(name: String) -> Action {
         Self {
             object: UpnpObjectType {
@@ -49,14 +114,56 @@ impl Action {
                 object_type: "Action".to_string(),
             },
             arguments: ArgumentSet::new(),
+            handle: Self::default_handler(),
         }
     }
 
+    /// Ajoute un argument à l'action.
+    ///
+    /// # Arguments
+    ///
+    /// * `arg` - Argument à ajouter
+    ///
+    /// # Errors
+    ///
+    /// Retourne une erreur si un argument avec le même nom existe déjà.
     pub fn add_argument(&mut self, arg: Arc<Argument>) -> Result<(), UpnpObjectSetError> {
         self.arguments.insert(arg)
     }
 
+    /// Retourne les arguments de l'action.
     pub fn arguments(&self) -> &ArgumentSet {
         &self.arguments
+    }
+
+    /// Définit un handler personnalisé pour cette action.
+    ///
+    /// Remplace le handler par défaut par un handler personnalisé.
+    ///
+    /// # Arguments
+    ///
+    /// * `handler` - Le nouveau handler à utiliser
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use pmoupnp::actions::Action;
+    /// # use pmoupnp::action_handler;
+    /// let mut action = Action::new("Play".to_string());
+    ///
+    /// let custom_handler = action_handler!(|instance, data| {
+    ///     // Logique personnalisée
+    ///     data
+    /// });
+    ///
+    /// action.set_handler(custom_handler);
+    /// ```
+    pub fn set_handler(&mut self, handler: ActionHandler) {
+        self.handle = handler;
+    }
+
+    /// Retourne le handler de l'action.
+    pub fn handler(&self) -> &ActionHandler {
+        &self.handle
     }
 }

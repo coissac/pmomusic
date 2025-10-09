@@ -310,6 +310,8 @@ impl DeviceInstance {
 
     /// Handler HTTP pour la description du device.
     async fn description_handler(&self) -> Response {
+        tracing::info!("📋 Device description requested for {}", self.get_name());
+
         let elem = self.description_element();
 
         let config = EmitterConfig::new()
@@ -318,11 +320,13 @@ impl DeviceInstance {
 
         let mut xml_output = Vec::new();
         if let Err(e) = elem.write_with_config(&mut xml_output, config) {
-            tracing::error!("Failed to serialize device description XML: {}", e);
+            tracing::error!("❌ Failed to serialize device description XML: {}", e);
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
 
         let xml = String::from_utf8_lossy(&xml_output).to_string();
+
+        tracing::debug!("✅ Device description generated ({} bytes)", xml.len());
 
         (
             StatusCode::OK,
