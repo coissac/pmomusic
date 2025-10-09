@@ -396,22 +396,69 @@ impl Service {
         format!("urn:schemas-upnp-org:serviceId:{}", self.name())
     }
 
+    /// Retourne l'URL de base du service.
+    ///
+    /// Cette méthode est utilisée en interne pour construire les routes du service.
     fn service_base_url(&self) -> String {
         format!("/service/{}", self.name())
     }
 
+    /// Retourne la route de la description SCPD.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use pmoupnp::services::Service;
+    /// let service = Service::new("AVTransport".to_string());
+    /// assert_eq!(service.scpd_route(), "/service/AVTransport/desc.xml");
+    /// ```
     pub fn scpd_route(&self) -> String {
         format!("{}/desc.xml", self.service_base_url())
     }
 
+    /// Retourne la route de contrôle SOAP.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use pmoupnp::services::Service;
+    /// let service = Service::new("AVTransport".to_string());
+    /// assert_eq!(service.control_route(), "/service/AVTransport/control");
+    /// ```
     pub fn control_route(&self) -> String {
         format!("{}/control", self.service_base_url())
     }
 
+    /// Retourne la route de souscription aux événements.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use pmoupnp::services::Service;
+    /// let service = Service::new("AVTransport".to_string());
+    /// assert_eq!(service.event_route(), "/service/AVTransport/event");
+    /// ```
     pub fn event_route(&self) -> String {
         format!("{}/event", self.service_base_url())
     }
 
+    /// Génère l'élément XML de la description SCPD (Service Control Protocol Description).
+    ///
+    /// Cette méthode crée un élément XML conforme à la spécification UPnP qui décrit
+    /// le service, ses actions et ses variables d'état.
+    ///
+    /// # Returns
+    ///
+    /// Un élément `xmltree::Element` représentant le document SCPD.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use pmoupnp::services::Service;
+    /// let service = Service::new("AVTransport".to_string());
+    /// let scpd = service.scpd_element();
+    /// assert_eq!(scpd.name, "scpd");
+    /// ```
     pub fn scpd_element(&self) -> Element {
         let mut scpd = Element::new("scpd");
         scpd.attributes.insert(
@@ -436,6 +483,27 @@ impl Service {
         scpd
     }
 
+    /// Génère la chaîne XML de la description SCPD.
+    ///
+    /// Cette méthode produit un document XML complet et formaté décrivant le service
+    /// selon la spécification UPnP.
+    ///
+    /// # Returns
+    ///
+    /// Une chaîne de caractères contenant le XML formaté de la description SCPD.
+    ///
+    /// # Panics
+    ///
+    /// Panique si la sérialisation XML échoue ou produit un UTF-8 invalide.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use pmoupnp::services::Service;
+    /// let service = Service::new("AVTransport".to_string());
+    /// let xml = service.scpd_xml();
+    /// assert!(xml.contains("<scpd"));
+    /// ```
     pub fn scpd_xml(&self) -> String {
         let elem = self.scpd_element();
 

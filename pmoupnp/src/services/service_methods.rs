@@ -1,4 +1,15 @@
 //! Implémentation des traits UPnP pour Service.
+//!
+//! Ce module fournit les implémentations des traits principaux du framework
+//! UPnP pour le type [`Service`]:
+//!
+//! - [`Display`] : Affichage formaté d'un service
+//! - [`UpnpTyped`] : Accès aux métadonnées de type UPnP
+//! - [`UpnpObject`] : Sérialisation XML pour la description de device
+//! - [`UpnpModel`] : Association du modèle avec son type d'instance
+//!
+//! Ces implémentations permettent aux services de s'intégrer dans
+//! l'architecture UPnP générique du framework.
 
 use xmltree::{Element, XMLNode};
 
