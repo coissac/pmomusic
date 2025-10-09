@@ -42,7 +42,7 @@ use std::{
     time::Duration,
 };
 use tokio::time;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use xmltree::{Element, EmitterConfig, XMLNode};
 
 use crate::{
@@ -499,6 +499,19 @@ impl ServiceInstance {
         &self.actions
     }
 
+    /// Retourne une action par son nom.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Nom de l'action
+    ///
+    /// # Returns
+    ///
+    /// `Some(Arc<ActionInstance>)` si trouvée, `None` sinon.
+    pub fn action(&self, name: &str) -> Option<Arc<crate::actions::ActionInstance>> {
+        self.actions.get_by_name(name)
+    }
+
     /// Enregistre les routes UPnP dans le serveur.
     ///
     /// # Errors
@@ -534,7 +547,7 @@ impl ServiceInstance {
             .await;
 
         // Handler control
-        let instance_control = self.clone();
+        let instance_control = Arc::new(self.clone());
         server
             .add_post_handler_with_state(&self.control_route(), control_handler, instance_control)
             .await;
@@ -615,6 +628,8 @@ impl ServiceInstance {
     /// - Content-Type: `text/xml; charset="utf-8"`
     /// - Body: Document SCPD formaté avec indentation
     async fn scpd_handler(&self) -> Response {
+        info!("📋 SCPD requested for service {}", self.get_name());
+
         let elem = self.scpd_element();
 
         let config = EmitterConfig::new()
@@ -623,11 +638,13 @@ impl ServiceInstance {
 
         let mut xml_output = Vec::new();
         if let Err(e) = elem.write_with_config(&mut xml_output, config) {
-            error!("Failed to serialize SCPD XML: {}", e);
+            error!("❌ Failed to serialize SCPD XML: {}", e);
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
 
         let xml = String::from_utf8_lossy(&xml_output).to_string();
+
+        debug!("✅ SCPD generated for {} ({} bytes)", self.get_name(), xml.len());
 
         (
             StatusCode::OK,
@@ -1047,43 +1064,148 @@ async fn event_sub_handler(
 ///
 /// # Arguments
 ///
-/// * `instance` - L'instance du service
-/// * `_body` - Corps de la requête SOAP (actuellement non utilisé)
+/// * `instance` - L'instance du service (Arc-wrapped)
+/// * `body` - Corps de la requête SOAP
 ///
 /// # Returns
 ///
-/// Une réponse SOAP avec le résultat de l'action.
+/// Une réponse SOAP avec le résultat de l'action, ou un SOAP fault en cas d'erreur.
 ///
-/// # Note
+/// # Erreurs
 ///
-/// Cette implémentation est actuellement un stub et retourne une réponse vide.
-/// Le parsing SOAP et l'exécution des actions doivent être implémentés.
-async fn control_handler(State(instance): State<ServiceInstance>, _body: String) -> Response {
+/// Retourne un SOAP fault dans les cas suivants :
+/// - Parsing SOAP invalide
+/// - Action non trouvée
+/// - Arguments invalides
+/// - Échec de l'exécution de l'action
+async fn control_handler(State(instance): State<Arc<ServiceInstance>>, body: String) -> Response {
+    use crate::{
+        soap::{parse_soap_action, build_soap_response, build_soap_fault, error_codes},
+        variable_types::{StateValue, UpnpVarType},
+        UpnpTypedInstance,
+    };
+    use std::collections::HashMap;
+    use tracing::debug;
+
     info!("📡 Control request for {}", instance.get_name());
 
-    // TODO: Parser le SOAP et appeler l'action correspondante
+    // Parser le SOAP pour extraire l'action et ses arguments
+    let soap_action = match parse_soap_action(body.as_bytes()) {
+        Ok(action) => action,
+        Err(e) => {
+            error!("❌ Failed to parse SOAP: {:?}", e);
+            let fault_xml = build_soap_fault(
+                "s:Client",
+                "Invalid SOAP request",
+                Some(error_codes::INVALID_ACTION),
+                Some("The SOAP request could not be parsed")
+            ).unwrap_or_else(|_| String::from("<?xml version=\"1.0\"?><s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\"><s:Body><s:Fault><faultcode>s:Server</faultcode><faultstring>Internal Error</faultstring></s:Fault></s:Body></s:Envelope>"));
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                [(axum::http::header::CONTENT_TYPE, "text/xml; charset=\"utf-8\"")],
+                fault_xml,
+            ).into_response();
+        }
+    };
 
-    let response_xml = format!(
-        r#"<?xml version="1.0"?>
-<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" 
-            s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
-    <s:Body>
-        <u:Response xmlns:u="{}">
-        </u:Response>
-    </s:Body>
-</s:Envelope>"#,
-        instance.service_type()
-    );
+    debug!("🎬 Received SOAP action: {}", soap_action.name);
 
-    (
-        StatusCode::OK,
-        [(
-            axum::http::header::CONTENT_TYPE,
-            "text/xml; charset=\"utf-8\"",
-        )],
-        response_xml,
-    )
-        .into_response()
+    // Trouver l'action correspondante dans l'instance
+    let action_instance = match instance.action(&soap_action.name) {
+        Some(action_inst) => action_inst,
+        None => {
+            error!("❌ Action not found: {}", soap_action.name);
+            let fault_xml = build_soap_fault(
+                "s:Client",
+                "Invalid Action",
+                Some(error_codes::INVALID_ACTION),
+                Some(&format!("Action '{}' not found", soap_action.name))
+            ).unwrap_or_else(|_| String::from("<?xml version=\"1.0\"?><s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\"><s:Body><s:Fault><faultcode>s:Server</faultcode><faultstring>Internal Error</faultstring></s:Fault></s:Body></s:Envelope>"));
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                [(axum::http::header::CONTENT_TYPE, "text/xml; charset=\"utf-8\"")],
+                fault_xml,
+            ).into_response();
+        }
+    };
+
+    // Convertir les arguments SOAP (String) en ActionData (StateValue)
+    let mut action_data = HashMap::new();
+    for (arg_name, arg_value) in soap_action.args {
+        // Trouver l'argument correspondant pour obtenir son type
+        if let Some(arg_inst) = action_instance.argument(&arg_name) {
+            if let Some(var_inst) = arg_inst.get_variable_instance() {
+                let var_model = var_inst.as_ref().get_model();
+                // Parser la valeur selon le type de la variable
+                match StateValue::from_string(&arg_value, &var_model.as_state_var_type()) {
+                    Ok(value) => {
+                        action_data.insert(arg_name, value);
+                    }
+                    Err(e) => {
+                        error!("❌ Failed to parse argument '{}': {:?}", arg_name, e);
+                        let fault_xml = build_soap_fault(
+                            "s:Client",
+                            "Invalid Arguments",
+                            Some(error_codes::ARGUMENT_VALUE_INVALID),
+                            Some(&format!("Invalid value for argument '{}'", arg_name))
+                        ).unwrap_or_else(|_| String::from("<?xml version=\"1.0\"?><s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\"><s:Body><s:Fault><faultcode>s:Server</faultcode><faultstring>Internal Error</faultstring></s:Fault></s:Body></s:Envelope>"));
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            [(axum::http::header::CONTENT_TYPE, "text/xml; charset=\"utf-8\"")],
+                            fault_xml,
+                        ).into_response();
+                    }
+                }
+            }
+        }
+    }
+
+    let action_data = Arc::new(action_data);
+
+    // Exécuter l'action
+    match action_instance.run(action_data).await {
+        Ok(output_data) => {
+            // Convertir les StateValue en String pour SOAP
+            let mut soap_values = HashMap::new();
+            for (key, value) in output_data.iter() {
+                soap_values.insert(key.clone(), value.to_string());
+            }
+
+            // Construire la réponse SOAP
+            let response_xml = build_soap_response(
+                &instance.service_type(),
+                &soap_action.name,
+                soap_values
+            ).unwrap_or_else(|_| {
+                build_soap_fault(
+                    "s:Server",
+                    "Action Failed",
+                    Some(error_codes::ACTION_FAILED),
+                    Some("Failed to build SOAP response")
+                ).unwrap_or_else(|_| String::from("<?xml version=\"1.0\"?><s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\"><s:Body><s:Fault><faultcode>s:Server</faultcode><faultstring>Internal Error</faultstring></s:Fault></s:Body></s:Envelope>"))
+            });
+
+            (
+                StatusCode::OK,
+                [(axum::http::header::CONTENT_TYPE, "text/xml; charset=\"utf-8\"")],
+                response_xml,
+            ).into_response()
+        }
+        Err(e) => {
+            error!("❌ Action execution failed: {:?}", e);
+            let fault_xml = build_soap_fault(
+                "s:Server",
+                "Action Failed",
+                Some(error_codes::ACTION_FAILED),
+                Some(&format!("Action execution failed: {:?}", e))
+            ).unwrap_or_else(|_| String::from("<?xml version=\"1.0\"?><s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\"><s:Body><s:Fault><faultcode>s:Server</faultcode><faultstring>Internal Error</faultstring></s:Fault></s:Body></s:Envelope>"));
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                [(axum::http::header::CONTENT_TYPE, "text/xml; charset=\"utf-8\"")],
+                fault_xml,
+            ).into_response()
+        }
+    }
 }
 
 #[cfg(test)]

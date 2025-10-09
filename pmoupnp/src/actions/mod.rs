@@ -3,6 +3,7 @@ mod errors;
 mod action_instance;
 mod action_instance_set;
 mod action_methods;
+mod action_handler;
 mod action_set_methods;
 mod arg_inst_set_methods;
 mod arg_instance_methods;
@@ -18,11 +19,58 @@ use crate::{
 use std::sync::{Arc, RwLock};
 
 pub use errors::ActionError;
+pub use action_handler::{ActionData, ActionFuture, ActionHandler};
 
-#[derive(Debug, Clone)]
+/// Action UPnP.
+///
+/// Représente une opération invocable sur un service UPnP avec ses arguments
+/// et son handler d'exécution.
+///
+/// # Structure
+///
+/// - **Arguments** : Liste d'arguments d'entrée (IN) et de sortie (OUT)
+/// - **Handler** : Fonction asynchrone qui exécute l'action
+///
+/// # Handler par défaut
+///
+/// Chaque action est créée avec un handler par défaut qui :
+/// - Logge les valeurs des arguments d'entrée
+/// - Retourne les valeurs par défaut des arguments de sortie
+///
+/// # Examples
+///
+/// ```rust
+/// use pmoupnp::actions::Action;
+/// use pmoupnp::actions::Argument;
+/// use pmoupnp::state_variables::StateVariable;
+/// use pmoupnp::variable_types::StateVarType;
+/// use std::sync::Arc;
+///
+/// let mut action = Action::new("Play".to_string());
+///
+/// // Ajouter des arguments
+/// let instance_id = Arc::new(StateVariable::new(
+///     StateVarType::UI4,
+///     "InstanceID".to_string()
+/// ));
+/// let arg = Arc::new(Argument::new_in("InstanceID".to_string(), instance_id));
+/// action.add_argument(arg);
+/// ```
+#[derive(Clone)]
 pub struct Action {
     object: UpnpObjectType,
     arguments: ArgumentSet,
+    handle: ActionHandler,
+}
+
+impl std::fmt::Debug for Action {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Action")
+            .field("object", &self.object)
+            .field("arguments", &self.arguments)
+            .field("handle", &"<ActionHandler>")
+            .finish()
+    }
 }
 
 pub type ActionSet = UpnpObjectSet<Action>;

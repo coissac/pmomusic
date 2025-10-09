@@ -5,7 +5,7 @@ use xmltree::{Element, XMLNode};
 
 use crate::{
     devices::{Device, DeviceInstance},
-    UpnpObject, UpnpModel, UpnpInstance,
+    UpnpObject, UpnpModel, UpnpInstance, UpnpTyped,
 };
 
 impl UpnpObject for Device {
@@ -119,14 +119,20 @@ impl UpnpModel for Device {
 
     /// Crée une instance du device avec ses services déjà instanciés.
     ///
-    /// Les services sont créés dans DeviceInstance::new(), cette méthode
-    /// établit uniquement les liens bidirectionnels parent-enfant.
+    /// Cette méthode :
+    /// 1. Crée l'instance du device
+    /// 2. Instancie tous les services du modèle
+    /// 3. Établit les liens bidirectionnels parent-enfant
     fn create_instance(&self) -> Arc<DeviceInstance> {
         let instance = Arc::new(DeviceInstance::new(self));
 
-        // Établir le lien parent pour chaque service
-        for service in instance.services() {
-            service.set_device(Arc::clone(&instance));
+        // Créer les instances de services depuis le modèle
+        for service_model in self.services() {
+            let service_instance = service_model.create_instance();
+            service_instance.set_device(Arc::clone(&instance));
+            if let Err(e) = instance.add_service(service_instance) {
+                tracing::error!("Failed to add service instance: {:?}", e);
+            }
         }
 
         instance
