@@ -1,28 +1,28 @@
 //! Implémentation de ServiceInstance.
 
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex, RwLock},
-    time::Duration,
-    pin::Pin,
-    future::Future,
-};
 use axum::{
+    body::Body,
     extract::{Request, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    body::Body,
+};
+use std::{
+    collections::HashMap,
+    future::Future,
+    pin::Pin,
+    sync::{Arc, Mutex, RwLock},
+    time::Duration,
 };
 use tokio::time;
-use tracing::{info, warn, error};
-use xmltree::{Element, XMLNode, EmitterConfig};
+use tracing::{error, info, warn};
+use xmltree::{Element, EmitterConfig, XMLNode};
 
 use crate::{
-    services::{Service, ServiceError},
+    UpnpInstance, UpnpObject, UpnpObjectType, UpnpTyped, UpnpTypedInstance,
     actions::{ActionInstance, ActionInstanceSet},
-    state_variables::{StateVarInstance, StateVarInstanceSet, UpnpVariable},
     devices::DeviceInstance,
-    UpnpObject, UpnpInstance, UpnpTyped, UpnpTypedInstance, UpnpObjectType,
+    services::{Service, ServiceError},
+    state_variables::{StateVarInstance, StateVarInstanceSet, UpnpVariable},
 };
 
 /// Méthodes HTTP pour les événements UPnP.
@@ -70,32 +70,31 @@ pub const METHOD_UNSUBSCRIBE: &str = "UNSUBSCRIBE";
 pub struct ServiceInstance {
     /// Métadonnées de l'objet
     object: UpnpObjectType,
-    
+
     /// Référence vers le modèle
     model: Arc<Service>,
-    
+
     /// Identifiant du service
     identifier: String,
-    
+
     /// Device parent (optionnel) - utilisé via interior mutability
     device: Arc<RwLock<Option<Arc<DeviceInstance>>>>,
-    
+
     /// Variables d'état instanciées
     statevariables: StateVarInstanceSet,
-    
+
     /// Actions instanciées
     actions: ActionInstanceSet,
-    
+
     /// Abonnés aux événements (SID -> Callback URL)
     subscribers: Arc<RwLock<HashMap<String, String>>>,
-    
+
     /// Buffer des changements en attente de notification
     changed_buffer: Arc<Mutex<HashMap<String, String>>>,
-    
+
     /// Compteurs de séquence par abonné
     seqid: Arc<Mutex<HashMap<String, u32>>>,
 }
-
 
 impl std::fmt::Debug for ServiceInstance {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -132,14 +131,14 @@ impl UpnpInstance for ServiceInstance {
         for a in model.actions() {
             // Vérifier que toutes les variables référencées existent
             let mut missing_vars = Vec::new();
-            
+
             for arg in a.arguments().all() {
                 let related_var_name = arg.state_variable().get_name();
                 if statevariables.get_by_name(related_var_name).is_none() {
                     missing_vars.push(related_var_name.to_string());
                 }
             }
-            
+
             if !missing_vars.is_empty() {
                 error!(
                     "Action '{}' references missing state variables: {:?}",
@@ -148,10 +147,10 @@ impl UpnpInstance for ServiceInstance {
                 );
                 continue;
             }
-            
+
             // Créer l'instance d'action
             let action_instance = Arc::new(ActionInstance::new(&*a));
-            
+
             // ✅ Phase 3 : ACTIVER le binding des arguments aux variables d'instance
             for arg_instance in action_instance.arguments_set().all() {
                 let var_name = arg_instance.get_model().state_variable().get_name();
@@ -160,7 +159,7 @@ impl UpnpInstance for ServiceInstance {
                     arg_instance.bind_variable(var_instance);
                 }
             }
-            
+
             if let Err(e) = actions.insert(action_instance) {
                 error!("Failed to insert action '{}': {:?}", a.get_name(), e);
             }
@@ -194,7 +193,9 @@ impl UpnpObject for ServiceInstance {
         let mut elem = Element::new("service");
 
         let mut service_type = Element::new("serviceType");
-        service_type.children.push(XMLNode::Text(self.service_type()));
+        service_type
+            .children
+            .push(XMLNode::Text(self.service_type()));
         elem.children.push(XMLNode::Element(service_type));
 
         let mut service_id = Element::new("serviceId");
@@ -206,11 +207,15 @@ impl UpnpObject for ServiceInstance {
         elem.children.push(XMLNode::Element(scpd_url));
 
         let mut control_url = Element::new("controlURL");
-        control_url.children.push(XMLNode::Text(self.control_route()));
+        control_url
+            .children
+            .push(XMLNode::Text(self.control_route()));
         elem.children.push(XMLNode::Element(control_url));
 
         let mut event_sub_url = Element::new("eventSubURL");
-        event_sub_url.children.push(XMLNode::Text(self.event_route()));
+        event_sub_url
+            .children
+            .push(XMLNode::Text(self.event_route()));
         elem.children.push(XMLNode::Element(event_sub_url));
 
         elem
@@ -241,7 +246,7 @@ impl ServiceInstance {
     pub fn get_variable(&self, name: &str) -> Option<Arc<StateVarInstance>> {
         self.statevariables.get_by_name(name)
     }
-    
+
     /// Raccourci pour obtenir une action par nom
     pub fn get_action(&self, name: &str) -> Option<Arc<ActionInstance>> {
         self.actions.get_by_name(name)
@@ -306,8 +311,14 @@ impl ServiceInstance {
     /// Retourne une erreur si l'enregistrement des routes échoue.
     pub async fn register_urls(&self, server: &mut pmoserver::Server) -> Result<(), ServiceError> {
         let device = self.device.read().unwrap();
-        let device_name = device.as_ref().map(|d| d.get_name().clone()).unwrap_or_else(|| "unknown".to_string());
-        let server_url = device.as_ref().map(|d| d.base_url().to_string()).unwrap_or_default();
+        let device_name = device
+            .as_ref()
+            .map(|d| d.get_name().clone())
+            .unwrap_or_else(|| "unknown".to_string());
+        let server_url = device
+            .as_ref()
+            .map(|d| d.base_url().to_string())
+            .unwrap_or_default();
         drop(device);
 
         info!(
@@ -320,26 +331,24 @@ impl ServiceInstance {
 
         // Handler SCPD
         let instance_scpd = self.clone();
-        server.add_handler(&self.scpd_route(), move || {
-            let instance = instance_scpd.clone();
-            async move { instance.scpd_handler().await }
-        }).await;
+        server
+            .add_handler(&self.scpd_route(), move || {
+                let instance = instance_scpd.clone();
+                async move { instance.scpd_handler().await }
+            })
+            .await;
 
         // Handler control
         let instance_control = self.clone();
-        server.add_post_handler_with_state(
-            &self.control_route(),
-            control_handler,
-            instance_control,
-        ).await;
+        server
+            .add_post_handler_with_state(&self.control_route(), control_handler, instance_control)
+            .await;
 
         // Handler événements
         let instance_event = self.clone();
-        server.add_handler_with_state(
-            &self.event_route(),
-            event_sub_handler,
-            instance_event,
-        ).await;
+        server
+            .add_handler_with_state(&self.event_route(), event_sub_handler, instance_event)
+            .await;
 
         Ok(())
     }
@@ -357,25 +366,23 @@ impl ServiceInstance {
         let mut major = Element::new("major");
         major.children.push(XMLNode::Text("1".to_string()));
         spec.children.push(XMLNode::Element(major));
-        
+
         let mut minor = Element::new("minor");
         minor.children.push(XMLNode::Text("0".to_string()));
         spec.children.push(XMLNode::Element(minor));
-        
+
         elem.children.push(XMLNode::Element(spec));
 
         // actionList
         if !self.actions.all().is_empty() {
-            elem.children.push(XMLNode::Element(
-                self.actions.to_xml_element()
-            ));
+            elem.children
+                .push(XMLNode::Element(self.actions.to_xml_element()));
         }
 
         // serviceStateTable
         if !self.statevariables.all().is_empty() {
-            elem.children.push(XMLNode::Element(
-                self.statevariables.to_xml_element()
-            ));
+            elem.children
+                .push(XMLNode::Element(self.statevariables.to_xml_element()));
         }
 
         elem
@@ -384,11 +391,11 @@ impl ServiceInstance {
     /// Handler pour la description SCPD.
     async fn scpd_handler(&self) -> Response {
         let elem = self.scpd_element();
-        
+
         let config = EmitterConfig::new()
             .perform_indent(true)
             .indent_string("  ");
-        
+
         let mut xml_output = Vec::new();
         if let Err(e) = elem.write_with_config(&mut xml_output, config) {
             error!("Failed to serialize SCPD XML: {}", e);
@@ -399,9 +406,13 @@ impl ServiceInstance {
 
         (
             StatusCode::OK,
-            [(axum::http::header::CONTENT_TYPE, "text/xml; charset=\"utf-8\"")],
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "text/xml; charset=\"utf-8\"",
+            )],
             xml,
-        ).into_response()
+        )
+            .into_response()
     }
 
     /// Ajoute un abonné aux événements.
@@ -442,10 +453,14 @@ impl ServiceInstance {
 
             tokio::spawn(async move {
                 let callback = callback.trim().trim_matches(|c| c == '<' || c == '>');
-                
-                let mut body = r#"<e:propertyset xmlns:e="urn:schemas-upnp-org:event-1-0">"#.to_string();
+
+                let mut body =
+                    r#"<e:propertyset xmlns:e="urn:schemas-upnp-org:event-1-0">"#.to_string();
                 for (name, val) in changed {
-                    body.push_str(&format!("<e:property><{0}>{1}</{0}></e:property>", name, val));
+                    body.push_str(&format!(
+                        "<e:property><{0}>{1}</{0}></e:property>",
+                        name, val
+                    ));
                 }
                 body.push_str("</e:propertyset>");
 
@@ -462,7 +477,11 @@ impl ServiceInstance {
                     .await
                 {
                     Ok(resp) => {
-                        info!("✅ Initial event sent to {}, status={}", callback, resp.status());
+                        info!(
+                            "✅ Initial event sent to {}, status={}",
+                            callback,
+                            resp.status()
+                        );
                     }
                     Err(e) => {
                         error!("Failed to send initial event to {}: {}", callback, e);
@@ -507,13 +526,17 @@ impl ServiceInstance {
         for (sid, callback) in subscribers_copy {
             let changed_clone = changed.clone();
             let seq = self.next_seq(&sid);
-            
+
             tokio::spawn(async move {
                 let callback = callback.trim().trim_matches(|c| c == '<' || c == '>');
 
-                let mut body = r#"<e:propertyset xmlns:e="urn:schemas-upnp-org:event-1-0">"#.to_string();
+                let mut body =
+                    r#"<e:propertyset xmlns:e="urn:schemas-upnp-org:event-1-0">"#.to_string();
                 for (name, val) in changed_clone {
-                    body.push_str(&format!("<e:property><{0}>{1}</{0}></e:property>", name, val));
+                    body.push_str(&format!(
+                        "<e:property><{0}>{1}</{0}></e:property>",
+                        name, val
+                    ));
                 }
                 body.push_str("</e:propertyset>");
 
@@ -551,7 +574,7 @@ impl ServiceInstance {
     /// Un handle vers la tâche tokio du notifier.
     pub fn start_notifier(&self, interval: Duration) -> tokio::task::JoinHandle<()> {
         let instance = self.clone();
-        
+
         tokio::spawn(async move {
             let mut ticker = time::interval(interval);
             info!("✅ Starting notifier every {:?}", interval);
@@ -565,18 +588,26 @@ impl ServiceInstance {
 }
 
 /// Handler Axum pour les événements (SUBSCRIBE/UNSUBSCRIBE).
-fn event_sub_handler(
+async fn event_sub_handler(
     State(instance): State<ServiceInstance>,
     headers: HeaderMap,
     req: Request<Body>,
-) -> Pin<Box<dyn Future<Output = Response> + Send>> {
-    Box::pin(async move {
+) -> Response {
     info!("📡 Event Subscription request for {}", instance.get_name());
 
     let method = req.method().as_str();
-    let sid = headers.get("SID").and_then(|v| v.to_str().ok()).unwrap_or("");
-    let timeout = headers.get("Timeout").and_then(|v| v.to_str().ok()).unwrap_or("");
-    let callback = headers.get("Callback").and_then(|v| v.to_str().ok()).unwrap_or("");
+    let sid = headers
+        .get("SID")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let timeout = headers
+        .get("Timeout")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let callback = headers
+        .get("Callback")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
 
     match method {
         METHOD_SUBSCRIBE => {
@@ -584,21 +615,26 @@ fn event_sub_handler(
                 // Nouvelle souscription
                 let new_sid = format!("uuid:{}", uuid::Uuid::new_v4());
                 if !callback.is_empty() {
-                    instance.add_subscriber(new_sid.clone(), callback.to_string()).await;
+                    instance
+                        .add_subscriber(new_sid.clone(), callback.to_string())
+                        .await;
                 }
                 let timeout_val = if timeout.is_empty() {
                     "Second-1800"
                 } else {
                     timeout
                 };
-                info!("🔒 New subscription: SID={}, Callback={}, Timeout={}", new_sid, callback, timeout_val);
-                
+                info!(
+                    "🔒 New subscription: SID={}, Callback={}, Timeout={}",
+                    new_sid, callback, timeout_val
+                );
+
                 let sid_clone = new_sid.clone();
                 let instance_clone = instance.clone();
                 tokio::spawn(async move {
                     instance_clone.send_initial_event(sid_clone).await;
                 });
-                
+
                 (new_sid, timeout_val.to_string())
             } else {
                 // Renouvellement
@@ -611,15 +647,16 @@ fn event_sub_handler(
                 StatusCode::OK,
                 [
                     (
-                        axum::http::header::HeaderName::from_static("sid"), 
-                        axum::http::HeaderValue::from_str(&response_sid).unwrap()
+                        axum::http::header::HeaderName::from_static("sid"),
+                        axum::http::HeaderValue::from_str(&response_sid).unwrap(),
                     ),
                     (
-                        axum::http::header::HeaderName::from_static("timeout"), 
-                        axum::http::HeaderValue::from_str(&response_timeout).unwrap()
+                        axum::http::header::HeaderName::from_static("timeout"),
+                        axum::http::HeaderValue::from_str(&response_timeout).unwrap(),
                     ),
                 ],
-            ).into_response()
+            )
+                .into_response()
         }
         METHOD_UNSUBSCRIBE => {
             if !sid.is_empty() {
@@ -633,19 +670,14 @@ fn event_sub_handler(
             StatusCode::METHOD_NOT_ALLOWED.into_response()
         }
     }
-    })
 }
 
 /// Handler Axum pour le contrôle SOAP.
-fn control_handler(
-    State(instance): State<ServiceInstance>,
-    _body: String,
-) -> Pin<Box<dyn Future<Output = Response> + Send>> {
-    Box::pin(async move {
+async fn control_handler(State(instance): State<ServiceInstance>, _body: String) -> Response {
     info!("📡 Control request for {}", instance.get_name());
 
     // TODO: Parser le SOAP et appeler l'action correspondante
-    
+
     let response_xml = format!(
         r#"<?xml version="1.0"?>
 <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" 
@@ -660,10 +692,13 @@ fn control_handler(
 
     (
         StatusCode::OK,
-        [(axum::http::header::CONTENT_TYPE, "text/xml; charset=\"utf-8\"")],
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/xml; charset=\"utf-8\"",
+        )],
         response_xml,
-    ).into_response()
-    })
+    )
+        .into_response()
 }
 
 #[cfg(test)]
@@ -675,7 +710,7 @@ mod tests {
     fn test_service_instance_creation() {
         let service = Service::new("AVTransport".to_string());
         let instance = ServiceInstance::new(&service);
-        
+
         assert_eq!(instance.get_name(), "AVTransport");
         assert_eq!(instance.identifier(), "AVTransport");
     }
@@ -684,7 +719,7 @@ mod tests {
     fn test_service_urls() {
         let service = Service::new("AVTransport".to_string());
         let instance = ServiceInstance::new(&service);
-        
+
         assert_eq!(instance.route(), "/service/AVTransport");
         assert_eq!(instance.control_route(), "/service/AVTransport/control");
         assert_eq!(instance.event_route(), "/service/AVTransport/event");
@@ -696,7 +731,7 @@ mod tests {
         let mut service = Service::new("AVTransport".to_string());
         service.set_version(2).unwrap();
         let instance = ServiceInstance::new(&service);
-        
+
         assert_eq!(
             instance.service_type(),
             "urn:schemas-upnp-org:service:AVTransport:2"
