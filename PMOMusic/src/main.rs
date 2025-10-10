@@ -1,8 +1,8 @@
 use pmoupnp::{
     mediarenderer::MEDIA_RENDERER,
     ssdp::SsdpServer,
+    upnp_api::UpnpApiExt,
     UpnpServer,
-    UpnpModel,
 };
 use pmoserver::{
     logs::LoggingOptions,
@@ -14,13 +14,13 @@ use tracing::info;
 
 #[tokio::main]
 async fn main() {
-    // Créer le serveur
+    // Créer le serveur - le trait UpnpServer étend automatiquement Server
     let mut server = ServerBuilder::new_configured().build();
 
     // Initialiser le logging et enregistrer les routes de logs
     server.init_logging(LoggingOptions::default()).await;
 
-        
+
     info!("📡 Registering the cover cache...");
     let cache = server.init_cover_cache_configured()
     .await
@@ -43,6 +43,9 @@ async fn main() {
     // Ajouter la webapp via le trait WebAppExt
     info!("📡 Registering Web application...");
     server.add_webapp_with_redirect::<Webapp>("/app").await;
+
+    // Enregistrer l'API d'introspection UPnP
+    server.register_upnp_api().await;
 
     info!("📡 Registering MediaRenderer...");
     let renderer_instance = server.register_device(MEDIA_RENDERER.clone())
