@@ -48,6 +48,7 @@ where
     S: Subscriber,
 {
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+        // Le filtrage par niveau est maintenant géré par le filtre rechargeable global
         let mut visitor = LogVisitor::new();
         event.record(&mut visitor);
 
