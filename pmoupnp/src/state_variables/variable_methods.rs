@@ -403,4 +403,29 @@ impl StateVariable {
     pub fn unset_value_marshaler(&mut self) {
         self.marshal = None;
     }
+
+    /// Retourne le type de données de cette variable.
+    pub fn get_data_type(&self) -> &StateVarType {
+        &self.value_type
+    }
+
+    /// Retourne la valeur par défaut si définie.
+    pub fn get_default_value(&self) -> Option<&StateValue> {
+        self.default_value.as_ref()
+    }
+
+    /// Retourne le step si défini.
+    pub fn get_step(&self) -> Option<&StateValue> {
+        self.step.as_ref()
+    }
+
+    /// Retourne les valeurs autorisées.
+    pub fn get_allowed_values(&self) -> Vec<StateValue> {
+        self.allowed_values.read().unwrap().clone()
+    }
+
+    /// Indique si cette variable envoie des notifications d'événements.
+    pub fn sends_events(&self) -> bool {
+        self.send_events
+    }
 }
