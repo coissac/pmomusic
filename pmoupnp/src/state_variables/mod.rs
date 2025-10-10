@@ -58,6 +58,8 @@ pub struct StateVarInstance {
     old_value: RwLock<StateValue>,
     last_modified: RwLock<DateTime<Utc>>,
     last_notification: RwLock<DateTime<Utc>>,
+    /// Pointeur vers le service parent (interior mutability)
+    service: RwLock<Option<std::sync::Weak<crate::services::ServiceInstance>>>,
 }
 
 pub type StateVarInstanceSet = UpnpObjectSet<StateVarInstance>;

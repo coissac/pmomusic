@@ -43,6 +43,7 @@ impl UpnpInstance for StateVarInstance {
             old_value: RwLock::new(from.get_default()),
             last_modified: RwLock::new(Utc::now()),
             last_notification: RwLock::new(Utc::now()),
+            service: RwLock::new(None),
         }
     }
 
@@ -83,11 +84,36 @@ impl Clone for StateVarInstance {
             old_value: RwLock::new(self.old_value.read().unwrap().clone()),
             last_modified: RwLock::new(self.last_modified.read().unwrap().clone()),
             last_notification: RwLock::new(self.last_notification.read().unwrap().clone()),
+            service: RwLock::new(self.service.read().unwrap().clone()),
         }
     }
 }
 
 impl StateVarInstance {
+    /// Enregistre le service parent pour cette variable.
+    ///
+    /// Cette méthode doit être appelée depuis `ServiceInstance::new()` pour
+    /// permettre à la variable de notifier le service lorsqu'elle change.
+    ///
+    /// # Arguments
+    ///
+    /// * `service` - Arc vers le ServiceInstance parent
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// # use pmoupnp::services::ServiceInstance;
+    /// # use pmoupnp::state_variables::StateVarInstance;
+    /// # use std::sync::Arc;
+    /// let service_instance = Arc::new(ServiceInstance::new(&service));
+    /// let var_instance = Arc::new(StateVarInstance::new(&variable));
+    /// var_instance.register_service(Arc::downgrade(&service_instance));
+    /// ```
+    pub fn register_service(&self, service: std::sync::Weak<crate::services::ServiceInstance>) {
+        let mut svc = self.service.write().unwrap();
+        *svc = Some(service);
+    }
+
     pub async fn set_value(&self, new_value: StateValue) -> Result<(), StateValueError> {
         // Validation du type
         if self.as_state_var_type() != new_value.as_state_var_type() {
@@ -95,16 +121,30 @@ impl StateVarInstance {
                 "Value type mismatch".to_string()
             ));
         }
-        
+
         // Mise à jour avec les locks
         let mut old_val = self.old_value.write().unwrap();
         let mut val = self.value.write().unwrap();
         let mut modified = self.last_modified.write().unwrap();
-        
+
         *old_val = val.clone();
-        *val = new_value;
+        *val = new_value.clone();
         *modified = Utc::now();
-        
+
+        // Notifier le service parent si la variable envoie des événements
+        if self.is_sending_notification() {
+            // Relâcher les locks avant d'appeler le service
+            drop(val);
+            drop(old_val);
+            drop(modified);
+
+            if let Some(weak_service) = self.service.read().unwrap().as_ref() {
+                if let Some(service) = weak_service.upgrade() {
+                    service.event_to_be_sent(self.get_name().to_string(), new_value.to_string());
+                }
+            }
+        }
+
         Ok(())
     }
     /// Accès à la valeur

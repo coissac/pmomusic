@@ -252,6 +252,32 @@ impl UpnpObject for ServiceInstance {
 }
 
 impl ServiceInstance {
+    /// Enregistre cette instance de service auprès de toutes ses variables.
+    ///
+    /// Cette méthode doit être appelée APRÈS la création de l'Arc<ServiceInstance>
+    /// pour permettre aux variables de notifier le service lors de leurs changements.
+    ///
+    /// # Arguments
+    ///
+    /// * `self_arc` - Arc pointant vers cette instance
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// # use pmoupnp::services::Service;
+    /// # use pmoupnp::UpnpModel;
+    /// # use std::sync::Arc;
+    /// let service = Service::new("AVTransport".to_string());
+    /// let instance = Arc::new(service.create_instance());
+    /// instance.register_with_variables(&instance);
+    /// ```
+    pub fn register_with_variables(self: &Arc<Self>) {
+        let weak_self = Arc::downgrade(self);
+        for var in self.statevariables.all() {
+            var.register_service(weak_self.clone());
+        }
+    }
+
     /// Retourne l'identifiant du service.
     ///
     /// # Examples
