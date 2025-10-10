@@ -129,6 +129,10 @@ impl UpnpModel for Device {
         // Créer les instances de services depuis le modèle
         for service_model in self.services() {
             let service_instance = service_model.create_instance();
+
+            // Enregistrer le service auprès de ses variables
+            service_instance.register_with_variables();
+
             service_instance.set_device(Arc::clone(&instance));
             if let Err(e) = instance.add_service(service_instance) {
                 tracing::error!("Failed to add service instance: {:?}", e);
