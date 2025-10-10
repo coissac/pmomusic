@@ -466,8 +466,8 @@ onUnmounted(() => {
 .log-viewer {
   display: flex;
   flex-direction: column;
-  height: 80vh;
-  width: 100vw;
+  min-height: calc(100vh - 60px); /* Hauteur viewport - nav */
+  width: 100%;
   margin: 0;
   padding: 0;
   background: #1e1e1e;

@@ -163,9 +163,25 @@ onUnmounted(() => {
 
 <style scoped>
 .upnp-explorer {
-  padding: 2rem;
-  max-width: 1400px;
-  margin: 0 auto;
+  padding: 1rem;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  box-sizing: border-box;
+}
+
+@media (min-width: 1400px) {
+  .upnp-explorer {
+    padding: 2rem;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+}
+
+@media (max-width: 768px) {
+  .upnp-explorer {
+    padding: 0.5rem;
+  }
 }
 
 /* Header */

@@ -162,4 +162,4 @@ cargo test
 
 ## License
 
-MIT
+CeCill-2.0
