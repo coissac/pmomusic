@@ -19,7 +19,8 @@
 //! ```
 
 use std::sync::Arc;
-use std::cell::RefCell;
+use std::sync::RwLock;
+use once_cell::sync::Lazy;
 
 use pmoserver::Server;
 
@@ -27,13 +28,14 @@ use crate::devices::errors::DeviceError;
 use crate::devices::{Device, DeviceInstance, DeviceRegistry};
 use crate::UpnpModel;
 
-thread_local! {
-    /// Registre de devices thread-local.
-    ///
-    /// Permet de maintenir un registre de devices par thread/serveur
-    /// sans modifier la structure `pmoserver::Server`.
-    static DEVICE_REGISTRY: RefCell<DeviceRegistry> = RefCell::new(DeviceRegistry::new());
-}
+/// Registre de devices global et thread-safe.
+///
+/// Utilise Lazy pour une initialisation paresseuse et RwLock pour le partage entre threads.
+/// Ceci permet aux API handlers (qui s'exécutent dans des threads différents) d'accéder
+/// au même registre de devices.
+static DEVICE_REGISTRY: Lazy<RwLock<DeviceRegistry>> = Lazy::new(|| {
+    RwLock::new(DeviceRegistry::new())
+});
 
 /// Trait pour étendre un serveur avec des fonctionnalités UPnP.
 ///
@@ -99,31 +101,30 @@ impl UpnpServer for Server {
         di.register_urls(self).await?;
 
         // Ajouter au registre pour l'introspection
-        DEVICE_REGISTRY.with(|registry| {
-            registry.borrow_mut()
-                .register(di.clone())
-                .map_err(|e| DeviceError::UrlRegistrationError(e))
-        })?;
+        DEVICE_REGISTRY.write()
+            .unwrap()
+            .register(di.clone())
+            .map_err(|e| DeviceError::UrlRegistrationError(e))?;
 
         Ok(di)
     }
 
     fn device_count(&self) -> usize {
-        DEVICE_REGISTRY.with(|registry| registry.borrow().count())
+        DEVICE_REGISTRY.read().unwrap().count()
     }
 
     fn list_devices(&self) -> Vec<Arc<DeviceInstance>> {
-        DEVICE_REGISTRY.with(|registry| registry.borrow().list_devices())
+        DEVICE_REGISTRY.read().unwrap().list_devices()
     }
 
     fn get_device(&self, udn: &str) -> Option<Arc<DeviceInstance>> {
-        DEVICE_REGISTRY.with(|registry| registry.borrow().get_device(udn))
+        DEVICE_REGISTRY.read().unwrap().get_device(udn)
     }
 }
 
 /// Fonctions helper pour accéder au registre depuis les handlers.
 ///
-/// Ces fonctions permettent d'accéder au registre thread-local depuis
+/// Ces fonctions permettent d'accéder au registre global depuis
 /// n'importe où dans le code, notamment depuis les handlers Axum.
 
 /// Exécute une closure avec un accès en lecture seule aux devices.
@@ -139,10 +140,8 @@ pub fn with_devices<F, R>(f: F) -> R
 where
     F: FnOnce(&Vec<Arc<DeviceInstance>>) -> R,
 {
-    DEVICE_REGISTRY.with(|registry| {
-        let devices = registry.borrow().list_devices();
-        f(&devices)
-    })
+    let devices = DEVICE_REGISTRY.read().unwrap().list_devices();
+    f(&devices)
 }
 
 /// Récupère un device par son UDN.
@@ -157,7 +156,7 @@ where
 /// }
 /// ```
 pub fn get_device_by_udn(udn: &str) -> Option<Arc<DeviceInstance>> {
-    DEVICE_REGISTRY.with(|registry| registry.borrow().get_device(udn))
+    DEVICE_REGISTRY.read().unwrap().get_device(udn)
 }
 
 #[cfg(test)]
