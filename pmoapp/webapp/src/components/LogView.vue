@@ -7,13 +7,24 @@
           {{ autoScroll ? '📌 Auto-scroll ON' : '📌 Auto-scroll OFF' }}
         </button>
         <button @click="clearLogs">🗑️ Clear</button>
+
+        <!-- Sélection du niveau côté serveur -->
+        <select v-model="serverLogLevel" @change="updateServerLogLevel" class="filter server-level">
+          <option value="ERROR">🔴 ERROR only</option>
+          <option value="WARN">🟡 WARN+</option>
+          <option value="INFO">🟢 INFO+</option>
+          <option value="DEBUG">🔵 DEBUG+</option>
+          <option value="TRACE">⚪ TRACE (all)</option>
+        </select>
+
+        <!-- Filtre côté client -->
         <select v-model="levelFilter" class="filter">
           <option value="ALL">All Levels</option>
-          <option value="TRACE">TRACE</option>
-          <option value="DEBUG">DEBUG</option>
-          <option value="INFO">INFO</option>
-          <option value="WARN">WARN</option>
           <option value="ERROR">ERROR</option>
+          <option value="WARN">WARN</option>
+          <option value="INFO">INFO</option>
+          <option value="DEBUG">DEBUG</option>
+          <option value="TRACE">TRACE</option>
         </select>
       </div>
     </div>
@@ -24,16 +35,28 @@
         :key="index"
         :class="['log-entry', `level-${log.level.toLowerCase()}`, { 'is-history': log.isHistory }]"
       >
-        <span class="timestamp">{{ formatTimestamp(log.timestamp) }}</span>
-        <span class="level">{{ log.level }}</span>
-        <span class="target">{{ log.target }}</span>
-        <span class="message markdown-content" v-html="renderMarkdown(log.message)"></span>
+        <div class="log-header">
+          <span class="timestamp">{{ formatTimestamp(log.timestamp) }}</span>
+          <span class="level">{{ log.level }}</span>
+          <span class="target">{{ log.target }}</span>
+        </div>
+        <div class="log-content">
+          <div class="message markdown-content">
+            <details v-if="isTooLong(log.message)" class="log-details">
+              <summary class="log-summary">
+                <span class="truncated-text">{{ truncateMessage(log.message) }}</span>
+              </summary>
+              <div class="full-message" v-html="renderMarkdown(log.message)"></div>
+            </details>
+            <div v-else v-html="renderMarkdown(log.message)"></div>
+          </div>
+        </div>
       </div>
-      
+
       <div v-if="isLoadingHistory" class="loading-state">
         ⏳ Loading history...
       </div>
-      
+
       <div v-else-if="filteredLogs.length === 0" class="empty-state">
         {{ isConnected ? 'Waiting for logs...' : 'Connecting to log stream...' }}
       </div>
@@ -43,6 +66,7 @@
       <span :class="['status', { connected: isConnected }]">
         {{ isConnected ? '🟢 Connected' : '🔴 Disconnected' }}
       </span>
+      <span class="server-info">Server level: {{ serverLogLevel }}</span>
       <span class="count">{{ filteredLogs.length }} logs</span>
     </div>
   </div>
@@ -64,10 +88,20 @@ const autoScroll = ref(true)
 const isConnected = ref(false)
 const isLoadingHistory = ref(true)
 const levelFilter = ref('ALL')
+const serverLogLevel = ref('TRACE')
 const logContainer = ref(null)
 let eventSource = null
 let historyLoaded = false
 const seenLogIds = new Set() // Pour détecter les duplicatas
+
+// Ordre de gravité des niveaux (du plus grave au moins grave)
+const levelOrder = {
+  'ERROR': 0,
+  'WARN': 1,
+  'INFO': 2,
+  'DEBUG': 3,
+  'TRACE': 4
+}
 
 const filteredLogs = computed(() => {
   if (levelFilter.value === 'ALL') {
@@ -75,6 +109,43 @@ const filteredLogs = computed(() => {
   }
   return logs.value.filter(log => log.level === levelFilter.value)
 })
+
+// Fonction pour mettre à jour le niveau de log côté serveur
+async function updateServerLogLevel() {
+  try {
+    const response = await fetch('/api/log_setup', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        level: serverLogLevel.value
+      })
+    })
+
+    if (response.ok) {
+      const data = await response.json()
+      console.log('Log level updated:', data.current_level)
+    } else {
+      console.error('Failed to update log level')
+    }
+  } catch (error) {
+    console.error('Error updating log level:', error)
+  }
+}
+
+// Charger le niveau de log actuel au démarrage
+async function loadServerLogLevel() {
+  try {
+    const response = await fetch('/api/log_setup')
+    if (response.ok) {
+      const data = await response.json()
+      serverLogLevel.value = data.current_level
+    }
+  } catch (error) {
+    console.error('Error loading log level:', error)
+  }
+}
 
 function formatTimestamp(timestamp) {
   const date = new Date(timestamp.secs_since_epoch * 1000)
@@ -84,6 +155,21 @@ function formatTimestamp(timestamp) {
     second: '2-digit',
     fractionalSecondDigits: 3
   })
+}
+
+function isTooLong(message) {
+  // Un message est trop long s'il a plus d'une ligne OU plus de 200 caractères
+  const firstLineEnd = message.indexOf('\n')
+  return firstLineEnd !== -1 || message.length > 200
+}
+
+function truncateMessage(message) {
+  // Prendre la première ligne, ou les 200 premiers caractères si pas de saut de ligne
+  const firstLineEnd = message.indexOf('\n')
+  if (firstLineEnd !== -1) {
+    return message.substring(0, firstLineEnd).trim()
+  }
+  return message.substring(0, 200).trim()
 }
 
 function renderMarkdown(text) {
@@ -115,13 +201,20 @@ function renderMarkdown(text) {
     }
   }
 
-  // ÉTAPE 2 : Convertir markdown en HTML
+  // ÉTAPE 2 : Détecter et transformer les liens d'images
+  // Pattern pour détecter les URLs d'images (png, jpg, jpeg, gif, webp, svg)
+  const imageUrlPattern = /(https?:\/\/[^\s]+\.(?:png|jpg|jpeg|gif|webp|svg)(?:\?[^\s]*)?)/gi
+  processedText = processedText.replace(imageUrlPattern, (match) => {
+    return `\n![Image](${match})\n`
+  })
+
+  // ÉTAPE 3 : Convertir markdown en HTML
   const rawHtml = marked.parse(processedText, { async: false })
 
-  // ÉTAPE 3 : Nettoyer pour la sécurité
+  // ÉTAPE 4 : Nettoyer pour la sécurité
   return DOMPurify.sanitize(rawHtml, {
-    ALLOWED_TAGS: ['strong', 'em', 'code', 'pre', 'a', 'ul', 'ol', 'li', 'p', 'br', 'span'],
-    ALLOWED_ATTR: ['href', 'target', 'class']
+    ALLOWED_TAGS: ['strong', 'em', 'code', 'pre', 'a', 'ul', 'ol', 'li', 'p', 'br', 'span', 'img'],
+    ALLOWED_ATTR: ['href', 'target', 'class', 'src', 'alt', 'title']
   })
 }
 
@@ -157,23 +250,23 @@ function connectSSE() {
   eventSource.onmessage = (event) => {
     try {
       const logEntry = JSON.parse(event.data)
-      
+
       // Créer un ID unique basé sur timestamp + message + target
       const logId = `${logEntry.timestamp.secs_since_epoch}-${logEntry.timestamp.nanos_since_epoch}-${logEntry.message}-${logEntry.target}`
-      
+
       // Ignorer les duplicatas
       if (seenLogIds.has(logId)) {
         return
       }
       seenLogIds.add(logId)
-      
+
       // Marquer les logs historiques
       if (!historyLoaded) {
         logEntry.isHistory = true
       }
-      
+
       logs.value.push(logEntry)
-      
+
       // Limiter à 1000 logs en mémoire
       if (logs.value.length > 1000) {
         const removed = logs.value.shift()
@@ -181,7 +274,7 @@ function connectSSE() {
         const removedId = `${removed.timestamp.secs_since_epoch}-${removed.timestamp.nanos_since_epoch}-${removed.message}-${removed.target}`
         seenLogIds.delete(removedId)
       }
-      
+
       scrollToBottom()
     } catch (error) {
       console.error('Failed to parse log entry:', error)
@@ -192,7 +285,7 @@ function connectSSE() {
     isConnected.value = false
     isLoadingHistory.value = false
     console.error('SSE connection error')
-    
+
     // Reconnexion automatique après 3 secondes
     setTimeout(() => {
       if (eventSource.readyState === EventSource.CLOSED) {
@@ -209,7 +302,7 @@ function connectSSE() {
   eventSource.onmessage = (event) => {
     clearTimeout(historyTimeout)
     originalOnMessage(event)
-    
+
     if (!historyLoaded) {
       historyTimeout = setTimeout(() => {
         historyLoaded = true
@@ -221,6 +314,7 @@ function connectSSE() {
 }
 
 onMounted(() => {
+  loadServerLogLevel()
   connectSSE()
 })
 
@@ -233,11 +327,11 @@ onUnmounted(() => {
 // Désactiver auto-scroll si l'utilisateur scroll manuellement
 watch(logContainer, (container) => {
   if (!container) return
-  
+
   container.addEventListener('scroll', () => {
-    const isAtBottom = 
+    const isAtBottom =
       container.scrollHeight - container.scrollTop <= container.clientHeight + 50
-    
+
     if (!isAtBottom && autoScroll.value) {
       autoScroll.value = false
     }
@@ -281,7 +375,7 @@ watch(logContainer, (container) => {
   .header {
     padding: 0.75rem 1rem;
   }
-  
+
   .header h2 {
     font-size: 1rem;
     width: 100%;
@@ -338,6 +432,13 @@ button.active {
   border: 1px solid #555;
   border-radius: 4px;
   cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.filter.server-level {
+  background: #1e3a5f;
+  border-color: #569cd6;
+  font-weight: bold;
 }
 
 @media (max-width: 768px) {
@@ -357,20 +458,18 @@ button.active {
 }
 
 .log-entry {
-  display: grid;
-  grid-template-columns: 130px 80px 200px 1fr;
-  gap: 1rem;
+  display: flex;
+  flex-direction: column;
   padding: 0.5rem;
   margin-bottom: 0.25rem;
   border-left: 3px solid transparent;
   font-size: 0.9rem;
   line-height: 1.4;
+  gap: 0.5rem;
 }
 
 @media (max-width: 768px) {
   .log-entry {
-    grid-template-columns: 1fr;
-    gap: 0.3rem;
     padding: 0.75rem 0.5rem;
     font-size: 0.85rem;
     border-left-width: 4px;
@@ -385,15 +484,32 @@ button.active {
   opacity: 0.7;
 }
 
+.log-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 768px) {
+  .log-header {
+    gap: 0.5rem;
+  }
+}
+
+.log-content {
+  padding-left: 0;
+}
+
 .timestamp {
   color: #858585;
   font-weight: 500;
+  flex-shrink: 0;
 }
 
 @media (max-width: 768px) {
   .timestamp {
     font-size: 0.75rem;
-    order: 1;
   }
 }
 
@@ -403,12 +519,11 @@ button.active {
   padding: 0.1rem 0.5rem;
   border-radius: 3px;
   text-align: center;
+  flex-shrink: 0;
 }
 
 @media (max-width: 768px) {
   .level {
-    order: 2;
-    width: fit-content;
     font-size: 0.75rem;
     padding: 0.2rem 0.6rem;
   }
@@ -417,11 +532,15 @@ button.active {
 .target {
   color: #4ec9b0;
   font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 1;
+  min-width: 0;
 }
 
 @media (max-width: 768px) {
   .target {
-    order: 3;
     font-size: 0.8rem;
     color: #6eb8a5;
   }
@@ -433,11 +552,61 @@ button.active {
   text-align: left;
 }
 
-@media (max-width: 768px) {
-  .message {
-    order: 4;
-    margin-top: 0.25rem;
-  }
+.log-details {
+  margin: 0;
+}
+
+.log-summary {
+  cursor: pointer;
+  color: #569cd6;
+  list-style: none;
+  user-select: none;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.log-summary::-webkit-details-marker {
+  display: none;
+}
+
+.log-summary::marker {
+  content: '';
+}
+
+.log-summary::before {
+  content: '▶';
+  display: inline-block;
+  width: 1em;
+  transition: transform 0.2s;
+  color: #569cd6;
+  font-size: 0.8em;
+}
+
+.log-details[open] .log-summary::before {
+  transform: rotate(90deg);
+}
+
+.log-summary:hover {
+  color: #6fa8dc;
+}
+
+.log-summary:hover::before {
+  color: #6fa8dc;
+}
+
+.truncated-text {
+  color: #d4d4d4;
+  font-family: 'Consolas', 'Monaco', monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.full-message {
+  margin-top: 0.5rem;
+  padding-left: 1.5em;
+  border-left: 2px solid #569cd6;
+  padding-top: 0.5rem;
 }
 
 .markdown-content {
@@ -476,6 +645,16 @@ button.active {
 /* Coloration pour les blocs XML */
 .markdown-content :deep(pre code.language-xml) {
   color: #ce9178;
+}
+
+/* Style pour les images */
+.markdown-content :deep(img) {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+  margin: 0.5rem 0;
+  border: 1px solid #3e3e42;
+  display: block;
 }
 
 /* Scrollbar pour les blocs de code longs */
@@ -527,32 +706,14 @@ button.active {
   padding-left: 1.5rem;
 }
 
-/* Level colors */
-.level-trace {
-  border-left-color: #808080;
+/* Level colors - Classés par ordre de gravité */
+.level-error {
+  border-left-color: #f48771;
 }
 
-.level-trace .level {
-  background: #3a3a3a;
-  color: #a0a0a0;
-}
-
-.level-debug {
-  border-left-color: #569cd6;
-}
-
-.level-debug .level {
-  background: #1e3a5f;
-  color: #569cd6;
-}
-
-.level-info {
-  border-left-color: #4ec9b0;
-}
-
-.level-info .level {
-  background: #1e4d42;
-  color: #4ec9b0;
+.level-error .level {
+  background: #5a1e1e;
+  color: #f48771;
 }
 
 .level-warn {
@@ -564,13 +725,31 @@ button.active {
   color: #dcdcaa;
 }
 
-.level-error {
-  border-left-color: #f48771;
+.level-info {
+  border-left-color: #4ec9b0;
 }
 
-.level-error .level {
-  background: #5a1e1e;
-  color: #f48771;
+.level-info .level {
+  background: #1e4d42;
+  color: #4ec9b0;
+}
+
+.level-debug {
+  border-left-color: #569cd6;
+}
+
+.level-debug .level {
+  background: #1e3a5f;
+  color: #569cd6;
+}
+
+.level-trace {
+  border-left-color: #808080;
+}
+
+.level-trace .level {
+  background: #3a3a3a;
+  color: #a0a0a0;
 }
 
 .empty-state {
@@ -600,6 +779,7 @@ button.active {
   background: #252526;
   border-top: 1px solid #3e3e42;
   font-size: 0.9rem;
+  gap: 1rem;
 }
 
 @media (max-width: 768px) {
@@ -615,6 +795,11 @@ button.active {
 
 .status.connected {
   color: #4ec9b0;
+}
+
+.server-info {
+  color: #569cd6;
+  font-weight: bold;
 }
 
 .count {

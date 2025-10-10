@@ -16,10 +16,18 @@ use axum::{
         IntoResponse,
         sse::{Event, KeepAlive, Sse},
     },
+    http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
-use tracing_subscriber::{Registry, layer::SubscriberExt};
+use tracing_subscriber::{
+    Registry,
+    layer::SubscriberExt,
+    reload,
+    filter::LevelFilter,
+    util::SubscriberInitExt,
+};
+use tracing::Level;
 
 /// Représente une entrée de log
 #[derive(Debug, Clone, Serialize)]
@@ -35,14 +43,40 @@ pub struct LogEntry {
 pub struct LogState {
     buffer: Arc<RwLock<VecDeque<LogEntry>>>,
     tx: broadcast::Sender<LogEntry>,
+    max_level: Arc<RwLock<Level>>,
+    reload_handle: Arc<RwLock<reload::Handle<LevelFilter, Registry>>>,
 }
 
 impl LogState {
-    pub fn new(capacity: usize) -> Self {
+    pub fn new(capacity: usize, reload_handle: reload::Handle<LevelFilter, Registry>) -> Self {
         Self {
             buffer: Arc::new(RwLock::new(VecDeque::with_capacity(capacity))),
             tx: broadcast::channel(1000).0,
+            max_level: Arc::new(RwLock::new(Level::TRACE)),
+            reload_handle: Arc::new(RwLock::new(reload_handle)),
         }
+    }
+
+    pub fn set_max_level(&self, level: Level) {
+        *self.max_level.write().unwrap() = level;
+
+        // Convertir Level en LevelFilter
+        let level_filter = match level {
+            Level::ERROR => LevelFilter::ERROR,
+            Level::WARN => LevelFilter::WARN,
+            Level::INFO => LevelFilter::INFO,
+            Level::DEBUG => LevelFilter::DEBUG,
+            Level::TRACE => LevelFilter::TRACE,
+        };
+
+        // Recharger le filtre dynamiquement
+        if let Err(e) = self.reload_handle.write().unwrap().reload(level_filter) {
+            tracing::error!("Failed to reload log level filter: {}", e);
+        }
+    }
+
+    pub fn get_max_level(&self) -> Level {
+        *self.max_level.read().unwrap()
     }
 
     fn push(&self, entry: LogEntry) {
@@ -195,23 +229,116 @@ impl Default for LoggingOptions {
 /// });
 /// ```
 pub fn init_logging(options: LoggingOptions) -> LogState {
-    let log_state = LogState::new(options.buffer_capacity);
+    // Créer un filtre rechargeable qui commence à TRACE
+    let (filter, reload_handle) = reload::Layer::new(LevelFilter::TRACE);
 
-    let subscriber = Registry::default().with(SseLayer::new(log_state.clone()));
+    // Créer le LogState avec le handle de rechargement
+    let log_state = LogState::new(options.buffer_capacity, reload_handle);
+
+    // Construire le subscriber avec le filtre rechargeable
+    let subscriber = Registry::default()
+        .with(filter)
+        .with(SseLayer::new(log_state.clone()));
 
     if options.enable_console {
-        let subscriber = subscriber.with(
-            tracing_subscriber::fmt::layer()
-                .with_target(true)
-                .with_level(true)
-                .with_ansi(true),
-        );
-        tracing::subscriber::set_global_default(subscriber)
-            .expect("Failed to set global default subscriber");
+        subscriber
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_target(true)
+                    .with_level(true)
+                    .with_ansi(true),
+            )
+            .init();
     } else {
-        tracing::subscriber::set_global_default(subscriber)
-            .expect("Failed to set global default subscriber");
+        subscriber.init();
     }
 
     log_state
+}
+
+/// Request body pour la configuration du logging
+#[derive(Debug, Deserialize)]
+pub struct LogSetupRequest {
+    pub level: String,
+}
+
+/// Response pour la configuration du logging
+#[derive(Debug, Serialize)]
+pub struct LogSetupResponse {
+    pub current_level: String,
+    pub available_levels: Vec<String>,
+}
+
+/// Handler pour GET /api/log_setup - retourne la configuration actuelle
+pub async fn log_setup_get(State(state): State<LogState>) -> impl IntoResponse {
+    let current = level_to_string(state.get_max_level());
+    Json(LogSetupResponse {
+        current_level: current,
+        available_levels: vec![
+            "ERROR".to_string(),
+            "WARN".to_string(),
+            "INFO".to_string(),
+            "DEBUG".to_string(),
+            "TRACE".to_string(),
+        ],
+    })
+}
+
+/// Handler pour POST /api/log_setup - met à jour le niveau de log
+pub async fn log_setup_post(
+    State(state): State<LogState>,
+    Json(payload): Json<LogSetupRequest>,
+) -> impl IntoResponse {
+    let level = match string_to_level(&payload.level) {
+        Some(l) => l,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "Invalid log level. Must be one of: ERROR, WARN, INFO, DEBUG, TRACE"
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    state.set_max_level(level);
+    tracing::info!("Log level changed to: {}", payload.level);
+
+    (
+        StatusCode::OK,
+        Json(LogSetupResponse {
+            current_level: level_to_string(level),
+            available_levels: vec![
+                "ERROR".to_string(),
+                "WARN".to_string(),
+                "INFO".to_string(),
+                "DEBUG".to_string(),
+                "TRACE".to_string(),
+            ],
+        }),
+    )
+        .into_response()
+}
+
+fn string_to_level(s: &str) -> Option<Level> {
+    match s.to_uppercase().as_str() {
+        "ERROR" => Some(Level::ERROR),
+        "WARN" => Some(Level::WARN),
+        "INFO" => Some(Level::INFO),
+        "DEBUG" => Some(Level::DEBUG),
+        "TRACE" => Some(Level::TRACE),
+        _ => None,
+    }
+}
+
+fn level_to_string(level: Level) -> String {
+    match level {
+        Level::ERROR => "ERROR",
+        Level::WARN => "WARN",
+        Level::INFO => "INFO",
+        Level::DEBUG => "DEBUG",
+        Level::TRACE => "TRACE",
+    }
+    .to_string()
 }
