@@ -465,7 +465,6 @@ mod tests {
     use super::*;
     use crate::{
         devices::Device,
-        services::Service,
         UpnpModel,
     };
 
@@ -477,13 +476,13 @@ mod tests {
 
     #[test]
     fn test_device_registration() {
-        let registry = DeviceRegistry::new();
+        let mut registry = DeviceRegistry::new();
         let device = Device::new(
             "TestDevice".to_string(),
             "MediaRenderer".to_string(),
             "Test Renderer".to_string(),
         );
-        let instance = Arc::new(device.create_instance());
+        let instance = device.create_instance();
 
         assert!(registry.register(instance.clone()).is_ok());
         assert_eq!(registry.count(), 1);
@@ -494,13 +493,13 @@ mod tests {
 
     #[test]
     fn test_device_retrieval() {
-        let registry = DeviceRegistry::new();
+        let mut registry = DeviceRegistry::new();
         let device = Device::new(
             "TestDevice".to_string(),
             "MediaRenderer".to_string(),
             "Test Renderer".to_string(),
         );
-        let instance = Arc::new(device.create_instance());
+        let instance = device.create_instance();
         let udn = instance.udn().to_string();
 
         registry.register(instance.clone()).unwrap();
@@ -517,13 +516,13 @@ mod tests {
 
     #[test]
     fn test_device_unregistration() {
-        let registry = DeviceRegistry::new();
+        let mut registry = DeviceRegistry::new();
         let device = Device::new(
             "TestDevice".to_string(),
             "MediaRenderer".to_string(),
             "Test Renderer".to_string(),
         );
-        let instance = Arc::new(device.create_instance());
+        let instance = device.create_instance();
         let udn = instance.udn().to_string();
 
         registry.register(instance).unwrap();

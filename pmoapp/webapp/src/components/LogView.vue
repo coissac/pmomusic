@@ -42,13 +42,13 @@
         </div>
         <div class="log-content">
           <div class="message markdown-content">
-            <details v-if="isTooLong(log.message)" class="log-details">
+            <details v-if="log.isTooLong" class="log-details">
               <summary class="log-summary">
-                <span class="truncated-text">{{ truncateMessage(log.message) }}</span>
+                <span class="truncated-text">{{ log.truncatedMessage }}</span>
               </summary>
-              <div class="full-message" v-html="renderMarkdown(log.message)"></div>
+              <div class="full-message" v-html="log.renderedHtml"></div>
             </details>
-            <div v-else v-html="renderMarkdown(log.message)"></div>
+            <div v-else v-html="log.renderedHtml"></div>
           </div>
         </div>
       </div>
@@ -103,11 +103,14 @@ const levelOrder = {
   'TRACE': 4
 }
 
+// Pré-calculer filteredLogs de manière optimisée
 const filteredLogs = computed(() => {
   if (levelFilter.value === 'ALL') {
     return logs.value
   }
-  return logs.value.filter(log => log.level === levelFilter.value)
+  // Utiliser la référence directe pour éviter des copies inutiles
+  const filter = levelFilter.value
+  return logs.value.filter(log => log.level === filter)
 })
 
 // Fonction pour mettre à jour le niveau de log côté serveur
@@ -157,65 +160,62 @@ function formatTimestamp(timestamp) {
   })
 }
 
-function isTooLong(message) {
-  // Un message est trop long s'il a plus d'une ligne OU plus de 200 caractères
+// Pré-traiter un log : calculer HTML, troncature, etc. UNE SEULE FOIS
+function preprocessLog(message) {
+  // ÉTAPE 1: Déterminer si trop long
   const firstLineEnd = message.indexOf('\n')
-  return firstLineEnd !== -1 || message.length > 200
-}
+  const isTooLong = firstLineEnd !== -1 || message.length > 200
 
-function truncateMessage(message) {
-  // Prendre la première ligne, ou les 200 premiers caractères si pas de saut de ligne
-  const firstLineEnd = message.indexOf('\n')
-  if (firstLineEnd !== -1) {
-    return message.substring(0, firstLineEnd).trim()
-  }
-  return message.substring(0, 200).trim()
-}
+  // ÉTAPE 2: Calculer le message tronqué si nécessaire
+  const truncatedMessage = isTooLong
+    ? (firstLineEnd !== -1
+        ? message.substring(0, firstLineEnd).trim()
+        : message.substring(0, 200).trim())
+    : null
 
-function renderMarkdown(text) {
-  // ÉTAPE 1 : Pré-processing pour détecter et protéger le XML
-  let processedText = text
+  // ÉTAPE 3: Pré-processing pour détecter et protéger le XML
+  let processedText = message
 
   // Détecter si le message contient du XML
-  // Pattern : cherche <?xml ou des balises XML racine communes (scpd, root, service, etc.)
-  const hasXml = /<\?xml|<(scpd|root|service|device|actionList|stateVariable)[>\s]/i.test(text)
+  const hasXml = /<\?xml|<(scpd|root|service|device|actionList|stateVariable)[>\s]/i.test(message)
 
   if (hasXml) {
-    // Extraire tout ce qui ressemble à du XML (du <?xml ou première balise jusqu'à la fin)
-    const xmlStartMatch = text.match(/<\?xml[\s\S]*$/)
+    const xmlStartMatch = message.match(/<\?xml[\s\S]*$/)
 
     if (xmlStartMatch) {
       const xmlContent = xmlStartMatch[0]
-      const beforeXml = text.substring(0, text.indexOf(xmlContent))
-
-      // Créer le texte avec le XML dans un bloc de code
+      const beforeXml = message.substring(0, message.indexOf(xmlContent))
       processedText = beforeXml + '\n```xml\n' + xmlContent + '\n```\n'
     } else {
-      // Fallback : chercher une balise racine XML
-      const xmlMatch = text.match(/<([a-zA-Z][a-zA-Z0-9:-]*)[>\s][\s\S]*/)
+      const xmlMatch = message.match(/<([a-zA-Z][a-zA-Z0-9:-]*)[>\s][\s\S]*/)
       if (xmlMatch) {
         const xmlContent = xmlMatch[0]
-        const beforeXml = text.substring(0, text.indexOf(xmlContent))
+        const beforeXml = message.substring(0, message.indexOf(xmlContent))
         processedText = beforeXml + '\n```xml\n' + xmlContent + '\n```\n'
       }
     }
   }
 
-  // ÉTAPE 2 : Détecter et transformer les liens d'images
-  // Pattern pour détecter les URLs d'images (png, jpg, jpeg, gif, webp, svg)
+  // ÉTAPE 4: Détecter et transformer les liens d'images
   const imageUrlPattern = /(https?:\/\/[^\s]+\.(?:png|jpg|jpeg|gif|webp|svg)(?:\?[^\s]*)?)/gi
   processedText = processedText.replace(imageUrlPattern, (match) => {
     return `\n![Image](${match})\n`
   })
 
-  // ÉTAPE 3 : Convertir markdown en HTML
+  // ÉTAPE 5: Convertir markdown en HTML
   const rawHtml = marked.parse(processedText, { async: false })
 
-  // ÉTAPE 4 : Nettoyer pour la sécurité
-  return DOMPurify.sanitize(rawHtml, {
+  // ÉTAPE 6: Nettoyer pour la sécurité
+  const renderedHtml = DOMPurify.sanitize(rawHtml, {
     ALLOWED_TAGS: ['strong', 'em', 'code', 'pre', 'a', 'ul', 'ol', 'li', 'p', 'br', 'span', 'img'],
     ALLOWED_ATTR: ['href', 'target', 'class', 'src', 'alt', 'title']
   })
+
+  return {
+    isTooLong,
+    truncatedMessage,
+    renderedHtml
+  }
 }
 
 function toggleAutoScroll() {
@@ -264,6 +264,12 @@ function connectSSE() {
       if (!historyLoaded) {
         logEntry.isHistory = true
       }
+
+      // PRÉ-TRAITER le log UNE SEULE FOIS à la réception
+      const processed = preprocessLog(logEntry.message)
+      logEntry.isTooLong = processed.isTooLong
+      logEntry.truncatedMessage = processed.truncatedMessage
+      logEntry.renderedHtml = processed.renderedHtml
 
       logs.value.push(logEntry)
 
@@ -325,17 +331,32 @@ onUnmounted(() => {
 })
 
 // Désactiver auto-scroll si l'utilisateur scroll manuellement
-watch(logContainer, (container) => {
+let scrollHandler = null
+watch(logContainer, (container, oldContainer) => {
+  // Nettoyer l'ancien listener si existant
+  if (oldContainer && scrollHandler) {
+    oldContainer.removeEventListener('scroll', scrollHandler)
+  }
+
   if (!container) return
 
-  container.addEventListener('scroll', () => {
+  scrollHandler = () => {
     const isAtBottom =
       container.scrollHeight - container.scrollTop <= container.clientHeight + 50
 
     if (!isAtBottom && autoScroll.value) {
       autoScroll.value = false
     }
-  })
+  }
+
+  container.addEventListener('scroll', scrollHandler, { passive: true })
+})
+
+// Nettoyer au démontage
+onUnmounted(() => {
+  if (logContainer.value && scrollHandler) {
+    logContainer.value.removeEventListener('scroll', scrollHandler)
+  }
 })
 </script>
 
