@@ -26,6 +26,20 @@
           <option value="DEBUG">DEBUG</option>
           <option value="TRACE">TRACE</option>
         </select>
+
+        <!-- Champ de recherche -->
+        <div class="search-box">
+          <input
+            v-model="searchQuery"
+            type="text"
+            placeholder="🔍 Search logs..."
+            class="search-input"
+            @keyup.escape="searchQuery = ''"
+          />
+          <button v-if="searchQuery" @click="searchQuery = ''" class="clear-search" title="Clear search">
+            ✖
+          </button>
+        </div>
       </div>
     </div>
 
@@ -42,13 +56,14 @@
         </div>
         <div class="log-content">
           <div class="message markdown-content">
-            <details v-if="log.isTooLong" class="log-details">
-              <summary class="log-summary">
-                <span class="truncated-text">{{ log.truncatedMessage }}</span>
-              </summary>
-              <div class="full-message" v-html="log.renderedHtml"></div>
-            </details>
-            <div v-else v-html="log.renderedHtml"></div>
+            <template v-if="log.isTooLong">
+              <div v-show="!log.expanded" class="truncated-preview" v-html="highlightSearchTerm(log.truncatedHtml)"></div>
+              <details class="log-details" @toggle="log.expanded = $event.target.open">
+                <summary class="log-summary"></summary>
+                <div class="full-message" v-html="highlightSearchTerm(log.renderedHtml)"></div>
+              </details>
+            </template>
+            <div v-else v-html="highlightSearchTerm(log.renderedHtml)"></div>
           </div>
         </div>
       </div>
@@ -67,7 +82,12 @@
         {{ isConnected ? '🟢 Connected' : '🔴 Disconnected' }}
       </span>
       <span class="server-info">Server level: {{ serverLogLevel }}</span>
-      <span class="count">{{ filteredLogs.length }} logs</span>
+      <span class="count">
+        {{ filteredLogs.length }} log{{ filteredLogs.length !== 1 ? 's' : '' }}
+        <span v-if="searchQuery.trim()" class="search-results">
+          ({{ filteredLogs.length }} / {{ logs.length }} matching "{{ searchQuery }}")
+        </span>
+      </span>
     </div>
   </div>
 </template>
@@ -89,6 +109,7 @@ const isConnected = ref(false)
 const isLoadingHistory = ref(true)
 const levelFilter = ref('ALL')
 const serverLogLevel = ref('TRACE')
+const searchQuery = ref('')
 const logContainer = ref(null)
 let eventSource = null
 let historyLoaded = false
@@ -103,14 +124,29 @@ const levelOrder = {
   'TRACE': 4
 }
 
-// Pré-calculer filteredLogs de manière optimisée
+// Pré-calculer filteredLogs de manière optimisée avec recherche
 const filteredLogs = computed(() => {
-  if (levelFilter.value === 'ALL') {
-    return logs.value
+  let filtered = logs.value
+
+  // Filtre par niveau
+  if (levelFilter.value !== 'ALL') {
+    const filter = levelFilter.value
+    filtered = filtered.filter(log => log.level === filter)
   }
-  // Utiliser la référence directe pour éviter des copies inutiles
-  const filter = levelFilter.value
-  return logs.value.filter(log => log.level === filter)
+
+  // Filtre par recherche
+  if (searchQuery.value.trim()) {
+    const query = searchQuery.value.toLowerCase()
+    filtered = filtered.filter(log => {
+      return (
+        log.message.toLowerCase().includes(query) ||
+        log.level.toLowerCase().includes(query) ||
+        log.target.toLowerCase().includes(query)
+      )
+    })
+  }
+
+  return filtered
 })
 
 // Fonction pour mettre à jour le niveau de log côté serveur
@@ -173,49 +209,113 @@ function preprocessLog(message) {
         : message.substring(0, 200).trim())
     : null
 
-  // ÉTAPE 3: Pré-processing pour détecter et protéger le XML
+  // ÉTAPE 3: Pré-processing pour détecter et protéger le XML, images et audio
   let processedText = message
 
-  // Détecter si le message contient du XML
-  const hasXml = /<\?xml|<(scpd|root|service|device|actionList|stateVariable)[>\s]/i.test(message)
+  // ÉTAPE 3a: Détecter et marquer les URLs audio AVANT tout traitement markdown
+  // On utilise des marqueurs UUID pour éviter les conflits
+  const audioMarkers = new Map()
+  const audioUrlPattern = /(https?:\/\/[^\s"<>]+\.(?:mp3|wav|ogg|m4a|flac|aac|opus|weba)(?:\?[^\s"<>]*)?)/gi
+  processedText = processedText.replace(audioUrlPattern, (match) => {
+    const markerId = `AUDIO_MARKER_${Math.random().toString(36).substring(2, 11)}`
+    audioMarkers.set(markerId, match)
+    return markerId
+  })
+
+  // ÉTAPE 3b: Détecter et transformer les liens d'images
+  const imageUrlPattern = /(https?:\/\/[^\s"<>]+\.(?:png|jpg|jpeg|gif|webp|svg)(?:\?[^\s"<>]*)?)/gi
+  processedText = processedText.replace(imageUrlPattern, (match) => {
+    return `\n![Image](${match})\n`
+  })
+
+  // ÉTAPE 3c: Détecter si le message contient du XML
+  const hasXml = /<\?xml|<(scpd|root|service|device|actionList|stateVariable)[>\s]/i.test(processedText)
 
   if (hasXml) {
-    const xmlStartMatch = message.match(/<\?xml[\s\S]*$/)
+    const xmlStartMatch = processedText.match(/<\?xml[\s\S]*$/)
 
     if (xmlStartMatch) {
       const xmlContent = xmlStartMatch[0]
-      const beforeXml = message.substring(0, message.indexOf(xmlContent))
+      const beforeXml = processedText.substring(0, processedText.indexOf(xmlContent))
       processedText = beforeXml + '\n```xml\n' + xmlContent + '\n```\n'
     } else {
-      const xmlMatch = message.match(/<([a-zA-Z][a-zA-Z0-9:-]*)[>\s][\s\S]*/)
+      const xmlMatch = processedText.match(/<([a-zA-Z][a-zA-Z0-9:-]*)[>\s][\s\S]*/)
       if (xmlMatch) {
         const xmlContent = xmlMatch[0]
-        const beforeXml = message.substring(0, message.indexOf(xmlContent))
+        const beforeXml = processedText.substring(0, processedText.indexOf(xmlContent))
         processedText = beforeXml + '\n```xml\n' + xmlContent + '\n```\n'
       }
     }
   }
 
-  // ÉTAPE 4: Détecter et transformer les liens d'images
-  const imageUrlPattern = /(https?:\/\/[^\s]+\.(?:png|jpg|jpeg|gif|webp|svg)(?:\?[^\s]*)?)/gi
-  processedText = processedText.replace(imageUrlPattern, (match) => {
-    return `\n![Image](${match})\n`
-  })
-
   // ÉTAPE 5: Convertir markdown en HTML
   const rawHtml = marked.parse(processedText, { async: false })
 
   // ÉTAPE 6: Nettoyer pour la sécurité
-  const renderedHtml = DOMPurify.sanitize(rawHtml, {
+  let renderedHtml = DOMPurify.sanitize(rawHtml, {
     ALLOWED_TAGS: ['strong', 'em', 'code', 'pre', 'a', 'ul', 'ol', 'li', 'p', 'br', 'span', 'img'],
     ALLOWED_ATTR: ['href', 'target', 'class', 'src', 'alt', 'title']
   })
 
+  // ÉTAPE 6b: Remplacer les marqueurs audio par de vrais lecteurs HTML5
+  for (const [markerId, audioUrl] of audioMarkers.entries()) {
+    const audioPlayer = `<div class="audio-player-wrapper">
+      <audio controls preload="metadata" class="log-audio-player">
+        <source src="${audioUrl}" type="audio/${audioUrl.split('.').pop().split('?')[0]}">
+        Your browser does not support the audio element.
+      </audio>
+      <div class="audio-url"><a href="${audioUrl}" target="_blank" rel="noopener">${audioUrl}</a></div>
+    </div>`
+
+    renderedHtml = renderedHtml.replace(new RegExp(markerId, 'g'), audioPlayer)
+  }
+
+  const finalHtml = renderedHtml
+
+  // ÉTAPE 7: Générer le HTML du message tronqué si nécessaire
+  let truncatedHtml = null
+  if (isTooLong && truncatedMessage) {
+    const truncatedRaw = marked.parse(truncatedMessage, { async: false })
+    let cleanTruncated = DOMPurify.sanitize(truncatedRaw, {
+      ALLOWED_TAGS: ['strong', 'em', 'code', 'pre', 'a', 'ul', 'ol', 'li', 'p', 'br', 'span', 'img'],
+      ALLOWED_ATTR: ['href', 'target', 'class', 'src', 'alt', 'title']
+    })
+
+    // Remplacer les marqueurs audio dans le message tronqué aussi
+    for (const [markerId, audioUrl] of audioMarkers.entries()) {
+      const audioPlayer = `<div class="audio-player-wrapper">
+        <audio controls preload="metadata" class="log-audio-player">
+          <source src="${audioUrl}" type="audio/${audioUrl.split('.').pop().split('?')[0]}">
+          Your browser does not support the audio element.
+        </audio>
+        <div class="audio-url"><a href="${audioUrl}" target="_blank" rel="noopener">${audioUrl}</a></div>
+      </div>`
+
+      cleanTruncated = cleanTruncated.replace(new RegExp(markerId, 'g'), audioPlayer)
+    }
+
+    truncatedHtml = cleanTruncated
+  }
+
   return {
     isTooLong,
     truncatedMessage,
-    renderedHtml
+    truncatedHtml,
+    renderedHtml: finalHtml
   }
+}
+
+function highlightSearchTerm(html) {
+  if (!searchQuery.value.trim() || !html) {
+    return html
+  }
+
+  const query = searchQuery.value.trim()
+  // Créer une regex insensible à la casse pour trouver le terme
+  // Utiliser un lookahead négatif pour éviter de matcher dans les balises HTML
+  const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})(?![^<]*>)`, 'gi')
+
+  return html.replace(regex, '<mark class="search-highlight">$1</mark>')
 }
 
 function toggleAutoScroll() {
@@ -269,7 +369,9 @@ function connectSSE() {
       const processed = preprocessLog(logEntry.message)
       logEntry.isTooLong = processed.isTooLong
       logEntry.truncatedMessage = processed.truncatedMessage
+      logEntry.truncatedHtml = processed.truncatedHtml
       logEntry.renderedHtml = processed.renderedHtml
+      logEntry.expanded = false // État de dépliage initial
 
       logs.value.push(logEntry)
 
@@ -471,6 +573,69 @@ button.active {
   }
 }
 
+.search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 200px;
+  max-width: 400px;
+}
+
+.search-input {
+  flex: 1;
+  padding: 0.5rem 2rem 0.5rem 0.75rem;
+  background: #3c3c3c;
+  color: #d4d4d4;
+  border: 1px solid #555;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  font-family: 'Consolas', 'Monaco', monospace;
+  outline: none;
+  transition: all 0.2s;
+}
+
+.search-input:focus {
+  border-color: #569cd6;
+  background: #2d2d30;
+  box-shadow: 0 0 0 2px rgba(86, 156, 214, 0.2);
+}
+
+.search-input::placeholder {
+  color: #858585;
+  font-style: italic;
+}
+
+.clear-search {
+  position: absolute;
+  right: 0.25rem;
+  background: transparent;
+  border: none;
+  color: #858585;
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.9rem;
+  border-radius: 3px;
+  transition: all 0.2s;
+}
+
+.clear-search:hover {
+  background: #505050;
+  color: #d4d4d4;
+}
+
+@media (max-width: 768px) {
+  .search-box {
+    width: 100%;
+    max-width: none;
+  }
+
+  .search-input {
+    font-size: 0.8rem;
+    padding: 0.4rem 2rem 0.4rem 0.6rem;
+  }
+}
+
 .log-container {
   flex: 1;
   overflow-y: auto;
@@ -582,9 +747,10 @@ button.active {
   color: #569cd6;
   list-style: none;
   user-select: none;
-  display: flex;
-  align-items: baseline;
-  gap: 0.5rem;
+  display: inline-block;
+  margin: 0;
+  padding: 0;
+  min-height: 1em;
 }
 
 .log-summary::-webkit-details-marker {
@@ -596,31 +762,28 @@ button.active {
 }
 
 .log-summary::before {
-  content: '▶';
+  content: '▶ Afficher plus';
   display: inline-block;
-  width: 1em;
   transition: transform 0.2s;
   color: #569cd6;
-  font-size: 0.8em;
+  font-size: 0.85em;
+  font-style: italic;
 }
 
 .log-details[open] .log-summary::before {
-  transform: rotate(90deg);
-}
-
-.log-summary:hover {
-  color: #6fa8dc;
+  content: '▼ Afficher moins';
 }
 
 .log-summary:hover::before {
   color: #6fa8dc;
 }
 
-.truncated-text {
+.truncated-preview {
   color: #d4d4d4;
   font-family: 'Consolas', 'Monaco', monospace;
   white-space: pre-wrap;
   word-break: break-word;
+  margin-bottom: 0.25rem;
 }
 
 .full-message {
@@ -676,6 +839,49 @@ button.active {
   margin: 0.5rem 0;
   border: 1px solid #3e3e42;
   display: block;
+}
+
+/* Style pour les lecteurs audio */
+.markdown-content :deep(.audio-player-wrapper) {
+  margin: 0.75rem 0;
+  padding: 0.75rem;
+  background: #2d2d30;
+  border: 1px solid #3e3e42;
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.markdown-content :deep(.log-audio-player) {
+  width: 100%;
+  max-width: 500px;
+  height: 40px;
+  border-radius: 4px;
+  background: #1e1e1e;
+  outline: none;
+}
+
+.markdown-content :deep(.log-audio-player:focus) {
+  outline: 2px solid #569cd6;
+  outline-offset: 2px;
+}
+
+.markdown-content :deep(.audio-url) {
+  font-size: 0.85em;
+  color: #858585;
+  font-style: italic;
+  word-break: break-all;
+}
+
+.markdown-content :deep(.audio-url a) {
+  color: #569cd6;
+  text-decoration: none;
+}
+
+.markdown-content :deep(.audio-url a:hover) {
+  color: #6fa8dc;
+  text-decoration: underline;
 }
 
 /* Scrollbar pour les blocs de code longs */
@@ -825,6 +1031,21 @@ button.active {
 
 .count {
   color: #858585;
+}
+
+.search-results {
+  color: #569cd6;
+  font-weight: bold;
+  font-style: italic;
+}
+
+/* Surlignage des termes recherchés */
+.markdown-content :deep(mark.search-highlight) {
+  background: #ffd700;
+  color: #1e1e1e;
+  padding: 0.1rem 0.2rem;
+  border-radius: 2px;
+  font-weight: bold;
 }
 
 /* Scrollbar styling */
