@@ -5,7 +5,7 @@ use xmltree::{Element, XMLNode};
 
 use crate::{
     devices::{Device, DeviceInstance},
-    UpnpObject, UpnpModel, UpnpInstance, UpnpTyped,
+    UpnpObject, UpnpModel, UpnpInstance,
 };
 
 impl UpnpObject for Device {
