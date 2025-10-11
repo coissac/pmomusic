@@ -319,6 +319,39 @@ impl Config {
             _ => Ok(2000),
         }
     }
+
+    /// Récupère le nom d'utilisateur Qobuz depuis la configuration
+    pub fn get_qobuz_username(&self) -> Result<String> {
+        match self.get_value(&["accounts", "qobuz", "username"])? {
+            Value::String(s) => Ok(s),
+            _ => Err(anyhow!("Qobuz username not configured")),
+        }
+    }
+
+    /// Définit le nom d'utilisateur Qobuz dans la configuration
+    pub fn set_qobuz_username(&self, username: &str) -> Result<()> {
+        self.set_value(&["accounts", "qobuz", "username"], Value::String(username.to_string()))
+    }
+
+    /// Récupère le mot de passe Qobuz depuis la configuration
+    pub fn get_qobuz_password(&self) -> Result<String> {
+        match self.get_value(&["accounts", "qobuz", "password"])? {
+            Value::String(s) => Ok(s),
+            _ => Err(anyhow!("Qobuz password not configured")),
+        }
+    }
+
+    /// Définit le mot de passe Qobuz dans la configuration
+    pub fn set_qobuz_password(&self, password: &str) -> Result<()> {
+        self.set_value(&["accounts", "qobuz", "password"], Value::String(password.to_string()))
+    }
+
+    /// Récupère les credentials Qobuz (username + password) depuis la configuration
+    pub fn get_qobuz_credentials(&self) -> Result<(String, String)> {
+        let username = self.get_qobuz_username()?;
+        let password = self.get_qobuz_password()?;
+        Ok((username, password))
+    }
 }
 
 /// Retourne l'instance globale
