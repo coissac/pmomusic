@@ -60,6 +60,8 @@ pub struct StateVarInstance {
     last_notification: RwLock<DateTime<Utc>>,
     /// Pointeur vers le service parent (interior mutability)
     service: RwLock<Option<std::sync::Weak<crate::services::ServiceInstance>>>,
+    /// Cache pour la valeur réflexive (utilisé quand un parser est défini)
+    reflexive_cache: RwLock<Option<Arc<dyn Reflect>>>,
 }
 
 pub type StateVarInstanceSet = UpnpObjectSet<StateVarInstance>;

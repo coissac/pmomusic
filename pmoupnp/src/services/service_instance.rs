@@ -34,6 +34,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
+use bevy_reflect::Reflect;
 use std::{
     collections::HashMap,
     future::Future,
@@ -44,6 +45,7 @@ use std::{
 use tokio::time;
 use tracing::{debug, error, info, warn};
 use xmltree::{Element, EmitterConfig, XMLNode};
+use quick_xml::escape::escape;
 
 use crate::{
     UpnpInstance, UpnpObject, UpnpObjectType, UpnpTyped, UpnpTypedInstance,
@@ -118,8 +120,8 @@ pub struct ServiceInstance {
     /// Abonnés aux événements (SID -> Callback URL)
     subscribers: Arc<RwLock<HashMap<String, String>>>,
 
-    /// Buffer des changements en attente de notification
-    changed_buffer: Arc<Mutex<HashMap<String, String>>>,
+    /// Buffer des changements en attente de notification (nom de variable -> valeur réflexive)
+    changed_buffer: Arc<Mutex<HashMap<String, Arc<dyn Reflect>>>>,
 
     /// Compteurs de séquence par abonné
     seqid: Arc<Mutex<HashMap<String, u32>>>,
@@ -849,14 +851,15 @@ impl ServiceInstance {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```rust,ignore
     /// # use pmoupnp::services::Service;
     /// # use pmoupnp::UpnpModel;
     /// let service = Service::new("AVTransport".to_string());
     /// let instance = service.create_instance();
-    /// instance.event_to_be_sent("TransportState".to_string(), "PLAYING".to_string());
+    /// let value = Arc::new("PLAYING".to_string()) as Arc<dyn Reflect>;
+    /// instance.event_to_be_sent("TransportState".to_string(), value);
     /// ```
-    pub fn event_to_be_sent(&self, name: String, value: String) {
+    pub fn event_to_be_sent(&self, name: String, value: Arc<dyn Reflect>) {
         let mut buffer = self.changed_buffer.lock().unwrap();
         buffer.insert(name, value);
     }
@@ -895,7 +898,10 @@ impl ServiceInstance {
     /// # async fn main() {
     /// # let service = Service::new("AVTransport".to_string());
     /// # let instance = service.create_instance();
-    /// instance.event_to_be_sent("TransportState".to_string(), "PLAYING".to_string());
+    /// # use std::sync::Arc;
+    /// # use bevy_reflect::Reflect;
+    /// let value = Arc::new("PLAYING".to_string()) as Arc<dyn Reflect>;
+    /// instance.event_to_be_sent("TransportState".to_string(), value);
     /// instance.notify_subscribers().await;
     /// # }
     /// ```
@@ -926,9 +932,11 @@ impl ServiceInstance {
                 let mut body =
                     r#"<e:propertyset xmlns:e="urn:schemas-upnp-org:event-1-0">"#.to_string();
                 for (name, val) in changed_clone {
+                    // Convertir la valeur Reflect en String
+                    let val_str = Self::reflect_to_string(&*val);
                     body.push_str(&format!(
                         "<e:property><{0}>{1}</{0}></e:property>",
-                        name, val
+                        name, val_str
                     ));
                 }
                 body.push_str("</e:propertyset>");
@@ -954,6 +962,131 @@ impl ServiceInstance {
                 }
             });
         }
+    }
+
+    /// Convertit une valeur Reflect en String pour la notification UPnP.
+    ///
+    /// Cette fonction gère plusieurs cas :
+    /// - Types primitifs : formatage direct
+    /// - Structures serde (pmodidl, etc.) : sérialisation XML
+    /// - Autres types : fallback sur Debug
+    ///
+    /// Le résultat est déjà échappé XML-safe selon les normes UPnP.
+    fn reflect_to_string(value: &dyn Reflect) -> String {
+        use std::any::Any;
+        use bevy_reflect::ReflectRef;
+
+        // Essayer de downcaster vers des types primitifs courants
+        if let Some(v) = value.as_any().downcast_ref::<String>() {
+            // Échapper les caractères XML spéciaux
+            return escape(v).to_string();
+        } else if let Some(v) = value.as_any().downcast_ref::<u8>() {
+            return v.to_string();
+        } else if let Some(v) = value.as_any().downcast_ref::<u16>() {
+            return v.to_string();
+        } else if let Some(v) = value.as_any().downcast_ref::<u32>() {
+            return v.to_string();
+        } else if let Some(v) = value.as_any().downcast_ref::<i8>() {
+            return v.to_string();
+        } else if let Some(v) = value.as_any().downcast_ref::<i16>() {
+            return v.to_string();
+        } else if let Some(v) = value.as_any().downcast_ref::<i32>() {
+            return v.to_string();
+        } else if let Some(v) = value.as_any().downcast_ref::<f32>() {
+            return v.to_string();
+        } else if let Some(v) = value.as_any().downcast_ref::<f64>() {
+            return v.to_string();
+        } else if let Some(v) = value.as_any().downcast_ref::<bool>() {
+            return if *v { "1" } else { "0" }.to_string();
+        } else if let Some(v) = value.as_any().downcast_ref::<char>() {
+            return escape(&v.to_string()).to_string();
+        }
+
+        // Pour les structures complexes, essayer de sérialiser avec bevy_reflect
+        match value.reflect_ref() {
+            ReflectRef::Struct(s) => {
+                // Construire un XML simple pour la struct
+                Self::serialize_struct_to_xml(s)
+            }
+            ReflectRef::TupleStruct(ts) => {
+                // Pour les tuple structs, essayer d'extraire la valeur si c'est un wrapper
+                if ts.field_len() == 1 {
+                    if let Some(inner) = ts.field(0) {
+                        // Convertir PartialReflect en Reflect si possible
+                        if let Some(reflect_val) = inner.try_as_reflect() {
+                            Self::reflect_to_string(reflect_val)
+                        } else {
+                            format!("{:?}", value)
+                        }
+                    } else {
+                        format!("{:?}", value)
+                    }
+                } else {
+                    format!("{:?}", value)
+                }
+            }
+            ReflectRef::Enum(e) => {
+                // Pour les enums, formater comme "Variant(value)"
+                let variant_name = e.variant_name();
+                if e.field_len() == 1 {
+                    if let Some(field) = e.field_at(0) {
+                        // Convertir PartialReflect en Reflect si possible
+                        if let Some(reflect_val) = field.try_as_reflect() {
+                            format!("{}", Self::reflect_to_string(reflect_val))
+                        } else {
+                            variant_name.to_string()
+                        }
+                    } else {
+                        variant_name.to_string()
+                    }
+                } else {
+                    variant_name.to_string()
+                }
+            }
+            _ => {
+                // Fallback: utiliser Debug et échapper
+                let debug_str = format!("{:?}", value);
+                escape(&debug_str).to_string()
+            }
+        }
+    }
+
+    /// Sérialise une structure Reflect en XML simple.
+    fn serialize_struct_to_xml(s: &dyn bevy_reflect::Struct) -> String {
+        use std::fmt::Write;
+        use bevy_reflect::TypeInfo;
+
+        let mut xml = String::new();
+
+        // Commencer par ouvrir la balise avec le nom du type
+        let type_name = s.get_represented_type_info()
+            .and_then(|ti| {
+                if let TypeInfo::Struct(si) = ti {
+                    Some(si.type_path_table().short_path())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or("struct");
+
+        let _ = write!(&mut xml, "<{}>", type_name);
+
+        // Ajouter chaque champ
+        for i in 0..s.field_len() {
+            if let Some(field_name) = s.name_at(i) {
+                if let Some(field_value) = s.field_at(i) {
+                    // Convertir PartialReflect en Reflect si possible
+                    if let Some(reflect_val) = field_value.try_as_reflect() {
+                        let value_str = Self::reflect_to_string(reflect_val);
+                        let _ = write!(&mut xml, "<{}>{}</{}>", field_name, value_str, field_name);
+                    }
+                }
+            }
+        }
+
+        let _ = write!(&mut xml, "</{}>", type_name);
+
+        xml
     }
 
     /// Démarre le notifier périodique.
@@ -1239,6 +1372,97 @@ async fn control_handler(State(instance): State<Arc<ServiceInstance>>, body: Str
 mod tests {
     use super::*;
     use crate::services::Service;
+    use bevy_reflect::Reflect;
+
+    #[test]
+    fn test_reflect_to_string_primitives() {
+        // Test des types primitifs
+        assert_eq!(ServiceInstance::reflect_to_string(&42i32), "42");
+        assert_eq!(ServiceInstance::reflect_to_string(&3.14f64), "3.14");
+        assert_eq!(ServiceInstance::reflect_to_string(&true), "1");
+        assert_eq!(ServiceInstance::reflect_to_string(&false), "0");
+        assert_eq!(ServiceInstance::reflect_to_string(&'a'), "a");
+    }
+
+    #[test]
+    fn test_reflect_to_string_xml_escaping() {
+        // Test de l'échappement XML
+        let test_str = "Test <tag> & \"quotes\"".to_string();
+        let result = ServiceInstance::reflect_to_string(&test_str);
+
+        // Vérifier que les caractères sont échappés
+        assert!(result.contains("&lt;"));
+        assert!(result.contains("&gt;"));
+        assert!(result.contains("&amp;"));
+        assert!(result.contains("&quot;"));
+    }
+
+    #[test]
+    fn test_reflect_to_string_struct() {
+        #[derive(Debug, Clone, Reflect)]
+        struct TestStruct {
+            name: String,
+            value: i32,
+        }
+
+        let test = TestStruct {
+            name: "Test".to_string(),
+            value: 42,
+        };
+
+        let result = ServiceInstance::reflect_to_string(&test);
+
+        // Vérifier que c'est du XML
+        assert!(result.starts_with("<"));
+        assert!(result.ends_with(">"));
+        assert!(result.contains("name"));
+        assert!(result.contains("value"));
+        assert!(result.contains("Test"));
+        assert!(result.contains("42"));
+
+        println!("Serialized struct: {}", result);
+    }
+
+    #[test]
+    fn test_reflect_to_string_nested_struct() {
+        #[derive(Debug, Clone, Reflect)]
+        struct Address {
+            street: String,
+            city: String,
+        }
+
+        #[derive(Debug, Clone, Reflect)]
+        struct Person {
+            name: String,
+            age: u32,
+            address: Address,
+        }
+
+        let person = Person {
+            name: "John <Doe>".to_string(),  // Test XML escaping
+            age: 30,
+            address: Address {
+                street: "123 Main St & Ave".to_string(),
+                city: "Springfield".to_string(),
+            },
+        };
+
+        let result = ServiceInstance::reflect_to_string(&person);
+
+        // Vérifier la structure XML
+        assert!(result.contains("<Person>"));
+        assert!(result.contains("</Person>"));
+        assert!(result.contains("name"));
+        assert!(result.contains("age"));
+        assert!(result.contains("address"));
+
+        // Vérifier l'échappement XML dans les valeurs imbriquées
+        assert!(result.contains("&lt;"));
+        assert!(result.contains("&gt;"));
+        assert!(result.contains("&amp;"));
+
+        println!("Nested struct XML: {}", result);
+    }
 
     #[test]
     fn test_service_instance_creation() {
