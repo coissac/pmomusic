@@ -8,11 +8,15 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 pub mod buffer_node;
+pub mod chromecast_sink;
 pub mod decoder_node;
+pub mod disk_sink;
 pub mod dsp_node;
+pub mod mpd_sink;
 pub mod sink_node;
 pub mod source_node;
 pub mod timer_node;
+pub mod volume_node;
 
 /// Trait de base pour tous les nodes audio
 ///
