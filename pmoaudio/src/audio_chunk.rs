@@ -47,6 +47,12 @@ pub struct AudioChunk {
     ///
     /// Valeurs typiques: 44100, 48000, 96000, 192000
     pub sample_rate: u32,
+
+    /// Gain multiplicatif appliqué au flux audio
+    ///
+    /// Valeur par défaut: 1.0 (aucun changement)
+    /// Valeurs typiques: 0.0 (silence) à 1.0 (volume max)
+    pub gain: f32,
 }
 
 impl AudioChunk {
@@ -79,6 +85,18 @@ impl AudioChunk {
             left: Arc::new(left),
             right: Arc::new(right),
             sample_rate,
+            gain: 1.0,
+        }
+    }
+
+    /// Crée un nouveau chunk audio avec un gain spécifique
+    pub fn with_gain(order: u64, left: Vec<f32>, right: Vec<f32>, sample_rate: u32, gain: f32) -> Self {
+        Self {
+            order,
+            left: Arc::new(left),
+            right: Arc::new(right),
+            sample_rate,
+            gain,
         }
     }
 
@@ -96,6 +114,24 @@ impl AudioChunk {
             left,
             right,
             sample_rate,
+            gain: 1.0,
+        }
+    }
+
+    /// Crée un chunk à partir de données déjà wrappées dans Arc avec gain
+    pub fn from_arc_with_gain(
+        order: u64,
+        left: Arc<Vec<f32>>,
+        right: Arc<Vec<f32>>,
+        sample_rate: u32,
+        gain: f32,
+    ) -> Self {
+        Self {
+            order,
+            left,
+            right,
+            sample_rate,
+            gain,
         }
     }
 
@@ -139,6 +175,48 @@ impl AudioChunk {
     /// ```
     pub fn clone_data(&self) -> (Vec<f32>, Vec<f32>) {
         ((*self.left).clone(), (*self.right).clone())
+    }
+
+    /// Applique le gain et retourne un nouveau chunk avec les données modifiées
+    ///
+    /// Cette méthode crée un nouveau chunk avec les samples multipliés par le gain.
+    /// Utile pour les nodes qui doivent matérialiser le gain avant la sortie.
+    ///
+    /// # Exemples
+    ///
+    /// ```
+    /// use pmoaudio::AudioChunk;
+    ///
+    /// let chunk = AudioChunk::with_gain(0, vec![1.0, 2.0], vec![3.0, 4.0], 48000, 0.5);
+    /// let applied = chunk.apply_gain();
+    ///
+    /// assert_eq!(applied.left[0], 0.5);
+    /// assert_eq!(applied.left[1], 1.0);
+    /// assert_eq!(applied.gain, 1.0); // Gain réinitialisé après application
+    /// ```
+    pub fn apply_gain(&self) -> Self {
+        if (self.gain - 1.0).abs() < f32::EPSILON {
+            // Pas de gain à appliquer, retourner un clone
+            return self.clone();
+        }
+
+        let left: Vec<f32> = self.left.iter().map(|&s| s * self.gain).collect();
+        let right: Vec<f32> = self.right.iter().map(|&s| s * self.gain).collect();
+
+        Self::new(self.order, left, right, self.sample_rate)
+    }
+
+    /// Modifie le gain de ce chunk (retourne un nouveau chunk avec le même Arc mais gain différent)
+    ///
+    /// Cette méthode est très peu coûteuse car elle ne clone que la structure, pas les données audio.
+    pub fn with_modified_gain(&self, new_gain: f32) -> Self {
+        Self {
+            order: self.order,
+            left: self.left.clone(),
+            right: self.right.clone(),
+            sample_rate: self.sample_rate,
+            gain: self.gain * new_gain, // Multiplication des gains
+        }
     }
 }
 

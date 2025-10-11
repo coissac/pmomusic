@@ -77,14 +77,23 @@
 
 mod audio_chunk;
 mod nodes;
+pub mod events;
 
 pub use audio_chunk::AudioChunk;
+pub use events::{
+    AudioDataEvent, EventPublisher, EventReceiver, NodeEvent, NodeListener,
+    SourceNameUpdateEvent, VolumeChangeEvent,
+};
 pub use nodes::{
     buffer_node::BufferNode,
+    chromecast_sink::{ChromecastConfig, ChromecastSink, ChromecastStats, StreamEncoding},
     decoder_node::DecoderNode,
+    disk_sink::{AudioFileFormat, DiskSink, DiskSinkConfig, DiskSinkStats},
     dsp_node::DspNode,
+    mpd_sink::{MpdAudioFormat, MpdConfig, MpdHandle, MpdSink, MpdStats},
     sink_node::{SinkNode, SinkStats},
     source_node::SourceNode,
     timer_node::{TimerHandle, TimerNode},
+    volume_node::{HardwareVolumeNode, VolumeHandle, VolumeNode},
     AudioError, AudioNode, MultiSubscriberNode, SingleSubscriberNode,
 };
