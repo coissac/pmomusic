@@ -1,5 +1,7 @@
 use std::fmt;
+use std::sync::Arc;
 
+use bevy_reflect::Reflect;
 use chrono::{DateTime, Utc};
 use std::sync::RwLock;
 use xmltree::Element;
@@ -44,6 +46,7 @@ impl UpnpInstance for StateVarInstance {
             last_modified: RwLock::new(Utc::now()),
             last_notification: RwLock::new(Utc::now()),
             service: RwLock::new(None),
+            reflexive_cache: RwLock::new(None),
         }
     }
 
@@ -85,6 +88,7 @@ impl Clone for StateVarInstance {
             last_modified: RwLock::new(self.last_modified.read().unwrap().clone()),
             last_notification: RwLock::new(self.last_notification.read().unwrap().clone()),
             service: RwLock::new(self.service.read().unwrap().clone()),
+            reflexive_cache: RwLock::new(None), // Le cache n'est pas cloné, il sera recalculé si nécessaire
         }
     }
 }
@@ -131,6 +135,12 @@ impl StateVarInstance {
         *val = new_value.clone();
         *modified = Utc::now();
 
+        // Invalider le cache réflexif
+        {
+            let mut cache = self.reflexive_cache.write().unwrap();
+            *cache = None;
+        }
+
         // Notifier le service parent si la variable envoie des événements
         if self.is_sending_notification() {
             // Relâcher les locks avant d'appeler le service
@@ -140,7 +150,10 @@ impl StateVarInstance {
 
             if let Some(weak_service) = self.service.read().unwrap().as_ref() {
                 if let Some(service) = weak_service.upgrade() {
-                    service.event_to_be_sent(self.get_name().to_string(), new_value.to_string());
+                    // Obtenir la valeur réflexive (sans propager l'erreur car on est dans une notification)
+                    if let Ok(reflected_value) = self.reflexive_value() {
+                        service.event_to_be_sent(self.get_name().to_string(), reflected_value);
+                    }
                 }
             }
         }
@@ -155,5 +168,69 @@ impl StateVarInstance {
     /// Accès au timestamp
     pub fn last_modified(&self) -> DateTime<Utc> {
         self.last_modified.read().unwrap().clone()
+    }
+
+    /// Retourne la valeur sous forme réflexive (Reflect).
+    ///
+    /// Cette méthode utilise un cache pour optimiser les performances lorsqu'un parser
+    /// est défini. Si la variable a un parser, la valeur String sera parsée et le résultat
+    /// sera mis en cache. Sinon, la StateValue brute est retournée directement comme Reflect.
+    ///
+    /// Le cache est invalidé automatiquement lors de `set_value()`.
+    ///
+    /// # Returns
+    ///
+    /// Un `Arc<dyn Reflect>` contenant soit:
+    /// - La valeur parsée (si un parser est défini)
+    /// - La StateValue brute (sinon)
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let var = StateVarInstance::new(&variable);
+    /// let reflected = var.reflexive_value();
+    /// // reflected peut maintenant être inspecté avec l'API Reflect
+    /// ```
+    pub fn reflexive_value(&self) -> Result<Arc<dyn Reflect>, crate::state_variables::StateVariableError> {
+        // Vérifier si on a un cache valide
+        {
+            let cache = self.reflexive_cache.read().unwrap();
+            if let Some(cached) = cache.as_ref() {
+                return Ok(Arc::clone(cached));
+            }
+        }
+
+        // Pas de cache, il faut calculer la valeur
+        let value = self.value.read().unwrap().clone();
+
+        // Si la variable a un parser, l'utiliser
+        if let Some(parser) = &self.model.parse {
+            // La valeur doit être une String pour être parsée
+            if let crate::variable_types::StateValue::String(s) = &value {
+                match parser(s) {
+                    Ok(parsed) => {
+                        // Convertir Box<dyn Reflect> en Arc<dyn Reflect>
+                        let arc_reflect: Arc<dyn Reflect> = Arc::from(parsed);
+
+                        // Mettre en cache
+                        let mut cache = self.reflexive_cache.write().unwrap();
+                        *cache = Some(Arc::clone(&arc_reflect));
+
+                        return Ok(arc_reflect);
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+
+        // Pas de parser ou la valeur n'est pas une String: convertir la StateValue en Reflect
+        let reflected = value.to_reflect();
+        let arc_reflect: Arc<dyn Reflect> = Arc::from(reflected);
+
+        // Mettre en cache
+        let mut cache = self.reflexive_cache.write().unwrap();
+        *cache = Some(Arc::clone(&arc_reflect));
+
+        Ok(arc_reflect)
     }
 }
