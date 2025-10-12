@@ -1,0 +1,251 @@
+//! Module de gestion de la base de données SQLite pour le cache
+//!
+//! Ce module fournit une interface générique pour gérer les métadonnées
+//! des éléments en cache, avec tracking des accès et des statistiques.
+
+use rusqlite::{Connection, params};
+use serde::Serialize;
+use chrono::Utc;
+use std::path::Path;
+use std::sync::Mutex;
+
+#[cfg(feature = "openapi")]
+use utoipa::ToSchema;
+
+/// Entrée de cache représentant un élément dans la base de données
+#[derive(Debug, Serialize, Clone)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct CacheEntry {
+    /// Clé primaire unique de l'élément (hash SHA1 de l'URL)
+    #[cfg_attr(feature = "openapi", schema(example = "1a2b3c4d5e6f7a8b"))]
+    pub pk: String,
+    /// URL source de l'élément
+    #[cfg_attr(feature = "openapi", schema(example = "https://example.com/resource"))]
+    pub source_url: String,
+    /// Collection à laquelle appartient l'élément (optionnel)
+    #[cfg_attr(feature = "openapi", schema(example = "album:123"))]
+    pub collection: Option<String>,
+    /// Nombre d'accès à l'élément
+    #[cfg_attr(feature = "openapi", schema(example = 42))]
+    pub hits: i32,
+    /// Date/heure du dernier accès (RFC3339)
+    #[cfg_attr(feature = "openapi", schema(example = "2025-01-15T10:30:00Z"))]
+    pub last_used: Option<String>,
+}
+
+/// Base de données SQLite pour le cache
+///
+/// Gère les métadonnées des éléments en cache :
+/// - Clés primaires (pk) et URLs sources
+/// - Statistiques d'utilisation (hits, last_used)
+/// - Opérations CRUD de base
+#[derive(Debug)]
+pub struct DB {
+    conn: Mutex<Connection>,
+    table_name: String,
+}
+
+impl DB {
+    /// Initialise une nouvelle base de données avec une table personnalisée
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Chemin vers le fichier de base de données SQLite
+    /// * `table_name` - Nom de la table à créer
+    ///
+    /// # Exemple
+    ///
+    /// ```rust,no_run
+    /// use pmocache::db::DB;
+    /// use std::path::Path;
+    ///
+    /// let db = DB::init(Path::new("cache.db"), "my_cache").unwrap();
+    /// ```
+    pub fn init(path: &Path, table_name: &str) -> Result<Self, rusqlite::Error> {
+        let conn = Connection::open(path)?;
+
+        let create_table_sql = format!(
+            "CREATE TABLE IF NOT EXISTS {} (
+                pk TEXT PRIMARY KEY,
+                source_url TEXT,
+                collection TEXT,
+                hits INTEGER DEFAULT 0,
+                last_used TEXT
+            )",
+            table_name
+        );
+
+        conn.execute(&create_table_sql, [])?;
+
+        // Créer un index sur la collection pour les requêtes rapides
+        let create_index_sql = format!(
+            "CREATE INDEX IF NOT EXISTS idx_{}_collection ON {} (collection)",
+            table_name, table_name
+        );
+
+        conn.execute(&create_index_sql, [])?;
+
+        Ok(Self {
+            conn: Mutex::new(conn),
+            table_name: table_name.to_string(),
+        })
+    }
+
+    /// Ajoute ou met à jour une entrée dans la base de données
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Clé primaire de l'élément
+    /// * `url` - URL source de l'élément
+    /// * `collection` - Collection optionnelle à laquelle appartient l'élément
+    pub fn add(&self, pk: &str, url: &str, collection: Option<&str>) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!(
+            "INSERT INTO {} (pk, source_url, collection, hits, last_used)
+             VALUES (?1, ?2, ?3, 0, ?4)
+             ON CONFLICT(pk) DO UPDATE SET
+                 source_url = excluded.source_url,
+                 collection = excluded.collection,
+                 last_used = excluded.last_used",
+            self.table_name
+        );
+
+        conn.execute(
+            &sql,
+            params![pk, url, collection, Utc::now().to_rfc3339()],
+        )?;
+
+        Ok(())
+    }
+
+    /// Récupère une entrée de la base de données par sa clé
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Clé primaire de l'élément à récupérer
+    pub fn get(&self, pk: &str) -> rusqlite::Result<CacheEntry> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!(
+            "SELECT pk, source_url, collection, hits, last_used FROM {} WHERE pk = ?1",
+            self.table_name
+        );
+
+        conn.query_row(
+            &sql,
+            [pk],
+            |row| {
+                Ok(CacheEntry {
+                    pk: row.get(0)?,
+                    source_url: row.get(1)?,
+                    collection: row.get(2)?,
+                    hits: row.get(3)?,
+                    last_used: row.get(4)?,
+                })
+            },
+        )
+    }
+
+    /// Met à jour le compteur d'accès et la date du dernier accès
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Clé primaire de l'élément
+    pub fn update_hit(&self, pk: &str) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!(
+            "UPDATE {} SET hits = hits + 1, last_used = ?1 WHERE pk = ?2",
+            self.table_name
+        );
+
+        conn.execute(
+            &sql,
+            params![Utc::now().to_rfc3339(), pk],
+        )?;
+
+        Ok(())
+    }
+
+    /// Purge toutes les entrées de la base de données
+    pub fn purge(&self) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!("DELETE FROM {}", self.table_name);
+        conn.execute(&sql, [])?;
+        Ok(())
+    }
+
+    /// Récupère toutes les entrées, triées par nombre d'accès décroissant
+    pub fn get_all(&self) -> rusqlite::Result<Vec<CacheEntry>> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!(
+            "SELECT pk, source_url, collection, hits, last_used FROM {} ORDER BY hits DESC",
+            self.table_name
+        );
+
+        let mut stmt = conn.prepare(&sql)?;
+
+        let entries = stmt.query_map([], |row| {
+            Ok(CacheEntry {
+                pk: row.get(0)?,
+                source_url: row.get(1)?,
+                collection: row.get(2)?,
+                hits: row.get(3)?,
+                last_used: row.get(4)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(entries)
+    }
+
+    /// Récupère toutes les entrées d'une collection spécifique
+    ///
+    /// # Arguments
+    ///
+    /// * `collection` - Identifiant de la collection
+    pub fn get_by_collection(&self, collection: &str) -> rusqlite::Result<Vec<CacheEntry>> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!(
+            "SELECT pk, source_url, collection, hits, last_used FROM {} WHERE collection = ?1 ORDER BY hits DESC",
+            self.table_name
+        );
+
+        let mut stmt = conn.prepare(&sql)?;
+
+        let entries = stmt.query_map([collection], |row| {
+            Ok(CacheEntry {
+                pk: row.get(0)?,
+                source_url: row.get(1)?,
+                collection: row.get(2)?,
+                hits: row.get(3)?,
+                last_used: row.get(4)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(entries)
+    }
+
+    /// Supprime toutes les entrées d'une collection
+    ///
+    /// # Arguments
+    ///
+    /// * `collection` - Identifiant de la collection à supprimer
+    pub fn delete_collection(&self, collection: &str) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!("DELETE FROM {} WHERE collection = ?1", self.table_name);
+        conn.execute(&sql, [collection])?;
+        Ok(())
+    }
+
+    /// Supprime une entrée de la base de données
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Clé primaire de l'élément à supprimer
+    pub fn delete(&self, pk: &str) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!("DELETE FROM {} WHERE pk = ?1", self.table_name);
+        conn.execute(&sql, [pk])?;
+        Ok(())
+    }
+}

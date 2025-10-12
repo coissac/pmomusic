@@ -1,32 +1,63 @@
+//! Module de gestion du cache d'images avec conversion WebP
+//!
+//! Ce module étend le cache générique de `pmocache` avec des fonctionnalités
+//! spécifiques aux images : conversion WebP et génération de variantes.
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use anyhow::{anyhow, Result};
-use sha1::{Sha1, Digest};
-use tokio::sync::Mutex;
-use crate::db::DB;
+use pmocache::{Cache as GenericCache, CacheConfig};
 use crate::webp;
+use crate::db::DB;
 
+/// Cache d'images avec conversion WebP et génération de variantes
+///
+/// Gère le téléchargement, la conversion en WebP, le stockage et la génération
+/// de variantes de tailles pour les images de couvertures.
 #[derive(Debug)]
 pub struct Cache {
+    cache: GenericCache,
     pub(crate) dir: PathBuf,
     pub(crate) limit: usize,
-    pub db: DB,
-    mu: Arc<Mutex<()>>,
+    pub db: Arc<DB>,
 }
 
 impl Cache {
+    /// Crée un nouveau cache d'images
+    ///
+    /// # Arguments
+    ///
+    /// * `dir` - Répertoire de stockage du cache
+    /// * `limit` - Limite de taille du cache (nombre d'images)
+    ///
+    /// # Exemple
+    ///
+    /// ```rust,no_run
+    /// use pmocovers::Cache;
+    ///
+    /// let cache = Cache::new("./cache", 1000).unwrap();
+    /// ```
     pub fn new(dir: &str, limit: usize) -> Result<Self> {
-        std::fs::create_dir_all(dir)?;
-        let db = DB::init(&PathBuf::from(dir).join("cache.db"))?;
+        let config = CacheConfig::new(dir, limit, "covers", "orig.webp");
+        let cache = GenericCache::new(config)?;
 
         Ok(Self {
             dir: PathBuf::from(dir),
             limit,
-            db,
-            mu: Arc::new(Mutex::new(())),
+            db: Arc::clone(&cache.db),
+            cache,
         })
     }
 
+    /// Télécharge une image depuis une URL et l'ajoute au cache
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - URL de l'image à télécharger
+    ///
+    /// # Returns
+    ///
+    /// La clé primaire (pk) de l'image dans le cache
     pub async fn add_from_url(&self, url: &str) -> Result<String> {
         let response = reqwest::get(url).await?;
         if !response.status().is_success() {
@@ -37,67 +68,60 @@ impl Cache {
         self.add(url, &data).await
     }
 
+    /// S'assure qu'une image est présente dans le cache
+    ///
+    /// Si l'image existe déjà, retourne sa clé. Sinon, la télécharge.
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - URL de l'image
     pub async fn ensure_from_url(&self, url: &str) -> Result<String> {
-        let pk = pk_from_url(url);
-
-        if self.db.get(&pk).is_ok() {
-            let orig_path = self.dir.join(format!("{}.orig.webp", pk));
-            if orig_path.exists() {
-                return Ok(pk);
-            }
-        }
-
-        self.add_from_url(url).await
+        self.cache.ensure_from_url(url, None).await
     }
 
+    /// Ajoute une image au cache avec conversion en WebP
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - URL source de l'image
+    /// * `data` - Données brutes de l'image
     pub async fn add(&self, url: &str, data: &[u8]) -> Result<String> {
-        let pk = pk_from_url(url);
+        let pk = pmocache::pk_from_url(url);
         let orig_path = self.dir.join(format!("{}.orig.webp", pk));
 
-        let _lock = self.mu.lock().await;
-
+        // Vérifier si le fichier existe déjà
         if !orig_path.exists() {
+            // Convertir l'image en WebP
             let img = image::load_from_memory(data)?;
             let webp_data = webp::encode_webp(&img)?;
             tokio::fs::write(&orig_path, webp_data).await?;
         }
 
-        self.db.add(&pk, url)?;
+        // Ajouter à la DB (sans collection pour les covers)
+        self.db.add(&pk, url, None)?;
         Ok(pk)
     }
 
+    /// Récupère le chemin d'une image dans le cache
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Clé primaire de l'image
     pub async fn get(&self, pk: &str) -> Result<PathBuf> {
-        let _lock = self.mu.lock().await;
-
-        self.db.get(pk)?;
-        self.db.update_hit(pk)?;
-
-        let orig_path = self.dir.join(format!("{}.orig.webp", pk));
-        if orig_path.exists() {
-            Ok(orig_path)
-        } else {
-            Err(anyhow!("File not found"))
-        }
+        self.cache.get(pk).await
     }
 
+    /// Supprime tous les fichiers et entrées du cache
     pub async fn purge(&self) -> Result<()> {
-        let _lock = self.mu.lock().await;
-
-        let mut entries = tokio::fs::read_dir(&self.dir).await?;
-        while let Some(entry) = entries.next_entry().await? {
-            if entry.path().is_file() {
-                tokio::fs::remove_file(entry.path()).await?;
-            }
-        }
-
-        self.db.purge().map_err(|e| anyhow!("Database error: {}", e))
+        self.cache.purge().await
     }
 
+    /// Consolide le cache en supprimant les orphelins et en re-téléchargeant les images manquantes
     pub async fn consolidate(&self) -> Result<()> {
-        let _lock = self.mu.lock().await;
-
+        // Récupérer la liste des entrées à traiter
         let entries = self.db.get_all()?;
 
+        // Supprimer les entrées sans fichiers correspondants
         for entry in entries {
             let orig_path = self.dir.join(format!("{}.orig.webp", entry.pk));
             if !orig_path.exists() {
@@ -113,10 +137,11 @@ impl Cache {
             }
         }
 
+        // Supprimer les fichiers sans entrées DB correspondantes
         let mut dir_entries = tokio::fs::read_dir(&self.dir).await?;
         while let Some(entry) = dir_entries.next_entry().await? {
             let path = entry.path();
-            if path.is_file() {
+            if path.is_file() && path != self.dir.join("cache.db") {
                 if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
                     if file_name.ends_with(".orig.webp") {
                         let pk = file_name.trim_end_matches(".orig.webp");
@@ -131,15 +156,8 @@ impl Cache {
         Ok(())
     }
 
+    /// Retourne le répertoire du cache
     pub fn cache_dir(&self) -> String {
         self.dir.to_string_lossy().to_string()
     }
-    
-}
-
-fn pk_from_url(url: &str) -> String {
-    let mut hasher = Sha1::new();
-    hasher.update(url.as_bytes());
-    let result = hasher.finalize();
-    hex::encode(&result[..8])
 }
