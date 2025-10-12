@@ -1,0 +1,116 @@
+//! # pmocache - Système de cache générique pour PMOMusic
+//!
+//! Cette crate fournit un système de cache générique avec support de base de données SQLite
+//! et stockage sur disque. Elle est utilisée comme base pour des caches spécialisés comme
+//! `pmocovers` (cache d'images) et `pmoaudiocache` (cache de pistes audio).
+//!
+//! ## Vue d'ensemble
+//!
+//! `pmocache` fournit les composants de base pour :
+//! - Stocker des fichiers sur disque avec une base de données SQLite pour les métadonnées
+//! - Gérer des collections d'éléments (albums, playlists, etc.)
+//! - Suivre les statistiques d'utilisation (hits, dernière utilisation)
+//! - Télécharger automatiquement depuis des URLs
+//! - Consolider et purger le cache
+//!
+//! ## Architecture
+//!
+//! `pmocache` est conçu comme une base générique :
+//!
+//! ```text
+//! pmocache (générique)
+//!     ├── db.rs       - Base de données SQLite générique
+//!     └── cache.rs    - Système de cache générique
+//!
+//! pmocovers (spécialisé pour les images)
+//!     └── Utilise pmocache + conversion WebP
+//!
+//! pmoaudiocache (spécialisé pour l'audio)
+//!     └── Utilise pmocache + métadonnées audio
+//! ```
+//!
+//! ## Utilisation
+//!
+//! ### Exemple basique
+//!
+//! ```rust,no_run
+//! use pmocache::cache::{Cache, CacheConfig};
+//!
+//! #[tokio::main]
+//! async fn main() -> anyhow::Result<()> {
+//!     let config = CacheConfig::new("./cache", 1000, "my_cache", "dat");
+//!     let cache = Cache::new(config)?;
+//!
+//!     // Ajouter un fichier depuis une URL
+//!     let pk = cache.add_from_url("http://example.com/file.dat", None).await?;
+//!     println!("Fichier ajouté avec clé: {}", pk);
+//!
+//!     // Récupérer le fichier
+//!     let path = cache.get(&pk).await?;
+//!     println!("Fichier stocké à: {:?}", path);
+//!
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ### Utilisation avec des collections
+//!
+//! ```rust,no_run
+//! use pmocache::cache::{Cache, CacheConfig};
+//!
+//! #[tokio::main]
+//! async fn main() -> anyhow::Result<()> {
+//!     let config = CacheConfig::new("./cache", 1000, "audio", "flac");
+//!     let cache = Cache::new(config)?;
+//!
+//!     // Ajouter des pistes d'un album
+//!     let album_id = "album:the_wall";
+//!     cache.add_from_url("http://example.com/track1.flac", Some(album_id)).await?;
+//!     cache.add_from_url("http://example.com/track2.flac", Some(album_id)).await?;
+//!
+//!     // Récupérer toutes les pistes de l'album
+//!     let tracks = cache.get_collection(album_id).await?;
+//!     println!("Album contient {} pistes", tracks.len());
+//!
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ## Structure des fichiers
+//!
+//! ```text
+//! cache/
+//! ├── cache.db                      # Base de données SQLite
+//! ├── 1a2b3c4d.webp                 # Fichier 1
+//! └── 5e6f7a8b.flac                 # Fichier 2
+//! ```
+//!
+//! ## Schéma de base de données
+//!
+//! ```sql
+//! CREATE TABLE {table_name} (
+//!     pk TEXT PRIMARY KEY,           -- Clé unique (hash SHA1 de l'URL)
+//!     source_url TEXT,               -- URL source
+//!     collection TEXT,               -- Collection (album, playlist, etc.)
+//!     hits INTEGER DEFAULT 0,        -- Nombre d'accès
+//!     last_used TEXT                 -- Dernière utilisation (RFC3339)
+//! );
+//! ```
+//!
+//! ## Dépendances principales
+//!
+//! - `rusqlite` : Base de données SQLite
+//! - `reqwest` : Téléchargement HTTP
+//! - `sha1` : Génération de clés
+//! - `tokio` : Runtime asynchrone
+//!
+//! ## Voir aussi
+//!
+//! - [`pmocovers`] : Cache d'images avec conversion WebP
+//! - [`pmoaudiocache`] : Cache de pistes audio
+
+pub mod db;
+pub mod cache;
+
+pub use db::{DB, CacheEntry};
+pub use cache::{Cache, CacheConfig, pk_from_url};
