@@ -1,0 +1,82 @@
+[package]
+name = "pmoparadise"
+version = "0.1.0"
+edition = "2021"
+authors = ["PMOMusic Contributors"]
+description = "Rust client for Radio Paradise streaming service"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/yourusername/pmomusic"
+keywords = ["radio", "paradise", "streaming", "music", "flac"]
+categories = ["multimedia", "api-bindings"]
+
+[dependencies]
+# HTTP client pour les requêtes à l'API Radio Paradise
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+# Gestion asynchrone
+tokio = { version = "1", features = ["full"] }
+
+# Sérialisation/Désérialisation JSON
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Gestion des erreurs
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Streaming de bytes
+bytes = "1.5"
+futures = "0.3"
+
+# Logging (optionnel)
+tracing = { version = "0.1", optional = true }
+
+# URL manipulation
+url = "2.5"
+
+# Per-track feature dependencies
+claxon = { version = "0.4", optional = true }
+hound = { version = "3.5", optional = true }
+tempfile = { version = "3.8", optional = true }
+
+# UPnP Media Server dependencies
+pmoupnp = { path = "../pmoupnp", optional = true }
+pmoserver = { path = "../pmoserver", optional = true }
+pmodidl = { path = "../pmodidl", optional = true }
+uuid = { version = "1.18", optional = true }
+
+[features]
+default = ["metadata-only"]
+# Mode métadonnées seules (pas de décodage FLAC)
+metadata-only = []
+# Active le décodage FLAC par-track
+per-track = ["dep:claxon", "dep:hound", "dep:tempfile"]
+# Active le logging
+logging = ["dep:tracing"]
+# Active le media server UPnP
+mediaserver = ["dep:pmoupnp", "dep:pmoserver", "dep:pmodidl", "dep:uuid"]
+
+[dev-dependencies]
+# Tests
+tokio-test = "0.4"
+wiremock = "0.6"
+# Pour les exemples avec logging
+tracing-subscriber = "0.3"
+
+[[example]]
+name = "now_playing"
+path = "examples/now_playing.rs"
+
+[[example]]
+name = "stream_block"
+path = "examples/stream_block.rs"
+
+[[example]]
+name = "extract_track"
+path = "examples/extract_track.rs"
+required-features = ["per-track"]
+
+[[example]]
+name = "upnp_mediaserver"
+path = "examples/upnp_mediaserver.rs"
+required-features = ["mediaserver"]
