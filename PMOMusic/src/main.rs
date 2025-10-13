@@ -18,7 +18,7 @@ async fn main() {
     let mut server = ServerBuilder::new_configured().build();
 
     // Initialiser le logging et enregistrer les routes de logs
-    server.init_logging(LoggingOptions::default()).await;
+    server.init_logging().await;
 
 
     info!("📡 Registering the cover cache...");

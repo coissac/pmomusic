@@ -486,20 +486,14 @@ impl Server {
     /// # async fn main() {
     /// let mut server = ServerBuilder::new_configured().build();
     ///
-    /// // Initialiser les logs avec console
-    /// server.init_logging(LoggingOptions::default()).await;
-    ///
-    /// // Ou sans console
-    /// server.init_logging(LoggingOptions {
-    ///     buffer_capacity: 1000,
-    ///     enable_console: false,
-    /// }).await;
+    /// // Initialiser les logs
+    /// server.init_logging().await;
     ///
     /// server.start().await;
     /// # }
     /// ```
-    pub async fn init_logging(&mut self, options: LoggingOptions) {
-        let log_state = init_logging(options);
+    pub async fn init_logging(&mut self) {
+        let log_state = init_logging();
 
         // Enregistrer automatiquement les routes de logging
         self.add_handler_with_state("/log-sse", log_sse, log_state.clone())
