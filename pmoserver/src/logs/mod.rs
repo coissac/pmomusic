@@ -1,6 +1,7 @@
 // logs.rs
 mod sselayer;
 
+use pmoconfig::get_config;
 pub use sselayer::SseLayer;
 
 use std::{
@@ -61,13 +62,7 @@ impl LogState {
         *self.max_level.write().unwrap() = level;
 
         // Convertir Level en LevelFilter
-        let level_filter = match level {
-            Level::ERROR => LevelFilter::ERROR,
-            Level::WARN => LevelFilter::WARN,
-            Level::INFO => LevelFilter::INFO,
-            Level::DEBUG => LevelFilter::DEBUG,
-            Level::TRACE => LevelFilter::TRACE,
-        };
+        let level_filter = level_to_levelfilter(level);
 
         // Recharger le filtre dynamiquement
         if let Err(e) = self.reload_handle.write().unwrap().reload(level_filter) {
@@ -228,19 +223,39 @@ impl Default for LoggingOptions {
 ///     enable_console: true,
 /// });
 /// ```
-pub fn init_logging(options: LoggingOptions) -> LogState {
+pub fn init_logging() -> LogState {
+    let config = get_config();
     // Créer un filtre rechargeable qui commence à TRACE
-    let (filter, reload_handle) = reload::Layer::new(LevelFilter::TRACE);
+
+    let log_level = match config.get_log_min_level() {
+        Ok(l) => match string_to_level(&l) {
+            Some(lev) => level_to_levelfilter(lev),
+            None => LevelFilter::INFO,
+        }
+        Err(_) => LevelFilter::INFO
+    };
+
+    let (filter, reload_handle) = reload::Layer::new(log_level);
+
+    let buffer_capacity = match config.get_log_cache_size() {
+        Ok(c) => c,
+        Err(_) => 500
+    };
 
     // Créer le LogState avec le handle de rechargement
-    let log_state = LogState::new(options.buffer_capacity, reload_handle);
+    let log_state = LogState::new(buffer_capacity, reload_handle);
 
     // Construire le subscriber avec le filtre rechargeable
     let subscriber = Registry::default()
         .with(filter)
         .with(SseLayer::new(log_state.clone()));
 
-    if options.enable_console {
+    let enable_console = match config.get_log_enable_console() {
+        Ok(b) => b,
+        Err(_) => true,
+    };
+
+    if enable_console {
         subscriber
             .with(
                 tracing_subscriber::fmt::layer()
@@ -341,4 +356,14 @@ fn level_to_string(level: Level) -> String {
         Level::TRACE => "TRACE",
     }
     .to_string()
+}
+
+fn level_to_levelfilter(level: Level) -> LevelFilter {
+    match level {
+            Level::ERROR => LevelFilter::ERROR,
+            Level::WARN => LevelFilter::WARN,
+            Level::INFO => LevelFilter::INFO,
+            Level::DEBUG => LevelFilter::DEBUG,
+            Level::TRACE => LevelFilter::TRACE,
+        }
 }

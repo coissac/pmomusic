@@ -6,19 +6,36 @@
 //! ## Vue d'ensemble
 //!
 //! `pmoaudiocache` étend `pmocache` pour gérer spécifiquement les fichiers audio :
+//! - **Cache à deux phases** : métadonnées immédiates + conversion asynchrone
 //! - Téléchargement et stockage de pistes audio
-//! - Extraction automatique des métadonnées (titre, artiste, album, etc.)
+//! - Extraction automatique des métadonnées (fichier + services externes)
 //! - Gestion de collections basées sur artiste/album
 //! - Cache persistant avec base de données SQLite
 //! - API HTTP optionnelle pour récupérer les pistes
 //!
-//! ## Fonctionnalités
+//! ## Fonctionnalités principales
+//!
+//! ### ⚡ Cache à deux phases
+//!
+//! Le système de cache permet de servir les métadonnées **immédiatement** (< 1 seconde)
+//! pendant que la conversion FLAC s'effectue en arrière-plan :
+//!
+//! **Phase 1 (immédiate)** :
+//! - Extraction des métadonnées du fichier original
+//! - Fusion avec métadonnées externes (Qobuz, Radio Paradise, CD)
+//! - Stockage en base de données
+//! - Service immédiat du DIDL-Lite pour MediaServer
+//!
+//! **Phase 2 (asynchrone)** :
+//! - Conversion automatique en FLAC en arrière-plan
+//! - Suivi du statut de conversion
+//! - Nettoyage automatique des fichiers temporaires
 //!
 //! ### 📦 Gestion du cache
 //! - Téléchargement automatique depuis des URLs
 //! - **Conversion automatique en FLAC** (standardisation du stockage)
 //! - Stockage persistant sur disque
-//! - Base de données SQLite pour le tracking
+//! - Base de données SQLite pour le tracking des métadonnées ET du statut
 //! - Extraction des métadonnées audio (via lofty)
 //!
 //! ### 🎵 Gestion des collections
@@ -54,19 +71,59 @@
 //! ### Exemple basique
 //!
 //! ```rust,no_run
-//! use pmoaudiocache::AudioCache;
+//! use pmoaudiocache::{AudioCache, AudioMetadata};
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
 //!     let cache = AudioCache::new("./audio_cache", 1000)?;
 //!
-//!     // Ajouter une piste depuis une URL
-//!     let (pk, metadata) = cache.add_from_url("http://example.com/track.flac").await?;
-//!     println!("Piste ajoutée: {} - {}", metadata.artist.unwrap(), metadata.title.unwrap());
+//!     // Ajouter une piste depuis une URL (sans métadonnées externes)
+//!     let (pk, metadata) = cache.add_from_url("http://example.com/track.flac", None).await?;
+//!     println!("Piste ajoutée: {} - {}",
+//!              metadata.artist.as_deref().unwrap_or("Unknown"),
+//!              metadata.title.as_deref().unwrap_or("Unknown"));
 //!
-//!     // Récupérer la piste
-//!     let (path, metadata) = cache.get(&pk).await?;
-//!     println!("Piste stockée à: {:?}", path);
+//!     // Les métadonnées sont disponibles IMMÉDIATEMENT
+//!     let metadata = cache.get_metadata(&pk).await?;
+//!     println!("Métadonnées disponibles: {:?}", metadata);
+//!
+//!     // Le fichier FLAC est disponible après conversion
+//!     let file_path = cache.get_file(&pk).await?;
+//!     println!("Fichier FLAC stocké à: {:?}", file_path);
+//!
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ### Exemple avec métadonnées externes (Qobuz, Radio Paradise, etc.)
+//!
+//! ```rust,no_run
+//! use pmoaudiocache::{AudioCache, AudioMetadata};
+//!
+//! #[tokio::main]
+//! async fn main() -> anyhow::Result<()> {
+//!     let cache = AudioCache::new("./audio_cache", 1000)?;
+//!
+//!     // Métadonnées provenant d'un service externe (Qobuz, etc.)
+//!     let external_metadata = AudioMetadata {
+//!         title: Some("Wish You Were Here".to_string()),
+//!         artist: Some("Pink Floyd".to_string()),
+//!         album: Some("Wish You Were Here".to_string()),
+//!         year: Some(1975),
+//!         track_number: Some(1),
+//!         ..Default::default()
+//!     };
+//!
+//!     // Ajouter la piste avec fusion des métadonnées
+//!     // (les métadonnées externes ont priorité sur celles du fichier)
+//!     let (pk, metadata) = cache.add_from_url(
+//!         "http://example.com/track.flac",
+//!         Some(external_metadata)
+//!     ).await?;
+//!
+//!     // Générer immédiatement le DIDL-Lite pour MediaServer
+//!     let didl = cache.get_didl(&pk, "http://localhost:8080").await?;
+//!     println!("DIDL-Lite disponible immédiatement:\n{}", didl);
 //!
 //!     Ok(())
 //! }
@@ -82,8 +139,8 @@
 //!     let cache = AudioCache::new("./audio_cache", 1000)?;
 //!
 //!     // Ajouter des pistes (elles seront automatiquement regroupées par album)
-//!     cache.add_from_url("http://example.com/track1.flac").await?;
-//!     cache.add_from_url("http://example.com/track2.flac").await?;
+//!     cache.add_from_url("http://example.com/track1.flac", None).await?;
+//!     cache.add_from_url("http://example.com/track2.flac", None).await?;
 //!
 //!     // Lister les collections disponibles
 //!     let collections = cache.list_collections().await?;
@@ -93,11 +150,11 @@
 //!
 //!     // Récupérer toutes les pistes d'un album
 //!     let tracks = cache.get_collection("pink_floyd:wish_you_were_here").await?;
-//!     for (pk, path, metadata) in tracks {
+//!     for entry in tracks {
 //!         println!("{:02}. {} - {}",
-//!             metadata.track_number.unwrap_or(0),
-//!             metadata.title.unwrap_or_default(),
-//!             path.display()
+//!             entry.metadata.track_number.unwrap_or(0),
+//!             entry.metadata.title.as_deref().unwrap_or("Unknown"),
+//!             entry.pk
 //!         );
 //!     }
 //!
@@ -129,11 +186,23 @@
 //!
 //! Les endpoints suivants sont disponibles :
 //!
-//! - `GET /audio/tracks/{pk}` - Récupère une piste audio
-//! - `GET /audio/tracks/{pk}/metadata` - Récupère les métadonnées d'une piste
-//! - `GET /audio/collections` - Liste les collections disponibles
-//! - `GET /audio/collections/{collection}` - Récupère toutes les pistes d'une collection
+//! ### Routes directes
+//! - `GET /audio/tracks/{pk}/stream` - Stream le fichier FLAC (attend la conversion si nécessaire)
+//! - `GET /audio/tracks/{pk}/metadata` - Récupère les métadonnées JSON (disponible immédiatement)
+//! - `GET /audio/tracks/{pk}/didl` - Récupère le DIDL-Lite XML (disponible immédiatement)
+//! - `GET /audio/tracks/{pk}/status` - Récupère le statut de conversion
 //! - `GET /audio/stats` - Statistiques du cache
+//! - `GET /audio/collections` - Liste les collections disponibles
+//!
+//! ### API REST (sous `/api/audio`)
+//! - `GET /api/audio` - Liste toutes les pistes
+//! - `POST /api/audio` - Ajoute une piste depuis une URL
+//! - `GET /api/audio/{pk}` - Informations complètes d'une piste
+//! - `DELETE /api/audio/{pk}` - Supprime une piste
+//! - `GET /api/audio/{pk}/metadata` - Métadonnées d'une piste
+//! - `GET /api/audio/{pk}/didl` - DIDL-Lite d'une piste
+//! - `POST /api/audio/consolidate` - Consolide le cache (nettoie les entrées orphelines)
+//! - `DELETE /api/audio` - Purge tout le cache
 //!
 //! ## Métadonnées supportées
 //!
