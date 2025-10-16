@@ -5,7 +5,6 @@ pub mod upnp_server;
 pub mod upnp_api;
 pub mod actions;
 pub mod devices;
-pub mod mediarenderer;
 pub mod services;
 pub mod soap;
 pub mod ssdp;

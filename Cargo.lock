@@ -10,6 +10,7 @@ dependencies = [
  "pmoapp",
  "pmoconfig",
  "pmocovers",
+ "pmomediarenderer",
  "pmoserver",
  "pmoupnp",
  "serde_json",
@@ -2331,6 +2332,16 @@ dependencies = [
  "serde",
  "utoipa",
  "utoipa-swagger-ui",
+]
+
+[[package]]
+name = "pmomediarenderer"
+version = "0.1.0"
+dependencies = [
+ "bevy_reflect",
+ "once_cell",
+ "pmodidl",
+ "pmoupnp",
 ]
 
 [[package]]
