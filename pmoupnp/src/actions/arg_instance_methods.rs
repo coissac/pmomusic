@@ -137,10 +137,10 @@ impl UpnpInstance for ArgumentInstance {
                 name: from.get_name().clone(),
                 object_type: "ArgumentInstance".to_string(),
             },
-            
+
             // Clone du modèle pour référence future
             model: from.clone(),
-            
+
             // Initialisation à None - sera lié plus tard via bind_variable()
             // Arc<RwLock<...>> permet la modification thread-safe post-construction
             variable_instance: Arc::new(RwLock::new(None)),
