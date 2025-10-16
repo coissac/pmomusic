@@ -2353,7 +2353,10 @@ dependencies = [
  "claxon",
  "futures",
  "hound",
+ "pmoaudiocache",
+ "pmocovers",
  "pmodidl",
+ "pmoplaylist",
  "pmoserver",
  "pmosource",
  "pmoupnp",
@@ -2369,6 +2372,15 @@ dependencies = [
  "url",
  "uuid",
  "wiremock",
+]
+
+[[package]]
+name = "pmoplaylist"
+version = "0.1.0"
+dependencies = [
+ "pmodidl",
+ "serde",
+ "tokio",
 ]
 
 [[package]]
@@ -2424,8 +2436,14 @@ dependencies = [
 name = "pmosource"
 version = "0.1.0"
 dependencies = [
- "image",
+ "anyhow",
+ "async-trait",
+ "pmoaudiocache",
+ "pmocovers",
+ "pmodidl",
+ "pmoplaylist",
  "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]

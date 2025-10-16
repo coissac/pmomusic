@@ -48,6 +48,13 @@ uuid = { version = "1.18", optional = true }
 # Common music source traits
 pmosource = { path = "../pmosource" }
 
+# Playlist management for FIFO support
+pmoplaylist = { path = "../pmoplaylist" }
+
+# Cache support
+pmocovers = { path = "../pmocovers", optional = true }
+pmoaudiocache = { path = "../pmoaudiocache", optional = true }
+
 [features]
 default = ["metadata-only"]
 # Mode métadonnées seules (pas de décodage FLAC)
@@ -58,6 +65,8 @@ per-track = ["dep:claxon", "dep:hound", "dep:tempfile"]
 logging = ["dep:tracing"]
 # Active le media server UPnP
 mediaserver = ["dep:pmoupnp", "dep:pmoserver", "dep:pmodidl", "dep:uuid"]
+# Active le cache d'images et audio
+cache = ["dep:pmocovers", "dep:pmoaudiocache", "logging"]
 
 [dev-dependencies]
 # Tests
@@ -65,6 +74,9 @@ tokio-test = "0.4"
 wiremock = "0.6"
 # Pour les exemples avec logging
 tracing-subscriber = "0.3"
+# Pour l'exemple with_cache
+pmocovers = { path = "../pmocovers" }
+pmoaudiocache = { path = "../pmoaudiocache" }
 
 [[example]]
 name = "now_playing"
@@ -83,3 +95,8 @@ required-features = ["per-track"]
 name = "upnp_mediaserver"
 path = "examples/upnp_mediaserver.rs"
 required-features = ["mediaserver"]
+
+[[example]]
+name = "with_cache"
+path = "examples/with_cache.rs"
+required-features = ["cache"]
