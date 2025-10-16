@@ -12,6 +12,24 @@ categories = ["multimedia"]
 [dependencies]
 # Gestion des erreurs
 thiserror = "1.0"
+anyhow = "1.0"
 
-# Image format support
-image = { version = "0.25", default-features = false, features = ["webp"] }
+# Async traits
+async-trait = "0.1"
+
+# Async runtime
+tokio = { version = "1.0", features = ["sync", "time"] }
+
+# DIDL-Lite support
+pmodidl = { path = "../pmodidl" }
+
+# Playlist/FIFO support
+pmoplaylist = { path = "../pmoplaylist" }
+
+# Optional cache integrations
+pmoaudiocache = { path = "../pmoaudiocache", optional = true }
+pmocovers = { path = "../pmocovers", optional = true }
+
+[features]
+default = ["cache"]
+cache = ["pmoaudiocache", "pmocovers"]

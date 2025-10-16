@@ -180,12 +180,63 @@
 //! }
 //! ```
 //!
+//! ## Caching Support (Feature: `cache`)
+//!
+//! `pmoparadise` can optionally integrate with `pmocovers` and `pmoaudiocache` to cache
+//! cover images and audio tracks locally:
+//!
+//! ```no_run
+//! # #[cfg(feature = "cache")]
+//! # {
+//! use pmoparadise::{RadioParadiseClient, RadioParadiseSource};
+//! use pmocovers::Cache as CoverCache;
+//! use pmoaudiocache::AudioCache;
+//! use std::sync::Arc;
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     // Create caches
+//!     let cover_cache = Arc::new(CoverCache::new("./cache/covers", 500)?);
+//!     let audio_cache = Arc::new(AudioCache::new("./cache/audio", 100)?);
+//!
+//!     // Create client and source with caching
+//!     let client = RadioParadiseClient::new().await?;
+//!     let source = RadioParadiseSource::new_with_cache(
+//!         client.clone(),
+//!         "http://localhost:8080",
+//!         50,
+//!         Some(cover_cache),
+//!         Some(audio_cache),
+//!     );
+//!
+//!     // Add songs - they will be automatically cached
+//!     let now_playing = client.now_playing().await?;
+//!     if let Some(song) = &now_playing.current_song {
+//!         let block = Arc::new(now_playing.block.clone());
+//!         source.add_song(block, song, 0).await?;
+//!         // Cover and audio are now cached!
+//!     }
+//!
+//!     Ok(())
+//! }
+//! # }
+//! ```
+//!
+//! **Benefits**:
+//! - Cover images are automatically downloaded and converted to WebP
+//! - Audio tracks are cached as FLAC with metadata preserved
+//! - Subsequent access is instant (no re-download)
+//! - URIs returned by `resolve_uri()` point to cached versions
+//!
+//! See the `with_cache` example for a complete demonstration.
+//!
 //! ## Cargo Features
 //!
 //! - `default = ["metadata-only"]`: Standard metadata and streaming (no FLAC decoding)
 //! - `per-track`: Enable FLAC decoding and per-track extraction (adds `claxon`, `hound`, `tempfile`)
 //! - `logging`: Enable tracing logs for debugging
 //! - `mediaserver`: Enable UPnP/DLNA Media Server (adds `pmoupnp`, `pmoserver`, `pmodidl`)
+//! - `cache`: Enable cover and audio caching support (adds `pmocovers`, `pmoaudiocache`, enables `logging`)
 //!
 //! ## See Also
 //!
