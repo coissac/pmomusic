@@ -195,6 +195,7 @@
 pub mod client;
 pub mod error;
 pub mod models;
+pub mod source;
 pub mod stream;
 
 #[cfg(feature = "per-track")]
@@ -207,6 +208,7 @@ pub mod mediaserver;
 pub use client::{ClientBuilder, RadioParadiseClient};
 pub use error::{Error, Result};
 pub use models::{Bitrate, Block, DurationMs, EventId, NowPlaying, Song};
+pub use source::RadioParadiseSource;
 pub use stream::BlockStream;
 
 #[cfg(feature = "per-track")]

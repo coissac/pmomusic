@@ -151,6 +151,7 @@ pub mod client;
 pub mod didl;
 pub mod error;
 pub mod models;
+pub mod source;
 
 // Extension pmoserver (feature-gated)
 #[cfg(feature = "pmoserver")]
@@ -165,6 +166,7 @@ mod pmoserver_impl;
 pub use client::QobuzClient;
 pub use error::{QobuzError, Result};
 pub use models::{Album, Artist, AudioFormat, Genre, Playlist, SearchResult, Track};
+pub use source::QobuzSource;
 
 /// Ré-exporte les types DIDL pour faciliter l'utilisation
 pub use didl::ToDIDL;

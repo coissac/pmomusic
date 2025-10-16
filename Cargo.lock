@@ -2355,6 +2355,7 @@ dependencies = [
  "hound",
  "pmodidl",
  "pmoserver",
+ "pmosource",
  "pmoupnp",
  "reqwest",
  "serde",
@@ -2384,6 +2385,7 @@ dependencies = [
  "pmocovers",
  "pmodidl",
  "pmoserver",
+ "pmosource",
  "reqwest",
  "serde",
  "serde_json",
@@ -2416,6 +2418,14 @@ dependencies = [
  "tracing-subscriber",
  "utoipa",
  "utoipa-swagger-ui",
+]
+
+[[package]]
+name = "pmosource"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
