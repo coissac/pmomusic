@@ -45,6 +45,9 @@ pmoserver = { path = "../pmoserver", optional = true }
 pmodidl = { path = "../pmodidl", optional = true }
 uuid = { version = "1.18", optional = true }
 
+# Common music source traits
+pmosource = { path = "../pmosource" }
+
 [features]
 default = ["metadata-only"]
 # Mode métadonnées seules (pas de décodage FLAC)

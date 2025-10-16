@@ -47,6 +47,9 @@ axum = { version = "0.8", optional = true }
 # Documentation OpenAPI
 utoipa = { version = "5.3", optional = true }
 
+# Common music source traits
+pmosource = { path = "../pmosource" }
+
 [features]
 default = []
 # Feature pour activer les extensions pmoserver
