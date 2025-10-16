@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 pmoconfig = { path = "../pmoconfig" }
 pmoupnp =  { path = "../pmoupnp"}
+pmomediarenderer = { path = "../pmomediarenderer" }
 pmoserver = { path = "../pmoserver" }
 pmocovers = { path = "../pmocovers", features = ["pmoserver"] }
 pmoapp = { path = "../pmoapp", features = ["pmoserver"] }

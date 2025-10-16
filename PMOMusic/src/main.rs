@@ -1,9 +1,9 @@
 use pmoupnp::{
-    mediarenderer::MEDIA_RENDERER,
     ssdp::SsdpServer,
     upnp_api::UpnpApiExt,
     UpnpServer,
 };
+use pmomediarenderer::MEDIA_RENDERER;
 use pmoserver::{
     logs::LoggingOptions,
     ServerBuilder
