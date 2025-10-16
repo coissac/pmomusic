@@ -113,25 +113,27 @@ pub type ActionFuture = Pin<Box<dyn Future<Output = Result<(), crate::actions::A
 /// # Signature
 ///
 /// ```ignore
-/// Fn(Arc<ActionInstance>, ActionData) -> ActionFuture
+/// Fn(Arc<ActionInstance>) -> ActionFuture
 /// ```
 ///
 /// Prend :
 /// - [`Arc<ActionInstance>`](crate::actions::ActionInstance) : L'instance de l'action avec accès aux variables liées
-/// - [`ActionData`] : Les données d'entrée (arguments IN)
+///   qui contiennent déjà les valeurs des arguments IN
 ///
 /// Retourne un [`ActionFuture`] qui se résout en `Result<(), ActionError>`.
 ///
 /// # Responsabilités
 ///
 /// Le handler est responsable de :
-/// - Lire les arguments d'entrée depuis `data`
+/// - Lire les arguments d'entrée depuis les variables liées à l'instance
 /// - Exécuter la logique métier
 /// - Modifier les variables d'instance selon les besoins
 /// - Retourner `Ok(())` en cas de succès ou `Err(ActionError)` en cas d'erreur
 ///
 /// La méthode [`ActionInstance::run()`](crate::actions::ActionInstance::run) s'occupe
-/// automatiquement de collecter les valeurs OUT si le handler retourne `Ok(())`.
+/// automatiquement de :
+/// 1. Stocker les valeurs IN dans les variables liées avant d'appeler le handler
+/// 2. Collecter les valeurs OUT si le handler retourne `Ok(())`
 ///
 /// # Traits requis
 ///
@@ -147,8 +149,8 @@ pub type ActionFuture = Pin<Box<dyn Future<Output = Result<(), crate::actions::A
 /// use pmoupnp::action_handler;
 /// use pmoupnp::actions::ActionError;
 ///
-/// let handler = action_handler!(|instance, data| {
-///     // Logique métier
+/// let handler = action_handler!(|instance| {
+///     // Logique métier - les valeurs IN sont déjà dans les variables
 ///     Ok::<(), ActionError>(())
 /// });
 /// ```
@@ -156,10 +158,10 @@ pub type ActionFuture = Pin<Box<dyn Future<Output = Result<(), crate::actions::A
 /// ## Manuellement
 ///
 /// ```rust
-/// use pmoupnp::actions::{ActionData, ActionHandler, ActionInstance, ActionError};
+/// use pmoupnp::actions::{ActionHandler, ActionInstance, ActionError};
 /// use std::sync::Arc;
 ///
-/// let handler: ActionHandler = Arc::new(|instance, data| {
+/// let handler: ActionHandler = Arc::new(|instance| {
 ///     Box::pin(async move {
 ///         // Votre logique async
 ///         Ok::<(), ActionError>(())
@@ -174,7 +176,7 @@ pub type ActionFuture = Pin<Box<dyn Future<Output = Result<(), crate::actions::A
 /// - Le handler capture les variables par `move`
 /// - Le future est automatiquement `Send` si les captures le sont
 /// - Utilisez la macro `action_handler!` pour simplifier la création
-pub type ActionHandler = Arc<dyn Fn(Arc<crate::actions::ActionInstance>, ActionData) -> ActionFuture + Send + Sync>;
+pub type ActionHandler = Arc<dyn Fn(Arc<crate::actions::ActionInstance>) -> ActionFuture + Send + Sync>;
 
 /// Macro pour créer facilement un ActionHandler.
 ///
@@ -184,16 +186,16 @@ pub type ActionHandler = Arc<dyn Fn(Arc<crate::actions::ActionInstance>, ActionD
 /// # Syntaxe
 ///
 /// ```ignore
-/// action_handler!(|instance, data| {
+/// action_handler!(|instance| {
 ///     // votre logique async (automatiquement dans un bloc async move)
-///     data
+///     // Les valeurs IN sont déjà disponibles dans les variables liées
 /// })
 /// ```
 ///
 /// # Arguments
 ///
 /// - `instance` : Paramètre de type `Arc<`[`ActionInstance`](crate::actions::ActionInstance)`>` - L'instance de l'action
-/// - `data` : Paramètre de type [`ActionData`] (Arc<HashMap<String, StateValue>>) - Les données d'entrée
+///   avec les valeurs IN déjà stockées dans les variables liées
 /// - Le corps du bloc peut contenir du code asynchrone (`.await`)
 ///
 /// # Type de retour
@@ -208,56 +210,61 @@ pub type ActionHandler = Arc<dyn Fn(Arc<crate::actions::ActionInstance>, ActionD
 /// use pmoupnp::action_handler;
 ///
 /// // Handler minimal - run() collectera automatiquement les OUT
-/// let handler = action_handler!(|instance, data| {
+/// let handler = action_handler!(|instance| {
 ///     Ok(()) // Succès, pas d'erreur
 /// });
 /// ```
 ///
-/// ## Exemple 2 : Handler qui modifie une variable avec gestion d'erreur
+/// ## Exemple 2 : Handler qui lit et modifie des variables
 ///
 /// ```ignore
 /// use pmoupnp::action_handler;
 /// use pmoupnp::actions::ActionError;
 ///
-/// let handler = action_handler!(|instance, data| {
-///     // Lire un argument d'entrée
-///     let volume = data.get("DesiredVolume")
-///         .ok_or_else(|| ActionError::MissingArgument("DesiredVolume".to_string()))?;
-///
-///     // Modifier la variable d'instance
-///     let arg = instance.argument("CurrentVolume")
-///         .ok_or_else(|| ActionError::ArgumentNotFound("CurrentVolume".to_string()))?;
+/// let handler = action_handler!(|instance| {
+///     // Lire un argument d'entrée depuis la variable liée
+///     let arg = instance.argument("DesiredVolume")
+///         .ok_or_else(|| ActionError::ArgumentNotFound("DesiredVolume".to_string()))?;
 ///
 ///     let var = arg.get_variable_instance()
 ///         .ok_or_else(|| ActionError::VariableNotBound)?;
 ///
-///     var.set_value(volume.clone());
+///     let volume = var.value();
+///
+///     // Modifier une autre variable d'instance
+///     let current_volume = instance.argument("CurrentVolume")
+///         .ok_or_else(|| ActionError::ArgumentNotFound("CurrentVolume".to_string()))?
+///         .get_variable_instance()
+///         .ok_or_else(|| ActionError::VariableNotBound)?;
+///
+///     current_volume.set_value(volume);
 ///
 ///     Ok(()) // Succès - run() collectera CurrentVolume dans les OUT
 /// });
 /// ```
 ///
-/// ## Exemple 3 : Handler avec logique métier asynchrone et gestion d'erreur
+/// ## Exemple 3 : Handler avec logique métier asynchrone
 ///
 /// ```ignore
 /// use pmoupnp::action_handler;
 /// use pmoupnp::actions::ActionError;
 ///
-/// let handler = action_handler!(|instance, data| {
+/// let handler = action_handler!(|instance| {
+///     // Lire les paramètres depuis les variables liées
+///     let uri_var = instance.argument("CurrentURI")
+///         .and_then(|a| a.get_variable_instance())
+///         .ok_or_else(|| ActionError::VariableNotBound)?;
+///
+///     let uri = uri_var.value();
+///
 ///     // Appel asynchrone à un service externe
-///     let response = external_service::fetch_data().await
+///     let response = external_service::fetch_metadata(&uri).await
 ///         .map_err(|e| ActionError::ExternalError(e.to_string()))?;
 ///
 ///     // Mettre à jour les variables selon la réponse
-///     if let Some(arg) = instance.argument("Status") {
+///     if let Some(arg) = instance.argument("Metadata") {
 ///         if let Some(var) = arg.get_variable_instance() {
-///             var.set_value(StateValue::String(response.status));
-///         }
-///     }
-///
-///     if let Some(arg) = instance.argument("Message") {
-///         if let Some(var) = arg.get_variable_instance() {
-///             var.set_value(StateValue::String(response.message));
+///             var.set_value(StateValue::String(response.metadata));
 ///         }
 ///     }
 ///
@@ -276,7 +283,7 @@ pub type ActionHandler = Arc<dyn Fn(Arc<crate::actions::ActionInstance>, ActionD
 /// // Contexte partagé (ex: état d'un lecteur média)
 /// let player_state = Arc::new(Mutex::new(PlayerState::Stopped));
 ///
-/// let handler = action_handler!(|instance, data| {
+/// let handler = action_handler!(|instance| {
 ///     // Vérifier l'état actuel
 ///     {
 ///         let state = player_state.lock().await;
@@ -309,8 +316,8 @@ pub type ActionHandler = Arc<dyn Fn(Arc<crate::actions::ActionInstance>, ActionD
 /// - Le résultat est automatiquement boxé et arcé
 #[macro_export]
 macro_rules! action_handler {
-    (|$instance:ident, $data:ident| $body:block) => {
-        std::sync::Arc::new(|$instance: std::sync::Arc<$crate::actions::ActionInstance>, $data: $crate::actions::ActionData| {
+    (|$instance:ident| $body:block) => {
+        std::sync::Arc::new(|$instance: std::sync::Arc<$crate::actions::ActionInstance>| {
             Box::pin(async move $body)
         })
     };

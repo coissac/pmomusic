@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tracing::debug;
+use tracing::{debug, trace};
 use xmltree::{Element, XMLNode};
 
 use crate::{
@@ -165,9 +165,10 @@ impl ActionInstance {
     /// Exécute l'action avec les données fournies.
     ///
     /// Cette méthode :
-    /// 1. Exécute le handler avec les données d'entrée
-    /// 2. Collecte automatiquement les valeurs OUT via [`get_out_values()`](Self::get_out_values)
-    /// 3. Retourne les résultats
+    /// 1. Stocke les valeurs IN dans les variables liées
+    /// 2. Exécute le handler (qui peut accéder aux valeurs IN via les variables)
+    /// 3. Collecte automatiquement les valeurs OUT via [`get_out_values()`](Self::get_out_values)
+    /// 4. Retourne les résultats
     ///
     /// # Arguments
     ///
@@ -185,9 +186,13 @@ impl ActionInstance {
     ///
     /// # Fonctionnement
     ///
-    /// Le handler n'a pas besoin de retourner les valeurs OUT - il modifie simplement
-    /// les variables d'instance et retourne `Ok(())`. La méthode `run()` collecte automatiquement
-    /// toutes les valeurs des arguments marqués comme OUT si le handler réussit.
+    /// 1. Pour chaque argument IN, la valeur fournie dans `data` est stockée dans la
+    ///    variable d'état liée à cet argument
+    /// 2. Le handler est appelé avec l'instance (il peut lire les valeurs IN via
+    ///    `argument.get_variable_instance().value()`)
+    /// 3. Le handler modifie les variables selon ses besoins et retourne `Ok(())` ou `Err(...)`
+    /// 4. Si le handler réussit, `run()` collecte automatiquement toutes les valeurs
+    ///    des arguments marqués comme OUT
     ///
     /// # Examples
     ///
@@ -206,8 +211,10 @@ impl ActionInstance {
     ///              pmoupnp::variable_types::StateValue::UI2(50));
     /// let input_data = Arc::new(input);
     ///
-    /// // Exécuter l'action - le handler modifie CurrentVolume
-    /// // run() retourne automatiquement CurrentVolume dans les OUT
+    /// // Exécuter l'action
+    /// // 1. run() stocke DesiredVolume=50 dans la variable liée
+    /// // 2. Le handler lit la valeur et fait son travail
+    /// // 3. run() retourne automatiquement les valeurs OUT
     /// match instance.run(input_data).await {
     ///     Ok(output_data) => {
     ///         // Traiter les résultats
@@ -224,15 +231,30 @@ impl ActionInstance {
     ///
     /// # Notes
     ///
+    /// - Les valeurs IN sont automatiquement stockées avant l'appel du handler
+    /// - Le handler n'a plus besoin de recevoir les données en paramètre
     /// - Le handler modifie les variables et retourne `Ok(())` ou `Err(ActionError)`
     /// - `run()` collecte automatiquement les OUT si le handler retourne `Ok(())`
     /// - L'instance doit être wrappée dans un `Arc` pour être passée au handler
     pub async fn run(self: Arc<Self>, data: ActionData) -> Result<ActionData, crate::actions::ActionError> {
+        // Stocker les valeurs IN dans les variables liées
+        for arg_inst in self.arguments.all() {
+            let arg_model = arg_inst.as_ref().get_model();
+            if arg_model.is_in() {
+                if let Some(value) = data.get(arg_inst.get_name()) {
+                    if let Some(var_inst) = arg_inst.get_variable_instance() {
+                        var_inst.set_value(value.clone());
+                        trace!("  IN  {} = {:?}", arg_inst.get_name(), value);
+                    }
+                }
+            }
+        }
+
         let handler = self.model.handler().clone();
         let instance_clone = self.clone();
 
-        // Exécuter le handler
-        handler(instance_clone, data).await?;
+        // Exécuter le handler (il peut maintenant lire les valeurs IN depuis les variables)
+        handler(instance_clone).await?;
 
         // Collecter automatiquement les valeurs OUT si succès
         debug!("✅ Action '{}' completed successfully, collecting outputs", self.get_name());

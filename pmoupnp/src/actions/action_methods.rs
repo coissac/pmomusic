@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use tracing::{debug, trace};
@@ -11,11 +10,9 @@ use crate::{
     UpnpObjectSetError,
     UpnpObjectType,
     UpnpTyped,
-    UpnpTypedInstance,
 };
 use crate::actions::{
     Action,
-    ActionData,
     ActionHandler,
     ActionInstance,
     Argument,
@@ -56,7 +53,9 @@ impl Action {
     ///
     /// Ce handler logge simplement l'appel et les arguments d'entrée.
     /// La méthode [`ActionInstance::run()`](crate::actions::ActionInstance::run) s'occupe
-    /// automatiquement de collecter les valeurs OUT après l'exécution.
+    /// automatiquement de :
+    /// 1. Stocker les valeurs IN dans les variables liées avant d'appeler le handler
+    /// 2. Collecter les valeurs OUT après l'exécution
     ///
     /// # Returns
     ///
@@ -65,7 +64,7 @@ impl Action {
     /// # Comportement
     ///
     /// - Logge le nom de l'action
-    /// - Logge les arguments IN avec leurs valeurs
+    /// - Logge les arguments IN avec leurs valeurs (lues depuis les variables liées)
     /// - Ne fait aucune modification (handler passif)
     ///
     /// # Note
@@ -73,17 +72,17 @@ impl Action {
     /// Ce handler est automatiquement assigné lors de la création d'une action.
     /// Il peut être remplacé via [`set_handler`](Self::set_handler).
     fn default_handler() -> ActionHandler {
-        action_handler!(|instance, data| {
+        action_handler!(|instance| {
             use crate::UpnpTypedInstance;
 
             debug!("🎬 Action '{}' called", instance.get_name());
 
-            // Logger les arguments d'entrée
+            // Logger les arguments d'entrée (déjà stockés dans les variables par run())
             for arg_inst in instance.arguments_set().all() {
                 let arg_model = arg_inst.as_ref().get_model();
                 if arg_model.is_in() {
-                    if let Some(value) = data.get(arg_inst.get_name()) {
-                        trace!("  IN  {} = {:?}", arg_inst.get_name(), value);
+                    if let Some(var_inst) = arg_inst.get_variable_instance() {
+                        trace!("  IN  {} = {:?}", arg_inst.get_name(), var_inst.value());
                     }
                 }
             }

@@ -106,6 +106,7 @@ pub type ArgumentSet = UpnpObjectSet<Argument>;
 /// 1. **Création** : Instanciation via [`UpnpInstance::new`] avec `variable_instance = None`
 /// 2. **Liaison** : Association à une [`StateVarInstance`] via [`bind_variable`](Self::bind_variable)
 /// 3. **Utilisation** : Accès à la valeur runtime via [`get_variable_instance`](Self::get_variable_instance)
+/// 4. **Exécution** : Les valeurs IN sont stockées dans les variables liées lors de l'appel à `run()`
 ///
 /// # Pourquoi `variable_instance` est optionnel ?
 ///
@@ -113,6 +114,13 @@ pub type ArgumentSet = UpnpObjectSet<Argument>;
 /// - Les `StateVarInstance` sont créées **après** les modèles
 /// - Les `ActionInstance` sont créées **avant** que toutes les variables soient disponibles
 /// - La validation des dépendances se fait en deux phases
+///
+/// # Stockage des valeurs IN
+///
+/// Lors de l'exécution d'une action, les valeurs des arguments IN sont automatiquement
+/// stockées dans les `StateVarInstance` liées. Les handlers peuvent ensuite y accéder
+/// via `argument.get_variable_instance().value()` sans avoir besoin de recevoir les
+/// valeurs en paramètre.
 ///
 /// # Thread-safety
 ///
