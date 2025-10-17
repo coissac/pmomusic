@@ -1,9 +1,10 @@
 //! # Sources API - API REST pour la gestion des sources musicales
 //!
-//! Ce module fournit une API REST pour :
+//! Ce module fournit une API REST de base pour :
 //! - Lister les sources enregistrées
 //! - Obtenir des informations sur une source spécifique
 //! - Récupérer les statistiques d'une source
+//! - Désenregistrer une source
 //!
 //! ## Routes
 //!
@@ -13,13 +14,17 @@
 //! - `GET /sources/:id/statistics` - Statistiques d'une source
 //! - `GET /sources/:id/root` - Container racine d'une source
 //! - `GET /sources/:id/image` - Image par défaut d'une source
+//! - `DELETE /sources/:id` - Désenregistrer une source
+//!
+//! Note: Les endpoints d'enregistrement spécifiques (POST /sources/qobuz, POST /sources/paradise)
+//! sont définis dans le crate pmomediaserver pour éviter les dépendances circulaires.
 
 #[cfg(feature = "server")]
 use axum::{
     extract::Path,
     http::{StatusCode, header},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{delete, get},
     Json, Router,
 };
 
@@ -423,11 +428,47 @@ async fn get_source_image(Path(id): Path<String>) -> Response {
     }
 }
 
-/// Crée le router pour l'API des sources
+/// Désenregistre une source musicale
+///
+/// Supprime une source du registre par son ID.
+#[cfg(feature = "server")]
+#[utoipa::path(
+    delete,
+    path = "/sources/{id}",
+    params(
+        ("id" = String, Path, description = "ID de la source à supprimer")
+    ),
+    responses(
+        (status = 200, description = "Source supprimée"),
+        (status = 404, description = "Source non trouvée", body = ErrorResponse),
+    ),
+    tag = "sources"
+)]
+async fn unregister_source_handler(Path(id): Path<String>) -> impl IntoResponse {
+    if unregister_source(&id).await {
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "message": format!("Source '{}' unregistered successfully", id)
+            })),
+        )
+            .into_response()
+    } else {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Source '{}' not found", id),
+            }),
+        )
+            .into_response()
+    }
+}
+
+/// Crée le router pour l'API des sources (endpoints de lecture uniquement)
 ///
 /// # Returns
 ///
-/// Un `Router` Axum avec toutes les routes de l'API configurées.
+/// Un `Router` Axum avec les routes de lecture de l'API configurées.
 ///
 /// # Examples
 ///
@@ -438,18 +479,26 @@ async fn get_source_image(Path(id): Path<String>) -> Response {
 /// let app = Router::new()
 ///     .nest("/api", create_sources_router());
 /// ```
+///
+/// Note: Les endpoints d'enregistrement spécifiques (POST /sources/qobuz, POST /sources/paradise)
+/// doivent être ajoutés via pmomediaserver pour éviter les dépendances circulaires.
 #[cfg(feature = "server")]
 pub fn create_sources_router() -> Router {
     Router::new()
         .route("/sources", get(list_sources))
         .route("/sources/{id}", get(get_source_info))
+        .route("/sources/{id}", delete(unregister_source_handler))
         .route("/sources/{id}/capabilities", get(get_source_capabilities))
         .route("/sources/{id}/statistics", get(get_source_statistics))
         .route("/sources/{id}/root", get(get_source_root))
         .route("/sources/{id}/image", get(get_source_image))
 }
 
-/// Structure pour la documentation OpenAPI
+/// Structure pour la documentation OpenAPI de base
+///
+/// Note: Cette documentation couvre les endpoints de base uniquement.
+/// Les endpoints d'enregistrement spécifiques (Qobuz, Paradise) sont documentés
+/// dans le crate pmomediaserver.
 #[cfg(feature = "server")]
 #[derive(utoipa::OpenApi)]
 #[openapi(
@@ -460,6 +509,7 @@ pub fn create_sources_router() -> Router {
         get_source_statistics,
         get_source_root,
         get_source_image,
+        unregister_source_handler,
     ),
     components(
         schemas(
@@ -472,7 +522,7 @@ pub fn create_sources_router() -> Router {
         )
     ),
     tags(
-        (name = "sources", description = "API de gestion des sources musicales")
+        (name = "sources", description = "API de gestion des sources musicales (base)")
     )
 )]
 pub struct SourcesApiDoc;

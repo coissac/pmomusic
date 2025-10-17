@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 pmoupnp = { path = "../pmoupnp" }
 pmodidl = { path = "../pmodidl" }
-pmosource = { path = "../pmosource", features = ["server"] }
+pmosource = { path = "../pmosource" }
 pmoserver = { path = "../pmoserver" }
 
 once_cell = "1.20"
@@ -27,10 +27,10 @@ pmoparadise = { path = "../pmoparadise", optional = true }
 pmoconfig = { path = "../pmoconfig", optional = true }
 
 [features]
-default = []
+default = ["pmosource/server"]
 # Feature pour activer l'API REST de gestion des sources
-api = ["dep:axum", "dep:utoipa"]
+api = ["dep:axum", "dep:utoipa", "pmosource/server"]
 # Feature pour activer le support Qobuz configuré
-qobuz = ["dep:pmoqobuz", "dep:pmoconfig", "pmoqobuz/cache"]
+qobuz = ["api", "dep:pmoqobuz", "dep:pmoconfig", "pmoqobuz/cache"]
 # Feature pour activer le support Radio Paradise
-paradise = ["dep:pmoparadise"]
+paradise = ["api", "dep:pmoparadise"]
