@@ -3,7 +3,7 @@
 //! Ce module fournit des helpers pour créer et enregistrer facilement des sources
 //! musicales préconfigurées à partir de la configuration système.
 
-use crate::server_ext::MediaServerExt;
+use pmosource::MusicSourceExt;
 use pmoserver::Server;
 use std::sync::Arc;
 

@@ -13,6 +13,7 @@ dependencies = [
  "pmomediarenderer",
  "pmomediaserver",
  "pmoserver",
+ "pmosource",
  "pmoupnp",
  "serde_json",
  "tokio",
@@ -2465,12 +2466,20 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "axum",
+ "lazy_static",
  "pmoaudiocache",
+ "pmoconfig",
  "pmocovers",
  "pmodidl",
  "pmoplaylist",
+ "pmoserver",
+ "serde",
+ "serde_json",
  "thiserror 1.0.69",
  "tokio",
+ "tracing",
+ "utoipa",
 ]
 
 [[package]]

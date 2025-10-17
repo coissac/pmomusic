@@ -12,7 +12,8 @@
 //! - `POST /sources/qobuz` - Enregistrer Qobuz (feature "qobuz")
 //! - `DELETE /sources/:id` - Désenregistrer une source
 
-use crate::server_ext::get_source_registry;
+// Utiliser les fonctions du registre de pmosource
+use pmosource::api::{list_all_sources, get_source as get_source_from_registry, register_source, unregister_source as unregister_source_from_registry};
 use axum::{
     extract::Path,
     http::StatusCode,
@@ -102,8 +103,7 @@ pub struct ErrorResponse {
     tag = "sources"
 )]
 async fn list_sources() -> impl IntoResponse {
-    let registry = get_source_registry().await;
-    let sources = registry.list_all().await;
+    let sources = list_all_sources().await;
 
     let source_infos: Vec<SourceInfo> = sources
         .iter()
@@ -147,9 +147,7 @@ async fn list_sources() -> impl IntoResponse {
     tag = "sources"
 )]
 async fn get_source(Path(id): Path<String>) -> impl IntoResponse {
-    let registry = get_source_registry().await;
-
-    match registry.get(&id).await {
+    match get_source_from_registry(&id).await {
         Some(source) => {
             let caps = source.capabilities();
             let info = SourceInfo {
@@ -192,8 +190,6 @@ async fn get_source(Path(id): Path<String>) -> impl IntoResponse {
 async fn register_qobuz(Json(creds): Json<QobuzCredentials>) -> impl IntoResponse {
     use pmoqobuz::{QobuzClient, QobuzSource};
 
-    let registry = get_source_registry().await;
-
     // Créer le client selon les credentials fournis
     let client_result = if let (Some(username), Some(password)) = (creds.username, creds.password) {
         QobuzClient::new(&username, &password).await
@@ -223,7 +219,7 @@ async fn register_qobuz(Json(creds): Json<QobuzCredentials>) -> impl IntoRespons
     let source = Arc::new(QobuzSource::new(client, &base_url));
     let source_id = source.as_ref().id().to_string();
 
-    registry.register(source).await;
+    register_source(source).await;
 
     (
         StatusCode::CREATED,
@@ -251,8 +247,6 @@ async fn register_qobuz(Json(creds): Json<QobuzCredentials>) -> impl IntoRespons
 )]
 async fn register_paradise(Json(params): Json<ParadiseParams>) -> impl IntoResponse {
     use pmoparadise::{RadioParadiseClient, RadioParadiseSource};
-
-    let registry = get_source_registry().await;
 
     // Créer le client (Radio Paradise ne nécessite pas d'auth)
     let client = match RadioParadiseClient::new().await {
@@ -282,7 +276,7 @@ async fn register_paradise(Json(params): Json<ParadiseParams>) -> impl IntoRespo
 
     let source_id = source.as_ref().id().to_string();
 
-    registry.register(source).await;
+    register_source(source).await;
 
     (
         StatusCode::CREATED,
@@ -310,9 +304,7 @@ async fn register_paradise(Json(params): Json<ParadiseParams>) -> impl IntoRespo
     tag = "sources"
 )]
 async fn unregister_source(Path(id): Path<String>) -> impl IntoResponse {
-    let registry = get_source_registry().await;
-
-    if registry.remove(&id).await {
+    if unregister_source_from_registry(&id).await {
         (
             StatusCode::OK,
             Json(serde_json::json!({
