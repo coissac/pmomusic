@@ -6,7 +6,7 @@
 //! - Supprimer des images
 //! - Consulter les statistiques
 
-use crate::{Cache, CacheEntry};
+use crate::{Cache, CacheEntry, ImageCacheExt};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -146,7 +146,7 @@ pub async fn add_image(
             .into_response();
     }
 
-    match cache.add_from_url(&req.url).await {
+    match cache.add_image_from_url(&req.url).await {
         Ok(pk) => (
             StatusCode::CREATED,
             Json(AddImageResponse {
@@ -200,7 +200,8 @@ pub async fn delete_image(
     }
 
     // Supprimer les fichiers (original + variantes)
-    let orig_path = cache.dir.join(format!("{}.orig.webp", pk));
+    let cache_dir = std::path::PathBuf::from(cache.cache_dir());
+    let orig_path = cache_dir.join(format!("{}.orig.webp", pk));
     if orig_path.exists() {
         if let Err(e) = tokio::fs::remove_file(&orig_path).await {
             return (
@@ -215,7 +216,7 @@ pub async fn delete_image(
     }
 
     // Supprimer toutes les variantes (*.{pk}.*.webp)
-    if let Ok(mut entries) = tokio::fs::read_dir(&cache.dir).await {
+    if let Ok(mut entries) = tokio::fs::read_dir(&cache_dir).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
             if let Some(filename) = entry.file_name().to_str() {
                 if filename.starts_with(&pk) && filename.ends_with(".webp") && filename != format!("{}.orig.webp", pk) {

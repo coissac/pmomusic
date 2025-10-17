@@ -3,35 +3,32 @@
 //! Ce module fournit une interface générique pour gérer un cache de fichiers
 //! avec métadonnées dans une base de données SQLite.
 
-use std::path::PathBuf;
-use std::sync::Arc;
-use anyhow::{anyhow, Result};
-use sha1::{Sha1, Digest};
-use tokio::sync::Mutex;
+use crate::cache_trait::FileCache;
 use crate::db::DB;
+use anyhow::{anyhow, Result};
+use sha1::{Digest, Sha1};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-/// Configuration du cache
-#[derive(Debug, Clone)]
-pub struct CacheConfig {
-    /// Répertoire de stockage
-    pub dir: PathBuf,
-    /// Limite de taille du cache (nombre d'éléments)
-    pub limit: usize,
-    /// Nom de la table dans la base de données
-    pub table_name: String,
-    /// Extension des fichiers dans le cache
-    pub file_extension: String,
-}
-
-impl CacheConfig {
-    /// Crée une nouvelle configuration de cache
-    pub fn new(dir: &str, limit: usize, table_name: &str, file_extension: &str) -> Self {
-        Self {
-            dir: PathBuf::from(dir),
-            limit,
-            table_name: table_name.to_string(),
-            file_extension: file_extension.to_string(),
-        }
+/// Trait pour définir les paramètres du cache
+pub trait CacheConfig: Send + Sync {
+    /// Extension des fichiers (ex: "webp", "flac")
+    fn file_extension() -> &'static str;
+    /// Nom de la table dans la base de données (ex: "covers", "audio")
+    fn table_name() -> &'static str {
+        "cached_items"
+    }
+    /// Type de cache (ex: "audio", "image")
+    fn cache_type() -> &'static str {
+        "file"
+    }
+    /// Cache name (ex: "covers", "audio", "cache")
+    fn cache_name()  -> &'static str {
+        "cache"
+    }
+    /// Default param extension ("orig") 
+    fn default_param() -> &'static str {
+        "orig"
     }
 }
 
@@ -40,42 +37,45 @@ impl CacheConfig {
 /// Gère le téléchargement, le stockage et la récupération de fichiers
 /// avec une base de données SQLite pour les métadonnées.
 ///
+/// # Paramètres de type
+///
+/// * `C` - Configuration du cache (implémente `CacheConfig`)
+///
 /// Note : Ce type est conçu pour être utilisé derrière un `Arc<Cache>`.
-/// Les méthodes prennent `&self` et utilisent des `Arc` et `Mutex` internes
-/// pour la synchronisation.
+/// La synchronisation est gérée par le Mutex interne de la base de données SQLite.
 #[derive(Debug)]
-pub struct Cache {
-    pub(crate) config: CacheConfig,
+pub struct Cache<C: CacheConfig> {
+    /// Répertoire de stockage
+    dir: PathBuf,
+    /// Limite de taille du cache (nombre d'éléments)
+    limit: usize,
+    /// URL de base pour la génération d'URLs
+    base_url: String,
+    /// Base de données SQLite
     pub db: Arc<DB>,
-    mu: Arc<Mutex<()>>,
+    /// Phantom data pour le type de configuration
+    _phantom: std::marker::PhantomData<C>,
 }
 
-impl Cache {
-    /// Crée un nouveau cache avec la configuration spécifiée
+impl<C: CacheConfig> Cache<C> {
+    /// Crée un nouveau cache
     ///
     /// # Arguments
     ///
-    /// * `config` - Configuration du cache
-    ///
-    /// # Exemple
-    ///
-    /// ```rust,no_run
-    /// use pmocache::cache::{Cache, CacheConfig};
-    ///
-    /// let config = CacheConfig::new("./cache", 1000, "my_cache", "webp");
-    /// let cache = Cache::new(config).unwrap();
-    /// ```
-    pub fn new(config: CacheConfig) -> Result<Self> {
-        std::fs::create_dir_all(&config.dir)?;
-        let db = DB::init(
-            &config.dir.join("cache.db"),
-            &config.table_name
-        )?;
+    /// * `dir` - Répertoire de stockage du cache
+    /// * `limit` - Limite de taille du cache (nombre d'éléments)
+    /// * `base_url` - URL de base pour la génération d'URLs
+    pub fn new(dir: &str, limit: usize, base_url: &str) -> Result<Self> {
+        let directory = PathBuf::from(dir);
+        std::fs::create_dir_all(&directory)?;
+        let db = DB::init(&directory.join("cache.db"), C::table_name())?;
 
         Ok(Self {
-            config,
+            dir: directory,
+            limit,
+            base_url: base_url.to_string(),
             db: Arc::new(db),
-            mu: Arc::new(Mutex::new(())),
+            _phantom: std::marker::PhantomData,
         })
     }
 
@@ -120,30 +120,6 @@ impl Cache {
         self.add_from_url(url, collection).await
     }
 
-    /// Ajoute des données au cache
-    ///
-    /// Cette méthode doit être surchargée par les implémentations spécifiques
-    /// pour gérer la conversion et le stockage des données.
-    ///
-    /// # Arguments
-    ///
-    /// * `url` - URL source du fichier
-    /// * `data` - Données brutes à stocker
-    /// * `collection` - Collection optionnelle à laquelle appartient le fichier
-    pub async fn add(&self, url: &str, data: &[u8], collection: Option<&str>) -> Result<String> {
-        let pk = pk_from_url(url);
-        let file_path = self.file_path(&pk);
-
-        let _lock = self.mu.lock().await;
-
-        if !file_path.exists() {
-            // Par défaut, on stocke les données telles quelles
-            tokio::fs::write(&file_path, data).await?;
-        }
-
-        self.db.add(&pk, url, collection)?;
-        Ok(pk)
-    }
 
     /// Récupère le chemin d'un fichier dans le cache
     ///
@@ -151,8 +127,6 @@ impl Cache {
     ///
     /// * `pk` - Clé primaire du fichier
     pub async fn get(&self, pk: &str) -> Result<PathBuf> {
-        let _lock = self.mu.lock().await;
-
         self.db.get(pk)?;
         self.db.update_hit(pk)?;
 
@@ -170,8 +144,6 @@ impl Cache {
     ///
     /// * `collection` - Identifiant de la collection
     pub async fn get_collection(&self, collection: &str) -> Result<Vec<PathBuf>> {
-        let _lock = self.mu.lock().await;
-
         let entries = self.db.get_by_collection(collection)?;
         let mut paths = Vec::new();
 
@@ -187,25 +159,22 @@ impl Cache {
 
     /// Supprime tous les fichiers et entrées du cache
     pub async fn purge(&self) -> Result<()> {
-        let _lock = self.mu.lock().await;
-
-        let mut entries = tokio::fs::read_dir(&self.config.dir).await?;
+        let mut entries = tokio::fs::read_dir(&self.dir).await?;
         while let Some(entry) = entries.next_entry().await? {
-            if entry.path().is_file() && entry.path() != self.config.dir.join("cache.db") {
+            if entry.path().is_file() && entry.path() != self.dir.join("cache.db") {
                 tokio::fs::remove_file(entry.path()).await?;
             }
         }
 
-        self.db.purge().map_err(|e| anyhow!("Database error: {}", e))
+        self.db
+            .purge()
+            .map_err(|e| anyhow!("Database error: {}", e))
     }
 
     /// Consolide le cache en supprimant les orphelins et en re-téléchargeant les fichiers manquants
     pub async fn consolidate(&self) -> Result<()> {
         // Récupérer la liste des entrées à traiter
-        let entries = {
-            let _lock = self.mu.lock().await;
-            self.db.get_all()?
-        };
+        let entries = self.db.get_all()?;
 
         // Supprimer les entrées sans fichiers correspondants
         for entry in entries {
@@ -214,10 +183,10 @@ impl Cache {
                 match reqwest::get(&entry.source_url).await {
                     Ok(response) if response.status().is_success() => {
                         let data = response.bytes().await?;
-                        self.add(&entry.source_url, &data, entry.collection.as_deref()).await?;
+                        self.add(&entry.source_url, &data, entry.collection.as_deref())
+                            .await?;
                     }
                     _ => {
-                        let _lock = self.mu.lock().await;
                         self.db.delete(&entry.pk)?;
                     }
                 }
@@ -225,15 +194,17 @@ impl Cache {
         }
 
         // Supprimer les fichiers sans entrées DB correspondantes
-        let _lock = self.mu.lock().await;
-        let mut dir_entries = tokio::fs::read_dir(&self.config.dir).await?;
+        let mut dir_entries = tokio::fs::read_dir(&self.dir).await?;
         while let Some(entry) = dir_entries.next_entry().await? {
             let path = entry.path();
-            if path.is_file() && path != self.config.dir.join("cache.db") {
+            if path.is_file() && path != self.dir.join("cache.db") {
                 if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
-                    let pk = file_name.trim_end_matches(&format!(".{}", self.config.file_extension));
-                    if self.db.get(pk).is_err() {
-                        tokio::fs::remove_file(path).await?;
+                    // Format attendu: {pk}.{qualifier}.{EXT}
+                    // On extrait le pk (première partie avant le premier point)
+                    if let Some(pk) = file_name.split('.').next() {
+                        if self.db.get(pk).is_err() {
+                            tokio::fs::remove_file(path).await?;
+                        }
                     }
                 }
             }
@@ -243,22 +214,78 @@ impl Cache {
     }
 
     /// Retourne le répertoire du cache
-    pub fn cache_dir(&self) -> String {
-        self.config.dir.to_string_lossy().to_string()
+    pub fn cache_dir(&self) -> &Path {
+        &self.dir
     }
 
-    /// Construit le chemin complet d'un fichier dans le cache
-    fn file_path(&self, pk: &str) -> PathBuf {
-        self.config.dir.join(format!("{}.{}", pk, self.config.file_extension))
+    /// Retourne l'URL de base
+    pub fn get_base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    /// Valide les données avant de les stocker
+    /// Par défaut, accepte toutes les données
+    pub fn validate_data(&self, data: &[u8]) -> Result<Vec<u8>> {
+        Ok(data.to_vec())
     }
 }
 
-/// Génère une clé primaire à partir d'une URL
-///
-/// Utilise SHA1 pour hasher l'URL et retourne les 8 premiers octets en hexadécimal.
-pub fn pk_from_url(url: &str) -> String {
-    let mut hasher = Sha1::new();
-    hasher.update(url.as_bytes());
-    let result = hasher.finalize();
-    hex::encode(&result[..8])
+
+/// Implémentation du trait FileCache pour Cache
+impl<C: CacheConfig> FileCache for Cache<C> {
+    fn cache_type(&self) -> &str {
+        C::cache_type()
+    }
+
+    fn validate_data(&self, data: &[u8]) -> Result<Vec<u8>> {
+        // Le cache générique accepte toutes les données
+        Ok(data.to_vec())
+    }
+
+    async fn add_from_url(&self, url: &str, collection: Option<&str>) -> Result<String> {
+        self.add_from_url(url, collection).await
+    }
+
+    async fn ensure_from_url(&self, url: &str, collection: Option<&str>) -> Result<String> {
+        self.ensure_from_url(url, collection).await
+    }
+
+    async fn add(&self, url: &str, data: &[u8], collection: Option<&str>) -> Result<String> {
+        // Valider les données avant de les ajouter
+        let validated_data = self.validate_data(data)?;
+
+        let pk = pk_from_url(url);
+        let file_path = self.file_path(&pk);
+
+        if !file_path.exists() {
+            tokio::fs::write(&file_path, &validated_data).await?;
+        }
+
+        self.db.add(&pk, url, collection)?;
+        Ok(pk)
+    }
+
+    async fn get(&self, pk: &str) -> Result<PathBuf> {
+        self.get(pk).await
+    }
+
+    async fn get_collection(&self, collection: &str) -> Result<Vec<PathBuf>> {
+        self.get_collection(collection).await
+    }
+
+    async fn purge(&self) -> Result<()> {
+        self.purge().await
+    }
+
+    async fn consolidate(&self) -> Result<()> {
+        self.consolidate().await
+    }
+
+    fn get_cache_dir(&self) -> String {
+        self.cache_dir()
+    }
+
+    fn get_base_url(&self) -> &str {
+        self.get_base_url()
+    }
 }

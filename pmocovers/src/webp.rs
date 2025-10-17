@@ -39,13 +39,14 @@ pub fn ensure_square(img: &DynamicImage, size: u32) -> DynamicImage {
 }
 
 pub async fn generate_variant(cache: &super::cache::Cache, pk: &str, size: usize) -> Result<Vec<u8>> {
-    let variant_path = cache.dir.join(format!("{}.{}.webp", pk, size));
+    // Utiliser file_path_with_qualifier pour obtenir le chemin
+    let variant_path = cache.file_path_with_qualifier(pk, &size.to_string());
 
     if variant_path.exists() {
         return Ok(tokio::fs::read(variant_path).await?);
     }
 
-    let orig_path = cache.dir.join(format!("{}.orig.webp", pk));
+    let orig_path = cache.file_path_with_qualifier(pk, "orig");
 
     // Charger l'image de manière synchrone (image::open n'est pas async)
     let img = tokio::task::spawn_blocking(move || {

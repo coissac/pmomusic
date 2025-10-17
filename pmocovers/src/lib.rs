@@ -100,13 +100,14 @@
 //!
 //! ```rust,no_run
 //! use pmocovers::Cache;
+//! use pmocache::FileCache;
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
-//!     let cache = Cache::new("./cache", 1000)?;
+//!     let cache = Cache::new("./cache", 1000, "http://localhost:8080")?;
 //!
-//!     // Ajouter une image depuis une URL
-//!     let pk = cache.add_from_url("http://example.com/cover.jpg").await?;
+//!     // Ajouter une image depuis une URL (avec conversion WebP automatique)
+//!     let pk = cache.add_from_url("http://example.com/cover.jpg", None).await?;
 //!     println!("Image ajoutée avec clé: {}", pk);
 //!
 //!     // Récupérer l'image originale
@@ -197,7 +198,7 @@ pub mod api;
 #[cfg(feature = "pmoserver")]
 pub mod openapi;
 
-pub use cache::Cache;
+pub use cache::{Cache, CoversConfig};
 pub use db::{CacheEntry, DB};
 
 #[cfg(feature = "pmoserver")]

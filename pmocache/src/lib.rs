@@ -34,12 +34,19 @@
 //! ### Exemple basique
 //!
 //! ```rust,no_run
-//! use pmocache::cache::{Cache, CacheConfig};
+//! use pmocache::{Cache, CacheConfig};
+//!
+//! // Définir la configuration du cache
+//! struct MyConfig;
+//! impl CacheConfig for MyConfig {
+//!     fn file_extension() -> &'static str { "dat" }
+//!     fn table_name() -> &'static str { "my_cache" }
+//!     fn cache_type() -> &'static str { "generic" }
+//! }
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
-//!     let config = CacheConfig::new("./cache", 1000, "my_cache", "dat");
-//!     let cache = Cache::new(config)?;
+//!     let cache = Cache::<MyConfig>::new("./cache", 1000, "http://localhost:8080")?;
 //!
 //!     // Ajouter un fichier depuis une URL
 //!     let pk = cache.add_from_url("http://example.com/file.dat", None).await?;
@@ -56,12 +63,18 @@
 //! ### Utilisation avec des collections
 //!
 //! ```rust,no_run
-//! use pmocache::cache::{Cache, CacheConfig};
+//! use pmocache::{Cache, CacheConfig};
+//!
+//! struct AudioConfig;
+//! impl CacheConfig for AudioConfig {
+//!     fn file_extension() -> &'static str { "flac" }
+//!     fn table_name() -> &'static str { "audio" }
+//!     fn cache_type() -> &'static str { "audio" }
+//! }
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
-//!     let config = CacheConfig::new("./cache", 1000, "audio", "flac");
-//!     let cache = Cache::new(config)?;
+//!     let cache = Cache::<AudioConfig>::new("./cache", 1000, "http://localhost:8080")?;
 //!
 //!     // Ajouter des pistes d'un album
 //!     let album_id = "album:the_wall";
@@ -111,6 +124,11 @@
 
 pub mod db;
 pub mod cache;
+pub mod cache_trait;
+
+#[cfg(feature = "pmoserver")]
+pub mod pmoserver_ext;
 
 pub use db::{DB, CacheEntry};
 pub use cache::{Cache, CacheConfig, pk_from_url};
+pub use cache_trait::FileCache;
