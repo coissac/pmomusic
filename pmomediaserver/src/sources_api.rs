@@ -65,6 +65,15 @@ pub struct QobuzCredentials {
     pub password: Option<String>,
 }
 
+/// Paramètres pour Radio Paradise (actuellement vide, mais peut être étendu)
+#[cfg(feature = "paradise")]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct ParadiseParams {
+    /// Capacité FIFO (optionnelle, 50 par défaut)
+    #[serde(default)]
+    pub fifo_capacity: Option<usize>,
+}
+
 /// Réponse d'enregistrement de source
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct SourceRegisteredResponse {
@@ -226,6 +235,65 @@ async fn register_qobuz(Json(creds): Json<QobuzCredentials>) -> impl IntoRespons
         .into_response()
 }
 
+/// Enregistre une source Radio Paradise
+///
+/// Enregistre une nouvelle source Radio Paradise (ne nécessite pas d'authentification).
+#[cfg(feature = "paradise")]
+#[utoipa::path(
+    post,
+    path = "/sources/paradise",
+    request_body = ParadiseParams,
+    responses(
+        (status = 201, description = "Source enregistrée", body = SourceRegisteredResponse),
+        (status = 400, description = "Erreur d'enregistrement", body = ErrorResponse),
+    ),
+    tag = "sources"
+)]
+async fn register_paradise(Json(params): Json<ParadiseParams>) -> impl IntoResponse {
+    use pmoparadise::{RadioParadiseClient, RadioParadiseSource};
+
+    let registry = get_source_registry().await;
+
+    // Créer le client (Radio Paradise ne nécessite pas d'auth)
+    let client = match RadioParadiseClient::new().await {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!("Failed to create Radio Paradise client: {}", e),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    // Récupérer l'URL de base du serveur depuis la config
+    let config = pmoconfig::get_config();
+    let port = config.get_http_port();
+    let base_url = format!("http://localhost:{}", port);
+
+    // Créer et enregistrer la source
+    let source = if let Some(capacity) = params.fifo_capacity {
+        Arc::new(RadioParadiseSource::new(client, &base_url, capacity))
+    } else {
+        Arc::new(RadioParadiseSource::new_default(client, &base_url))
+    };
+
+    let source_id = source.as_ref().id().to_string();
+
+    registry.register(source).await;
+
+    (
+        StatusCode::CREATED,
+        Json(SourceRegisteredResponse {
+            message: "Radio Paradise source registered successfully".to_string(),
+            source_id,
+        }),
+    )
+        .into_response()
+}
+
 /// Désenregistre une source musicale
 ///
 /// Supprime une source du registre par son ID.
@@ -281,19 +349,52 @@ async fn unregister_source(Path(id): Path<String>) -> impl IntoResponse {
 pub fn sources_api_router() -> Router {
     let mut router = Router::new()
         .route("/sources", get(list_sources))
-        .route("/sources/:id", get(get_source))
-        .route("/sources/:id", delete(unregister_source));
+        .route("/sources/{id}", get(get_source))
+        .route("/sources/{id}", delete(unregister_source));
 
     #[cfg(feature = "qobuz")]
     {
         router = router.route("/sources/qobuz", post(register_qobuz));
     }
 
+    #[cfg(feature = "paradise")]
+    {
+        router = router.route("/sources/paradise", post(register_paradise));
+    }
+
     router
 }
 
-/// Structure pour la documentation OpenAPI
-#[cfg(feature = "qobuz")]
+/// Structure pour la documentation OpenAPI (Qobuz + Paradise)
+#[cfg(all(feature = "qobuz", feature = "paradise"))]
+#[derive(utoipa::OpenApi)]
+#[openapi(
+    paths(
+        list_sources,
+        get_source,
+        unregister_source,
+        register_qobuz,
+        register_paradise,
+    ),
+    components(
+        schemas(
+            SourceInfo,
+            SourceCapabilitiesInfo,
+            SourcesList,
+            SourceRegisteredResponse,
+            ErrorResponse,
+            QobuzCredentials,
+            ParadiseParams,
+        )
+    ),
+    tags(
+        (name = "sources", description = "Gestion des sources musicales")
+    )
+)]
+pub struct SourcesApiDoc;
+
+/// Structure pour la documentation OpenAPI (Qobuz uniquement)
+#[cfg(all(feature = "qobuz", not(feature = "paradise")))]
 #[derive(utoipa::OpenApi)]
 #[openapi(
     paths(
@@ -318,8 +419,34 @@ pub fn sources_api_router() -> Router {
 )]
 pub struct SourcesApiDoc;
 
-/// Structure pour la documentation OpenAPI (sans Qobuz)
-#[cfg(not(feature = "qobuz"))]
+/// Structure pour la documentation OpenAPI (Paradise uniquement)
+#[cfg(all(feature = "paradise", not(feature = "qobuz")))]
+#[derive(utoipa::OpenApi)]
+#[openapi(
+    paths(
+        list_sources,
+        get_source,
+        unregister_source,
+        register_paradise,
+    ),
+    components(
+        schemas(
+            SourceInfo,
+            SourceCapabilitiesInfo,
+            SourcesList,
+            SourceRegisteredResponse,
+            ErrorResponse,
+            ParadiseParams,
+        )
+    ),
+    tags(
+        (name = "sources", description = "Gestion des sources musicales")
+    )
+)]
+pub struct SourcesApiDoc;
+
+/// Structure pour la documentation OpenAPI (sans sources spécifiques)
+#[cfg(not(any(feature = "qobuz", feature = "paradise")))]
 #[derive(utoipa::OpenApi)]
 #[openapi(
     paths(

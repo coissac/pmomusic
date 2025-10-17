@@ -14,6 +14,10 @@ pub enum SourceInitError {
     #[error("Failed to initialize Qobuz: {0}")]
     QobuzError(String),
 
+    #[cfg(feature = "paradise")]
+    #[error("Failed to initialize Radio Paradise: {0}")]
+    ParadiseError(String),
+
     #[error("Configuration error: {0}")]
     ConfigError(String),
 
@@ -46,7 +50,7 @@ pub type Result<T> = std::result::Result<T, SourceInitError>;
 /// ```
 #[async_trait::async_trait]
 pub trait SourcesExt {
-    /// Enregistre la source Qobuz depuis la configuration
+    /// Enregistre la source Qobuz
     ///
     /// Cette méthode lit les credentials Qobuz depuis `pmoconfig` et crée
     /// automatiquement un `QobuzSource` avec cache activé.
@@ -71,10 +75,10 @@ pub trait SourcesExt {
     /// # Examples
     ///
     /// ```ignore
-    /// server.register_qobuz_from_config().await?;
+    /// server.register_qobuz().await?;
     /// ```
     #[cfg(feature = "qobuz")]
-    async fn register_qobuz_from_config(&mut self) -> Result<()>;
+    async fn register_qobuz(&mut self) -> Result<()>;
 
     /// Enregistre la source Qobuz avec des credentials explicites
     ///
@@ -86,19 +90,38 @@ pub trait SourcesExt {
     /// # Examples
     ///
     /// ```ignore
-    /// server.register_qobuz("user@example.com", "password").await?;
+    /// server.register_qobuz_with_credentials("user@example.com", "password").await?;
     /// ```
     #[cfg(feature = "qobuz")]
-    async fn register_qobuz(&mut self, username: &str, password: &str) -> Result<()>;
+    async fn register_qobuz_with_credentials(&mut self, username: &str, password: &str) -> Result<()>;
+
+    /// Enregistre la source Radio Paradise
+    ///
+    /// Cette méthode crée automatiquement un `RadioParadiseSource` avec cache activé.
+    /// Radio Paradise ne nécessite pas d'authentification.
+    ///
+    /// # Erreurs
+    ///
+    /// Retourne une erreur si :
+    /// - La connexion au client Radio Paradise échoue
+    /// - La feature "paradise" n'est pas activée
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// server.register_paradise().await?;
+    /// ```
+    #[cfg(feature = "paradise")]
+    async fn register_paradise(&mut self) -> Result<()>;
 }
 
 #[async_trait::async_trait]
 impl SourcesExt for Server {
     #[cfg(feature = "qobuz")]
-    async fn register_qobuz_from_config(&mut self) -> Result<()> {
+    async fn register_qobuz(&mut self) -> Result<()> {
         use pmoqobuz::{QobuzClient, QobuzSource};
 
-        tracing::info!("Initializing Qobuz source from configuration...");
+        tracing::info!("Initializing Qobuz source...");
 
         // Créer le client depuis la config
         let client = QobuzClient::from_config()
@@ -122,7 +145,7 @@ impl SourcesExt for Server {
     }
 
     #[cfg(feature = "qobuz")]
-    async fn register_qobuz(&mut self, username: &str, password: &str) -> Result<()> {
+    async fn register_qobuz_with_credentials(&mut self, username: &str, password: &str) -> Result<()> {
         use pmoqobuz::{QobuzClient, QobuzSource};
 
         tracing::info!("Initializing Qobuz source with explicit credentials...");
@@ -147,12 +170,34 @@ impl SourcesExt for Server {
 
         Ok(())
     }
-}
 
-// Placeholder pour d'autres sources
-// TODO: Ajouter Radio Paradise lorsque la crate sera disponible
-// #[cfg(feature = "radioparadise")]
-// async fn register_radioparadise_from_config(&mut self) -> Result<()> { ... }
+    #[cfg(feature = "paradise")]
+    async fn register_paradise(&mut self) -> Result<()> {
+        use pmoparadise::{RadioParadiseClient, RadioParadiseSource};
+
+        tracing::info!("Initializing Radio Paradise source...");
+
+        // Créer le client (Radio Paradise ne nécessite pas d'authentification)
+        let client = RadioParadiseClient::new()
+            .await
+            .map_err(|e| SourceInitError::ParadiseError(format!("Failed to create client: {}", e)))?;
+
+        // Récupérer l'URL de base du serveur depuis la config
+        let config = pmoconfig::get_config();
+        let port = config.get_http_port();
+        let base_url = format!("http://localhost:{}", port);
+
+        // Créer la source avec capacité FIFO par défaut
+        let source = RadioParadiseSource::new_default(client, &base_url);
+
+        // Enregistrer la source
+        self.register_music_source(Arc::new(source)).await;
+
+        tracing::info!("✅ Radio Paradise source registered successfully");
+
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod tests {
