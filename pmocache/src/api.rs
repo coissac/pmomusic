@@ -7,7 +7,7 @@
 //! - Supprimer des items
 //! - Purger et consolider le cache
 
-use crate::{Cache, CacheConfig, CacheEntry};
+use crate::{Cache, CacheConfig};
 use axum::{
     extract::{Path, State},
     http::StatusCode,

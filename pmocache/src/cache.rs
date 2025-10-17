@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing;
 
 /// Trait pour définir les paramètres du cache
 pub trait CacheConfig: Send + Sync {
@@ -46,7 +47,6 @@ pub trait CacheConfig: Send + Sync {
 /// Note : Ce type est conçu pour être utilisé derrière un `Arc<Cache>`.
 /// La synchronisation est gérée par le Mutex interne de la base de données SQLite
 /// et par le RwLock pour la map des downloads.
-#[derive(Debug)]
 pub struct Cache<C: CacheConfig> {
     /// Répertoire de stockage
     dir: PathBuf,
@@ -58,12 +58,14 @@ pub struct Cache<C: CacheConfig> {
     pub db: Arc<DB>,
     /// Map des downloads en cours (pk -> Download)
     downloads: Arc<RwLock<HashMap<String, Arc<Download>>>>,
+    /// Factory pour créer des transformers (optionnel)
+    transformer_factory: Option<Arc<dyn Fn() -> StreamTransformer + Send + Sync>>,
     /// Phantom data pour le type de configuration
     _phantom: std::marker::PhantomData<C>,
 }
 
 impl<C: CacheConfig> Cache<C> {
-    /// Crée un nouveau cache
+    /// Crée un nouveau cache sans transformer
     ///
     /// # Arguments
     ///
@@ -71,6 +73,52 @@ impl<C: CacheConfig> Cache<C> {
     /// * `limit` - Limite de taille du cache (nombre d'éléments)
     /// * `base_url` - URL de base pour la génération d'URLs
     pub fn new(dir: &str, limit: usize, base_url: &str) -> Result<Self> {
+        Self::with_transformer(dir, limit, base_url, None)
+    }
+
+    /// Crée un nouveau cache avec un transformer optionnel
+    ///
+    /// # Arguments
+    ///
+    /// * `dir` - Répertoire de stockage du cache
+    /// * `limit` - Limite de taille du cache (nombre d'éléments)
+    /// * `base_url` - URL de base pour la génération d'URLs
+    /// * `transformer_factory` - Factory pour créer des transformers à chaque téléchargement
+    ///
+    /// # Exemple
+    ///
+    /// ```rust,no_run
+    /// use pmocache::{Cache, CacheConfig, StreamTransformer};
+    /// use std::sync::Arc;
+    ///
+    /// struct MyConfig;
+    /// impl CacheConfig for MyConfig {
+    ///     fn file_extension() -> &'static str { "dat" }
+    /// }
+    ///
+    /// let transformer_factory = Arc::new(|| {
+    ///     // Créer un transformer qui convertit les données
+    ///     Box::new(|response, file, progress| {
+    ///         Box::pin(async move {
+    ///             // Transformation personnalisée
+    ///             Ok(())
+    ///         })
+    ///     }) as StreamTransformer
+    /// });
+    ///
+    /// let cache = Cache::<MyConfig>::with_transformer(
+    ///     "./cache",
+    ///     1000,
+    ///     "http://localhost:8080",
+    ///     Some(transformer_factory)
+    /// ).unwrap();
+    /// ```
+    pub fn with_transformer(
+        dir: &str,
+        limit: usize,
+        base_url: &str,
+        transformer_factory: Option<Arc<dyn Fn() -> StreamTransformer + Send + Sync>>,
+    ) -> Result<Self> {
         let directory = PathBuf::from(dir);
         std::fs::create_dir_all(&directory)?;
         let db = DB::init(&directory.join("cache.db"), C::table_name())?;
@@ -81,16 +129,9 @@ impl<C: CacheConfig> Cache<C> {
             base_url: base_url.to_string(),
             db: Arc::new(db),
             downloads: Arc::new(RwLock::new(HashMap::new())),
+            transformer_factory,
             _phantom: std::marker::PhantomData,
         })
-    }
-
-    /// Retourne le transformer pour ce cache
-    ///
-    /// Par défaut retourne None (pas de transformation).
-    /// Les caches spécialisés peuvent surcharger cette méthode.
-    fn get_transformer(&self) -> Option<StreamTransformer> {
-        None
     }
 
     /// Télécharge un fichier depuis une URL et l'ajoute au cache
@@ -120,10 +161,11 @@ impl<C: CacheConfig> Cache<C> {
         }
 
         // Lancer le téléchargement avec transformer
+        let transformer = self.transformer_factory.as_ref().map(|f| f());
         let download = download_with_transformer(
             &file_path,
             url,
-            self.get_transformer(),
+            transformer,
         );
 
         // Stocker dans la map des downloads en cours
@@ -134,6 +176,12 @@ impl<C: CacheConfig> Cache<C> {
 
         // Ajouter immédiatement à la DB
         self.db.add(&pk, url, collection)?;
+
+        // Appliquer la politique d'éviction LRU si nécessaire
+        // Cela garantit que le cache respecte toujours la limite configurée
+        if let Err(e) = self.enforce_limit().await {
+            tracing::warn!("Error enforcing cache limit: {}", e);
+        }
 
         // Lancer une tâche de nettoyage en background
         let downloads_clone = self.downloads.clone();
@@ -413,10 +461,77 @@ impl<C: CacheConfig> Cache<C> {
         &self.base_url
     }
 
+    /// Construit le chemin complet d'un fichier dans le cache avec le param par défaut
+    ///
+    /// Format: `{pk}.{default_param}.{extension}`
+    pub fn file_path(&self, pk: &str) -> PathBuf {
+        self.file_path_with_qualifier(pk, C::default_param())
+    }
+
+    /// Construit le chemin d'un fichier dans le cache avec un qualificatif
+    ///
+    /// Format: `{pk}.{qualifier}.{extension}`
+    pub fn file_path_with_qualifier(&self, pk: &str, qualifier: &str) -> PathBuf {
+        self.dir.join(format!("{}.{}.{}", pk, qualifier, C::file_extension()))
+    }
+
     /// Valide les données avant de les stocker
     /// Par défaut, accepte toutes les données
     pub fn validate_data(&self, data: &[u8]) -> Result<Vec<u8>> {
         Ok(data.to_vec())
+    }
+
+    /// Applique la politique d'éviction LRU (Least Recently Used)
+    ///
+    /// Si le nombre d'entrées dépasse la limite configurée, supprime
+    /// les entrées les plus anciennes (moins récemment utilisées).
+    ///
+    /// Cette méthode :
+    /// 1. Compte le nombre total d'entrées
+    /// 2. Si > limit, récupère les N entrées les plus anciennes
+    /// 3. Supprime ces entrées de la DB et leurs fichiers du disque
+    ///
+    /// # Returns
+    ///
+    /// Le nombre d'entrées supprimées
+    pub async fn enforce_limit(&self) -> Result<usize> {
+        let count = self.db.count()?;
+
+        if count <= self.limit {
+            return Ok(0);
+        }
+
+        let to_remove = count - self.limit;
+        let old_entries = self.db.get_oldest(to_remove)?;
+
+        let mut removed = 0;
+        for entry in old_entries {
+            // Supprimer tous les fichiers avec ce pk (toutes variantes)
+            if let Ok(mut dir_entries) = tokio::fs::read_dir(&self.dir).await {
+                while let Ok(Some(dir_entry)) = dir_entries.next_entry().await {
+                    if let Some(filename) = dir_entry.file_name().to_str() {
+                        // Format: {pk}.{param}.{ext}
+                        if filename.starts_with(&entry.pk) && filename.starts_with(&format!("{}.", entry.pk)) {
+                            let _ = tokio::fs::remove_file(dir_entry.path()).await;
+                        }
+                    }
+                }
+            }
+
+            // Supprimer de la base de données
+            if let Err(e) = self.db.delete(&entry.pk) {
+                tracing::warn!("Error deleting entry {} from DB: {}", entry.pk, e);
+            } else {
+                removed += 1;
+            }
+        }
+
+        if removed > 0 {
+            tracing::info!("LRU eviction: removed {} old entries (cache size: {} -> {})",
+                removed, count, count - removed);
+        }
+
+        Ok(removed)
     }
 }
 
