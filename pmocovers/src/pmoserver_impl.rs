@@ -29,80 +29,39 @@
 
 use crate::{api, Cache, CoverCacheExt};
 use axum::{
-    body::Body,
-    extract::State,
-    http::{Request, StatusCode},
+    extract::{Path, State},
+    http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{get, post},
     Json, Router,
 };
 use pmoserver::Server;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 use std::sync::Arc;
 use utoipa::OpenApi;
 
-
-
-/// Handler pour GET /covers/images/{pk}
-async fn get_cover_image(
-    State(cache): State<Arc<Cache>>,
-    req: Request<Body>,
-) -> Response {
-    // Extraire pk du path
-    let path = req.uri().path();
-    let parts: Vec<&str> = path.split('/').collect();
-
-    warn!("{:?}",parts);
-
-    if parts.len() != 2 {
-        return (StatusCode::BAD_REQUEST, "Invalid path").into_response();
-    }
-
-    let pk = parts[1];
-
-    match cache.get(pk).await {
-        Ok(file_path) => {
-            match tokio::fs::read(&file_path).await {
-                Ok(data) => (
-                    StatusCode::OK,
-                    [("content-type", "image/webp")],
-                    data,
-                )
-                    .into_response(),
-                Err(_) => (StatusCode::NOT_FOUND, "File not found").into_response(),
-            }
-        }
-        Err(_) => (StatusCode::NOT_FOUND, "Image not found").into_response(),
-    }
-}
-
 /// Handler pour GET /covers/images/{pk}/{size}
+/// Génère une variante d'image à la demande
 async fn get_cover_variant(
     State(cache): State<Arc<Cache>>,
-    req: Request<Body>,
+    Path((pk, size)): Path<(String, String)>,
 ) -> Response {
-    // Extraire pk et size du path
-    let path = req.uri().path();
-    let parts: Vec<&str> = path.split('/').collect();
-
-    if parts.len() != 3 {
-        return (StatusCode::BAD_REQUEST, "Invalid path").into_response();
-    }
-
-    let pk = parts[1];
-    let size = match parts[2].parse::<usize>() {
+    let size = match size.parse::<usize>() {
         Ok(s) => s,
         Err(_) => return (StatusCode::BAD_REQUEST, "Invalid size").into_response(),
     };
 
-    match crate::webp::generate_variant(&cache, pk, size).await {
+    match crate::webp::generate_variant(&cache, &pk, size).await {
         Ok(data) => (
             StatusCode::OK,
             [("content-type", "image/webp")],
             data,
         )
             .into_response(),
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Cannot generate variant").into_response(),
+        Err(e) => {
+            warn!("Cannot generate variant for {}: {}", pk, e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Cannot generate variant").into_response()
+        }
     }
 }
 
@@ -116,18 +75,28 @@ async fn get_cover_stats(State(cache): State<Arc<Cache>>) -> Response {
 
 impl CoverCacheExt for Server {
     async fn init_cover_cache(&mut self, cache_dir: &str, limit: usize) -> anyhow::Result<Arc<Cache>> {
-        let cache = Arc::new(Cache::new(cache_dir, limit)?);
+        // Utiliser l'URL du serveur comme base_url
+        let base_url = self.info().base_url;
+        let cache = Arc::new(Cache::new(cache_dir, limit, &base_url)?);
 
-        // Enregistrer les routes HTTP classiques pour servir les images
-        let image_router = Router::new()
-            .route("/{pk}", get(get_cover_image))
+        // Utiliser le router générique de pmocache pour servir les fichiers
+        // Routes: GET /covers/images/{pk} et GET /covers/images/{pk}/{param}
+        let file_router = pmocache::pmoserver_ext::create_file_router(
+            cache.clone(),
+            "image/webp"
+        );
+        self.add_router("/covers/images", file_router).await;
+
+        // Route pour générer les variantes à la demande (redimensionnement)
+        // Note: Cette route est spécifique à pmocovers car elle nécessite generate_variant
+        let variant_router = Router::new()
             .route("/{pk}/{size}", get(get_cover_variant))
             .with_state(cache.clone());
+        self.add_router("/covers/variants", variant_router).await;
 
-        self.add_router("/covers/images", image_router).await;
+        // Route pour les stats
         self.add_handler_with_state("/covers/stats", get_cover_stats, cache.clone()).await;
 
-        // Router API RESTful
         // Router API RESTful qui sera nesté sous /api/covers par add_openapi
         let api_router = Router::new()
             // Liste et ajout

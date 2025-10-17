@@ -1,6 +1,6 @@
 //! Implémentation du trait AudioCacheExt pour le serveur pmoserver
-
 use crate::{api, AudioCache, AudioCacheExt};
+
 use axum::{
     body::Body,
     extract::State,
@@ -142,6 +142,7 @@ async fn list_collections(State(cache): State<Arc<AudioCache>>) -> Response {
     }
 }
 
+#[cfg(feature = "pmoserver")]
 impl AudioCacheExt for Server {
     async fn init_audio_cache(
         &mut self,

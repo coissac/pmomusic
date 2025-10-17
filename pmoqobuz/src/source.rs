@@ -14,7 +14,7 @@ use std::time::SystemTime;
 use tokio::sync::RwLock;
 
 #[cfg(feature = "cache")]
-use pmocovers::Cache as CoverCache;
+use pmocovers::{Cache as CoverCache, ImageCacheExt};
 #[cfg(feature = "cache")]
 use pmoaudiocache::{AudioCache, AudioMetadata};
 
@@ -226,7 +226,7 @@ impl QobuzSource {
         let cached_cover_pk = if let Some(ref cover_cache) = self.inner.cover_cache {
             if let Some(ref album) = track.album {
                 if let Some(ref image_url) = album.image {
-                    match cover_cache.add_from_url(image_url).await {
+                    match cover_cache.add_image_from_url(image_url).await {
                         Ok(pk) => {
                             tracing::info!("Successfully cached cover for track {}: {}", track_id, pk);
                             Some(pk)
