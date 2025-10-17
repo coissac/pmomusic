@@ -35,6 +35,8 @@
 //! server.register_music_source(Arc::new(my_source)).await;
 //! ```
 
+pub mod cache;
+
 use pmodidl::{Container, Item};
 use std::fmt::Debug;
 use std::time::SystemTime;
@@ -903,6 +905,9 @@ pub trait MusicSource: Debug + Send + Sync {
 pub use async_trait::async_trait;
 pub use pmodidl;
 pub use pmoplaylist;
+
+// Re-export cache types
+pub use cache::{TrackMetadata, SourceCacheManager, CacheStatistics};
 
 // Server extension modules (feature-gated)
 #[cfg(feature = "server")]

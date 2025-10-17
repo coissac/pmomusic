@@ -28,8 +28,8 @@ anyhow = "1.0"
 bytes = "1.5"
 futures = "0.3"
 
-# Logging (optionnel)
-tracing = { version = "0.1", optional = true }
+# Logging
+tracing = "0.1"
 
 # URL manipulation
 url = "2.5"
@@ -51,9 +51,9 @@ pmosource = { path = "../pmosource" }
 # Playlist management for FIFO support
 pmoplaylist = { path = "../pmoplaylist" }
 
-# Cache support
-pmocovers = { path = "../pmocovers", optional = true }
-pmoaudiocache = { path = "../pmoaudiocache", optional = true }
+# Cache support (OBLIGATOIRE - architecture refactorisée)
+pmocovers = { path = "../pmocovers" }
+pmoaudiocache = { path = "../pmoaudiocache" }
 
 [features]
 default = ["metadata-only"]
@@ -61,12 +61,10 @@ default = ["metadata-only"]
 metadata-only = []
 # Active le décodage FLAC par-track
 per-track = ["dep:claxon", "dep:hound", "dep:tempfile"]
-# Active le logging
-logging = ["dep:tracing"]
 # Active le media server UPnP
 mediaserver = ["dep:pmoupnp", "dep:pmoserver", "dep:pmodidl", "dep:uuid"]
-# Active le cache d'images et audio
-cache = ["dep:pmocovers", "dep:pmoaudiocache", "logging"]
+# Feature cache (deprecated - toujours actif maintenant)
+cache = []
 
 [dev-dependencies]
 # Tests
