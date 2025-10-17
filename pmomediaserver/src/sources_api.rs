@@ -1,60 +1,28 @@
-//! # Sources API - API REST pour la gestion des sources musicales
+//! # Sources Registration API - Endpoints d'enregistrement dynamique des sources
 //!
-//! Ce module fournit une API REST pour :
-//! - Lister les sources enregistrées
-//! - Obtenir des informations sur une source spécifique
-//! - Enregistrer/désenregistrer des sources
+//! Ce module étend l'API de base de `pmosource` avec des endpoints d'enregistrement
+//! spécifiques pour chaque type de source musicale (Qobuz, Paradise, etc.).
 //!
-//! ## Routes
+//! ## Routes additionnelles
 //!
-//! - `GET /sources` - Liste toutes les sources
-//! - `GET /sources/:id` - Informations sur une source
 //! - `POST /sources/qobuz` - Enregistrer Qobuz (feature "qobuz")
-//! - `DELETE /sources/:id` - Désenregistrer une source
+//! - `POST /sources/paradise` - Enregistrer Radio Paradise (feature "paradise")
+//!
+//! ## Architecture
+//!
+//! Ces endpoints sont définis ici plutôt que dans `pmosource` pour éviter les
+//! dépendances circulaires (pmoqobuz et pmoparadise dépendent de pmosource).
 
-// Utiliser les fonctions du registre de pmosource
-use pmosource::api::{list_all_sources, get_source as get_source_from_registry, register_source, unregister_source as unregister_source_from_registry};
 use axum::{
-    extract::Path,
+    extract::Json,
     http::StatusCode,
     response::IntoResponse,
-    Json, Router,
-    routing::{delete, get, post},
+    routing::post,
+    Router,
 };
 use pmosource::MusicSource;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-
-/// Information sur une source musicale
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct SourceInfo {
-    /// ID unique de la source
-    pub id: String,
-    /// Nom de la source
-    pub name: String,
-    /// La source supporte-t-elle les opérations FIFO
-    pub supports_fifo: bool,
-   /// Capacités de la source
-    pub capabilities: SourceCapabilitiesInfo,
-}
-
-/// Capacités d'une source
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct SourceCapabilitiesInfo {
-    pub supports_search: bool,
-    pub supports_favorites: bool,
-    pub supports_playlists: bool,
-    pub supports_high_res_audio: bool,
-}
-
-/// Liste des sources enregistrées
-#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct SourcesList {
-    /// Nombre total de sources
-    pub count: usize,
-    /// Liste des sources
-    pub sources: Vec<SourceInfo>,
-}
 
 /// Credentials pour Qobuz
 #[cfg(feature = "qobuz")]
@@ -66,7 +34,7 @@ pub struct QobuzCredentials {
     pub password: Option<String>,
 }
 
-/// Paramètres pour Radio Paradise (actuellement vide, mais peut être étendu)
+/// Paramètres pour Radio Paradise
 #[cfg(feature = "paradise")]
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct ParadiseParams {
@@ -91,88 +59,6 @@ pub struct ErrorResponse {
     pub error: String,
 }
 
-/// Liste toutes les sources musicales enregistrées
-///
-/// Retourne la liste complète des sources avec leurs informations.
-#[utoipa::path(
-    get,
-    path = "/sources",
-    responses(
-        (status = 200, description = "Liste des sources", body = SourcesList),
-    ),
-    tag = "sources"
-)]
-async fn list_sources() -> impl IntoResponse {
-    let sources = list_all_sources().await;
-
-    let source_infos: Vec<SourceInfo> = sources
-        .iter()
-        .map(|s| {
-            let caps = s.capabilities();
-            SourceInfo {
-                id: s.id().to_string(),
-                name: s.name().to_string(),
-                supports_fifo: s.supports_fifo(),
-                capabilities: SourceCapabilitiesInfo {
-                    supports_search: caps.supports_search,
-                    supports_favorites: caps.supports_favorites,
-                    supports_playlists: caps.supports_playlists,
-                    supports_high_res_audio: caps.supports_high_res_audio,
-                },
-            }
-        })
-        .collect();
-
-    let list = SourcesList {
-        count: source_infos.len(),
-        sources: source_infos,
-    };
-
-    Json(list)
-}
-
-/// Obtient les informations d'une source spécifique
-///
-/// Retourne les détails d'une source musicale par son ID.
-#[utoipa::path(
-    get,
-    path = "/sources/{id}",
-    params(
-        ("id" = String, Path, description = "ID de la source")
-    ),
-    responses(
-        (status = 200, description = "Informations de la source", body = SourceInfo),
-        (status = 404, description = "Source non trouvée", body = ErrorResponse),
-    ),
-    tag = "sources"
-)]
-async fn get_source(Path(id): Path<String>) -> impl IntoResponse {
-    match get_source_from_registry(&id).await {
-        Some(source) => {
-            let caps = source.capabilities();
-            let info = SourceInfo {
-                id: source.id().to_string(),
-                name: source.name().to_string(),
-                supports_fifo: source.supports_fifo(),
-                capabilities: SourceCapabilitiesInfo {
-                    supports_search: caps.supports_search,
-                    supports_favorites: caps.supports_favorites,
-                    supports_playlists: caps.supports_playlists,
-                    supports_high_res_audio: caps.supports_high_res_audio,
-                },
-            };
-            (StatusCode::OK, Json(info)).into_response()
-        }
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: format!("Source '{}' not found", id),
-            }),
-        )
-            .into_response(),
-    }
-}
-
 /// Enregistre une source Qobuz
 ///
 /// Enregistre une nouvelle source Qobuz avec les credentials fournis ou depuis la config.
@@ -189,6 +75,7 @@ async fn get_source(Path(id): Path<String>) -> impl IntoResponse {
 )]
 async fn register_qobuz(Json(creds): Json<QobuzCredentials>) -> impl IntoResponse {
     use pmoqobuz::{QobuzClient, QobuzSource};
+    use pmosource::api::register_source;
 
     // Créer le client selon les credentials fournis
     let client_result = if let (Some(username), Some(password)) = (creds.username, creds.password) {
@@ -247,6 +134,7 @@ async fn register_qobuz(Json(creds): Json<QobuzCredentials>) -> impl IntoRespons
 )]
 async fn register_paradise(Json(params): Json<ParadiseParams>) -> impl IntoResponse {
     use pmoparadise::{RadioParadiseClient, RadioParadiseSource};
+    use pmosource::api::register_source;
 
     // Créer le client (Radio Paradise ne nécessite pas d'auth)
     let client = match RadioParadiseClient::new().await {
@@ -288,61 +176,24 @@ async fn register_paradise(Json(params): Json<ParadiseParams>) -> impl IntoRespo
         .into_response()
 }
 
-/// Désenregistre une source musicale
+/// Crée un router avec les endpoints d'enregistrement des sources
 ///
-/// Supprime une source du registre par son ID.
-#[utoipa::path(
-    delete,
-    path = "/sources/{id}",
-    params(
-        ("id" = String, Path, description = "ID de la source à supprimer")
-    ),
-    responses(
-        (status = 200, description = "Source supprimée"),
-        (status = 404, description = "Source non trouvée", body = ErrorResponse),
-    ),
-    tag = "sources"
-)]
-async fn unregister_source(Path(id): Path<String>) -> impl IntoResponse {
-    if unregister_source_from_registry(&id).await {
-        (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "message": format!("Source '{}' unregistered successfully", id)
-            })),
-        )
-            .into_response()
-    } else {
-        (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: format!("Source '{}' not found", id),
-            }),
-        )
-            .into_response()
-    }
-}
-
-/// Crée le router pour l'API des sources
-///
-/// # Returns
-///
-/// Un `Router` Axum avec toutes les routes de l'API configurées.
+/// Ce router doit être combiné avec le router de base de `pmosource::api::create_sources_router()`
+/// pour obtenir une API complète.
 ///
 /// # Examples
 ///
 /// ```ignore
-/// use pmomediaserver::sources_api::sources_api_router;
+/// use pmomediaserver::sources_api::create_registration_router;
+/// use pmosource::api::create_sources_router;
 /// use axum::Router;
 ///
-/// let app = Router::new()
-///     .nest("/api", sources_api_router());
+/// let sources_router = create_sources_router();
+/// let registration_router = create_registration_router();
+/// let combined = sources_router.merge(registration_router);
 /// ```
-pub fn sources_api_router() -> Router {
-    let mut router = Router::new()
-        .route("/sources", get(list_sources))
-        .route("/sources/{id}", get(get_source))
-        .route("/sources/{id}", delete(unregister_source));
+pub fn create_registration_router() -> Router {
+    let mut router = Router::new();
 
     #[cfg(feature = "qobuz")]
     {
@@ -357,22 +208,16 @@ pub fn sources_api_router() -> Router {
     router
 }
 
-/// Structure pour la documentation OpenAPI (Qobuz + Paradise)
+/// Structure pour la documentation OpenAPI des endpoints d'enregistrement (Qobuz + Paradise)
 #[cfg(all(feature = "qobuz", feature = "paradise"))]
 #[derive(utoipa::OpenApi)]
 #[openapi(
     paths(
-        list_sources,
-        get_source,
-        unregister_source,
         register_qobuz,
         register_paradise,
     ),
     components(
         schemas(
-            SourceInfo,
-            SourceCapabilitiesInfo,
-            SourcesList,
             SourceRegisteredResponse,
             ErrorResponse,
             QobuzCredentials,
@@ -380,83 +225,47 @@ pub fn sources_api_router() -> Router {
         )
     ),
     tags(
-        (name = "sources", description = "Gestion des sources musicales")
+        (name = "sources", description = "Enregistrement dynamique des sources musicales")
     )
 )]
-pub struct SourcesApiDoc;
+pub struct SourceRegistrationApiDoc;
 
 /// Structure pour la documentation OpenAPI (Qobuz uniquement)
 #[cfg(all(feature = "qobuz", not(feature = "paradise")))]
 #[derive(utoipa::OpenApi)]
 #[openapi(
     paths(
-        list_sources,
-        get_source,
-        unregister_source,
         register_qobuz,
     ),
     components(
         schemas(
-            SourceInfo,
-            SourceCapabilitiesInfo,
-            SourcesList,
             SourceRegisteredResponse,
             ErrorResponse,
             QobuzCredentials,
         )
     ),
     tags(
-        (name = "sources", description = "Gestion des sources musicales")
+        (name = "sources", description = "Enregistrement dynamique des sources musicales")
     )
 )]
-pub struct SourcesApiDoc;
+pub struct SourceRegistrationApiDoc;
 
 /// Structure pour la documentation OpenAPI (Paradise uniquement)
 #[cfg(all(feature = "paradise", not(feature = "qobuz")))]
 #[derive(utoipa::OpenApi)]
 #[openapi(
     paths(
-        list_sources,
-        get_source,
-        unregister_source,
         register_paradise,
     ),
     components(
         schemas(
-            SourceInfo,
-            SourceCapabilitiesInfo,
-            SourcesList,
             SourceRegisteredResponse,
             ErrorResponse,
             ParadiseParams,
         )
     ),
     tags(
-        (name = "sources", description = "Gestion des sources musicales")
+        (name = "sources", description = "Enregistrement dynamique des sources musicales")
     )
 )]
-pub struct SourcesApiDoc;
-
-/// Structure pour la documentation OpenAPI (sans sources spécifiques)
-#[cfg(not(any(feature = "qobuz", feature = "paradise")))]
-#[derive(utoipa::OpenApi)]
-#[openapi(
-    paths(
-        list_sources,
-        get_source,
-        unregister_source,
-    ),
-    components(
-        schemas(
-            SourceInfo,
-            SourceCapabilitiesInfo,
-            SourcesList,
-            SourceRegisteredResponse,
-            ErrorResponse,
-        )
-    ),
-    tags(
-        (name = "sources", description = "Gestion des sources musicales")
-    )
-)]
-pub struct SourcesApiDoc;
+pub struct SourceRegistrationApiDoc;
