@@ -2350,15 +2350,22 @@ name = "pmomediaserver"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "axum",
  "bevy_reflect",
  "once_cell",
+ "pmoconfig",
  "pmodidl",
+ "pmoqobuz",
  "pmoserver",
  "pmosource",
  "pmoupnp",
  "quick-xml 0.38.3",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "utoipa",
 ]
 
 [[package]]

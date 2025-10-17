@@ -7,7 +7,7 @@ edition = "2024"
 pmoconfig = { path = "../pmoconfig" }
 pmoupnp =  { path = "../pmoupnp"}
 pmomediarenderer = { path = "../pmomediarenderer" }
-pmomediaserver = { path = "../pmomediaserver"}
+pmomediaserver = { path = "../pmomediaserver", features = ["qobuz", "api"] }
 pmoserver = { path = "../pmoserver" }
 pmocovers = { path = "../pmocovers", features = ["pmoserver"] }
 pmoapp = { path = "../pmoapp", features = ["pmoserver"] }
