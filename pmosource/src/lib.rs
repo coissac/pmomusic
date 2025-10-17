@@ -12,10 +12,28 @@
 //! - **Cache Integration**: Automatic URI resolution with `pmoaudiocache` and `pmocovers`.
 //! - **Change Tracking**: `update_id` and `last_change` for UPnP notifications.
 //! - **Send + Sync**: Ready for async servers.
+//! - **Server Extension**: Optional `pmoserver` integration with REST API (feature `server`).
 //!
 //! ## Usage
 //!
+//! ### Basic Usage (implementing a source)
+//!
 //! See the [examples/radio_paradise.rs](../examples/radio_paradise.rs) for a complete implementation.
+//!
+//! ### Server Integration (feature `server`)
+//!
+//! ```rust,ignore
+//! use pmosource::MusicSourceExt;
+//! use pmoserver::ServerBuilder;
+//!
+//! let mut server = ServerBuilder::new_configured().build();
+//!
+//! // Initialiser le système de sources
+//! server.init_music_sources().await?;
+//!
+//! // Enregistrer des sources
+//! server.register_music_source(Arc::new(my_source)).await;
+//! ```
 
 use pmodidl::{Container, Item};
 use std::fmt::Debug;
@@ -885,6 +903,20 @@ pub trait MusicSource: Debug + Send + Sync {
 pub use async_trait::async_trait;
 pub use pmodidl;
 pub use pmoplaylist;
+
+// Server extension modules (feature-gated)
+#[cfg(feature = "server")]
+pub mod pmoserver_ext;
+
+#[cfg(feature = "server")]
+pub mod api;
+
+#[cfg(feature = "server")]
+mod pmoserver_impl;
+
+// Re-export server extension trait
+#[cfg(feature = "server")]
+pub use pmoserver_ext::MusicSourceExt;
 
 #[cfg(test)]
 mod tests {

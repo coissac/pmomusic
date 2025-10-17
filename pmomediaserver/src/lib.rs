@@ -76,11 +76,14 @@ pub mod sources_api;
 
 pub use device::MEDIA_SERVER;
 pub use source_registry::SourceRegistry;
-pub use server_ext::{MediaServerExt, get_source_registry};
+pub use server_ext::{MediaServerExt, get_source_registry, MusicSourceExt};
 pub use content_handler::ContentHandler;
 pub use sources::{SourcesExt, SourceInitError};
 
+// L'API des sources est maintenant dans pmosource
+// Pour des raisons de compatibilité, on réexporte ici
 #[cfg(feature = "api")]
+#[deprecated(since = "0.2.0", note = "Use pmosource::api directly")]
 pub use sources_api::{sources_api_router, SourcesApiDoc};
 
 // Re-export sources when features are enabled

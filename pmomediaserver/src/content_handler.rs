@@ -10,7 +10,7 @@
 //! - **Search** : Recherche dans les sources qui le supportent
 //! - **Update ID** : Suivi des changements pour les notifications UPnP
 
-use crate::server_ext::get_source_registry;
+use pmosource::api::{list_all_sources, get_source as get_source_from_registry};
 use pmodidl::{Container, DIDLLite};
 use pmosource::{BrowseResult, MusicSource};
 use std::sync::Arc;
@@ -102,10 +102,8 @@ impl ContentHandler {
             Ok((didl, 1, 1, 0))
         } else {
             // Essayer de trouver l'objet dans les sources
-            let registry = get_source_registry().await;
-
             // Vérifier si c'est un container racine d'une source
-            if let Some(source) = registry.get(object_id).await {
+            if let Some(source) = get_source_from_registry(object_id).await {
                 let container = source
                     .root_container()
                     .await
@@ -116,7 +114,7 @@ impl ContentHandler {
             }
 
             // Sinon, chercher dans les sources
-            for source in registry.list_all().await {
+            for source in list_all_sources().await {
                 if let Ok(result) = source.browse(object_id).await {
                     // L'objet a été trouvé, retourner ses métadonnées
                     match result {
@@ -165,17 +163,15 @@ impl ContentHandler {
             return self.browse_root(starting_index, requested_count).await;
         }
 
-        let registry = get_source_registry().await;
-
         // Vérifier si c'est le container racine d'une source
-        if let Some(source) = registry.get(object_id).await {
+        if let Some(source) = get_source_from_registry(object_id).await {
             return self
                 .browse_source_root(source, starting_index, requested_count)
                 .await;
         }
 
         // Sinon, chercher dans les sources
-        for source in registry.list_all().await {
+        for source in list_all_sources().await {
             if let Ok(result) = source.browse(object_id).await {
                 return self
                     .browse_result_to_didl(result, source, starting_index, requested_count)
@@ -192,8 +188,7 @@ impl ContentHandler {
         starting_index: u32,
         requested_count: u32,
     ) -> Result<(String, u32, u32, u32), String> {
-        let registry = get_source_registry().await;
-        let sources = registry.list_all().await;
+        let sources = list_all_sources().await;
 
         let mut containers = Vec::new();
         for source in sources.iter() {
@@ -299,8 +294,8 @@ impl ContentHandler {
 
     /// Construit le container racine du MediaServer
     async fn build_root_container(&self) -> Container {
-        let registry = get_source_registry().await;
-        let child_count = registry.count().await;
+        let sources = list_all_sources().await;
+        let child_count = sources.len();
 
         Container {
             id: "0".to_string(),
@@ -335,12 +330,11 @@ impl ContentHandler {
             "ContentDirectory::Search"
         );
 
-        let registry = get_source_registry().await;
         let mut all_containers = Vec::new();
         let mut all_items = Vec::new();
 
         // Rechercher dans toutes les sources qui supportent la recherche
-        for source in registry.list_all().await {
+        for source in list_all_sources().await {
             if source.capabilities().supports_search {
                 if let Ok(result) = source.search(search_criteria).await {
                     match result {
@@ -375,8 +369,7 @@ impl ContentHandler {
 
     /// Retourne le system update ID global
     pub async fn get_system_update_id(&self) -> u32 {
-        let registry = get_source_registry().await;
-        let sources = registry.list_all().await;
+        let sources = list_all_sources().await;
 
         // Combiner les update IDs de toutes les sources
         let mut combined_id = 0u32;

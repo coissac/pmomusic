@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 pmoupnp = { path = "../pmoupnp" }
 pmodidl = { path = "../pmodidl" }
-pmosource = { path = "../pmosource" }
+pmosource = { path = "../pmosource", features = ["server"] }
 pmoserver = { path = "../pmoserver" }
 
 once_cell = "1.20"
