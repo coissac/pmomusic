@@ -2355,6 +2355,7 @@ dependencies = [
  "once_cell",
  "pmoconfig",
  "pmodidl",
+ "pmoparadise",
  "pmoqobuz",
  "pmoserver",
  "pmosource",

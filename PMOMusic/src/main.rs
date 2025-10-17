@@ -2,7 +2,7 @@ use pmoapp::{WebAppExt, Webapp};
 use pmocovers::CoverCacheExt;
 use pmomediarenderer::MEDIA_RENDERER;
 use pmomediaserver::{MEDIA_SERVER, sources::SourcesExt, MediaServerExt, sources_api_router};
-use pmoserver::{ServerBuilder, logs::LoggingOptions};
+use pmoserver::ServerBuilder;
 use pmoupnp::{UpnpServer, ssdp::SsdpServer, upnp_api::UpnpApiExt};
 use tracing::info;
 
@@ -55,9 +55,14 @@ async fn main() {
     // Enregistrer les sources musicales
     info!("📡 Registering music sources...");
 
-    // Enregistrer Qobuz depuis la configuration
-    if let Err(e) = server.register_qobuz_from_config().await {
+    // Enregistrer Qobuz
+    if let Err(e) = server.register_qobuz().await {
         tracing::warn!("Failed to register Qobuz: {}", e);
+    }
+
+    // Enregistrer Radio Paradise
+    if let Err(e) = server.register_paradise().await {
+        tracing::warn!("Failed to register Radio Paradise: {}", e);
     }
 
     // Lister toutes les sources enregistrées
