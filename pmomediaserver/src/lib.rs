@@ -48,6 +48,20 @@
 //!     println!("Source: {} ({})", source.name(), source.id());
 //! }
 //! ```
+//!
+//! # Enregistrement simplifié avec features
+//!
+//! Avec les features activées, vous pouvez enregistrer des sources préconfigurées :
+//!
+//! ```ignore
+//! use pmomediaserver::sources::SourcesExt;
+//! use pmoserver::ServerBuilder;
+//!
+//! let mut server = ServerBuilder::new_configured().build();
+//!
+//! // Enregistrer Qobuz depuis la config (feature "qobuz" requise)
+//! server.register_qobuz_from_config().await?;
+//! ```
 
 pub mod contentdirectory;
 pub mod connectionmanager;
@@ -55,8 +69,20 @@ pub mod device;
 pub mod source_registry;
 pub mod server_ext;
 pub mod content_handler;
+pub mod sources;
+
+#[cfg(feature = "api")]
+pub mod sources_api;
 
 pub use device::MEDIA_SERVER;
 pub use source_registry::SourceRegistry;
 pub use server_ext::{MediaServerExt, get_source_registry};
 pub use content_handler::ContentHandler;
+pub use sources::{SourcesExt, SourceInitError};
+
+#[cfg(feature = "api")]
+pub use sources_api::{sources_api_router, SourcesApiDoc};
+
+// Re-export sources when features are enabled
+#[cfg(feature = "qobuz")]
+pub use pmoqobuz;

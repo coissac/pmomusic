@@ -1,7 +1,7 @@
 use pmoapp::{WebAppExt, Webapp};
 use pmocovers::CoverCacheExt;
 use pmomediarenderer::MEDIA_RENDERER;
-use pmomediaserver::{MEDIA_SERVER, MediaServerExt};
+use pmomediaserver::{MEDIA_SERVER, sources::SourcesExt, MediaServerExt, sources_api_router};
 use pmoserver::{ServerBuilder, logs::LoggingOptions};
 use pmoupnp::{UpnpServer, ssdp::SsdpServer, upnp_api::UpnpApiExt};
 use tracing::info;
@@ -36,6 +36,10 @@ async fn main() {
     // Enregistrer l'API d'introspection UPnP
     server.register_upnp_api().await;
 
+    // Enregistrer l'API de gestion des sources musicales
+    info!("📡 Registering Sources API...");
+    server.add_router("/api", sources_api_router()).await;
+
     info!("📡 Registering MediaRenderer...");
     let renderer_instance = server
         .register_device(MEDIA_RENDERER.clone())
@@ -48,27 +52,20 @@ async fn main() {
         renderer_instance.description_route()
     );
 
-    // TODO: Enregistrer les sources musicales
-    // Exemple d'utilisation du MediaServerExt:
-    //
-    // use std::sync::Arc;
-    //
-    // info!("📡 Registering music sources...");
-    //
-    // // Exemple: Enregistrer une source Qobuz
-    // // let qobuz = Arc::new(QobuzSource::new(credentials));
-    // // server.register_music_source(qobuz).await;
-    //
-    // // Exemple: Enregistrer une source Radio Paradise
-    // // let radio = Arc::new(RadioParadiseSource::new());
-    // // server.register_music_source(radio).await;
-    //
-    // // Lister toutes les sources enregistrées
-    // let sources = server.list_music_sources().await;
-    // info!("✅ {} music source(s) registered", sources.len());
-    // for source in sources {
-    //     info!("  - {} ({})", source.name(), source.id());
-    // }
+    // Enregistrer les sources musicales
+    info!("📡 Registering music sources...");
+
+    // Enregistrer Qobuz depuis la configuration
+    if let Err(e) = server.register_qobuz_from_config().await {
+        tracing::warn!("Failed to register Qobuz: {}", e);
+    }
+
+    // Lister toutes les sources enregistrées
+    let sources = server.list_music_sources().await;
+    info!("✅ {} music source(s) registered", sources.len());
+    for source in sources {
+        info!("  - {} ({})", source.name(), source.id());
+    }
 
     info!("📡 Registering MediaServer...");
     let server_instance = server
