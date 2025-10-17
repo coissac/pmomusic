@@ -11,6 +11,7 @@ dependencies = [
  "pmoconfig",
  "pmocovers",
  "pmomediarenderer",
+ "pmomediaserver",
  "pmoserver",
  "pmoupnp",
  "serde_json",
@@ -2348,10 +2349,16 @@ dependencies = [
 name = "pmomediaserver"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bevy_reflect",
  "once_cell",
  "pmodidl",
+ "pmoserver",
+ "pmosource",
  "pmoupnp",
+ "quick-xml 0.38.3",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
