@@ -1,10 +1,11 @@
 use pmoapp::{WebAppExt, Webapp};
 use pmocovers::CoverCacheExt;
 use pmomediarenderer::MEDIA_RENDERER;
-use pmomediaserver::{MEDIA_SERVER, sources::SourcesExt, MediaServerExt, sources_api_router};
+use pmomediaserver::{MEDIA_SERVER, sources::SourcesExt, MediaServerExt, sources_api_router, sources_api::SourcesApiDoc};
 use pmoserver::ServerBuilder;
 use pmoupnp::{UpnpServer, ssdp::SsdpServer, upnp_api::UpnpApiExt};
 use tracing::info;
+use utoipa::OpenApi;
 
 #[tokio::main]
 async fn main() {
@@ -36,9 +37,9 @@ async fn main() {
     // Enregistrer l'API d'introspection UPnP
     server.register_upnp_api().await;
 
-    // Enregistrer l'API de gestion des sources musicales
-    info!("📡 Registering Sources API...");
-    server.add_router("/api", sources_api_router()).await;
+    // Enregistrer l'API de gestion des sources musicales avec OpenAPI
+    info!("📡 Registering Sources API with OpenAPI documentation...");
+    server.add_openapi(sources_api_router(), SourcesApiDoc::openapi(), "sources").await;
 
     info!("📡 Registering MediaRenderer...");
     let renderer_instance = server
