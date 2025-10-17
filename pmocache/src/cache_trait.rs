@@ -12,6 +12,7 @@ pub trait FileCache<C: CacheConfig>: Send + Sync {
     fn get_cache_dir(&self) -> &Path;
     fn get_database(&self) ->  Arc<DB>;
     fn get_base_url(&self) -> &str;
+
     /// Valide les données avant de les stocker dans le cache
     ///
     /// Cette méthode peut être surchargée pour vérifier le type MIME,
@@ -34,12 +35,12 @@ pub trait FileCache<C: CacheConfig>: Send + Sync {
         C::cache_type()
     }
 
-    /// Retourne le type de cache
+    /// Retourne le nom du cache
     fn cache_name(&self) -> &'static str {
         C::cache_name()
     }
 
-    /// Retourne le type de cache
+    /// Retourne le paramètre par défaut
     fn default_param(&self) -> &'static str {
         C::default_param()
     }
@@ -54,9 +55,7 @@ pub trait FileCache<C: CacheConfig>: Send + Sync {
         C::table_name()
     }
 
-
-
-        /// Construit le chemin complet d'un fichier dans le cache
+    /// Construit le chemin complet d'un fichier dans le cache
     ///
     /// Format: `{pk}.{qualificatif}.{extension}`
     /// Pour le fichier original: `{pk}.orig.{extension}`
@@ -82,6 +81,20 @@ pub trait FileCache<C: CacheConfig>: Send + Sync {
     ///
     /// La clé primaire (pk) du fichier dans le cache
     async fn add_from_url(&self, url: &str, collection: Option<&str>) -> Result<String>;
+
+    /// Ajoute un fichier local au cache
+    ///
+    /// Le fichier est copié dans le cache via une URL file://
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Chemin du fichier local
+    /// * `collection` - Collection optionnelle à laquelle appartient le fichier
+    ///
+    /// # Returns
+    ///
+    /// La clé primaire (pk) du fichier dans le cache
+    async fn add_from_file(&self, path: &str, collection: Option<&str>) -> Result<String>;
 
     /// S'assure qu'un fichier est présent dans le cache
     ///
