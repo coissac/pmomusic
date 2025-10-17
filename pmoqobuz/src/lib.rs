@@ -105,15 +105,82 @@
 //! - Résultats de recherche : 15 minutes
 //! - URLs de streaming : 5 minutes
 //!
-//! ## Intégration pmocovers
+//! ## Intégration pmocovers et pmoaudiocache
 //!
-//! Les images d'albums sont automatiquement cachées via `pmocovers` (feature `covers`) :
+//! La feature `cache` active le support complet du cache pour les images et l'audio.
 //!
-//! ```rust,ignore
-//! let album = client.get_album("12345").await?;
-//! // L'image est automatiquement ajoutée au cache pmocovers
-//! let cover_url = album.cover_url_cached; // URL vers le cache local
+//! ### Cache d'images (pmocovers)
+//!
+//! Les images de couverture sont automatiquement téléchargées et converties en WebP :
+//!
+//! ```rust,no_run
+//! use pmoqobuz::{QobuzSource, QobuzClient};
+//! use pmocovers::Cache as CoverCache;
+//! use std::sync::Arc;
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let client = QobuzClient::from_config().await?;
+//! let cover_cache = Arc::new(CoverCache::new("./cache/covers", 500)?);
+//!
+//! let source = QobuzSource::new_with_cache(
+//!     client,
+//!     "http://localhost:8080",
+//!     Some(cover_cache),
+//!     None,
+//! );
+//! # Ok(())
+//! # }
 //! ```
+//!
+//! ### Cache audio (pmoaudiocache)
+//!
+//! L'audio haute résolution est téléchargé et caché localement avec métadonnées enrichies :
+//!
+//! ```rust,no_run
+//! use pmoqobuz::{QobuzSource, QobuzClient};
+//! use pmocovers::Cache as CoverCache;
+//! use pmoaudiocache::AudioCache;
+//! use std::sync::Arc;
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let client = QobuzClient::from_config().await?;
+//! let cover_cache = Arc::new(CoverCache::new("./cache/covers", 500)?);
+//! let audio_cache = Arc::new(AudioCache::new("./cache/audio", 100)?);
+//!
+//! let source = QobuzSource::new_with_cache(
+//!     client.clone(),
+//!     "http://localhost:8080",
+//!     Some(cover_cache),
+//!     Some(audio_cache),
+//! );
+//!
+//! // Add a track with caching
+//! let tracks = client.get_favorite_tracks().await?;
+//! if let Some(track) = tracks.first() {
+//!     let track_id = source.add_track(track).await?;
+//!     // Audio and cover are now cached with rich metadata
+//!
+//!     // Resolve URI (returns cached version if available)
+//!     let uri = source.resolve_uri(&track_id).await?;
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ### Métadonnées enrichies
+//!
+//! Qobuz fournit des métadonnées détaillées qui sont préservées dans le cache :
+//! - Titre, artiste, album
+//! - Numéro de piste et de disque
+//! - Année de sortie
+//! - Genre(s)
+//! - Label
+//! - Qualité audio (sample rate, bit depth, channels)
+//! - Durée
+//!
+//! ### Exemple complet
+//!
+//! Voir `examples/with_cache.rs` pour un exemple complet d'utilisation avec cache.
 //!
 //! ## Formats audio supportés
 //!
@@ -142,6 +209,7 @@
 //!
 //! - [`pmodidl`] : Format DIDL-Lite
 //! - [`pmocovers`] : Cache d'images
+//! - [`pmoaudiocache`] : Cache audio
 //! - [`pmoconfig`] : Configuration
 //! - [`pmoserver`] : Serveur HTTP
 

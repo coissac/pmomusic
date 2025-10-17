@@ -2393,6 +2393,7 @@ dependencies = [
  "hex",
  "mockito",
  "moka",
+ "pmoaudiocache",
  "pmoconfig",
  "pmocovers",
  "pmodidl",

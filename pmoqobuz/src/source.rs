@@ -8,9 +8,15 @@ use crate::didl::ToDIDL;
 use crate::models::{Album, Track};
 use pmosource::{async_trait, BrowseResult, MusicSource, MusicSourceError, Result};
 use pmodidl::{Container, Item};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::RwLock;
+
+#[cfg(feature = "cache")]
+use pmocovers::Cache as CoverCache;
+#[cfg(feature = "cache")]
+use pmoaudiocache::{AudioCache, AudioMetadata};
 
 /// Default image for Qobuz (300x300 WebP, embedded in binary)
 const DEFAULT_IMAGE: &[u8] = include_bytes!("../assets/default.webp");
@@ -65,9 +71,32 @@ struct QobuzSourceInner {
     /// Qobuz API client
     client: QobuzClient,
 
+    /// Cache server base URL for URI resolution
+    cache_base_url: String,
+
+    /// Track metadata cache (track_id -> TrackMetadata)
+    track_cache: RwLock<HashMap<String, TrackMetadata>>,
+
+    /// Cover image cache (optional)
+    #[cfg(feature = "cache")]
+    cover_cache: Option<Arc<CoverCache>>,
+
+    /// Audio cache (optional)
+    #[cfg(feature = "cache")]
+    audio_cache: Option<Arc<AudioCache>>,
+
     /// Update tracking
     update_counter: RwLock<u32>,
     last_change: RwLock<SystemTime>,
+}
+
+#[derive(Debug, Clone)]
+struct TrackMetadata {
+    original_uri: String,
+    #[cfg(feature = "cache")]
+    cached_audio_pk: Option<String>,
+    #[cfg(feature = "cache")]
+    cached_cover_pk: Option<String>,
 }
 
 impl std::fmt::Debug for QobuzSource {
@@ -82,6 +111,7 @@ impl QobuzSource {
     /// # Arguments
     ///
     /// * `client` - Authenticated Qobuz API client
+    /// * `cache_base_url` - Base URL for the cache server (e.g., "http://localhost:8080")
     ///
     /// # Examples
     ///
@@ -91,14 +121,72 @@ impl QobuzSource {
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let client = QobuzClient::from_config().await?;
-    ///     let source = QobuzSource::new(client);
+    ///     let source = QobuzSource::new(client, "http://localhost:8080");
     ///     Ok(())
     /// }
     /// ```
-    pub fn new(client: QobuzClient) -> Self {
+    pub fn new(client: QobuzClient, cache_base_url: impl Into<String>) -> Self {
         Self {
             inner: Arc::new(QobuzSourceInner {
                 client,
+                cache_base_url: cache_base_url.into(),
+                track_cache: RwLock::new(HashMap::new()),
+                #[cfg(feature = "cache")]
+                cover_cache: None,
+                #[cfg(feature = "cache")]
+                audio_cache: None,
+                update_counter: RwLock::new(0),
+                last_change: RwLock::new(SystemTime::now()),
+            }),
+        }
+    }
+
+    /// Create a new Qobuz source with caching support
+    ///
+    /// # Arguments
+    ///
+    /// * `client` - Authenticated Qobuz API client
+    /// * `cache_base_url` - Base URL for the cache server (e.g., "http://localhost:8080")
+    /// * `cover_cache` - Optional cover image cache
+    /// * `audio_cache` - Optional audio cache
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use pmoqobuz::{QobuzSource, QobuzClient};
+    /// use pmocovers::Cache as CoverCache;
+    /// use pmoaudiocache::AudioCache;
+    /// use std::sync::Arc;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let client = QobuzClient::from_config().await?;
+    ///     let cover_cache = Arc::new(CoverCache::new("/tmp/qobuz-covers").await?);
+    ///     let audio_cache = Arc::new(AudioCache::new("/tmp/qobuz-audio").await?);
+    ///
+    ///     let source = QobuzSource::new_with_cache(
+    ///         client,
+    ///         "http://localhost:8080",
+    ///         Some(cover_cache),
+    ///         Some(audio_cache),
+    ///     );
+    ///     Ok(())
+    /// }
+    /// ```
+    #[cfg(feature = "cache")]
+    pub fn new_with_cache(
+        client: QobuzClient,
+        cache_base_url: impl Into<String>,
+        cover_cache: Option<Arc<CoverCache>>,
+        audio_cache: Option<Arc<AudioCache>>,
+    ) -> Self {
+        Self {
+            inner: Arc::new(QobuzSourceInner {
+                client,
+                cache_base_url: cache_base_url.into(),
+                track_cache: RwLock::new(HashMap::new()),
+                cover_cache,
+                audio_cache,
                 update_counter: RwLock::new(0),
                 last_change: RwLock::new(SystemTime::now()),
             }),
@@ -108,6 +196,118 @@ impl QobuzSource {
     /// Get the Qobuz client
     pub fn client(&self) -> &QobuzClient {
         &self.inner.client
+    }
+
+    /// Add a track from Qobuz with optional caching
+    ///
+    /// This method is used to add a Qobuz track to the internal cache,
+    /// downloading and caching both cover art and audio data if caching is enabled.
+    ///
+    /// # Arguments
+    ///
+    /// * `track` - The Qobuz track to add
+    ///
+    /// # Returns
+    ///
+    /// Returns the track ID that was used for caching.
+    pub async fn add_track(&self, track: &Track) -> Result<String> {
+        let track_id = format!("qobuz://track/{}", track.id);
+
+        // Get streaming URL
+        let stream_url = self
+            .inner
+            .client
+            .get_stream_url(&track.id)
+            .await
+            .map_err(|e| MusicSourceError::UriResolutionError(e.to_string()))?;
+
+        // Cache cover image
+        #[cfg(feature = "cache")]
+        let cached_cover_pk = if let Some(ref cover_cache) = self.inner.cover_cache {
+            if let Some(ref album) = track.album {
+                if let Some(ref image_url) = album.image {
+                    match cover_cache.add_from_url(image_url).await {
+                        Ok(pk) => {
+                            tracing::info!("Successfully cached cover for track {}: {}", track_id, pk);
+                            Some(pk)
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to cache cover image {}: {}", image_url, e);
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Cache audio asynchronously
+        #[cfg(feature = "cache")]
+        let cached_audio_pk = if let Some(ref audio_cache) = self.inner.audio_cache {
+            // Prepare rich metadata from Qobuz track
+            let metadata = AudioMetadata {
+                title: Some(track.title.clone()),
+                artist: track.performer.as_ref().map(|p| p.name.clone()),
+                album: track.album.as_ref().map(|a| a.title.clone()),
+                duration_secs: Some(track.duration as u64),
+                year: track.album.as_ref().and_then(|a| {
+                    a.release_date.as_ref().and_then(|d| {
+                        // Parse year from ISO date (e.g., "2023-01-15")
+                        d.split('-').next()?.parse().ok()
+                    })
+                }),
+                track_number: Some(track.track_number),
+                track_total: track.album.as_ref().and_then(|a| a.tracks_count),
+                disc_number: Some(track.media_number),
+                disc_total: None,
+                genre: track.album.as_ref().and_then(|a| {
+                    if !a.genres.is_empty() {
+                        Some(a.genres.join(", "))
+                    } else {
+                        None
+                    }
+                }),
+                sample_rate: track.sample_rate,
+                channels: track.channels,
+                bitrate: None, // Qobuz doesn't provide bitrate directly
+            };
+
+            // Cache the audio asynchronously
+            match audio_cache.add_from_url(&stream_url, Some(metadata)).await {
+                Ok((pk, _)) => {
+                    tracing::info!("Successfully cached audio for track {}: {}", track_id, pk);
+                    Some(pk)
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to cache audio for track {}: {}", track_id, e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // Store metadata
+        {
+            let mut cache = self.inner.track_cache.write().await;
+            cache.insert(
+                track_id.clone(),
+                TrackMetadata {
+                    original_uri: stream_url,
+                    #[cfg(feature = "cache")]
+                    cached_audio_pk,
+                    #[cfg(feature = "cache")]
+                    cached_cover_pk,
+                },
+            );
+        }
+
+        Ok(track_id)
     }
 
     /// Increment update counter (called on catalog changes)
@@ -284,7 +484,21 @@ impl MusicSource for QobuzSource {
     }
 
     async fn resolve_uri(&self, object_id: &str) -> Result<String> {
-        // Extract track ID from object_id
+        // Check if we have cached metadata for this track
+        let cache = self.inner.track_cache.read().await;
+
+        if let Some(metadata) = cache.get(object_id) {
+            // Priority 1: Use cached audio if available
+            #[cfg(feature = "cache")]
+            if let Some(ref pk) = metadata.cached_audio_pk {
+                return Ok(format!("{}/audio/tracks/{}/stream", self.inner.cache_base_url, pk));
+            }
+
+            // Priority 2: Return original stream URI (already fetched)
+            return Ok(metadata.original_uri.clone());
+        }
+
+        // If not in cache, extract track ID and get streaming URL from Qobuz
         // Object IDs for tracks follow pattern: "qobuz://track/{id}"
         let track_id = if let Some(id) = object_id.strip_prefix("qobuz://track/") {
             id
