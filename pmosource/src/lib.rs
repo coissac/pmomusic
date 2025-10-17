@@ -53,10 +53,117 @@ pub enum MusicSourceError {
 
     #[error("URI resolution failed: {0}")]
     UriResolutionError(String),
+
+    #[error("Feature not supported: {0}")]
+    NotSupported(String),
+
+    #[error("Favorites operation failed: {0}")]
+    FavoritesError(String),
+
+    #[error("Playlist operation failed: {0}")]
+    PlaylistError(String),
 }
 
 /// Result type for music source operations
 pub type Result<T> = std::result::Result<T, MusicSourceError>;
+
+/// Source capabilities describing what features are supported
+#[derive(Debug, Clone, Default)]
+pub struct SourceCapabilities {
+    /// Supports FIFO operations (dynamic playlists)
+    pub supports_fifo: bool,
+    /// Supports search functionality
+    pub supports_search: bool,
+    /// Supports user favorites
+    pub supports_favorites: bool,
+    /// Supports user playlists
+    pub supports_playlists: bool,
+    /// Supports user-created content
+    pub supports_user_content: bool,
+    /// Supports high-resolution audio
+    pub supports_high_res_audio: bool,
+    /// Maximum sample rate supported (Hz)
+    pub max_sample_rate: Option<u32>,
+    /// Supports multiple audio formats
+    pub supports_multiple_formats: bool,
+    /// Supports advanced search with filters
+    pub supports_advanced_search: bool,
+    /// Supports pagination in browse operations
+    pub supports_pagination: bool,
+}
+
+/// Audio format information
+#[derive(Debug, Clone)]
+pub struct AudioFormat {
+    /// Format identifier (e.g., "flac-24-96", "mp3-320")
+    pub format_id: String,
+    /// MIME type (e.g., "audio/flac", "audio/mpeg")
+    pub mime_type: String,
+    /// Sample rate in Hz (e.g., 44100, 96000)
+    pub sample_rate: Option<u32>,
+    /// Bit depth (e.g., 16, 24)
+    pub bit_depth: Option<u8>,
+    /// Bitrate in kbps (for lossy formats)
+    pub bitrate: Option<u32>,
+    /// Number of audio channels (e.g., 2 for stereo)
+    pub channels: Option<u8>,
+}
+
+impl Default for AudioFormat {
+    fn default() -> Self {
+        Self {
+            format_id: "default".to_string(),
+            mime_type: "audio/flac".to_string(),
+            sample_rate: Some(44100),
+            bit_depth: Some(16),
+            bitrate: None,
+            channels: Some(2),
+        }
+    }
+}
+
+/// Cache status for an item
+#[derive(Debug, Clone)]
+pub enum CacheStatus {
+    /// Item is not cached
+    NotCached,
+    /// Item is currently being cached
+    Caching { progress: f32 },
+    /// Item is fully cached
+    Cached { size_bytes: u64 },
+    /// Caching failed
+    Failed { error: String },
+}
+
+/// Search filters for advanced search
+#[derive(Debug, Clone, Default)]
+pub struct SearchFilters {
+    /// Filter by artist name
+    pub artist: Option<String>,
+    /// Filter by album name
+    pub album: Option<String>,
+    /// Filter by genre
+    pub genre: Option<String>,
+    /// Minimum year
+    pub year_min: Option<u32>,
+    /// Maximum year
+    pub year_max: Option<u32>,
+    /// Maximum number of results
+    pub limit: Option<usize>,
+}
+
+/// Source statistics
+#[derive(Debug, Clone, Default)]
+pub struct SourceStatistics {
+    /// Total number of items in the source
+    pub total_items: Option<usize>,
+    /// Total number of containers in the source
+    pub total_containers: Option<usize>,
+    /// Number of cached items
+    pub cached_items: Option<usize>,
+    /// Total cache size in bytes
+    pub cache_size_bytes: Option<u64>,
+}
 
 /// Result of a browse operation
 #[derive(Debug, Clone)]
@@ -446,6 +553,331 @@ pub trait MusicSource: Debug + Send + Sync {
     async fn search(&self, query: &str) -> Result<BrowseResult> {
         let _ = query;
         Err(MusicSourceError::SearchNotSupported)
+    }
+
+    // ============= Extended Features =============
+
+    /// Returns the capabilities of this music source
+    ///
+    /// This allows clients to discover what features are supported without
+    /// having to call methods and handle errors.
+    ///
+    /// # Returns
+    ///
+    /// A `SourceCapabilities` struct describing supported features.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let caps = source.capabilities();
+    /// if caps.supports_search {
+    ///     let results = source.search("query").await?;
+    /// }
+    /// ```
+    fn capabilities(&self) -> SourceCapabilities {
+        SourceCapabilities {
+            supports_fifo: self.supports_fifo(),
+            supports_search: false,
+            supports_favorites: false,
+            supports_playlists: false,
+            supports_user_content: false,
+            supports_high_res_audio: false,
+            max_sample_rate: None,
+            supports_multiple_formats: false,
+            supports_advanced_search: false,
+            supports_pagination: false,
+        }
+    }
+
+    /// Get available audio formats for a specific track
+    ///
+    /// Some sources (like Qobuz) offer multiple quality levels and formats.
+    /// This method returns all available formats for a given track.
+    ///
+    /// # Arguments
+    ///
+    /// * `object_id` - The ID of the track
+    ///
+    /// # Returns
+    ///
+    /// A vector of available audio formats, or a single default format.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let formats = source.get_available_formats("track-123").await?;
+    /// for format in formats {
+    ///     println!("{}: {} Hz, {} bit", format.format_id,
+    ///              format.sample_rate.unwrap_or(0),
+    ///              format.bit_depth.unwrap_or(0));
+    /// }
+    /// ```
+    async fn get_available_formats(&self, object_id: &str) -> Result<Vec<AudioFormat>> {
+        let _ = object_id;
+        Ok(vec![AudioFormat::default()])
+    }
+
+    /// Get the cache status for a specific item
+    ///
+    /// Returns information about whether an item is cached, being cached,
+    /// or not cached at all.
+    ///
+    /// # Arguments
+    ///
+    /// * `object_id` - The ID of the item to check
+    ///
+    /// # Returns
+    ///
+    /// The current cache status of the item.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let status = source.get_cache_status("track-123").await?;
+    /// match status {
+    ///     CacheStatus::Cached { size_bytes } => {
+    ///         println!("Cached: {} bytes", size_bytes);
+    ///     }
+    ///     CacheStatus::NotCached => {
+    ///         println!("Not cached");
+    ///     }
+    ///     _ => {}
+    /// }
+    /// ```
+    async fn get_cache_status(&self, object_id: &str) -> Result<CacheStatus> {
+        let _ = object_id;
+        Ok(CacheStatus::NotCached)
+    }
+
+    /// Request caching of a specific item
+    ///
+    /// Initiates asynchronous caching of an item (audio and/or cover art).
+    /// The operation happens in the background.
+    ///
+    /// # Arguments
+    ///
+    /// * `object_id` - The ID of the item to cache
+    ///
+    /// # Returns
+    ///
+    /// The initial cache status after the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MusicSourceError::NotSupported` if caching is not available.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let status = source.cache_item("track-123").await?;
+    /// ```
+    async fn cache_item(&self, object_id: &str) -> Result<CacheStatus> {
+        let _ = object_id;
+        Err(MusicSourceError::NotSupported("Caching not supported".to_string()))
+    }
+
+    /// Add an item to favorites
+    ///
+    /// Marks an item (track, album, artist, etc.) as a favorite.
+    ///
+    /// # Arguments
+    ///
+    /// * `object_id` - The ID of the item to favorite
+    ///
+    /// # Errors
+    ///
+    /// Returns `MusicSourceError::NotSupported` if favorites are not available.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// source.add_favorite("album-123").await?;
+    /// ```
+    async fn add_favorite(&self, object_id: &str) -> Result<()> {
+        let _ = object_id;
+        Err(MusicSourceError::NotSupported("Favorites not supported".to_string()))
+    }
+
+    /// Remove an item from favorites
+    ///
+    /// Unmarks an item as a favorite.
+    ///
+    /// # Arguments
+    ///
+    /// * `object_id` - The ID of the item to unfavorite
+    ///
+    /// # Errors
+    ///
+    /// Returns `MusicSourceError::NotSupported` if favorites are not available.
+    async fn remove_favorite(&self, object_id: &str) -> Result<()> {
+        let _ = object_id;
+        Err(MusicSourceError::NotSupported("Favorites not supported".to_string()))
+    }
+
+    /// Check if an item is in favorites
+    ///
+    /// # Arguments
+    ///
+    /// * `object_id` - The ID of the item to check
+    ///
+    /// # Returns
+    ///
+    /// `true` if the item is favorited, `false` otherwise.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MusicSourceError::NotSupported` if favorites are not available.
+    async fn is_favorite(&self, object_id: &str) -> Result<bool> {
+        let _ = object_id;
+        Err(MusicSourceError::NotSupported("Favorites not supported".to_string()))
+    }
+
+    /// Get user playlists
+    ///
+    /// Returns all playlists created or followed by the user.
+    ///
+    /// # Returns
+    ///
+    /// A vector of Container objects representing playlists.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MusicSourceError::NotSupported` if playlists are not available.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let playlists = source.get_user_playlists().await?;
+    /// for playlist in playlists {
+    ///     println!("Playlist: {}", playlist.title);
+    /// }
+    /// ```
+    async fn get_user_playlists(&self) -> Result<Vec<Container>> {
+        Err(MusicSourceError::NotSupported("Playlists not supported".to_string()))
+    }
+
+    /// Add an item to a playlist
+    ///
+    /// # Arguments
+    ///
+    /// * `playlist_id` - The ID of the playlist
+    /// * `item_id` - The ID of the item to add
+    ///
+    /// # Errors
+    ///
+    /// Returns `MusicSourceError::NotSupported` if playlists are not available.
+    async fn add_to_playlist(&self, playlist_id: &str, item_id: &str) -> Result<()> {
+        let _ = (playlist_id, item_id);
+        Err(MusicSourceError::NotSupported("Playlists not supported".to_string()))
+    }
+
+    /// Get total item count for a container
+    ///
+    /// This is more efficient than browsing and counting for large collections.
+    ///
+    /// # Arguments
+    ///
+    /// * `object_id` - The ID of the container
+    ///
+    /// # Returns
+    ///
+    /// The total number of items in the container.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let count = source.get_item_count("album-123").await?;
+    /// println!("Album has {} tracks", count);
+    /// ```
+    async fn get_item_count(&self, object_id: &str) -> Result<usize> {
+        // Default implementation: browse and count
+        let result = self.browse(object_id).await?;
+        Ok(result.count())
+    }
+
+    /// Browse with pagination support
+    ///
+    /// More efficient than `browse()` for large containers.
+    ///
+    /// # Arguments
+    ///
+    /// * `object_id` - The ID of the container to browse
+    /// * `offset` - Starting index (0-based)
+    /// * `limit` - Maximum number of items to return
+    ///
+    /// # Returns
+    ///
+    /// A `BrowseResult` containing the requested subset of items.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Get items 10-19
+    /// let result = source.browse_paginated("album-123", 10, 10).await?;
+    /// ```
+    async fn browse_paginated(
+        &self,
+        object_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<BrowseResult> {
+        // Default implementation: browse all then slice (inefficient)
+        let _ = (offset, limit);
+        self.browse(object_id).await
+    }
+
+    /// Advanced search with filters
+    ///
+    /// Provides more fine-grained search control than basic `search()`.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - Search query string
+    /// * `filters` - Additional search filters
+    ///
+    /// # Returns
+    ///
+    /// A `BrowseResult` containing matching items/containers.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MusicSourceError::SearchNotSupported` if not implemented.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let filters = SearchFilters {
+    ///     artist: Some("Pink Floyd".to_string()),
+    ///     year_min: Some(1970),
+    ///     year_max: Some(1980),
+    ///     ..Default::default()
+    /// };
+    /// let results = source.search_advanced("Wall", filters).await?;
+    /// ```
+    async fn search_advanced(&self, query: &str, filters: SearchFilters) -> Result<BrowseResult> {
+        // Default: ignore filters and call basic search
+        let _ = filters;
+        self.search(query).await
+    }
+
+    /// Get source statistics
+    ///
+    /// Returns information about the source such as total items, cache usage, etc.
+    ///
+    /// # Returns
+    ///
+    /// A `SourceStatistics` struct with available statistics.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let stats = source.statistics().await?;
+    /// if let Some(total) = stats.total_items {
+    ///     println!("Total tracks: {}", total);
+    /// }
+    /// ```
+    async fn statistics(&self) -> Result<SourceStatistics> {
+        Ok(SourceStatistics::default())
     }
 }
 

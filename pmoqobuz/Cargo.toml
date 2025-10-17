@@ -68,3 +68,8 @@ tokio-test = "0.4"
 mockito = "1.0"
 # Pour les exemples
 tracing-subscriber = "0.3"
+
+# Specify that the with_cache example requires the cache feature
+[[example]]
+name = "with_cache"
+required-features = ["cache"]

@@ -5,14 +5,16 @@
 //! - Accessing the embedded WebP image
 //! - Optionally saving it to a file
 
-use pmoqobuz::QobuzSource;
+use pmoqobuz::{QobuzSource, QobuzClient};
 use pmosource::MusicSource;
 use std::fs;
 use std::io::Write;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create the source
-    let source = QobuzSource;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Create the client and source
+    let client = QobuzClient::from_config().await?;
+    let source = QobuzSource::new(client, "http://localhost:8080");
 
     // Display source information
     println!("Music Source Information");

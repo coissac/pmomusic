@@ -500,6 +500,228 @@ impl MusicSource for RadioParadiseSource {
         // Radio Paradise doesn't support search
         Err(MusicSourceError::SearchNotSupported)
     }
+
+    // ============= Extended Features Implementation =============
+
+    fn capabilities(&self) -> pmosource::SourceCapabilities {
+        pmosource::SourceCapabilities {
+            supports_fifo: true,
+            supports_search: false,
+            supports_favorites: false,
+            supports_playlists: false,
+            supports_user_content: false,
+            supports_high_res_audio: true,
+            max_sample_rate: Some(96_000), // Radio Paradise FLAC is typically 44.1 or 48 kHz, up to 96 kHz
+            supports_multiple_formats: true,
+            supports_advanced_search: false,
+            supports_pagination: false,
+        }
+    }
+
+    async fn get_available_formats(&self, _object_id: &str) -> Result<Vec<pmosource::AudioFormat>> {
+        use pmosource::AudioFormat;
+
+        // Radio Paradise offers 5 quality levels
+        Ok(vec![
+            AudioFormat {
+                format_id: "mp3-128".to_string(),
+                mime_type: "audio/mpeg".to_string(),
+                sample_rate: Some(44100),
+                bit_depth: None,
+                bitrate: Some(128),
+                channels: Some(2),
+            },
+            AudioFormat {
+                format_id: "aac-64".to_string(),
+                mime_type: "audio/aac".to_string(),
+                sample_rate: Some(44100),
+                bit_depth: None,
+                bitrate: Some(64),
+                channels: Some(2),
+            },
+            AudioFormat {
+                format_id: "aac-128".to_string(),
+                mime_type: "audio/aac".to_string(),
+                sample_rate: Some(44100),
+                bit_depth: None,
+                bitrate: Some(128),
+                channels: Some(2),
+            },
+            AudioFormat {
+                format_id: "aac-320".to_string(),
+                mime_type: "audio/aac".to_string(),
+                sample_rate: Some(44100),
+                bit_depth: None,
+                bitrate: Some(320),
+                channels: Some(2),
+            },
+            AudioFormat {
+                format_id: "flac".to_string(),
+                mime_type: "audio/flac".to_string(),
+                sample_rate: Some(44100),
+                bit_depth: Some(16),
+                bitrate: None,
+                channels: Some(2),
+            },
+        ])
+    }
+
+    async fn get_cache_status(&self, object_id: &str) -> Result<pmosource::CacheStatus> {
+        use pmosource::CacheStatus;
+
+        let cache = self.inner.track_cache.read().await;
+
+        if let Some(metadata) = cache.get(object_id) {
+            #[cfg(feature = "cache")]
+            {
+                if let Some(ref audio_cache) = self.inner.audio_cache {
+                    if let Some(ref pk) = metadata.cached_audio_pk {
+                        // Check if the cached file exists and get its size
+                        if let Ok(Some(info)) = audio_cache.get_info(pk).await {
+                            return Ok(CacheStatus::Cached {
+                                size_bytes: info.size_bytes,
+                            });
+                        }
+                    }
+                }
+            }
+
+            // Check legacy cached_pk for backward compatibility
+            if metadata.cached_pk.is_some() {
+                // We don't have size info for legacy cache
+                return Ok(CacheStatus::Cached { size_bytes: 0 });
+            }
+        }
+
+        Ok(CacheStatus::NotCached)
+    }
+
+    async fn cache_item(&self, object_id: &str) -> Result<pmosource::CacheStatus> {
+        #[cfg(not(feature = "cache"))]
+        {
+            let _ = object_id;
+            return Err(MusicSourceError::NotSupported("Caching not enabled".to_string()));
+        }
+
+        #[cfg(feature = "cache")]
+        {
+            use pmosource::CacheStatus;
+
+            // Get the track metadata
+            let cache = self.inner.track_cache.read().await;
+            let metadata = cache
+                .get(object_id)
+                .ok_or_else(|| MusicSourceError::ObjectNotFound(object_id.to_string()))?
+                .clone();
+            drop(cache);
+
+            // If already cached, return status
+            if metadata.cached_audio_pk.is_some() {
+                return self.get_cache_status(object_id).await;
+            }
+
+            // Cache it now
+            if let Some(ref audio_cache) = self.inner.audio_cache {
+                let song = &metadata.block.songs[metadata.song_index];
+
+                let audio_metadata = pmoaudiocache::AudioMetadata {
+                    title: Some(song.title.clone()),
+                    artist: if !song.artist.is_empty() {
+                        Some(song.artist.clone())
+                    } else {
+                        None
+                    },
+                    album: if !song.album.is_empty() {
+                        Some(song.album.clone())
+                    } else {
+                        None
+                    },
+                    duration_secs: if song.duration > 0 {
+                        Some((song.duration / 1000) as u64)
+                    } else {
+                        None
+                    },
+                    year: None,
+                    track_number: None,
+                    track_total: None,
+                    disc_number: None,
+                    disc_total: None,
+                    genre: None,
+                    sample_rate: None,
+                    channels: None,
+                    bitrate: None,
+                };
+
+                match audio_cache
+                    .add_from_url(&metadata.original_uri, Some(audio_metadata))
+                    .await
+                {
+                    Ok((pk, _)) => {
+                        // Update the metadata
+                        let mut cache = self.inner.track_cache.write().await;
+                        if let Some(meta) = cache.get_mut(object_id) {
+                            meta.cached_audio_pk = Some(pk);
+                        }
+                        return self.get_cache_status(object_id).await;
+                    }
+                    Err(e) => {
+                        return Ok(CacheStatus::Failed {
+                            error: e.to_string(),
+                        });
+                    }
+                }
+            }
+
+            Ok(CacheStatus::NotCached)
+        }
+    }
+
+    async fn browse_paginated(
+        &self,
+        object_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<BrowseResult> {
+        // For Radio Paradise, we can efficiently paginate the FIFO
+        if object_id == "radio-paradise" || object_id == "0" {
+            let tracks = self.inner.playlist.get_items(offset, limit).await;
+            let items: Vec<Item> = tracks.iter().map(|t| self.track_to_item(t)).collect();
+            Ok(BrowseResult::Items(items))
+        } else {
+            Err(MusicSourceError::ObjectNotFound(object_id.to_string()))
+        }
+    }
+
+    async fn get_item_count(&self, object_id: &str) -> Result<usize> {
+        if object_id == "radio-paradise" || object_id == "0" {
+            Ok(self.inner.playlist.len().await)
+        } else {
+            Err(MusicSourceError::ObjectNotFound(object_id.to_string()))
+        }
+    }
+
+    async fn statistics(&self) -> Result<pmosource::SourceStatistics> {
+        let mut stats = pmosource::SourceStatistics::default();
+
+        // Total items in FIFO
+        stats.total_items = Some(self.inner.playlist.len().await);
+
+        // Cache statistics
+        #[cfg(feature = "cache")]
+        {
+            let cache = self.inner.track_cache.read().await;
+            let cached_count = cache.values().filter(|m| m.cached_audio_pk.is_some()).count();
+            stats.cached_items = Some(cached_count);
+
+            if let Some(ref audio_cache) = self.inner.audio_cache {
+                if let Ok(cache_stats) = audio_cache.statistics().await {
+                    stats.cache_size_bytes = Some(cache_stats.total_size_bytes);
+                }
+            }
+        }
+
+        Ok(stats)
+    }
 }
 
 #[cfg(test)]
