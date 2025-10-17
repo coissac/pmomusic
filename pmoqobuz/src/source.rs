@@ -5,7 +5,7 @@
 
 use crate::client::QobuzClient;
 use crate::didl::ToDIDL;
-use crate::models::{Album, Track};
+use crate::models::Track;
 use pmosource::{async_trait, BrowseResult, MusicSource, MusicSourceError, Result};
 use pmodidl::{Container, Item};
 use std::collections::HashMap;
@@ -581,6 +581,381 @@ impl MusicSource for QobuzSource {
         } else {
             Ok(BrowseResult::Items(vec![]))
         }
+    }
+
+    // ============= Extended Features Implementation =============
+
+    fn capabilities(&self) -> pmosource::SourceCapabilities {
+        pmosource::SourceCapabilities {
+            supports_fifo: false,
+            supports_search: true,
+            supports_favorites: true,
+            supports_playlists: true,
+            supports_user_content: false,
+            supports_high_res_audio: true,
+            max_sample_rate: Some(192_000), // Qobuz supports up to 192kHz
+            supports_multiple_formats: true,
+            supports_advanced_search: false, // TODO: Qobuz API supports it, not yet implemented
+            supports_pagination: true,
+        }
+    }
+
+    async fn get_available_formats(&self, object_id: &str) -> Result<Vec<pmosource::AudioFormat>> {
+        use pmosource::AudioFormat;
+
+        // Extract track ID from object_id
+        let track_id = if let Some(id) = object_id.strip_prefix("qobuz://track/") {
+            id
+        } else {
+            object_id
+        };
+
+        // Get track details from Qobuz
+        let track = self
+            .inner
+            .client
+            .get_track(track_id)
+            .await
+            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+        // Qobuz provides multiple formats based on subscription
+        let mut formats = vec![];
+
+        // MP3 320 (format_id 5) - available to all
+        formats.push(AudioFormat {
+            format_id: "mp3-320".to_string(),
+            mime_type: "audio/mpeg".to_string(),
+            sample_rate: Some(44100),
+            bit_depth: None,
+            bitrate: Some(320),
+            channels: Some(2),
+        });
+
+        // FLAC 16/44.1 (format_id 6) - CD quality
+        formats.push(AudioFormat {
+            format_id: "flac-16-44".to_string(),
+            mime_type: "audio/flac".to_string(),
+            sample_rate: Some(44100),
+            bit_depth: Some(16),
+            bitrate: None,
+            channels: Some(2),
+        });
+
+        // Hi-Res formats (if available for this track)
+        if let Some(sample_rate) = track.sample_rate {
+            if sample_rate > 44100 {
+                // FLAC 24-bit Hi-Res
+                let bit_depth = track.bit_depth.map(|d| d as u8).or(Some(24));
+
+                formats.push(AudioFormat {
+                    format_id: format!("flac-{}-{}", bit_depth.unwrap_or(24), sample_rate / 1000),
+                    mime_type: "audio/flac".to_string(),
+                    sample_rate: Some(sample_rate),
+                    bit_depth,
+                    bitrate: None,
+                    channels: track.channels,
+                });
+            }
+        }
+
+        Ok(formats)
+    }
+
+    async fn get_cache_status(&self, object_id: &str) -> Result<pmosource::CacheStatus> {
+        use pmosource::CacheStatus;
+
+        let cache = self.inner.track_cache.read().await;
+
+        if let Some(metadata) = cache.get(object_id) {
+            #[cfg(feature = "cache")]
+            {
+                if let Some(ref _audio_cache) = self.inner.audio_cache {
+                    if let Some(ref _pk) = metadata.cached_audio_pk {
+                        // TODO: AudioCache doesn't have get_info method yet
+                        // For now, just return that it's cached without size info
+                        return Ok(CacheStatus::Cached {
+                            size_bytes: 0,
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(CacheStatus::NotCached)
+    }
+
+    async fn cache_item(&self, object_id: &str) -> Result<pmosource::CacheStatus> {
+        #[cfg(not(feature = "cache"))]
+        {
+            let _ = object_id;
+            return Err(MusicSourceError::NotSupported("Caching not enabled".to_string()));
+        }
+
+        #[cfg(feature = "cache")]
+        {
+            use pmosource::CacheStatus;
+
+            // Extract track ID
+            let track_id = if let Some(id) = object_id.strip_prefix("qobuz://track/") {
+                id
+            } else {
+                object_id
+            };
+
+            // Get track details
+            let track = self
+                .inner
+                .client
+                .get_track(track_id)
+                .await
+                .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+            // Add track to cache
+            let cached_id = self.add_track(&track).await?;
+
+            // Return the cache status
+            self.get_cache_status(&cached_id).await
+        }
+    }
+
+    async fn add_favorite(&self, object_id: &str) -> Result<()> {
+        // Parse object_id to determine type
+        let parts: Vec<&str> = object_id.split(':').collect();
+
+        match parts.as_slice() {
+            ["qobuz", "album", id] | ["qobuz://album", id] => {
+                self.inner
+                    .client
+                    .add_favorite_album(id)
+                    .await
+                    .map_err(|e| MusicSourceError::FavoritesError(e.to_string()))?;
+            }
+            ["qobuz", "track", id] | ["qobuz://track", id] => {
+                self.inner
+                    .client
+                    .add_favorite_track(id)
+                    .await
+                    .map_err(|e| MusicSourceError::FavoritesError(e.to_string()))?;
+            }
+            _ => {
+                return Err(MusicSourceError::NotSupported(
+                    "Favorites only supported for albums and tracks".to_string(),
+                ));
+            }
+        }
+
+        self.increment_update_id().await;
+        Ok(())
+    }
+
+    async fn remove_favorite(&self, object_id: &str) -> Result<()> {
+        // Parse object_id to determine type
+        let parts: Vec<&str> = object_id.split(':').collect();
+
+        match parts.as_slice() {
+            ["qobuz", "album", id] | ["qobuz://album", id] => {
+                self.inner
+                    .client
+                    .remove_favorite_album(id)
+                    .await
+                    .map_err(|e| MusicSourceError::FavoritesError(e.to_string()))?;
+            }
+            ["qobuz", "track", id] | ["qobuz://track", id] => {
+                self.inner
+                    .client
+                    .remove_favorite_track(id)
+                    .await
+                    .map_err(|e| MusicSourceError::FavoritesError(e.to_string()))?;
+            }
+            _ => {
+                return Err(MusicSourceError::NotSupported(
+                    "Favorites only supported for albums and tracks".to_string(),
+                ));
+            }
+        }
+
+        self.increment_update_id().await;
+        Ok(())
+    }
+
+    async fn is_favorite(&self, object_id: &str) -> Result<bool> {
+        // Parse object_id to determine type
+        let parts: Vec<&str> = object_id.split(':').collect();
+
+        match parts.as_slice() {
+            ["qobuz", "album", id] | ["qobuz://album", id] => {
+                let favorites = self
+                    .inner
+                    .client
+                    .get_favorite_albums()
+                    .await
+                    .map_err(|e| MusicSourceError::FavoritesError(e.to_string()))?;
+
+                Ok(favorites.iter().any(|album| album.id == *id))
+            }
+            ["qobuz", "track", id] | ["qobuz://track", id] => {
+                let favorites = self
+                    .inner
+                    .client
+                    .get_favorite_tracks()
+                    .await
+                    .map_err(|e| MusicSourceError::FavoritesError(e.to_string()))?;
+
+                Ok(favorites.iter().any(|track| track.id == *id))
+            }
+            _ => {
+                Err(MusicSourceError::NotSupported(
+                    "Favorites only supported for albums and tracks".to_string(),
+                ))
+            }
+        }
+    }
+
+    async fn get_user_playlists(&self) -> Result<Vec<Container>> {
+        let playlists = self
+            .inner
+            .client
+            .get_user_playlists()
+            .await
+            .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
+
+        let containers: Vec<Container> = playlists
+            .into_iter()
+            .filter_map(|playlist| playlist.to_didl_container("qobuz").ok())
+            .collect();
+
+        Ok(containers)
+    }
+
+    async fn add_to_playlist(&self, playlist_id: &str, item_id: &str) -> Result<()> {
+        // Extract track ID from item_id
+        let track_id = if let Some(id) = item_id.strip_prefix("qobuz://track/") {
+            id
+        } else if let Some(id) = item_id.strip_prefix("qobuz:track:") {
+            id
+        } else {
+            item_id
+        };
+
+        self.inner
+            .client
+            .add_to_playlist(playlist_id, track_id)
+            .await
+            .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
+
+        self.increment_update_id().await;
+        Ok(())
+    }
+
+    async fn get_item_count(&self, object_id: &str) -> Result<usize> {
+        match self.parse_object_id(object_id) {
+            ObjectIdType::Album(album_id) => {
+                let album = self
+                    .inner
+                    .client
+                    .get_album(&album_id)
+                    .await
+                    .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+                Ok(album.tracks_count.unwrap_or(0) as usize)
+            }
+            ObjectIdType::Playlist(playlist_id) => {
+                let playlist = self
+                    .inner
+                    .client
+                    .get_playlist(&playlist_id)
+                    .await
+                    .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+                Ok(playlist.tracks_count.unwrap_or(0) as usize)
+            }
+            _ => {
+                // Fall back to default implementation
+                let result = self.browse(object_id).await?;
+                Ok(result.count())
+            }
+        }
+    }
+
+    async fn browse_paginated(
+        &self,
+        object_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<BrowseResult> {
+        match self.parse_object_id(object_id) {
+            ObjectIdType::Album(album_id) => {
+                // Qobuz returns all tracks, so we slice them
+                let tracks = self
+                    .inner
+                    .client
+                    .get_album_tracks(&album_id)
+                    .await
+                    .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+                let items: Vec<Item> = tracks
+                    .into_iter()
+                    .skip(offset)
+                    .take(limit)
+                    .filter_map(|track| {
+                        track
+                            .to_didl_item(&format!("qobuz:album:{}", album_id))
+                            .ok()
+                    })
+                    .collect();
+
+                Ok(BrowseResult::Items(items))
+            }
+            ObjectIdType::Favorites => {
+                let albums = self
+                    .inner
+                    .client
+                    .get_favorite_albums()
+                    .await
+                    .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+                let containers: Vec<Container> = albums
+                    .into_iter()
+                    .skip(offset)
+                    .take(limit)
+                    .filter_map(|album| album.to_didl_container("qobuz:favorites").ok())
+                    .collect();
+
+                Ok(BrowseResult::Containers(containers))
+            }
+            _ => {
+                // Fall back to default implementation
+                self.browse(object_id).await
+            }
+        }
+    }
+
+    async fn statistics(&self) -> Result<pmosource::SourceStatistics> {
+        let mut stats = pmosource::SourceStatistics::default();
+
+        // Try to get favorite counts
+        if let Ok(albums) = self.inner.client.get_favorite_albums().await {
+            stats.total_containers = Some(albums.len());
+        }
+
+        if let Ok(tracks) = self.inner.client.get_favorite_tracks().await {
+            stats.total_items = Some(tracks.len());
+        }
+
+        // Get cache statistics
+        #[cfg(feature = "cache")]
+        {
+            let cache = self.inner.track_cache.read().await;
+            stats.cached_items = Some(cache.len());
+
+            // TODO: AudioCache doesn't have statistics method yet
+            // For now, just count cached items
+            if let Some(ref _audio_cache) = self.inner.audio_cache {
+                // stats.cache_size_bytes will remain None
+            }
+        }
+
+        Ok(stats)
     }
 }
 

@@ -121,4 +121,74 @@ impl QobuzApi {
             .map(QobuzApi::parse_playlist)
             .collect())
     }
+
+    /// Ajoute un album aux favoris
+    pub async fn add_favorite_album(&self, album_id: &str) -> Result<()> {
+        let user_id = self.ensure_authenticated()?;
+        debug!("Adding album {} to favorites for user {}", album_id, user_id);
+
+        let params = [
+            ("album_id", album_id),
+            ("user_id", user_id),
+        ];
+
+        self.get::<serde_json::Value>("/favorite/create", &params).await?;
+        Ok(())
+    }
+
+    /// Supprime un album des favoris
+    pub async fn remove_favorite_album(&self, album_id: &str) -> Result<()> {
+        let user_id = self.ensure_authenticated()?;
+        debug!("Removing album {} from favorites for user {}", album_id, user_id);
+
+        let params = [
+            ("album_ids", album_id),
+            ("user_id", user_id),
+        ];
+
+        self.get::<serde_json::Value>("/favorite/delete", &params).await?;
+        Ok(())
+    }
+
+    /// Ajoute un track aux favoris
+    pub async fn add_favorite_track(&self, track_id: &str) -> Result<()> {
+        let user_id = self.ensure_authenticated()?;
+        debug!("Adding track {} to favorites for user {}", track_id, user_id);
+
+        let params = [
+            ("track_id", track_id),
+            ("user_id", user_id),
+        ];
+
+        self.get::<serde_json::Value>("/favorite/create", &params).await?;
+        Ok(())
+    }
+
+    /// Supprime un track des favoris
+    pub async fn remove_favorite_track(&self, track_id: &str) -> Result<()> {
+        let user_id = self.ensure_authenticated()?;
+        debug!("Removing track {} from favorites for user {}", track_id, user_id);
+
+        let params = [
+            ("track_ids", track_id),
+            ("user_id", user_id),
+        ];
+
+        self.get::<serde_json::Value>("/favorite/delete", &params).await?;
+        Ok(())
+    }
+
+    /// Ajoute un track à une playlist
+    pub async fn add_to_playlist(&self, playlist_id: &str, track_id: &str) -> Result<()> {
+        let user_id = self.ensure_authenticated()?;
+        debug!("Adding track {} to playlist {} for user {}", track_id, playlist_id, user_id);
+
+        let params = [
+            ("playlist_id", playlist_id),
+            ("track_ids", track_id),
+        ];
+
+        self.get::<serde_json::Value>("/playlist/addTracks", &params).await?;
+        Ok(())
+    }
 }

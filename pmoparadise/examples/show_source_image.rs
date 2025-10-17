@@ -5,14 +5,16 @@
 //! - Accessing the embedded WebP image
 //! - Optionally saving it to a file
 
-use pmoparadise::RadioParadiseSource;
+use pmoparadise::{RadioParadiseSource, RadioParadiseClient};
 use pmosource::MusicSource;
 use std::fs;
 use std::io::Write;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create the source
-    let source = RadioParadiseSource;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Create the client and source
+    let client = RadioParadiseClient::new().await?;
+    let source = RadioParadiseSource::new_default(client, "http://localhost:8080");
 
     // Display source information
     println!("Music Source Information");

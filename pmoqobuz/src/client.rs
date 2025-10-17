@@ -327,6 +327,31 @@ impl QobuzClient {
     pub async fn get_user_playlists(&self) -> Result<Vec<Playlist>> {
         self.api.get_user_playlists().await
     }
+
+    /// Ajoute un album aux favoris
+    pub async fn add_favorite_album(&self, album_id: &str) -> Result<()> {
+        self.api.add_favorite_album(album_id).await
+    }
+
+    /// Supprime un album des favoris
+    pub async fn remove_favorite_album(&self, album_id: &str) -> Result<()> {
+        self.api.remove_favorite_album(album_id).await
+    }
+
+    /// Ajoute un track aux favoris
+    pub async fn add_favorite_track(&self, track_id: &str) -> Result<()> {
+        self.api.add_favorite_track(track_id).await
+    }
+
+    /// Supprime un track des favoris
+    pub async fn remove_favorite_track(&self, track_id: &str) -> Result<()> {
+        self.api.remove_favorite_track(track_id).await
+    }
+
+    /// Ajoute un track à une playlist
+    pub async fn add_to_playlist(&self, playlist_id: &str, track_id: &str) -> Result<()> {
+        self.api.add_to_playlist(playlist_id, track_id).await
+    }
 }
 
 #[cfg(test)]
