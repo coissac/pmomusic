@@ -41,7 +41,7 @@ use crate::{
 /// ```
 pub static MEDIA_SERVER: Lazy<Arc<Device>> = Lazy::new(|| {
     let mut device = Device::new(
-        "MediaServer".to_string(),
+        "PMO_MediaServer".to_string(),
         "MediaServer".to_string(),
         "PMOMusic Media Server".to_string(),
     );

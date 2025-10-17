@@ -69,7 +69,7 @@ static DEVICE_REGISTRY: Lazy<RwLock<DeviceRegistry>> = Lazy::new(|| {
 /// // Introspection via le trait UpnpServer
 /// let devices = server.device_registry().list_devices();
 /// ```
-pub trait UpnpServer {
+pub trait UpnpServerExt {
     /// Enregistre un device UPnP et toutes ses URLs.
     ///
     /// # Arguments
@@ -92,7 +92,7 @@ pub trait UpnpServer {
 }
 
 // Implémentation du trait UpnpServer pour pmoserver::Server
-impl UpnpServer for Server {
+impl UpnpServerExt for Server {
     async fn register_device(&mut self, device: Arc<Device>) -> Result<Arc<DeviceInstance>, DeviceError> {
         // Créer l'instance (retourne déjà un Arc<DeviceInstance>)
         let di = device.create_instance();

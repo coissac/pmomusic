@@ -1,10 +1,11 @@
 use pmoapp::{WebAppExt, Webapp};
 use pmocovers::CoverCacheExt;
+use pmoaudiocache::AudioCacheExt;
 use pmomediarenderer::MEDIA_RENDERER;
 use pmomediaserver::{MEDIA_SERVER, sources::SourcesExt};
 use pmosource::MusicSourceExt;
 use pmoserver::ServerBuilder;
-use pmoupnp::{UpnpServer, ssdp::SsdpServer, upnp_api::UpnpApiExt};
+use pmoupnp::{UpnpServerExt, ssdp::SsdpServer, upnp_api::UpnpApiExt};
 use tracing::info;
 
 #[tokio::main]
@@ -16,12 +17,20 @@ async fn main() {
     server.init_logging().await;
 
     info!("📡 Registering the cover cache...");
-    let cache = server
+    let covercache = server
         .init_cover_cache_configured()
         .await
         .expect("Cannot initialise the image cache");
 
-    info!("✅ Cover cache ready at {}", cache.cache_dir(),);
+    info!("✅ Cover cache ready at {}", covercache.cache_dir(),);
+
+    info!("📡 Registering the audio cache...");
+    let audiocache = server
+        .init_audio_cache_configured()
+        .await
+        .expect("Cannot initialise the audio cache");
+
+    info!("✅ Audio cache ready at {}", audiocache.cache_dir(),);
 
     // Routes de base
     server

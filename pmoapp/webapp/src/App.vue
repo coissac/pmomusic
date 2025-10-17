@@ -13,7 +13,7 @@
           <router-link to="/logs" @click="showDebugMenu = false">📋 Logs</router-link>
           <router-link to="/upnp" @click="showDebugMenu = false">🎵 UPnP Explorer</router-link>
           <router-link to="/covers-cache" @click="showDebugMenu = false">🎨 Cover Cache</router-link>
-          <router-link to="/api-explorer" @click="showDebugMenu = false">🌐 API Explorer</router-link>
+          <router-link to="/api-dashboard" @click="showDebugMenu = false">🚀 API Dashboard</router-link>
         </div>
       </div>
     </nav>
@@ -31,7 +31,7 @@ const showDebugMenu = ref(false)
 const route = useRoute()
 
 const isDebugRoute = computed(() => {
-  return ['/logs', '/upnp', '/covers-cache', '/api-explorer'].includes(route.path)
+  return ['/logs', '/upnp', '/covers-cache', '/api-dashboard'].includes(route.path)
 })
 </script>
 

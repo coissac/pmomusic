@@ -20,7 +20,7 @@ use std::{collections::HashMap, sync::Arc};
 use std::sync::RwLock;
 
 pub use crate::object_trait::*;
-pub use crate::upnp_server::UpnpServer;
+pub use crate::upnp_server::UpnpServerExt;
 
 #[derive(Debug, Clone)]
 pub struct UpnpObjectType {

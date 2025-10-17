@@ -13,7 +13,8 @@
 //! - 📚 **Documentation API** : OpenAPI/Swagger automatique avec `add_openapi()`
 //! - ⚡ **Gestion gracieuse** : Arrêt propre sur Ctrl+C
 
-use crate::logs::{LogState, LoggingOptions, init_logging, log_dump, log_sse};
+use crate::logs::{LogState, init_logging, log_dump, log_sse};
+use axum::extract::State;
 use axum::handler::Handler;
 use axum::response::Redirect;
 use axum::routing::{get, post};
@@ -37,6 +38,49 @@ pub struct ServerInfo {
     pub http_port: u16,
 }
 
+/// Entrée du registre d'API
+#[derive(Clone, Serialize, utoipa::ToSchema)]
+pub struct ApiRegistryEntry {
+    /// Nom de l'API
+    pub name: String,
+    /// Chemin de base de l'API
+    pub path: String,
+    /// Chemin vers Swagger UI
+    pub swagger_ui_path: String,
+    /// Chemin vers le JSON OpenAPI
+    pub openapi_json_path: String,
+    /// Nombre d'endpoints
+    pub endpoint_count: usize,
+    /// Version de l'API
+    pub version: String,
+    /// Description de l'API
+    pub description: Option<String>,
+    /// Titre de l'API
+    pub title: String,
+}
+
+/// Liste des APIs enregistrées
+#[derive(Clone, Serialize, utoipa::ToSchema)]
+pub struct ApiRegistry {
+    /// Liste des APIs disponibles
+    pub apis: Vec<ApiRegistryEntry>,
+    /// Nombre total d'endpoints
+    pub total_endpoints: usize,
+}
+
+type ApiRegistryState = Arc<RwLock<Vec<ApiRegistryEntry>>>;
+
+/// Handler pour l'endpoint /api/registry
+async fn get_api_registry(State(registry): State<ApiRegistryState>) -> Json<ApiRegistry> {
+    let apis = registry.read().await.clone();
+    let total_endpoints = apis.iter().map(|api| api.endpoint_count).sum();
+
+    Json(ApiRegistry {
+        apis,
+        total_endpoints,
+    })
+}
+
 /// Serveur principal
 pub struct Server {
     name: String,
@@ -46,6 +90,7 @@ pub struct Server {
     api_router: Arc<RwLock<Option<Router>>>,
     join_handle: Option<JoinHandle<()>>,
     log_state: Option<LogState>,
+    api_registry: ApiRegistryState,
 }
 
 impl Server {
@@ -64,14 +109,22 @@ impl Server {
     /// let server = Server::new("MyAPI", "http://localhost:3000", 3000);
     /// ```
     pub fn new(name: impl Into<String>, base_url: impl Into<String>, http_port: u16) -> Self {
+        let api_registry = Arc::new(RwLock::new(Vec::new()));
+
+        // Créer le router initial avec l'endpoint de registre
+        let registry_route = Router::new()
+            .route("/api/registry", get(get_api_registry))
+            .with_state(api_registry.clone());
+
         Self {
             name: name.into(),
             base_url: base_url.into(),
             http_port,
-            router: Arc::new(RwLock::new(Router::new())),
+            router: Arc::new(RwLock::new(registry_route)),
             api_router: Arc::new(RwLock::new(None)),
             join_handle: None,
             log_state: None,
+            api_registry,
         }
     }
 
@@ -378,10 +431,34 @@ impl Server {
         drop(api_r);
 
         let swagger_path = format!("/swagger-ui/{}", name);
-        let swagger_path_static: &'static str = Box::leak(swagger_path.into_boxed_str());
+        let swagger_path_static: &'static str = Box::leak(swagger_path.clone().into_boxed_str());
 
         let openapi_json_path = format!("/api-docs/{}.json", name);
-        let openapi_json_path_static: &'static str = Box::leak(openapi_json_path.into_boxed_str());
+        let openapi_json_path_static: &'static str = Box::leak(openapi_json_path.clone().into_boxed_str());
+
+        // Compter le nombre d'endpoints dans l'OpenAPI spec
+        let endpoint_count = openapi.paths.paths.len();
+
+        // Extraire les informations de l'API depuis la spec OpenAPI
+        let version = openapi.info.version.clone();
+        let description = openapi.info.description.clone();
+        let title = openapi.info.title.clone();
+
+        // Enregistrer l'API dans le registre
+        let registry_entry = ApiRegistryEntry {
+            name: name.to_string(),
+            path: format!("/api/{}", name),
+            swagger_ui_path: swagger_path,
+            openapi_json_path,
+            endpoint_count,
+            version,
+            description,
+            title,
+        };
+
+        let mut registry = self.api_registry.write().await;
+        registry.push(registry_entry);
+        drop(registry);
 
         let swagger = SwaggerUi::new(swagger_path_static).url(openapi_json_path_static, openapi);
 
