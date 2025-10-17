@@ -2345,6 +2345,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pmomediaserver"
+version = "0.1.0"
+dependencies = [
+ "bevy_reflect",
+ "once_cell",
+ "pmodidl",
+ "pmoupnp",
+]
+
+[[package]]
 name = "pmoparadise"
 version = "0.1.0"
 dependencies = [
