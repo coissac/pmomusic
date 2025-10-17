@@ -1,5 +1,5 @@
 #[cfg(feature = "pmoserver")]
-use crate::AudioCache;
+use crate::Cache;
 
 /// Trait pour étendre un serveur HTTP avec des fonctionnalités de cache audio.
 ///
@@ -16,11 +16,11 @@ pub trait AudioCacheExt {
     ///
     /// # Returns
     ///
-    /// * `Arc<AudioCache>` - Instance partagée du cache
-    async fn init_audio_cache(&mut self, cache_dir: &str, limit: usize) -> anyhow::Result<std::sync::Arc<AudioCache>>;
+    /// * `Arc<Cache>` - Instance partagée du cache
+    async fn init_audio_cache(&mut self, cache_dir: &str, limit: usize) -> anyhow::Result<std::sync::Arc<Cache>>;
 
     /// Initialise le cache audio avec la configuration par défaut.
     ///
     /// Utilise automatiquement les paramètres de `pmoconfig::Config`.
-    async fn init_audio_cache_configured(&mut self) -> anyhow::Result<std::sync::Arc<AudioCache>>;
+    async fn init_audio_cache_configured(&mut self) -> anyhow::Result<std::sync::Arc<Cache>>;
 }

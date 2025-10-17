@@ -31,6 +31,9 @@ pub struct CacheEntry {
     /// Date/heure du dernier accès (RFC3339)
     #[cfg_attr(feature = "openapi", schema(example = "2025-01-15T10:30:00Z"))]
     pub last_used: Option<String>,
+    /// Métadonnées JSON optionnelles (ex: métadonnées audio, EXIF images, etc.)
+    #[cfg_attr(feature = "openapi", schema(example = r#"{"title":"Track","artist":"Artist"}"#))]
+    pub metadata_json: Option<String>,
 }
 
 /// Base de données SQLite pour le cache
@@ -70,7 +73,8 @@ impl DB {
                 source_url TEXT,
                 collection TEXT,
                 hits INTEGER DEFAULT 0,
-                last_used TEXT
+                last_used TEXT,
+                metadata_json TEXT
             )",
             table_name
         );
@@ -84,6 +88,14 @@ impl DB {
         );
 
         conn.execute(&create_index_sql, [])?;
+
+        // Créer un index composite pour optimiser la politique LRU (get_oldest)
+        let create_lru_index_sql = format!(
+            "CREATE INDEX IF NOT EXISTS idx_{}_lru ON {} (last_used ASC, hits ASC)",
+            table_name, table_name
+        );
+
+        conn.execute(&create_lru_index_sql, [])?;
 
         Ok(Self {
             conn: Mutex::new(conn),
@@ -99,20 +111,39 @@ impl DB {
     /// * `url` - URL source de l'élément
     /// * `collection` - Collection optionnelle à laquelle appartient l'élément
     pub fn add(&self, pk: &str, url: &str, collection: Option<&str>) -> rusqlite::Result<()> {
+        self.add_with_metadata(pk, url, collection, None)
+    }
+
+    /// Ajoute ou met à jour une entrée avec métadonnées JSON optionnelles
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Clé primaire de l'élément
+    /// * `url` - URL source de l'élément
+    /// * `collection` - Collection optionnelle à laquelle appartient l'élément
+    /// * `metadata_json` - Métadonnées JSON optionnelles
+    pub fn add_with_metadata(
+        &self,
+        pk: &str,
+        url: &str,
+        collection: Option<&str>,
+        metadata_json: Option<&str>,
+    ) -> rusqlite::Result<()> {
         let conn = self.conn.lock().unwrap();
         let sql = format!(
-            "INSERT INTO {} (pk, source_url, collection, hits, last_used)
-             VALUES (?1, ?2, ?3, 0, ?4)
+            "INSERT INTO {} (pk, source_url, collection, hits, last_used, metadata_json)
+             VALUES (?1, ?2, ?3, 0, ?4, ?5)
              ON CONFLICT(pk) DO UPDATE SET
                  source_url = excluded.source_url,
                  collection = excluded.collection,
-                 last_used = excluded.last_used",
+                 last_used = excluded.last_used,
+                 metadata_json = excluded.metadata_json",
             self.table_name
         );
 
         conn.execute(
             &sql,
-            params![pk, url, collection, Utc::now().to_rfc3339()],
+            params![pk, url, collection, Utc::now().to_rfc3339(), metadata_json],
         )?;
 
         Ok(())
@@ -126,7 +157,7 @@ impl DB {
     pub fn get(&self, pk: &str) -> rusqlite::Result<CacheEntry> {
         let conn = self.conn.lock().unwrap();
         let sql = format!(
-            "SELECT pk, source_url, collection, hits, last_used FROM {} WHERE pk = ?1",
+            "SELECT pk, source_url, collection, hits, last_used, metadata_json FROM {} WHERE pk = ?1",
             self.table_name
         );
 
@@ -140,6 +171,7 @@ impl DB {
                     collection: row.get(2)?,
                     hits: row.get(3)?,
                     last_used: row.get(4)?,
+                    metadata_json: row.get(5)?,
                 })
             },
         )
@@ -177,7 +209,7 @@ impl DB {
     pub fn get_all(&self) -> rusqlite::Result<Vec<CacheEntry>> {
         let conn = self.conn.lock().unwrap();
         let sql = format!(
-            "SELECT pk, source_url, collection, hits, last_used FROM {} ORDER BY hits DESC",
+            "SELECT pk, source_url, collection, hits, last_used, metadata_json FROM {} ORDER BY hits DESC",
             self.table_name
         );
 
@@ -190,6 +222,7 @@ impl DB {
                 collection: row.get(2)?,
                 hits: row.get(3)?,
                 last_used: row.get(4)?,
+                metadata_json: row.get(5)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -205,7 +238,7 @@ impl DB {
     pub fn get_by_collection(&self, collection: &str) -> rusqlite::Result<Vec<CacheEntry>> {
         let conn = self.conn.lock().unwrap();
         let sql = format!(
-            "SELECT pk, source_url, collection, hits, last_used FROM {} WHERE collection = ?1 ORDER BY hits DESC",
+            "SELECT pk, source_url, collection, hits, last_used, metadata_json FROM {} WHERE collection = ?1 ORDER BY hits DESC",
             self.table_name
         );
 
@@ -218,6 +251,7 @@ impl DB {
                 collection: row.get(2)?,
                 hits: row.get(3)?,
                 last_used: row.get(4)?,
+                metadata_json: row.get(5)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -276,7 +310,7 @@ impl DB {
     pub fn get_oldest(&self, limit: usize) -> rusqlite::Result<Vec<CacheEntry>> {
         let conn = self.conn.lock().unwrap();
         let sql = format!(
-            "SELECT pk, source_url, collection, hits, last_used
+            "SELECT pk, source_url, collection, hits, last_used, metadata_json
              FROM {}
              ORDER BY last_used ASC, hits ASC
              LIMIT ?1",
@@ -292,10 +326,47 @@ impl DB {
                 collection: row.get(2)?,
                 hits: row.get(3)?,
                 last_used: row.get(4)?,
+                metadata_json: row.get(5)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(entries)
+    }
+
+    /// Récupère uniquement les métadonnées JSON d'une entrée
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Clé primaire de l'élément
+    ///
+    /// # Returns
+    ///
+    /// Les métadonnées JSON si présentes, None sinon
+    pub fn get_metadata_json(&self, pk: &str) -> rusqlite::Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!(
+            "SELECT metadata_json FROM {} WHERE pk = ?1",
+            self.table_name
+        );
+
+        conn.query_row(&sql, [pk], |row| row.get(0))
+    }
+
+    /// Met à jour uniquement les métadonnées JSON d'une entrée existante
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Clé primaire de l'élément
+    /// * `metadata_json` - Métadonnées JSON à stocker
+    pub fn update_metadata(&self, pk: &str, metadata_json: &str) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!(
+            "UPDATE {} SET metadata_json = ?1 WHERE pk = ?2",
+            self.table_name
+        );
+
+        conn.execute(&sql, params![metadata_json, pk])?;
+        Ok(())
     }
 }
