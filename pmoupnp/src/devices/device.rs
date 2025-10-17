@@ -132,6 +132,10 @@ impl Device {
         format!("urn:schemas-upnp-org:device:{}:{}", self.device_type, self.version)
     }
 
+    pub fn device_category(&self) -> &String {
+        &self.device_type
+    }
+
     /// Définit la version du device.
     pub fn set_version(&mut self, version: u8) -> Result<(), DeviceError> {
         if version == 0 {

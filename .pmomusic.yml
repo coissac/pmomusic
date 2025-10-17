@@ -10,19 +10,19 @@ host:
     buffer_capacity: 200
     enable_console: true
     min_level: INFO
-devices:
   mediarenderer:
     mpd_renderer: null
-    fakerenderer:
-      udn: d7eaad15-7d21-4411-926a-bc1eea0713db
-    mediarenderer:
-      udn: f9ef6c21-0ed3-470c-9846-bc1ae85fea62
-    mediaserver:
-      udn: 4aa1d843-22ca-4a1d-b383-43a9d197d875
   mediaserver:
     qobuz:
-      udn: 28963b75-4c5f-4da7-b10e-ffafd
+      udn: uuid:28963b75-4c5f-4da7-b10e-ffafd
 accounts:
   qobuz:
     username: eric@coissac.eu
     password: '*Misfcr73110$'
+devices:
+  mediarenderer:
+    pmo_mediarenderer:
+      udn: 15a13316-daac-47f0-b64e-47e56f5e3b51
+  mediaserver:
+    pmo_mediaserver:
+      udn: 23df0bfa-cfef-4724-b731-00f66fadf176

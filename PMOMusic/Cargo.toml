@@ -11,6 +11,7 @@ pmomediaserver = { path = "../pmomediaserver", features = ["qobuz", "paradise", 
 pmosource = { path = "../pmosource", features = ["server"] }
 pmoserver = { path = "../pmoserver" }
 pmocovers = { path = "../pmocovers", features = ["pmoserver"] }
+pmoaudiocache = { path = "../pmoaudiocache", features = ["pmoserver"]}
 pmoapp = { path = "../pmoapp", features = ["pmoserver"] }
 
 

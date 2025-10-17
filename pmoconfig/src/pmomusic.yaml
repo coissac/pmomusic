@@ -10,7 +10,7 @@ host:
     buffer_capacity: 200
     enable_console: true
     min_level: "INFO"
-devices:
+
   mediarenderer:
     mpd_renderer:
   mediaserver:

@@ -78,8 +78,8 @@ impl UpnpInstance for DeviceInstance {
     fn new(model: &Device) -> Self {
         // Obtenir ou créer un UDN persistant via la configuration
         let device_name = model.get_name();
-
-        let udn = if let Ok(config_udn) = pmoconfig::get_config().get_device_udn("mediarenderer", device_name) {
+        let device_type = model.device_category();
+        let udn = if let Ok(config_udn) = pmoconfig::get_config().get_device_udn(&device_type, device_name) {
             config_udn
         } else {
             // Fallback : générer un UDN
