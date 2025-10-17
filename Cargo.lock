@@ -2485,6 +2485,7 @@ dependencies = [
 name = "pmoupnp"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "axum",
  "base64",
  "bevy_reflect",
@@ -2493,7 +2494,10 @@ dependencies = [
  "hex",
  "once_cell",
  "parking_lot",
+ "pmoaudiocache",
+ "pmocache",
  "pmoconfig",
+ "pmocovers",
  "pmodidl",
  "pmoserver",
  "pmoutils",
@@ -2505,6 +2509,7 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+ "utoipa",
  "uuid",
  "xmltree",
 ]

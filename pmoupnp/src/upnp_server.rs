@@ -23,10 +23,15 @@ use std::sync::RwLock;
 use once_cell::sync::Lazy;
 
 use pmoserver::Server;
+use utoipa::OpenApi;
 
 use crate::devices::errors::DeviceError;
 use crate::devices::{Device, DeviceInstance, DeviceRegistry};
 use crate::UpnpModel;
+use crate::cache_registry::CACHE_REGISTRY;
+
+use pmocovers::Cache as CoverCache;
+use pmoaudiocache::Cache as AudioCache;
 
 /// Registre de devices global et thread-safe.
 ///
@@ -70,6 +75,8 @@ static DEVICE_REGISTRY: Lazy<RwLock<DeviceRegistry>> = Lazy::new(|| {
 /// let devices = server.device_registry().list_devices();
 /// ```
 pub trait UpnpServerExt {
+    // ========= Device Management (existant) =========
+
     /// Enregistre un device UPnP et toutes ses URLs.
     ///
     /// # Arguments
@@ -89,6 +96,57 @@ pub trait UpnpServerExt {
 
     /// Récupère un device par son UDN.
     fn get_device(&self, udn: &str) -> Option<Arc<DeviceInstance>>;
+
+    // ========= Cache Management (NOUVEAU) =========
+
+    /// Initialiser le cache de couvertures centralisé
+    ///
+    /// Crée le cache et enregistre les routes HTTP.
+    /// Toutes les sources musicales utiliseront ce cache partagé.
+    ///
+    /// # Arguments
+    ///
+    /// * `cache_dir` - Répertoire de stockage
+    /// * `limit` - Limite de taille (nombre d'images)
+    ///
+    /// # Returns
+    ///
+    /// Instance partagée du cache
+    async fn init_cover_cache(&mut self, cache_dir: &str, limit: usize)
+        -> Result<Arc<CoverCache>, anyhow::Error>;
+
+    /// Initialiser le cache audio centralisé
+    ///
+    /// Crée le cache et enregistre les routes HTTP.
+    /// Toutes les sources musicales utiliseront ce cache partagé.
+    ///
+    /// # Arguments
+    ///
+    /// * `cache_dir` - Répertoire de stockage
+    /// * `limit` - Limite de taille (nombre de pistes)
+    ///
+    /// # Returns
+    ///
+    /// Instance partagée du cache
+    async fn init_audio_cache(&mut self, cache_dir: &str, limit: usize)
+        -> Result<Arc<AudioCache>, anyhow::Error>;
+
+    /// Initialiser les caches depuis la configuration
+    ///
+    /// Utilise pmoconfig pour charger les paramètres et initialiser
+    /// automatiquement les deux caches.
+    ///
+    /// # Returns
+    ///
+    /// Tuple (cache de couvertures, cache audio)
+    async fn init_caches(&mut self)
+        -> Result<(Arc<CoverCache>, Arc<AudioCache>), anyhow::Error>;
+
+    /// Récupérer le cache de couvertures
+    fn cover_cache(&self) -> Option<Arc<CoverCache>>;
+
+    /// Récupérer le cache audio
+    fn audio_cache(&self) -> Option<Arc<AudioCache>>;
 }
 
 // Implémentation du trait UpnpServer pour pmoserver::Server
@@ -119,6 +177,101 @@ impl UpnpServerExt for Server {
 
     fn get_device(&self, udn: &str) -> Option<Arc<DeviceInstance>> {
         DEVICE_REGISTRY.read().unwrap().get_device(udn)
+    }
+
+    // ========= Cache Management Implementation =========
+
+    async fn init_cover_cache(&mut self, cache_dir: &str, limit: usize)
+        -> Result<Arc<CoverCache>, anyhow::Error> {
+        use pmocovers::new_cache;
+        use pmocache::pmoserver_ext::{create_file_router_with_generator, create_api_router};
+
+        let base_url = self.info().base_url;
+        let cache = Arc::new(new_cache(cache_dir, limit, &base_url)?);
+
+        // Routes de fichiers avec génération de variantes
+        // Routes: GET /covers/image/{pk} et GET /covers/image/{pk}/{size}
+        let variant_generator: pmocache::pmoserver_ext::ParamGenerator<pmocovers::CoversConfig> =
+            Arc::new(|cache, pk, param| {
+                Box::pin(async move {
+                    // Si le param est numérique, c'est une taille de variante
+                    if let Ok(size) = param.parse::<usize>() {
+                        match pmocovers::webp::generate_variant(&cache, &pk, size).await {
+                            Ok(data) => return Some(data),
+                            Err(e) => {
+                                tracing::warn!("Cannot generate variant {}x{} for {}: {}", size, size, pk, e);
+                                return None;
+                            }
+                        }
+                    }
+                    None
+                })
+            });
+
+        let file_router = create_file_router_with_generator(
+            cache.clone(),
+            "image/webp",
+            Some(variant_generator)
+        );
+        self.add_router("/", file_router).await;
+
+        // API REST générique (pmocache)
+        let api_router = create_api_router(cache.clone());
+        let openapi = pmocovers::ApiDoc::openapi();
+        self.add_openapi(api_router, openapi, "covers").await;
+
+        // Enregistrer dans le registre global
+        CACHE_REGISTRY.write().unwrap().set_cover_cache(cache.clone());
+
+        Ok(cache)
+    }
+
+    async fn init_audio_cache(&mut self, cache_dir: &str, limit: usize)
+        -> Result<Arc<AudioCache>, anyhow::Error> {
+        use pmoaudiocache::new_cache;
+        use pmocache::pmoserver_ext::{create_file_router, create_api_router};
+
+        let base_url = self.info().base_url;
+        let cache = Arc::new(new_cache(cache_dir, limit, &base_url)?);
+
+        // Routes de fichiers pour servir les pistes FLAC
+        let file_router = create_file_router(cache.clone(), "audio/flac");
+        self.add_router("/", file_router).await;
+
+        // API REST générique (pmocache)
+        let api_router = create_api_router(cache.clone());
+        let openapi = pmoaudiocache::ApiDoc::openapi();
+        self.add_openapi(api_router, openapi, "audio").await;
+
+        // Enregistrer dans le registre global
+        CACHE_REGISTRY.write().unwrap().set_audio_cache(cache.clone());
+
+        Ok(cache)
+    }
+
+    async fn init_caches(&mut self)
+        -> Result<(Arc<CoverCache>, Arc<AudioCache>), anyhow::Error> {
+        let config = pmoconfig::get_config();
+
+        let cover_cache = self.init_cover_cache(
+            &config.get_cover_cache_dir()?,
+            config.get_cover_cache_size()?
+        ).await?;
+
+        let audio_cache = self.init_audio_cache(
+            &config.get_audio_cache_dir()?,
+            config.get_audio_cache_size()?
+        ).await?;
+
+        Ok((cover_cache, audio_cache))
+    }
+
+    fn cover_cache(&self) -> Option<Arc<CoverCache>> {
+        crate::cache_registry::get_cover_cache()
+    }
+
+    fn audio_cache(&self) -> Option<Arc<AudioCache>> {
+        crate::cache_registry::get_audio_cache()
     }
 }
 

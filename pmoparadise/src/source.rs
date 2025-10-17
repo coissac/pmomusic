@@ -6,17 +6,13 @@
 use crate::client::RadioParadiseClient;
 use crate::models::{Block, Song};
 use pmosource::{async_trait, pmodidl, BrowseResult, MusicSource, MusicSourceError, Result};
+use pmosource::SourceCacheManager;
+use pmoaudiocache::{AudioMetadata, Cache as AudioCache};
+use pmocovers::Cache as CoverCache;
 use pmodidl::{Container, Item, Resource};
 use pmoplaylist::{FifoPlaylist, Track};
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
-use tokio::sync::RwLock;
-
-#[cfg(feature = "cache")]
-use pmocovers::Cache as CoverCache;
-#[cfg(feature = "cache")]
-use pmoaudiocache::{AudioCache, AudioMetadata};
 
 /// Default image for Radio Paradise (300x300 WebP, embedded in binary)
 const DEFAULT_IMAGE: &[u8] = include_bytes!("../assets/default.webp");
@@ -67,53 +63,37 @@ struct RadioParadiseSourceInner {
     /// FIFO playlist for dynamic track management
     playlist: FifoPlaylist,
 
-    /// Cache server base URL for URI resolution
-    cache_base_url: String,
+    /// Cache manager (centralisé)
+    cache_manager: SourceCacheManager,
 
-    /// Track metadata cache (track_id -> (original_uri, cached_pk, block_event))
-    track_cache: RwLock<HashMap<String, TrackMetadata>>,
-
-    /// Cover image cache (optional)
-    #[cfg(feature = "cache")]
-    cover_cache: Option<Arc<CoverCache>>,
-
-    /// Audio cache (optional)
-    #[cfg(feature = "cache")]
-    audio_cache: Option<Arc<AudioCache>>,
-}
-
-#[derive(Debug, Clone)]
-struct TrackMetadata {
-    original_uri: String,
-    cached_pk: Option<String>,
-    block: Arc<Block>,
-    song_index: usize,
-    #[cfg(feature = "cache")]
-    cached_audio_pk: Option<String>,
-    #[cfg(feature = "cache")]
-    cached_cover_pk: Option<String>,
+    /// Blocks cache pour retrouver les métadonnées originales
+    /// (track_id -> (block, song_index))
+    blocks: tokio::sync::RwLock<std::collections::HashMap<String, (Arc<Block>, usize)>>,
 }
 
 impl std::fmt::Debug for RadioParadiseSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RadioParadiseSource")
-            .field("cache_base_url", &self.inner.cache_base_url)
             .finish()
     }
 }
 
 impl RadioParadiseSource {
-    /// Create a new Radio Paradise source
+    /// Create a new Radio Paradise source with caches
     ///
     /// # Arguments
     ///
     /// * `client` - Radio Paradise API client
     /// * `cache_base_url` - Base URL for the cache server (e.g., "http://localhost:8080")
     /// * `fifo_capacity` - Maximum number of tracks in the FIFO
+    /// * `cover_cache` - Cover image cache (required)
+    /// * `audio_cache` - Audio cache (required)
     pub fn new(
         client: RadioParadiseClient,
         cache_base_url: impl Into<String>,
         fifo_capacity: usize,
+        cover_cache: Arc<CoverCache>,
+        audio_cache: Arc<AudioCache>,
     ) -> Self {
         let playlist = FifoPlaylist::new(
             "radio-paradise".to_string(),
@@ -122,59 +102,32 @@ impl RadioParadiseSource {
             DEFAULT_IMAGE,
         );
 
+        let cache_base_url = cache_base_url.into();
+        let cache_manager = SourceCacheManager::new(
+            cache_base_url.clone(),
+            "radio-paradise".to_string(),
+            cover_cache,
+            audio_cache,
+        );
+
         Self {
             inner: Arc::new(RadioParadiseSourceInner {
                 client,
                 playlist,
-                cache_base_url: cache_base_url.into(),
-                track_cache: RwLock::new(HashMap::new()),
-                #[cfg(feature = "cache")]
-                cover_cache: None,
-                #[cfg(feature = "cache")]
-                audio_cache: None,
+                cache_manager,
+                blocks: tokio::sync::RwLock::new(std::collections::HashMap::new()),
             }),
         }
     }
 
     /// Create with default FIFO capacity
-    pub fn new_default(client: RadioParadiseClient, cache_base_url: impl Into<String>) -> Self {
-        Self::new(client, cache_base_url, DEFAULT_FIFO_CAPACITY)
-    }
-
-    /// Create a new Radio Paradise source with caching support
-    ///
-    /// # Arguments
-    ///
-    /// * `client` - Radio Paradise API client
-    /// * `cache_base_url` - Base URL for the cache server (e.g., "http://localhost:8080")
-    /// * `fifo_capacity` - Maximum number of tracks in the FIFO
-    /// * `cover_cache` - Optional cover image cache
-    /// * `audio_cache` - Optional audio cache
-    #[cfg(feature = "cache")]
-    pub fn new_with_cache(
+    pub fn new_default(
         client: RadioParadiseClient,
         cache_base_url: impl Into<String>,
-        fifo_capacity: usize,
-        cover_cache: Option<Arc<CoverCache>>,
-        audio_cache: Option<Arc<AudioCache>>,
+        cover_cache: Arc<CoverCache>,
+        audio_cache: Arc<AudioCache>,
     ) -> Self {
-        let playlist = FifoPlaylist::new(
-            "radio-paradise".to_string(),
-            "Radio Paradise".to_string(),
-            fifo_capacity,
-            DEFAULT_IMAGE,
-        );
-
-        Self {
-            inner: Arc::new(RadioParadiseSourceInner {
-                client,
-                playlist,
-                cache_base_url: cache_base_url.into(),
-                track_cache: RwLock::new(HashMap::new()),
-                cover_cache,
-                audio_cache,
-            }),
-        }
+        Self::new(client, cache_base_url, DEFAULT_FIFO_CAPACITY, cover_cache, audio_cache)
     }
 
     /// Add a track from a Radio Paradise song and block
@@ -199,30 +152,24 @@ impl RadioParadiseSource {
             track = track.with_duration((song.duration / 1000) as u32);
         }
 
-        // Cache cover image and add to track
-        #[cfg(feature = "cache")]
-        let cached_cover_pk = if let Some(ref cover_cache) = self.inner.cover_cache {
-            if let Some(ref image_base) = block.image_base {
-                if let Some(ref cover) = song.cover {
-                    let image_url = format!("{}{}", image_base, cover);
+        // 1. Cache cover via le manager
+        let cached_cover_pk = if let Some(ref image_base) = block.image_base {
+            if let Some(ref cover) = song.cover {
+                let image_url = format!("{}{}", image_base, cover);
 
-                    // Cache the cover image asynchronously
-                    match cover_cache.add_from_url(&image_url).await {
-                        Ok(pk) => {
-                            // Use the cached cover URL
-                            let cached_url = format!("{}/covers/images/{}", self.inner.cache_base_url, pk);
-                            track = track.with_image(cached_url);
-                            Some(pk)
-                        }
-                        Err(e) => {
-                            tracing::warn!("Failed to cache cover image {}: {}", image_url, e);
-                            // Fall back to original URL
-                            track = track.with_image(image_url);
-                            None
-                        }
+                match self.inner.cache_manager.cache_cover(&image_url).await {
+                    Ok(pk) => {
+                        // Use the cached cover URL
+                        let cached_url = self.inner.cache_manager.cover_url(&pk, None);
+                        track = track.with_image(cached_url);
+                        Some(pk)
                     }
-                } else {
-                    None
+                    Err(e) => {
+                        tracing::warn!("Failed to cache cover image {}: {}", image_url, e);
+                        // Fall back to original URL
+                        track = track.with_image(image_url);
+                        None
+                    }
                 }
             } else {
                 None
@@ -231,98 +178,66 @@ impl RadioParadiseSource {
             None
         };
 
-        // If no cache, add original cover image
-        #[cfg(not(feature = "cache"))]
-        if let Some(ref image_base) = block.image_base {
-            if let Some(ref cover) = song.cover {
-                let image_url = format!("{}{}", image_base, cover);
-                track = track.with_image(image_url);
-            }
-        }
-
-        // Cache audio asynchronously (in background)
-        #[cfg(feature = "cache")]
-        let cached_audio_pk = if let Some(ref audio_cache) = self.inner.audio_cache {
-            // Prepare metadata for the audio cache
-            let metadata = AudioMetadata {
-                title: Some(song.title.clone()),
-                artist: if !song.artist.is_empty() {
-                    Some(song.artist.clone())
-                } else {
-                    None
-                },
-                album: if !song.album.is_empty() {
-                    Some(song.album.clone())
-                } else {
-                    None
-                },
-                duration_secs: if song.duration > 0 {
-                    Some((song.duration / 1000) as u64)
-                } else {
-                    None
-                },
-                year: None,
-                track_number: None,
-                track_total: None,
-                disc_number: None,
-                disc_total: None,
-                genre: None,
-                sample_rate: None,
-                channels: None,
-                bitrate: None,
-            };
-
-            // Cache the audio asynchronously
-            match audio_cache.add_from_url(&block.url, Some(metadata)).await {
-                Ok((pk, _)) => {
-                    tracing::info!("Successfully cached audio for track {}: {}", track_id, pk);
-                    Some(pk)
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to cache audio for track {}: {}", track_id, e);
-                    None
-                }
-            }
-        } else {
-            None
+        // 2. Cache audio via le manager (métadonnées pour compatibilité)
+        let metadata = AudioMetadata {
+            title: Some(song.title.clone()),
+            artist: if !song.artist.is_empty() {
+                Some(song.artist.clone())
+            } else {
+                None
+            },
+            album: if !song.album.is_empty() {
+                Some(song.album.clone())
+            } else {
+                None
+            },
+            duration_secs: if song.duration > 0 {
+                Some((song.duration / 1000) as u64)
+            } else {
+                None
+            },
+            year: None,
+            track_number: None,
+            track_total: None,
+            disc_number: None,
+            disc_total: None,
+            genre: None,
+            sample_rate: None,
+            channels: None,
+            bitrate: None,
         };
 
-        // Store metadata
+        let cached_audio_pk = match self.inner.cache_manager.cache_audio(&block.url, Some(metadata)).await {
+            Ok(pk) => {
+                tracing::info!("Successfully cached audio for track {}: {}", track_id, pk);
+                Some(pk)
+            }
+            Err(e) => {
+                tracing::warn!("Failed to cache audio for track {}: {}", track_id, e);
+                None
+            }
+        };
+
+        // 3. Store metadata in the cache manager
+        self.inner.cache_manager.update_metadata(
+            track_id.clone(),
+            pmosource::TrackMetadata {
+                original_uri: block.url.clone(),
+                cached_audio_pk,
+                cached_cover_pk,
+            }
+        ).await;
+
+        // 4. Store block for later retrieval
         {
-            let mut cache = self.inner.track_cache.write().await;
-            cache.insert(
-                track_id.clone(),
-                TrackMetadata {
-                    original_uri: block.url.clone(),
-                    cached_pk: None,
-                    block: block.clone(),
-                    song_index,
-                    #[cfg(feature = "cache")]
-                    cached_audio_pk,
-                    #[cfg(feature = "cache")]
-                    cached_cover_pk,
-                },
-            );
+            let mut blocks = self.inner.blocks.write().await;
+            blocks.insert(track_id.clone(), (block.clone(), song_index));
         }
 
-        // Add to FIFO
+        // 5. Add to FIFO
         self.inner.playlist.append_track(track).await;
 
         Ok(())
-    }
-
-    /// Mark a track as cached
-    ///
-    /// Call this after successfully caching a track's audio via pmoaudiocache.
-    pub async fn cache_track(&self, track_id: &str, cache_pk: String) -> Result<()> {
-        let mut cache = self.inner.track_cache.write().await;
-
-        if let Some(metadata) = cache.get_mut(track_id) {
-            metadata.cached_pk = Some(cache_pk);
-            Ok(())
-        } else {
-            Err(MusicSourceError::ObjectNotFound(track_id.to_string()))
-        }
     }
 
     /// Convert a pmoplaylist::Track to pmodidl::Item
@@ -398,25 +313,8 @@ impl MusicSource for RadioParadiseSource {
     }
 
     async fn resolve_uri(&self, object_id: &str) -> Result<String> {
-        let cache = self.inner.track_cache.read().await;
-
-        if let Some(metadata) = cache.get(object_id) {
-            // Priority 1: Use cached audio if available
-            #[cfg(feature = "cache")]
-            if let Some(ref pk) = metadata.cached_audio_pk {
-                return Ok(format!("{}/audio/tracks/{}/stream", self.inner.cache_base_url, pk));
-            }
-
-            // Priority 2: Use legacy cached_pk (for backward compatibility)
-            if let Some(ref pk) = metadata.cached_pk {
-                return Ok(format!("{}/audio/cache/{}", self.inner.cache_base_url, pk));
-            }
-
-            // Priority 3: Return original block URI (not cached yet)
-            Ok(metadata.original_uri.clone())
-        } else {
-            Err(MusicSourceError::ObjectNotFound(object_id.to_string()))
-        }
+        // Delegate to cache manager
+        self.inner.cache_manager.resolve_uri(object_id).await
     }
 
     fn supports_fifo(&self) -> bool {
@@ -471,11 +369,10 @@ impl MusicSource for RadioParadiseSource {
 
     async fn remove_oldest(&self) -> Result<Option<Item>> {
         if let Some(track) = self.inner.playlist.remove_oldest().await {
-            // Remove from cache
-            {
-                let mut cache = self.inner.track_cache.write().await;
-                cache.remove(&track.id);
-            }
+            // Remove from caches
+            self.inner.cache_manager.remove_track(&track.id).await;
+            let mut blocks = self.inner.blocks.write().await;
+            blocks.remove(&track.id);
 
             Ok(Some(self.track_to_item(&track)))
         } else {
@@ -567,112 +464,56 @@ impl MusicSource for RadioParadiseSource {
     }
 
     async fn get_cache_status(&self, object_id: &str) -> Result<pmosource::CacheStatus> {
-        use pmosource::CacheStatus;
-
-        let cache = self.inner.track_cache.read().await;
-
-        if let Some(metadata) = cache.get(object_id) {
-            #[cfg(feature = "cache")]
-            {
-                if let Some(ref audio_cache) = self.inner.audio_cache {
-                    if let Some(ref pk) = metadata.cached_audio_pk {
-                        // Check if the cached file exists and get its size
-                        if let Ok(Some(info)) = audio_cache.get_info(pk).await {
-                            return Ok(CacheStatus::Cached {
-                                size_bytes: info.size_bytes,
-                            });
-                        }
-                    }
-                }
-            }
-
-            // Check legacy cached_pk for backward compatibility
-            if metadata.cached_pk.is_some() {
-                // We don't have size info for legacy cache
-                return Ok(CacheStatus::Cached { size_bytes: 0 });
-            }
-        }
-
-        Ok(CacheStatus::NotCached)
+        // Delegate to cache manager
+        self.inner.cache_manager.get_cache_status(object_id).await
     }
 
     async fn cache_item(&self, object_id: &str) -> Result<pmosource::CacheStatus> {
-        #[cfg(not(feature = "cache"))]
-        {
-            let _ = object_id;
-            return Err(MusicSourceError::NotSupported("Caching not enabled".to_string()));
+        use pmosource::CacheStatus;
+
+        // Check if already cached
+        let status = self.inner.cache_manager.get_cache_status(object_id).await?;
+        if matches!(status, CacheStatus::Cached { .. }) {
+            return Ok(status);
         }
 
-        #[cfg(feature = "cache")]
-        {
-            use pmosource::CacheStatus;
+        // Get metadata and block info
+        let metadata = self.inner.cache_manager.get_metadata(object_id).await
+            .ok_or_else(|| MusicSourceError::ObjectNotFound(object_id.to_string()))?;
 
-            // Get the track metadata
-            let cache = self.inner.track_cache.read().await;
-            let metadata = cache
-                .get(object_id)
-                .ok_or_else(|| MusicSourceError::ObjectNotFound(object_id.to_string()))?
-                .clone();
-            drop(cache);
+        let blocks = self.inner.blocks.read().await;
+        let (block, song_index) = blocks.get(object_id)
+            .ok_or_else(|| MusicSourceError::ObjectNotFound(object_id.to_string()))?;
+        let song = block.get_song(*song_index)
+            .ok_or_else(|| MusicSourceError::ObjectNotFound(format!("Song {} not found", object_id)))?;
 
-            // If already cached, return status
-            if metadata.cached_audio_pk.is_some() {
-                return self.get_cache_status(object_id).await;
+        // Prepare metadata
+        let audio_metadata = AudioMetadata {
+            title: Some(song.title.clone()),
+            artist: if !song.artist.is_empty() { Some(song.artist.clone()) } else { None },
+            album: if !song.album.is_empty() { Some(song.album.clone()) } else { None },
+            duration_secs: if song.duration > 0 { Some((song.duration / 1000) as u64) } else { None },
+            year: None,
+            track_number: None,
+            track_total: None,
+            disc_number: None,
+            disc_total: None,
+            genre: None,
+            sample_rate: None,
+            channels: None,
+            bitrate: None,
+        };
+
+        // Cache via manager
+        match self.inner.cache_manager.cache_audio(&metadata.original_uri, Some(audio_metadata)).await {
+            Ok(pk) => {
+                // Update metadata with new pk
+                let mut updated = metadata;
+                updated.cached_audio_pk = Some(pk);
+                self.inner.cache_manager.update_metadata(object_id.to_string(), updated).await;
+                self.get_cache_status(object_id).await
             }
-
-            // Cache it now
-            if let Some(ref audio_cache) = self.inner.audio_cache {
-                let song = &metadata.block.songs[metadata.song_index];
-
-                let audio_metadata = pmoaudiocache::AudioMetadata {
-                    title: Some(song.title.clone()),
-                    artist: if !song.artist.is_empty() {
-                        Some(song.artist.clone())
-                    } else {
-                        None
-                    },
-                    album: if !song.album.is_empty() {
-                        Some(song.album.clone())
-                    } else {
-                        None
-                    },
-                    duration_secs: if song.duration > 0 {
-                        Some((song.duration / 1000) as u64)
-                    } else {
-                        None
-                    },
-                    year: None,
-                    track_number: None,
-                    track_total: None,
-                    disc_number: None,
-                    disc_total: None,
-                    genre: None,
-                    sample_rate: None,
-                    channels: None,
-                    bitrate: None,
-                };
-
-                match audio_cache
-                    .add_from_url(&metadata.original_uri, Some(audio_metadata))
-                    .await
-                {
-                    Ok((pk, _)) => {
-                        // Update the metadata
-                        let mut cache = self.inner.track_cache.write().await;
-                        if let Some(meta) = cache.get_mut(object_id) {
-                            meta.cached_audio_pk = Some(pk);
-                        }
-                        return self.get_cache_status(object_id).await;
-                    }
-                    Err(e) => {
-                        return Ok(CacheStatus::Failed {
-                            error: e.to_string(),
-                        });
-                    }
-                }
-            }
-
-            Ok(CacheStatus::NotCached)
+            Err(e) => Ok(CacheStatus::Failed { error: e.to_string() }),
         }
     }
 
@@ -701,26 +542,13 @@ impl MusicSource for RadioParadiseSource {
     }
 
     async fn statistics(&self) -> Result<pmosource::SourceStatistics> {
-        let mut stats = pmosource::SourceStatistics::default();
+        let cache_stats = self.inner.cache_manager.statistics().await;
 
-        // Total items in FIFO
-        stats.total_items = Some(self.inner.playlist.len().await);
-
-        // Cache statistics
-        #[cfg(feature = "cache")]
-        {
-            let cache = self.inner.track_cache.read().await;
-            let cached_count = cache.values().filter(|m| m.cached_audio_pk.is_some()).count();
-            stats.cached_items = Some(cached_count);
-
-            if let Some(ref audio_cache) = self.inner.audio_cache {
-                if let Ok(cache_stats) = audio_cache.statistics().await {
-                    stats.cache_size_bytes = Some(cache_stats.total_size_bytes);
-                }
-            }
-        }
-
-        Ok(stats)
+        Ok(pmosource::SourceStatistics {
+            total_items: Some(self.inner.playlist.len().await),
+            cached_items: Some(cache_stats.cached_tracks),
+            ..Default::default()
+        })
     }
 }
 
@@ -728,10 +556,37 @@ impl MusicSource for RadioParadiseSource {
 mod tests {
     use super::*;
 
+    // Helper to create test caches (requires actual directories in tests)
+    async fn create_test_caches() -> (Arc<CoverCache>, Arc<AudioCache>) {
+        let temp_dir = std::env::temp_dir();
+        let cover_dir = temp_dir.join("test_covers");
+        let audio_dir = temp_dir.join("test_audio");
+
+        std::fs::create_dir_all(&cover_dir).ok();
+        std::fs::create_dir_all(&audio_dir).ok();
+
+        let cover_cache = Arc::new(
+            pmocovers::Cache::new(cover_dir.to_str().unwrap(), 100, "http://localhost:8080")
+                .await.unwrap()
+        );
+        let audio_cache = Arc::new(
+            pmoaudiocache::new_cache(audio_dir.to_str().unwrap(), 100, "http://localhost:8080")
+                .unwrap()
+        );
+
+        (cover_cache, audio_cache)
+    }
+
     #[tokio::test]
     async fn test_source_info() {
         let client = RadioParadiseClient::with_client(reqwest::Client::new());
-        let source = RadioParadiseSource::new_default(client, "http://localhost:8080");
+        let (cover_cache, audio_cache) = create_test_caches().await;
+        let source = RadioParadiseSource::new_default(
+            client,
+            "http://localhost:8080",
+            cover_cache,
+            audio_cache
+        );
 
         assert_eq!(source.name(), "Radio Paradise");
         assert_eq!(source.id(), "radio-paradise");
@@ -752,7 +607,13 @@ mod tests {
     #[tokio::test]
     async fn test_fifo_operations() {
         let client = RadioParadiseClient::with_client(reqwest::Client::new());
-        let source = RadioParadiseSource::new_default(client, "http://localhost:8080");
+        let (cover_cache, audio_cache) = create_test_caches().await;
+        let source = RadioParadiseSource::new_default(
+            client,
+            "http://localhost:8080",
+            cover_cache,
+            audio_cache
+        );
 
         // Initially empty
         let items = source.get_items(0, 10).await.unwrap();

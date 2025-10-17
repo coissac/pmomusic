@@ -34,11 +34,11 @@ chrono = { version = "0.4", features = ["serde"] }
 # Configuration
 pmoconfig = { path = "../pmoconfig" }
 
-# Intégration avec pmocovers pour le cache d'images
-pmocovers = { path = "../pmocovers", optional = true }
+# Intégration avec pmocovers pour le cache d'images (OBLIGATOIRE)
+pmocovers = { path = "../pmocovers" }
 
-# Intégration avec pmoaudiocache pour le cache audio
-pmoaudiocache = { path = "../pmoaudiocache", optional = true }
+# Intégration avec pmoaudiocache pour le cache audio (OBLIGATOIRE)
+pmoaudiocache = { path = "../pmoaudiocache" }
 
 # Intégration avec pmodidl pour l'export DIDL
 pmodidl = { path = "../pmodidl" }
@@ -57,10 +57,8 @@ pmosource = { path = "../pmosource" }
 default = []
 # Feature pour activer les extensions pmoserver
 pmoserver = ["dep:pmoserver", "dep:axum", "dep:utoipa"]
-# Feature pour activer le cache d'images via pmocovers
-covers = ["dep:pmocovers"]
-# Feature pour activer le cache complet (images + audio)
-cache = ["dep:pmocovers", "dep:pmoaudiocache"]
+# Feature cache (deprecated - toujours actif maintenant)
+cache = []
 
 [dev-dependencies]
 # Tests

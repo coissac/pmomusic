@@ -8,12 +8,16 @@ pmoconfig = { path = "../pmoconfig" }
 pmodidl = { path = "../pmodidl"}
 pmoutils = { path = "../pmoutils" }
 pmoserver = { path = "../pmoserver" }
+pmocovers = { path = "../pmocovers", features = ["pmoserver"] }
+pmoaudiocache = { path = "../pmoaudiocache", features = ["pmoserver"] }
+pmocache = { path = "../pmocache" }
 
 url = "2.5.7"
 uuid = "1.18.1"
 hex = "0.4.3"
 base64 = "0.22.1"
 thiserror = "2.0.16"
+anyhow = "1.0"
 xmltree = "0.11.0"
 axum = "0.8.4"
 tokio = { version = "1.35", features = ["rt-multi-thread", "macros", "sync"] }
@@ -27,3 +31,4 @@ tracing = "0.1"
 bevy_reflect = "0.17.1"
 bevy_reflect_derive = "0.17.1"
 reqwest = "0.12.23"
+utoipa = { version = "5.3", features = ["axum_extras"] }
