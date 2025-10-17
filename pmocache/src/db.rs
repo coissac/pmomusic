@@ -248,4 +248,54 @@ impl DB {
         conn.execute(&sql, [pk])?;
         Ok(())
     }
+
+    /// Compte le nombre total d'entrées dans le cache
+    ///
+    /// # Returns
+    ///
+    /// Le nombre total d'entrées
+    pub fn count(&self) -> rusqlite::Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!("SELECT COUNT(*) FROM {}", self.table_name);
+        let count: i64 = conn.query_row(&sql, [], |row| row.get(0))?;
+        Ok(count as usize)
+    }
+
+    /// Récupère les N entrées les plus anciennes (LRU - Least Recently Used)
+    ///
+    /// Trie par last_used (les plus anciens en premier), puis par hits (les moins utilisés).
+    /// Utile pour implémenter une politique d'éviction LRU.
+    ///
+    /// # Arguments
+    ///
+    /// * `limit` - Nombre maximum d'entrées à récupérer
+    ///
+    /// # Returns
+    ///
+    /// Liste des entrées les plus anciennes, triées par last_used ASC
+    pub fn get_oldest(&self, limit: usize) -> rusqlite::Result<Vec<CacheEntry>> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!(
+            "SELECT pk, source_url, collection, hits, last_used
+             FROM {}
+             ORDER BY last_used ASC, hits ASC
+             LIMIT ?1",
+            self.table_name
+        );
+
+        let mut stmt = conn.prepare(&sql)?;
+
+        let entries = stmt.query_map([limit], |row| {
+            Ok(CacheEntry {
+                pk: row.get(0)?,
+                source_url: row.get(1)?,
+                collection: row.get(2)?,
+                hits: row.get(3)?,
+                last_used: row.get(4)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(entries)
+    }
 }

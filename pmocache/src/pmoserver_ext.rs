@@ -40,8 +40,6 @@
 #[cfg(feature = "pmoserver")]
 use crate::{Cache, CacheConfig};
 #[cfg(feature = "pmoserver")]
-use crate::cache_trait::FileCache;
-#[cfg(feature = "pmoserver")]
 use axum::{
     body::Body,
     extract::{Path, State},
@@ -56,41 +54,82 @@ use std::sync::Arc;
 use tokio_util::io::ReaderStream;
 #[cfg(feature = "pmoserver")]
 use tracing::warn;
+#[cfg(feature = "pmoserver")]
+use std::pin::Pin;
+#[cfg(feature = "pmoserver")]
+use std::future::Future;
+
+/// Type pour le callback de génération de param
+///
+/// Appelé quand un fichier avec param n'existe pas.
+/// Permet de générer à la volée (ex: redimensionnement d'images).
+///
+/// # Arguments
+///
+/// - `cache`: le cache
+/// - `pk`: clé primaire
+/// - `param`: paramètre demandé (ex: "256" pour une taille)
+///
+/// # Retourne
+///
+/// Les données générées ou None si le param n'est pas supporté
+#[cfg(feature = "pmoserver")]
+pub type ParamGenerator<C> = Arc<
+    dyn Fn(Arc<Cache<C>>, String, String)
+        -> Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send>>
+        + Send + Sync
+>;
 
 /// Handler générique pour GET /{cache_name}/{cache_type}/{pk}
 /// Sert un fichier avec le param par défaut
 #[cfg(feature = "pmoserver")]
 async fn get_file<C: CacheConfig + 'static>(
-    State((cache, content_type)): State<(Arc<Cache<C>>, &'static str)>,
+    State((cache, content_type, param_generator)): State<(Arc<Cache<C>>, &'static str, Option<ParamGenerator<C>>)>,
     Path(pk): Path<String>,
 ) -> Response {
     // Utiliser le param par défaut
     let param = C::default_param();
-    serve_file_with_streaming(&cache, &pk, param, content_type).await
+    serve_file_with_streaming(&cache, &pk, param, content_type, param_generator).await
 }
 
 /// Handler générique pour GET /{cache_name}/{cache_type}/{pk}/{param}
 /// Sert un fichier avec un param spécifique
 #[cfg(feature = "pmoserver")]
 async fn get_file_with_param<C: CacheConfig + 'static>(
-    State((cache, content_type)): State<(Arc<Cache<C>>, &'static str)>,
+    State((cache, content_type, param_generator)): State<(Arc<Cache<C>>, &'static str, Option<ParamGenerator<C>>)>,
     Path((pk, param)): Path<(String, String)>,
 ) -> Response {
-    serve_file_with_streaming(&cache, &pk, &param, content_type).await
+    serve_file_with_streaming(&cache, &pk, &param, content_type, param_generator).await
 }
 
 /// Fonction utilitaire pour servir un fichier avec streaming progressif
 ///
 /// Si le fichier est en cours de téléchargement, il est streamé au fur et à mesure.
 /// Sinon, le fichier complet est servi normalement.
+/// Si le fichier n'existe pas et qu'un param_generator est fourni, tente de générer le param.
 #[cfg(feature = "pmoserver")]
 async fn serve_file_with_streaming<C: CacheConfig>(
     cache: &Arc<Cache<C>>,
     pk: &str,
     param: &str,
     content_type: &'static str,
+    param_generator: Option<ParamGenerator<C>>,
 ) -> Response {
     let file_path = cache.file_path_with_qualifier(pk, param);
+
+    // Si le fichier n'existe pas et qu'on a un générateur, l'utiliser
+    if !file_path.exists() {
+        if let Some(generator) = param_generator {
+            if let Some(data) = generator(cache.clone(), pk.to_string(), param.to_string()).await {
+                // Le générateur a créé les données, les servir directement
+                return (
+                    StatusCode::OK,
+                    [("content-type", content_type)],
+                    data,
+                ).into_response();
+            }
+        }
+    }
 
     // Mettre à jour les stats d'utilisation
     if let Err(e) = cache.db.update_hit(pk) {
@@ -219,17 +258,62 @@ pub fn create_file_router<C: CacheConfig + 'static>(
     cache: Arc<Cache<C>>,
     content_type: &'static str,
 ) -> Router {
+    create_file_router_with_generator(cache, content_type, None)
+}
+
+/// Crée un router pour servir les fichiers d'un cache avec générateur de param
+///
+/// Similaire à `create_file_router` mais permet de fournir un générateur
+/// pour créer des variantes à la volée (ex: redimensionnement d'images).
+///
+/// # Arguments
+///
+/// * `cache` - Instance du cache
+/// * `content_type` - Type MIME des fichiers (ex: "image/webp", "audio/flac")
+/// * `param_generator` - Générateur optionnel pour créer des params à la volée
+///
+/// # Exemple
+///
+/// ```rust,no_run
+/// use pmocache::pmoserver_ext::{create_file_router_with_generator, ParamGenerator};
+/// use std::sync::Arc;
+///
+/// # async fn example(cache: std::sync::Arc<pmocache::Cache<CoversConfig>>) {
+/// let generator: ParamGenerator<CoversConfig> = Arc::new(|cache, pk, param| {
+///     Box::pin(async move {
+///         // Générer une variante si param est numérique
+///         if let Ok(size) = param.parse::<usize>() {
+///             // Générer et retourner les données
+///             Some(vec![])
+///         } else {
+///             None
+///         }
+///     })
+/// });
+///
+/// let router = create_file_router_with_generator(
+///     cache.clone(),
+///     "image/webp",
+///     Some(generator)
+/// );
+/// # }
+/// ```
+#[cfg(feature = "pmoserver")]
+pub fn create_file_router_with_generator<C: CacheConfig + 'static>(
+    cache: Arc<Cache<C>>,
+    content_type: &'static str,
+    param_generator: Option<ParamGenerator<C>>,
+) -> Router {
     let cache_name = C::cache_name();
     let cache_type = C::cache_type();
 
-    let path_base = format!("/{}/{}", cache_name, cache_type);
-    let path_with_param = format!("/{}/{}/:pk/:param", cache_name, cache_type);
-    let path_without_param = format!("/{}/{}/:pk", cache_name, cache_type);
+    let path_with_param = format!("/{}/{}/{{pk}}/{{param}}", cache_name, cache_type);
+    let path_without_param = format!("/{}/{}/{{pk}}", cache_name, cache_type);
 
     Router::new()
         .route(&path_without_param, get(get_file::<C>))
         .route(&path_with_param, get(get_file_with_param::<C>))
-        .with_state((cache, content_type))
+        .with_state((cache, content_type, param_generator))
 }
 
 /// Crée un router pour l'API REST du cache
@@ -261,11 +345,11 @@ pub fn create_api_router<C: CacheConfig + 'static>(
                 .delete(api::purge_cache::<C>),
         )
         .route(
-            "/:pk",
+            "/{pk}",
             get(api::get_item_info::<C>)
                 .delete(api::delete_item::<C>),
         )
-        .route("/:pk/status", get(api::get_download_status::<C>))
+        .route("/{pk}/status", get(api::get_download_status::<C>))
         .route("/consolidate", post(api::consolidate_cache::<C>))
         .with_state(cache)
 }
