@@ -8,7 +8,8 @@ edition = "2021"
 rusqlite = { version = "0.37.0", features = ["bundled"] }
 
 # HTTP client
-reqwest = { version = "0.12", features = ["blocking"] }
+reqwest = { version = "0.12", features = ["blocking", "stream"] }
+futures-util = "0.3"
 
 # Cryptographie
 sha1 = "0.10"
@@ -28,8 +29,9 @@ utoipa = { version = "5.3", optional = true }
 # Feature pour pmoserver (extension HTTP)
 axum = { version = "0.8", optional = true }
 tracing = { version = "0.1", optional = true }
+tokio-util = { version = "0.7", features = ["io"], optional = true }
 
 [features]
 default = []
 openapi = ["dep:utoipa"]
-pmoserver = ["dep:axum", "dep:tracing"]
+pmoserver = ["dep:axum", "dep:tracing", "dep:tokio-util"]

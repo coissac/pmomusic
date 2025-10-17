@@ -125,10 +125,27 @@
 pub mod db;
 pub mod cache;
 pub mod cache_trait;
+pub mod download;
 
 #[cfg(feature = "pmoserver")]
 pub mod pmoserver_ext;
 
+#[cfg(feature = "pmoserver")]
+pub mod api;
+
+#[cfg(feature = "openapi")]
+pub mod openapi;
+
 pub use db::{DB, CacheEntry};
-pub use cache::{Cache, CacheConfig, pk_from_url};
-pub use cache_trait::FileCache;
+pub use cache::{Cache, CacheConfig};
+pub use cache_trait::{FileCache, pk_from_url};
+pub use download::{Download, download, download_with_transformer, StreamTransformer};
+
+#[cfg(feature = "pmoserver")]
+pub use pmoserver_ext::{create_file_router, create_api_router, GenericCacheExt};
+
+#[cfg(all(feature = "pmoserver", feature = "openapi"))]
+pub use api::{
+    DownloadStatus, AddItemRequest, AddItemResponse,
+    DeleteItemResponse, ErrorResponse,
+};

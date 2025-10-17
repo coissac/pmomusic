@@ -1,16 +1,22 @@
 //! Extension pmoserver pour servir les fichiers du cache via HTTP
 //!
 //! Ce module fournit des handlers génériques pour servir les fichiers
-//! d'un cache via des routes HTTP structurées.
+//! d'un cache via des routes HTTP structurées, avec support du streaming progressif.
 //!
 //! ## Routes générées
 //!
-//! Format: `/{name}/{type}/{pk}[/{param}]`
+//! Format: `/{cache_name}/{cache_type}/{pk}[/{param}]`
 //!
 //! Exemples:
 //! - `/covers/images/abc123` - Image avec param par défaut (orig)
-//! - `/covers/images/abc123/thumb` - Image avec param spécifique
-//! - `/audio/tracks/def456/stream` - Piste audio
+//! - `/covers/images/abc123/256` - Image redimensionnée 256x256
+//! - `/audio/tracks/def456` - Piste audio par défaut
+//! - `/audio/tracks/def456/stream` - Piste audio streamable
+//!
+//! ## Streaming progressif
+//!
+//! Les fichiers en cours de téléchargement sont automatiquement streamés
+//! au fur et à mesure de leur disponibilité.
 //!
 //! ## Utilisation
 //!
@@ -25,69 +31,140 @@
 //!     "image/webp"  // Content-Type
 //! );
 //!
-//! // Le router peut être monté sur n'importe quel chemin
-//! // Exemple: /covers/images -> GET /covers/images/{pk}
-//! //                         -> GET /covers/images/{pk}/{param}
+//! // Le router sera monté à la racine avec les routes complètes
+//! // Exemple: GET /covers/images/{pk}
+//! //          GET /covers/images/{pk}/{param}
 //! # }
 //! ```
 
 #[cfg(feature = "pmoserver")]
 use crate::{Cache, CacheConfig};
 #[cfg(feature = "pmoserver")]
+use crate::cache_trait::FileCache;
+#[cfg(feature = "pmoserver")]
 use axum::{
     body::Body,
     extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
     Router,
 };
 #[cfg(feature = "pmoserver")]
 use std::sync::Arc;
 #[cfg(feature = "pmoserver")]
+use tokio_util::io::ReaderStream;
+#[cfg(feature = "pmoserver")]
 use tracing::warn;
 
-/// Handler générique pour GET /{pk}
+/// Handler générique pour GET /{cache_name}/{cache_type}/{pk}
 /// Sert un fichier avec le param par défaut
 #[cfg(feature = "pmoserver")]
 async fn get_file<C: CacheConfig + 'static>(
     State((cache, content_type)): State<(Arc<Cache<C>>, &'static str)>,
     Path(pk): Path<String>,
 ) -> Response {
-    match cache.get(&pk).await {
-        Ok(file_path) => match tokio::fs::read(&file_path).await {
-            Ok(data) => (
-                StatusCode::OK,
-                [("content-type", content_type)],
-                data,
-            )
-                .into_response(),
-            Err(_) => (StatusCode::NOT_FOUND, "File not found").into_response(),
-        },
-        Err(e) => {
-            warn!("Error getting file {}: {}", pk, e);
-            (StatusCode::NOT_FOUND, "Item not found").into_response()
-        }
-    }
+    // Utiliser le param par défaut
+    let param = C::default_param();
+    serve_file_with_streaming(&cache, &pk, param, content_type).await
 }
 
-/// Handler générique pour GET /{pk}/{param}
+/// Handler générique pour GET /{cache_name}/{cache_type}/{pk}/{param}
 /// Sert un fichier avec un param spécifique
 #[cfg(feature = "pmoserver")]
 async fn get_file_with_param<C: CacheConfig + 'static>(
     State((cache, content_type)): State<(Arc<Cache<C>>, &'static str)>,
     Path((pk, param)): Path<(String, String)>,
 ) -> Response {
-    let file_path = cache.file_path_with_qualifier(&pk, &param);
+    serve_file_with_streaming(&cache, &pk, &param, content_type).await
+}
 
+/// Fonction utilitaire pour servir un fichier avec streaming progressif
+///
+/// Si le fichier est en cours de téléchargement, il est streamé au fur et à mesure.
+/// Sinon, le fichier complet est servi normalement.
+#[cfg(feature = "pmoserver")]
+async fn serve_file_with_streaming<C: CacheConfig>(
+    cache: &Arc<Cache<C>>,
+    pk: &str,
+    param: &str,
+    content_type: &'static str,
+) -> Response {
+    let file_path = cache.file_path_with_qualifier(pk, param);
+
+    // Mettre à jour les stats d'utilisation
+    if let Err(e) = cache.db.update_hit(pk) {
+        warn!("Error updating hit count for {}: {}", pk, e);
+    }
+
+    // Vérifier si le download est en cours
+    if let Some(download) = cache.get_download(pk).await {
+        // Le fichier est en cours de téléchargement
+        if !download.finished().await {
+            // Streaming progressif
+            return stream_file_progressive(file_path, download, content_type).await;
+        }
+    }
+
+    // Fichier terminé ou pas de download en cours, servir normalement
+    serve_complete_file(file_path, content_type).await
+}
+
+/// Stream un fichier en cours de téléchargement de manière progressive
+#[cfg(feature = "pmoserver")]
+async fn stream_file_progressive(
+    file_path: std::path::PathBuf,
+    download: Arc<crate::download::Download>,
+    content_type: &'static str,
+) -> Response {
+    // Attendre qu'au moins 64 KB soient disponibles avant de commencer
+    const MIN_SIZE_TO_START: u64 = 64 * 1024;
+
+    if let Err(e) = download.wait_until_min_size(MIN_SIZE_TO_START).await {
+        warn!("Error waiting for download to start: {}", e);
+        if let Some(error_msg) = download.error().await {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Download error: {}", error_msg),
+            )
+                .into_response();
+        }
+        return (StatusCode::NOT_FOUND, "File not available").into_response();
+    }
+
+    // Ouvrir le fichier en lecture
+    let file = match tokio::fs::File::open(&file_path).await {
+        Ok(f) => f,
+        Err(e) => {
+            warn!("Error opening file {:?}: {}", file_path, e);
+            return (StatusCode::NOT_FOUND, "File not found").into_response();
+        }
+    };
+
+    // Créer un stream à partir du fichier
+    let stream = ReaderStream::new(file);
+    let body = Body::from_stream(stream);
+
+    (
+        StatusCode::OK,
+        [
+            ("content-type", content_type),
+            ("transfer-encoding", "chunked"),
+        ],
+        body,
+    )
+        .into_response()
+}
+
+/// Sert un fichier complet déjà téléchargé
+#[cfg(feature = "pmoserver")]
+async fn serve_complete_file(
+    file_path: std::path::PathBuf,
+    content_type: &'static str,
+) -> Response {
     if !file_path.exists() {
         warn!("File not found: {:?}", file_path);
         return (StatusCode::NOT_FOUND, "File not found").into_response();
-    }
-
-    // Mettre à jour les stats d'utilisation
-    if let Err(e) = cache.db.update_hit(&pk) {
-        warn!("Error updating hit count for {}: {}", pk, e);
     }
 
     match tokio::fs::read(&file_path).await {
@@ -97,11 +174,16 @@ async fn get_file_with_param<C: CacheConfig + 'static>(
             data,
         )
             .into_response(),
-        Err(_) => (StatusCode::NOT_FOUND, "File not found").into_response(),
+        Err(e) => {
+            warn!("Error reading file {:?}: {}", file_path, e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Error reading file").into_response()
+        }
     }
 }
 
 /// Crée un router pour servir les fichiers d'un cache
+///
+/// Crée un router avec les routes complètes incluant cache_name et cache_type.
 ///
 /// # Arguments
 ///
@@ -110,8 +192,8 @@ async fn get_file_with_param<C: CacheConfig + 'static>(
 ///
 /// # Routes créées
 ///
-/// - `GET /{pk}` - Fichier avec param par défaut
-/// - `GET /{pk}/{param}` - Fichier avec param spécifique
+/// - `GET /{cache_name}/{cache_type}/{pk}` - Fichier avec param par défaut
+/// - `GET /{cache_name}/{cache_type}/{pk}/{param}` - Fichier avec param spécifique
 ///
 /// # Exemple
 ///
@@ -126,8 +208,10 @@ async fn get_file_with_param<C: CacheConfig + 'static>(
 ///     "image/webp"
 /// );
 ///
-/// // Monter le router sur /covers/images
-/// server.add_router("/covers/images", router).await;
+/// // Le router sera monté à la racine avec les routes complètes:
+/// // GET /covers/images/{pk}
+/// // GET /covers/images/{pk}/{param}
+/// server.add_router("/", router).await;
 /// # }
 /// ```
 #[cfg(feature = "pmoserver")]
@@ -135,8 +219,79 @@ pub fn create_file_router<C: CacheConfig + 'static>(
     cache: Arc<Cache<C>>,
     content_type: &'static str,
 ) -> Router {
+    let cache_name = C::cache_name();
+    let cache_type = C::cache_type();
+
+    let path_base = format!("/{}/{}", cache_name, cache_type);
+    let path_with_param = format!("/{}/{}/:pk/:param", cache_name, cache_type);
+    let path_without_param = format!("/{}/{}/:pk", cache_name, cache_type);
+
     Router::new()
-        .route("/:pk", get(get_file::<C>))
-        .route("/:pk/:param", get(get_file_with_param::<C>))
+        .route(&path_without_param, get(get_file::<C>))
+        .route(&path_with_param, get(get_file_with_param::<C>))
         .with_state((cache, content_type))
+}
+
+/// Crée un router pour l'API REST du cache
+///
+/// # Arguments
+///
+/// * `cache` - Instance du cache
+///
+/// # Routes créées
+///
+/// - `GET /` - Liste des items
+/// - `POST /` - Ajouter un item
+/// - `DELETE /` - Purger le cache
+/// - `GET /{pk}` - Info d'un item
+/// - `GET /{pk}/status` - Status du download
+/// - `DELETE /{pk}` - Supprimer un item
+/// - `POST /consolidate` - Consolider le cache
+#[cfg(feature = "pmoserver")]
+pub fn create_api_router<C: CacheConfig + 'static>(
+    cache: Arc<Cache<C>>,
+) -> Router {
+    use crate::api;
+
+    Router::new()
+        .route(
+            "/",
+            get(api::list_items::<C>)
+                .post(api::add_item::<C>)
+                .delete(api::purge_cache::<C>),
+        )
+        .route(
+            "/:pk",
+            get(api::get_item_info::<C>)
+                .delete(api::delete_item::<C>),
+        )
+        .route("/:pk/status", get(api::get_download_status::<C>))
+        .route("/consolidate", post(api::consolidate_cache::<C>))
+        .with_state(cache)
+}
+
+/// Trait d'extension pour pmoserver::Server
+///
+/// Permet d'initialiser un cache générique avec routes HTTP complètes
+#[cfg(feature = "pmoserver")]
+pub trait GenericCacheExt {
+    /// Initialise un cache générique avec routes complètes
+    ///
+    /// # Arguments
+    ///
+    /// * `cache_dir` - Répertoire de stockage du cache
+    /// * `limit` - Limite de taille du cache (nombre d'éléments)
+    /// * `content_type` - Type MIME des fichiers (ex: "image/webp", "audio/flac")
+    ///
+    /// # Routes créées
+    ///
+    /// - Fichiers: `/{cache_name}/{cache_type}/{pk}[/{param}]`
+    /// - API: `/api/{cache_name}/*`
+    /// - Swagger: `/swagger-ui/{cache_name}`
+    async fn init_generic_cache<C: CacheConfig + 'static>(
+        &mut self,
+        cache_dir: &str,
+        limit: usize,
+        content_type: &'static str,
+    ) -> anyhow::Result<Arc<Cache<C>>>;
 }

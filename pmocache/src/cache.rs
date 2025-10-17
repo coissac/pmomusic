@@ -3,12 +3,14 @@
 //! Ce module fournit une interface générique pour gérer un cache de fichiers
 //! avec métadonnées dans une base de données SQLite.
 
-use crate::cache_trait::FileCache;
+use crate::cache_trait::{FileCache, pk_from_url};
 use crate::db::DB;
+use crate::download::{Download, download_with_transformer, StreamTransformer};
 use anyhow::{anyhow, Result};
-use sha1::{Digest, Sha1};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 /// Trait pour définir les paramètres du cache
 pub trait CacheConfig: Send + Sync {
@@ -42,7 +44,8 @@ pub trait CacheConfig: Send + Sync {
 /// * `C` - Configuration du cache (implémente `CacheConfig`)
 ///
 /// Note : Ce type est conçu pour être utilisé derrière un `Arc<Cache>`.
-/// La synchronisation est gérée par le Mutex interne de la base de données SQLite.
+/// La synchronisation est gérée par le Mutex interne de la base de données SQLite
+/// et par le RwLock pour la map des downloads.
 #[derive(Debug)]
 pub struct Cache<C: CacheConfig> {
     /// Répertoire de stockage
@@ -53,6 +56,8 @@ pub struct Cache<C: CacheConfig> {
     base_url: String,
     /// Base de données SQLite
     pub db: Arc<DB>,
+    /// Map des downloads en cours (pk -> Download)
+    downloads: Arc<RwLock<HashMap<String, Arc<Download>>>>,
     /// Phantom data pour le type de configuration
     _phantom: std::marker::PhantomData<C>,
 }
@@ -75,11 +80,23 @@ impl<C: CacheConfig> Cache<C> {
             limit,
             base_url: base_url.to_string(),
             db: Arc::new(db),
+            downloads: Arc::new(RwLock::new(HashMap::new())),
             _phantom: std::marker::PhantomData,
         })
     }
 
+    /// Retourne le transformer pour ce cache
+    ///
+    /// Par défaut retourne None (pas de transformation).
+    /// Les caches spécialisés peuvent surcharger cette méthode.
+    fn get_transformer(&self) -> Option<StreamTransformer> {
+        None
+    }
+
     /// Télécharge un fichier depuis une URL et l'ajoute au cache
+    ///
+    /// Utilise le module download pour gérer le téléchargement asynchrone.
+    /// Le download est tracké dans la map jusqu'à sa fin.
     ///
     /// # Arguments
     ///
@@ -90,13 +107,63 @@ impl<C: CacheConfig> Cache<C> {
     ///
     /// La clé primaire (pk) du fichier dans le cache
     pub async fn add_from_url(&self, url: &str, collection: Option<&str>) -> Result<String> {
-        let response = reqwest::get(url).await?;
-        if !response.status().is_success() {
-            return Err(anyhow!("Bad status: {}", response.status()));
+        let pk = pk_from_url(url);
+        let file_path = self.file_path(&pk);
+
+        // Vérifier si déjà en cours de téléchargement
+        {
+            let downloads = self.downloads.read().await;
+            if downloads.contains_key(&pk) {
+                // Download déjà en cours, retourner la clé
+                return Ok(pk);
+            }
         }
 
-        let data = response.bytes().await?;
-        self.add(url, &data, collection).await
+        // Lancer le téléchargement avec transformer
+        let download = download_with_transformer(
+            &file_path,
+            url,
+            self.get_transformer(),
+        );
+
+        // Stocker dans la map des downloads en cours
+        {
+            let mut downloads = self.downloads.write().await;
+            downloads.insert(pk.clone(), download.clone());
+        }
+
+        // Ajouter immédiatement à la DB
+        self.db.add(&pk, url, collection)?;
+
+        // Lancer une tâche de nettoyage en background
+        let downloads_clone = self.downloads.clone();
+        let pk_clone = pk.clone();
+        tokio::spawn(async move {
+            // Attendre la fin du téléchargement
+            let _ = download.wait_until_finished().await;
+            // Retirer de la map
+            downloads_clone.write().await.remove(&pk_clone);
+        });
+
+        Ok(pk)
+    }
+
+    /// Ajoute un fichier local au cache
+    ///
+    /// Le fichier est copié dans le cache via une URL file://
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Chemin du fichier local
+    /// * `collection` - Collection optionnelle à laquelle appartient le fichier
+    ///
+    /// # Returns
+    ///
+    /// La clé primaire (pk) du fichier dans le cache
+    pub async fn add_from_file(&self, path: &str, collection: Option<&str>) -> Result<String> {
+        let canonical_path = std::fs::canonicalize(path)?;
+        let file_url = format!("file://{}", canonical_path.display());
+        self.add_from_url(&file_url, collection).await
     }
 
     /// S'assure qu'un fichier est présent dans le cache
@@ -180,13 +247,11 @@ impl<C: CacheConfig> Cache<C> {
         for entry in entries {
             let file_path = self.file_path(&entry.pk);
             if !file_path.exists() {
-                match reqwest::get(&entry.source_url).await {
-                    Ok(response) if response.status().is_success() => {
-                        let data = response.bytes().await?;
-                        self.add(&entry.source_url, &data, entry.collection.as_deref())
-                            .await?;
-                    }
-                    _ => {
+                // Re-télécharger le fichier manquant
+                match self.add_from_url(&entry.source_url, entry.collection.as_deref()).await {
+                    Ok(_) => {},
+                    Err(_) => {
+                        // Si le téléchargement échoue, supprimer l'entrée DB
                         self.db.delete(&entry.pk)?;
                     }
                 }
@@ -213,6 +278,131 @@ impl<C: CacheConfig> Cache<C> {
         Ok(())
     }
 
+    /// Récupère l'objet Download pour un pk donné (si en cours)
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Clé primaire du fichier
+    ///
+    /// # Returns
+    ///
+    /// Some(Download) si le téléchargement est en cours, None sinon
+    pub async fn get_download(&self, pk: &str) -> Option<Arc<Download>> {
+        let downloads = self.downloads.read().await;
+        downloads.get(pk).cloned()
+    }
+
+    /// Retourne la taille actuelle téléchargée (source)
+    ///
+    /// Si le download est en cours, retourne la taille téléchargée.
+    /// Sinon, retourne la taille du fichier sur disque.
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Clé primaire du fichier
+    pub async fn current_size(&self, pk: &str) -> Option<u64> {
+        if let Some(download) = self.get_download(pk).await {
+            Some(download.current_size().await)
+        } else {
+            // Fichier terminé, lire la taille du fichier
+            let file_path = self.file_path(pk);
+            if file_path.exists() {
+                std::fs::metadata(file_path).ok().map(|m| m.len())
+            } else {
+                None
+            }
+        }
+    }
+
+    /// Retourne la taille des données transformées
+    ///
+    /// Si le download est en cours, retourne la taille transformée.
+    /// Sinon, retourne la taille du fichier sur disque.
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Clé primaire du fichier
+    pub async fn transformed_size(&self, pk: &str) -> Option<u64> {
+        if let Some(download) = self.get_download(pk).await {
+            Some(download.transformed_size().await)
+        } else {
+            // Fichier terminé, lire la taille du fichier
+            let file_path = self.file_path(pk);
+            if file_path.exists() {
+                std::fs::metadata(file_path).ok().map(|m| m.len())
+            } else {
+                None
+            }
+        }
+    }
+
+    /// Retourne la taille attendue du fichier (si disponible)
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Clé primaire du fichier
+    pub async fn expected_size(&self, pk: &str) -> Option<u64> {
+        if let Some(download) = self.get_download(pk).await {
+            download.expected_size().await
+        } else {
+            // Fichier terminé, la taille finale est la taille du fichier
+            self.transformed_size(pk).await
+        }
+    }
+
+    /// Indique si le téléchargement est terminé
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Clé primaire du fichier
+    pub async fn is_finished(&self, pk: &str) -> bool {
+        if let Some(download) = self.get_download(pk).await {
+            download.finished().await
+        } else {
+            // Pas dans la map = terminé (ou n'existe pas)
+            self.file_path(pk).exists()
+        }
+    }
+
+    /// Attend qu'un fichier atteigne au moins une taille minimale
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Clé primaire du fichier
+    /// * `min_size` - Taille minimale attendue en bytes
+    pub async fn wait_until_min_size(&self, pk: &str, min_size: u64) -> Result<()> {
+        if let Some(download) = self.get_download(pk).await {
+            download.wait_until_min_size(min_size).await
+                .map_err(|e| anyhow!("Download error: {}", e))
+        } else {
+            // Déjà terminé ou n'existe pas
+            if self.file_path(pk).exists() {
+                Ok(())
+            } else {
+                Err(anyhow!("File not found"))
+            }
+        }
+    }
+
+    /// Attend que le téléchargement soit complètement terminé
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Clé primaire du fichier
+    pub async fn wait_until_finished(&self, pk: &str) -> Result<()> {
+        if let Some(download) = self.get_download(pk).await {
+            download.wait_until_finished().await
+                .map_err(|e| anyhow!("Download error: {}", e))
+        } else {
+            // Déjà terminé ou n'existe pas
+            if self.file_path(pk).exists() {
+                Ok(())
+            } else {
+                Err(anyhow!("File not found"))
+            }
+        }
+    }
+
     /// Retourne le répertoire du cache
     pub fn cache_dir(&self) -> &Path {
         &self.dir
@@ -232,9 +422,17 @@ impl<C: CacheConfig> Cache<C> {
 
 
 /// Implémentation du trait FileCache pour Cache
-impl<C: CacheConfig> FileCache for Cache<C> {
-    fn cache_type(&self) -> &str {
-        C::cache_type()
+impl<C: CacheConfig> FileCache<C> for Cache<C> {
+    fn get_cache_dir(&self) -> &Path {
+        self.cache_dir()
+    }
+
+    fn get_database(&self) -> Arc<DB> {
+        self.db.clone()
+    }
+
+    fn get_base_url(&self) -> &str {
+        &self.base_url
     }
 
     fn validate_data(&self, data: &[u8]) -> Result<Vec<u8>> {
@@ -246,23 +444,12 @@ impl<C: CacheConfig> FileCache for Cache<C> {
         self.add_from_url(url, collection).await
     }
 
-    async fn ensure_from_url(&self, url: &str, collection: Option<&str>) -> Result<String> {
-        self.ensure_from_url(url, collection).await
+    async fn add_from_file(&self, path: &str, collection: Option<&str>) -> Result<String> {
+        self.add_from_file(path, collection).await
     }
 
-    async fn add(&self, url: &str, data: &[u8], collection: Option<&str>) -> Result<String> {
-        // Valider les données avant de les ajouter
-        let validated_data = self.validate_data(data)?;
-
-        let pk = pk_from_url(url);
-        let file_path = self.file_path(&pk);
-
-        if !file_path.exists() {
-            tokio::fs::write(&file_path, &validated_data).await?;
-        }
-
-        self.db.add(&pk, url, collection)?;
-        Ok(pk)
+    async fn ensure_from_url(&self, url: &str, collection: Option<&str>) -> Result<String> {
+        self.ensure_from_url(url, collection).await
     }
 
     async fn get(&self, pk: &str) -> Result<PathBuf> {
@@ -279,13 +466,5 @@ impl<C: CacheConfig> FileCache for Cache<C> {
 
     async fn consolidate(&self) -> Result<()> {
         self.consolidate().await
-    }
-
-    fn get_cache_dir(&self) -> String {
-        self.cache_dir()
-    }
-
-    fn get_base_url(&self) -> &str {
-        self.get_base_url()
     }
 }
