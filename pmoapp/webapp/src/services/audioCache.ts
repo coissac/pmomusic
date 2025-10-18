@@ -154,14 +154,14 @@ export async function consolidateCache(): Promise<void> {
  * Génère l'URL pour streamer une piste
  */
 export function getTrackUrl(pk: string): string {
-  return `/audio/tracks/${pk}`;
+  return `/audio/flac/${pk}`;
 }
 
 /**
  * Génère l'URL pour télécharger la piste originale
  */
 export function getOriginalTrackUrl(pk: string): string {
-  return `/audio/tracks/${pk}/orig`;
+  return `/audio/flac/${pk}/orig`;
 }
 
 /**

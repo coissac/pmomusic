@@ -114,7 +114,7 @@ export async function consolidateCache(): Promise<void> {
  */
 export function getImageUrl(pk: string, size?: number): string {
   if (size) {
-    return `/covers/images/${pk}/${size}`;
+    return `/covers/image/${pk}/${size}`;
   }
-  return `/covers/images/${pk}`;
+  return `/covers/image/${pk}`;
 }
