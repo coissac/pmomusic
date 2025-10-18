@@ -347,6 +347,31 @@ impl MusicSource for RadioParadiseSource {
     async fn browse(&self, object_id: &str) -> Result<BrowseResult> {
         // For Radio Paradise, browsing returns all tracks in the FIFO
         if object_id == "radio-paradise" || object_id == "0" {
+            // Si la FIFO est vide, la peupler avec les morceaux actuels
+            if self.inner.playlist.len().await == 0 {
+                tracing::info!("FIFO is empty, fetching current Radio Paradise tracks...");
+
+                match self.inner.client.now_playing().await {
+                    Ok(now_playing) => {
+                        let block = Arc::new(now_playing.block);
+
+                        // Ajouter tous les morceaux du bloc actuel
+                        for (song_index, song) in block.songs_ordered() {
+                            if let Err(e) = self.add_song(block.clone(), song, song_index).await {
+                                tracing::warn!("Failed to add song '{}': {}", song.title, e);
+                            } else {
+                                tracing::debug!("Added song: {} - {}", song.artist, song.title);
+                            }
+                        }
+
+                        tracing::info!("✅ Added {} tracks to Radio Paradise FIFO", block.song_count());
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to fetch current tracks: {}", e);
+                    }
+                }
+            }
+
             let tracks = self.inner.playlist.get_items(0, 1000).await;
             let items: Vec<Item> = tracks.iter().map(|t| self.track_to_item(t)).collect();
             Ok(BrowseResult::Items(items))

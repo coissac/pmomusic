@@ -179,6 +179,7 @@ impl SourcesExt for Server {
             .map_err(|e| SourceInitError::ParadiseError(format!("Failed to create source: {}", e)))?;
 
         // Enregistrer la source
+        // Note: La FIFO sera peuplée automatiquement lors du premier browse
         self.register_music_source(Arc::new(source)).await;
 
         tracing::info!("✅ Radio Paradise source registered successfully");
