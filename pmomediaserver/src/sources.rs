@@ -165,7 +165,7 @@ impl SourcesExt for Server {
 
     #[cfg(feature = "paradise")]
     async fn register_paradise(&mut self) -> Result<()> {
-        use pmoparadise::{RadioParadiseClient, RadioParadiseSource};
+        use pmoparadise::{RadioParadiseClient, RadioParadiseSource, RadioParadiseExt};
 
         tracing::info!("Initializing Radio Paradise source...");
 
@@ -183,6 +183,17 @@ impl SourcesExt for Server {
         self.register_music_source(Arc::new(source)).await;
 
         tracing::info!("✅ Radio Paradise source registered successfully");
+
+        // Initialiser l'API REST Radio Paradise
+        #[cfg(feature = "paradise-api")]
+        {
+            tracing::info!("📻 Initializing Radio Paradise API...");
+            if let Err(e) = self.init_radioparadise().await {
+                tracing::warn!("⚠️ Failed to initialize Radio Paradise API: {}", e);
+            } else {
+                tracing::info!("✅ Radio Paradise API initialized");
+            }
+        }
 
         Ok(())
     }

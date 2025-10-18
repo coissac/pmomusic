@@ -35,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //     tracing::warn!("⚠️ Failed to register Qobuz: {}", e);
     // }
 
-    // Enregistrer Radio Paradise
+    // Enregistrer Radio Paradise (inclut l'initialisation de l'API)
     if let Err(e) = server.register_paradise().await {
         tracing::warn!("⚠️ Failed to register Radio Paradise: {}", e);
     }

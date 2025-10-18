@@ -55,14 +55,20 @@ pmoplaylist = { path = "../pmoplaylist" }
 pmocovers = { path = "../pmocovers" }
 pmoaudiocache = { path = "../pmoaudiocache" }
 
+# OpenAPI/Swagger support (pour pmoserver extension)
+utoipa = { version = "5.4.0", optional = true }
+axum = { version = "0.8.4", optional = true }
+
 [features]
 default = ["metadata-only"]
 # Mode métadonnées seules (pas de décodage FLAC)
 metadata-only = []
 # Active le décodage FLAC par-track
 per-track = ["dep:claxon", "dep:hound", "dep:tempfile"]
-# Active le media server UPnP
-mediaserver = ["dep:pmoupnp", "dep:pmoserver", "dep:pmodidl", "dep:uuid"]
+# Active l'API REST pmoserver
+pmoserver = ["dep:pmoserver", "dep:utoipa", "dep:axum"]
+# Active le media server UPnP (includes pmoserver)
+mediaserver = ["dep:pmoupnp", "dep:pmodidl", "dep:uuid", "pmoserver"]
 # Feature pour activer le support serveur (cache registry)
 server = ["pmosource/server"]
 # Feature cache (deprecated - toujours actif maintenant)
