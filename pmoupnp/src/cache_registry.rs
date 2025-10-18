@@ -9,6 +9,7 @@
 
 use std::sync::Arc;
 use once_cell::sync::Lazy;
+use pmocache::FileCache;
 use std::sync::RwLock;
 use pmocovers::Cache as CoverCache;
 use pmoaudiocache::Cache as AudioCache;
@@ -82,7 +83,13 @@ impl CacheRegistry {
         let base_url = self.base_url
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Base URL not set in CacheRegistry"))?;
-        let route = pmocovers::cache::route_for(pk, size);
+        let cache = get_cover_cache()
+        .ok_or_else(|| anyhow::anyhow!("No registred cover cache"))?;
+        let param=  match size {
+            Some(size_) => Some(size_.to_string()),
+            None => None  
+        };
+        let route = cache.route_for(pk, param.as_deref());           
         Ok(format!("{}{}", base_url, route))
     }
 
@@ -100,7 +107,9 @@ impl CacheRegistry {
         let base_url = self.base_url
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Base URL not set in CacheRegistry"))?;
-        let route = pmoaudiocache::cache::route_for(pk, param);
+        let cache = get_audio_cache()
+        .ok_or_else(|| anyhow::anyhow!("No registred audio cache"))?;
+        let route = cache.route_for(pk, param);           
         Ok(format!("{}{}", base_url, route))
     }
 }
