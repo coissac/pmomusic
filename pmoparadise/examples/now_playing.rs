@@ -39,7 +39,9 @@ async fn main() -> Result<()> {
         println!("Now Playing:");
         println!("  Title: {}", song.title);
         println!("  Artist: {}", song.artist);
-        println!("  Album: {}", song.album);
+        if let Some(ref album) = song.album {
+            println!("  Album: {}", album);
+        }
         if let Some(year) = song.year {
             println!("  Year: {}", year);
         }
@@ -77,7 +79,9 @@ async fn main() -> Result<()> {
             duration_sec / 60,
             duration_sec % 60
         );
-        println!("   Album: {}", song.album);
+        if let Some(ref album) = song.album {
+            println!("   Album: {}", album);
+        }
 
         if let Some(year) = song.year {
             print!("   Year: {}", year);

@@ -261,7 +261,9 @@ fn create_song_item(
 
     // Add metadata
     item.add_artist(song.artist.clone());
-    item.add_album(song.album.clone());
+    if let Some(ref album) = song.album {
+        item.add_album(album.clone());
+    }
 
     if let Some(year) = song.year {
         item.set_date(format!("{}-01-01", year));

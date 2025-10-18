@@ -1,7 +1,110 @@
 //! Data models for Radio Paradise API responses
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
+
+/// Deserialize a string or number into a u64
+fn deserialize_string_or_u64<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::Error;
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrU64 {
+        String(String),
+        Number(u64),
+    }
+
+    match StringOrU64::deserialize(deserializer)? {
+        StringOrU64::String(s) => s.parse::<u64>().map_err(D::Error::custom),
+        StringOrU64::Number(n) => Ok(n),
+    }
+}
+
+/// Deserialize a string or number into a f64, then convert to u64 milliseconds
+fn deserialize_length<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::Error;
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrNumber {
+        String(String),
+        Float(f64),
+        Int(u64),
+    }
+
+    match StringOrNumber::deserialize(deserializer)? {
+        StringOrNumber::String(s) => {
+            let seconds = s.parse::<f64>().map_err(D::Error::custom)?;
+            Ok((seconds * 1000.0) as u64)
+        }
+        StringOrNumber::Float(f) => Ok((f * 1000.0) as u64),
+        StringOrNumber::Int(i) => Ok(i),
+    }
+}
+
+/// Deserialize an optional string or number into Option<u32>
+fn deserialize_optional_string_or_u32<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::Error;
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrU32 {
+        String(String),
+        Number(u32),
+    }
+
+    let opt = Option::<StringOrU32>::deserialize(deserializer)?;
+    match opt {
+        None => Ok(None),
+        Some(StringOrU32::String(s)) => {
+            if s.is_empty() {
+                Ok(None)
+            } else {
+                s.parse::<u32>().map(Some).map_err(D::Error::custom)
+            }
+        }
+        Some(StringOrU32::Number(n)) => Ok(Some(n)),
+    }
+}
+
+/// Deserialize an optional string or number into Option<f32>
+fn deserialize_optional_string_or_f32<'de, D>(deserializer: D) -> Result<Option<f32>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::Error;
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrF32 {
+        String(String),
+        Float(f32),
+        Int(i32),
+    }
+
+    let opt = Option::<StringOrF32>::deserialize(deserializer)?;
+    match opt {
+        None => Ok(None),
+        Some(StringOrF32::String(s)) => {
+            if s.is_empty() {
+                Ok(None)
+            } else {
+                s.parse::<f32>().map(Some).map_err(D::Error::custom)
+            }
+        }
+        Some(StringOrF32::Float(f)) => Ok(Some(f)),
+        Some(StringOrF32::Int(i)) => Ok(Some(i as f32)),
+    }
+}
 
 /// Bitrate quality levels for Radio Paradise streams
 ///
@@ -77,11 +180,13 @@ pub struct Song {
     /// Song title
     pub title: String,
 
-    /// Album name
-    pub album: String,
+    /// Album name (may be missing for promos/announcements)
+    #[serde(default)]
+    pub album: Option<String>,
 
     /// Year of release
-    #[serde(default)]
+    /// Note: API returns this as a string, we deserialize to u32
+    #[serde(default, deserialize_with = "deserialize_optional_string_or_u32")]
     pub year: Option<u32>,
 
     /// Elapsed time from start of block in milliseconds
@@ -95,7 +200,8 @@ pub struct Song {
     pub cover: Option<String>,
 
     /// Rating (0-10)
-    #[serde(default)]
+    /// Note: API returns this as a string, we deserialize to f32
+    #[serde(default, deserialize_with = "deserialize_optional_string_or_f32")]
     pub rating: Option<f32>,
 
     /// Additional metadata
@@ -130,12 +236,18 @@ pub struct ImageInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Block {
     /// Event ID for this block (start event)
+    /// Note: API returns this as a string, we deserialize to u64
+    #[serde(deserialize_with = "deserialize_string_or_u64")]
     pub event: EventId,
 
     /// Event ID for the next block (end event)
+    /// Note: API returns this as a string, we deserialize to u64
+    #[serde(deserialize_with = "deserialize_string_or_u64")]
     pub end_event: EventId,
 
     /// Total length of the block in milliseconds
+    /// Note: API returns this as a string in seconds (e.g., "1715.54"), we convert to ms
+    #[serde(deserialize_with = "deserialize_length")]
     pub length: DurationMs,
 
     /// URL to stream this block
@@ -256,7 +368,7 @@ mod tests {
         let song = Song {
             artist: "Test Artist".to_string(),
             title: "Test Song".to_string(),
-            album: "Test Album".to_string(),
+            album: Some("Test Album".to_string()),
             year: Some(2024),
             elapsed: 1000,
             duration: 5000,
