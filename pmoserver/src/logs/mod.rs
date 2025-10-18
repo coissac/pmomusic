@@ -23,12 +23,13 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use tracing_subscriber::{
     Registry,
-    layer::SubscriberExt,
+    layer::{SubscriberExt, Filter},
     reload,
     filter::LevelFilter,
     util::SubscriberInitExt,
 };
 use tracing::Level;
+use utoipa::OpenApi;
 
 /// Représente une entrée de log
 #[derive(Debug, Clone, Serialize)]
@@ -66,7 +67,9 @@ impl LogState {
 
         // Recharger le filtre dynamiquement
         if let Err(e) = self.reload_handle.write().unwrap().reload(level_filter) {
-            tracing::error!("Failed to reload log level filter: {}", e);
+            eprintln!("❌ Failed to reload log level filter: {}", e);
+        } else {
+            eprintln!("✅ Log level filter reloaded successfully to: {:?}", level_filter);
         }
     }
 
@@ -117,12 +120,18 @@ pub async fn log_sse(
 ) -> impl IntoResponse {
     let mut rx = state.subscribe();
 
-    // Récupérer l'historique du buffer
+    // Récupérer l'historique du buffer et le niveau actuel
     let history = state.dump();
+    let current_level = state.get_max_level();
 
     let stream = async_stream::stream! {
-        // 1. Envoyer d'abord tous les logs historiques
+        // 1. Envoyer d'abord tous les logs historiques filtrés par le niveau actuel
         for entry in history {
+            // Filtrer par le niveau actuel du serveur
+            if !is_level_allowed(&entry.level, current_level) {
+                continue;
+            }
+
             if !filter_entry(&entry, &params) {
                 continue;
             }
@@ -146,6 +155,28 @@ pub async fn log_sse(
 /// Handler REST (dump JSON du buffer)
 pub async fn log_dump(State(state): State<LogState>) -> impl IntoResponse {
     Json(state.dump())
+}
+
+/// Vérifie si un niveau de log est autorisé selon le niveau maximum configuré
+fn is_level_allowed(log_level: &str, max_level: Level) -> bool {
+    let entry_level = match log_level.to_uppercase().as_str() {
+        "ERROR" => Level::ERROR,
+        "WARN" => Level::WARN,
+        "INFO" => Level::INFO,
+        "DEBUG" => Level::DEBUG,
+        "TRACE" => Level::TRACE,
+        _ => return false,
+    };
+
+    // Comparer les niveaux : un log est autorisé si son niveau est <= max_level
+    // ERROR(1) <= WARN(2) <= INFO(3) <= DEBUG(4) <= TRACE(5)
+    match max_level {
+        Level::ERROR => matches!(entry_level, Level::ERROR),
+        Level::WARN => matches!(entry_level, Level::ERROR | Level::WARN),
+        Level::INFO => matches!(entry_level, Level::ERROR | Level::WARN | Level::INFO),
+        Level::DEBUG => matches!(entry_level, Level::ERROR | Level::WARN | Level::INFO | Level::DEBUG),
+        Level::TRACE => true, // Tous les niveaux
+    }
 }
 
 /// Fonction de filtrage
@@ -245,7 +276,8 @@ pub fn init_logging() -> LogState {
     // Créer le LogState avec le handle de rechargement
     let log_state = LogState::new(buffer_capacity, reload_handle);
 
-    // Construire le subscriber avec le filtre rechargeable
+    // Construire le subscriber avec le filtre rechargeable AVANT le SseLayer
+    // L'ordre est important : le filtre doit être appliqué en premier
     let subscriber = Registry::default()
         .with(filter)
         .with(SseLayer::new(log_state.clone()));
@@ -272,19 +304,27 @@ pub fn init_logging() -> LogState {
 }
 
 /// Request body pour la configuration du logging
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct LogSetupRequest {
     pub level: String,
 }
 
 /// Response pour la configuration du logging
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct LogSetupResponse {
     pub current_level: String,
     pub available_levels: Vec<String>,
 }
 
 /// Handler pour GET /api/log_setup - retourne la configuration actuelle
+#[utoipa::path(
+    get,
+    path = "/api/log_setup",
+    responses(
+        (status = 200, description = "Log configuration retrieved successfully", body = LogSetupResponse)
+    ),
+    tag = "logs"
+)]
 pub async fn log_setup_get(State(state): State<LogState>) -> impl IntoResponse {
     let current = level_to_string(state.get_max_level());
     Json(LogSetupResponse {
@@ -300,6 +340,16 @@ pub async fn log_setup_get(State(state): State<LogState>) -> impl IntoResponse {
 }
 
 /// Handler pour POST /api/log_setup - met à jour le niveau de log
+#[utoipa::path(
+    post,
+    path = "/api/log_setup",
+    request_body = LogSetupRequest,
+    responses(
+        (status = 200, description = "Log level updated successfully", body = LogSetupResponse),
+        (status = 400, description = "Invalid log level")
+    ),
+    tag = "logs"
+)]
 pub async fn log_setup_post(
     State(state): State<LogState>,
     Json(payload): Json<LogSetupRequest>,
@@ -367,3 +417,27 @@ fn level_to_levelfilter(level: Level) -> LevelFilter {
             Level::TRACE => LevelFilter::TRACE,
         }
 }
+
+/// Crée le router pour l'API de gestion des logs
+pub fn create_logs_router(log_state: LogState) -> axum::Router {
+    use axum::routing::{get, post};
+    axum::Router::new()
+        .route("/log_setup", get(log_setup_get).post(log_setup_post))
+        .with_state(log_state)
+}
+
+/// API OpenAPI pour la gestion des logs
+#[derive(utoipa::OpenApi)]
+#[openapi(
+    paths(
+        log_setup_get,
+        log_setup_post,
+    ),
+    components(
+        schemas(LogSetupRequest, LogSetupResponse)
+    ),
+    tags(
+        (name = "logs", description = "Log level configuration endpoints")
+    )
+)]
+pub struct LogsApiDoc;

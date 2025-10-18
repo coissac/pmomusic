@@ -72,4 +72,4 @@ pub mod server;
 pub mod logs;
 
 pub use server::{Server, ServerBuilder, ServerInfo, ApiRegistry, ApiRegistryEntry};
-pub use logs::{LogState, SseLayer, log_sse, log_dump, init_logging, LoggingOptions, log_setup_get, log_setup_post};
+pub use logs::{LogState, SseLayer, log_sse, log_dump, init_logging, LoggingOptions, log_setup_get, log_setup_post, create_logs_router, LogsApiDoc};
