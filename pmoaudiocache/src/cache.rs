@@ -83,7 +83,6 @@ fn create_flac_transformer() -> StreamTransformer {
 ///
 /// * `dir` - Répertoire de stockage du cache
 /// * `limit` - Limite de taille du cache (nombre de pistes)
-/// * `base_url` - URL de base pour la génération d'URLs
 ///
 /// # Returns
 ///
@@ -94,11 +93,11 @@ fn create_flac_transformer() -> StreamTransformer {
 /// ```rust,no_run
 /// use pmoaudiocache::cache;
 ///
-/// let cache = cache::new_cache("./audio_cache", 1000, "http://localhost:8080").unwrap();
+/// let cache = cache::new_cache("./audio_cache", 1000).unwrap();
 /// ```
-pub fn new_cache(dir: &str, limit: usize, base_url: &str) -> Result<Cache> {
+pub fn new_cache(dir: &str, limit: usize) -> Result<Cache> {
     let transformer_factory = Arc::new(|| create_flac_transformer());
-    Cache::with_transformer(dir, limit, base_url, Some(transformer_factory))
+    Cache::with_transformer(dir, limit, Some(transformer_factory))
 }
 
 /// Ajoute une piste audio depuis une URL avec extraction et stockage des métadonnées
@@ -200,4 +199,22 @@ pub fn get_metadata(cache: &Cache, pk: &str) -> Result<crate::metadata::AudioMet
         .map_err(|e| anyhow::anyhow!("Metadata deserialization error: {}", e))?;
 
     Ok(metadata)
+}
+
+/// Retourne la route relative pour accéder à une piste audio
+///
+/// # Arguments
+///
+/// * `pk` - Clé primaire de la piste
+/// * `param` - Paramètre optionnel (ex: "orig", "128k", etc.)
+///
+/// # Returns
+///
+/// Route relative (ex: "/audio/tracks/abc123" ou "/audio/tracks/abc123/orig")
+pub fn route_for(pk: &str, param: Option<&str>) -> String {
+    if let Some(p) = param {
+        format!("/audio/tracks/{}/{}", pk, p)
+    } else {
+        format!("/audio/tracks/{}", pk)
+    }
 }

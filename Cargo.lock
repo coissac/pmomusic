@@ -2473,6 +2473,7 @@ dependencies = [
  "pmodidl",
  "pmoplaylist",
  "pmoserver",
+ "pmoupnp",
  "serde",
  "serde_json",
  "thiserror 1.0.69",

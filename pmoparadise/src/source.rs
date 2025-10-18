@@ -79,18 +79,56 @@ impl std::fmt::Debug for RadioParadiseSource {
 }
 
 impl RadioParadiseSource {
-    /// Create a new Radio Paradise source with caches
+    /// Create a new Radio Paradise source from the cache registry
+    ///
+    /// This is the recommended way to create a source when using the UPnP server.
+    /// The caches are automatically retrieved from the global registry.
     ///
     /// # Arguments
     ///
     /// * `client` - Radio Paradise API client
-    /// * `cache_base_url` - Base URL for the cache server (e.g., "http://localhost:8080")
+    /// * `fifo_capacity` - Maximum number of tracks in the FIFO
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the caches are not initialized in the registry
+    #[cfg(feature = "server")]
+    pub fn from_registry(client: RadioParadiseClient, fifo_capacity: usize) -> Result<Self> {
+        let playlist = FifoPlaylist::new(
+            "radio-paradise".to_string(),
+            "Radio Paradise".to_string(),
+            fifo_capacity,
+            DEFAULT_IMAGE,
+        );
+
+        let cache_manager = SourceCacheManager::from_registry("radio-paradise".to_string())?;
+
+        Ok(Self {
+            inner: Arc::new(RadioParadiseSourceInner {
+                client,
+                playlist,
+                cache_manager,
+                blocks: tokio::sync::RwLock::new(std::collections::HashMap::new()),
+            }),
+        })
+    }
+
+    /// Create with default FIFO capacity from the cache registry
+    #[cfg(feature = "server")]
+    pub fn from_registry_default(client: RadioParadiseClient) -> Result<Self> {
+        Self::from_registry(client, DEFAULT_FIFO_CAPACITY)
+    }
+
+    /// Create a new Radio Paradise source with explicit caches (for tests)
+    ///
+    /// # Arguments
+    ///
+    /// * `client` - Radio Paradise API client
     /// * `fifo_capacity` - Maximum number of tracks in the FIFO
     /// * `cover_cache` - Cover image cache (required)
     /// * `audio_cache` - Audio cache (required)
     pub fn new(
         client: RadioParadiseClient,
-        cache_base_url: impl Into<String>,
         fifo_capacity: usize,
         cover_cache: Arc<CoverCache>,
         audio_cache: Arc<AudioCache>,
@@ -102,9 +140,7 @@ impl RadioParadiseSource {
             DEFAULT_IMAGE,
         );
 
-        let cache_base_url = cache_base_url.into();
         let cache_manager = SourceCacheManager::new(
-            cache_base_url.clone(),
             "radio-paradise".to_string(),
             cover_cache,
             audio_cache,
@@ -120,14 +156,13 @@ impl RadioParadiseSource {
         }
     }
 
-    /// Create with default FIFO capacity
+    /// Create with default FIFO capacity (for tests)
     pub fn new_default(
         client: RadioParadiseClient,
-        cache_base_url: impl Into<String>,
         cover_cache: Arc<CoverCache>,
         audio_cache: Arc<AudioCache>,
     ) -> Self {
-        Self::new(client, cache_base_url, DEFAULT_FIFO_CAPACITY, cover_cache, audio_cache)
+        Self::new(client, DEFAULT_FIFO_CAPACITY, cover_cache, audio_cache)
     }
 
     /// Add a track from a Radio Paradise song and block
@@ -160,9 +195,17 @@ impl RadioParadiseSource {
                 match self.inner.cache_manager.cache_cover(&image_url).await {
                     Ok(pk) => {
                         // Use the cached cover URL
-                        let cached_url = self.inner.cache_manager.cover_url(&pk, None);
-                        track = track.with_image(cached_url);
-                        Some(pk)
+                        match self.inner.cache_manager.cover_url(&pk, None) {
+                            Ok(cached_url) => {
+                                track = track.with_image(cached_url);
+                                Some(pk)
+                            }
+                            Err(e) => {
+                                tracing::warn!("Failed to build cover URL for {}: {}", pk, e);
+                                track = track.with_image(image_url);
+                                Some(pk)
+                            }
+                        }
                     }
                     Err(e) => {
                         tracing::warn!("Failed to cache cover image {}: {}", image_url, e);
@@ -583,7 +626,6 @@ mod tests {
         let (cover_cache, audio_cache) = create_test_caches().await;
         let source = RadioParadiseSource::new_default(
             client,
-            "http://localhost:8080",
             cover_cache,
             audio_cache
         );
@@ -610,7 +652,6 @@ mod tests {
         let (cover_cache, audio_cache) = create_test_caches().await;
         let source = RadioParadiseSource::new_default(
             client,
-            "http://localhost:8080",
             cover_cache,
             audio_cache
         );

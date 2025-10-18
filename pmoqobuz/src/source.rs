@@ -82,23 +82,45 @@ impl std::fmt::Debug for QobuzSource {
 }
 
 impl QobuzSource {
-    /// Create a new Qobuz source with caches
+    /// Create a new Qobuz source from the cache registry
+    ///
+    /// This is the recommended way to create a source when using the UPnP server.
+    /// The caches are automatically retrieved from the global registry.
     ///
     /// # Arguments
     ///
     /// * `client` - Authenticated Qobuz API client
-    /// * `cache_base_url` - Base URL for the cache server (e.g., "http://localhost:8080")
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the caches are not initialized in the registry
+    #[cfg(feature = "server")]
+    pub fn from_registry(client: QobuzClient) -> Result<Self> {
+        let cache_manager = SourceCacheManager::from_registry("qobuz".to_string())?;
+
+        Ok(Self {
+            inner: Arc::new(QobuzSourceInner {
+                client,
+                cache_manager,
+                update_counter: tokio::sync::RwLock::new(0),
+                last_change: tokio::sync::RwLock::new(SystemTime::now()),
+            }),
+        })
+    }
+
+    /// Create a new Qobuz source with explicit caches (for tests)
+    ///
+    /// # Arguments
+    ///
+    /// * `client` - Authenticated Qobuz API client
     /// * `cover_cache` - Cover image cache (required)
     /// * `audio_cache` - Audio cache (required)
     pub fn new(
         client: QobuzClient,
-        cache_base_url: impl Into<String>,
         cover_cache: Arc<CoverCache>,
         audio_cache: Arc<AudioCache>,
     ) -> Self {
-        let cache_base_url = cache_base_url.into();
         let cache_manager = SourceCacheManager::new(
-            cache_base_url.clone(),
             "qobuz".to_string(),
             cover_cache,
             audio_cache,

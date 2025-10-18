@@ -63,6 +63,8 @@ metadata-only = []
 per-track = ["dep:claxon", "dep:hound", "dep:tempfile"]
 # Active le media server UPnP
 mediaserver = ["dep:pmoupnp", "dep:pmoserver", "dep:pmodidl", "dep:uuid"]
+# Feature pour activer le support serveur (cache registry)
+server = ["pmosource/server"]
 # Feature cache (deprecated - toujours actif maintenant)
 cache = []
 

@@ -97,13 +97,19 @@ async fn register_qobuz(Json(creds): Json<QobuzCredentials>) -> impl IntoRespons
         }
     };
 
-    // Récupérer l'URL de base du serveur depuis la config
-    let config = pmoconfig::get_config();
-    let port = config.get_http_port();
-    let base_url = format!("http://localhost:{}", port);
-
-    // Créer et enregistrer la source
-    let source = Arc::new(QobuzSource::new(client, &base_url));
+    // Créer et enregistrer la source depuis le registry
+    let source = match QobuzSource::from_registry(client) {
+        Ok(s) => Arc::new(s),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to create source: {}", e),
+                }),
+            )
+                .into_response();
+        }
+    };
     let source_id = source.as_ref().id().to_string();
 
     register_source(source).await;
@@ -150,16 +156,33 @@ async fn register_paradise(Json(params): Json<ParadiseParams>) -> impl IntoRespo
         }
     };
 
-    // Récupérer l'URL de base du serveur depuis la config
-    let config = pmoconfig::get_config();
-    let port = config.get_http_port();
-    let base_url = format!("http://localhost:{}", port);
-
-    // Créer et enregistrer la source
+    // Créer et enregistrer la source depuis le registry
     let source = if let Some(capacity) = params.fifo_capacity {
-        Arc::new(RadioParadiseSource::new(client, &base_url, capacity))
+        match RadioParadiseSource::from_registry(client, capacity) {
+            Ok(s) => Arc::new(s),
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: format!("Failed to create source: {}", e),
+                    }),
+                )
+                    .into_response();
+            }
+        }
     } else {
-        Arc::new(RadioParadiseSource::new_default(client, &base_url))
+        match RadioParadiseSource::from_registry_default(client) {
+            Ok(s) => Arc::new(s),
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: format!("Failed to create source: {}", e),
+                    }),
+                )
+                    .into_response();
+            }
+        }
     };
 
     let source_id = source.as_ref().id().to_string();

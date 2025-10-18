@@ -33,6 +33,7 @@ pmocovers = { path = "../pmocovers", optional = true }
 # Server extension (optional)
 pmoserver = { path = "../pmoserver", optional = true }
 pmoconfig = { path = "../pmoconfig", optional = true }
+pmoupnp = { path = "../pmoupnp", optional = true }
 
 # Web framework for API (optional)
 axum = { version = "0.8", optional = true }
@@ -45,4 +46,4 @@ lazy_static = { version = "1.4", optional = true }
 [features]
 default = ["cache"]
 cache = ["pmoaudiocache", "pmocovers"]
-server = ["pmoserver", "pmoconfig", "axum", "serde", "serde_json", "utoipa", "tracing", "lazy_static"]
+server = ["pmoserver", "pmoconfig", "pmoupnp", "axum", "serde", "serde_json", "utoipa", "tracing", "lazy_static"]
