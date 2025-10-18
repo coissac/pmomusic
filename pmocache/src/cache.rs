@@ -52,8 +52,6 @@ pub struct Cache<C: CacheConfig> {
     dir: PathBuf,
     /// Limite de taille du cache (nombre d'éléments)
     limit: usize,
-    /// URL de base pour la génération d'URLs
-    base_url: String,
     /// Base de données SQLite
     pub db: Arc<DB>,
     /// Map des downloads en cours (pk -> Download)
@@ -71,9 +69,8 @@ impl<C: CacheConfig> Cache<C> {
     ///
     /// * `dir` - Répertoire de stockage du cache
     /// * `limit` - Limite de taille du cache (nombre d'éléments)
-    /// * `base_url` - URL de base pour la génération d'URLs
-    pub fn new(dir: &str, limit: usize, base_url: &str) -> Result<Self> {
-        Self::with_transformer(dir, limit, base_url, None)
+    pub fn new(dir: &str, limit: usize) -> Result<Self> {
+        Self::with_transformer(dir, limit, None)
     }
 
     /// Crée un nouveau cache avec un transformer optionnel
@@ -82,7 +79,6 @@ impl<C: CacheConfig> Cache<C> {
     ///
     /// * `dir` - Répertoire de stockage du cache
     /// * `limit` - Limite de taille du cache (nombre d'éléments)
-    /// * `base_url` - URL de base pour la génération d'URLs
     /// * `transformer_factory` - Factory pour créer des transformers à chaque téléchargement
     ///
     /// # Exemple
@@ -109,14 +105,12 @@ impl<C: CacheConfig> Cache<C> {
     /// let cache = Cache::<MyConfig>::with_transformer(
     ///     "./cache",
     ///     1000,
-    ///     "http://localhost:8080",
     ///     Some(transformer_factory)
     /// ).unwrap();
     /// ```
     pub fn with_transformer(
         dir: &str,
         limit: usize,
-        base_url: &str,
         transformer_factory: Option<Arc<dyn Fn() -> StreamTransformer + Send + Sync>>,
     ) -> Result<Self> {
         let directory = PathBuf::from(dir);
@@ -126,7 +120,6 @@ impl<C: CacheConfig> Cache<C> {
         Ok(Self {
             dir: directory,
             limit,
-            base_url: base_url.to_string(),
             db: Arc::new(db),
             downloads: Arc::new(RwLock::new(HashMap::new())),
             transformer_factory,
@@ -456,11 +449,6 @@ impl<C: CacheConfig> Cache<C> {
         &self.dir
     }
 
-    /// Retourne l'URL de base
-    pub fn get_base_url(&self) -> &str {
-        &self.base_url
-    }
-
     /// Construit le chemin complet d'un fichier dans le cache avec le param par défaut
     ///
     /// Format: `{pk}.{default_param}.{extension}`
@@ -544,10 +532,6 @@ impl<C: CacheConfig> FileCache<C> for Cache<C> {
 
     fn get_database(&self) -> Arc<DB> {
         self.db.clone()
-    }
-
-    fn get_base_url(&self) -> &str {
-        &self.base_url
     }
 
     fn validate_data(&self, data: &[u8]) -> Result<Vec<u8>> {

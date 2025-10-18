@@ -114,8 +114,7 @@ impl CoverCacheExt for pmoserver::Server {
         -> anyhow::Result<Arc<Cache>> {
         use pmocache::pmoserver_ext::{create_file_router_with_generator, create_api_router};
 
-        let base_url = self.info().base_url;
-        let cache = Arc::new(cache::new_cache(cache_dir, limit, &base_url)?);
+        let cache = Arc::new(cache::new_cache(cache_dir, limit)?);
 
         // Router de fichiers avec génération de variantes
         // Routes: GET /covers/image/{pk} et GET /covers/image/{pk}/{size}

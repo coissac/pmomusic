@@ -57,6 +57,8 @@ pmosource = { path = "../pmosource" }
 default = []
 # Feature pour activer les extensions pmoserver
 pmoserver = ["dep:pmoserver", "dep:axum", "dep:utoipa"]
+# Feature pour activer le support serveur (cache registry)
+server = ["pmosource/server"]
 # Feature cache (deprecated - toujours actif maintenant)
 cache = []
 

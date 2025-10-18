@@ -22,7 +22,7 @@ async fn main() {
         .await
         .expect("Cannot initialise the image cache");
 
-    info!("✅ Cover cache ready at {}", covercache.cache_dir(),);
+    info!("✅ Cover cache ready at {}", covercache.cache_dir().display());
 
     info!("📡 Registering the audio cache...");
     let audiocache = server
@@ -30,7 +30,7 @@ async fn main() {
         .await
         .expect("Cannot initialise the audio cache");
 
-    info!("✅ Audio cache ready at {}", audiocache.cache_dir(),);
+    info!("✅ Audio cache ready at {}", audiocache.cache_dir().display());
 
     // Routes de base
     server

@@ -179,8 +179,7 @@ use utoipa::OpenApi;
 #[cfg(feature = "pmoserver")]
 impl AudioCacheExt for pmoserver::Server {
     async fn init_audio_cache(&mut self, cache_dir: &str, limit: usize) -> anyhow::Result<Arc<Cache>> {
-        let base_url = self.info().base_url;
-        let cache = Arc::new(crate::cache::new_cache(cache_dir, limit, &base_url)?);
+        let cache = Arc::new(crate::cache::new_cache(cache_dir, limit)?);
 
         // Router de fichiers pour servir les pistes FLAC
         // Routes: GET /audio/tracks/{pk} et GET /audio/tracks/{pk}/{param}

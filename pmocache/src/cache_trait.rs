@@ -11,7 +11,6 @@ pub trait FileCache<C: CacheConfig>: Send + Sync {
 
     fn get_cache_dir(&self) -> &Path;
     fn get_database(&self) ->  Arc<DB>;
-    fn get_base_url(&self) -> &str;
 
     /// Valide les données avant de les stocker dans le cache
     ///

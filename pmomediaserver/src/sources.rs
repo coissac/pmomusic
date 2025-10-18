@@ -128,13 +128,9 @@ impl SourcesExt for Server {
             .await
             .map_err(|e| SourceInitError::QobuzError(format!("Failed to create client: {}", e)))?;
 
-        // Récupérer l'URL de base du serveur depuis la config
-        let config = pmoconfig::get_config();
-        let port = config.get_http_port();
-        let base_url = format!("http://localhost:{}", port);
-
-        // Créer la source
-        let source = QobuzSource::new(client, &base_url);
+        // Créer la source depuis le registry
+        let source = QobuzSource::from_registry(client)
+            .map_err(|e| SourceInitError::QobuzError(format!("Failed to create source: {}", e)))?;
 
         // Enregistrer la source
         self.register_music_source(Arc::new(source)).await;
@@ -155,13 +151,9 @@ impl SourcesExt for Server {
             .await
             .map_err(|e| SourceInitError::QobuzError(format!("Failed to authenticate: {}", e)))?;
 
-        // Récupérer l'URL de base du serveur depuis la config
-        let config = pmoconfig::get_config();
-        let port = config.get_http_port();
-        let base_url = format!("http://localhost:{}", port);
-
-        // Créer la source
-        let source = QobuzSource::new(client, &base_url);
+        // Créer la source depuis le registry
+        let source = QobuzSource::from_registry(client)
+            .map_err(|e| SourceInitError::QobuzError(format!("Failed to create source: {}", e)))?;
 
         // Enregistrer la source
         self.register_music_source(Arc::new(source)).await;
@@ -182,13 +174,9 @@ impl SourcesExt for Server {
             .await
             .map_err(|e| SourceInitError::ParadiseError(format!("Failed to create client: {}", e)))?;
 
-        // Récupérer l'URL de base du serveur depuis la config
-        let config = pmoconfig::get_config();
-        let port = config.get_http_port();
-        let base_url = format!("http://localhost:{}", port);
-
-        // Créer la source avec capacité FIFO par défaut
-        let source = RadioParadiseSource::new_default(client, &base_url);
+        // Créer la source depuis le registry avec capacité FIFO par défaut
+        let source = RadioParadiseSource::from_registry_default(client)
+            .map_err(|e| SourceInitError::ParadiseError(format!("Failed to create source: {}", e)))?;
 
         // Enregistrer la source
         self.register_music_source(Arc::new(source)).await;

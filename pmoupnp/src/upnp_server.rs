@@ -186,8 +186,8 @@ impl UpnpServerExt for Server {
         use pmocovers::new_cache;
         use pmocache::pmoserver_ext::{create_file_router_with_generator, create_api_router};
 
-        let base_url = self.info().base_url;
-        let cache = Arc::new(new_cache(cache_dir, limit, &base_url)?);
+        let base_url = self.info().base_url.clone();
+        let cache = Arc::new(new_cache(cache_dir, limit)?);
 
         // Routes de fichiers avec génération de variantes
         // Routes: GET /covers/image/{pk} et GET /covers/image/{pk}/{size}
@@ -220,8 +220,12 @@ impl UpnpServerExt for Server {
         let openapi = pmocovers::ApiDoc::openapi();
         self.add_openapi(api_router, openapi, "covers").await;
 
-        // Enregistrer dans le registre global
-        CACHE_REGISTRY.write().unwrap().set_cover_cache(cache.clone());
+        // Enregistrer base_url et cache dans le registre global
+        {
+            let mut registry = CACHE_REGISTRY.write().unwrap();
+            registry.set_base_url(base_url);
+            registry.set_cover_cache(cache.clone());
+        }
 
         Ok(cache)
     }
@@ -231,8 +235,8 @@ impl UpnpServerExt for Server {
         use pmoaudiocache::new_cache;
         use pmocache::pmoserver_ext::{create_file_router, create_api_router};
 
-        let base_url = self.info().base_url;
-        let cache = Arc::new(new_cache(cache_dir, limit, &base_url)?);
+        let base_url = self.info().base_url.clone();
+        let cache = Arc::new(new_cache(cache_dir, limit)?);
 
         // Routes de fichiers pour servir les pistes FLAC
         let file_router = create_file_router(cache.clone(), "audio/flac");
@@ -243,8 +247,12 @@ impl UpnpServerExt for Server {
         let openapi = pmoaudiocache::ApiDoc::openapi();
         self.add_openapi(api_router, openapi, "audio").await;
 
-        // Enregistrer dans le registre global
-        CACHE_REGISTRY.write().unwrap().set_audio_cache(cache.clone());
+        // Enregistrer base_url et cache dans le registre global
+        {
+            let mut registry = CACHE_REGISTRY.write().unwrap();
+            registry.set_base_url(base_url);
+            registry.set_audio_cache(cache.clone());
+        }
 
         Ok(cache)
     }

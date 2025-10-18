@@ -18,6 +18,9 @@ use pmoaudiocache::Cache as AudioCache;
 /// Contient les instances partagées des caches de couvertures et audio.
 /// Ces caches sont uniques et partagés entre toutes les sources musicales.
 pub struct CacheRegistry {
+    /// URL de base du serveur (ex: "http://localhost:8080")
+    base_url: Option<String>,
+
     /// Cache de couvertures (WebP)
     cover_cache: Option<Arc<CoverCache>>,
 
@@ -29,9 +32,20 @@ impl CacheRegistry {
     /// Créer un nouveau registre vide
     pub fn new() -> Self {
         Self {
+            base_url: None,
             cover_cache: None,
             audio_cache: None,
         }
+    }
+
+    /// Définir l'URL de base du serveur
+    pub fn set_base_url(&mut self, url: String) {
+        self.base_url = Some(url);
+    }
+
+    /// Récupérer l'URL de base du serveur
+    pub fn base_url(&self) -> Option<&str> {
+        self.base_url.as_deref()
     }
 
     /// Enregistrer le cache de couvertures
@@ -52,6 +66,42 @@ impl CacheRegistry {
     /// Récupérer le cache audio
     pub fn audio_cache(&self) -> Option<Arc<AudioCache>> {
         self.audio_cache.clone()
+    }
+
+    /// Construit l'URL complète pour une couverture
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Clé primaire de la couverture
+    /// * `size` - Taille optionnelle de l'image
+    ///
+    /// # Returns
+    ///
+    /// URL complète (ex: "http://localhost:8080/covers/images/abc123/300")
+    pub fn build_cover_url(&self, pk: &str, size: Option<usize>) -> anyhow::Result<String> {
+        let base_url = self.base_url
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Base URL not set in CacheRegistry"))?;
+        let route = pmocovers::cache::route_for(pk, size);
+        Ok(format!("{}{}", base_url, route))
+    }
+
+    /// Construit l'URL complète pour une piste audio
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Clé primaire de la piste
+    /// * `param` - Paramètre optionnel (ex: "orig", "128k")
+    ///
+    /// # Returns
+    ///
+    /// URL complète (ex: "http://localhost:8080/audio/tracks/abc123/orig")
+    pub fn build_audio_url(&self, pk: &str, param: Option<&str>) -> anyhow::Result<String> {
+        let base_url = self.base_url
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Base URL not set in CacheRegistry"))?;
+        let route = pmoaudiocache::cache::route_for(pk, param);
+        Ok(format!("{}{}", base_url, route))
     }
 }
 
@@ -97,6 +147,48 @@ pub fn get_cover_cache() -> Option<Arc<CoverCache>> {
 /// ```
 pub fn get_audio_cache() -> Option<Arc<AudioCache>> {
     CACHE_REGISTRY.read().unwrap().audio_cache()
+}
+
+/// Construit l'URL complète pour une couverture
+///
+/// Fonction globale qui utilise le registre de caches pour construire l'URL.
+///
+/// # Arguments
+///
+/// * `pk` - Clé primaire de la couverture
+/// * `size` - Taille optionnelle de l'image
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use pmoupnp::cache_registry::build_cover_url;
+///
+/// let url = build_cover_url("abc123", Some(300))?;
+/// // url = "http://localhost:8080/covers/images/abc123/300"
+/// ```
+pub fn build_cover_url(pk: &str, size: Option<usize>) -> anyhow::Result<String> {
+    CACHE_REGISTRY.read().unwrap().build_cover_url(pk, size)
+}
+
+/// Construit l'URL complète pour une piste audio
+///
+/// Fonction globale qui utilise le registre de caches pour construire l'URL.
+///
+/// # Arguments
+///
+/// * `pk` - Clé primaire de la piste
+/// * `param` - Paramètre optionnel (ex: "orig", "128k")
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use pmoupnp::cache_registry::build_audio_url;
+///
+/// let url = build_audio_url("abc123", Some("orig"))?;
+/// // url = "http://localhost:8080/audio/tracks/abc123/orig"
+/// ```
+pub fn build_audio_url(pk: &str, param: Option<&str>) -> anyhow::Result<String> {
+    CACHE_REGISTRY.read().unwrap().build_audio_url(pk, param)
 }
 
 #[cfg(test)]

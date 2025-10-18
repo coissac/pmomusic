@@ -47,9 +47,6 @@ pub struct SourceCacheManager {
     /// Métadonnées des pistes (track_id → metadata)
     track_cache: RwLock<HashMap<String, TrackMetadata>>,
 
-    /// URL de base du serveur
-    cache_base_url: String,
-
     /// ID de collection pour cette source (ex: "radio-paradise", "qobuz")
     collection_id: String,
 
@@ -61,23 +58,56 @@ pub struct SourceCacheManager {
 }
 
 impl SourceCacheManager {
-    /// Créer un nouveau manager
+    /// Créer un nouveau manager depuis le registre de caches
+    ///
+    /// Cette méthode utilise le registre global de caches (`CACHE_REGISTRY`)
+    /// pour récupérer les caches centralisés du serveur.
     ///
     /// # Arguments
     ///
-    /// * `cache_base_url` - URL de base du serveur
+    /// * `collection_id` - ID de collection pour cette source (ex: "radio-paradise", "qobuz")
+    ///
+    /// # Returns
+    ///
+    /// Un nouveau `SourceCacheManager` configuré avec les caches centralisés
+    ///
+    /// # Errors
+    ///
+    /// Retourne une erreur si les caches ne sont pas encore initialisés dans le registre
+    #[cfg(feature = "server")]
+    pub fn from_registry(collection_id: String) -> Result<Self> {
+        let cover_cache = pmoupnp::cache_registry::get_cover_cache()
+            .ok_or_else(|| MusicSourceError::CacheError(
+                "Cover cache not initialized in registry".to_string()
+            ))?;
+
+        let audio_cache = pmoupnp::cache_registry::get_audio_cache()
+            .ok_or_else(|| MusicSourceError::CacheError(
+                "Audio cache not initialized in registry".to_string()
+            ))?;
+
+        Ok(Self {
+            track_cache: RwLock::new(HashMap::new()),
+            collection_id,
+            cover_cache,
+            audio_cache,
+        })
+    }
+
+    /// Créer un nouveau manager (ancien constructeur pour tests)
+    ///
+    /// # Arguments
+    ///
     /// * `collection_id` - ID de collection (source ID)
     /// * `cover_cache` - Cache de couvertures centralisé
     /// * `audio_cache` - Cache audio centralisé
     pub fn new(
-        cache_base_url: String,
         collection_id: String,
         cover_cache: Arc<CoverCache>,
         audio_cache: Arc<AudioCache>,
     ) -> Self {
         Self {
             track_cache: RwLock::new(HashMap::new()),
-            cache_base_url,
             collection_id,
             cover_cache,
             audio_cache,
@@ -93,7 +123,18 @@ impl SourceCacheManager {
 
         if let Some(metadata) = cache.get(object_id) {
             if let Some(ref pk) = metadata.cached_audio_pk {
-                return Ok(format!("{}/audio/tracks/{}/stream", self.cache_base_url, pk));
+                #[cfg(feature = "server")]
+                {
+                    let url = pmoupnp::cache_registry::build_audio_url(pk, Some("stream"))
+                        .map_err(|e| MusicSourceError::CacheError(e.to_string()))?;
+                    return Ok(url);
+                }
+                #[cfg(not(feature = "server"))]
+                {
+                    return Err(MusicSourceError::CacheError(
+                        "Server feature not enabled".to_string()
+                    ));
+                }
             }
             return Ok(metadata.original_uri.clone());
         }
@@ -140,11 +181,17 @@ impl SourceCacheManager {
     /// # Returns
     ///
     /// L'URL complète de l'image
-    pub fn cover_url(&self, pk: &str, size: Option<usize>) -> String {
-        if let Some(s) = size {
-            format!("{}/covers/images/{}/{}", self.cache_base_url, pk, s)
-        } else {
-            format!("{}/covers/images/{}", self.cache_base_url, pk)
+    pub fn cover_url(&self, pk: &str, size: Option<usize>) -> Result<String> {
+        #[cfg(feature = "server")]
+        {
+            pmoupnp::cache_registry::build_cover_url(pk, size)
+                .map_err(|e| MusicSourceError::CacheError(e.to_string()))
+        }
+        #[cfg(not(feature = "server"))]
+        {
+            Err(MusicSourceError::CacheError(
+                "Server feature not enabled - cannot build cover URL".to_string()
+            ))
         }
     }
 

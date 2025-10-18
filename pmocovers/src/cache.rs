@@ -63,7 +63,6 @@ fn create_webp_transformer() -> StreamTransformer {
 ///
 /// * `dir` - Répertoire de stockage du cache
 /// * `limit` - Limite de taille du cache (nombre d'images)
-/// * `base_url` - URL de base pour la génération d'URLs
 ///
 /// # Returns
 ///
@@ -74,9 +73,27 @@ fn create_webp_transformer() -> StreamTransformer {
 /// ```rust,no_run
 /// use pmocovers::cache;
 ///
-/// let cache = cache::new_cache("./cache", 1000, "http://localhost:8080").unwrap();
+/// let cache = cache::new_cache("./cache", 1000).unwrap();
 /// ```
-pub fn new_cache(dir: &str, limit: usize, base_url: &str) -> Result<Cache> {
+pub fn new_cache(dir: &str, limit: usize) -> Result<Cache> {
     let transformer_factory = Arc::new(|| create_webp_transformer());
-    Cache::with_transformer(dir, limit, base_url, Some(transformer_factory))
+    Cache::with_transformer(dir, limit, Some(transformer_factory))
+}
+
+/// Retourne la route relative pour accéder à une couverture
+///
+/// # Arguments
+///
+/// * `pk` - Clé primaire de l'image
+/// * `size` - Taille optionnelle de l'image
+///
+/// # Returns
+///
+/// Route relative (ex: "/covers/images/abc123" ou "/covers/images/abc123/300")
+pub fn route_for(pk: &str, size: Option<usize>) -> String {
+    if let Some(s) = size {
+        format!("/covers/images/{}/{}", pk, s)
+    } else {
+        format!("/covers/images/{}", pk)
+    }
 }
