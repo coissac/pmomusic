@@ -8,23 +8,13 @@
         </button>
         <button @click="clearLogs">🗑️ Clear</button>
 
-        <!-- Sélection du niveau côté serveur -->
-        <select v-model="serverLogLevel" @change="updateServerLogLevel" class="filter server-level">
+        <!-- Sélection du niveau de log -->
+        <select v-model="serverLogLevel" @change="updateServerLogLevel" class="filter log-level">
           <option value="ERROR">🔴 ERROR only</option>
           <option value="WARN">🟡 WARN+</option>
           <option value="INFO">🟢 INFO+</option>
           <option value="DEBUG">🔵 DEBUG+</option>
           <option value="TRACE">⚪ TRACE (all)</option>
-        </select>
-
-        <!-- Filtre côté client -->
-        <select v-model="levelFilter" class="filter">
-          <option value="ALL">All Levels</option>
-          <option value="ERROR">ERROR</option>
-          <option value="WARN">WARN</option>
-          <option value="INFO">INFO</option>
-          <option value="DEBUG">DEBUG</option>
-          <option value="TRACE">TRACE</option>
         </select>
 
         <!-- Champ de recherche -->
@@ -81,11 +71,11 @@
       <span :class="['status', { connected: isConnected }]">
         {{ isConnected ? '🟢 Connected' : '🔴 Disconnected' }}
       </span>
-      <span class="server-info">Server level: {{ serverLogLevel }}</span>
+      <span class="server-info">Level: {{ serverLogLevel }}</span>
       <span class="count">
         {{ filteredLogs.length }} log{{ filteredLogs.length !== 1 ? 's' : '' }}
         <span v-if="searchQuery.trim()" class="search-results">
-          ({{ filteredLogs.length }} / {{ logs.length }} matching "{{ searchQuery }}")
+          ({{ filteredLogs.length }} / {{ logs.length }} matching)
         </span>
       </span>
     </div>
@@ -107,7 +97,6 @@ const logs = ref([])
 const autoScroll = ref(true)
 const isConnected = ref(false)
 const isLoadingHistory = ref(true)
-const levelFilter = ref('ALL')
 const serverLogLevel = ref('TRACE')
 const searchQuery = ref('')
 const logContainer = ref(null)
@@ -115,24 +104,9 @@ let eventSource = null
 let historyLoaded = false
 const seenLogIds = new Set() // Pour détecter les duplicatas
 
-// Ordre de gravité des niveaux (du plus grave au moins grave)
-const levelOrder = {
-  'ERROR': 0,
-  'WARN': 1,
-  'INFO': 2,
-  'DEBUG': 3,
-  'TRACE': 4
-}
-
-// Pré-calculer filteredLogs de manière optimisée avec recherche
+// Filtrer les logs uniquement par recherche
 const filteredLogs = computed(() => {
   let filtered = logs.value
-
-  // Filtre par niveau
-  if (levelFilter.value !== 'ALL') {
-    const filter = levelFilter.value
-    filtered = filtered.filter(log => log.level === filter)
-  }
 
   // Filtre par recherche
   if (searchQuery.value.trim()) {
@@ -165,6 +139,20 @@ async function updateServerLogLevel() {
     if (response.ok) {
       const data = await response.json()
       console.log('Log level updated:', data.current_level)
+
+      // Fermer la connexion SSE actuelle
+      if (eventSource) {
+        eventSource.close()
+      }
+
+      // Vider les logs actuels et réinitialiser
+      logs.value = []
+      seenLogIds.clear()
+      historyLoaded = false
+      isLoadingHistory.value = true
+
+      // Reconnecter au SSE avec le nouveau niveau
+      connectSSE()
     } else {
       console.error('Failed to update log level')
     }
@@ -466,7 +454,7 @@ onUnmounted(() => {
 .log-viewer {
   display: flex;
   flex-direction: column;
-  min-height: calc(100vh - 60px); /* Hauteur viewport - nav */
+  height: calc(100vh - 60px); /* Hauteur viewport - nav */
   width: 100%;
   margin: 0;
   padding: 0;
@@ -474,6 +462,7 @@ onUnmounted(() => {
   color: #d4d4d4;
   font-family: 'Consolas', 'Monaco', monospace;
   box-sizing: border-box;
+  overflow: hidden; /* Empêcher le scroll sur le conteneur principal */
 }
 
 .header {
@@ -485,6 +474,7 @@ onUnmounted(() => {
   border-bottom: 1px solid #3e3e42;
   flex-wrap: wrap;
   gap: 0.5rem;
+  flex-shrink: 0; /* Ne pas réduire le header */
 }
 
 .header h2 {
@@ -558,7 +548,7 @@ button.active {
   font-size: 0.9rem;
 }
 
-.filter.server-level {
+.filter.log-level {
   background: #1e3a5f;
   border-color: #569cd6;
   font-weight: bold;
@@ -1007,6 +997,7 @@ button.active {
   border-top: 1px solid #3e3e42;
   font-size: 0.9rem;
   gap: 1rem;
+  flex-shrink: 0; /* Ne pas réduire le footer */
 }
 
 @media (max-width: 768px) {

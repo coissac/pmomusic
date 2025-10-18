@@ -29,6 +29,7 @@ use std::sync::Arc;
 use tokio::{signal, sync::RwLock, task::JoinHandle};
 use tracing::info;
 use utoipa_swagger_ui::SwaggerUi;
+use utoipa::OpenApi;
 
 /// Info serveur sérialisable
 #[derive(Clone, Serialize, utoipa::ToSchema)]
@@ -572,11 +573,18 @@ impl Server {
     pub async fn init_logging(&mut self) {
         let log_state = init_logging();
 
-        // Enregistrer automatiquement les routes de logging
+        // Enregistrer automatiquement les routes de logging SSE
         self.add_handler_with_state("/log-sse", log_sse, log_state.clone())
             .await;
         self.add_handler_with_state("/log-dump", log_dump, log_state.clone())
             .await;
+
+        // Enregistrer l'API REST de configuration des logs via OpenAPI
+        self.add_openapi(
+            crate::logs::create_logs_router(log_state.clone()),
+            crate::logs::LogsApiDoc::openapi(),
+            "logs"
+        ).await;
 
         self.log_state = Some(log_state);
     }
