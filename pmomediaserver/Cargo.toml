@@ -34,3 +34,5 @@ api = ["dep:axum", "dep:utoipa", "pmosource/server"]
 qobuz = ["api", "dep:pmoqobuz", "dep:pmoconfig", "pmoqobuz/server"]
 # Feature pour activer le support Radio Paradise
 paradise = ["api", "dep:pmoparadise", "pmoparadise/server"]
+# Feature pour activer l'API REST de Radio Paradise (en plus de la source UPnP)
+paradise-api = ["paradise", "pmoparadise/pmoserver"]

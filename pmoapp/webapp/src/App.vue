@@ -15,6 +15,9 @@
           <router-link to="/covers-cache" @click="showDebugMenu = false">🎨 Cover Cache</router-link>
           <router-link to="/audio-cache" @click="showDebugMenu = false">🎵 Audio Cache</router-link>
           <router-link to="/api-dashboard" @click="showDebugMenu = false">🚀 API Dashboard</router-link>
+
+          <div class="submenu-divider">Sources</div>
+          <router-link to="/radio-paradise" @click="showDebugMenu = false">📻 Radio Paradise</router-link>
         </div>
       </div>
     </nav>
@@ -32,7 +35,7 @@ const showDebugMenu = ref(false)
 const route = useRoute()
 
 const isDebugRoute = computed(() => {
-  return ['/logs', '/upnp', '/covers-cache', '/audio-cache', '/api-dashboard'].includes(route.path)
+  return ['/logs', '/upnp', '/covers-cache', '/audio-cache', '/api-dashboard', '/radio-paradise'].includes(route.path)
 })
 </script>
 
@@ -152,6 +155,17 @@ const isDebugRoute = computed(() => {
   background: #569cd6;
   color: #fff;
   font-weight: bold;
+}
+
+.submenu-divider {
+  padding: 0.5rem 1rem;
+  margin-top: 0.5rem;
+  border-top: 1px solid #555;
+  color: #999;
+  font-size: 0.85em;
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .main-content {
