@@ -64,10 +64,10 @@ Consolide le cache (répare les incohérences)
 
 ## Servir les fichiers
 
-### GET /audio/tracks/{pk}
+### GET /audio/flac/{pk}
 Récupère le fichier FLAC (streaming progressif si en cours de téléchargement)
 
-### GET /audio/tracks/{pk}/orig
+### GET /audio/flac/{pk}/orig
 Alias pour le fichier original
 
 ## Format des fichiers

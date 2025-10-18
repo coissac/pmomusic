@@ -261,9 +261,9 @@ pub fn init_logging() -> LogState {
     let log_level = match config.get_log_min_level() {
         Ok(l) => match string_to_level(&l) {
             Some(lev) => level_to_levelfilter(lev),
-            None => LevelFilter::INFO,
+            None => LevelFilter::TRACE,
         }
-        Err(_) => LevelFilter::INFO
+        Err(_) => LevelFilter::TRACE
     };
 
     let (filter, reload_handle) = reload::Layer::new(log_level);

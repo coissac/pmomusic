@@ -433,7 +433,7 @@ impl Config {
     pub fn get_log_min_level(&self) -> Result<String> {
         match self.get_value(&["host", "logger", "min_level"])? {
             Value::String(s) => Ok(s),
-            _ => Ok("INFO".to_string()),
+            _ => Ok("TRACE".to_string()),
         }
     }
 

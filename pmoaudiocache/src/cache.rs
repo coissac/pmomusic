@@ -21,7 +21,7 @@ impl CacheConfig for AudioConfig {
     }
 
     fn cache_type() -> &'static str {
-        "audio"
+        "flac"
     }
 
     fn cache_name() -> &'static str {

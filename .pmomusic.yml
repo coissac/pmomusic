@@ -9,7 +9,7 @@ host:
   logger:
     buffer_capacity: 200
     enable_console: true
-    min_level: INFO
+    min_level: TRACE
   mediarenderer:
     mpd_renderer: null
   mediaserver:

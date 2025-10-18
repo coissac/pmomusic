@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tracing::{debug, trace};
+use tracing::{debug, info, trace};
 use xmltree::{Element, XMLNode};
 
 use crate::{
@@ -75,7 +75,7 @@ impl Action {
         action_handler!(|instance| {
             use crate::UpnpTypedInstance;
 
-            debug!("🎬 Action '{}' called", instance.get_name());
+            info!("🎬 Action '{}' called", instance.get_name());
 
             // Logger les arguments d'entrée (déjà stockés dans les variables par run())
             for arg_inst in instance.arguments_set().all() {
