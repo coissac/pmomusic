@@ -179,8 +179,10 @@ impl RadioParadiseSource {
             track = track.with_artist(song.artist.clone());
         }
 
-        if !song.album.is_empty() {
-            track = track.with_album(song.album.clone());
+        if let Some(ref album) = song.album {
+            if !album.is_empty() {
+                track = track.with_album(album.clone());
+            }
         }
 
         if song.duration > 0 {
@@ -229,11 +231,7 @@ impl RadioParadiseSource {
             } else {
                 None
             },
-            album: if !song.album.is_empty() {
-                Some(song.album.clone())
-            } else {
-                None
-            },
+            album: song.album.clone().filter(|a| !a.is_empty()),
             duration_secs: if song.duration > 0 {
                 Some((song.duration / 1000) as u64)
             } else {
@@ -559,7 +557,7 @@ impl MusicSource for RadioParadiseSource {
         let audio_metadata = AudioMetadata {
             title: Some(song.title.clone()),
             artist: if !song.artist.is_empty() { Some(song.artist.clone()) } else { None },
-            album: if !song.album.is_empty() { Some(song.album.clone()) } else { None },
+            album: song.album.clone().filter(|a| !a.is_empty()),
             duration_secs: if song.duration > 0 { Some((song.duration / 1000) as u64) } else { None },
             year: None,
             track_number: None,
