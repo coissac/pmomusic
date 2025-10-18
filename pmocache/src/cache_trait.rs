@@ -1,6 +1,9 @@
 use anyhow::Result;
 use sha1::{Digest, Sha1};
-use std::{path::{Path, PathBuf}, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use crate::{CacheConfig, DB};
 
@@ -8,9 +11,8 @@ use crate::{CacheConfig, DB};
 ///
 /// Définit l'interface commune pour tous les types de caches (images, audio, etc.)
 pub trait FileCache<C: CacheConfig>: Send + Sync {
-
     fn get_cache_dir(&self) -> &Path;
-    fn get_database(&self) ->  Arc<DB>;
+    fn get_database(&self) -> Arc<DB>;
 
     /// Valide les données avant de les stocker dans le cache
     ///
@@ -44,7 +46,7 @@ pub trait FileCache<C: CacheConfig>: Send + Sync {
         C::default_param()
     }
 
-     /// Retourne l'extension des fichiers
+    /// Retourne l'extension des fichiers
     fn file_extension(&self) -> &'static str {
         C::file_extension()
     }
@@ -66,7 +68,26 @@ pub trait FileCache<C: CacheConfig>: Send + Sync {
     ///
     /// Format: `{pk}.{qualificatif}.{extension}`
     fn file_path_with_qualifier(&self, pk: &str, qualifier: &str) -> PathBuf {
-        self.get_cache_dir().join(format!("{}.{}.{}", pk, qualifier, C::file_extension()))
+        self.get_cache_dir()
+            .join(format!("{}.{}.{}", pk, qualifier, C::file_extension()))
+    }
+
+    /// Retourne la route relative pour accéder à un item du cache
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Clé primaire de la piste
+    /// * `param` - Paramètre optionnel (ex: "orig", "128k", etc.)
+    ///
+    /// # Returns
+    ///
+    /// Route relative (ex: "/audio/flac/abc123" ou "/audio/tracks/abc123/orig")
+    fn route_for(&self, pk: &str, param: Option<&str>) -> String {
+        if let Some(p) = param {
+            format!("/{}/{}/{}/{}", C::cache_name(), C::cache_type(), pk, p)
+        } else {
+            format!("/{}/{}/{}", C::cache_name(), C::cache_type(), pk)
+        }
     }
 
     /// Télécharge un fichier depuis une URL et l'ajoute au cache
@@ -124,7 +145,6 @@ pub trait FileCache<C: CacheConfig>: Send + Sync {
 
     /// Consolide le cache en supprimant les orphelins et en re-téléchargeant les fichiers manquants
     async fn consolidate(&self) -> Result<()>;
-
 }
 
 /// Génère une clé primaire à partir d'une URL

@@ -79,21 +79,3 @@ pub fn new_cache(dir: &str, limit: usize) -> Result<Cache> {
     let transformer_factory = Arc::new(|| create_webp_transformer());
     Cache::with_transformer(dir, limit, Some(transformer_factory))
 }
-
-/// Retourne la route relative pour accéder à une couverture
-///
-/// # Arguments
-///
-/// * `pk` - Clé primaire de l'image
-/// * `size` - Taille optionnelle de l'image
-///
-/// # Returns
-///
-/// Route relative (ex: "/covers/images/abc123" ou "/covers/images/abc123/300")
-pub fn route_for(pk: &str, size: Option<usize>) -> String {
-    if let Some(s) = size {
-        format!("/covers/images/{}/{}", pk, s)
-    } else {
-        format!("/covers/images/{}", pk)
-    }
-}

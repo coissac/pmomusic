@@ -634,11 +634,11 @@ mod tests {
         std::fs::create_dir_all(&audio_dir).ok();
 
         let cover_cache = Arc::new(
-            pmocovers::Cache::new(cover_dir.to_str().unwrap(), 100, "http://localhost:8080")
-                .await.unwrap()
+            pmocovers::Cache::new(cover_dir.to_str().unwrap(), 100)
+                .unwrap()
         );
         let audio_cache = Arc::new(
-            pmoaudiocache::new_cache(audio_dir.to_str().unwrap(), 100, "http://localhost:8080")
+            pmoaudiocache::new_cache(audio_dir.to_str().unwrap(), 100)
                 .unwrap()
         );
 

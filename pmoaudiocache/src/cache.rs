@@ -201,20 +201,3 @@ pub fn get_metadata(cache: &Cache, pk: &str) -> Result<crate::metadata::AudioMet
     Ok(metadata)
 }
 
-/// Retourne la route relative pour accéder à une piste audio
-///
-/// # Arguments
-///
-/// * `pk` - Clé primaire de la piste
-/// * `param` - Paramètre optionnel (ex: "orig", "128k", etc.)
-///
-/// # Returns
-///
-/// Route relative (ex: "/audio/tracks/abc123" ou "/audio/tracks/abc123/orig")
-pub fn route_for(pk: &str, param: Option<&str>) -> String {
-    if let Some(p) = param {
-        format!("/audio/tracks/{}/{}", pk, p)
-    } else {
-        format!("/audio/tracks/{}", pk)
-    }
-}
