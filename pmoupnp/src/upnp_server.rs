@@ -29,6 +29,8 @@ use crate::devices::errors::DeviceError;
 use crate::devices::{Device, DeviceInstance, DeviceRegistry};
 use crate::UpnpModel;
 use crate::cache_registry::CACHE_REGISTRY;
+use crate::ssdp::SsdpServer;
+use crate::upnp_api::UpnpApiExt;
 
 use pmocovers::Cache as CoverCache;
 use pmoaudiocache::Cache as AudioCache;
@@ -40,6 +42,14 @@ use pmoaudiocache::Cache as AudioCache;
 /// au même registre de devices.
 static DEVICE_REGISTRY: Lazy<RwLock<DeviceRegistry>> = Lazy::new(|| {
     RwLock::new(DeviceRegistry::new())
+});
+
+/// Serveur SSDP global et thread-safe.
+///
+/// Utilise Lazy pour une initialisation paresseuse et RwLock pour le partage entre threads.
+/// Permet l'annonce automatique des devices UPnP sur le réseau.
+static SSDP_SERVER: Lazy<RwLock<Option<SsdpServer>>> = Lazy::new(|| {
+    RwLock::new(None)
 });
 
 /// Trait pour étendre un serveur avec des fonctionnalités UPnP.
@@ -147,11 +157,70 @@ pub trait UpnpServerExt {
 
     /// Récupérer le cache audio
     fn audio_cache(&self) -> Option<Arc<AudioCache>>;
+
+    // ========= SSDP Management (NOUVEAU) =========
+
+    /// Initialise et démarre le serveur SSDP
+    ///
+    /// Cette méthode crée et démarre le serveur SSDP qui gère les annonces
+    /// UPnP sur le réseau (NOTIFY alive/byebye, réponses M-SEARCH).
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` si l'initialisation réussit, `Err` sinon.
+    ///
+    /// # Note
+    ///
+    /// Cette méthode peut être appelée plusieurs fois sans effet si SSDP
+    /// est déjà initialisé.
+    fn init_ssdp(&self) -> Result<(), std::io::Error>;
+
+    /// Vérifie si le serveur SSDP est initialisé
+    ///
+    /// # Returns
+    ///
+    /// `true` si SSDP est actif, `false` sinon
+    fn ssdp_enabled(&self) -> bool;
+
+    /// Crée et initialise un serveur UPnP complet (factory method)
+    ///
+    /// Cette méthode factory initialise l'infrastructure UPnP complète :
+    /// - Serveur HTTP (via pmoserver)
+    /// - Caches (couvertures + audio)
+    /// - Logging
+    /// - Serveur SSDP
+    ///
+    /// Après cette méthode, l'utilisateur doit :
+    /// - Enregistrer ses devices via `register_device()`
+    /// - Enregistrer ses sources musicales
+    /// - Appeler `wait()` pour attendre l'arrêt
+    ///
+    /// # Returns
+    ///
+    /// Un serveur UPnP prêt à l'emploi
+    ///
+    /// # Errors
+    ///
+    /// Retourne une erreur si l'initialisation échoue (config, caches, SSDP, etc.)
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use pmoupnp::UpnpServerExt;
+    /// use pmoserver::Server;
+    ///
+    /// let mut server = Server::create_upnp_server().await?;
+    /// server.register_device(my_device).await?;
+    /// server.wait().await;
+    /// ```
+    async fn create_upnp_server() -> Result<Server, anyhow::Error>;
 }
 
 // Implémentation du trait UpnpServer pour pmoserver::Server
 impl UpnpServerExt for Server {
     async fn register_device(&mut self, device: Arc<Device>) -> Result<Arc<DeviceInstance>, DeviceError> {
+        use tracing::info;
+
         // Créer l'instance (retourne déjà un Arc<DeviceInstance>)
         let di = device.create_instance();
 
@@ -163,6 +232,16 @@ impl UpnpServerExt for Server {
             .unwrap()
             .register(di.clone())
             .map_err(|e| DeviceError::UrlRegistrationError(e))?;
+
+        // Annoncer via SSDP (si initialisé)
+        if self.ssdp_enabled() {
+            let ssdp_opt = SSDP_SERVER.read().unwrap();
+            if let Some(ref ssdp) = *ssdp_opt {
+                let ssdp_device = di.to_ssdp_device("PMOMusic", "1.0");
+                ssdp.add_device(ssdp_device);
+                info!("✅ SSDP announcement for {}", di.udn());
+            }
+        }
 
         Ok(di)
     }
@@ -280,6 +359,76 @@ impl UpnpServerExt for Server {
 
     fn audio_cache(&self) -> Option<Arc<AudioCache>> {
         crate::cache_registry::get_audio_cache()
+    }
+
+    // ========= SSDP Management Implementation =========
+
+    fn init_ssdp(&self) -> Result<(), std::io::Error> {
+        use tracing::info;
+
+        let mut ssdp_opt = SSDP_SERVER.write().unwrap();
+        if ssdp_opt.is_some() {
+            // Déjà initialisé
+            return Ok(());
+        }
+
+        let mut ssdp = SsdpServer::new();
+        ssdp.start()?;
+        *ssdp_opt = Some(ssdp);
+
+        info!("✅ SSDP server initialized");
+        Ok(())
+    }
+
+    fn ssdp_enabled(&self) -> bool {
+        SSDP_SERVER.read().unwrap().is_some()
+    }
+
+    async fn create_upnp_server() -> Result<Server, anyhow::Error> {
+        use pmoserver::ServerBuilder;
+        use tracing::{info, warn};
+
+        // 1. Créer le serveur depuis la config
+        info!("🔧 Creating UPnP server from configuration...");
+        let mut server = ServerBuilder::new_configured().build();
+
+        // 2. Initialiser le logging HTTP (routes de logs + tracing)
+        info!("📝 Initializing logging...");
+        server.init_logging().await;
+
+        // 3. Initialiser les caches
+        info!("💾 Initializing caches...");
+        match server.init_caches().await {
+            Ok(_) => {
+                info!("✅ Caches initialized");
+            }
+            Err(e) => {
+                warn!("❌ Cache initialization failed: {}", e);
+                return Err(e);
+            }
+        }
+
+        // 4. Le serveur HTTP n'est PAS encore démarré
+        // Il sera démarré après l'enregistrement des devices et routes
+        info!("🌐 HTTP server configured at {}", server.info().base_url);
+
+        // 5. Enregistrer l'API d'introspection UPnP
+        info!("📡 Registering UPnP API...");
+        server.register_upnp_api().await;
+
+        // 6. Initialiser SSDP
+        info!("📡 Initializing SSDP discovery...");
+        match server.init_ssdp() {
+            Ok(_) => info!("✅ SSDP server initialized"),
+            Err(e) => {
+                warn!("❌ SSDP initialization failed: {}", e);
+                return Err(e.into());
+            }
+        }
+
+        info!("🎉 UPnP server infrastructure ready");
+        info!("📝 Next: Register devices and music sources");
+        Ok(server)
     }
 }
 
