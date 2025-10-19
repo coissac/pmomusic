@@ -114,13 +114,26 @@ fn parse_track_identifier(track_id: &str) -> Option<(u8, u64, usize)> {
 /// # Examples
 ///
 /// ```no_run
-/// use pmoparadise::{RadioParadiseSource, RadioParadiseClient};
+/// use pmoparadise::{RadioParadiseClient, RadioParadiseSource};
 /// use pmosource::MusicSource;
+/// use std::sync::Arc;
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let client = RadioParadiseClient::new().await?;
-///     let source = RadioParadiseSource::new(client, "http://localhost:8080", 50);
+///
+///     let base_dir = std::env::temp_dir().join("pmoparadise_doc_source");
+///     let cover_dir = base_dir.join("covers");
+///     let audio_dir = base_dir.join("audio");
+///     std::fs::create_dir_all(&cover_dir)?;
+///     std::fs::create_dir_all(&audio_dir)?;
+///
+///     let cover_dir_str = cover_dir.to_string_lossy().into_owned();
+///     let audio_dir_str = audio_dir.to_string_lossy().into_owned();
+///     let cover_cache = Arc::new(pmocovers::cache::new_cache(&cover_dir_str, 32)?);
+///     let audio_cache = Arc::new(pmoaudiocache::cache::new_cache(&audio_dir_str, 32)?);
+///
+///     let source = RadioParadiseSource::new(client, 50, cover_cache, audio_cache);
 ///
 ///     println!("Source: {}", source.name());
 ///     println!("Supports FIFO: {}", source.supports_fifo());
@@ -431,13 +444,12 @@ impl RadioParadiseSource {
             .map_err(|e| MusicSourceError::CacheError(e.to_string()))?;
 
             let audio_source_uri = format!("{}#{}", block.url, song_index);
-            let reader = Cursor::new(flac_data.clone());
+            let data_len = flac_data.len() as u64;
+            let reader = Cursor::new(flac_data);
             let audio_pk: String = channel
                 .cache_manager
-                .cache_audio_from_reader(&audio_source_uri, reader, Some(flac_data.len() as u64))
+                .cache_audio_from_reader(&audio_source_uri, reader, Some(data_len))
                 .await?;
-
-            channel.cache_manager.wait_audio_ready(&audio_pk).await?;
 
             let cached_cover_pk = if let Some(ref image_base) = block.image_base {
                 if let Some(ref cover) = song.cover {
@@ -460,6 +472,19 @@ impl RadioParadiseSource {
             } else {
                 None
             };
+
+            let metadata_cover_pk = cached_cover_pk.clone();
+            channel
+                .cache_manager
+                .update_metadata(
+                    track_id.clone(),
+                    pmosource::TrackMetadata {
+                        original_uri: block.url.clone(),
+                        cached_audio_pk: Some(audio_pk.clone()),
+                        cached_cover_pk: metadata_cover_pk,
+                    },
+                )
+                .await;
 
             let playback_url = channel.cache_manager.resolve_uri(&track_id).await?;
 
@@ -487,19 +512,33 @@ impl RadioParadiseSource {
                 }
             }
 
-            channel
-                .cache_manager
-                .update_metadata(
-                    track_id.clone(),
-                    pmosource::TrackMetadata {
-                        original_uri: block.url.clone(),
-                        cached_audio_pk: Some(audio_pk.clone()),
-                        cached_cover_pk,
-                    },
-                )
-                .await;
-
             channel.playlist.append_track(track).await;
+
+            let channel_for_wait = channel.clone();
+            let track_id_for_wait = track_id.clone();
+            let audio_pk_for_wait = audio_pk.clone();
+            tokio::spawn(async move {
+                if let Err(e) = channel_for_wait
+                    .cache_manager
+                    .wait_audio_ready(&audio_pk_for_wait)
+                    .await
+                {
+                    tracing::error!(
+                        "Failed to finalize audio {} on channel {}: {}",
+                        track_id_for_wait,
+                        channel_for_wait.descriptor.name,
+                        e
+                    );
+                    channel_for_wait
+                        .cache_manager
+                        .remove_track(&track_id_for_wait)
+                        .await;
+                    channel_for_wait
+                        .playlist
+                        .remove_by_id(&track_id_for_wait)
+                        .await;
+                }
+            });
         }
 
         tracing::info!(

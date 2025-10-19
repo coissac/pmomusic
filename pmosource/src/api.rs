@@ -21,7 +21,7 @@
 
 #[cfg(feature = "server")]
 use axum::{
-    extract::Path,
+    extract::{Path, Query},
     http::{header, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, get},
@@ -36,6 +36,9 @@ use crate::{MusicSource, SourceCapabilities, SourceStatistics};
 
 #[cfg(feature = "server")]
 use std::sync::Arc;
+
+#[cfg(feature = "server")]
+use pmodidl::{Container as DidlContainer, Item as DidlItem, Resource as DidlResource};
 
 /// Information sur une source musicale
 #[cfg(feature = "server")]
@@ -139,6 +142,132 @@ pub struct ErrorResponse {
     pub error: String,
 }
 
+/// Paramètres de navigation pour `browse`
+#[cfg(feature = "server")]
+#[derive(Debug, Default, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct BrowseParams {
+    /// ID de l'objet à parcourir (container ou item)
+    #[serde(default)]
+    pub object_id: Option<String>,
+
+    /// Index de départ (pagination)
+    #[serde(default)]
+    pub starting_index: Option<usize>,
+
+    /// Nombre d'éléments demandés (0 = tous)
+    #[serde(default)]
+    pub requested_count: Option<usize>,
+}
+
+/// Réponse JSON pour un browse de source
+#[cfg(feature = "server")]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct SourceBrowseResponse {
+    /// ObjectID parcouru
+    pub object_id: String,
+    /// Containers renvoyés
+    pub containers: Vec<BrowseContainerInfo>,
+    /// Items renvoyés
+    pub items: Vec<BrowseItemInfo>,
+    /// Nombre de containers retournés
+    pub returned_containers: usize,
+    /// Nombre d'items retournés
+    pub returned_items: usize,
+    /// Nombre total combiné containers + items
+    pub total: usize,
+    /// Update ID de la source
+    pub update_id: u32,
+}
+
+/// Informations simplifiées de container pour l'API browse
+#[cfg(feature = "server")]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct BrowseContainerInfo {
+    /// ID du container
+    pub id: String,
+    /// ID du parent
+    pub parent_id: String,
+    /// Titre du container
+    pub title: String,
+    /// Classe UPnP
+    pub class: String,
+    /// Nombre d'enfants (si connu)
+    pub child_count: Option<String>,
+    /// Flag restricted
+    pub restricted: Option<String>,
+}
+
+/// Informations sur une ressource audio
+#[cfg(feature = "server")]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct BrowseItemResourceInfo {
+    pub url: String,
+    pub protocol_info: String,
+    pub duration: Option<String>,
+}
+
+/// Informations simplifiées d'item audio
+#[cfg(feature = "server")]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct BrowseItemInfo {
+    pub id: String,
+    pub parent_id: String,
+    pub title: String,
+    pub class: String,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub creator: Option<String>,
+    pub album_art: Option<String>,
+    pub resources: Vec<BrowseItemResourceInfo>,
+}
+
+#[cfg(feature = "server")]
+impl From<&DidlContainer> for BrowseContainerInfo {
+    fn from(container: &DidlContainer) -> Self {
+        Self {
+            id: container.id.clone(),
+            parent_id: container.parent_id.clone(),
+            title: container.title.clone(),
+            class: container.class.clone(),
+            child_count: container.child_count.clone(),
+            restricted: container.restricted.clone(),
+        }
+    }
+}
+
+#[cfg(feature = "server")]
+impl From<&DidlResource> for BrowseItemResourceInfo {
+    fn from(res: &DidlResource) -> Self {
+        Self {
+            url: res.url.clone(),
+            protocol_info: res.protocol_info.clone(),
+            duration: res.duration.clone(),
+        }
+    }
+}
+
+#[cfg(feature = "server")]
+impl From<&DidlItem> for BrowseItemInfo {
+    fn from(item: &DidlItem) -> Self {
+        Self {
+            id: item.id.clone(),
+            parent_id: item.parent_id.clone(),
+            title: item.title.clone(),
+            class: item.class.clone(),
+            artist: item.artist.clone(),
+            album: item.album.clone(),
+            creator: item.creator.clone(),
+            album_art: item.album_art.clone(),
+            resources: item
+                .resources
+                .iter()
+                .map(BrowseItemResourceInfo::from)
+                .collect(),
+        }
+    }
+}
+
 // ============= Gestionnaire de registre global =============
 
 #[cfg(feature = "server")]
@@ -194,7 +323,7 @@ pub async fn get_source(source_id: &str) -> Option<Arc<dyn MusicSource>> {
 #[cfg(feature = "server")]
 #[utoipa::path(
     get,
-    path = "/sources",
+    path = "/",
     responses(
         (status = 200, description = "Liste des sources", body = SourcesList),
     ),
@@ -230,7 +359,7 @@ async fn list_sources() -> impl IntoResponse {
 #[cfg(feature = "server")]
 #[utoipa::path(
     get,
-    path = "/sources/{id}",
+    path = "/{id}",
     params(
         ("id" = String, Path, description = "ID de la source")
     ),
@@ -268,7 +397,7 @@ async fn get_source_info(Path(id): Path<String>) -> impl IntoResponse {
 #[cfg(feature = "server")]
 #[utoipa::path(
     get,
-    path = "/sources/{id}/capabilities",
+    path = "/{id}/capabilities",
     params(
         ("id" = String, Path, description = "ID de la source")
     ),
@@ -300,7 +429,7 @@ async fn get_source_capabilities(Path(id): Path<String>) -> impl IntoResponse {
 #[cfg(feature = "server")]
 #[utoipa::path(
     get,
-    path = "/sources/{id}/statistics",
+    path = "/{id}/statistics",
     params(
         ("id" = String, Path, description = "ID de la source")
     ),
@@ -342,7 +471,7 @@ async fn get_source_statistics(Path(id): Path<String>) -> impl IntoResponse {
 #[cfg(feature = "server")]
 #[utoipa::path(
     get,
-    path = "/sources/{id}/root",
+    path = "/{id}/root",
     params(
         ("id" = String, Path, description = "ID de la source")
     ),
@@ -390,7 +519,7 @@ async fn get_source_root(Path(id): Path<String>) -> impl IntoResponse {
 #[cfg(feature = "server")]
 #[utoipa::path(
     get,
-    path = "/sources/{id}/image",
+    path = "/{id}/image",
     params(
         ("id" = String, Path, description = "ID de la source")
     ),
@@ -424,13 +553,111 @@ async fn get_source_image(Path(id): Path<String>) -> Response {
     }
 }
 
+/// Parcourt une source musicale (containers et items)
+#[cfg(feature = "server")]
+#[utoipa::path(
+    get,
+    path = "/{id}/browse",
+    params(
+        ("id" = String, Path, description = "ID de la source"),
+        BrowseParams
+    ),
+    responses(
+        (status = 200, description = "Résultat du browse", body = SourceBrowseResponse),
+        (status = 404, description = "Source ou objet introuvable", body = ErrorResponse),
+        (status = 500, description = "Erreur lors du browse", body = ErrorResponse),
+    ),
+    tag = "sources"
+)]
+async fn browse_source(
+    Path(id): Path<String>,
+    Query(params): Query<BrowseParams>,
+) -> impl IntoResponse {
+    match get_source(&id).await {
+        Some(source) => {
+            let object_id = params
+                .object_id
+                .clone()
+                .unwrap_or_else(|| source.id().to_string());
+
+            let offset = params.starting_index.unwrap_or(0);
+            let requested = params.requested_count.unwrap_or(0);
+
+            let browse_result = if requested > 0 {
+                source.browse_paginated(&object_id, offset, requested).await
+            } else if offset > 0 {
+                source
+                    .browse_paginated(&object_id, offset, usize::MAX)
+                    .await
+            } else {
+                source.browse(&object_id).await
+            };
+
+            match browse_result {
+                Ok(result) => {
+                    let (containers_raw, items_raw) = match result {
+                        crate::BrowseResult::Containers(c) => (c, Vec::new()),
+                        crate::BrowseResult::Items(i) => (Vec::new(), i),
+                        crate::BrowseResult::Mixed { containers, items } => (containers, items),
+                    };
+
+                    let containers: Vec<BrowseContainerInfo> = containers_raw
+                        .iter()
+                        .map(BrowseContainerInfo::from)
+                        .collect();
+                    let items: Vec<BrowseItemInfo> =
+                        items_raw.iter().map(BrowseItemInfo::from).collect();
+
+                    let returned_containers = containers.len();
+                    let returned_items = items.len();
+                    let total = returned_containers + returned_items;
+                    let update_id = source.update_id().await;
+
+                    let response = SourceBrowseResponse {
+                        object_id,
+                        containers,
+                        items,
+                        returned_containers,
+                        returned_items,
+                        total,
+                        update_id,
+                    };
+
+                    (StatusCode::OK, Json(response)).into_response()
+                }
+                Err(crate::MusicSourceError::ObjectNotFound(_)) => (
+                    StatusCode::NOT_FOUND,
+                    Json(ErrorResponse {
+                        error: "Object not found".to_string(),
+                    }),
+                )
+                    .into_response(),
+                Err(e) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: format!("Browse failed: {}", e),
+                    }),
+                )
+                    .into_response(),
+            }
+        }
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Source '{}' not found", id),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 /// Désenregistre une source musicale
 ///
 /// Supprime une source du registre par son ID.
 #[cfg(feature = "server")]
 #[utoipa::path(
     delete,
-    path = "/sources/{id}",
+    path = "/{id}",
     params(
         ("id" = String, Path, description = "ID de la source à supprimer")
     ),
@@ -481,13 +708,16 @@ async fn unregister_source_handler(Path(id): Path<String>) -> impl IntoResponse 
 #[cfg(feature = "server")]
 pub fn create_sources_router() -> Router {
     Router::new()
-        .route("/sources", get(list_sources))
-        .route("/sources/{id}", get(get_source_info))
-        .route("/sources/{id}", delete(unregister_source_handler))
-        .route("/sources/{id}/capabilities", get(get_source_capabilities))
-        .route("/sources/{id}/statistics", get(get_source_statistics))
-        .route("/sources/{id}/root", get(get_source_root))
-        .route("/sources/{id}/image", get(get_source_image))
+        .route("/", get(list_sources))
+        .route(
+            "/{id}",
+            get(get_source_info).delete(unregister_source_handler),
+        )
+        .route("/{id}/capabilities", get(get_source_capabilities))
+        .route("/{id}/statistics", get(get_source_statistics))
+        .route("/{id}/root", get(get_source_root))
+        .route("/{id}/browse", get(browse_source))
+        .route("/{id}/image", get(get_source_image))
 }
 
 /// Structure pour la documentation OpenAPI de base
@@ -504,6 +734,7 @@ pub fn create_sources_router() -> Router {
         get_source_capabilities,
         get_source_statistics,
         get_source_root,
+        browse_source,
         get_source_image,
         unregister_source_handler,
     ),
@@ -514,6 +745,10 @@ pub fn create_sources_router() -> Router {
             SourceStatisticsInfo,
             SourcesList,
             SourceRootContainer,
+            BrowseContainerInfo,
+            BrowseItemResourceInfo,
+            BrowseItemInfo,
+            SourceBrowseResponse,
             ErrorResponse,
         )
     ),

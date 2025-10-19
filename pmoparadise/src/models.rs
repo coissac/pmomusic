@@ -1,6 +1,7 @@
 //! Data models for Radio Paradise API responses
 
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Number;
 use std::collections::HashMap;
 
 /// Deserialize a string or number into a u64
@@ -34,17 +35,31 @@ where
     #[serde(untagged)]
     enum StringOrNumber {
         String(String),
-        Float(f64),
-        Int(u64),
+        Number(Number),
+    }
+
+    fn to_milliseconds(value: f64) -> u64 {
+        if value >= 100_000.0 {
+            value.round() as u64
+        } else {
+            (value * 1000.0).round() as u64
+        }
     }
 
     match StringOrNumber::deserialize(deserializer)? {
         StringOrNumber::String(s) => {
-            let seconds = s.parse::<f64>().map_err(D::Error::custom)?;
-            Ok((seconds * 1000.0) as u64)
+            let value = s.parse::<f64>().map_err(D::Error::custom)?;
+            Ok(to_milliseconds(value))
         }
-        StringOrNumber::Float(f) => Ok((f * 1000.0) as u64),
-        StringOrNumber::Int(i) => Ok(i),
+        StringOrNumber::Number(n) => {
+            if let Some(int_value) = n.as_u64() {
+                Ok(to_milliseconds(int_value as f64))
+            } else if let Some(float_value) = n.as_f64() {
+                Ok(to_milliseconds(float_value))
+            } else {
+                Err(D::Error::custom("Invalid number for block length"))
+            }
+        }
     }
 }
 
@@ -434,5 +449,61 @@ mod tests {
         let (idx, song) = block.song_at_timestamp(600000).unwrap();
         assert_eq!(idx, 1);
         assert_eq!(song.title, "Giant Steps");
+    }
+
+    #[test]
+    fn test_block_length_from_seconds_string() {
+        let json = serde_json::json!({
+            "event": 1,
+            "end_event": 2,
+            "length": "1715.54",
+            "url": "https://example.com/block.flac",
+            "song": {}
+        });
+
+        let block: Block = serde_json::from_value(json).unwrap();
+        assert_eq!(block.length, 1_715_540);
+    }
+
+    #[test]
+    fn test_block_length_from_seconds_integer() {
+        let json = serde_json::json!({
+            "event": 1,
+            "end_event": 2,
+            "length": 1800,
+            "url": "https://example.com/block.flac",
+            "song": {}
+        });
+
+        let block: Block = serde_json::from_value(json).unwrap();
+        assert_eq!(block.length, 1_800_000);
+    }
+
+    #[test]
+    fn test_block_length_from_milliseconds_integer() {
+        let json = serde_json::json!({
+            "event": 1,
+            "end_event": 2,
+            "length": 900_000,
+            "url": "https://example.com/block.flac",
+            "song": {}
+        });
+
+        let block: Block = serde_json::from_value(json).unwrap();
+        assert_eq!(block.length, 900_000);
+    }
+
+    #[test]
+    fn test_block_length_from_milliseconds_float() {
+        let json = serde_json::json!({
+            "event": 1,
+            "end_event": 2,
+            "length": 900_000.0,
+            "url": "https://example.com/block.flac",
+            "song": {}
+        });
+
+        let block: Block = serde_json::from_value(json).unwrap();
+        assert_eq!(block.length, 900_000);
     }
 }
