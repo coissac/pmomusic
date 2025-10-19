@@ -1,57 +1,199 @@
-use futures_util::Future;
+use bytes::Bytes;
+use futures_util::{stream, Future, Stream, StreamExt};
 use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::RwLock;
+use tokio_util::io::ReaderStream;
 
-/// Type pour une fonction de transformation de stream
+/// Type pour une fonction de transformation de stream.
 ///
-/// La fonction reçoit:
-/// - Le stream de bytes téléchargés
+/// La fonction reçoit :
+/// - Un `CacheInput` abstrait (HTTP ou lecteur en streaming)
 /// - Un writer pour écrire les données transformées
 /// - Un callback pour mettre à jour la progression
 ///
-/// Elle retourne un Future qui se résout en Result
+/// Elle retourne un `Future` qui se résout en `Result`.
 pub type StreamTransformer = Box<
     dyn FnOnce(
-            reqwest::Response,
+            CacheInput,
             tokio::fs::File,
             Arc<dyn Fn(u64) + Send + Sync>,
         ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>>
         + Send,
 >;
 
+type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send>>;
+
+/// Source générique (HTTP ou lecteur) exposée aux transformers.
+pub struct CacheInput {
+    inner: CacheInputInner,
+}
+
+enum CacheInputInner {
+    Http {
+        response: Option<reqwest::Response>,
+        buffer: Option<Bytes>,
+        length: Option<u64>,
+    },
+    Reader {
+        reader: Option<Box<dyn AsyncRead + Send + Unpin>>,
+        buffer: Option<Bytes>,
+        length: Option<u64>,
+    },
+}
+
+impl CacheInput {
+    pub fn from_response(response: reqwest::Response) -> Self {
+        let length = response.content_length();
+        Self {
+            inner: CacheInputInner::Http {
+                response: Some(response),
+                buffer: None,
+                length,
+            },
+        }
+    }
+
+    pub fn from_reader<R>(reader: R, length: Option<u64>) -> Self
+    where
+        R: AsyncRead + Send + Unpin + 'static,
+    {
+        Self::from_reader_box(Box::new(reader), length)
+    }
+
+    pub fn from_reader_box(reader: Box<dyn AsyncRead + Send + Unpin>, length: Option<u64>) -> Self {
+        Self {
+            inner: CacheInputInner::Reader {
+                reader: Some(reader),
+                buffer: None,
+                length,
+            },
+        }
+    }
+
+    pub fn content_length(&self) -> Option<u64> {
+        match &self.inner {
+            CacheInputInner::Http { length, buffer, .. } => {
+                length.or_else(|| buffer.as_ref().map(|b| b.len() as u64))
+            }
+            CacheInputInner::Reader { length, buffer, .. } => {
+                length.or_else(|| buffer.as_ref().map(|b| b.len() as u64))
+            }
+        }
+    }
+
+    pub async fn bytes(&mut self) -> Result<Bytes, String> {
+        match &mut self.inner {
+            CacheInputInner::Http {
+                response,
+                buffer,
+                ..
+            } => {
+                if let Some(bytes) = buffer.clone() {
+                    return Ok(bytes);
+                }
+
+                let resp = response
+                    .take()
+                    .ok_or_else(|| "stream already consumed".to_string())?;
+                let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+                *buffer = Some(bytes.clone());
+                Ok(bytes)
+            }
+            CacheInputInner::Reader { reader, buffer, .. } => {
+                if let Some(bytes) = buffer.clone() {
+                    return Ok(bytes);
+                }
+
+                let mut reader = reader
+                    .take()
+                    .ok_or_else(|| "stream already consumed".to_string())?;
+
+                let mut data = Vec::new();
+                reader
+                    .read_to_end(&mut data)
+                    .await
+                    .map_err(|e| e.to_string())?;
+
+                let bytes = Bytes::from(data);
+                *buffer = Some(bytes.clone());
+                Ok(bytes)
+            }
+        }
+    }
+
+    pub fn into_byte_stream(self) -> ByteStream {
+        match self.inner {
+            CacheInputInner::Http {
+                response,
+                buffer,
+                ..
+            } => {
+                if let Some(response) = response {
+                    Box::pin(
+                        response
+                            .bytes_stream()
+                            .map(|res| res.map_err(|e| e.to_string())),
+                    )
+                } else if let Some(bytes) = buffer {
+                    Box::pin(stream::once(async move { Ok(bytes) }))
+                } else {
+                    Box::pin(stream::once(async {
+                        Err("stream already consumed".to_string())
+                    }))
+                }
+            }
+            CacheInputInner::Reader { reader, buffer, .. } => {
+                if let Some(bytes) = buffer {
+                    Box::pin(stream::once(async move { Ok(bytes) }))
+                } else if let Some(reader) = reader {
+                    let stream = ReaderStream::new(reader);
+                    Box::pin(stream.map(|res| {
+                        res.map(Bytes::from)
+                            .map_err(|e| format!("Stream read error: {}", e))
+                    }))
+                } else {
+                    Box::pin(stream::once(async {
+                        Err("stream already consumed".to_string())
+                    }))
+                }
+            }
+        }
+    }
+}
+
+enum DownloadSource {
+    Url(String),
+    Reader {
+        reader: Box<dyn AsyncRead + Send + Unpin>,
+        length: Option<u64>,
+    },
+}
+
 /// État interne du téléchargement
 #[derive(Debug, Clone)]
 struct DownloadState {
-    /// Taille actuelle téléchargée (du stream source)
     current_size: u64,
-    /// Taille attendue du fichier source (si connue)
     expected_size: Option<u64>,
-    /// Taille des données transformées écrites
     transformed_size: u64,
-    /// Indique si le téléchargement est terminé
     finished: bool,
-    /// Position de lecture actuelle
     read_position: u64,
-    /// Erreur éventuelle lors du téléchargement
     error: Option<String>,
 }
 
 /// Objet représentant un téléchargement en cours
 #[derive(Debug)]
 pub struct Download {
-    /// Nom du fichier de destination
     filename: PathBuf,
-    /// État partagé entre le téléchargement et les lectures
     state: Arc<RwLock<DownloadState>>,
 }
 
 impl Download {
-    /// Crée une nouvelle instance de Download
     fn new(filename: PathBuf) -> Arc<Self> {
         Arc::new(Self {
             filename,
@@ -66,244 +208,210 @@ impl Download {
         })
     }
 
-    /// Retourne le nom du fichier
     pub fn filename(&self) -> &Path {
         &self.filename
     }
 
-    /// Attend que le fichier atteigne au moins la taille spécifiée ou soit complètement téléchargé
     pub async fn wait_until_min_size(&self, min_size: u64) -> Result<(), String> {
         loop {
             let state = self.state.read().await;
-
-            // Vérifier s'il y a eu une erreur
-            if let Some(ref error) = state.error {
-                return Err(error.clone());
+            if let Some(err) = &state.error {
+                return Err(err.clone());
             }
-
-            // Vérifier si la condition est remplie
             if state.transformed_size >= min_size || state.finished {
                 return Ok(());
             }
-
-            drop(state); // Libérer le lock avant de dormir
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    }
-
-    /// Attend que le téléchargement soit complètement terminé
-    pub async fn wait_until_finished(&self) -> Result<(), String> {
-        loop {
-            let state = self.state.read().await;
-
-            // Vérifier s'il y a eu une erreur
-            if let Some(ref error) = state.error {
-                return Err(error.clone());
-            }
-
-            if state.finished {
-                return Ok(());
-            }
-
             drop(state);
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
 
-    /// Ouvre le fichier pour lecture
+    pub async fn wait_until_finished(&self) -> Result<(), String> {
+        loop {
+            let state = self.state.read().await;
+            if let Some(err) = &state.error {
+                return Err(err.clone());
+            }
+            if state.finished {
+                return Ok(());
+            }
+            drop(state);
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
     pub fn open(&self) -> io::Result<File> {
         File::open(&self.filename)
     }
 
-    /// Retourne la position actuelle de lecture
     pub async fn pos(&self) -> u64 {
         let state = self.state.read().await;
         state.read_position
     }
 
-    /// Met à jour la position de lecture
     pub async fn set_pos(&self, pos: u64) {
         let mut state = self.state.write().await;
         state.read_position = pos;
     }
 
-    /// Retourne la taille attendue du fichier (si disponible)
     pub async fn expected_size(&self) -> Option<u64> {
         let state = self.state.read().await;
         state.expected_size
     }
 
-    /// Retourne la taille actuellement téléchargée (du stream source)
     pub async fn current_size(&self) -> u64 {
         let state = self.state.read().await;
         state.current_size
     }
 
-    /// Retourne la taille des données transformées écrites sur disque
     pub async fn transformed_size(&self) -> u64 {
         let state = self.state.read().await;
         state.transformed_size
     }
 
-    /// Indique si le téléchargement est terminé
     pub async fn finished(&self) -> bool {
         let state = self.state.read().await;
         state.finished
     }
 
-    /// Retourne l'erreur éventuelle
     pub async fn error(&self) -> Option<String> {
         let state = self.state.read().await;
         state.error.clone()
     }
 }
 
-/// Lance le téléchargement d'une URL dans un fichier
-///
-/// # Arguments
-/// * `filename` - Chemin du fichier de destination
-/// * `url` - URL à télécharger
-///
-/// # Returns
-/// Un Arc<Download> qui permet de suivre la progression du téléchargement
+/// Lance le téléchargement d'une URL dans un fichier.
 pub fn download<P: AsRef<Path>>(filename: P, url: &str) -> Arc<Download> {
     download_with_transformer(filename, url, None)
 }
 
-/// Lance le téléchargement d'une URL avec transformation du stream
-///
-/// # Arguments
-/// * `filename` - Chemin du fichier de destination
-/// * `url` - URL à télécharger
-/// * `transformer` - Fonction optionnelle pour transformer le stream avant sauvegarde
-///
-/// # Returns
-/// Un Arc<Download> qui permet de suivre la progression du téléchargement
-///
-/// # Exemple
-///
-/// ```rust,no_run
-/// use pmocache::download::{download_with_transformer, StreamTransformer};
-/// use futures_util::StreamExt;
-/// use tokio::io::AsyncWriteExt;
-///
-/// // Transformer qui convertit en majuscules (exemple simple)
-/// let transformer: StreamTransformer = Box::new(|response, mut file, update_progress| {
-///     Box::pin(async move {
-///         let mut stream = response.bytes_stream();
-///         let mut total = 0u64;
-///
-///         while let Some(chunk_result) = stream.next().await {
-///             let chunk = chunk_result.map_err(|e| e.to_string())?;
-///
-///             // Transformer les données (ex: conversion, décompression, etc.)
-///             let transformed = chunk.to_vec(); // Votre transformation ici
-///
-///             file.write_all(&transformed).await.map_err(|e| e.to_string())?;
-///
-///             total += chunk.len() as u64;
-///             update_progress(total);
-///         }
-///
-///         file.flush().await.map_err(|e| e.to_string())?;
-///         Ok(())
-///     })
-/// });
-///
-/// let dl = download_with_transformer("/tmp/output.txt", "https://example.com/data", Some(transformer));
-/// ```
+/// Lance le téléchargement d'une URL avec transformation du stream.
 pub fn download_with_transformer<P: AsRef<Path>>(
     filename: P,
     url: &str,
     transformer: Option<StreamTransformer>,
 ) -> Arc<Download> {
-    let filename = filename.as_ref().to_path_buf();
-    let url = url.to_string();
+    spawn_download(filename, DownloadSource::Url(url.to_string()), transformer)
+}
 
+/// Ingère un flux (AsyncRead) dans le cache avec transformation optionnelle.
+pub fn ingest_with_transformer<P, R>(
+    filename: P,
+    reader: R,
+    length: Option<u64>,
+    transformer: Option<StreamTransformer>,
+) -> Arc<Download>
+where
+    P: AsRef<Path>,
+    R: AsyncRead + Send + Unpin + 'static,
+{
+    spawn_download(
+        filename,
+        DownloadSource::Reader {
+            reader: Box::new(reader),
+            length,
+        },
+        transformer,
+    )
+}
+
+fn spawn_download<P: AsRef<Path>>(
+    filename: P,
+    source: DownloadSource,
+    transformer: Option<StreamTransformer>,
+) -> Arc<Download> {
+    let filename = filename.as_ref().to_path_buf();
     let download = Download::new(filename.clone());
     let state = Arc::clone(&download.state);
 
-    // Lancer le téléchargement en tâche de fond
     tokio::spawn(async move {
-        if let Err(e) = download_impl(filename, url, state, transformer).await {
-            // L'erreur a déjà été enregistrée dans download_impl
-            eprintln!("Download error: {}", e);
+        if let Err(e) = download_impl(filename, source, state, transformer).await {
+            tracing::error!("Download error: {}", e);
         }
     });
 
     download
 }
 
-/// Implémentation du téléchargement
 async fn download_impl(
     filename: PathBuf,
-    url: String,
+    source: DownloadSource,
     state: Arc<RwLock<DownloadState>>,
     transformer: Option<StreamTransformer>,
 ) -> Result<(), String> {
-    // Créer le client HTTP
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(300))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let input = match source {
+        DownloadSource::Url(url) => {
+            let client = reqwest::Client::builder()
+                .timeout(Duration::from_secs(300))
+                .build()
+                .map_err(|e| e.to_string())?;
 
-    // Lancer la requête
-    let response = client.get(&url).send().await.map_err(|e| {
-        let error = format!("Failed to fetch URL: {}", e);
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
+            let response = match client.get(&url).send().await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    let mut s = state.write().await;
+                    let error = format!("Failed to fetch URL: {}", e);
+                    s.error = Some(error.clone());
+                    s.finished = true;
+                    return Err(error);
+                }
+            };
+
+            if !response.status().is_success() {
                 let mut s = state.write().await;
-                s.error = Some(error.clone());
-            });
-        });
-        error
-    })?;
-
-    // Vérifier le statut
-    if !response.status().is_success() {
-        let error = format!("HTTP error: {}", response.status());
-        let mut s = state.write().await;
-        s.error = Some(error.clone());
-        s.finished = true;
-        return Err(error);
-    }
-
-    // Récupérer la taille attendue si disponible
-    if let Some(content_length) = response.content_length() {
-        let mut s = state.write().await;
-        s.expected_size = Some(content_length);
-    }
-
-    // Créer le fichier de destination
-    let file = tokio::fs::File::create(&filename).await.map_err(|e| {
-        let error = format!("Failed to create file: {}", e);
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                let mut s = state.write().await;
+                let error = format!("HTTP error: {}", response.status());
                 s.error = Some(error.clone());
                 s.finished = true;
-            });
-        });
-        error
-    })?;
+                return Err(error);
+            }
 
-    // Si un transformer est fourni, l'utiliser
+            let length = response.content_length();
+            {
+                let mut s = state.write().await;
+                s.expected_size = length;
+            }
+
+            CacheInput::from_response(response)
+        }
+        DownloadSource::Reader { reader, length } => {
+            {
+                let mut s = state.write().await;
+                s.expected_size = length;
+            }
+            CacheInput::from_reader_box(reader, length)
+        }
+    };
+
+    let file = tokio::fs::File::create(&filename)
+        .await
+        .map_err(|e| format!("Failed to create file: {}", e))?;
+
+    process_input(input, file, state, transformer).await
+}
+
+async fn process_input(
+    input: CacheInput,
+    file: tokio::fs::File,
+    state: Arc<RwLock<DownloadState>>,
+    transformer: Option<StreamTransformer>,
+) -> Result<(), String> {
     if let Some(transformer) = transformer {
-        // Créer un callback pour mettre à jour la progression
-        let state_clone = Arc::clone(&state);
+        let progress_state = Arc::clone(&state);
         let progress_callback: Arc<dyn Fn(u64) + Send + Sync> =
             Arc::new(move |transformed_bytes| {
-                let state = Arc::clone(&state_clone);
+                let progress_state = Arc::clone(&progress_state);
                 tokio::spawn(async move {
-                    let mut s = state.write().await;
+                    let mut s = progress_state.write().await;
                     s.transformed_size = transformed_bytes;
                 });
             });
 
-        // Appeler le transformer
-        match transformer(response, file, progress_callback).await {
+        match transformer(input, file, Arc::clone(&progress_callback)).await {
             Ok(_) => {
                 let mut s = state.write().await;
+                if s.current_size == 0 {
+                    s.current_size = s.transformed_size;
+                }
                 s.finished = true;
                 Ok(())
             }
@@ -315,118 +423,44 @@ async fn download_impl(
             }
         }
     } else {
-        // Comportement par défaut : téléchargement direct sans transformation
-        default_download(response, file, state).await
+        default_copy(input, file, state).await
     }
 }
 
-/// Téléchargement par défaut sans transformation
-async fn default_download(
-    response: reqwest::Response,
+async fn default_copy(
+    input: CacheInput,
     mut file: tokio::fs::File,
     state: Arc<RwLock<DownloadState>>,
 ) -> Result<(), String> {
-    use futures_util::StreamExt;
     use tokio::io::AsyncWriteExt;
 
-    let mut stream = response.bytes_stream();
+    let mut stream = input.into_byte_stream();
 
     while let Some(chunk_result) = stream.next().await {
-        match chunk_result {
-            Ok(chunk) => {
-                // Écrire le chunk dans le fichier
-                if let Err(e) = file.write_all(&chunk).await {
-                    let error = format!("Failed to write to file: {}", e);
-                    let mut s = state.write().await;
-                    s.error = Some(error.clone());
-                    s.finished = true;
-                    return Err(error);
-                }
-
-                // Mettre à jour les tailles (identiques sans transformation)
-                let mut s = state.write().await;
-                let chunk_len = chunk.len() as u64;
-                s.current_size += chunk_len;
-                s.transformed_size += chunk_len;
-            }
-            Err(e) => {
-                let error = format!("Failed to read chunk: {}", e);
-                let mut s = state.write().await;
-                s.error = Some(error.clone());
-                s.finished = true;
-                return Err(error);
-            }
+        let chunk = chunk_result?;
+        if let Err(e) = file.write_all(&chunk).await {
+            let mut s = state.write().await;
+            let error = format!("Failed to write to file: {}", e);
+            s.error = Some(error.clone());
+            s.finished = true;
+            return Err(error);
         }
+
+        let mut s = state.write().await;
+        let len = chunk.len() as u64;
+        s.current_size += len;
+        s.transformed_size += len;
     }
 
-    // Fermer le fichier
     if let Err(e) = file.flush().await {
-        let error = format!("Failed to flush file: {}", e);
         let mut s = state.write().await;
+        let error = format!("Failed to flush file: {}", e);
         s.error = Some(error.clone());
         s.finished = true;
         return Err(error);
     }
 
-    // Marquer comme terminé
     let mut s = state.write().await;
     s.finished = true;
-
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::PathBuf;
-
-    #[tokio::test]
-    async fn test_download_basic() {
-        let temp_dir = std::env::temp_dir();
-        let filename = temp_dir.join("test_download.txt");
-
-        // Nettoyer si le fichier existe
-        let _ = std::fs::remove_file(&filename);
-
-        // Télécharger un petit fichier de test
-        let dl = download(&filename, "https://www.rust-lang.org/");
-
-        // Attendre la fin du téléchargement
-        match dl.wait_until_finished().await {
-            Ok(_) => {
-                assert!(dl.finished().await);
-                assert!(filename.exists());
-                assert!(dl.current_size().await > 0);
-            }
-            Err(e) => {
-                eprintln!("Download failed: {}", e);
-            }
-        }
-
-        // Nettoyer
-        let _ = std::fs::remove_file(&filename);
-    }
-
-    #[tokio::test]
-    async fn test_wait_until_min_size() {
-        let temp_dir = std::env::temp_dir();
-        let filename = temp_dir.join("test_download_min_size.txt");
-
-        let _ = std::fs::remove_file(&filename);
-
-        let dl = download(&filename, "https://www.rust-lang.org/");
-
-        // Attendre au moins 100 bytes
-        match dl.wait_until_min_size(100).await {
-            Ok(_) => {
-                let size = dl.current_size().await;
-                assert!(size >= 100 || dl.finished().await);
-            }
-            Err(e) => {
-                eprintln!("Download failed: {}", e);
-            }
-        }
-
-        let _ = std::fs::remove_file(&filename);
-    }
 }

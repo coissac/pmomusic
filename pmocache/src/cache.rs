@@ -5,11 +5,14 @@
 
 use crate::cache_trait::{pk_from_url, FileCache};
 use crate::db::DB;
-use crate::download::{download_with_transformer, Download, StreamTransformer};
+use crate::download::{
+    download_with_transformer, ingest_with_transformer, Download, StreamTransformer,
+};
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio::io::AsyncRead;
 use tokio::sync::RwLock;
 use tracing;
 
@@ -94,7 +97,7 @@ impl<C: CacheConfig> Cache<C> {
     ///
     /// let transformer_factory = Arc::new(|| {
     ///     // Créer un transformer qui convertit les données
-    ///     Box::new(|response, file, progress| {
+    ///     Box::new(|input, file, progress| {
     ///         Box::pin(async move {
     ///             // Transformation personnalisée
     ///             Ok(())
@@ -185,6 +188,62 @@ impl<C: CacheConfig> Cache<C> {
         Ok(pk)
     }
 
+    /// Ajoute un fichier à partir d'un flux asynchrone.
+    ///
+    /// Le flux peut provenir de n'importe quelle source (stream HTTP custom, décodeur,
+    /// extraction en mémoire, etc.). Les mêmes transformers que `add_from_url` sont
+    /// appliqués.
+    ///
+    /// # Arguments
+    ///
+    /// * `source_uri` - Identifiant logique du flux (utilisé pour générer le pk)
+    /// * `reader` - Flux asynchrone fournissant les données
+    /// * `length` - Taille attendue (si connue)
+    /// * `collection` - Collection optionnelle à laquelle appartient l'élément
+    pub async fn add_from_reader<R>(
+        &self,
+        source_uri: &str,
+        reader: R,
+        length: Option<u64>,
+        collection: Option<&str>,
+    ) -> Result<String>
+    where
+        R: AsyncRead + Send + Unpin + 'static,
+    {
+        let pk = pk_from_url(source_uri);
+        let file_path = self.file_path(&pk);
+
+        {
+            let downloads = self.downloads.read().await;
+            if downloads.contains_key(&pk) {
+                return Ok(pk);
+            }
+        }
+
+        let transformer = self.transformer_factory.as_ref().map(|factory| factory());
+        let download = ingest_with_transformer(&file_path, reader, length, transformer);
+
+        {
+            let mut downloads = self.downloads.write().await;
+            downloads.insert(pk.clone(), download.clone());
+        }
+
+        self.db.add(&pk, source_uri, collection)?;
+
+        if let Err(e) = self.enforce_limit().await {
+            tracing::warn!("Error enforcing cache limit: {}", e);
+        }
+
+        let downloads_clone = self.downloads.clone();
+        let pk_clone = pk.clone();
+        tokio::spawn(async move {
+            let _ = download.wait_until_finished().await;
+            downloads_clone.write().await.remove(&pk_clone);
+        });
+
+        Ok(pk)
+    }
+
     /// Ajoute un fichier local au cache
     ///
     /// Le fichier est copié dans le cache via une URL file://
@@ -200,7 +259,13 @@ impl<C: CacheConfig> Cache<C> {
     pub async fn add_from_file(&self, path: &str, collection: Option<&str>) -> Result<String> {
         let canonical_path = std::fs::canonicalize(path)?;
         let file_url = format!("file://{}", canonical_path.display());
-        self.add_from_url(&file_url, collection).await
+        let length = tokio::fs::metadata(&canonical_path)
+            .await
+            .ok()
+            .map(|m| m.len());
+        let reader = tokio::fs::File::open(&canonical_path).await?;
+        self.add_from_reader(&file_url, reader, length, collection)
+            .await
     }
 
     /// S'assure qu'un fichier est présent dans le cache

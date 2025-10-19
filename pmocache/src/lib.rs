@@ -139,7 +139,9 @@ pub mod openapi;
 pub use cache::{Cache, CacheConfig};
 pub use cache_trait::{pk_from_url, FileCache};
 pub use db::{CacheEntry, DB};
-pub use download::{download, download_with_transformer, Download, StreamTransformer};
+pub use download::{
+    download, download_with_transformer, ingest_with_transformer, Download, StreamTransformer,
+};
 
 #[cfg(feature = "pmoserver")]
 pub use pmoserver_ext::{create_api_router, create_file_router, GenericCacheExt};
