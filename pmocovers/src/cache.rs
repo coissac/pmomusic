@@ -35,10 +35,10 @@ pub type Cache = pmocache::Cache<CoversConfig>;
 ///
 /// Convertit automatiquement toute image téléchargée en format WebP
 fn create_webp_transformer() -> StreamTransformer {
-    Box::new(|response, mut file, progress| {
+    Box::new(|mut input, mut file, progress| {
         Box::pin(async move {
             // Télécharger tout en mémoire
-            let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+            let bytes = input.bytes().await?;
 
             // Convertir en WebP
             let img = image::load_from_memory(&bytes)

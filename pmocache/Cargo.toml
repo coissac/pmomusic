@@ -19,9 +19,11 @@ hex = "0.4"
 anyhow = "1.0"
 chrono = "0.4"
 serde = { version = "1.0", features = ["derive"] }
+bytes = "1.6"
 
 # Async
 tokio = { version = "1.0", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io"] }
 
 # Logging
 tracing = "0.1"
@@ -31,9 +33,8 @@ utoipa = { version = "5.3", optional = true }
 
 # Feature pour pmoserver (extension HTTP)
 axum = { version = "0.8", optional = true }
-tokio-util = { version = "0.7", features = ["io"], optional = true }
 
 [features]
 default = []
 openapi = ["dep:utoipa"]
-pmoserver = ["dep:axum", "dep:tokio-util"]
+pmoserver = ["dep:axum"]

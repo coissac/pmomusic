@@ -52,13 +52,13 @@ fn create_gzip_transformer() -> StreamTransformer {
 
 /// Exemple de transformer qui convertit les données en majuscules (exemple simple)
 fn create_uppercase_transformer() -> StreamTransformer {
-    Box::new(|response, mut file, update_progress| {
+    Box::new(|input, mut file, update_progress| {
         Box::pin(async move {
-            let mut stream = response.bytes_stream();
+            let mut stream = input.into_byte_stream();
             let mut total_written = 0u64;
 
             while let Some(chunk_result) = stream.next().await {
-                let chunk = chunk_result.map_err(|e| format!("Failed to read chunk: {}", e))?;
+                let chunk = chunk_result?;
 
                 // Transformer en majuscules (seulement pour texte ASCII)
                 let transformed: Vec<u8> = chunk
@@ -91,14 +91,14 @@ fn create_uppercase_transformer() -> StreamTransformer {
 
 /// Exemple de transformer qui saute les N premiers bytes (utile pour enlever des headers)
 fn create_skip_header_transformer(skip_bytes: usize) -> StreamTransformer {
-    Box::new(move |response, mut file, update_progress| {
+    Box::new(move |input, mut file, update_progress| {
         Box::pin(async move {
-            let mut stream = response.bytes_stream();
+            let mut stream = input.into_byte_stream();
             let mut skipped = 0usize;
             let mut total_written = 0u64;
 
             while let Some(chunk_result) = stream.next().await {
-                let chunk = chunk_result.map_err(|e| format!("Failed to read chunk: {}", e))?;
+                let chunk = chunk_result?;
 
                 let to_write = if skipped < skip_bytes {
                     let remaining_to_skip = skip_bytes - skipped;
@@ -132,15 +132,15 @@ fn create_skip_header_transformer(skip_bytes: usize) -> StreamTransformer {
 
 /// Exemple de transformer qui compte les lignes et ajoute des numéros
 fn create_line_number_transformer() -> StreamTransformer {
-    Box::new(|response, mut file, update_progress| {
+    Box::new(|input, mut file, update_progress| {
         Box::pin(async move {
-            let mut stream = response.bytes_stream();
+            let mut stream = input.into_byte_stream();
             let mut line_number = 1u32;
             let mut buffer = Vec::new();
             let mut total_written = 0u64;
 
             while let Some(chunk_result) = stream.next().await {
-                let chunk = chunk_result.map_err(|e| format!("Failed to read chunk: {}", e))?;
+                let chunk = chunk_result?;
                 buffer.extend_from_slice(&chunk);
 
                 // Traiter les lignes complètes dans le buffer

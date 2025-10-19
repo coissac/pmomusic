@@ -53,7 +53,7 @@ pub type Cache = pmocache::Cache<AudioConfig>;
 /// Note: Bien que nous utilisions un buffer temporaire, celui-ci est géré
 /// de manière efficace et les données FLAC sont écrites au fur et à mesure.
 fn create_flac_transformer() -> StreamTransformer {
-    Box::new(|response, mut file, progress| {
+    Box::new(|input, mut file, progress| {
         Box::pin(async move {
             use futures_util::StreamExt;
             use tokio::io::AsyncWriteExt;
@@ -63,7 +63,7 @@ fn create_flac_transformer() -> StreamTransformer {
             // ce qui n'est pas compatible avec un vrai streaming HTTP.
             // Nous devons donc bufferiser les données.
             let mut buffer = Vec::new();
-            let mut stream = response.bytes_stream();
+            let mut stream = input.into_byte_stream();
 
             while let Some(chunk) = stream.next().await {
                 let chunk = chunk.map_err(|e| format!("Stream error: {}", e))?;
