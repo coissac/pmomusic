@@ -247,6 +247,10 @@ impl ArgumentInstance {
     pub fn get_variable_instance(&self) -> Option<Arc<StateVarInstance>> {
         self.variable_instance.read().unwrap().clone()
     }
+
+    pub fn is_in(&self) -> bool {
+        self.model.is_in()
+    }
 }
 
 impl UpnpInstance for ActionInstanceSet {

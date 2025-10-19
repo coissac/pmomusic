@@ -12,7 +12,7 @@
 
 use pmodidl::{Container, DIDLLite};
 use pmosource::api::{get_source as get_source_from_registry, list_all_sources};
-use pmosource::{BrowseResult, MusicSource};
+use pmosource::{BrowseResult, MusicSource, MusicSourceError};
 use std::sync::Arc;
 
 /// Convertit des containers et items en XML DIDL-Lite
@@ -113,40 +113,52 @@ impl ContentHandler {
             }
 
             // Sinon, chercher dans les sources
+            let mut non_not_found_error: Option<String> = None;
             for source in list_all_sources().await {
-                if let Ok(result) = source.browse(object_id).await {
-                    // L'objet a été trouvé, retourner ses métadonnées
-                    match result {
-                        BrowseResult::Containers(containers) => {
-                            if let Some(container) = containers.first() {
-                                let didl = to_didl_lite(&[container.clone()], &[])?;
-                                let update_id = source.update_id().await;
-                                return Ok((didl, 1, 1, update_id));
+                match source.browse(object_id).await {
+                    Ok(result) => {
+                        // L'objet a été trouvé, retourner ses métadonnées
+                        match result {
+                            BrowseResult::Containers(containers) => {
+                                if let Some(container) = containers.first() {
+                                    let didl = to_didl_lite(&[container.clone()], &[])?;
+                                    let update_id = source.update_id().await;
+                                    return Ok((didl, 1, 1, update_id));
+                                }
+                            }
+                            BrowseResult::Items(items) => {
+                                if let Some(item) = items.first() {
+                                    let didl = to_didl_lite(&[], &[item.clone()])?;
+                                    let update_id = source.update_id().await;
+                                    return Ok((didl, 1, 1, update_id));
+                                }
+                            }
+                            BrowseResult::Mixed { containers, items } => {
+                                if let Some(container) = containers.first() {
+                                    let didl = to_didl_lite(&[container.clone()], &[])?;
+                                    let update_id = source.update_id().await;
+                                    return Ok((didl, 1, 1, update_id));
+                                } else if let Some(item) = items.first() {
+                                    let didl = to_didl_lite(&[], &[item.clone()])?;
+                                    let update_id = source.update_id().await;
+                                    return Ok((didl, 1, 1, update_id));
+                                }
                             }
                         }
-                        BrowseResult::Items(items) => {
-                            if let Some(item) = items.first() {
-                                let didl = to_didl_lite(&[], &[item.clone()])?;
-                                let update_id = source.update_id().await;
-                                return Ok((didl, 1, 1, update_id));
-                            }
-                        }
-                        BrowseResult::Mixed { containers, items } => {
-                            if let Some(container) = containers.first() {
-                                let didl = to_didl_lite(&[container.clone()], &[])?;
-                                let update_id = source.update_id().await;
-                                return Ok((didl, 1, 1, update_id));
-                            } else if let Some(item) = items.first() {
-                                let didl = to_didl_lite(&[], &[item.clone()])?;
-                                let update_id = source.update_id().await;
-                                return Ok((didl, 1, 1, update_id));
-                            }
-                        }
+                    }
+                    Err(MusicSourceError::ObjectNotFound(_)) => continue,
+                    Err(e) => {
+                        non_not_found_error = Some(e.to_string());
+                        break;
                     }
                 }
             }
 
-            Err(format!("Object not found: {}", object_id))
+            if let Some(err) = non_not_found_error {
+                Err(format!("Browse failed: {}", err))
+            } else {
+                Err(format!("Object not found: {}", object_id))
+            }
         }
     }
 
@@ -170,15 +182,27 @@ impl ContentHandler {
         }
 
         // Sinon, chercher dans les sources
+        let mut non_not_found_error: Option<String> = None;
         for source in list_all_sources().await {
-            if let Ok(result) = source.browse(object_id).await {
-                return self
-                    .browse_result_to_didl(result, source, starting_index, requested_count)
-                    .await;
+            match source.browse(object_id).await {
+                Ok(result) => {
+                    return self
+                        .browse_result_to_didl(result, source, starting_index, requested_count)
+                        .await;
+                }
+                Err(MusicSourceError::ObjectNotFound(_)) => continue,
+                Err(e) => {
+                    non_not_found_error = Some(e.to_string());
+                    break;
+                }
             }
         }
 
-        Err(format!("Container not found: {}", object_id))
+        if let Some(err) = non_not_found_error {
+            Err(format!("Browse failed: {}", err))
+        } else {
+            Err(format!("Container not found: {}", object_id))
+        }
     }
 
     /// Browse la racine (liste toutes les sources)

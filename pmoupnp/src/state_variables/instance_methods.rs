@@ -243,13 +243,16 @@ impl StateVarInstance {
     ///
     /// Un `Box<dyn Reflect>` contenant la valeur actuelle
     pub fn to_reflect(&self) -> Box<dyn Reflect> {
-        use crate::variable_types::StateVarType;
-
         let current_value = self.value.read().unwrap().clone();
+        self.parse_value(current_value)
+    }
+
+    pub fn parse_value(&self, value: StateValue) -> Box<dyn Reflect> {
+        use crate::variable_types::StateVarType;
 
         // Parser uniquement pour les String
         if self.as_state_var_type() == StateVarType::String {
-            if let StateValue::String(ref s) = current_value {
+            if let StateValue::String(ref s) = value {
                 if let Some(ref parser) = self.model.parse {
                     match parser(s) {
                         Ok(reflected) => return reflected,
@@ -266,10 +269,8 @@ impl StateVarInstance {
             }
         }
 
-        // Conversion standard pour tous les autres types
-        current_value.to_reflect()
+        value.to_reflect()
     }
-
     /// Définit la valeur depuis Box<dyn Reflect>
     ///
     /// - Si type String ET marshal défini : utilise le marshal

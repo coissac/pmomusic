@@ -56,16 +56,16 @@ impl Action {
     /// Il peut être remplacé via [`set_handler`](Self::set_handler).
     fn default_handler() -> ActionHandler {
         action_handler!(|data| {
-            info!("🎬 Action called with default handler");
-
+            let mut s = String::new();
             // Logger les arguments
             for (key, value) in data.iter() {
-                trace!(
-                    "  {} = {}",
+                s.push_str(&format![
+                    "- {} = {}\n",
                     key,
                     crate::actions::reflect_to_string(value.as_ref())
-                );
+                ]);
             }
+            info!("🎬 Action called with default handler\n\n{}", s);
 
             // Retourner les données telles quelles
             Ok(data)

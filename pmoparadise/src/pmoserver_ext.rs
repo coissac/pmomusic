@@ -3,9 +3,9 @@
 //! Ce module fournit un trait d'extension pour ajouter facilement l'API Radio Paradise
 //! à un serveur pmoserver.
 
-use crate::{Block, NowPlaying, RadioParadiseClient};
+use crate::{models::Bitrate, Block, NowPlaying, RadioParadiseClient};
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     routing::get,
     Json, Router,
@@ -21,6 +21,15 @@ pub struct RadioParadiseState {
     client: Arc<RwLock<RadioParadiseClient>>,
 }
 
+const MAX_CHANNEL_ID: u8 = 3;
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct ParadiseQuery {
+    channel: Option<u8>,
+    bitrate: Option<u8>,
+}
+
 impl RadioParadiseState {
     pub async fn new() -> anyhow::Result<Self> {
         let client = RadioParadiseClient::new()
@@ -29,6 +38,36 @@ impl RadioParadiseState {
         Ok(Self {
             client: Arc::new(RwLock::new(client)),
         })
+    }
+
+    async fn client_for_params(
+        &self,
+        params: &ParadiseQuery,
+    ) -> Result<RadioParadiseClient, StatusCode> {
+        let base_client = {
+            let client_guard = self.client.read().await;
+            client_guard.clone()
+        };
+
+        let mut client = base_client;
+
+        if let Some(channel) = params.channel {
+            if channel > MAX_CHANNEL_ID {
+                tracing::warn!("Invalid Radio Paradise channel requested: {}", channel);
+                return Err(StatusCode::BAD_REQUEST);
+            }
+            client = client.clone_with_channel(channel);
+        }
+
+        if let Some(bitrate_id) = params.bitrate {
+            let bitrate = Bitrate::from_u8(bitrate_id).map_err(|e| {
+                tracing::warn!("Invalid Radio Paradise bitrate requested: {}", e);
+                StatusCode::BAD_REQUEST
+            })?;
+            client = client.clone_with_bitrate(bitrate);
+        }
+
+        Ok(client)
     }
 }
 
@@ -186,8 +225,9 @@ impl From<NowPlaying> for NowPlayingResponse {
 )]
 async fn get_now_playing(
     State(state): State<RadioParadiseState>,
+    Query(params): Query<ParadiseQuery>,
 ) -> Result<Json<NowPlayingResponse>, StatusCode> {
-    let client = state.client.read().await;
+    let client = state.client_for_params(&params).await?;
     let now_playing = client.now_playing().await.map_err(|e| {
         tracing::error!("Failed to fetch now playing from Radio Paradise: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
@@ -208,8 +248,9 @@ async fn get_now_playing(
 )]
 async fn get_current_block(
     State(state): State<RadioParadiseState>,
+    Query(params): Query<ParadiseQuery>,
 ) -> Result<Json<BlockResponse>, StatusCode> {
-    let client = state.client.read().await;
+    let client = state.client_for_params(&params).await?;
     let block = client.get_block(None).await.map_err(|e| {
         tracing::error!("Failed to fetch current block from Radio Paradise: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
@@ -234,8 +275,9 @@ async fn get_current_block(
 async fn get_block_by_id(
     State(state): State<RadioParadiseState>,
     Path(event_id): Path<u64>,
+    Query(params): Query<ParadiseQuery>,
 ) -> Result<Json<BlockResponse>, StatusCode> {
-    let client = state.client.read().await;
+    let client = state.client_for_params(&params).await?;
     let block = client.get_block(Some(event_id)).await.map_err(|e| {
         tracing::error!(
             "Failed to fetch block {} from Radio Paradise: {}",
