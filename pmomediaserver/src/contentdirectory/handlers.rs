@@ -26,7 +26,7 @@
 use crate::content_handler::ContentHandler;
 use pmoupnp::actions::{ActionError, ActionHandler};
 use pmoupnp::{action_handler, get, set};
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 /// Handler pour l'action Browse.
 ///
@@ -61,6 +61,11 @@ pub fn browse_handler() -> ActionHandler {
         let _filter: String = get!(&data, "Filter", String);
         let _sort_criteria: String = get!(&data, "SortCriteria", String);
 
+        info!(
+            "📂 Browse requested: object_id={} flag={} start={} count={}",
+            object_id, browse_flag, starting_index, requested_count
+        );
+
         // Appeler la logique métier
         let (didl, returned, total, update_id) = handler
             .browse(&object_id, &browse_flag, starting_index, requested_count)
@@ -79,6 +84,10 @@ pub fn browse_handler() -> ActionHandler {
         debug!(
             "✅ Browse completed: returned={}, total={}",
             returned, total
+        );
+        info!(
+            "📂 Browse completed: object_id={} returned={} total={}",
+            object_id, returned, total
         );
         Ok(data)
     })
