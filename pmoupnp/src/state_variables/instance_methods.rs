@@ -233,4 +233,95 @@ impl StateVarInstance {
 
         Ok(arc_reflect)
     }
+
+    /// Convertit la valeur actuelle en Box<dyn Reflect>
+    ///
+    /// - Si type String ET parser défini : utilise le parser
+    /// - Sinon : utilise StateValue::to_reflect() directement
+    ///
+    /// # Returns
+    ///
+    /// Un `Box<dyn Reflect>` contenant la valeur actuelle
+    pub fn to_reflect(&self) -> Box<dyn Reflect> {
+        use crate::variable_types::StateVarType;
+
+        let current_value = self.value.read().unwrap().clone();
+
+        // Parser uniquement pour les String
+        if self.as_state_var_type() == StateVarType::String {
+            if let StateValue::String(ref s) = current_value {
+                if let Some(ref parser) = self.model.parse {
+                    match parser(s) {
+                        Ok(reflected) => return reflected,
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to parse value '{}' for variable '{}': {:?}, using raw string",
+                                s, self.get_name(), e
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // Conversion standard pour tous les autres types
+        current_value.to_reflect()
+    }
+
+    /// Définit la valeur depuis Box<dyn Reflect>
+    ///
+    /// - Si type String ET marshal défini : utilise le marshal
+    /// - Sinon : utilise StateValue::from_reflect() directement
+    ///
+    /// Puis délègue à set_value() pour la mise à jour et les notifications
+    ///
+    /// # Arguments
+    ///
+    /// * `reflect_value` - La nouvelle valeur sous forme Reflect
+    ///
+    /// # Errors
+    ///
+    /// Retourne une erreur si :
+    /// - La conversion Reflect → StateValue échoue
+    /// - Le marshalling échoue
+    /// - La mise à jour de la valeur échoue
+    pub async fn set_reflect_value(&self, reflect_value: Box<dyn Reflect>) -> Result<(), StateValueError> {
+        use crate::variable_types::StateVarType;
+
+        // Convertir Reflect → StateValue
+        let state_value = if self.as_state_var_type() == StateVarType::String {
+            // Pour les String : essayer le marshal si défini
+            if let Some(ref marshal) = self.model.marshal {
+                // D'abord, essayer de convertir Reflect → StateValue temporaire
+                match StateValue::from_reflect(reflect_value.as_ref(), self.as_state_var_type()) {
+                    Ok(temp_value) => {
+                        // Utiliser le marshal pour obtenir la String marshallée
+                        match marshal(&temp_value) {
+                            Ok(marshalled_string) => {
+                                StateValue::String(marshalled_string)
+                            },
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to marshal value for variable '{}': {:?}, using standard conversion",
+                                    self.get_name(), e
+                                );
+                                // Fallback
+                                temp_value
+                            }
+                        }
+                    },
+                    Err(e) => return Err(e),
+                }
+            } else {
+                // Pas de marshal, conversion standard
+                StateValue::from_reflect(reflect_value.as_ref(), self.as_state_var_type())?
+            }
+        } else {
+            // Pas un String, conversion standard
+            StateValue::from_reflect(reflect_value.as_ref(), self.as_state_var_type())?
+        };
+
+        // Déléguer à set_value() pour factoriser (mise à jour + notifications)
+        self.set_value(state_value).await
+    }
 }

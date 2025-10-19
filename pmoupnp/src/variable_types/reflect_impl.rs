@@ -1,11 +1,12 @@
-// Ce module permet de convertir StateValue en valeurs Reflect
+// Ce module permet de convertir StateValue en valeurs Reflect et vice-versa
 //
 // Étant donné que StateValue contient des types qui n'implémentent pas tous Reflect
 // (comme Uuid, Url, et certains types chrono), nous fournissons des méthodes de conversion
 // vers des types primitifs qui supportent Reflect.
 
 use bevy_reflect::Reflect;
-use crate::variable_types::StateValue;
+use crate::variable_types::{StateValue, StateValueError, StateVarType};
+use std::any::Any;
 
 impl StateValue {
     /// Convertit la StateValue en une valeur Reflect.
@@ -39,6 +40,87 @@ impl StateValue {
             StateValue::TimeTZ(v) => Box::new(v.to_string()),
             StateValue::UUID(v) => Box::new(v.to_string()),
             StateValue::URI(v) => Box::new(v.to_string()),
+        }
+    }
+
+    /// Convertit &dyn Reflect → StateValue selon le type attendu
+    ///
+    /// Méthode statique utilisée pour reconstruire StateValue depuis Reflect
+    pub fn from_reflect(
+        value: &dyn Reflect,
+        expected_type: StateVarType
+    ) -> Result<StateValue, StateValueError> {
+        match expected_type {
+            StateVarType::UI1 => {
+                value.as_any().downcast_ref::<u8>()
+                    .map(|v| StateValue::UI1(*v))
+                    .ok_or_else(|| StateValueError::TypeError("Expected u8".into()))
+            },
+            StateVarType::UI2 => {
+                value.as_any().downcast_ref::<u16>()
+                    .map(|v| StateValue::UI2(*v))
+                    .ok_or_else(|| StateValueError::TypeError("Expected u16".into()))
+            },
+            StateVarType::UI4 => {
+                value.as_any().downcast_ref::<u32>()
+                    .map(|v| StateValue::UI4(*v))
+                    .ok_or_else(|| StateValueError::TypeError("Expected u32".into()))
+            },
+            StateVarType::I1 => {
+                value.as_any().downcast_ref::<i8>()
+                    .map(|v| StateValue::I1(*v))
+                    .ok_or_else(|| StateValueError::TypeError("Expected i8".into()))
+            },
+            StateVarType::I2 => {
+                value.as_any().downcast_ref::<i16>()
+                    .map(|v| StateValue::I2(*v))
+                    .ok_or_else(|| StateValueError::TypeError("Expected i16".into()))
+            },
+            StateVarType::I4 | StateVarType::Int => {
+                value.as_any().downcast_ref::<i32>()
+                    .map(|v| StateValue::I4(*v))
+                    .ok_or_else(|| StateValueError::TypeError("Expected i32".into()))
+            },
+            StateVarType::R4 => {
+                value.as_any().downcast_ref::<f32>()
+                    .map(|v| StateValue::R4(*v))
+                    .ok_or_else(|| StateValueError::TypeError("Expected f32".into()))
+            },
+            StateVarType::R8 | StateVarType::Number | StateVarType::Fixed14_4 => {
+                value.as_any().downcast_ref::<f64>()
+                    .map(|v| StateValue::R8(*v))
+                    .ok_or_else(|| StateValueError::TypeError("Expected f64".into()))
+            },
+            StateVarType::String | StateVarType::BinBase64 | StateVarType::BinHex => {
+                value.as_any().downcast_ref::<String>()
+                    .map(|v| match expected_type {
+                        StateVarType::String => StateValue::String(v.clone()),
+                        StateVarType::BinBase64 => StateValue::BinBase64(v.clone()),
+                        StateVarType::BinHex => StateValue::BinHex(v.clone()),
+                        _ => unreachable!(),
+                    })
+                    .ok_or_else(|| StateValueError::TypeError("Expected String".into()))
+            },
+            StateVarType::Boolean => {
+                value.as_any().downcast_ref::<bool>()
+                    .map(|v| StateValue::Boolean(*v))
+                    .ok_or_else(|| StateValueError::TypeError("Expected bool".into()))
+            },
+            StateVarType::Char => {
+                value.as_any().downcast_ref::<char>()
+                    .map(|v| StateValue::Char(*v))
+                    .ok_or_else(|| StateValueError::TypeError("Expected char".into()))
+            },
+            // Pour les types complexes, on essaie de reconstruire depuis String
+            StateVarType::Date | StateVarType::DateTime | StateVarType::DateTimeTZ |
+            StateVarType::Time | StateVarType::TimeTZ | StateVarType::UUID | StateVarType::URI => {
+                value.as_any().downcast_ref::<String>()
+                    .ok_or_else(|| StateValueError::TypeError("Expected String representation".into()))
+                    .and_then(|s| {
+                        // Utiliser les méthodes from_string existantes
+                        StateValue::from_string(s, &expected_type)
+                    })
+            },
         }
     }
 }

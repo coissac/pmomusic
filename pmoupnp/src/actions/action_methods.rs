@@ -51,43 +51,33 @@ impl UpnpTyped for Action {
 impl Action {
     /// Crée un handler par défaut pour une action.
     ///
-    /// Ce handler logge simplement l'appel et les arguments d'entrée.
-    /// La méthode [`ActionInstance::run()`](crate::actions::ActionInstance::run) s'occupe
-    /// automatiquement de :
-    /// 1. Stocker les valeurs IN dans les variables liées avant d'appeler le handler
-    /// 2. Collecter les valeurs OUT après l'exécution
+    /// Ce handler logge simplement l'appel et les arguments.
     ///
     /// # Returns
     ///
-    /// Un [`ActionHandler`] qui logge les entrées.
+    /// Un [`ActionHandler`] qui logge les entrées et retourne les données telles quelles.
     ///
     /// # Comportement
     ///
-    /// - Logge le nom de l'action
-    /// - Logge les arguments IN avec leurs valeurs (lues depuis les variables liées)
+    /// - Logge les arguments avec leurs valeurs
     /// - Ne fait aucune modification (handler passif)
+    /// - Retourne les données telles quelles
     ///
     /// # Note
     ///
     /// Ce handler est automatiquement assigné lors de la création d'une action.
     /// Il peut être remplacé via [`set_handler`](Self::set_handler).
     fn default_handler() -> ActionHandler {
-        action_handler!(|instance| {
-            use crate::UpnpTypedInstance;
+        action_handler!(|data| {
+            info!("🎬 Action called with default handler");
 
-            info!("🎬 Action '{}' called", instance.get_name());
-
-            // Logger les arguments d'entrée (déjà stockés dans les variables par run())
-            for arg_inst in instance.arguments_set().all() {
-                let arg_model = arg_inst.as_ref().get_model();
-                if arg_model.is_in() {
-                    if let Some(var_inst) = arg_inst.get_variable_instance() {
-                        trace!("  IN  {} = {:?}", arg_inst.get_name(), var_inst.value());
-                    }
-                }
+            // Logger les arguments
+            for (key, value) in data.iter() {
+                trace!("  {} = {:?}", key, value);
             }
 
-            Ok(()) // Succès - handler par défaut ne fait rien d'autre
+            // Retourner les données telles quelles
+            Ok(data)
         })
     }
 
@@ -114,6 +104,7 @@ impl Action {
             },
             arguments: ArgumentSet::new(),
             handle: Self::default_handler(),
+            stateful: true,  // Par défaut, les actions sont stateful
         }
     }
 
@@ -164,5 +155,54 @@ impl Action {
     /// Retourne le handler de l'action.
     pub fn handler(&self) -> &ActionHandler {
         &self.handle
+    }
+
+    /// Définit si l'action est stateful.
+    ///
+    /// Une action stateful met à jour les StateVarInstance lors de l'exécution,
+    /// déclenchant ainsi les notifications d'événements UPnP.
+    ///
+    /// Une action stateless n'interagit pas avec les StateVarInstance,
+    /// ce qui améliore les performances pour les opérations purement calculatoires.
+    ///
+    /// # Arguments
+    ///
+    /// * `stateful` - `true` pour stateful (défaut), `false` pour stateless
+    ///
+    /// # Returns
+    ///
+    /// `&mut Self` pour permettre le chaînage
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use pmoupnp::actions::Action;
+    /// let mut action = Action::new("Calculate".to_string());
+    /// action.set_stateful(false);  // Action stateless
+    /// ```
+    pub fn set_stateful(&mut self, stateful: bool) -> &mut Self {
+        self.stateful = stateful;
+        self
+    }
+
+    /// Retourne `true` si l'action est stateful.
+    ///
+    /// # Returns
+    ///
+    /// `true` si l'action met à jour les StateVarInstance (stateful),
+    /// `false` si l'action est purement calculatoire (stateless).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use pmoupnp::actions::Action;
+    /// let mut action = Action::new("Play".to_string());
+    /// assert!(action.is_stateful());  // Stateful par défaut
+    ///
+    /// action.set_stateful(false);
+    /// assert!(!action.is_stateful());  // Maintenant stateless
+    /// ```
+    pub fn is_stateful(&self) -> bool {
+        self.stateful
     }
 }

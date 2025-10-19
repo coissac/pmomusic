@@ -76,6 +76,27 @@ impl UpnpTypedInstance for ActionInstance {
 }
 
 impl ActionInstance {
+    /// Retourne `true` si l'action est stateful.
+    ///
+    /// Une action stateful met à jour les StateVarInstance lors de l'exécution.
+    ///
+    /// # Returns
+    ///
+    /// `true` si l'action est stateful, `false` si stateless.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use pmoupnp::actions::{Action, ActionInstance};
+    /// # use pmoupnp::UpnpInstance;
+    /// let mut action = Action::new("Play".to_string());
+    /// let instance = ActionInstance::new(&action);
+    /// assert!(instance.is_stateful());  // Stateful par défaut
+    /// ```
+    pub fn is_stateful(&self) -> bool {
+        self.model.is_stateful()
+    }
+
     /// Retourne une instance d'argument par son nom.
     ///
     /// # Arguments
