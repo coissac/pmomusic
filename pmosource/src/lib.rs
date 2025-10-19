@@ -693,7 +693,9 @@ pub trait MusicSource: Debug + Send + Sync {
     /// ```
     async fn cache_item(&self, object_id: &str) -> Result<CacheStatus> {
         let _ = object_id;
-        Err(MusicSourceError::NotSupported("Caching not supported".to_string()))
+        Err(MusicSourceError::NotSupported(
+            "Caching not supported".to_string(),
+        ))
     }
 
     /// Add an item to favorites
@@ -715,7 +717,9 @@ pub trait MusicSource: Debug + Send + Sync {
     /// ```
     async fn add_favorite(&self, object_id: &str) -> Result<()> {
         let _ = object_id;
-        Err(MusicSourceError::NotSupported("Favorites not supported".to_string()))
+        Err(MusicSourceError::NotSupported(
+            "Favorites not supported".to_string(),
+        ))
     }
 
     /// Remove an item from favorites
@@ -731,7 +735,9 @@ pub trait MusicSource: Debug + Send + Sync {
     /// Returns `MusicSourceError::NotSupported` if favorites are not available.
     async fn remove_favorite(&self, object_id: &str) -> Result<()> {
         let _ = object_id;
-        Err(MusicSourceError::NotSupported("Favorites not supported".to_string()))
+        Err(MusicSourceError::NotSupported(
+            "Favorites not supported".to_string(),
+        ))
     }
 
     /// Check if an item is in favorites
@@ -749,7 +755,9 @@ pub trait MusicSource: Debug + Send + Sync {
     /// Returns `MusicSourceError::NotSupported` if favorites are not available.
     async fn is_favorite(&self, object_id: &str) -> Result<bool> {
         let _ = object_id;
-        Err(MusicSourceError::NotSupported("Favorites not supported".to_string()))
+        Err(MusicSourceError::NotSupported(
+            "Favorites not supported".to_string(),
+        ))
     }
 
     /// Get user playlists
@@ -773,7 +781,9 @@ pub trait MusicSource: Debug + Send + Sync {
     /// }
     /// ```
     async fn get_user_playlists(&self) -> Result<Vec<Container>> {
-        Err(MusicSourceError::NotSupported("Playlists not supported".to_string()))
+        Err(MusicSourceError::NotSupported(
+            "Playlists not supported".to_string(),
+        ))
     }
 
     /// Add an item to a playlist
@@ -788,7 +798,9 @@ pub trait MusicSource: Debug + Send + Sync {
     /// Returns `MusicSourceError::NotSupported` if playlists are not available.
     async fn add_to_playlist(&self, playlist_id: &str, item_id: &str) -> Result<()> {
         let _ = (playlist_id, item_id);
-        Err(MusicSourceError::NotSupported("Playlists not supported".to_string()))
+        Err(MusicSourceError::NotSupported(
+            "Playlists not supported".to_string(),
+        ))
     }
 
     /// Get total item count for a container
@@ -907,7 +919,7 @@ pub use pmodidl;
 pub use pmoplaylist;
 
 // Re-export cache types
-pub use cache::{TrackMetadata, SourceCacheManager, CacheStatistics};
+pub use cache::{CacheStatistics, SourceCacheManager, TrackMetadata};
 
 // Server extension modules (feature-gated)
 #[cfg(feature = "server")]

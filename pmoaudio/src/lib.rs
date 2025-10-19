@@ -76,13 +76,13 @@
 //! - **RwLock** : Pour partage concurrent du compteur [`TimerNode`]
 
 mod audio_chunk;
-mod nodes;
 pub mod events;
+mod nodes;
 
 pub use audio_chunk::AudioChunk;
 pub use events::{
-    AudioDataEvent, EventPublisher, EventReceiver, NodeEvent, NodeListener,
-    SourceNameUpdateEvent, VolumeChangeEvent,
+    AudioDataEvent, EventPublisher, EventReceiver, NodeEvent, NodeListener, SourceNameUpdateEvent,
+    VolumeChangeEvent,
 };
 pub use nodes::{
     buffer_node::BufferNode,

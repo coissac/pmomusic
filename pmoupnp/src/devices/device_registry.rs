@@ -4,14 +4,13 @@
 //! les `DeviceInstance` actifs, permettant l'introspection et la modification
 //! de l'état du serveur UPnP.
 
-use std::sync::{Arc, RwLock};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use serde::{Serialize, Deserialize};
+use std::sync::{Arc, RwLock};
 
 use crate::{
-    devices::DeviceInstance,
+    UpnpObjectSet, UpnpTyped, UpnpTypedInstance, devices::DeviceInstance,
     state_variables::UpnpVariable,
-    UpnpTyped, UpnpObjectSet, UpnpTypedInstance,
 };
 
 /// Ensemble de DeviceInstance.
@@ -118,7 +117,8 @@ impl DeviceRegistry {
         }
 
         // Insérer dans le DeviceInstanceSet (par nom)
-        self.devices.insert(device)
+        self.devices
+            .insert(device)
             .map_err(|e| format!("Failed to register device in registry: {:?}", e))?;
 
         // Mettre à jour l'index UDN
@@ -225,7 +225,12 @@ impl DeviceRegistry {
     /// # Returns
     ///
     /// `Some(String)` contenant la valeur de la variable, `None` si non trouvée.
-    pub fn get_variable(&self, udn: &str, service_name: &str, variable_name: &str) -> Option<String> {
+    pub fn get_variable(
+        &self,
+        udn: &str,
+        service_name: &str,
+        variable_name: &str,
+    ) -> Option<String> {
         let device = self.get_device(udn)?;
         let service = device.get_service(service_name)?;
         let variable = service.get_variable(variable_name)?;
@@ -244,14 +249,23 @@ impl DeviceRegistry {
     /// # Returns
     ///
     /// `Ok(())` si la modification réussit, `Err(String)` en cas d'erreur.
-    pub async fn set_variable(&self, udn: &str, service_name: &str, variable_name: &str, value: &str) -> Result<(), String> {
-        let device = self.get_device(udn)
+    pub async fn set_variable(
+        &self,
+        udn: &str,
+        service_name: &str,
+        variable_name: &str,
+        value: &str,
+    ) -> Result<(), String> {
+        let device = self
+            .get_device(udn)
             .ok_or_else(|| format!("Device {} not found", udn))?;
 
-        let service = device.get_service(service_name)
+        let service = device
+            .get_service(service_name)
             .ok_or_else(|| format!("Service {} not found", service_name))?;
 
-        let variable = service.get_variable(variable_name)
+        let variable = service
+            .get_variable(variable_name)
             .ok_or_else(|| format!("Variable {} not found", variable_name))?;
 
         // Parser et valider la valeur selon le type de la variable
@@ -260,7 +274,9 @@ impl DeviceRegistry {
         let state_value = StateValue::from_string(value, &var_model.as_state_var_type())
             .map_err(|e| format!("Invalid value for variable {}: {:?}", variable_name, e))?;
 
-        variable.set_value(state_value).await
+        variable
+            .set_value(state_value)
+            .await
             .map_err(|e| format!("Failed to set value: {:?}", e))?;
 
         Ok(())
@@ -276,7 +292,11 @@ impl DeviceRegistry {
     /// # Returns
     ///
     /// `Some(HashMap<String, String>)` avec les variables (nom -> valeur), `None` si non trouvé.
-    pub fn get_service_variables(&self, udn: &str, service_name: &str) -> Option<HashMap<String, String>> {
+    pub fn get_service_variables(
+        &self,
+        udn: &str,
+        service_name: &str,
+    ) -> Option<HashMap<String, String>> {
         let device = self.get_device(udn)?;
         let service = device.get_service(service_name)?;
 
@@ -327,11 +347,13 @@ impl DeviceInfo {
             manufacturer: model.manufacturer().to_string(),
             model_name: model.model_name().to_string(),
             base_url: instance.base_url().to_string(),
-            services: instance.services()
+            services: instance
+                .services()
                 .iter()
                 .map(|s| ServiceInfo::from_instance(s))
                 .collect(),
-            devices: instance.devices()
+            devices: instance
+                .devices()
                 .iter()
                 .map(|d| DeviceInfo::from_instance(d))
                 .collect(),
@@ -361,12 +383,14 @@ impl ServiceInfo {
             name: instance.get_name().to_string(),
             service_type: instance.service_type(),
             service_id: instance.service_id(),
-            actions: instance.actions()
+            actions: instance
+                .actions()
                 .all()
                 .iter()
                 .map(|a| ActionInfo::from_instance(a))
                 .collect(),
-            variables: instance.statevariables()
+            variables: instance
+                .statevariables()
                 .all()
                 .iter()
                 .map(|v| VariableInfo::from_instance(v))
@@ -463,10 +487,7 @@ impl VariableInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        devices::Device,
-        UpnpModel,
-    };
+    use crate::{UpnpModel, devices::Device};
 
     #[test]
     fn test_registry_creation() {

@@ -1,8 +1,8 @@
 use pmoapp::{WebAppExt, Webapp};
 use pmomediarenderer::MEDIA_RENDERER;
 use pmomediaserver::{MEDIA_SERVER, sources::SourcesExt};
-use pmosource::MusicSourceExt;
 use pmoserver::Server;
+use pmosource::MusicSourceExt;
 use pmoupnp::{UpnpServerExt, upnp_api::UpnpApiExt};
 use tracing::info;
 

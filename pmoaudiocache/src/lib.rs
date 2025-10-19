@@ -131,14 +131,14 @@
 //! - [`pmoserver`] : Serveur HTTP
 
 pub mod cache;
-pub mod metadata;
 pub mod flac;
+pub mod metadata;
 
 #[cfg(feature = "pmoserver")]
 pub mod openapi;
 
 // Re-exports principaux
-pub use cache::{Cache, AudioConfig, new_cache, add_with_metadata_extraction, get_metadata};
+pub use cache::{add_with_metadata_extraction, get_metadata, new_cache, AudioConfig, Cache};
 pub use metadata::AudioMetadata;
 
 #[cfg(feature = "pmoserver")]
@@ -161,7 +161,11 @@ pub trait AudioCacheExt {
     /// # Returns
     ///
     /// * `Arc<Cache>` - Instance partagée du cache
-    async fn init_audio_cache(&mut self, cache_dir: &str, limit: usize) -> anyhow::Result<std::sync::Arc<Cache>>;
+    async fn init_audio_cache(
+        &mut self,
+        cache_dir: &str,
+        limit: usize,
+    ) -> anyhow::Result<std::sync::Arc<Cache>>;
 
     /// Initialise le cache audio avec la configuration par défaut.
     ///
@@ -170,7 +174,7 @@ pub trait AudioCacheExt {
 }
 
 #[cfg(feature = "pmoserver")]
-use pmocache::pmoserver_ext::{create_file_router, create_api_router};
+use pmocache::pmoserver_ext::{create_api_router, create_file_router};
 #[cfg(feature = "pmoserver")]
 use std::sync::Arc;
 #[cfg(feature = "pmoserver")]
@@ -178,14 +182,18 @@ use utoipa::OpenApi;
 
 #[cfg(feature = "pmoserver")]
 impl AudioCacheExt for pmoserver::Server {
-    async fn init_audio_cache(&mut self, cache_dir: &str, limit: usize) -> anyhow::Result<Arc<Cache>> {
+    async fn init_audio_cache(
+        &mut self,
+        cache_dir: &str,
+        limit: usize,
+    ) -> anyhow::Result<Arc<Cache>> {
         let cache = Arc::new(crate::cache::new_cache(cache_dir, limit)?);
 
         // Router de fichiers pour servir les pistes FLAC
         // Routes: GET /audio/tracks/{pk} et GET /audio/tracks/{pk}/{param}
         let file_router = create_file_router(
             cache.clone(),
-            "audio/flac"  // Content-Type
+            "audio/flac", // Content-Type
         );
         self.add_router("/", file_router).await;
 

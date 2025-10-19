@@ -3,11 +3,8 @@
 use once_cell::sync::Lazy;
 use std::sync::Arc;
 
+use crate::{connectionmanager::CONNECTIONMANAGER, contentdirectory::CONTENTDIRECTORY};
 use pmoupnp::devices::Device;
-use crate::{
-    contentdirectory::CONTENTDIRECTORY,
-    connectionmanager::CONNECTIONMANAGER,
-};
 
 /// Device MediaServer UPnP.
 ///
@@ -52,10 +49,12 @@ pub static MEDIA_SERVER: Lazy<Arc<Device>> = Lazy::new(|| {
     device.set_udn_prefix("pmomusic".to_string());
 
     // Ajouter les deux services obligatoires
-    device.add_service(Arc::clone(&CONTENTDIRECTORY))
+    device
+        .add_service(Arc::clone(&CONTENTDIRECTORY))
         .expect("Failed to add ContentDirectory service");
 
-    device.add_service(Arc::clone(&CONNECTIONMANAGER))
+    device
+        .add_service(Arc::clone(&CONNECTIONMANAGER))
         .expect("Failed to add ConnectionManager service");
 
     Arc::new(device)

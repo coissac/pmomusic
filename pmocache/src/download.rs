@@ -1,3 +1,4 @@
+use futures_util::Future;
 use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -5,7 +6,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
-use futures_util::Future;
 
 /// Type pour une fonction de transformation de stream
 ///
@@ -248,20 +248,16 @@ async fn download_impl(
         .map_err(|e| e.to_string())?;
 
     // Lancer la requête
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| {
-            let error = format!("Failed to fetch URL: {}", e);
-            tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    let mut s = state.write().await;
-                    s.error = Some(error.clone());
-                });
+    let response = client.get(&url).send().await.map_err(|e| {
+        let error = format!("Failed to fetch URL: {}", e);
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                let mut s = state.write().await;
+                s.error = Some(error.clone());
             });
-            error
-        })?;
+        });
+        error
+    })?;
 
     // Vérifier le statut
     if !response.status().is_success() {
@@ -279,31 +275,30 @@ async fn download_impl(
     }
 
     // Créer le fichier de destination
-    let file = tokio::fs::File::create(&filename)
-        .await
-        .map_err(|e| {
-            let error = format!("Failed to create file: {}", e);
-            tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    let mut s = state.write().await;
-                    s.error = Some(error.clone());
-                    s.finished = true;
-                });
+    let file = tokio::fs::File::create(&filename).await.map_err(|e| {
+        let error = format!("Failed to create file: {}", e);
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                let mut s = state.write().await;
+                s.error = Some(error.clone());
+                s.finished = true;
             });
-            error
-        })?;
+        });
+        error
+    })?;
 
     // Si un transformer est fourni, l'utiliser
     if let Some(transformer) = transformer {
         // Créer un callback pour mettre à jour la progression
         let state_clone = Arc::clone(&state);
-        let progress_callback: Arc<dyn Fn(u64) + Send + Sync> = Arc::new(move |transformed_bytes| {
-            let state = Arc::clone(&state_clone);
-            tokio::spawn(async move {
-                let mut s = state.write().await;
-                s.transformed_size = transformed_bytes;
+        let progress_callback: Arc<dyn Fn(u64) + Send + Sync> =
+            Arc::new(move |transformed_bytes| {
+                let state = Arc::clone(&state_clone);
+                tokio::spawn(async move {
+                    let mut s = state.write().await;
+                    s.transformed_size = transformed_bytes;
+                });
             });
-        });
 
         // Appeler le transformer
         match transformer(response, file, progress_callback).await {
@@ -331,8 +326,8 @@ async fn default_download(
     mut file: tokio::fs::File,
     state: Arc<RwLock<DownloadState>>,
 ) -> Result<(), String> {
-    use tokio::io::AsyncWriteExt;
     use futures_util::StreamExt;
+    use tokio::io::AsyncWriteExt;
 
     let mut stream = response.bytes_stream();
 

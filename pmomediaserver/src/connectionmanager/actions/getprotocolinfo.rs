@@ -1,4 +1,4 @@
-use crate::connectionmanager::variables::{SOURCEPROTOCOLINFO, SINKPROTOCOLINFO};
+use crate::connectionmanager::variables::{SINKPROTOCOLINFO, SOURCEPROTOCOLINFO};
 use pmoupnp::define_action;
 
 define_action! {

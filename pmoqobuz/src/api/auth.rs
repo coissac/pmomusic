@@ -69,10 +69,7 @@ impl QobuzApi {
     pub async fn login(&mut self, username: &str, password: &str) -> Result<AuthInfo> {
         info!("Attempting to login to Qobuz as {}", username);
 
-        let params = [
-            ("username", username),
-            ("password", password),
-        ];
+        let params = [("username", username), ("password", password)];
 
         let response: LoginResponse = self.post("/user/login", &params).await?;
 

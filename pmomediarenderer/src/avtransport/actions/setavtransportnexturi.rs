@@ -1,4 +1,6 @@
-use crate::avtransport::variables::{A_ARG_TYPE_INSTANCE_ID, AVTRANSPORTNEXTURI, AVTRANSPORTNEXTURIMETADATA};
+use crate::avtransport::variables::{
+    A_ARG_TYPE_INSTANCE_ID, AVTRANSPORTNEXTURI, AVTRANSPORTNEXTURIMETADATA,
+};
 use pmoupnp::define_action;
 
 define_action! {

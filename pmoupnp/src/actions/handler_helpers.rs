@@ -33,8 +33,8 @@
 //! });
 //! ```
 
-use bevy_reflect::Reflect;
 use crate::actions::{ActionData, ActionError};
+use bevy_reflect::Reflect;
 
 /// Extrait une valeur typée depuis ActionData.
 ///
@@ -73,17 +73,13 @@ use crate::actions::{ActionData, ActionError};
 /// let volume: u32 = get_value(&data, "Volume").unwrap();
 /// assert_eq!(volume, 50);
 /// ```
-pub fn get_value<T: Reflect + Clone>(
-    data: &ActionData,
-    key: &str
-) -> Result<T, ActionError> {
+pub fn get_value<T: Reflect + Clone>(data: &ActionData, key: &str) -> Result<T, ActionError> {
     data.get(key)
         .and_then(|boxed| boxed.as_any().downcast_ref::<T>())
         .cloned()
-        .ok_or_else(|| ActionError::ArgumentError(format!(
-            "Argument '{}' not found or type mismatch",
-            key
-        )))
+        .ok_or_else(|| {
+            ActionError::ArgumentError(format!("Argument '{}' not found or type mismatch", key))
+        })
 }
 
 /// Insère une valeur dans ActionData.
@@ -115,11 +111,7 @@ pub fn get_value<T: Reflect + Clone>(
 /// let volume: u32 = get_value(&data, "Volume").unwrap();
 /// assert_eq!(volume, 75);
 /// ```
-pub fn set_value<T: Reflect + 'static>(
-    data: &mut ActionData,
-    key: impl Into<String>,
-    value: T
-) {
+pub fn set_value<T: Reflect + 'static>(data: &mut ActionData, key: impl Into<String>, value: T) {
     data.insert(key.into(), Box::new(value));
 }
 

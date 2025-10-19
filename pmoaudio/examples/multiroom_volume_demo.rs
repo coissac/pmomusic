@@ -7,8 +7,7 @@
 //! - Système d'événements pour la communication entre nodes
 
 use pmoaudio::{
-    ChromecastConfig, ChromecastSink, DiskSink, DiskSinkConfig, SourceNode,
-    VolumeNode,
+    ChromecastConfig, ChromecastSink, DiskSink, DiskSinkConfig, SourceNode, VolumeNode,
 };
 use tokio::sync::mpsc;
 
@@ -146,8 +145,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n=== Demo completed successfully! ===");
     println!("\nSummary:");
-    println!("- Generated {} chunks of {} samples each", num_chunks, chunk_size);
-    println!("- Total duration: {:.2} seconds", (num_chunks as usize * chunk_size) as f32 / sample_rate as f32);
+    println!(
+        "- Generated {} chunks of {} samples each",
+        num_chunks, chunk_size
+    );
+    println!(
+        "- Total duration: {:.2} seconds",
+        (num_chunks as usize * chunk_size) as f32 / sample_rate as f32
+    );
     println!("- Output to Chromecast: Living Room (192.168.1.100)");
     println!(
         "- Output to file: {}",

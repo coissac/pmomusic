@@ -1,4 +1,4 @@
-use crate::renderingcontrol::variables::{A_ARG_TYPE_INSTANCE_ID, A_ARG_TYPE_CHANNEL, VOLUME};
+use crate::renderingcontrol::variables::{A_ARG_TYPE_CHANNEL, A_ARG_TYPE_INSTANCE_ID, VOLUME};
 use pmoupnp::define_action;
 
 define_action! {

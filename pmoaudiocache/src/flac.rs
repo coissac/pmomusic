@@ -4,6 +4,7 @@
 //! pour standardiser le stockage dans le cache.
 
 use anyhow::{anyhow, Result};
+use std::io::Cursor;
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
 use symphonia::core::errors::Error as SymphoniaError;
@@ -11,7 +12,6 @@ use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
-use std::io::Cursor;
 
 /// Convertit des données audio en FLAC
 ///
@@ -54,7 +54,12 @@ pub fn convert_to_flac(data: &[u8], extension: Option<&str>) -> Result<Vec<u8>> 
 
     // Prober le format
     let probed = symphonia::default::get_probe()
-        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
         .map_err(|e| anyhow!("Impossible de détecter le format audio: {}", e))?;
 
     let mut format = probed.format;

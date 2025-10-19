@@ -102,17 +102,13 @@ pub fn build_soap_fault(
         error_code_elem
             .children
             .push(XMLNode::Text(code.to_string()));
-        upnp_error
-            .children
-            .push(XMLNode::Element(error_code_elem));
+        upnp_error.children.push(XMLNode::Element(error_code_elem));
 
         let mut error_desc_elem = Element::new("errorDescription");
         error_desc_elem
             .children
             .push(XMLNode::Text(desc.to_string()));
-        upnp_error
-            .children
-            .push(XMLNode::Element(error_desc_elem));
+        upnp_error.children.push(XMLNode::Element(error_desc_elem));
 
         detail.children.push(XMLNode::Element(upnp_error));
         fault.children.push(XMLNode::Element(detail));

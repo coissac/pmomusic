@@ -11,4 +11,3 @@ define_variable! {
         evented: true,
     }
 }
-

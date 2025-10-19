@@ -7,10 +7,10 @@ use std::sync::RwLock;
 use xmltree::Element;
 
 use crate::{
-    object_trait::{UpnpInstance, UpnpObject}, 
-    state_variables::{StateVarInstance, StateVariable, UpnpVariable}, 
-    variable_types::{StateValue, StateValueError, UpnpVarType}, 
-    UpnpObjectType, UpnpTyped, UpnpTypedInstance
+    UpnpObjectType, UpnpTyped, UpnpTypedInstance,
+    object_trait::{UpnpInstance, UpnpObject},
+    state_variables::{StateVarInstance, StateVariable, UpnpVariable},
+    variable_types::{StateValue, StateValueError, UpnpVarType},
 };
 
 impl UpnpVariable for StateVarInstance {
@@ -49,7 +49,6 @@ impl UpnpInstance for StateVarInstance {
             reflexive_cache: RwLock::new(None),
         }
     }
-
 }
 
 impl UpnpTyped for StateVarInstance {
@@ -59,7 +58,6 @@ impl UpnpTyped for StateVarInstance {
 }
 
 impl UpnpTypedInstance for StateVarInstance {
-
     fn get_model(&self) -> &Self::Model {
         &self.model
     }
@@ -122,7 +120,7 @@ impl StateVarInstance {
         // Validation du type
         if self.as_state_var_type() != new_value.as_state_var_type() {
             return Err(StateValueError::TypeError(
-                "Value type mismatch".to_string()
+                "Value type mismatch".to_string(),
             ));
         }
 
@@ -191,7 +189,9 @@ impl StateVarInstance {
     /// let reflected = var.reflexive_value();
     /// // reflected peut maintenant être inspecté avec l'API Reflect
     /// ```
-    pub fn reflexive_value(&self) -> Result<Arc<dyn Reflect>, crate::state_variables::StateVariableError> {
+    pub fn reflexive_value(
+        &self,
+    ) -> Result<Arc<dyn Reflect>, crate::state_variables::StateVariableError> {
         // Vérifier si on a un cache valide
         {
             let cache = self.reflexive_cache.read().unwrap();
@@ -256,7 +256,9 @@ impl StateVarInstance {
                         Err(e) => {
                             tracing::warn!(
                                 "Failed to parse value '{}' for variable '{}': {:?}, using raw string",
-                                s, self.get_name(), e
+                                s,
+                                self.get_name(),
+                                e
                             );
                         }
                     }
@@ -285,7 +287,10 @@ impl StateVarInstance {
     /// - La conversion Reflect → StateValue échoue
     /// - Le marshalling échoue
     /// - La mise à jour de la valeur échoue
-    pub async fn set_reflect_value(&self, reflect_value: Box<dyn Reflect>) -> Result<(), StateValueError> {
+    pub async fn set_reflect_value(
+        &self,
+        reflect_value: Box<dyn Reflect>,
+    ) -> Result<(), StateValueError> {
         use crate::variable_types::StateVarType;
 
         // Convertir Reflect → StateValue
@@ -297,19 +302,18 @@ impl StateVarInstance {
                     Ok(temp_value) => {
                         // Utiliser le marshal pour obtenir la String marshallée
                         match marshal(&temp_value) {
-                            Ok(marshalled_string) => {
-                                StateValue::String(marshalled_string)
-                            },
+                            Ok(marshalled_string) => StateValue::String(marshalled_string),
                             Err(e) => {
                                 tracing::warn!(
                                     "Failed to marshal value for variable '{}': {:?}, using standard conversion",
-                                    self.get_name(), e
+                                    self.get_name(),
+                                    e
                                 );
                                 // Fallback
                                 temp_value
                             }
                         }
-                    },
+                    }
                     Err(e) => return Err(e),
                 }
             } else {

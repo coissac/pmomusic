@@ -28,8 +28,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::{signal, sync::RwLock, task::JoinHandle};
 use tracing::info;
-use utoipa_swagger_ui::SwaggerUi;
 use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
 /// Info serveur sérialisable
 #[derive(Clone, Serialize, utoipa::ToSchema)]
@@ -435,7 +435,8 @@ impl Server {
         let swagger_path_static: &'static str = Box::leak(swagger_path.clone().into_boxed_str());
 
         let openapi_json_path = format!("/api-docs/{}.json", name);
-        let openapi_json_path_static: &'static str = Box::leak(openapi_json_path.clone().into_boxed_str());
+        let openapi_json_path_static: &'static str =
+            Box::leak(openapi_json_path.clone().into_boxed_str());
 
         // Compter le nombre d'endpoints dans l'OpenAPI spec
         let endpoint_count = openapi.paths.paths.len();
@@ -538,11 +539,35 @@ impl Server {
         }
     }
 
+    /// Retourne l'URL de base complète du serveur (schéma + hôte + port).
+    ///
+    /// La valeur configurable peut omettre le schéma ou le port ; cette méthode
+    /// s'assure donc que les clients reçoivent toujours une URL exploitable comme
+    /// `http://192.168.0.10:8080`.
+    pub fn base_url(&self) -> String {
+        let mut base = self.base_url.trim_end_matches('/').to_string();
+
+        if !base.contains("://") {
+            base = format!("http://{}", base);
+        }
+
+        let has_port = base
+            .rsplit_once(':')
+            .and_then(|(_, port)| port.parse::<u16>().ok())
+            .is_some();
+
+        if has_port {
+            base
+        } else {
+            format!("{}:{}", base, self.http_port)
+        }
+    }
+
     /// Récupère les infos du serveur
     pub fn info(&self) -> ServerInfo {
         ServerInfo {
             name: self.name.clone(),
-            base_url: self.base_url.clone(),
+            base_url: self.base_url(),
             http_port: self.http_port,
         }
     }
@@ -583,8 +608,9 @@ impl Server {
         self.add_openapi(
             crate::logs::create_logs_router(log_state.clone()),
             crate::logs::LogsApiDoc::openapi(),
-            "logs"
-        ).await;
+            "logs",
+        )
+        .await;
 
         self.log_state = Some(log_state);
     }

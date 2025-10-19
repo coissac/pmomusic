@@ -4,8 +4,8 @@ use std::sync::Arc;
 use xmltree::{Element, XMLNode};
 
 use crate::{
+    UpnpInstance, UpnpModel, UpnpObject,
     devices::{Device, DeviceInstance},
-    UpnpObject, UpnpModel, UpnpInstance,
 };
 
 impl UpnpObject for Device {
@@ -19,37 +19,49 @@ impl UpnpObject for Device {
 
         // friendlyName
         let mut friendly_name = Element::new("friendlyName");
-        friendly_name.children.push(XMLNode::Text(self.friendly_name().to_string()));
+        friendly_name
+            .children
+            .push(XMLNode::Text(self.friendly_name().to_string()));
         elem.children.push(XMLNode::Element(friendly_name));
 
         // manufacturer
         let mut manufacturer = Element::new("manufacturer");
-        manufacturer.children.push(XMLNode::Text(self.manufacturer().to_string()));
+        manufacturer
+            .children
+            .push(XMLNode::Text(self.manufacturer().to_string()));
         elem.children.push(XMLNode::Element(manufacturer));
 
         // manufacturerURL (optionnel)
         if let Some(url) = self.manufacturer_url() {
             let mut manufacturer_url = Element::new("manufacturerURL");
-            manufacturer_url.children.push(XMLNode::Text(url.to_string()));
+            manufacturer_url
+                .children
+                .push(XMLNode::Text(url.to_string()));
             elem.children.push(XMLNode::Element(manufacturer_url));
         }
 
         // modelDescription (optionnel)
         if let Some(desc) = self.model_description() {
             let mut model_description = Element::new("modelDescription");
-            model_description.children.push(XMLNode::Text(desc.to_string()));
+            model_description
+                .children
+                .push(XMLNode::Text(desc.to_string()));
             elem.children.push(XMLNode::Element(model_description));
         }
 
         // modelName
         let mut model_name = Element::new("modelName");
-        model_name.children.push(XMLNode::Text(self.model_name().to_string()));
+        model_name
+            .children
+            .push(XMLNode::Text(self.model_name().to_string()));
         elem.children.push(XMLNode::Element(model_name));
 
         // modelNumber (optionnel)
         if let Some(number) = self.model_number() {
             let mut model_number = Element::new("modelNumber");
-            model_number.children.push(XMLNode::Text(number.to_string()));
+            model_number
+                .children
+                .push(XMLNode::Text(number.to_string()));
             elem.children.push(XMLNode::Element(model_number));
         }
 
@@ -63,7 +75,9 @@ impl UpnpObject for Device {
         // serialNumber (optionnel)
         if let Some(serial) = self.serial_number() {
             let mut serial_number = Element::new("serialNumber");
-            serial_number.children.push(XMLNode::Text(serial.to_string()));
+            serial_number
+                .children
+                .push(XMLNode::Text(serial.to_string()));
             elem.children.push(XMLNode::Element(serial_number));
         }
 
@@ -80,7 +94,9 @@ impl UpnpObject for Device {
             let mut icon = Element::new("icon");
 
             let mut mimetype = Element::new("mimetype");
-            mimetype.children.push(XMLNode::Text("image/png".to_string()));
+            mimetype
+                .children
+                .push(XMLNode::Text("image/png".to_string()));
             icon.children.push(XMLNode::Element(mimetype));
 
             let mut width = Element::new("width");
@@ -106,7 +122,9 @@ impl UpnpObject for Device {
         // presentationURL (optionnel)
         if let Some(url) = self.presentation_url() {
             let mut presentation_url = Element::new("presentationURL");
-            presentation_url.children.push(XMLNode::Text(url.to_string()));
+            presentation_url
+                .children
+                .push(XMLNode::Text(url.to_string()));
             elem.children.push(XMLNode::Element(presentation_url));
         }
 

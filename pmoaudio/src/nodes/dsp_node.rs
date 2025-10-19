@@ -1,4 +1,7 @@
-use crate::{AudioChunk, nodes::{AudioError, MultiSubscriberNode}};
+use crate::{
+    nodes::{AudioError, MultiSubscriberNode},
+    AudioChunk,
+};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -46,12 +49,8 @@ impl DspNode {
                     *sample *= self.gain;
                 }
 
-                let new_chunk = AudioChunk::new(
-                    chunk.order,
-                    left_data,
-                    right_data,
-                    chunk.sample_rate,
-                );
+                let new_chunk =
+                    AudioChunk::new(chunk.order, left_data, right_data, chunk.sample_rate);
 
                 self.subscribers.push(Arc::new(new_chunk)).await?;
             }
@@ -118,12 +117,7 @@ impl LowPassDspNode {
                 new_right.push(self.prev_right);
             }
 
-            let new_chunk = AudioChunk::new(
-                chunk.order,
-                new_left,
-                new_right,
-                chunk.sample_rate,
-            );
+            let new_chunk = AudioChunk::new(chunk.order, new_left, new_right, chunk.sample_rate);
 
             self.subscribers.push(Arc::new(new_chunk)).await?;
         }

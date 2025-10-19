@@ -122,9 +122,9 @@
 //! - [`pmocovers`] : Cache d'images avec conversion WebP
 //! - [`pmoaudiocache`] : Cache de pistes audio
 
-pub mod db;
 pub mod cache;
 pub mod cache_trait;
+pub mod db;
 pub mod download;
 
 #[cfg(feature = "pmoserver")]
@@ -136,16 +136,13 @@ pub mod api;
 #[cfg(feature = "openapi")]
 pub mod openapi;
 
-pub use db::{DB, CacheEntry};
 pub use cache::{Cache, CacheConfig};
-pub use cache_trait::{FileCache, pk_from_url};
-pub use download::{Download, download, download_with_transformer, StreamTransformer};
+pub use cache_trait::{pk_from_url, FileCache};
+pub use db::{CacheEntry, DB};
+pub use download::{download, download_with_transformer, Download, StreamTransformer};
 
 #[cfg(feature = "pmoserver")]
-pub use pmoserver_ext::{create_file_router, create_api_router, GenericCacheExt};
+pub use pmoserver_ext::{create_api_router, create_file_router, GenericCacheExt};
 
 #[cfg(all(feature = "pmoserver", feature = "openapi"))]
-pub use api::{
-    DownloadStatus, AddItemRequest, AddItemResponse,
-    DeleteItemResponse, ErrorResponse,
-};
+pub use api::{AddItemRequest, AddItemResponse, DeleteItemResponse, DownloadStatus, ErrorResponse};

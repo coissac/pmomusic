@@ -8,9 +8,9 @@
 //! cargo run --example with_cache --features cache
 //! ```
 
-use pmoqobuz::{QobuzClient, QobuzSource};
-use pmocovers::Cache as CoverCache;
 use pmoaudiocache::AudioCache;
+use pmocovers::Cache as CoverCache;
+use pmoqobuz::{QobuzClient, QobuzSource};
 use pmosource::MusicSource;
 use std::sync::Arc;
 
@@ -60,9 +60,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if !search_results.tracks.is_empty() {
             println!("\n📋 Found {} tracks:", search_results.tracks.len());
             for (i, track) in search_results.tracks.iter().enumerate().take(3) {
-                println!("   {}. {} - {}",
+                println!(
+                    "   {}. {} - {}",
                     i + 1,
-                    track.performer.as_ref().map(|p| p.name.as_str()).unwrap_or("Unknown"),
+                    track
+                        .performer
+                        .as_ref()
+                        .map(|p| p.name.as_str())
+                        .unwrap_or("Unknown"),
                     track.title
                 );
 
@@ -86,9 +91,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Add first 3 favorite tracks with caching
         for (i, track) in favorite_tracks.iter().enumerate().take(3) {
-            println!("{}. {} - {}",
+            println!(
+                "{}. {} - {}",
                 i + 1,
-                track.performer.as_ref().map(|p| p.name.as_str()).unwrap_or("Unknown"),
+                track
+                    .performer
+                    .as_ref()
+                    .map(|p| p.name.as_str())
+                    .unwrap_or("Unknown"),
                 track.title
             );
 

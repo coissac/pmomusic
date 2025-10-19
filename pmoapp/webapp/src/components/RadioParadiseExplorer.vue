@@ -8,12 +8,34 @@
           <span v-else>🔄</span>
           Refresh
         </button>
+        <button
+          @click="togglePlayback"
+          :disabled="!nowPlaying || !nowPlaying.stream_url"
+          class="btn-play"
+        >
+          {{ isPlaying ? '⏹️ Stop' : '▶️ Play' }}
+        </button>
         <select v-model="selectedChannel" @change="changeChannel" class="channel-select">
           <option v-for="channel in channels" :key="channel.id" :value="channel.id">
             {{ channel.name }}
           </option>
         </select>
       </div>
+    </div>
+
+    <!-- Audio Player -->
+    <div v-if="isPlaying || audioError" class="audio-player-container">
+      <audio
+        v-if="!audioError"
+        ref="audioPlayer"
+        controls
+        @ended="handleAudioEnded"
+        @error="handleAudioError"
+      ></audio>
+      <p v-if="audioError" class="audio-error">{{ audioError }}</p>
+      <button @click="stopPlayback" class="btn-stop">
+        {{ audioError ? '✕ Close' : '⏹️ Stop' }}
+      </button>
     </div>
 
     <div v-if="error" class="error-message">
@@ -114,7 +136,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, nextTick } from 'vue'
 
 const API_BASE = '/api/radioparadise'
 
@@ -123,6 +145,9 @@ const error = ref(null)
 const nowPlaying = ref(null)
 const channels = ref([])
 const selectedChannel = ref(0)
+const audioPlayer = ref(null)
+const isPlaying = ref(false)
+const audioError = ref('')
 
 // Format duration from milliseconds to MM:SS
 function formatDuration(ms) {
@@ -176,6 +201,61 @@ function selectChannel(channelId) {
 function changeChannel() {
   console.log('Channel changed to:', selectedChannel.value)
   // TODO: Implement channel switching in the API
+}
+
+function playStream() {
+  if (!nowPlaying.value?.stream_url) {
+    audioError.value = 'No stream URL available'
+    return
+  }
+
+  audioError.value = ''
+  isPlaying.value = true
+
+  nextTick(() => {
+    const player = audioPlayer.value
+    if (!player) {
+      return
+    }
+    player.src = nowPlaying.value.stream_url
+    player.play().catch((e) => {
+      console.error('Failed to start playback:', e)
+      audioError.value = `Cannot play stream: ${e.message}`
+      isPlaying.value = false
+    })
+  })
+}
+
+function stopPlayback() {
+  if (audioPlayer.value) {
+    audioPlayer.value.pause()
+    audioPlayer.value.currentTime = 0
+    audioPlayer.value.src = ''
+  }
+  isPlaying.value = false
+  audioError.value = ''
+}
+
+function togglePlayback() {
+  if (isPlaying.value) {
+    stopPlayback()
+  } else {
+    playStream()
+  }
+}
+
+function handleAudioEnded() {
+  isPlaying.value = false
+}
+
+function handleAudioError() {
+  const audio = audioPlayer.value
+  if (audio?.error) {
+    audioError.value = `Audio playback error (code ${audio.error.code})`
+  } else {
+    audioError.value = 'Unknown audio playback error'
+  }
+  isPlaying.value = false
 }
 
 // Initialize on mount
@@ -235,6 +315,26 @@ onMounted(async () => {
 }
 
 .btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-play {
+  background: rgba(46, 204, 113, 0.2);
+  color: #2ecc71;
+  border: 1px solid rgba(46, 204, 113, 0.4);
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: bold;
+  transition: background 0.3s;
+}
+
+.btn-play:hover:not(:disabled) {
+  background: rgba(46, 204, 113, 0.35);
+}
+
+.btn-play:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -512,5 +612,32 @@ onMounted(async () => {
 .channel-description {
   color: #999;
   font-size: 0.9em;
+}
+
+.audio-player-container {
+  margin: 12px 0 24px;
+  padding: 16px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid #333;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.audio-error {
+  margin: 0;
+  color: #ff6b6b;
+  flex: 1;
+}
+
+.btn-stop {
+  padding: 8px 16px;
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+  background: rgba(231, 76, 60, 0.2);
+  color: #e74c3c;
+  font-weight: bold;
 }
 </style>

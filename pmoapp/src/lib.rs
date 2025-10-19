@@ -297,7 +297,7 @@ pub trait WebAppExt {
     /// # Type Parameter
     ///
     /// * `W` - Type RustEmbed contenant les fichiers de la webapp
-    async fn add_webapp<W>(&mut self, path: &str) 
+    async fn add_webapp<W>(&mut self, path: &str)
     where
         W: RustEmbed + Clone + Send + Sync + 'static;
 
@@ -310,7 +310,7 @@ pub trait WebAppExt {
     /// # Type Parameter
     ///
     /// * `W` - Type RustEmbed contenant les fichiers de la webapp
-    async fn add_webapp_with_redirect<W>(&mut self, path: &str) 
+    async fn add_webapp_with_redirect<W>(&mut self, path: &str)
     where
         W: RustEmbed + Clone + Send + Sync + 'static;
 }

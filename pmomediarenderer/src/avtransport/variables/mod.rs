@@ -21,10 +21,10 @@ mod transportstatus;
 pub use a_arg_type_instanceid::A_ARG_TYPE_INSTANCE_ID;
 pub use a_arg_type_playspeed::A_ARG_TYPE_PLAY_SPEED;
 pub use a_arg_type_seekmode::A_ARG_TYPE_SEEKMODE;
-pub use avtransporturi::AVTRANSPORTURI;
 pub use avtransporturi::AVTRANSPORTNEXTURI;
-pub use avtransporturimetadata::AVTRANSPORTURIMETADATA;
+pub use avtransporturi::AVTRANSPORTURI;
 pub use avtransporturimetadata::AVTRANSPORTNEXTURIMETADATA;
+pub use avtransporturimetadata::AVTRANSPORTURIMETADATA;
 pub use currentmediaduration::CURRENTMEDIADURATION;
 pub use currentplaymode::CURRENTPLAYMODE;
 pub use currenttrackmetadata::CURRENTTRACKMETADATA;
@@ -42,6 +42,3 @@ pub use trackduration::RELATIVETIMEPOSITION;
 pub use transportplayspeed::TRANSPORTPLAYSPEED;
 pub use transportstate::TRANSPORTSTATE;
 pub use transportstatus::TRANSPORTSTATUS;
-
-
-

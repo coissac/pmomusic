@@ -133,11 +133,7 @@ impl RadioParadiseClient {
         #[cfg(feature = "logging")]
         tracing::debug!("Fetching block: {}", url);
 
-        let response = self.client
-            .get(url)
-            .timeout(self.timeout)
-            .send()
-            .await?;
+        let response = self.client.get(url).timeout(self.timeout).send().await?;
 
         if !response.status().is_success() {
             return Err(Error::other(format!(
@@ -381,6 +377,9 @@ mod tests {
     fn test_cover_url() {
         let client = RadioParadiseClient::with_client(Client::new());
         let url = client.cover_url("test.jpg").unwrap();
-        assert_eq!(url.as_str(), "https://img.radioparadise.com/covers/l/test.jpg");
+        assert_eq!(
+            url.as_str(),
+            "https://img.radioparadise.com/covers/l/test.jpg"
+        );
     }
 }

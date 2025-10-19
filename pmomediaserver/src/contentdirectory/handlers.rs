@@ -23,9 +23,9 @@
 //! - [`get_sort_capabilities_handler`] : Capacités de tri supportées
 //! - [`get_system_update_id_handler`] : ID de mise à jour du système
 
-use pmoupnp::{action_handler, get, set};
-use pmoupnp::actions::{ActionError, ActionHandler};
 use crate::content_handler::ContentHandler;
+use pmoupnp::actions::{ActionError, ActionHandler};
+use pmoupnp::{action_handler, get, set};
 use tracing::{debug, error};
 
 /// Handler pour l'action Browse.
@@ -76,7 +76,10 @@ pub fn browse_handler() -> ActionHandler {
         set!(&mut data, "TotalMatches", total);
         set!(&mut data, "UpdateID", update_id);
 
-        debug!("✅ Browse completed: returned={}, total={}", returned, total);
+        debug!(
+            "✅ Browse completed: returned={}, total={}",
+            returned, total
+        );
         Ok(data)
     })
 }
@@ -128,7 +131,10 @@ pub fn search_handler() -> ActionHandler {
         set!(&mut data, "TotalMatches", total);
         set!(&mut data, "UpdateID", update_id);
 
-        debug!("✅ Search completed: returned={}, total={}", returned, total);
+        debug!(
+            "✅ Search completed: returned={}, total={}",
+            returned, total
+        );
         Ok(data)
     })
 }

@@ -70,7 +70,10 @@ fn create_flac_transformer() -> StreamTransformer {
                 buffer.extend_from_slice(&chunk);
             }
 
-            tracing::debug!("Downloaded {} bytes total, starting FLAC conversion", buffer.len());
+            tracing::debug!(
+                "Downloaded {} bytes total, starting FLAC conversion",
+                buffer.len()
+            );
 
             // 2. Si c'est déjà du FLAC, on l'écrit directement
             if buffer.len() >= 4 && &buffer[0..4] == b"fLaC" {
@@ -85,21 +88,26 @@ fn create_flac_transformer() -> StreamTransformer {
 
             // 3. Décoder l'audio avec Symphonia
             let (samples, channels, sample_rate, bits_per_sample) = {
+                use std::io::Cursor;
                 use symphonia::core::audio::SampleBuffer;
                 use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
+                use symphonia::core::errors::Error as SymphoniaError;
                 use symphonia::core::formats::FormatOptions;
                 use symphonia::core::io::MediaSourceStream;
                 use symphonia::core::meta::MetadataOptions;
                 use symphonia::core::probe::Hint;
-                use symphonia::core::errors::Error as SymphoniaError;
-                use std::io::Cursor;
 
                 let cursor = Cursor::new(buffer);
                 let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
 
                 let hint = Hint::new();
                 let probed = symphonia::default::get_probe()
-                    .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+                    .format(
+                        &hint,
+                        mss,
+                        &FormatOptions::default(),
+                        &MetadataOptions::default(),
+                    )
                     .map_err(|e| format!("Failed to probe format: {}", e))?;
 
                 let mut format = probed.format;
@@ -114,15 +122,18 @@ fn create_flac_transformer() -> StreamTransformer {
                     .make(&track.codec_params, &DecoderOptions::default())
                     .map_err(|e| format!("Failed to create decoder: {}", e))?;
 
-                let channels = track.codec_params.channels
+                let channels = track
+                    .codec_params
+                    .channels
                     .ok_or_else(|| "No channel info".to_string())?
                     .count();
 
-                let sample_rate = track.codec_params.sample_rate
+                let sample_rate = track
+                    .codec_params
+                    .sample_rate
                     .ok_or_else(|| "No sample rate info".to_string())?;
 
-                let bits_per_sample = track.codec_params.bits_per_sample
-                    .unwrap_or(16);
+                let bits_per_sample = track.codec_params.bits_per_sample.unwrap_or(16);
 
                 let mut samples_i32 = Vec::new();
                 let track_id = track.id;
@@ -135,7 +146,9 @@ fn create_flac_transformer() -> StreamTransformer {
                             decoder.reset();
                             continue;
                         }
-                        Err(SymphoniaError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                        Err(SymphoniaError::IoError(e))
+                            if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+                        {
                             break;
                         }
                         Err(e) => return Err(format!("Decode error: {}", e)),
@@ -183,13 +196,13 @@ fn create_flac_transformer() -> StreamTransformer {
                         tracing::debug!("Normalizing to 16-bit");
                         let samples = samples_i32.iter().map(|&s| (s >> 16) as i32).collect();
                         (samples, 16)
-                    },
+                    }
                     17..=24 => {
                         // Pour 17-24 bits, normaliser vers la plage 24-bit
                         tracing::debug!("Normalizing to 24-bit");
                         let samples = samples_i32.iter().map(|&s| (s >> 8) as i32).collect();
                         (samples, 24)
-                    },
+                    }
                     _ => {
                         // Pour 25-32 bits, garder la pleine échelle i32
                         tracing::debug!("Keeping 32-bit");
@@ -200,15 +213,20 @@ fn create_flac_transformer() -> StreamTransformer {
                 (normalized_samples, channels, sample_rate, target_bits)
             };
 
-            tracing::debug!("Encoding to FLAC: {} samples, {} channels, {} Hz, {} bits",
-                samples.len(), channels, sample_rate, bits_per_sample);
+            tracing::debug!(
+                "Encoding to FLAC: {} samples, {} channels, {} Hz, {} bits",
+                samples.len(),
+                channels,
+                sample_rate,
+                bits_per_sample
+            );
 
             // 4. Encoder en FLAC avec flacenc
             // Note: L'encodage FLAC est une opération bloquante/CPU-intensive,
             // donc nous l'exécutons dans un thread bloquant pour ne pas bloquer le runtime Tokio
             let flac_data = tokio::task::spawn_blocking(move || {
-                use flacenc::component::BitRepr;
                 use flacenc::bitsink::ByteSink;
+                use flacenc::component::BitRepr;
                 use flacenc::error::Verify;
 
                 let config = flacenc::config::Encoder::default()
@@ -222,15 +240,13 @@ fn create_flac_transformer() -> StreamTransformer {
                     sample_rate as usize,
                 );
 
-                let flac_stream = flacenc::encode_with_fixed_block_size(
-                    &config,
-                    source,
-                    config.block_size,
-                )
-                .map_err(|e| format!("FLAC encode error: {:?}", e))?;
+                let flac_stream =
+                    flacenc::encode_with_fixed_block_size(&config, source, config.block_size)
+                        .map_err(|e| format!("FLAC encode error: {:?}", e))?;
 
                 let mut sink = ByteSink::new();
-                flac_stream.write(&mut sink)
+                flac_stream
+                    .write(&mut sink)
                     .map_err(|e| format!("FLAC write error: {:?}", e))?;
 
                 Ok::<Vec<u8>, String>(sink.into_inner())
@@ -241,7 +257,9 @@ fn create_flac_transformer() -> StreamTransformer {
             tracing::debug!("FLAC encoding complete: {} bytes", flac_data.len());
 
             // 5. Écrire le fichier FLAC
-            file.write_all(&flac_data).await.map_err(|e| e.to_string())?;
+            file.write_all(&flac_data)
+                .await
+                .map_err(|e| e.to_string())?;
             file.flush().await.map_err(|e| e.to_string())?;
 
             // 6. Mettre à jour la progression finale
@@ -328,13 +346,17 @@ pub async fn add_with_metadata_extraction(
     let metadata_json = serde_json::to_string(&metadata)?;
 
     // Stocker dans la DB
-    cache.db.update_metadata(&pk, &metadata_json)
+    cache
+        .db
+        .update_metadata(&pk, &metadata_json)
         .map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
 
     // Mettre à jour la collection si les métadonnées en fournissent une
     if collection.is_none() {
         if let Some(auto_collection) = metadata.collection_key() {
-            cache.db.add(&pk, url, Some(&auto_collection))
+            cache
+                .db
+                .add(&pk, url, Some(&auto_collection))
                 .map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
         }
     }
@@ -366,7 +388,9 @@ pub async fn add_with_metadata_extraction(
 /// # }
 /// ```
 pub fn get_metadata(cache: &Cache, pk: &str) -> Result<crate::metadata::AudioMetadata> {
-    let metadata_json = cache.db.get_metadata_json(pk)
+    let metadata_json = cache
+        .db
+        .get_metadata_json(pk)
         .map_err(|e| anyhow::anyhow!("Database error: {}", e))?
         .ok_or_else(|| anyhow::anyhow!("No metadata found for pk: {}", pk))?;
 
@@ -375,4 +399,3 @@ pub fn get_metadata(cache: &Cache, pk: &str) -> Result<crate::metadata::AudioMet
 
     Ok(metadata)
 }
-

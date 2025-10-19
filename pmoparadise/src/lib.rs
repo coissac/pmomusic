@@ -269,10 +269,12 @@ pub use stream::BlockStream;
 pub use track::{TrackMetadata, TrackStream};
 
 #[cfg(feature = "mediaserver")]
-pub use mediaserver::{RadioParadiseMediaServer, MediaServerBuilder};
+pub use mediaserver::{MediaServerBuilder, RadioParadiseMediaServer};
 
 #[cfg(feature = "pmoserver")]
-pub use pmoserver_ext::{RadioParadiseExt, RadioParadiseState, RadioParadiseApiDoc, create_api_router};
+pub use pmoserver_ext::{
+    create_api_router, RadioParadiseApiDoc, RadioParadiseExt, RadioParadiseState,
+};
 
 // Version information
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

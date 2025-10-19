@@ -3,9 +3,9 @@
 use crate::error::{Error, Result};
 use crate::models::Bitrate;
 use crate::RadioParadiseClient;
-use pmoupnp::devices::Device;
-use pmoupnp::{UpnpServer};
 use pmoserver::Server;
+use pmoupnp::devices::Device;
+use pmoupnp::UpnpServer;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -33,7 +33,9 @@ impl RadioParadiseMediaServer {
     ///
     /// This will start the HTTP server and SSDP announcements.
     pub async fn run(self) -> Result<()> {
-        self.server.run().await
+        self.server
+            .run()
+            .await
             .map_err(|e| Error::other(format!("Server error: {}", e)))
     }
 
@@ -144,19 +146,21 @@ impl MediaServerBuilder {
         device.set_udn(device_udn.clone());
 
         // Add ContentDirectory service
-        let content_directory = super::content_directory::create_content_directory_service(
-            client.clone()
-        );
-        device.add_service(Arc::new(content_directory))
+        let content_directory =
+            super::content_directory::create_content_directory_service(client.clone());
+        device
+            .add_service(Arc::new(content_directory))
             .map_err(|e| Error::other(format!("Failed to add ContentDirectory: {:?}", e)))?;
 
         // Add ConnectionManager service
         let connection_manager = super::connection_manager::create_connection_manager_service();
-        device.add_service(Arc::new(connection_manager))
+        device
+            .add_service(Arc::new(connection_manager))
             .map_err(|e| Error::other(format!("Failed to add ConnectionManager: {:?}", e)))?;
 
         // Register device with server
-        server.register_device(Arc::new(device))
+        server
+            .register_device(Arc::new(device))
             .await
             .map_err(|e| Error::other(format!("Failed to register device: {:?}", e)))?;
 

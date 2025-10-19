@@ -48,11 +48,11 @@
 //! ```
 
 #[cfg(feature = "mediaserver")]
-mod server;
+mod connection_manager;
 #[cfg(feature = "mediaserver")]
 mod content_directory;
 #[cfg(feature = "mediaserver")]
-mod connection_manager;
+mod server;
 
 #[cfg(feature = "mediaserver")]
-pub use server::{RadioParadiseMediaServer, MediaServerBuilder};
+pub use server::{MediaServerBuilder, RadioParadiseMediaServer};

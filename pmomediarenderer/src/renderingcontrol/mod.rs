@@ -51,8 +51,8 @@
 
 use pmoupnp::define_service;
 
-pub mod variables;
 pub mod actions;
+pub mod variables;
 
 use actions::{GETMUTE, GETVOLUME, SETMUTE, SETVOLUME};
 use variables::{A_ARG_TYPE_CHANNEL, A_ARG_TYPE_INSTANCE_ID, MUTE, VOLUME};

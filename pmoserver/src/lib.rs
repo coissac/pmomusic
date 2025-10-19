@@ -68,8 +68,11 @@
 //! # }
 //! ```
 
-pub mod server;
 pub mod logs;
+pub mod server;
 
-pub use server::{Server, ServerBuilder, ServerInfo, ApiRegistry, ApiRegistryEntry};
-pub use logs::{LogState, SseLayer, log_sse, log_dump, init_logging, LoggingOptions, log_setup_get, log_setup_post, create_logs_router, LogsApiDoc};
+pub use logs::{
+    LogState, LoggingOptions, LogsApiDoc, SseLayer, create_logs_router, init_logging, log_dump,
+    log_setup_get, log_setup_post, log_sse,
+};
+pub use server::{ApiRegistry, ApiRegistryEntry, Server, ServerBuilder, ServerInfo};

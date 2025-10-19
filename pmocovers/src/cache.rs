@@ -43,12 +43,14 @@ fn create_webp_transformer() -> StreamTransformer {
             // Convertir en WebP
             let img = image::load_from_memory(&bytes)
                 .map_err(|e| format!("Image decode error: {}", e))?;
-            let webp_data = crate::webp::encode_webp(&img)
-                .map_err(|e| format!("WebP encode error: {}", e))?;
+            let webp_data =
+                crate::webp::encode_webp(&img).map_err(|e| format!("WebP encode error: {}", e))?;
 
             // Écrire et mettre à jour la progression
             use tokio::io::AsyncWriteExt;
-            file.write_all(&webp_data).await.map_err(|e| e.to_string())?;
+            file.write_all(&webp_data)
+                .await
+                .map_err(|e| e.to_string())?;
             file.flush().await.map_err(|e| e.to_string())?;
             progress(webp_data.len() as u64);
 

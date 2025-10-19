@@ -4,7 +4,7 @@ use crate::actions::{ActionInstanceSet, ActionSet};
 use crate::{UpnpModel, UpnpObject};
 
 impl UpnpObject for ActionSet {
-         fn to_xml_element(&self) -> Element {
+    fn to_xml_element(&self) -> Element {
         let mut elem = Element::new("actionList");
 
         for action in self.all() {
@@ -14,9 +14,7 @@ impl UpnpObject for ActionSet {
 
         elem
     }
-
 }
-
 
 impl UpnpModel for ActionSet {
     type Instance = ActionInstanceSet;

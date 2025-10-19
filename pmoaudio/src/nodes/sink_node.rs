@@ -1,4 +1,4 @@
-use crate::{AudioChunk, nodes::AudioError};
+use crate::{nodes::AudioError, AudioChunk};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -115,11 +115,13 @@ impl SinkStats {
         let sum_squares_left: f64 = chunk.left.iter().map(|&x| (x * x) as f64).sum();
         let sum_squares_right: f64 = chunk.right.iter().map(|&x| (x * x) as f64).sum();
 
-        self.rms_left = ((self.rms_left.powi(2) * (self.total_samples - chunk.len() as u64) as f64
+        self.rms_left = ((self.rms_left.powi(2)
+            * (self.total_samples - chunk.len() as u64) as f64
             + sum_squares_left)
             / self.total_samples as f64)
             .sqrt();
-        self.rms_right = ((self.rms_right.powi(2) * (self.total_samples - chunk.len() as u64) as f64
+        self.rms_right = ((self.rms_right.powi(2)
+            * (self.total_samples - chunk.len() as u64) as f64
             + sum_squares_right)
             / self.total_samples as f64)
             .sqrt();

@@ -1,8 +1,4 @@
-use std::{
-    collections::HashMap,
-    fmt,
-    sync::Arc,
-};
+use std::{collections::HashMap, fmt, sync::Arc};
 
 use std::sync::RwLock;
 use xmltree::{Element, XMLNode};
@@ -112,17 +108,13 @@ impl Clone for StateVariable {
         // clone safe des structures protégées par RwLock en prenant un read lock
         let event_conditions_clone = {
             // si le lock est "poisoned" on panic - tu peux adapter la gestion si tu veux
-            let guard = self
-                .event_conditions
-                .read().unwrap();
+            let guard = self.event_conditions.read().unwrap();
             // nécessite que Key: Clone, Value: Clone
             Arc::new(RwLock::new(guard.clone()))
         };
 
         let allowed_values_clone = {
-            let guard = self
-                .allowed_values
-                .read().unwrap();
+            let guard = self.allowed_values.read().unwrap();
             Arc::new(RwLock::new(guard.clone()))
         };
 
@@ -154,20 +146,14 @@ impl fmt::Debug for StateVariable {
             .field("modifiable", &self.modifiable)
             .field(
                 "event_conditions",
-                &format_args!(
-                    "len={}",
-                    self.event_conditions.read().unwrap().len()
-                ),
+                &format_args!("len={}", self.event_conditions.read().unwrap().len()),
             )
             .field("description", &self.description)
             .field("default_value", &self.default_value)
             .field("value_range", &self.value_range)
             .field(
                 "allowed_values",
-                &format_args!(
-                    "len={}",
-                    self.allowed_values.read().unwrap().len()
-                ),
+                &format_args!("len={}", self.allowed_values.read().unwrap().len()),
             )
             .field("send_events", &self.send_events)
             .field(
@@ -332,9 +318,7 @@ impl StateVariable {
     }
 
     pub fn extend_allowed_values(&mut self, values: &[StateValue]) -> Result<(), StateValueError> {
-        let mut av = self
-            .allowed_values
-            .write().unwrap();
+        let mut av = self.allowed_values.write().unwrap();
 
         for v in values {
             if self.as_state_var_type() == v.as_state_var_type() {
@@ -350,9 +334,7 @@ impl StateVariable {
     }
 
     pub fn push_allowed_value(&mut self, value: &StateValue) -> Result<(), StateValueError> {
-        let mut av = self
-            .allowed_values
-            .write().unwrap();
+        let mut av = self.allowed_values.write().unwrap();
 
         if self.as_state_var_type() == value.as_state_var_type() {
             av.push(value.clone());

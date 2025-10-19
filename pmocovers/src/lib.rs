@@ -42,15 +42,15 @@ pub mod webp;
 #[cfg(feature = "pmoserver")]
 pub mod openapi;
 
-pub use cache::{Cache, CoversConfig, new_cache};
+pub use cache::{new_cache, Cache, CoversConfig};
 
 #[cfg(feature = "pmoserver")]
 pub use openapi::ApiDoc;
 
 #[cfg(feature = "pmoserver")]
-use utoipa::OpenApi;
-#[cfg(feature = "pmoserver")]
 use std::sync::Arc;
+#[cfg(feature = "pmoserver")]
+use utoipa::OpenApi;
 
 /// Générateur de variantes d'images
 ///
@@ -64,7 +64,13 @@ fn create_variant_generator() -> pmocache::pmoserver_ext::ParamGenerator<CoversC
                 match webp::generate_variant(&cache, &pk, size).await {
                     Ok(data) => return Some(data),
                     Err(e) => {
-                        tracing::warn!("Cannot generate variant {}x{} for {}: {}", size, size, pk, e);
+                        tracing::warn!(
+                            "Cannot generate variant {}x{} for {}: {}",
+                            size,
+                            size,
+                            pk,
+                            e
+                        );
                         return None;
                     }
                 }
@@ -98,21 +104,26 @@ pub trait CoverCacheExt {
     /// - `DELETE /api/covers/{pk}` - Supprimer une image (API REST)
     /// - `GET /api/covers/{pk}/status` - Statut du téléchargement
     /// - `GET /swagger-ui/covers` - Documentation interactive
-    async fn init_cover_cache(&mut self, cache_dir: &str, limit: usize)
-        -> anyhow::Result<Arc<Cache>>;
+    async fn init_cover_cache(
+        &mut self,
+        cache_dir: &str,
+        limit: usize,
+    ) -> anyhow::Result<Arc<Cache>>;
 
     /// Initialise le cache d'images avec la configuration par défaut
     ///
     /// Utilise automatiquement les paramètres de `pmoconfig::Config`
-    async fn init_cover_cache_configured(&mut self)
-        -> anyhow::Result<Arc<Cache>>;
+    async fn init_cover_cache_configured(&mut self) -> anyhow::Result<Arc<Cache>>;
 }
 
 #[cfg(feature = "pmoserver")]
 impl CoverCacheExt for pmoserver::Server {
-    async fn init_cover_cache(&mut self, cache_dir: &str, limit: usize)
-        -> anyhow::Result<Arc<Cache>> {
-        use pmocache::pmoserver_ext::{create_file_router_with_generator, create_api_router};
+    async fn init_cover_cache(
+        &mut self,
+        cache_dir: &str,
+        limit: usize,
+    ) -> anyhow::Result<Arc<Cache>> {
+        use pmocache::pmoserver_ext::{create_api_router, create_file_router_with_generator};
 
         let cache = Arc::new(cache::new_cache(cache_dir, limit)?);
 
@@ -121,7 +132,7 @@ impl CoverCacheExt for pmoserver::Server {
         let file_router = create_file_router_with_generator(
             cache.clone(),
             "image/webp",
-            Some(create_variant_generator())
+            Some(create_variant_generator()),
         );
         self.add_router("/", file_router).await;
 
@@ -134,8 +145,7 @@ impl CoverCacheExt for pmoserver::Server {
         Ok(cache)
     }
 
-    async fn init_cover_cache_configured(&mut self)
-        -> anyhow::Result<Arc<Cache>> {
+    async fn init_cover_cache_configured(&mut self) -> anyhow::Result<Arc<Cache>> {
         let config = pmoconfig::get_config();
         let cache_dir = config.get_cover_cache_dir()?;
         let limit = config.get_cover_cache_size()?;

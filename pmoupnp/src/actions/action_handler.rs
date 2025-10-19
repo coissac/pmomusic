@@ -97,7 +97,8 @@ pub type ActionData = HashMap<String, Box<dyn Reflect>>;
 /// - Le handler retourne les données modifiées (ActionData unifié pour entrée/sortie)
 /// - Rarement utilisé directement (la macro `action_handler!` s'en charge)
 /// - Nécessaire pour la compatibilité avec les trait objects
-pub type ActionFuture = Pin<Box<dyn Future<Output = Result<ActionData, crate::actions::ActionError>> + Send>>;
+pub type ActionFuture =
+    Pin<Box<dyn Future<Output = Result<ActionData, crate::actions::ActionError>> + Send>>;
 
 /// Handler d'action UPnP asynchrone.
 ///

@@ -3,12 +3,11 @@
 use once_cell::sync::Lazy;
 use std::sync::Arc;
 
-use pmoupnp::devices::Device;
 use crate::{
-    avtransport::AVTTRANSPORT,
+    avtransport::AVTTRANSPORT, connectionmanager::CONNECTIONMANAGER,
     renderingcontrol::RENDERINGCONTROL,
-    connectionmanager::CONNECTIONMANAGER,
 };
+use pmoupnp::devices::Device;
 
 /// Device MediaRenderer UPnP.
 ///
@@ -54,13 +53,16 @@ pub static MEDIA_RENDERER: Lazy<Arc<Device>> = Lazy::new(|| {
     device.set_udn_prefix("pmomusic".to_string());
 
     // Ajouter les trois services obligatoires
-    device.add_service(Arc::clone(&AVTTRANSPORT))
+    device
+        .add_service(Arc::clone(&AVTTRANSPORT))
         .expect("Failed to add AVTransport service");
 
-    device.add_service(Arc::clone(&RENDERINGCONTROL))
+    device
+        .add_service(Arc::clone(&RENDERINGCONTROL))
         .expect("Failed to add RenderingControl service");
 
-    device.add_service(Arc::clone(&CONNECTIONMANAGER))
+    device
+        .add_service(Arc::clone(&CONNECTIONMANAGER))
         .expect("Failed to add ConnectionManager service");
 
     Arc::new(device)

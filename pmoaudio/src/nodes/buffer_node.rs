@@ -1,4 +1,7 @@
-use crate::{AudioChunk, nodes::{AudioError, MultiSubscriberNode}};
+use crate::{
+    nodes::{AudioError, MultiSubscriberNode},
+    AudioChunk,
+};
 use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};

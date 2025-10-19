@@ -13,13 +13,7 @@
 //! Ces endpoints sont définis ici plutôt que dans `pmosource` pour éviter les
 //! dépendances circulaires (pmoqobuz et pmoparadise dépendent de pmosource).
 
-use axum::{
-    extract::Json,
-    http::StatusCode,
-    response::IntoResponse,
-    routing::post,
-    Router,
-};
+use axum::{Router, extract::Json, http::StatusCode, response::IntoResponse, routing::post};
 use pmosource::MusicSource;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;

@@ -197,7 +197,9 @@ impl MpdSink {
     /// Envoie un chunk au serveur MPD (mock)
     async fn send_chunk(&self, _chunk: &AudioChunk) -> Result<(), AudioError> {
         if !self.connected {
-            return Err(AudioError::ProcessingError("Not connected to MPD".to_string()));
+            return Err(AudioError::ProcessingError(
+                "Not connected to MPD".to_string(),
+            ));
         }
 
         // Dans une vraie implémentation:

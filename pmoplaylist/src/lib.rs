@@ -229,12 +229,7 @@ impl FifoPlaylist {
     ///     pmoplaylist::DEFAULT_IMAGE,
     /// );
     /// ```
-    pub fn new(
-        id: String,
-        title: String,
-        capacity: usize,
-        default_image: &'static [u8],
-    ) -> Self {
+    pub fn new(id: String, title: String, capacity: usize, default_image: &'static [u8]) -> Self {
         Self {
             inner: Arc::new(RwLock::new(FifoPlaylistInner {
                 id,
@@ -414,7 +409,8 @@ impl FifoPlaylist {
     pub async fn get_items(&self, offset: usize, count: usize) -> Vec<Track> {
         let inner = self.inner.read().await;
 
-        inner.queue
+        inner
+            .queue
             .iter()
             .skip(offset)
             .take(count)
@@ -531,7 +527,8 @@ impl FifoPlaylist {
     ) -> Vec<Item> {
         let inner = self.inner.read().await;
 
-        inner.queue
+        inner
+            .queue
             .iter()
             .skip(offset)
             .take(count)
@@ -618,8 +615,12 @@ mod tests {
             DEFAULT_IMAGE,
         );
 
-        playlist.append_track(Track::new("track-1", "Song 1", "http://example.com/1.mp3")).await;
-        playlist.append_track(Track::new("track-2", "Song 2", "http://example.com/2.mp3")).await;
+        playlist
+            .append_track(Track::new("track-1", "Song 1", "http://example.com/1.mp3"))
+            .await;
+        playlist
+            .append_track(Track::new("track-2", "Song 2", "http://example.com/2.mp3"))
+            .await;
 
         let removed = playlist.remove_oldest().await;
         assert!(removed.is_some());
@@ -636,9 +637,15 @@ mod tests {
             DEFAULT_IMAGE,
         );
 
-        playlist.append_track(Track::new("track-1", "Song 1", "http://example.com/1.mp3")).await;
-        playlist.append_track(Track::new("track-2", "Song 2", "http://example.com/2.mp3")).await;
-        playlist.append_track(Track::new("track-3", "Song 3", "http://example.com/3.mp3")).await;
+        playlist
+            .append_track(Track::new("track-1", "Song 1", "http://example.com/1.mp3"))
+            .await;
+        playlist
+            .append_track(Track::new("track-2", "Song 2", "http://example.com/2.mp3"))
+            .await;
+        playlist
+            .append_track(Track::new("track-3", "Song 3", "http://example.com/3.mp3"))
+            .await;
 
         assert!(playlist.remove_by_id("track-2").await);
         assert_eq!(playlist.len().await, 2);
@@ -657,8 +664,12 @@ mod tests {
             DEFAULT_IMAGE,
         );
 
-        playlist.append_track(Track::new("track-1", "Song 1", "http://example.com/1.mp3")).await;
-        playlist.append_track(Track::new("track-2", "Song 2", "http://example.com/2.mp3")).await;
+        playlist
+            .append_track(Track::new("track-1", "Song 1", "http://example.com/1.mp3"))
+            .await;
+        playlist
+            .append_track(Track::new("track-2", "Song 2", "http://example.com/2.mp3"))
+            .await;
 
         playlist.clear().await;
         assert_eq!(playlist.len().await, 0);
@@ -675,11 +686,13 @@ mod tests {
         );
 
         for i in 0..5 {
-            playlist.append_track(Track::new(
-                format!("track-{}", i),
-                format!("Song {}", i),
-                format!("http://example.com/{}.mp3", i),
-            )).await;
+            playlist
+                .append_track(Track::new(
+                    format!("track-{}", i),
+                    format!("Song {}", i),
+                    format!("http://example.com/{}.mp3", i),
+                ))
+                .await;
         }
 
         let items = playlist.get_items(1, 2).await;
@@ -697,7 +710,9 @@ mod tests {
             DEFAULT_IMAGE,
         );
 
-        playlist.append_track(Track::new("track-1", "Song 1", "http://example.com/1.mp3")).await;
+        playlist
+            .append_track(Track::new("track-1", "Song 1", "http://example.com/1.mp3"))
+            .await;
 
         let container = playlist.as_container().await;
         assert_eq!(container.id, "radio-1");
@@ -715,14 +730,20 @@ mod tests {
             DEFAULT_IMAGE,
         );
 
-        let track = Track::new("track-1", "Bohemian Rhapsody", "http://example.com/song.mp3")
-            .with_artist("Queen")
-            .with_album("A Night at the Opera")
-            .with_duration(354);
+        let track = Track::new(
+            "track-1",
+            "Bohemian Rhapsody",
+            "http://example.com/song.mp3",
+        )
+        .with_artist("Queen")
+        .with_album("A Night at the Opera")
+        .with_duration(354);
 
         playlist.append_track(track).await;
 
-        let items = playlist.as_objects(0, 10, Some("http://server/default.webp")).await;
+        let items = playlist
+            .as_objects(0, 10, Some("http://server/default.webp"))
+            .await;
         assert_eq!(items.len(), 1);
 
         let item = &items[0];
@@ -745,7 +766,10 @@ mod tests {
         assert_eq!(track.artist, Some("Artist".to_string()));
         assert_eq!(track.album, Some("Album".to_string()));
         assert_eq!(track.duration, Some(180));
-        assert_eq!(track.image, Some("http://example.com/cover.jpg".to_string()));
+        assert_eq!(
+            track.image,
+            Some("http://example.com/cover.jpg".to_string())
+        );
     }
 
     #[tokio::test]
@@ -759,10 +783,14 @@ mod tests {
 
         assert_eq!(playlist.update_id().await, 0);
 
-        playlist.append_track(Track::new("track-1", "Song 1", "http://example.com/1.mp3")).await;
+        playlist
+            .append_track(Track::new("track-1", "Song 1", "http://example.com/1.mp3"))
+            .await;
         assert_eq!(playlist.update_id().await, 1);
 
-        playlist.append_track(Track::new("track-2", "Song 2", "http://example.com/2.mp3")).await;
+        playlist
+            .append_track(Track::new("track-2", "Song 2", "http://example.com/2.mp3"))
+            .await;
         assert_eq!(playlist.update_id().await, 2);
 
         playlist.remove_oldest().await;

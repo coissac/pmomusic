@@ -97,11 +97,14 @@ impl TrackStream {
         track_index: usize,
     ) -> Result<Self> {
         // Validate track index
-        let song = block.get_song(track_index)
+        let song = block
+            .get_song(track_index)
             .ok_or(Error::InvalidIndex(track_index, block.song_count()))?;
 
         // Download block to temporary file
-        let url = block.url.parse()
+        let url = block
+            .url
+            .parse()
             .map_err(|e| Error::other(format!("Invalid block URL: {}", e)))?;
 
         let block_data = client.download_block(&url).await?;
@@ -191,7 +194,9 @@ impl TrackStream {
     /// Returns samples as 16-bit signed integers (i16), interleaved by channel.
     /// For stereo: [L, R, L, R, ...]. Returns None when track ends.
     pub fn read_samples(&mut self, buffer: &mut [i16]) -> Result<Option<usize>> {
-        let reader = self.reader.as_mut()
+        let reader = self
+            .reader
+            .as_mut()
             .ok_or(Error::other("TrackStream already consumed"))?;
 
         let mut samples_iter = reader.samples();
@@ -335,7 +340,11 @@ impl RadioParadiseClient {
     /// # }
     /// # }
     /// ```
-    pub async fn open_track_stream(&self, block: &Block, track_index: usize) -> Result<TrackStream> {
+    pub async fn open_track_stream(
+        &self,
+        block: &Block,
+        track_index: usize,
+    ) -> Result<TrackStream> {
         TrackStream::from_block_internal(self, block, track_index).await
     }
 
@@ -363,7 +372,8 @@ impl RadioParadiseClient {
     /// # }
     /// ```
     pub fn track_position_seconds(&self, block: &Block, track_index: usize) -> Result<(f64, f64)> {
-        let song = block.get_song(track_index)
+        let song = block
+            .get_song(track_index)
             .ok_or(Error::InvalidIndex(track_index, block.song_count()))?;
 
         let start_secs = song.elapsed as f64 / 1000.0;

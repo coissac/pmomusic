@@ -43,11 +43,13 @@ async fn main() -> Result<()> {
     // Display all tracks
     println!("Available Tracks:");
     for (index, song) in block.songs_ordered() {
-        println!("  {}. {} - {} ({:.1}s)",
-                 index,
-                 song.artist,
-                 song.title,
-                 song.duration as f64 / 1000.0);
+        println!(
+            "  {}. {} - {} ({:.1}s)",
+            index,
+            song.artist,
+            song.title,
+            song.duration as f64 / 1000.0
+        );
     }
     println!();
 
@@ -67,7 +69,10 @@ async fn main() -> Result<()> {
         println!("Track Metadata:");
         println!("  Sample Rate: {} Hz", track_stream.metadata.sample_rate);
         println!("  Channels: {}", track_stream.metadata.channels);
-        println!("  Bits Per Sample: {}", track_stream.metadata.bits_per_sample);
+        println!(
+            "  Bits Per Sample: {}",
+            track_stream.metadata.bits_per_sample
+        );
         println!("  Total Samples: {}", track_stream.metadata.total_samples);
         println!();
 
@@ -86,10 +91,15 @@ async fn main() -> Result<()> {
         let (start, duration) = client.track_position_seconds(&block, index)?;
         println!("Track {}: {} - {}", index, song.artist, song.title);
         println!("  mpv command:");
-        println!("    mpv --start={:.3} --length={:.3} '{}'", start, duration, block.url);
+        println!(
+            "    mpv --start={:.3} --length={:.3} '{}'",
+            start, duration, block.url
+        );
         println!("  ffmpeg command (extract to file):");
-        println!("    ffmpeg -ss {:.3} -t {:.3} -i '{}' -c copy track_{}.flac",
-                 start, duration, block.url, index);
+        println!(
+            "    ffmpeg -ss {:.3} -t {:.3} -i '{}' -c copy track_{}.flac",
+            start, duration, block.url, index
+        );
         println!();
     }
 

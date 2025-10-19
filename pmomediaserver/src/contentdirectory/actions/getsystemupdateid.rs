@@ -1,6 +1,6 @@
+use crate::contentdirectory::handlers;
 use crate::contentdirectory::variables::SYSTEMUPDATEID;
 use pmoupnp::define_action;
-use crate::contentdirectory::handlers;
 
 define_action! {
     pub static GETSYSTEMUPDATEID = "GetSystemUpdateID" stateless {

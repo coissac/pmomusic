@@ -3,11 +3,7 @@
 //! Ce module fournit un sink qui écrit les chunks audio sur disque,
 //! avec support de la dérivation automatique du nom de fichier depuis la source.
 
-use crate::{
-    events::SourceNameUpdateEvent,
-    nodes::AudioError,
-    AudioChunk,
-};
+use crate::{events::SourceNameUpdateEvent, nodes::AudioError, AudioChunk};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs::File;
@@ -161,7 +157,13 @@ impl DiskSink {
             // Nettoyer le nom de la source pour en faire un nom de fichier valide
             let clean_name = name
                 .chars()
-                .map(|c| if c.is_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+                .map(|c| {
+                    if c.is_alphanumeric() || c == '_' || c == '-' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
                 .collect::<String>();
 
             format!("{}.{}", clean_name, self.config.format.extension())
@@ -180,9 +182,9 @@ impl DiskSink {
 
         // Créer le répertoire parent si nécessaire
         if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|e| AudioError::ProcessingError(format!("Failed to create directory: {}", e)))?;
+            tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                AudioError::ProcessingError(format!("Failed to create directory: {}", e))
+            })?;
         }
 
         // Créer le writer approprié selon le format
@@ -328,10 +330,9 @@ impl AudioFileWriter {
             bytes.extend_from_slice(&sample_i16.to_le_bytes());
         }
 
-        self.file
-            .write_all(&bytes)
-            .await
-            .map_err(|e| AudioError::ProcessingError(format!("Failed to write audio data: {}", e)))?;
+        self.file.write_all(&bytes).await.map_err(|e| {
+            AudioError::ProcessingError(format!("Failed to write audio data: {}", e))
+        })?;
 
         self.total_samples += chunk.len();
         Ok(())
@@ -361,10 +362,9 @@ impl AudioFileWriter {
         header.extend_from_slice(b"data");
         header.extend_from_slice(&0u32.to_le_bytes()); // Taille des données (à mettre à jour)
 
-        self.file
-            .write_all(&header)
-            .await
-            .map_err(|e| AudioError::ProcessingError(format!("Failed to write WAV header: {}", e)))?;
+        self.file.write_all(&header).await.map_err(|e| {
+            AudioError::ProcessingError(format!("Failed to write WAV header: {}", e))
+        })?;
 
         Ok(())
     }
@@ -378,24 +378,37 @@ impl AudioFileWriter {
 
             // Positionner au début et réécrire les tailles
             use tokio::io::AsyncSeekExt;
-            self.file.seek(std::io::SeekFrom::Start(4)).await.map_err(|e| {
-                AudioError::ProcessingError(format!("Failed to seek in file: {}", e))
-            })?;
-            self.file.write_all(&file_size.to_le_bytes()).await.map_err(|e| {
-                AudioError::ProcessingError(format!("Failed to update file size: {}", e))
-            })?;
+            self.file
+                .seek(std::io::SeekFrom::Start(4))
+                .await
+                .map_err(|e| {
+                    AudioError::ProcessingError(format!("Failed to seek in file: {}", e))
+                })?;
+            self.file
+                .write_all(&file_size.to_le_bytes())
+                .await
+                .map_err(|e| {
+                    AudioError::ProcessingError(format!("Failed to update file size: {}", e))
+                })?;
 
-            self.file.seek(std::io::SeekFrom::Start(40)).await.map_err(|e| {
-                AudioError::ProcessingError(format!("Failed to seek in file: {}", e))
-            })?;
-            self.file.write_all(&data_size.to_le_bytes()).await.map_err(|e| {
-                AudioError::ProcessingError(format!("Failed to update data size: {}", e))
-            })?;
+            self.file
+                .seek(std::io::SeekFrom::Start(40))
+                .await
+                .map_err(|e| {
+                    AudioError::ProcessingError(format!("Failed to seek in file: {}", e))
+                })?;
+            self.file
+                .write_all(&data_size.to_le_bytes())
+                .await
+                .map_err(|e| {
+                    AudioError::ProcessingError(format!("Failed to update data size: {}", e))
+                })?;
         }
 
-        self.file.flush().await.map_err(|e| {
-            AudioError::ProcessingError(format!("Failed to flush file: {}", e))
-        })?;
+        self.file
+            .flush()
+            .await
+            .map_err(|e| AudioError::ProcessingError(format!("Failed to flush file: {}", e)))?;
 
         Ok(())
     }

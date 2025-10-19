@@ -22,7 +22,7 @@
 #[cfg(feature = "server")]
 use axum::{
     extract::Path,
-    http::{StatusCode, header},
+    http::{header, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, get},
     Json, Router,
@@ -313,21 +313,19 @@ async fn get_source_capabilities(Path(id): Path<String>) -> impl IntoResponse {
 )]
 async fn get_source_statistics(Path(id): Path<String>) -> impl IntoResponse {
     match get_source(&id).await {
-        Some(source) => {
-            match source.statistics().await {
-                Ok(stats) => {
-                    let stats_info: SourceStatisticsInfo = stats.into();
-                    (StatusCode::OK, Json(stats_info)).into_response()
-                }
-                Err(e) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: format!("Failed to get statistics: {}", e),
-                    }),
-                )
-                    .into_response(),
+        Some(source) => match source.statistics().await {
+            Ok(stats) => {
+                let stats_info: SourceStatisticsInfo = stats.into();
+                (StatusCode::OK, Json(stats_info)).into_response()
             }
-        }
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to get statistics: {}", e),
+                }),
+            )
+                .into_response(),
+        },
         None => (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
@@ -357,27 +355,25 @@ async fn get_source_statistics(Path(id): Path<String>) -> impl IntoResponse {
 )]
 async fn get_source_root(Path(id): Path<String>) -> impl IntoResponse {
     match get_source(&id).await {
-        Some(source) => {
-            match source.root_container().await {
-                Ok(container) => {
-                    let root = SourceRootContainer {
-                        id: container.id,
-                        parent_id: container.parent_id,
-                        title: container.title,
-                        class: container.class,
-                        child_count: container.child_count,
-                    };
-                    (StatusCode::OK, Json(root)).into_response()
-                }
-                Err(e) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: format!("Failed to get root container: {}", e),
-                    }),
-                )
-                    .into_response(),
+        Some(source) => match source.root_container().await {
+            Ok(container) => {
+                let root = SourceRootContainer {
+                    id: container.id,
+                    parent_id: container.parent_id,
+                    title: container.title,
+                    class: container.class,
+                    child_count: container.child_count,
+                };
+                (StatusCode::OK, Json(root)).into_response()
             }
-        }
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to get root container: {}", e),
+                }),
+            )
+                .into_response(),
+        },
         None => (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {

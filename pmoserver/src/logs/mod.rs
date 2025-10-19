@@ -13,22 +13,22 @@ use std::{
 use axum::{
     Json,
     extract::{Query, State},
+    http::StatusCode,
     response::{
         IntoResponse,
         sse::{Event, KeepAlive, Sse},
     },
-    http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
+use tracing::Level;
 use tracing_subscriber::{
     Registry,
-    layer::{SubscriberExt, Filter},
-    reload,
     filter::LevelFilter,
+    layer::{Filter, SubscriberExt},
+    reload,
     util::SubscriberInitExt,
 };
-use tracing::Level;
 use utoipa::OpenApi;
 
 /// Représente une entrée de log
@@ -69,7 +69,10 @@ impl LogState {
         if let Err(e) = self.reload_handle.write().unwrap().reload(level_filter) {
             eprintln!("❌ Failed to reload log level filter: {}", e);
         } else {
-            eprintln!("✅ Log level filter reloaded successfully to: {:?}", level_filter);
+            eprintln!(
+                "✅ Log level filter reloaded successfully to: {:?}",
+                level_filter
+            );
         }
     }
 
@@ -174,7 +177,10 @@ fn is_level_allowed(log_level: &str, max_level: Level) -> bool {
         Level::ERROR => matches!(entry_level, Level::ERROR),
         Level::WARN => matches!(entry_level, Level::ERROR | Level::WARN),
         Level::INFO => matches!(entry_level, Level::ERROR | Level::WARN | Level::INFO),
-        Level::DEBUG => matches!(entry_level, Level::ERROR | Level::WARN | Level::INFO | Level::DEBUG),
+        Level::DEBUG => matches!(
+            entry_level,
+            Level::ERROR | Level::WARN | Level::INFO | Level::DEBUG
+        ),
         Level::TRACE => true, // Tous les niveaux
     }
 }
@@ -262,15 +268,15 @@ pub fn init_logging() -> LogState {
         Ok(l) => match string_to_level(&l) {
             Some(lev) => level_to_levelfilter(lev),
             None => LevelFilter::TRACE,
-        }
-        Err(_) => LevelFilter::TRACE
+        },
+        Err(_) => LevelFilter::TRACE,
     };
 
     let (filter, reload_handle) = reload::Layer::new(log_level);
 
     let buffer_capacity = match config.get_log_cache_size() {
         Ok(c) => c,
-        Err(_) => 500
+        Err(_) => 500,
     };
 
     // Créer le LogState avec le handle de rechargement
@@ -410,12 +416,12 @@ fn level_to_string(level: Level) -> String {
 
 fn level_to_levelfilter(level: Level) -> LevelFilter {
     match level {
-            Level::ERROR => LevelFilter::ERROR,
-            Level::WARN => LevelFilter::WARN,
-            Level::INFO => LevelFilter::INFO,
-            Level::DEBUG => LevelFilter::DEBUG,
-            Level::TRACE => LevelFilter::TRACE,
-        }
+        Level::ERROR => LevelFilter::ERROR,
+        Level::WARN => LevelFilter::WARN,
+        Level::INFO => LevelFilter::INFO,
+        Level::DEBUG => LevelFilter::DEBUG,
+        Level::TRACE => LevelFilter::TRACE,
+    }
 }
 
 /// Crée le router pour l'API de gestion des logs

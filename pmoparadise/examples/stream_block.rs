@@ -38,7 +38,10 @@ async fn main() -> Result<()> {
     eprintln!("Current Block:");
     eprintln!("  Event: {}", current_block.event);
     eprintln!("  Songs: {}", current_block.song_count());
-    eprintln!("  Duration: {:.1} minutes", current_block.length as f64 / 60000.0);
+    eprintln!(
+        "  Duration: {:.1} minutes",
+        current_block.length as f64 / 60000.0
+    );
     eprintln!("  URL: {}\n", current_block.url);
 
     // Display tracklist
@@ -51,7 +54,10 @@ async fn main() -> Result<()> {
     // Prefetch next block in advance
     eprintln!("Prefetching next block...");
     client.prefetch_next(&current_block).await?;
-    eprintln!("Next block prefetched: {}\n", client.next_block_url().unwrap());
+    eprintln!(
+        "Next block prefetched: {}\n",
+        client.next_block_url().unwrap()
+    );
 
     // Stream the block
     eprintln!("Streaming block... (writing to stdout)");
@@ -71,12 +77,18 @@ async fn main() -> Result<()> {
 
         // Progress indicator (to stderr so it doesn't interfere with piped audio)
         if total_bytes % (1024 * 1024) == 0 {
-            eprintln!("  Downloaded: {:.1} MB", total_bytes as f64 / 1024.0 / 1024.0);
+            eprintln!(
+                "  Downloaded: {:.1} MB",
+                total_bytes as f64 / 1024.0 / 1024.0
+            );
         }
     }
 
     eprintln!("\nBlock streaming complete!");
-    eprintln!("Total downloaded: {:.2} MB", total_bytes as f64 / 1024.0 / 1024.0);
+    eprintln!(
+        "Total downloaded: {:.2} MB",
+        total_bytes as f64 / 1024.0 / 1024.0
+    );
 
     // In a real application, you would now:
     // 1. Get the next block using prefetched metadata

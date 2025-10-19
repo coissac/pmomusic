@@ -7,8 +7,8 @@
 //! méthodes spécifiques au MediaServer UPnP.
 
 use async_trait::async_trait;
-use pmosource::MusicSource;
 use pmoserver::Server;
+use pmosource::MusicSource;
 use std::sync::Arc;
 
 // Réexporter le trait de base de pmosource
@@ -23,7 +23,10 @@ pub use pmosource::MusicSourceExt;
 ///
 /// let sources = pmosource::api::list_all_sources().await;
 /// ```
-#[deprecated(since = "0.2.0", note = "Use pmosource::api::list_all_sources() directly")]
+#[deprecated(
+    since = "0.2.0",
+    note = "Use pmosource::api::list_all_sources() directly"
+)]
 pub async fn get_source_registry() -> Vec<Arc<dyn MusicSource>> {
     pmosource::api::list_all_sources().await
 }

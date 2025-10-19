@@ -50,7 +50,9 @@ async fn main() -> anyhow::Result<()> {
     println!("\n2. Initialisation du client Qobuz avec intégration pmocovers...");
     // Initialiser le client Qobuz avec intégration pmocovers
     // Les images d'albums seront automatiquement ajoutées au cache
-    let client = server.init_qobuz_client_configured_with_covers(cache.clone()).await?;
+    let client = server
+        .init_qobuz_client_configured_with_covers(cache.clone())
+        .await?;
 
     if let Some(auth_info) = client.auth_info() {
         println!("   ✓ Client Qobuz connecté !");

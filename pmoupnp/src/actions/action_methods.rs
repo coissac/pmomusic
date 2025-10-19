@@ -3,21 +3,8 @@ use std::sync::Arc;
 use tracing::{info, trace};
 use xmltree::{Element, XMLNode};
 
-use crate::{
-    action_handler,
-    UpnpModel,
-    UpnpObject,
-    UpnpObjectSetError,
-    UpnpObjectType,
-    UpnpTyped,
-};
-use crate::actions::{
-    Action,
-    ActionHandler,
-    ActionInstance,
-    Argument,
-    ArgumentSet,
-};
+use crate::actions::{Action, ActionHandler, ActionInstance, Argument, ArgumentSet};
+use crate::{UpnpModel, UpnpObject, UpnpObjectSetError, UpnpObjectType, UpnpTyped, action_handler};
 
 impl UpnpObject for Action {
     fn to_xml_element(&self) -> Element {
@@ -108,7 +95,7 @@ impl Action {
             },
             arguments: ArgumentSet::new(),
             handle: Self::default_handler(),
-            stateful: true,  // Par défaut, les actions sont stateful
+            stateful: true, // Par défaut, les actions sont stateful
         }
     }
 
@@ -188,12 +175,11 @@ impl Action {
         self.stateful = stateful;
         self
     }
-    
+
     pub fn set_stateless(&mut self, stateless: bool) -> &mut Self {
         self.stateful = !stateless;
         self
     }
-
 
     /// Retourne `true` si l'action est stateful.
     ///

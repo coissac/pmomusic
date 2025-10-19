@@ -1,9 +1,15 @@
-use std::{collections::HashMap, sync::{Arc, RwLock}};
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+};
 
 use xmltree::Element;
 
-use crate::{actions::{ActionInstanceSet, ActionSet, Argument, ArgumentInstance}, state_variables::StateVarInstance, UpnpInstance, UpnpObject, UpnpObjectType, UpnpTyped, UpnpTypedInstance};
-
+use crate::{
+    UpnpInstance, UpnpObject, UpnpObjectType, UpnpTyped, UpnpTypedInstance,
+    actions::{ActionInstanceSet, ActionSet, Argument, ArgumentInstance},
+    state_variables::StateVarInstance,
+};
 
 impl UpnpObject for ArgumentInstance {
     fn to_xml_element(&self) -> Element {
@@ -46,7 +52,6 @@ impl UpnpTypedInstance for ArgumentInstance {
     }
 }
 
-
 /// Implémentation de [`UpnpInstance`] pour [`ArgumentInstance`].
 ///
 /// Cette implémentation fournit le constructeur standard qui crée une instance
@@ -80,14 +85,14 @@ impl UpnpTypedInstance for ArgumentInstance {
 /// use pmoupnp::UpnpInstance;
 ///
 /// let arg_model = Argument::new_in("InstanceID".to_string(), instance_id_var);
-/// 
+///
 /// // Création de l'instance - Phase 1
 /// let arg_instance = ArgumentInstance::new(&arg_model);
-/// 
+///
 /// // À ce stade, l'instance existe mais n'est pas encore liée
 /// assert_eq!(arg_instance.get_name(), "InstanceID");
 /// assert!(arg_instance.get_variable_instance().is_none());
-/// 
+///
 /// // La liaison se fera plus tard via bind_variable()
 /// ```
 impl UpnpInstance for ArgumentInstance {
@@ -119,14 +124,14 @@ impl UpnpInstance for ArgumentInstance {
     ///
     /// ```ignore
     /// use pmoupnp::UpnpInstance;
-    /// 
+    ///
     /// // Création depuis un modèle
     /// let instance = ArgumentInstance::new(&arg_model);
-    /// 
+    ///
     /// // L'instance hérite des propriétés du modèle
     /// assert_eq!(instance.get_name(), arg_model.get_name());
     /// assert_eq!(instance.is_in(), arg_model.is_in());
-    /// 
+    ///
     /// // Mais n'a pas encore de valeur runtime
     /// assert!(instance.get_variable_instance().is_none());
     /// ```
@@ -176,13 +181,13 @@ impl ArgumentInstance {
     ///
     /// ```ignore
     /// use std::sync::Arc;
-    /// 
+    ///
     /// let arg_instance = ArgumentInstance::new(&arg_model);
     /// let var_instance = Arc::new(StateVarInstance::new(&state_var));
-    /// 
+    ///
     /// // Établir la liaison
     /// arg_instance.bind_variable(var_instance.clone());
-    /// 
+    ///
     /// // Vérifier que la liaison est établie
     /// assert!(arg_instance.get_variable_instance().is_some());
     /// ```
@@ -244,13 +249,12 @@ impl ArgumentInstance {
     }
 }
 
-
 impl UpnpInstance for ActionInstanceSet {
     type Model = ActionSet;
-    
+
     fn new(_: &ActionSet) -> Self {
-        Self { 
-            objects: RwLock::new(HashMap::new()) 
+        Self {
+            objects: RwLock::new(HashMap::new()),
         }
     }
 }

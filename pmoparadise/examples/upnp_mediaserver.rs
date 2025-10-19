@@ -48,7 +48,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Look for 'Radio Paradise FLAC' in your DLNA/UPnP clients.");
     println!();
     println!("ContentDirectory service available at:");
-    println!("  http://localhost:8080/upnp/device/{}/service/ContentDirectory", server.udn());
+    println!(
+        "  http://localhost:8080/upnp/device/{}/service/ContentDirectory",
+        server.udn()
+    );
     println!();
     println!("Press Ctrl+C to stop the server.");
     println!();

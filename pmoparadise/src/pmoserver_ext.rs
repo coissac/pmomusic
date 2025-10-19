@@ -3,7 +3,7 @@
 //! Ce module fournit un trait d'extension pour ajouter facilement l'API Radio Paradise
 //! à un serveur pmoserver.
 
-use crate::{RadioParadiseClient, Block, NowPlaying};
+use crate::{Block, NowPlaying, RadioParadiseClient};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -188,13 +188,10 @@ async fn get_now_playing(
     State(state): State<RadioParadiseState>,
 ) -> Result<Json<NowPlayingResponse>, StatusCode> {
     let client = state.client.read().await;
-    let now_playing = client
-        .now_playing()
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to fetch now playing from Radio Paradise: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let now_playing = client.now_playing().await.map_err(|e| {
+        tracing::error!("Failed to fetch now playing from Radio Paradise: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     Ok(Json(now_playing.into()))
 }
@@ -213,13 +210,10 @@ async fn get_current_block(
     State(state): State<RadioParadiseState>,
 ) -> Result<Json<BlockResponse>, StatusCode> {
     let client = state.client.read().await;
-    let block = client
-        .get_block(None)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to fetch current block from Radio Paradise: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let block = client.get_block(None).await.map_err(|e| {
+        tracing::error!("Failed to fetch current block from Radio Paradise: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     Ok(Json(block.into()))
 }
@@ -242,13 +236,14 @@ async fn get_block_by_id(
     Path(event_id): Path<u64>,
 ) -> Result<Json<BlockResponse>, StatusCode> {
     let client = state.client.read().await;
-    let block = client
-        .get_block(Some(event_id))
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to fetch block {} from Radio Paradise: {}", event_id, e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let block = client.get_block(Some(event_id)).await.map_err(|e| {
+        tracing::error!(
+            "Failed to fetch block {} from Radio Paradise: {}",
+            event_id,
+            e
+        );
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     Ok(Json(block.into()))
 }
@@ -396,11 +391,8 @@ impl RadioParadiseExt for pmoserver::Server {
         let api_router = create_api_router(state.clone());
 
         // L'enregistrer avec OpenAPI
-        self.add_openapi(
-            api_router,
-            RadioParadiseApiDoc::openapi(),
-            "radioparadise"
-        ).await;
+        self.add_openapi(api_router, RadioParadiseApiDoc::openapi(), "radioparadise")
+            .await;
 
         Ok(state)
     }
