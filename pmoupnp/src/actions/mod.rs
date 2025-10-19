@@ -9,6 +9,7 @@ mod arg_inst_set_methods;
 mod arg_instance_methods;
 mod arg_set_methods;
 mod argument_methods;
+mod handler_helpers;
 
 mod macros;
 
@@ -20,6 +21,7 @@ use std::sync::{Arc, RwLock};
 
 pub use errors::ActionError;
 pub use action_handler::{ActionData, ActionFuture, ActionHandler};
+pub use handler_helpers::{get_value, set_value};
 
 /// Action UPnP.
 ///
@@ -61,6 +63,7 @@ pub struct Action {
     object: UpnpObjectType,
     arguments: ArgumentSet,
     handle: ActionHandler,
+    stateful: bool,
 }
 
 impl std::fmt::Debug for Action {

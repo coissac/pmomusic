@@ -41,42 +41,39 @@
 
 use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc};
 
-use crate::variable_types::StateValue;
+use bevy_reflect::Reflect;
 
-/// Données d'une action UPnP.
+/// Données d'une action UPnP (entrée/sortie unifiées).
 ///
 /// Représente un ensemble de paramètres clé-valeur pour une action UPnP,
-/// partagé via `Arc` pour permettre un clonage efficace.
+/// utilisant des valeurs Reflect pour la flexibilité de typage.
 ///
 /// # Structure
 ///
 /// - **Clé** : Nom du paramètre (ex: "InstanceID", "TransportURI")
-/// - **Valeur** : Valeur typée du paramètre ([`StateValue`])
+/// - **Valeur** : Valeur dynamique via `Box<dyn Reflect>`
 ///
 /// # Exemples
 ///
 /// ```rust
 /// use pmoupnp::actions::ActionData;
-/// use pmoupnp::variable_types::StateValue;
 /// use std::collections::HashMap;
-/// use std::sync::Arc;
+/// use bevy_reflect::Reflect;
 ///
-/// let mut data = HashMap::new();
-/// data.insert("InstanceID".to_string(), StateValue::UI4(0));
-/// data.insert("Speed".to_string(), StateValue::String("1".to_string()));
+/// let mut data: ActionData = HashMap::new();
+/// data.insert("InstanceID".to_string(), Box::new(0u32));
+/// data.insert("Speed".to_string(), Box::new("1".to_string()));
 ///
-/// let action_data: ActionData = Arc::new(data);
-///
-/// // Le Arc permet un clonage efficace
-/// let cloned = action_data.clone();
+/// // Les valeurs peuvent être modifiées
+/// data.insert("InstanceID".to_string(), Box::new(1u32));
 /// ```
 ///
 /// # Notes
 ///
-/// - Utilise `Arc` pour éviter les copies coûteuses
-/// - Thread-safe grâce à `Arc`
-/// - Les valeurs sont immuables une fois créées
-pub type ActionData = Arc<HashMap<String, StateValue>>;
+/// - Utilise `Box<dyn Reflect>` pour la flexibilité de typage
+/// - Même type pour les entrées et sorties du handler
+/// - Le handler peut modifier directement les données
+pub type ActionData = HashMap<String, Box<dyn Reflect>>;
 
 /// Future retourné par un [`ActionHandler`].
 ///
@@ -87,53 +84,54 @@ pub type ActionData = Arc<HashMap<String, StateValue>>;
 /// # Type complet
 ///
 /// ```ignore
-/// Pin<Box<dyn Future<Output = Result<(), ActionError>> + Send>>
+/// Pin<Box<dyn Future<Output = Result<ActionData, ActionError>> + Send>>
 /// ```
 ///
 /// # Composants
 ///
 /// - `Pin<Box<...>>` : Permet de déplacer le future en mémoire sans invalidation
-/// - `dyn Future<Output = Result<(), ActionError>>` : Future retournant un Result
+/// - `dyn Future<Output = Result<ActionData, ActionError>>` : Future retournant un Result avec les données modifiées
 /// - `+ Send` : Le future peut être envoyé entre threads
 ///
 /// # Notes
 ///
-/// - Les handlers retournent `Ok(())` en cas de succès ou `Err(ActionError)` en cas d'erreur
-/// - Ils modifient les variables d'instance et [`ActionInstance::run()`](crate::actions::ActionInstance::run)
-///   collecte automatiquement les valeurs OUT si le handler réussit
+/// - Les handlers retournent `Ok(ActionData)` en cas de succès ou `Err(ActionError)` en cas d'erreur
+/// - Le handler retourne les données modifiées (ActionData unifié pour entrée/sortie)
 /// - Rarement utilisé directement (la macro `action_handler!` s'en charge)
 /// - Nécessaire pour la compatibilité avec les trait objects
-pub type ActionFuture = Pin<Box<dyn Future<Output = Result<(), crate::actions::ActionError>> + Send>>;
+pub type ActionFuture = Pin<Box<dyn Future<Output = Result<ActionData, crate::actions::ActionError>> + Send>>;
 
 /// Handler d'action UPnP asynchrone.
 ///
 /// Un `ActionHandler` est une fonction asynchrone partageable qui exécute
-/// la logique métier d'une action sans retourner de valeur.
+/// la logique métier d'une action et retourne les données modifiées.
 ///
 /// # Signature
 ///
 /// ```ignore
-/// Fn(Arc<ActionInstance>) -> ActionFuture
+/// Fn(ActionData) -> ActionFuture
 /// ```
 ///
 /// Prend :
-/// - [`Arc<ActionInstance>`](crate::actions::ActionInstance) : L'instance de l'action avec accès aux variables liées
-///   qui contiennent déjà les valeurs des arguments IN
+/// - [`ActionData`] : HashMap contenant les valeurs des arguments (Box<dyn Reflect>)
 ///
-/// Retourne un [`ActionFuture`] qui se résout en `Result<(), ActionError>`.
+/// Retourne un [`ActionFuture`] qui se résout en `Result<ActionData, ActionError>`.
 ///
 /// # Responsabilités
 ///
 /// Le handler est responsable de :
-/// - Lire les arguments d'entrée depuis les variables liées à l'instance
+/// - Lire les arguments d'entrée depuis ActionData
 /// - Exécuter la logique métier
-/// - Modifier les variables d'instance selon les besoins
-/// - Retourner `Ok(())` en cas de succès ou `Err(ActionError)` en cas d'erreur
+/// - Modifier les données selon les besoins
+/// - Retourner `Ok(ActionData)` avec les données modifiées ou `Err(ActionError)` en cas d'erreur
 ///
 /// La méthode [`ActionInstance::run()`](crate::actions::ActionInstance::run) s'occupe
 /// automatiquement de :
-/// 1. Stocker les valeurs IN dans les variables liées avant d'appeler le handler
-/// 2. Collecter les valeurs OUT si le handler retourne `Ok(())`
+/// 1. Construire ActionData depuis les StateVarInstance
+/// 2. Merger les valeurs IN du SOAP
+/// 3. (Si stateful) Sauver les IN dans les StateVarInstance avant le handler
+/// 4. Exécuter le handler
+/// 5. (Si stateful) Sauver les OUT dans les StateVarInstance après le handler
 ///
 /// # Traits requis
 ///
@@ -149,34 +147,34 @@ pub type ActionFuture = Pin<Box<dyn Future<Output = Result<(), crate::actions::A
 /// use pmoupnp::action_handler;
 /// use pmoupnp::actions::ActionError;
 ///
-/// let handler = action_handler!(|instance| {
-///     // Logique métier - les valeurs IN sont déjà dans les variables
-///     Ok::<(), ActionError>(())
+/// let handler = action_handler!(|data| {
+///     // Logique métier avec ActionData
+///     Ok(data)
 /// });
 /// ```
 ///
 /// ## Manuellement
 ///
 /// ```rust
-/// use pmoupnp::actions::{ActionHandler, ActionInstance, ActionError};
+/// use pmoupnp::actions::{ActionHandler, ActionData, ActionError};
 /// use std::sync::Arc;
 ///
-/// let handler: ActionHandler = Arc::new(|instance| {
+/// let handler: ActionHandler = Arc::new(|data| {
 ///     Box::pin(async move {
 ///         // Votre logique async
-///         Ok::<(), ActionError>(())
+///         Ok(data)
 ///     })
 /// });
 /// ```
 ///
 /// # Notes d'implémentation
 ///
-/// - Le handler ne retourne rien - il modifie les variables d'instance
-/// - [`ActionInstance::run()`](crate::actions::ActionInstance::run) collecte automatiquement les OUT
+/// - Le handler reçoit et retourne ActionData (type unifié entrée/sortie)
+/// - Le handler peut modifier directement les données reçues
 /// - Le handler capture les variables par `move`
 /// - Le future est automatiquement `Send` si les captures le sont
 /// - Utilisez la macro `action_handler!` pour simplifier la création
-pub type ActionHandler = Arc<dyn Fn(Arc<crate::actions::ActionInstance>) -> ActionFuture + Send + Sync>;
+pub type ActionHandler = Arc<dyn Fn(ActionData) -> ActionFuture + Send + Sync>;
 
 /// Macro pour créer facilement un ActionHandler.
 ///
@@ -186,16 +184,16 @@ pub type ActionHandler = Arc<dyn Fn(Arc<crate::actions::ActionInstance>) -> Acti
 /// # Syntaxe
 ///
 /// ```ignore
-/// action_handler!(|instance| {
-///     // votre logique async (automatiquement dans un bloc async move)
-///     // Les valeurs IN sont déjà disponibles dans les variables liées
+/// action_handler!(|data| {
+///     // votre logique async avec ActionData
+///     // Modifier les données et les retourner
+///     Ok(data)
 /// })
 /// ```
 ///
 /// # Arguments
 ///
-/// - `instance` : Paramètre de type `Arc<`[`ActionInstance`](crate::actions::ActionInstance)`>` - L'instance de l'action
-///   avec les valeurs IN déjà stockées dans les variables liées
+/// - `data` : Paramètre de type [`ActionData`] - HashMap contenant les valeurs des arguments
 /// - Le corps du bloc peut contenir du code asynchrone (`.await`)
 ///
 /// # Type de retour
@@ -204,108 +202,87 @@ pub type ActionHandler = Arc<dyn Fn(Arc<crate::actions::ActionInstance>) -> Acti
 ///
 /// # Examples
 ///
-/// ## Exemple 1 : Handler simple (ne fait rien)
+/// ## Exemple 1 : Handler simple (retourne les données telles quelles)
 ///
 /// ```ignore
 /// use pmoupnp::action_handler;
 ///
-/// // Handler minimal - run() collectera automatiquement les OUT
-/// let handler = action_handler!(|instance| {
-///     Ok(()) // Succès, pas d'erreur
+/// let handler = action_handler!(|data| {
+///     Ok(data) // Retourne les données non modifiées
 /// });
 /// ```
 ///
-/// ## Exemple 2 : Handler qui lit et modifie des variables
+/// ## Exemple 2 : Handler qui calcule et modifie les données
 ///
 /// ```ignore
-/// use pmoupnp::action_handler;
+/// use pmoupnp::{action_handler, get, set};
 /// use pmoupnp::actions::ActionError;
 ///
-/// let handler = action_handler!(|instance| {
-///     // Lire un argument d'entrée depuis la variable liée
-///     let arg = instance.argument("DesiredVolume")
-///         .ok_or_else(|| ActionError::ArgumentNotFound("DesiredVolume".to_string()))?;
+/// let handler = action_handler!(|mut data| {
+///     // Extraire les valeurs avec la macro get!
+///     let celsius: f64 = get!(data, "Celsius", f64);
 ///
-///     let var = arg.get_variable_instance()
-///         .ok_or_else(|| ActionError::VariableNotBound)?;
+///     // Calculer
+///     let fahrenheit = celsius * 9.0 / 5.0 + 32.0;
 ///
-///     let volume = var.value();
+///     // Insérer avec la macro set!
+///     set!(data, "Fahrenheit", fahrenheit);
 ///
-///     // Modifier une autre variable d'instance
-///     let current_volume = instance.argument("CurrentVolume")
-///         .ok_or_else(|| ActionError::ArgumentNotFound("CurrentVolume".to_string()))?
-///         .get_variable_instance()
-///         .ok_or_else(|| ActionError::VariableNotBound)?;
-///
-///     current_volume.set_value(volume);
-///
-///     Ok(()) // Succès - run() collectera CurrentVolume dans les OUT
+///     Ok(data) // Retourner les données modifiées
 /// });
 /// ```
 ///
 /// ## Exemple 3 : Handler avec logique métier asynchrone
 ///
 /// ```ignore
-/// use pmoupnp::action_handler;
+/// use pmoupnp::{action_handler, get, set};
 /// use pmoupnp::actions::ActionError;
 ///
-/// let handler = action_handler!(|instance| {
-///     // Lire les paramètres depuis les variables liées
-///     let uri_var = instance.argument("CurrentURI")
-///         .and_then(|a| a.get_variable_instance())
-///         .ok_or_else(|| ActionError::VariableNotBound)?;
-///
-///     let uri = uri_var.value();
+/// let handler = action_handler!(|mut data| {
+///     // Lire l'URI
+///     let uri: String = get!(data, "URI", String);
 ///
 ///     // Appel asynchrone à un service externe
-///     let response = external_service::fetch_metadata(&uri).await
+///     let metadata = external_service::fetch_metadata(&uri).await
 ///         .map_err(|e| ActionError::ExternalError(e.to_string()))?;
 ///
-///     // Mettre à jour les variables selon la réponse
-///     if let Some(arg) = instance.argument("Metadata") {
-///         if let Some(var) = arg.get_variable_instance() {
-///             var.set_value(StateValue::String(response.metadata));
-///         }
-///     }
+///     // Mettre à jour les données
+///     set!(data, "Metadata", metadata);
 ///
-///     Ok(())
+///     Ok(data)
 /// });
 /// ```
 ///
-/// ## Exemple 4 : Handler avec capture de contexte et validation
+/// ## Exemple 4 : Handler avec capture de contexte
 ///
 /// ```ignore
-/// use pmoupnp::action_handler;
+/// use pmoupnp::{action_handler, get, set};
 /// use pmoupnp::actions::ActionError;
 /// use std::sync::Arc;
 /// use tokio::sync::Mutex;
 ///
-/// // Contexte partagé (ex: état d'un lecteur média)
+/// // Contexte partagé
 /// let player_state = Arc::new(Mutex::new(PlayerState::Stopped));
 ///
-/// let handler = action_handler!(|instance| {
-///     // Vérifier l'état actuel
+/// let handler = action_handler!(|mut data| {
+///     // Vérifier l'état
 ///     {
 ///         let state = player_state.lock().await;
 ///         if *state == PlayerState::Error {
-///             return Err(ActionError::InvalidState("Player in error state".to_string()));
+///             return Err(ActionError::InvalidState("Player in error state".into()));
 ///         }
 ///     }
 ///
-///     // Modifier l'état du lecteur
+///     // Modifier l'état
 ///     {
 ///         let mut state = player_state.lock().await;
 ///         *state = PlayerState::Playing;
 ///     }
 ///
-///     // Mettre à jour la variable TransportState
-///     if let Some(arg) = instance.argument("CurrentTransportState") {
-///         if let Some(var) = arg.get_variable_instance() {
-///             var.set_value(StateValue::String("PLAYING".to_string()));
-///         }
-///     }
+///     // Mettre à jour les données
+///     set!(data, "TransportState", "PLAYING".to_string());
 ///
-///     Ok(())
+///     Ok(data)
 /// });
 /// ```
 ///
@@ -314,10 +291,11 @@ pub type ActionHandler = Arc<dyn Fn(Arc<crate::actions::ActionInstance>) -> Acti
 /// - Le bloc est automatiquement wrappé dans `async move`
 /// - Les captures de variables sont déplacées (`move`)
 /// - Le résultat est automatiquement boxé et arcé
+/// - Utilisez les macros `get!` et `set!` pour manipuler facilement les données
 #[macro_export]
 macro_rules! action_handler {
-    (|$instance:ident| $body:block) => {
-        std::sync::Arc::new(|$instance: std::sync::Arc<$crate::actions::ActionInstance>| {
+    (|$data:ident| $body:block) => {
+        std::sync::Arc::new(|$data: $crate::actions::ActionData| {
             Box::pin(async move $body)
         })
     };
