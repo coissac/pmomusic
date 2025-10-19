@@ -178,8 +178,20 @@
       </div>
     </div>
 
-    <!-- Lecteur audio (caché) -->
-    <audio ref="audioPlayer" controls style="display: none;"></audio>
+    <!-- Lecteur audio -->
+    <div v-if="isPlaying || audioError" class="audio-player-container">
+      <audio
+        ref="audioPlayer"
+        controls
+        v-if="!audioError"
+        @ended="handleAudioEnded"
+        @error="handleAudioError"
+      ></audio>
+      <p v-if="audioError" class="audio-error">{{ audioError }}</p>
+      <button @click="stopTrack" class="btn-stop" title="Stop">
+        {{ audioError ? '✕ Close' : '⏹️ Stop' }}
+      </button>
+    </div>
   </div>
 </template>
 
@@ -217,6 +229,10 @@ const addSuccess = ref("");
 const isConsolidating = ref(false);
 const isPurging = ref(false);
 const deletingTracks = ref(new Set<string>());
+
+// Lecteur audio
+const isPlaying = ref(false);
+const audioError = ref("");
 
 // --- Computed ---
 const totalHits = computed(() => tracks.value.reduce((sum, t) => sum + t.hits, 0));
@@ -305,9 +321,61 @@ async function handleConsolidate() {
 }
 
 function playTrack(pk: string) {
+  audioError.value = "";
+  isPlaying.value = true;
+
+  // Attendre que le DOM soit mis à jour (car le lecteur audio est dans un v-if)
+  setTimeout(() => {
+    if (audioPlayer.value) {
+      const url = getTrackUrl(pk);
+      audioPlayer.value.src = url;
+      audioPlayer.value.play().catch((error) => {
+        console.error("Failed to play audio:", error);
+        audioError.value = `Cannot play audio: ${error.message}. Your browser may not support FLAC format.`;
+        isPlaying.value = false;
+      });
+    }
+  }, 100);
+}
+
+function stopTrack() {
   if (audioPlayer.value) {
-    audioPlayer.value.src = getTrackUrl(pk);
-    audioPlayer.value.play();
+    audioPlayer.value.pause();
+    audioPlayer.value.currentTime = 0;
+    audioPlayer.value.src = "";
+  }
+  isPlaying.value = false;
+  audioError.value = "";
+}
+
+function handleAudioEnded() {
+  isPlaying.value = false;
+  audioError.value = "";
+}
+
+function handleAudioError() {
+  const audio = audioPlayer.value;
+  if (audio?.error) {
+    let message = "Audio playback error: ";
+    switch (audio.error.code) {
+      case 1:
+        message += "Loading aborted";
+        break;
+      case 2:
+        message += "Network error";
+        break;
+      case 3:
+        message += "Format not supported";
+        break;
+      case 4:
+        message += "Source not found";
+        break;
+      default:
+        message += "Unknown error";
+    }
+    console.error('Audio player error:', message, 'code:', audio.error.code);
+    audioError.value = message;
+    isPlaying.value = false;
   }
 }
 
@@ -330,7 +398,9 @@ function formatDate(dateString: string) {
   return d.toLocaleDateString();
 }
 
-onMounted(() => refreshTracks());
+onMounted(() => {
+  refreshTracks();
+});
 </script>
 
 <style scoped>
@@ -767,5 +837,58 @@ button:disabled {
 .modal-actions button {
   flex: 1;
   min-width: 120px;
+}
+
+/* Lecteur audio */
+.audio-player-container {
+  position: fixed;
+  bottom: 2rem;
+  right: 2rem;
+  background: #2a2a2a;
+  padding: 1rem;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  z-index: 1001;
+}
+
+.audio-player-container audio {
+  max-width: 400px;
+}
+
+.audio-error {
+  color: #ff6b6b;
+  margin: 0;
+  padding: 0.5rem;
+  background: rgba(255, 107, 107, 0.1);
+  border-radius: 4px;
+  max-width: 400px;
+}
+
+.btn-stop {
+  background: #ff6b6b;
+  color: #fff;
+  padding: 0.75rem 1.5rem;
+  white-space: nowrap;
+}
+
+.btn-stop:hover:not(:disabled) {
+  background: #ee5a52;
+}
+
+@media (max-width: 768px) {
+  .audio-player-container {
+    bottom: 1rem;
+    right: 1rem;
+    left: 1rem;
+    flex-direction: column;
+  }
+
+  .audio-player-container audio {
+    max-width: 100%;
+    width: 100%;
+  }
 }
 </style>
