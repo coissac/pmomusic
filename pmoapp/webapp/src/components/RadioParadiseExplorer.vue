@@ -1,7 +1,13 @@
 <template>
   <div class="radio-paradise-explorer">
     <div class="header">
-      <h2>Radio Paradise Explorer</h2>
+      <div class="title-block">
+        <h2>Radio Paradise Explorer</h2>
+        <div class="status-bar">
+          <span v-if="lastUpdated">Updated {{ formatTimestamp(lastUpdated) }}</span>
+          <span v-if="nowPlaying">Current block #{{ nowPlaying.event }}</span>
+        </div>
+      </div>
       <div class="controls">
         <button @click="refreshNowPlaying" :disabled="loading" class="btn-primary">
           <span v-if="loading">⏳</span>
@@ -20,7 +26,31 @@
             {{ channel.name }}
           </option>
         </select>
+        <select
+          v-if="bitrates.length"
+          v-model="selectedBitrate"
+          @change="changeBitrate"
+          class="bitrate-select"
+        >
+          <option v-for="bitrate in bitrates" :key="bitrate.id" :value="bitrate.id">
+            {{ bitrate.name }}
+          </option>
+        </select>
       </div>
+    </div>
+
+    <div v-if="bitrates.length" class="bitrate-tags">
+      <span
+        v-for="bitrate in bitrates"
+        :key="`chip-${bitrate.id}`"
+        :class="['bitrate-chip', { active: selectedBitrate === bitrate.id }]"
+      >
+        {{ bitrate.name }}
+      </span>
+    </div>
+
+    <div v-if="bitratesError" class="error-message inline-error">
+      ❌ {{ bitratesError }}
     </div>
 
     <!-- Audio Player -->
@@ -89,6 +119,25 @@
       </div>
     </div>
 
+    <div v-if="nowPlaying" class="block-actions">
+      <button
+        class="btn-secondary"
+        @click="loadUpcomingBlock"
+        :disabled="upcomingLoading || !nowPlaying?.end_event"
+      >
+        <span v-if="upcomingLoading">⏳ Loading next block…</span>
+        <span v-else>⏭️ Preview Next Block</span>
+      </button>
+      <div class="next-block-info">
+        <span>Next event:</span>
+        <code>{{ nowPlaying.end_event }}</code>
+      </div>
+    </div>
+
+    <div v-if="upcomingError" class="error-message">
+      ❌ {{ upcomingError }}
+    </div>
+
     <!-- Songs List -->
     <div v-if="nowPlaying && nowPlaying.songs" class="songs-section">
       <h3>🎼 Songs in Current Block</h3>
@@ -117,7 +166,103 @@
       </div>
     </div>
 
+    <div v-if="upcomingBlock" class="songs-section upcoming-section">
+      <div class="section-header">
+        <h3>⏭️ Next Block Preview</h3>
+        <div class="section-meta">
+          <span>Event:</span>
+          <code>{{ upcomingBlock.event }}</code>
+          <span>Next event:</span>
+          <code>{{ upcomingBlock.end_event }}</code>
+        </div>
+      </div>
+      <div class="summary-row">
+        <span>{{ upcomingBlock.songs.length }} song(s)</span>
+        <span>Total duration: {{ formatDuration(upcomingBlock.length_ms) }}</span>
+        <a :href="upcomingBlock.url" target="_blank" class="stream-link">Open block stream</a>
+      </div>
+      <div class="songs-list">
+        <div v-for="song in upcomingBlock.songs" :key="`${upcomingBlock.event}-${song.index}`" class="song-item">
+          <div class="song-number">{{ song.index + 1 }}</div>
+          <div v-if="song.cover_url" class="song-cover-mini">
+            <img :src="song.cover_url" :alt="`${song.album} cover`">
+          </div>
+          <div class="song-info">
+            <div class="song-title">{{ song.title }}</div>
+            <div class="song-artist">{{ song.artist }}</div>
+            <div class="song-album">{{ song.album }}</div>
+          </div>
+          <div class="song-meta">
+            <div class="song-year" v-if="song.year">{{ song.year }}</div>
+            <div class="song-duration">{{ formatDuration(song.duration_ms) }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="block-search">
+      <h3>🔎 Block Lookup</h3>
+      <div class="search-controls">
+        <input
+          v-model="blockSearchId"
+          type="number"
+          inputmode="numeric"
+          min="0"
+          placeholder="Enter an event ID (e.g. 123456)"
+        >
+        <button
+          class="btn-secondary"
+          @click="lookupBlockById"
+          :disabled="!blockSearchId || blockSearchLoading"
+        >
+          <span v-if="blockSearchLoading">⏳ Loading…</span>
+          <span v-else>Load Block</span>
+        </button>
+        <button class="btn-tertiary" @click="clearBlockSearch" :disabled="!blockSearchResult && !blockSearchError && !blockSearchId">
+          Clear
+        </button>
+      </div>
+      <div v-if="blockSearchError" class="error-message">
+        ❌ {{ blockSearchError }}
+      </div>
+      <div v-if="blockSearchResult" class="songs-section lookup-section">
+        <div class="section-header">
+          <h3>📂 Block {{ blockSearchResult.event }}</h3>
+          <div class="section-meta">
+            <span>Next event:</span>
+            <code>{{ blockSearchResult.end_event }}</code>
+          </div>
+        </div>
+        <div class="summary-row">
+          <span>{{ blockSearchResult.songs.length }} song(s)</span>
+          <span>Total duration: {{ formatDuration(blockSearchResult.length_ms) }}</span>
+          <a :href="blockSearchResult.url" target="_blank" class="stream-link">Open block stream</a>
+        </div>
+        <div class="songs-list">
+          <div v-for="song in blockSearchResult.songs" :key="`${blockSearchResult.event}-${song.index}`" class="song-item">
+            <div class="song-number">{{ song.index + 1 }}</div>
+            <div v-if="song.cover_url" class="song-cover-mini">
+              <img :src="song.cover_url" :alt="`${song.album} cover`">
+            </div>
+            <div class="song-info">
+              <div class="song-title">{{ song.title }}</div>
+              <div class="song-artist">{{ song.artist }}</div>
+              <div class="song-album">{{ song.album }}</div>
+            </div>
+            <div class="song-meta">
+              <div class="song-year" v-if="song.year">{{ song.year }}</div>
+              <div class="song-duration">{{ formatDuration(song.duration_ms) }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Available Channels -->
+    <div v-if="channelsError" class="error-message inline-error">
+      ❌ {{ channelsError }}
+    </div>
+
     <div class="channels-section">
       <h3>📻 Available Channels</h3>
       <div class="channels-grid">
@@ -136,7 +281,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 
 const API_BASE = '/api/radioparadise'
 
@@ -144,17 +289,66 @@ const loading = ref(false)
 const error = ref(null)
 const nowPlaying = ref(null)
 const channels = ref([])
+const bitrates = ref([])
 const selectedChannel = ref(0)
+const selectedBitrate = ref(null)
 const audioPlayer = ref(null)
 const isPlaying = ref(false)
 const audioError = ref('')
+const lastUpdated = ref(null)
+const upcomingBlock = ref(null)
+const upcomingLoading = ref(false)
+const upcomingError = ref('')
+const blockSearchId = ref('')
+const blockSearchResult = ref(null)
+const blockSearchLoading = ref(false)
+const blockSearchError = ref('')
+const channelsError = ref('')
+const bitratesError = ref('')
+let refreshTimerId = null
 
 // Format duration from milliseconds to MM:SS
 function formatDuration(ms) {
-  const seconds = Math.floor(ms / 1000)
+  if (typeof ms !== 'number' || !Number.isFinite(ms)) {
+    return '--:--'
+  }
+  const seconds = Math.max(0, Math.floor(ms / 1000))
   const minutes = Math.floor(seconds / 60)
   const remainingSeconds = seconds % 60
   return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`
+}
+
+function formatTimestamp(date) {
+  if (!date) return ''
+  return date.toLocaleTimeString()
+}
+
+function buildQuery(extra = {}) {
+  const params = new URLSearchParams()
+  if (selectedChannel.value != null) {
+    params.set('channel', selectedChannel.value.toString())
+  }
+  if (selectedBitrate.value != null) {
+    params.set('bitrate', selectedBitrate.value.toString())
+  }
+
+  Object.entries(extra).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') {
+      params.set(key, String(value))
+    }
+  })
+
+  const query = params.toString()
+  return query ? `?${query}` : ''
+}
+
+async function fetchBlockByEvent(eventId) {
+  const query = buildQuery()
+  const response = await fetch(`${API_BASE}/block/${eventId}${query}`)
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+  }
+  return await response.json()
 }
 
 // Fetch now playing info
@@ -163,11 +357,19 @@ async function refreshNowPlaying() {
   error.value = null
 
   try {
-    const response = await fetch(`${API_BASE}/now-playing`)
+    const query = buildQuery()
+    const response = await fetch(`${API_BASE}/now-playing${query}`)
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`)
     }
     nowPlaying.value = await response.json()
+    lastUpdated.value = new Date()
+    upcomingBlock.value = null
+    upcomingError.value = ''
+
+    if (isPlaying.value) {
+      playStream()
+    }
   } catch (e) {
     error.value = `Failed to fetch now playing: ${e.message}`
     console.error('Error fetching now playing:', e)
@@ -183,29 +385,68 @@ async function fetchChannels() {
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`)
     }
-    channels.value = await response.json()
+    const data = await response.json()
+    channels.value = data
+    channelsError.value = ''
+
+    if (channels.value.length > 0) {
+      const hasSelected = channels.value.some(channel => channel.id === selectedChannel.value)
+      if (!hasSelected) {
+        selectedChannel.value = channels.value[0].id
+      }
+    }
   } catch (e) {
-    error.value = `Failed to fetch channels: ${e.message}`
+    channelsError.value = `Failed to fetch channels: ${e.message}`
     console.error('Error fetching channels:', e)
+  }
+}
+
+// Fetch available bitrates
+async function fetchBitrates() {
+  try {
+    const response = await fetch(`${API_BASE}/bitrates`)
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+    }
+    const data = await response.json()
+    bitrates.value = data
+    bitratesError.value = ''
+
+    if (bitrates.value.length > 0 && selectedBitrate.value === null) {
+      const flac = bitrates.value.find(bitrate => /flac/i.test(bitrate.name))
+      selectedBitrate.value = (flac || bitrates.value[0]).id
+    }
+  } catch (e) {
+    bitratesError.value = `Failed to fetch bitrates: ${e.message}`
+    console.error('Error fetching bitrates:', e)
   }
 }
 
 // Select a channel
 function selectChannel(channelId) {
+  if (selectedChannel.value === channelId) {
+    return
+  }
   selectedChannel.value = channelId
-  // For now, just highlight it - we could implement channel switching
-  // when the API supports it
+  changeChannel()
 }
 
-// Change channel (placeholder for future implementation)
-function changeChannel() {
-  console.log('Channel changed to:', selectedChannel.value)
-  // TODO: Implement channel switching in the API
+async function changeChannel() {
+  await refreshNowPlaying()
+  blockSearchResult.value = null
+  blockSearchError.value = ''
+}
+
+async function changeBitrate() {
+  await refreshNowPlaying()
+  blockSearchResult.value = null
+  blockSearchError.value = ''
 }
 
 function playStream() {
   if (!nowPlaying.value?.stream_url) {
     audioError.value = 'No stream URL available'
+    isPlaying.value = false
     return
   }
 
@@ -258,17 +499,73 @@ function handleAudioError() {
   isPlaying.value = false
 }
 
+async function loadUpcomingBlock() {
+  if (!nowPlaying.value?.end_event) {
+    return
+  }
+
+  upcomingLoading.value = true
+  upcomingError.value = ''
+
+  try {
+    upcomingBlock.value = await fetchBlockByEvent(nowPlaying.value.end_event)
+  } catch (e) {
+    console.error('Failed to fetch upcoming block:', e)
+    upcomingError.value = `Failed to load upcoming block: ${e.message}`
+  } finally {
+    upcomingLoading.value = false
+  }
+}
+
+async function lookupBlockById() {
+  if (!blockSearchId.value) {
+    return
+  }
+
+  const eventId = Number(blockSearchId.value)
+  if (!Number.isFinite(eventId) || eventId < 0) {
+    blockSearchError.value = 'Please enter a valid event ID'
+    return
+  }
+
+  blockSearchLoading.value = true
+  blockSearchError.value = ''
+
+  try {
+    blockSearchResult.value = await fetchBlockByEvent(eventId)
+  } catch (e) {
+    console.error('Failed to fetch block by ID:', e)
+    blockSearchError.value = `Failed to load block: ${e.message}`
+    blockSearchResult.value = null
+  } finally {
+    blockSearchLoading.value = false
+  }
+}
+
+function clearBlockSearch() {
+  blockSearchId.value = ''
+  blockSearchResult.value = null
+  blockSearchError.value = ''
+}
+
 // Initialize on mount
 onMounted(async () => {
   await fetchChannels()
+  await fetchBitrates()
   await refreshNowPlaying()
 
   // Auto-refresh every 30 seconds
-  setInterval(() => {
+  refreshTimerId = window.setInterval(() => {
     if (!loading.value) {
       refreshNowPlaying()
     }
   }, 30000)
+})
+
+onUnmounted(() => {
+  if (refreshTimerId) {
+    clearInterval(refreshTimerId)
+  }
 })
 </script>
 
@@ -293,10 +590,32 @@ onMounted(async () => {
   color: #00d4ff;
 }
 
+.title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.status-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  font-size: 0.85rem;
+  color: #9aa0a6;
+}
+
+.status-bar span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .controls {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   align-items: center;
+  justify-content: flex-end;
 }
 
 .btn-primary {
@@ -339,6 +658,46 @@ onMounted(async () => {
   cursor: not-allowed;
 }
 
+.btn-secondary {
+  background: rgba(0, 212, 255, 0.12);
+  color: #00d4ff;
+  border: 1px solid rgba(0, 212, 255, 0.4);
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: background 0.3s;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: rgba(0, 212, 255, 0.25);
+}
+
+.btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-tertiary {
+  background: transparent;
+  color: #bbb;
+  border: 1px solid #444;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: border-color 0.3s, color 0.3s;
+}
+
+.btn-tertiary:hover:not(:disabled) {
+  color: #fff;
+  border-color: #666;
+}
+
+.btn-tertiary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .channel-select {
   padding: 8px 12px;
   border-radius: 4px;
@@ -348,12 +707,71 @@ onMounted(async () => {
   cursor: pointer;
 }
 
+.bitrate-select {
+  padding: 8px 12px;
+  border-radius: 4px;
+  border: 1px solid #333;
+  background: #1a1a1a;
+  color: #fff;
+  cursor: pointer;
+}
+
+.bitrate-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.bitrate-chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid #333;
+  background: #1c1c1c;
+  font-size: 0.8rem;
+  color: #bbb;
+}
+
+.bitrate-chip.active {
+  border-color: #00d4ff;
+  color: #00d4ff;
+  background: rgba(0, 212, 255, 0.12);
+}
+
 .error-message {
   background: #ff4444;
   color: white;
   padding: 12px;
   border-radius: 4px;
   margin-bottom: 20px;
+}
+
+.inline-error {
+  margin-top: -8px;
+  margin-bottom: 16px;
+  font-size: 0.9rem;
+}
+
+.block-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.next-block-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  color: #9aa0a6;
+}
+
+.next-block-info code {
+  background: rgba(255, 255, 255, 0.05);
+  padding: 2px 6px;
+  border-radius: 4px;
 }
 
 /* Now Playing Section */
@@ -475,6 +893,39 @@ onMounted(async () => {
 }
 
 /* Songs List */
+.section-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.section-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  color: #9aa0a6;
+  font-size: 0.85rem;
+}
+
+.section-meta code {
+  background: rgba(255, 255, 255, 0.05);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.summary-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 16px;
+  color: #9aa0a6;
+}
+
 .songs-section {
   background: #1a1a1a;
   border-radius: 8px;
@@ -564,6 +1015,30 @@ onMounted(async () => {
   border-radius: 3px;
 }
 
+.block-search {
+  margin: 30px 0;
+  padding: 20px;
+  border: 1px solid #333;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.search-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.search-controls input {
+  padding: 8px 12px;
+  border-radius: 4px;
+  border: 1px solid #333;
+  background: #111;
+  color: #fff;
+  flex: 1 1 220px;
+}
+
 /* Channels Section */
 .channels-section {
   background: #1a1a1a;
@@ -639,5 +1114,34 @@ onMounted(async () => {
   background: rgba(231, 76, 60, 0.2);
   color: #e74c3c;
   font-weight: bold;
+}
+
+@media (max-width: 768px) {
+  .header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .controls {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .block-actions {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .summary-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  .search-controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
 }
 </style>
