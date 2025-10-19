@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// Serveur SSDP gérant les annonces et découvertes
 pub struct SsdpServer {
@@ -62,6 +62,17 @@ impl SsdpServer {
         devices.insert(uuid.clone(), device.clone());
         drop(devices);
 
+        info!(
+            "🆕 SSDP device registered: {} ({} NTs)",
+            uuid,
+            device.get_notification_types().len()
+        );
+        debug!(
+            "🆕 SSDP device notification types for {}: {:?}",
+            uuid,
+            device.get_notification_types()
+        );
+
         // Envoyer alive pour tous les NTs
         if let Some(ref socket) = self.socket {
             for nt in device.get_notification_types() {
@@ -75,6 +86,12 @@ impl SsdpServer {
         let mut devices = self.devices.write().unwrap();
         if let Some(device) = devices.remove(uuid) {
             drop(devices);
+
+            info!(
+                "🗑️ SSDP device removed: {} ({} NTs)",
+                uuid,
+                device.get_notification_types().len()
+            );
 
             // Envoyer byebye pour tous les NTs
             if let Some(ref socket) = self.socket {
@@ -111,7 +128,13 @@ impl SsdpServer {
             .unwrap();
 
         match socket.send_to(msg.as_bytes(), addr) {
-            Ok(_) => info!("✅ NOTIFY alive: {} (NT={})", usn, nt),
+            Ok(_) => {
+                info!("✅ NOTIFY alive: {} (NT={})", usn, nt);
+                debug!(
+                    "📣 NOTIFY alive payload\n<details>\n\n```\n{}\n```\n</details>\n",
+                    msg
+                );
+            }
             Err(e) => warn!("❌ Failed to send NOTIFY alive for {}: {}", usn, e),
         }
     }
@@ -139,7 +162,13 @@ impl SsdpServer {
             .unwrap();
 
         match socket.send_to(msg.as_bytes(), addr) {
-            Ok(_) => info!("👋 NOTIFY byebye: {} (NT={})", usn, nt),
+            Ok(_) => {
+                info!("👋 NOTIFY byebye: {} (NT={})", usn, nt);
+                debug!(
+                    "📣 NOTIFY byebye payload\n<details>\n\n```\n{}\n```\n</details>\n",
+                    msg
+                );
+            }
             Err(e) => warn!("❌ Failed to send NOTIFY byebye for {}: {}", usn, e),
         }
     }
@@ -151,6 +180,7 @@ impl SsdpServer {
 
         std::thread::spawn(move || {
             loop {
+                debug!("⏰ SSDP periodic announcement tick");
                 std::thread::sleep(period);
 
                 let devices = devices.read().unwrap();
@@ -189,7 +219,13 @@ impl SsdpServer {
             .unwrap();
 
         match socket.send_to(msg.as_bytes(), addr) {
-            Ok(_) => info!("✅ NOTIFY alive (periodic): {} (NT={})", usn, nt),
+            Ok(_) => {
+                info!("✅ NOTIFY alive (periodic): {} (NT={})", usn, nt);
+                debug!(
+                    "📣 NOTIFY alive (periodic) payload\n<details>\n\n```\n{}\n```\n</details>\n",
+                    msg
+                );
+            }
             Err(e) => warn!("❌ Failed to send periodic NOTIFY alive for {}: {}", usn, e),
         }
     }
@@ -205,6 +241,10 @@ impl SsdpServer {
                     Ok((n, src)) => {
                         let data = String::from_utf8_lossy(&buf[..n]);
                         if data.starts_with("M-SEARCH") {
+                            debug!(
+                                "🔍 M-SEARCH received from {}\n<details>\n\n```\n{}\n```\n</details>\n",
+                                src, data
+                            );
                             if let Some(st) = Self::parse_st(&data) {
                                 let devices = devices.read().unwrap();
                                 for device in devices.values() {
@@ -270,12 +310,14 @@ impl SsdpServer {
                  \r\n",
                 MAX_AGE, date, device.location, device.server, nt, usn
             );
-
             match socket.send_to(resp.as_bytes(), src) {
-                Ok(_) => info!(
-                    "📡 M-SEARCH response sent to {} with ST={}\n<details>\n\n```\n{}\n```\n</details>\n",
-                    src, nt, resp
-                ),
+                Ok(_) => {
+                    info!("📡 M-SEARCH response sent to {} with ST={}", src, nt);
+                    debug!(
+                        "📡 M-SEARCH response payload\n<details>\n\n```\n{}\n```\n</details>\n",
+                        resp
+                    );
+                }
                 Err(e) => warn!("❌ Failed to send M-SEARCH response to {}: {}", src, e),
             }
         }
