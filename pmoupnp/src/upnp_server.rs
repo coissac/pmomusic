@@ -386,7 +386,7 @@ impl UpnpServerExt for Server {
 
     async fn create_upnp_server() -> Result<Server, anyhow::Error> {
         use pmoserver::ServerBuilder;
-        use tracing::{info, warn};
+        use tracing::{error, info, warn};
 
         // 1. Créer le serveur depuis la config
         info!("🔧 Creating UPnP server from configuration...");
@@ -421,7 +421,19 @@ impl UpnpServerExt for Server {
         match server.init_ssdp() {
             Ok(_) => info!("✅ SSDP server initialized"),
             Err(e) => {
-                warn!("❌ SSDP initialization failed: {}", e);
+                let kind = e.kind();
+                if kind == std::io::ErrorKind::AddrInUse {
+                    error!(
+                        "❌ SSDP initialization failed: port {} is already in use. \
+                        Check which process listens on UDP:{} (e.g. `lsof -nP -i UDP:{}`): {}",
+                        crate::ssdp::SSDP_PORT,
+                        crate::ssdp::SSDP_PORT,
+                        crate::ssdp::SSDP_PORT,
+                        e,
+                    );
+                } else {
+                    error!("❌ SSDP initialization failed: {}", e);
+                }
                 return Err(e.into());
             }
         }

@@ -7,7 +7,7 @@ use pmoupnp::define_action;
 use crate::contentdirectory::handlers;
 
 define_action! {
-    pub static SEARCH = "Search" {
+    pub static SEARCH = "Search" stateless {
         in "ContainerID" => A_ARG_TYPE_OBJECTID,
         in "SearchCriteria" => A_ARG_TYPE_SEARCHCRITERIA,
         in "Filter" => A_ARG_TYPE_FILTER,
