@@ -243,7 +243,7 @@ impl ActionInstance {
             if arg_model.is_in() {
                 if let Some(value) = data.get(arg_inst.get_name()) {
                     if let Some(var_inst) = arg_inst.get_variable_instance() {
-                        var_inst.set_value(value.clone());
+                        var_inst.set_value(value.clone()).await.ok();
                         trace!("  IN  {} = {:?}", arg_inst.get_name(), value);
                     }
                 }
