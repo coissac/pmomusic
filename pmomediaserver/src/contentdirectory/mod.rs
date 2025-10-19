@@ -76,6 +76,7 @@ use pmoupnp::define_service;
 
 pub mod variables;
 pub mod actions;
+pub mod handlers;
 
 use actions::{
     BROWSE, SEARCH, GETSEARCHCAPABILITIES, GETSORTCAPABILITIES, GETSYSTEMUPDATEID

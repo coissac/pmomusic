@@ -1269,6 +1269,7 @@ async fn control_handler(State(instance): State<Arc<ServiceInstance>>, body: Str
     };
 
     debug!("🎬 Received SOAP action: {}", soap_action.name);
+    debug!("🎬 SOAP arguments: {:?}", soap_action.args);
 
     // Trouver l'action correspondante dans l'instance
     let action_instance = match instance.action(&soap_action.name) {
@@ -1290,8 +1291,22 @@ async fn control_handler(State(instance): State<Arc<ServiceInstance>>, body: Str
     };
 
     // Convertir les arguments SOAP (String) en ActionData (StateValue)
+    // D'abord, initialiser tous les arguments IN avec leurs valeurs par défaut
     let mut action_data = HashMap::new();
+    for arg_inst in action_instance.arguments_set().all() {
+        let arg_model = arg_inst.as_ref().get_model();
+        if arg_model.is_in() {
+            if let Some(var_inst) = arg_inst.get_variable_instance() {
+                // Utiliser la valeur par défaut de la variable
+                let default_value = var_inst.value();
+                action_data.insert(arg_inst.get_name().to_string(), default_value);
+            }
+        }
+    }
+
+    // Puis, écraser avec les valeurs fournies dans le SOAP
     for (arg_name, arg_value) in soap_action.args {
+        debug!("🔍 Processing SOAP arg: {} = '{}'", arg_name, arg_value);
         // Trouver l'argument correspondant pour obtenir son type
         if let Some(arg_inst) = action_instance.argument(&arg_name) {
             if let Some(var_inst) = arg_inst.get_variable_instance() {
@@ -1299,6 +1314,7 @@ async fn control_handler(State(instance): State<Arc<ServiceInstance>>, body: Str
                 // Parser la valeur selon le type de la variable
                 match StateValue::from_string(&arg_value, &var_model.as_state_var_type()) {
                     Ok(value) => {
+                        debug!("✅ Parsed {} = {:?}", arg_name, value);
                         action_data.insert(arg_name, value);
                     }
                     Err(e) => {

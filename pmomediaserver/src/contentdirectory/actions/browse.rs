@@ -4,6 +4,7 @@ use crate::contentdirectory::variables::{
     A_ARG_TYPE_RESULT, A_ARG_TYPE_UPDATEID,
 };
 use pmoupnp::define_action;
+use crate::contentdirectory::handlers;
 
 define_action! {
     pub static BROWSE = "Browse" {
@@ -18,4 +19,5 @@ define_action! {
         out "TotalMatches" => A_ARG_TYPE_COUNT,
         out "UpdateID" => A_ARG_TYPE_UPDATEID,
     }
+    with handler handlers::browse_handler()
 }
