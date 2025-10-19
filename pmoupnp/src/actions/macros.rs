@@ -189,22 +189,22 @@ macro_rules! define_action {
                 std::sync::Arc::new(ac)
             });
     };
-    
+
     // Helper interne pour créer un argument d'entrée
     (@arg in $name:literal, $var:expr) => {
         std::sync::Arc::new(
             $crate::actions::Argument::new_in(
-                $name.to_string(), 
+                $name.to_string(),
                 std::sync::Arc::clone(&$var)
             )
         )
     };
-    
+
     // Helper interne pour créer un argument de sortie
     (@arg out $name:literal, $var:expr) => {
         std::sync::Arc::new(
             $crate::actions::Argument::new_out(
-                $name.to_string(), 
+                $name.to_string(),
                 std::sync::Arc::clone(&$var)
             )
         )

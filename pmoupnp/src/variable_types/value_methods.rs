@@ -116,41 +116,53 @@ impl StateValue {
         use uuid::Uuid;
 
         match var_type {
-            StateVarType::UI1 => s.parse::<u8>()
+            StateVarType::UI1 => s
+                .parse::<u8>()
                 .map(StateValue::UI1)
                 .map_err(|e| StateValueError::ParseError(format!("Failed to parse UI1: {}", e))),
-            StateVarType::UI2 => s.parse::<u16>()
+            StateVarType::UI2 => s
+                .parse::<u16>()
                 .map(StateValue::UI2)
                 .map_err(|e| StateValueError::ParseError(format!("Failed to parse UI2: {}", e))),
-            StateVarType::UI4 => s.parse::<u32>()
+            StateVarType::UI4 => s
+                .parse::<u32>()
                 .map(StateValue::UI4)
                 .map_err(|e| StateValueError::ParseError(format!("Failed to parse UI4: {}", e))),
-            StateVarType::I1 => s.parse::<i8>()
+            StateVarType::I1 => s
+                .parse::<i8>()
                 .map(StateValue::I1)
                 .map_err(|e| StateValueError::ParseError(format!("Failed to parse I1: {}", e))),
-            StateVarType::I2 => s.parse::<i16>()
+            StateVarType::I2 => s
+                .parse::<i16>()
                 .map(StateValue::I2)
                 .map_err(|e| StateValueError::ParseError(format!("Failed to parse I2: {}", e))),
-            StateVarType::I4 | StateVarType::Int => s.parse::<i32>()
+            StateVarType::I4 | StateVarType::Int => s
+                .parse::<i32>()
                 .map(StateValue::I4)
                 .map_err(|e| StateValueError::ParseError(format!("Failed to parse I4/Int: {}", e))),
-            StateVarType::R4 => s.parse::<f32>()
+            StateVarType::R4 => s
+                .parse::<f32>()
                 .map(StateValue::R4)
                 .map_err(|e| StateValueError::ParseError(format!("Failed to parse R4: {}", e))),
-            StateVarType::R8 | StateVarType::Number | StateVarType::Fixed14_4 => s.parse::<f64>()
-                .map(StateValue::R8)
-                .map_err(|e| StateValueError::ParseError(format!("Failed to parse R8/Number: {}", e))),
-            StateVarType::Char => s.chars().next()
+            StateVarType::R8 | StateVarType::Number | StateVarType::Fixed14_4 => {
+                s.parse::<f64>().map(StateValue::R8).map_err(|e| {
+                    StateValueError::ParseError(format!("Failed to parse R8/Number: {}", e))
+                })
+            }
+            StateVarType::Char => s
+                .chars()
+                .next()
                 .ok_or_else(|| StateValueError::ParseError("Empty string for Char".to_string()))
                 .map(StateValue::Char),
             StateVarType::String => Ok(StateValue::String(s.to_string())),
-            StateVarType::Boolean => {
-                match s.to_lowercase().as_str() {
-                    "true" | "1" | "yes" => Ok(StateValue::Boolean(true)),
-                    "false" | "0" | "no" => Ok(StateValue::Boolean(false)),
-                    _ => Err(StateValueError::ParseError(format!("Invalid boolean value: {}", s))),
-                }
-            }
+            StateVarType::Boolean => match s.to_lowercase().as_str() {
+                "true" | "1" | "yes" => Ok(StateValue::Boolean(true)),
+                "false" | "0" | "no" => Ok(StateValue::Boolean(false)),
+                _ => Err(StateValueError::ParseError(format!(
+                    "Invalid boolean value: {}",
+                    s
+                ))),
+            },
             StateVarType::BinBase64 => Ok(StateValue::BinBase64(s.to_string())),
             StateVarType::BinHex => Ok(StateValue::BinHex(s.to_string())),
             StateVarType::Date => NaiveDate::parse_from_str(s, "%Y-%m-%d")
@@ -159,16 +171,24 @@ impl StateValue {
             StateVarType::DateTime => chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S")
                 .or_else(|_| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S"))
                 .map(StateValue::DateTime)
-                .map_err(|e| StateValueError::ParseError(format!("Failed to parse DateTime: {}", e))),
+                .map_err(|e| {
+                    StateValueError::ParseError(format!("Failed to parse DateTime: {}", e))
+                }),
             StateVarType::DateTimeTZ => chrono::DateTime::parse_from_rfc3339(s)
                 .map(|dt| StateValue::DateTimeTZ(dt.into()))
-                .map_err(|e| StateValueError::ParseError(format!("Failed to parse DateTimeTZ: {}", e))),
+                .map_err(|e| {
+                    StateValueError::ParseError(format!("Failed to parse DateTimeTZ: {}", e))
+                }),
             StateVarType::Time => chrono::NaiveTime::parse_from_str(s, "%H:%M:%S")
                 .map(StateValue::Time)
                 .map_err(|e| StateValueError::ParseError(format!("Failed to parse Time: {}", e))),
-            StateVarType::TimeTZ => chrono::DateTime::parse_from_rfc3339(&format!("1970-01-01T{}", s))
-                .map(|dt| StateValue::TimeTZ(dt.into()))
-                .map_err(|e| StateValueError::ParseError(format!("Failed to parse TimeTZ: {}", e))),
+            StateVarType::TimeTZ => {
+                chrono::DateTime::parse_from_rfc3339(&format!("1970-01-01T{}", s))
+                    .map(|dt| StateValue::TimeTZ(dt.into()))
+                    .map_err(|e| {
+                        StateValueError::ParseError(format!("Failed to parse TimeTZ: {}", e))
+                    })
+            }
             StateVarType::UUID => Uuid::parse_str(s)
                 .map(StateValue::UUID)
                 .map_err(|e| StateValueError::ParseError(format!("Failed to parse UUID: {}", e))),

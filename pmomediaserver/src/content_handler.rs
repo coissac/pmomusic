@@ -10,8 +10,8 @@
 //! - **Search** : Recherche dans les sources qui le supportent
 //! - **Update ID** : Suivi des changements pour les notifications UPnP
 
-use pmosource::api::{list_all_sources, get_source as get_source_from_registry};
 use pmodidl::{Container, DIDLLite};
+use pmosource::api::{get_source as get_source_from_registry, list_all_sources};
 use pmosource::{BrowseResult, MusicSource};
 use std::sync::Arc;
 
@@ -28,8 +28,7 @@ fn to_didl_lite(containers: &[Container], items: &[pmodidl::Item]) -> Result<Str
         items: items.to_vec(),
     };
 
-    quick_xml::se::to_string(&didl)
-        .map_err(|e| format!("Failed to serialize DIDL-Lite: {}", e))
+    quick_xml::se::to_string(&didl).map_err(|e| format!("Failed to serialize DIDL-Lite: {}", e))
 }
 
 /// Handler pour le service ContentDirectory
@@ -208,11 +207,7 @@ impl ContentHandler {
             requested_count as usize
         };
 
-        let paginated: Vec<Container> = containers
-            .into_iter()
-            .skip(start)
-            .take(count)
-            .collect();
+        let paginated: Vec<Container> = containers.into_iter().skip(start).take(count).collect();
 
         let returned = paginated.len();
         let didl = to_didl_lite(&paginated, &[])?;
@@ -278,11 +273,7 @@ impl ContentHandler {
             // On commence dans les items
             containers.clear();
             let item_start = start - total_containers;
-            items = items
-                .into_iter()
-                .skip(item_start)
-                .take(count)
-                .collect();
+            items = items.into_iter().skip(item_start).take(count).collect();
         }
 
         let returned = (containers.len() + items.len()) as u32;

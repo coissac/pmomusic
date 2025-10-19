@@ -30,12 +30,20 @@ async fn main() -> anyhow::Result<()> {
         let header = &data[0..4];
         if header == b"fLaC" {
             println!("✓ File is FLAC!");
-        } else if header[0..3] == *b"ID3" || (header.len() >= 2 && header[0] == 0xFF && (header[1] & 0xE0) == 0xE0) {
+        } else if header[0..3] == *b"ID3"
+            || (header.len() >= 2 && header[0] == 0xFF && (header[1] & 0xE0) == 0xE0)
+        {
             println!("✗ File is still MP3!");
-            println!("   Header: {:02X} {:02X} {:02X} {:02X}", header[0], header[1], header[2], header[3]);
+            println!(
+                "   Header: {:02X} {:02X} {:02X} {:02X}",
+                header[0], header[1], header[2], header[3]
+            );
         } else {
             println!("? Unknown format");
-            println!("   Header: {:02X} {:02X} {:02X} {:02X}", header[0], header[1], header[2], header[3]);
+            println!(
+                "   Header: {:02X} {:02X} {:02X} {:02X}",
+                header[0], header[1], header[2], header[3]
+            );
         }
     }
 

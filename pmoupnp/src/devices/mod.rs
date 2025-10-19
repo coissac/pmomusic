@@ -39,4 +39,7 @@ pub mod errors;
 
 pub use device::Device;
 pub use device_instance::DeviceInstance;
-pub use device_registry::{DeviceRegistry, DeviceInstanceSet, DeviceInfo, ServiceInfo, ActionInfo, ArgumentInfo, VariableInfo};
+pub use device_registry::{
+    ActionInfo, ArgumentInfo, DeviceInfo, DeviceInstanceSet, DeviceRegistry, ServiceInfo,
+    VariableInfo,
+};

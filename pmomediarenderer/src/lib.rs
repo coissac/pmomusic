@@ -29,7 +29,7 @@
 
 pub mod avtransport;
 pub mod connectionmanager;
-pub mod renderingcontrol;
 pub mod device;
+pub mod renderingcontrol;
 
 pub use device::MEDIA_RENDERER;

@@ -49,15 +49,15 @@ use axum::{
     Router,
 };
 #[cfg(feature = "pmoserver")]
+use std::future::Future;
+#[cfg(feature = "pmoserver")]
+use std::pin::Pin;
+#[cfg(feature = "pmoserver")]
 use std::sync::Arc;
 #[cfg(feature = "pmoserver")]
 use tokio_util::io::ReaderStream;
 #[cfg(feature = "pmoserver")]
 use tracing::warn;
-#[cfg(feature = "pmoserver")]
-use std::pin::Pin;
-#[cfg(feature = "pmoserver")]
-use std::future::Future;
 
 /// Type pour le callback de génération de param
 ///
@@ -75,16 +75,20 @@ use std::future::Future;
 /// Les données générées ou None si le param n'est pas supporté
 #[cfg(feature = "pmoserver")]
 pub type ParamGenerator<C> = Arc<
-    dyn Fn(Arc<Cache<C>>, String, String)
-        -> Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send>>
-        + Send + Sync
+    dyn Fn(Arc<Cache<C>>, String, String) -> Pin<Box<dyn Future<Output = Option<Vec<u8>>> + Send>>
+        + Send
+        + Sync,
 >;
 
 /// Handler générique pour GET /{cache_name}/{cache_type}/{pk}
 /// Sert un fichier avec le param par défaut
 #[cfg(feature = "pmoserver")]
 async fn get_file<C: CacheConfig + 'static>(
-    State((cache, content_type, param_generator)): State<(Arc<Cache<C>>, &'static str, Option<ParamGenerator<C>>)>,
+    State((cache, content_type, param_generator)): State<(
+        Arc<Cache<C>>,
+        &'static str,
+        Option<ParamGenerator<C>>,
+    )>,
     Path(pk): Path<String>,
 ) -> Response {
     // Utiliser le param par défaut
@@ -96,7 +100,11 @@ async fn get_file<C: CacheConfig + 'static>(
 /// Sert un fichier avec un param spécifique
 #[cfg(feature = "pmoserver")]
 async fn get_file_with_param<C: CacheConfig + 'static>(
-    State((cache, content_type, param_generator)): State<(Arc<Cache<C>>, &'static str, Option<ParamGenerator<C>>)>,
+    State((cache, content_type, param_generator)): State<(
+        Arc<Cache<C>>,
+        &'static str,
+        Option<ParamGenerator<C>>,
+    )>,
     Path((pk, param)): Path<(String, String)>,
 ) -> Response {
     serve_file_with_streaming(&cache, &pk, &param, content_type, param_generator).await
@@ -122,11 +130,7 @@ async fn serve_file_with_streaming<C: CacheConfig>(
         if let Some(generator) = param_generator {
             if let Some(data) = generator(cache.clone(), pk.to_string(), param.to_string()).await {
                 // Le générateur a créé les données, les servir directement
-                return (
-                    StatusCode::OK,
-                    [("content-type", content_type)],
-                    data,
-                ).into_response();
+                return (StatusCode::OK, [("content-type", content_type)], data).into_response();
             }
         }
     }
@@ -207,12 +211,7 @@ async fn serve_complete_file(
     }
 
     match tokio::fs::read(&file_path).await {
-        Ok(data) => (
-            StatusCode::OK,
-            [("content-type", content_type)],
-            data,
-        )
-            .into_response(),
+        Ok(data) => (StatusCode::OK, [("content-type", content_type)], data).into_response(),
         Err(e) => {
             warn!("Error reading file {:?}: {}", file_path, e);
             (StatusCode::INTERNAL_SERVER_ERROR, "Error reading file").into_response()
@@ -332,9 +331,7 @@ pub fn create_file_router_with_generator<C: CacheConfig + 'static>(
 /// - `DELETE /{pk}` - Supprimer un item
 /// - `POST /consolidate` - Consolider le cache
 #[cfg(feature = "pmoserver")]
-pub fn create_api_router<C: CacheConfig + 'static>(
-    cache: Arc<Cache<C>>,
-) -> Router {
+pub fn create_api_router<C: CacheConfig + 'static>(cache: Arc<Cache<C>>) -> Router {
     use crate::api;
 
     Router::new()
@@ -346,8 +343,7 @@ pub fn create_api_router<C: CacheConfig + 'static>(
         )
         .route(
             "/{pk}",
-            get(api::get_item_info::<C>)
-                .delete(api::delete_item::<C>),
+            get(api::get_item_info::<C>).delete(api::delete_item::<C>),
         )
         .route("/{pk}/status", get(api::get_download_status::<C>))
         .route("/consolidate", post(api::consolidate_cache::<C>))

@@ -3,9 +3,9 @@
 //! Ce module fournit une interface générique pour gérer les métadonnées
 //! des éléments en cache, avec tracking des accès et des statistiques.
 
-use rusqlite::{Connection, params};
-use serde::Serialize;
 use chrono::Utc;
+use rusqlite::{params, Connection};
+use serde::Serialize;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -32,7 +32,10 @@ pub struct CacheEntry {
     #[cfg_attr(feature = "openapi", schema(example = "2025-01-15T10:30:00Z"))]
     pub last_used: Option<String>,
     /// Métadonnées JSON optionnelles (ex: métadonnées audio, EXIF images, etc.)
-    #[cfg_attr(feature = "openapi", schema(example = r#"{"title":"Track","artist":"Artist"}"#))]
+    #[cfg_attr(
+        feature = "openapi",
+        schema(example = r#"{"title":"Track","artist":"Artist"}"#)
+    )]
     pub metadata_json: Option<String>,
 }
 
@@ -161,20 +164,16 @@ impl DB {
             self.table_name
         );
 
-        conn.query_row(
-            &sql,
-            [pk],
-            |row| {
-                Ok(CacheEntry {
-                    pk: row.get(0)?,
-                    source_url: row.get(1)?,
-                    collection: row.get(2)?,
-                    hits: row.get(3)?,
-                    last_used: row.get(4)?,
-                    metadata_json: row.get(5)?,
-                })
-            },
-        )
+        conn.query_row(&sql, [pk], |row| {
+            Ok(CacheEntry {
+                pk: row.get(0)?,
+                source_url: row.get(1)?,
+                collection: row.get(2)?,
+                hits: row.get(3)?,
+                last_used: row.get(4)?,
+                metadata_json: row.get(5)?,
+            })
+        })
     }
 
     /// Met à jour le compteur d'accès et la date du dernier accès
@@ -189,10 +188,7 @@ impl DB {
             self.table_name
         );
 
-        conn.execute(
-            &sql,
-            params![Utc::now().to_rfc3339(), pk],
-        )?;
+        conn.execute(&sql, params![Utc::now().to_rfc3339(), pk])?;
 
         Ok(())
     }
@@ -215,17 +211,18 @@ impl DB {
 
         let mut stmt = conn.prepare(&sql)?;
 
-        let entries = stmt.query_map([], |row| {
-            Ok(CacheEntry {
-                pk: row.get(0)?,
-                source_url: row.get(1)?,
-                collection: row.get(2)?,
-                hits: row.get(3)?,
-                last_used: row.get(4)?,
-                metadata_json: row.get(5)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+        let entries = stmt
+            .query_map([], |row| {
+                Ok(CacheEntry {
+                    pk: row.get(0)?,
+                    source_url: row.get(1)?,
+                    collection: row.get(2)?,
+                    hits: row.get(3)?,
+                    last_used: row.get(4)?,
+                    metadata_json: row.get(5)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(entries)
     }
@@ -244,17 +241,18 @@ impl DB {
 
         let mut stmt = conn.prepare(&sql)?;
 
-        let entries = stmt.query_map([collection], |row| {
-            Ok(CacheEntry {
-                pk: row.get(0)?,
-                source_url: row.get(1)?,
-                collection: row.get(2)?,
-                hits: row.get(3)?,
-                last_used: row.get(4)?,
-                metadata_json: row.get(5)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+        let entries = stmt
+            .query_map([collection], |row| {
+                Ok(CacheEntry {
+                    pk: row.get(0)?,
+                    source_url: row.get(1)?,
+                    collection: row.get(2)?,
+                    hits: row.get(3)?,
+                    last_used: row.get(4)?,
+                    metadata_json: row.get(5)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(entries)
     }
@@ -319,17 +317,18 @@ impl DB {
 
         let mut stmt = conn.prepare(&sql)?;
 
-        let entries = stmt.query_map([limit], |row| {
-            Ok(CacheEntry {
-                pk: row.get(0)?,
-                source_url: row.get(1)?,
-                collection: row.get(2)?,
-                hits: row.get(3)?,
-                last_used: row.get(4)?,
-                metadata_json: row.get(5)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+        let entries = stmt
+            .query_map([limit], |row| {
+                Ok(CacheEntry {
+                    pk: row.get(0)?,
+                    source_url: row.get(1)?,
+                    collection: row.get(2)?,
+                    hits: row.get(3)?,
+                    last_used: row.get(4)?,
+                    metadata_json: row.get(5)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(entries)
     }

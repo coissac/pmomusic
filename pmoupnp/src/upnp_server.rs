@@ -18,40 +18,37 @@
 //!     + DeviceRegistry (thread_local storage)
 //! ```
 
+use once_cell::sync::Lazy;
 use std::sync::Arc;
 use std::sync::RwLock;
-use once_cell::sync::Lazy;
 
 use pmoserver::Server;
 use utoipa::OpenApi;
 
-use crate::devices::errors::DeviceError;
-use crate::devices::{Device, DeviceInstance, DeviceRegistry};
 use crate::UpnpModel;
 use crate::cache_registry::CACHE_REGISTRY;
+use crate::devices::errors::DeviceError;
+use crate::devices::{Device, DeviceInstance, DeviceRegistry};
 use crate::ssdp::SsdpServer;
 use crate::upnp_api::UpnpApiExt;
 
-use pmocovers::Cache as CoverCache;
 use pmoaudiocache::Cache as AudioCache;
-use pmoutils::{find_process_using_port, TransportProtocol};
+use pmocovers::Cache as CoverCache;
+use pmoutils::{TransportProtocol, find_process_using_port};
 
 /// Registre de devices global et thread-safe.
 ///
 /// Utilise Lazy pour une initialisation paresseuse et RwLock pour le partage entre threads.
 /// Ceci permet aux API handlers (qui s'exécutent dans des threads différents) d'accéder
 /// au même registre de devices.
-static DEVICE_REGISTRY: Lazy<RwLock<DeviceRegistry>> = Lazy::new(|| {
-    RwLock::new(DeviceRegistry::new())
-});
+static DEVICE_REGISTRY: Lazy<RwLock<DeviceRegistry>> =
+    Lazy::new(|| RwLock::new(DeviceRegistry::new()));
 
 /// Serveur SSDP global et thread-safe.
 ///
 /// Utilise Lazy pour une initialisation paresseuse et RwLock pour le partage entre threads.
 /// Permet l'annonce automatique des devices UPnP sur le réseau.
-static SSDP_SERVER: Lazy<RwLock<Option<SsdpServer>>> = Lazy::new(|| {
-    RwLock::new(None)
-});
+static SSDP_SERVER: Lazy<RwLock<Option<SsdpServer>>> = Lazy::new(|| RwLock::new(None));
 
 /// Trait pour étendre un serveur avec des fonctionnalités UPnP.
 ///
@@ -97,7 +94,10 @@ pub trait UpnpServerExt {
     /// # Returns
     ///
     /// L'instance du device créée et enregistrée.
-    async fn register_device(&mut self, device: Arc<Device>) -> Result<Arc<DeviceInstance>, DeviceError>;
+    async fn register_device(
+        &mut self,
+        device: Arc<Device>,
+    ) -> Result<Arc<DeviceInstance>, DeviceError>;
 
     /// Retourne le nombre de devices enregistrés.
     fn device_count(&self) -> usize;
@@ -123,8 +123,11 @@ pub trait UpnpServerExt {
     /// # Returns
     ///
     /// Instance partagée du cache
-    async fn init_cover_cache(&mut self, cache_dir: &str, limit: usize)
-        -> Result<Arc<CoverCache>, anyhow::Error>;
+    async fn init_cover_cache(
+        &mut self,
+        cache_dir: &str,
+        limit: usize,
+    ) -> Result<Arc<CoverCache>, anyhow::Error>;
 
     /// Initialiser le cache audio centralisé
     ///
@@ -139,8 +142,11 @@ pub trait UpnpServerExt {
     /// # Returns
     ///
     /// Instance partagée du cache
-    async fn init_audio_cache(&mut self, cache_dir: &str, limit: usize)
-        -> Result<Arc<AudioCache>, anyhow::Error>;
+    async fn init_audio_cache(
+        &mut self,
+        cache_dir: &str,
+        limit: usize,
+    ) -> Result<Arc<AudioCache>, anyhow::Error>;
 
     /// Initialiser les caches depuis la configuration
     ///
@@ -150,8 +156,7 @@ pub trait UpnpServerExt {
     /// # Returns
     ///
     /// Tuple (cache de couvertures, cache audio)
-    async fn init_caches(&mut self)
-        -> Result<(Arc<CoverCache>, Arc<AudioCache>), anyhow::Error>;
+    async fn init_caches(&mut self) -> Result<(Arc<CoverCache>, Arc<AudioCache>), anyhow::Error>;
 
     /// Récupérer le cache de couvertures
     fn cover_cache(&self) -> Option<Arc<CoverCache>>;
@@ -219,17 +224,32 @@ pub trait UpnpServerExt {
 
 // Implémentation du trait UpnpServer pour pmoserver::Server
 impl UpnpServerExt for Server {
-    async fn register_device(&mut self, device: Arc<Device>) -> Result<Arc<DeviceInstance>, DeviceError> {
+    async fn register_device(
+        &mut self,
+        device: Arc<Device>,
+    ) -> Result<Arc<DeviceInstance>, DeviceError> {
         use tracing::info;
 
         // Créer l'instance (retourne déjà un Arc<DeviceInstance>)
-        let di = device.create_instance();
+        let mut di = device.create_instance();
+
+        // Normaliser la base URL HTTP avant tout enregistrement.
+        let server_base_url = self.base_url();
+        if let Some(instance) = Arc::get_mut(&mut di) {
+            instance.set_server_base_url(server_base_url);
+        } else {
+            tracing::warn!(
+                "Unable to set base URL on device {} before registration; keeping existing value",
+                di.udn()
+            );
+        }
 
         // Enregistrer les URLs dans le serveur web
         di.register_urls(self).await?;
 
         // Ajouter au registre pour l'introspection
-        DEVICE_REGISTRY.write()
+        DEVICE_REGISTRY
+            .write()
             .unwrap()
             .register(di.clone())
             .map_err(|e| DeviceError::UrlRegistrationError(e))?;
@@ -261,10 +281,13 @@ impl UpnpServerExt for Server {
 
     // ========= Cache Management Implementation =========
 
-    async fn init_cover_cache(&mut self, cache_dir: &str, limit: usize)
-        -> Result<Arc<CoverCache>, anyhow::Error> {
+    async fn init_cover_cache(
+        &mut self,
+        cache_dir: &str,
+        limit: usize,
+    ) -> Result<Arc<CoverCache>, anyhow::Error> {
+        use pmocache::pmoserver_ext::{create_api_router, create_file_router_with_generator};
         use pmocovers::new_cache;
-        use pmocache::pmoserver_ext::{create_file_router_with_generator, create_api_router};
 
         let base_url = self.info().base_url.clone();
         let cache = Arc::new(new_cache(cache_dir, limit)?);
@@ -279,7 +302,13 @@ impl UpnpServerExt for Server {
                         match pmocovers::webp::generate_variant(&cache, &pk, size).await {
                             Ok(data) => return Some(data),
                             Err(e) => {
-                                tracing::warn!("Cannot generate variant {}x{} for {}: {}", size, size, pk, e);
+                                tracing::warn!(
+                                    "Cannot generate variant {}x{} for {}: {}",
+                                    size,
+                                    size,
+                                    pk,
+                                    e
+                                );
                                 return None;
                             }
                         }
@@ -288,11 +317,8 @@ impl UpnpServerExt for Server {
                 })
             });
 
-        let file_router = create_file_router_with_generator(
-            cache.clone(),
-            "image/webp",
-            Some(variant_generator)
-        );
+        let file_router =
+            create_file_router_with_generator(cache.clone(), "image/webp", Some(variant_generator));
         self.add_router("/", file_router).await;
 
         // API REST générique (pmocache)
@@ -310,10 +336,13 @@ impl UpnpServerExt for Server {
         Ok(cache)
     }
 
-    async fn init_audio_cache(&mut self, cache_dir: &str, limit: usize)
-        -> Result<Arc<AudioCache>, anyhow::Error> {
+    async fn init_audio_cache(
+        &mut self,
+        cache_dir: &str,
+        limit: usize,
+    ) -> Result<Arc<AudioCache>, anyhow::Error> {
         use pmoaudiocache::new_cache;
-        use pmocache::pmoserver_ext::{create_file_router, create_api_router};
+        use pmocache::pmoserver_ext::{create_api_router, create_file_router};
 
         let base_url = self.info().base_url.clone();
         let cache = Arc::new(new_cache(cache_dir, limit)?);
@@ -337,19 +366,22 @@ impl UpnpServerExt for Server {
         Ok(cache)
     }
 
-    async fn init_caches(&mut self)
-        -> Result<(Arc<CoverCache>, Arc<AudioCache>), anyhow::Error> {
+    async fn init_caches(&mut self) -> Result<(Arc<CoverCache>, Arc<AudioCache>), anyhow::Error> {
         let config = pmoconfig::get_config();
 
-        let cover_cache = self.init_cover_cache(
-            &config.get_cover_cache_dir()?,
-            config.get_cover_cache_size()?
-        ).await?;
+        let cover_cache = self
+            .init_cover_cache(
+                &config.get_cover_cache_dir()?,
+                config.get_cover_cache_size()?,
+            )
+            .await?;
 
-        let audio_cache = self.init_audio_cache(
-            &config.get_audio_cache_dir()?,
-            config.get_audio_cache_size()?
-        ).await?;
+        let audio_cache = self
+            .init_audio_cache(
+                &config.get_audio_cache_dir()?,
+                config.get_audio_cache_size()?,
+            )
+            .await?;
 
         Ok((cover_cache, audio_cache))
     }
@@ -425,9 +457,7 @@ impl UpnpServerExt for Server {
                 let kind = e.kind();
                 if kind == std::io::ErrorKind::AddrInUse {
                     let port = crate::ssdp::SSDP_PORT;
-                    if let Some(process) =
-                        find_process_using_port(port, TransportProtocol::Udp)
-                    {
+                    if let Some(process) = find_process_using_port(port, TransportProtocol::Udp) {
                         error!(
                             "❌ SSDP initialization failed: port {} is already in use by \
                             PID {} ({}) owned by {}: {}",

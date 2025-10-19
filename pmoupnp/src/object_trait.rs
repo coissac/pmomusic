@@ -277,7 +277,7 @@ pub trait UpnpObject: Clone + Debug {
 pub trait UpnpModel: UpnpObject {
     /// Le type d'instance créée par ce modèle.
     type Instance: UpnpInstance<Model = Self>;
-    
+
     /// Crée une nouvelle instance à partir de ce modèle.
     ///
     /// # Returns
@@ -320,7 +320,7 @@ pub trait UpnpModel: UpnpObject {
 pub trait UpnpInstance: UpnpObject {
     /// Le type du modèle dont cette instance est dérivée.
     type Model: UpnpModel<Instance = Self>;
-      
+
     /// Crée une nouvelle instance à partir d'un modèle.
     ///
     /// # Arguments
@@ -331,7 +331,7 @@ pub trait UpnpInstance: UpnpObject {
     ///
     /// Une nouvelle instance initialisée depuis le modèle.
     fn new(model: &Self::Model) -> Self;
-    
+
     /// Indique que cet objet est une instance.
     ///
     /// # Returns
@@ -421,9 +421,9 @@ pub trait UpnpTypedObject: UpnpObject + UpnpTyped {}
 /// Ce trait ajoute la méthode [`get_model`](Self::get_model) pour accéder
 /// au modèle de l'instance. Les collections d'instances ([`UpnInstanceSet`])
 /// n'ont pas cette méthode car elles contiennent plusieurs instances.
-pub trait UpnpTypedInstance: UpnpTypedObject + UpnpInstance 
+pub trait UpnpTypedInstance: UpnpTypedObject + UpnpInstance
 where
-    Self::Model: UpnpModel<Instance = Self>
+    Self::Model: UpnpModel<Instance = Self>,
 {
     /// Retourne une référence vers le modèle dont cette instance est dérivée.
     ///
@@ -438,11 +438,11 @@ where
     ///
     /// ```ignore
     /// let instance = model.create_instance();
-    /// 
+    ///
     /// // Accéder aux propriétés du modèle depuis l'instance
     /// let model_ref = instance.get_model();
     /// println!("Instance du modèle: {}", model_ref.get_name());
-    /// 
+    ///
     /// // Vérifier les contraintes définies dans le modèle
     /// if let Some(range) = model_ref.get_range() {
     ///     println!("Plage autorisée: {:?}", range);
@@ -464,7 +464,6 @@ where
     /// mais spécifique au domaine des variables.
     fn get_model(&self) -> &Self::Model;
 }
-
 
 /// Trait marqueur pour les collections UPnP.
 ///
@@ -607,7 +606,6 @@ pub trait UpnpSet: UpnpObject + UpnpDeepClone {
 /// ```
 pub trait UpnpModelSet: UpnpSet + UpnpModel {}
 
-
 /// Trait marqueur pour les collections d'instances UPnP.
 ///
 /// Combine [`UpnpSet`] et [`UpnpInstance`] pour représenter une collection
@@ -625,7 +623,6 @@ pub trait UpnpModelSet: UpnpSet + UpnpModel {}
 ///
 /// C'est un *marker trait* (trait marqueur) sans méthodes supplémentaires.
 pub trait UpnInstanceSet: UpnpSet + UpnpInstance {}
-
 
 /// Implémentation automatique de [`UpnInstanceSet`] pour tous les types éligibles.
 ///
@@ -667,10 +664,7 @@ pub trait UpnInstanceSet: UpnpSet + UpnpInstance {}
 ///     }
 /// }
 /// ```
-impl<T> UpnInstanceSet for T 
-where
-    T: UpnpSet + UpnpInstance
-{}
+impl<T> UpnInstanceSet for T where T: UpnpSet + UpnpInstance {}
 
 /// Implémentation automatique de [`UpnpTypedObject`] pour tous les types éligibles.
 ///
@@ -697,11 +691,7 @@ where
 ///     println!("{}", obj.get_name());
 /// }
 /// ```
-impl<T> UpnpTypedObject for T 
-where
-    T: UpnpObject + UpnpTyped
-{}
-
+impl<T> UpnpTypedObject for T where T: UpnpObject + UpnpTyped {}
 
 /// Implémentation automatique de [`UpnpModelSet`] pour tous les types éligibles.
 ///
@@ -756,8 +746,4 @@ where
 ///
 /// - [`UpnpModelSet`] : Collection de **modèles** (peut créer des instances)
 /// - [`UpnInstanceSet`] : Collection d'**instances** (créée depuis un modèle)
-impl<T> UpnpModelSet for T 
-where
-    T: UpnpSet + UpnpModel
-{}
-
+impl<T> UpnpModelSet for T where T: UpnpSet + UpnpModel {}

@@ -7,12 +7,12 @@
 //! Les caches supportent les collections, permettant à chaque source
 //! d'avoir sa propre collection dans le cache partagé.
 
-use std::sync::Arc;
 use once_cell::sync::Lazy;
-use pmocache::FileCache;
-use std::sync::RwLock;
-use pmocovers::Cache as CoverCache;
 use pmoaudiocache::Cache as AudioCache;
+use pmocache::FileCache;
+use pmocovers::Cache as CoverCache;
+use std::sync::Arc;
+use std::sync::RwLock;
 
 /// Registre global des caches
 ///
@@ -80,16 +80,16 @@ impl CacheRegistry {
     ///
     /// URL complète (ex: "http://localhost:8080/covers/images/abc123/300")
     pub fn build_cover_url(&self, pk: &str, size: Option<usize>) -> anyhow::Result<String> {
-        let base_url = self.base_url
+        let base_url = self
+            .base_url
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Base URL not set in CacheRegistry"))?;
-        let cache = get_cover_cache()
-        .ok_or_else(|| anyhow::anyhow!("No registred cover cache"))?;
-        let param=  match size {
+        let cache = get_cover_cache().ok_or_else(|| anyhow::anyhow!("No registred cover cache"))?;
+        let param = match size {
             Some(size_) => Some(size_.to_string()),
-            None => None  
+            None => None,
         };
-        let route = cache.route_for(pk, param.as_deref());           
+        let route = cache.route_for(pk, param.as_deref());
         Ok(format!("{}{}", base_url, route))
     }
 
@@ -104,12 +104,12 @@ impl CacheRegistry {
     ///
     /// URL complète (ex: "http://localhost:8080/audio/tracks/abc123/orig")
     pub fn build_audio_url(&self, pk: &str, param: Option<&str>) -> anyhow::Result<String> {
-        let base_url = self.base_url
+        let base_url = self
+            .base_url
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Base URL not set in CacheRegistry"))?;
-        let cache = get_audio_cache()
-        .ok_or_else(|| anyhow::anyhow!("No registred audio cache"))?;
-        let route = cache.route_for(pk, param);           
+        let cache = get_audio_cache().ok_or_else(|| anyhow::anyhow!("No registred audio cache"))?;
+        let route = cache.route_for(pk, param);
         Ok(format!("{}{}", base_url, route))
     }
 }
@@ -124,9 +124,8 @@ impl Default for CacheRegistry {
 ///
 /// Utilise Lazy pour une initialisation paresseuse et RwLock pour le partage entre threads.
 /// Permet aux handlers et aux sources d'accéder aux caches depuis n'importe où.
-pub(crate) static CACHE_REGISTRY: Lazy<RwLock<CacheRegistry>> = Lazy::new(|| {
-    RwLock::new(CacheRegistry::new())
-});
+pub(crate) static CACHE_REGISTRY: Lazy<RwLock<CacheRegistry>> =
+    Lazy::new(|| RwLock::new(CacheRegistry::new()));
 
 /// Accès global au cache de couvertures
 ///

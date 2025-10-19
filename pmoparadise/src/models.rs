@@ -270,7 +270,8 @@ pub struct Block {
 impl Block {
     /// Get songs in order by index
     pub fn songs_ordered(&self) -> Vec<(usize, &Song)> {
-        let mut songs: Vec<_> = self.song
+        let mut songs: Vec<_> = self
+            .song
             .iter()
             .filter_map(|(k, v)| k.parse::<usize>().ok().map(|idx| (idx, v)))
             .collect();
@@ -290,7 +291,9 @@ impl Block {
 
     /// Get the full URL for a cover image
     pub fn cover_url(&self, cover_path: &str) -> Option<String> {
-        self.image_base.as_ref().map(|base| format!("{}{}", base, cover_path))
+        self.image_base
+            .as_ref()
+            .map(|base| format!("{}{}", base, cover_path))
     }
 
     /// Find which song is playing at a given timestamp (ms from block start)
@@ -334,7 +337,8 @@ pub struct NowPlaying {
 impl NowPlaying {
     /// Create from a block (assumes starting from beginning)
     pub fn from_block(block: Block) -> Self {
-        let (current_song_index, current_song) = block.get_song(0)
+        let (current_song_index, current_song) = block
+            .get_song(0)
             .map(|s| (Some(0), Some(s.clone())))
             .unwrap_or((None, None));
 

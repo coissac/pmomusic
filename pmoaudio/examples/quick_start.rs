@@ -73,10 +73,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 7. Générer l'audio (10 chunks de 4800 samples à 48kHz = ~1 seconde)
     source
         .generate_chunks(
-            10,     // nombre de chunks
-            4800,   // samples par chunk (100ms @ 48kHz)
-            48000,  // sample rate
-            440.0,  // fréquence (La 440 Hz)
+            10,    // nombre de chunks
+            4800,  // samples par chunk (100ms @ 48kHz)
+            48000, // sample rate
+            440.0, // fréquence (La 440 Hz)
         )
         .await?;
 

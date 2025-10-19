@@ -71,8 +71,11 @@ pub trait QobuzServerExt {
     /// - `GET /qobuz/featured/playlists` - Playlists featured
     /// - `GET /qobuz/cache/stats` - Statistiques du cache
     /// - `GET /swagger-ui` - Documentation interactive
-    async fn init_qobuz_client(&mut self, username: &str, password: &str)
-        -> Result<Arc<QobuzClient>>;
+    async fn init_qobuz_client(
+        &mut self,
+        username: &str,
+        password: &str,
+    ) -> Result<Arc<QobuzClient>>;
 
     /// Initialise le client Qobuz avec la configuration par défaut
     ///

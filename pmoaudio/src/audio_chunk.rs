@@ -90,7 +90,13 @@ impl AudioChunk {
     }
 
     /// Crée un nouveau chunk audio avec un gain spécifique
-    pub fn with_gain(order: u64, left: Vec<f32>, right: Vec<f32>, sample_rate: u32, gain: f32) -> Self {
+    pub fn with_gain(
+        order: u64,
+        left: Vec<f32>,
+        right: Vec<f32>,
+        sample_rate: u32,
+        gain: f32,
+    ) -> Self {
         Self {
             order,
             left: Arc::new(left),

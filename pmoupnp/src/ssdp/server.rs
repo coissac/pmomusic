@@ -1,6 +1,6 @@
 //! Serveur SSDP
 
-use super::{SsdpDevice, SSDP_MULTICAST_ADDR, SSDP_PORT, MAX_AGE};
+use super::{MAX_AGE, SSDP_MULTICAST_ADDR, SSDP_PORT, SsdpDevice};
 use std::collections::HashMap;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::{Arc, RwLock};

@@ -257,7 +257,12 @@ impl QobuzApi {
 
         let response: SimilarArtistsResponse =
             self.get("/artist/getSimilarArtists", &params).await?;
-        Ok(response.artists.items.into_iter().map(Self::parse_artist).collect())
+        Ok(response
+            .artists
+            .items
+            .into_iter()
+            .map(Self::parse_artist)
+            .collect())
     }
 
     /// Récupère les détails d'une playlist
@@ -275,7 +280,11 @@ impl QobuzApi {
         let response: PlaylistResponse = self.get("/playlist/get", &params).await?;
 
         if let Some(tracks) = response.tracks {
-            Ok(tracks.items.into_iter().map(|t| Self::parse_track(t, None)).collect())
+            Ok(tracks
+                .items
+                .into_iter()
+                .map(|t| Self::parse_track(t, None))
+                .collect())
         } else {
             Ok(Vec::new())
         }
@@ -285,7 +294,12 @@ impl QobuzApi {
     pub async fn get_genres(&self) -> Result<Vec<Genre>> {
         debug!("Fetching genres");
         let response: GenresResponse = self.get("/genre/list", &[]).await?;
-        Ok(response.genres.items.into_iter().map(Self::parse_genre).collect())
+        Ok(response
+            .genres
+            .items
+            .into_iter()
+            .map(Self::parse_genre)
+            .collect())
     }
 
     /// Récupère les albums featured (nouveautés, éditeur, etc.)
@@ -329,7 +343,12 @@ impl QobuzApi {
 
         let response: FeaturedPlaylistsResponse =
             self.get("/playlist/getFeatured", &params).await?;
-        Ok(response.playlists.items.into_iter().map(Self::parse_playlist).collect())
+        Ok(response
+            .playlists
+            .items
+            .into_iter()
+            .map(Self::parse_playlist)
+            .collect())
     }
 
     /// Recherche dans le catalogue
@@ -391,10 +410,7 @@ impl QobuzApi {
             description: response.description,
             maximum_sampling_rate: response.maximum_sampling_rate,
             maximum_bit_depth: response.maximum_bit_depth,
-            genres: response
-                .genre
-                .map(|g| vec![g.name])
-                .unwrap_or_default(),
+            genres: response.genre.map(|g| vec![g.name]).unwrap_or_default(),
             label: response.label.map(|l| l.name),
         }
     }

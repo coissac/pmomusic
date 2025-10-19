@@ -119,7 +119,9 @@ impl QobuzClient {
         let album = self.api.get_album(album_id).await?;
 
         // Mettre en cache
-        self.cache.put_album(album_id.to_string(), album.clone()).await;
+        self.cache
+            .put_album(album_id.to_string(), album.clone())
+            .await;
 
         Ok(album)
     }
@@ -130,9 +132,7 @@ impl QobuzClient {
 
         // Mettre les tracks en cache
         for track in &tracks {
-            self.cache
-                .put_track(track.id.clone(), track.clone())
-                .await;
+            self.cache.put_track(track.id.clone(), track.clone()).await;
         }
 
         Ok(tracks)
@@ -148,7 +148,9 @@ impl QobuzClient {
         }
 
         let track = self.api.get_track(track_id).await?;
-        self.cache.put_track(track_id.to_string(), track.clone()).await;
+        self.cache
+            .put_track(track_id.to_string(), track.clone())
+            .await;
 
         Ok(track)
     }
@@ -168,9 +170,7 @@ impl QobuzClient {
         let url = info.url.clone();
 
         // Mettre en cache
-        self.cache
-            .put_stream_url(track_id.to_string(), info)
-            .await;
+        self.cache.put_stream_url(track_id.to_string(), info).await;
 
         Ok(url)
     }
@@ -194,7 +194,10 @@ impl QobuzClient {
                 .await;
             Ok(artist)
         } else {
-            Err(QobuzError::NotFound(format!("Artist {} not found", artist_id)))
+            Err(QobuzError::NotFound(format!(
+                "Artist {} not found",
+                artist_id
+            )))
         }
     }
 

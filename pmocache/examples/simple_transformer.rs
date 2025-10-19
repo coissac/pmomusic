@@ -11,7 +11,9 @@ fn main() {
     println!("   dl.wait_until_finished().await?;\n");
 
     println!("2. Téléchargement avec transformation:");
-    println!("   let transformer: StreamTransformer = Box::new(|response, mut file, update_progress| {{");
+    println!(
+        "   let transformer: StreamTransformer = Box::new(|response, mut file, update_progress| {{"
+    );
     println!("       Box::pin(async move {{");
     println!("           let mut stream = response.bytes_stream();");
     println!("           let mut total = 0u64;");

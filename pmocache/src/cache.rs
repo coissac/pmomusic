@@ -3,9 +3,9 @@
 //! Ce module fournit une interface générique pour gérer un cache de fichiers
 //! avec métadonnées dans une base de données SQLite.
 
-use crate::cache_trait::{FileCache, pk_from_url};
+use crate::cache_trait::{pk_from_url, FileCache};
 use crate::db::DB;
-use crate::download::{Download, download_with_transformer, StreamTransformer};
+use crate::download::{download_with_transformer, Download, StreamTransformer};
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -26,10 +26,10 @@ pub trait CacheConfig: Send + Sync {
         "file"
     }
     /// Cache name (ex: "covers", "audio", "cache")
-    fn cache_name()  -> &'static str {
+    fn cache_name() -> &'static str {
         "cache"
     }
-    /// Default param extension ("orig") 
+    /// Default param extension ("orig")
     fn default_param() -> &'static str {
         "orig"
     }
@@ -155,11 +155,7 @@ impl<C: CacheConfig> Cache<C> {
 
         // Lancer le téléchargement avec transformer
         let transformer = self.transformer_factory.as_ref().map(|f| f());
-        let download = download_with_transformer(
-            &file_path,
-            url,
-            transformer,
-        );
+        let download = download_with_transformer(&file_path, url, transformer);
 
         // Stocker dans la map des downloads en cours
         {
@@ -228,7 +224,6 @@ impl<C: CacheConfig> Cache<C> {
         self.add_from_url(url, collection).await
     }
 
-
     /// Récupère le chemin d'un fichier dans le cache
     ///
     /// # Arguments
@@ -289,8 +284,11 @@ impl<C: CacheConfig> Cache<C> {
             let file_path = self.file_path(&entry.pk);
             if !file_path.exists() {
                 // Re-télécharger le fichier manquant
-                match self.add_from_url(&entry.source_url, entry.collection.as_deref()).await {
-                    Ok(_) => {},
+                match self
+                    .add_from_url(&entry.source_url, entry.collection.as_deref())
+                    .await
+                {
+                    Ok(_) => {}
                     Err(_) => {
                         // Si le téléchargement échoue, supprimer l'entrée DB
                         self.db.delete(&entry.pk)?;
@@ -413,7 +411,9 @@ impl<C: CacheConfig> Cache<C> {
     /// * `min_size` - Taille minimale attendue en bytes
     pub async fn wait_until_min_size(&self, pk: &str, min_size: u64) -> Result<()> {
         if let Some(download) = self.get_download(pk).await {
-            download.wait_until_min_size(min_size).await
+            download
+                .wait_until_min_size(min_size)
+                .await
                 .map_err(|e| anyhow!("Download error: {}", e))
         } else {
             // Déjà terminé ou n'existe pas
@@ -432,7 +432,9 @@ impl<C: CacheConfig> Cache<C> {
     /// * `pk` - Clé primaire du fichier
     pub async fn wait_until_finished(&self, pk: &str) -> Result<()> {
         if let Some(download) = self.get_download(pk).await {
-            download.wait_until_finished().await
+            download
+                .wait_until_finished()
+                .await
                 .map_err(|e| anyhow!("Download error: {}", e))
         } else {
             // Déjà terminé ou n'existe pas
@@ -460,7 +462,8 @@ impl<C: CacheConfig> Cache<C> {
     ///
     /// Format: `{pk}.{qualifier}.{extension}`
     pub fn file_path_with_qualifier(&self, pk: &str, qualifier: &str) -> PathBuf {
-        self.dir.join(format!("{}.{}.{}", pk, qualifier, C::file_extension()))
+        self.dir
+            .join(format!("{}.{}.{}", pk, qualifier, C::file_extension()))
     }
 
     /// Valide les données avant de les stocker
@@ -499,7 +502,9 @@ impl<C: CacheConfig> Cache<C> {
                 while let Ok(Some(dir_entry)) = dir_entries.next_entry().await {
                     if let Some(filename) = dir_entry.file_name().to_str() {
                         // Format: {pk}.{param}.{ext}
-                        if filename.starts_with(&entry.pk) && filename.starts_with(&format!("{}.", entry.pk)) {
+                        if filename.starts_with(&entry.pk)
+                            && filename.starts_with(&format!("{}.", entry.pk))
+                        {
                             let _ = tokio::fs::remove_file(dir_entry.path()).await;
                         }
                     }
@@ -515,14 +520,17 @@ impl<C: CacheConfig> Cache<C> {
         }
 
         if removed > 0 {
-            tracing::info!("LRU eviction: removed {} old entries (cache size: {} -> {})",
-                removed, count, count - removed);
+            tracing::info!(
+                "LRU eviction: removed {} old entries (cache size: {} -> {})",
+                removed,
+                count,
+                count - removed
+            );
         }
 
         Ok(removed)
     }
 }
-
 
 /// Implémentation du trait FileCache pour Cache
 impl<C: CacheConfig> FileCache<C> for Cache<C> {

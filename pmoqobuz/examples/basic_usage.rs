@@ -58,7 +58,10 @@ async fn main() -> anyhow::Result<()> {
             println!(
                 "  {}. {} - {} ({}:{})",
                 track.track_number,
-                track.display_artist().map(|a| a.name.as_str()).unwrap_or("Unknown"),
+                track
+                    .display_artist()
+                    .map(|a| a.name.as_str())
+                    .unwrap_or("Unknown"),
                 track.title,
                 track.duration / 60,
                 track.duration % 60

@@ -6,11 +6,11 @@
 use crate::client::QobuzClient;
 use crate::didl::ToDIDL;
 use crate::models::Track;
-use pmosource::{async_trait, BrowseResult, MusicSource, MusicSourceError, Result};
-use pmosource::SourceCacheManager;
 use pmoaudiocache::{AudioMetadata, Cache as AudioCache};
 use pmocovers::Cache as CoverCache;
 use pmodidl::{Container, Item};
+use pmosource::SourceCacheManager;
+use pmosource::{async_trait, BrowseResult, MusicSource, MusicSourceError, Result};
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -120,11 +120,7 @@ impl QobuzSource {
         cover_cache: Arc<CoverCache>,
         audio_cache: Arc<AudioCache>,
     ) -> Self {
-        let cache_manager = SourceCacheManager::new(
-            "qobuz".to_string(),
-            cover_cache,
-            audio_cache,
-        );
+        let cache_manager = SourceCacheManager::new("qobuz".to_string(), cover_cache, audio_cache);
 
         Self {
             inner: Arc::new(QobuzSourceInner {
@@ -148,15 +144,23 @@ impl QobuzSource {
         let track_id = format!("qobuz://track/{}", track.id);
 
         // Get streaming URL
-        let stream_url = self.inner.client.get_stream_url(&track.id).await
+        let stream_url = self
+            .inner
+            .client
+            .get_stream_url(&track.id)
+            .await
             .map_err(|e| MusicSourceError::UriResolutionError(e.to_string()))?;
 
         // 1. Cache cover via manager
         let cached_cover_pk = if let Some(ref album) = track.album {
             if let Some(ref image_url) = album.image {
                 self.inner.cache_manager.cache_cover(image_url).await.ok()
-            } else { None }
-        } else { None };
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
         // 2. Prepare rich metadata from Qobuz track
         let metadata = AudioMetadata {
@@ -165,14 +169,20 @@ impl QobuzSource {
             album: track.album.as_ref().map(|a| a.title.clone()),
             duration_secs: Some(track.duration as u64),
             year: track.album.as_ref().and_then(|a| {
-                a.release_date.as_ref().and_then(|d| d.split('-').next()?.parse().ok())
+                a.release_date
+                    .as_ref()
+                    .and_then(|d| d.split('-').next()?.parse().ok())
             }),
             track_number: Some(track.track_number),
             track_total: track.album.as_ref().and_then(|a| a.tracks_count),
             disc_number: Some(track.media_number),
             disc_total: None,
             genre: track.album.as_ref().and_then(|a| {
-                if !a.genres.is_empty() { Some(a.genres.join(", ")) } else { None }
+                if !a.genres.is_empty() {
+                    Some(a.genres.join(", "))
+                } else {
+                    None
+                }
             }),
             sample_rate: track.sample_rate,
             channels: track.channels,
@@ -180,17 +190,25 @@ impl QobuzSource {
         };
 
         // 3. Cache audio via manager
-        let cached_audio_pk = self.inner.cache_manager.cache_audio(&stream_url, Some(metadata)).await.ok();
+        let cached_audio_pk = self
+            .inner
+            .cache_manager
+            .cache_audio(&stream_url, Some(metadata))
+            .await
+            .ok();
 
         // 4. Store metadata
-        self.inner.cache_manager.update_metadata(
-            track_id.clone(),
-            pmosource::TrackMetadata {
-                original_uri: stream_url,
-                cached_audio_pk,
-                cached_cover_pk,
-            }
-        ).await;
+        self.inner
+            .cache_manager
+            .update_metadata(
+                track_id.clone(),
+                pmosource::TrackMetadata {
+                    original_uri: stream_url,
+                    cached_audio_pk,
+                    cached_cover_pk,
+                },
+            )
+            .await;
 
         Ok(track_id)
     }
@@ -375,9 +393,14 @@ impl MusicSource for QobuzSource {
         }
 
         // If not cached, extract track ID and get streaming URL from Qobuz
-        let track_id = object_id.strip_prefix("qobuz://track/").unwrap_or(object_id);
+        let track_id = object_id
+            .strip_prefix("qobuz://track/")
+            .unwrap_or(object_id);
 
-        self.inner.client.get_stream_url(track_id).await
+        self.inner
+            .client
+            .get_stream_url(track_id)
+            .await
             .map_err(|e| MusicSourceError::UriResolutionError(e.to_string()))
     }
 
@@ -534,10 +557,16 @@ impl MusicSource for QobuzSource {
 
     async fn cache_item(&self, object_id: &str) -> Result<pmosource::CacheStatus> {
         // Extract track ID
-        let track_id = object_id.strip_prefix("qobuz://track/").unwrap_or(object_id);
+        let track_id = object_id
+            .strip_prefix("qobuz://track/")
+            .unwrap_or(object_id);
 
         // Get track details from Qobuz
-        let track = self.inner.client.get_track(track_id).await
+        let track = self
+            .inner
+            .client
+            .get_track(track_id)
+            .await
             .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
 
         // Add track to cache (via manager)
@@ -632,11 +661,9 @@ impl MusicSource for QobuzSource {
 
                 Ok(favorites.iter().any(|track| track.id == *id))
             }
-            _ => {
-                Err(MusicSourceError::NotSupported(
-                    "Favorites only supported for albums and tracks".to_string(),
-                ))
-            }
+            _ => Err(MusicSourceError::NotSupported(
+                "Favorites only supported for albums and tracks".to_string(),
+            )),
         }
     }
 
@@ -788,7 +815,10 @@ mod tests {
         assert!(DEFAULT_IMAGE.len() > 0, "Default image should not be empty");
 
         // Check WebP magic bytes (RIFF...WEBP)
-        assert!(DEFAULT_IMAGE.len() >= 12, "Image too small to be valid WebP");
+        assert!(
+            DEFAULT_IMAGE.len() >= 12,
+            "Image too small to be valid WebP"
+        );
         assert_eq!(&DEFAULT_IMAGE[0..4], b"RIFF", "Missing RIFF header");
         assert_eq!(&DEFAULT_IMAGE[8..12], b"WEBP", "Missing WEBP signature");
     }

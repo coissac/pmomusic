@@ -92,9 +92,7 @@ pub struct ErrorResponse {
 /// Liste tous les items en cache avec leurs statistiques
 ///
 /// Retourne la liste complète des entrées du cache triées par nombre d'accès décroissant.
-pub async fn list_items<C: CacheConfig>(
-    State(cache): State<Arc<Cache<C>>>,
-) -> impl IntoResponse {
+pub async fn list_items<C: CacheConfig>(State(cache): State<Arc<Cache<C>>>) -> impl IntoResponse {
     match cache.db.get_all() {
         Ok(entries) => (StatusCode::OK, Json(entries)).into_response(),
         Err(e) => (
@@ -192,7 +190,10 @@ pub async fn add_item<C: CacheConfig>(
             .into_response();
     }
 
-    match cache.add_from_url(&req.url, req.collection.as_deref()).await {
+    match cache
+        .add_from_url(&req.url, req.collection.as_deref())
+        .await
+    {
         Ok(pk) => (
             StatusCode::CREATED,
             Json(AddItemResponse {
@@ -268,9 +269,7 @@ pub async fn delete_item<C: CacheConfig>(
 /// Purge complètement le cache
 ///
 /// Supprime tous les items et vide la base de données. Opération irréversible.
-pub async fn purge_cache<C: CacheConfig>(
-    State(cache): State<Arc<Cache<C>>>,
-) -> impl IntoResponse {
+pub async fn purge_cache<C: CacheConfig>(State(cache): State<Arc<Cache<C>>>) -> impl IntoResponse {
     match cache.purge().await {
         Ok(_) => (
             StatusCode::OK,

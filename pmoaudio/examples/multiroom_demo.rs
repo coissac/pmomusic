@@ -49,7 +49,10 @@ async fn main() {
     tokio::spawn(async move {
         let mut source = SourceNode::new();
         source.add_subscriber(buffer_tx);
-        source.generate_chunks(30, 4800, 48000, 440.0).await.unwrap();
+        source
+            .generate_chunks(30, 4800, 48000, 440.0)
+            .await
+            .unwrap();
     });
 
     println!("Waiting for all rooms to finish...\n");

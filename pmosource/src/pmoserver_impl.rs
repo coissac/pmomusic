@@ -30,7 +30,10 @@
 //! ```
 
 #[cfg(feature = "server")]
-use crate::api::{register_source, unregister_source, list_all_sources, get_source, create_sources_router, SourcesApiDoc};
+use crate::api::{
+    create_sources_router, get_source, list_all_sources, register_source, unregister_source,
+    SourcesApiDoc,
+};
 #[cfg(feature = "server")]
 use crate::pmoserver_ext::MusicSourceExt;
 #[cfg(feature = "server")]

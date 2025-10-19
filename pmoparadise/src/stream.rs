@@ -70,7 +70,8 @@ impl RadioParadiseClient {
         #[cfg(feature = "logging")]
         tracing::debug!("Starting block stream: {}", block_url);
 
-        let response = self.client
+        let response = self
+            .client
             .get(block_url.clone())
             .timeout(self.timeout)
             .send()
@@ -85,9 +86,7 @@ impl RadioParadiseClient {
 
         // Convert reqwest's byte stream to our Result type
         let stream = response.bytes_stream();
-        let mapped = futures::stream::StreamExt::map(stream, |result| {
-            result.map_err(Error::from)
-        });
+        let mapped = futures::stream::StreamExt::map(stream, |result| result.map_err(Error::from));
 
         Ok(BlockStream::new(mapped))
     }
@@ -149,7 +148,8 @@ impl RadioParadiseClient {
         #[cfg(feature = "logging")]
         tracing::debug!("Downloading complete block: {}", block_url);
 
-        let response = self.client
+        let response = self
+            .client
             .get(block_url.clone())
             .timeout(self.timeout)
             .send()

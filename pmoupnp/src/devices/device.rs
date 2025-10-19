@@ -1,12 +1,9 @@
 //! Définition du modèle Device UPnP.
 
-use std::sync::{Arc, RwLock};
 use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
-use crate::{
-    UpnpTyped, UpnpObjectType,
-    services::Service,
-};
+use crate::{UpnpObjectType, UpnpTyped, services::Service};
 
 use super::errors::DeviceError;
 
@@ -129,7 +126,10 @@ impl Device {
     ///
     /// Format: `urn:schemas-upnp-org:device:{type}:{version}`
     pub fn device_type(&self) -> String {
-        format!("urn:schemas-upnp-org:device:{}:{}", self.device_type, self.version)
+        format!(
+            "urn:schemas-upnp-org:device:{}:{}",
+            self.device_type, self.version
+        )
     }
 
     pub fn device_category(&self) -> &String {

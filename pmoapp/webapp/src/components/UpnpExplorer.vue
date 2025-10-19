@@ -55,13 +55,37 @@
             </div>
 
             <!-- Services -->
-            <div v-else class="services-list">
-              <ServicePanel
-                v-for="service in device.services"
-                :key="service.name"
-                :service="service"
-                :device-udn="device.udn"
-              />
+            <div v-else class="device-content">
+              <div class="device-summary">
+                <div class="meta-row">
+                  <span class="meta-label">UDN:</span>
+                  <code class="meta-value">{{ device.udn }}</code>
+                </div>
+                <div class="meta-row" v-if="device.description_url">
+                  <span class="meta-label">Description:</span>
+                  <a
+                    :href="device.description_url"
+                    target="_blank"
+                    rel="noopener"
+                    class="meta-link"
+                  >
+                    View XML
+                  </a>
+                </div>
+                <div class="meta-row" v-if="device.base_url">
+                  <span class="meta-label">Base URL:</span>
+                  <code class="meta-value">{{ device.base_url }}</code>
+                </div>
+              </div>
+
+              <div class="services-list">
+                <ServicePanel
+                  v-for="service in device.services"
+                  :key="service.name"
+                  :service="service"
+                  :device-udn="device.udn"
+                />
+              </div>
             </div>
           </div>
         </transition>
@@ -351,6 +375,51 @@ onUnmounted(() => {
   padding: 2rem;
   text-align: center;
   color: #95a5a6;
+}
+
+.device-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.device-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.5rem;
+  padding: 0.75rem 1rem;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(52, 152, 219, 0.25);
+}
+
+.meta-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.meta-label {
+  font-weight: 600;
+  color: #95a5a6;
+}
+
+.meta-value {
+  background: rgba(44, 62, 80, 0.6);
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  color: #ecf0f1;
+}
+
+.meta-link {
+  color: #1abc9c;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.meta-link:hover {
+  text-decoration: underline;
 }
 
 .services-list {

@@ -210,8 +210,8 @@ impl Default for SourceRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pmosource::{MusicSource, Result, BrowseResult};
     use pmodidl::{Container, Item};
+    use pmosource::{BrowseResult, MusicSource, Result};
     use std::time::SystemTime;
 
     #[derive(Debug)]
@@ -308,9 +308,15 @@ mod tests {
     async fn test_list_all() {
         let registry = SourceRegistry::new();
 
-        registry.register(Arc::new(TestSource::new("test-1", "Test 1"))).await;
-        registry.register(Arc::new(TestSource::new("test-2", "Test 2"))).await;
-        registry.register(Arc::new(TestSource::new("test-3", "Test 3"))).await;
+        registry
+            .register(Arc::new(TestSource::new("test-1", "Test 1")))
+            .await;
+        registry
+            .register(Arc::new(TestSource::new("test-2", "Test 2")))
+            .await;
+        registry
+            .register(Arc::new(TestSource::new("test-3", "Test 3")))
+            .await;
 
         let sources = registry.list_all().await;
         assert_eq!(sources.len(), 3);
@@ -321,17 +327,23 @@ mod tests {
         let registry = SourceRegistry::new();
         assert_eq!(registry.count().await, 0);
 
-        registry.register(Arc::new(TestSource::new("test-1", "Test 1"))).await;
+        registry
+            .register(Arc::new(TestSource::new("test-1", "Test 1")))
+            .await;
         assert_eq!(registry.count().await, 1);
 
-        registry.register(Arc::new(TestSource::new("test-2", "Test 2"))).await;
+        registry
+            .register(Arc::new(TestSource::new("test-2", "Test 2")))
+            .await;
         assert_eq!(registry.count().await, 2);
     }
 
     #[tokio::test]
     async fn test_remove() {
         let registry = SourceRegistry::new();
-        registry.register(Arc::new(TestSource::new("test-1", "Test 1"))).await;
+        registry
+            .register(Arc::new(TestSource::new("test-1", "Test 1")))
+            .await;
 
         assert!(registry.contains("test-1").await);
         assert!(registry.remove("test-1").await);
@@ -345,7 +357,9 @@ mod tests {
 
         assert!(!registry.contains("test-1").await);
 
-        registry.register(Arc::new(TestSource::new("test-1", "Test 1"))).await;
+        registry
+            .register(Arc::new(TestSource::new("test-1", "Test 1")))
+            .await;
 
         assert!(registry.contains("test-1").await);
         assert!(!registry.contains("test-2").await);
@@ -355,11 +369,15 @@ mod tests {
     async fn test_replace_source() {
         let registry = SourceRegistry::new();
 
-        registry.register(Arc::new(TestSource::new("test-1", "Old Name"))).await;
+        registry
+            .register(Arc::new(TestSource::new("test-1", "Old Name")))
+            .await;
         let old = registry.get("test-1").await.unwrap();
         assert_eq!(old.name(), "Old Name");
 
-        registry.register(Arc::new(TestSource::new("test-1", "New Name"))).await;
+        registry
+            .register(Arc::new(TestSource::new("test-1", "New Name")))
+            .await;
         let new = registry.get("test-1").await.unwrap();
         assert_eq!(new.name(), "New Name");
 

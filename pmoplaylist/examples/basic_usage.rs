@@ -5,7 +5,7 @@
 //! cargo run -p pmoplaylist --example basic_usage
 //! ```
 
-use pmoplaylist::{FifoPlaylist, Track, DEFAULT_IMAGE};
+use pmoplaylist::{DEFAULT_IMAGE, FifoPlaylist, Track};
 
 #[tokio::main]
 async fn main() {
@@ -27,26 +27,40 @@ async fn main() {
     // 2. Ajouter des tracks
     println!("2. Ajout de 3 tracks...");
     let tracks = vec![
-        Track::new("track-1", "Bohemian Rhapsody", "http://example.com/queen/bohemian.flac")
-            .with_artist("Queen")
-            .with_album("A Night at the Opera")
-            .with_duration(354)
-            .with_image("http://example.com/covers/queen-anato.jpg"),
-
-        Track::new("track-2", "Stairway to Heaven", "http://example.com/zeppelin/stairway.mp3")
-            .with_artist("Led Zeppelin")
-            .with_album("Led Zeppelin IV")
-            .with_duration(482),
-
-        Track::new("track-3", "Hotel California", "http://example.com/eagles/hotel.flac")
-            .with_artist("Eagles")
-            .with_album("Hotel California")
-            .with_duration(391),
+        Track::new(
+            "track-1",
+            "Bohemian Rhapsody",
+            "http://example.com/queen/bohemian.flac",
+        )
+        .with_artist("Queen")
+        .with_album("A Night at the Opera")
+        .with_duration(354)
+        .with_image("http://example.com/covers/queen-anato.jpg"),
+        Track::new(
+            "track-2",
+            "Stairway to Heaven",
+            "http://example.com/zeppelin/stairway.mp3",
+        )
+        .with_artist("Led Zeppelin")
+        .with_album("Led Zeppelin IV")
+        .with_duration(482),
+        Track::new(
+            "track-3",
+            "Hotel California",
+            "http://example.com/eagles/hotel.flac",
+        )
+        .with_artist("Eagles")
+        .with_album("Hotel California")
+        .with_duration(391),
     ];
 
     for track in tracks {
         playlist.append_track(track.clone()).await;
-        println!("   ✓ Ajouté: {} - {}", track.title, track.artist.unwrap_or_default());
+        println!(
+            "   ✓ Ajouté: {} - {}",
+            track.title,
+            track.artist.unwrap_or_default()
+        );
     }
 
     println!("\n   Total tracks: {}", playlist.len().await);
@@ -60,12 +74,15 @@ async fn main() {
         let track = Track::new(
             format!("track-{}", i),
             format!("Song Number {}", i),
-            format!("http://example.com/songs/{}.mp3", i)
+            format!("http://example.com/songs/{}.mp3", i),
         );
         playlist.append_track(track).await;
     }
 
-    println!("   ✓ Total tracks (limité par capacité): {}", playlist.len().await);
+    println!(
+        "   ✓ Total tracks (limité par capacité): {}",
+        playlist.len().await
+    );
 
     // Afficher les tracks actuels
     let items = playlist.get_items(0, 10).await;
@@ -99,15 +116,16 @@ async fn main() {
     println!("     - Parent ID: {}", container.parent_id);
     println!("     - Title: {}", container.title);
     println!("     - Class: {}", container.class);
-    println!("     - Child Count: {}\n", container.child_count.unwrap_or_default());
+    println!(
+        "     - Child Count: {}\n",
+        container.child_count.unwrap_or_default()
+    );
 
     // 7. Générer des Items DIDL-Lite
     println!("7. Génération des Items DIDL-Lite...");
-    let didl_items = playlist.as_objects(
-        0,
-        10,
-        Some("http://myserver/api/default-image")
-    ).await;
+    let didl_items = playlist
+        .as_objects(0, 10, Some("http://myserver/api/default-image"))
+        .await;
 
     println!("   Items DIDL-Lite:");
     for (idx, item) in didl_items.iter().enumerate() {
@@ -134,7 +152,10 @@ async fn main() {
     // 8. Image par défaut
     println!("\n8. Image par défaut...");
     let default_image = playlist.default_image().await;
-    println!("   ✓ Taille de l'image par défaut: {} bytes", default_image.len());
+    println!(
+        "   ✓ Taille de l'image par défaut: {} bytes",
+        default_image.len()
+    );
     println!("   (Cette image peut être servie via un endpoint HTTP)\n");
 
     // 9. Vider la playlist

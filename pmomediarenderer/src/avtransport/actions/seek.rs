@@ -1,4 +1,6 @@
-use crate::avtransport::variables::{A_ARG_TYPE_INSTANCE_ID, A_ARG_TYPE_SEEKMODE, CURRENTTRACKDURATION};
+use crate::avtransport::variables::{
+    A_ARG_TYPE_INSTANCE_ID, A_ARG_TYPE_SEEKMODE, CURRENTTRACKDURATION,
+};
 use pmoupnp::define_action;
 
 define_action! {

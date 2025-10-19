@@ -59,10 +59,7 @@ impl SingleSubscriberNode {
     }
 
     pub async fn push(&self, chunk: Arc<AudioChunk>) -> Result<(), AudioError> {
-        self.tx
-            .send(chunk)
-            .await
-            .map_err(|_| AudioError::SendError)
+        self.tx.send(chunk).await.map_err(|_| AudioError::SendError)
     }
 }
 

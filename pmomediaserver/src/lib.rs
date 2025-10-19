@@ -63,23 +63,23 @@
 //! server.register_qobuz_from_config().await?;
 //! ```
 
-pub mod contentdirectory;
 pub mod connectionmanager;
-pub mod device;
-pub mod source_registry;
-pub mod server_ext;
 pub mod content_handler;
+pub mod contentdirectory;
+pub mod device;
+pub mod server_ext;
+pub mod source_registry;
 pub mod sources;
 
 // API REST pour l'enregistrement des sources (requires features qobuz/paradise)
 #[cfg(any(feature = "qobuz", feature = "paradise"))]
 pub mod sources_api;
 
-pub use device::MEDIA_SERVER;
-pub use source_registry::SourceRegistry;
-pub use server_ext::{MediaServerExt, get_source_registry, MusicSourceExt};
 pub use content_handler::ContentHandler;
-pub use sources::{SourcesExt, SourceInitError};
+pub use device::MEDIA_SERVER;
+pub use server_ext::{MediaServerExt, MusicSourceExt, get_source_registry};
+pub use source_registry::SourceRegistry;
+pub use sources::{SourceInitError, SourcesExt};
 
 // Re-export sources when features are enabled
 #[cfg(feature = "qobuz")]

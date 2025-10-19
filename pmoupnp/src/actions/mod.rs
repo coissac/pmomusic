@@ -1,9 +1,9 @@
 mod errors;
 
+mod action_handler;
 mod action_instance;
 mod action_instance_set;
 mod action_methods;
-mod action_handler;
 mod action_set_methods;
 mod arg_inst_set_methods;
 mod arg_instance_methods;
@@ -19,8 +19,8 @@ use crate::{
 };
 use std::sync::{Arc, RwLock};
 
-pub use errors::ActionError;
 pub use action_handler::{ActionData, ActionFuture, ActionHandler};
+pub use errors::ActionError;
 pub use handler_helpers::{get_value, reflect_to_string, set_value};
 
 /// Action UPnP.

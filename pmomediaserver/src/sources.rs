@@ -3,8 +3,8 @@
 //! Ce module fournit des helpers pour créer et enregistrer facilement des sources
 //! musicales préconfigurées à partir de la configuration système.
 
-use pmosource::MusicSourceExt;
 use pmoserver::Server;
+use pmosource::MusicSourceExt;
 use std::sync::Arc;
 
 /// Erreur lors de l'initialisation d'une source
@@ -93,7 +93,11 @@ pub trait SourcesExt {
     /// server.register_qobuz_with_credentials("user@example.com", "password").await?;
     /// ```
     #[cfg(feature = "qobuz")]
-    async fn register_qobuz_with_credentials(&mut self, username: &str, password: &str) -> Result<()>;
+    async fn register_qobuz_with_credentials(
+        &mut self,
+        username: &str,
+        password: &str,
+    ) -> Result<()>;
 
     /// Enregistre la source Radio Paradise
     ///
@@ -141,7 +145,11 @@ impl SourcesExt for Server {
     }
 
     #[cfg(feature = "qobuz")]
-    async fn register_qobuz_with_credentials(&mut self, username: &str, password: &str) -> Result<()> {
+    async fn register_qobuz_with_credentials(
+        &mut self,
+        username: &str,
+        password: &str,
+    ) -> Result<()> {
         use pmoqobuz::{QobuzClient, QobuzSource};
 
         tracing::info!("Initializing Qobuz source with explicit credentials...");
@@ -165,18 +173,19 @@ impl SourcesExt for Server {
 
     #[cfg(feature = "paradise")]
     async fn register_paradise(&mut self) -> Result<()> {
-        use pmoparadise::{RadioParadiseClient, RadioParadiseSource, RadioParadiseExt};
+        use pmoparadise::{RadioParadiseClient, RadioParadiseExt, RadioParadiseSource};
 
         tracing::info!("Initializing Radio Paradise source...");
 
         // Créer le client (Radio Paradise ne nécessite pas d'authentification)
-        let client = RadioParadiseClient::new()
-            .await
-            .map_err(|e| SourceInitError::ParadiseError(format!("Failed to create client: {}", e)))?;
+        let client = RadioParadiseClient::new().await.map_err(|e| {
+            SourceInitError::ParadiseError(format!("Failed to create client: {}", e))
+        })?;
 
         // Créer la source depuis le registry avec capacité FIFO par défaut
-        let source = RadioParadiseSource::from_registry_default(client)
-            .map_err(|e| SourceInitError::ParadiseError(format!("Failed to create source: {}", e)))?;
+        let source = RadioParadiseSource::from_registry_default(client).map_err(|e| {
+            SourceInitError::ParadiseError(format!("Failed to create source: {}", e))
+        })?;
 
         // Enregistrer la source
         // Note: La FIFO sera peuplée automatiquement lors du premier browse

@@ -116,10 +116,7 @@ impl ToDIDL for Track {
             genre: None, // Qobuz ne fournit pas le genre au niveau track
             album_art,
             album_art_pk: None,
-            date: self
-                .album
-                .as_ref()
-                .and_then(|a| a.release_date.clone()),
+            date: self.album.as_ref().and_then(|a| a.release_date.clone()),
             original_track_number: Some(self.track_number.to_string()),
             resources: vec![resource],
             descriptions: Vec::new(),

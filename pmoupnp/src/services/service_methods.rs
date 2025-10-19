@@ -14,8 +14,8 @@
 use xmltree::{Element, XMLNode};
 
 use crate::{
+    UpnpModel, UpnpObject, UpnpObjectType, UpnpTyped,
     services::{Service, ServiceInstance},
-    UpnpObject, UpnpModel, UpnpTyped, UpnpObjectType,
 };
 
 impl std::fmt::Display for Service {
@@ -36,7 +36,9 @@ impl UpnpObject for Service {
 
         // serviceType
         let mut service_type = Element::new("serviceType");
-        service_type.children.push(XMLNode::Text(self.service_type()));
+        service_type
+            .children
+            .push(XMLNode::Text(self.service_type()));
         elem.children.push(XMLNode::Element(service_type));
 
         // serviceId
@@ -51,7 +53,9 @@ impl UpnpObject for Service {
 
         // controlURL
         let mut controlURL = Element::new("controlURL");
-        controlURL.children.push(XMLNode::Text(self.control_route()));
+        controlURL
+            .children
+            .push(XMLNode::Text(self.control_route()));
         elem.children.push(XMLNode::Element(controlURL));
 
         // eventSubURL

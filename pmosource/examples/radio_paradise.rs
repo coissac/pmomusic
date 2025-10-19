@@ -16,9 +16,9 @@
 //! cargo run --example radio_paradise
 //! ```
 
-use pmosource::{async_trait, BrowseResult, MusicSource, MusicSourceError, Result};
 use pmodidl::{Container, Item, Resource};
 use pmoplaylist::{FifoPlaylist, Track};
+use pmosource::{async_trait, BrowseResult, MusicSource, MusicSourceError, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -353,7 +353,10 @@ async fn main() -> anyhow::Result<()> {
     println!("Source: {}", source.name());
     println!("ID: {}", source.id());
     println!("Supports FIFO: {}", source.supports_fifo());
-    println!("Default image size: {} bytes\n", source.default_image().len());
+    println!(
+        "Default image size: {} bytes\n",
+        source.default_image().len()
+    );
 
     // Add some sample tracks
     println!("Adding sample tracks...");
@@ -427,14 +430,13 @@ async fn main() -> anyhow::Result<()> {
     // Track changes
     println!("Change Tracking:");
     println!("  Update ID: {}", source.update_id().await);
-    println!(
-        "  Last Change: {:?}\n",
-        source.last_change().await.unwrap()
-    );
+    println!("  Last Change: {:?}\n", source.last_change().await.unwrap());
 
     // Simulate caching a track
     println!("Simulating cache for rp-001...");
-    source.cache_track("rp-001", "cached-abc123".to_string()).await?;
+    source
+        .cache_track("rp-001", "cached-abc123".to_string())
+        .await?;
 
     let cached_uri = source.resolve_uri("rp-001").await?;
     println!("  Cached URI: {}\n", cached_uri);

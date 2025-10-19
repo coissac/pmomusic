@@ -18,12 +18,12 @@
 //!       └─ collection: "qobuz"
 //! ```
 
+use crate::{CacheStatus, MusicSourceError, Result};
+use pmoaudiocache::{AudioMetadata, Cache as AudioCache};
+use pmocovers::Cache as CoverCache;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use pmocovers::Cache as CoverCache;
-use pmoaudiocache::{Cache as AudioCache, AudioMetadata};
-use crate::{MusicSourceError, Result, CacheStatus};
 
 /// Métadonnées d'une piste en cache
 #[derive(Debug, Clone)]
@@ -76,15 +76,13 @@ impl SourceCacheManager {
     /// Retourne une erreur si les caches ne sont pas encore initialisés dans le registre
     #[cfg(feature = "server")]
     pub fn from_registry(collection_id: String) -> Result<Self> {
-        let cover_cache = pmoupnp::cache_registry::get_cover_cache()
-            .ok_or_else(|| MusicSourceError::CacheError(
-                "Cover cache not initialized in registry".to_string()
-            ))?;
+        let cover_cache = pmoupnp::cache_registry::get_cover_cache().ok_or_else(|| {
+            MusicSourceError::CacheError("Cover cache not initialized in registry".to_string())
+        })?;
 
-        let audio_cache = pmoupnp::cache_registry::get_audio_cache()
-            .ok_or_else(|| MusicSourceError::CacheError(
-                "Audio cache not initialized in registry".to_string()
-            ))?;
+        let audio_cache = pmoupnp::cache_registry::get_audio_cache().ok_or_else(|| {
+            MusicSourceError::CacheError("Audio cache not initialized in registry".to_string())
+        })?;
 
         Ok(Self {
             track_cache: RwLock::new(HashMap::new()),
@@ -132,7 +130,7 @@ impl SourceCacheManager {
                 #[cfg(not(feature = "server"))]
                 {
                     return Err(MusicSourceError::CacheError(
-                        "Server feature not enabled".to_string()
+                        "Server feature not enabled".to_string(),
                     ));
                 }
             }
@@ -190,7 +188,7 @@ impl SourceCacheManager {
         #[cfg(not(feature = "server"))]
         {
             Err(MusicSourceError::CacheError(
-                "Server feature not enabled - cannot build cover URL".to_string()
+                "Server feature not enabled - cannot build cover URL".to_string(),
             ))
         }
     }
@@ -207,11 +205,11 @@ impl SourceCacheManager {
     /// # Returns
     ///
     /// La clé primaire (pk) de la piste dans le cache
-    pub async fn cache_audio(&self, url: &str, _metadata: Option<AudioMetadata>)
-        -> Result<String> {
+    pub async fn cache_audio(&self, url: &str, _metadata: Option<AudioMetadata>) -> Result<String> {
         // Note: Les métadonnées seront extraites automatiquement par le cache audio
         // lors de la conversion FLAC
-        let pk = self.audio_cache
+        let pk = self
+            .audio_cache
             .add_from_url(url, Some(&self.collection_id))
             .await
             .map_err(|e| MusicSourceError::CacheError(e.to_string()))?;
@@ -246,7 +244,8 @@ impl SourceCacheManager {
     /// Obtenir les statistiques du cache pour cette source
     pub async fn statistics(&self) -> CacheStatistics {
         let cache = self.track_cache.read().await;
-        let cached_count = cache.values()
+        let cached_count = cache
+            .values()
             .filter(|m| m.cached_audio_pk.is_some())
             .count();
 

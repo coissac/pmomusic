@@ -35,6 +35,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use bevy_reflect::Reflect;
+use quick_xml::escape::escape;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex, RwLock},
@@ -43,7 +44,6 @@ use std::{
 use tokio::time;
 use tracing::{debug, error, info, warn};
 use xmltree::{Element, EmitterConfig, XMLNode};
-use quick_xml::escape::escape;
 
 use crate::{
     UpnpInstance, UpnpObject, UpnpObjectType, UpnpTyped, UpnpTypedInstance,
@@ -671,7 +671,11 @@ impl ServiceInstance {
 
         let xml = String::from_utf8_lossy(&xml_output).to_string();
 
-        debug!("✅ SCPD generated for {} ({} bytes)", self.get_name(), xml.len());
+        debug!(
+            "✅ SCPD generated for {} ({} bytes)",
+            self.get_name(),
+            xml.len()
+        );
 
         (
             StatusCode::OK,
@@ -1050,13 +1054,14 @@ impl ServiceInstance {
 
     /// Sérialise une structure Reflect en XML simple.
     fn serialize_struct_to_xml(s: &dyn bevy_reflect::Struct) -> String {
-        use std::fmt::Write;
         use bevy_reflect::TypeInfo;
+        use std::fmt::Write;
 
         let mut xml = String::new();
 
         // Commencer par ouvrir la balise avec le nom du type
-        let type_name = s.get_represented_type_info()
+        let type_name = s
+            .get_represented_type_info()
             .and_then(|ti| {
                 if let TypeInfo::Struct(si) = ti {
                     Some(si.type_path_table().short_path())
@@ -1237,9 +1242,9 @@ async fn event_sub_handler(
 /// - Échec de l'exécution de l'action
 async fn control_handler(State(instance): State<Arc<ServiceInstance>>, body: String) -> Response {
     use crate::{
-        soap::{parse_soap_action, build_soap_response, build_soap_fault, error_codes},
-        variable_types::{StateValue, UpnpVarType},
         UpnpTypedInstance,
+        soap::{build_soap_fault, build_soap_response, error_codes, parse_soap_action},
+        variable_types::{StateValue, UpnpVarType},
     };
     use std::collections::HashMap;
     use tracing::debug;
@@ -1259,9 +1264,13 @@ async fn control_handler(State(instance): State<Arc<ServiceInstance>>, body: Str
             ).unwrap_or_else(|_| String::from("<?xml version=\"1.0\"?><s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\"><s:Body><s:Fault><faultcode>s:Server</faultcode><faultstring>Internal Error</faultstring></s:Fault></s:Body></s:Envelope>"));
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                [(axum::http::header::CONTENT_TYPE, "text/xml; charset=\"utf-8\"")],
+                [(
+                    axum::http::header::CONTENT_TYPE,
+                    "text/xml; charset=\"utf-8\"",
+                )],
                 fault_xml,
-            ).into_response();
+            )
+                .into_response();
         }
     };
 
@@ -1281,9 +1290,13 @@ async fn control_handler(State(instance): State<Arc<ServiceInstance>>, body: Str
             ).unwrap_or_else(|_| String::from("<?xml version=\"1.0\"?><s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\"><s:Body><s:Fault><faultcode>s:Server</faultcode><faultstring>Internal Error</faultstring></s:Fault></s:Body></s:Envelope>"));
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                [(axum::http::header::CONTENT_TYPE, "text/xml; charset=\"utf-8\"")],
+                [(
+                    axum::http::header::CONTENT_TYPE,
+                    "text/xml; charset=\"utf-8\"",
+                )],
                 fault_xml,
-            ).into_response();
+            )
+                .into_response();
         }
     };
 
@@ -1311,9 +1324,13 @@ async fn control_handler(State(instance): State<Arc<ServiceInstance>>, body: Str
                         ).unwrap_or_else(|_| String::from("<?xml version=\"1.0\"?><s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\"><s:Body><s:Fault><faultcode>s:Server</faultcode><faultstring>Internal Error</faultstring></s:Fault></s:Body></s:Envelope>"));
                         return (
                             StatusCode::BAD_REQUEST,
-                            [(axum::http::header::CONTENT_TYPE, "text/xml; charset=\"utf-8\"")],
+                            [(
+                                axum::http::header::CONTENT_TYPE,
+                                "text/xml; charset=\"utf-8\"",
+                            )],
                             fault_xml,
-                        ).into_response();
+                        )
+                            .into_response();
                     }
                 }
             }
@@ -1334,7 +1351,8 @@ async fn control_handler(State(instance): State<Arc<ServiceInstance>>, body: Str
                 let arg_model = arg_inst.as_ref().get_model();
                 if arg_model.is_out() {
                     if let Some(reflect_value) = output_data.get(arg_inst.get_name()) {
-                        let soap_string = ServiceInstance::reflect_to_string(reflect_value.as_ref());
+                        let soap_string =
+                            ServiceInstance::reflect_to_string(reflect_value.as_ref());
                         soap_values.insert(arg_inst.get_name().to_string(), soap_string);
                     }
                 }
@@ -1356,9 +1374,13 @@ async fn control_handler(State(instance): State<Arc<ServiceInstance>>, body: Str
 
             (
                 StatusCode::OK,
-                [(axum::http::header::CONTENT_TYPE, "text/xml; charset=\"utf-8\"")],
+                [(
+                    axum::http::header::CONTENT_TYPE,
+                    "text/xml; charset=\"utf-8\"",
+                )],
                 response_xml,
-            ).into_response()
+            )
+                .into_response()
         }
         Err(e) => {
             error!("❌ Action execution failed: {:?}", e);
@@ -1370,9 +1392,13 @@ async fn control_handler(State(instance): State<Arc<ServiceInstance>>, body: Str
             ).unwrap_or_else(|_| String::from("<?xml version=\"1.0\"?><s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\"><s:Body><s:Fault><faultcode>s:Server</faultcode><faultstring>Internal Error</faultstring></s:Fault></s:Body></s:Envelope>"));
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                [(axum::http::header::CONTENT_TYPE, "text/xml; charset=\"utf-8\"")],
+                [(
+                    axum::http::header::CONTENT_TYPE,
+                    "text/xml; charset=\"utf-8\"",
+                )],
                 fault_xml,
-            ).into_response()
+            )
+                .into_response()
         }
     }
 }
@@ -1448,7 +1474,7 @@ mod tests {
         }
 
         let person = Person {
-            name: "John <Doe>".to_string(),  // Test XML escaping
+            name: "John <Doe>".to_string(), // Test XML escaping
             age: 30,
             address: Address {
                 street: "123 Main St & Ave".to_string(),

@@ -9,17 +9,13 @@
 //! - `GET /api/upnp/devices/:udn` - Détails d'un device
 //! - `GET /api/upnp/devices/:udn/services/:service/variables` - Variables d'un service
 
+use crate::{UpnpTyped, UpnpTypedInstance, state_variables::UpnpVariable, upnp_server};
 use axum::{
+    Router,
     extract::Path,
     http::StatusCode,
     response::{IntoResponse, Json},
     routing::get,
-    Router,
-};
-use crate::{
-    state_variables::UpnpVariable,
-    upnp_server,
-    UpnpTyped, UpnpTypedInstance,
 };
 use pmoserver::Server;
 use serde_json::json;
@@ -65,7 +61,8 @@ async fn get_device(Path(udn): Path<String>) -> impl IntoResponse {
                 .iter()
                 .map(|s| {
                     // Collecter les actions
-                    let actions: Vec<_> = s.actions()
+                    let actions: Vec<_> = s
+                        .actions()
                         .all()
                         .iter()
                         .map(|a| {
@@ -91,12 +88,13 @@ async fn get_device(Path(udn): Path<String>) -> impl IntoResponse {
                                     json!({
                                         "name": arg.get_name(),
                                         "related_state_variable": model.state_variable().get_name()
-                                    })
-                                })
-                                .collect();
+                            })
+                        })
+                        .collect();
 
                             json!({
                                 "name": a.get_name(),
+                                "stateless": !a.is_stateful(),
                                 "in_arguments": in_args,
                                 "out_arguments": out_args
                             })
@@ -143,7 +141,9 @@ async fn get_device(Path(udn): Path<String>) -> impl IntoResponse {
 /// Handler : Variables d'un service.
 ///
 /// GET /api/upnp/devices/:udn/services/:service/variables
-async fn get_service_variables(Path((udn, service_name)): Path<(String, String)>) -> impl IntoResponse {
+async fn get_service_variables(
+    Path((udn, service_name)): Path<(String, String)>,
+) -> impl IntoResponse {
     match upnp_server::get_device_by_udn(&udn) {
         Some(device) => match device.get_service(&service_name) {
             Some(service) => {
@@ -168,7 +168,7 @@ async fn get_service_variables(Path((udn, service_name)): Path<(String, String)>
                         let (min, max) = if let Some(range) = model.get_range() {
                             (
                                 Some(range.get_minimum().to_string()),
-                                Some(range.get_maximum().to_string())
+                                Some(range.get_maximum().to_string()),
                             )
                         } else {
                             (None, None)

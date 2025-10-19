@@ -5,7 +5,7 @@
 //! - Accessing the embedded WebP image
 //! - Optionally saving it to a file
 
-use pmoparadise::{RadioParadiseSource, RadioParadiseClient};
+use pmoparadise::{RadioParadiseClient, RadioParadiseSource};
 use pmosource::MusicSource;
 use std::fs;
 use std::io::Write;

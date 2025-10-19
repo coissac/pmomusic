@@ -1,4 +1,4 @@
-use netstat2::{get_sockets_info, AddressFamilyFlags, ProtocolFlags, ProtocolSocketInfo};
+use netstat2::{AddressFamilyFlags, ProtocolFlags, ProtocolSocketInfo, get_sockets_info};
 use sysinfo::{Pid, System};
 
 /// Informations sur un processus utilisant un port réseau.
@@ -39,8 +39,7 @@ pub fn find_process_using_port(port: u16, protocol: TransportProtocol) -> Option
     for socket in sockets {
         match socket.protocol_socket_info {
             ProtocolSocketInfo::Tcp(ref tcp_info)
-                if matches!(protocol, TransportProtocol::Tcp)
-                    && tcp_info.local_port == port =>
+                if matches!(protocol, TransportProtocol::Tcp) && tcp_info.local_port == port =>
             {
                 if let Some(info) =
                     build_process_info(&mut system, port, socket.associated_pids.first())
@@ -49,8 +48,7 @@ pub fn find_process_using_port(port: u16, protocol: TransportProtocol) -> Option
                 }
             }
             ProtocolSocketInfo::Udp(ref udp_info)
-                if matches!(protocol, TransportProtocol::Udp)
-                    && udp_info.local_port == port =>
+                if matches!(protocol, TransportProtocol::Udp) && udp_info.local_port == port =>
             {
                 if let Some(info) =
                     build_process_info(&mut system, port, socket.associated_pids.first())
@@ -77,8 +75,7 @@ fn build_process_info(
     let owner = process
         .user_id()
         .and_then(|uid| {
-            users::get_user_by_uid(**uid)
-                .map(|user| user.name().to_string_lossy().into_owned())
+            users::get_user_by_uid(**uid).map(|user| user.name().to_string_lossy().into_owned())
         })
         .unwrap_or_else(|| "unknown".to_string());
 

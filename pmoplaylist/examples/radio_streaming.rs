@@ -10,7 +10,7 @@
 //! cargo run -p pmoplaylist --example radio_streaming
 //! ```
 
-use pmoplaylist::{FifoPlaylist, Track, DEFAULT_IMAGE};
+use pmoplaylist::{DEFAULT_IMAGE, FifoPlaylist, Track};
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -42,26 +42,46 @@ async fn main() {
         let tracks_data = vec![
             ("Radiohead", "Paranoid Android", "OK Computer", 383),
             ("Massive Attack", "Teardrop", "Mezzanine", 329),
-            ("Pink Floyd", "Shine On You Crazy Diamond", "Wish You Were Here", 810),
+            (
+                "Pink Floyd",
+                "Shine On You Crazy Diamond",
+                "Wish You Were Here",
+                810,
+            ),
             ("Portishead", "Glory Box", "Dummy", 305),
             ("Dire Straits", "Sultans of Swing", "Dire Straits", 349),
             ("The Cure", "Pictures of You", "Disintegration", 428),
             ("David Bowie", "Heroes", "Heroes", 371),
-            ("Talking Heads", "Once in a Lifetime", "Remain in Light", 259),
+            (
+                "Talking Heads",
+                "Once in a Lifetime",
+                "Remain in Light",
+                259,
+            ),
             ("Fleetwood Mac", "Dreams", "Rumours", 257),
-            ("The Smiths", "There Is a Light That Never Goes Out", "The Queen Is Dead", 244),
+            (
+                "The Smiths",
+                "There Is a Light That Never Goes Out",
+                "The Queen Is Dead",
+                244,
+            ),
             ("Joy Division", "Love Will Tear Us Apart", "Closer", 206),
             ("New Order", "Blue Monday", "Power, Corruption & Lies", 448),
             ("Depeche Mode", "Enjoy the Silence", "Violator", 376),
             ("R.E.M.", "Losing My Religion", "Out of Time", 269),
-            ("U2", "Where the Streets Have No Name", "The Joshua Tree", 337),
+            (
+                "U2",
+                "Where the Streets Have No Name",
+                "The Joshua Tree",
+                337,
+            ),
         ];
 
         for (idx, (artist, title, album, duration)) in tracks_data.iter().enumerate() {
             let track = Track::new(
                 format!("radio-track-{}", idx),
                 *title,
-                format!("http://stream.radioparadise.com/track/{}", idx)
+                format!("http://stream.radioparadise.com/track/{}", idx),
             )
             .with_artist(*artist)
             .with_album(*album)
@@ -94,9 +114,7 @@ async fn main() {
             if current_update_id != last_update_id {
                 println!(
                     "👁️  [MONITOR] Changement détecté! Update ID: {} → {} | Tracks: {}",
-                    last_update_id,
-                    current_update_id,
-                    count
+                    last_update_id, current_update_id, count
                 );
                 last_update_id = current_update_id;
             }
@@ -125,7 +143,11 @@ async fn main() {
             let history = radio_client.get_items(0, 10).await;
             let update_id = radio_client.update_id().await;
 
-            println!("📱 [CLIENT] Consultation #{} (Update ID: {})", i + 1, update_id);
+            println!(
+                "📱 [CLIENT] Consultation #{} (Update ID: {})",
+                i + 1,
+                update_id
+            );
             println!("   Historique actuel ({} tracks):", history.len());
 
             for (idx, track) in history.iter().enumerate() {
@@ -140,7 +162,10 @@ async fn main() {
         let container = radio_client.as_container().await;
         println!("   Container ID: {}", container.id);
         println!("   Title: {}", container.title);
-        println!("   Child Count: {}", container.child_count.unwrap_or_default());
+        println!(
+            "   Child Count: {}",
+            container.child_count.unwrap_or_default()
+        );
 
         println!("\n📱 [CLIENT] Fin de la consultation");
     });

@@ -5,7 +5,7 @@
 //! - Accessing the embedded WebP image
 //! - Optionally saving it to a file
 
-use pmoqobuz::{QobuzSource, QobuzClient};
+use pmoqobuz::{QobuzClient, QobuzSource};
 use pmosource::MusicSource;
 use std::fs;
 use std::io::Write;

@@ -1,7 +1,7 @@
 // Exemple d'utilisation du module download avec transformations
 
-use pmocache::download::{download_with_transformer, StreamTransformer};
 use futures_util::StreamExt;
+use pmocache::download::{download_with_transformer, StreamTransformer};
 use tokio::io::AsyncWriteExt;
 
 /// Exemple de transformer qui compresse les données en gzip
@@ -63,7 +63,13 @@ fn create_uppercase_transformer() -> StreamTransformer {
                 // Transformer en majuscules (seulement pour texte ASCII)
                 let transformed: Vec<u8> = chunk
                     .iter()
-                    .map(|&b| if b.is_ascii_lowercase() { b.to_ascii_uppercase() } else { b })
+                    .map(|&b| {
+                        if b.is_ascii_lowercase() {
+                            b.to_ascii_uppercase()
+                        } else {
+                            b
+                        }
+                    })
                     .collect();
 
                 file.write_all(&transformed)
@@ -210,7 +216,10 @@ async fn main() {
         Ok(_) => {
             println!("   ✓ Téléchargement terminé!");
             println!("   - Taille source: {} bytes", dl.current_size().await);
-            println!("   - Taille transformée: {} bytes", dl.transformed_size().await);
+            println!(
+                "   - Taille transformée: {} bytes",
+                dl.transformed_size().await
+            );
         }
         Err(e) => {
             eprintln!("   ✗ Erreur: {}", e);
@@ -223,16 +232,15 @@ async fn main() {
     let _ = std::fs::remove_file(&skip_file);
 
     let transformer = create_skip_header_transformer(100);
-    let dl = download_with_transformer(
-        &skip_file,
-        "https://www.rust-lang.org/",
-        Some(transformer),
-    );
+    let dl = download_with_transformer(&skip_file, "https://www.rust-lang.org/", Some(transformer));
 
     match dl.wait_until_finished().await {
         Ok(_) => {
             println!("   ✓ Téléchargement terminé!");
-            println!("   - Taille transformée: {} bytes", dl.transformed_size().await);
+            println!(
+                "   - Taille transformée: {} bytes",
+                dl.transformed_size().await
+            );
         }
         Err(e) => {
             eprintln!("   ✗ Erreur: {}", e);
@@ -254,7 +262,10 @@ async fn main() {
     match dl.wait_until_finished().await {
         Ok(_) => {
             println!("   ✓ Téléchargement terminé!");
-            println!("   - Taille transformée: {} bytes", dl.transformed_size().await);
+            println!(
+                "   - Taille transformée: {} bytes",
+                dl.transformed_size().await
+            );
         }
         Err(e) => {
             eprintln!("   ✗ Erreur: {}", e);

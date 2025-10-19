@@ -55,17 +55,16 @@ pub fn parse_soap_envelope(xml: &[u8]) -> Result<SoapEnvelope, SoapParseError> {
         .get_child("Header")
         .or_else(|| root.children.iter().find_map(|n| n.as_element()))
         .filter(|e| e.name.ends_with("Header"))
-        .map(|e| SoapHeader {
-            content: e.clone(),
-        });
+        .map(|e| SoapHeader { content: e.clone() });
 
     // Extraire Body (obligatoire)
     let body_elem = root
         .get_child("Body")
-        .or_else(|| root.children.iter().find_map(|n| {
-            n.as_element()
-                .filter(|e| e.name.ends_with("Body"))
-        }))
+        .or_else(|| {
+            root.children
+                .iter()
+                .find_map(|n| n.as_element().filter(|e| e.name.ends_with("Body")))
+        })
         .ok_or(SoapParseError::MissingBody)?;
 
     let body = SoapBody {

@@ -87,12 +87,12 @@ impl AudioMetadata {
     /// println!("Titre: {:?}", metadata.title);
     /// ```
     pub fn from_file(path: &Path) -> Result<Self> {
-        let tagged_file = Probe::open(path)?
-            .options(ParseOptions::new())
-            .read()?;
+        let tagged_file = Probe::open(path)?.options(ParseOptions::new()).read()?;
 
         let properties = tagged_file.properties();
-        let tag = tagged_file.primary_tag().or_else(|| tagged_file.first_tag());
+        let tag = tagged_file
+            .primary_tag()
+            .or_else(|| tagged_file.first_tag());
 
         let mut metadata = Self {
             title: None,
@@ -138,7 +138,9 @@ impl AudioMetadata {
             .read()?;
 
         let properties = tagged_file.properties();
-        let tag = tagged_file.primary_tag().or_else(|| tagged_file.first_tag());
+        let tag = tagged_file
+            .primary_tag()
+            .or_else(|| tagged_file.first_tag());
 
         let mut metadata = Self {
             title: None,

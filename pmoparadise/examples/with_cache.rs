@@ -8,9 +8,9 @@
 //! cargo run --example with_cache --features cache
 //! ```
 
-use pmoparadise::{RadioParadiseClient, RadioParadiseSource};
-use pmocovers::Cache as CoverCache;
 use pmoaudiocache::AudioCache;
+use pmocovers::Cache as CoverCache;
+use pmoparadise::{RadioParadiseClient, RadioParadiseSource};
 use pmosource::MusicSource;
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
@@ -64,7 +64,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Add current song to the source
     println!("➕ Adding current track to FIFO with caching...");
     if let Some(song) = &now_playing.current_song {
-        source.add_song(block.clone(), song, now_playing.current_song_index.unwrap_or(0)).await?;
+        source
+            .add_song(
+                block.clone(),
+                song,
+                now_playing.current_song_index.unwrap_or(0),
+            )
+            .await?;
         println!("✅ Track added and caching started!");
         println!("   - Cover image will be cached to: ./cache/covers/");
         println!("   - Audio will be cached to: ./cache/audio/\n");
@@ -78,7 +84,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n📋 Items in FIFO:");
     let items = source.get_items(0, 10).await?;
     for (i, item) in items.iter().enumerate() {
-        println!("   {}. {} - {}",
+        println!(
+            "   {}. {} - {}",
             i + 1,
             item.artist.as_deref().unwrap_or("Unknown"),
             item.title

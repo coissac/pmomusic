@@ -1,4 +1,7 @@
-use crate::{AudioChunk, nodes::{AudioError, MultiSubscriberNode}};
+use crate::{
+    nodes::{AudioError, MultiSubscriberNode},
+    AudioChunk,
+};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -56,10 +59,10 @@ impl DecoderNode {
 
                     if src_idx < left_data.len() - 1 {
                         let frac = src_pos - src_idx as f64;
-                        let left_sample =
-                            left_data[src_idx] * (1.0 - frac as f32) + left_data[src_idx + 1] * frac as f32;
-                        let right_sample =
-                            right_data[src_idx] * (1.0 - frac as f32) + right_data[src_idx + 1] * frac as f32;
+                        let left_sample = left_data[src_idx] * (1.0 - frac as f32)
+                            + left_data[src_idx + 1] * frac as f32;
+                        let right_sample = right_data[src_idx] * (1.0 - frac as f32)
+                            + right_data[src_idx + 1] * frac as f32;
 
                         new_left.push(left_sample);
                         new_right.push(right_sample);
@@ -69,7 +72,8 @@ impl DecoderNode {
                     }
                 }
 
-                let new_chunk = AudioChunk::new(chunk.order, new_left, new_right, target_sample_rate);
+                let new_chunk =
+                    AudioChunk::new(chunk.order, new_left, new_right, target_sample_rate);
                 self.subscribers.push(Arc::new(new_chunk)).await?;
             }
         }

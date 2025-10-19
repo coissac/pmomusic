@@ -52,7 +52,7 @@ pub use errors::ServiceError;
 pub use service_instance::ServiceInstance;
 use xmltree::{Element, EmitterConfig, XMLNode};
 
-use crate::{actions::ActionSet, state_variables::StateVariableSet, UpnpObject, UpnpObjectType};
+use crate::{UpnpObject, UpnpObjectType, actions::ActionSet, state_variables::StateVariableSet};
 
 /// Service UPnP (modèle).
 ///
@@ -470,18 +470,18 @@ impl Service {
         );
 
         let mut specversion = Element::new("specVersion");
-        let mut major= Element::new("major");
-        major.children
-            .push(XMLNode::Text("1".to_string()));
+        let mut major = Element::new("major");
+        major.children.push(XMLNode::Text("1".to_string()));
         specversion.children.push(XMLNode::Element(major));
         let mut minor = Element::new("minor");
-        minor.children
-            .push(XMLNode::Text("0".to_string()));
+        minor.children.push(XMLNode::Text("0".to_string()));
         specversion.children.push(XMLNode::Element(minor));
         scpd.children.push(XMLNode::Element(specversion));
 
-        scpd.children.push(XMLNode::Element(self.actions.to_xml_element()));
-        scpd.children.push(XMLNode::Element(self.state_table.to_xml_element()));
+        scpd.children
+            .push(XMLNode::Element(self.actions.to_xml_element()));
+        scpd.children
+            .push(XMLNode::Element(self.state_table.to_xml_element()));
 
         scpd
     }
@@ -519,7 +519,6 @@ impl Service {
             .expect("Failed to write XML");
 
         String::from_utf8(buf).expect("Invalid UTF-8")
-
     }
 }
 

@@ -1,7 +1,7 @@
 //! ConnectionManager service implementation
 
-use pmoupnp::services::Service;
 use pmoupnp::actions::Action;
+use pmoupnp::services::Service;
 use pmoupnp::state_variables::StateVariable;
 use std::sync::Arc;
 
@@ -15,23 +15,20 @@ pub fn create_connection_manager_service() -> Service {
     service.set_service_id("urn:upnp-org:serviceId:ConnectionManager".to_string());
 
     // State variables
-    let source_protocol_info = StateVariable::new(
-        "SourceProtocolInfo".to_string(),
-        "string".to_string(),
-    ).with_send_events(true)
-     .with_default_value(get_protocol_info());
+    let source_protocol_info =
+        StateVariable::new("SourceProtocolInfo".to_string(), "string".to_string())
+            .with_send_events(true)
+            .with_default_value(get_protocol_info());
 
-    let sink_protocol_info = StateVariable::new(
-        "SinkProtocolInfo".to_string(),
-        "string".to_string(),
-    ).with_send_events(true)
-     .with_default_value("".to_string());
+    let sink_protocol_info =
+        StateVariable::new("SinkProtocolInfo".to_string(), "string".to_string())
+            .with_send_events(true)
+            .with_default_value("".to_string());
 
-    let current_connection_ids = StateVariable::new(
-        "CurrentConnectionIDs".to_string(),
-        "string".to_string(),
-    ).with_send_events(true)
-     .with_default_value("0".to_string());
+    let current_connection_ids =
+        StateVariable::new("CurrentConnectionIDs".to_string(), "string".to_string())
+            .with_send_events(true)
+            .with_default_value("0".to_string());
 
     service.add_state_variable(Arc::new(source_protocol_info));
     service.add_state_variable(Arc::new(sink_protocol_info));
@@ -39,14 +36,8 @@ pub fn create_connection_manager_service() -> Service {
 
     // GetProtocolInfo action
     let mut get_protocol_info = Action::new("GetProtocolInfo".to_string());
-    get_protocol_info.add_output_argument(
-        "Source".to_string(),
-        "SourceProtocolInfo".to_string(),
-    );
-    get_protocol_info.add_output_argument(
-        "Sink".to_string(),
-        "SinkProtocolInfo".to_string(),
-    );
+    get_protocol_info.add_output_argument("Source".to_string(), "SourceProtocolInfo".to_string());
+    get_protocol_info.add_output_argument("Sink".to_string(), "SinkProtocolInfo".to_string());
     service.add_action(Arc::new(get_protocol_info));
 
     // GetCurrentConnectionIDs action
@@ -63,10 +54,7 @@ pub fn create_connection_manager_service() -> Service {
         "ConnectionID".to_string(),
         "A_ARG_TYPE_ConnectionID".to_string(),
     );
-    get_connection_info.add_output_argument(
-        "RcsID".to_string(),
-        "A_ARG_TYPE_RcsID".to_string(),
-    );
+    get_connection_info.add_output_argument("RcsID".to_string(), "A_ARG_TYPE_RcsID".to_string());
     get_connection_info.add_output_argument(
         "AVTransportID".to_string(),
         "A_ARG_TYPE_AVTransportID".to_string(),
@@ -83,10 +71,8 @@ pub fn create_connection_manager_service() -> Service {
         "PeerConnectionID".to_string(),
         "A_ARG_TYPE_ConnectionID".to_string(),
     );
-    get_connection_info.add_output_argument(
-        "Direction".to_string(),
-        "A_ARG_TYPE_Direction".to_string(),
-    );
+    get_connection_info
+        .add_output_argument("Direction".to_string(), "A_ARG_TYPE_Direction".to_string());
     get_connection_info.add_output_argument(
         "Status".to_string(),
         "A_ARG_TYPE_ConnectionStatus".to_string(),
@@ -94,34 +80,42 @@ pub fn create_connection_manager_service() -> Service {
     service.add_action(Arc::new(get_connection_info));
 
     // Additional state variables for arguments
-    service.add_state_variable(Arc::new(
-        StateVariable::new("A_ARG_TYPE_ConnectionID".to_string(), "i4".to_string())
-    ));
-    service.add_state_variable(Arc::new(
-        StateVariable::new("A_ARG_TYPE_RcsID".to_string(), "i4".to_string())
-    ));
-    service.add_state_variable(Arc::new(
-        StateVariable::new("A_ARG_TYPE_AVTransportID".to_string(), "i4".to_string())
-    ));
-    service.add_state_variable(Arc::new(
-        StateVariable::new("A_ARG_TYPE_ProtocolInfo".to_string(), "string".to_string())
-    ));
-    service.add_state_variable(Arc::new(
-        StateVariable::new("A_ARG_TYPE_ConnectionManager".to_string(), "string".to_string())
-    ));
+    service.add_state_variable(Arc::new(StateVariable::new(
+        "A_ARG_TYPE_ConnectionID".to_string(),
+        "i4".to_string(),
+    )));
+    service.add_state_variable(Arc::new(StateVariable::new(
+        "A_ARG_TYPE_RcsID".to_string(),
+        "i4".to_string(),
+    )));
+    service.add_state_variable(Arc::new(StateVariable::new(
+        "A_ARG_TYPE_AVTransportID".to_string(),
+        "i4".to_string(),
+    )));
+    service.add_state_variable(Arc::new(StateVariable::new(
+        "A_ARG_TYPE_ProtocolInfo".to_string(),
+        "string".to_string(),
+    )));
+    service.add_state_variable(Arc::new(StateVariable::new(
+        "A_ARG_TYPE_ConnectionManager".to_string(),
+        "string".to_string(),
+    )));
     service.add_state_variable(Arc::new(
         StateVariable::new("A_ARG_TYPE_Direction".to_string(), "string".to_string())
-            .with_allowed_values(vec!["Input".to_string(), "Output".to_string()])
+            .with_allowed_values(vec!["Input".to_string(), "Output".to_string()]),
     ));
     service.add_state_variable(Arc::new(
-        StateVariable::new("A_ARG_TYPE_ConnectionStatus".to_string(), "string".to_string())
-            .with_allowed_values(vec![
-                "OK".to_string(),
-                "ContentFormatMismatch".to_string(),
-                "InsufficientBandwidth".to_string(),
-                "UnreliableChannel".to_string(),
-                "Unknown".to_string(),
-            ])
+        StateVariable::new(
+            "A_ARG_TYPE_ConnectionStatus".to_string(),
+            "string".to_string(),
+        )
+        .with_allowed_values(vec![
+            "OK".to_string(),
+            "ContentFormatMismatch".to_string(),
+            "InsufficientBandwidth".to_string(),
+            "UnreliableChannel".to_string(),
+            "Unknown".to_string(),
+        ]),
     ));
 
     service
@@ -143,7 +137,8 @@ fn get_protocol_info() -> String {
         "http-get:*:audio/mpeg:*",
         "http-get:*:audio/mp3:*",
         "http-get:*:audio/x-mp3:*",
-    ].join(",")
+    ]
+    .join(",")
 }
 
 #[cfg(test)]
@@ -153,8 +148,14 @@ mod tests {
     #[test]
     fn test_create_connection_manager() {
         let service = create_connection_manager_service();
-        assert_eq!(service.service_type(), "urn:schemas-upnp-org:service:ConnectionManager:1");
-        assert_eq!(service.service_id(), "urn:upnp-org:serviceId:ConnectionManager");
+        assert_eq!(
+            service.service_type(),
+            "urn:schemas-upnp-org:service:ConnectionManager:1"
+        );
+        assert_eq!(
+            service.service_id(),
+            "urn:upnp-org:serviceId:ConnectionManager"
+        );
     }
 
     #[test]

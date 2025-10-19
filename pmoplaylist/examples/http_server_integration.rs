@@ -8,7 +8,7 @@
 //! cargo run -p pmoplaylist --example http_server_integration
 //! ```
 
-use pmoplaylist::{FifoPlaylist, Track, DEFAULT_IMAGE};
+use pmoplaylist::{DEFAULT_IMAGE, FifoPlaylist, Track};
 use std::sync::Arc;
 
 #[tokio::main]
@@ -35,17 +35,19 @@ async fn main() {
     ];
 
     for (idx, (artist, title, album, duration)) in initial_tracks.iter().enumerate() {
-        playlist.append_track(
-            Track::new(
-                format!("track-{}", idx),
-                *title,
-                format!("http://media.server/music/{}.flac", idx)
+        playlist
+            .append_track(
+                Track::new(
+                    format!("track-{}", idx),
+                    *title,
+                    format!("http://media.server/music/{}.flac", idx),
+                )
+                .with_artist(*artist)
+                .with_album(*album)
+                .with_duration(*duration)
+                .with_image(format!("http://media.server/covers/{}.jpg", idx)),
             )
-            .with_artist(*artist)
-            .with_album(*album)
-            .with_duration(*duration)
-            .with_image(format!("http://media.server/covers/{}.jpg", idx))
-        ).await;
+            .await;
         println!("  ✓ {} - {}", artist, title);
     }
     println!();
@@ -72,7 +74,7 @@ async fn main() {
     let new_track = Track::new(
         "track-new-1",
         "Stairway to Heaven",
-        "http://media.server/music/stairway.flac"
+        "http://media.server/music/stairway.flac",
     )
     .with_artist("Led Zeppelin")
     .with_album("Led Zeppelin IV")
@@ -115,17 +117,18 @@ async fn simulate_get_container(playlist: Arc<FifoPlaylist>) {
     println!("    \"parentId\": \"{}\",", container.parent_id);
     println!("    \"title\": \"{}\",", container.title);
     println!("    \"class\": \"{}\",", container.class);
-    println!("    \"childCount\": {}", container.child_count.unwrap_or_default());
+    println!(
+        "    \"childCount\": {}",
+        container.child_count.unwrap_or_default()
+    );
     println!("  }}");
 }
 
 /// Simule GET /playlist/items?offset=X&count=Y
 async fn simulate_get_items(playlist: Arc<FifoPlaylist>, offset: usize, count: usize) {
-    let items = playlist.as_objects(
-        offset,
-        count,
-        Some("http://media.server/api/default-image")
-    ).await;
+    let items = playlist
+        .as_objects(offset, count, Some("http://media.server/api/default-image"))
+        .await;
 
     println!("  Response: {} items", items.len());
     println!("  [");
@@ -133,8 +136,14 @@ async fn simulate_get_items(playlist: Arc<FifoPlaylist>, offset: usize, count: u
         println!("    {{");
         println!("      \"id\": \"{}\",", item.id);
         println!("      \"title\": \"{}\",", item.title);
-        println!("      \"artist\": \"{}\",", item.artist.as_deref().unwrap_or(""));
-        println!("      \"album\": \"{}\",", item.album.as_deref().unwrap_or(""));
+        println!(
+            "      \"artist\": \"{}\",",
+            item.artist.as_deref().unwrap_or("")
+        );
+        println!(
+            "      \"album\": \"{}\",",
+            item.album.as_deref().unwrap_or("")
+        );
         println!("      \"class\": \"{}\",", item.class);
         if !item.resources.is_empty() {
             println!("      \"uri\": \"{}\",", item.resources[0].url);
@@ -175,7 +184,8 @@ async fn simulate_add_track(playlist: Arc<FifoPlaylist>, track: Track) {
 
     let new_update_id = playlist.update_id().await;
 
-    println!("  Track added: {} - {}",
+    println!(
+        "  Track added: {} - {}",
         track.artist.as_deref().unwrap_or("Unknown"),
         track.title
     );

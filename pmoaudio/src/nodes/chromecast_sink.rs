@@ -189,10 +189,7 @@ impl ChromecastSink {
         // Établir la connexion
         self.connect().await?;
 
-        let mut stats = ChromecastStats::new(
-            self.node_id.clone(),
-            self.config.device_name.clone(),
-        );
+        let mut stats = ChromecastStats::new(self.node_id.clone(), self.config.device_name.clone());
 
         // Boucle principale
         while let Some(chunk) = self.rx.recv().await {

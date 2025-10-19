@@ -1,15 +1,12 @@
 mod errors;
 mod instance_methods;
 mod macros;
-mod variable_methods;
-mod var_set_methods;
 mod var_inst_set_methods;
+mod var_set_methods;
+mod variable_methods;
 mod variable_trait;
 
-use std::{
-    collections::HashMap,
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 pub use crate::state_variables::variable_trait::UpnpVariable;
 use bevy_reflect::Reflect;
@@ -18,9 +15,9 @@ pub use errors::StateVariableError;
 use std::sync::RwLock;
 
 use crate::{
-    value_ranges::ValueRange, 
-    variable_types::{StateValue, StateVarType}, 
     UpnpObjectSet, UpnpObjectType,
+    value_ranges::ValueRange,
+    variable_types::{StateValue, StateVarType},
 };
 
 /// Type pour les fonctions de condition d'événement
@@ -65,4 +62,3 @@ pub struct StateVarInstance {
 }
 
 pub type StateVarInstanceSet = UpnpObjectSet<StateVarInstance>;
-

@@ -1,4 +1,7 @@
-use crate::{AudioChunk, nodes::{AudioError, MultiSubscriberNode}};
+use crate::{
+    nodes::{AudioError, MultiSubscriberNode},
+    AudioChunk,
+};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -63,12 +66,8 @@ impl SourceNode {
         sample_rate: u32,
     ) -> Result<(), AudioError> {
         for i in 0..count {
-            let chunk = AudioChunk::new(
-                i,
-                vec![0.0; chunk_size],
-                vec![0.0; chunk_size],
-                sample_rate,
-            );
+            let chunk =
+                AudioChunk::new(i, vec![0.0; chunk_size], vec![0.0; chunk_size], sample_rate);
             self.subscribers.push(Arc::new(chunk)).await?;
         }
         Ok(())

@@ -32,7 +32,10 @@ async fn test_complete_pipeline() {
     tokio::spawn(async move {
         let mut source = SourceNode::new();
         source.add_subscriber(decoder_tx);
-        source.generate_chunks(10, 4800, 48000, 440.0).await.unwrap();
+        source
+            .generate_chunks(10, 4800, 48000, 440.0)
+            .await
+            .unwrap();
     });
 
     // Attendre la fin
@@ -73,7 +76,10 @@ async fn test_multiroom_buffering() {
     tokio::spawn(async move {
         let mut source = SourceNode::new();
         source.add_subscriber(buffer_tx);
-        source.generate_chunks(20, 1000, 48000, 440.0).await.unwrap();
+        source
+            .generate_chunks(20, 1000, 48000, 440.0)
+            .await
+            .unwrap();
     });
 
     let stats1 = sink1_handle.await.unwrap();
@@ -108,7 +114,10 @@ async fn test_timer_accuracy() {
         source.add_subscriber(timer_tx);
 
         // 48000 samples à 48kHz = 1 seconde
-        source.generate_chunks(1, 48000, 48000, 440.0).await.unwrap();
+        source
+            .generate_chunks(1, 48000, 48000, 440.0)
+            .await
+            .unwrap();
     });
 
     sink_handle.await.unwrap();

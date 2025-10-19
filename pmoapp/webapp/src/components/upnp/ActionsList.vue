@@ -30,6 +30,13 @@
               <span v-if="action.out_arguments.length > 0" class="badge out-badge" title="Output arguments">
                 ⬅️ {{ action.out_arguments.length }}
               </span>
+              <span
+                v-if="action.stateless"
+                class="badge stateless-badge"
+                title="Does not mutate state variables"
+              >
+                🧊 Stateless
+              </span>
               <span class="expand-indicator">
                 {{ expandedAction === action.name ? '▼' : '▶' }}
               </span>
@@ -38,6 +45,12 @@
 
           <transition name="expand-args">
             <div v-if="expandedAction === action.name" class="action-details">
+              <div v-if="action.stateless" class="action-flags">
+                <span class="stateless-pill">
+                  Stateless action — no state variables updated
+                </span>
+              </div>
+
               <!-- Input arguments -->
               <div v-if="action.in_arguments.length > 0" class="arguments-section">
                 <h5 class="section-title">
@@ -299,6 +312,12 @@ onMounted(() => {
   border: 1px solid rgba(46, 204, 113, 0.3);
 }
 
+.stateless-badge {
+  background: rgba(155, 89, 182, 0.2);
+  color: #9b59b6;
+  border: 1px solid rgba(155, 89, 182, 0.3);
+}
+
 .expand-indicator {
   color: #3498db;
   font-size: 0.9rem;
@@ -314,6 +333,23 @@ onMounted(() => {
 .action-details {
   padding: 0 1rem 1rem 1rem;
   border-top: 1px solid rgba(52, 152, 219, 0.2);
+}
+
+.action-flags {
+  margin-top: 0.75rem;
+}
+
+.stateless-pill {
+  display: inline-block;
+  padding: 0.3rem 0.6rem;
+  border-radius: 999px;
+  background: rgba(155, 89, 182, 0.15);
+  border: 1px solid rgba(155, 89, 182, 0.25);
+  color: #d2a6e6;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
 }
 
 .arguments-section {

@@ -6,20 +6,9 @@ use std::{
 use bevy_reflect::Reflect;
 use xmltree::{Element, XMLNode};
 
-use crate::{
-    UpnpInstance,
-    UpnpObject,
-    UpnpObjectType,
-    UpnpTyped,
-    UpnpTypedInstance,
-};
-use crate::actions::{
-    Action,
-    ActionData,
-    ActionInstance,
-    ArgInstanceSet,
-};
+use crate::actions::{Action, ActionData, ActionInstance, ArgInstanceSet};
 use crate::variable_types::StateValue;
+use crate::{UpnpInstance, UpnpObject, UpnpObjectType, UpnpTyped, UpnpTypedInstance};
 
 impl UpnpObject for ActionInstance {
     fn to_xml_element(&self) -> Element {
@@ -27,7 +16,9 @@ impl UpnpObject for ActionInstance {
 
         // <name>
         let mut name_elem = Element::new("name");
-        name_elem.children.push(XMLNode::Text(self.get_name().clone()));
+        name_elem
+            .children
+            .push(XMLNode::Text(self.get_name().clone()));
         elem.children.push(XMLNode::Element(name_elem));
 
         // Utiliser le set d'instances d'arguments
@@ -35,7 +26,7 @@ impl UpnpObject for ActionInstance {
         elem.children.push(XMLNode::Element(args_container));
 
         elem
-    }  
+    }
 }
 
 impl UpnpTyped for ActionInstance {
@@ -45,35 +36,31 @@ impl UpnpTyped for ActionInstance {
 }
 
 impl UpnpInstance for ActionInstance {
-
     type Model = Action;
 
     fn new(action: &Action) -> Self {
         // Créer les instances d'arguments
         let mut arguments = ArgInstanceSet::new();
-        
+
         for arg_model in action.arguments().all() {
             let arg_instance = Arc::new(crate::actions::ArgumentInstance::new(&*arg_model));
             if let Err(e) = arguments.insert(arg_instance) {
                 tracing::error!("Failed to insert argument instance: {:?}", e);
             }
         }
-        
+
         Self {
             object: UpnpObjectType {
                 name: action.get_name().clone(),
                 object_type: "ActionInstance".to_string(),
             },
             model: action.clone(),
-            arguments,  // ⬅️ Set d'instances, pas le modèle !
+            arguments, // ⬅️ Set d'instances, pas le modèle !
         }
     }
-
 }
 
-
 impl UpnpTypedInstance for ActionInstance {
-
     fn get_model(&self) -> &Self::Model {
         &self.model
     }
@@ -131,7 +118,7 @@ impl ActionInstance {
     /// }
     /// ```
     pub fn arguments_set(&self) -> &ArgInstanceSet {
-        &self.arguments  // ⬅️ Retourne les INSTANCES, pas les modèles !
+        &self.arguments // ⬅️ Retourne les INSTANCES, pas les modèles !
     }
 
     /// Construit un [`ActionData`] initial à partir des variables d'état liées.
@@ -186,10 +173,9 @@ impl ActionInstance {
             if arg_inst.get_model().is_in() && updated_keys.contains(arg_inst.get_name()) {
                 if let Some(var_inst) = arg_inst.get_variable_instance() {
                     if let Some(reflect_value) = action_data.get(arg_inst.get_name()) {
-                        let cloned = reflect_value
-                            .as_ref()
-                            .reflect_clone()
-                            .map_err(|e| crate::actions::ActionError::ArgumentError(e.to_string()))?;
+                        let cloned = reflect_value.as_ref().reflect_clone().map_err(|e| {
+                            crate::actions::ActionError::ArgumentError(e.to_string())
+                        })?;
                         var_inst
                             .set_reflect_value(cloned)
                             .await
@@ -269,22 +255,22 @@ impl ActionInstance {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::actions::Action;
     use crate::UpnpInstance;
+    use crate::actions::Action;
 
     #[test]
     fn test_action_instance_creation() {
         let action = Action::new("Play".to_string());
         let instance = ActionInstance::new(&action);
-        
+
         assert_eq!(instance.get_name(), "Play");
     }
-    
+
     #[test]
     fn test_action_instance_has_argument_instances() {
         let action = Action::new("Play".to_string());
         let instance = ActionInstance::new(&action);
-        
+
         // Vérifier que arguments_set() retourne bien des instances
         assert!(instance.arguments_set().all().iter().all(|arg| {
             // Chaque argument doit être une ArgumentInstance

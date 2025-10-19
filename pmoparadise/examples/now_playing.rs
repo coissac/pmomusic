@@ -48,9 +48,11 @@ async fn main() -> Result<()> {
         if let Some(rating) = song.rating {
             println!("  Rating: {:.1}/10", rating);
         }
-        println!("  Duration: {}:{:02}",
-                 song.duration / 60000,
-                 (song.duration % 60000) / 1000);
+        println!(
+            "  Duration: {}:{:02}",
+            song.duration / 60000,
+            (song.duration % 60000) / 1000
+        );
 
         // Display cover URL
         if let Some(cover) = &song.cover {

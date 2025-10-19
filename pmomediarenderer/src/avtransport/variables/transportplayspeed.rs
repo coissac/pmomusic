@@ -6,4 +6,3 @@ define_variable! {
         default: "1",
     }
 }
-

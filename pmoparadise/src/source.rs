@@ -5,12 +5,12 @@
 
 use crate::client::RadioParadiseClient;
 use crate::models::{Block, Song};
-use pmosource::{async_trait, pmodidl, BrowseResult, MusicSource, MusicSourceError, Result};
-use pmosource::SourceCacheManager;
 use pmoaudiocache::{AudioMetadata, Cache as AudioCache};
 use pmocovers::Cache as CoverCache;
 use pmodidl::{Container, Item, Resource};
 use pmoplaylist::{FifoPlaylist, Track};
+use pmosource::SourceCacheManager;
+use pmosource::{async_trait, pmodidl, BrowseResult, MusicSource, MusicSourceError, Result};
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -73,8 +73,7 @@ struct RadioParadiseSourceInner {
 
 impl std::fmt::Debug for RadioParadiseSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RadioParadiseSource")
-            .finish()
+        f.debug_struct("RadioParadiseSource").finish()
     }
 }
 
@@ -140,11 +139,8 @@ impl RadioParadiseSource {
             DEFAULT_IMAGE,
         );
 
-        let cache_manager = SourceCacheManager::new(
-            "radio-paradise".to_string(),
-            cover_cache,
-            audio_cache,
-        );
+        let cache_manager =
+            SourceCacheManager::new("radio-paradise".to_string(), cover_cache, audio_cache);
 
         Self {
             inner: Arc::new(RadioParadiseSourceInner {
@@ -248,7 +244,12 @@ impl RadioParadiseSource {
             bitrate: None,
         };
 
-        let cached_audio_pk = match self.inner.cache_manager.cache_audio(&block.url, Some(metadata)).await {
+        let cached_audio_pk = match self
+            .inner
+            .cache_manager
+            .cache_audio(&block.url, Some(metadata))
+            .await
+        {
             Ok(pk) => {
                 tracing::info!("Successfully cached audio for track {}: {}", track_id, pk);
                 Some(pk)
@@ -260,14 +261,17 @@ impl RadioParadiseSource {
         };
 
         // 3. Store metadata in the cache manager
-        self.inner.cache_manager.update_metadata(
-            track_id.clone(),
-            pmosource::TrackMetadata {
-                original_uri: block.url.clone(),
-                cached_audio_pk,
-                cached_cover_pk,
-            }
-        ).await;
+        self.inner
+            .cache_manager
+            .update_metadata(
+                track_id.clone(),
+                pmosource::TrackMetadata {
+                    original_uri: block.url.clone(),
+                    cached_audio_pk,
+                    cached_cover_pk,
+                },
+            )
+            .await;
 
         // 4. Store block for later retrieval
         {
@@ -362,7 +366,10 @@ impl MusicSource for RadioParadiseSource {
                             }
                         }
 
-                        tracing::info!("✅ Added {} tracks to Radio Paradise FIFO", block.song_count());
+                        tracing::info!(
+                            "✅ Added {} tracks to Radio Paradise FIFO",
+                            block.song_count()
+                        );
                     }
                     Err(e) => {
                         tracing::warn!("Failed to fetch current tracks: {}", e);
@@ -544,21 +551,35 @@ impl MusicSource for RadioParadiseSource {
         }
 
         // Get metadata and block info
-        let metadata = self.inner.cache_manager.get_metadata(object_id).await
+        let metadata = self
+            .inner
+            .cache_manager
+            .get_metadata(object_id)
+            .await
             .ok_or_else(|| MusicSourceError::ObjectNotFound(object_id.to_string()))?;
 
         let blocks = self.inner.blocks.read().await;
-        let (block, song_index) = blocks.get(object_id)
+        let (block, song_index) = blocks
+            .get(object_id)
             .ok_or_else(|| MusicSourceError::ObjectNotFound(object_id.to_string()))?;
-        let song = block.get_song(*song_index)
-            .ok_or_else(|| MusicSourceError::ObjectNotFound(format!("Song {} not found", object_id)))?;
+        let song = block.get_song(*song_index).ok_or_else(|| {
+            MusicSourceError::ObjectNotFound(format!("Song {} not found", object_id))
+        })?;
 
         // Prepare metadata
         let audio_metadata = AudioMetadata {
             title: Some(song.title.clone()),
-            artist: if !song.artist.is_empty() { Some(song.artist.clone()) } else { None },
+            artist: if !song.artist.is_empty() {
+                Some(song.artist.clone())
+            } else {
+                None
+            },
             album: song.album.clone().filter(|a| !a.is_empty()),
-            duration_secs: if song.duration > 0 { Some((song.duration / 1000) as u64) } else { None },
+            duration_secs: if song.duration > 0 {
+                Some((song.duration / 1000) as u64)
+            } else {
+                None
+            },
             year: None,
             track_number: None,
             track_total: None,
@@ -571,15 +592,25 @@ impl MusicSource for RadioParadiseSource {
         };
 
         // Cache via manager
-        match self.inner.cache_manager.cache_audio(&metadata.original_uri, Some(audio_metadata)).await {
+        match self
+            .inner
+            .cache_manager
+            .cache_audio(&metadata.original_uri, Some(audio_metadata))
+            .await
+        {
             Ok(pk) => {
                 // Update metadata with new pk
                 let mut updated = metadata;
                 updated.cached_audio_pk = Some(pk);
-                self.inner.cache_manager.update_metadata(object_id.to_string(), updated).await;
+                self.inner
+                    .cache_manager
+                    .update_metadata(object_id.to_string(), updated)
+                    .await;
                 self.get_cache_status(object_id).await
             }
-            Err(e) => Ok(CacheStatus::Failed { error: e.to_string() }),
+            Err(e) => Ok(CacheStatus::Failed {
+                error: e.to_string(),
+            }),
         }
     }
 
@@ -631,14 +662,10 @@ mod tests {
         std::fs::create_dir_all(&cover_dir).ok();
         std::fs::create_dir_all(&audio_dir).ok();
 
-        let cover_cache = Arc::new(
-            pmocovers::Cache::new(cover_dir.to_str().unwrap(), 100)
-                .unwrap()
-        );
-        let audio_cache = Arc::new(
-            pmoaudiocache::new_cache(audio_dir.to_str().unwrap(), 100)
-                .unwrap()
-        );
+        let cover_cache =
+            Arc::new(pmocovers::Cache::new(cover_dir.to_str().unwrap(), 100).unwrap());
+        let audio_cache =
+            Arc::new(pmoaudiocache::new_cache(audio_dir.to_str().unwrap(), 100).unwrap());
 
         (cover_cache, audio_cache)
     }
@@ -647,11 +674,7 @@ mod tests {
     async fn test_source_info() {
         let client = RadioParadiseClient::with_client(reqwest::Client::new());
         let (cover_cache, audio_cache) = create_test_caches().await;
-        let source = RadioParadiseSource::new_default(
-            client,
-            cover_cache,
-            audio_cache
-        );
+        let source = RadioParadiseSource::new_default(client, cover_cache, audio_cache);
 
         assert_eq!(source.name(), "Radio Paradise");
         assert_eq!(source.id(), "radio-paradise");
@@ -664,7 +687,10 @@ mod tests {
         assert!(DEFAULT_IMAGE.len() > 0, "Default image should not be empty");
 
         // Check WebP magic bytes (RIFF...WEBP)
-        assert!(DEFAULT_IMAGE.len() >= 12, "Image too small to be valid WebP");
+        assert!(
+            DEFAULT_IMAGE.len() >= 12,
+            "Image too small to be valid WebP"
+        );
         assert_eq!(&DEFAULT_IMAGE[0..4], b"RIFF", "Missing RIFF header");
         assert_eq!(&DEFAULT_IMAGE[8..12], b"WEBP", "Missing WEBP signature");
     }
@@ -673,11 +699,7 @@ mod tests {
     async fn test_fifo_operations() {
         let client = RadioParadiseClient::with_client(reqwest::Client::new());
         let (cover_cache, audio_cache) = create_test_caches().await;
-        let source = RadioParadiseSource::new_default(
-            client,
-            cover_cache,
-            audio_cache
-        );
+        let source = RadioParadiseSource::new_default(client, cover_cache, audio_cache);
 
         // Initially empty
         let items = source.get_items(0, 10).await.unwrap();
