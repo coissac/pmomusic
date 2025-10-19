@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    env::var,
     sync::Arc,
 };
 
@@ -153,8 +154,13 @@ impl ActionInstance {
 
         for (arg_name, state_value) in soap_data.iter() {
             if let Some(arg_inst) = self.argument(arg_name) {
-                if arg_inst.get_model().is_in() {
-                    action_data.insert(arg_name.clone(), state_value.to_reflect());
+                if arg_inst.is_in() {
+                    if let Some(var_inst) = arg_inst.get_variable_instance() {
+                        action_data
+                            .insert(arg_name.clone(), var_inst.parse_value(state_value.clone()));
+                    } else {
+                        action_data.insert(arg_name.clone(), state_value.to_reflect());
+                    }
                     updated.insert(arg_name.clone());
                 }
             }

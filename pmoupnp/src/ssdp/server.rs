@@ -312,10 +312,9 @@ impl SsdpServer {
             );
             match socket.send_to(resp.as_bytes(), src) {
                 Ok(_) => {
-                    info!("📡 M-SEARCH response sent to {} with ST={}", src, nt);
                     debug!(
-                        "📡 M-SEARCH response payload\n<details>\n\n```\n{}\n```\n</details>\n",
-                        resp
+                        "📡 M-SEARCH response sent to {} with ST={}\n\n### payload\n\n<details>\n\n```\n{}\n```\n</details>\n",
+                        src, nt, resp
                     );
                 }
                 Err(e) => warn!("❌ Failed to send M-SEARCH response to {}: {}", src, e),

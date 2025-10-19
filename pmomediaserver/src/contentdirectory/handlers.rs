@@ -56,10 +56,34 @@ pub fn browse_handler() -> ActionHandler {
 
         let object_id: String = get!(&data, "ObjectID", String);
         let browse_flag: String = get!(&data, "BrowseFlag", String);
-        let starting_index: u32 = get!(&data, "StartingIndex", u32);
-        let requested_count: u32 = get!(&data, "RequestedCount", u32);
-        let _filter: String = get!(&data, "Filter", String);
-        let _sort_criteria: String = get!(&data, "SortCriteria", String);
+
+        let starting_index: u32 = get!(
+            &data,
+            "StartingIndex",
+            u32,
+            "ContentDirectory::Browse misconfigured: 'StartingIndex' missing or not bound"
+        );
+
+        let requested_count: u32 = get!(
+            &data,
+            "RequestedCount",
+            u32,
+            "ContentDirectory::Browse misconfigured: 'RequestedCount' missing or not bound"
+        );
+
+        let _filter: String = get!(
+            &data,
+            "Filter",
+            String,
+            "ContentDirectory::Browse misconfigured: 'Filter' missing or not bound"
+        );
+
+        let _sort_criteria: String = get!(
+            &data,
+            "SortCriteria",
+            String,
+            "ContentDirectory::Browse misconfigured: 'SortCriteria' missing or not bound"
+        );
 
         info!(
             "📂 Browse requested: object_id={} flag={} start={} count={}",

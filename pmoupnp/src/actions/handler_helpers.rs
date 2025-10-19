@@ -195,6 +195,16 @@ macro_rules! get {
     ($data:expr, $key:expr, $type:ty) => {
         $crate::actions::get_value::<$type>($data, $key)?
     };
+    ($data:expr, $key:expr, $type:ty, $($msg:tt)+) => {{
+        match $crate::actions::get_value::<$type>($data, $key) {
+            Ok(value) => value,
+            Err(_) => {
+                let message = format!($($msg)+);
+                tracing::error!("{}", message);
+                return Err($crate::actions::ActionError::ArgumentError(message));
+            }
+        }
+    }};
 }
 
 /// Macro pour insérer facilement une valeur dans ActionData.

@@ -105,6 +105,21 @@ impl RadioParadiseClient {
         cloned
     }
 
+    /// Clone the client with a different bitrate while preserving other settings.
+    pub fn clone_with_bitrate(&self, bitrate: Bitrate) -> Self {
+        let mut cloned = self.clone();
+        cloned.bitrate = bitrate;
+        cloned.next_block_url = None;
+        cloned
+    }
+
+    /// Clone the client with an updated channel and bitrate.
+    pub fn clone_with_channel_and_bitrate(&self, channel: u8, bitrate: Bitrate) -> Self {
+        let mut cloned = self.clone_with_channel(channel);
+        cloned.bitrate = bitrate;
+        cloned
+    }
+
     /// Get a block by event ID
     ///
     /// If `event` is None, returns the current block.
