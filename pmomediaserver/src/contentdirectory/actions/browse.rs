@@ -7,7 +7,7 @@ use pmoupnp::define_action;
 use crate::contentdirectory::handlers;
 
 define_action! {
-    pub static BROWSE = "Browse" {
+    pub static BROWSE = "Browse" stateless {
         in "ObjectID" => A_ARG_TYPE_OBJECTID,
         in "BrowseFlag" => A_ARG_TYPE_BROWSEFLAG,
         in "Filter" => A_ARG_TYPE_FILTER,

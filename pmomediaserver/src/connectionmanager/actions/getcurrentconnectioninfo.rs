@@ -5,7 +5,7 @@ use crate::connectionmanager::variables::{
 use pmoupnp::define_action;
 
 define_action! {
-    pub static GETCURRENTCONNECTIONINFO = "GetCurrentConnectionInfo" {
+    pub static GETCURRENTCONNECTIONINFO = "GetCurrentConnectionInfo" stateless {
         in "ConnectionID" => A_ARG_TYPE_CONNECTIONID,
         out "RcsID" => A_ARG_TYPE_RCSID,
         out "AVTransportID" => A_ARG_TYPE_AVTRANSPORTID,

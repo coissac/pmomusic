@@ -104,24 +104,8 @@
 /// - Initialisation paresseuse via `Lazy` (thread-safe)
 #[macro_export]
 macro_rules! define_action {
-    // Variante sans arguments avec options `stateless` et handler
-    (pub static $name:ident = $action_name:literal $(stateless)? $(with handler $handler:expr)?) => {
-        pub static $name: once_cell::sync::Lazy<std::sync::Arc<$crate::actions::Action>> =
-            once_cell::sync::Lazy::new(|| {
-                let mut ac = $crate::actions::Action::new($action_name.to_string());
-
-                define_action!(@maybe_stateless ac $(stateless)?);
-
-                $(
-                    ac.set_handler($handler);
-                )?
-
-                std::sync::Arc::new(ac)
-            });
-    };
-    
-    // Variante avec arguments, options `stateless` et handler
-    (pub static $name:ident = $action_name:literal $(stateless)? {
+    // Variante stateless avec arguments
+    (pub static $name:ident = $action_name:literal stateless {
         $(
             $direction:ident $arg_name:literal => $var_ref:expr
         ),* $(,)?
@@ -131,8 +115,7 @@ macro_rules! define_action {
         pub static $name: once_cell::sync::Lazy<std::sync::Arc<$crate::actions::Action>> =
             once_cell::sync::Lazy::new(|| {
                 let mut ac = $crate::actions::Action::new($action_name.to_string());
-
-                define_action!(@maybe_stateless ac $(stateless)?);
+                ac.set_stateful(false);
 
                 $(
                     ac.add_argument(
@@ -148,11 +131,64 @@ macro_rules! define_action {
             });
     };
 
-    (@maybe_stateless $ac:ident stateless) => {
-        $ac.set_stateful(false);
+    // Variante stateless sans arguments
+    (pub static $name:ident = $action_name:literal stateless
+    $(with handler $handler:expr)?
+    ) => {
+        pub static $name: once_cell::sync::Lazy<std::sync::Arc<$crate::actions::Action>> =
+            once_cell::sync::Lazy::new(|| {
+                let mut ac = $crate::actions::Action::new($action_name.to_string());
+                ac.set_stateful(false);
+
+                $(
+                    ac.set_handler($handler);
+                )?
+
+                std::sync::Arc::new(ac)
+            });
     };
 
-    (@maybe_stateless $ac:ident) => {};
+    // Variante stateful (défaut) avec arguments
+    (pub static $name:ident = $action_name:literal {
+        $(
+            $direction:ident $arg_name:literal => $var_ref:expr
+        ),* $(,)?
+    }
+    $(with handler $handler:expr)?
+    ) => {
+        pub static $name: once_cell::sync::Lazy<std::sync::Arc<$crate::actions::Action>> =
+            once_cell::sync::Lazy::new(|| {
+                let mut ac = $crate::actions::Action::new($action_name.to_string());
+
+                $(
+                    ac.add_argument(
+                        define_action!(@arg $direction $arg_name, $var_ref)
+                    );
+                )*
+
+                $(
+                    ac.set_handler($handler);
+                )?
+
+                std::sync::Arc::new(ac)
+            });
+    };
+
+    // Variante stateful (défaut) sans arguments
+    (pub static $name:ident = $action_name:literal
+    $(with handler $handler:expr)?
+    ) => {
+        pub static $name: once_cell::sync::Lazy<std::sync::Arc<$crate::actions::Action>> =
+            once_cell::sync::Lazy::new(|| {
+                let mut ac = $crate::actions::Action::new($action_name.to_string());
+
+                $(
+                    ac.set_handler($handler);
+                )?
+
+                std::sync::Arc::new(ac)
+            });
+    };
     
     // Helper interne pour créer un argument d'entrée
     (@arg in $name:literal, $var:expr) => {

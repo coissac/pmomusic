@@ -23,9 +23,8 @@
 //! - [`get_sort_capabilities_handler`] : Capacités de tri supportées
 //! - [`get_system_update_id_handler`] : ID de mise à jour du système
 
-use pmoupnp::action_handler;
-use pmoupnp::actions::{ActionHandler, ActionError};
-use pmoupnp::variable_types::StateValue;
+use pmoupnp::{action_handler, get, set};
+use pmoupnp::actions::{ActionError, ActionHandler};
 use crate::content_handler::ContentHandler;
 use tracing::{debug, error};
 
@@ -49,51 +48,18 @@ use tracing::{debug, error};
 /// - `TotalMatches` : Nombre total d'éléments
 /// - `UpdateID` : ID de mise à jour
 pub fn browse_handler() -> ActionHandler {
-    action_handler!(|instance| {
+    action_handler!(|data| {
+        let mut data = data;
         debug!("📂 Browse handler called");
 
         let handler = ContentHandler::new();
 
-        // Extraire les arguments d'entrée
-        let object_id = match instance
-            .argument("ObjectID")
-            .and_then(|arg| arg.get_variable_instance())
-            .ok_or_else(|| ActionError::ArgumentError("ObjectID not found".to_string()))?
-            .value()
-        {
-            StateValue::String(s) => s,
-            _ => return Err(ActionError::ArgumentError("ObjectID must be a string".to_string())),
-        };
-
-        let browse_flag = match instance
-            .argument("BrowseFlag")
-            .and_then(|arg| arg.get_variable_instance())
-            .ok_or_else(|| ActionError::ArgumentError("BrowseFlag not found".to_string()))?
-            .value()
-        {
-            StateValue::String(s) => s,
-            _ => return Err(ActionError::ArgumentError("BrowseFlag must be a string".to_string())),
-        };
-
-        let starting_index = match instance
-            .argument("StartingIndex")
-            .and_then(|arg| arg.get_variable_instance())
-            .ok_or_else(|| ActionError::ArgumentError("StartingIndex not found".to_string()))?
-            .value()
-        {
-            StateValue::UI4(n) => n,
-            _ => return Err(ActionError::ArgumentError("StartingIndex must be ui4".to_string())),
-        };
-
-        let requested_count = match instance
-            .argument("RequestedCount")
-            .and_then(|arg| arg.get_variable_instance())
-            .ok_or_else(|| ActionError::ArgumentError("RequestedCount not found".to_string()))?
-            .value()
-        {
-            StateValue::UI4(n) => n,
-            _ => return Err(ActionError::ArgumentError("RequestedCount must be ui4".to_string())),
-        };
+        let object_id: String = get!(&data, "ObjectID", String);
+        let browse_flag: String = get!(&data, "BrowseFlag", String);
+        let starting_index: u32 = get!(&data, "StartingIndex", u32);
+        let requested_count: u32 = get!(&data, "RequestedCount", u32);
+        let _filter: String = get!(&data, "Filter", String);
+        let _sort_criteria: String = get!(&data, "SortCriteria", String);
 
         // Appeler la logique métier
         let (didl, returned, total, update_id) = handler
@@ -105,32 +71,13 @@ pub fn browse_handler() -> ActionHandler {
             })?;
 
         // Définir les arguments de sortie
-        if let Some(arg) = instance.argument("Result") {
-            if let Some(var) = arg.get_variable_instance() {
-                var.set_value(StateValue::String(didl)).await;
-            }
-        }
-
-        if let Some(arg) = instance.argument("NumberReturned") {
-            if let Some(var) = arg.get_variable_instance() {
-                var.set_value(StateValue::UI4(returned)).await;
-            }
-        }
-
-        if let Some(arg) = instance.argument("TotalMatches") {
-            if let Some(var) = arg.get_variable_instance() {
-                var.set_value(StateValue::UI4(total)).await;
-            }
-        }
-
-        if let Some(arg) = instance.argument("UpdateID") {
-            if let Some(var) = arg.get_variable_instance() {
-                var.set_value(StateValue::UI4(update_id)).await;
-            }
-        }
+        set!(&mut data, "Result", didl);
+        set!(&mut data, "NumberReturned", returned);
+        set!(&mut data, "TotalMatches", total);
+        set!(&mut data, "UpdateID", update_id);
 
         debug!("✅ Browse completed: returned={}, total={}", returned, total);
-        Ok(())
+        Ok(data)
     })
 }
 
@@ -154,30 +101,18 @@ pub fn browse_handler() -> ActionHandler {
 /// - `TotalMatches` : Total
 /// - `UpdateID` : ID de mise à jour
 pub fn search_handler() -> ActionHandler {
-    action_handler!(|instance| {
+    action_handler!(|data| {
+        let mut data = data;
         debug!("🔍 Search handler called");
 
         let handler = ContentHandler::new();
 
-        let container_id = match instance
-            .argument("ContainerID")
-            .and_then(|arg| arg.get_variable_instance())
-            .ok_or_else(|| ActionError::ArgumentError("ContainerID not found".to_string()))?
-            .value()
-        {
-            StateValue::String(s) => s,
-            _ => return Err(ActionError::ArgumentError("ContainerID must be a string".to_string())),
-        };
-
-        let search_criteria = match instance
-            .argument("SearchCriteria")
-            .and_then(|arg| arg.get_variable_instance())
-            .ok_or_else(|| ActionError::ArgumentError("SearchCriteria not found".to_string()))?
-            .value()
-        {
-            StateValue::String(s) => s,
-            _ => return Err(ActionError::ArgumentError("SearchCriteria must be a string".to_string())),
-        };
+        let container_id: String = get!(&data, "ContainerID", String);
+        let search_criteria: String = get!(&data, "SearchCriteria", String);
+        let _filter: String = get!(&data, "Filter", String);
+        let _starting_index: u32 = get!(&data, "StartingIndex", u32);
+        let _requested_count: u32 = get!(&data, "RequestedCount", u32);
+        let _sort_criteria: String = get!(&data, "SortCriteria", String);
 
         let (didl, returned, total, update_id) = handler
             .search(&container_id, &search_criteria)
@@ -188,32 +123,13 @@ pub fn search_handler() -> ActionHandler {
             })?;
 
         // Définir les sorties
-        if let Some(arg) = instance.argument("Result") {
-            if let Some(var) = arg.get_variable_instance() {
-                var.set_value(StateValue::String(didl)).await;
-            }
-        }
-
-        if let Some(arg) = instance.argument("NumberReturned") {
-            if let Some(var) = arg.get_variable_instance() {
-                var.set_value(StateValue::UI4(returned)).await;
-            }
-        }
-
-        if let Some(arg) = instance.argument("TotalMatches") {
-            if let Some(var) = arg.get_variable_instance() {
-                var.set_value(StateValue::UI4(total)).await;
-            }
-        }
-
-        if let Some(arg) = instance.argument("UpdateID") {
-            if let Some(var) = arg.get_variable_instance() {
-                var.set_value(StateValue::UI4(update_id)).await;
-            }
-        }
+        set!(&mut data, "Result", didl);
+        set!(&mut data, "NumberReturned", returned);
+        set!(&mut data, "TotalMatches", total);
+        set!(&mut data, "UpdateID", update_id);
 
         debug!("✅ Search completed: returned={}, total={}", returned, total);
-        Ok(())
+        Ok(data)
     })
 }
 
@@ -225,20 +141,17 @@ pub fn search_handler() -> ActionHandler {
 ///
 /// - `SearchCaps` : Chaîne de capacités séparées par virgules
 pub fn get_search_capabilities_handler() -> ActionHandler {
-    action_handler!(|instance| {
+    action_handler!(|data| {
+        let mut data = data;
         debug!("🔍 GetSearchCapabilities handler called");
 
         let handler = ContentHandler::new();
         let capabilities = handler.get_search_capabilities().await;
 
-        if let Some(arg) = instance.argument("SearchCaps") {
-            if let Some(var) = arg.get_variable_instance() {
-                var.set_value(StateValue::String(capabilities.clone())).await;
-            }
-        }
+        set!(&mut data, "SearchCaps", capabilities.clone());
 
         debug!("✅ SearchCapabilities: {}", capabilities);
-        Ok(())
+        Ok(data)
     })
 }
 
@@ -250,20 +163,17 @@ pub fn get_search_capabilities_handler() -> ActionHandler {
 ///
 /// - `SortCaps` : Chaîne de capacités séparées par virgules
 pub fn get_sort_capabilities_handler() -> ActionHandler {
-    action_handler!(|instance| {
+    action_handler!(|data| {
+        let mut data = data;
         debug!("📊 GetSortCapabilities handler called");
 
         let handler = ContentHandler::new();
         let capabilities = handler.get_sort_capabilities().await;
 
-        if let Some(arg) = instance.argument("SortCaps") {
-            if let Some(var) = arg.get_variable_instance() {
-                var.set_value(StateValue::String(capabilities.clone())).await;
-            }
-        }
+        set!(&mut data, "SortCaps", capabilities.clone());
 
         debug!("✅ SortCapabilities: {}", capabilities);
-        Ok(())
+        Ok(data)
     })
 }
 
@@ -276,20 +186,17 @@ pub fn get_sort_capabilities_handler() -> ActionHandler {
 ///
 /// - `Id` : ID de mise à jour (entier non signé)
 pub fn get_system_update_id_handler() -> ActionHandler {
-    action_handler!(|instance| {
+    action_handler!(|data| {
+        let mut data = data;
         debug!("🔄 GetSystemUpdateID handler called");
 
         let handler = ContentHandler::new();
         let update_id = handler.get_system_update_id().await;
 
-        if let Some(arg) = instance.argument("Id") {
-            if let Some(var) = arg.get_variable_instance() {
-                var.set_value(StateValue::UI4(update_id)).await;
-            }
-        }
+        set!(&mut data, "Id", update_id);
 
         debug!("✅ SystemUpdateID: {}", update_id);
-        Ok(())
+        Ok(data)
     })
 }
 
