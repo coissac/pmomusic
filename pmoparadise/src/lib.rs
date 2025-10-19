@@ -28,7 +28,9 @@
 //!
 //!     if let Some(song) = &now_playing.current_song {
 //!         println!("Now Playing: {} - {}", song.artist, song.title);
-//!         println!("Album: {}", song.album);
+//!         if let Some(album) = &song.album {
+//!             println!("Album: {}", album);
+//!         }
 //!     }
 //!
 //!     // Get all songs in the current block
@@ -189,33 +191,24 @@
 //! # #[cfg(feature = "cache")]
 //! # {
 //! use pmoparadise::{RadioParadiseClient, RadioParadiseSource};
-//! use pmocovers::Cache as CoverCache;
-//! use pmoaudiocache::AudioCache;
 //! use std::sync::Arc;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     // Create caches
-//!     let cover_cache = Arc::new(CoverCache::new("./cache/covers", 500)?);
-//!     let audio_cache = Arc::new(AudioCache::new("./cache/audio", 100)?);
+//!     let cover_cache = Arc::new(pmocovers::cache::new_cache("./cache/covers", 500)?);
+//!     let audio_cache = Arc::new(pmoaudiocache::cache::new_cache("./cache/audio", 100)?);
 //!
 //!     // Create client and source with caching
 //!     let client = RadioParadiseClient::new().await?;
-//!     let source = RadioParadiseSource::new_with_cache(
-//!         client.clone(),
-//!         "http://localhost:8080",
+//!     let source = RadioParadiseSource::new(
+//!         client,
 //!         50,
-//!         Some(cover_cache),
-//!         Some(audio_cache),
+//!         cover_cache,
+//!         audio_cache,
 //!     );
 //!
-//!     // Add songs - they will be automatically cached
-//!     let now_playing = client.now_playing().await?;
-//!     if let Some(song) = &now_playing.current_song {
-//!         let block = Arc::new(now_playing.block.clone());
-//!         source.add_song(block, song, 0).await?;
-//!         // Cover and audio are now cached!
-//!     }
+//!     println!("Source ready: {}", source.name());
 //!
 //!     Ok(())
 //! }

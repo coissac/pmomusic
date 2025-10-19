@@ -166,6 +166,68 @@
       </div>
     </div>
 
+    <div class="channel-tracks-section">
+      <div class="section-header">
+        <h3>🎧 Channel Tracks (Source API)</h3>
+        <button class="btn-secondary" @click="fetchChannelTracks" :disabled="channelBrowseLoading">
+          <span v-if="channelBrowseLoading">⏳ Refreshing…</span>
+          <span v-else>Refresh Tracks</span>
+        </button>
+      </div>
+      <div class="section-meta">
+        <span>Object:</span>
+        <code>{{ channelBrowse.object_id || channelObjectId(selectedChannel) }}</code>
+        <span>Items:</span>
+        <strong>{{ channelBrowse.returned_items }}</strong>
+        <span v-if="channelBrowse.total">/ {{ channelBrowse.total }}</span>
+        <span v-if="channelBrowse.update_id">Update ID: {{ channelBrowse.update_id }}</span>
+      </div>
+      <div v-if="channelBrowseError" class="error-message">
+        ❌ {{ channelBrowseError }}
+      </div>
+      <div v-else-if="channelBrowseLoading" class="loading-message">
+        ⏳ Loading channel tracks…
+      </div>
+      <div v-else>
+        <div v-if="channelBrowse.containers.length" class="sub-container-notice">
+          {{ channelBrowse.containers.length }} sub container(s) available.
+        </div>
+        <div v-if="channelBrowse.items.length" class="track-grid">
+          <div
+            v-for="item in channelBrowse.items"
+            :key="item.id"
+            :class="['track-card', { active: activeTrackId === item.id }]"
+          >
+            <div class="track-headline">
+              <div class="track-title">{{ item.title }}</div>
+              <div class="track-artist">{{ item.artist || item.creator || 'Unknown artist' }}</div>
+            </div>
+            <div class="track-meta">
+              <span v-if="item.album">{{ item.album }}</span>
+              <span v-if="item.resources && item.resources.length && item.resources[0].duration">
+                ⏱ {{ item.resources[0].duration }}
+              </span>
+            </div>
+            <div class="track-actions">
+              <button class="btn-secondary" @click="playTrackItem(item)">▶️ Play Track</button>
+              <a
+                v-for="resource in item.resources"
+                :key="resource.url"
+                :href="resource.url"
+                target="_blank"
+                class="stream-link"
+              >
+                Open resource
+              </a>
+            </div>
+          </div>
+        </div>
+        <div v-else class="empty-placeholder">
+          No cached tracks yet for this channel. Refresh after playback starts.
+        </div>
+      </div>
+    </div>
+
     <div v-if="upcomingBlock" class="songs-section upcoming-section">
       <div class="section-header">
         <h3>⏭️ Next Block Preview</h3>
@@ -284,6 +346,8 @@
 import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 
 const API_BASE = '/api/radioparadise'
+const SOURCE_API_BASE = '/api/sources'
+const SOURCE_ID = 'radio-paradise'
 
 const loading = ref(false)
 const error = ref(null)
@@ -295,6 +359,7 @@ const selectedBitrate = ref(null)
 const audioPlayer = ref(null)
 const isPlaying = ref(false)
 const audioError = ref('')
+const activeTrackId = ref(null)
 const lastUpdated = ref(null)
 const upcomingBlock = ref(null)
 const upcomingLoading = ref(false)
@@ -305,6 +370,17 @@ const blockSearchLoading = ref(false)
 const blockSearchError = ref('')
 const channelsError = ref('')
 const bitratesError = ref('')
+const channelBrowse = ref({
+  object_id: '',
+  containers: [],
+  items: [],
+  returned_containers: 0,
+  returned_items: 0,
+  total: 0,
+  update_id: 0
+})
+const channelBrowseLoading = ref(false)
+const channelBrowseError = ref('')
 let refreshTimerId = null
 
 // Format duration from milliseconds to MM:SS
@@ -351,6 +427,35 @@ async function fetchBlockByEvent(eventId) {
   return await response.json()
 }
 
+function channelObjectId(channelId) {
+  return `${SOURCE_ID}:channel:${channelId}`
+}
+
+function playAudio(url) {
+  if (!url) {
+    audioError.value = 'No audio URL available'
+    isPlaying.value = false
+    return
+  }
+
+  audioError.value = ''
+  isPlaying.value = true
+
+  nextTick(() => {
+    const player = audioPlayer.value
+    if (!player) {
+      return
+    }
+    player.src = url
+    player.play().catch((e) => {
+      console.error('Failed to start playback:', e)
+      audioError.value = `Cannot play stream: ${e.message}`
+      isPlaying.value = false
+      activeTrackId.value = null
+    })
+  })
+}
+
 // Fetch now playing info
 async function refreshNowPlaying() {
   loading.value = true
@@ -367,7 +472,7 @@ async function refreshNowPlaying() {
     upcomingBlock.value = null
     upcomingError.value = ''
 
-    if (isPlaying.value) {
+    if (isPlaying.value && !activeTrackId.value) {
       playStream()
     }
   } catch (e) {
@@ -375,6 +480,38 @@ async function refreshNowPlaying() {
     console.error('Error fetching now playing:', e)
   } finally {
     loading.value = false
+  }
+}
+
+async function fetchChannelTracks() {
+  channelBrowseLoading.value = true
+  channelBrowseError.value = ''
+
+  try {
+    const params = new URLSearchParams()
+    params.set('object_id', channelObjectId(selectedChannel.value))
+    params.set('requested_count', '0')
+
+    const response = await fetch(`${SOURCE_API_BASE}/${SOURCE_ID}/browse?${params.toString()}`)
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+    }
+
+    const data = await response.json()
+    channelBrowse.value = {
+      object_id: data.object_id || channelObjectId(selectedChannel.value),
+      containers: data.containers ?? [],
+      items: data.items ?? [],
+      returned_containers: data.returned_containers ?? (data.containers?.length ?? 0),
+      returned_items: data.returned_items ?? (data.items?.length ?? 0),
+      total: data.total ?? ((data.containers?.length ?? 0) + (data.items?.length ?? 0)),
+      update_id: data.update_id ?? 0
+    }
+  } catch (e) {
+    channelBrowseError.value = `Failed to load channel tracks: ${e.message}`
+    console.error('Error fetching channel tracks:', e)
+  } finally {
+    channelBrowseLoading.value = false
   }
 }
 
@@ -433,12 +570,14 @@ function selectChannel(channelId) {
 
 async function changeChannel() {
   await refreshNowPlaying()
+  await fetchChannelTracks()
   blockSearchResult.value = null
   blockSearchError.value = ''
 }
 
 async function changeBitrate() {
   await refreshNowPlaying()
+  await fetchChannelTracks()
   blockSearchResult.value = null
   blockSearchError.value = ''
 }
@@ -447,24 +586,12 @@ function playStream() {
   if (!nowPlaying.value?.stream_url) {
     audioError.value = 'No stream URL available'
     isPlaying.value = false
+    activeTrackId.value = null
     return
   }
 
-  audioError.value = ''
-  isPlaying.value = true
-
-  nextTick(() => {
-    const player = audioPlayer.value
-    if (!player) {
-      return
-    }
-    player.src = nowPlaying.value.stream_url
-    player.play().catch((e) => {
-      console.error('Failed to start playback:', e)
-      audioError.value = `Cannot play stream: ${e.message}`
-      isPlaying.value = false
-    })
-  })
+  activeTrackId.value = null
+  playAudio(nowPlaying.value.stream_url)
 }
 
 function stopPlayback() {
@@ -475,6 +602,7 @@ function stopPlayback() {
   }
   isPlaying.value = false
   audioError.value = ''
+  activeTrackId.value = null
 }
 
 function togglePlayback() {
@@ -487,6 +615,7 @@ function togglePlayback() {
 
 function handleAudioEnded() {
   isPlaying.value = false
+  activeTrackId.value = null
 }
 
 function handleAudioError() {
@@ -497,6 +626,7 @@ function handleAudioError() {
     audioError.value = 'Unknown audio playback error'
   }
   isPlaying.value = false
+  activeTrackId.value = null
 }
 
 async function loadUpcomingBlock() {
@@ -548,11 +678,24 @@ function clearBlockSearch() {
   blockSearchError.value = ''
 }
 
+function playTrackItem(item) {
+  const resource = item?.resources?.find(res => res.url)
+  if (!resource) {
+    audioError.value = 'No audio resource available for this track'
+    isPlaying.value = false
+    return
+  }
+
+  activeTrackId.value = item.id
+  playAudio(resource.url)
+}
+
 // Initialize on mount
 onMounted(async () => {
   await fetchChannels()
   await fetchBitrates()
   await refreshNowPlaying()
+  await fetchChannelTracks()
 
   // Auto-refresh every 30 seconds
   refreshTimerId = window.setInterval(() => {
@@ -1047,6 +1190,14 @@ onUnmounted(() => {
   border: 1px solid #333;
 }
 
+.channel-tracks-section {
+  margin-top: 32px;
+  padding: 20px;
+  border-radius: 8px;
+  border: 1px solid #333;
+  background: #141414;
+}
+
 .channels-section h3 {
   margin-top: 0;
   color: #00d4ff;
@@ -1087,6 +1238,90 @@ onUnmounted(() => {
 .channel-description {
   color: #999;
   font-size: 0.9em;
+}
+
+.section-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+  font-size: 0.85rem;
+  color: #9aa0a6;
+}
+
+.loading-message {
+  margin-top: 16px;
+  color: #9aa0a6;
+}
+
+.empty-placeholder {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px dashed #444;
+  border-radius: 6px;
+  color: #9aa0a6;
+  text-align: center;
+}
+
+.sub-container-notice {
+  margin-top: 12px;
+  font-size: 0.8rem;
+  color: #9aa0a6;
+}
+
+.track-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+  margin-top: 18px;
+}
+
+.track-card {
+  background: rgba(0, 212, 255, 0.08);
+  border: 1px solid rgba(0, 212, 255, 0.2);
+  border-radius: 8px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.track-card.active {
+  border-color: rgba(46, 204, 113, 0.8);
+  box-shadow: 0 0 12px rgba(46, 204, 113, 0.25);
+}
+
+.track-headline {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.track-title {
+  font-weight: 600;
+  color: #f5f5f5;
+}
+
+.track-artist {
+  color: #9aa0a6;
+  font-size: 0.9rem;
+}
+
+.track-meta {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+  color: #9aa0a6;
+}
+
+.track-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
 }
 
 .audio-player-container {

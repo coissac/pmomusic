@@ -217,6 +217,10 @@ impl From<NowPlaying> for NowPlayingResponse {
 #[utoipa::path(
     get,
     path = "/now-playing",
+    params(
+        ("channel" = Option<u8>, Query, description = "Channel ID (0-3)"),
+        ("bitrate" = Option<u8>, Query, description = "Bitrate ID (0-4)")
+    ),
     responses(
         (status = 200, description = "Morceau en cours", body = NowPlayingResponse),
         (status = 500, description = "Erreur serveur")
@@ -240,6 +244,10 @@ async fn get_now_playing(
 #[utoipa::path(
     get,
     path = "/block/current",
+    params(
+        ("channel" = Option<u8>, Query, description = "Channel ID (0-3)"),
+        ("bitrate" = Option<u8>, Query, description = "Bitrate ID (0-4)")
+    ),
     responses(
         (status = 200, description = "Block actuel", body = BlockResponse),
         (status = 500, description = "Erreur serveur")
@@ -264,7 +272,9 @@ async fn get_current_block(
     get,
     path = "/block/{event_id}",
     params(
-        ("event_id" = u64, Path, description = "Event ID du block")
+        ("event_id" = u64, Path, description = "Event ID du block"),
+        ("channel" = Option<u8>, Query, description = "Channel ID (0-3)"),
+        ("bitrate" = Option<u8>, Query, description = "Bitrate ID (0-4)")
     ),
     responses(
         (status = 200, description = "Block demandé", body = BlockResponse),
