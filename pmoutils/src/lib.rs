@@ -18,6 +18,8 @@
 pub mod ip_utils;
 
 pub use ip_utils::guess_local_ip;
+pub mod process;
+pub use process::{find_process_using_port, ProcessPortInfo, TransportProtocol};
 
 /// Retourne une chaîne décrivant le système d'exploitation et sa version.
 ///

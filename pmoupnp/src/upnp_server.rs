@@ -34,6 +34,7 @@ use crate::upnp_api::UpnpApiExt;
 
 use pmocovers::Cache as CoverCache;
 use pmoaudiocache::Cache as AudioCache;
+use pmoutils::{find_process_using_port, TransportProtocol};
 
 /// Registre de devices global et thread-safe.
 ///
@@ -423,14 +424,23 @@ impl UpnpServerExt for Server {
             Err(e) => {
                 let kind = e.kind();
                 if kind == std::io::ErrorKind::AddrInUse {
-                    error!(
-                        "❌ SSDP initialization failed: port {} is already in use. \
-                        Check which process listens on UDP:{} (e.g. `lsof -nP -i UDP:{}`): {}",
-                        crate::ssdp::SSDP_PORT,
-                        crate::ssdp::SSDP_PORT,
-                        crate::ssdp::SSDP_PORT,
-                        e,
-                    );
+                    let port = crate::ssdp::SSDP_PORT;
+                    if let Some(process) =
+                        find_process_using_port(port, TransportProtocol::Udp)
+                    {
+                        error!(
+                            "❌ SSDP initialization failed: port {} is already in use by \
+                            PID {} ({}) owned by {}: {}",
+                            port, process.pid, process.process_name, process.owner, e
+                        );
+                    } else {
+                        error!(
+                            "❌ SSDP initialization failed: port {} is already in use. \
+                            Unable to identify the blocking process automatically. \
+                            Check manually with `lsof -nP -i UDP:{}`: {}",
+                            port, port, e
+                        );
+                    }
                 } else {
                     error!("❌ SSDP initialization failed: {}", e);
                 }
