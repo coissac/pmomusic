@@ -1,107 +1,3 @@
-/// Macro pour créer facilement une action avec son handler.
-///
-/// Cette macro simplifie la création d'actions dynamiques en combinant
-/// la création de l'action et l'assignation du handler en une seule expression.
-///
-/// # Syntaxe
-///
-/// ## Action stateful (défaut)
-///
-/// ```ignore
-/// action!("ActionName", |data| {
-///     // Handler code
-///     Ok(data)
-/// })
-/// ```
-///
-/// ## Action stateless
-///
-/// ```ignore
-/// action!("ActionName", stateless, |data| {
-///     // Handler code
-///     Ok(data)
-/// })
-/// ```
-///
-/// # Arguments
-///
-/// * `name` - Nom de l'action UPnP (chaîne littérale ou expression String)
-/// * `stateless` - (Optionnel) Mot-clé pour marquer l'action comme stateless
-/// * `|data| { ... }` - Closure du handler (voir [`action_handler!`](crate::action_handler))
-///
-/// # Type de retour
-///
-/// Retourne une `Action` configurée avec le handler spécifié.
-///
-/// # Examples
-///
-/// ## Action stateless simple
-///
-/// ```ignore
-/// use pmoupnp::{action, get, set};
-///
-/// let convert = action!("ConvertTemp", stateless, |mut data| {
-///     let celsius: f64 = get!(data, "Celsius", f64);
-///     let fahrenheit = celsius * 9.0 / 5.0 + 32.0;
-///     set!(data, "Fahrenheit", fahrenheit);
-///     Ok(data)
-/// });
-/// ```
-///
-/// ## Action stateful (défaut)
-///
-/// ```ignore
-/// use pmoupnp::{action, get, set};
-///
-/// let play = action!("Play", |mut data| {
-///     let speed: String = get!(data, "Speed", String);
-///     set!(data, "TransportState", "PLAYING".to_string());
-///     Ok(data)
-/// });
-/// ```
-///
-/// ## Avec capture de contexte
-///
-/// ```ignore
-/// use pmoupnp::{action, get, set};
-/// use std::sync::Arc;
-/// use tokio::sync::Mutex;
-///
-/// let state = Arc::new(Mutex::new(PlayerState::Stopped));
-/// let state_clone = state.clone();
-///
-/// let play = action!("Play", |mut data| {
-///     let mut player = state_clone.lock().await;
-///     *player = PlayerState::Playing;
-///     set!(data, "TransportState", "PLAYING".to_string());
-///     Ok(data)
-/// });
-/// ```
-///
-/// # Notes
-///
-/// - Actions stateful (défaut) : mettent à jour les StateVarInstance (notifications)
-/// - Actions stateless : pas de mise à jour des StateVarInstance (performances)
-/// - Le handler capture les variables par `move`
-/// - Utilisez [`get!`](crate::get) et [`set!`](crate::set) pour manipuler facilement les données
-#[macro_export]
-macro_rules! action {
-    // Action stateful (défaut)
-    ($name:expr, |$data:ident| $body:block) => {{
-        let mut action = $crate::actions::Action::new($name.to_string());
-        action.set_handler($crate::action_handler!(|$data| $body));
-        action
-    }};
-
-    // Action stateless
-    ($name:expr, stateless, |$data:ident| $body:block) => {{
-        let mut action = $crate::actions::Action::new($name.to_string());
-        action.set_stateful(false);
-        action.set_handler($crate::action_handler!(|$data| $body));
-        action
-    }};
-}
-
 /// Macro pour définir facilement une action UPnP.
 ///
 /// Cette macro simplifie la création d'actions UPnP statiques en générant
@@ -208,11 +104,13 @@ macro_rules! action {
 /// - Initialisation paresseuse via `Lazy` (thread-safe)
 #[macro_export]
 macro_rules! define_action {
-    // Variante sans arguments avec handler optionnel
-    (pub static $name:ident = $action_name:literal $(with handler $handler:expr)?) => {
+    // Variante sans arguments avec options `stateless` et handler
+    (pub static $name:ident = $action_name:literal $(stateless)? $(with handler $handler:expr)?) => {
         pub static $name: once_cell::sync::Lazy<std::sync::Arc<$crate::actions::Action>> =
             once_cell::sync::Lazy::new(|| {
                 let mut ac = $crate::actions::Action::new($action_name.to_string());
+
+                define_action!(@maybe_stateless ac $(stateless)?);
 
                 $(
                     ac.set_handler($handler);
@@ -222,8 +120,8 @@ macro_rules! define_action {
             });
     };
     
-    // Variante avec arguments et handler optionnel
-    (pub static $name:ident = $action_name:literal {
+    // Variante avec arguments, options `stateless` et handler
+    (pub static $name:ident = $action_name:literal $(stateless)? {
         $(
             $direction:ident $arg_name:literal => $var_ref:expr
         ),* $(,)?
@@ -233,6 +131,8 @@ macro_rules! define_action {
         pub static $name: once_cell::sync::Lazy<std::sync::Arc<$crate::actions::Action>> =
             once_cell::sync::Lazy::new(|| {
                 let mut ac = $crate::actions::Action::new($action_name.to_string());
+
+                define_action!(@maybe_stateless ac $(stateless)?);
 
                 $(
                     ac.add_argument(
@@ -247,6 +147,12 @@ macro_rules! define_action {
                 std::sync::Arc::new(ac)
             });
     };
+
+    (@maybe_stateless $ac:ident stateless) => {
+        $ac.set_stateful(false);
+    };
+
+    (@maybe_stateless $ac:ident) => {};
     
     // Helper interne pour créer un argument d'entrée
     (@arg in $name:literal, $var:expr) => {
@@ -362,29 +268,10 @@ macro_rules! define_action {
 /// - La macro se développe en plusieurs appels à [`define_action!`]
 #[macro_export]
 macro_rules! define_actions {
-    // Variante avec arguments pour chaque action
     (
         $(
-            $name:ident = $action_name:literal {
-                $(
-                    $direction:ident $arg_name:literal => $var_ref:expr
-                ),* $(,)?
-            }
-        )*
-    ) => {
-        $(
-            define_action! {
-                pub static $name = $action_name {
-                    $($direction $arg_name => $var_ref),*
-                }
-            }
-        )*
-    };
-    
-    // Variante mixte : actions avec et sans arguments
-    (
-        $(
-            $name:ident = $action_name:literal $({
+            $name:ident = $action_name:literal $(stateless)?
+            $({
                 $(
                     $direction:ident $arg_name:literal => $var_ref:expr
                 ),* $(,)?
@@ -392,20 +279,15 @@ macro_rules! define_actions {
         )*
     ) => {
         $(
-            $(
-                define_action! {
-                    pub static $name = $action_name {
+            define_action! {
+                pub static $name = $action_name
+                $(stateless)?
+                $(
+                    {
                         $($direction $arg_name => $var_ref),*
                     }
-                }
-            )?
-            $(
-                // Cas sans accolades (action sans arguments)
-                #[allow(unused)]
-                define_action! {
-                    pub static $name = $action_name
-                }
-            )?
+                )?
+            }
         )*
     };
 }

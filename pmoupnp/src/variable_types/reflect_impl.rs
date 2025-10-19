@@ -6,7 +6,6 @@
 
 use bevy_reflect::Reflect;
 use crate::variable_types::{StateValue, StateValueError, StateVarType};
-use std::any::Any;
 
 impl StateValue {
     /// Convertit la StateValue en une valeur Reflect.

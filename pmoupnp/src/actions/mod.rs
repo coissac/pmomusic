@@ -21,7 +21,7 @@ use std::sync::{Arc, RwLock};
 
 pub use errors::ActionError;
 pub use action_handler::{ActionData, ActionFuture, ActionHandler};
-pub use handler_helpers::{get_value, set_value};
+pub use handler_helpers::{get_value, reflect_to_string, set_value};
 
 /// Action UPnP.
 ///

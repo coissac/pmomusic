@@ -25,17 +25,15 @@
 //! use std::sync::Arc;
 //!
 //! // Créer un handler avec la macro
-//! let handler = action_handler!(|instance, data| {
+//! let handler = action_handler!(|mut data| {
 //!     // Traiter les données
-//!     Ok::<(), ActionError>(())
+//!     Ok::<_, ActionError>(data)
 //! });
 //!
 //! // Ou manuellement
-//! use pmoupnp::actions::{ActionData, ActionHandler, ActionInstance};
-//! let manual_handler: ActionHandler = Arc::new(|instance, data| {
-//!     Box::pin(async move {
-//!         Ok::<(), ActionError>(())
-//!     })
+//! use pmoupnp::actions::{ActionData, ActionHandler};
+//! let manual_handler: ActionHandler = Arc::new(|data| {
+//!     Box::pin(async move { Ok::<_, ActionError>(data) })
 //! });
 //! ```
 

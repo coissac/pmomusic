@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tracing::{debug, info, trace};
+use tracing::{info, trace};
 use xmltree::{Element, XMLNode};
 
 use crate::{
@@ -73,7 +73,11 @@ impl Action {
 
             // Logger les arguments
             for (key, value) in data.iter() {
-                trace!("  {} = {:?}", key, value);
+                trace!(
+                    "  {} = {}",
+                    key,
+                    crate::actions::reflect_to_string(value.as_ref())
+                );
             }
 
             // Retourner les données telles quelles
@@ -141,9 +145,9 @@ impl Action {
     /// # use pmoupnp::action_handler;
     /// let mut action = Action::new("Play".to_string());
     ///
-    /// let custom_handler = action_handler!(|instance, data| {
+    /// let custom_handler = action_handler!(|mut data| {
     ///     // Logique personnalisée
-    ///     Ok::<(), ActionError>(())
+    ///     Ok::<_, ActionError>(data)
     /// });
     ///
     /// action.set_handler(custom_handler);
@@ -184,6 +188,12 @@ impl Action {
         self.stateful = stateful;
         self
     }
+    
+    pub fn set_stateless(&mut self, stateless: bool) -> &mut Self {
+        self.stateful = !stateless;
+        self
+    }
+
 
     /// Retourne `true` si l'action est stateful.
     ///
