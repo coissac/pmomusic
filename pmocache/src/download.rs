@@ -90,9 +90,7 @@ impl CacheInput {
     pub async fn bytes(&mut self) -> Result<Bytes, String> {
         match &mut self.inner {
             CacheInputInner::Http {
-                response,
-                buffer,
-                ..
+                response, buffer, ..
             } => {
                 if let Some(bytes) = buffer.clone() {
                     return Ok(bytes);
@@ -130,9 +128,7 @@ impl CacheInput {
     pub fn into_byte_stream(self) -> ByteStream {
         match self.inner {
             CacheInputInner::Http {
-                response,
-                buffer,
-                ..
+                response, buffer, ..
             } => {
                 if let Some(response) = response {
                     Box::pin(

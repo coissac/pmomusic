@@ -27,12 +27,16 @@ anyhow = "1.0"
 # Streaming de bytes
 bytes = "1.5"
 futures = "0.3"
+flacenc = "0.4"
 
 # Logging
 tracing = "0.1"
 
 # URL manipulation
 url = "2.5"
+
+# Audio decoding/encoding
+symphonia = { version = "0.5", features = ["all"] }
 
 # Per-track feature dependencies
 claxon = { version = "0.4", optional = true }

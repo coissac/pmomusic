@@ -5,20 +5,98 @@
 
 use crate::client::RadioParadiseClient;
 use crate::models::{Block, Song};
-use pmoaudiocache::{AudioMetadata, Cache as AudioCache};
+use anyhow::anyhow;
+use pmoaudiocache::Cache as AudioCache;
 use pmocovers::Cache as CoverCache;
-use pmodidl::{Container, Item, Resource};
+use pmodidl::{Container, Item};
 use pmoplaylist::{FifoPlaylist, Track};
 use pmosource::SourceCacheManager;
 use pmosource::{async_trait, pmodidl, BrowseResult, MusicSource, MusicSourceError, Result};
+use std::collections::{HashMap, HashSet};
+use std::io::Cursor;
 use std::sync::Arc;
 use std::time::SystemTime;
+use tokio::sync::{Mutex, RwLock};
+use url::Url;
 
 /// Default image for Radio Paradise (300x300 WebP, embedded in binary)
 const DEFAULT_IMAGE: &[u8] = include_bytes!("../assets/default.webp");
 
 /// Default FIFO capacity (number of recent tracks to keep)
 const DEFAULT_FIFO_CAPACITY: usize = 50;
+
+#[derive(Clone, Copy)]
+struct ChannelDescriptor {
+    id: u8,
+    name: &'static str,
+    description: &'static str,
+}
+
+const CHANNELS: [ChannelDescriptor; 4] = [
+    ChannelDescriptor {
+        id: 0,
+        name: "Main Mix",
+        description: "Eclectic mix of rock, world, electronica, and more",
+    },
+    ChannelDescriptor {
+        id: 1,
+        name: "Mellow Mix",
+        description: "Mellower, less aggressive music",
+    },
+    ChannelDescriptor {
+        id: 2,
+        name: "Rock Mix",
+        description: "Heavier, more guitar-driven music",
+    },
+    ChannelDescriptor {
+        id: 3,
+        name: "World Mix",
+        description: "Global beats and world music",
+    },
+];
+
+fn channel_collection_id(channel_id: u8) -> String {
+    format!("radio-paradise:{}", channel_id)
+}
+
+fn channel_container_id(channel_id: u8) -> String {
+    format!("radio-paradise:channel:{}", channel_id)
+}
+
+fn channel_playlist_id(channel_id: u8) -> String {
+    channel_container_id(channel_id)
+}
+
+fn parse_channel_container_id(object_id: &str) -> Option<u8> {
+    let mut parts = object_id.split(':');
+    match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (Some("radio-paradise"), Some("channel"), Some(id_str), None) => id_str.parse().ok(),
+        _ => None,
+    }
+}
+
+fn track_identifier(channel_id: u8, event: u64, song_index: usize) -> String {
+    format!("rp:{}:{}:{}", channel_id, event, song_index)
+}
+
+fn parse_track_identifier(track_id: &str) -> Option<(u8, u64, usize)> {
+    let mut parts = track_id.split(':');
+    match (
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+    ) {
+        (Some("rp"), Some(channel_str), Some(event_str), Some(index_str), None) => {
+            let channel = channel_str.parse().ok()?;
+            let event = event_str.parse().ok()?;
+            let idx = index_str.parse().ok()?;
+            Some((channel, event, idx))
+        }
+        _ => None,
+    }
+}
 
 /// Radio Paradise music source with full MusicSource trait implementation
 ///
@@ -56,19 +134,24 @@ pub struct RadioParadiseSource {
     inner: Arc<RadioParadiseSourceInner>,
 }
 
-struct RadioParadiseSourceInner {
-    /// Radio Paradise API client
+struct ChannelState {
+    descriptor: ChannelDescriptor,
     client: RadioParadiseClient,
-
-    /// FIFO playlist for dynamic track management
     playlist: FifoPlaylist,
-
-    /// Cache manager (centralisé)
     cache_manager: SourceCacheManager,
+    processed_blocks: RwLock<HashSet<u64>>,
+    ingest_lock: Mutex<()>,
+}
 
-    /// Blocks cache pour retrouver les métadonnées originales
-    /// (track_id -> (block, song_index))
-    blocks: tokio::sync::RwLock<std::collections::HashMap<String, (Arc<Block>, usize)>>,
+struct DecodedBlock {
+    samples: Vec<i32>,
+    channels: usize,
+    sample_rate: u32,
+    bits_per_sample: u32,
+}
+
+struct RadioParadiseSourceInner {
+    channels: HashMap<u8, Arc<ChannelState>>,
 }
 
 impl std::fmt::Debug for RadioParadiseSource {
@@ -93,22 +176,36 @@ impl RadioParadiseSource {
     /// Returns an error if the caches are not initialized in the registry
     #[cfg(feature = "server")]
     pub fn from_registry(client: RadioParadiseClient, fifo_capacity: usize) -> Result<Self> {
-        let playlist = FifoPlaylist::new(
-            "radio-paradise".to_string(),
-            "Radio Paradise".to_string(),
-            fifo_capacity,
-            DEFAULT_IMAGE,
-        );
+        let mut channels = HashMap::new();
 
-        let cache_manager = SourceCacheManager::from_registry("radio-paradise".to_string())?;
+        for descriptor in CHANNELS.iter() {
+            let channel_id = descriptor.id;
+            let channel_client = client.clone_with_channel(channel_id);
+            let playlist = FifoPlaylist::new(
+                channel_playlist_id(channel_id),
+                descriptor.name.to_string(),
+                fifo_capacity,
+                DEFAULT_IMAGE,
+            );
+
+            let cache_manager =
+                SourceCacheManager::from_registry(channel_collection_id(channel_id))?;
+
+            channels.insert(
+                channel_id,
+                Arc::new(ChannelState {
+                    descriptor: *descriptor,
+                    client: channel_client,
+                    playlist,
+                    cache_manager,
+                    processed_blocks: RwLock::new(HashSet::new()),
+                    ingest_lock: Mutex::new(()),
+                }),
+            );
+        }
 
         Ok(Self {
-            inner: Arc::new(RadioParadiseSourceInner {
-                client,
-                playlist,
-                cache_manager,
-                blocks: tokio::sync::RwLock::new(std::collections::HashMap::new()),
-            }),
+            inner: Arc::new(RadioParadiseSourceInner { channels }),
         })
     }
 
@@ -132,23 +229,39 @@ impl RadioParadiseSource {
         cover_cache: Arc<CoverCache>,
         audio_cache: Arc<AudioCache>,
     ) -> Self {
-        let playlist = FifoPlaylist::new(
-            "radio-paradise".to_string(),
-            "Radio Paradise".to_string(),
-            fifo_capacity,
-            DEFAULT_IMAGE,
-        );
+        let mut channels = HashMap::new();
 
-        let cache_manager =
-            SourceCacheManager::new("radio-paradise".to_string(), cover_cache, audio_cache);
+        for descriptor in CHANNELS.iter() {
+            let channel_id = descriptor.id;
+            let channel_client = client.clone_with_channel(channel_id);
+            let playlist = FifoPlaylist::new(
+                channel_playlist_id(channel_id),
+                descriptor.name.to_string(),
+                fifo_capacity,
+                DEFAULT_IMAGE,
+            );
+
+            let cache_manager = SourceCacheManager::new(
+                channel_collection_id(channel_id),
+                Arc::clone(&cover_cache),
+                Arc::clone(&audio_cache),
+            );
+
+            channels.insert(
+                channel_id,
+                Arc::new(ChannelState {
+                    descriptor: *descriptor,
+                    client: channel_client,
+                    playlist,
+                    cache_manager,
+                    processed_blocks: RwLock::new(HashSet::new()),
+                    ingest_lock: Mutex::new(()),
+                }),
+            );
+        }
 
         Self {
-            inner: Arc::new(RadioParadiseSourceInner {
-                client,
-                playlist,
-                cache_manager,
-                blocks: tokio::sync::RwLock::new(std::collections::HashMap::new()),
-            }),
+            inner: Arc::new(RadioParadiseSourceInner { channels }),
         }
     }
 
@@ -161,171 +274,398 @@ impl RadioParadiseSource {
         Self::new(client, DEFAULT_FIFO_CAPACITY, cover_cache, audio_cache)
     }
 
-    /// Add a track from a Radio Paradise song and block
-    ///
-    /// This is the main way to populate the FIFO with tracks as they are
-    /// received from the Radio Paradise API.
-    pub async fn add_song(&self, block: Arc<Block>, song: &Song, song_index: usize) -> Result<()> {
-        let track_id = format!("rp-{}-{}", block.event, song_index);
-
-        // Create track for playlist
-        let mut track = Track::new(track_id.clone(), song.title.clone(), block.url.clone());
-
-        if !song.artist.is_empty() {
-            track = track.with_artist(song.artist.clone());
-        }
-
-        if let Some(ref album) = song.album {
-            if !album.is_empty() {
-                track = track.with_album(album.clone());
-            }
-        }
-
-        if song.duration > 0 {
-            track = track.with_duration((song.duration / 1000) as u32);
-        }
-
-        // 1. Cache cover via le manager
-        let cached_cover_pk = if let Some(ref image_base) = block.image_base {
-            if let Some(ref cover) = song.cover {
-                let image_url = format!("{}{}", image_base, cover);
-
-                match self.inner.cache_manager.cache_cover(&image_url).await {
-                    Ok(pk) => {
-                        // Use the cached cover URL
-                        match self.inner.cache_manager.cover_url(&pk, None) {
-                            Ok(cached_url) => {
-                                track = track.with_image(cached_url);
-                                Some(pk)
-                            }
-                            Err(e) => {
-                                tracing::warn!("Failed to build cover URL for {}: {}", pk, e);
-                                track = track.with_image(image_url);
-                                Some(pk)
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to cache cover image {}: {}", image_url, e);
-                        // Fall back to original URL
-                        track = track.with_image(image_url);
-                        None
-                    }
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        // 2. Cache audio via le manager (métadonnées pour compatibilité)
-        let metadata = AudioMetadata {
-            title: Some(song.title.clone()),
-            artist: if !song.artist.is_empty() {
-                Some(song.artist.clone())
-            } else {
-                None
-            },
-            album: song.album.clone().filter(|a| !a.is_empty()),
-            duration_secs: if song.duration > 0 {
-                Some((song.duration / 1000) as u64)
-            } else {
-                None
-            },
-            year: None,
-            track_number: None,
-            track_total: None,
-            disc_number: None,
-            disc_total: None,
-            genre: None,
-            sample_rate: None,
-            channels: None,
-            bitrate: None,
-        };
-
-        let cached_audio_pk = match self
-            .inner
-            .cache_manager
-            .cache_audio(&block.url, Some(metadata))
-            .await
-        {
-            Ok(pk) => {
-                tracing::info!("Successfully cached audio for track {}: {}", track_id, pk);
-                Some(pk)
-            }
-            Err(e) => {
-                tracing::warn!("Failed to cache audio for track {}: {}", track_id, e);
-                None
-            }
-        };
-
-        // 3. Store metadata in the cache manager
+    /// Get the Radio Paradise client for a given channel
+    pub fn client_for_channel(&self, channel: u8) -> Option<RadioParadiseClient> {
         self.inner
-            .cache_manager
-            .update_metadata(
-                track_id.clone(),
-                pmosource::TrackMetadata {
-                    original_uri: block.url.clone(),
-                    cached_audio_pk,
-                    cached_cover_pk,
-                },
-            )
-            .await;
+            .channels
+            .get(&channel)
+            .map(|state| state.client.clone())
+    }
 
-        // 4. Store block for later retrieval
-        {
-            let mut blocks = self.inner.blocks.write().await;
-            blocks.insert(track_id.clone(), (block.clone(), song_index));
+    fn channel_state(&self, channel_id: u8) -> Option<Arc<ChannelState>> {
+        self.inner.channels.get(&channel_id).cloned()
+    }
+
+    fn build_root_container(&self) -> Container {
+        Container {
+            id: "radio-paradise".to_string(),
+            parent_id: "0".to_string(),
+            restricted: Some("1".to_string()),
+            child_count: Some(CHANNELS.len().to_string()),
+            title: "Radio Paradise".to_string(),
+            class: "object.container".to_string(),
+            containers: vec![],
+            items: vec![],
+        }
+    }
+
+    async fn build_channel_containers(&self) -> Vec<Container> {
+        let mut containers = Vec::new();
+        for descriptor in CHANNELS.iter() {
+            if let Some(channel) = self.channel_state(descriptor.id) {
+                let child_count = channel.playlist.len().await;
+                containers.push(Container {
+                    id: channel_container_id(descriptor.id),
+                    parent_id: "radio-paradise".to_string(),
+                    restricted: Some("1".to_string()),
+                    child_count: Some(child_count.to_string()),
+                    title: descriptor.name.to_string(),
+                    class: "object.container.playlistContainer".to_string(),
+                    containers: vec![],
+                    items: vec![],
+                });
+            }
+        }
+        containers
+    }
+
+    async fn ensure_channel_ready(&self, channel: Arc<ChannelState>) -> Result<()> {
+        if channel.playlist.len().await > 0 {
+            return Ok(());
         }
 
-        // 5. Add to FIFO
-        self.inner.playlist.append_track(track).await;
+        let guard = channel.ingest_lock.lock().await;
+        if channel.playlist.len().await == 0 {
+            drop(guard);
+            self.populate_channel_locked(channel.clone()).await?;
+        } else {
+            drop(guard);
+        }
 
         Ok(())
     }
 
-    /// Convert a pmoplaylist::Track to pmodidl::Item
-    fn track_to_item(&self, track: &Track) -> Item {
-        let duration_str = track.duration.map(|d| {
-            let hours = d / 3600;
-            let minutes = (d % 3600) / 60;
-            let seconds = d % 60;
-            format!("{}:{:02}:{:02}", hours, minutes, seconds)
-        });
+    async fn populate_channel_locked(&self, channel: Arc<ChannelState>) -> Result<()> {
+        tracing::info!(
+            "📻 Fetching Radio Paradise block for channel {}",
+            channel.descriptor.name
+        );
 
-        let resource = Resource {
-            protocol_info: "http-get:*:audio/flac:*".to_string(),
-            bits_per_sample: None,
-            sample_frequency: None,
-            nr_audio_channels: None,
-            duration: duration_str,
-            url: track.uri.clone(),
+        let now_playing = channel
+            .client
+            .now_playing()
+            .await
+            .map_err(|e| MusicSourceError::SourceUnavailable(e.to_string()))?;
+
+        let block = Arc::new(now_playing.block);
+        self.ingest_block(channel, block).await
+    }
+
+    async fn ingest_block(&self, channel: Arc<ChannelState>, block: Arc<Block>) -> Result<()> {
+        {
+            let mut processed = channel.processed_blocks.write().await;
+            if !processed.insert(block.event) {
+                tracing::debug!(
+                    "Channel {} already processed block {}",
+                    channel.descriptor.name,
+                    block.event
+                );
+                return Ok(());
+            }
+        }
+
+        let block_url = Url::parse(&block.url)
+            .map_err(|e| MusicSourceError::BrowseError(format!("Invalid block URL: {}", e)))?;
+
+        let block_bytes = channel
+            .client
+            .download_block(&block_url)
+            .await
+            .map_err(|e| {
+                MusicSourceError::BrowseError(format!("Failed to download block: {}", e))
+            })?;
+
+        let decoded = decode_block_audio(block_bytes.to_vec())
+            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+        let ordered_songs = block.songs_ordered();
+        let total_frames = decoded.samples.len() / decoded.channels;
+
+        for (position, (song_index, song)) in ordered_songs.iter().enumerate() {
+            let track_id = track_identifier(channel.descriptor.id, block.event, *song_index);
+
+            if channel
+                .cache_manager
+                .get_metadata(&track_id)
+                .await
+                .is_some()
+            {
+                continue;
+            }
+
+            let duration_ms = song_duration_ms(&block, &ordered_songs, position);
+            if duration_ms == 0 {
+                tracing::debug!(
+                    "Skipping track {} with zero duration on channel {}",
+                    track_id,
+                    channel.descriptor.name
+                );
+                continue;
+            }
+
+            let start_frame = ms_to_frames(song.elapsed, decoded.sample_rate);
+            let end_frame =
+                ms_to_frames(song.elapsed + duration_ms, decoded.sample_rate).min(total_frames);
+
+            if start_frame >= end_frame {
+                tracing::debug!(
+                    "Invalid frame range for track {} (start {} >= end {})",
+                    track_id,
+                    start_frame,
+                    end_frame
+                );
+                continue;
+            }
+
+            let start_index = start_frame * decoded.channels;
+            let end_index = end_frame * decoded.channels;
+            let song_samples = decoded.samples[start_index..end_index].to_vec();
+
+            let flac_data = encode_samples_to_flac(
+                song_samples,
+                decoded.channels,
+                decoded.sample_rate,
+                decoded.bits_per_sample,
+            )
+            .await
+            .map_err(|e| MusicSourceError::CacheError(e.to_string()))?;
+
+            let audio_source_uri = format!("{}#{}", block.url, song_index);
+            let reader = Cursor::new(flac_data.clone());
+            let audio_pk: String = channel
+                .cache_manager
+                .cache_audio_from_reader(&audio_source_uri, reader, Some(flac_data.len() as u64))
+                .await?;
+
+            channel.cache_manager.wait_audio_ready(&audio_pk).await?;
+
+            let cached_cover_pk = if let Some(ref image_base) = block.image_base {
+                if let Some(ref cover) = song.cover {
+                    let image_url = format!("{}{}", image_base, cover);
+                    match channel.cache_manager.cache_cover(&image_url).await {
+                        Ok(pk) => Some(pk),
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to cache cover {} on channel {}: {}",
+                                image_url,
+                                channel.descriptor.name,
+                                e
+                            );
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let playback_url = channel.cache_manager.resolve_uri(&track_id).await?;
+
+            let mut track = Track::new(track_id.clone(), song.title.clone(), playback_url);
+
+            if !song.artist.is_empty() {
+                track = track.with_artist(song.artist.clone());
+            }
+
+            if let Some(ref album) = song.album {
+                if !album.is_empty() {
+                    track = track.with_album(album.clone());
+                }
+            }
+
+            track = track.with_duration((duration_ms / 1000) as u32);
+
+            if let Some(ref cover_pk) = cached_cover_pk {
+                if let Ok(url) = channel.cache_manager.cover_url(cover_pk, None) {
+                    track = track.with_image(url);
+                }
+            } else if let Some(ref cover) = song.cover {
+                if let Some(ref image_base) = block.image_base {
+                    track = track.with_image(format!("{}{}", image_base, cover));
+                }
+            }
+
+            channel
+                .cache_manager
+                .update_metadata(
+                    track_id.clone(),
+                    pmosource::TrackMetadata {
+                        original_uri: block.url.clone(),
+                        cached_audio_pk: Some(audio_pk.clone()),
+                        cached_cover_pk,
+                    },
+                )
+                .await;
+
+            channel.playlist.append_track(track).await;
+        }
+
+        tracing::info!(
+            "Channel {} now has {} tracks",
+            channel.descriptor.name,
+            channel.playlist.len().await
+        );
+
+        Ok(())
+    }
+}
+
+fn song_duration_ms(block: &Block, ordered: &[(usize, &Song)], position: usize) -> u64 {
+    let song = ordered[position].1;
+    if song.duration > 0 {
+        return song.duration;
+    }
+
+    if let Some((_, next_song)) = ordered.get(position + 1) {
+        return next_song.elapsed.saturating_sub(song.elapsed);
+    }
+
+    block.length.saturating_sub(song.elapsed)
+}
+
+fn ms_to_frames(ms: u64, sample_rate: u32) -> usize {
+    ((ms as u128 * sample_rate as u128) / 1000) as usize
+}
+
+fn decode_block_audio(data: Vec<u8>) -> anyhow::Result<DecodedBlock> {
+    use symphonia::core::audio::SampleBuffer;
+    use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
+    use symphonia::core::errors::Error as SymphoniaError;
+    use symphonia::core::formats::FormatOptions;
+    use symphonia::core::io::MediaSourceStream;
+    use symphonia::core::meta::MetadataOptions;
+    use symphonia::core::probe::Hint;
+
+    let cursor = Cursor::new(data);
+    let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
+
+    let hint = Hint::new();
+    let probed = symphonia::default::get_probe()
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
+        .map_err(|e| anyhow!("Failed to probe format: {}", e))?;
+
+    let mut format = probed.format;
+
+    let track = format
+        .tracks()
+        .iter()
+        .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
+        .ok_or_else(|| anyhow!("No audio track found"))?;
+
+    let mut decoder = symphonia::default::get_codecs()
+        .make(&track.codec_params, &DecoderOptions::default())
+        .map_err(|e| anyhow!("Failed to create decoder: {}", e))?;
+
+    let channels = track
+        .codec_params
+        .channels
+        .ok_or_else(|| anyhow!("Missing channel info"))?
+        .count();
+
+    let sample_rate = track
+        .codec_params
+        .sample_rate
+        .ok_or_else(|| anyhow!("Missing sample rate"))?;
+
+    let bits_per_sample = track.codec_params.bits_per_sample.unwrap_or(16);
+
+    let mut samples_i32 = Vec::new();
+    let track_id = track.id;
+
+    loop {
+        let packet = match format.next_packet() {
+            Ok(packet) => packet,
+            Err(SymphoniaError::ResetRequired) => {
+                decoder.reset();
+                continue;
+            }
+            Err(SymphoniaError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                break;
+            }
+            Err(e) => return Err(anyhow!("Decode error: {}", e)),
         };
 
-        Item {
-            id: track.id.clone(),
-            parent_id: "radio-paradise".to_string(),
-            restricted: Some("1".to_string()),
-            title: track.title.clone(),
-            creator: track.artist.clone(),
-            class: "object.item.audioItem.musicTrack".to_string(),
-            artist: track.artist.clone(),
-            album: track.album.clone(),
-            genre: None,
-            album_art: track.image.clone(),
-            album_art_pk: None,
-            date: None,
-            original_track_number: None,
-            resources: vec![resource],
-            descriptions: vec![],
+        if packet.track_id() != track_id {
+            continue;
+        }
+
+        match decoder.decode(&packet) {
+            Ok(decoded) => {
+                let spec = *decoded.spec();
+                let duration = decoded.capacity() as u64;
+                let mut sample_buf = SampleBuffer::<i32>::new(duration, spec);
+                sample_buf.copy_interleaved_ref(decoded);
+                samples_i32.extend_from_slice(sample_buf.samples());
+            }
+            Err(SymphoniaError::DecodeError(_)) => continue,
+            Err(e) => return Err(anyhow!("Decode error: {}", e)),
         }
     }
 
-    /// Get the Radio Paradise client
-    pub fn client(&self) -> &RadioParadiseClient {
-        &self.inner.client
+    if samples_i32.is_empty() {
+        return Err(anyhow!("No samples decoded"));
     }
+
+    let (normalized_samples, target_bits): (Vec<i32>, u32) = match bits_per_sample {
+        0..=16 => {
+            let samples = samples_i32.iter().map(|&s| (s >> 16) as i32).collect();
+            (samples, 16)
+        }
+        17..=24 => {
+            let samples = samples_i32.iter().map(|&s| (s >> 8) as i32).collect();
+            (samples, 24)
+        }
+        _ => (samples_i32, 32),
+    };
+
+    Ok(DecodedBlock {
+        samples: normalized_samples,
+        channels,
+        sample_rate,
+        bits_per_sample: target_bits,
+    })
+}
+
+async fn encode_samples_to_flac(
+    samples: Vec<i32>,
+    channels: usize,
+    sample_rate: u32,
+    bits_per_sample: u32,
+) -> anyhow::Result<Vec<u8>> {
+    tokio::task::spawn_blocking(move || {
+        use flacenc::bitsink::ByteSink;
+        use flacenc::component::BitRepr;
+        use flacenc::error::Verify;
+
+        let config = flacenc::config::Encoder::default()
+            .into_verified()
+            .map_err(|e| anyhow!("FLAC config error: {:?}", e))?;
+
+        let source = flacenc::source::MemSource::from_samples(
+            &samples,
+            channels,
+            bits_per_sample as usize,
+            sample_rate as usize,
+        );
+
+        let flac_stream = flacenc::encode_with_fixed_block_size(&config, source, config.block_size)
+            .map_err(|e| anyhow!("FLAC encode error: {:?}", e))?;
+
+        let mut sink = ByteSink::new();
+        flac_stream
+            .write(&mut sink)
+            .map_err(|e| anyhow!("FLAC write error: {:?}", e))?;
+
+        Ok::<_, anyhow::Error>(sink.into_inner())
+    })
+    .await?
 }
 
 #[async_trait]
@@ -343,155 +683,129 @@ impl MusicSource for RadioParadiseSource {
     }
 
     async fn root_container(&self) -> Result<Container> {
-        Ok(self.inner.playlist.as_container().await)
+        Ok(self.build_root_container())
     }
 
     async fn browse(&self, object_id: &str) -> Result<BrowseResult> {
-        // For Radio Paradise, browsing returns all tracks in the FIFO
-        if object_id == "radio-paradise" || object_id == "0" {
-            // Si la FIFO est vide, la peupler avec les morceaux actuels
-            if self.inner.playlist.len().await == 0 {
-                tracing::info!("FIFO is empty, fetching current Radio Paradise tracks...");
-
-                match self.inner.client.now_playing().await {
-                    Ok(now_playing) => {
-                        let block = Arc::new(now_playing.block);
-
-                        // Ajouter tous les morceaux du bloc actuel
-                        for (song_index, song) in block.songs_ordered() {
-                            if let Err(e) = self.add_song(block.clone(), song, song_index).await {
-                                tracing::warn!("Failed to add song '{}': {}", song.title, e);
-                            } else {
-                                tracing::debug!("Added song: {} - {}", song.artist, song.title);
-                            }
-                        }
-
-                        tracing::info!(
-                            "✅ Added {} tracks to Radio Paradise FIFO",
-                            block.song_count()
-                        );
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to fetch current tracks: {}", e);
-                    }
+        match object_id {
+            "0" => Ok(BrowseResult::Containers(vec![self.build_root_container()])),
+            "radio-paradise" => {
+                let containers = self.build_channel_containers().await;
+                Ok(BrowseResult::Containers(containers))
+            }
+            _ => {
+                if let Some(channel_id) = parse_channel_container_id(object_id) {
+                    let channel = self
+                        .channel_state(channel_id)
+                        .ok_or_else(|| MusicSourceError::ObjectNotFound(object_id.to_string()))?;
+                    self.ensure_channel_ready(channel.clone()).await?;
+                    let len = channel.playlist.len().await;
+                    let items = channel.playlist.as_objects(0, len, None).await;
+                    Ok(BrowseResult::Items(items))
+                } else {
+                    Err(MusicSourceError::ObjectNotFound(object_id.to_string()))
                 }
             }
-
-            let tracks = self.inner.playlist.get_items(0, 1000).await;
-            let items: Vec<Item> = tracks.iter().map(|t| self.track_to_item(t)).collect();
-            Ok(BrowseResult::Items(items))
-        } else {
-            Err(MusicSourceError::ObjectNotFound(object_id.to_string()))
         }
     }
 
     async fn resolve_uri(&self, object_id: &str) -> Result<String> {
-        // Delegate to cache manager
-        self.inner.cache_manager.resolve_uri(object_id).await
+        let (channel_id, _, _) = parse_track_identifier(object_id)
+            .ok_or_else(|| MusicSourceError::ObjectNotFound(object_id.to_string()))?;
+        let channel = self
+            .channel_state(channel_id)
+            .ok_or_else(|| MusicSourceError::ObjectNotFound(object_id.to_string()))?;
+        channel.cache_manager.resolve_uri(object_id).await
     }
 
     fn supports_fifo(&self) -> bool {
-        true
+        false
     }
 
-    async fn append_track(&self, track: Item) -> Result<()> {
-        // Convert Item back to Track
-        let duration = track
-            .resources
-            .first()
-            .and_then(|r| r.duration.as_ref())
-            .and_then(|d| {
-                let parts: Vec<&str> = d.split(':').collect();
-                if parts.len() == 3 {
-                    let h: u32 = parts[0].parse().ok()?;
-                    let m: u32 = parts[1].parse().ok()?;
-                    let s: u32 = parts[2].parse().ok()?;
-                    Some(h * 3600 + m * 60 + s)
-                } else {
-                    None
-                }
-            });
-
-        let uri = track
-            .resources
-            .first()
-            .map(|r| r.url.clone())
-            .unwrap_or_default();
-
-        let mut pmo_track = Track::new(track.id.clone(), track.title.clone(), uri);
-
-        if let Some(artist) = track.artist {
-            pmo_track = pmo_track.with_artist(artist);
-        }
-
-        if let Some(album) = track.album {
-            pmo_track = pmo_track.with_album(album);
-        }
-
-        if let Some(dur) = duration {
-            pmo_track = pmo_track.with_duration(dur);
-        }
-
-        if let Some(img) = track.album_art {
-            pmo_track = pmo_track.with_image(img);
-        }
-
-        self.inner.playlist.append_track(pmo_track).await;
-        Ok(())
+    async fn append_track(&self, _track: Item) -> Result<()> {
+        Err(MusicSourceError::FifoNotSupported)
     }
 
     async fn remove_oldest(&self) -> Result<Option<Item>> {
-        if let Some(track) = self.inner.playlist.remove_oldest().await {
-            // Remove from caches
-            self.inner.cache_manager.remove_track(&track.id).await;
-            let mut blocks = self.inner.blocks.write().await;
-            blocks.remove(&track.id);
-
-            Ok(Some(self.track_to_item(&track)))
-        } else {
-            Ok(None)
-        }
+        Err(MusicSourceError::FifoNotSupported)
     }
 
     async fn update_id(&self) -> u32 {
-        self.inner.playlist.update_id().await
+        let mut max_id = 0;
+        for descriptor in CHANNELS.iter() {
+            if let Some(channel) = self.channel_state(descriptor.id) {
+                let id = channel.playlist.update_id().await;
+                max_id = max_id.max(id);
+            }
+        }
+        max_id
     }
 
     async fn last_change(&self) -> Option<SystemTime> {
-        Some(self.inner.playlist.last_change().await)
+        let mut latest: Option<SystemTime> = None;
+        for descriptor in CHANNELS.iter() {
+            if let Some(channel) = self.channel_state(descriptor.id) {
+                let change = channel.playlist.last_change().await;
+                latest = Some(match latest {
+                    Some(current) if change <= current => current,
+                    _ => change,
+                });
+            }
+        }
+        latest
     }
 
     async fn get_items(&self, offset: usize, count: usize) -> Result<Vec<Item>> {
-        let tracks = self.inner.playlist.get_items(offset, count).await;
-        Ok(tracks.iter().map(|t| self.track_to_item(t)).collect())
+        let mut all_items = Vec::new();
+        for descriptor in CHANNELS.iter() {
+            if let Some(channel) = self.channel_state(descriptor.id) {
+                self.ensure_channel_ready(channel.clone()).await?;
+                let len = channel.playlist.len().await;
+                let mut items = channel.playlist.as_objects(0, len, None).await;
+                all_items.append(&mut items);
+            }
+        }
+
+        let total = all_items.len();
+        if offset >= total {
+            return Ok(Vec::new());
+        }
+
+        let end = if count == 0 {
+            total
+        } else {
+            (offset + count).min(total)
+        };
+
+        Ok(all_items
+            .into_iter()
+            .skip(offset)
+            .take(end - offset)
+            .collect())
     }
 
     async fn search(&self, _query: &str) -> Result<BrowseResult> {
-        // Radio Paradise doesn't support search
         Err(MusicSourceError::SearchNotSupported)
     }
 
-    // ============= Extended Features Implementation =============
-
     fn capabilities(&self) -> pmosource::SourceCapabilities {
         pmosource::SourceCapabilities {
-            supports_fifo: true,
+            supports_fifo: false,
             supports_search: false,
             supports_favorites: false,
             supports_playlists: false,
             supports_user_content: false,
             supports_high_res_audio: true,
-            max_sample_rate: Some(96_000), // Radio Paradise FLAC is typically 44.1 or 48 kHz, up to 96 kHz
+            max_sample_rate: Some(96_000),
             supports_multiple_formats: true,
             supports_advanced_search: false,
-            supports_pagination: false,
+            supports_pagination: true,
         }
     }
 
     async fn get_available_formats(&self, _object_id: &str) -> Result<Vec<pmosource::AudioFormat>> {
         use pmosource::AudioFormat;
 
-        // Radio Paradise offers 5 quality levels
         Ok(vec![
             AudioFormat {
                 format_id: "mp3-128".to_string(),
@@ -537,81 +851,22 @@ impl MusicSource for RadioParadiseSource {
     }
 
     async fn get_cache_status(&self, object_id: &str) -> Result<pmosource::CacheStatus> {
-        // Delegate to cache manager
-        self.inner.cache_manager.get_cache_status(object_id).await
+        let (channel_id, _, _) = parse_track_identifier(object_id)
+            .ok_or_else(|| MusicSourceError::ObjectNotFound(object_id.to_string()))?;
+        let channel = self
+            .channel_state(channel_id)
+            .ok_or_else(|| MusicSourceError::ObjectNotFound(object_id.to_string()))?;
+        channel.cache_manager.get_cache_status(object_id).await
     }
 
     async fn cache_item(&self, object_id: &str) -> Result<pmosource::CacheStatus> {
-        use pmosource::CacheStatus;
-
-        // Check if already cached
-        let status = self.inner.cache_manager.get_cache_status(object_id).await?;
-        if matches!(status, CacheStatus::Cached { .. }) {
-            return Ok(status);
-        }
-
-        // Get metadata and block info
-        let metadata = self
-            .inner
-            .cache_manager
-            .get_metadata(object_id)
-            .await
+        let (channel_id, _, _) = parse_track_identifier(object_id)
             .ok_or_else(|| MusicSourceError::ObjectNotFound(object_id.to_string()))?;
-
-        let blocks = self.inner.blocks.read().await;
-        let (block, song_index) = blocks
-            .get(object_id)
+        let channel = self
+            .channel_state(channel_id)
             .ok_or_else(|| MusicSourceError::ObjectNotFound(object_id.to_string()))?;
-        let song = block.get_song(*song_index).ok_or_else(|| {
-            MusicSourceError::ObjectNotFound(format!("Song {} not found", object_id))
-        })?;
-
-        // Prepare metadata
-        let audio_metadata = AudioMetadata {
-            title: Some(song.title.clone()),
-            artist: if !song.artist.is_empty() {
-                Some(song.artist.clone())
-            } else {
-                None
-            },
-            album: song.album.clone().filter(|a| !a.is_empty()),
-            duration_secs: if song.duration > 0 {
-                Some((song.duration / 1000) as u64)
-            } else {
-                None
-            },
-            year: None,
-            track_number: None,
-            track_total: None,
-            disc_number: None,
-            disc_total: None,
-            genre: None,
-            sample_rate: None,
-            channels: None,
-            bitrate: None,
-        };
-
-        // Cache via manager
-        match self
-            .inner
-            .cache_manager
-            .cache_audio(&metadata.original_uri, Some(audio_metadata))
-            .await
-        {
-            Ok(pk) => {
-                // Update metadata with new pk
-                let mut updated = metadata;
-                updated.cached_audio_pk = Some(pk);
-                self.inner
-                    .cache_manager
-                    .update_metadata(object_id.to_string(), updated)
-                    .await;
-                self.get_cache_status(object_id).await
-            }
-            Err(e) => Ok(CacheStatus::Failed {
-                error: e.to_string(),
-            }),
-        }
+        self.ensure_channel_ready(channel.clone()).await?;
+        channel.cache_manager.get_cache_status(object_id).await
     }
 
     async fn browse_paginated(
@@ -620,96 +875,92 @@ impl MusicSource for RadioParadiseSource {
         offset: usize,
         limit: usize,
     ) -> Result<BrowseResult> {
-        // For Radio Paradise, we can efficiently paginate the FIFO
-        if object_id == "radio-paradise" || object_id == "0" {
-            let tracks = self.inner.playlist.get_items(offset, limit).await;
-            let items: Vec<Item> = tracks.iter().map(|t| self.track_to_item(t)).collect();
-            Ok(BrowseResult::Items(items))
-        } else {
-            Err(MusicSourceError::ObjectNotFound(object_id.to_string()))
+        match object_id {
+            "0" => {
+                if offset == 0 {
+                    Ok(BrowseResult::Containers(vec![self.build_root_container()]))
+                } else {
+                    Ok(BrowseResult::Containers(Vec::new()))
+                }
+            }
+            "radio-paradise" => {
+                let containers = self.build_channel_containers().await;
+                let total = containers.len();
+                if offset >= total {
+                    return Ok(BrowseResult::Containers(Vec::new()));
+                }
+                let end = if limit == 0 {
+                    total
+                } else {
+                    (offset + limit).min(total)
+                };
+                Ok(BrowseResult::Containers(
+                    containers
+                        .into_iter()
+                        .skip(offset)
+                        .take(end - offset)
+                        .collect(),
+                ))
+            }
+            _ => {
+                if let Some(channel_id) = parse_channel_container_id(object_id) {
+                    let channel = self
+                        .channel_state(channel_id)
+                        .ok_or_else(|| MusicSourceError::ObjectNotFound(object_id.to_string()))?;
+                    self.ensure_channel_ready(channel.clone()).await?;
+                    let len = channel.playlist.len().await;
+                    if offset >= len {
+                        return Ok(BrowseResult::Items(Vec::new()));
+                    }
+                    let count = if limit == 0 {
+                        len - offset
+                    } else {
+                        limit.min(len - offset)
+                    };
+                    let items = channel.playlist.as_objects(offset, count, None).await;
+                    Ok(BrowseResult::Items(items))
+                } else {
+                    Err(MusicSourceError::ObjectNotFound(object_id.to_string()))
+                }
+            }
         }
     }
 
     async fn get_item_count(&self, object_id: &str) -> Result<usize> {
-        if object_id == "radio-paradise" || object_id == "0" {
-            Ok(self.inner.playlist.len().await)
-        } else {
-            Err(MusicSourceError::ObjectNotFound(object_id.to_string()))
+        match object_id {
+            "0" => Ok(1),
+            "radio-paradise" => Ok(CHANNELS.len()),
+            _ => {
+                if let Some(channel_id) = parse_channel_container_id(object_id) {
+                    let channel = self
+                        .channel_state(channel_id)
+                        .ok_or_else(|| MusicSourceError::ObjectNotFound(object_id.to_string()))?;
+                    self.ensure_channel_ready(channel.clone()).await?;
+                    Ok(channel.playlist.len().await)
+                } else {
+                    Err(MusicSourceError::ObjectNotFound(object_id.to_string()))
+                }
+            }
         }
     }
 
     async fn statistics(&self) -> Result<pmosource::SourceStatistics> {
-        let cache_stats = self.inner.cache_manager.statistics().await;
+        let mut total_items = 0usize;
+        let mut cached_items = 0usize;
+
+        for descriptor in CHANNELS.iter() {
+            if let Some(channel) = self.channel_state(descriptor.id) {
+                total_items += channel.playlist.len().await;
+                let stats = channel.cache_manager.statistics().await;
+                cached_items += stats.cached_tracks;
+            }
+        }
 
         Ok(pmosource::SourceStatistics {
-            total_items: Some(self.inner.playlist.len().await),
-            cached_items: Some(cache_stats.cached_tracks),
-            ..Default::default()
+            total_items: Some(total_items),
+            total_containers: Some(CHANNELS.len() + 1),
+            cached_items: Some(cached_items),
+            cache_size_bytes: None,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Helper to create test caches (requires actual directories in tests)
-    async fn create_test_caches() -> (Arc<CoverCache>, Arc<AudioCache>) {
-        let temp_dir = std::env::temp_dir();
-        let cover_dir = temp_dir.join("test_covers");
-        let audio_dir = temp_dir.join("test_audio");
-
-        std::fs::create_dir_all(&cover_dir).ok();
-        std::fs::create_dir_all(&audio_dir).ok();
-
-        let cover_cache =
-            Arc::new(pmocovers::Cache::new(cover_dir.to_str().unwrap(), 100).unwrap());
-        let audio_cache =
-            Arc::new(pmoaudiocache::new_cache(audio_dir.to_str().unwrap(), 100).unwrap());
-
-        (cover_cache, audio_cache)
-    }
-
-    #[tokio::test]
-    async fn test_source_info() {
-        let client = RadioParadiseClient::with_client(reqwest::Client::new());
-        let (cover_cache, audio_cache) = create_test_caches().await;
-        let source = RadioParadiseSource::new_default(client, cover_cache, audio_cache);
-
-        assert_eq!(source.name(), "Radio Paradise");
-        assert_eq!(source.id(), "radio-paradise");
-        assert_eq!(source.default_image_mime_type(), "image/webp");
-        assert!(source.supports_fifo());
-    }
-
-    #[test]
-    fn test_default_image_present() {
-        assert!(DEFAULT_IMAGE.len() > 0, "Default image should not be empty");
-
-        // Check WebP magic bytes (RIFF...WEBP)
-        assert!(
-            DEFAULT_IMAGE.len() >= 12,
-            "Image too small to be valid WebP"
-        );
-        assert_eq!(&DEFAULT_IMAGE[0..4], b"RIFF", "Missing RIFF header");
-        assert_eq!(&DEFAULT_IMAGE[8..12], b"WEBP", "Missing WEBP signature");
-    }
-
-    #[tokio::test]
-    async fn test_fifo_operations() {
-        let client = RadioParadiseClient::with_client(reqwest::Client::new());
-        let (cover_cache, audio_cache) = create_test_caches().await;
-        let source = RadioParadiseSource::new_default(client, cover_cache, audio_cache);
-
-        // Initially empty
-        let items = source.get_items(0, 10).await.unwrap();
-        assert_eq!(items.len(), 0);
-
-        // Test FIFO support
-        assert!(source.supports_fifo());
-
-        // Initial update_id
-        let update_id = source.update_id().await;
-        assert_eq!(update_id, 0);
     }
 }

@@ -23,6 +23,7 @@ use pmoaudiocache::{AudioMetadata, Cache as AudioCache};
 use pmocovers::Cache as CoverCache;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::io::AsyncRead;
 use tokio::sync::RwLock;
 
 /// Métadonnées d'une piste en cache
@@ -214,6 +215,32 @@ impl SourceCacheManager {
             .await
             .map_err(|e| MusicSourceError::CacheError(e.to_string()))?;
         Ok(pk)
+    }
+
+    /// Cache un flux audio via un reader asynchrone
+    pub async fn cache_audio_from_reader<R>(
+        &self,
+        source_uri: &str,
+        reader: R,
+        length: Option<u64>,
+    ) -> Result<String>
+    where
+        R: AsyncRead + Send + Unpin + 'static,
+    {
+        let pk = self
+            .audio_cache
+            .add_from_reader(source_uri, reader, length, Some(&self.collection_id))
+            .await
+            .map_err(|e| MusicSourceError::CacheError(e.to_string()))?;
+        Ok(pk)
+    }
+
+    /// Attend que le fichier audio correspondant soit complètement disponible
+    pub async fn wait_audio_ready(&self, pk: &str) -> Result<()> {
+        self.audio_cache
+            .wait_until_finished(pk)
+            .await
+            .map_err(|e| MusicSourceError::CacheError(e.to_string()))
     }
 
     /// Mettre à jour les métadonnées d'une piste

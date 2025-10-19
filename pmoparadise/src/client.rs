@@ -92,6 +92,19 @@ impl RadioParadiseClient {
         self.channel
     }
 
+    fn block_base_for_channel(channel: u8) -> String {
+        format!("https://apps.radioparadise.com/blocks/chan/{}", channel)
+    }
+
+    /// Clone the client with a different channel while preserving other settings.
+    pub fn clone_with_channel(&self, channel: u8) -> Self {
+        let mut cloned = self.clone();
+        cloned.channel = channel;
+        cloned.block_base = Self::block_base_for_channel(channel);
+        cloned.next_block_url = None;
+        cloned
+    }
+
     /// Get a block by event ID
     ///
     /// If `event` is None, returns the current block.
@@ -123,7 +136,8 @@ impl RadioParadiseClient {
 
         url.query_pairs_mut()
             .append_pair("bitrate", &self.bitrate.as_u8().to_string())
-            .append_pair("info", "true");
+            .append_pair("info", "true")
+            .append_pair("channel", &self.channel.to_string());
 
         if let Some(event_id) = event {
             url.query_pairs_mut()
@@ -348,10 +362,16 @@ impl ClientBuilder {
             builder.build()?
         };
 
+        let block_base = if self.block_base == DEFAULT_BLOCK_BASE {
+            RadioParadiseClient::block_base_for_channel(self.channel)
+        } else {
+            self.block_base.clone()
+        };
+
         Ok(RadioParadiseClient {
             client,
             api_base: self.api_base,
-            block_base: self.block_base,
+            block_base,
             image_base: self.image_base,
             bitrate: self.bitrate,
             channel: self.channel,
