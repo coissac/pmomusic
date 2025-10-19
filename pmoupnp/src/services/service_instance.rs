@@ -37,8 +37,6 @@ use axum::{
 use bevy_reflect::Reflect;
 use std::{
     collections::HashMap,
-    future::Future,
-    pin::Pin,
     sync::{Arc, Mutex, RwLock},
     time::Duration,
 };
@@ -973,7 +971,6 @@ impl ServiceInstance {
     ///
     /// Le résultat est déjà échappé XML-safe selon les normes UPnP.
     fn reflect_to_string(value: &dyn Reflect) -> String {
-        use std::any::Any;
         use bevy_reflect::ReflectRef;
 
         // Essayer de downcaster vers des types primitifs courants
@@ -1290,21 +1287,8 @@ async fn control_handler(State(instance): State<Arc<ServiceInstance>>, body: Str
         }
     };
 
-    // Convertir les arguments SOAP (String) en ActionData (StateValue)
-    // D'abord, initialiser tous les arguments IN avec leurs valeurs par défaut
-    let mut action_data = HashMap::new();
-    for arg_inst in action_instance.arguments_set().all() {
-        let arg_model = arg_inst.as_ref().get_model();
-        if arg_model.is_in() {
-            if let Some(var_inst) = arg_inst.get_variable_instance() {
-                // Utiliser la valeur par défaut de la variable
-                let default_value = var_inst.value();
-                action_data.insert(arg_inst.get_name().to_string(), default_value);
-            }
-        }
-    }
-
-    // Puis, écraser avec les valeurs fournies dans le SOAP
+    // Convertir les arguments SOAP (String) en StateValue
+    let mut soap_values = HashMap::new();
     for (arg_name, arg_value) in soap_action.args {
         debug!("🔍 Processing SOAP arg: {} = '{}'", arg_name, arg_value);
         // Trouver l'argument correspondant pour obtenir son type
@@ -1315,7 +1299,7 @@ async fn control_handler(State(instance): State<Arc<ServiceInstance>>, body: Str
                 match StateValue::from_string(&arg_value, &var_model.as_state_var_type()) {
                     Ok(value) => {
                         debug!("✅ Parsed {} = {:?}", arg_name, value);
-                        action_data.insert(arg_name, value);
+                        soap_values.insert(arg_name, value);
                     }
                     Err(e) => {
                         error!("❌ Failed to parse argument '{}': {:?}", arg_name, e);
@@ -1336,15 +1320,24 @@ async fn control_handler(State(instance): State<Arc<ServiceInstance>>, body: Str
         }
     }
 
-    let action_data = Arc::new(action_data);
+    let soap_values = Arc::new(soap_values);
 
     // Exécuter l'action
-    match action_instance.run(action_data).await {
+    let action_instance_for_run = Arc::clone(&action_instance);
+
+    match action_instance_for_run.run(soap_values).await {
         Ok(output_data) => {
-            // Convertir les StateValue en String pour SOAP
+            // Convertir ActionData (Reflect) → HashMap<String, String> pour SOAP
             let mut soap_values = HashMap::new();
-            for (key, value) in output_data.iter() {
-                soap_values.insert(key.clone(), value.to_string());
+
+            for arg_inst in action_instance.arguments_set().all() {
+                let arg_model = arg_inst.as_ref().get_model();
+                if arg_model.is_out() {
+                    if let Some(reflect_value) = output_data.get(arg_inst.get_name()) {
+                        let soap_string = ServiceInstance::reflect_to_string(reflect_value.as_ref());
+                        soap_values.insert(arg_inst.get_name().to_string(), soap_string);
+                    }
+                }
             }
 
             // Construire la réponse SOAP

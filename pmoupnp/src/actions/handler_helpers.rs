@@ -35,7 +35,6 @@
 
 use bevy_reflect::Reflect;
 use crate::actions::{ActionData, ActionError};
-use std::any::Any;
 
 /// Extrait une valeur typée depuis ActionData.
 ///
@@ -58,7 +57,7 @@ use std::any::Any;
 ///
 /// # Errors
 ///
-/// Retourne `ActionError::ArgumentNotFound` si :
+/// Retourne `ActionError::ArgumentError` si :
 /// - La clé n'existe pas dans ActionData
 /// - La valeur ne peut pas être convertie vers le type `T`
 ///
@@ -81,7 +80,10 @@ pub fn get_value<T: Reflect + Clone>(
     data.get(key)
         .and_then(|boxed| boxed.as_any().downcast_ref::<T>())
         .cloned()
-        .ok_or_else(|| ActionError::ArgumentNotFound(key.to_string()))
+        .ok_or_else(|| ActionError::ArgumentError(format!(
+            "Argument '{}' not found or type mismatch",
+            key
+        )))
 }
 
 /// Insère une valeur dans ActionData.
@@ -119,6 +121,44 @@ pub fn set_value<T: Reflect + 'static>(
     value: T
 ) {
     data.insert(key.into(), Box::new(value));
+}
+
+/// Convertit une valeur Reflect en chaîne lisible pour les logs/SOAP.
+///
+/// Cette fonction réalise une tentative de conversion vers les types
+/// primitifs les plus courants (String, entiers, flottants, bool).
+/// Si aucune correspondance n'est trouvée, elle utilise `ReflectRef`
+/// pour fournir une représentation `Debug` générique.
+pub fn reflect_to_string(value: &dyn Reflect) -> String {
+    if let Some(v) = value.as_any().downcast_ref::<String>() {
+        v.clone()
+    } else if let Some(v) = value.as_any().downcast_ref::<&str>() {
+        v.to_string()
+    } else if let Some(v) = value.as_any().downcast_ref::<u8>() {
+        v.to_string()
+    } else if let Some(v) = value.as_any().downcast_ref::<u16>() {
+        v.to_string()
+    } else if let Some(v) = value.as_any().downcast_ref::<u32>() {
+        v.to_string()
+    } else if let Some(v) = value.as_any().downcast_ref::<u64>() {
+        v.to_string()
+    } else if let Some(v) = value.as_any().downcast_ref::<i8>() {
+        v.to_string()
+    } else if let Some(v) = value.as_any().downcast_ref::<i16>() {
+        v.to_string()
+    } else if let Some(v) = value.as_any().downcast_ref::<i32>() {
+        v.to_string()
+    } else if let Some(v) = value.as_any().downcast_ref::<i64>() {
+        v.to_string()
+    } else if let Some(v) = value.as_any().downcast_ref::<f32>() {
+        v.to_string()
+    } else if let Some(v) = value.as_any().downcast_ref::<f64>() {
+        v.to_string()
+    } else if let Some(v) = value.as_any().downcast_ref::<bool>() {
+        if *v { "1".to_string() } else { "0".to_string() }
+    } else {
+        "<unsupported Reflect>".to_string()
+    }
 }
 
 /// Macro pour extraire facilement une valeur depuis ActionData.

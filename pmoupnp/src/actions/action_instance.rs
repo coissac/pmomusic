@@ -1,6 +1,9 @@
-use std::sync::Arc;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
-use tracing::{debug, trace};
+use bevy_reflect::Reflect;
 use xmltree::{Element, XMLNode};
 
 use crate::{
@@ -16,6 +19,7 @@ use crate::actions::{
     ActionInstance,
     ArgInstanceSet,
 };
+use crate::variable_types::StateValue;
 
 impl UpnpObject for ActionInstance {
     fn to_xml_element(&self) -> Element {
@@ -130,156 +134,135 @@ impl ActionInstance {
         &self.arguments  // ⬅️ Retourne les INSTANCES, pas les modèles !
     }
 
-    /// Récupère les valeurs de tous les arguments de sortie (OUT).
+    /// Construit un [`ActionData`] initial à partir des variables d'état liées.
     ///
-    /// Cette méthode collecte automatiquement les valeurs actuelles de toutes
-    /// les variables d'état liées aux arguments OUT et les retourne dans un
-    /// [`ActionData`] indexé par le nom de chaque argument.
-    ///
-    /// # Returns
-    ///
-    /// Un [`ActionData`] contenant les paires (nom_argument, valeur_variable) pour
-    /// tous les arguments de sortie qui ont une variable d'instance liée.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// # use pmoupnp::actions::{Action, ActionInstance};
-    /// # use pmoupnp::UpnpInstance;
-    /// # use std::sync::Arc;
-    /// let action = Action::new("GetVolume".to_string());
-    /// let instance = Arc::new(ActionInstance::new(&action));
-    ///
-    /// // Récupérer automatiquement toutes les valeurs OUT
-    /// let output = instance.get_out_values();
-    ///
-    /// // Afficher les résultats
-    /// for (arg_name, value) in output.iter() {
-    ///     println!("{} = {:?}", arg_name, value);
-    /// }
-    /// ```
-    ///
-    /// # Notes
-    ///
-    /// - Seuls les arguments marqués comme OUT sont inclus
-    /// - Les arguments sans variable d'instance liée sont ignorés
-    /// - Le nom de l'argument (pas le nom de la variable) est utilisé comme clé
-    /// - Cette méthode est utilisée par le handler par défaut
-    pub fn get_out_values(&self) -> ActionData {
-        use std::collections::HashMap;
-        use crate::UpnpTypedInstance;
-
-        let mut result = HashMap::new();
+    /// Chaque argument lié à une [`StateVarInstance`](crate::state_variables::StateVarInstance)
+    /// voit sa valeur courante convertie en [`Reflect`](bevy_reflect::Reflect) pour alimenter
+    /// le handler de l'action.
+    fn build_action_data(&self) -> ActionData {
+        let mut data = HashMap::new();
 
         for arg_inst in self.arguments.all() {
-            let arg_model = arg_inst.as_ref().get_model();
-            if arg_model.is_out() {
-                if let Some(var_inst) = arg_inst.get_variable_instance() {
-                    result.insert(arg_inst.get_name().to_string(), var_inst.value());
+            if let Some(var_inst) = arg_inst.get_variable_instance() {
+                let name = arg_inst.get_name().to_string();
+                let reflect_value = var_inst.to_reflect();
+                data.insert(name, reflect_value);
+            }
+        }
+
+        data
+    }
+
+    /// Fusionne les valeurs SOAP IN dans l'[`ActionData`] existant.
+    ///
+    /// Seuls les arguments marqués comme IN sont considérés. Les valeurs sont
+    /// converties depuis [`StateValue`] vers `Reflect` pour les handlers.
+    fn merge_soap_inputs(
+        &self,
+        action_data: &mut ActionData,
+        soap_data: &HashMap<String, StateValue>,
+    ) -> HashSet<String> {
+        let mut updated = HashSet::new();
+
+        for (arg_name, state_value) in soap_data.iter() {
+            if let Some(arg_inst) = self.argument(arg_name) {
+                if arg_inst.get_model().is_in() {
+                    action_data.insert(arg_name.clone(), state_value.to_reflect());
+                    updated.insert(arg_name.clone());
                 }
             }
         }
 
-        Arc::new(result)
+        updated
     }
 
-    /// Exécute l'action avec les données fournies.
-    ///
-    /// Cette méthode :
-    /// 1. Stocke les valeurs IN dans les variables liées
-    /// 2. Exécute le handler (qui peut accéder aux valeurs IN via les variables)
-    /// 3. Collecte automatiquement les valeurs OUT via [`get_out_values()`](Self::get_out_values)
-    /// 4. Retourne les résultats
-    ///
-    /// # Arguments
-    ///
-    /// * `data` - Données d'entrée de l'action (arguments IN)
-    ///
-    /// # Returns
-    ///
-    /// Un `Future` qui se résout en `Result<ActionData, ActionError>` :
-    /// - `Ok(ActionData)` contenant les résultats (arguments OUT) si le handler réussit
-    /// - `Err(ActionError)` si le handler échoue
-    ///
-    /// # Errors
-    ///
-    /// Retourne une erreur si le handler retourne `Err(ActionError)`.
-    ///
-    /// # Fonctionnement
-    ///
-    /// 1. Pour chaque argument IN, la valeur fournie dans `data` est stockée dans la
-    ///    variable d'état liée à cet argument
-    /// 2. Le handler est appelé avec l'instance (il peut lire les valeurs IN via
-    ///    `argument.get_variable_instance().value()`)
-    /// 3. Le handler modifie les variables selon ses besoins et retourne `Ok(())` ou `Err(...)`
-    /// 4. Si le handler réussit, `run()` collecte automatiquement toutes les valeurs
-    ///    des arguments marqués comme OUT
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// # use pmoupnp::actions::{Action, ActionData, ActionInstance};
-    /// # use pmoupnp::UpnpInstance;
-    /// # use std::collections::HashMap;
-    /// # use std::sync::Arc;
-    /// # async fn example() {
-    /// let action = Action::new("SetVolume".to_string());
-    /// let instance = Arc::new(ActionInstance::new(&action));
-    ///
-    /// // Préparer les données d'entrée
-    /// let mut input = HashMap::new();
-    /// input.insert("DesiredVolume".to_string(),
-    ///              pmoupnp::variable_types::StateValue::UI2(50));
-    /// let input_data = Arc::new(input);
-    ///
-    /// // Exécuter l'action
-    /// // 1. run() stocke DesiredVolume=50 dans la variable liée
-    /// // 2. Le handler lit la valeur et fait son travail
-    /// // 3. run() retourne automatiquement les valeurs OUT
-    /// match instance.run(input_data).await {
-    ///     Ok(output_data) => {
-    ///         // Traiter les résultats
-    ///         for (key, value) in output_data.iter() {
-    ///             println!("{} = {:?}", key, value);
-    ///         }
-    ///     }
-    ///     Err(e) => {
-    ///         eprintln!("Action failed: {:?}", e);
-    ///     }
-    /// }
-    /// # }
-    /// ```
-    ///
-    /// # Notes
-    ///
-    /// - Les valeurs IN sont automatiquement stockées avant l'appel du handler
-    /// - Le handler n'a plus besoin de recevoir les données en paramètre
-    /// - Le handler modifie les variables et retourne `Ok(())` ou `Err(ActionError)`
-    /// - `run()` collecte automatiquement les OUT si le handler retourne `Ok(())`
-    /// - L'instance doit être wrappée dans un `Arc` pour être passée au handler
-    pub async fn run(self: Arc<Self>, data: ActionData) -> Result<ActionData, crate::actions::ActionError> {
-        // Stocker les valeurs IN dans les variables liées
+    /// Sauvegarde les arguments IN dans les variables d'état (mode stateful uniquement).
+    async fn save_inputs_to_state_variables(
+        &self,
+        action_data: &ActionData,
+        updated_keys: &HashSet<String>,
+    ) -> Result<(), crate::actions::ActionError> {
         for arg_inst in self.arguments.all() {
-            let arg_model = arg_inst.as_ref().get_model();
-            if arg_model.is_in() {
-                if let Some(value) = data.get(arg_inst.get_name()) {
-                    if let Some(var_inst) = arg_inst.get_variable_instance() {
-                        var_inst.set_value(value.clone()).await.ok();
-                        trace!("  IN  {} = {:?}", arg_inst.get_name(), value);
+            if arg_inst.get_model().is_in() && updated_keys.contains(arg_inst.get_name()) {
+                if let Some(var_inst) = arg_inst.get_variable_instance() {
+                    if let Some(reflect_value) = action_data.get(arg_inst.get_name()) {
+                        let cloned = reflect_value
+                            .as_ref()
+                            .reflect_clone()
+                            .map_err(|e| crate::actions::ActionError::ArgumentError(e.to_string()))?;
+                        var_inst
+                            .set_reflect_value(cloned)
+                            .await
+                            .map_err(|e| crate::actions::ActionError::SetError(e.to_string()))?;
                     }
                 }
             }
         }
 
+        Ok(())
+    }
+
+    /// Sauvegarde les arguments OUT dans les variables d'état (mode stateful uniquement).
+    async fn save_outputs_to_state_variables(
+        &self,
+        action_data: &ActionData,
+    ) -> Result<(), crate::actions::ActionError> {
+        for arg_inst in self.arguments.all() {
+            if arg_inst.get_model().is_out() {
+                if let Some(var_inst) = arg_inst.get_variable_instance() {
+                    if let Some(reflect_value) = action_data.get(arg_inst.get_name()) {
+                        let cloned = reflect_value
+                            .as_ref()
+                            .reflect_clone()
+                            .map_err(|e| crate::actions::ActionError::SetError(e.to_string()))?;
+                        var_inst
+                            .set_reflect_value(cloned)
+                            .await
+                            .map_err(|e| crate::actions::ActionError::SetError(e.to_string()))?;
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Exécute l'action avec les données SOAP fournies.
+    ///
+    /// Workflow unifié :
+    /// 1. Construire l'[`ActionData`] initial depuis les `StateVarInstance`
+    /// 2. Fusionner les valeurs IN issues du SOAP
+    /// 3. Si l'action est stateful : sauvegarder les IN dans les `StateVarInstance`
+    /// 4. Exécuter le handler
+    /// 5. Si l'action est stateful : sauvegarder les OUT dans les `StateVarInstance`
+    /// 6. Retourner l'[`ActionData`] pour la réponse SOAP
+    pub async fn run(
+        self: Arc<Self>,
+        soap_data: Arc<HashMap<String, StateValue>>,
+    ) -> Result<ActionData, crate::actions::ActionError> {
+        // 1. Construire ActionData initial
+        let mut action_data = self.build_action_data();
+
+        // 2. Fusionner les valeurs SOAP IN
+        let updated_inputs = self.merge_soap_inputs(&mut action_data, &soap_data);
+
+        // 3. Sauvegarder les IN si stateful
+        if self.is_stateful() {
+            self.save_inputs_to_state_variables(&action_data, &updated_inputs)
+                .await?;
+        }
+
+        // 4. Exécuter le handler
         let handler = self.model.handler().clone();
-        let instance_clone = self.clone();
+        let result_data = handler(action_data).await?;
 
-        // Exécuter le handler (il peut maintenant lire les valeurs IN depuis les variables)
-        handler(instance_clone).await?;
+        // 5. Sauvegarder les OUT si stateful
+        if self.is_stateful() {
+            self.save_outputs_to_state_variables(&result_data).await?;
+        }
 
-        // Collecter automatiquement les valeurs OUT si succès
-        debug!("✅ Action '{}' completed successfully, collecting outputs", self.get_name());
-        Ok(self.get_out_values())
+        // 6. Retourner les données pour la réponse SOAP
+        Ok(result_data)
     }
 }
 
@@ -310,4 +293,3 @@ mod tests {
         }));
     }
 }
-
