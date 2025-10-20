@@ -1,20 +1,20 @@
 //! Implémentation de DeviceInstance.
 
-use std::{
-    collections::HashMap,
-    sync::{Arc, RwLock},
-};
 use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+};
 use tracing::info;
-use xmltree::{Element, XMLNode, EmitterConfig};
+use xmltree::{Element, EmitterConfig, XMLNode};
 
 use crate::{
+    UpnpInstance, UpnpObject, UpnpObjectType, UpnpTyped, UpnpTypedInstance,
     devices::{Device, errors::DeviceError},
     services::ServiceInstance,
-    UpnpObject, UpnpInstance, UpnpTyped, UpnpTypedInstance, UpnpObjectType,
 };
 
 /// Instance d'un device UPnP.
@@ -78,8 +78,10 @@ impl UpnpInstance for DeviceInstance {
     fn new(model: &Device) -> Self {
         // Obtenir ou créer un UDN persistant via la configuration
         let device_name = model.get_name();
-
-        let udn = if let Ok(config_udn) = pmoconfig::get_config().get_device_udn("mediarenderer", device_name) {
+        let device_type = model.device_category();
+        let udn = if let Ok(config_udn) =
+            pmoconfig::get_config().get_device_udn(&device_type, device_name)
+        {
             config_udn
         } else {
             // Fallback : générer un UDN
@@ -88,6 +90,7 @@ impl UpnpInstance for DeviceInstance {
         };
 
         // Obtenir l'IP locale et le port depuis la configuration
+        // TODO: c'est amusant cet instanciation sauvage de base_url
         let local_ip = pmoutils::guess_local_ip();
         let port = pmoconfig::get_config().get_http_port();
         let server_base_url = format!("http://{}:{}", local_ip, port);
@@ -118,22 +121,30 @@ impl UpnpObject for DeviceInstance {
 
         // deviceType
         let mut device_type = Element::new("deviceType");
-        device_type.children.push(XMLNode::Text(self.model.device_type()));
+        device_type
+            .children
+            .push(XMLNode::Text(self.model.device_type()));
         elem.children.push(XMLNode::Element(device_type));
 
         // friendlyName
         let mut friendly_name = Element::new("friendlyName");
-        friendly_name.children.push(XMLNode::Text(self.model.friendly_name().to_string()));
+        friendly_name
+            .children
+            .push(XMLNode::Text(self.model.friendly_name().to_string()));
         elem.children.push(XMLNode::Element(friendly_name));
 
         // manufacturer
         let mut manufacturer = Element::new("manufacturer");
-        manufacturer.children.push(XMLNode::Text(self.model.manufacturer().to_string()));
+        manufacturer
+            .children
+            .push(XMLNode::Text(self.model.manufacturer().to_string()));
         elem.children.push(XMLNode::Element(manufacturer));
 
         // modelName
         let mut model_name = Element::new("modelName");
-        model_name.children.push(XMLNode::Text(self.model.model_name().to_string()));
+        model_name
+            .children
+            .push(XMLNode::Text(self.model.model_name().to_string()));
         elem.children.push(XMLNode::Element(model_name));
 
         // UDN
@@ -146,7 +157,9 @@ impl UpnpObject for DeviceInstance {
         if !services.is_empty() {
             let mut service_list = Element::new("serviceList");
             for service in services.values() {
-                service_list.children.push(XMLNode::Element(service.to_xml_element()));
+                service_list
+                    .children
+                    .push(XMLNode::Element(service.to_xml_element()));
             }
             elem.children.push(XMLNode::Element(service_list));
         }
@@ -156,7 +169,9 @@ impl UpnpObject for DeviceInstance {
         if !devices.is_empty() {
             let mut device_list = Element::new("deviceList");
             for device in devices.values() {
-                device_list.children.push(XMLNode::Element(device.to_xml_element()));
+                device_list
+                    .children
+                    .push(XMLNode::Element(device.to_xml_element()));
             }
             elem.children.push(XMLNode::Element(device_list));
         }
@@ -164,7 +179,9 @@ impl UpnpObject for DeviceInstance {
         // presentationURL
         if let Some(url) = self.model.presentation_url() {
             let mut presentation_url = Element::new("presentationURL");
-            presentation_url.children.push(XMLNode::Text(url.to_string()));
+            presentation_url
+                .children
+                .push(XMLNode::Text(url.to_string()));
             elem.children.push(XMLNode::Element(presentation_url));
         }
 
@@ -251,7 +268,10 @@ impl DeviceInstance {
     }
 
     /// Enregistre toutes les URLs du device et de ses services dans le serveur.
-    pub fn register_urls<'a>(&'a self, server: &'a mut pmoserver::Server) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), DeviceError>> + 'a>> {
+    pub fn register_urls<'a>(
+        &'a self,
+        server: &'a mut pmoserver::Server,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), DeviceError>> + 'a>> {
         Box::pin(async move {
             info!(
                 "✅ Device description for {} available at: {}{}",
@@ -262,14 +282,18 @@ impl DeviceInstance {
 
             // Handler pour la description du device
             let instance_desc = self.clone();
-            server.add_handler(&self.description_route(), move || {
-                let instance = instance_desc.clone();
-                async move { instance.description_handler().await }
-            }).await;
+            server
+                .add_handler(&self.description_route(), move || {
+                    let instance = instance_desc.clone();
+                    async move { instance.description_handler().await }
+                })
+                .await;
 
             // Enregistrer les services
             for service in self.services() {
-                service.register_urls(server).await
+                service
+                    .register_urls(server)
+                    .await
                     .map_err(|e| DeviceError::UrlRegistrationError(e.to_string()))?;
             }
 
@@ -310,6 +334,8 @@ impl DeviceInstance {
 
     /// Handler HTTP pour la description du device.
     async fn description_handler(&self) -> Response {
+        tracing::info!("📋 Device description requested for {}", self.get_name());
+
         let elem = self.description_element();
 
         let config = EmitterConfig::new()
@@ -318,17 +344,23 @@ impl DeviceInstance {
 
         let mut xml_output = Vec::new();
         if let Err(e) = elem.write_with_config(&mut xml_output, config) {
-            tracing::error!("Failed to serialize device description XML: {}", e);
+            tracing::error!("❌ Failed to serialize device description XML: {}", e);
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
 
         let xml = String::from_utf8_lossy(&xml_output).to_string();
 
+        tracing::debug!("✅ Device description generated ({} bytes)", xml.len());
+
         (
             StatusCode::OK,
-            [(axum::http::header::CONTENT_TYPE, "text/xml; charset=\"utf-8\"")],
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "text/xml; charset=\"utf-8\"",
+            )],
             xml,
-        ).into_response()
+        )
+            .into_response()
     }
 
     /// Crée un SsdpDevice configuré pour ce device UPnP.

@@ -48,15 +48,15 @@
 //! ).unwrap();
 //! ```
 
-mod envelope;
-mod parser;
 mod builder;
+mod envelope;
 mod fault;
+mod parser;
 
-pub use envelope::{SoapEnvelope, SoapHeader, SoapBody};
-pub use parser::{parse_soap_action, SoapAction};
 pub use builder::build_soap_response;
+pub use envelope::{SoapBody, SoapEnvelope, SoapHeader};
 pub use fault::{SoapFault, build_soap_fault};
+pub use parser::{SoapAction, parse_soap_action};
 
 /// Codes d'erreur SOAP UPnP standards
 pub mod error_codes {

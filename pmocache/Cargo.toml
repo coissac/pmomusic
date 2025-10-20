@@ -1,0 +1,40 @@
+[package]
+name = "pmocache"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Base de données
+rusqlite = { version = "0.37.0", features = ["bundled"] }
+
+# HTTP client
+reqwest = { version = "0.12", features = ["blocking", "stream"] }
+futures-util = "0.3"
+
+# Cryptographie
+sha1 = "0.10"
+hex = "0.4"
+
+# Utilitaires
+anyhow = "1.0"
+chrono = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+bytes = "1.6"
+
+# Async
+tokio = { version = "1.0", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io"] }
+
+# Logging
+tracing = "0.1"
+
+# Feature pour OpenAPI
+utoipa = { version = "5.3", optional = true }
+
+# Feature pour pmoserver (extension HTTP)
+axum = { version = "0.8", optional = true }
+
+[features]
+default = []
+openapi = ["dep:utoipa"]
+pmoserver = ["dep:axum"]

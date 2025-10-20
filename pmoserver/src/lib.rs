@@ -23,21 +23,20 @@
 //!
 //! ## Exemple d'utilisation
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! use pmoserver::{ServerBuilder, logs::{LogState, SseLayer}};
 //! use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 //!
 //! #[tokio::main]
 //! async fn main() {
 //!     // Configuration des logs avec SSE
-//!     let log_state = LogState::new();
+//!     let log_state = LogState::new(1000);
 //!     tracing_subscriber::registry()
 //!         .with(SseLayer::new(log_state.clone()))
 //!         .init();
 //!
 //!     // Création et démarrage du serveur
-//!     let mut server = ServerBuilder::new("MyServer")
-//!         .http_port(8080)
+//!     let mut server = ServerBuilder::new("MyServer", "http://localhost", 8080)
 //!         .build();
 //!
 //!     // Ajout d'une route JSON
@@ -56,12 +55,12 @@
 //! L'implémentation est fournie par `pmoupnp` (feature `pmoserver`), permettant
 //! de connecter des devices UPnP sans que `pmoserver` dépende de `pmoupnp` :
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! use pmoupnp::{UpnpServer, mediarenderer::MEDIA_RENDERER};
 //! use pmoserver::ServerBuilder;
 //!
 //! # async fn example() {
-//! let mut server = ServerBuilder::new("MediaRenderer").build();
+//! let mut server = ServerBuilder::new("MediaRenderer", "http://localhost", 8080).build();
 //! let device = MEDIA_RENDERER.create_instance();
 //!
 //! // Le trait UpnpServer est automatiquement disponible (implémenté dans pmoupnp)
@@ -69,8 +68,11 @@
 //! # }
 //! ```
 
-pub mod server;
 pub mod logs;
+pub mod server;
 
-pub use server::{Server, ServerBuilder, ServerInfo};
-pub use logs::{LogState, SseLayer, log_sse, log_dump, init_logging, LoggingOptions};
+pub use logs::{
+    LogState, LoggingOptions, LogsApiDoc, SseLayer, create_logs_router, init_logging, log_dump,
+    log_setup_get, log_setup_post, log_sse,
+};
+pub use server::{ApiRegistry, ApiRegistryEntry, Server, ServerBuilder, ServerInfo};

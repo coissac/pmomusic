@@ -216,9 +216,7 @@ pub trait UpnpVariable {
     ///
     /// Retourne `false` si le lock est empoisonné (poisoned).
     fn has_allowed_values(&self) -> bool {
-        let guard = self.get_definition()
-            .allowed_values
-            .read().unwrap();
+        let guard = self.get_definition().allowed_values.read().unwrap();
 
         !guard.is_empty()
     }
@@ -250,9 +248,7 @@ pub trait UpnpVariable {
     /// retourne `false`. Utilisez [`has_allowed_values`](Self::has_allowed_values)
     /// pour distinguer "pas de liste" de "valeur non autorisée".
     fn is_an_allowed_value(&self, value: &StateValue) -> bool {
-        let guard = self.get_definition()
-            .allowed_values
-            .read().unwrap();
+        let guard = self.get_definition().allowed_values.read().unwrap();
 
         guard.contains(value)
     }

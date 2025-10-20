@@ -1,24 +1,23 @@
 //! Documentation OpenAPI pour l'API REST du cache de couvertures
+//!
+//! Ce module fournit une documentation OpenAPI simple pour l'API REST
+//! fournie par pmocache, spécialisée pour les images de couvertures.
 
 use utoipa::OpenApi;
 
+/// Documentation OpenAPI pour l'API PMOCovers
+///
+/// L'API réutilise les handlers génériques de pmocache.
 #[derive(OpenApi)]
 #[openapi(
-    paths(
-        crate::api::list_images,
-        crate::api::get_image_info,
-        crate::api::add_image,
-        crate::api::delete_image,
-        crate::api::purge_cache,
-        crate::api::consolidate_cache,
-    ),
     components(
         schemas(
-            crate::db::CacheEntry,
-            crate::api::AddImageRequest,
-            crate::api::AddImageResponse,
-            crate::api::DeleteImageResponse,
-            crate::api::ErrorResponse,
+            pmocache::CacheEntry,
+            pmocache::api::AddItemRequest,
+            pmocache::api::AddItemResponse,
+            pmocache::api::DeleteItemResponse,
+            pmocache::api::ErrorResponse,
+            pmocache::api::DownloadStatus,
         )
     ),
     tags(
@@ -38,6 +37,38 @@ Cette API permet de gérer un cache d'images optimisé pour les couvertures d'al
 - **Consultation** : Liste des images avec statistiques d'utilisation
 - **Suppression** : Suppression individuelle ou purge complète
 - **Maintenance** : Consolidation du cache pour réparer les incohérences
+- **Statut** : Suivi des téléchargements en cours
+
+## Endpoints principaux
+
+### GET /api/covers
+Liste toutes les images en cache avec leurs statistiques
+
+### POST /api/covers
+Ajoute une image depuis une URL (conversion WebP automatique)
+
+### GET /api/covers/{pk}
+Récupère les informations d'une image
+
+### DELETE /api/covers/{pk}
+Supprime une image et ses variantes
+
+### GET /api/covers/{pk}/status
+Récupère le statut du téléchargement
+
+### DELETE /api/covers
+Purge complètement le cache
+
+### POST /api/covers/consolidate
+Consolide le cache (répare les incohérences)
+
+## Servir les fichiers
+
+### GET /covers/image/{pk}
+Récupère l'image originale en WebP
+
+### GET /covers/image/{pk}/{size}
+Récupère une variante redimensionnée (ex: /covers/image/abc123/256)
 
 ## Format des images
 

@@ -6,13 +6,17 @@ edition = "2024"
 [dependencies]
 pmoconfig = { path = "../pmoconfig" }
 pmoupnp =  { path = "../pmoupnp"}
+pmomediarenderer = { path = "../pmomediarenderer" }
+pmomediaserver = { path = "../pmomediaserver", features = ["qobuz", "paradise", "paradise-api", "api"] }
+pmosource = { path = "../pmosource", features = ["server"] }
 pmoserver = { path = "../pmoserver" }
 pmocovers = { path = "../pmocovers", features = ["pmoserver"] }
+pmoaudiocache = { path = "../pmoaudiocache", features = ["pmoserver"]}
 pmoapp = { path = "../pmoapp", features = ["pmoserver"] }
-
 
 tokio = { version = "1.35", features = ["rt-multi-thread", "macros", "sync", "time","signal"] }
 tracing = "0.1.41"
 tracing-subscriber = "0.3.20"
 axum = "0.8.4"
 serde_json = "1.0.145"
+utoipa = "5.4"

@@ -1,0 +1,51 @@
+[package]
+name = "pmoaudiocache"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Cache générique
+pmocache = { path = "../pmocache" }
+
+# DIDL-Lite pour UPnP
+pmodidl = { path = "../pmodidl" }
+
+# Base de données
+rusqlite = { version = "0.37", features = ["bundled"] }
+chrono = "0.4"
+
+# Métadonnées audio
+lofty = "0.22"
+
+# Encodage/décodage audio
+symphonia = { version = "0.5", features = ["all"] }
+claxon = "0.4"  # Décodeur FLAC
+flacenc = "0.4"  # Encodeur FLAC
+futures-util = "0.3"  # Pour le streaming
+
+# HTTP client
+reqwest = { version = "0.12", features = ["blocking"] }
+
+# Utilitaires
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+quick-xml = { version = "0.37", features = ["serialize"] }
+
+# Async
+tokio = { version = "1.0", features = ["full"] }
+
+# Serveur HTTP (optionnel pour l'extension)
+pmoserver = { path = "../pmoserver", optional = true }
+pmoconfig = { path = "../pmoconfig", optional = true }
+axum = { version = "0.8", optional = true }
+utoipa = { version = "5.3", features = ["axum_extras"], optional = true }
+
+tracing = "0.1.41"
+
+[dev-dependencies]
+tracing-subscriber = "0.3"
+
+[features]
+default = ["pmoserver"]
+pmoserver = ["dep:pmoserver", "dep:pmoconfig", "dep:axum", "dep:utoipa", "pmocache/pmoserver", "pmocache/openapi"]

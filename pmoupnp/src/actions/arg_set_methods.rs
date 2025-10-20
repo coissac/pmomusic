@@ -1,9 +1,6 @@
-use crate::actions::ArgInstanceSet;
 use crate::UpnpModel;
-use crate::{
-    UpnpObject,
-    actions::{ArgumentSet},
-};
+use crate::actions::ArgInstanceSet;
+use crate::{UpnpObject, actions::ArgumentSet};
 use xmltree::Element;
 
 impl UpnpObject for ArgumentSet {

@@ -1,3 +1,5 @@
+.ollama
+.ollamacode
 /bin/
 /pkg/
 /vendor/
@@ -21,3 +23,5 @@ xxx
 xx
 all.txt
 pmo_src.txt
+upmpdcli/
+/*.xml

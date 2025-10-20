@@ -12,12 +12,12 @@
 //!
 //! ## Exemple d'utilisation
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! use pmoapp::{Webapp, WebAppExt};
 //! use pmoserver::ServerBuilder;
 //!
 //! # async fn example() {
-//! let mut server = ServerBuilder::new("MyApp").build();
+//! let mut server = ServerBuilder::new("MyApp", "http://localhost", 8080).build();
 //!
 //! // Le trait WebAppExt est automatiquement disponible
 //! server.add_webapp::<Webapp>("/app").await;
@@ -30,28 +30,24 @@
 use crate::WebAppExt;
 use pmoserver::Server;
 use rust_embed::RustEmbed;
-use std::future::Future;
-use std::pin::Pin;
 
 impl WebAppExt for Server {
-    fn add_webapp<W>(&mut self, path: &str) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>
+    async fn add_webapp<W>(&mut self, path: &str)
     where
         W: RustEmbed + Clone + Send + Sync + 'static,
     {
         let path = path.to_string();
-        Box::pin(async move {
-            self.add_spa::<W>(&path).await;
-        })
+
+        self.add_spa::<W>(&path).await;
     }
 
-    fn add_webapp_with_redirect<W>(&mut self, path: &str) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>
+    async fn add_webapp_with_redirect<W>(&mut self, path: &str)
     where
         W: RustEmbed + Clone + Send + Sync + 'static,
     {
         let path = path.to_string();
-        Box::pin(async move {
-            self.add_spa::<W>(&path).await;
-            self.add_redirect("/", &path).await;
-        })
+
+        self.add_spa::<W>(&path).await;
+        self.add_redirect("/", &path).await;
     }
 }
