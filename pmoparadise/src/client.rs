@@ -6,6 +6,44 @@ use reqwest::Client;
 use std::time::Duration;
 use url::Url;
 
+fn normalize_base_url(base: &str) -> String {
+    let mut normalized = base.trim().to_string();
+
+    if normalized.is_empty() {
+        return "https://img.radioparadise.com/".to_string();
+    }
+
+    if normalized.starts_with("//") {
+        normalized = format!("https:{}", normalized);
+    } else if !(normalized.starts_with("http://") || normalized.starts_with("https://")) {
+        normalized = format!("https://{}", normalized.trim_start_matches('/'));
+    }
+
+    if !normalized.ends_with('/') {
+        normalized.push('/');
+    }
+
+    normalized
+}
+
+fn resolve_cover_with_base(base: &str, cover_path: &str) -> Result<Url> {
+    let cover_path = cover_path.trim();
+
+    if cover_path.starts_with("http://") || cover_path.starts_with("https://") {
+        return Ok(Url::parse(cover_path)?);
+    }
+
+    if cover_path.starts_with("//") {
+        let url = format!("https:{}", cover_path);
+        return Ok(Url::parse(&url)?);
+    }
+
+    let base = normalize_base_url(base);
+    let base_url = Url::parse(&base)?;
+
+    Ok(base_url.join(cover_path)?)
+}
+
 /// Default Radio Paradise API base URL
 pub const DEFAULT_API_BASE: &str = "https://api.radioparadise.com/api";
 
@@ -13,10 +51,13 @@ pub const DEFAULT_API_BASE: &str = "https://api.radioparadise.com/api";
 pub const DEFAULT_BLOCK_BASE: &str = "https://apps.radioparadise.com/blocks/chan/0";
 
 /// Default image base URL
-pub const DEFAULT_IMAGE_BASE: &str = "https://img.radioparadise.com/covers/l/";
+pub const DEFAULT_IMAGE_BASE: &str = "https://img.radioparadise.com/";
 
-/// Default timeout for HTTP requests
-pub const DEFAULT_TIMEOUT_SECS: u64 = 30;
+/// Default timeout for metadata HTTP requests
+pub const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
+
+/// Default timeout for large block downloads/streams
+pub const DEFAULT_BLOCK_TIMEOUT_SECS: u64 = 180;
 
 /// Default User-Agent
 pub const DEFAULT_USER_AGENT: &str = "pmoparadise/0.1.0";
@@ -49,7 +90,8 @@ pub struct RadioParadiseClient {
     image_base: String,
     bitrate: Bitrate,
     channel: u8,
-    pub(crate) timeout: Duration,
+    pub(crate) request_timeout: Duration,
+    pub(crate) block_timeout: Duration,
     next_block_url: Option<String>,
 }
 
@@ -74,10 +116,11 @@ impl RadioParadiseClient {
             client,
             api_base: DEFAULT_API_BASE.to_string(),
             block_base: DEFAULT_BLOCK_BASE.to_string(),
-            image_base: DEFAULT_IMAGE_BASE.to_string(),
+            image_base: normalize_base_url(DEFAULT_IMAGE_BASE),
             bitrate: Bitrate::default(),
             channel: 0,
-            timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
+            request_timeout: Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS),
+            block_timeout: Duration::from_secs(DEFAULT_BLOCK_TIMEOUT_SECS),
             next_block_url: None,
         }
     }
@@ -162,7 +205,12 @@ impl RadioParadiseClient {
         #[cfg(feature = "logging")]
         tracing::debug!("Fetching block: {}", url);
 
-        let response = self.client.get(url).timeout(self.timeout).send().await?;
+        let response = self
+            .client
+            .get(url)
+            .timeout(self.request_timeout)
+            .send()
+            .await?;
 
         if !response.status().is_success() {
             return Err(Error::other(format!(
@@ -174,7 +222,9 @@ impl RadioParadiseClient {
         let mut block: Block = response.json().await?;
 
         // Set image_base if not provided
-        if block.image_base.is_none() {
+        if let Some(ref mut base) = block.image_base {
+            *base = normalize_base_url(base);
+        } else {
             block.image_base = Some(self.image_base.clone());
         }
 
@@ -219,8 +269,7 @@ impl RadioParadiseClient {
     /// # }
     /// ```
     pub fn cover_url(&self, cover_path: &str) -> Result<Url> {
-        let url_str = format!("{}{}", self.image_base, cover_path);
-        Ok(Url::parse(&url_str)?)
+        resolve_cover_with_base(&self.image_base, cover_path)
     }
 
     /// Prefetch metadata for the next block
@@ -270,7 +319,8 @@ pub struct ClientBuilder {
     image_base: String,
     bitrate: Bitrate,
     channel: u8,
-    timeout: Duration,
+    request_timeout: Duration,
+    block_timeout: Duration,
     user_agent: String,
     proxy: Option<String>,
 }
@@ -284,7 +334,8 @@ impl Default for ClientBuilder {
             image_base: DEFAULT_IMAGE_BASE.to_string(),
             bitrate: Bitrate::default(),
             channel: 0,
-            timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
+            request_timeout: Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS),
+            block_timeout: Duration::from_secs(DEFAULT_BLOCK_TIMEOUT_SECS),
             user_agent: DEFAULT_USER_AGENT.to_string(),
             proxy: None,
         }
@@ -343,7 +394,13 @@ impl ClientBuilder {
 
     /// Set the request timeout
     pub fn timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
+        self.request_timeout = timeout;
+        self
+    }
+
+    /// Set the timeout specifically for block downloads/streams
+    pub fn block_timeout(mut self, timeout: Duration) -> Self {
+        self.block_timeout = timeout;
         self
     }
 
@@ -366,7 +423,7 @@ impl ClientBuilder {
         } else {
             let mut builder = Client::builder()
                 .user_agent(&self.user_agent)
-                .timeout(self.timeout);
+                .timeout(self.request_timeout);
 
             if let Some(proxy_url) = &self.proxy {
                 let proxy = reqwest::Proxy::all(proxy_url)
@@ -382,15 +439,17 @@ impl ClientBuilder {
         } else {
             self.block_base.clone()
         };
+        let image_base = normalize_base_url(&self.image_base);
 
         Ok(RadioParadiseClient {
             client,
             api_base: self.api_base,
             block_base,
-            image_base: self.image_base,
+            image_base,
             bitrate: self.bitrate,
             channel: self.channel,
-            timeout: self.timeout,
+            request_timeout: self.request_timeout,
+            block_timeout: self.block_timeout,
             next_block_url: None,
         })
     }

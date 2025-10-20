@@ -361,6 +361,31 @@ impl FifoPlaylist {
         inner.queue.len()
     }
 
+    /// Vérifie si un track existe déjà dans la playlist
+    pub async fn has_track(&self, track_id: &str) -> bool {
+        let inner = self.inner.read().await;
+        inner.queue.iter().any(|t| t.id == track_id)
+    }
+
+    /// Met à jour un track existant en appliquant une fonction de mise à jour.
+    ///
+    /// Retourne `true` si le track a été trouvé et modifié.
+    pub async fn update_track<F>(&self, track_id: &str, updater: F) -> bool
+    where
+        F: FnOnce(&mut Track),
+    {
+        let mut inner = self.inner.write().await;
+
+        if let Some(track) = inner.queue.iter_mut().find(|t| t.id == track_id) {
+            updater(track);
+            inner.update_id = inner.update_id.wrapping_add(1);
+            inner.last_change = SystemTime::now();
+            true
+        } else {
+            false
+        }
+    }
+
     /// Vérifie si la FIFO est vide
     pub async fn is_empty(&self) -> bool {
         let inner = self.inner.read().await;

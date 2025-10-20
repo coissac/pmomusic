@@ -126,7 +126,7 @@ const filteredLogs = computed(() => {
 // Fonction pour mettre à jour le niveau de log côté serveur
 async function updateServerLogLevel() {
   try {
-    const response = await fetch('/api/log_setup', {
+    const response = await fetch('/api/logs/log_setup', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -164,7 +164,7 @@ async function updateServerLogLevel() {
 // Charger le niveau de log actuel au démarrage
 async function loadServerLogLevel() {
   try {
-    const response = await fetch('/api/log_setup')
+    const response = await fetch('/api/logs/log_setup')
     if (response.ok) {
       const data = await response.json()
       serverLogLevel.value = data.current_level
