@@ -3,6 +3,7 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Number;
 use std::collections::HashMap;
+use url::Url;
 
 /// Deserialize a string or number into a u64
 fn deserialize_string_or_u64<'de, D>(deserializer: D) -> Result<u64, D::Error>
@@ -306,9 +307,9 @@ impl Block {
 
     /// Get the full URL for a cover image
     pub fn cover_url(&self, cover_path: &str) -> Option<String> {
-        self.image_base
-            .as_ref()
-            .map(|base| format!("{}{}", base, cover_path))
+        let base = self.image_base.as_ref()?;
+        let base_url = Url::parse(base).ok()?;
+        base_url.join(cover_path).ok().map(|url| url.to_string())
     }
 
     /// Find which song is playing at a given timestamp (ms from block start)

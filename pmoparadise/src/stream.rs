@@ -73,7 +73,7 @@ impl RadioParadiseClient {
         let response = self
             .client
             .get(block_url.clone())
-            .timeout(self.timeout)
+            .timeout(self.block_timeout)
             .send()
             .await?;
 
@@ -151,7 +151,7 @@ impl RadioParadiseClient {
         let response = self
             .client
             .get(block_url.clone())
-            .timeout(self.timeout)
+            .timeout(self.block_timeout)
             .send()
             .await?;
 

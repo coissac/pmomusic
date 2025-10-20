@@ -12,9 +12,11 @@ xxx
 /dcai/
 **/.pmomusic.yml
 **/.pmomusic_covers/**
+**/.pmomusic_audio/**
 .DS_Store
 /target/
-.pmomusic_covers
+/.pmomusic_covers
+/.pmomusic_audio/** 
 C/src/soxr-0.1.3/Release/tests
 **/Release/
 **/Debug/

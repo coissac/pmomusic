@@ -181,6 +181,9 @@
         <strong>{{ channelBrowse.returned_items }}</strong>
         <span v-if="channelBrowse.total">/ {{ channelBrowse.total }}</span>
         <span v-if="channelBrowse.update_id">Update ID: {{ channelBrowse.update_id }}</span>
+        <span v-if="channelBrowseLastUpdated">
+          Last refresh: {{ formatTimestamp(channelBrowseLastUpdated) }}
+        </span>
       </div>
       <div v-if="channelBrowseError" class="error-message">
         ❌ {{ channelBrowseError }}
@@ -198,6 +201,12 @@
             :key="item.id"
             :class="['track-card', { active: activeTrackId === item.id }]"
           >
+            <div class="track-card-header">
+              <span :class="trackStatusClass(item.__status)">
+                {{ trackStatusLabel(item.__status) }}
+              </span>
+              <span v-if="item.update_id" class="track-metadata">update {{ item.update_id }}</span>
+            </div>
             <div class="track-headline">
               <div class="track-title">{{ item.title }}</div>
               <div class="track-artist">{{ item.artist || item.creator || 'Unknown artist' }}</div>
@@ -381,7 +390,11 @@ const channelBrowse = ref({
 })
 const channelBrowseLoading = ref(false)
 const channelBrowseError = ref('')
+const channelBrowseLastUpdated = ref(null)
 let refreshTimerId = null
+let channelRefreshTimerId = null
+const CHANNEL_TRACKS_REFRESH_INTERVAL = 5000
+let channelTracksInFlight = false
 
 // Format duration from milliseconds to MM:SS
 function formatDuration(ms) {
@@ -483,8 +496,52 @@ async function refreshNowPlaying() {
   }
 }
 
-async function fetchChannelTracks() {
-  channelBrowseLoading.value = true
+function deriveTrackStatus(item) {
+  const url = item?.resources?.[0]?.url || ''
+  if (!url) {
+    return 'pending'
+  }
+  if (url.includes('/audio/flac/') && !url.includes('#')) {
+    return 'cached'
+  }
+  if (url.includes('#')) {
+    return 'downloading'
+  }
+  return 'external'
+}
+
+function trackStatusLabel(status) {
+  switch (status) {
+    case 'cached':
+      return 'Cached'
+    case 'downloading':
+      return 'Downloading'
+    case 'external':
+      return 'External'
+    default:
+      return 'Pending'
+  }
+}
+
+function trackStatusClass(status) {
+  return {
+    'status-badge': true,
+    cached: status === 'cached',
+    downloading: status === 'downloading',
+    external: status === 'external',
+    pending: status === 'pending'
+  }
+}
+
+async function fetchChannelTracks(options = {}) {
+  const { silent = false } = options
+  if (channelTracksInFlight) {
+    return
+  }
+  channelTracksInFlight = true
+  if (!silent) {
+    channelBrowseLoading.value = true
+  }
   channelBrowseError.value = ''
 
   try {
@@ -507,11 +564,20 @@ async function fetchChannelTracks() {
       total: data.total ?? ((data.containers?.length ?? 0) + (data.items?.length ?? 0)),
       update_id: data.update_id ?? 0
     }
+    // annotate each item with status for UI
+    channelBrowse.value.items = channelBrowse.value.items.map((item) => ({
+      ...item,
+      __status: deriveTrackStatus(item)
+    }))
+    channelBrowseLastUpdated.value = new Date()
   } catch (e) {
     channelBrowseError.value = `Failed to load channel tracks: ${e.message}`
     console.error('Error fetching channel tracks:', e)
   } finally {
-    channelBrowseLoading.value = false
+    channelTracksInFlight = false
+    if (!silent) {
+      channelBrowseLoading.value = false
+    }
   }
 }
 
@@ -703,11 +769,21 @@ onMounted(async () => {
       refreshNowPlaying()
     }
   }, 30000)
+
+  // Auto-refresh channel tracks every few seconds
+  channelRefreshTimerId = window.setInterval(() => {
+    if (!channelBrowseLoading.value) {
+      fetchChannelTracks({ silent: true })
+    }
+  }, CHANNEL_TRACKS_REFRESH_INTERVAL)
 })
 
 onUnmounted(() => {
   if (refreshTimerId) {
     clearInterval(refreshTimerId)
+  }
+  if (channelRefreshTimerId) {
+    clearInterval(channelRefreshTimerId)
   }
 })
 </script>
@@ -1286,6 +1362,58 @@ onUnmounted(() => {
   flex-direction: column;
   gap: 10px;
   transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.track-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #bbb;
+}
+
+.status-badge.cached {
+  background: rgba(46, 204, 113, 0.18);
+  border-color: rgba(46, 204, 113, 0.45);
+  color: #2ecc71;
+}
+
+.status-badge.downloading {
+  background: rgba(255, 193, 7, 0.15);
+  border-color: rgba(255, 193, 7, 0.4);
+  color: #ffc107;
+}
+
+.status-badge.external {
+  background: rgba(0, 212, 255, 0.12);
+  border-color: rgba(0, 212, 255, 0.4);
+  color: #00d4ff;
+}
+
+.status-badge.pending {
+  background: rgba(255, 87, 34, 0.15);
+  border-color: rgba(255, 87, 34, 0.4);
+  color: #ff6d3a;
+}
+
+.track-metadata {
+  font-size: 0.7rem;
+  color: #666;
 }
 
 .track-card.active {

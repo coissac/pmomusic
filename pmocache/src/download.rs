@@ -346,7 +346,7 @@ async fn download_impl(
                 Ok(resp) => resp,
                 Err(e) => {
                     let mut s = state.write().await;
-                    let error = format!("Failed to fetch URL: {}", e);
+                    let error = format!("Failed to fetch URL '{}': {}", url, e);
                     s.error = Some(error.clone());
                     s.finished = true;
                     return Err(error);

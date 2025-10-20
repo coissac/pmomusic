@@ -98,6 +98,39 @@ fn parse_track_identifier(track_id: &str) -> Option<(u8, u64, usize)> {
     }
 }
 
+fn resolve_cover_url(
+    image_base: Option<&str>,
+    client: &RadioParadiseClient,
+    cover: &str,
+) -> anyhow::Result<Url> {
+    if cover.starts_with("http://") || cover.starts_with("https://") {
+        return Url::parse(cover).map_err(|e| anyhow!("Invalid cover URL '{}': {}", cover, e));
+    }
+
+    if cover.starts_with("//") {
+        let url = format!("https:{}", cover);
+        return Url::parse(&url).map_err(|e| anyhow!("Invalid cover URL '{}': {}", cover, e));
+    }
+
+    if let Some(base) = image_base {
+        match Url::parse(base).and_then(|base_url| base_url.join(cover)) {
+            Ok(url) => return Ok(url),
+            Err(err) => {
+                tracing::debug!(
+                    "Failed to join cover '{}' with image base '{}': {}",
+                    cover,
+                    base,
+                    err
+                );
+            }
+        }
+    }
+
+    client
+        .cover_url(cover)
+        .map_err(|e| anyhow!("Invalid cover URL '{}': {}", cover, e))
+}
+
 /// Radio Paradise music source with full MusicSource trait implementation
 ///
 /// This struct combines a [`RadioParadiseClient`] for API access with a FIFO playlist
@@ -348,6 +381,70 @@ impl RadioParadiseSource {
         Ok(())
     }
 
+    async fn prepare_initial_track(
+        &self,
+        channel: Arc<ChannelState>,
+        block: Arc<Block>,
+    ) -> Result<()> {
+        let ordered_songs = block.songs_ordered();
+        let (song_index, song) = match ordered_songs.first() {
+            Some(entry) => entry,
+            None => return Ok(()),
+        };
+
+        let track_id = track_identifier(channel.descriptor.id, block.event, *song_index);
+
+        if channel.playlist.has_track(&track_id).await {
+            return Ok(());
+        }
+
+        let placeholder_uri = format!("{}#{}", block.url, *song_index);
+
+        channel
+            .cache_manager
+            .update_metadata(
+                track_id.clone(),
+                pmosource::TrackMetadata {
+                    original_uri: placeholder_uri.clone(),
+                    cached_audio_pk: None,
+                    cached_cover_pk: None,
+                },
+            )
+            .await;
+
+        let mut track = Track::new(
+            track_id.clone(),
+            song.title.clone(),
+            placeholder_uri.clone(),
+        );
+
+        if !song.artist.is_empty() {
+            track = track.with_artist(song.artist.clone());
+        }
+
+        if let Some(ref album) = song.album {
+            if !album.is_empty() {
+                track = track.with_album(album.clone());
+            }
+        }
+
+        let duration_ms = song_duration_ms(&block, &ordered_songs, 0);
+        if duration_ms > 0 {
+            track = track.with_duration((duration_ms / 1000) as u32);
+        }
+
+        if let Some(ref cover) = song.cover {
+            if let Ok(url) = resolve_cover_url(block.image_base.as_deref(), &channel.client, cover)
+            {
+                track = track.with_image(url.to_string());
+            }
+        }
+
+        channel.playlist.append_track(track).await;
+
+        Ok(())
+    }
+
     async fn populate_channel_locked(&self, channel: Arc<ChannelState>) -> Result<()> {
         tracing::info!(
             "📻 Fetching Radio Paradise block for channel {}",
@@ -361,7 +458,25 @@ impl RadioParadiseSource {
             .map_err(|e| MusicSourceError::SourceUnavailable(e.to_string()))?;
 
         let block = Arc::new(now_playing.block);
-        self.ingest_block(channel, block).await
+        self.prepare_initial_track(channel.clone(), block.clone())
+            .await?;
+
+        let source_clone = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = source_clone
+                .ingest_block(channel.clone(), block.clone())
+                .await
+            {
+                tracing::error!(
+                    "Failed to ingest block {} on channel {}: {}",
+                    block.event,
+                    channel.descriptor.name,
+                    e
+                );
+            }
+        });
+
+        Ok(())
     }
 
     async fn ingest_block(&self, channel: Arc<ChannelState>, block: Arc<Block>) -> Result<()> {
@@ -396,14 +511,25 @@ impl RadioParadiseSource {
 
         for (position, (song_index, song)) in ordered_songs.iter().enumerate() {
             let track_id = track_identifier(channel.descriptor.id, block.event, *song_index);
+            let placeholder_uri = format!("{}#{}", block.url, *song_index);
 
-            if channel
-                .cache_manager
-                .get_metadata(&track_id)
-                .await
-                .is_some()
-            {
-                continue;
+            let existing_metadata = channel.cache_manager.get_metadata(&track_id).await;
+            if let Some(ref metadata) = existing_metadata {
+                if metadata.cached_audio_pk.is_some() {
+                    continue;
+                }
+            } else {
+                channel
+                    .cache_manager
+                    .update_metadata(
+                        track_id.clone(),
+                        pmosource::TrackMetadata {
+                            original_uri: placeholder_uri.clone(),
+                            cached_audio_pk: None,
+                            cached_cover_pk: None,
+                        },
+                    )
+                    .await;
             }
 
             let duration_ms = song_duration_ms(&block, &ordered_songs, position);
@@ -451,23 +577,34 @@ impl RadioParadiseSource {
                 .cache_audio_from_reader(&audio_source_uri, reader, Some(data_len))
                 .await?;
 
-            let cached_cover_pk = if let Some(ref image_base) = block.image_base {
-                if let Some(ref cover) = song.cover {
-                    let image_url = format!("{}{}", image_base, cover);
-                    match channel.cache_manager.cache_cover(&image_url).await {
-                        Ok(pk) => Some(pk),
+            let resolved_cover_url =
+                song.cover.as_ref().and_then(|cover| {
+                    match resolve_cover_url(block.image_base.as_deref(), &channel.client, cover) {
+                        Ok(url) => Some(url.to_string()),
                         Err(e) => {
                             tracing::warn!(
-                                "Failed to cache cover {} on channel {}: {}",
-                                image_url,
+                                "Failed to resolve cover '{}' for channel {}: {}",
+                                cover,
                                 channel.descriptor.name,
                                 e
                             );
                             None
                         }
                     }
-                } else {
-                    None
+                });
+
+            let cached_cover_pk = if let Some(ref cover_url) = resolved_cover_url {
+                match channel.cache_manager.cache_cover(cover_url).await {
+                    Ok(pk) => Some(pk),
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to cache cover {} on channel {}: {}",
+                            cover_url,
+                            channel.descriptor.name,
+                            e
+                        );
+                        None
+                    }
                 }
             } else {
                 None
@@ -479,7 +616,15 @@ impl RadioParadiseSource {
                 .update_metadata(
                     track_id.clone(),
                     pmosource::TrackMetadata {
-                        original_uri: block.url.clone(),
+                        original_uri: existing_metadata
+                            .and_then(|m| {
+                                if m.original_uri.is_empty() {
+                                    None
+                                } else {
+                                    Some(m.original_uri)
+                                }
+                            })
+                            .unwrap_or_else(|| placeholder_uri.clone()),
                         cached_audio_pk: Some(audio_pk.clone()),
                         cached_cover_pk: metadata_cover_pk,
                     },
@@ -506,13 +651,25 @@ impl RadioParadiseSource {
                 if let Ok(url) = channel.cache_manager.cover_url(cover_pk, None) {
                     track = track.with_image(url);
                 }
-            } else if let Some(ref cover) = song.cover {
-                if let Some(ref image_base) = block.image_base {
-                    track = track.with_image(format!("{}{}", image_base, cover));
-                }
+            } else if let Some(ref cover_url) = resolved_cover_url {
+                track = track.with_image(cover_url.clone());
             }
 
-            channel.playlist.append_track(track).await;
+            let updated = channel
+                .playlist
+                .update_track(&track_id, |existing| {
+                    existing.title = track.title.clone();
+                    existing.artist = track.artist.clone();
+                    existing.album = track.album.clone();
+                    existing.duration = track.duration;
+                    existing.uri = track.uri.clone();
+                    existing.image = track.image.clone();
+                })
+                .await;
+
+            if !updated {
+                channel.playlist.append_track(track).await;
+            }
 
             let channel_for_wait = channel.clone();
             let track_id_for_wait = track_id.clone();
