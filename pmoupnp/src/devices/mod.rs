@@ -34,7 +34,12 @@
 mod device;
 mod device_instance;
 mod device_methods;
+mod device_registry;
 pub mod errors;
 
 pub use device::Device;
 pub use device_instance::DeviceInstance;
+pub use device_registry::{
+    ActionInfo, ArgumentInfo, DeviceInfo, DeviceInstanceSet, DeviceRegistry, ServiceInfo,
+    VariableInfo,
+};

@@ -29,10 +29,7 @@ pub struct SoapBody {
 impl SoapEnvelope {
     /// Crée une nouvelle enveloppe SOAP
     pub fn new(body: SoapBody) -> Self {
-        Self {
-            header: None,
-            body,
-        }
+        Self { header: None, body }
     }
 
     /// Crée une nouvelle enveloppe avec header

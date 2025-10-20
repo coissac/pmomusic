@@ -21,6 +21,8 @@ use std::net::UdpSocket;
 /// # Examples
 ///
 /// ```
+/// use pmoutils::guess_local_ip;
+///
 /// let ip = guess_local_ip();
 /// println!("IP locale détectée: {}", ip);
 /// // Affiche par exemple: "IP locale détectée: 192.168.1.42"
@@ -62,6 +64,8 @@ pub fn guess_local_ip() -> String {
 /// # Examples
 ///
 /// ```
+/// use pmoutils::ip_utils::list_all_ips;
+///
 /// let ips = list_all_ips();
 /// for (interface, addresses) in ips {
 ///     println!("Interface {}: {:?}", interface, addresses);
@@ -110,22 +114,25 @@ mod tests {
     #[test]
     fn test_guess_local_ip_returns_valid_ip() {
         let ip = guess_local_ip();
-        
+
         // Vérifie que le résultat est parsable comme une IP
-        assert!(ip.parse::<IpAddr>().is_ok(), "Should return a valid IP address");
+        assert!(
+            ip.parse::<IpAddr>().is_ok(),
+            "Should return a valid IP address"
+        );
     }
 
     #[test]
     fn test_guess_local_ip_not_empty() {
         let ip = guess_local_ip();
-        
+
         assert!(!ip.is_empty(), "IP should not be empty");
     }
 
     #[test]
     fn test_guess_local_ip_is_ipv4() {
         let ip = guess_local_ip();
-        
+
         if let Ok(parsed_ip) = ip.parse::<IpAddr>() {
             assert!(parsed_ip.is_ipv4(), "Should return an IPv4 address");
         }
@@ -137,7 +144,7 @@ mod tests {
         // (difficile à tester sans mocker, mais on vérifie la cohérence)
         let ip = guess_local_ip();
         let parsed = ip.parse::<IpAddr>().unwrap();
-        
+
         // L'IP doit être soit locale (127.0.0.1) soit une IP privée valide
         assert!(
             parsed.is_loopback() || is_private_ip(&ip),
@@ -148,7 +155,7 @@ mod tests {
     #[test]
     fn test_list_all_ips_no_loopback() {
         let ips = list_all_ips();
-        
+
         // Vérifie qu'aucune adresse de loopback n'est présente
         for (_, addresses) in ips.iter() {
             for addr in addresses {
@@ -165,13 +172,13 @@ mod tests {
     #[test]
     fn test_list_all_ips_only_ipv4() {
         let ips = list_all_ips();
-        
+
         // Vérifie que seules des adresses IPv4 sont retournées
         for (iface_name, addresses) in ips.iter() {
             if iface_name == "error" {
                 continue; // Skip error entries
             }
-            
+
             for addr in addresses {
                 if let Ok(parsed_ip) = addr.parse::<IpAddr>() {
                     assert!(
@@ -186,13 +193,13 @@ mod tests {
     #[test]
     fn test_list_all_ips_valid_format() {
         let ips = list_all_ips();
-        
+
         // Vérifie que toutes les IPs sont dans un format valide
         for (iface_name, addresses) in ips.iter() {
             if iface_name == "error" {
                 continue;
             }
-            
+
             for addr in addresses {
                 assert!(
                     addr.parse::<IpAddr>().is_ok(),
@@ -206,23 +213,26 @@ mod tests {
     #[test]
     fn test_list_all_ips_interface_names_not_empty() {
         let ips = list_all_ips();
-        
+
         // Vérifie que les noms d'interface ne sont pas vides
         for (iface_name, _) in ips.iter() {
-            assert!(!iface_name.is_empty(), "Interface names should not be empty");
+            assert!(
+                !iface_name.is_empty(),
+                "Interface names should not be empty"
+            );
         }
     }
 
     #[test]
     fn test_list_all_ips_no_duplicate_ips_per_interface() {
         let ips = list_all_ips();
-        
+
         // Vérifie qu'il n'y a pas de doublons par interface
         for (iface_name, addresses) in ips.iter() {
             if iface_name == "error" {
                 continue;
             }
-            
+
             let unique_addresses: std::collections::HashSet<_> = addresses.iter().collect();
             assert_eq!(
                 addresses.len(),

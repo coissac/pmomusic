@@ -10,14 +10,16 @@
 /// # Examples
 ///
 /// ```
-/// use votre_crate::guess_local_ip;
+/// use pmoutils::guess_local_ip;
 ///
 /// let ip = guess_local_ip();
 /// println!("Adresse IP locale: {}", ip);
 /// ```
-mod ip_utils;
+pub mod ip_utils;
 
 pub use ip_utils::guess_local_ip;
+pub mod process;
+pub use process::{ProcessPortInfo, TransportProtocol, find_process_using_port};
 
 /// Retourne une chaîne décrivant le système d'exploitation et sa version.
 ///

@@ -236,8 +236,24 @@ onMounted(()=>refreshImages());
 <style scoped>
 .cover-cache-manager {
   padding: 1rem;
-  max-width: 1400px;
-  margin: 0 auto;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  box-sizing: border-box;
+}
+
+@media (min-width: 1400px) {
+  .cover-cache-manager {
+    padding: 2rem;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+}
+
+@media (max-width: 768px) {
+  .cover-cache-manager {
+    padding: 0.5rem;
+  }
 }
 .header {
   display: flex;

@@ -22,12 +22,7 @@ pub struct SsdpDevice {
 
 impl SsdpDevice {
     /// Crée un nouveau device SSDP
-    pub fn new(
-        uuid: String,
-        device_type: String,
-        location: String,
-        server: String,
-    ) -> Self {
+    pub fn new(uuid: String, device_type: String, location: String, server: String) -> Self {
         // Construction automatique des NTs standards
         let notification_types = vec![
             format!("uuid:{}", uuid),

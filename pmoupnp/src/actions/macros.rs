@@ -24,6 +24,21 @@
 /// }
 /// ```
 ///
+/// ## Action avec handler personnalisé
+///
+/// ```ignore
+/// define_action! {
+///     pub static ACTION_NAME = "ActionName" {
+///         in "ParamName" => VARIABLE_REF,
+///         out "ResultParam" => RESULT_VAR,
+///     }
+///     with handler action_handler!(|instance, data| {
+///         // Logique personnalisée
+///         Ok(())
+///     })
+/// }
+/// ```
+///
 /// # Arguments
 ///
 /// - `ACTION_NAME` : Nom de la constante statique Rust
@@ -89,49 +104,107 @@
 /// - Initialisation paresseuse via `Lazy` (thread-safe)
 #[macro_export]
 macro_rules! define_action {
-    // Variante sans arguments
-    (pub static $name:ident = $action_name:literal) => {
-        pub static $name: once_cell::sync::Lazy<std::sync::Arc<$crate::actions::Action>> = 
-            once_cell::sync::Lazy::new(|| {
-                std::sync::Arc::new($crate::actions::Action::new($action_name.to_string()))
-            });
-    };
-    
-    // Variante avec arguments
-    (pub static $name:ident = $action_name:literal {
+    // Variante stateless avec arguments
+    (pub static $name:ident = $action_name:literal stateless {
         $(
             $direction:ident $arg_name:literal => $var_ref:expr
         ),* $(,)?
-    }) => {
-        pub static $name: once_cell::sync::Lazy<std::sync::Arc<$crate::actions::Action>> = 
+    }
+    $(with handler $handler:expr)?
+    ) => {
+        pub static $name: once_cell::sync::Lazy<std::sync::Arc<$crate::actions::Action>> =
             once_cell::sync::Lazy::new(|| {
                 let mut ac = $crate::actions::Action::new($action_name.to_string());
-                
+                ac.set_stateful(false);
+
                 $(
                     ac.add_argument(
                         define_action!(@arg $direction $arg_name, $var_ref)
                     );
                 )*
-                
+
+                $(
+                    ac.set_handler($handler);
+                )?
+
                 std::sync::Arc::new(ac)
             });
     };
-    
+
+    // Variante stateless sans arguments
+    (pub static $name:ident = $action_name:literal stateless
+    $(with handler $handler:expr)?
+    ) => {
+        pub static $name: once_cell::sync::Lazy<std::sync::Arc<$crate::actions::Action>> =
+            once_cell::sync::Lazy::new(|| {
+                let mut ac = $crate::actions::Action::new($action_name.to_string());
+                ac.set_stateful(false);
+
+                $(
+                    ac.set_handler($handler);
+                )?
+
+                std::sync::Arc::new(ac)
+            });
+    };
+
+    // Variante stateful (défaut) avec arguments
+    (pub static $name:ident = $action_name:literal {
+        $(
+            $direction:ident $arg_name:literal => $var_ref:expr
+        ),* $(,)?
+    }
+    $(with handler $handler:expr)?
+    ) => {
+        pub static $name: once_cell::sync::Lazy<std::sync::Arc<$crate::actions::Action>> =
+            once_cell::sync::Lazy::new(|| {
+                let mut ac = $crate::actions::Action::new($action_name.to_string());
+
+                $(
+                    ac.add_argument(
+                        define_action!(@arg $direction $arg_name, $var_ref)
+                    );
+                )*
+
+                $(
+                    ac.set_handler($handler);
+                )?
+
+                std::sync::Arc::new(ac)
+            });
+    };
+
+    // Variante stateful (défaut) sans arguments
+    (pub static $name:ident = $action_name:literal
+    $(with handler $handler:expr)?
+    ) => {
+        pub static $name: once_cell::sync::Lazy<std::sync::Arc<$crate::actions::Action>> =
+            once_cell::sync::Lazy::new(|| {
+                let mut ac = $crate::actions::Action::new($action_name.to_string());
+
+                $(
+                    ac.set_handler($handler);
+                )?
+
+                std::sync::Arc::new(ac)
+            });
+    };
+
     // Helper interne pour créer un argument d'entrée
     (@arg in $name:literal, $var:expr) => {
         std::sync::Arc::new(
             $crate::actions::Argument::new_in(
-                $name.to_string(), 
+                $name.to_string(),
                 std::sync::Arc::clone(&$var)
             )
         )
     };
-    
+
     // Helper interne pour créer un argument de sortie
     (@arg out $name:literal, $var:expr) => {
         std::sync::Arc::new(
             $crate::actions::Argument::new_out(
-                $name.to_string(), 
+                $name.to_string(),
                 std::sync::Arc::clone(&$var)
             )
         )
@@ -231,29 +304,10 @@ macro_rules! define_action {
 /// - La macro se développe en plusieurs appels à [`define_action!`]
 #[macro_export]
 macro_rules! define_actions {
-    // Variante avec arguments pour chaque action
     (
         $(
-            $name:ident = $action_name:literal {
-                $(
-                    $direction:ident $arg_name:literal => $var_ref:expr
-                ),* $(,)?
-            }
-        )*
-    ) => {
-        $(
-            define_action! {
-                pub static $name = $action_name {
-                    $($direction $arg_name => $var_ref),*
-                }
-            }
-        )*
-    };
-    
-    // Variante mixte : actions avec et sans arguments
-    (
-        $(
-            $name:ident = $action_name:literal $({
+            $name:ident = $action_name:literal $(stateless)?
+            $({
                 $(
                     $direction:ident $arg_name:literal => $var_ref:expr
                 ),* $(,)?
@@ -261,20 +315,15 @@ macro_rules! define_actions {
         )*
     ) => {
         $(
-            $(
-                define_action! {
-                    pub static $name = $action_name {
+            define_action! {
+                pub static $name = $action_name
+                $(stateless)?
+                $(
+                    {
                         $($direction $arg_name => $var_ref),*
                     }
-                }
-            )?
-            $(
-                // Cas sans accolades (action sans arguments)
-                #[allow(unused)]
-                define_action! {
-                    pub static $name = $action_name
-                }
-            )?
+                )?
+            }
         )*
     };
 }

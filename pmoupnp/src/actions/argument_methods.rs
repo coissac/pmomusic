@@ -3,7 +3,9 @@ use std::sync::Arc;
 use xmltree::{Element, XMLNode};
 
 use crate::{
-    actions::{Argument, ArgumentInstance}, state_variables::StateVariable, UpnpModel, UpnpObject, UpnpObjectType, UpnpTyped
+    UpnpModel, UpnpObject, UpnpObjectType, UpnpTyped,
+    actions::{Argument, ArgumentInstance},
+    state_variables::StateVariable,
 };
 
 impl UpnpTyped for Argument {
@@ -45,8 +47,6 @@ impl UpnpObject for Argument {
 impl UpnpModel for Argument {
     type Instance = ArgumentInstance;
 }
-
-
 
 impl Argument {
     fn new(name: String, state_variable: Arc<StateVariable>) -> Self {

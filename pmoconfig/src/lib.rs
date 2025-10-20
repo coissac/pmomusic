@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use dirs::home_dir;
 use lazy_static::lazy_static;
 use pmoutils::guess_local_ip;
-use serde_yaml::{Mapping, Value};
+use serde_yaml::{Mapping, Number, Value};
 use std::{
     env, fs,
     path::{Path, PathBuf},
@@ -40,7 +40,6 @@ impl Clone for Config {
 }
 
 impl Config {
-
     pub fn load_config(filename: &str) -> Result<Self> {
         let mut path = filename.to_string();
         let mut data: Option<Vec<u8>> = None;
@@ -100,10 +99,9 @@ impl Config {
             DEFAULT_CONFIG.as_bytes().to_vec()
         };
 
-
         let external_value: Value = serde_yaml::from_slice(&yaml_data)?;
         merge_yaml(&mut default_value, &external_value);
-        let mut config_value  = Self::lower_keys_value(default_value);
+        let mut config_value = Self::lower_keys_value(default_value);
 
         Self::apply_env_overrides(&mut config_value);
 
@@ -181,7 +179,6 @@ impl Config {
     fn get_value_internal(data: &Value, path: &[&str]) -> Result<Value> {
         let mut current = data;
         for (i, key) in path.iter().enumerate() {
-
             if let Value::Mapping(map) = current {
                 let key = key.to_lowercase();
 
@@ -293,6 +290,11 @@ impl Config {
         }
     }
 
+    pub fn set_http_port(&self, port: u16) -> Result<()> {
+        let n = Number::from(port);
+        self.set_value(&["host", "http_port"], Value::Number(n))
+    }
+
     pub fn get_device_udn(&self, devtype: &str, name: &str) -> Result<String> {
         let path = &["devices", devtype, name, "udn"];
         match self.get_value(path) {
@@ -305,11 +307,22 @@ impl Config {
         }
     }
 
+    pub fn set_device_udn(&self, devtype: &str, name: &str, udn: String) -> Result<()> {
+        self.set_value(&["devices", devtype, name, "udn"], Value::String(udn))
+    }
+
     pub fn get_cover_cache_dir(&self) -> Result<String> {
         match self.get_value(&["host", "cover_cache", "directory"])? {
             Value::String(s) => Ok(s),
             _ => Ok("./.pmomusic_covers".to_string()),
         }
+    }
+
+    pub fn set_cover_cache_dir(&self, directory: String) -> Result<()> {
+        self.set_value(
+            &["host", "cover_cache", "directory"],
+            Value::String(directory),
+        )
     }
 
     pub fn get_cover_cache_size(&self) -> Result<usize> {
@@ -318,6 +331,114 @@ impl Config {
             Value::Number(n) if n.is_u64() => Ok(n.as_u64().unwrap() as usize),
             _ => Ok(2000),
         }
+    }
+
+    pub fn set_cover_cache_size(&self, size: usize) -> Result<()> {
+        let n = Number::from(size);
+        self.set_value(&["host", "cover_cache", "size"], Value::Number(n))
+    }
+
+    pub fn get_audio_cache_dir(&self) -> Result<String> {
+        match self.get_value(&["host", "audio_cache", "directory"])? {
+            Value::String(s) => Ok(s),
+            _ => Ok("./.pmomusic_audio".to_string()),
+        }
+    }
+
+    pub fn set_audio_cache_dir(&self, directory: String) -> Result<()> {
+        self.set_value(
+            &["host", "audio_cache", "directory"],
+            Value::String(directory),
+        )
+    }
+
+    pub fn get_audio_cache_size(&self) -> Result<usize> {
+        match self.get_value(&["host", "audio_cache", "size"])? {
+            Value::Number(n) if n.is_i64() => Ok(n.as_i64().unwrap() as usize),
+            Value::Number(n) if n.is_u64() => Ok(n.as_u64().unwrap() as usize),
+            _ => Ok(500),
+        }
+    }
+
+    pub fn set_audio_cache_size(&self, size: usize) -> Result<()> {
+        let n = Number::from(size);
+        self.set_value(&["host", "audio_cache", "size"], Value::Number(n))
+    }
+
+    /// Récupère le nom d'utilisateur Qobuz depuis la configuration
+    pub fn get_qobuz_username(&self) -> Result<String> {
+        match self.get_value(&["accounts", "qobuz", "username"])? {
+            Value::String(s) => Ok(s),
+            _ => Err(anyhow!("Qobuz username not configured")),
+        }
+    }
+
+    /// Définit le nom d'utilisateur Qobuz dans la configuration
+    pub fn set_qobuz_username(&self, username: &str) -> Result<()> {
+        self.set_value(
+            &["accounts", "qobuz", "username"],
+            Value::String(username.to_string()),
+        )
+    }
+
+    /// Récupère le mot de passe Qobuz depuis la configuration
+    pub fn get_qobuz_password(&self) -> Result<String> {
+        match self.get_value(&["accounts", "qobuz", "password"])? {
+            Value::String(s) => Ok(s),
+            _ => Err(anyhow!("Qobuz password not configured")),
+        }
+    }
+
+    /// Définit le mot de passe Qobuz dans la configuration
+    pub fn set_qobuz_password(&self, password: &str) -> Result<()> {
+        self.set_value(
+            &["accounts", "qobuz", "password"],
+            Value::String(password.to_string()),
+        )
+    }
+
+    /// Récupère les credentials Qobuz (username + password) depuis la configuration
+    pub fn get_qobuz_credentials(&self) -> Result<(String, String)> {
+        let username = self.get_qobuz_username()?;
+        let password = self.get_qobuz_password()?;
+        Ok((username, password))
+    }
+
+    pub fn get_log_cache_size(&self) -> Result<usize> {
+        match self.get_value(&["host", "logger", "buffer_capacity"])? {
+            Value::Number(n) => n
+                .as_u64()
+                .map(|v| v as usize)
+                .ok_or_else(|| anyhow::anyhow!("Number is not an unsigned integer")),
+            _ => Ok(1000),
+        }
+    }
+
+    pub fn set_log_cache_size(&self, size: usize) -> Result<()> {
+        let n = Number::from(size);
+        self.set_value(&["host", "logger", "buffer_capacity"], Value::Number(n))
+    }
+
+    pub fn get_log_enable_console(&self) -> Result<bool> {
+        match self.get_value(&["host", "logger", "enable_console"])? {
+            Value::Bool(b) => Ok(b),
+            _ => Ok(true),
+        }
+    }
+
+    pub fn set_log_enable_console(&self, enable: bool) -> Result<()> {
+        self.set_value(&["host", "logger", "enable_console"], Value::Bool(enable))
+    }
+
+    pub fn get_log_min_level(&self) -> Result<String> {
+        match self.get_value(&["host", "logger", "min_level"])? {
+            Value::String(s) => Ok(s),
+            _ => Ok("TRACE".to_string()),
+        }
+    }
+
+    pub fn set_log_min_level(&self, level: String) -> Result<()> {
+        self.set_value(&["host", "logger", "min_level"], Value::String(level))
     }
 }
 
@@ -332,7 +453,9 @@ fn merge_yaml(default: &mut Value, external: &Value) {
             for (k, v) in emap {
                 match dmap.get_mut(k) {
                     Some(dv) => merge_yaml(dv, v),
-                    None => { dmap.insert(k.clone(), v.clone()); }
+                    None => {
+                        dmap.insert(k.clone(), v.clone());
+                    }
                 }
             }
         }

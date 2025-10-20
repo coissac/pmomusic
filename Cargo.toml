@@ -1,3 +1,21 @@
 [workspace]
 resolver = "3"
-members = ["PMOMusic", "pmoupnp","pmoconfig", "pmoutils", "pmodidl", "pmoserver", "pmoapp", "pmocovers"]
+members = [
+    "PMOMusic",
+    "pmoupnp",
+    "pmomediarenderer",
+    "pmomediaserver",
+    "pmoconfig",
+    "pmoutils",
+    "pmodidl",
+    "pmoserver",
+    "pmoapp",
+    "pmocache",
+    "pmocovers",
+    "pmoaudiocache",
+    "pmoaudio",
+    "pmoqobuz",
+    "pmoparadise",
+    "pmosource",
+    "pmoplaylist",
+]

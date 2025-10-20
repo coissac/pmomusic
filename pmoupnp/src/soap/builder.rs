@@ -88,12 +88,8 @@ mod tests {
     fn test_build_empty_response() {
         let values = HashMap::new();
 
-        let xml = build_soap_response(
-            "urn:schemas-upnp-org:service:AVTransport:1",
-            "Stop",
-            values,
-        )
-        .unwrap();
+        let xml = build_soap_response("urn:schemas-upnp-org:service:AVTransport:1", "Stop", values)
+            .unwrap();
 
         assert!(xml.contains("StopResponse"));
         assert!(xml.contains("xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\""));

@@ -1,15 +1,12 @@
 mod errors;
 mod instance_methods;
 mod macros;
-mod variable_methods;
-mod var_set_methods;
 mod var_inst_set_methods;
+mod var_set_methods;
+mod variable_methods;
 mod variable_trait;
 
-use std::{
-    collections::HashMap,
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 pub use crate::state_variables::variable_trait::UpnpVariable;
 use bevy_reflect::Reflect;
@@ -18,9 +15,9 @@ pub use errors::StateVariableError;
 use std::sync::RwLock;
 
 use crate::{
-    value_ranges::ValueRange, 
-    variable_types::{StateValue, StateVarType}, 
     UpnpObjectSet, UpnpObjectType,
+    value_ranges::ValueRange,
+    variable_types::{StateValue, StateVarType},
 };
 
 /// Type pour les fonctions de condition d'événement
@@ -58,7 +55,10 @@ pub struct StateVarInstance {
     old_value: RwLock<StateValue>,
     last_modified: RwLock<DateTime<Utc>>,
     last_notification: RwLock<DateTime<Utc>>,
+    /// Pointeur vers le service parent (interior mutability)
+    service: RwLock<Option<std::sync::Weak<crate::services::ServiceInstance>>>,
+    /// Cache pour la valeur réflexive (utilisé quand un parser est défini)
+    reflexive_cache: RwLock<Option<Arc<dyn Reflect>>>,
 }
 
 pub type StateVarInstanceSet = UpnpObjectSet<StateVarInstance>;
-

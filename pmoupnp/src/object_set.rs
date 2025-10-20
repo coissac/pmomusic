@@ -51,7 +51,7 @@ impl<T: UpnpTypedObject> UpnpObjectSet<T> {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// let set: UpnpObjectSet<MyObject> = UpnpObjectSet::new();
     /// ```
     pub fn new() -> Self {
@@ -73,7 +73,7 @@ impl<T: UpnpTypedObject> UpnpObjectSet<T> {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// let mut set = UpnpObjectSet::new();
     /// let obj = Arc::new(MyObject::new("test"));
     /// set.insert(obj)?;
@@ -100,11 +100,11 @@ impl<T: UpnpTypedObject> UpnpObjectSet<T> {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// let mut set = UpnpObjectSet::new();
     /// let obj1 = Arc::new(MyObject::new("test"));
     /// let obj2 = Arc::new(MyObject::new("test")); // Même nom
-    /// 
+    ///
     /// set.insert_or_replace(obj1);
     /// set.insert_or_replace(obj2); // Remplace obj1
     /// ```
@@ -129,10 +129,10 @@ impl<T: UpnpTypedObject> UpnpObjectSet<T> {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// let set = UpnpObjectSet::new();
     /// let obj = Arc::new(MyObject::new("test"));
-    /// 
+    ///
     /// if set.contains(obj.clone()) {
     ///     println!("L'objet existe déjà");
     /// }
@@ -157,9 +157,9 @@ impl<T: UpnpTypedObject> UpnpObjectSet<T> {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// let set = UpnpObjectSet::new();
-    /// 
+    ///
     /// if let Some(obj) = set.get_by_name("test") {
     ///     println!("Objet trouvé: {}", obj.get_name());
     /// }
@@ -178,9 +178,9 @@ impl<T: UpnpTypedObject> UpnpObjectSet<T> {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// let set = UpnpObjectSet::new();
-    /// 
+    ///
     /// for obj in set.all() {
     ///     println!("Objet: {}", obj.get_name());
     /// }

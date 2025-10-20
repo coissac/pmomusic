@@ -1,9 +1,6 @@
-use crate::{
-    UpnpObject,
-    actions::{ActionInstanceSet},
-};
+use crate::{UpnpObject, actions::ActionInstanceSet};
 
-use xmltree::{Element,XMLNode};
+use xmltree::{Element, XMLNode};
 
 impl UpnpObject for ActionInstanceSet {
     // Méthode pour convertir en XML (à implémenter avec une librairie XML)
@@ -18,4 +15,3 @@ impl UpnpObject for ActionInstanceSet {
         elem
     }
 }
-

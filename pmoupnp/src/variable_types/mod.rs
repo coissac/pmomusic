@@ -4,6 +4,7 @@ mod display_type;
 mod display_value;
 mod errors;
 mod fromstr;
+mod reflect_impl;
 mod type_methods;
 mod type_trait;
 mod value_methods;

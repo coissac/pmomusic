@@ -3,7 +3,14 @@ host:
   cover_cache:
     directory: "./.pmomusic_covers"
     size: 2000
-devices:
+  audio_cache:
+    directory: "./.pmomusic_audio"
+    size: 500
+  logger:
+    buffer_capacity: 200
+    enable_console: true
+    min_level: "INFO"
+
   mediarenderer:
     mpd_renderer:
   mediaserver:
