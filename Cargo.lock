@@ -2397,13 +2397,17 @@ name = "pmoconfig"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum",
  "dirs",
  "lazy_static",
  "log",
  "pmoutils",
  "serde",
+ "serde_json",
  "serde_yaml",
+ "tokio",
  "tracing",
+ "utoipa",
  "uuid",
 ]
 
@@ -2555,6 +2559,7 @@ dependencies = [
 name = "pmoserver"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-stream",
  "axum",
  "axum-embed",

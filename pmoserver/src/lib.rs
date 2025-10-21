@@ -68,9 +68,11 @@
 //! # }
 //! ```
 
+pub mod config_ext;
 pub mod logs;
 pub mod server;
 
+pub use config_ext::ConfigExt;
 pub use logs::{
     LogState, LoggingOptions, LogsApiDoc, SseLayer, create_logs_router, init_logging, log_dump,
     log_setup_get, log_setup_post, log_sse,
