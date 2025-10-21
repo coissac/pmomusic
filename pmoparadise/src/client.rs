@@ -6,11 +6,30 @@ use reqwest::Client;
 use std::time::Duration;
 use url::Url;
 
-fn normalize_base_url(base: &str) -> String {
+/// Default Radio Paradise API base URL
+pub const DEFAULT_API_BASE: &str = "https://api.radioparadise.com/api";
+
+/// Default block base URL pattern
+pub const DEFAULT_BLOCK_BASE: &str = "https://apps.radioparadise.com/blocks/chan/0";
+
+/// Default image base URL
+pub const DEFAULT_IMAGE_BASE: &str = "https://img.radioparadise.com/";
+
+/// Default timeout for metadata HTTP requests
+pub const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
+
+/// Default timeout for large block downloads/streams
+pub const DEFAULT_BLOCK_TIMEOUT_SECS: u64 = 180;
+
+/// Default User-Agent
+pub const DEFAULT_USER_AGENT: &str = "pmoparadise/0.1.0";
+
+
+fn normalize_cover_base_url(base: &str) -> String {
     let mut normalized = base.trim().to_string();
 
     if normalized.is_empty() {
-        return "https://img.radioparadise.com/".to_string();
+        return DEFAULT_IMAGE_BASE.to_string();
     }
 
     if normalized.starts_with("//") {
@@ -38,29 +57,12 @@ fn resolve_cover_with_base(base: &str, cover_path: &str) -> Result<Url> {
         return Ok(Url::parse(&url)?);
     }
 
-    let base = normalize_base_url(base);
+    let base = normalize_cover_base_url(base);
     let base_url = Url::parse(&base)?;
 
     Ok(base_url.join(cover_path)?)
 }
 
-/// Default Radio Paradise API base URL
-pub const DEFAULT_API_BASE: &str = "https://api.radioparadise.com/api";
-
-/// Default block base URL pattern
-pub const DEFAULT_BLOCK_BASE: &str = "https://apps.radioparadise.com/blocks/chan/0";
-
-/// Default image base URL
-pub const DEFAULT_IMAGE_BASE: &str = "https://img.radioparadise.com/";
-
-/// Default timeout for metadata HTTP requests
-pub const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
-
-/// Default timeout for large block downloads/streams
-pub const DEFAULT_BLOCK_TIMEOUT_SECS: u64 = 180;
-
-/// Default User-Agent
-pub const DEFAULT_USER_AGENT: &str = "pmoparadise/0.1.0";
 
 /// Radio Paradise HTTP client
 ///
@@ -116,7 +118,7 @@ impl RadioParadiseClient {
             client,
             api_base: DEFAULT_API_BASE.to_string(),
             block_base: DEFAULT_BLOCK_BASE.to_string(),
-            image_base: normalize_base_url(DEFAULT_IMAGE_BASE),
+            image_base: normalize_cover_base_url(DEFAULT_IMAGE_BASE),
             bitrate: Bitrate::default(),
             channel: 0,
             request_timeout: Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS),
@@ -223,7 +225,7 @@ impl RadioParadiseClient {
 
         // Set image_base if not provided
         if let Some(ref mut base) = block.image_base {
-            *base = normalize_base_url(base);
+            *base = normalize_cover_base_url(base);
         } else {
             block.image_base = Some(self.image_base.clone());
         }
@@ -439,7 +441,7 @@ impl ClientBuilder {
         } else {
             self.block_base.clone()
         };
-        let image_base = normalize_base_url(&self.image_base);
+        let image_base = normalize_cover_base_url(&self.image_base);
 
         Ok(RadioParadiseClient {
             client,

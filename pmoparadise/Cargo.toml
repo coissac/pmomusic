@@ -19,6 +19,16 @@ tokio = { version = "1", features = ["full"] }
 # Sérialisation/Désérialisation JSON
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde_yaml = "0.9"
+
+# Helpers
+chrono = { version = "0.4", features = ["serde"] }
+async-trait = "0.1"
+sha2 = "0.10"
+hex = "0.4"
+tokio-util = { version = "0.7", features = ["io"] }
+async-stream = "0.3"
+rusqlite = { version = "0.37", features = ["bundled"] }
 
 # Gestion des erreurs
 thiserror = "1.0"
@@ -54,6 +64,7 @@ pmosource = { path = "../pmosource" }
 
 # Playlist management for FIFO support
 pmoplaylist = { path = "../pmoplaylist" }
+pmoconfig = { path = "../pmoconfig" }
 
 # Cache support (OBLIGATOIRE - architecture refactorisée)
 pmocovers = { path = "../pmocovers" }
@@ -70,7 +81,7 @@ metadata-only = []
 # Active le décodage FLAC par-track
 per-track = ["dep:claxon", "dep:hound", "dep:tempfile"]
 # Active l'API REST pmoserver
-pmoserver = ["dep:pmoserver", "dep:utoipa", "dep:axum"]
+pmoserver = ["dep:pmoserver", "dep:utoipa", "dep:axum", "server"]
 # Active le media server UPnP (includes pmoserver)
 mediaserver = ["dep:pmoupnp", "dep:pmodidl", "dep:uuid", "pmoserver"]
 # Feature pour activer le support serveur (cache registry)
