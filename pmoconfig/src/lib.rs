@@ -1,3 +1,29 @@
+//! # PMOMusic Configuration Module
+//!
+//! This module provides configuration management for PMOMusic, including:
+//! - Loading configuration from YAML files
+//! - Merging with embedded default configuration
+//! - Environment variable overrides
+//! - Type-safe getters and setters for configuration values
+//! - Thread-safe singleton access pattern
+//!
+//! ## Usage
+//!
+//! ```no_run
+//! use pmoconfig::get_config;
+//!
+//! // Get the global configuration
+//! let config = get_config();
+//!
+//! // Access configuration values
+//! let port = config.get_http_port();
+//! let cache_dir = config.get_cover_cache_dir()?;
+//!
+//! // Update configuration values
+//! config.set_http_port(9000)?;
+//! # Ok::<(), anyhow::Error>(())
+//! ```
+
 use anyhow::{anyhow, Result};
 use dirs::home_dir;
 use lazy_static::lazy_static;
@@ -5,11 +31,20 @@ use pmoutils::guess_local_ip;
 use serde_yaml::{Mapping, Number, Value};
 use std::{
     env, fs,
-    path::{Path, PathBuf},
+    path::Path,
     sync::{Arc, Mutex},
 };
-use tracing::{info, warn};
+use tracing::info;
 use uuid::Uuid;
+
+// Modules conditionnels pour l'API REST
+#[cfg(feature = "api")]
+pub mod api;
+#[cfg(feature = "api")]
+pub mod openapi;
+
+#[cfg(feature = "api")]
+pub use openapi::ApiDoc;
 
 // Configuration par défaut intégrée
 const DEFAULT_CONFIG: &str = include_str!("pmomusic.yaml");
@@ -19,11 +54,91 @@ lazy_static! {
         Arc::new(Config::load_config("").expect("Failed to load PMOMusic configuration"));
 }
 
-const ENV_CONFIG_FILE: &str = "PMOMUSIC_CONFIG";
+const ENV_CONFIG_DIR: &str = "PMOMUSIC_CONFIG";
 const ENV_PREFIX: &str = "PMOMUSIC_CONFIG__";
 
+// Default values for configuration
+const DEFAULT_HTTP_PORT: u16 = 8080;
+const DEFAULT_COVER_CACHE_DIR: &str = "cache_covers";
+const DEFAULT_COVER_CACHE_SIZE: usize = 2000;
+const DEFAULT_AUDIO_CACHE_DIR: &str = "cache_audio";
+const DEFAULT_AUDIO_CACHE_SIZE: usize = 500;
+const DEFAULT_LOG_BUFFER_CAPACITY: usize = 1000;
+const DEFAULT_LOG_MIN_LEVEL: &str = "TRACE";
+const DEFAULT_LOG_ENABLE_CONSOLE: bool = true;
+
+/// Macro to generate getter/setter for String values
+macro_rules! impl_string_config {
+    ($(#[$meta:meta])* $getter:ident, $setter:ident, $path:expr, $default:expr) => {
+        $(#[$meta])*
+        pub fn $getter(&self) -> Result<String> {
+            match self.get_value($path)? {
+                Value::String(s) => Ok(s),
+                _ => Err(anyhow!(concat!(stringify!($getter), " not configured"))),
+            }
+        }
+
+        $(#[$meta])*
+        pub fn $setter(&self, value: &str) -> Result<()> {
+            self.set_value($path, Value::String(value.to_string()))
+        }
+    };
+}
+
+/// Macro to generate getter/setter for usize values with default
+macro_rules! impl_usize_config {
+    ($getter:ident, $setter:ident, $path:expr, $default:expr) => {
+        pub fn $getter(&self) -> Result<usize> {
+            match self.get_value($path)? {
+                Value::Number(n) if n.is_i64() => Ok(n.as_i64().unwrap() as usize),
+                Value::Number(n) if n.is_u64() => Ok(n.as_u64().unwrap() as usize),
+                _ => Ok($default),
+            }
+        }
+
+        pub fn $setter(&self, size: usize) -> Result<()> {
+            let n = Number::from(size);
+            self.set_value($path, Value::Number(n))
+        }
+    };
+}
+
+/// Macro to generate getter/setter for bool values with default
+macro_rules! impl_bool_config {
+    ($getter:ident, $setter:ident, $path:expr, $default:expr) => {
+        pub fn $getter(&self) -> Result<bool> {
+            match self.get_value($path)? {
+                Value::Bool(b) => Ok(b),
+                _ => Ok($default),
+            }
+        }
+
+        pub fn $setter(&self, value: bool) -> Result<()> {
+            self.set_value($path, Value::Bool(value))
+        }
+    };
+}
+
+/// Configuration manager for PMOMusic
+///
+/// This structure manages the application configuration, including:
+/// - Loading configuration from YAML files
+/// - Merging with default configuration
+/// - Handling environment variable overrides
+/// - Providing typed getters/setters for configuration values
+///
+/// # Examples
+///
+/// ```no_run
+/// use pmoconfig::get_config;
+///
+/// let config = get_config();
+/// let port = config.get_http_port();
+/// println!("HTTP port: {}", port);
+/// ```
 #[derive(Debug)]
 pub struct Config {
+    config_dir: String,
     path: String,
     data: Mutex<Value>,
 }
@@ -33,6 +148,7 @@ impl Clone for Config {
     fn clone(&self) -> Self {
         let data = self.data.lock().unwrap().clone();
         Self {
+            config_dir: self.config_dir.clone(),
             path: self.path.clone(),
             data: Mutex::new(data),
         }
@@ -40,100 +156,144 @@ impl Clone for Config {
 }
 
 impl Config {
-    pub fn load_config(filename: &str) -> Result<Self> {
-        let mut path = filename.to_string();
-        let mut data: Option<Vec<u8>> = None;
+    /// Finds a config directory by trying different locations in order
+    fn find_config_dir(directory: &str) -> String {
+        // 1. Try provided directory
+        if !directory.is_empty() {
+            return directory.to_string();
+        }
 
+        // 2. Try environment variable
+        if let Ok(env_path) = env::var(ENV_CONFIG_DIR) {
+            info!(env_var=ENV_CONFIG_DIR, path=%env_path, "Trying to load config from env");
+            return env_path;
+        }
+
+        // 3. Try current directory
+        if Path::new(".pmomusic").exists() {
+            return ".pmomusic".to_string();
+        }
+
+        // 4. Try home directory
+        if let Some(home) = home_dir() {
+            let home_config = home.join(".pmomusic");
+            if home_config.exists() {
+                return home_config.to_string_lossy().to_string();
+            }
+        }
+
+        // Default fallback
+        ".pmomusic".to_string()
+    }
+
+    /// Validates and prepares a config directory
+    fn validate_config_dir(path: &Path) -> Result<()> {
+        // Create if doesn't exist
+        if !path.exists() {
+            fs::create_dir_all(path)?;
+        }
+
+        // Verify it's a directory
+        if !path.is_dir() {
+            return Err(anyhow!("Le chemin spécifié n'est pas un répertoire"));
+        }
+
+        // Test write permission
+        let test_file = path.join(".write_test");
+        fs::write(&test_file, b"test")?;
+        fs::remove_file(&test_file)?;
+
+        // Test read permission
+        fs::read_dir(path)?;
+
+        Ok(())
+    }
+
+    /// Determines and validates the configuration directory
+    ///
+    /// The directory is searched in the following order:
+    /// 1. The provided `directory` parameter if not empty
+    /// 2. The `PMOMUSIC_CONFIG` environment variable
+    /// 3. `.pmomusic` in the current directory
+    /// 4. `.pmomusic` in the user's home directory
+    ///
+    /// The directory is created if it doesn't exist, and validated for read/write permissions.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the directory cannot be created or validated
+    pub fn config_dir(directory: &str) -> String {
+        let dir_path = Self::find_config_dir(directory);
+        let path = Path::new(&dir_path);
+
+        Self::validate_config_dir(path)
+            .expect("Impossible de valider le répertoire de configuration");
+
+        dir_path
+    }
+
+    /// Loads the configuration from the specified directory
+    ///
+    /// This method:
+    /// 1. Determines the configuration directory
+    /// 2. Loads the default embedded configuration
+    /// 3. Merges it with the external config.yaml file if present
+    /// 4. Applies environment variable overrides
+    /// 5. Saves the merged configuration
+    ///
+    /// # Arguments
+    ///
+    /// * `directory` - The directory containing the config.yaml file, or empty to use defaults
+    ///
+    /// # Returns
+    ///
+    /// Returns a `Result` containing the loaded `Config` or an error
+    pub fn load_config(directory: &str) -> Result<Self> {
+        // Obtenir le répertoire de configuration
+        let config_dir = Self::config_dir(directory);
+        info!(config_dir=%config_dir, "Using config directory");
+
+        // Construire le chemin du fichier config.yaml
+        let config_file_path = Path::new(&config_dir).join("config.yaml");
+        let path = config_file_path.to_string_lossy().to_string();
+
+        // Charger la configuration par défaut
         let mut default_value: Value = serde_yaml::from_str(DEFAULT_CONFIG)?;
 
-        // Essayer de charger depuis différents emplacements
-        if !filename.is_empty() {
-            info!(config_file=%path, "Trying to load config");
-            data = fs::read(&path).ok();
-            if data.is_none() {
-                warn!(config_file=%path, "Cannot read config file");
-                path.clear();
-            }
-        }
-
-        if path.is_empty() {
-            if let Ok(env_path) = env::var(ENV_CONFIG_FILE) {
-                info!(env_var=ENV_CONFIG_FILE, path=%env_path, "Trying to load config from env");
-                path = env_path.clone();
-                data = fs::read(&path).ok();
-                if data.is_none() {
-                    warn!(config_file=%path, "Cannot read config file from env var");
-                    path.clear();
-                }
-            }
-        }
-
-        if path.is_empty() {
-            let current_dir = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-            path = current_dir
-                .join(".pmomusic.yml")
-                .to_string_lossy()
-                .to_string();
-            info!(config_file=%path, "Trying to load config file from current directory");
-            data = fs::read(&path).ok();
-            if data.is_none() {
-                warn!(config_file=%path, "Cannot read config file in current dir");
-                path.clear();
-            }
-        }
-
-        if path.is_empty() {
-            path = Self::get_home_yml_path();
-            info!(config_file=%path, "Trying to load config file from home directory");
-            data = fs::read(&path).ok();
-            if data.is_none() {
-                warn!(config_file=%path, "Cannot read config file in home directory");
-                path.clear();
-            }
-        }
-
-        let yaml_data = if let Some(d) = data {
-            d
+        // Essayer de charger le fichier de configuration
+        let yaml_data = if let Ok(data) = fs::read(&path) {
+            info!(config_file=%path, "Loaded config file");
+            data
         } else {
-            info!("Using default embedded config");
+            info!(config_file=%path, "Config file not found, using default embedded config");
             DEFAULT_CONFIG.as_bytes().to_vec()
         };
 
+        // Merger avec la config par défaut
         let external_value: Value = serde_yaml::from_slice(&yaml_data)?;
         merge_yaml(&mut default_value, &external_value);
         let mut config_value = Self::lower_keys_value(default_value);
 
+        // Appliquer les overrides depuis les variables d'environnement
         Self::apply_env_overrides(&mut config_value);
 
-        if path.is_empty() || !Self::is_writable(&path) {
-            let candidates = [
-                filename.to_string(),
-                env::var(ENV_CONFIG_FILE).unwrap_or_default(),
-                ".pmomusic.yml".to_string(),
-                Self::get_home_yml_path(),
-            ];
-            for candidate in candidates.iter().filter(|c| !c.is_empty()) {
-                if Self::is_writable(candidate) {
-                    path = candidate.clone();
-                    break;
-                }
-            }
-        }
-
-        if path.is_empty() {
-            return Err(anyhow!("Cannot find a place to store config file"));
-        }
-
-        info!(config_file=%path, "Config file will be stored here");
-
+        // Créer la configuration
         let config = Config {
+            config_dir,
             path,
             data: Mutex::new(config_value),
         };
+
+        // Sauvegarder la configuration
         config.save()?;
         Ok(config)
     }
 
+    /// Saves the current configuration to the config.yaml file
+    ///
+    /// # Returns
+    ///
+    /// Returns a `Result` indicating success or failure
     pub fn save(&self) -> Result<()> {
         let data = self.data.lock().unwrap();
         let yaml = serde_yaml::to_string(&*data)?;
@@ -141,6 +301,16 @@ impl Config {
         Ok(())
     }
 
+    /// Sets a configuration value at the specified path and saves it
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Array of keys representing the path (e.g., `&["host", "http_port"]`)
+    /// * `value` - The YAML value to set
+    ///
+    /// # Returns
+    ///
+    /// Returns a `Result` indicating success or failure
     pub fn set_value(&self, path: &[&str], value: Value) -> Result<()> {
         let mut data = self.data.lock().unwrap();
         Self::set_value_internal(&mut data, path, value.clone())?;
@@ -171,6 +341,15 @@ impl Config {
         }
     }
 
+    /// Gets a configuration value at the specified path
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Array of keys representing the path (e.g., `&["host", "http_port"]`)
+    ///
+    /// # Returns
+    ///
+    /// Returns a `Result` containing the YAML value or an error if the path doesn't exist
     pub fn get_value(&self, path: &[&str]) -> Result<Value> {
         let data = self.data.lock().unwrap();
         Self::get_value_internal(&data, path)
@@ -192,14 +371,6 @@ impl Config {
             }
         }
         Ok(current.clone())
-    }
-
-    fn get_home_yml_path() -> String {
-        home_dir()
-            .map(|p| p.join(".pmomusic.yml"))
-            .unwrap_or_else(|| PathBuf::from("."))
-            .to_string_lossy()
-            .to_string()
     }
 
     fn apply_env_overrides(config: &mut Value) {
@@ -244,17 +415,64 @@ impl Config {
         }
     }
 
-    fn is_writable(path: &str) -> bool {
-        let path = Path::new(path);
-        if let Some(parent) = path.parent() {
-            fs::metadata(parent)
-                .map(|m| !m.permissions().readonly())
-                .unwrap_or(false)
+    /// Résout un chemin relatif ou absolu et crée le répertoire si nécessaire
+    fn resolve_and_create_dir(&self, dir_path: &str) -> Result<String> {
+        let path = Path::new(dir_path);
+
+        // Déterminer si le chemin est relatif ou absolu
+        let absolute_path = if path.is_absolute() {
+            path.to_path_buf()
         } else {
-            false
+            // Chemin relatif : le résoudre par rapport à config_dir
+            Path::new(&self.config_dir).join(path)
+        };
+
+        // Créer le répertoire s'il n'existe pas
+        if !absolute_path.exists() {
+            fs::create_dir_all(&absolute_path)?;
+            info!(directory=%absolute_path.display(), "Created cache directory");
+        }
+
+        // Retourner le chemin absolu
+        Ok(absolute_path.to_string_lossy().to_string())
+    }
+
+    /// Generic function to get cache directory
+    fn get_cache_dir(&self, cache_type: &str, default_dir: &str) -> Result<String> {
+        let dir_path = match self.get_value(&["host", cache_type, "directory"]) {
+            Ok(Value::String(s)) => s,
+            _ => default_dir.to_string(),
+        };
+        self.resolve_and_create_dir(&dir_path)
+    }
+
+    /// Generic function to set cache directory
+    fn set_cache_dir(&self, cache_type: &str, directory: String) -> Result<()> {
+        self.set_value(&["host", cache_type, "directory"], Value::String(directory))
+    }
+
+    /// Generic function to get cache size
+    fn get_cache_size(&self, cache_type: &str, default_size: usize) -> Result<usize> {
+        match self.get_value(&["host", cache_type, "size"])? {
+            Value::Number(n) if n.is_i64() => Ok(n.as_i64().unwrap() as usize),
+            Value::Number(n) if n.is_u64() => Ok(n.as_u64().unwrap() as usize),
+            _ => Ok(default_size),
         }
     }
 
+    /// Generic function to set cache size
+    fn set_cache_size(&self, cache_type: &str, size: usize) -> Result<()> {
+        let n = Number::from(size);
+        self.set_value(&["host", cache_type, "size"], Value::Number(n))
+    }
+
+    /// Gets the base URL for the HTTP server
+    ///
+    /// Returns the configured base URL, or attempts to guess the local IP address if not configured.
+    ///
+    /// # Returns
+    ///
+    /// The base URL as a String
     pub fn get_base_url(&self) -> String {
         match self.get_value(&["host", "base_url"]) {
             Ok(Value::String(s)) if !s.is_empty() => s,
@@ -269,32 +487,58 @@ impl Config {
         }
     }
 
+    /// Gets the HTTP port from configuration
+    ///
+    /// Returns the configured HTTP port, or the default port (8080) if not configured or invalid.
+    ///
+    /// # Returns
+    ///
+    /// The HTTP port as a u16
     pub fn get_http_port(&self) -> u16 {
         match self.get_value(&["host", "http_port"]) {
             Ok(Value::Number(n)) if n.is_i64() => n.as_i64().unwrap() as u16,
             Ok(Value::String(s)) => match s.parse::<u16>() {
                 Ok(port) => port,
                 Err(_) => {
-                    tracing::warn!("Invalid HTTP port '{}', using default 8080", s);
-                    8080
+                    tracing::warn!("Invalid HTTP port '{}', using default {}", s, DEFAULT_HTTP_PORT);
+                    DEFAULT_HTTP_PORT
                 }
             },
             Ok(_) => {
-                tracing::warn!("HTTP port not a number or string, using default 8080");
-                8080
+                tracing::warn!("HTTP port not a number or string, using default {}", DEFAULT_HTTP_PORT);
+                DEFAULT_HTTP_PORT
             }
             Err(err) => {
-                tracing::warn!("Failed to get HTTP port: {}, using default 8080", err);
-                8080
+                tracing::warn!("Failed to get HTTP port: {}, using default {}", err, DEFAULT_HTTP_PORT);
+                DEFAULT_HTTP_PORT
             }
         }
     }
 
+    /// Sets the HTTP port in configuration
+    ///
+    /// # Arguments
+    ///
+    /// * `port` - The port number to set
+    ///
+    /// # Returns
+    ///
+    /// Returns a `Result` indicating success or failure
     pub fn set_http_port(&self, port: u16) -> Result<()> {
         let n = Number::from(port);
         self.set_value(&["host", "http_port"], Value::Number(n))
     }
 
+    /// Gets the UDN (Unique Device Name) for a device, generating one if it doesn't exist
+    ///
+    /// # Arguments
+    ///
+    /// * `devtype` - The device type (e.g., "mediarenderer")
+    /// * `name` - The device name
+    ///
+    /// # Returns
+    ///
+    /// Returns a `Result` containing the UDN string, generating a new UUID if not found
     pub fn get_device_udn(&self, devtype: &str, name: &str) -> Result<String> {
         let path = &["devices", devtype, name, "udn"];
         match self.get_value(path) {
@@ -307,146 +551,173 @@ impl Config {
         }
     }
 
+    /// Sets the UDN (Unique Device Name) for a device
+    ///
+    /// # Arguments
+    ///
+    /// * `devtype` - The device type (e.g., "mediarenderer")
+    /// * `name` - The device name
+    /// * `udn` - The UDN to set
+    ///
+    /// # Returns
+    ///
+    /// Returns a `Result` indicating success or failure
     pub fn set_device_udn(&self, devtype: &str, name: &str, udn: String) -> Result<()> {
         self.set_value(&["devices", devtype, name, "udn"], Value::String(udn))
     }
 
+    /// Gets the cover cache directory
+    ///
+    /// # Returns
+    ///
+    /// Returns a `Result` containing the absolute path to the cover cache directory (default: "cache_covers")
     pub fn get_cover_cache_dir(&self) -> Result<String> {
-        match self.get_value(&["host", "cover_cache", "directory"])? {
-            Value::String(s) => Ok(s),
-            _ => Ok("./.pmomusic_covers".to_string()),
-        }
+        self.get_cache_dir("cover_cache", DEFAULT_COVER_CACHE_DIR)
     }
 
+    /// Sets the cover cache directory
+    ///
+    /// # Arguments
+    ///
+    /// * `directory` - The directory path (absolute or relative to config dir)
     pub fn set_cover_cache_dir(&self, directory: String) -> Result<()> {
-        self.set_value(
-            &["host", "cover_cache", "directory"],
-            Value::String(directory),
-        )
+        self.set_cache_dir("cover_cache", directory)
     }
 
+    /// Gets the maximum number of items in the cover cache
+    ///
+    /// # Returns
+    ///
+    /// Returns a `Result` containing the cache size (default: 2000)
     pub fn get_cover_cache_size(&self) -> Result<usize> {
-        match self.get_value(&["host", "cover_cache", "size"])? {
-            Value::Number(n) if n.is_i64() => Ok(n.as_i64().unwrap() as usize),
-            Value::Number(n) if n.is_u64() => Ok(n.as_u64().unwrap() as usize),
-            _ => Ok(2000),
-        }
+        self.get_cache_size("cover_cache", DEFAULT_COVER_CACHE_SIZE)
     }
 
+    /// Sets the maximum number of items in the cover cache
+    ///
+    /// # Arguments
+    ///
+    /// * `size` - The maximum cache size
     pub fn set_cover_cache_size(&self, size: usize) -> Result<()> {
-        let n = Number::from(size);
-        self.set_value(&["host", "cover_cache", "size"], Value::Number(n))
+        self.set_cache_size("cover_cache", size)
     }
 
+    /// Gets the audio cache directory
+    ///
+    /// # Returns
+    ///
+    /// Returns a `Result` containing the absolute path to the audio cache directory (default: "cache_audio")
     pub fn get_audio_cache_dir(&self) -> Result<String> {
-        match self.get_value(&["host", "audio_cache", "directory"])? {
-            Value::String(s) => Ok(s),
-            _ => Ok("./.pmomusic_audio".to_string()),
-        }
+        self.get_cache_dir("audio_cache", DEFAULT_AUDIO_CACHE_DIR)
     }
 
+    /// Sets the audio cache directory
+    ///
+    /// # Arguments
+    ///
+    /// * `directory` - The directory path (absolute or relative to config dir)
     pub fn set_audio_cache_dir(&self, directory: String) -> Result<()> {
-        self.set_value(
-            &["host", "audio_cache", "directory"],
-            Value::String(directory),
-        )
+        self.set_cache_dir("audio_cache", directory)
     }
 
+    /// Gets the maximum number of items in the audio cache
+    ///
+    /// # Returns
+    ///
+    /// Returns a `Result` containing the cache size (default: 500)
     pub fn get_audio_cache_size(&self) -> Result<usize> {
-        match self.get_value(&["host", "audio_cache", "size"])? {
-            Value::Number(n) if n.is_i64() => Ok(n.as_i64().unwrap() as usize),
-            Value::Number(n) if n.is_u64() => Ok(n.as_u64().unwrap() as usize),
-            _ => Ok(500),
-        }
+        self.get_cache_size("audio_cache", DEFAULT_AUDIO_CACHE_SIZE)
     }
 
+    /// Sets the maximum number of items in the audio cache
+    ///
+    /// # Arguments
+    ///
+    /// * `size` - The maximum cache size
     pub fn set_audio_cache_size(&self, size: usize) -> Result<()> {
-        let n = Number::from(size);
-        self.set_value(&["host", "audio_cache", "size"], Value::Number(n))
+        self.set_cache_size("audio_cache", size)
     }
 
-    /// Récupère le nom d'utilisateur Qobuz depuis la configuration
-    pub fn get_qobuz_username(&self) -> Result<String> {
-        match self.get_value(&["accounts", "qobuz", "username"])? {
-            Value::String(s) => Ok(s),
-            _ => Err(anyhow!("Qobuz username not configured")),
-        }
-    }
+    impl_string_config!(
+        /// Gets the Qobuz username from configuration
+        get_qobuz_username,
+        set_qobuz_username,
+        &["accounts", "qobuz", "username"],
+        ""
+    );
 
-    /// Définit le nom d'utilisateur Qobuz dans la configuration
-    pub fn set_qobuz_username(&self, username: &str) -> Result<()> {
-        self.set_value(
-            &["accounts", "qobuz", "username"],
-            Value::String(username.to_string()),
-        )
-    }
+    impl_string_config!(
+        /// Gets the Qobuz password from configuration
+        get_qobuz_password,
+        set_qobuz_password,
+        &["accounts", "qobuz", "password"],
+        ""
+    );
 
-    /// Récupère le mot de passe Qobuz depuis la configuration
-    pub fn get_qobuz_password(&self) -> Result<String> {
-        match self.get_value(&["accounts", "qobuz", "password"])? {
-            Value::String(s) => Ok(s),
-            _ => Err(anyhow!("Qobuz password not configured")),
-        }
-    }
-
-    /// Définit le mot de passe Qobuz dans la configuration
-    pub fn set_qobuz_password(&self, password: &str) -> Result<()> {
-        self.set_value(
-            &["accounts", "qobuz", "password"],
-            Value::String(password.to_string()),
-        )
-    }
-
-    /// Récupère les credentials Qobuz (username + password) depuis la configuration
+    /// Gets the Qobuz credentials (username and password) from configuration
+    ///
+    /// # Returns
+    ///
+    /// Returns a `Result` containing a tuple of (username, password)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either username or password is not configured
     pub fn get_qobuz_credentials(&self) -> Result<(String, String)> {
         let username = self.get_qobuz_username()?;
         let password = self.get_qobuz_password()?;
         Ok((username, password))
     }
 
-    pub fn get_log_cache_size(&self) -> Result<usize> {
-        match self.get_value(&["host", "logger", "buffer_capacity"])? {
-            Value::Number(n) => n
-                .as_u64()
-                .map(|v| v as usize)
-                .ok_or_else(|| anyhow::anyhow!("Number is not an unsigned integer")),
-            _ => Ok(1000),
-        }
-    }
+    impl_usize_config!(get_log_cache_size, set_log_cache_size, &["host", "logger", "buffer_capacity"], DEFAULT_LOG_BUFFER_CAPACITY);
 
-    pub fn set_log_cache_size(&self, size: usize) -> Result<()> {
-        let n = Number::from(size);
-        self.set_value(&["host", "logger", "buffer_capacity"], Value::Number(n))
-    }
+    impl_bool_config!(get_log_enable_console, set_log_enable_console, &["host", "logger", "enable_console"], DEFAULT_LOG_ENABLE_CONSOLE);
 
-    pub fn get_log_enable_console(&self) -> Result<bool> {
-        match self.get_value(&["host", "logger", "enable_console"])? {
-            Value::Bool(b) => Ok(b),
-            _ => Ok(true),
-        }
-    }
-
-    pub fn set_log_enable_console(&self, enable: bool) -> Result<()> {
-        self.set_value(&["host", "logger", "enable_console"], Value::Bool(enable))
-    }
-
+    /// Récupère le niveau de log minimum depuis la configuration
     pub fn get_log_min_level(&self) -> Result<String> {
         match self.get_value(&["host", "logger", "min_level"])? {
             Value::String(s) => Ok(s),
-            _ => Ok("TRACE".to_string()),
+            _ => Ok(DEFAULT_LOG_MIN_LEVEL.to_string()),
         }
     }
 
+    /// Définit le niveau de log minimum dans la configuration
     pub fn set_log_min_level(&self, level: String) -> Result<()> {
         self.set_value(&["host", "logger", "min_level"], Value::String(level))
     }
 }
 
-/// Retourne l'instance globale
+/// Returns the global configuration instance
+///
+/// This function provides access to the singleton configuration instance,
+/// which is lazily loaded on first access.
+///
+/// # Returns
+///
+/// An `Arc<Config>` pointing to the global configuration
+///
+/// # Examples
+///
+/// ```no_run
+/// use pmoconfig::get_config;
+///
+/// let config = get_config();
+/// let port = config.get_http_port();
+/// ```
 pub fn get_config() -> Arc<Config> {
     CONFIG.clone()
 }
 
+/// Merges external YAML configuration into default configuration
+///
+/// This function recursively merges two YAML value trees:
+/// - For mappings (objects), it merges keys from external into default
+/// - For scalars and sequences, external values replace default values
+///
+/// # Arguments
+///
+/// * `default` - The default configuration to merge into (modified in place)
+/// * `external` - The external configuration to merge from
 fn merge_yaml(default: &mut Value, external: &Value) {
     match (default, external) {
         (Value::Mapping(dmap), Value::Mapping(emap)) => {

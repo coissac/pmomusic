@@ -4,8 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-pmoconfig = { path = "../pmoconfig" }
+pmoconfig = { path = "../pmoconfig", features = ["api"] }
 
+anyhow = "1.0"
 axum = "0.8.4"
 tokio = { version = "1.35", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
 tokio-stream = "0.1"
