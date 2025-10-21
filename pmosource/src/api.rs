@@ -24,7 +24,7 @@ use axum::{
     extract::{Path, Query},
     http::{header, StatusCode},
     response::{IntoResponse, Response},
-    routing::{delete, get},
+    routing::{get, post},
     Json, Router,
 };
 
@@ -32,7 +32,9 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "server")]
-use crate::{MusicSource, SourceCapabilities, SourceStatistics};
+use crate::{
+    AudioFormat, CacheStatus, MusicSource, MusicSourceError, SourceCapabilities, SourceStatistics,
+};
 
 #[cfg(feature = "server")]
 use std::sync::Arc;
@@ -220,6 +222,151 @@ pub struct BrowseItemInfo {
     pub creator: Option<String>,
     pub album_art: Option<String>,
     pub resources: Vec<BrowseItemResourceInfo>,
+}
+
+/// Paramètres génériques pour cibler un objet d'une source
+#[cfg(feature = "server")]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ObjectQuery {
+    /// ID de l'objet (container ou item)
+    pub object_id: String,
+}
+
+/// Réponse pour la résolution d'URI d'un objet
+#[cfg(feature = "server")]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct ResolveUriResponse {
+    /// ID de l'objet demandé
+    pub object_id: String,
+    /// URI résolue (cache ou origine)
+    pub uri: String,
+}
+
+/// États possibles pour le cache
+#[cfg(feature = "server")]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheStatusState {
+    NotCached,
+    Caching,
+    Cached,
+    Failed,
+}
+
+/// Informations détaillées sur le cache d'un objet
+#[cfg(feature = "server")]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct CacheStatusInfo {
+    /// État du cache
+    pub status: CacheStatusState,
+    /// Progression (0.0 - 1.0)
+    pub progress: Option<f32>,
+    /// Taille en octets si connue
+    pub size_bytes: Option<u64>,
+    /// Message d'erreur éventuel
+    pub error: Option<String>,
+}
+
+#[cfg(feature = "server")]
+impl From<CacheStatus> for CacheStatusInfo {
+    fn from(status: CacheStatus) -> Self {
+        match status {
+            CacheStatus::NotCached => Self {
+                status: CacheStatusState::NotCached,
+                progress: Some(0.0),
+                size_bytes: None,
+                error: None,
+            },
+            CacheStatus::Caching { progress } => Self {
+                status: CacheStatusState::Caching,
+                progress: Some(progress),
+                size_bytes: None,
+                error: None,
+            },
+            CacheStatus::Cached { size_bytes } => Self {
+                status: CacheStatusState::Cached,
+                progress: Some(1.0),
+                size_bytes: Some(size_bytes),
+                error: None,
+            },
+            CacheStatus::Failed { error } => Self {
+                status: CacheStatusState::Failed,
+                progress: None,
+                size_bytes: None,
+                error: Some(error),
+            },
+        }
+    }
+}
+
+/// Corps de requête pour déclencher la mise en cache
+#[cfg(feature = "server")]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct CacheRequest {
+    /// ID de l'objet à mettre en cache
+    pub object_id: String,
+}
+
+/// Réponse standard pour les endpoints de cache
+#[cfg(feature = "server")]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct CacheStatusResponse {
+    /// ID de l'objet
+    pub object_id: String,
+    /// Informations de cache
+    pub status: CacheStatusInfo,
+}
+
+/// Paramètres pour récupérer les formats disponibles
+#[cfg(feature = "server")]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct FormatsQuery {
+    /// ID de l'objet ciblé
+    pub object_id: String,
+}
+
+/// Description d'un format audio disponible
+#[cfg(feature = "server")]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct AudioFormatInfo {
+    /// Identifiant technique du format
+    pub format_id: String,
+    /// MIME type (`audio/flac`, `audio/mpeg`, ...)
+    pub mime_type: String,
+    /// Fréquence d'échantillonnage (Hz)
+    pub sample_rate: Option<u32>,
+    /// Profondeur de bits
+    pub bit_depth: Option<u8>,
+    /// Débit en kbps (lossy)
+    pub bitrate: Option<u32>,
+    /// Nombre de canaux
+    pub channels: Option<u8>,
+}
+
+#[cfg(feature = "server")]
+impl From<AudioFormat> for AudioFormatInfo {
+    fn from(format: AudioFormat) -> Self {
+        Self {
+            format_id: format.format_id,
+            mime_type: format.mime_type,
+            sample_rate: format.sample_rate,
+            bit_depth: format.bit_depth,
+            bitrate: format.bitrate,
+            channels: format.channels,
+        }
+    }
+}
+
+/// Réponse contenant les formats disponibles pour un objet
+#[cfg(feature = "server")]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct AudioFormatsResponse {
+    /// ID de l'objet
+    pub object_id: String,
+    /// Liste des formats supportés
+    pub formats: Vec<AudioFormatInfo>,
 }
 
 #[cfg(feature = "server")]
@@ -651,6 +798,234 @@ async fn browse_source(
     }
 }
 
+/// Résout l'URI réelle d'un objet (cache ou origine)
+#[cfg(feature = "server")]
+#[utoipa::path(
+    get,
+    path = "/{id}/resolve",
+    params(
+        ("id" = String, Path, description = "ID de la source"),
+        ObjectQuery
+    ),
+    responses(
+        (status = 200, description = "URI résolue", body = ResolveUriResponse),
+        (status = 404, description = "Source ou objet introuvable", body = ErrorResponse),
+        (status = 500, description = "Erreur lors de la résolution de l'URI", body = ErrorResponse),
+    ),
+    tag = "sources"
+)]
+async fn resolve_source_uri(
+    Path(id): Path<String>,
+    Query(params): Query<ObjectQuery>,
+) -> impl IntoResponse {
+    match get_source(&id).await {
+        Some(source) => match source.resolve_uri(&params.object_id).await {
+            Ok(uri) => {
+                let response = ResolveUriResponse {
+                    object_id: params.object_id,
+                    uri,
+                };
+                (StatusCode::OK, Json(response)).into_response()
+            }
+            Err(MusicSourceError::ObjectNotFound(_)) => (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: "Object not found".to_string(),
+                }),
+            )
+                .into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to resolve URI: {}", e),
+                }),
+            )
+                .into_response(),
+        },
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Source '{}' not found", id),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+/// Récupère le statut du cache pour un objet
+#[cfg(feature = "server")]
+#[utoipa::path(
+    get,
+    path = "/{id}/cache/status",
+    params(
+        ("id" = String, Path, description = "ID de la source"),
+        ObjectQuery
+    ),
+    responses(
+        (status = 200, description = "Statut du cache", body = CacheStatusResponse),
+        (status = 404, description = "Source ou objet introuvable", body = ErrorResponse),
+        (status = 501, description = "Cache non supporté", body = ErrorResponse),
+        (status = 500, description = "Erreur lors de la récupération du statut du cache", body = ErrorResponse),
+    ),
+    tag = "sources"
+)]
+async fn get_source_cache_status(
+    Path(id): Path<String>,
+    Query(params): Query<ObjectQuery>,
+) -> impl IntoResponse {
+    match get_source(&id).await {
+        Some(source) => match source.get_cache_status(&params.object_id).await {
+            Ok(status) => {
+                let response = CacheStatusResponse {
+                    object_id: params.object_id,
+                    status: CacheStatusInfo::from(status),
+                };
+                (StatusCode::OK, Json(response)).into_response()
+            }
+            Err(MusicSourceError::ObjectNotFound(_)) => (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: "Object not found".to_string(),
+                }),
+            )
+                .into_response(),
+            Err(MusicSourceError::NotSupported(msg)) => (
+                StatusCode::NOT_IMPLEMENTED,
+                Json(ErrorResponse { error: msg }),
+            )
+                .into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to get cache status: {}", e),
+                }),
+            )
+                .into_response(),
+        },
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Source '{}' not found", id),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+/// Demande la mise en cache d'un objet
+#[cfg(feature = "server")]
+#[utoipa::path(
+    post,
+    path = "/{id}/cache",
+    params(
+        ("id" = String, Path, description = "ID de la source")
+    ),
+    request_body = CacheRequest,
+    responses(
+        (status = 200, description = "Requête de cache enregistrée", body = CacheStatusResponse),
+        (status = 404, description = "Source ou objet introuvable", body = ErrorResponse),
+        (status = 501, description = "Cache non supporté", body = ErrorResponse),
+        (status = 500, description = "Erreur lors de la mise en cache", body = ErrorResponse),
+    ),
+    tag = "sources"
+)]
+async fn request_source_cache(
+    Path(id): Path<String>,
+    Json(payload): Json<CacheRequest>,
+) -> impl IntoResponse {
+    match get_source(&id).await {
+        Some(source) => match source.cache_item(&payload.object_id).await {
+            Ok(status) => {
+                let response = CacheStatusResponse {
+                    object_id: payload.object_id,
+                    status: CacheStatusInfo::from(status),
+                };
+                (StatusCode::OK, Json(response)).into_response()
+            }
+            Err(MusicSourceError::ObjectNotFound(_)) => (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: "Object not found".to_string(),
+                }),
+            )
+                .into_response(),
+            Err(MusicSourceError::NotSupported(msg)) => (
+                StatusCode::NOT_IMPLEMENTED,
+                Json(ErrorResponse { error: msg }),
+            )
+                .into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to cache item: {}", e),
+                }),
+            )
+                .into_response(),
+        },
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Source '{}' not found", id),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+/// Récupère les formats audio disponibles pour un objet
+#[cfg(feature = "server")]
+#[utoipa::path(
+    get,
+    path = "/{id}/formats",
+    params(
+        ("id" = String, Path, description = "ID de la source"),
+        FormatsQuery
+    ),
+    responses(
+        (status = 200, description = "Formats disponibles", body = AudioFormatsResponse),
+        (status = 404, description = "Source ou objet introuvable", body = ErrorResponse),
+        (status = 500, description = "Erreur lors de la récupération des formats", body = ErrorResponse),
+    ),
+    tag = "sources"
+)]
+async fn get_source_formats(
+    Path(id): Path<String>,
+    Query(params): Query<FormatsQuery>,
+) -> impl IntoResponse {
+    match get_source(&id).await {
+        Some(source) => match source.get_available_formats(&params.object_id).await {
+            Ok(formats) => {
+                let response = AudioFormatsResponse {
+                    object_id: params.object_id,
+                    formats: formats.into_iter().map(AudioFormatInfo::from).collect(),
+                };
+                (StatusCode::OK, Json(response)).into_response()
+            }
+            Err(MusicSourceError::ObjectNotFound(_)) => (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: "Object not found".to_string(),
+                }),
+            )
+                .into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to get available formats: {}", e),
+                }),
+            )
+                .into_response(),
+        },
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Source '{}' not found", id),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 /// Désenregistre une source musicale
 ///
 /// Supprime une source du registre par son ID.
@@ -718,6 +1093,10 @@ pub fn create_sources_router() -> Router {
         .route("/{id}/root", get(get_source_root))
         .route("/{id}/browse", get(browse_source))
         .route("/{id}/image", get(get_source_image))
+        .route("/{id}/resolve", get(resolve_source_uri))
+        .route("/{id}/cache/status", get(get_source_cache_status))
+        .route("/{id}/cache", post(request_source_cache))
+        .route("/{id}/formats", get(get_source_formats))
 }
 
 /// Structure pour la documentation OpenAPI de base
@@ -736,6 +1115,10 @@ pub fn create_sources_router() -> Router {
         get_source_root,
         browse_source,
         get_source_image,
+        resolve_source_uri,
+        get_source_cache_status,
+        request_source_cache,
+        get_source_formats,
         unregister_source_handler,
     ),
     components(
@@ -749,6 +1132,13 @@ pub fn create_sources_router() -> Router {
             BrowseItemResourceInfo,
             BrowseItemInfo,
             SourceBrowseResponse,
+            ResolveUriResponse,
+            CacheStatusState,
+            CacheStatusInfo,
+            CacheStatusResponse,
+            CacheRequest,
+            AudioFormatInfo,
+            AudioFormatsResponse,
             ErrorResponse,
         )
     ),

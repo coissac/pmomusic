@@ -2476,13 +2476,18 @@ name = "pmoparadise"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-stream",
+ "async-trait",
  "axum",
  "bytes",
+ "chrono",
  "claxon",
  "flacenc",
  "futures",
+ "hex",
  "hound",
  "pmoaudiocache",
+ "pmoconfig",
  "pmocovers",
  "pmodidl",
  "pmoplaylist",
@@ -2490,13 +2495,17 @@ dependencies = [
  "pmosource",
  "pmoupnp",
  "reqwest",
+ "rusqlite",
  "serde",
  "serde_json",
+ "serde_yaml",
+ "sha2",
  "symphonia",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tokio-test",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
  "url",
@@ -4202,8 +4211,15 @@ dependencies = [
  "serde_json",
  "url",
  "utoipa",
+ "utoipa-swagger-ui-vendored",
  "zip",
 ]
+
+[[package]]
+name = "utoipa-swagger-ui-vendored"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2eebbbfe4093922c2b6734d7c679ebfebd704a0d7e56dfcb0d05818ce28977d"
 
 [[package]]
 name = "uuid"

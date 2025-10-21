@@ -239,6 +239,7 @@
 pub mod client;
 pub mod error;
 pub mod models;
+pub mod paradise;
 pub mod source;
 pub mod stream;
 

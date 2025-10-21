@@ -282,6 +282,16 @@ impl SourceCacheManager {
             collection_id: self.collection_id.clone(),
         }
     }
+
+    /// Récupère le chemin de fichier pour une piste audio en cache
+    ///
+    /// Retourne `None` si le fichier n'est pas encore disponible.
+    pub async fn audio_file_path(&self, pk: &str) -> Option<std::path::PathBuf> {
+        match self.audio_cache.get(pk).await {
+            Ok(path) => Some(path),
+            Err(_) => None,
+        }
+    }
 }
 
 /// Statistiques du cache pour une source
