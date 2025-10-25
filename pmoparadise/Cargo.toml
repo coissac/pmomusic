@@ -48,8 +48,10 @@ url = "2.5"
 # Audio decoding/encoding
 symphonia = { version = "0.5", features = ["all"] }
 
+# Audio decoding - claxon for FLAC streaming
+claxon = "0.4"
+
 # Per-track feature dependencies
-claxon = { version = "0.4", optional = true }
 hound = { version = "3.5", optional = true }
 tempfile = { version = "3.8", optional = true }
 
@@ -78,8 +80,8 @@ axum = { version = "0.8.4", optional = true }
 default = ["metadata-only"]
 # Mode métadonnées seules (pas de décodage FLAC)
 metadata-only = []
-# Active le décodage FLAC par-track
-per-track = ["dep:claxon", "dep:hound", "dep:tempfile"]
+# Active l'extraction par-track (WAV export, etc.)
+per-track = ["dep:hound", "dep:tempfile"]
 # Active l'API REST pmoserver
 pmoserver = ["dep:pmoserver", "dep:utoipa", "dep:axum", "server"]
 # Active le media server UPnP (includes pmoserver)

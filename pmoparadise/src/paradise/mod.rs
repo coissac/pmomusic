@@ -19,7 +19,8 @@ mod playlist;
 mod worker;
 
 pub use channel::{
-    ChannelDescriptor, ParadiseChannel, ParadiseChannelKind, ParadiseClientStream, ALL_CHANNELS,
+    max_channel_id, ChannelDescriptor, ParadiseChannel, ParadiseChannelKind, ParadiseClientStream,
+    ALL_CHANNELS,
 };
 pub use config::{
     ActivityConfig, ApiConfig, CacheConfig, HistoryConfig, PollingConfig, RadioParadiseConfig,

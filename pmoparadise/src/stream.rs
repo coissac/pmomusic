@@ -4,7 +4,7 @@ use crate::error::{Error, Result};
 use crate::models::Block;
 use crate::RadioParadiseClient;
 use bytes::Bytes;
-use futures::stream::Stream;
+use futures::stream::{Stream, StreamExt};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use url::Url;
@@ -121,12 +121,14 @@ impl RadioParadiseClient {
         self.stream_block(&url).await
     }
 
-    /// Download a complete block to memory
+    /// Download an entire block as Bytes
     ///
-    /// **Warning**: Blocks can be large (50-100MB for FLAC). Use streaming
-    /// for playback instead of downloading the entire block to memory.
+    /// This downloads the complete block file into memory. For streaming playback,
+    /// use `stream_block()` instead which is more memory efficient.
     ///
-    /// This is useful for the per-track feature which needs random access.
+    /// # Arguments
+    ///
+    /// * `block_url` - The URL of the block to download
     ///
     /// # Example
     ///
@@ -137,38 +139,24 @@ impl RadioParadiseClient {
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     let client = RadioParadiseClient::new().await?;
     ///     let block = client.get_block(None).await?;
-    ///
-    ///     let data = client.download_block(&block.url.parse()?).await?;
-    ///     println!("Downloaded {} bytes", data.len());
-    ///
+    ///     let url = block.url.parse()?;
+    ///     let bytes = client.download_block(&url).await?;
+    ///     println!("Downloaded {} bytes", bytes.len());
     ///     Ok(())
     /// }
     /// ```
     pub async fn download_block(&self, block_url: &Url) -> Result<Bytes> {
-        #[cfg(feature = "logging")]
-        tracing::debug!("Downloading complete block: {}", block_url);
+        let mut stream = self.stream_block(block_url).await?;
+        let mut data = Vec::new();
 
-        let response = self
-            .client
-            .get(block_url.clone())
-            .timeout(self.block_timeout)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            return Err(Error::other(format!(
-                "Failed to download block: HTTP {}",
-                response.status()
-            )));
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = chunk_result?;
+            data.extend_from_slice(&chunk);
         }
 
-        let bytes = response.bytes().await?;
-
-        #[cfg(feature = "logging")]
-        tracing::debug!("Downloaded {} bytes", bytes.len());
-
-        Ok(bytes)
+        Ok(Bytes::from(data))
     }
+
 }
 
 #[cfg(test)]

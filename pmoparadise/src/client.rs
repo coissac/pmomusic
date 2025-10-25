@@ -25,45 +25,6 @@ pub const DEFAULT_BLOCK_TIMEOUT_SECS: u64 = 180;
 pub const DEFAULT_USER_AGENT: &str = "pmoparadise/0.1.0";
 
 
-fn normalize_cover_base_url(base: &str) -> String {
-    let mut normalized = base.trim().to_string();
-
-    if normalized.is_empty() {
-        return DEFAULT_IMAGE_BASE.to_string();
-    }
-
-    if normalized.starts_with("//") {
-        normalized = format!("https:{}", normalized);
-    } else if !(normalized.starts_with("http://") || normalized.starts_with("https://")) {
-        normalized = format!("https://{}", normalized.trim_start_matches('/'));
-    }
-
-    if !normalized.ends_with('/') {
-        normalized.push('/');
-    }
-
-    normalized
-}
-
-fn resolve_cover_with_base(base: &str, cover_path: &str) -> Result<Url> {
-    let cover_path = cover_path.trim();
-
-    if cover_path.starts_with("http://") || cover_path.starts_with("https://") {
-        return Ok(Url::parse(cover_path)?);
-    }
-
-    if cover_path.starts_with("//") {
-        let url = format!("https:{}", cover_path);
-        return Ok(Url::parse(&url)?);
-    }
-
-    let base = normalize_cover_base_url(base);
-    let base_url = Url::parse(&base)?;
-
-    Ok(base_url.join(cover_path)?)
-}
-
-
 /// Radio Paradise HTTP client
 ///
 /// This client provides access to Radio Paradise's streaming API,
@@ -89,7 +50,6 @@ pub struct RadioParadiseClient {
     pub(crate) client: Client,
     api_base: String,
     block_base: String,
-    image_base: String,
     bitrate: Bitrate,
     channel: u8,
     pub(crate) request_timeout: Duration,
@@ -118,7 +78,6 @@ impl RadioParadiseClient {
             client,
             api_base: DEFAULT_API_BASE.to_string(),
             block_base: DEFAULT_BLOCK_BASE.to_string(),
-            image_base: normalize_cover_base_url(DEFAULT_IMAGE_BASE),
             bitrate: Bitrate::default(),
             channel: 0,
             request_timeout: Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS),
@@ -155,13 +114,6 @@ impl RadioParadiseClient {
         let mut cloned = self.clone();
         cloned.bitrate = bitrate;
         cloned.next_block_url = None;
-        cloned
-    }
-
-    /// Clone the client with an updated channel and bitrate.
-    pub fn clone_with_channel_and_bitrate(&self, channel: u8, bitrate: Bitrate) -> Self {
-        let mut cloned = self.clone_with_channel(channel);
-        cloned.bitrate = bitrate;
         cloned
     }
 
@@ -223,11 +175,14 @@ impl RadioParadiseClient {
 
         let mut block: Block = response.json().await?;
 
-        // Set image_base if not provided
-        if let Some(ref mut base) = block.image_base {
-            *base = normalize_cover_base_url(base);
+        // Normalize protocol-relative URLs from API (//img.radioparadise.com/)
+        if let Some(ref base) = block.image_base {
+            if base.starts_with("//") {
+                block.image_base = Some(format!("https:{}", base));
+            }
         } else {
-            block.image_base = Some(self.image_base.clone());
+            // Fallback if API doesn't provide image_base (should never happen)
+            block.image_base = Some(DEFAULT_IMAGE_BASE.to_string());
         }
 
         #[cfg(feature = "logging")]
@@ -250,28 +205,6 @@ impl RadioParadiseClient {
     pub async fn now_playing(&self) -> Result<NowPlaying> {
         let block = self.get_block(None).await?;
         Ok(NowPlaying::from_block(block))
-    }
-
-    /// Get the full URL for a cover image
-    ///
-    /// # Arguments
-    ///
-    /// * `cover_path` - The cover filename/path from song metadata
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use pmoparadise::RadioParadiseClient;
-    /// # #[tokio::main]
-    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let client = RadioParadiseClient::new().await?;
-    /// let url = client.cover_url("B00000I0JF.jpg")?;
-    /// println!("Cover URL: {}", url);
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn cover_url(&self, cover_path: &str) -> Result<Url> {
-        resolve_cover_with_base(&self.image_base, cover_path)
     }
 
     /// Prefetch metadata for the next block
@@ -318,7 +251,6 @@ pub struct ClientBuilder {
     client: Option<Client>,
     api_base: String,
     block_base: String,
-    image_base: String,
     bitrate: Bitrate,
     channel: u8,
     request_timeout: Duration,
@@ -333,7 +265,6 @@ impl Default for ClientBuilder {
             client: None,
             api_base: DEFAULT_API_BASE.to_string(),
             block_base: DEFAULT_BLOCK_BASE.to_string(),
-            image_base: DEFAULT_IMAGE_BASE.to_string(),
             bitrate: Bitrate::default(),
             channel: 0,
             request_timeout: Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS),
@@ -365,12 +296,6 @@ impl ClientBuilder {
     /// Set the block base URL
     pub fn block_base(mut self, url: impl Into<String>) -> Self {
         self.block_base = url.into();
-        self
-    }
-
-    /// Set the image base URL
-    pub fn image_base(mut self, url: impl Into<String>) -> Self {
-        self.image_base = url.into();
         self
     }
 
@@ -441,13 +366,11 @@ impl ClientBuilder {
         } else {
             self.block_base.clone()
         };
-        let image_base = normalize_cover_base_url(&self.image_base);
 
         Ok(RadioParadiseClient {
             client,
             api_base: self.api_base,
             block_base,
-            image_base,
             bitrate: self.bitrate,
             channel: self.channel,
             request_timeout: self.request_timeout,
@@ -469,13 +392,4 @@ mod tests {
         assert_eq!(builder.channel, 0);
     }
 
-    #[test]
-    fn test_cover_url() {
-        let client = RadioParadiseClient::with_client(Client::new());
-        let url = client.cover_url("test.jpg").unwrap();
-        assert_eq!(
-            url.as_str(),
-            "https://img.radioparadise.com/covers/l/test.jpg"
-        );
-    }
 }
