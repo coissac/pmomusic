@@ -1355,6 +1355,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "62adaabb884c94955b19907d60019f4e145d091c75345379e70d1ee696f7854f"
 
 [[package]]
+name = "htmlescape"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9025058dae765dee5070ec375f591e2ba14638c63feff74f13805a72e523163"
+
+[[package]]
 name = "http"
 version = "1.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2449,9 +2455,11 @@ name = "pmomediarenderer"
 version = "0.1.0"
 dependencies = [
  "bevy_reflect",
+ "htmlescape",
  "once_cell",
  "pmodidl",
  "pmoupnp",
+ "quick-xml 0.38.3",
 ]
 
 [[package]]

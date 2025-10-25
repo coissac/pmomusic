@@ -321,36 +321,165 @@ impl WorkerState {
         info!(
             channel = self.descriptor.slug,
             event = block.event,
-            "Processing Radio Paradise block"
+            "Processing Radio Paradise block with progressive streaming"
         );
 
         let _ = &self.history;
 
+        // Start streaming the block
         let block_url = Url::parse(&block.url)?;
-        let block_bytes = self
+        let http_stream = self
             .client
-            .download_block(&block_url)
+            .stream_block(&block_url)
             .await
-            .context("Failed to download block")?;
+            .context("Failed to start block stream")?;
 
-        let decoded = decode_block_audio(block_bytes.to_vec())?;
         let ordered_songs = block.songs_ordered();
-        let total_frames = decoded.samples.len() / decoded.channels;
 
-        for (position, (song_index, song)) in ordered_songs.iter().enumerate() {
-            let track = self
-                .process_song(
-                    &block,
-                    song_index,
-                    song,
-                    position,
-                    &ordered_songs,
-                    total_frames,
-                    &decoded,
-                )
-                .await?;
+        // Decode in streaming mode using spawn_blocking
+        let (tx, mut rx) = mpsc::channel::<crate::streaming::PCMChunk>(16);
 
-            self.playlist.push_active(track.clone()).await;
+        let decode_handle = tokio::task::spawn_blocking(move || -> Result<()> {
+            use crate::streaming::StreamingPCMDecoder;
+
+            let mut decoder = StreamingPCMDecoder::new(http_stream)
+                .context("Failed to create streaming decoder")?;
+
+            info!("Streaming decoder initialized: {}Hz, {} channels, {} bits",
+                  decoder.sample_rate(), decoder.channels(), decoder.bits_per_sample());
+
+            // Decode chunks and send them
+            while let Some(chunk) = decoder.decode_chunk()? {
+                if tx.blocking_send(chunk).is_err() {
+                    // Receiver dropped, stop decoding
+                    break;
+                }
+            }
+
+            Ok(())
+        });
+
+        // Process songs as chunks arrive
+        let mut accumulated_pcm = Vec::new();
+        let mut current_song_idx = 0;
+        let mut sample_rate = 0u32;
+        let mut channels = 0u32;
+        let mut bits_per_sample = 0u32;
+
+        while let Some(chunk) = rx.recv().await {
+            // Store metadata from first chunk
+            if sample_rate == 0 {
+                sample_rate = chunk.sample_rate;
+                channels = chunk.channels;
+                bits_per_sample = 16; // Normalized to 16-bit by decoder
+            }
+
+            accumulated_pcm.extend_from_slice(&chunk.samples);
+            let current_position_ms = chunk.position_ms;
+
+            // Check if we've completed any songs
+            while current_song_idx < ordered_songs.len() {
+                let (song_index, song) = ordered_songs[current_song_idx];
+
+                // Calculate song boundaries
+                let song_start_ms = song.elapsed;
+                let song_end_ms = if current_song_idx + 1 < ordered_songs.len() {
+                    ordered_songs[current_song_idx + 1].1.elapsed
+                } else {
+                    u64::MAX // Last song goes to end of block
+                };
+
+                // Check if we have enough PCM for this song
+                if current_position_ms >= song_end_ms {
+                    // Extract song samples
+                    let start_frame = crate::streaming::ms_to_frames(song_start_ms, sample_rate);
+                    let end_frame = crate::streaming::ms_to_frames(song_end_ms, sample_rate);
+
+                    let start_sample = start_frame * channels as usize;
+                    let end_sample = end_frame * channels as usize;
+
+                    if end_sample <= accumulated_pcm.len() {
+                        let track_samples = accumulated_pcm[start_sample..end_sample].to_vec();
+
+                        info!(
+                            channel = self.descriptor.slug,
+                            song_index = song_index,
+                            position_ms = current_position_ms,
+                            "✅ Song '{}' ready for encoding ({} samples)",
+                            song.title,
+                            track_samples.len()
+                        );
+
+                        // Encode and cache the song
+                        let entry = self
+                            .process_song_from_pcm(
+                                &block,
+                                song_index,
+                                song,
+                                track_samples,
+                                sample_rate,
+                                channels as usize,
+                                bits_per_sample,
+                            )
+                            .await?;
+
+                        self.playlist.push_active(entry).await;
+
+                        info!(
+                            channel = self.descriptor.slug,
+                            song_index = song_index,
+                            "🎵 Song '{}' available after {}ms (streaming mode)",
+                            song.title,
+                            current_position_ms
+                        );
+
+                        current_song_idx += 1;
+                    } else {
+                        // Not enough samples yet, wait for more chunks
+                        break;
+                    }
+                } else {
+                    // Haven't reached this song's end yet
+                    break;
+                }
+            }
+        }
+
+        // Wait for decoder to finish
+        decode_handle.await??;
+
+        // Process any remaining songs (last song in block)
+        if current_song_idx < ordered_songs.len() {
+            let (song_index, song) = ordered_songs[current_song_idx];
+            let song_start_ms = song.elapsed;
+            let start_frame = crate::streaming::ms_to_frames(song_start_ms, sample_rate);
+            let start_sample = start_frame * channels as usize;
+
+            if start_sample < accumulated_pcm.len() {
+                let track_samples = accumulated_pcm[start_sample..].to_vec();
+
+                info!(
+                    channel = self.descriptor.slug,
+                    song_index = song_index,
+                    "Processing last song '{}' ({} samples)",
+                    song.title,
+                    track_samples.len()
+                );
+
+                let entry = self
+                    .process_song_from_pcm(
+                        &block,
+                        song_index,
+                        song,
+                        track_samples,
+                        sample_rate,
+                        channels as usize,
+                        bits_per_sample,
+                    )
+                    .await?;
+
+                self.playlist.push_active(entry).await;
+            }
         }
 
         self.record_processed_block(block.event);
@@ -418,6 +547,90 @@ impl WorkerState {
             metadata.cached_cover_pk = Some(cover_pk);
         }
 
+        let flac_len = flac_bytes.len() as u64;
+        let reader = StreamReader::new(stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from(
+            flac_bytes,
+        ))]));
+
+        let audio_pk = self
+            .cache_manager
+            .cache_audio_from_reader(&track_id, reader, Some(flac_len))
+            .await
+            .map_err(|e| anyhow!("Cache audio error: {e}"))?;
+
+        metadata.cached_audio_pk = Some(audio_pk.clone());
+        self.cache_manager
+            .update_metadata(track_id.clone(), metadata)
+            .await;
+
+        let file_path = self.cache_manager.audio_file_path(&audio_pk).await;
+
+        let entry = Arc::new(PlaylistEntry::new(
+            track_id,
+            self.descriptor.id,
+            Arc::new(song.clone()),
+            Utc::now(),
+            duration_ms,
+            Some(audio_pk),
+            file_path,
+            self.active_clients,
+        ));
+
+        Ok(entry)
+    }
+
+    /// Process a song from pre-decoded PCM samples (for streaming mode)
+    ///
+    /// This is a variant of `process_song()` that takes PCM samples directly
+    /// instead of slicing from a DecodedBlock. Used for progressive streaming
+    /// where samples are decoded on-the-fly.
+    ///
+    /// # Arguments
+    ///
+    /// * `block` - The block metadata
+    /// * `song_index` - Index of the song in the block
+    /// * `song` - The song metadata
+    /// * `track_samples` - Pre-decoded and sliced PCM samples (interleaved i32)
+    /// * `sample_rate` - Sample rate (e.g., 44100)
+    /// * `channels` - Number of channels (e.g., 2 for stereo)
+    /// * `bits_per_sample` - Bits per sample (e.g., 16)
+    async fn process_song_from_pcm(
+        &self,
+        block: &Block,
+        song_index: usize,
+        song: &Song,
+        track_samples: Vec<i32>,
+        sample_rate: u32,
+        channels: usize,
+        bits_per_sample: u32,
+    ) -> Result<Arc<PlaylistEntry>> {
+        let duration_ms = song.duration;
+
+        // Encode PCM to FLAC
+        let flac_bytes = encode_samples_to_flac(
+            track_samples,
+            channels,
+            sample_rate,
+            bits_per_sample,
+        )
+        .await
+        .context("Failed to encode song to FLAC")?;
+
+        let track_id = self.compute_track_id(&flac_bytes);
+        let placeholder_uri = format!("{}#{}", block.url, song_index);
+
+        let mut metadata = TrackMetadata {
+            original_uri: placeholder_uri.clone(),
+            cached_audio_pk: None,
+            cached_cover_pk: None,
+        };
+
+        // Cache cover art
+        if let Some(cover_pk) = self.cache_cover(block, song).await? {
+            metadata.cached_cover_pk = Some(cover_pk);
+        }
+
+        // Cache audio
         let flac_len = flac_bytes.len() as u64;
         let reader = StreamReader::new(stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from(
             flac_bytes,

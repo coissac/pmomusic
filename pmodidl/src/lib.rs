@@ -255,6 +255,21 @@ pub struct Description {
 
 // ============= Implémentation des méthodes =============
 
+impl Default for DIDLLite {
+    fn default() -> Self {
+        Self {
+            xmlns: "urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/".to_string(),
+            xmlns_upnp: Some("urn:schemas-upnp-org:metadata-1-0/upnp/".to_string()),
+            xmlns_dc: Some("http://purl.org/dc/elements/1.1/".to_string()),
+            xmlns_dlna: None,
+            xmlns_sec: None,
+            xmlns_pv: None,
+            containers: Vec::new(),
+            items: Vec::new(),
+        }
+    }
+}
+
 impl DIDLLite {
     /// Itère sur tous les containers de manière récursive
     pub fn all_containers(&self) -> impl Iterator<Item = &Container> {

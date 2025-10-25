@@ -24,6 +24,14 @@ impl BlockStream {
             inner: Box::pin(stream),
         }
     }
+
+    /// Extract the inner stream
+    ///
+    /// Consumes the BlockStream and returns the underlying pinned stream.
+    /// Useful for advanced streaming scenarios like progressive decoding.
+    pub fn into_inner(self) -> Pin<Box<dyn Stream<Item = Result<Bytes>> + Send>> {
+        self.inner
+    }
 }
 
 impl Stream for BlockStream {
