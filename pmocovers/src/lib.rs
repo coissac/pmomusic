@@ -42,10 +42,16 @@ pub mod webp;
 #[cfg(feature = "pmoserver")]
 pub mod openapi;
 
+#[cfg(feature = "pmoconfig")]
+pub mod config_ext;
+
 pub use cache::{new_cache, Cache, CoversConfig};
 
 #[cfg(feature = "pmoserver")]
 pub use openapi::ApiDoc;
+
+#[cfg(feature = "pmoconfig")]
+pub use config_ext::CoverCacheConfigExt;
 
 #[cfg(feature = "pmoserver")]
 use std::sync::Arc;
@@ -146,9 +152,10 @@ impl CoverCacheExt for pmoserver::Server {
     }
 
     async fn init_cover_cache_configured(&mut self) -> anyhow::Result<Arc<Cache>> {
+        use crate::CoverCacheConfigExt;
         let config = pmoconfig::get_config();
-        let cache_dir = config.get_cover_cache_dir()?;
-        let limit = config.get_cover_cache_size()?;
+        let cache_dir = config.get_covers_dir()?;
+        let limit = config.get_covers_size()?;
         self.init_cover_cache(&cache_dir, limit).await
     }
 }

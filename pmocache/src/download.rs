@@ -460,3 +460,97 @@ async fn default_copy(
     s.finished = true;
     Ok(())
 }
+
+/// Lit les premiers octets d'une URL sans télécharger le fichier complet
+///
+/// Cette fonction effectue une requête HTTP partielle (Range header) pour télécharger
+/// uniquement les premiers octets d'un fichier. C'est utilisé pour calculer l'identifiant
+/// basé sur le contenu sans avoir à télécharger tout le fichier.
+///
+/// # Arguments
+///
+/// * `url` - URL du fichier à télécharger
+/// * `max_bytes` - Nombre maximum d'octets à lire (par défaut 512)
+///
+/// # Returns
+///
+/// Un `Vec<u8>` contenant les premiers octets du fichier
+///
+/// # Exemple
+///
+/// ```rust,ignore
+/// use pmocache::download::peek_header;
+///
+/// let header = peek_header("http://example.com/file.dat", 512).await?;
+/// let pk = pk_from_content_header(&header);
+/// ```
+pub async fn peek_header(url: &str, max_bytes: usize) -> Result<Vec<u8>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    // Essayer d'abord avec une requête Range
+    let range_header = format!("bytes=0-{}", max_bytes - 1);
+    let mut response = client
+        .get(url)
+        .header("Range", range_header)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch URL '{}': {}", url, e))?;
+
+    // Si le serveur ne supporte pas Range (status 200 au lieu de 206),
+    // on lit quand même mais on limite la lecture
+    if !response.status().is_success() && response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+        return Err(format!("HTTP error: {}", response.status()));
+    }
+
+    let mut buffer = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+        buffer.extend_from_slice(&chunk);
+        if buffer.len() >= max_bytes {
+            buffer.truncate(max_bytes);
+            break;
+        }
+    }
+
+    Ok(buffer)
+}
+
+/// Lit les premiers octets d'un reader asynchrone
+///
+/// Cette fonction lit jusqu'à `max_bytes` octets depuis un reader asynchrone.
+/// C'est utilisé pour calculer l'identifiant basé sur le contenu des fichiers locaux
+/// ou des streams.
+///
+/// # Arguments
+///
+/// * `reader` - Le reader asynchrone à lire
+/// * `max_bytes` - Nombre maximum d'octets à lire (par défaut 512)
+///
+/// # Returns
+///
+/// Un `Vec<u8>` contenant les premiers octets lus
+///
+/// # Exemple
+///
+/// ```rust,ignore
+/// use pmocache::download::peek_reader_header;
+/// use tokio::fs::File;
+///
+/// let mut file = File::open("file.dat").await?;
+/// let header = peek_reader_header(&mut file, 512).await?;
+/// let pk = pk_from_content_header(&header);
+/// ```
+pub async fn peek_reader_header<R>(reader: &mut R, max_bytes: usize) -> Result<Vec<u8>, String>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut buffer = vec![0u8; max_bytes];
+    let n = reader
+        .read(&mut buffer)
+        .await
+        .map_err(|e| format!("Failed to read from stream: {}", e))?;
+    buffer.truncate(n);
+    Ok(buffer)
+}

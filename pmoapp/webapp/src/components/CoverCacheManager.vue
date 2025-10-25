@@ -141,6 +141,7 @@ import {
   purgeCache,
   consolidateCache,
   getImageUrl,
+  waitForDownload,
 } from "../services/coverCache";
 
 // --- États ---
@@ -190,11 +191,16 @@ async function handleAddImage() {
   isAdding.value = true; addError.value=""; addSuccess.value="";
   try {
     const result = await addImage(newImageUrl.value);
+    addSuccess.value = `Image downloading... PK: ${result.pk}`;
+
+    // Attendre que le téléchargement et la transformation soient terminés
+    await waitForDownload(result.pk);
+
     addSuccess.value = `Image added! PK: ${result.pk}`;
     newImageUrl.value = "";
     await refreshImages();
   } catch(e:any) { addError.value = e.message ?? "Failed to add image"; }
-  finally { isAdding.value=false; setTimeout(()=>addSuccess.value="",1500); }
+  finally { isAdding.value=false; setTimeout(()=>addSuccess.value="",3000); }
 }
 
 async function handleDeleteImage(pk:string){

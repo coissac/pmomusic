@@ -24,6 +24,14 @@ export interface ApiError {
   message: string;
 }
 
+export interface DownloadStatus {
+  pk: string;
+  finished: boolean;
+  current_size?: number;
+  expected_size?: number;
+  transformed_size?: number;
+}
+
 /**
  * Liste toutes les images en cache
  */
@@ -106,6 +114,54 @@ export async function consolidateCache(): Promise<void> {
   if (!response.ok) {
     const error: ApiError = await response.json();
     throw new Error(error.message || "Failed to consolidate cache");
+  }
+}
+
+/**
+ * Récupère le statut du téléchargement d'une image
+ */
+export async function getDownloadStatus(pk: string): Promise<DownloadStatus> {
+  const response = await fetch(`/api/covers/${pk}/status`);
+  if (!response.ok) {
+    const error: ApiError = await response.json();
+    throw new Error(error.message || "Failed to get download status");
+  }
+  return response.json();
+}
+
+/**
+ * Attend que le téléchargement d'une image soit terminé
+ *
+ * @param pk - Clé primaire de l'image
+ * @param maxWaitMs - Temps maximum d'attente en millisecondes (défaut: 30000)
+ * @param pollIntervalMs - Intervalle entre les vérifications en millisecondes (défaut: 500)
+ */
+export async function waitForDownload(
+  pk: string,
+  maxWaitMs: number = 30000,
+  pollIntervalMs: number = 500
+): Promise<void> {
+  const startTime = Date.now();
+
+  while (Date.now() - startTime < maxWaitMs) {
+    try {
+      const status = await getDownloadStatus(pk);
+      if (status.finished) {
+        return; // Téléchargement terminé
+      }
+    } catch (error) {
+      // Si l'API retourne une erreur, on continue d'attendre
+      console.warn(`Error checking download status for ${pk}:`, error);
+    }
+
+    // Attendre avant la prochaine vérification
+    await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+  }
+
+  // Timeout atteint, on lance une dernière vérification
+  const finalStatus = await getDownloadStatus(pk);
+  if (!finalStatus.finished) {
+    console.warn(`Download timeout for ${pk}, but continuing anyway`);
   }
 }
 

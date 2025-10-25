@@ -3,7 +3,7 @@
 //! Ce module fournit une interface générique pour gérer un cache de fichiers
 //! avec métadonnées dans une base de données SQLite.
 
-use crate::cache_trait::{pk_from_url, FileCache};
+use crate::cache_trait::FileCache;
 use crate::db::DB;
 use crate::download::{
     download_with_transformer, ingest_with_transformer, Download, StreamTransformer,
@@ -132,8 +132,18 @@ impl<C: CacheConfig> Cache<C> {
 
     /// Télécharge un fichier depuis une URL et l'ajoute au cache
     ///
-    /// Utilise le module download pour gérer le téléchargement asynchrone.
-    /// Le download est tracké dans la map jusqu'à sa fin.
+    /// Cette méthode utilise un système d'identifiants basé sur le contenu plutôt que sur l'URL.
+    /// Elle télécharge les 512 premiers octets du fichier pour calculer un identifiant unique (pk),
+    /// puis vérifie si le fichier est déjà en cache. Si c'est le cas, elle met à jour le timestamp
+    /// et retourne rapidement. Sinon, elle lance le téléchargement complet en arrière-plan.
+    ///
+    /// # Workflow
+    ///
+    /// 1. Télécharge les 512 premiers octets via une requête HTTP partielle
+    /// 2. Calcule le pk en hashant (SHA256) ces premiers octets
+    /// 3. Vérifie si le fichier existe déjà dans le cache
+    /// 4. Si oui : update timestamp et retour rapide
+    /// 5. Si non : lance le téléchargement complet en background
     ///
     /// # Arguments
     ///
@@ -142,21 +152,46 @@ impl<C: CacheConfig> Cache<C> {
     ///
     /// # Returns
     ///
-    /// La clé primaire (pk) du fichier dans le cache
+    /// La clé primaire (pk) du fichier dans le cache, calculée à partir du contenu
+    ///
+    /// # Note
+    ///
+    /// Deux URLs différentes pointant vers le même contenu auront le même pk,
+    /// permettant une déduplication automatique.
     pub async fn add_from_url(&self, url: &str, collection: Option<&str>) -> Result<String> {
-        let pk = pk_from_url(url);
-        let file_path = self.file_path(&pk);
+        // 1. Télécharger les 512 premiers octets pour calculer le pk
+        let header = crate::download::peek_header(url, 512)
+            .await
+            .map_err(|e| anyhow!("Failed to peek header: {}", e))?;
 
-        // Vérifier si déjà en cours de téléchargement
-        {
-            let downloads = self.downloads.read().await;
-            if downloads.contains_key(&pk) {
-                // Download déjà en cours, retourner la clé
+        // 2. Calculer le pk basé sur le contenu
+        let pk = crate::cache_trait::pk_from_content_header(&header);
+        tracing::debug!("Computed pk {} for URL {}", pk, url);
+
+        // 3. Vérifier si le fichier est déjà en cache
+        if self.db.get(&pk).is_ok() {
+            let file_path = self.file_path(&pk);
+            if file_path.exists() {
+                // Déjà en cache, update timestamp et retour rapide
+                tracing::debug!("File with pk {} already in cache, updating timestamp", pk);
+                self.db.update_hit(&pk)?;
                 return Ok(pk);
             }
         }
 
-        // Lancer le téléchargement avec transformer
+        // 4. Vérifier si un download est déjà en cours pour ce pk
+        {
+            let downloads = self.downloads.read().await;
+            if downloads.contains_key(&pk) {
+                // Download déjà en cours pour ce contenu, retourner la clé
+                tracing::debug!("Download already in progress for pk {}", pk);
+                return Ok(pk);
+            }
+        }
+
+        // 5. Lancer le téléchargement complet avec transformer
+        tracing::debug!("Starting full download for pk {} from URL {}", pk, url);
+        let file_path = self.file_path(&pk);
         let transformer = self.transformer_factory.as_ref().map(|f| f());
         let download = download_with_transformer(&file_path, url, transformer);
 
@@ -170,7 +205,6 @@ impl<C: CacheConfig> Cache<C> {
         self.db.add(&pk, url, collection)?;
 
         // Appliquer la politique d'éviction LRU si nécessaire
-        // Cela garantit que le cache respecte toujours la limite configurée
         if let Err(e) = self.enforce_limit().await {
             tracing::warn!("Error enforcing cache limit: {}", e);
         }
@@ -179,9 +213,7 @@ impl<C: CacheConfig> Cache<C> {
         let downloads_clone = self.downloads.clone();
         let pk_clone = pk.clone();
         tokio::spawn(async move {
-            // Attendre la fin du téléchargement
             let _ = download.wait_until_finished().await;
-            // Retirer de la map
             downloads_clone.write().await.remove(&pk_clone);
         });
 
@@ -190,38 +222,79 @@ impl<C: CacheConfig> Cache<C> {
 
     /// Ajoute un fichier à partir d'un flux asynchrone.
     ///
-    /// Le flux peut provenir de n'importe quelle source (stream HTTP custom, décodeur,
-    /// extraction en mémoire, etc.). Les mêmes transformers que `add_from_url` sont
-    /// appliqués.
+    /// Cette méthode utilise le même système d'identifiants basé sur le contenu que `add_from_url`.
+    /// Elle lit les 512 premiers octets du flux pour calculer l'identifiant, puis reconstitue
+    /// le flux complet pour l'ingestion.
+    ///
+    /// # Workflow
+    ///
+    /// 1. Lit les 512 premiers octets du reader
+    /// 2. Calcule le pk en hashant (SHA256) ces premiers octets
+    /// 3. Vérifie si le fichier existe déjà dans le cache
+    /// 4. Si oui : update timestamp et retour rapide
+    /// 5. Si non : reconstitue le reader (header + reste) et lance l'ingestion
     ///
     /// # Arguments
     ///
-    /// * `source_uri` - Identifiant logique du flux (utilisé pour générer le pk)
+    /// * `source_uri` - Identifiant logique du flux (pour traçabilité dans la DB)
     /// * `reader` - Flux asynchrone fournissant les données
     /// * `length` - Taille attendue (si connue)
     /// * `collection` - Collection optionnelle à laquelle appartient l'élément
+    ///
+    /// # Returns
+    ///
+    /// La clé primaire (pk) du fichier dans le cache, calculée à partir du contenu
     pub async fn add_from_reader<R>(
         &self,
         source_uri: &str,
-        reader: R,
+        mut reader: R,
         length: Option<u64>,
         collection: Option<&str>,
     ) -> Result<String>
     where
         R: AsyncRead + Send + Unpin + 'static,
     {
-        let pk = pk_from_url(source_uri);
-        let file_path = self.file_path(&pk);
+        // 1. Lire les 512 premiers octets pour calculer le pk
+        let header = crate::download::peek_reader_header(&mut reader, 512)
+            .await
+            .map_err(|e| anyhow!("Failed to peek reader header: {}", e))?;
 
-        {
-            let downloads = self.downloads.read().await;
-            if downloads.contains_key(&pk) {
+        // 2. Calculer le pk basé sur le contenu
+        let pk = crate::cache_trait::pk_from_content_header(&header);
+        tracing::debug!("Computed pk {} for source_uri {}", pk, source_uri);
+
+        // 3. Vérifier si le fichier est déjà en cache
+        if self.db.get(&pk).is_ok() {
+            let file_path = self.file_path(&pk);
+            if file_path.exists() {
+                // Déjà en cache, update timestamp et retour rapide
+                tracing::debug!("File with pk {} already in cache, updating timestamp", pk);
+                self.db.update_hit(&pk)?;
                 return Ok(pk);
             }
         }
 
+        // 4. Vérifier si un download est déjà en cours pour ce pk
+        {
+            let downloads = self.downloads.read().await;
+            if downloads.contains_key(&pk) {
+                tracing::debug!("Download already in progress for pk {}", pk);
+                return Ok(pk);
+            }
+        }
+
+        // 5. Reconstituer le reader complet (header + reste)
+        // Utiliser tokio::io::chain pour créer un reader composé
+        use std::io::Cursor;
+        use tokio::io::AsyncReadExt;
+        let header_reader = Cursor::new(header);
+        let full_reader = header_reader.chain(reader);
+
+        // 6. Lancer l'ingestion avec transformer
+        tracing::debug!("Starting ingestion for pk {} from reader", pk);
+        let file_path = self.file_path(&pk);
         let transformer = self.transformer_factory.as_ref().map(|factory| factory());
-        let download = ingest_with_transformer(&file_path, reader, length, transformer);
+        let download = ingest_with_transformer(&file_path, full_reader, length, transformer);
 
         {
             let mut downloads = self.downloads.write().await;
@@ -246,7 +319,9 @@ impl<C: CacheConfig> Cache<C> {
 
     /// Ajoute un fichier local au cache
     ///
-    /// Le fichier est copié dans le cache via une URL file://
+    /// Cette méthode lit les 512 premiers octets du fichier local pour calculer
+    /// l'identifiant basé sur le contenu, puis utilise `add_from_reader()` pour
+    /// l'ingestion complète.
     ///
     /// # Arguments
     ///
@@ -255,7 +330,21 @@ impl<C: CacheConfig> Cache<C> {
     ///
     /// # Returns
     ///
-    /// La clé primaire (pk) du fichier dans le cache
+    /// La clé primaire (pk) du fichier dans le cache, calculée à partir du contenu
+    ///
+    /// # Exemple
+    ///
+    /// ```rust,ignore
+    /// use pmocache::{Cache, CacheConfig};
+    ///
+    /// struct MyConfig;
+    /// impl CacheConfig for MyConfig {
+    ///     fn file_extension() -> &'static str { "dat" }
+    /// }
+    ///
+    /// let cache = Cache::<MyConfig>::new("./cache", 1000)?;
+    /// let pk = cache.add_from_file("/path/to/file.dat", None).await?;
+    /// ```
     pub async fn add_from_file(&self, path: &str, collection: Option<&str>) -> Result<String> {
         let canonical_path = std::fs::canonicalize(path)?;
         let file_url = format!("file://{}", canonical_path.display());
@@ -264,29 +353,10 @@ impl<C: CacheConfig> Cache<C> {
             .ok()
             .map(|m| m.len());
         let reader = tokio::fs::File::open(&canonical_path).await?;
+
+        // add_from_reader() s'occupe de lire les 512 premiers octets et de calculer le pk
         self.add_from_reader(&file_url, reader, length, collection)
             .await
-    }
-
-    /// S'assure qu'un fichier est présent dans le cache
-    ///
-    /// Si le fichier existe déjà, retourne sa clé. Sinon, le télécharge.
-    ///
-    /// # Arguments
-    ///
-    /// * `url` - URL du fichier
-    /// * `collection` - Collection optionnelle à laquelle appartient le fichier
-    pub async fn ensure_from_url(&self, url: &str, collection: Option<&str>) -> Result<String> {
-        let pk = pk_from_url(url);
-
-        if self.db.get(&pk).is_ok() {
-            let file_path = self.file_path(&pk);
-            if file_path.exists() {
-                return Ok(pk);
-            }
-        }
-
-        self.add_from_url(url, collection).await
     }
 
     /// Récupère le chemin d'un fichier dans le cache
@@ -618,10 +688,6 @@ impl<C: CacheConfig> FileCache<C> for Cache<C> {
 
     async fn add_from_file(&self, path: &str, collection: Option<&str>) -> Result<String> {
         self.add_from_file(path, collection).await
-    }
-
-    async fn ensure_from_url(&self, url: &str, collection: Option<&str>) -> Result<String> {
-        self.ensure_from_url(url, collection).await
     }
 
     async fn get(&self, pk: &str) -> Result<PathBuf> {

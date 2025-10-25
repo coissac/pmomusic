@@ -116,16 +116,6 @@ pub trait FileCache<C: CacheConfig>: Send + Sync {
     /// La clé primaire (pk) du fichier dans le cache
     async fn add_from_file(&self, path: &str, collection: Option<&str>) -> Result<String>;
 
-    /// S'assure qu'un fichier est présent dans le cache
-    ///
-    /// Si le fichier existe déjà, retourne sa clé. Sinon, le télécharge.
-    ///
-    /// # Arguments
-    ///
-    /// * `url` - URL du fichier
-    /// * `collection` - Collection optionnelle à laquelle appartient le fichier
-    async fn ensure_from_url(&self, url: &str, collection: Option<&str>) -> Result<String>;
-
     /// Récupère le chemin d'un fichier dans le cache
     ///
     /// # Arguments
@@ -147,9 +137,48 @@ pub trait FileCache<C: CacheConfig>: Send + Sync {
     async fn consolidate(&self) -> Result<()>;
 }
 
-/// Génère une clé primaire à partir d'une URL
+/// Génère une clé primaire à partir des premiers octets d'un document
+///
+/// Utilise SHA256 pour hasher les premiers octets du contenu et retourne les 16 premiers octets
+/// en hexadécimal (32 caractères). L'utilisation de 16 octets au lieu de 8 réduit considérablement
+/// les risques de collision.
+///
+/// # Arguments
+///
+/// * `header` - Les premiers octets du document (typiquement 512 octets)
+///
+/// # Returns
+///
+/// Une chaîne hexadécimale de 32 caractères servant de clé primaire unique
+///
+/// # Exemple
+///
+/// ```
+/// use pmocache::pk_from_content_header;
+///
+/// let data = b"Some file content...";
+/// let pk = pk_from_content_header(data);
+/// assert_eq!(pk.len(), 32);  // 16 bytes = 32 hex chars
+/// ```
+pub fn pk_from_content_header(header: &[u8]) -> String {
+    use sha2::{Sha256, Digest};
+    let mut hasher = Sha256::new();
+    hasher.update(header);
+    let result = hasher.finalize();
+    hex::encode(&result[..16])  // 16 octets = 32 caractères hex
+}
+
+/// Génère une clé primaire à partir d'une URL (legacy)
+///
+/// **DEPRECATED**: Cette fonction est obsolète et ne devrait plus être utilisée.
+/// Utilisez `pk_from_content_header()` à la place pour générer des identifiants
+/// basés sur le contenu plutôt que sur l'URL.
 ///
 /// Utilise SHA1 pour hasher l'URL et retourne les 8 premiers octets en hexadécimal.
+#[deprecated(
+    since = "0.2.0",
+    note = "Utilisez pk_from_content_header() pour des identifiants basés sur le contenu"
+)]
 pub fn pk_from_url(url: &str) -> String {
     let mut hasher = Sha1::new();
     hasher.update(url.as_bytes());

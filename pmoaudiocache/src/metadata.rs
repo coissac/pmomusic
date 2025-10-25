@@ -71,6 +71,46 @@ pub struct AudioMetadata {
 }
 
 impl AudioMetadata {
+    /// Extrait les métadonnées depuis un fichier audio taggé
+    ///
+    /// Fonction interne commune pour extraire les métadonnées depuis un TaggedFile
+    fn from_tagged_file(tagged_file: lofty::file::TaggedFile) -> Self {
+        let properties = tagged_file.properties();
+        let tag = tagged_file
+            .primary_tag()
+            .or_else(|| tagged_file.first_tag());
+
+        let mut metadata = Self {
+            title: None,
+            artist: None,
+            album: None,
+            year: None,
+            track_number: None,
+            track_total: None,
+            disc_number: None,
+            disc_total: None,
+            genre: None,
+            duration_secs: Some(properties.duration().as_secs()),
+            sample_rate: properties.sample_rate(),
+            channels: properties.channels(),
+            bitrate: properties.audio_bitrate(),
+        };
+
+        if let Some(tag) = tag {
+            metadata.title = tag.title().map(|s| s.to_string());
+            metadata.artist = tag.artist().map(|s| s.to_string());
+            metadata.album = tag.album().map(|s| s.to_string());
+            metadata.year = tag.year();
+            metadata.track_number = tag.track();
+            metadata.track_total = tag.track_total();
+            metadata.disc_number = tag.disk();
+            metadata.disc_total = tag.disk_total();
+            metadata.genre = tag.genre().map(|s| s.to_string());
+        }
+
+        metadata
+    }
+
     /// Extrait les métadonnées d'un fichier audio
     ///
     /// # Arguments
@@ -88,41 +128,7 @@ impl AudioMetadata {
     /// ```
     pub fn from_file(path: &Path) -> Result<Self> {
         let tagged_file = Probe::open(path)?.options(ParseOptions::new()).read()?;
-
-        let properties = tagged_file.properties();
-        let tag = tagged_file
-            .primary_tag()
-            .or_else(|| tagged_file.first_tag());
-
-        let mut metadata = Self {
-            title: None,
-            artist: None,
-            album: None,
-            year: None,
-            track_number: None,
-            track_total: None,
-            disc_number: None,
-            disc_total: None,
-            genre: None,
-            duration_secs: Some(properties.duration().as_secs()),
-            sample_rate: properties.sample_rate(),
-            channels: properties.channels(),
-            bitrate: properties.audio_bitrate(),
-        };
-
-        if let Some(tag) = tag {
-            metadata.title = tag.title().map(|s| s.to_string());
-            metadata.artist = tag.artist().map(|s| s.to_string());
-            metadata.album = tag.album().map(|s| s.to_string());
-            metadata.year = tag.year();
-            metadata.track_number = tag.track();
-            metadata.track_total = tag.track_total();
-            metadata.disc_number = tag.disk();
-            metadata.disc_total = tag.disk_total();
-            metadata.genre = tag.genre().map(|s| s.to_string());
-        }
-
-        Ok(metadata)
+        Ok(Self::from_tagged_file(tagged_file))
     }
 
     /// Crée des métadonnées depuis des données brutes audio
@@ -136,41 +142,7 @@ impl AudioMetadata {
             .guess_file_type()?
             .options(ParseOptions::new())
             .read()?;
-
-        let properties = tagged_file.properties();
-        let tag = tagged_file
-            .primary_tag()
-            .or_else(|| tagged_file.first_tag());
-
-        let mut metadata = Self {
-            title: None,
-            artist: None,
-            album: None,
-            year: None,
-            track_number: None,
-            track_total: None,
-            disc_number: None,
-            disc_total: None,
-            genre: None,
-            duration_secs: Some(properties.duration().as_secs()),
-            sample_rate: properties.sample_rate(),
-            channels: properties.channels(),
-            bitrate: properties.audio_bitrate(),
-        };
-
-        if let Some(tag) = tag {
-            metadata.title = tag.title().map(|s| s.to_string());
-            metadata.artist = tag.artist().map(|s| s.to_string());
-            metadata.album = tag.album().map(|s| s.to_string());
-            metadata.year = tag.year();
-            metadata.track_number = tag.track();
-            metadata.track_total = tag.track_total();
-            metadata.disc_number = tag.disk();
-            metadata.disc_total = tag.disk_total();
-            metadata.genre = tag.genre().map(|s| s.to_string());
-        }
-
-        Ok(metadata)
+        Ok(Self::from_tagged_file(tagged_file))
     }
 
     /// Génère une clé de collection basée sur l'artiste et l'album

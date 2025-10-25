@@ -13,6 +13,7 @@ futures-util = "0.3"
 
 # Cryptographie
 sha1 = "0.10"
+sha2 = "0.10"
 hex = "0.4"
 
 # Utilitaires
@@ -34,7 +35,12 @@ utoipa = { version = "5.3", optional = true }
 # Feature pour pmoserver (extension HTTP)
 axum = { version = "0.8", optional = true }
 
+# Feature pour pmoconfig (extension de configuration)
+pmoconfig = { path = "../pmoconfig", optional = true }
+serde_yaml = { version = "0.9", optional = true }
+
 [features]
 default = []
 openapi = ["dep:utoipa"]
 pmoserver = ["dep:axum"]
+pmoconfig = ["dep:pmoconfig", "dep:serde_yaml"]
