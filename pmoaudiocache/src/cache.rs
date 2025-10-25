@@ -108,7 +108,15 @@ fn create_flac_transformer() -> StreamTransformer {
                         &FormatOptions::default(),
                         &MetadataOptions::default(),
                     )
-                    .map_err(|e| format!("Failed to probe format: {}", e))?;
+                    .map_err(|e| {
+                        tracing::error!("Symphonia failed to detect audio format: {}", e);
+                        format!(
+                            "Unable to detect audio format. Error: {}. \
+                            Supported formats: MP3, WAV, OGG, FLAC, AAC, ALAC. \
+                            Please verify the URL points to a valid audio file.",
+                            e
+                        )
+                    })?;
 
                 let mut format = probed.format;
 
@@ -116,22 +124,40 @@ fn create_flac_transformer() -> StreamTransformer {
                     .tracks()
                     .iter()
                     .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
-                    .ok_or_else(|| "No audio track found".to_string())?;
+                    .ok_or_else(|| {
+                        tracing::error!("No audio track found in the file");
+                        "No audio track found in the file. The file may be corrupted or not a valid audio file.".to_string()
+                    })?;
+
+                let codec_name = format!("{:?}", track.codec_params.codec);
+                tracing::debug!("Detected codec: {}", codec_name);
 
                 let mut decoder = symphonia::default::get_codecs()
                     .make(&track.codec_params, &DecoderOptions::default())
-                    .map_err(|e| format!("Failed to create decoder: {}", e))?;
+                    .map_err(|e| {
+                        tracing::error!("Failed to create decoder for codec {}: {}", codec_name, e);
+                        format!(
+                            "Codec '{}' is not supported or failed to initialize. Error: {}",
+                            codec_name, e
+                        )
+                    })?;
 
                 let channels = track
                     .codec_params
                     .channels
-                    .ok_or_else(|| "No channel info".to_string())?
+                    .ok_or_else(|| {
+                        tracing::error!("Audio file missing channel information");
+                        "Audio file is missing channel information. The file may be corrupted.".to_string()
+                    })?
                     .count();
 
                 let sample_rate = track
                     .codec_params
                     .sample_rate
-                    .ok_or_else(|| "No sample rate info".to_string())?;
+                    .ok_or_else(|| {
+                        tracing::error!("Audio file missing sample rate information");
+                        "Audio file is missing sample rate information. The file may be corrupted.".to_string()
+                    })?;
 
                 let bits_per_sample = track.codec_params.bits_per_sample.unwrap_or(16);
 
@@ -151,7 +177,10 @@ fn create_flac_transformer() -> StreamTransformer {
                         {
                             break;
                         }
-                        Err(e) => return Err(format!("Decode error: {}", e)),
+                        Err(e) => {
+                            tracing::error!("Failed to read audio packet: {}", e);
+                            return Err(format!("Failed to read audio data: {}. The file may be corrupted.", e));
+                        }
                     };
 
                     if packet.track_id() != track_id {
@@ -170,13 +199,20 @@ fn create_flac_transformer() -> StreamTransformer {
                             sample_buf.copy_interleaved_ref(decoded);
                             samples_i32.extend_from_slice(sample_buf.samples());
                         }
-                        Err(SymphoniaError::DecodeError(_)) => continue,
-                        Err(e) => return Err(format!("Decode error: {}", e)),
+                        Err(SymphoniaError::DecodeError(e)) => {
+                            tracing::warn!("Skipping corrupted audio packet: {}", e);
+                            continue;
+                        }
+                        Err(e) => {
+                            tracing::error!("Fatal decode error: {}", e);
+                            return Err(format!("Failed to decode audio: {}. The file may be corrupted or use an unsupported codec variant.", e));
+                        }
                     }
                 }
 
                 if samples_i32.is_empty() {
-                    return Err("No samples decoded".to_string());
+                    tracing::error!("No audio samples could be decoded from the file");
+                    return Err("No audio samples could be decoded. The file may be corrupted or empty.".to_string());
                 }
 
                 tracing::debug!(
@@ -231,7 +267,10 @@ fn create_flac_transformer() -> StreamTransformer {
 
                 let config = flacenc::config::Encoder::default()
                     .into_verified()
-                    .map_err(|e| format!("FLAC config error: {:?}", e))?;
+                    .map_err(|e| {
+                        tracing::error!("Failed to create FLAC encoder config: {:?}", e);
+                        format!("Internal error: FLAC encoder configuration failed: {:?}", e)
+                    })?;
 
                 let source = flacenc::source::MemSource::from_samples(
                     &samples,
@@ -242,17 +281,26 @@ fn create_flac_transformer() -> StreamTransformer {
 
                 let flac_stream =
                     flacenc::encode_with_fixed_block_size(&config, source, config.block_size)
-                        .map_err(|e| format!("FLAC encode error: {:?}", e))?;
+                        .map_err(|e| {
+                            tracing::error!("FLAC encoding failed: {:?}", e);
+                            format!("Failed to encode audio to FLAC format: {:?}", e)
+                        })?;
 
                 let mut sink = ByteSink::new();
                 flac_stream
                     .write(&mut sink)
-                    .map_err(|e| format!("FLAC write error: {:?}", e))?;
+                    .map_err(|e| {
+                        tracing::error!("Failed to write FLAC stream: {:?}", e);
+                        format!("Failed to write FLAC data: {:?}", e)
+                    })?;
 
                 Ok::<Vec<u8>, String>(sink.into_inner())
             })
             .await
-            .map_err(|e| format!("Spawn blocking error: {}", e))??;
+            .map_err(|e| {
+                tracing::error!("FLAC encoding task panicked: {}", e);
+                format!("Internal error: FLAC encoding task failed: {}", e)
+            })??;
 
             tracing::debug!("FLAC encoding complete: {} bytes", flac_data.len());
 

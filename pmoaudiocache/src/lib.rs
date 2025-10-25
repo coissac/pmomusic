@@ -131,7 +131,6 @@
 //! - [`pmoserver`] : Serveur HTTP
 
 pub mod cache;
-pub mod flac;
 pub mod metadata;
 
 #[cfg(feature = "pmoserver")]
