@@ -48,4 +48,5 @@ tracing-subscriber = "0.3"
 
 [features]
 default = ["pmoserver"]
-pmoserver = ["dep:pmoserver", "dep:pmoconfig", "dep:axum", "dep:utoipa", "pmocache/pmoserver", "pmocache/openapi"]
+pmoconfig = ["dep:pmoconfig", "pmocache/pmoconfig"]
+pmoserver = ["pmoconfig", "dep:pmoserver", "dep:axum", "dep:utoipa", "pmocache/pmoserver", "pmocache/openapi"]

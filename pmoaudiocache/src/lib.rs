@@ -137,9 +137,15 @@ pub mod metadata;
 #[cfg(feature = "pmoserver")]
 pub mod openapi;
 
+#[cfg(feature = "pmoconfig")]
+pub mod config_ext;
+
 // Re-exports principaux
 pub use cache::{add_with_metadata_extraction, get_metadata, new_cache, AudioConfig, Cache};
 pub use metadata::AudioMetadata;
+
+#[cfg(feature = "pmoconfig")]
+pub use config_ext::AudioCacheConfigExt;
 
 #[cfg(feature = "pmoserver")]
 pub use openapi::ApiDoc;
@@ -207,9 +213,10 @@ impl AudioCacheExt for pmoserver::Server {
     }
 
     async fn init_audio_cache_configured(&mut self) -> anyhow::Result<Arc<Cache>> {
+        use crate::AudioCacheConfigExt;
         let config = pmoconfig::get_config();
-        let cache_dir = config.get_audio_cache_dir()?;
-        let limit = config.get_audio_cache_size()?;
+        let cache_dir = config.get_audiocache_dir()?;
+        let limit = config.get_audiocache_size()?;
         self.init_audio_cache(&cache_dir, limit).await
     }
 }

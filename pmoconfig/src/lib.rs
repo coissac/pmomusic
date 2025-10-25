@@ -59,10 +59,6 @@ const ENV_PREFIX: &str = "PMOMUSIC_CONFIG__";
 
 // Default values for configuration
 const DEFAULT_HTTP_PORT: u16 = 8080;
-const DEFAULT_COVER_CACHE_DIR: &str = "cache_covers";
-const DEFAULT_COVER_CACHE_SIZE: usize = 2000;
-const DEFAULT_AUDIO_CACHE_DIR: &str = "cache_audio";
-const DEFAULT_AUDIO_CACHE_SIZE: usize = 500;
 const DEFAULT_LOG_BUFFER_CAPACITY: usize = 1000;
 const DEFAULT_LOG_MIN_LEVEL: &str = "TRACE";
 const DEFAULT_LOG_ENABLE_CONSOLE: bool = true;
@@ -437,33 +433,57 @@ impl Config {
         Ok(absolute_path.to_string_lossy().to_string())
     }
 
-    /// Generic function to get cache directory
-    fn get_cache_dir(&self, cache_type: &str, default_dir: &str) -> Result<String> {
-        let dir_path = match self.get_value(&["host", cache_type, "directory"]) {
+    /// Récupère un répertoire géré par la configuration
+    ///
+    /// Cette méthode générique permet de récupérer n'importe quel répertoire
+    /// configuré dans le YAML. Le répertoire peut être absolu ou relatif au
+    /// répertoire de configuration. Il sera créé s'il n'existe pas.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Chemin dans l'arbre de configuration (ex: `&["host", "cache", "directory"]`)
+    /// * `default` - Nom de répertoire par défaut si non configuré
+    ///
+    /// # Returns
+    ///
+    /// Le chemin absolu du répertoire, créé s'il n'existait pas
+    ///
+    /// # Exemple
+    ///
+    /// ```no_run
+    /// use pmoconfig::get_config;
+    ///
+    /// let config = get_config();
+    /// let cache_dir = config.get_managed_dir(&["host", "audio_cache", "directory"], "cache_audio")?;
+    /// println!("Audio cache directory: {}", cache_dir);
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    pub fn get_managed_dir(&self, path: &[&str], default: &str) -> Result<String> {
+        let dir_path = match self.get_value(path) {
             Ok(Value::String(s)) => s,
-            _ => default_dir.to_string(),
+            _ => default.to_string(),
         };
         self.resolve_and_create_dir(&dir_path)
     }
 
-    /// Generic function to set cache directory
-    fn set_cache_dir(&self, cache_type: &str, directory: String) -> Result<()> {
-        self.set_value(&["host", cache_type, "directory"], Value::String(directory))
-    }
-
-    /// Generic function to get cache size
-    fn get_cache_size(&self, cache_type: &str, default_size: usize) -> Result<usize> {
-        match self.get_value(&["host", cache_type, "size"])? {
-            Value::Number(n) if n.is_i64() => Ok(n.as_i64().unwrap() as usize),
-            Value::Number(n) if n.is_u64() => Ok(n.as_u64().unwrap() as usize),
-            _ => Ok(default_size),
-        }
-    }
-
-    /// Generic function to set cache size
-    fn set_cache_size(&self, cache_type: &str, size: usize) -> Result<()> {
-        let n = Number::from(size);
-        self.set_value(&["host", cache_type, "size"], Value::Number(n))
+    /// Définit un répertoire géré par la configuration
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Chemin dans l'arbre de configuration (ex: `&["host", "cache", "directory"]`)
+    /// * `directory` - Chemin du répertoire (absolu ou relatif au config_dir)
+    ///
+    /// # Exemple
+    ///
+    /// ```no_run
+    /// use pmoconfig::get_config;
+    ///
+    /// let config = get_config();
+    /// config.set_managed_dir(&["host", "audio_cache", "directory"], "/var/cache/audio".to_string())?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    pub fn set_managed_dir(&self, path: &[&str], directory: String) -> Result<()> {
+        self.set_value(path, Value::String(directory))
     }
 
     /// Gets the base URL for the HTTP server
@@ -566,77 +586,6 @@ impl Config {
         self.set_value(&["devices", devtype, name, "udn"], Value::String(udn))
     }
 
-    /// Gets the cover cache directory
-    ///
-    /// # Returns
-    ///
-    /// Returns a `Result` containing the absolute path to the cover cache directory (default: "cache_covers")
-    pub fn get_cover_cache_dir(&self) -> Result<String> {
-        self.get_cache_dir("cover_cache", DEFAULT_COVER_CACHE_DIR)
-    }
-
-    /// Sets the cover cache directory
-    ///
-    /// # Arguments
-    ///
-    /// * `directory` - The directory path (absolute or relative to config dir)
-    pub fn set_cover_cache_dir(&self, directory: String) -> Result<()> {
-        self.set_cache_dir("cover_cache", directory)
-    }
-
-    /// Gets the maximum number of items in the cover cache
-    ///
-    /// # Returns
-    ///
-    /// Returns a `Result` containing the cache size (default: 2000)
-    pub fn get_cover_cache_size(&self) -> Result<usize> {
-        self.get_cache_size("cover_cache", DEFAULT_COVER_CACHE_SIZE)
-    }
-
-    /// Sets the maximum number of items in the cover cache
-    ///
-    /// # Arguments
-    ///
-    /// * `size` - The maximum cache size
-    pub fn set_cover_cache_size(&self, size: usize) -> Result<()> {
-        self.set_cache_size("cover_cache", size)
-    }
-
-    /// Gets the audio cache directory
-    ///
-    /// # Returns
-    ///
-    /// Returns a `Result` containing the absolute path to the audio cache directory (default: "cache_audio")
-    pub fn get_audio_cache_dir(&self) -> Result<String> {
-        self.get_cache_dir("audio_cache", DEFAULT_AUDIO_CACHE_DIR)
-    }
-
-    /// Sets the audio cache directory
-    ///
-    /// # Arguments
-    ///
-    /// * `directory` - The directory path (absolute or relative to config dir)
-    pub fn set_audio_cache_dir(&self, directory: String) -> Result<()> {
-        self.set_cache_dir("audio_cache", directory)
-    }
-
-    /// Gets the maximum number of items in the audio cache
-    ///
-    /// # Returns
-    ///
-    /// Returns a `Result` containing the cache size (default: 500)
-    pub fn get_audio_cache_size(&self) -> Result<usize> {
-        self.get_cache_size("audio_cache", DEFAULT_AUDIO_CACHE_SIZE)
-    }
-
-    /// Sets the maximum number of items in the audio cache
-    ///
-    /// # Arguments
-    ///
-    /// * `size` - The maximum cache size
-    pub fn set_audio_cache_size(&self, size: usize) -> Result<()> {
-        self.set_cache_size("audio_cache", size)
-    }
 
     impl_string_config!(
         /// Gets the Qobuz username from configuration

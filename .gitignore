@@ -13,6 +13,7 @@ xxx
 **/.pmomusic.yml
 **/.pmomusic_covers/**
 **/.pmomusic_audio/**
+/.pmomusic
 .DS_Store
 /target/
 /.pmomusic_covers

@@ -303,7 +303,7 @@ async fn get_cache_stats(
 #[cfg(all(feature = "pmoserver", feature = "covers"))]
 async fn cache_album_image(mut album: Album, cover_cache: &Arc<pmocovers::Cache>) -> Album {
     if let Some(ref image_url) = album.image {
-        match cover_cache.ensure_from_url(image_url).await {
+        match cover_cache.add_from_url(image_url, None).await {
             Ok(pk) => {
                 album.image_cached = Some(format!("/covers/images/{}", pk));
             }

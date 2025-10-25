@@ -2,6 +2,25 @@ use anyhow::Result;
 use image::{imageops::FilterType, DynamicImage};
 use webp::{Encoder, WebPMemory};
 
+/// Encode une image en format WebP avec un niveau de qualité de 85%
+///
+/// # Arguments
+///
+/// * `img` - Image à encoder
+///
+/// # Returns
+///
+/// Les données WebP encodées sous forme de vecteur d'octets
+///
+/// # Exemple
+///
+/// ```rust,ignore
+/// use pmocovers::webp::encode_webp;
+/// use image::DynamicImage;
+///
+/// let img = DynamicImage::new_rgba8(100, 100);
+/// let webp_data = encode_webp(&img)?;
+/// ```
 pub fn encode_webp(img: &DynamicImage) -> Result<Vec<u8>> {
     let rgb_img = img.to_rgba8();
     let encoder = Encoder::from_rgba(&rgb_img, rgb_img.width(), rgb_img.height());
@@ -9,6 +28,31 @@ pub fn encode_webp(img: &DynamicImage) -> Result<Vec<u8>> {
     Ok(webp_data.to_vec())
 }
 
+/// Redimensionne une image pour l'inscrire dans un carré de taille donnée
+///
+/// Cette fonction préserve le ratio d'aspect de l'image originale en la redimensionnant
+/// pour qu'elle tienne dans un carré, puis la centre sur un fond transparent.
+///
+/// # Arguments
+///
+/// * `img` - Image à redimensionner
+/// * `size` - Taille du carré de sortie (en pixels)
+///
+/// # Returns
+///
+/// Une nouvelle image carrée de taille `size × size` avec l'image originale centrée
+///
+/// # Exemple
+///
+/// ```rust,ignore
+/// use pmocovers::webp::ensure_square;
+/// use image::DynamicImage;
+///
+/// let img = DynamicImage::new_rgba8(800, 600);
+/// let square = ensure_square(&img, 256);
+/// assert_eq!(square.width(), 256);
+/// assert_eq!(square.height(), 256);
+/// ```
 pub fn ensure_square(img: &DynamicImage, size: u32) -> DynamicImage {
     let (width, height) = (img.width(), img.height());
 
@@ -38,6 +82,36 @@ pub fn ensure_square(img: &DynamicImage, size: u32) -> DynamicImage {
     square
 }
 
+/// Génère une variante redimensionnée d'une image en cache
+///
+/// Cette fonction crée (ou récupère si déjà existante) une variante redimensionnée
+/// d'une image. La variante est mise en cache sur disque pour éviter les
+/// recalculs futurs.
+///
+/// # Arguments
+///
+/// * `cache` - Instance du cache de couvertures
+/// * `pk` - Clé primaire de l'image
+/// * `size` - Taille de la variante (carré de `size × size`)
+///
+/// # Returns
+///
+/// Les données WebP de la variante redimensionnée
+///
+/// # Comportement
+///
+/// 1. Si la variante existe déjà sur disque, elle est retournée directement
+/// 2. Sinon, l'image originale est chargée, redimensionnée et encodée en WebP
+/// 3. La variante est sauvegardée sur disque pour utilisation future
+///
+/// # Exemple
+///
+/// ```rust,ignore
+/// use pmocovers::webp::generate_variant;
+///
+/// let cache = pmocovers::cache::new_cache("./cache", 1000)?;
+/// let variant_256 = generate_variant(&cache, "abc123", 256).await?;
+/// ```
 pub async fn generate_variant(
     cache: &super::cache::Cache,
     pk: &str,
