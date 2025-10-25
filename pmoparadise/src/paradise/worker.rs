@@ -452,14 +452,15 @@ impl WorkerState {
 
     async fn cache_cover(&self, block: &Block, song: &Song) -> Result<Option<String>> {
         if let Some(ref cover_path) = song.cover {
-            let cover_url =
-                resolve_cover_url(block.image_base.as_deref(), &self.client, cover_path)
-                    .context("Invalid cover URL")?;
-            match self.cache_manager.cache_cover(cover_url.as_str()).await {
-                Ok(pk) => return Ok(Some(pk)),
-                Err(err) => {
-                    warn!(channel = self.descriptor.slug, "Cover cache error: {err}");
+            if let Some(cover_url) = block.cover_url(cover_path) {
+                match self.cache_manager.cache_cover(&cover_url).await {
+                    Ok(pk) => return Ok(Some(pk)),
+                    Err(err) => {
+                        warn!(channel = self.descriptor.slug, "Cover cache error: {err}");
+                    }
                 }
+            } else {
+                warn!(channel = self.descriptor.slug, "Unable to resolve cover URL for {}", cover_path);
             }
         }
         Ok(None)
@@ -729,30 +730,3 @@ async fn encode_samples_to_flac(
     .await?
 }
 
-fn resolve_cover_url(
-    image_base: Option<&str>,
-    client: &RadioParadiseClient,
-    cover: &str,
-) -> Result<Url> {
-    if cover.starts_with("http://") || cover.starts_with("https://") {
-        return Url::parse(cover).map_err(|e| anyhow!("Invalid cover URL '{cover}': {e}"));
-    }
-
-    if cover.starts_with("//") {
-        let url = format!("https:{cover}");
-        return Url::parse(&url).map_err(|e| anyhow!("Invalid cover URL '{cover}': {e}"));
-    }
-
-    if let Some(base) = image_base {
-        match Url::parse(base).and_then(|base_url| base_url.join(cover)) {
-            Ok(url) => return Ok(url),
-            Err(err) => {
-                debug!("Failed to join cover '{cover}' with base '{base}': {err}");
-            }
-        }
-    }
-
-    client
-        .cover_url(cover)
-        .map_err(|e| anyhow!("Invalid cover URL '{cover}': {e}"))
-}

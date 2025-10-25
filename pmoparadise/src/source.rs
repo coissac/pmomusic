@@ -75,7 +75,7 @@ impl std::fmt::Debug for RadioParadiseSource {
 
 impl RadioParadiseSource {
     #[cfg(feature = "server")]
-    pub fn from_registry(client: RadioParadiseClient, _legacy_capacity: usize) -> Result<Self> {
+    pub fn from_registry(client: RadioParadiseClient) -> Result<Self> {
         let config = Arc::new(RadioParadiseConfig::load_from_pmoconfig().unwrap_or_default());
         let history_backend = history_backend_from_config(&config.history).map_err(|e| {
             MusicSourceError::SourceUnavailable(format!(
@@ -114,12 +114,11 @@ impl RadioParadiseSource {
 
     #[cfg(feature = "server")]
     pub fn from_registry_default(client: RadioParadiseClient) -> Result<Self> {
-        Self::from_registry(client, 0)
+        Self::from_registry(client)
     }
 
     pub fn new(
         client: RadioParadiseClient,
-        _legacy_capacity: usize,
         cover_cache: Arc<CoverCache>,
         audio_cache: Arc<AudioCache>,
     ) -> Self {
@@ -166,7 +165,7 @@ impl RadioParadiseSource {
         cover_cache: Arc<CoverCache>,
         audio_cache: Arc<AudioCache>,
     ) -> Self {
-        Self::new(client, 0, cover_cache, audio_cache)
+        Self::new(client, cover_cache, audio_cache)
     }
 
     pub fn client_for_channel(&self, channel: u8) -> Option<RadioParadiseClient> {

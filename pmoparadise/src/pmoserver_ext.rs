@@ -3,7 +3,7 @@
 //! Ce module fournit un trait d'extension pour ajouter facilement l'API Radio Paradise
 //! à un serveur pmoserver.
 
-use crate::paradise::{ParadiseChannel, PlaylistEntry};
+use crate::paradise::{max_channel_id, ParadiseChannel, PlaylistEntry, ALL_CHANNELS};
 use crate::{models::Bitrate, Block, NowPlaying, RadioParadiseClient, RadioParadiseSource};
 use axum::{
     body::Body,
@@ -29,8 +29,6 @@ pub struct RadioParadiseState {
     client: Arc<RwLock<RadioParadiseClient>>,
     source: Arc<RadioParadiseSource>,
 }
-
-const MAX_CHANNEL_ID: u8 = 3;
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
@@ -101,7 +99,7 @@ impl RadioParadiseState {
         let mut client = base_client;
 
         if let Some(channel) = params.channel {
-            if channel > MAX_CHANNEL_ID {
+            if channel > max_channel_id() {
                 tracing::warn!("Invalid Radio Paradise channel requested: {}", channel);
                 return Err(StatusCode::BAD_REQUEST);
             }
@@ -120,7 +118,7 @@ impl RadioParadiseState {
     }
 
     fn channel_for_id(&self, channel_id: u8) -> Result<Arc<ParadiseChannel>, StatusCode> {
-        if channel_id > MAX_CHANNEL_ID {
+        if channel_id > max_channel_id() {
             return Err(StatusCode::BAD_REQUEST);
         }
         self.source
@@ -142,6 +140,16 @@ pub struct ChannelInfo {
     pub name: String,
     /// Description
     pub description: String,
+}
+
+impl From<&crate::paradise::ChannelDescriptor> for ChannelInfo {
+    fn from(descriptor: &crate::paradise::ChannelDescriptor) -> Self {
+        Self {
+            id: descriptor.id,
+            name: descriptor.display_name.to_string(),
+            description: descriptor.description.to_string(),
+        }
+    }
 }
 
 /// Réponse avec informations étendues sur le morceau en cours
@@ -372,29 +380,7 @@ async fn get_block_by_id(
     tag = "Radio Paradise"
 )]
 async fn get_channels() -> Json<Vec<ChannelInfo>> {
-    let channels = vec![
-        ChannelInfo {
-            id: 0,
-            name: "Main Mix".to_string(),
-            description: "Eclectic mix of rock, world, electronica, and more".to_string(),
-        },
-        ChannelInfo {
-            id: 1,
-            name: "Mellow Mix".to_string(),
-            description: "Mellower, less aggressive music".to_string(),
-        },
-        ChannelInfo {
-            id: 2,
-            name: "Rock Mix".to_string(),
-            description: "Heavier, more guitar-driven music".to_string(),
-        },
-        ChannelInfo {
-            id: 3,
-            name: "World/Etc Mix".to_string(),
-            description: "Global beats and world music".to_string(),
-        },
-    ];
-
+    let channels: Vec<ChannelInfo> = ALL_CHANNELS.iter().map(Into::into).collect();
     Json(channels)
 }
 

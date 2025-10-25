@@ -114,6 +114,11 @@ pub const ALL_CHANNELS: [ChannelDescriptor; 4] = [
     ChannelDescriptor::new(ParadiseChannelKind::Eclectic),
 ];
 
+/// Returns the maximum valid channel ID
+pub const fn max_channel_id() -> u8 {
+    (ALL_CHANNELS.len() - 1) as u8
+}
+
 /// Public handle to interact with a channel.
 #[derive(Clone)]
 pub struct ParadiseChannel {
