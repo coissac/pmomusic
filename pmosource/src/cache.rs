@@ -21,6 +21,7 @@
 use crate::{CacheStatus, MusicSourceError, Result};
 use pmoaudiocache::{AudioMetadata, Cache as AudioCache};
 use pmocovers::Cache as CoverCache;
+use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::AsyncRead;
@@ -261,6 +262,79 @@ impl SourceCacheManager {
     pub async fn remove_track(&self, track_id: &str) {
         let mut cache = self.track_cache.write().await;
         cache.remove(track_id);
+    }
+
+    /// Stocke une métadonnée personnalisée pour un fichier audio caché
+    ///
+    /// Permet de stocker des métadonnées arbitraires (clé/valeur JSON) associées
+    /// à un fichier audio identifié par son PK. Ces métadonnées sont persistées
+    /// dans la base de données SQLite du cache audio.
+    ///
+    /// # Arguments
+    ///
+    /// * `audio_pk` - Clé primaire du fichier audio dans le cache
+    /// * `key` - Nom de la métadonnée à stocker
+    /// * `value` - Valeur JSON à stocker
+    ///
+    /// # Exemples
+    ///
+    /// ```no_run
+    /// # use pmosource::SourceCacheManager;
+    /// # use serde_json::json;
+    /// # async fn example(cache_manager: &SourceCacheManager, audio_pk: &str) {
+    /// // Stocker une métadonnée simple
+    /// cache_manager.set_audio_metadata(audio_pk, "genre", json!("Rock")).unwrap();
+    ///
+    /// // Stocker une métadonnée numérique
+    /// cache_manager.set_audio_metadata(audio_pk, "rating", json!(8.5)).unwrap();
+    /// # }
+    /// ```
+    pub fn set_audio_metadata(
+        &self,
+        audio_pk: &str,
+        key: &str,
+        value: JsonValue,
+    ) -> Result<()> {
+        self.audio_cache
+            .db
+            .set_a_metadata(audio_pk, key, value)
+            .map_err(|e| MusicSourceError::CacheError(format!("Failed to set metadata: {}", e)))
+    }
+
+    /// Récupère une métadonnée personnalisée pour un fichier audio caché
+    ///
+    /// Lit une métadonnée précédemment stockée via `set_audio_metadata()`.
+    ///
+    /// # Arguments
+    ///
+    /// * `audio_pk` - Clé primaire du fichier audio dans le cache
+    /// * `key` - Nom de la métadonnée à récupérer
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Some(value))` - La métadonnée existe
+    /// * `Ok(None)` - La métadonnée n'existe pas
+    /// * `Err(_)` - Erreur de lecture
+    ///
+    /// # Exemples
+    ///
+    /// ```no_run
+    /// # use pmosource::SourceCacheManager;
+    /// # async fn example(cache_manager: &SourceCacheManager, audio_pk: &str) {
+    /// if let Some(genre) = cache_manager.get_audio_metadata(audio_pk, "genre").unwrap() {
+    ///     println!("Genre: {}", genre);
+    /// }
+    /// # }
+    /// ```
+    pub fn get_audio_metadata(&self, audio_pk: &str, key: &str) -> Result<Option<JsonValue>> {
+        match self.audio_cache.db.get_a_metadata(audio_pk, key) {
+            Ok(value) => Ok(value),
+            Err(e) if e.to_string().contains("QueryReturnedNoRows") => Ok(None),
+            Err(e) => Err(MusicSourceError::CacheError(format!(
+                "Failed to get metadata: {}",
+                e
+            ))),
+        }
     }
 
     /// Obtenir l'ID de collection
