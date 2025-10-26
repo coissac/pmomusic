@@ -682,8 +682,27 @@ impl WorkerState {
 
         metadata.cached_audio_pk = Some(audio_pk.clone());
         self.cache_manager
-            .update_metadata(track_id.clone(), metadata)
+            .update_metadata(track_id.clone(), metadata.clone())
             .await;
+
+        // Stocker les métadonnées Radio Paradise dans le cache
+        if let Err(e) = Self::store_rp_metadata(
+            &self.cache_manager,
+            &audio_pk,
+            &track_id,
+            self.descriptor.id,
+            song,
+            duration_ms,
+            block.event,
+            metadata.cached_cover_pk.as_deref(),
+        )
+        .await
+        {
+            warn!(
+                channel = self.descriptor.slug,
+                "Failed to store RP metadata: {e:?}"
+            );
+        }
 
         let file_path = self.cache_manager.audio_file_path(&audio_pk).await;
 
@@ -718,6 +737,46 @@ impl WorkerState {
             }
         }
         Ok(None)
+    }
+
+    /// Stocke les métadonnées Radio Paradise pour un fichier audio caché
+    ///
+    /// Cette fonction persiste toutes les métadonnées RP dans la base de données
+    /// du cache audio, permettant leur récupération future sans dépendance aux
+    /// données en mémoire.
+    async fn store_rp_metadata(
+        cache_manager: &SourceCacheManager,
+        audio_pk: &str,
+        track_id: &str,
+        channel_id: u8,
+        song: &Song,
+        duration_ms: u64,
+        event: u64,
+        cover_pk: Option<&str>,
+    ) -> Result<()> {
+        use serde_json::json;
+
+        // Métadonnées basiques de la chanson
+        cache_manager.set_audio_metadata(audio_pk, "rp_title", json!(song.title))?;
+        cache_manager.set_audio_metadata(audio_pk, "rp_artist", json!(song.artist))?;
+        cache_manager.set_audio_metadata(audio_pk, "rp_album", json!(song.album))?;
+        cache_manager.set_audio_metadata(audio_pk, "rp_year", json!(song.year))?;
+
+        // Informations temporelles
+        cache_manager.set_audio_metadata(audio_pk, "rp_duration_ms", json!(duration_ms))?;
+        cache_manager.set_audio_metadata(audio_pk, "rp_elapsed_ms", json!(song.elapsed))?;
+
+        // Identifiants Radio Paradise
+        cache_manager.set_audio_metadata(audio_pk, "rp_track_id", json!(track_id))?;
+        cache_manager.set_audio_metadata(audio_pk, "rp_channel_id", json!(channel_id))?;
+        cache_manager.set_audio_metadata(audio_pk, "rp_event", json!(event))?;
+
+        // Métadonnées supplémentaires
+        cache_manager.set_audio_metadata(audio_pk, "rp_rating", json!(song.rating))?;
+        cache_manager.set_audio_metadata(audio_pk, "rp_cover_url", json!(song.cover))?;
+        cache_manager.set_audio_metadata(audio_pk, "rp_cover_pk", json!(cover_pk))?;
+
+        Ok(())
     }
 
     fn compute_track_id(&self, block: &Block, song_index: usize) -> String {
@@ -1136,4 +1195,101 @@ async fn encode_samples_to_flac(
         Ok::<_, anyhow::Error>(sink.into_inner())
     })
     .await?
+}
+
+/// Métadonnées Radio Paradise récupérées depuis le cache
+///
+/// Cette structure contient toutes les métadonnées RP stockées de manière
+/// persistante dans le cache audio.
+#[derive(Debug, Clone)]
+pub struct RadioParadiseMetadata {
+    /// Titre de la chanson
+    pub title: String,
+    /// Artiste
+    pub artist: String,
+    /// Album (optionnel)
+    pub album: Option<String>,
+    /// Année de sortie (optionnelle)
+    pub year: Option<u32>,
+    /// Durée en millisecondes
+    pub duration_ms: u64,
+    /// Offset depuis le début du block en millisecondes
+    pub elapsed_ms: u64,
+    /// Identifiant unique de la piste
+    pub track_id: String,
+    /// ID du canal Radio Paradise (0-3)
+    pub channel_id: u8,
+    /// ID de l'événement (block)
+    pub event: u64,
+    /// Note de la chanson (0-10, optionnelle)
+    pub rating: Option<f32>,
+    /// URL de la couverture (optionnelle)
+    pub cover_url: Option<String>,
+    /// PK de la couverture dans le cache (optionnelle)
+    pub cover_pk: Option<String>,
+}
+
+/// Charge les métadonnées Radio Paradise depuis le cache audio
+///
+/// Cette fonction lit toutes les métadonnées RP stockées pour un fichier
+/// audio donné et les retourne dans une structure `RadioParadiseMetadata`.
+///
+/// # Arguments
+///
+/// * `cache_manager` - Le gestionnaire de cache source
+/// * `audio_pk` - Clé primaire du fichier audio dans le cache
+///
+/// # Returns
+///
+/// Les métadonnées RP si elles existent et sont complètes, sinon une erreur.
+///
+/// # Erreurs
+///
+/// Cette fonction retourne une erreur si :
+/// - Les métadonnées n'existent pas dans le cache
+/// - Les métadonnées sont incomplètes ou corrompues
+/// - Il y a une erreur de lecture du cache
+pub async fn load_rp_metadata(
+    cache_manager: &SourceCacheManager,
+    audio_pk: &str,
+) -> Result<RadioParadiseMetadata> {
+    // Helper macro pour récupérer une métadonnée requise
+    macro_rules! get_required {
+        ($key:expr, $type:ty) => {{
+            cache_manager
+                .get_audio_metadata(audio_pk, $key)?
+                .and_then(|v| serde_json::from_value::<$type>(v).ok())
+                .ok_or_else(|| anyhow!("Missing or invalid metadata: {}", $key))?
+        }};
+    }
+
+    // Helper macro pour récupérer une métadonnée optionnelle
+    macro_rules! get_optional {
+        ($key:expr, $type:ty) => {{
+            cache_manager
+                .get_audio_metadata(audio_pk, $key)?
+                .and_then(|v| {
+                    if v.is_null() {
+                        None
+                    } else {
+                        serde_json::from_value::<$type>(v).ok()
+                    }
+                })
+        }};
+    }
+
+    Ok(RadioParadiseMetadata {
+        title: get_required!("rp_title", String),
+        artist: get_required!("rp_artist", String),
+        album: get_optional!("rp_album", String),
+        year: get_optional!("rp_year", u32),
+        duration_ms: get_required!("rp_duration_ms", u64),
+        elapsed_ms: get_required!("rp_elapsed_ms", u64),
+        track_id: get_required!("rp_track_id", String),
+        channel_id: get_required!("rp_channel_id", u8),
+        event: get_required!("rp_event", u64),
+        rating: get_optional!("rp_rating", f32),
+        cover_url: get_optional!("rp_cover_url", String),
+        cover_pk: get_optional!("rp_cover_pk", String),
+    })
 }

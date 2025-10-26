@@ -25,4 +25,4 @@ pub use channel::{
 pub use constants::*;  // Export all constants
 pub use history::{create_history_backend, HistoryBackend, HistoryEntry};
 pub use playlist::PlaylistEntry;
-pub use worker::{ParadiseWorker, WorkerCommand};
+pub use worker::{load_rp_metadata, ParadiseWorker, RadioParadiseMetadata, WorkerCommand};
