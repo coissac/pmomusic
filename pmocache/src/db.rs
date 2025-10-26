@@ -334,7 +334,7 @@ impl DB {
 
     /// Récupère l'URL d'origine précédemment stockée pour un élément.
     ///
-    /// Retourne `Ok(None)` si aucune URL n'est définie.
+    /// Retourne `Ok(None)` lorsqu'aucune URL n'a été définie.
     pub fn get_origin_url(&self, pk: &str) -> rusqlite::Result<Option<String>> {
         match self.get_metadata_value(pk, "origin_url")? {
             Some(Value::String(url)) => Ok(Some(url)),
@@ -445,6 +445,34 @@ impl DB {
         }
 
         Ok(entry)
+    }
+
+    /// Indique si une collection contient un identifiant donné.
+    ///
+    /// Retourne `false` si l'enregistrement n'existe pas ou si la requête échoue.
+    pub fn does_collection_contain_id(&self, collection: &str, id: &str) -> bool {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM asset WHERE collection = ?1 AND id = ?2)",
+            params![collection, id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|flag| flag != 0)
+        .unwrap_or(false)
+    }
+
+    /// Retourne la clé primaire associée à la paire `(collection, id)`.
+    ///
+    /// # Errors
+    ///
+    /// Retourne `QueryReturnedNoRows` si aucun enregistrement ne correspond.
+    pub fn get_pk_from_id(&self, collection: &str, id: &str) -> rusqlite::Result<String> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT pk FROM asset WHERE collection = ?1 AND id = ?2",
+            params![collection, id],
+            |row| row.get(0),
+        )
     }
 
     /// Définit ou remplace l'identifiant logique (`id`) d'une entrée.

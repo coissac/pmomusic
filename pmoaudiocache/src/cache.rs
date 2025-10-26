@@ -384,7 +384,7 @@ pub async fn add_with_metadata_extraction(
     cache.wait_until_finished(&pk).await?;
 
     // Lire le fichier FLAC pour extraire les métadonnées
-    let file_path = cache.file_path(&pk);
+    let file_path = cache.get_file_path(&pk);
     let flac_bytes = tokio::fs::read(&file_path).await?;
 
     // Extraire les métadonnées
