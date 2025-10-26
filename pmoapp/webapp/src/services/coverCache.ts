@@ -2,11 +2,18 @@
  * Service API pour interagir avec le cache d'images de couvertures
  */
 
+export interface CacheMetadata {
+  origin_url?: string;
+  [key: string]: unknown;
+}
+
 export interface CacheEntry {
   pk: string;
-  source_url: string;
+  id: string | null;
+  collection?: string | null;
   hits: number;
   last_used: string | null;
+  metadata?: CacheMetadata | null;
 }
 
 export interface AddImageRequest {
@@ -168,6 +175,17 @@ export async function waitForDownload(
 /**
  * Génère l'URL pour afficher une image
  */
+export function getOriginUrl(entry: CacheEntry): string | undefined {
+  const metadata = entry.metadata;
+  if (metadata && typeof metadata === "object") {
+    const origin = (metadata as { origin_url?: unknown }).origin_url;
+    if (typeof origin === "string" && origin.trim().length > 0) {
+      return origin;
+    }
+  }
+  return undefined;
+}
+
 export function getImageUrl(pk: string, size?: number): string {
   if (size) {
     return `/covers/image/${pk}/${size}`;

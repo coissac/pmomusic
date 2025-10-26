@@ -93,8 +93,8 @@
           </div>
           <div class="pk">{{ track.pk }}</div>
           <div class="meta">
-            <span v-if="track.metadata?.duration_ms">
-              {{ formatDuration(track.metadata.duration_ms) }}
+            <span v-if="durationMs(track) !== undefined">
+              {{ formatDuration(durationMs(track)!) }}
             </span>
             <span v-if="track.metadata?.sample_rate">
               {{ formatSampleRate(track.metadata.sample_rate) }}
@@ -147,7 +147,9 @@
             <p v-if="selectedTrack.metadata.year"><strong>Year:</strong> {{ selectedTrack.metadata.year }}</p>
             <p v-if="selectedTrack.metadata.genre"><strong>Genre:</strong> {{ selectedTrack.metadata.genre }}</p>
             <p v-if="selectedTrack.metadata.track_number"><strong>Track:</strong> {{ selectedTrack.metadata.track_number }}</p>
-            <p v-if="selectedTrack.metadata.duration_ms"><strong>Duration:</strong> {{ formatDuration(selectedTrack.metadata.duration_ms) }}</p>
+            <p v-if="durationMs(selectedTrack) !== undefined">
+              <strong>Duration:</strong> {{ formatDuration(durationMs(selectedTrack)!) }}
+            </p>
             <p v-if="selectedTrack.metadata.sample_rate"><strong>Sample Rate:</strong> {{ formatSampleRate(selectedTrack.metadata.sample_rate) }}</p>
             <p v-if="selectedTrack.metadata.bitrate"><strong>Bitrate:</strong> {{ formatBitrate(selectedTrack.metadata.bitrate) }}</p>
             <p v-if="selectedTrack.metadata.channels"><strong>Channels:</strong> {{ selectedTrack.metadata.channels }}</p>
@@ -155,7 +157,11 @@
           <div class="cache-section">
             <h4>Cache Info</h4>
             <p><strong>PK:</strong> {{ selectedTrack.pk }}</p>
-            <p><strong>Source URL:</strong> <a :href="selectedTrack.source_url" target="_blank">{{ selectedTrack.source_url }}</a></p>
+            <p v-if="resolveTrackOrigin(selectedTrack)">
+              <strong>Source URL:</strong>
+              <a :href="resolveTrackOrigin(selectedTrack)" target="_blank">{{ resolveTrackOrigin(selectedTrack) }}</a>
+            </p>
+            <p v-else><strong>Source URL:</strong> Unknown</p>
             <p><strong>Hits:</strong> {{ selectedTrack.hits }}</p>
             <p v-if="selectedTrack.collection"><strong>Collection:</strong> {{ selectedTrack.collection }}</p>
             <p v-if="selectedTrack.last_used"><strong>Last Used:</strong> {{ formatDate(selectedTrack.last_used) }}</p>
@@ -206,6 +212,8 @@ import {
   consolidateCache,
   getTrackUrl,
   getOriginalTrackUrl,
+  getOriginUrl,
+  getDurationMs,
   formatDuration,
   formatBitrate,
   formatSampleRate,
@@ -386,6 +394,14 @@ function downloadTrack(pk: string) {
 function copyTrackUrl(pk: string) {
   navigator.clipboard.writeText(window.location.origin + getTrackUrl(pk));
   alert("✅ URL copied!");
+}
+
+function resolveTrackOrigin(track: AudioCacheEntry | null): string | undefined {
+  return track ? getOriginUrl(track) : undefined;
+}
+
+function durationMs(track: AudioCacheEntry | null): number | undefined {
+  return track ? getDurationMs(track.metadata) : undefined;
 }
 
 function formatDate(dateString: string) {
