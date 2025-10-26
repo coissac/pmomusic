@@ -78,12 +78,14 @@ impl Default for CacheConfig {
 }
 
 /// Persisted history tuning.
+///
+/// Configuration for the SQLite-based history persistence.
+/// The database path is managed via `RadioParadiseConfigExt` trait
+/// and defaults to a relative path in the config directory.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryConfig {
     #[serde(default = "HistoryConfig::default_max_tracks")]
     pub max_tracks: usize,
-    #[serde(default)]
-    pub persistence_backend: HistoryBackendKind,
     #[serde(default = "HistoryConfig::default_database_path")]
     pub database_path: String,
 }
@@ -94,7 +96,8 @@ impl HistoryConfig {
     }
 
     fn default_database_path() -> String {
-        "/var/lib/pmo/paradise_history.db".to_string()
+        // Default to a relative path (will be resolved by config_ext)
+        "paradise_history.db".to_string()
     }
 }
 
@@ -102,7 +105,6 @@ impl Default for HistoryConfig {
     fn default() -> Self {
         Self {
             max_tracks: Self::default_max_tracks(),
-            persistence_backend: HistoryBackendKind::Sqlite,
             database_path: Self::default_database_path(),
         }
     }
@@ -116,15 +118,6 @@ impl RadioParadiseConfig {
             Err(_) => Ok(Self::default()),
         }
     }
-}
-
-/// Backend selection for history persistence.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum HistoryBackendKind {
-    #[default]
-    Sqlite,
-    Json,
 }
 
 /// Activity lifecycle tuning.

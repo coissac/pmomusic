@@ -1,66 +1,48 @@
-//! # pmocache - Système de cache générique pour PMOMusic
+//! # pmocache – Système de cache générique pour PMOMusic
 //!
-//! Cette crate fournit un système de cache générique avec support de base de données SQLite
-//! et stockage sur disque. Elle est utilisée comme base pour des caches spécialisés comme
-//! `pmocovers` (cache d'images) et `pmoaudiocache` (cache de pistes audio).
+//! Cette crate fournit les briques communes utilisées par les caches de PMOMusic.
+//! Elle gère l'association entre fichiers stockés sur disque et métadonnées
+//! conservées dans une base SQLite, ainsi que les opérations de téléchargement,
+//! d'éviction et de mise à jour.
 //!
 //! ## Vue d'ensemble
 //!
-//! `pmocache` fournit les composants de base pour :
-//! - Stocker des fichiers sur disque avec une base de données SQLite pour les métadonnées
-//! - Gérer des collections d'éléments (albums, playlists, etc.)
-//! - Suivre les statistiques d'utilisation (hits, dernière utilisation)
-//! - Télécharger automatiquement depuis des URLs
-//! - Consolider et purger le cache
+//! `pmocache` met à disposition :
+//! - un modèle `Cache` asynchrone pour stocker des fichiers et leurs métadonnées ;
+//! - un module `db` encapsulant l'accès SQLite (table `asset` + table `metadata`) ;
+//! - des utilitaires de téléchargement (`download`) réutilisables par les caches spécialisés ;
+//! - un trait `CacheConfig` permettant de paramétrer l'extension, le nom et le type du cache.
 //!
-//! ## Architecture
+//! Les crates `pmocovers` (images) et `pmoaudiocache` (pistes audio) s'appuient sur ces
+//! composants et ajoutent leurs propres contraintes métier (conversion WebP, métadonnées audio…).
 //!
-//! `pmocache` est conçu comme une base générique :
-//!
-//! ```text
-//! pmocache (générique)
-//!     ├── db.rs       - Base de données SQLite générique
-//!     └── cache.rs    - Système de cache générique
-//!
-//! pmocovers (spécialisé pour les images)
-//!     └── Utilise pmocache + conversion WebP
-//!
-//! pmoaudiocache (spécialisé pour l'audio)
-//!     └── Utilise pmocache + métadonnées audio
-//! ```
-//!
-//! ## Utilisation
-//!
-//! ### Exemple basique
+//! ## Exemple basique
 //!
 //! ```rust,no_run
 //! use pmocache::{Cache, CacheConfig};
 //!
-//! // Définir la configuration du cache
 //! struct MyConfig;
 //! impl CacheConfig for MyConfig {
 //!     fn file_extension() -> &'static str { "dat" }
-//!     fn table_name() -> &'static str { "my_cache" }
-//!     fn cache_type() -> &'static str { "generic" }
 //! }
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
-//!     let cache = Cache::<MyConfig>::new("./cache", 1000, "http://localhost:8080")?;
+//!     let cache = Cache::<MyConfig>::new("./cache", 1000)?;
 //!
-//!     // Ajouter un fichier depuis une URL
-//!     let pk = cache.add_from_url("http://example.com/file.dat", None).await?;
-//!     println!("Fichier ajouté avec clé: {}", pk);
+//!    // Ajout d'un fichier depuis une URL
+//!     let pk = cache.add_from_url("https://example.com/file.dat", None).await?;
+//!     println!("Fichier ajouté avec la clé {pk}");
 //!
-//!     // Récupérer le fichier
+//!     // Récupération du fichier local
 //!     let path = cache.get(&pk).await?;
-//!     println!("Fichier stocké à: {:?}", path);
+//!     println!("Fichier disponible à {path:?}");
 //!
 //!     Ok(())
 //! }
 //! ```
 //!
-//! ### Utilisation avec des collections
+//! ## Collections
 //!
 //! ```rust,no_run
 //! use pmocache::{Cache, CacheConfig};
@@ -68,59 +50,66 @@
 //! struct AudioConfig;
 //! impl CacheConfig for AudioConfig {
 //!     fn file_extension() -> &'static str { "flac" }
-//!     fn table_name() -> &'static str { "audio" }
 //!     fn cache_type() -> &'static str { "audio" }
+//!     fn cache_name() -> &'static str { "tracks" }
 //! }
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
-//!     let cache = Cache::<AudioConfig>::new("./cache", 1000, "http://localhost:8080")?;
+//!     let cache = Cache::<AudioConfig>::new("./audio-cache", 200)?;
 //!
-//!     // Ajouter des pistes d'un album
-//!     let album_id = "album:the_wall";
-//!     cache.add_from_url("http://example.com/track1.flac", Some(album_id)).await?;
-//!     cache.add_from_url("http://example.com/track2.flac", Some(album_id)).await?;
+//!     let album = "album:the_wall";
+//!     cache.add_from_url("https://example.com/track1.flac", Some(album)).await?;
+//!     cache.add_from_url("https://example.com/track2.flac", Some(album)).await?;
 //!
-//!     // Récupérer toutes les pistes de l'album
-//!     let tracks = cache.get_collection(album_id).await?;
-//!     println!("Album contient {} pistes", tracks.len());
+//!     let files = cache.get_collection(album).await?;
+//!     println!("Album {album} : {} fichiers en cache", files.len());
 //!
 //!     Ok(())
 //! }
 //! ```
 //!
-//! ## Structure des fichiers
+//! ## Structure sur disque
 //!
 //! ```text
 //! cache/
-//! ├── cache.db                      # Base de données SQLite
-//! ├── 1a2b3c4d.webp                 # Fichier 1
-//! └── 5e6f7a8b.flac                 # Fichier 2
+//! ├── cache.db            # Base SQLite
+//! ├── 1a2b3c4d.orig.dat   # Fichier original
+//! └── 1a2b3c4d.thumb.dat  # Variante (qualifier différent)
 //! ```
 //!
-//! ## Schéma de base de données
+//! Les métadonnées sont conservées dans deux tables :
 //!
 //! ```sql
-//! CREATE TABLE {table_name} (
-//!     pk TEXT PRIMARY KEY,           -- Clé unique (hash SHA1 de l'URL)
-//!     source_url TEXT,               -- URL source
-//!     collection TEXT,               -- Collection (album, playlist, etc.)
-//!     hits INTEGER DEFAULT 0,        -- Nombre d'accès
-//!     last_used TEXT                 -- Dernière utilisation (RFC3339)
+//! CREATE TABLE asset (
+//!     pk TEXT PRIMARY KEY,
+//!     collection TEXT,
+//!     id TEXT,
+//!     hits INTEGER DEFAULT 0,
+//!     last_used TEXT
+//! );
+//!
+//! CREATE TABLE metadata (
+//!     pk TEXT,
+//!     key TEXT,
+//!     value_type TEXT CHECK(value_type IN ('string','number','boolean','null')),
+//!     value TEXT,
+//!     PRIMARY KEY (pk, key),
+//!     FOREIGN KEY (pk) REFERENCES asset(pk) ON DELETE CASCADE
 //! );
 //! ```
 //!
-//! ## Dépendances principales
+//! ## Modules principaux
 //!
-//! - `rusqlite` : Base de données SQLite
-//! - `reqwest` : Téléchargement HTTP
-//! - `sha1` : Génération de clés
-//! - `tokio` : Runtime asynchrone
+//! - [`cache`] : gestion du cache sur disque + opérations asynchrones ;
+//! - [`db`] : accès SQLite, contraintes et helpers métadonnées ;
+//! - [`download`] : primitives de téléchargement et de transformation ;
+//! - [`cache_trait`] : trait partagé entre implémentations spécialisées.
 //!
-//! ## Voir aussi
+//! ## Crates associées
 //!
-//! - [`pmocovers`] : Cache d'images avec conversion WebP
-//! - [`pmoaudiocache`] : Cache de pistes audio
+//! - [`pmocovers`] : cache d'images reposant sur `pmocache` ;
+//! - [`pmoaudiocache`] : spécialisation audio avec extraction de métadonnées.
 
 pub mod cache;
 pub mod cache_trait;

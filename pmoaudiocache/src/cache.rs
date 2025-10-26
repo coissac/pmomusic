@@ -363,10 +363,10 @@ pub fn new_cache(dir: &str, limit: usize) -> Result<Cache> {
 /// use pmoaudiocache::cache;
 ///
 /// # async fn example() -> anyhow::Result<()> {
-/// let cache = cache::new_cache("./audio_cache", 1000, "http://localhost:8080")?;
+/// let cache = cache::new_cache("./audio_cache", 1000)?;
 /// let pk = cache::add_with_metadata_extraction(
 ///     &cache,
-///     "http://example.com/track.flac",
+///     "https://example.com/track.flac",
 ///     Some("artist:album")
 /// ).await?;
 /// # Ok(())

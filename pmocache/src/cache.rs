@@ -17,21 +17,19 @@ use tokio::io::AsyncRead;
 use tokio::sync::RwLock;
 use tracing;
 
-/// Trait pour définir les paramètres du cache
+/// Paramètres statiques d'un cache spécialisé.
 pub trait CacheConfig: Send + Sync {
-    /// Extension des fichiers (ex: "webp", "flac")
+    /// Extension des fichiers générés (ex: `"webp"`, `"flac"`).
     fn file_extension() -> &'static str;
-    /// Nom de la table dans la base de données (ex: "covers", "audio")
-
-    /// Type de cache (ex: "audio", "image")
+    /// Type logique exposé (ex: `"audio"`, `"image"`). Sert notamment pour les routes HTTP.
     fn cache_type() -> &'static str {
         "file"
     }
-    /// Cache name (ex: "covers", "audio", "cache")
+    /// Nom du cache (ex: `"covers"`, `"audio"`). Utilisé pour composer les chemins d'accès.
     fn cache_name() -> &'static str {
         "cache"
     }
-    /// Default param extension ("orig")
+    /// Qualifier par défaut associé au fichier original (ex: `"orig"`).
     fn default_param() -> &'static str {
         "orig"
     }

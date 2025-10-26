@@ -7,8 +7,8 @@
 
 use crate::client::RadioParadiseClient;
 use crate::paradise::{
-    history_backend_from_config, ChannelDescriptor, MemoryHistoryBackend, ParadiseChannel,
-    PlaylistEntry, RadioParadiseConfig, ALL_CHANNELS,
+    history_backend_from_config, ChannelDescriptor, ParadiseChannel, PlaylistEntry,
+    RadioParadiseConfig, ALL_CHANNELS,
 };
 use anyhow::Result as AnyhowResult;
 use pmoaudiocache::Cache as AudioCache;
@@ -77,7 +77,31 @@ impl RadioParadiseSource {
     #[cfg(feature = "server")]
     pub fn from_registry(client: RadioParadiseClient) -> Result<Self> {
         let config = Arc::new(RadioParadiseConfig::load_from_pmoconfig().unwrap_or_default());
-        let history_backend = history_backend_from_config(&config.history).map_err(|e| {
+
+        // Load history configuration from pmoconfig using the config extension trait
+        #[cfg(feature = "pmoconfig")]
+        let history_config = {
+            use crate::config_ext::RadioParadiseConfigExt;
+            let cfg = pmoconfig::get_config();
+            let database_path = cfg.get_paradise_history_database().map_err(|e| {
+                MusicSourceError::SourceUnavailable(format!(
+                    "Failed to get history database path: {}",
+                    e
+                ))
+            })?;
+            let max_tracks = cfg.get_paradise_history_size().map_err(|e| {
+                MusicSourceError::SourceUnavailable(format!("Failed to get history size: {}", e))
+            })?;
+            crate::paradise::HistoryConfig {
+                database_path,
+                max_tracks,
+            }
+        };
+
+        #[cfg(not(feature = "pmoconfig"))]
+        let history_config = config.history.clone();
+
+        let history_backend = history_backend_from_config(&history_config).map_err(|e| {
             MusicSourceError::SourceUnavailable(format!(
                 "Failed to initialize history backend: {}",
                 e
@@ -125,8 +149,7 @@ impl RadioParadiseSource {
         let config = Arc::new(RadioParadiseConfig::load_from_pmoconfig().unwrap_or_default());
         let history_backend: Arc<dyn crate::paradise::HistoryBackend> =
             history_backend_from_config(&config.history).unwrap_or_else(|err| {
-                warn!("Falling back to in-memory history backend: {err}");
-                Arc::new(MemoryHistoryBackend::new()) as Arc<dyn crate::paradise::HistoryBackend>
+                panic!("Failed to initialize history backend: {err}");
             });
         let mut channels = HashMap::new();
 

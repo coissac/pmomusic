@@ -2575,6 +2575,7 @@ dependencies = [
  "axum-server",
  "futures",
  "futures-util",
+ "once_cell",
  "pmoconfig",
  "rust-embed",
  "serde",
