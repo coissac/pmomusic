@@ -3,6 +3,14 @@
 //! Ce module fournit le trait `RadioParadiseConfigExt` qui permet d'ajouter facilement
 //! des méthodes de gestion de la configuration Radio Paradise à pmoconfig::Config.
 //!
+//! La configuration est minimale - seulement ce qui doit vraiment être configurable :
+//! - Activation/désactivation de la source
+//! - Chemin de la base de données d'historique
+//! - Taille maximale de l'historique
+//!
+//! Tous les autres paramètres (polling, timeouts, etc.) sont des constantes
+//! définies dans `paradise::constants`.
+//!
 //! # Exemple
 //!
 //! ```rust,ignore
@@ -10,24 +18,41 @@
 //! use pmoparadise::RadioParadiseConfigExt;
 //!
 //! let config = get_config();
-//! let history_db = config.get_paradise_history_database()?;
-//! let history_size = config.get_paradise_history_size()?;
+//!
+//! // Check if enabled
+//! if !config.get_paradise_enabled()? {
+//!     println!("Radio Paradise is disabled");
+//!     return Ok(());
+//! }
+//!
+//! // Get configuration
+//! let db_path = config.get_paradise_history_database()?;
+//! let max_tracks = config.get_paradise_history_size()?;
 //! ```
 
-use anyhow::Result;
+use std::path::PathBuf;
+
+use anyhow::{anyhow, Result};
 use pmoconfig::Config;
 use serde_yaml::{Number, Value};
 
-/// Chemin par défaut de la base de données d'historique (relatif au config_dir)
-const DEFAULT_HISTORY_DATABASE: &str = "paradise_history.db";
+use crate::paradise::constants;
 
-/// Nombre maximal par défaut de pistes dans l'historique
-const DEFAULT_HISTORY_SIZE: usize = 100;
+/// Nom du répertoire pour Radio Paradise (relatif au config_dir)
+///
+/// La base de données sera stockée dans `<config_dir>/paradise/history.db`
+const DEFAULT_HISTORY_DATABASE_DIR: &str = "paradise";
 
 /// Trait d'extension pour gérer la configuration Radio Paradise dans pmoconfig
 ///
 /// Ce trait étend `pmoconfig::Config` avec des méthodes spécifiques
-/// à la configuration de Radio Paradise (historique, etc.).
+/// à la configuration minimale de Radio Paradise.
+///
+/// # Auto-persist des valeurs par défaut
+///
+/// Tous les getters persistent automatiquement la valeur par défaut dans la
+/// configuration si elle n'existe pas encore. Cela permet à l'utilisateur de
+/// voir la configuration effective dans le fichier YAML et de la modifier facilement.
 ///
 /// # Exemple
 ///
@@ -37,30 +62,62 @@ const DEFAULT_HISTORY_SIZE: usize = 100;
 ///
 /// let config = get_config();
 ///
-/// // Récupérer le chemin de la base de données d'historique
-/// let db_path = config.get_paradise_history_database()?;
-/// println!("History database: {}", db_path);
+/// // Premier appel : persiste "enabled: true" dans la config et retourne true
+/// let enabled = config.get_paradise_enabled()?;
 ///
-/// // Récupérer la taille maximale de l'historique
+/// // Premier appel : persiste "max_tracks: 100" dans la config et retourne 100
 /// let max_tracks = config.get_paradise_history_size()?;
-/// println!("Max history tracks: {}", max_tracks);
+///
+/// // L'utilisateur peut maintenant éditer ces valeurs dans le fichier YAML
 /// ```
 pub trait RadioParadiseConfigExt {
-    /// Récupère le chemin de la base de données d'historique
-    ///
-    /// Le chemin retourné est absolu, mais peut être configuré de manière relative
-    /// au répertoire de configuration (via `get_managed_dir`).
+    /// Vérifie si Radio Paradise est activé
     ///
     /// # Returns
     ///
-    /// Le chemin absolu vers la base de données SQLite d'historique
-    /// (default: `<config_dir>/paradise_history.db`)
+    /// `true` si la source est activée (default), `false` sinon.
+    ///
+    /// Si la valeur n'existe pas dans la configuration, elle est automatiquement
+    /// définie à `true` (activé par défaut) et persistée.
+    ///
+    /// # Exemple
+    ///
+    /// ```rust,ignore
+    /// if config.get_paradise_enabled()? {
+    ///     // Initialize Radio Paradise...
+    /// }
+    /// ```
+    fn get_paradise_enabled(&self) -> Result<bool>;
+
+    /// Active ou désactive Radio Paradise
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - `true` pour activer, `false` pour désactiver
+    ///
+    /// # Exemple
+    ///
+    /// ```rust,ignore
+    /// // Disable Radio Paradise
+    /// config.set_paradise_enabled(false)?;
+    /// ```
+    fn set_paradise_enabled(&self, enabled: bool) -> Result<()>;
+
+    /// Récupère le chemin de la base de données d'historique
+    ///
+    /// Le chemin retourné est absolu et pointe vers `<config_dir>/paradise/history.db`.
+    /// Le répertoire `paradise` est créé automatiquement s'il n'existe pas.
+    ///
+    /// # Returns
+    ///
+    /// Le chemin absolu vers la base de données SQLite d'historique.
+    /// Exemple: `/home/user/.config/pmo/paradise/history.db`
     ///
     /// # Exemple
     ///
     /// ```rust,ignore
     /// let db_path = config.get_paradise_history_database()?;
-    /// // Exemple: "/home/user/.config/pmo/paradise_history.db"
+    /// let backend = SqliteHistoryBackend::new(&db_path)?;
     /// ```
     fn get_paradise_history_database(&self) -> Result<String>;
 
@@ -68,16 +125,15 @@ pub trait RadioParadiseConfigExt {
     ///
     /// # Arguments
     ///
-    /// * `path` - Chemin de la base de données (absolu ou relatif au config_dir)
+    /// * `path` - Chemin complet vers la base de données (doit inclure le nom du fichier)
+    ///
+    /// Le répertoire parent sera extrait et stocké dans la configuration.
     ///
     /// # Exemple
     ///
     /// ```rust,ignore
-    /// // Chemin relatif au config_dir
-    /// config.set_paradise_history_database("my_paradise.db".to_string())?;
-    ///
-    /// // Ou chemin absolu
-    /// config.set_paradise_history_database("/var/lib/paradise.db".to_string())?;
+    /// // Set custom path
+    /// config.set_paradise_history_database("/var/lib/pmo/paradise.db".to_string())?;
     /// ```
     fn set_paradise_history_database(&self, path: String) -> Result<()>;
 
@@ -85,7 +141,10 @@ pub trait RadioParadiseConfigExt {
     ///
     /// # Returns
     ///
-    /// Le nombre maximal de pistes à conserver dans l'historique (default: 100)
+    /// Le nombre maximal de pistes à conserver dans l'historique.
+    ///
+    /// Si la valeur n'existe pas dans la configuration, elle est automatiquement
+    /// définie à la constante `HISTORY_DEFAULT_MAX_TRACKS` (100) et persistée.
     ///
     /// # Exemple
     ///
@@ -104,32 +163,69 @@ pub trait RadioParadiseConfigExt {
     /// # Exemple
     ///
     /// ```rust,ignore
-    /// // Conserver les 200 dernières pistes
+    /// // Keep last 200 tracks
     /// config.set_paradise_history_size(200)?;
     /// ```
     fn set_paradise_history_size(&self, size: usize) -> Result<()>;
 }
 
 impl RadioParadiseConfigExt for Config {
-    fn get_paradise_history_database(&self) -> Result<String> {
-        // Utilise get_managed_dir qui gère automatiquement les chemins
-        // relatifs au config_dir et les chemins absolus
-        self.get_managed_dir(
-            &["sources", "radio_paradise", "history", "database"],
-            DEFAULT_HISTORY_DATABASE,
+    fn get_paradise_enabled(&self) -> Result<bool> {
+        match self.get_value(&["sources", "radio_paradise", "enabled"]) {
+            Ok(Value::Bool(b)) => Ok(b),
+            _ => {
+                // Use default (enabled) and persist it
+                self.set_paradise_enabled(true)?;
+                Ok(true)
+            }
+        }
+    }
+
+    fn set_paradise_enabled(&self, enabled: bool) -> Result<()> {
+        self.set_value(
+            &["sources", "radio_paradise", "enabled"],
+            Value::Bool(enabled),
         )
     }
 
+    fn get_paradise_history_database(&self) -> Result<String> {
+        // Get managed directory: ~/.config/pmo/paradise/
+        let dir = self.get_managed_dir(
+            &["sources", "radio_paradise", "database"],
+            DEFAULT_HISTORY_DATABASE_DIR,
+        )?;
+
+        // Ensure directory exists
+        std::fs::create_dir_all(&dir)?;
+
+        // Build full path: ~/.config/pmo/paradise/history.db
+        let mut path = PathBuf::from(dir);
+        path.push("history.db");
+
+        Ok(path.to_string_lossy().to_string())
+    }
+
     fn set_paradise_history_database(&self, path: String) -> Result<()> {
-        self.set_managed_dir(&["sources", "radio_paradise", "history", "database"], path)
+        // Extract parent directory from the full path
+        match PathBuf::from(&path).parent() {
+            Some(dir) => self.set_managed_dir(
+                &["sources", "radio_paradise", "database"],
+                dir.to_string_lossy().to_string(),
+            ),
+            None => Err(anyhow!("Invalid database path: no parent directory")),
+        }
     }
 
     fn get_paradise_history_size(&self) -> Result<usize> {
-        // Tente de lire depuis la configuration YAML
         match self.get_value(&["sources", "radio_paradise", "history", "max_tracks"]) {
             Ok(Value::Number(n)) if n.is_u64() => Ok(n.as_u64().unwrap() as usize),
             Ok(Value::Number(n)) if n.is_i64() => Ok(n.as_i64().unwrap() as usize),
-            _ => Ok(DEFAULT_HISTORY_SIZE),
+            _ => {
+                // Use default and persist it
+                let default = constants::HISTORY_DEFAULT_MAX_TRACKS;
+                self.set_paradise_history_size(default)?;
+                Ok(default)
+            }
         }
     }
 
@@ -148,8 +244,20 @@ mod tests {
 
     #[test]
     fn test_default_values() {
-        // Les valeurs par défaut doivent être cohérentes
-        assert_eq!(DEFAULT_HISTORY_DATABASE, "paradise_history.db");
-        assert_eq!(DEFAULT_HISTORY_SIZE, 100);
+        assert_eq!(DEFAULT_HISTORY_DATABASE_DIR, "paradise");
+        assert_eq!(constants::HISTORY_DEFAULT_MAX_TRACKS, 100);
+    }
+
+    #[test]
+    fn test_database_path_construction() {
+        // Simulating path construction
+        let base = "/home/user/.config/pmo/paradise";
+        let mut path = PathBuf::from(base);
+        path.push("history.db");
+
+        assert_eq!(
+            path.to_string_lossy(),
+            "/home/user/.config/pmo/paradise/history.db"
+        );
     }
 }

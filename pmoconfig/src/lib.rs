@@ -461,7 +461,10 @@ impl Config {
     pub fn get_managed_dir(&self, path: &[&str], default: &str) -> Result<String> {
         let dir_path = match self.get_value(path) {
             Ok(Value::String(s)) => s,
-            _ => default.to_string(),
+            _ => {
+                self.set_managed_dir(path, default.to_string())?;
+                default.to_string()
+            },
         };
         self.resolve_and_create_dir(&dir_path)
     }

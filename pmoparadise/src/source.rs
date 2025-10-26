@@ -7,9 +7,11 @@
 
 use crate::client::RadioParadiseClient;
 use crate::paradise::{
-    history_backend_from_config, ChannelDescriptor, ParadiseChannel, PlaylistEntry,
-    RadioParadiseConfig, ALL_CHANNELS,
+    create_history_backend, ChannelDescriptor, ParadiseChannel, PlaylistEntry, ALL_CHANNELS,
 };
+
+#[cfg(not(feature = "pmoconfig"))]
+use crate::paradise::HISTORY_DEFAULT_MAX_TRACKS;
 use anyhow::Result as AnyhowResult;
 use pmoaudiocache::Cache as AudioCache;
 use pmocovers::Cache as CoverCache;
@@ -76,11 +78,9 @@ impl std::fmt::Debug for RadioParadiseSource {
 impl RadioParadiseSource {
     #[cfg(feature = "server")]
     pub fn from_registry(client: RadioParadiseClient) -> Result<Self> {
-        let config = Arc::new(RadioParadiseConfig::load_from_pmoconfig().unwrap_or_default());
-
         // Load history configuration from pmoconfig using the config extension trait
         #[cfg(feature = "pmoconfig")]
-        let history_config = {
+        let (database_path, history_max_tracks) = {
             use crate::config_ext::RadioParadiseConfigExt;
             let cfg = pmoconfig::get_config();
             let database_path = cfg.get_paradise_history_database().map_err(|e| {
@@ -92,16 +92,22 @@ impl RadioParadiseSource {
             let max_tracks = cfg.get_paradise_history_size().map_err(|e| {
                 MusicSourceError::SourceUnavailable(format!("Failed to get history size: {}", e))
             })?;
-            crate::paradise::HistoryConfig {
-                database_path,
-                max_tracks,
-            }
+            (database_path, max_tracks)
         };
 
         #[cfg(not(feature = "pmoconfig"))]
-        let history_config = config.history.clone();
+        let (database_path, history_max_tracks) = {
+            use std::path::PathBuf;
+            let mut path = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()));
+            path.push(".config");
+            path.push("pmo");
+            path.push("paradise");
+            std::fs::create_dir_all(&path).ok();
+            path.push("history.db");
+            (path.to_string_lossy().to_string(), HISTORY_DEFAULT_MAX_TRACKS)
+        };
 
-        let history_backend = history_backend_from_config(&history_config).map_err(|e| {
+        let history_backend = create_history_backend(&database_path).map_err(|e| {
             MusicSourceError::SourceUnavailable(format!(
                 "Failed to initialize history backend: {}",
                 e
@@ -117,7 +123,7 @@ impl RadioParadiseSource {
                 ParadiseChannel::new(
                     *descriptor,
                     client.clone(),
-                    config.clone(),
+                    history_max_tracks,
                     history_backend.clone(),
                     cache_manager,
                 )
@@ -146,9 +152,34 @@ impl RadioParadiseSource {
         cover_cache: Arc<CoverCache>,
         audio_cache: Arc<AudioCache>,
     ) -> Self {
-        let config = Arc::new(RadioParadiseConfig::load_from_pmoconfig().unwrap_or_default());
+        // Load history configuration from pmoconfig using the config extension trait
+        #[cfg(feature = "pmoconfig")]
+        let (database_path, history_max_tracks) = {
+            use crate::config_ext::RadioParadiseConfigExt;
+            let cfg = pmoconfig::get_config();
+            let database_path = cfg.get_paradise_history_database().unwrap_or_else(|e| {
+                panic!("Failed to get history database path: {e}");
+            });
+            let max_tracks = cfg.get_paradise_history_size().unwrap_or_else(|e| {
+                panic!("Failed to get history size: {e}");
+            });
+            (database_path, max_tracks)
+        };
+
+        #[cfg(not(feature = "pmoconfig"))]
+        let (database_path, history_max_tracks) = {
+            use std::path::PathBuf;
+            let mut path = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()));
+            path.push(".config");
+            path.push("pmo");
+            path.push("paradise");
+            std::fs::create_dir_all(&path).ok();
+            path.push("history.db");
+            (path.to_string_lossy().to_string(), HISTORY_DEFAULT_MAX_TRACKS)
+        };
+
         let history_backend: Arc<dyn crate::paradise::HistoryBackend> =
-            history_backend_from_config(&config.history).unwrap_or_else(|err| {
+            create_history_backend(&database_path).unwrap_or_else(|err| {
                 panic!("Failed to initialize history backend: {err}");
             });
         let mut channels = HashMap::new();
@@ -162,7 +193,7 @@ impl RadioParadiseSource {
             match ParadiseChannel::new(
                 *descriptor,
                 client.clone(),
-                config.clone(),
+                history_max_tracks,
                 history_backend.clone(),
                 cache_manager,
             ) {
