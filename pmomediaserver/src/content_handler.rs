@@ -28,7 +28,9 @@ fn to_didl_lite(containers: &[Container], items: &[pmodidl::Item]) -> Result<Str
         items: items.to_vec(),
     };
 
-    quick_xml::se::to_string(&didl).map_err(|e| format!("Failed to serialize DIDL-Lite: {}", e))
+    let body =
+        quick_xml::se::to_string(&didl).map_err(|e| format!("Failed to serialize DIDL-Lite: {}", e))?;
+    Ok(format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>{}", body))
 }
 
 /// Handler pour le service ContentDirectory
@@ -97,8 +99,8 @@ impl ContentHandler {
         if object_id == "0" {
             // Retourner le container racine
             let root = self.build_root_container().await;
-            let didl = to_didl_lite(&[root], &[])?;
-            Ok((didl, 1, 1, 0))
+        let didl = to_didl_lite(&[root], &[])?;
+        Ok((didl, 1, 1, 1))
         } else {
             // Essayer de trouver l'objet dans les sources
             // Vérifier si c'est un container racine d'une source
@@ -219,6 +221,8 @@ impl ContentHandler {
                 .root_container()
                 .await
                 .map_err(|e| format!("Failed to get root container: {}", e))?;
+            let mut container = container;
+            container.searchable = container.searchable.or_else(|| Some("1".to_string()));
             containers.push(container);
         }
 
@@ -236,7 +240,14 @@ impl ContentHandler {
         let returned = paginated.len();
         let didl = to_didl_lite(&paginated, &[])?;
 
-        Ok((didl, returned as u32, total as u32, 0))
+        // Aggregate update IDs across all sources
+        let mut combined_id = 0u32;
+        for source in list_all_sources().await {
+            combined_id = combined_id.wrapping_add(source.update_id().await);
+        }
+        let update_id = combined_id.max(1);
+
+        Ok((didl, returned as u32, total as u32, update_id))
     }
 
     /// Browse le container racine d'une source spécifique
@@ -317,6 +328,7 @@ impl ContentHandler {
             parent_id: "-1".to_string(),
             restricted: Some("1".to_string()),
             child_count: Some(child_count.to_string()),
+            searchable: Some("1".to_string()),
             title: "PMOMusic".to_string(),
             class: "object.container".to_string(),
             containers: vec![],
@@ -367,7 +379,19 @@ impl ContentHandler {
         let total = (all_containers.len() + all_items.len()) as u32;
         let didl = to_didl_lite(&all_containers, &all_items)?;
 
-        Ok((didl, total, total, 0))
+        // Compute a global update ID from active sources, ensure it starts at 1
+        let update_id = if total > 0 {
+            let sources = list_all_sources().await;
+            let mut combined_id = 0u32;
+            for source in sources {
+                combined_id = combined_id.wrapping_add(source.update_id().await);
+            }
+            combined_id.max(1)
+        } else {
+            1
+        };
+
+        Ok((didl, total, total, update_id))
     }
 
     /// Retourne les capacités de recherche
@@ -392,7 +416,7 @@ impl ContentHandler {
             combined_id = combined_id.wrapping_add(source.update_id().await);
         }
 
-        combined_id
+        combined_id.max(1)
     }
 }
 
@@ -419,9 +443,10 @@ mod tests {
         let result = handler.browse("0", "BrowseDirectChildren", 0, 0).await;
         assert!(result.is_ok());
 
-        let (didl, returned, total, _) = result.unwrap();
+        let (didl, returned, total, update_id) = result.unwrap();
         assert_eq!(returned, 0);
         assert_eq!(total, 0);
+        assert_eq!(update_id, 1);
         assert!(didl.contains("DIDL-Lite"));
     }
 
@@ -429,6 +454,6 @@ mod tests {
     async fn test_get_system_update_id() {
         let handler = ContentHandler::new();
         let update_id = handler.get_system_update_id().await;
-        assert_eq!(update_id, 0); // No sources registered
+        assert_eq!(update_id, 1); // No sources registered -> minimum 1
     }
 }

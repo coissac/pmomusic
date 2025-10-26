@@ -125,6 +125,9 @@ pub struct Container {
     #[serde(rename = "@childCount", skip_serializing_if = "Option::is_none")]
     pub child_count: Option<String>,
 
+    #[serde(rename = "@searchable", skip_serializing_if = "Option::is_none")]
+    pub searchable: Option<String>,
+
     #[serde(rename = "dc:title", alias = "title")]
     pub title: String,
 

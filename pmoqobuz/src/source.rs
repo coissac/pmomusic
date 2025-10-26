@@ -275,6 +275,7 @@ impl MusicSource for QobuzSource {
             parent_id: "0".to_string(),
             restricted: Some("1".to_string()),
             child_count: Some("2".to_string()), // Favorites + Search (simplified)
+            searchable: Some("1".to_string()),
             title: "Qobuz".to_string(),
             class: "object.container".to_string(),
             containers: vec![
@@ -284,6 +285,7 @@ impl MusicSource for QobuzSource {
                     parent_id: "qobuz".to_string(),
                     restricted: Some("1".to_string()),
                     child_count: None, // Will be determined when browsed
+                    searchable: Some("1".to_string()),
                     title: "My Favorites".to_string(),
                     class: "object.container".to_string(),
                     containers: vec![],

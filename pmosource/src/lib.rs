@@ -962,6 +962,7 @@ mod tests {
                 parent_id: "0".to_string(),
                 restricted: Some("1".to_string()),
                 child_count: Some("0".to_string()),
+                searchable: Some("1".to_string()),
                 title: "Test Source".to_string(),
                 class: "object.container".to_string(),
                 containers: vec![],
