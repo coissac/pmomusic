@@ -4,6 +4,7 @@ use futures::stream::Stream;
 use std::io::{self, Read};
 use std::pin::Pin;
 use std::sync::mpsc::{sync_channel, Receiver, RecvError, SyncSender};
+use std::time::{Duration, Instant};
 
 const CHANNEL_BUFFER_SIZE: usize = 16;
 pub const CHUNK_SIZE_FRAMES: usize = 4096;
@@ -33,9 +34,24 @@ impl ChannelReader {
     ) {
         use futures::StreamExt;
         while let Some(result) = stream.next().await {
+            let start = Instant::now();
+
             let to_send = result.map_err(|e| e.to_string());
-            if tx.send(to_send).is_err() {
-                break;
+            match tx.try_send(to_send) {
+                Ok(_) => { /* message envoyé sans attente */ }
+                Err(std::sync::mpsc::TrySendError::Full(value)) => {
+                    tracing::warn!("stream_feeder: buffer plein");
+                    // Revenir à l’envoi bloquant pour ne pas perdre le message
+                    if tx.send(value).is_err() {
+                        break;
+                    }
+                }
+                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => break,
+            }
+            let waited = start.elapsed();
+            tracing::trace!("stream_feeder send {:?}", waited);
+            if waited > Duration::from_millis(200) {
+                tracing::warn!("stream_feeder wait {:?}", waited);
             }
         }
     }
@@ -43,6 +59,7 @@ impl ChannelReader {
 
 impl Read for ChannelReader {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let start = Instant::now();
         loop {
             if let Some(chunk) = &self.current_chunk {
                 if self.position < chunk.len() {
@@ -50,17 +67,36 @@ impl Read for ChannelReader {
                     let to_copy = available.min(buf.len());
                     buf[..to_copy].copy_from_slice(&chunk[self.position..self.position + to_copy]);
                     self.position += to_copy;
+                     tracing::trace!(
+                         "ChannelReader copied {} bytes (elapsed {:?})",
+                         to_copy,
+                         start.elapsed()
+                     );
                     return Ok(to_copy);
                 }
             }
 
             match self.receiver.recv() {
                 Ok(Ok(bytes)) => {
+                    tracing::trace!(
+                        "ChannelReader received chunk of {} bytes after {:?}",
+                        bytes.len(),
+                        start.elapsed()
+                    );
                     self.current_chunk = Some(bytes);
                     self.position = 0;
                 }
-                Ok(Err(e)) => return Err(io::Error::new(io::ErrorKind::Other, e)),
-                Err(RecvError) => return Ok(0),
+                Ok(Err(e)) => {
+                    tracing::warn!("ChannelReader received error chunk: {}", e);
+                    return Err(io::Error::new(io::ErrorKind::Other, e));
+                }
+                Err(RecvError) => {
+                    tracing::trace!(
+                        "ChannelReader stream closed after {:?}",
+                        start.elapsed()
+                    );
+                    return Ok(0);
+                }
             }
         }
     }
