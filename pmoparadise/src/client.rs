@@ -1,7 +1,7 @@
 //! HTTP client for Radio Paradise API
 
 use crate::error::{Error, Result};
-use crate::models::{Bitrate, Block, EventId, NowPlaying};
+use crate::models::{Block, EventId, NowPlaying};
 use reqwest::Client;
 use std::time::Duration;
 use url::Url;
@@ -50,7 +50,6 @@ pub struct RadioParadiseClient {
     pub(crate) client: Client,
     api_base: String,
     block_base: String,
-    bitrate: Bitrate,
     channel: u8,
     pub(crate) request_timeout: Duration,
     pub(crate) block_timeout: Duration,
@@ -60,7 +59,7 @@ pub struct RadioParadiseClient {
 impl RadioParadiseClient {
     /// Create a new client with default settings
     ///
-    /// Uses FLAC quality (bitrate 4) and channel 0 (main mix)
+    /// Uses FLAC quality and channel 0 (main mix)
     pub async fn new() -> Result<Self> {
         Self::builder().build().await
     }
@@ -78,17 +77,11 @@ impl RadioParadiseClient {
             client,
             api_base: DEFAULT_API_BASE.to_string(),
             block_base: DEFAULT_BLOCK_BASE.to_string(),
-            bitrate: Bitrate::default(),
             channel: 0,
             request_timeout: Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS),
             block_timeout: Duration::from_secs(DEFAULT_BLOCK_TIMEOUT_SECS),
             next_block_url: None,
         }
-    }
-
-    /// Get the current bitrate setting
-    pub fn bitrate(&self) -> Bitrate {
-        self.bitrate
     }
 
     /// Get the current channel (0 = main mix)
@@ -109,13 +102,6 @@ impl RadioParadiseClient {
         cloned
     }
 
-    /// Clone the client with a different bitrate while preserving other settings.
-    pub fn clone_with_bitrate(&self, bitrate: Bitrate) -> Self {
-        let mut cloned = self.clone();
-        cloned.bitrate = bitrate;
-        cloned.next_block_url = None;
-        cloned
-    }
 
     /// Get a block by event ID
     ///
@@ -147,7 +133,7 @@ impl RadioParadiseClient {
         let mut url = Url::parse(&format!("{}/get_block", self.api_base))?;
 
         url.query_pairs_mut()
-            .append_pair("bitrate", &self.bitrate.as_u8().to_string())
+            .append_pair("bitrate", "4") // FLAC lossless
             .append_pair("info", "true")
             .append_pair("channel", &self.channel.to_string());
 
@@ -251,7 +237,6 @@ pub struct ClientBuilder {
     client: Option<Client>,
     api_base: String,
     block_base: String,
-    bitrate: Bitrate,
     channel: u8,
     request_timeout: Duration,
     block_timeout: Duration,
@@ -265,7 +250,6 @@ impl Default for ClientBuilder {
             client: None,
             api_base: DEFAULT_API_BASE.to_string(),
             block_base: DEFAULT_BLOCK_BASE.to_string(),
-            bitrate: Bitrate::default(),
             channel: 0,
             request_timeout: Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS),
             block_timeout: Duration::from_secs(DEFAULT_BLOCK_TIMEOUT_SECS),
@@ -299,19 +283,6 @@ impl ClientBuilder {
         self
     }
 
-    /// Set the bitrate/quality level
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// # use pmoparadise::{RadioParadiseClient, Bitrate};
-    /// let builder = RadioParadiseClient::builder()
-    ///     .bitrate(Bitrate::Aac320);
-    /// ```
-    pub fn bitrate(mut self, bitrate: Bitrate) -> Self {
-        self.bitrate = bitrate;
-        self
-    }
 
     /// Set the channel (0 = main mix, 1 = mellow, 2 = rock, 3 = world/etc)
     pub fn channel(mut self, channel: u8) -> Self {
@@ -371,7 +342,6 @@ impl ClientBuilder {
             client,
             api_base: self.api_base,
             block_base,
-            bitrate: self.bitrate,
             channel: self.channel,
             request_timeout: self.request_timeout,
             block_timeout: self.block_timeout,
@@ -388,7 +358,6 @@ mod tests {
     fn test_builder_defaults() {
         let builder = ClientBuilder::default();
         assert_eq!(builder.api_base, DEFAULT_API_BASE);
-        assert_eq!(builder.bitrate, Bitrate::Flac);
         assert_eq!(builder.channel, 0);
     }
 

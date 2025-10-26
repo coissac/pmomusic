@@ -1,7 +1,6 @@
 //! Radio Paradise UPnP Media Server implementation
 
 use crate::error::{Error, Result};
-use crate::models::Bitrate;
 use crate::RadioParadiseClient;
 use pmoserver::Server;
 use pmoupnp::devices::Device;
@@ -55,7 +54,6 @@ pub struct MediaServerBuilder {
     friendly_name: String,
     manufacturer: String,
     model_name: String,
-    bitrate: Bitrate,
     channel: u8,
     port: u16,
 }
@@ -66,7 +64,6 @@ impl Default for MediaServerBuilder {
             friendly_name: "Radio Paradise Media Server".to_string(),
             manufacturer: "PMOMusic".to_string(),
             model_name: "Radio Paradise Adapter".to_string(),
-            bitrate: Bitrate::Flac,
             channel: 0,
             port: 8080,
         }
@@ -97,12 +94,6 @@ impl MediaServerBuilder {
         self
     }
 
-    /// Set the bitrate/quality level
-    pub fn with_bitrate(mut self, bitrate: Bitrate) -> Self {
-        self.bitrate = bitrate;
-        self
-    }
-
     /// Set the Radio Paradise channel (0=main, 1=mellow, 2=rock, 3=world)
     pub fn with_channel(mut self, channel: u8) -> Self {
         self.channel = channel;
@@ -119,7 +110,6 @@ impl MediaServerBuilder {
     pub async fn build(self) -> Result<RadioParadiseMediaServer> {
         // Create Radio Paradise client
         let client = RadioParadiseClient::builder()
-            .bitrate(self.bitrate)
             .channel(self.channel)
             .build()
             .await?;
@@ -180,7 +170,6 @@ mod tests {
     fn test_builder_defaults() {
         let builder = MediaServerBuilder::default();
         assert_eq!(builder.friendly_name, "Radio Paradise Media Server");
-        assert_eq!(builder.bitrate, Bitrate::Flac);
         assert_eq!(builder.channel, 0);
         assert_eq!(builder.port, 8080);
     }
@@ -189,12 +178,10 @@ mod tests {
     fn test_builder_customization() {
         let builder = MediaServerBuilder::new()
             .with_friendly_name("Custom Server")
-            .with_bitrate(Bitrate::Aac320)
             .with_channel(1)
             .with_port(9090);
 
         assert_eq!(builder.friendly_name, "Custom Server");
-        assert_eq!(builder.bitrate, Bitrate::Aac320);
         assert_eq!(builder.channel, 1);
         assert_eq!(builder.port, 9090);
     }

@@ -4,7 +4,7 @@
 //! à un serveur pmoserver.
 
 use crate::paradise::{max_channel_id, ParadiseChannel, PlaylistEntry, ALL_CHANNELS};
-use crate::{models::Bitrate, Block, NowPlaying, RadioParadiseClient, RadioParadiseSource};
+use crate::{Block, NowPlaying, RadioParadiseClient, RadioParadiseSource};
 use axum::{
     body::Body,
     extract::{Path, Query, State},
@@ -34,7 +34,6 @@ pub struct RadioParadiseState {
 #[serde(default)]
 struct ParadiseQuery {
     channel: Option<u8>,
-    bitrate: Option<u8>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -104,14 +103,6 @@ impl RadioParadiseState {
                 return Err(StatusCode::BAD_REQUEST);
             }
             client = client.clone_with_channel(channel);
-        }
-
-        if let Some(bitrate_id) = params.bitrate {
-            let bitrate = Bitrate::from_u8(bitrate_id).map_err(|e| {
-                tracing::warn!("Invalid Radio Paradise bitrate requested: {}", e);
-                StatusCode::BAD_REQUEST
-            })?;
-            client = client.clone_with_bitrate(bitrate);
         }
 
         Ok(client)
@@ -288,8 +279,7 @@ impl From<NowPlaying> for NowPlayingResponse {
     get,
     path = "/now-playing",
     params(
-        ("channel" = Option<u8>, Query, description = "Channel ID (0-3)"),
-        ("bitrate" = Option<u8>, Query, description = "Bitrate ID (0-4)")
+        ("channel" = Option<u8>, Query, description = "Channel ID (0-3)")
     ),
     responses(
         (status = 200, description = "Morceau en cours", body = NowPlayingResponse),
@@ -315,8 +305,7 @@ async fn get_now_playing(
     get,
     path = "/block/current",
     params(
-        ("channel" = Option<u8>, Query, description = "Channel ID (0-3)"),
-        ("bitrate" = Option<u8>, Query, description = "Bitrate ID (0-4)")
+        ("channel" = Option<u8>, Query, description = "Channel ID (0-3)")
     ),
     responses(
         (status = 200, description = "Block actuel", body = BlockResponse),
@@ -343,8 +332,7 @@ async fn get_current_block(
     path = "/block/{event_id}",
     params(
         ("event_id" = u64, Path, description = "Event ID du block"),
-        ("channel" = Option<u8>, Query, description = "Channel ID (0-3)"),
-        ("bitrate" = Option<u8>, Query, description = "Bitrate ID (0-4)")
+        ("channel" = Option<u8>, Query, description = "Channel ID (0-3)")
     ),
     responses(
         (status = 200, description = "Block demandé", body = BlockResponse),
@@ -382,15 +370,6 @@ async fn get_block_by_id(
 async fn get_channels() -> Json<Vec<ChannelInfo>> {
     let channels: Vec<ChannelInfo> = ALL_CHANNELS.iter().map(Into::into).collect();
     Json(channels)
-}
-
-/// Information sur un bitrate
-#[derive(Debug, Clone, Serialize, ToSchema)]
-pub struct BitrateInfo {
-    /// ID du bitrate (0-4)
-    pub id: u8,
-    /// Nom/description
-    pub name: String,
 }
 
 /// Statut opérationnel d'un canal Radio Paradise
@@ -530,42 +509,6 @@ pub struct ChannelHistoryResponse {
     pub returned: usize,
     /// Entrées
     pub entries: Vec<ChannelHistoryEntry>,
-}
-
-/// GET /bitrates - Liste les bitrates disponibles
-#[utoipa::path(
-    get,
-    path = "/bitrates",
-    responses(
-        (status = 200, description = "Liste des bitrates disponibles", body = Vec<BitrateInfo>)
-    ),
-    tag = "Radio Paradise"
-)]
-async fn get_bitrates() -> Json<Vec<BitrateInfo>> {
-    let bitrates = vec![
-        BitrateInfo {
-            id: 0,
-            name: "MP3 128 kbps".to_string(),
-        },
-        BitrateInfo {
-            id: 1,
-            name: "AAC 64 kbps".to_string(),
-        },
-        BitrateInfo {
-            id: 2,
-            name: "AAC 128 kbps".to_string(),
-        },
-        BitrateInfo {
-            id: 3,
-            name: "AAC 320 kbps".to_string(),
-        },
-        BitrateInfo {
-            id: 4,
-            name: "FLAC Lossless".to_string(),
-        },
-    ];
-
-    Json(bitrates)
 }
 
 /// GET /channels/{channel_id}/status - Statut détaillé d'un canal
@@ -840,7 +783,6 @@ async fn stream_channel(
         get_channel_status,
         get_channel_playlist,
         get_channel_history,
-        get_bitrates,
         stream_channel
     ),
     components(schemas(
@@ -848,7 +790,6 @@ async fn stream_channel(
         BlockResponse,
         SongInfo,
         ChannelInfo,
-        BitrateInfo,
         ChannelStatusResponse,
         ChannelPlaylistEntry,
         ChannelPlaylistResponse,
@@ -872,7 +813,6 @@ pub fn create_api_router(state: RadioParadiseState) -> Router {
         .route("/channels/{channel_id}/status", get(get_channel_status))
         .route("/channels/{channel_id}/playlist", get(get_channel_playlist))
         .route("/channels/{channel_id}/history", get(get_channel_history))
-        .route("/bitrates", get(get_bitrates))
         .route("/stream", get(stream_channel))
         .with_state(state)
 }
