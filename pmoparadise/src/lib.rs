@@ -7,8 +7,8 @@
 //! ## Features
 //!
 //! - **Metadata Access**: Get current and historical block metadata with song information
-//! - **Block Streaming**: Stream continuous FLAC/AAC blocks with automatic prefetching
-//! - **Multiple Quality Levels**: Support for MP3, AAC (64/128/320 kbps), and FLAC
+//! - **Block Streaming**: Stream continuous FLAC blocks with automatic prefetching
+//! - **FLAC Quality**: Lossless CD quality or better
 //! - **Per-Track Extraction** (optional): Extract individual tracks from FLAC blocks
 //! - **Async/Await**: Built on tokio for efficient async I/O
 //! - **Type-Safe**: Strongly typed API with comprehensive error handling
@@ -49,7 +49,7 @@
 //! ## Streaming Blocks
 //!
 //! Radio Paradise broadcasts music in continuous "blocks" - each block is a single
-//! FLAC or AAC file containing multiple songs with metadata indicating timing offsets.
+//! FLAC file containing multiple songs with metadata indicating timing offsets.
 //!
 //! ```no_run
 //! use pmoparadise::RadioParadiseClient;
@@ -67,24 +67,6 @@
 //!         let bytes = chunk?;
 //!         // Feed to audio player, write to file, etc.
 //!     }
-//!
-//!     Ok(())
-//! }
-//! ```
-//!
-//! ## Quality Levels
-//!
-//! Radio Paradise offers multiple quality levels via the [`Bitrate`] enum:
-//!
-//! ```no_run
-//! use pmoparadise::{RadioParadiseClient, Bitrate};
-//!
-//! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let client = RadioParadiseClient::builder()
-//!         .bitrate(Bitrate::Aac320)
-//!         .build()
-//!         .await?;
 //!
 //!     Ok(())
 //! }
@@ -135,7 +117,7 @@
 //!
 //! Radio Paradise streams use a block-based format:
 //!
-//! - Each block is a single audio file (FLAC or AAC)
+//! - Each block is a single FLAC audio file
 //! - Blocks contain multiple songs (typically 10-15 minutes total)
 //! - Metadata includes timing offsets (`song[i].elapsed` in ms) for each song
 //! - Block URLs follow the pattern: `https://apps.radioparadise.com/blocks/chan/0/4/<start>-<end>.flac`
@@ -256,7 +238,7 @@ pub mod pmoserver_ext;
 // Re-exports for convenience
 pub use client::{ClientBuilder, RadioParadiseClient};
 pub use error::{Error, Result};
-pub use models::{Bitrate, Block, DurationMs, EventId, NowPlaying, Song};
+pub use models::{Block, DurationMs, EventId, NowPlaying, Song};
 pub use source::RadioParadiseSource;
 pub use stream::BlockStream;
 

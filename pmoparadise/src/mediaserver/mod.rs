@@ -31,12 +31,10 @@
 //! # #[cfg(feature = "mediaserver")]
 //! # {
 //! use pmoparadise::mediaserver::RadioParadiseMediaServer;
-//! use pmoparadise::Bitrate;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let server = RadioParadiseMediaServer::new()
-//!         .with_bitrate(Bitrate::Flac)
+//!     let server = RadioParadiseMediaServer::builder()
 //!         .with_friendly_name("Radio Paradise FLAC")
 //!         .build()
 //!         .await?;
