@@ -15,7 +15,6 @@ use bytes::Bytes;
 use chrono::Utc;
 use futures::stream;
 use pmosource::{SourceCacheManager, TrackMetadata};
-use sha2::{Digest, Sha256};
 use std::collections::{HashSet, VecDeque};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -149,6 +148,7 @@ struct WorkerState {
     active_clients: usize,
     status: ChannelLifecycle,
     processed_blocks: HashSet<u64>,
+    processing_blocks: HashSet<u64>,
     recent_blocks: VecDeque<u64>,
     next_block_hint: Option<u64>,
     scheduled_task: Option<ScheduledTask>,
@@ -175,6 +175,7 @@ impl WorkerState {
             active_clients: 0,
             status: ChannelLifecycle::Idle,
             processed_blocks: HashSet::new(),
+            processing_blocks: HashSet::new(),
             recent_blocks: VecDeque::new(),
             next_block_hint: None,
             scheduled_task: None,
@@ -308,16 +309,57 @@ impl WorkerState {
     }
 
     async fn process_block(&mut self, block: Block) -> Result<()> {
+        // Check if we just processed this block (songs are already in playlist)
         if self.is_recent_block(block.event) {
             debug!(
                 channel = self.descriptor.slug,
                 event = block.event,
-                "Skipping already processed block"
+                "Skipping already processed block (songs already in playlist)"
             );
             self.next_block_hint = Some(block.end_event);
             return Ok(());
         }
 
+        // Check if this block is currently being processed by another task
+        // This prevents race conditions when the same block is requested multiple times
+        if self.processing_blocks.contains(&block.event) {
+            warn!(
+                channel = self.descriptor.slug,
+                event = block.event,
+                "Block is already being processed, skipping duplicate request"
+            );
+            return Ok(());
+        }
+
+        // Check if all songs from this block are in cache
+        // If yes, restore from cache instead of downloading
+        if self.check_all_songs_cached(&block).await {
+            info!(
+                channel = self.descriptor.slug,
+                event = block.event,
+                "Block found in cache, restoring without download"
+            );
+            self.restore_from_cache(&block).await?;
+            self.record_processed_block(block.event);
+            self.next_block_hint = Some(block.end_event);
+            self.backoff.reset();
+            return Ok(());
+        }
+
+        // Mark block as being processed
+        self.processing_blocks.insert(block.event);
+        let event = block.event; // Save for cleanup
+
+        // Process the block and ensure cleanup even on error
+        let result = self.process_block_inner(block).await;
+
+        // Always remove from processing set, whether success or error
+        self.processing_blocks.remove(&event);
+
+        result
+    }
+
+    async fn process_block_inner(&mut self, block: Block) -> Result<()> {
         info!(
             channel = self.descriptor.slug,
             event = block.event,
@@ -534,7 +576,7 @@ impl WorkerState {
         .await
         .context("Failed to encode song to FLAC")?;
 
-        let track_id = self.compute_track_id(&flac_bytes);
+        let track_id = self.compute_track_id(block, *song_index);
         let placeholder_uri = format!("{}#{}", block.url, song_index);
 
         let mut metadata = TrackMetadata {
@@ -616,7 +658,7 @@ impl WorkerState {
         .await
         .context("Failed to encode song to FLAC")?;
 
-        let track_id = self.compute_track_id(&flac_bytes);
+        let track_id = self.compute_track_id(block, song_index);
         let placeholder_uri = format!("{}#{}", block.url, song_index);
 
         let mut metadata = TrackMetadata {
@@ -679,12 +721,10 @@ impl WorkerState {
         Ok(None)
     }
 
-    fn compute_track_id(&self, flac_bytes: &[u8]) -> String {
-        let slice_len = flac_bytes.len().min(self.config.cache.track_id_hash_bytes);
-        let mut hasher = Sha256::new();
-        hasher.update(&flac_bytes[..slice_len]);
-        let hash = hasher.finalize();
-        format!("rp:{}:{}", self.descriptor.id, hex::encode(hash))
+    fn compute_track_id(&self, block: &Block, song_index: usize) -> String {
+        // Use deterministic ID based on block event and song index
+        // This allows checking if a song is cached before downloading the block
+        format!("rp:{}:event_{}_song_{}", self.descriptor.id, block.event, song_index)
     }
 
     async fn maybe_schedule_poll(&mut self) {
@@ -733,6 +773,144 @@ impl WorkerState {
 
     fn is_recent_block(&self, event: u64) -> bool {
         self.processed_blocks.contains(&event)
+    }
+
+    /// Check if all songs from a block are already cached
+    async fn check_all_songs_cached(&self, block: &Block) -> bool {
+        let ordered_songs = block.songs_ordered();
+
+        for (song_index, _song) in &ordered_songs {
+            let track_id = self.compute_track_id(block, *song_index);
+
+            // Check if metadata exists
+            let metadata = match self.cache_manager.get_metadata(&track_id).await {
+                Some(m) => m,
+                None => {
+                    debug!(
+                        channel = self.descriptor.slug,
+                        event = block.event,
+                        song_index = *song_index,
+                        "Song not in cache: no metadata"
+                    );
+                    return false;
+                }
+            };
+
+            // Check if audio is cached
+            let audio_pk = match metadata.cached_audio_pk {
+                Some(pk) => pk,
+                None => {
+                    debug!(
+                        channel = self.descriptor.slug,
+                        event = block.event,
+                        song_index = *song_index,
+                        "Song not in cache: no audio_pk"
+                    );
+                    return false;
+                }
+            };
+
+            // Check if file exists
+            if self.cache_manager.audio_file_path(&audio_pk).await.is_none() {
+                debug!(
+                    channel = self.descriptor.slug,
+                    event = block.event,
+                    song_index = *song_index,
+                    "Song not in cache: file not found"
+                );
+                return false;
+            }
+        }
+
+        debug!(
+            channel = self.descriptor.slug,
+            event = block.event,
+            "All {} songs are cached",
+            ordered_songs.len()
+        );
+        true
+    }
+
+    /// Restore songs from cache and add them to the playlist
+    async fn restore_from_cache(&mut self, block: &Block) -> Result<()> {
+        info!(
+            channel = self.descriptor.slug,
+            event = block.event,
+            "Restoring block from cache (no download needed)"
+        );
+
+        let ordered_songs = block.songs_ordered();
+
+        for (song_index, song) in &ordered_songs {
+            let track_id = self.compute_track_id(block, *song_index);
+
+            // Get metadata (we already checked it exists in check_all_songs_cached)
+            let metadata = self.cache_manager.get_metadata(&track_id).await
+                .ok_or_else(|| anyhow!("Metadata disappeared for track_id: {}", track_id))?;
+
+            let audio_pk = metadata.cached_audio_pk.clone()
+                .ok_or_else(|| anyhow!("Audio PK disappeared for track_id: {}", track_id))?;
+
+            // Get cover PK if available
+            let cover_pk = if let Some(ref cover_path) = song.cover {
+                if let Some(cover_url) = block.cover_url(cover_path) {
+                    match self.cache_manager.cache_cover(&cover_url).await {
+                        Ok(pk) => Some(pk),
+                        Err(err) => {
+                            warn!(channel = self.descriptor.slug, "Cover cache error: {err}");
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            // Update metadata with cover if we just cached it
+            if cover_pk.is_some() && metadata.cached_cover_pk.is_none() {
+                let updated_metadata = TrackMetadata {
+                    cached_cover_pk: cover_pk,
+                    ..metadata.clone()
+                };
+                self.cache_manager.update_metadata(track_id.clone(), updated_metadata).await;
+            }
+
+            let file_path = self.cache_manager.audio_file_path(&audio_pk).await
+                .ok_or_else(|| anyhow!("File disappeared for audio_pk: {}", audio_pk))?;
+
+            let duration_ms = song.duration;
+
+            let entry = Arc::new(PlaylistEntry::new(
+                track_id,
+                self.descriptor.id,
+                Arc::new((*song).clone()),
+                Utc::now(),
+                duration_ms,
+                Some(audio_pk),
+                Some(file_path),
+                self.active_clients,
+            ));
+
+            self.playlist.push_active(entry).await;
+
+            info!(
+                channel = self.descriptor.slug,
+                song_index = *song_index,
+                "🎵 Restored '{}' from cache",
+                song.title
+            );
+        }
+
+        info!(
+            channel = self.descriptor.slug,
+            event = block.event,
+            "Block restored from cache: {} songs",
+            ordered_songs.len()
+        );
+
+        Ok(())
     }
 }
 
