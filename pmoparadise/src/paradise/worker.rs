@@ -600,6 +600,12 @@ impl WorkerState {
             .await
             .map_err(|e| anyhow!("Cache audio error: {e}"))?;
 
+        // Wait for the file to be completely written before continuing
+        self.cache_manager
+            .wait_audio_ready(&audio_pk)
+            .await
+            .map_err(|e| anyhow!("Wait audio ready error: {e}"))?;
+
         metadata.cached_audio_pk = Some(audio_pk.clone());
         self.cache_manager
             .update_metadata(track_id.clone(), metadata)
@@ -679,6 +685,12 @@ impl WorkerState {
             .cache_audio_from_reader(&track_id, reader, Some(flac_len))
             .await
             .map_err(|e| anyhow!("Cache audio error: {e}"))?;
+
+        // Wait for the file to be completely written before continuing
+        self.cache_manager
+            .wait_audio_ready(&audio_pk)
+            .await
+            .map_err(|e| anyhow!("Wait audio ready error: {e}"))?;
 
         metadata.cached_audio_pk = Some(audio_pk.clone());
         self.cache_manager

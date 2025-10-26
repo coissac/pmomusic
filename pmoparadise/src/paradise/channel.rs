@@ -333,7 +333,13 @@ impl ParadiseClientStream {
 
     pub fn into_byte_stream(self) -> BoxStream<'static, Result<Bytes, anyhow::Error>> {
         let channel = self.channel.clone();
+        let client_id = self.client_id.clone();
         let stream = try_stream! {
+            tracing::info!(
+                channel = channel.descriptor().slug,
+                client_id = %client_id,
+                "🎧 Client connecting to stream"
+            );
             channel.ensure_started().await?;
             let mut index = 0usize;
             loop {
