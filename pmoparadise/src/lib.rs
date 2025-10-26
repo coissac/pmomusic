@@ -209,9 +209,9 @@
 //!
 //! - `default = ["metadata-only"]`: Standard metadata and streaming (no FLAC decoding)
 //! - `per-track`: Enable FLAC decoding and per-track extraction (adds `claxon`, `hound`, `tempfile`)
-//! - `logging`: Enable tracing logs for debugging
-//! - `mediaserver`: Enable UPnP/DLNA Media Server (adds `pmoupnp`, `pmoserver`, `pmodidl`)
-//! - `cache`: Enable cover and audio caching support (adds `pmocovers`, `pmoaudiocache`, enables `logging`)
+//! - `pmoserver`: Enable REST API extension for pmoserver integration (adds `utoipa`, `axum`)
+//! - `server`: Enable server-side features (cache registry integration)
+//! - `cache`: Enable cover and audio caching support (adds `pmocovers`, `pmoaudiocache`)
 //!
 //! ## See Also
 //!
@@ -229,9 +229,6 @@ pub mod streaming;
 #[cfg(feature = "per-track")]
 pub mod track;
 
-#[cfg(feature = "mediaserver")]
-pub mod mediaserver;
-
 #[cfg(feature = "pmoserver")]
 pub mod pmoserver_ext;
 
@@ -244,9 +241,6 @@ pub use stream::BlockStream;
 
 #[cfg(feature = "per-track")]
 pub use track::{TrackMetadata, TrackStream};
-
-#[cfg(feature = "mediaserver")]
-pub use mediaserver::{MediaServerBuilder, RadioParadiseMediaServer};
 
 #[cfg(feature = "pmoserver")]
 pub use pmoserver_ext::{

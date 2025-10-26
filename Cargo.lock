@@ -2504,11 +2504,9 @@ dependencies = [
  "pmoaudiocache",
  "pmoconfig",
  "pmocovers",
- "pmodidl",
  "pmoplaylist",
  "pmoserver",
  "pmosource",
- "pmoupnp",
  "reqwest",
  "rusqlite",
  "serde",
@@ -2525,7 +2523,6 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "utoipa",
- "uuid",
  "wiremock",
 ]
 
