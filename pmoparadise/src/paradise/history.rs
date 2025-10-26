@@ -3,15 +3,12 @@
 //! The worker pushes every completed track into the history backend while
 //! keeping the latest entries available for UPnP browsing.  We use SQLite
 //! for persistent storage with an abstract trait for testability.
-
-use super::config::HistoryConfig;
 use crate::models::Song;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::{Arc, Mutex as StdMutex};
-use tokio::sync::Mutex;
 use tokio::task::spawn_blocking;
 
 /// Serializable record describing a played track.
@@ -59,46 +56,6 @@ pub trait HistoryBackend: Send + Sync {
     async fn truncate(&self, keep: usize) -> anyhow::Result<()>;
 }
 
-/// Creates a history backend from configuration.
-///
-/// This always creates a SQLite-based backend using the configured database path.
-pub fn history_backend_from_config(
-    config: &HistoryConfig,
-) -> anyhow::Result<Arc<dyn HistoryBackend>> {
-    let backend = SqliteHistoryBackend::new(&config.database_path)?;
-    Ok(Arc::new(backend))
-}
-
-
-#[async_trait]
-impl HistoryBackend for MemoryHistoryBackend {
-    async fn append(&self, entry: HistoryEntry) -> anyhow::Result<()> {
-        let mut entries = self.entries.lock().await;
-        entries.push(entry);
-        Ok(())
-    }
-
-    async fn recent(&self, limit: usize) -> anyhow::Result<Vec<HistoryEntry>> {
-        let entries = self.entries.lock().await;
-        let total = entries.len();
-        let start = total.saturating_sub(limit);
-        Ok(entries[start..].to_vec())
-    }
-
-    async fn len(&self) -> anyhow::Result<usize> {
-        Ok(self.entries.lock().await.len())
-    }
-
-    async fn truncate(&self, keep: usize) -> anyhow::Result<()> {
-        let mut entries = self.entries.lock().await;
-        if entries.len() > keep {
-            let drop_count = entries.len() - keep;
-            entries.drain(0..drop_count);
-        }
-        Ok(())
-    }
-}
-
 pub struct SqliteHistoryBackend {
     conn: Arc<StdMutex<rusqlite::Connection>>,
 }
@@ -136,6 +93,7 @@ impl SqliteHistoryBackend {
         self.conn.clone()
     }
 }
+
 
 #[async_trait]
 impl HistoryBackend for SqliteHistoryBackend {
@@ -239,4 +197,22 @@ impl HistoryBackend for SqliteHistoryBackend {
         .await??;
         Ok(())
     }
+}
+
+/// Creates a SQLite history backend with the given database path.
+///
+/// The database file and parent directories will be created if they don't exist.
+///
+/// # Arguments
+///
+/// * `database_path` - Path to the SQLite database file
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let backend = create_history_backend("/var/lib/pmo/history.db")?;
+/// ```
+pub fn create_history_backend(database_path: &str) -> anyhow::Result<Arc<dyn HistoryBackend>> {
+    let backend = SqliteHistoryBackend::new(database_path)?;
+    Ok(Arc::new(backend))
 }

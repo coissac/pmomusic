@@ -5,7 +5,6 @@
 //! a scaffolding of the final behaviour; commands sent to the worker are
 //! logged but not yet executing the full download/buffering pipeline.
 
-use super::config::RadioParadiseConfig;
 use super::history::HistoryBackend;
 use super::playlist::{PlaylistEntry, SharedPlaylist};
 use super::worker::{ParadiseWorker, WorkerCommand};
@@ -128,7 +127,7 @@ pub struct ParadiseChannel {
 struct ParadiseChannelInner {
     descriptor: ChannelDescriptor,
     client: RadioParadiseClient,
-    config: Arc<RadioParadiseConfig>,
+    history_max_tracks: usize,
     playlist: SharedPlaylist,
     history: Arc<dyn HistoryBackend>,
     cache_manager: Arc<SourceCacheManager>,
@@ -154,16 +153,16 @@ impl ParadiseChannel {
     pub fn new(
         descriptor: ChannelDescriptor,
         base_client: RadioParadiseClient,
-        config: Arc<RadioParadiseConfig>,
+        history_max_tracks: usize,
         history: Arc<dyn HistoryBackend>,
         cache_manager: Arc<SourceCacheManager>,
     ) -> Result<Self> {
         let client = base_client.clone_with_channel(descriptor.id);
-        let playlist = SharedPlaylist::new(config.history.max_tracks);
+        let playlist = SharedPlaylist::new(history_max_tracks);
         let (worker, worker_tx) = ParadiseWorker::spawn(
             descriptor,
             client.clone(),
-            config.clone(),
+            history_max_tracks,
             playlist.clone(),
             history.clone(),
             cache_manager.clone(),
@@ -173,7 +172,7 @@ impl ParadiseChannel {
             inner: Arc::new(ParadiseChannelInner {
                 descriptor,
                 client,
-                config,
+                history_max_tracks,
                 playlist,
                 history,
                 cache_manager,
@@ -192,8 +191,8 @@ impl ParadiseChannel {
         &self.inner.playlist
     }
 
-    pub fn config(&self) -> &Arc<RadioParadiseConfig> {
-        &self.inner.config
+    pub fn history_max_tracks(&self) -> usize {
+        self.inner.history_max_tracks
     }
 
     pub fn history_backend(&self) -> &Arc<dyn HistoryBackend> {
@@ -297,7 +296,7 @@ impl ParadiseChannel {
             if let Err(err) = self
                 .inner
                 .history
-                .truncate(self.inner.config.history.max_tracks)
+                .truncate(self.inner.history_max_tracks)
                 .await
             {
                 warn!(

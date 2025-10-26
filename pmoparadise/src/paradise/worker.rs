@@ -5,7 +5,7 @@
 //! and ensures fresh content is available according to the specification.
 
 use super::channel::ChannelDescriptor;
-use super::config::RadioParadiseConfig;
+use super::constants::*;
 use super::history::HistoryBackend;
 use super::playlist::{PlaylistEntry, SharedPlaylist};
 use crate::client::RadioParadiseClient;
@@ -46,7 +46,7 @@ impl ParadiseWorker {
     pub fn spawn(
         descriptor: ChannelDescriptor,
         client: RadioParadiseClient,
-        config: Arc<RadioParadiseConfig>,
+        history_max_tracks: usize,
         playlist: SharedPlaylist,
         history: Arc<dyn HistoryBackend>,
         cache_manager: Arc<SourceCacheManager>,
@@ -57,7 +57,7 @@ impl ParadiseWorker {
             info!(channel = descriptor.slug, "Starting Radio Paradise worker");
 
             let mut state =
-                WorkerState::new(descriptor, client, config, playlist, history, cache_manager);
+                WorkerState::new(descriptor, client, history_max_tracks, playlist, history, cache_manager);
 
             loop {
                 if let Some(task) = state.scheduled_task.as_mut() {
@@ -141,7 +141,6 @@ impl ParadiseWorker {
 struct WorkerState {
     descriptor: ChannelDescriptor,
     client: RadioParadiseClient,
-    config: Arc<RadioParadiseConfig>,
     playlist: SharedPlaylist,
     history: Arc<dyn HistoryBackend>,
     cache_manager: Arc<SourceCacheManager>,
@@ -160,7 +159,7 @@ impl WorkerState {
     fn new(
         descriptor: ChannelDescriptor,
         client: RadioParadiseClient,
-        config: Arc<RadioParadiseConfig>,
+        _history_max_tracks: usize,
         playlist: SharedPlaylist,
         history: Arc<dyn HistoryBackend>,
         cache_manager: Arc<SourceCacheManager>,
@@ -168,7 +167,6 @@ impl WorkerState {
         Self {
             descriptor,
             client,
-            config,
             playlist,
             history,
             cache_manager,
@@ -241,9 +239,7 @@ impl WorkerState {
 
     fn on_error(&mut self, err: anyhow::Error) {
         warn!(channel = self.descriptor.slug, "Worker error: {err:?}");
-        let delay = self
-            .backoff
-            .next_delay(&self.config.polling.backoff_on_error);
+        let delay = self.backoff.next_delay();
         self.schedule_task(ScheduledTaskKind::Poll, delay);
     }
 
@@ -270,7 +266,7 @@ impl WorkerState {
             "Channel entering Cooling state"
         );
         self.status = ChannelLifecycle::Cooling;
-        let duration = Duration::from_secs(self.config.activity.cooling_timeout_seconds.max(1));
+        let duration = Duration::from_secs(COOLING_TIMEOUT_SECONDS.max(1));
         self.schedule_task(ScheduledTaskKind::Cooling, duration);
     }
 
@@ -741,11 +737,11 @@ impl WorkerState {
         let buffer_len = self.playlist.active_len().await;
 
         let interval = if buffer_len > 3 {
-            self.config.polling.high_interval()
+            polling_high_interval()
         } else if buffer_len >= 2 {
-            self.config.polling.medium_interval()
+            polling_medium_interval()
         } else {
-            self.config.polling.low_interval()
+            polling_low_interval()
         };
 
         self.schedule_task(ScheduledTaskKind::Poll, interval);
@@ -769,7 +765,7 @@ impl WorkerState {
     fn record_processed_block(&mut self, event: u64) {
         self.processed_blocks.insert(event);
         self.recent_blocks.push_back(event);
-        let max = self.config.cache.max_blocks_remembered.max(1);
+        let max = MAX_BLOCKS_REMEMBERED.max(1);
         while self.recent_blocks.len() > max {
             if let Some(ev) = self.recent_blocks.pop_front() {
                 self.processed_blocks.remove(&ev);
@@ -966,13 +962,13 @@ impl BackoffState {
         self.current = None;
     }
 
-    fn next_delay(&mut self, config: &super::config::PollingBackoffConfig) -> Duration {
+    fn next_delay(&mut self) -> Duration {
         let next = match self.current {
             Some(current) => {
-                let multiplied = (current.as_secs_f32() * config.multiplier).round() as u64;
-                Duration::from_secs(multiplied.min(config.max))
+                let multiplied = (current.as_secs_f32() * BACKOFF_MULTIPLIER).round() as u64;
+                Duration::from_secs(multiplied.min(BACKOFF_MAX_SECONDS))
             }
-            None => Duration::from_secs(config.initial),
+            None => Duration::from_secs(BACKOFF_INITIAL_SECONDS),
         };
         self.current = Some(next);
         next
