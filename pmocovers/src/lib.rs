@@ -20,6 +20,21 @@
 //!
 //! ## Utilisation
 //!
+//! ### Exemple minimal
+//!
+//! ```rust,no_run
+//! use pmocovers::cache;
+//!
+//! #[tokio::main]
+//! async fn main() -> anyhow::Result<()> {
+//!     let cache = cache::new_cache("./covers_cache", 200)?;
+//!     let pk = cache.add_from_url("https://example.com/cover.jpg", None).await?;
+//!     let path = cache.get(&pk).await?;
+//!     println!("Image convertie en WebP: {path:?}");
+//!     Ok(())
+//! }
+//! ```
+//!
 //! ### Exemple avec configuration automatique
 //!
 //! ```rust,no_run

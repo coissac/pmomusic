@@ -1,11 +1,10 @@
 //! History persistence for Radio Paradise playback.
 //!
 //! The worker pushes every completed track into the history backend while
-//! keeping the latest entries available for UPnP browsing.  We expose an
-//! abstract trait so different storage engines (SQLite, JSON, etc.) can be
-//! supported while sharing the same API.
+//! keeping the latest entries available for UPnP browsing.  We use SQLite
+//! for persistent storage with an abstract trait for testability.
 
-use super::config::{HistoryBackendKind, HistoryConfig};
+use super::config::HistoryConfig;
 use crate::models::Song;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -60,99 +59,16 @@ pub trait HistoryBackend: Send + Sync {
     async fn truncate(&self, keep: usize) -> anyhow::Result<()>;
 }
 
+/// Creates a history backend from configuration.
+///
+/// This always creates a SQLite-based backend using the configured database path.
 pub fn history_backend_from_config(
     config: &HistoryConfig,
 ) -> anyhow::Result<Arc<dyn HistoryBackend>> {
-    match config.persistence_backend {
-        HistoryBackendKind::Sqlite => {
-            let backend = SqliteHistoryBackend::new(&config.database_path)?;
-            Ok(Arc::new(backend))
-        }
-        HistoryBackendKind::Json => {
-            let backend = JsonHistoryBackend::new(&config.database_path);
-            Ok(Arc::new(backend))
-        }
-    }
+    let backend = SqliteHistoryBackend::new(&config.database_path)?;
+    Ok(Arc::new(backend))
 }
 
-/// Simple JSON file backed history (placeholder implementation).
-///
-/// The JSON backend is primarily useful for tests and quick setups.  The file
-/// is stored next to the configured database path with a `.json` extension.
-pub struct JsonHistoryBackend {
-    path: std::path::PathBuf,
-    entries: Arc<Mutex<Vec<HistoryEntry>>>,
-}
-
-impl JsonHistoryBackend {
-    pub fn new(path: impl AsRef<Path>) -> Self {
-        let path = path.as_ref().to_path_buf();
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let entries = if path.exists() {
-            std::fs::read(&path)
-                .ok()
-                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-
-        Self {
-            path,
-            entries: Arc::new(Mutex::new(entries)),
-        }
-    }
-
-    async fn save(&self, entries: &[HistoryEntry]) -> anyhow::Result<()> {
-        let json = serde_json::to_vec_pretty(entries)?;
-        tokio::fs::write(&self.path, json).await?;
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl HistoryBackend for JsonHistoryBackend {
-    async fn append(&self, entry: HistoryEntry) -> anyhow::Result<()> {
-        let mut entries = self.entries.lock().await;
-        entries.push(entry);
-        self.save(&entries).await
-    }
-
-    async fn recent(&self, limit: usize) -> anyhow::Result<Vec<HistoryEntry>> {
-        let entries = self.entries.lock().await;
-        let total = entries.len();
-        let start = total.saturating_sub(limit);
-        Ok(entries[start..].to_vec())
-    }
-
-    async fn len(&self) -> anyhow::Result<usize> {
-        Ok(self.entries.lock().await.len())
-    }
-
-    async fn truncate(&self, keep: usize) -> anyhow::Result<()> {
-        let mut entries = self.entries.lock().await;
-        if entries.len() > keep {
-            let drop_count = entries.len() - keep;
-            entries.drain(0..drop_count);
-            self.save(&entries).await?;
-        }
-        Ok(())
-    }
-}
-
-/// In-memory history backend – useful for tests or ephemeral deployments.
-#[derive(Default)]
-pub struct MemoryHistoryBackend {
-    entries: Arc<Mutex<Vec<HistoryEntry>>>,
-}
-
-impl MemoryHistoryBackend {
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
 
 #[async_trait]
 impl HistoryBackend for MemoryHistoryBackend {

@@ -232,6 +232,9 @@ pub mod track;
 #[cfg(feature = "pmoserver")]
 pub mod pmoserver_ext;
 
+#[cfg(feature = "pmoconfig")]
+pub mod config_ext;
+
 // Re-exports for convenience
 pub use client::{ClientBuilder, RadioParadiseClient};
 pub use error::{Error, Result};
@@ -246,6 +249,9 @@ pub use track::{TrackMetadata, TrackStream};
 pub use pmoserver_ext::{
     create_api_router, RadioParadiseApiDoc, RadioParadiseExt, RadioParadiseState,
 };
+
+#[cfg(feature = "pmoconfig")]
+pub use config_ext::RadioParadiseConfigExt;
 
 // Version information
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

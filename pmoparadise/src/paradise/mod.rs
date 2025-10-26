@@ -26,9 +26,6 @@ pub use config::{
     ActivityConfig, ApiConfig, CacheConfig, HistoryConfig, PollingConfig, RadioParadiseConfig,
     StreamConfig,
 };
-pub use history::{
-    history_backend_from_config, HistoryBackend, HistoryEntry, JsonHistoryBackend,
-    MemoryHistoryBackend,
-};
+pub use history::{history_backend_from_config, HistoryBackend, HistoryEntry};
 pub use playlist::PlaylistEntry;
 pub use worker::{ParadiseWorker, WorkerCommand};
