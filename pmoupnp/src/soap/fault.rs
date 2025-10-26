@@ -129,6 +129,7 @@ pub fn build_soap_fault(
     // Sérialiser
     let mut buf = Vec::new();
     let config = xmltree::EmitterConfig::new()
+        .write_document_declaration(true)
         .perform_indent(true)
         .indent_string("  ");
     envelope.write_with_config(&mut buf, config)?;

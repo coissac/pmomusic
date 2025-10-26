@@ -134,6 +134,8 @@ pub struct SourceRootContainer {
     pub class: String,
     /// Nombre d'enfants
     pub child_count: Option<String>,
+    /// Indique si le container est searchable ("1" ou "0")
+    pub searchable: Option<String>,
 }
 
 /// Message d'erreur
@@ -639,6 +641,7 @@ async fn get_source_root(Path(id): Path<String>) -> impl IntoResponse {
                     title: container.title,
                     class: container.class,
                     child_count: container.child_count,
+                    searchable: container.searchable,
                 };
                 (StatusCode::OK, Json(root)).into_response()
             }

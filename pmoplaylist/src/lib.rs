@@ -504,6 +504,7 @@ impl FifoPlaylist {
             parent_id: parent_id.into(),
             restricted: Some("1".to_string()),
             child_count: Some(inner.queue.len().to_string()),
+            searchable: Some("1".to_string()),
             title: inner.title.clone(),
             class: "object.container.playlistContainer".to_string(),
             containers: vec![],

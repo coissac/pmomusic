@@ -39,8 +39,8 @@
 //! assert_eq!(action.args.get("InstanceID"), Some(&"0".to_string()));
 //!
 //! // Construire une réponse
-//! let mut values = std::collections::HashMap::new();
-//! values.insert("CurrentTrack".to_string(), "5".to_string());
+//! let mut values = Vec::new();
+//! values.push(("CurrentTrack".to_string(), "5".to_string()));
 //! let response = build_soap_response(
 //!     "urn:schemas-upnp-org:service:AVTransport:1",
 //!     "GetPositionInfo",
