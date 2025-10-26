@@ -10,35 +10,4 @@ host:
     buffer_capacity: 200
     enable_console: true
     min_level: "INFO"
-
-mediarenderer:
           
-mediaserver:
-  sources:
-    radio_paradise:
-      enabled: true
-      cache:
-        max_blocks_remembered: 5
-        track_id_hash_bytes: 512
-      history:
-        max_tracks: 100
-        persistence_backend: sqlite
-        database_path: /var/lib/pmo/paradise_history.db
-      activity:
-        cooling_timeout_seconds: 180
-      polling:
-        interval_high_buffer: 120
-        interval_medium_buffer: 60
-        interval_low_buffer: 20
-        backoff_on_error:
-          initial: 20
-          max: 300
-          multiplier: 2.0
-      stream:
-        metadata_format: icy
-        enable_gapless: true
-        buffer_size_bytes: 65536
-      api:
-        base_url: https://api.radioparadise.com
-        timeout_seconds: 30
-        user_agent: "PMO-RadioParadise/1.0"
