@@ -6,7 +6,7 @@ use std::pin::Pin;
 use std::sync::mpsc::{sync_channel, Receiver, RecvError, SyncSender};
 use std::time::{Duration, Instant};
 
-const CHANNEL_BUFFER_SIZE: usize = 16;
+const CHANNEL_BUFFER_SIZE: usize = 64; // Augmenté de 16 à 64 pour réduire les warnings "buffer plein"
 pub const CHUNK_SIZE_FRAMES: usize = 4096;
 
 pub struct ChannelReader {
@@ -67,11 +67,11 @@ impl Read for ChannelReader {
                     let to_copy = available.min(buf.len());
                     buf[..to_copy].copy_from_slice(&chunk[self.position..self.position + to_copy]);
                     self.position += to_copy;
-                     tracing::trace!(
-                         "ChannelReader copied {} bytes (elapsed {:?})",
-                         to_copy,
-                         start.elapsed()
-                     );
+                    tracing::trace!(
+                        "ChannelReader copied {} bytes (elapsed {:?})",
+                        to_copy,
+                        start.elapsed()
+                    );
                     return Ok(to_copy);
                 }
             }
@@ -91,10 +91,7 @@ impl Read for ChannelReader {
                     return Err(io::Error::new(io::ErrorKind::Other, e));
                 }
                 Err(RecvError) => {
-                    tracing::trace!(
-                        "ChannelReader stream closed after {:?}",
-                        start.elapsed()
-                    );
+                    tracing::trace!("ChannelReader stream closed after {:?}", start.elapsed());
                     return Ok(0);
                 }
             }
@@ -179,10 +176,21 @@ impl StreamingPCMDecoder<ChannelReader> {
             Err(e) => return Err(anyhow::anyhow!("FLAC decode error: {}", e)),
         };
 
-        let samples: Vec<i32> = frame.into_buffer();
-        if samples.is_empty() {
+        let planar_samples: Vec<i32> = frame.into_buffer();
+        if planar_samples.is_empty() {
             self.done = true;
             return Ok(None);
+        }
+
+        // IMPORTANT: Claxon retourne les samples en format PLANAR (tous les L, puis tous les R)
+        // Mais nous avons besoin du format INTERLEAVED (L, R, L, R, ...) pour l'encodage
+        let block_size = planar_samples.len() / self.channels as usize;
+        let mut samples = Vec::with_capacity(planar_samples.len());
+
+        for i in 0..block_size {
+            for ch in 0..self.channels as usize {
+                samples.push(planar_samples[ch * block_size + i]);
+            }
         }
 
         let position_ms = {

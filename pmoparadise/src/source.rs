@@ -104,7 +104,10 @@ impl RadioParadiseSource {
             path.push("paradise");
             std::fs::create_dir_all(&path).ok();
             path.push("history.db");
-            (path.to_string_lossy().to_string(), HISTORY_DEFAULT_MAX_TRACKS)
+            (
+                path.to_string_lossy().to_string(),
+                HISTORY_DEFAULT_MAX_TRACKS,
+            )
         };
 
         let history_backend = create_history_backend(&database_path).map_err(|e| {
@@ -175,7 +178,10 @@ impl RadioParadiseSource {
             path.push("paradise");
             std::fs::create_dir_all(&path).ok();
             path.push("history.db");
-            (path.to_string_lossy().to_string(), HISTORY_DEFAULT_MAX_TRACKS)
+            (
+                path.to_string_lossy().to_string(),
+                HISTORY_DEFAULT_MAX_TRACKS,
+            )
         };
 
         let history_backend: Arc<dyn crate::paradise::HistoryBackend> =

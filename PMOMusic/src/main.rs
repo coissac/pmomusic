@@ -9,8 +9,13 @@ use tracing::info;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ========== PHASE 1 : Infrastructure UPnP ==========
-let server = Server::create_upnp_server().await?;    // Routes personnalisées de l'application
-    server.write().await
+    // #[cfg(tokio_unstable)]
+    // console_subscriber::init();
+
+    let server = Server::create_upnp_server().await?; // Routes personnalisées de l'application
+    server
+        .write()
+        .await
         .add_route("/info", || async {
             serde_json::json!({"version": "1.0.0"})
         })
@@ -18,7 +23,9 @@ let server = Server::create_upnp_server().await?;    // Routes personnalisées d
 
     // Initialiser le système de gestion des sources musicales avec API REST
     info!("📡 Initializing music sources management system...");
-    server.write().await
+    server
+        .write()
+        .await
         .init_music_sources()
         .await
         .expect("Failed to initialize music sources API");
@@ -48,7 +55,9 @@ let server = Server::create_upnp_server().await?;    // Routes personnalisées d
     // Enregistrer les devices UPnP (HTTP + SSDP automatique)
     info!("📡 Registering UPnP devices...");
 
-    let renderer_instance = server.write().await
+    let renderer_instance = server
+        .write()
+        .await
         .register_device(MEDIA_RENDERER.clone())
         .await
         .expect("Failed to register MediaRenderer");
@@ -59,7 +68,9 @@ let server = Server::create_upnp_server().await?;    // Routes personnalisées d
         renderer_instance.description_route()
     );
 
-    let server_instance = server.write().await
+    let server_instance = server
+        .write()
+        .await
         .register_device(MEDIA_SERVER.clone())
         .await
         .expect("Failed to register MediaServer");
@@ -72,7 +83,11 @@ let server = Server::create_upnp_server().await?;    // Routes personnalisées d
 
     // Ajouter la webapp via le trait WebAppExt
     info!("📡 Registering Web application...");
-    server.write().await.add_webapp_with_redirect::<Webapp>("/app").await;
+    server
+        .write()
+        .await
+        .add_webapp_with_redirect::<Webapp>("/app")
+        .await;
 
     // ========== PHASE 3 : Démarrage du serveur ==========
 

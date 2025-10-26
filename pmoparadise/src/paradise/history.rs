@@ -94,7 +94,6 @@ impl SqliteHistoryBackend {
     }
 }
 
-
 #[async_trait]
 impl HistoryBackend for SqliteHistoryBackend {
     async fn append(&self, entry: HistoryEntry) -> anyhow::Result<()> {

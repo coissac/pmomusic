@@ -56,8 +56,14 @@ impl ParadiseWorker {
         let join_handle = tokio::spawn(async move {
             info!(channel = descriptor.slug, "Starting Radio Paradise worker");
 
-            let mut state =
-                WorkerState::new(descriptor, client, history_max_tracks, playlist, history, cache_manager);
+            let mut state = WorkerState::new(
+                descriptor,
+                client,
+                history_max_tracks,
+                playlist,
+                history,
+                cache_manager,
+            );
 
             loop {
                 if let Some(task) = state.scheduled_task.as_mut() {
@@ -155,7 +161,24 @@ struct WorkerState {
     shutdown: bool,
 }
 
+#[derive(Clone)]
+struct SongTaskContext {
+    cache_manager: Arc<SourceCacheManager>,
+    playlist: SharedPlaylist,
+    descriptor_id: u8,
+    slug: &'static str,
+}
+
 impl WorkerState {
+    fn song_task_context(&self) -> SongTaskContext {
+        SongTaskContext {
+            cache_manager: Arc::clone(&self.cache_manager),
+            playlist: self.playlist.clone(),
+            descriptor_id: self.descriptor.id,
+            slug: self.descriptor.slug,
+        }
+    }
+
     fn new(
         descriptor: ChannelDescriptor,
         client: RadioParadiseClient,
@@ -452,27 +475,19 @@ impl WorkerState {
                             track_samples.len()
                         );
 
-                        // Encode and cache the song
-                        let entry = self
-                            .process_song_from_pcm(
-                                &block,
-                                song_index,
-                                song,
-                                track_samples,
-                                sample_rate,
-                                channels as usize,
-                                bits_per_sample,
-                            )
-                            .await?;
-
-                        self.playlist.push_active(entry).await;
-
-                        info!(
-                            channel = self.descriptor.slug,
-                            song_index = song_index,
-                            "🎵 Song '{}' available after {}ms (streaming mode)",
-                            song.title,
-                            current_position_ms
+                        let context = self.song_task_context();
+                        spawn_song_processing(
+                            context,
+                            block.clone(),
+                            song_index,
+                            song.clone(),
+                            track_samples,
+                            sample_rate,
+                            channels as usize,
+                            bits_per_sample,
+                            self.active_clients,
+                            song.duration,
+                            current_position_ms,
                         );
 
                         current_song_idx += 1;
@@ -508,19 +523,20 @@ impl WorkerState {
                     track_samples.len()
                 );
 
-                let entry = self
-                    .process_song_from_pcm(
-                        &block,
-                        song_index,
-                        song,
-                        track_samples,
-                        sample_rate,
-                        channels as usize,
-                        bits_per_sample,
-                    )
-                    .await?;
-
-                self.playlist.push_active(entry).await;
+                let context = self.song_task_context();
+                spawn_song_processing(
+                    context,
+                    block.clone(),
+                    song_index,
+                    song.clone(),
+                    track_samples,
+                    sample_rate,
+                    channels as usize,
+                    bits_per_sample,
+                    self.active_clients,
+                    song.duration,
+                    song_start_ms,
+                );
             }
         }
 
@@ -567,188 +583,21 @@ impl WorkerState {
             .ok_or_else(|| anyhow!("Sample slice out of bounds"))?;
 
         let track_samples = slice.to_vec();
-        let flac_bytes = encode_samples_to_flac(
+        encode_song_to_cache(
+            Arc::clone(&self.cache_manager),
+            self.descriptor.id,
+            self.descriptor.slug,
+            block.clone(),
+            *song_index,
+            song.clone(),
             track_samples,
-            decoded.channels,
             decoded.sample_rate,
+            decoded.channels,
             decoded.bits_per_sample,
+            self.active_clients,
+            duration_ms,
         )
         .await
-        .context("Failed to encode song to FLAC")?;
-
-        let track_id = self.compute_track_id(block, *song_index);
-        let placeholder_uri = format!("{}#{}", block.url, song_index);
-
-        let mut metadata = TrackMetadata {
-            original_uri: placeholder_uri.clone(),
-            cached_audio_pk: None,
-            cached_cover_pk: None,
-        };
-
-        if let Some(cover_pk) = self.cache_cover(block, song).await? {
-            metadata.cached_cover_pk = Some(cover_pk);
-        }
-
-        let flac_len = flac_bytes.len() as u64;
-        let reader = StreamReader::new(stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from(
-            flac_bytes,
-        ))]));
-
-        let audio_pk = self
-            .cache_manager
-            .cache_audio_from_reader(&track_id, reader, Some(flac_len))
-            .await
-            .map_err(|e| anyhow!("Cache audio error: {e}"))?;
-
-        // Wait for the file to be completely written before continuing
-        self.cache_manager
-            .wait_audio_ready(&audio_pk)
-            .await
-            .map_err(|e| anyhow!("Wait audio ready error: {e}"))?;
-
-        metadata.cached_audio_pk = Some(audio_pk.clone());
-        self.cache_manager
-            .update_metadata(track_id.clone(), metadata)
-            .await;
-
-        let file_path = self.cache_manager.audio_file_path(&audio_pk).await;
-
-        let entry = Arc::new(PlaylistEntry::new(
-            track_id,
-            self.descriptor.id,
-            Arc::new(song.clone()),
-            Utc::now(),
-            duration_ms,
-            Some(audio_pk),
-            file_path,
-            self.active_clients,
-        ));
-
-        Ok(entry)
-    }
-
-    /// Process a song from pre-decoded PCM samples (for streaming mode)
-    ///
-    /// This is a variant of `process_song()` that takes PCM samples directly
-    /// instead of slicing from a DecodedBlock. Used for progressive streaming
-    /// where samples are decoded on-the-fly.
-    ///
-    /// # Arguments
-    ///
-    /// * `block` - The block metadata
-    /// * `song_index` - Index of the song in the block
-    /// * `song` - The song metadata
-    /// * `track_samples` - Pre-decoded and sliced PCM samples (interleaved i32)
-    /// * `sample_rate` - Sample rate (e.g., 44100)
-    /// * `channels` - Number of channels (e.g., 2 for stereo)
-    /// * `bits_per_sample` - Bits per sample (e.g., 16)
-    async fn process_song_from_pcm(
-        &self,
-        block: &Block,
-        song_index: usize,
-        song: &Song,
-        track_samples: Vec<i32>,
-        sample_rate: u32,
-        channels: usize,
-        bits_per_sample: u32,
-    ) -> Result<Arc<PlaylistEntry>> {
-        let duration_ms = song.duration;
-
-        // Encode PCM to FLAC
-        let flac_bytes =
-            encode_samples_to_flac(track_samples, channels, sample_rate, bits_per_sample)
-                .await
-                .context("Failed to encode song to FLAC")?;
-
-        let track_id = self.compute_track_id(block, song_index);
-        let placeholder_uri = format!("{}#{}", block.url, song_index);
-
-        let mut metadata = TrackMetadata {
-            original_uri: placeholder_uri.clone(),
-            cached_audio_pk: None,
-            cached_cover_pk: None,
-        };
-
-        // Cache cover art
-        if let Some(cover_pk) = self.cache_cover(block, song).await? {
-            metadata.cached_cover_pk = Some(cover_pk);
-        }
-
-        // Cache audio
-        let flac_len = flac_bytes.len() as u64;
-        let reader = StreamReader::new(stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from(
-            flac_bytes,
-        ))]));
-
-        let audio_pk = self
-            .cache_manager
-            .cache_audio_from_reader(&track_id, reader, Some(flac_len))
-            .await
-            .map_err(|e| anyhow!("Cache audio error: {e}"))?;
-
-        // Wait for the file to be completely written before continuing
-        self.cache_manager
-            .wait_audio_ready(&audio_pk)
-            .await
-            .map_err(|e| anyhow!("Wait audio ready error: {e}"))?;
-
-        metadata.cached_audio_pk = Some(audio_pk.clone());
-        self.cache_manager
-            .update_metadata(track_id.clone(), metadata.clone())
-            .await;
-
-        // Stocker les métadonnées Radio Paradise dans le cache
-        if let Err(e) = Self::store_rp_metadata(
-            &self.cache_manager,
-            &audio_pk,
-            &track_id,
-            self.descriptor.id,
-            song,
-            duration_ms,
-            block.event,
-            metadata.cached_cover_pk.as_deref(),
-        )
-        .await
-        {
-            warn!(
-                channel = self.descriptor.slug,
-                "Failed to store RP metadata: {e:?}"
-            );
-        }
-
-        let file_path = self.cache_manager.audio_file_path(&audio_pk).await;
-
-        let entry = Arc::new(PlaylistEntry::new(
-            track_id,
-            self.descriptor.id,
-            Arc::new(song.clone()),
-            Utc::now(),
-            duration_ms,
-            Some(audio_pk),
-            file_path,
-            self.active_clients,
-        ));
-
-        Ok(entry)
-    }
-
-    async fn cache_cover(&self, block: &Block, song: &Song) -> Result<Option<String>> {
-        if let Some(ref cover_path) = song.cover {
-            if let Some(cover_url) = block.cover_url(cover_path) {
-                match self.cache_manager.cache_cover(&cover_url).await {
-                    Ok(pk) => return Ok(Some(pk)),
-                    Err(err) => {
-                        warn!(channel = self.descriptor.slug, "Cover cache error: {err}");
-                    }
-                }
-            } else {
-                warn!(
-                    channel = self.descriptor.slug,
-                    "Unable to resolve cover URL for {}", cover_path
-                );
-            }
-        }
-        Ok(None)
     }
 
     /// Stocke les métadonnées Radio Paradise pour un fichier audio caché
@@ -756,48 +605,8 @@ impl WorkerState {
     /// Cette fonction persiste toutes les métadonnées RP dans la base de données
     /// du cache audio, permettant leur récupération future sans dépendance aux
     /// données en mémoire.
-    async fn store_rp_metadata(
-        cache_manager: &SourceCacheManager,
-        audio_pk: &str,
-        track_id: &str,
-        channel_id: u8,
-        song: &Song,
-        duration_ms: u64,
-        event: u64,
-        cover_pk: Option<&str>,
-    ) -> Result<()> {
-        use serde_json::json;
-
-        // Métadonnées basiques de la chanson
-        cache_manager.set_audio_metadata(audio_pk, "rp_title", json!(song.title))?;
-        cache_manager.set_audio_metadata(audio_pk, "rp_artist", json!(song.artist))?;
-        cache_manager.set_audio_metadata(audio_pk, "rp_album", json!(song.album))?;
-        cache_manager.set_audio_metadata(audio_pk, "rp_year", json!(song.year))?;
-
-        // Informations temporelles
-        cache_manager.set_audio_metadata(audio_pk, "rp_duration_ms", json!(duration_ms))?;
-        cache_manager.set_audio_metadata(audio_pk, "rp_elapsed_ms", json!(song.elapsed))?;
-
-        // Identifiants Radio Paradise
-        cache_manager.set_audio_metadata(audio_pk, "rp_track_id", json!(track_id))?;
-        cache_manager.set_audio_metadata(audio_pk, "rp_channel_id", json!(channel_id))?;
-        cache_manager.set_audio_metadata(audio_pk, "rp_event", json!(event))?;
-
-        // Métadonnées supplémentaires
-        cache_manager.set_audio_metadata(audio_pk, "rp_rating", json!(song.rating))?;
-        cache_manager.set_audio_metadata(audio_pk, "rp_cover_url", json!(song.cover))?;
-        cache_manager.set_audio_metadata(audio_pk, "rp_cover_pk", json!(cover_pk))?;
-
-        Ok(())
-    }
-
     fn compute_track_id(&self, block: &Block, song_index: usize) -> String {
-        // Use deterministic ID based on block event and song index
-        // This allows checking if a song is cached before downloading the block
-        format!(
-            "rp:{}:event_{}_song_{}",
-            self.descriptor.id, block.event, song_index
-        )
+        compute_track_id_for_descriptor(self.descriptor.id, block, song_index)
     }
 
     async fn maybe_schedule_poll(&mut self) {
@@ -1072,7 +881,7 @@ fn ms_to_frames(ms: u64, sample_rate: u32) -> usize {
 
 fn decode_block_audio(data: Vec<u8>) -> anyhow::Result<DecodedBlock> {
     use symphonia::core::audio::SampleBuffer;
-    use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
+    use symphonia::core::codecs::{CODEC_TYPE_NULL, DecoderOptions};
     use symphonia::core::errors::Error as SymphoniaError;
     use symphonia::core::formats::FormatOptions;
     use symphonia::core::io::MediaSourceStream;
@@ -1174,6 +983,213 @@ fn decode_block_audio(data: Vec<u8>) -> anyhow::Result<DecodedBlock> {
     })
 }
 
+fn compute_track_id_for_descriptor(descriptor_id: u8, block: &Block, song_index: usize) -> String {
+    format!(
+        "rp:{}:event_{}_song_{}",
+        descriptor_id, block.event, song_index
+    )
+}
+
+async fn store_rp_metadata(
+    cache_manager: &SourceCacheManager,
+    audio_pk: &str,
+    track_id: &str,
+    channel_id: u8,
+    song: &Song,
+    duration_ms: u64,
+    event: u64,
+    cover_pk: Option<&str>,
+) -> Result<()> {
+    use serde_json::json;
+
+    cache_manager.set_audio_metadata(audio_pk, "rp_title", json!(song.title))?;
+    cache_manager.set_audio_metadata(audio_pk, "rp_artist", json!(song.artist))?;
+    cache_manager.set_audio_metadata(audio_pk, "rp_album", json!(song.album))?;
+    cache_manager.set_audio_metadata(audio_pk, "rp_year", json!(song.year))?;
+
+    cache_manager.set_audio_metadata(audio_pk, "rp_duration_ms", json!(duration_ms))?;
+    cache_manager.set_audio_metadata(audio_pk, "rp_elapsed_ms", json!(song.elapsed))?;
+
+    cache_manager.set_audio_metadata(audio_pk, "rp_track_id", json!(track_id))?;
+    cache_manager.set_audio_metadata(audio_pk, "rp_channel_id", json!(channel_id))?;
+    cache_manager.set_audio_metadata(audio_pk, "rp_event", json!(event))?;
+
+    cache_manager.set_audio_metadata(audio_pk, "rp_rating", json!(song.rating))?;
+    cache_manager.set_audio_metadata(audio_pk, "rp_cover_url", json!(song.cover))?;
+    cache_manager.set_audio_metadata(audio_pk, "rp_cover_pk", json!(cover_pk))?;
+
+    Ok(())
+}
+
+async fn cache_cover_for_song(
+    cache_manager: &SourceCacheManager,
+    slug: &'static str,
+    block: &Block,
+    song: &Song,
+) -> Result<Option<String>> {
+    if let Some(ref cover_path) = song.cover {
+        if let Some(cover_url) = block.cover_url(cover_path) {
+            match cache_manager.cache_cover(&cover_url).await {
+                Ok(pk) => return Ok(Some(pk)),
+                Err(err) => {
+                    warn!(channel = slug, "Cover cache error: {err}");
+                }
+            }
+        } else {
+            warn!(
+                channel = slug,
+                "Unable to resolve cover URL for {}", cover_path
+            );
+        }
+    }
+    Ok(None)
+}
+
+async fn encode_song_to_cache(
+    cache_manager: Arc<SourceCacheManager>,
+    descriptor_id: u8,
+    slug: &'static str,
+    block: Block,
+    song_index: usize,
+    song: Song,
+    track_samples: Vec<i32>,
+    sample_rate: u32,
+    channels: usize,
+    bits_per_sample: u32,
+    active_clients: usize,
+    duration_ms: u64,
+) -> Result<Arc<PlaylistEntry>> {
+    let flac_bytes = encode_samples_to_flac(track_samples, channels, sample_rate, bits_per_sample)
+        .await
+        .context("Failed to encode song to FLAC")?;
+
+    let track_id = compute_track_id_for_descriptor(descriptor_id, &block, song_index);
+    let placeholder_uri = format!("{}#{}", block.url, song_index);
+
+    let mut metadata = TrackMetadata {
+        original_uri: placeholder_uri.clone(),
+        cached_audio_pk: None,
+        cached_cover_pk: None,
+    };
+
+    if let Some(cover_pk) =
+        cache_cover_for_song(cache_manager.as_ref(), slug, &block, &song).await?
+    {
+        metadata.cached_cover_pk = Some(cover_pk);
+    }
+
+    let flac_len = flac_bytes.len() as u64;
+    let reader = StreamReader::new(stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from(
+        flac_bytes,
+    ))]));
+
+    let audio_pk = cache_manager
+        .cache_audio_from_reader(&track_id, reader, Some(flac_len))
+        .await
+        .map_err(|e| anyhow!("Cache audio error: {e}"))?;
+
+    cache_manager
+        .wait_audio_ready(&audio_pk)
+        .await
+        .map_err(|e| anyhow!("Wait audio ready error: {e}"))?;
+
+    metadata.cached_audio_pk = Some(audio_pk.clone());
+    cache_manager
+        .update_metadata(track_id.clone(), metadata.clone())
+        .await;
+
+    if let Err(e) = store_rp_metadata(
+        cache_manager.as_ref(),
+        &audio_pk,
+        &track_id,
+        descriptor_id,
+        &song,
+        duration_ms,
+        block.event,
+        metadata.cached_cover_pk.as_deref(),
+    )
+    .await
+    {
+        warn!(channel = slug, "Failed to store RP metadata: {e:?}");
+    }
+
+    let file_path = cache_manager.audio_file_path(&audio_pk).await;
+
+    let entry = Arc::new(PlaylistEntry::new(
+        track_id,
+        descriptor_id,
+        Arc::new(song.clone()),
+        Utc::now(),
+        duration_ms,
+        Some(audio_pk),
+        file_path,
+        active_clients,
+    ));
+
+    Ok(entry)
+}
+
+fn spawn_song_processing(
+    context: SongTaskContext,
+    block: Block,
+    song_index: usize,
+    song: Song,
+    track_samples: Vec<i32>,
+    sample_rate: u32,
+    channels: usize,
+    bits_per_sample: u32,
+    active_clients: usize,
+    duration_ms: u64,
+    position_ms: u64,
+) {
+    tokio::spawn(async move {
+        let SongTaskContext {
+            cache_manager,
+            playlist,
+            descriptor_id,
+            slug,
+        } = context;
+
+        let song_title = song.title.clone();
+
+        match encode_song_to_cache(
+            cache_manager,
+            descriptor_id,
+            slug,
+            block,
+            song_index,
+            song,
+            track_samples,
+            sample_rate,
+            channels,
+            bits_per_sample,
+            active_clients,
+            duration_ms,
+        )
+        .await
+        {
+            Ok(entry) => {
+                playlist.push_active(entry).await;
+                info!(
+                    channel = slug,
+                    song_index = song_index,
+                    "🎵 Song '{}' available after {}ms (streaming mode)",
+                    song_title,
+                    position_ms
+                );
+            }
+            Err(err) => {
+                warn!(
+                    channel = slug,
+                    song_index = song_index,
+                    "Failed to process song '{}' asynchronously: {err:?}",
+                    song_title
+                );
+            }
+        }
+    });
+}
+
 async fn encode_samples_to_flac(
     samples: Vec<i32>,
     channels: usize,
@@ -1185,6 +1201,9 @@ async fn encode_samples_to_flac(
         use flacenc::component::BitRepr;
         use flacenc::error::Verify;
 
+        // Note: Claxon retourne les samples dans leur résolution native
+        // Un fichier FLAC 16 bits retourne des samples i32 avec des valeurs dans la plage i16
+        // Pas besoin de normalisation supplémentaire
         let config = flacenc::config::Encoder::default()
             .into_verified()
             .map_err(|e| anyhow!("FLAC config error: {e:?}"))?;

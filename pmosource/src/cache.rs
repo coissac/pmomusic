@@ -289,12 +289,7 @@ impl SourceCacheManager {
     /// cache_manager.set_audio_metadata(audio_pk, "rating", json!(8.5)).unwrap();
     /// # }
     /// ```
-    pub fn set_audio_metadata(
-        &self,
-        audio_pk: &str,
-        key: &str,
-        value: JsonValue,
-    ) -> Result<()> {
+    pub fn set_audio_metadata(&self, audio_pk: &str, key: &str, value: JsonValue) -> Result<()> {
         self.audio_cache
             .db
             .set_a_metadata(audio_pk, key, value)

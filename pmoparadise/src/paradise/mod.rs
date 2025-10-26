@@ -22,7 +22,7 @@ pub use channel::{
     max_channel_id, ChannelDescriptor, ParadiseChannel, ParadiseChannelKind, ParadiseClientStream,
     ALL_CHANNELS,
 };
-pub use constants::*;  // Export all constants
+pub use constants::*; // Export all constants
 pub use history::{create_history_backend, HistoryBackend, HistoryEntry};
 pub use playlist::PlaylistEntry;
 pub use worker::{load_rp_metadata, ParadiseWorker, RadioParadiseMetadata, WorkerCommand};

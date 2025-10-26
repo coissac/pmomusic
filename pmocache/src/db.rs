@@ -79,9 +79,8 @@ impl<'a> std::ops::DerefMut for ConnGuard<'a> {
     }
 }
 
-
 impl DB {
-   fn lock_conn(&self, ctx: &'static str) -> ConnGuard<'_> {
+    fn lock_conn(&self, ctx: &'static str) -> ConnGuard<'_> {
         trace!("DB mutex → acquiring ({ctx})");
         let start = Instant::now();
         let guard = self.conn.lock().unwrap();
