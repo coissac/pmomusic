@@ -8,7 +8,8 @@ use crate::db::DB;
 use crate::download::{
     download_with_transformer, ingest_with_transformer, Download, StreamTransformer,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
+use serde_json::{Number, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -168,7 +169,7 @@ impl<C: CacheConfig> Cache<C> {
 
         // 3. Vérifier si le fichier est déjà en cache
         if self.db.get(&pk, false).is_ok() {
-            let file_path = self.file_path(&pk);
+            let file_path = self.get_file_path(&pk);
             if file_path.exists() {
                 // Déjà en cache, update timestamp et retour rapide
                 tracing::debug!("File with pk {} already in cache, updating timestamp", pk);
@@ -189,7 +190,7 @@ impl<C: CacheConfig> Cache<C> {
 
         // 5. Lancer le téléchargement complet avec transformer
         tracing::debug!("Starting full download for pk {} from URL {}", pk, url);
-        let file_path = self.file_path(&pk);
+        let file_path = self.get_file_path(&pk);
         let transformer = self.transformer_factory.as_ref().map(|f| f());
         let download = download_with_transformer(&file_path, url, transformer);
 
@@ -263,7 +264,7 @@ impl<C: CacheConfig> Cache<C> {
 
         // 3. Vérifier si le fichier est déjà en cache
         if self.db.get(&pk, false).is_ok() {
-            let file_path = self.file_path(&pk);
+            let file_path = self.get_file_path(&pk);
             if file_path.exists() {
                 // Déjà en cache, update timestamp et retour rapide
                 tracing::debug!("File with pk {} already in cache, updating timestamp", pk);
@@ -290,7 +291,7 @@ impl<C: CacheConfig> Cache<C> {
 
         // 6. Lancer l'ingestion avec transformer
         tracing::debug!("Starting ingestion for pk {} from reader", pk);
-        let file_path = self.file_path(&pk);
+        let file_path = self.get_file_path(&pk);
         let transformer = self.transformer_factory.as_ref().map(|factory| factory());
         let download = ingest_with_transformer(&file_path, full_reader, length, transformer);
 
@@ -413,7 +414,7 @@ impl<C: CacheConfig> Cache<C> {
         self.db.get(pk, false)?;
         self.db.update_hit(pk)?;
 
-        let file_path = self.file_path(pk);
+        let file_path = self.get_file_path(pk);
         if file_path.exists() {
             Ok(file_path)
         } else {
@@ -421,6 +422,37 @@ impl<C: CacheConfig> Cache<C> {
         }
     }
 
+    /// Récupère une métadonnée précise pour une entrée du cache.
+    pub async fn get_a_metadata(&self, pk: &str, key: &str) -> Result<Option<Value>> {
+        Ok(self.db.get_metadata_value(pk, key)?)
+    }
+
+    /// Récupère une métadonnée en tant que chaîne, si disponible.
+    pub async fn get_a_metadata_as_string(&self, pk: &str, key: &str) -> Result<Option<String>> {
+        match self.get_a_metadata(pk, key).await? {
+            Some(Value::String(s)) => Ok(Some(s)),
+            Some(Value::Null) | None => Ok(None),
+            Some(other) => bail!("metadata '{key}' for pk '{pk}' is not a string (found {other})"),
+        }
+    }
+
+    /// Récupère une métadonnée en tant que nombre JSON (`serde_json::Number`).
+    pub async fn get_a_metadata_as_number(&self, pk: &str, key: &str) -> Result<Option<Number>> {
+        match self.get_a_metadata(pk, key).await? {
+            Some(Value::Number(n)) => Ok(Some(n)),
+            Some(Value::Null) | None => Ok(None),
+            Some(other) => bail!("metadata '{key}' for pk '{pk}' is not a number (found {other})"),
+        }
+    }
+
+    /// Récupère une métadonnée en tant que booléen.
+    pub async fn get_a_metadata_as_bool(&self, pk: &str, key: &str) -> Result<Option<bool>> {
+        match self.get_a_metadata(pk, key).await? {
+            Some(Value::Bool(b)) => Ok(Some(b)),
+            Some(Value::Null) | None => Ok(None),
+            Some(other) => bail!("metadata '{key}' for pk '{pk}' is not a boolean (found {other})"),
+        }
+    }
     pub async fn touch(&self, pk: &str) -> Result<()> {
         self.db.update_hit(pk)?;
         Ok(())
@@ -436,7 +468,7 @@ impl<C: CacheConfig> Cache<C> {
         let mut paths = Vec::new();
 
         for entry in entries {
-            let path = self.file_path(&entry.pk);
+            let path = self.get_file_path(&entry.pk);
             if path.exists() {
                 paths.push(path);
             }
@@ -466,7 +498,7 @@ impl<C: CacheConfig> Cache<C> {
 
         // Supprimer les entrées sans fichiers correspondants
         for entry in entries {
-            let file_path = self.file_path(&entry.pk);
+            let file_path = self.get_file_path(&entry.pk);
 
             if !file_path.exists() {
                 match self.db.get_origin_url(&entry.pk)? {
@@ -535,7 +567,7 @@ impl<C: CacheConfig> Cache<C> {
             Some(download.current_size().await)
         } else {
             // Fichier terminé, lire la taille du fichier
-            let file_path = self.file_path(pk);
+            let file_path = self.get_file_path(pk);
             if file_path.exists() {
                 std::fs::metadata(file_path).ok().map(|m| m.len())
             } else {
@@ -557,7 +589,7 @@ impl<C: CacheConfig> Cache<C> {
             Some(download.transformed_size().await)
         } else {
             // Fichier terminé, lire la taille du fichier
-            let file_path = self.file_path(pk);
+            let file_path = self.get_file_path(pk);
             if file_path.exists() {
                 std::fs::metadata(file_path).ok().map(|m| m.len())
             } else {
@@ -590,7 +622,7 @@ impl<C: CacheConfig> Cache<C> {
             download.finished().await
         } else {
             // Pas dans la map = terminé (ou n'existe pas)
-            self.file_path(pk).exists()
+            self.get_file_path(pk).exists()
         }
     }
 
@@ -608,7 +640,7 @@ impl<C: CacheConfig> Cache<C> {
                 .map_err(|e| anyhow!("Download error: {}", e))
         } else {
             // Déjà terminé ou n'existe pas
-            if self.file_path(pk).exists() {
+            if self.get_file_path(pk).exists() {
                 Ok(())
             } else {
                 Err(anyhow!("File not found"))
@@ -629,7 +661,7 @@ impl<C: CacheConfig> Cache<C> {
                 .map_err(|e| anyhow!("Download error: {}", e))
         } else {
             // Déjà terminé ou n'existe pas
-            if self.file_path(pk).exists() {
+            if self.get_file_path(pk).exists() {
                 Ok(())
             } else {
                 Err(anyhow!("File not found"))
@@ -645,14 +677,14 @@ impl<C: CacheConfig> Cache<C> {
     /// Construit le chemin complet d'un fichier dans le cache avec le param par défaut
     ///
     /// Format: `{pk}.{default_param}.{extension}`
-    pub fn file_path(&self, pk: &str) -> PathBuf {
-        self.file_path_with_qualifier(pk, C::default_param())
+    pub fn get_file_path(&self, pk: &str) -> PathBuf {
+        self.get_file_path_with_qualifier(pk, C::default_param())
     }
 
     /// Construit le chemin d'un fichier dans le cache avec un qualificatif
     ///
     /// Format: `{pk}.{qualifier}.{extension}`
-    pub fn file_path_with_qualifier(&self, pk: &str, qualifier: &str) -> PathBuf {
+    pub fn get_file_path_with_qualifier(&self, pk: &str, qualifier: &str) -> PathBuf {
         self.dir
             .join(format!("{}.{}.{}", pk, qualifier, C::file_extension()))
     }

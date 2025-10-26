@@ -33,7 +33,7 @@ async fn main() -> anyhow::Result<()> {
             println!("✓ Fichier converti avec succès!");
             println!("  Clé primaire: {}", pk);
 
-            let file_path = cache.file_path(&pk);
+            let file_path = cache.get_file_path(&pk);
             println!("  Chemin: {}", file_path.display());
 
             if let Ok(metadata) = std::fs::metadata(&file_path) {

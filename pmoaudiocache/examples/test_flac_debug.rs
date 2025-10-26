@@ -21,7 +21,7 @@ async fn main() -> anyhow::Result<()> {
     let pk = cache::add_with_metadata_extraction(&cache, test_url, Some("test")).await?;
 
     println!("\nPK: {}", pk);
-    let file_path = cache.file_path(&pk);
+    let file_path = cache.get_file_path(&pk);
     println!("File path: {}", file_path.display());
 
     // Vérifier le format

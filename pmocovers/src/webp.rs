@@ -118,13 +118,13 @@ pub async fn generate_variant(
     size: usize,
 ) -> Result<Vec<u8>> {
     // Utiliser file_path_with_qualifier pour obtenir le chemin
-    let variant_path = cache.file_path_with_qualifier(pk, &size.to_string());
+    let variant_path = cache.get_file_path_with_qualifier(pk, &size.to_string());
 
     if variant_path.exists() {
         return Ok(tokio::fs::read(variant_path).await?);
     }
 
-    let orig_path = cache.file_path_with_qualifier(pk, "orig");
+    let orig_path = cache.get_file_path_with_qualifier(pk, "orig");
 
     // Charger l'image de manière synchrone (image::open n'est pas async)
     let img = tokio::task::spawn_blocking(move || image::open(orig_path)).await??;
