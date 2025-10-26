@@ -36,12 +36,6 @@ struct ParadiseQuery {
     channel: Option<u8>,
 }
 
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct StreamQuery {
-    channel: Option<u8>,
-    client_id: Option<String>,
-}
 
 #[derive(Debug, Default, Deserialize, IntoParams)]
 #[serde(default)]
@@ -697,35 +691,29 @@ async fn get_channel_history(
     Ok(Json(response))
 }
 
-/// GET /stream - Stream audio pour un canal donné
+/// GET /channels/{channel_id}/stream/{connection_id} - Stream audio pour une connexion spécifique
 #[utoipa::path(
     get,
-    path = "/stream",
+    path = "/channels/{channel_id}/stream/{connection_id}",
     params(
-        ("channel" = Option<u8>, Query, description = "Channel ID (0-3)"),
-        ("client_id" = Option<String>, Query, description = "Identifiant personnalisé du client")
+        ("channel_id" = u8, Path, description = "Channel ID (0-3)"),
+        ("connection_id" = i32, Path, description = "Connection ID fourni par le media server")
     ),
     responses(
         (status = 200, description = "Flux audio FLAC (gapless)", content_type = "audio/flac"),
-        (status = 400, description = "Paramètres invalides"),
+        (status = 400, description = "Canal invalide"),
         (status = 503, description = "Canal indisponible")
     ),
     tag = "Radio Paradise"
 )]
-async fn stream_channel(
+async fn stream_channel_by_connection(
     State(state): State<RadioParadiseState>,
-    Query(params): Query<StreamQuery>,
+    Path((channel_id, connection_id)): Path<(u8, i32)>,
 ) -> Result<impl IntoResponse, StatusCode> {
-    let channel_id = params.channel.unwrap_or(0);
     let channel = state.channel_for_id(channel_id)?;
 
-    let client_id = params.client_id.clone().unwrap_or_else(|| {
-        format!(
-            "api-{}-{}",
-            channel.descriptor().slug,
-            Utc::now().timestamp_micros()
-        )
-    });
+    // Convertir connection_id en String pour l'utiliser comme client_id
+    let client_id = connection_id.to_string();
 
     let client_stream = channel.connect_client(client_id).await.map_err(|e| {
         error!("Failed to create streaming client: {e:?}");
@@ -783,7 +771,7 @@ async fn stream_channel(
         get_channel_status,
         get_channel_playlist,
         get_channel_history,
-        stream_channel
+        stream_channel_by_connection
     ),
     components(schemas(
         NowPlayingResponse,
@@ -813,7 +801,7 @@ pub fn create_api_router(state: RadioParadiseState) -> Router {
         .route("/channels/{channel_id}/status", get(get_channel_status))
         .route("/channels/{channel_id}/playlist", get(get_channel_playlist))
         .route("/channels/{channel_id}/history", get(get_channel_history))
-        .route("/stream", get(stream_channel))
+        .route("/channels/{channel_id}/stream/{connection_id}", get(stream_channel_by_connection))
         .with_state(state)
 }
 
@@ -829,7 +817,7 @@ pub trait RadioParadiseExt {
     /// - API: `/api/radioparadise/*`
     ///   - `/now-playing`
     ///   - `/block/*`
-    ///   - `/stream`
+    ///   - `/channels/{channel_id}/stream/{connection_id}`
     /// - Swagger: `/swagger-ui/radioparadise`
     async fn init_radioparadise(&mut self) -> anyhow::Result<RadioParadiseState>;
 }

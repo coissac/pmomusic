@@ -1,6 +1,6 @@
 //! Integration tests for pmoparadise
 
-use pmoparadise::{Bitrate, Block, RadioParadiseClient};
+use pmoparadise::{Block, RadioParadiseClient};
 use serde_json::json;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -127,39 +127,8 @@ async fn test_now_playing() {
     }
 }
 
-#[tokio::test]
-async fn test_bitrate_configuration() {
-    let mock_server = MockServer::start().await;
 
-    Mock::given(method("GET"))
-        .and(path("/api/get_block"))
-        .and(query_param("bitrate", "3"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(mock_block_json(1234, 5678)))
-        .mount(&mock_server)
-        .await;
 
-    let client = RadioParadiseClient::builder()
-        .api_base(format!("{}/api", mock_server.uri()))
-        .bitrate(Bitrate::Aac320)
-        .build()
-        .await
-        .unwrap();
-
-    assert_eq!(client.bitrate(), Bitrate::Aac320);
-
-    let _block = client.get_block(None).await.unwrap();
-}
-
-#[tokio::test]
-async fn test_cover_url() {
-    let client = RadioParadiseClient::new().await.unwrap();
-
-    let url = client.cover_url("B00000I0JF.jpg").unwrap();
-    assert_eq!(
-        url.as_str(),
-        "https://img.radioparadise.com/covers/l/B00000I0JF.jpg"
-    );
-}
 
 #[tokio::test]
 async fn test_prefetch_next() {

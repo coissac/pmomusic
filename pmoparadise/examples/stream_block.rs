@@ -26,7 +26,6 @@ async fn main() -> Result<()> {
 
     // Create client
     let mut client = RadioParadiseClient::builder()
-        .bitrate(pmoparadise::Bitrate::Flac)
         .build()
         .await?;
 
