@@ -387,8 +387,12 @@ impl WorkerState {
             let mut decoder = StreamingPCMDecoder::new(http_stream)
                 .context("Failed to create streaming decoder")?;
 
-            info!("Streaming decoder initialized: {}Hz, {} channels, {} bits",
-                  decoder.sample_rate(), decoder.channels(), decoder.bits_per_sample());
+            info!(
+                "Streaming decoder initialized: {}Hz, {} channels, {} bits",
+                decoder.sample_rate(),
+                decoder.channels(),
+                decoder.bits_per_sample()
+            );
 
             // Decode chunks and send them
             while let Some(chunk) = decoder.decode_chunk()? {
@@ -649,14 +653,10 @@ impl WorkerState {
         let duration_ms = song.duration;
 
         // Encode PCM to FLAC
-        let flac_bytes = encode_samples_to_flac(
-            track_samples,
-            channels,
-            sample_rate,
-            bits_per_sample,
-        )
-        .await
-        .context("Failed to encode song to FLAC")?;
+        let flac_bytes =
+            encode_samples_to_flac(track_samples, channels, sample_rate, bits_per_sample)
+                .await
+                .context("Failed to encode song to FLAC")?;
 
         let track_id = self.compute_track_id(block, song_index);
         let placeholder_uri = format!("{}#{}", block.url, song_index);
@@ -715,7 +715,10 @@ impl WorkerState {
                     }
                 }
             } else {
-                warn!(channel = self.descriptor.slug, "Unable to resolve cover URL for {}", cover_path);
+                warn!(
+                    channel = self.descriptor.slug,
+                    "Unable to resolve cover URL for {}", cover_path
+                );
             }
         }
         Ok(None)
@@ -724,7 +727,10 @@ impl WorkerState {
     fn compute_track_id(&self, block: &Block, song_index: usize) -> String {
         // Use deterministic ID based on block event and song index
         // This allows checking if a song is cached before downloading the block
-        format!("rp:{}:event_{}_song_{}", self.descriptor.id, block.event, song_index)
+        format!(
+            "rp:{}:event_{}_song_{}",
+            self.descriptor.id, block.event, song_index
+        )
     }
 
     async fn maybe_schedule_poll(&mut self) {
@@ -811,7 +817,12 @@ impl WorkerState {
             };
 
             // Check if file exists
-            if self.cache_manager.audio_file_path(&audio_pk).await.is_none() {
+            if self
+                .cache_manager
+                .audio_file_path(&audio_pk)
+                .await
+                .is_none()
+            {
                 debug!(
                     channel = self.descriptor.slug,
                     event = block.event,
@@ -845,10 +856,15 @@ impl WorkerState {
             let track_id = self.compute_track_id(block, *song_index);
 
             // Get metadata (we already checked it exists in check_all_songs_cached)
-            let metadata = self.cache_manager.get_metadata(&track_id).await
+            let metadata = self
+                .cache_manager
+                .get_metadata(&track_id)
+                .await
                 .ok_or_else(|| anyhow!("Metadata disappeared for track_id: {}", track_id))?;
 
-            let audio_pk = metadata.cached_audio_pk.clone()
+            let audio_pk = metadata
+                .cached_audio_pk
+                .clone()
                 .ok_or_else(|| anyhow!("Audio PK disappeared for track_id: {}", track_id))?;
 
             // Get cover PK if available
@@ -874,10 +890,15 @@ impl WorkerState {
                     cached_cover_pk: cover_pk,
                     ..metadata.clone()
                 };
-                self.cache_manager.update_metadata(track_id.clone(), updated_metadata).await;
+                self.cache_manager
+                    .update_metadata(track_id.clone(), updated_metadata)
+                    .await;
             }
 
-            let file_path = self.cache_manager.audio_file_path(&audio_pk).await
+            let file_path = self
+                .cache_manager
+                .audio_file_path(&audio_pk)
+                .await
                 .ok_or_else(|| anyhow!("File disappeared for audio_pk: {}", audio_pk))?;
 
             let duration_ms = song.duration;
@@ -1120,4 +1141,3 @@ async fn encode_samples_to_flac(
     })
     .await?
 }
-

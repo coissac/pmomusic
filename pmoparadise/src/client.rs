@@ -24,7 +24,6 @@ pub const DEFAULT_BLOCK_TIMEOUT_SECS: u64 = 180;
 /// Default User-Agent
 pub const DEFAULT_USER_AGENT: &str = "pmoparadise/0.1.0";
 
-
 /// Radio Paradise HTTP client
 ///
 /// This client provides access to Radio Paradise's streaming API,
@@ -101,7 +100,6 @@ impl RadioParadiseClient {
         cloned.next_block_url = None;
         cloned
     }
-
 
     /// Get a block by event ID
     ///
@@ -283,7 +281,6 @@ impl ClientBuilder {
         self
     }
 
-
     /// Set the channel (0 = main mix, 1 = mellow, 2 = rock, 3 = world/etc)
     pub fn channel(mut self, channel: u8) -> Self {
         self.channel = channel;
@@ -360,5 +357,4 @@ mod tests {
         assert_eq!(builder.api_base, DEFAULT_API_BASE);
         assert_eq!(builder.channel, 0);
     }
-
 }

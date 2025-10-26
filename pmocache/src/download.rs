@@ -501,7 +501,8 @@ pub async fn peek_header(url: &str, max_bytes: usize) -> Result<Vec<u8>, String>
 
     // Si le serveur ne supporte pas Range (status 200 au lieu de 206),
     // on lit quand même mais on limite la lecture
-    if !response.status().is_success() && response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+    if !response.status().is_success() && response.status() != reqwest::StatusCode::PARTIAL_CONTENT
+    {
         return Err(format!("HTTP error: {}", response.status()));
     }
 

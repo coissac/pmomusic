@@ -4,8 +4,8 @@
 //! des méthodes de gestion du cache audio à pmoconfig::Config.
 
 use anyhow::Result;
-use pmoconfig::Config;
 use pmocache::CacheConfigExt;
+use pmoconfig::Config;
 use std::sync::Arc;
 
 const DEFAULT_AUDIO_CACHE_DIR: &str = "cache_audio";

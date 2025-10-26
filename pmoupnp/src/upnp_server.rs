@@ -367,23 +367,17 @@ impl UpnpServerExt for Server {
     }
 
     async fn init_caches(&mut self) -> Result<(Arc<CoverCache>, Arc<AudioCache>), anyhow::Error> {
-        use pmocovers::CoverCacheConfigExt;
         use pmoaudiocache::AudioCacheConfigExt;
+        use pmocovers::CoverCacheConfigExt;
 
         let config = pmoconfig::get_config();
 
         let cover_cache = self
-            .init_cover_cache(
-                &config.get_covers_dir()?,
-                config.get_covers_size()?,
-            )
+            .init_cover_cache(&config.get_covers_dir()?, config.get_covers_size()?)
             .await?;
 
         let audio_cache = self
-            .init_audio_cache(
-                &config.get_audiocache_dir()?,
-                config.get_audiocache_size()?,
-            )
+            .init_audio_cache(&config.get_audiocache_dir()?, config.get_audiocache_size()?)
             .await?;
 
         Ok((cover_cache, audio_cache))

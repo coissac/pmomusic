@@ -6,6 +6,7 @@
 
 use anyhow::Result;
 use pmocache::{CacheConfig, StreamTransformer};
+use serde_json::Value;
 use std::sync::Arc;
 
 /// Configuration pour le cache audio
@@ -14,10 +15,6 @@ pub struct AudioConfig;
 impl CacheConfig for AudioConfig {
     fn file_extension() -> &'static str {
         "flac"
-    }
-
-    fn table_name() -> &'static str {
-        "audio_tracks"
     }
 
     fn cache_type() -> &'static str {
@@ -147,17 +144,16 @@ fn create_flac_transformer() -> StreamTransformer {
                     .channels
                     .ok_or_else(|| {
                         tracing::error!("Audio file missing channel information");
-                        "Audio file is missing channel information. The file may be corrupted.".to_string()
+                        "Audio file is missing channel information. The file may be corrupted."
+                            .to_string()
                     })?
                     .count();
 
-                let sample_rate = track
-                    .codec_params
-                    .sample_rate
-                    .ok_or_else(|| {
-                        tracing::error!("Audio file missing sample rate information");
-                        "Audio file is missing sample rate information. The file may be corrupted.".to_string()
-                    })?;
+                let sample_rate = track.codec_params.sample_rate.ok_or_else(|| {
+                    tracing::error!("Audio file missing sample rate information");
+                    "Audio file is missing sample rate information. The file may be corrupted."
+                        .to_string()
+                })?;
 
                 let bits_per_sample = track.codec_params.bits_per_sample.unwrap_or(16);
 
@@ -179,7 +175,10 @@ fn create_flac_transformer() -> StreamTransformer {
                         }
                         Err(e) => {
                             tracing::error!("Failed to read audio packet: {}", e);
-                            return Err(format!("Failed to read audio data: {}. The file may be corrupted.", e));
+                            return Err(format!(
+                                "Failed to read audio data: {}. The file may be corrupted.",
+                                e
+                            ));
                         }
                     };
 
@@ -212,7 +211,10 @@ fn create_flac_transformer() -> StreamTransformer {
 
                 if samples_i32.is_empty() {
                     tracing::error!("No audio samples could be decoded from the file");
-                    return Err("No audio samples could be decoded. The file may be corrupted or empty.".to_string());
+                    return Err(
+                        "No audio samples could be decoded. The file may be corrupted or empty."
+                            .to_string(),
+                    );
                 }
 
                 tracing::debug!(
@@ -287,12 +289,10 @@ fn create_flac_transformer() -> StreamTransformer {
                         })?;
 
                 let mut sink = ByteSink::new();
-                flac_stream
-                    .write(&mut sink)
-                    .map_err(|e| {
-                        tracing::error!("Failed to write FLAC stream: {:?}", e);
-                        format!("Failed to write FLAC data: {:?}", e)
-                    })?;
+                flac_stream.write(&mut sink).map_err(|e| {
+                    tracing::error!("Failed to write FLAC stream: {:?}", e);
+                    format!("Failed to write FLAC data: {:?}", e)
+                })?;
 
                 Ok::<Vec<u8>, String>(sink.into_inner())
             })
@@ -389,14 +389,12 @@ pub async fn add_with_metadata_extraction(
 
     // Extraire les métadonnées
     let metadata = crate::metadata::AudioMetadata::from_bytes(&flac_bytes)?;
-
-    // Sérialiser en JSON
-    let metadata_json = serde_json::to_string(&metadata)?;
-
+    let metadata_json: Value = serde_json::to_value(&metadata)
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
     // Stocker dans la DB
     cache
         .db
-        .update_metadata(&pk, &metadata_json)
+        .set_metadata(&pk, &metadata_json)
         .map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
 
     // Mettre à jour la collection si les métadonnées en fournissent une
@@ -404,8 +402,9 @@ pub async fn add_with_metadata_extraction(
         if let Some(auto_collection) = metadata.collection_key() {
             cache
                 .db
-                .add(&pk, url, Some(&auto_collection))
+                .add(&pk, None, Some(&auto_collection))
                 .map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
+            cache.db.set_origin_url(&pk, url)?;
         }
     }
 

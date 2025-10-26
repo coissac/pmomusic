@@ -127,9 +127,6 @@ async fn test_now_playing() {
     }
 }
 
-
-
-
 #[tokio::test]
 async fn test_prefetch_next() {
     let mock_server = MockServer::start().await;

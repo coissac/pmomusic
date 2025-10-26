@@ -70,9 +70,7 @@ where
         (status = 200, description = "Configuration complète", body = serde_json::Value)
     )
 )]
-async fn get_full_config(
-    State(config): State<Arc<Config>>,
-) -> Result<Json<JsonValue>, ApiError> {
+async fn get_full_config(State(config): State<Arc<Config>>) -> Result<Json<JsonValue>, ApiError> {
     let value = config.get_value(&[])?;
     let json_value = yaml_to_json(&value)?;
     Ok(Json(json_value))

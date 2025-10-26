@@ -21,9 +21,7 @@ pub trait CacheConfig: Send + Sync {
     /// Extension des fichiers (ex: "webp", "flac")
     fn file_extension() -> &'static str;
     /// Nom de la table dans la base de données (ex: "covers", "audio")
-    fn table_name() -> &'static str {
-        "cached_items"
-    }
+
     /// Type de cache (ex: "audio", "image")
     fn cache_type() -> &'static str {
         "file"
@@ -118,7 +116,7 @@ impl<C: CacheConfig> Cache<C> {
     ) -> Result<Self> {
         let directory = PathBuf::from(dir);
         std::fs::create_dir_all(&directory)?;
-        let db = DB::init(&directory.join("cache.db"), C::table_name())?;
+        let db = DB::init(&directory.join("cache.db"))?;
 
         Ok(Self {
             dir: directory,
@@ -169,7 +167,7 @@ impl<C: CacheConfig> Cache<C> {
         tracing::debug!("Computed pk {} for URL {}", pk, url);
 
         // 3. Vérifier si le fichier est déjà en cache
-        if self.db.get(&pk).is_ok() {
+        if self.db.get(&pk, false).is_ok() {
             let file_path = self.file_path(&pk);
             if file_path.exists() {
                 // Déjà en cache, update timestamp et retour rapide
@@ -202,8 +200,8 @@ impl<C: CacheConfig> Cache<C> {
         }
 
         // Ajouter immédiatement à la DB
-        self.db.add(&pk, url, collection)?;
-
+        self.db.add(&pk, None, collection)?;
+        self.db.set_origin_url(&pk, url)?;
         // Appliquer la politique d'éviction LRU si nécessaire
         if let Err(e) = self.enforce_limit().await {
             tracing::warn!("Error enforcing cache limit: {}", e);
@@ -264,7 +262,7 @@ impl<C: CacheConfig> Cache<C> {
         tracing::debug!("Computed pk {} for source_uri {}", pk, source_uri);
 
         // 3. Vérifier si le fichier est déjà en cache
-        if self.db.get(&pk).is_ok() {
+        if self.db.get(&pk, false).is_ok() {
             let file_path = self.file_path(&pk);
             if file_path.exists() {
                 // Déjà en cache, update timestamp et retour rapide
@@ -301,7 +299,8 @@ impl<C: CacheConfig> Cache<C> {
             downloads.insert(pk.clone(), download.clone());
         }
 
-        self.db.add(&pk, source_uri, collection)?;
+        self.db.add(&pk, None, collection)?;
+        self.db.set_origin_url(&pk, source_uri);
 
         if let Err(e) = self.enforce_limit().await {
             tracing::warn!("Error enforcing cache limit: {}", e);
@@ -359,13 +358,59 @@ impl<C: CacheConfig> Cache<C> {
             .await
     }
 
+    pub async fn delete_item(&self, pk: &str) -> Result<()> {
+        // Vérifie l'existence pour signaler une erreur explicite si l'entrée est absente
+        self.db.get(pk, false)?;
+
+        // Oublie un téléchargement en cours pour cette clé
+        self.downloads.write().await.remove(pk);
+
+        // Supprime chaque fichier {pk}.{qualifier}.{ext} (ignorer si déjà absent)
+        for path in self.get_file_paths(pk)? {
+            if let Err(err) = tokio::fs::remove_file(&path).await {
+                if err.kind() != std::io::ErrorKind::NotFound {
+                    return Err(err.into());
+                }
+            }
+        }
+
+        // Efface l’entrée de la base (les métadonnées partent via ON DELETE CASCADE)
+        self.db.delete(pk)?;
+
+        Ok(())
+    }
+
+    pub async fn delete_collection(&self, collection: &str) -> Result<()> {
+        let entries = self.db.get_by_collection(collection, false)?;
+
+        {
+            let mut downloads = self.downloads.write().await;
+            for entry in &entries {
+                downloads.remove(&entry.pk);
+            }
+        }
+
+        for entry in &entries {
+            for path in self.get_file_paths(&entry.pk)? {
+                if let Err(err) = tokio::fs::remove_file(&path).await {
+                    if err.kind() != std::io::ErrorKind::NotFound {
+                        return Err(err.into());
+                    }
+                }
+            }
+        }
+
+        self.db.delete_collection(collection)?;
+        Ok(())
+    }
+
     /// Récupère le chemin d'un fichier dans le cache
     ///
     /// # Arguments
     ///
     /// * `pk` - Clé primaire du fichier
     pub async fn get(&self, pk: &str) -> Result<PathBuf> {
-        self.db.get(pk)?;
+        self.db.get(pk, false)?;
         self.db.update_hit(pk)?;
 
         let file_path = self.file_path(pk);
@@ -376,13 +421,18 @@ impl<C: CacheConfig> Cache<C> {
         }
     }
 
+    pub async fn touch(&self, pk: &str) -> Result<()> {
+        self.db.update_hit(pk)?;
+        Ok(())
+    }
+
     /// Récupère tous les fichiers d'une collection
     ///
     /// # Arguments
     ///
     /// * `collection` - Identifiant de la collection
     pub async fn get_collection(&self, collection: &str) -> Result<Vec<PathBuf>> {
-        let entries = self.db.get_by_collection(collection)?;
+        let entries = self.db.get_by_collection(collection, false)?;
         let mut paths = Vec::new();
 
         for entry in entries {
@@ -412,20 +462,26 @@ impl<C: CacheConfig> Cache<C> {
     /// Consolide le cache en supprimant les orphelins et en re-téléchargeant les fichiers manquants
     pub async fn consolidate(&self) -> Result<()> {
         // Récupérer la liste des entrées à traiter
-        let entries = self.db.get_all()?;
+        let entries = self.db.get_all(false)?;
 
         // Supprimer les entrées sans fichiers correspondants
         for entry in entries {
             let file_path = self.file_path(&entry.pk);
+
             if !file_path.exists() {
-                // Re-télécharger le fichier manquant
-                match self
-                    .add_from_url(&entry.source_url, entry.collection.as_deref())
-                    .await
-                {
-                    Ok(_) => {}
-                    Err(_) => {
-                        // Si le téléchargement échoue, supprimer l'entrée DB
+                match self.db.get_origin_url(&entry.pk)? {
+                    Some(url) => {
+                        if let Err(err) = self.add_from_url(&url, entry.collection.as_deref()).await
+                        {
+                            tracing::warn!(
+                                "Unable to redownload missing file for {}: {}",
+                                entry.pk,
+                                err
+                            );
+                            self.db.delete(&entry.pk)?;
+                        }
+                    }
+                    None => {
                         self.db.delete(&entry.pk)?;
                     }
                 }
@@ -441,7 +497,7 @@ impl<C: CacheConfig> Cache<C> {
                     // Format attendu: {pk}.{qualifier}.{EXT}
                     // On extrait le pk (première partie avant le premier point)
                     if let Some(pk) = file_name.split('.').next() {
-                        if self.db.get(pk).is_err() {
+                        if self.db.get(pk, false).is_err() {
                             tokio::fs::remove_file(path).await?;
                         }
                     }
@@ -599,6 +655,42 @@ impl<C: CacheConfig> Cache<C> {
     pub fn file_path_with_qualifier(&self, pk: &str, qualifier: &str) -> PathBuf {
         self.dir
             .join(format!("{}.{}.{}", pk, qualifier, C::file_extension()))
+    }
+
+    /// Retourne tous les chemins de fichiers stockés pour une clé donnée,
+    /// quel que soit le qualifier.
+    ///
+    /// Format: `{pk}.*.{extension}`
+    pub fn get_file_paths(&self, pk: &str) -> Result<Vec<PathBuf>> {
+        let mut paths = Vec::new();
+        let prefix = format!("{pk}.");
+        let expected_ext = C::file_extension();
+
+        for entry in std::fs::read_dir(&self.dir)? {
+            let entry = entry?;
+            let path = entry.path();
+
+            if !path.is_file() {
+                continue;
+            }
+
+            let file_name = match entry.file_name().into_string() {
+                Ok(name) => name,
+                Err(_) => continue, // nom de fichier non UTF-8 : on l’ignore
+            };
+
+            if !file_name.starts_with(&prefix) {
+                continue;
+            }
+
+            if !file_name.ends_with(expected_ext) {
+                continue;
+            }
+
+            paths.push(path);
+        }
+
+        Ok(paths)
     }
 
     /// Valide les données avant de les stocker
