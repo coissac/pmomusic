@@ -36,7 +36,6 @@ struct ParadiseQuery {
     channel: Option<u8>,
 }
 
-
 #[derive(Debug, Default, Deserialize, IntoParams)]
 #[serde(default)]
 #[into_params(parameter_in = Query)]
@@ -801,7 +800,10 @@ pub fn create_api_router(state: RadioParadiseState) -> Router {
         .route("/channels/{channel_id}/status", get(get_channel_status))
         .route("/channels/{channel_id}/playlist", get(get_channel_playlist))
         .route("/channels/{channel_id}/history", get(get_channel_history))
-        .route("/channels/{channel_id}/stream/{connection_id}", get(stream_channel_by_connection))
+        .route(
+            "/channels/{channel_id}/stream/{connection_id}",
+            get(stream_channel_by_connection),
+        )
         .with_state(state)
 }
 

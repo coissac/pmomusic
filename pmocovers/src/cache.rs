@@ -15,10 +15,6 @@ impl CacheConfig for CoversConfig {
         "webp"
     }
 
-    fn table_name() -> &'static str {
-        "covers"
-    }
-
     fn cache_type() -> &'static str {
         "image"
     }

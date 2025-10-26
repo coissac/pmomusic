@@ -1,12 +1,11 @@
 use std::sync::Arc;
 
 use bevy_reflect::Reflect;
+use htmlescape::decode_html;
 use once_cell::sync::Lazy;
 use pmodidl::{DIDLLite, MediaMetadataParser};
 use pmoupnp::state_variables::{StateVariable, StateVariableError};
 use pmoupnp::variable_types::StateVarType;
-use htmlescape::decode_html;
-
 
 fn avtransporturimetadataparser(value: &str) -> Result<Box<dyn Reflect>, StateVariableError> {
     // Nettoyage de base
@@ -32,7 +31,8 @@ fn avtransporturimetadataparser(value: &str) -> Result<Box<dyn Reflect>, StateVa
 }
 
 fn avtransporturimetadatamarshal(value: &dyn Reflect) -> Result<String, StateVariableError> {
-    let didl = value.downcast_ref::<DIDLLite>()
+    let didl = value
+        .downcast_ref::<DIDLLite>()
         .ok_or_else(|| StateVariableError::ConversionError("DIDLLite".into()))?;
     let xml = quick_xml::se::to_string(didl)
         .map_err(|e| StateVariableError::ConversionError(format!("serialize error: {}", e)))?;

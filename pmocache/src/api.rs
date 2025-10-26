@@ -93,7 +93,7 @@ pub struct ErrorResponse {
 ///
 /// Retourne la liste complète des entrées du cache triées par nombre d'accès décroissant.
 pub async fn list_items<C: CacheConfig>(State(cache): State<Arc<Cache<C>>>) -> impl IntoResponse {
-    match cache.db.get_all() {
+    match cache.db.get_all(true) {
         Ok(entries) => (StatusCode::OK, Json(entries)).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -113,7 +113,7 @@ pub async fn get_item_info<C: CacheConfig>(
     State(cache): State<Arc<Cache<C>>>,
     Path(pk): Path<String>,
 ) -> impl IntoResponse {
-    match cache.db.get(&pk) {
+    match cache.db.get(&pk, true) {
         Ok(entry) => (StatusCode::OK, Json(entry)).into_response(),
         Err(_) => (
             StatusCode::NOT_FOUND,
@@ -135,7 +135,7 @@ pub async fn get_download_status<C: CacheConfig>(
     Path(pk): Path<String>,
 ) -> impl IntoResponse {
     // Vérifier que l'item existe dans la DB
-    if cache.db.get(&pk).is_err() {
+    if cache.db.get(&pk, false).is_err() {
         return (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
@@ -222,7 +222,7 @@ pub async fn delete_item<C: CacheConfig>(
     Path(pk): Path<String>,
 ) -> impl IntoResponse {
     // Vérifier que l'item existe
-    if cache.db.get(&pk).is_err() {
+    if cache.db.get(&pk, false).is_err() {
         return (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {

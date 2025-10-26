@@ -5,7 +5,7 @@
 
 use crate::Server;
 use anyhow::Result;
-use pmoconfig::{api, get_config, ApiDoc};
+use pmoconfig::{ApiDoc, api, get_config};
 use utoipa::OpenApi;
 
 /// Trait d'extension pour ajouter l'API de configuration à pmoserver

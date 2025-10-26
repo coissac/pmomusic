@@ -65,10 +65,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let decode_task = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<(u64, usize)>> {
         let mut decoder = StreamingPCMDecoder::new(http_stream)?;
 
-        println!("   🎼 Stream info: {}Hz, {} channels, {} bits",
-                 decoder.sample_rate(),
-                 decoder.channels(),
-                 decoder.bits_per_sample());
+        println!(
+            "   🎼 Stream info: {}Hz, {} channels, {} bits",
+            decoder.sample_rate(),
+            decoder.channels(),
+            decoder.bits_per_sample()
+        );
 
         let mut chunk_times = Vec::new();
         let mut chunk_count = 0;
@@ -78,17 +80,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             chunk_times.push((chunk.position_ms, chunk.samples.len()));
 
             if chunk_count % 50 == 0 {
-                println!("   📦 Chunk {} at {}ms ({} samples)",
-                         chunk_count,
-                         chunk.position_ms,
-                         chunk.samples.len());
+                println!(
+                    "   📦 Chunk {} at {}ms ({} samples)",
+                    chunk_count,
+                    chunk.position_ms,
+                    chunk.samples.len()
+                );
             }
         }
 
         Ok(chunk_times)
     });
 
-    let chunk_times = decode_task.await.map_err(|e| anyhow::anyhow!("Join error: {}", e))??;
+    let chunk_times = decode_task
+        .await
+        .map_err(|e| anyhow::anyhow!("Join error: {}", e))??;
     let total_time = start_time.elapsed();
 
     println!("\n✅ Streaming Complete!");
@@ -101,7 +107,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if let Some((last_pos, _)) = chunk_times.last() {
-        println!("   Last chunk at: {}ms (~{:.1}s)", last_pos, last_pos / 1000);
+        println!(
+            "   Last chunk at: {}ms (~{:.1}s)",
+            last_pos,
+            last_pos / 1000
+        );
     }
 
     println!("\n💡 Analysis:");

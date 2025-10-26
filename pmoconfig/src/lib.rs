@@ -520,16 +520,27 @@ impl Config {
             Ok(Value::String(s)) => match s.parse::<u16>() {
                 Ok(port) => port,
                 Err(_) => {
-                    tracing::warn!("Invalid HTTP port '{}', using default {}", s, DEFAULT_HTTP_PORT);
+                    tracing::warn!(
+                        "Invalid HTTP port '{}', using default {}",
+                        s,
+                        DEFAULT_HTTP_PORT
+                    );
                     DEFAULT_HTTP_PORT
                 }
             },
             Ok(_) => {
-                tracing::warn!("HTTP port not a number or string, using default {}", DEFAULT_HTTP_PORT);
+                tracing::warn!(
+                    "HTTP port not a number or string, using default {}",
+                    DEFAULT_HTTP_PORT
+                );
                 DEFAULT_HTTP_PORT
             }
             Err(err) => {
-                tracing::warn!("Failed to get HTTP port: {}, using default {}", err, DEFAULT_HTTP_PORT);
+                tracing::warn!(
+                    "Failed to get HTTP port: {}, using default {}",
+                    err,
+                    DEFAULT_HTTP_PORT
+                );
                 DEFAULT_HTTP_PORT
             }
         }
@@ -586,7 +597,6 @@ impl Config {
         self.set_value(&["devices", devtype, name, "udn"], Value::String(udn))
     }
 
-
     impl_string_config!(
         /// Gets the Qobuz username from configuration
         get_qobuz_username,
@@ -618,9 +628,19 @@ impl Config {
         Ok((username, password))
     }
 
-    impl_usize_config!(get_log_cache_size, set_log_cache_size, &["host", "logger", "buffer_capacity"], DEFAULT_LOG_BUFFER_CAPACITY);
+    impl_usize_config!(
+        get_log_cache_size,
+        set_log_cache_size,
+        &["host", "logger", "buffer_capacity"],
+        DEFAULT_LOG_BUFFER_CAPACITY
+    );
 
-    impl_bool_config!(get_log_enable_console, set_log_enable_console, &["host", "logger", "enable_console"], DEFAULT_LOG_ENABLE_CONSOLE);
+    impl_bool_config!(
+        get_log_enable_console,
+        set_log_enable_console,
+        &["host", "logger", "enable_console"],
+        DEFAULT_LOG_ENABLE_CONSOLE
+    );
 
     /// Récupère le niveau de log minimum depuis la configuration
     pub fn get_log_min_level(&self) -> Result<String> {

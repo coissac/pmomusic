@@ -125,7 +125,9 @@ impl StreamingPCMDecoder<ChannelReader> {
     }
 
     pub fn decode_chunk(&mut self) -> anyhow::Result<Option<PCMChunk>> {
-        if self.done { return Ok(None); }
+        if self.done {
+            return Ok(None);
+        }
 
         // Crée le FrameReader à la volée (emprunt de self.reader)
         let mut frames = self.reader.blocks();
@@ -133,7 +135,10 @@ impl StreamingPCMDecoder<ChannelReader> {
         // API claxon 0.6.x : il FAUT fournir un Vec<i32> par valeur
         let buf: Vec<i32> = Vec::new();
         let frame = match frames.read_next_or_eof(buf) {
-            Ok(None) => { self.done = true; return Ok(None); }
+            Ok(None) => {
+                self.done = true;
+                return Ok(None);
+            }
             Ok(Some(f)) => f,
             Err(e) => return Err(anyhow::anyhow!("FLAC decode error: {}", e)),
         };

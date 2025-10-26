@@ -25,9 +25,7 @@ async fn main() -> Result<()> {
     eprintln!("======================================\n");
 
     // Create client
-    let mut client = RadioParadiseClient::builder()
-        .build()
-        .await?;
+    let mut client = RadioParadiseClient::builder().build().await?;
 
     eprintln!("Client configured for FLAC streaming\n");
 

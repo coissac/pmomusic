@@ -51,11 +51,6 @@ pub trait FileCache<C: CacheConfig>: Send + Sync {
         C::file_extension()
     }
 
-    /// Retourne le nom de la table
-    fn table_name(&self) -> &'static str {
-        C::table_name()
-    }
-
     /// Construit le chemin complet d'un fichier dans le cache
     ///
     /// Format: `{pk}.{qualificatif}.{extension}`
@@ -161,11 +156,11 @@ pub trait FileCache<C: CacheConfig>: Send + Sync {
 /// assert_eq!(pk.len(), 32);  // 16 bytes = 32 hex chars
 /// ```
 pub fn pk_from_content_header(header: &[u8]) -> String {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(header);
     let result = hasher.finalize();
-    hex::encode(&result[..16])  // 16 octets = 32 caractères hex
+    hex::encode(&result[..16]) // 16 octets = 32 caractères hex
 }
 
 /// Génère une clé primaire à partir d'une URL (legacy)

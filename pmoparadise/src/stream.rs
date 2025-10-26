@@ -164,7 +164,6 @@ impl RadioParadiseClient {
 
         Ok(Bytes::from(data))
     }
-
 }
 
 #[cfg(test)]
