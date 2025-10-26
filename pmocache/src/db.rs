@@ -71,7 +71,7 @@ impl DB {
         let conn = Connection::open(path)?;
 
         let create_table_sql = format!(
-            "CREATE TABLE IF NOT EXISTS {} (
+            "CREATE TABLE IF NOT EXISTS ASSET (
                 pk TEXT PRIMARY KEY,
                 source_url TEXT,
                 collection TEXT,
