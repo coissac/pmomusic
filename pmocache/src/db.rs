@@ -7,10 +7,12 @@ use chrono::Utc;
 use rusqlite::{params, Connection, Error, OptionalExtension};
 use serde::Serialize;
 use serde_json::{Map, Number, Value};
+use tracing::{trace, warn};
 
 use std::path::Path;
 use std::str::FromStr;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
+use std::time::Instant;
 
 #[cfg(feature = "openapi")]
 use utoipa::ToSchema;
@@ -24,7 +26,7 @@ pub struct CacheEntry {
     pub pk: String,
     /// URL source de l'élément
     #[cfg_attr(feature = "openapi", schema(example = "https://example.com/resource"))]
-    pub id: String,
+    pub id: Option<String>,
     /// Collection à laquelle appartient l'élément (optionnel)
     #[cfg_attr(feature = "openapi", schema(example = "album:123"))]
     pub collection: Option<String>,
@@ -53,7 +55,46 @@ pub struct DB {
     conn: Mutex<Connection>,
 }
 
+struct ConnGuard<'a> {
+    ctx: &'static str,
+    guard: MutexGuard<'a, Connection>,
+}
+
+impl<'a> Drop for ConnGuard<'a> {
+    fn drop(&mut self) {
+        trace!("DB mutex → released ({})", self.ctx);
+    }
+}
+
+impl<'a> std::ops::Deref for ConnGuard<'a> {
+    type Target = Connection;
+    fn deref(&self) -> &Self::Target {
+        &self.guard
+    }
+}
+
+impl<'a> std::ops::DerefMut for ConnGuard<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.guard
+    }
+}
+
+
 impl DB {
+   fn lock_conn(&self, ctx: &'static str) -> ConnGuard<'_> {
+        trace!("DB mutex → acquiring ({ctx})");
+        let start = Instant::now();
+        let guard = self.conn.lock().unwrap();
+        let waited = start.elapsed();
+
+        trace!("DB mutex → acquired ({ctx}) in {:?}", waited);
+        if waited > std::time::Duration::from_millis(50) {
+            warn!("DB mutex wait >50 ms ({}): {:?}", ctx, waited);
+        }
+
+        ConnGuard { ctx, guard }
+    }
+
     /// Initialise une nouvelle base de données avec une table personnalisée
     ///
     /// # Arguments
@@ -152,7 +193,7 @@ impl DB {
         collection: Option<&str>,
         metadata: Option<&Value>,
     ) -> rusqlite::Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn("add_with_metadata");
 
         conn.execute(
             "INSERT INTO asset (pk, id, collection, hits, last_used)
@@ -187,7 +228,7 @@ impl DB {
             Error::InvalidParameterName("metadata must be a JSON object".to_owned())
         })?;
 
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.lock_conn("set_metadata");
 
         let tx = conn.transaction()?;
 
@@ -228,7 +269,7 @@ impl DB {
             Value::Object(map) => ("string", Some(Value::Object(map).to_string())),
         };
 
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn("set_a_metadata");
 
         conn.execute(
             "INSERT INTO metadata (pk, key, value_type, value)
@@ -246,7 +287,7 @@ impl DB {
     ///
     /// Préférer `get_metadata_value` pour les appels externes.
     pub fn get_a_metadata(&self, pk: &str, key: &str) -> rusqlite::Result<Option<Value>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn("get_a_metadata");
 
         conn.query_row(
             "SELECT value_type, value FROM metadata WHERE pk = ?1 AND key = ?2",
@@ -264,7 +305,7 @@ impl DB {
     ///
     /// Retourne `Ok(None)` si aucune métadonnée n'est présente.
     pub fn get_metadata(&self, pk: &str) -> rusqlite::Result<Option<Value>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn("get_metadata");
         let mut stmt = conn.prepare("SELECT key, value_type, value FROM metadata WHERE pk = ?1")?;
 
         let rows = stmt.query_map([pk], |row| {
@@ -360,7 +401,7 @@ impl DB {
 
     /// Récupère une métadonnée individuelle, si elle existe.
     pub fn get_metadata_value(&self, pk: &str, key: &str) -> rusqlite::Result<Option<Value>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn("get_metadata_value");
 
         conn.query_row(
             "SELECT value_type, value FROM metadata WHERE pk = ?1 AND key = ?2",
@@ -381,7 +422,7 @@ impl DB {
     /// * `with_metadata` - Charge les métadonnées associées si `true`.
     pub fn get(&self, pk: &str, with_metadata: bool) -> rusqlite::Result<CacheEntry> {
         let mut entry = {
-            let conn = self.conn.lock().unwrap();
+            let conn = self.lock_conn("get");
             conn.query_row(
                 "SELECT pk, id, collection, hits, last_used \
                  FROM asset \
@@ -390,7 +431,7 @@ impl DB {
                 |row| {
                     Ok(CacheEntry {
                         pk: row.get(0)?,
-                        id: row.get(1)?,
+                        id: row.get::<_, Option<String>>(1)?,
                         collection: row.get(2)?,
                         hits: row.get(3)?,
                         last_used: row.get(4)?,
@@ -421,7 +462,7 @@ impl DB {
         with_metadata: bool,
     ) -> rusqlite::Result<CacheEntry> {
         let mut entry = {
-            let conn = self.conn.lock().unwrap();
+            let conn = self.lock_conn("get_from_id");
             conn.query_row(
                 "SELECT pk, id, collection, hits, last_used \
              FROM asset \
@@ -430,7 +471,7 @@ impl DB {
                 |row| {
                     Ok(CacheEntry {
                         pk: row.get(0)?,
-                        id: row.get(1)?,
+                        id: row.get::<_, Option<String>>(1)?,
                         collection: row.get(2)?,
                         hits: row.get(3)?,
                         last_used: row.get(4)?,
@@ -451,7 +492,7 @@ impl DB {
     ///
     /// Retourne `false` si l'enregistrement n'existe pas ou si la requête échoue.
     pub fn does_collection_contain_id(&self, collection: &str, id: &str) -> bool {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn("does_collection_contain_id");
         conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM asset WHERE collection = ?1 AND id = ?2)",
             params![collection, id],
@@ -467,7 +508,7 @@ impl DB {
     ///
     /// Retourne `QueryReturnedNoRows` si aucun enregistrement ne correspond.
     pub fn get_pk_from_id(&self, collection: &str, id: &str) -> rusqlite::Result<String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn("get_pk_from_id");
         conn.query_row(
             "SELECT pk FROM asset WHERE collection = ?1 AND id = ?2",
             params![collection, id],
@@ -479,7 +520,7 @@ impl DB {
     ///
     /// Retourne `QueryReturnedNoRows` si la clé primaire est inconnue.
     pub fn set_id(&self, pk: &str, id: &str) -> rusqlite::Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn("set_id");
         let updated = conn.execute("UPDATE asset SET id = ?2 WHERE pk = ?1", params![pk, id])?;
 
         if updated == 0 {
@@ -495,7 +536,7 @@ impl DB {
     ///
     /// * `pk` - Clé primaire de l'élément
     pub fn update_hit(&self, pk: &str) -> rusqlite::Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn("update_hit");
 
         conn.execute(
             &"UPDATE asset 
@@ -509,7 +550,7 @@ impl DB {
 
     /// Purge toutes les entrées de la base de données.
     pub fn purge(&self) -> rusqlite::Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn("purge");
         conn.execute("DELETE FROM asset", [])?;
         Ok(())
     }
@@ -520,26 +561,28 @@ impl DB {
     ///
     /// * `include_metadata` - Ajoute les métadonnées à chaque entrée si `true`.
     pub fn get_all(&self, include_metadata: bool) -> rusqlite::Result<Vec<CacheEntry>> {
-        let conn = self.conn.lock().unwrap();
+        let mut entries = {
+            let conn = self.lock_conn("get_all");
 
-        let mut stmt = conn.prepare(
-            "SELECT pk, id, collection, hits, last_used 
+            let mut stmt = conn.prepare(
+                "SELECT pk, id, collection, hits, last_used 
                  FROM asset 
                  ORDER BY hits DESC",
-        )?;
+            )?;
 
-        let mut entries = stmt
-            .query_map([], |row| {
+            let rows = stmt.query_map([], |row| {
                 Ok(CacheEntry {
                     pk: row.get(0)?,
-                    id: row.get(1)?,
+                    id: row.get::<_, Option<String>>(1)?,
                     collection: row.get(2)?,
                     hits: row.get(3)?,
                     last_used: row.get(4)?,
                     metadata: None,
                 })
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+            })?;
+
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
 
         if include_metadata {
             for entry in entries.iter_mut() {
@@ -561,26 +604,27 @@ impl DB {
         collection: &str,
         include_metadata: bool,
     ) -> rusqlite::Result<Vec<CacheEntry>> {
-        let conn = self.conn.lock().unwrap();
+        let mut entries = {
+            let conn = self.lock_conn("get_by_collection");
 
-        let mut stmt = conn.prepare(
-            "SELECT pk, id, collection, hits, last_used 
+            let mut stmt = conn.prepare(
+                "SELECT pk, id, collection, hits, last_used 
                   FROM asset 
                   WHERE collection = ?1 ORDER BY hits DESC",
-        )?;
-
-        let mut entries = stmt
-            .query_map([collection], |row| {
+            )?;
+            let rows = stmt.query_map([collection], |row| {
                 Ok(CacheEntry {
                     pk: row.get(0)?,
-                    id: row.get(1)?,
+                    id: row.get::<_, Option<String>>(1)?,
                     collection: row.get(2)?,
                     hits: row.get(3)?,
                     last_used: row.get(4)?,
                     metadata: None,
                 })
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+            })?;
+
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
 
         if include_metadata {
             for entry in entries.iter_mut() {
@@ -596,14 +640,14 @@ impl DB {
     /// Les métadonnées associées sont supprimées automatiquement grâce à la
     /// contrainte `ON DELETE CASCADE`.
     pub fn delete_collection(&self, collection: &str) -> rusqlite::Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn("delete_collection");
         conn.execute("DELETE FROM asset WHERE collection = ?1", [collection])?;
         Ok(())
     }
 
     /// Supprime une entrée de la base de données ainsi que ses métadonnées.
     pub fn delete(&self, pk: &str) -> rusqlite::Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn("delete");
         conn.execute("DELETE FROM asset WHERE pk = ?1", [pk])?;
         Ok(())
     }
@@ -614,7 +658,7 @@ impl DB {
     ///
     /// Le nombre total d'entrées
     pub fn count(&self) -> rusqlite::Result<usize> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn("count");
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM asset", [], |row| row.get(0))?;
         Ok(count as usize)
     }
@@ -632,7 +676,7 @@ impl DB {
     ///
     /// Liste des entrées les plus anciennes, triées par last_used ASC
     pub fn get_oldest(&self, limit: usize) -> rusqlite::Result<Vec<CacheEntry>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn("get_oldest");
 
         let mut stmt = conn.prepare(
             "SELECT pk, source_url, collection, hits, last_used, metadata_json
@@ -645,7 +689,7 @@ impl DB {
             .query_map([limit], |row| {
                 Ok(CacheEntry {
                     pk: row.get(0)?,
-                    id: row.get(1)?,
+                    id: row.get::<_, Option<String>>(1)?,
                     collection: row.get(2)?,
                     hits: row.get(3)?,
                     last_used: row.get(4)?,
