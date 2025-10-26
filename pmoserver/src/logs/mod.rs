@@ -299,16 +299,25 @@ pub fn init_logging() -> LogState {
     };
 
     if enable_console {
-        subscriber
-            .with(
-                tracing_subscriber::fmt::layer()
-                    .with_target(true)
-                    .with_level(true)
-                    .with_ansi(true),
-            )
-            .init();
+        let subscriber = subscriber.with(
+            tracing_subscriber::fmt::layer()
+                .with_target(true)
+                .with_level(true)
+                .with_ansi(true),
+        );
+        if let Err(e) = subscriber.try_init() {
+            eprintln!(
+                "⚠️ tracing subscriber already initialised, skipping console layer: {}",
+                e
+            );
+        }
     } else {
-        subscriber.init();
+        if let Err(e) = subscriber.try_init() {
+            eprintln!(
+                "⚠️ tracing subscriber already initialised, skipping default registry: {}",
+                e
+            );
+        }
     }
 
     log_state

@@ -464,7 +464,7 @@ impl Config {
             _ => {
                 self.set_managed_dir(path, default.to_string())?;
                 default.to_string()
-            },
+            }
         };
         self.resolve_and_create_dir(&dir_path)
     }

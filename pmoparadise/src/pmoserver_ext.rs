@@ -555,7 +555,7 @@ async fn get_channel_status(
         last_change,
         history_entries: history_len,
         history_max_tracks: channel.history_max_tracks(),
-        configured: true,  // All channels are always available
+        configured: true, // All channels are always available
         cache_collection_id: cache_stats.collection_id,
         cache_total_tracks: cache_stats.total_tracks,
         cache_cached_tracks: cache_stats.cached_tracks,
