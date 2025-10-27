@@ -187,6 +187,7 @@ impl QobuzSource {
             sample_rate: track.sample_rate,
             channels: track.channels,
             bitrate: None,
+            conversion: None,
         };
 
         // 3. Cache audio via manager

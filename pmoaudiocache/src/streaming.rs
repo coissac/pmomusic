@@ -6,13 +6,14 @@
 //! while native FLAC input is forwarded byte-for-byte without re-encoding.
 
 use bytes::Bytes;
+use pmocache::download::TransformMetadata;
 use pmocache::StreamTransformer;
 use pmoflac::{transcode_to_flac_stream, AudioCodec, TranscodeOptions};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Creates the transformer consumed by the audio cache.
 pub fn create_streaming_flac_transformer() -> StreamTransformer {
-    Box::new(|input, mut file, progress| {
+    Box::new(|input, mut file, context| {
         Box::pin(async move {
             let byte_stream = input.into_byte_stream();
             let reader = StreamToAsyncRead::new(byte_stream);
@@ -21,7 +22,23 @@ pub fn create_streaming_flac_transformer() -> StreamTransformer {
                 .await
                 .map_err(|e| format!("Audio transcode error: {}", e))?;
 
-            log_stream_info(transcode.input_codec(), transcode.input_stream_info());
+            let codec = transcode.input_codec();
+            let info = transcode.input_stream_info().clone();
+            log_stream_info(codec, &info);
+
+            let mode = if transcode.is_passthrough() {
+                "passthrough"
+            } else {
+                "transcode"
+            };
+
+            context
+                .set_metadata(TransformMetadata {
+                    mode: Some(mode.to_string()),
+                    input_codec: Some(codec_to_string(codec)),
+                    details: None,
+                })
+                .await;
 
             let mut flac_stream = transcode.into_stream();
             let mut buffer = vec![0u8; 64 * 1024];
@@ -42,7 +59,7 @@ pub fn create_streaming_flac_transformer() -> StreamTransformer {
                     .map_err(|e| format!("Failed to write FLAC file: {}", e))?;
 
                 total_written += read as u64;
-                progress(total_written);
+                context.report_progress(total_written);
             }
 
             file.flush()
@@ -68,6 +85,18 @@ fn log_stream_info(codec: AudioCodec, info: &pmoflac::StreamInfo) {
         info.bits_per_sample,
         codec == AudioCodec::Flac
     );
+}
+
+fn codec_to_string(codec: AudioCodec) -> String {
+    match codec {
+        AudioCodec::Flac => "flac",
+        AudioCodec::Mp3 => "mp3",
+        AudioCodec::OggVorbis => "ogg_vorbis",
+        AudioCodec::OggOpus => "ogg_opus",
+        AudioCodec::Wav => "wav",
+        AudioCodec::Aiff => "aiff",
+    }
+    .to_string()
 }
 
 /// Adapter exposing a byte stream as `AsyncRead`.

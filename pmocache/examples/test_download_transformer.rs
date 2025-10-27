@@ -19,7 +19,7 @@ fn create_gzip_transformer() -> StreamTransformer {
     unimplemented!("Cette fonction nécessite la dépendance async-compression")
 
     /*
-    Box::new(|response, mut file, update_progress| {
+    Box::new(|response, mut file, context| {
         Box::pin(async move {
             use async_compression::tokio::write::GzipEncoder;
 
@@ -36,7 +36,7 @@ fn create_gzip_transformer() -> StreamTransformer {
                     .map_err(|e| format!("Failed to write compressed data: {}", e))?;
 
                 total_written += chunk.len() as u64;
-                update_progress(total_written);
+                context.report_progress(total_written);
             }
 
             encoder
@@ -52,7 +52,7 @@ fn create_gzip_transformer() -> StreamTransformer {
 
 /// Exemple de transformer qui convertit les données en majuscules (exemple simple)
 fn create_uppercase_transformer() -> StreamTransformer {
-    Box::new(|input, mut file, update_progress| {
+    Box::new(|input, mut file, context| {
         Box::pin(async move {
             let mut stream = input.into_byte_stream();
             let mut total_written = 0u64;
@@ -77,7 +77,7 @@ fn create_uppercase_transformer() -> StreamTransformer {
                     .map_err(|e| format!("Failed to write: {}", e))?;
 
                 total_written += transformed.len() as u64;
-                update_progress(total_written);
+                context.report_progress(total_written);
             }
 
             file.flush()
@@ -91,7 +91,7 @@ fn create_uppercase_transformer() -> StreamTransformer {
 
 /// Exemple de transformer qui saute les N premiers bytes (utile pour enlever des headers)
 fn create_skip_header_transformer(skip_bytes: usize) -> StreamTransformer {
-    Box::new(move |input, mut file, update_progress| {
+    Box::new(move |input, mut file, context| {
         Box::pin(async move {
             let mut stream = input.into_byte_stream();
             let mut skipped = 0usize;
@@ -118,7 +118,7 @@ fn create_skip_header_transformer(skip_bytes: usize) -> StreamTransformer {
                     .map_err(|e| format!("Failed to write: {}", e))?;
 
                 total_written += to_write.len() as u64;
-                update_progress(total_written);
+                context.report_progress(total_written);
             }
 
             file.flush()
@@ -132,7 +132,7 @@ fn create_skip_header_transformer(skip_bytes: usize) -> StreamTransformer {
 
 /// Exemple de transformer qui compte les lignes et ajoute des numéros
 fn create_line_number_transformer() -> StreamTransformer {
-    Box::new(|input, mut file, update_progress| {
+    Box::new(|input, mut file, context| {
         Box::pin(async move {
             let mut stream = input.into_byte_stream();
             let mut line_number = 1u32;
@@ -162,7 +162,7 @@ fn create_line_number_transformer() -> StreamTransformer {
                         .map_err(|e| format!("Failed to write: {}", e))?;
 
                     total_written += numbered_line.len() as u64 + line.len() as u64 + 1;
-                    update_progress(total_written);
+                    context.report_progress(total_written);
 
                     line_number += 1;
                     buffer.drain(..=newline_pos);
@@ -181,7 +181,7 @@ fn create_line_number_transformer() -> StreamTransformer {
                     .map_err(|e| format!("Failed to write: {}", e))?;
 
                 total_written += numbered_line.len() as u64 + buffer.len() as u64;
-                update_progress(total_written);
+                context.report_progress(total_written);
             }
 
             file.flush()

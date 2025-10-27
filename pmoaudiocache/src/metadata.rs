@@ -68,6 +68,23 @@ pub struct AudioMetadata {
     /// Bitrate moyen (kbps)
     #[cfg_attr(feature = "pmoserver", schema(example = 1411))]
     pub bitrate: Option<u32>,
+
+    /// Informations sur la conversion appliquée lors de l'ingestion
+    #[cfg_attr(feature = "pmoserver", schema(example = json!({"mode":"transcode","source_codec":"mp3"})))]
+    pub conversion: Option<AudioConversionInfo>,
+}
+
+/// Informations sur le processus de conversion
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "pmoserver", derive(ToSchema))]
+pub struct AudioConversionInfo {
+    /// Mode de conversion (ex: "passthrough", "transcode")
+    #[cfg_attr(feature = "pmoserver", schema(example = "transcode"))]
+    pub mode: String,
+
+    /// Codec source détecté
+    #[cfg_attr(feature = "pmoserver", schema(example = "mp3"))]
+    pub source_codec: Option<String>,
 }
 
 impl AudioMetadata {
@@ -94,6 +111,7 @@ impl AudioMetadata {
             sample_rate: properties.sample_rate(),
             channels: properties.channels(),
             bitrate: properties.audio_bitrate(),
+            conversion: None,
         };
 
         if let Some(tag) = tag {
@@ -232,6 +250,7 @@ impl Default for AudioMetadata {
             sample_rate: None,
             channels: None,
             bitrate: None,
+            conversion: None,
         }
     }
 }
@@ -256,6 +275,7 @@ mod tests {
             sample_rate: Some(44100),
             channels: Some(2),
             bitrate: Some(1411),
+            conversion: None,
         };
 
         assert_eq!(
@@ -280,6 +300,7 @@ mod tests {
             sample_rate: None,
             channels: None,
             bitrate: None,
+            conversion: None,
         };
 
         assert_eq!(metadata.collection_key(), None);
