@@ -10,6 +10,9 @@ pmocache = { path = "../pmocache" }
 # DIDL-Lite pour UPnP
 pmodidl = { path = "../pmodidl" }
 
+# Streaming FLAC asynchrone
+pmoflac = { path = "../pmoflac" }
+
 # Base de données
 rusqlite = { version = "0.37", features = ["bundled"] }
 chrono = "0.4"
@@ -19,9 +22,10 @@ lofty = "0.22"
 
 # Encodage/décodage audio
 symphonia = { version = "0.5", features = ["all"] }
-claxon = "0.4"  # Décodeur FLAC
-flacenc = "0.4"  # Encodeur FLAC
+claxon = "0.4"  # Décodeur FLAC (legacy)
+flacenc = "0.4"  # Encodeur FLAC (legacy)
 futures-util = "0.3"  # Pour le streaming
+bytes = "1.0"  # Pour la conversion de streams
 
 # HTTP client
 reqwest = { version = "0.12", features = ["blocking"] }

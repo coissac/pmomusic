@@ -79,6 +79,7 @@
 pub mod cache;
 pub mod metadata;
 pub mod metadata_ext;
+pub mod streaming;
 
 #[cfg(feature = "pmoserver")]
 pub mod openapi;
