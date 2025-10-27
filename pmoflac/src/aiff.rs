@@ -200,8 +200,7 @@ where
                             return Err(AiffError::Decode("COMM chunk too small for AIFC".into()));
                         }
                         let channels = u16::from_be_bytes([data[0], data[1]]);
-                        let num_frames =
-                            u32::from_be_bytes([data[2], data[3], data[4], data[5]]);
+                        let num_frames = u32::from_be_bytes([data[2], data[3], data[4], data[5]]);
                         let bits_per_sample = u16::from_be_bytes([data[6], data[7]]);
                         let sample_rate = parse_extended_f80(&data[8..18])?;
 
@@ -246,12 +245,12 @@ where
                         })?;
 
                         let header = aiff_reader.read_exact_vec(8)?;
-                        let offset = u32::from_be_bytes([
-                            header[0], header[1], header[2], header[3],
-                        ]) as usize;
-                        let _block_size = u32::from_be_bytes([
-                            header[4], header[5], header[6], header[7],
-                        ]) as usize;
+                        let offset =
+                            u32::from_be_bytes([header[0], header[1], header[2], header[3]])
+                                as usize;
+                        let _block_size =
+                            u32::from_be_bytes([header[4], header[5], header[6], header[7]])
+                                as usize;
 
                         if offset > 0 {
                             aiff_reader.skip(offset)?;

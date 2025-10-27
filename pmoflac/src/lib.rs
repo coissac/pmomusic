@@ -108,6 +108,7 @@ mod ogg_common;
 pub mod opus;
 mod pcm;
 mod stream;
+pub mod transcode;
 mod util;
 pub mod wav;
 
@@ -120,4 +121,8 @@ pub use mp3::{decode_mp3_stream, Mp3DecodedStream, Mp3Error};
 pub use ogg::{decode_ogg_vorbis_stream, OggDecodedStream, OggError};
 pub use opus::{decode_ogg_opus_stream, OggOpusDecodedStream, OggOpusError};
 pub use pcm::{PcmFormat, StreamInfo};
+pub use transcode::{
+    transcode_to_flac_stream, AudioCodec, FlacTranscodeStream, TranscodeError, TranscodeOptions,
+    TranscodeToFlac,
+};
 pub use wav::{decode_wav_stream, WavDecodedStream, WavError};
