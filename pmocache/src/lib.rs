@@ -115,6 +115,7 @@ pub mod cache;
 pub mod cache_trait;
 pub mod db;
 pub mod download;
+pub mod metadata_macros;
 
 #[cfg(feature = "pmoserver")]
 pub mod pmoserver_ext;
@@ -129,7 +130,7 @@ pub mod openapi;
 pub mod config_ext;
 
 pub use cache::{Cache, CacheConfig};
-pub use cache_trait::{pk_from_content_header, pk_from_url, FileCache};
+pub use cache_trait::{pk_from_content_header, FileCache};
 pub use db::{CacheEntry, DB};
 pub use download::{
     download, download_with_transformer, ingest_with_transformer, peek_header, peek_reader_header,

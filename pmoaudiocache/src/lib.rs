@@ -78,6 +78,7 @@
 
 pub mod cache;
 pub mod metadata;
+pub mod metadata_ext;
 
 #[cfg(feature = "pmoserver")]
 pub mod openapi;
@@ -88,6 +89,7 @@ pub mod config_ext;
 // Re-exports principaux
 pub use cache::{add_with_metadata_extraction, get_metadata, new_cache, AudioConfig, Cache};
 pub use metadata::AudioMetadata;
+pub use metadata_ext::AudioMetadataExt;
 
 #[cfg(feature = "pmoconfig")]
 pub use config_ext::AudioCacheConfigExt;
