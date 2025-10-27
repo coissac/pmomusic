@@ -12,6 +12,41 @@ use tokio::{
     task::JoinHandle,
 };
 
+/// Generic error type shared by the streaming decoders.
+#[derive(thiserror::Error, Debug, Clone)]
+pub enum DecoderError {
+    #[error("I/O error ({kind:?}): {message}")]
+    Io {
+        kind: io::ErrorKind,
+        message: String,
+    },
+    #[error("{0}")]
+    Decode(String),
+    #[error("internal channel closed unexpectedly")]
+    ChannelClosed,
+}
+
+impl From<io::Error> for DecoderError {
+    fn from(err: io::Error) -> Self {
+        DecoderError::Io {
+            kind: err.kind(),
+            message: err.to_string(),
+        }
+    }
+}
+
+impl From<String> for DecoderError {
+    fn from(value: String) -> Self {
+        DecoderError::Decode(value)
+    }
+}
+
+impl From<&str> for DecoderError {
+    fn from(value: &str) -> Self {
+        DecoderError::Decode(value.to_owned())
+    }
+}
+
 /// Size of chunks when reading input data.
 ///
 /// This size balances between efficient I/O operations and memory usage.
