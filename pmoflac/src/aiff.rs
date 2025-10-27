@@ -153,176 +153,195 @@ where
     let (info_tx, info_rx) = oneshot::channel::<Result<StreamInfo, AiffError>>();
 
     let blocking_handle = tokio::task::spawn_blocking(move || -> Result<(), AiffError> {
-        let channel_reader = ChannelReader::<AiffError>::new(ingest_rx);
-        let mut aiff_reader = StreamingAiffReader::new(channel_reader);
+        let mut info_tx = Some(info_tx);
 
-        // Parse FORM header
-        let form_header = aiff_reader.read_exact_vec(12)?;
-        if &form_header[0..4] != b"FORM" {
-            return Err(AiffError::Decode("missing FORM header".into()));
-        }
-        let form_type = <[u8; 4]>::try_from(&form_header[8..12]).unwrap();
-        if form_type != *b"AIFF" && form_type != *b"AIFC" {
-            return Err(AiffError::Decode(
-                "unsupported FORM type (expected AIFF/AIFC)".into(),
-            ));
-        }
+        let result: Result<(), AiffError> = (|| {
+            let channel_reader = ChannelReader::<AiffError>::new(ingest_rx);
+            let mut aiff_reader = StreamingAiffReader::new(channel_reader);
 
-        let mut comm_chunk: Option<CommChunk> = None;
-        let mut stream_info_sent = false;
+            // Parse FORM header
+            let form_header = aiff_reader.read_exact_vec(12)?;
+            if &form_header[0..4] != b"FORM" {
+                return Err(AiffError::Decode("missing FORM header".into()));
+            }
+            let form_type = <[u8; 4]>::try_from(&form_header[8..12]).unwrap();
+            if form_type != *b"AIFF" && form_type != *b"AIFC" {
+                return Err(AiffError::Decode(
+                    "unsupported FORM type (expected AIFF/AIFC)".into(),
+                ));
+            }
 
-        loop {
-            let header = match aiff_reader.read_exact_vec(8) {
-                Ok(bytes) => bytes,
-                Err(AiffError::Decode(msg)) if msg.contains("unexpected EOF") => break,
-                Err(err) => return Err(err),
-            };
-            let chunk_id = <[u8; 4]>::try_from(&header[..4]).unwrap();
-            let chunk_size =
-                u32::from_be_bytes([header[4], header[5], header[6], header[7]]) as usize;
+            let mut comm_chunk: Option<CommChunk> = None;
+            let mut stream_info_sent = false;
 
-            let padded_size = if chunk_size % 2 == 0 {
-                chunk_size
-            } else {
-                chunk_size + 1
-            };
+            loop {
+                let header = match aiff_reader.read_exact_vec(8) {
+                    Ok(bytes) => bytes,
+                    Err(AiffError::Decode(msg)) if msg.contains("unexpected EOF") => break,
+                    Err(err) => return Err(err),
+                };
+                let chunk_id = <[u8; 4]>::try_from(&header[..4]).unwrap();
+                let chunk_size =
+                    u32::from_be_bytes([header[4], header[5], header[6], header[7]]) as usize;
 
-            match &chunk_id {
-                b"COMM" => {
-                    let data = aiff_reader.read_exact_vec(chunk_size)?;
-                    if form_type == *b"AIFF" && data.len() < 18 {
-                        return Err(AiffError::Decode("COMM chunk too small".into()));
-                    }
-                    if data.len() < 18 {
-                        return Err(AiffError::Decode("COMM chunk too small for AIFC".into()));
-                    }
-                    let channels = u16::from_be_bytes([data[0], data[1]]);
-                    let num_frames = u32::from_be_bytes([data[2], data[3], data[4], data[5]]);
-                    let bits_per_sample = u16::from_be_bytes([data[6], data[7]]);
-                    let sample_rate = parse_extended_f80(&data[8..18])?;
+                let padded_size = if chunk_size % 2 == 0 {
+                    chunk_size
+                } else {
+                    chunk_size + 1
+                };
 
-                    let compression = if form_type == *b"AIFC" {
-                        if data.len() < 22 {
-                            return Err(AiffError::Decode(
-                                "AIFC COMM chunk missing compression type".into(),
-                            ));
+                match &chunk_id {
+                    b"COMM" => {
+                        let data = aiff_reader.read_exact_vec(chunk_size)?;
+                        if form_type == *b"AIFF" && data.len() < 18 {
+                            return Err(AiffError::Decode("COMM chunk too small".into()));
                         }
-                        match &data[18..22] {
-                            b"NONE" => Compression::BigEndianPcm,
-                            b"sowt" => Compression::LittleEndianPcm,
-                            code => {
-                                return Err(AiffError::Decode(format!(
-                                    "unsupported AIFC compression type: {}",
-                                    String::from_utf8_lossy(code)
-                                )))
+                        if data.len() < 18 {
+                            return Err(AiffError::Decode("COMM chunk too small for AIFC".into()));
+                        }
+                        let channels = u16::from_be_bytes([data[0], data[1]]);
+                        let num_frames =
+                            u32::from_be_bytes([data[2], data[3], data[4], data[5]]);
+                        let bits_per_sample = u16::from_be_bytes([data[6], data[7]]);
+                        let sample_rate = parse_extended_f80(&data[8..18])?;
+
+                        let compression = if form_type == *b"AIFC" {
+                            if data.len() < 22 {
+                                return Err(AiffError::Decode(
+                                    "AIFC COMM chunk missing compression type".into(),
+                                ));
                             }
-                        }
-                    } else {
-                        Compression::BigEndianPcm
-                    };
-
-                    let comm = CommChunk {
-                        channels,
-                        num_frames,
-                        bits_per_sample,
-                        sample_rate,
-                        compression,
-                    };
-                    comm.validate()?;
-
-                    comm_chunk = Some(comm);
-
-                    if padded_size > chunk_size {
-                        aiff_reader.skip(padded_size - chunk_size)?;
-                    }
-                }
-                b"SSND" => {
-                    let comm = comm_chunk.as_ref().ok_or_else(|| {
-                        AiffError::Decode("SSND chunk encountered before COMM".into())
-                    })?;
-
-                    let header = aiff_reader.read_exact_vec(8)?;
-                    let offset =
-                        u32::from_be_bytes([header[0], header[1], header[2], header[3]]) as usize;
-                    let _block_size =
-                        u32::from_be_bytes([header[4], header[5], header[6], header[7]]) as usize;
-
-                    if offset > 0 {
-                        aiff_reader.skip(offset)?;
-                    }
-
-                    let data_bytes = chunk_size
-                        .checked_sub(8)
-                        .ok_or_else(|| AiffError::Decode("invalid SSND chunk size".into()))?;
-                    let bytes_per_sample = comm.bytes_per_sample();
-
-                    let info = StreamInfo {
-                        sample_rate: comm.sample_rate,
-                        channels: comm.channels as u8,
-                        bits_per_sample: comm.bits_per_sample as u8,
-                        total_samples: Some(comm.num_frames as u64),
-                        max_block_size: 0,
-                        min_block_size: 0,
-                    };
-
-                    if !stream_info_sent {
-                        if info_tx.send(Ok(info.clone())).is_err() {
-                            return Ok(());
-                        }
-                        stream_info_sent = true;
-                    }
-
-                    let mut remaining = data_bytes;
-                    while remaining > 0 {
-                        let mut to_read = remaining.min(8192);
-                        let residue = to_read % bytes_per_sample;
-                        if residue != 0 {
-                            to_read -= residue;
-                        }
-                        if to_read == 0 {
-                            to_read = bytes_per_sample;
-                        }
-                        let mut chunk = aiff_reader.read_exact_vec(to_read)?;
-                        match comm.compression {
-                            Compression::BigEndianPcm => {
-                                chunk = convert_be_pcm(chunk, comm.bits_per_sample)?;
+                            match &data[18..22] {
+                                b"NONE" => Compression::BigEndianPcm,
+                                b"sowt" => Compression::LittleEndianPcm,
+                                code => {
+                                    return Err(AiffError::Decode(format!(
+                                        "unsupported AIFC compression type: {}",
+                                        String::from_utf8_lossy(code)
+                                    )))
+                                }
                             }
-                            Compression::LittleEndianPcm => {
-                                // data already little-endian; no conversion
-                            }
-                        }
-                        if !chunk.is_empty() {
-                            if pcm_tx.blocking_send(Ok(chunk)).is_err() {
-                                return Ok(());
-                            }
-                        }
-                        remaining = remaining
-                            .checked_sub(to_read)
-                            .ok_or_else(|| AiffError::Decode("SSND chunk underflow".into()))?;
-                    }
+                        } else {
+                            Compression::BigEndianPcm
+                        };
 
-                    if padded_size > chunk_size {
-                        aiff_reader.skip(1)?;
-                    }
+                        let comm = CommChunk {
+                            channels,
+                            num_frames,
+                            bits_per_sample,
+                            sample_rate,
+                            compression,
+                        };
+                        comm.validate()?;
 
-                    break;
-                }
-                _ => {
-                    aiff_reader.skip(chunk_size)?;
-                    if padded_size > chunk_size {
-                        aiff_reader.skip(padded_size - chunk_size)?;
+                        comm_chunk = Some(comm);
+
+                        if padded_size > chunk_size {
+                            aiff_reader.skip(padded_size - chunk_size)?;
+                        }
+                    }
+                    b"SSND" => {
+                        let comm = comm_chunk.as_ref().ok_or_else(|| {
+                            AiffError::Decode("SSND chunk encountered before COMM".into())
+                        })?;
+
+                        let header = aiff_reader.read_exact_vec(8)?;
+                        let offset = u32::from_be_bytes([
+                            header[0], header[1], header[2], header[3],
+                        ]) as usize;
+                        let _block_size = u32::from_be_bytes([
+                            header[4], header[5], header[6], header[7],
+                        ]) as usize;
+
+                        if offset > 0 {
+                            aiff_reader.skip(offset)?;
+                        }
+
+                        let data_bytes = chunk_size
+                            .checked_sub(8)
+                            .ok_or_else(|| AiffError::Decode("invalid SSND chunk size".into()))?;
+                        let bytes_per_sample = comm.bytes_per_sample();
+
+                        let info = StreamInfo {
+                            sample_rate: comm.sample_rate,
+                            channels: comm.channels as u8,
+                            bits_per_sample: comm.bits_per_sample as u8,
+                            total_samples: Some(comm.num_frames as u64),
+                            max_block_size: 0,
+                            min_block_size: 0,
+                        };
+
+                        if !stream_info_sent {
+                            if let Some(tx) = info_tx.take() {
+                                if tx.send(Ok(info.clone())).is_err() {
+                                    return Ok(());
+                                }
+                            }
+                            stream_info_sent = true;
+                        }
+
+                        let mut remaining = data_bytes;
+                        while remaining > 0 {
+                            let mut to_read = remaining.min(8192);
+                            let residue = to_read % bytes_per_sample;
+                            if residue != 0 {
+                                to_read -= residue;
+                            }
+                            if to_read == 0 {
+                                to_read = bytes_per_sample;
+                            }
+                            let mut chunk = aiff_reader.read_exact_vec(to_read)?;
+                            match comm.compression {
+                                Compression::BigEndianPcm => {
+                                    chunk = convert_be_pcm(chunk, comm.bits_per_sample)?;
+                                }
+                                Compression::LittleEndianPcm => {
+                                    // data already little-endian; no conversion
+                                }
+                            }
+                            if !chunk.is_empty() {
+                                if pcm_tx.blocking_send(Ok(chunk)).is_err() {
+                                    return Ok(());
+                                }
+                            }
+                            remaining = remaining
+                                .checked_sub(to_read)
+                                .ok_or_else(|| AiffError::Decode("SSND chunk underflow".into()))?;
+                        }
+
+                        if padded_size > chunk_size {
+                            aiff_reader.skip(1)?;
+                        }
+
+                        break;
+                    }
+                    _ => {
+                        aiff_reader.skip(chunk_size)?;
+                        if padded_size > chunk_size {
+                            aiff_reader.skip(padded_size - chunk_size)?;
+                        }
                     }
                 }
             }
-        }
 
-        if !stream_info_sent {
-            return Err(AiffError::Decode(
-                "no SSND chunk found in AIFF stream".into(),
-            ));
-        }
+            if !stream_info_sent {
+                return Err(AiffError::Decode(
+                    "no SSND chunk found in AIFF stream".into(),
+                ));
+            }
 
-        Ok(())
+            Ok(())
+        })();
+
+        match result {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                if let Some(tx) = info_tx.take() {
+                    let _ = tx.send(Err(err.clone()));
+                }
+                Err(err)
+            }
+        }
     });
 
     let writer_handle = spawn_writer_task(pcm_rx, pcm_writer, blocking_handle, "aiff-decode");

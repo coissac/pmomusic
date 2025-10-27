@@ -48,112 +48,129 @@ where
     let (info_tx, info_rx) = oneshot::channel::<Result<StreamInfo, OggOpusError>>();
 
     let blocking_handle = tokio::task::spawn_blocking(move || -> Result<(), OggOpusError> {
-        let channel_reader = ChannelReader::<OggContainerError>::new(ingest_rx);
-        let mut packet_reader = OggPacketReader::new(
-            channel_reader,
-            OggReaderOptions {
-                validate_crc: false,
-                find_sync: false,
-                ..OggReaderOptions::default()
-            },
-        );
+        let mut info_tx = Some(info_tx);
 
-        let header_packet = packet_reader
-            .next_packet()?
-            .ok_or_else(|| OggOpusError::Decode("missing OpusHead packet".into()))?;
-        let header = OpusHead::parse(&header_packet)?;
+        let result: Result<(), OggOpusError> = (|| {
+            let channel_reader = ChannelReader::<OggContainerError>::new(ingest_rx);
+            let mut packet_reader = OggPacketReader::new(
+                channel_reader,
+                OggReaderOptions {
+                    validate_crc: false,
+                    find_sync: false,
+                    ..OggReaderOptions::default()
+                },
+            );
 
-        let tags_packet = packet_reader
-            .next_packet()?
-            .ok_or_else(|| OggOpusError::Decode("missing OpusTags packet".into()))?;
-        let _tags = OpusTags::parse(&tags_packet)?;
+            let header_packet = packet_reader
+                .next_packet()?
+                .ok_or_else(|| OggOpusError::Decode("missing OpusHead packet".into()))?;
+            let header = OpusHead::parse(&header_packet)?;
 
-        let channels_enum = match header.channels {
-            1 => Channels::Mono,
-            2 => Channels::Stereo,
-            other => {
-                return Err(OggOpusError::Decode(format!(
-                    "unsupported channel count: {}",
-                    other
-                )))
-            }
-        };
+            let tags_packet = packet_reader
+                .next_packet()?
+                .ok_or_else(|| OggOpusError::Decode("missing OpusTags packet".into()))?;
+            let _tags = OpusTags::parse(&tags_packet)?;
 
-        let mut decoder = OpusDecoder::new(48_000, channels_enum)?;
-        if header.output_gain != 0 {
-            decoder.set_gain(i32::from(header.output_gain))?;
-        }
+            let channels_enum = match header.channels {
+                1 => Channels::Mono,
+                2 => Channels::Stereo,
+                other => {
+                    return Err(OggOpusError::Decode(format!(
+                        "unsupported channel count: {}",
+                        other
+                    )))
+                }
+            };
 
-        let info = StreamInfo {
-            sample_rate: 48_000,
-            channels: header.channels,
-            bits_per_sample: 16,
-            total_samples: None,
-            max_block_size: MAX_FRAME_SAMPLES as u16,
-            min_block_size: 0,
-        };
-
-        if info_tx.send(Ok(info.clone())).is_err() {
-            return Ok(());
-        }
-
-        let channels = header.channels as usize;
-        let mut pcm_buffer = vec![0i16; MAX_FRAME_SAMPLES * channels];
-        let mut pcm_bytes = Vec::new();
-        let mut pre_skip = header.pre_skip as usize;
-        let mut produced_audio = false;
-
-        while let Some(packet) = packet_reader.next_packet()? {
-            if pcm_buffer.len() < MAX_FRAME_SAMPLES * channels {
-                pcm_buffer.resize(MAX_FRAME_SAMPLES * channels, 0);
+            let mut decoder = OpusDecoder::new(48_000, channels_enum)?;
+            if header.output_gain != 0 {
+                decoder.set_gain(i32::from(header.output_gain))?;
             }
 
-            let decoded_frames = decoder.decode(
-                &packet,
-                &mut pcm_buffer[..MAX_FRAME_SAMPLES * channels],
-                false,
-            )?;
-            if decoded_frames == 0 {
-                continue;
-            }
+            let info = StreamInfo {
+                sample_rate: 48_000,
+                channels: header.channels,
+                bits_per_sample: 16,
+                total_samples: None,
+                max_block_size: MAX_FRAME_SAMPLES as u16,
+                min_block_size: 0,
+            };
 
-            let mut start_frame = 0;
-            if pre_skip > 0 {
-                let drop = pre_skip.min(decoded_frames);
-                pre_skip -= drop;
-                start_frame = drop;
-                if start_frame == decoded_frames {
-                    continue;
+            if let Some(tx) = info_tx.take() {
+                if tx.send(Ok(info.clone())).is_err() {
+                    return Ok(());
                 }
             }
 
-            let start_index = start_frame * channels;
-            let end_index = decoded_frames * channels;
+            let channels = header.channels as usize;
+            let mut pcm_buffer = vec![0i16; MAX_FRAME_SAMPLES * channels];
+            let mut pcm_bytes = Vec::new();
+            let mut pre_skip = header.pre_skip as usize;
+            let mut produced_audio = false;
 
-            pcm_bytes.clear();
-            pcm_bytes.reserve((end_index - start_index) * 2);
-            for sample in &pcm_buffer[start_index..end_index] {
-                pcm_bytes.extend_from_slice(&sample.to_le_bytes());
+            while let Some(packet) = packet_reader.next_packet()? {
+                if pcm_buffer.len() < MAX_FRAME_SAMPLES * channels {
+                    pcm_buffer.resize(MAX_FRAME_SAMPLES * channels, 0);
+                }
+
+                let decoded_frames = decoder.decode(
+                    &packet,
+                    &mut pcm_buffer[..MAX_FRAME_SAMPLES * channels],
+                    false,
+                )?;
+                if decoded_frames == 0 {
+                    continue;
+                }
+
+                let mut start_frame = 0;
+                if pre_skip > 0 {
+                    let drop = pre_skip.min(decoded_frames);
+                    pre_skip -= drop;
+                    start_frame = drop;
+                    if start_frame == decoded_frames {
+                        continue;
+                    }
+                }
+
+                let start_index = start_frame * channels;
+                let end_index = decoded_frames * channels;
+
+                pcm_bytes.clear();
+                pcm_bytes.reserve((end_index - start_index) * 2);
+                for sample in &pcm_buffer[start_index..end_index] {
+                    pcm_bytes.extend_from_slice(&sample.to_le_bytes());
+                }
+
+                if pcm_bytes.is_empty() {
+                    continue;
+                }
+
+                produced_audio = true;
+                let chunk = std::mem::take(&mut pcm_bytes);
+                if pcm_tx.blocking_send(Ok(chunk)).is_err() {
+                    break;
+                }
+                pcm_bytes = Vec::with_capacity(MAX_FRAME_SAMPLES * channels * 2);
             }
 
-            if pcm_bytes.is_empty() {
-                continue;
+            if !produced_audio {
+                return Err(OggOpusError::Decode(
+                    "stream contained no decodable Opus packets".into(),
+                ));
             }
 
-            produced_audio = true;
-            let chunk = pcm_bytes.clone();
-            if pcm_tx.blocking_send(Ok(chunk)).is_err() {
-                break;
+            Ok(())
+        })();
+
+        match result {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                if let Some(tx) = info_tx.take() {
+                    let _ = tx.send(Err(err.clone()));
+                }
+                Err(err)
             }
         }
-
-        if !produced_audio {
-            return Err(OggOpusError::Decode(
-                "stream contained no decodable Opus packets".into(),
-            ));
-        }
-
-        Ok(())
     });
 
     let writer_handle = spawn_writer_task(pcm_rx, pcm_writer, blocking_handle, "ogg-opus");

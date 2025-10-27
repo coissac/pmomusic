@@ -82,6 +82,7 @@ pub struct OggPacketReader {
     finished: bool,
     stream_serial: Option<u32>,
     sync_buffer: Vec<u8>,
+    sync_bytes_read: usize,
     synced: bool,
     options: OggReaderOptions,
 }
@@ -96,6 +97,7 @@ impl OggPacketReader {
             finished: false,
             stream_serial: None,
             sync_buffer: Vec::new(),
+            sync_bytes_read: 0,
             synced: !options.find_sync, // If we don't need to find sync, we're already synced
             options,
         }
@@ -183,14 +185,21 @@ impl OggPacketReader {
             return Ok(());
         }
 
-        while self.sync_buffer.len() < self.options.max_sync_search {
+        while self.sync_bytes_read < self.options.max_sync_search {
             let mut chunk = [0u8; 1024];
-            let n = Read::read(&mut self.reader, &mut chunk).map_err(OggContainerError::from)?;
+            let remaining = self.options.max_sync_search - self.sync_bytes_read;
+            let to_read = remaining.min(chunk.len());
+            if to_read == 0 {
+                break;
+            }
+            let n = Read::read(&mut self.reader, &mut chunk[..to_read])
+                .map_err(OggContainerError::from)?;
             if n == 0 {
                 return Err(OggContainerError::Decode(
                     "EOF reached while searching for Ogg sync pattern".into(),
                 ));
             }
+            self.sync_bytes_read += n;
             self.sync_buffer.extend_from_slice(&chunk[..n]);
 
             // Search for "OggS" pattern
@@ -205,9 +214,8 @@ impl OggPacketReader {
                 return Ok(());
             }
 
-            // If buffer is getting large and still no sync, keep only last 3 bytes
-            // (in case "OggS" is split across chunk boundary)
-            if self.sync_buffer.len() >= self.options.max_sync_search {
+            // Keep the buffer compact to avoid unbounded growth.
+            if self.sync_buffer.len() > 3 {
                 let keep_len = 3.min(self.sync_buffer.len());
                 self.sync_buffer.drain(..self.sync_buffer.len() - keep_len);
             }
