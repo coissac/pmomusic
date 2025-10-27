@@ -18,6 +18,7 @@ libflac-sys = { version = "0.3.3", default-features = false, features = ["build-
 thiserror = "1.0"
 tokio = { version = "1.37", features = ["rt", "rt-multi-thread", "macros", "sync", "io-util", "fs"] }
 minimp3 = "0.5"
+lewton = "0.10"
 
 [dev-dependencies]
 tempfile = "3.10"

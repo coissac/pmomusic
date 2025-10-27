@@ -102,10 +102,12 @@ mod pcm;
 mod stream;
 mod util;
 pub mod mp3;
+pub mod ogg;
 mod common;
 
 pub use decoder::{decode_flac_stream, FlacDecodedStream};
 pub use encoder::{encode_flac_stream, EncoderOptions, FlacEncodedStream};
 pub use error::FlacError;
 pub use mp3::{decode_mp3_stream, Mp3DecodedStream, Mp3Error};
+pub use ogg::{decode_ogg_vorbis_stream, OggDecodedStream, OggError};
 pub use pcm::{PcmFormat, StreamInfo};
