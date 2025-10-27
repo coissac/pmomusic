@@ -130,6 +130,20 @@ pub trait FileCache<C: CacheConfig>: Send + Sync {
 
     /// Consolide le cache en supprimant les orphelins et en re-téléchargeant les fichiers manquants
     async fn consolidate(&self) -> Result<()>;
+
+    /// Vérifie si une clé primaire est valide (existe en DB et fichier présent)
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Clé primaire à vérifier
+    ///
+    /// # Returns
+    ///
+    /// `true` si l'entrée existe en base de données et que le fichier est présent
+    fn is_valid_pk(&self, pk: &str) -> bool {
+        self.get_database().get(pk, false).is_ok()
+            && self.file_path(pk).exists()
+    }
 }
 
 /// Génère une clé primaire à partir des premiers octets d'un document
@@ -163,20 +177,3 @@ pub fn pk_from_content_header(header: &[u8]) -> String {
     hex::encode(&result[..16]) // 16 octets = 32 caractères hex
 }
 
-/// Génère une clé primaire à partir d'une URL (legacy)
-///
-/// **DEPRECATED**: Cette fonction est obsolète et ne devrait plus être utilisée.
-/// Utilisez `pk_from_content_header()` à la place pour générer des identifiants
-/// basés sur le contenu plutôt que sur l'URL.
-///
-/// Utilise SHA1 pour hasher l'URL et retourne les 8 premiers octets en hexadécimal.
-#[deprecated(
-    since = "0.2.0",
-    note = "Utilisez pk_from_content_header() pour des identifiants basés sur le contenu"
-)]
-pub fn pk_from_url(url: &str) -> String {
-    let mut hasher = Sha1::new();
-    hasher.update(url.as_bytes());
-    let result = hasher.finalize();
-    hex::encode(&result[..8])
-}

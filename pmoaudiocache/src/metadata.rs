@@ -159,6 +159,81 @@ impl AudioMetadata {
             _ => None,
         }
     }
+
+    /// Retourne la durée formatée pour DIDL-Lite (H:MM:SS)
+    ///
+    /// # Exemple
+    ///
+    /// ```
+    /// use pmoaudiocache::AudioMetadata;
+    ///
+    /// let metadata = AudioMetadata {
+    ///     duration_secs: Some(3665),
+    ///     ..Default::default()
+    /// };
+    ///
+    /// assert_eq!(metadata.duration_formatted(), Some("1:01:05".to_string()));
+    /// ```
+    pub fn duration_formatted(&self) -> Option<String> {
+        self.duration_secs.map(|d| {
+            let hours = d / 3600;
+            let minutes = (d % 3600) / 60;
+            let seconds = d % 60;
+            format!("{}:{:02}:{:02}", hours, minutes, seconds)
+        })
+    }
+
+    /// Convertit les métadonnées en Resource DIDL-Lite
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - URL de la ressource audio
+    ///
+    /// # Exemple
+    ///
+    /// ```no_run
+    /// use pmoaudiocache::AudioMetadata;
+    ///
+    /// let metadata = AudioMetadata {
+    ///     duration_secs: Some(180),
+    ///     sample_rate: Some(44100),
+    ///     channels: Some(2),
+    ///     ..Default::default()
+    /// };
+    ///
+    /// let resource = metadata.to_didl_resource("http://localhost:8080/audio/tracks/abc123".into());
+    /// assert_eq!(resource.url, "http://localhost:8080/audio/tracks/abc123");
+    /// ```
+    pub fn to_didl_resource(&self, url: String) -> pmodidl::Resource {
+        pmodidl::Resource {
+            protocol_info: "http-get:*:audio/flac:*".to_string(),
+            bits_per_sample: None,
+            sample_frequency: self.sample_rate.map(|sr| sr.to_string()),
+            nr_audio_channels: self.channels.map(|ch| ch.to_string()),
+            duration: self.duration_formatted(),
+            url,
+        }
+    }
+}
+
+impl Default for AudioMetadata {
+    fn default() -> Self {
+        Self {
+            title: None,
+            artist: None,
+            album: None,
+            year: None,
+            track_number: None,
+            track_total: None,
+            disc_number: None,
+            disc_total: None,
+            genre: None,
+            duration_secs: None,
+            sample_rate: None,
+            channels: None,
+            bitrate: None,
+        }
+    }
 }
 
 #[cfg(test)]
