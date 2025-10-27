@@ -1,9 +1,3 @@
-use std::{
-    io,
-    pin::Pin,
-    task::{Context, Poll},
-};
-
 use tokio::{
     io::AsyncRead,
     sync::{mpsc, oneshot},
@@ -11,72 +5,17 @@ use tokio::{
 
 use crate::{
     common::ChannelReader,
-    decoder_common::{spawn_ingest_task, spawn_writer_task, CHANNEL_CAPACITY, DUPLEX_BUFFER_SIZE},
+    decoder_common::{
+        spawn_ingest_task, spawn_writer_task, DecodedStream, CHANNEL_CAPACITY, DUPLEX_BUFFER_SIZE,
+    },
     error::FlacError,
     pcm::StreamInfo,
     stream::ManagedAsyncReader,
     util::interleaved_i32_to_le_bytes,
 };
 
-/// An async stream that decodes FLAC audio into PCM samples.
-///
-/// This struct implements `AsyncRead`, allowing you to read decoded PCM data
-/// as it becomes available. The decoding happens in a background task.
-///
-/// # Example
-///
-/// ```no_run
-/// use pmoflac::decode_flac_stream;
-/// use tokio::fs::File;
-/// use tokio::io::AsyncReadExt;
-///
-/// # #[tokio::main]
-/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// let file = File::open("audio.flac").await?;
-/// let mut stream = decode_flac_stream(file).await?;
-///
-/// println!("Sample rate: {}", stream.info().sample_rate);
-///
-/// let mut pcm = Vec::new();
-/// stream.read_to_end(&mut pcm).await?;
-/// stream.wait().await?;
-/// # Ok(())
-/// # }
-/// ```
-pub struct FlacDecodedStream {
-    info: StreamInfo,
-    reader: ManagedAsyncReader<FlacError>,
-}
-
-impl FlacDecodedStream {
-    /// Returns metadata about the FLAC stream (sample rate, channels, etc.).
-    pub fn info(&self) -> &StreamInfo {
-        &self.info
-    }
-
-    /// Consumes the stream and returns its components.
-    pub fn into_parts(self) -> (StreamInfo, ManagedAsyncReader<FlacError>) {
-        (self.info, self.reader)
-    }
-
-    /// Waits for the background decoding task to complete.
-    ///
-    /// This should be called after reading all data to ensure proper cleanup
-    /// and to catch any errors that occurred during decoding.
-    pub async fn wait(self) -> Result<(), FlacError> {
-        self.reader.wait().await
-    }
-}
-
-impl AsyncRead for FlacDecodedStream {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.reader).poll_read(cx, buf)
-    }
-}
+/// Async stream alias for decoded FLAC audio.
+pub type FlacDecodedStream = DecodedStream<FlacError>;
 
 /// Decodes a FLAC stream into PCM audio data.
 ///
@@ -210,5 +149,5 @@ where
     let info = info_rx.await.map_err(|_| FlacError::ChannelClosed)??;
     let reader = ManagedAsyncReader::new("flac-decode-writer", pcm_reader, writer_handle);
 
-    Ok(FlacDecodedStream { info, reader })
+    Ok(DecodedStream::new(info, reader))
 }

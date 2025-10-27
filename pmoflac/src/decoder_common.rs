@@ -3,14 +3,20 @@
 //! This module provides shared functionality for the FLAC, MP3, and Ogg/Vorbis decoders,
 //! reducing code duplication and ensuring consistent behavior across all decoders.
 
-use std::io;
+use std::{
+    io,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
 use bytes::Bytes;
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWriteExt, DuplexStream},
+    io::{AsyncRead, AsyncReadExt, AsyncWriteExt, DuplexStream, ReadBuf},
     sync::mpsc,
     task::JoinHandle,
 };
+
+use crate::{pcm::StreamInfo, stream::ManagedAsyncReader};
 
 /// Generic error type shared by the streaming decoders.
 #[derive(thiserror::Error, Debug, Clone)]
@@ -44,6 +50,56 @@ impl From<String> for DecoderError {
 impl From<&str> for DecoderError {
     fn from(value: &str) -> Self {
         DecoderError::Decode(value.to_owned())
+    }
+}
+
+/// Generic decoded stream wrapper shared by all decoders.
+pub struct DecodedStream<E>
+where
+    E: std::error::Error,
+{
+    info: StreamInfo,
+    reader: ManagedAsyncReader<E>,
+}
+
+impl<E> DecodedStream<E>
+where
+    E: std::error::Error,
+{
+    /// Creates a new decoded stream from metadata and the underlying reader.
+    pub fn new(info: StreamInfo, reader: ManagedAsyncReader<E>) -> Self {
+        Self { info, reader }
+    }
+
+    /// Returns metadata about the decoded audio stream.
+    pub fn info(&self) -> &StreamInfo {
+        &self.info
+    }
+
+    /// Consumes the stream and returns its components.
+    pub fn into_parts(self) -> (StreamInfo, ManagedAsyncReader<E>) {
+        (self.info, self.reader)
+    }
+
+    /// Waits for the decoding pipeline to finish.
+    pub async fn wait(self) -> Result<(), E>
+    where
+        E: From<String>,
+    {
+        self.reader.wait().await
+    }
+}
+
+impl<E> AsyncRead for DecodedStream<E>
+where
+    E: std::error::Error,
+{
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.reader).poll_read(cx, buf)
     }
 }
 

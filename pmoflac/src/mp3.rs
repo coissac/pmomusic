@@ -87,22 +87,17 @@
 //! }
 //! ```
 
-use std::{
-    io,
-    pin::Pin,
-    task::{Context, Poll},
-};
-
 use minimp3::{Decoder as MiniMp3Decoder, Error as MiniMp3Error};
 use tokio::{
-    io::{AsyncRead, ReadBuf},
+    io::AsyncRead,
     sync::{mpsc, oneshot},
 };
 
 use crate::{
     common::ChannelReader,
     decoder_common::{
-        spawn_ingest_task, spawn_writer_task, DecoderError, CHANNEL_CAPACITY, DUPLEX_BUFFER_SIZE,
+        spawn_ingest_task, spawn_writer_task, DecodedStream, DecoderError, CHANNEL_CAPACITY,
+        DUPLEX_BUFFER_SIZE,
     },
     pcm::StreamInfo,
     stream::ManagedAsyncReader,
@@ -111,44 +106,8 @@ use crate::{
 /// Errors that can occur while decoding MP3 data.
 pub type Mp3Error = DecoderError;
 
-/// An async stream that decodes MP3 audio into PCM samples.
-///
-/// This struct implements `AsyncRead`, allowing you to read decoded PCM data
-/// as it becomes available. The decoding happens in a background task.
-pub struct Mp3DecodedStream {
-    info: StreamInfo,
-    reader: ManagedAsyncReader<Mp3Error>,
-}
-
-impl Mp3DecodedStream {
-    /// Returns metadata about the decoded MP3 stream.
-    pub fn info(&self) -> &StreamInfo {
-        &self.info
-    }
-
-    /// Consumes the stream and returns its components.
-    pub fn into_parts(self) -> (StreamInfo, ManagedAsyncReader<Mp3Error>) {
-        (self.info, self.reader)
-    }
-
-    /// Waits for the background decoding task to complete.
-    ///
-    /// This should be called after reading all data to ensure proper cleanup
-    /// and to catch any errors that occurred during decoding.
-    pub async fn wait(self) -> Result<(), Mp3Error> {
-        self.reader.wait().await
-    }
-}
-
-impl AsyncRead for Mp3DecodedStream {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.reader).poll_read(cx, buf)
-    }
-}
+/// Async decoded MP3 stream (type alias over the shared wrapper).
+pub type Mp3DecodedStream = DecodedStream<Mp3Error>;
 
 /// Decodes an MP3 stream into PCM audio data (16-bit little-endian interleaved).
 ///
@@ -239,5 +198,5 @@ where
     let info = info_rx.await.map_err(|_| Mp3Error::ChannelClosed)??;
     let reader = ManagedAsyncReader::new("mp3-decode-writer", pcm_reader, writer_handle);
 
-    Ok(Mp3DecodedStream { info, reader })
+    Ok(DecodedStream::new(info, reader))
 }

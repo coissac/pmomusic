@@ -5,13 +5,7 @@
 //! little-endian interleaved PCM frames compatible with the rest of the
 //! pipeline.
 
-use std::{
-    collections::VecDeque,
-    fmt,
-    io::{self, Read},
-    pin::Pin,
-    task::{Context, Poll},
-};
+use std::{collections::VecDeque, fmt, io::Read};
 
 use tokio::{
     io::AsyncRead,
@@ -21,7 +15,8 @@ use tokio::{
 use crate::{
     common::ChannelReader,
     decoder_common::{
-        spawn_ingest_task, spawn_writer_task, DecoderError, CHANNEL_CAPACITY, DUPLEX_BUFFER_SIZE,
+        spawn_ingest_task, spawn_writer_task, DecodedStream, DecoderError, CHANNEL_CAPACITY,
+        DUPLEX_BUFFER_SIZE,
     },
     pcm::StreamInfo,
     stream::ManagedAsyncReader,
@@ -142,35 +137,8 @@ impl CommChunk {
     }
 }
 
-/// Asynchronous decoded stream wrapper for AIFF data.
-pub struct AiffDecodedStream {
-    info: StreamInfo,
-    reader: ManagedAsyncReader<AiffError>,
-}
-
-impl AiffDecodedStream {
-    pub fn info(&self) -> &StreamInfo {
-        &self.info
-    }
-
-    pub fn into_parts(self) -> (StreamInfo, ManagedAsyncReader<AiffError>) {
-        (self.info, self.reader)
-    }
-
-    pub async fn wait(self) -> Result<(), AiffError> {
-        self.reader.wait().await
-    }
-}
-
-impl AsyncRead for AiffDecodedStream {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.reader).poll_read(cx, buf)
-    }
-}
+/// Async stream alias for decoded AIFF audio.
+pub type AiffDecodedStream = DecodedStream<AiffError>;
 
 /// Decode an AIFF stream into PCM audio (little-endian interleaved).
 pub async fn decode_aiff_stream<R>(reader: R) -> Result<AiffDecodedStream, AiffError>
@@ -362,7 +330,7 @@ where
     let info = info_rx.await.map_err(|_| AiffError::ChannelClosed)??;
     let reader = ManagedAsyncReader::new("aiff-decode-writer", pcm_reader, writer_handle);
 
-    Ok(AiffDecodedStream { info, reader })
+    Ok(DecodedStream::new(info, reader))
 }
 
 fn parse_extended_f80(bytes: &[u8]) -> Result<u32, AiffError> {
