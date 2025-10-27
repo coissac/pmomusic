@@ -93,28 +93,18 @@ use std::{
     task::{Context, Poll},
 };
 
-use bytes::Bytes;
 use minimp3::{Decoder as MiniMp3Decoder, Error as MiniMp3Error};
 use tokio::{
-    io::{
-        self as tokio_io, AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf,
-    },
+    io::{AsyncRead, ReadBuf},
     sync::{mpsc, oneshot},
 };
 
-use crate::{common::ChannelReader, pcm::StreamInfo, stream::ManagedAsyncReader};
-
-/// Size of chunks when reading MP3 input data (16 KB).
-///
-/// This size balances between efficient I/O operations and memory usage.
-/// Larger chunks reduce system call overhead, while smaller chunks reduce latency.
-const INGEST_CHUNK_SIZE: usize = 16 * 1024;
-
-/// Channel capacity for async message passing between tasks.
-///
-/// This bounded capacity provides backpressure: if the decoder can't keep up,
-/// the ingest task will wait before reading more data.
-const CHANNEL_CAPACITY: usize = 8;
+use crate::{
+    common::ChannelReader,
+    decoder_common::{spawn_ingest_task, spawn_writer_task, CHANNEL_CAPACITY, DUPLEX_BUFFER_SIZE},
+    pcm::StreamInfo,
+    stream::ManagedAsyncReader,
+};
 
 /// Errors that can occur while decoding MP3 data.
 #[derive(thiserror::Error, Debug, Clone)]
@@ -194,31 +184,11 @@ pub async fn decode_mp3_stream<R>(reader: R) -> Result<Mp3DecodedStream, Mp3Erro
 where
     R: AsyncRead + Unpin + Send + 'static,
 {
-    let (ingest_tx, ingest_rx) = mpsc::channel::<Result<Bytes, Mp3Error>>(CHANNEL_CAPACITY);
+    let (ingest_tx, ingest_rx) = mpsc::channel(CHANNEL_CAPACITY);
+    spawn_ingest_task(reader, ingest_tx);
 
-    tokio::spawn(async move {
-        let mut reader = tokio_io::BufReader::new(reader);
-        let mut buf = vec![0u8; INGEST_CHUNK_SIZE];
-
-        loop {
-            match reader.read(&mut buf).await {
-                Ok(0) => break,
-                Ok(n) => {
-                    let chunk = Bytes::copy_from_slice(&buf[..n]);
-                    if ingest_tx.send(Ok(chunk)).await.is_err() {
-                        break;
-                    }
-                }
-                Err(err) => {
-                    let _ = ingest_tx.send(Err(Mp3Error::from(err))).await;
-                    break;
-                }
-            }
-        }
-    });
-
-    let (pcm_tx, mut pcm_rx) = mpsc::channel::<Result<Vec<u8>, Mp3Error>>(CHANNEL_CAPACITY);
-    let (pcm_reader, mut pcm_writer) = tokio_io::duplex(256 * 1024);
+    let (pcm_tx, pcm_rx) = mpsc::channel(CHANNEL_CAPACITY);
+    let (pcm_reader, pcm_writer) = tokio::io::duplex(DUPLEX_BUFFER_SIZE);
     let (info_tx, info_rx) = oneshot::channel::<Result<StreamInfo, Mp3Error>>();
 
     let blocking_handle = tokio::task::spawn_blocking(move || -> Result<(), Mp3Error> {
@@ -290,29 +260,7 @@ where
         Ok(())
     });
 
-    let writer_handle = tokio::spawn(async move {
-        while let Some(chunk_result) = pcm_rx.recv().await {
-            let chunk = chunk_result?;
-            if chunk.is_empty() {
-                continue;
-            }
-            pcm_writer
-                .write_all(&chunk)
-                .await
-                .map_err(Mp3Error::from)?;
-        }
-        pcm_writer
-            .shutdown()
-            .await
-            .map_err(Mp3Error::from)?;
-        match blocking_handle.await {
-            Ok(res) => res,
-            Err(err) => Err(Mp3Error::TaskJoin {
-                role: "mp3-decode",
-                details: err.to_string(),
-            }),
-        }
-    });
+    let writer_handle = spawn_writer_task(pcm_rx, pcm_writer, blocking_handle, "mp3-decode");
 
     let info = info_rx
         .await
