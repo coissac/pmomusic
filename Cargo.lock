@@ -2785,9 +2785,19 @@ dependencies = [
 name = "pmoplaylist"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "once_cell",
+ "pmoaudiocache",
+ "pmocache",
+ "pmoconfig",
  "pmodidl",
+ "pmoupnp",
+ "rusqlite",
  "serde",
+ "serde_json",
+ "thiserror 1.0.69",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
