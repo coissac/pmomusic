@@ -111,11 +111,7 @@ where
         pcm_writer.shutdown().await.map_err(E::from)?;
         match blocking_handle.await {
             Ok(res) => res,
-            Err(err) => Err(E::from(format!(
-                "{} task failed: {}",
-                role,
-                err
-            ))),
+            Err(err) => Err(E::from(format!("{} task failed: {}", role, err))),
         }
     })
 }

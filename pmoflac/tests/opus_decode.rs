@@ -1,8 +1,6 @@
 use tokio::io::AsyncReadExt;
 
-use pmoflac::{
-    decode_ogg_opus_stream, encode_flac_stream, EncoderOptions, PcmFormat, StreamInfo,
-};
+use pmoflac::{decode_ogg_opus_stream, encode_flac_stream, EncoderOptions, PcmFormat, StreamInfo};
 
 const TEST_OPUS: &str = "test_data/music_orig.opus";
 

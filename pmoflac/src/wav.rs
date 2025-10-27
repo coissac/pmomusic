@@ -18,9 +18,7 @@ use tokio::{
 
 use crate::{
     common::ChannelReader,
-    decoder_common::{
-        spawn_ingest_task, spawn_writer_task, CHANNEL_CAPACITY, DUPLEX_BUFFER_SIZE,
-    },
+    decoder_common::{spawn_ingest_task, spawn_writer_task, CHANNEL_CAPACITY, DUPLEX_BUFFER_SIZE},
     pcm::StreamInfo,
     stream::ManagedAsyncReader,
 };
@@ -109,7 +107,9 @@ where
                 let mut chunk = [0u8; 4096];
                 let read = self.reader.read(&mut chunk)?;
                 if read == 0 {
-                    return Err(WavError::Decode("unexpected EOF while skipping chunk".into()));
+                    return Err(WavError::Decode(
+                        "unexpected EOF while skipping chunk".into(),
+                    ));
                 }
                 self.buffer.clear();
                 self.buffer.extend_from_slice(&chunk[..read]);
@@ -118,7 +118,6 @@ where
         }
         Ok(())
     }
-
 }
 
 /// PCM format metadata extracted from the WAV `fmt ` chunk.
@@ -252,8 +251,7 @@ where
                     }
                     let audio_format = u16::from_le_bytes([bytes[0], bytes[1]]);
                     let channels = u16::from_le_bytes([bytes[2], bytes[3]]);
-                    let sample_rate =
-                        u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+                    let sample_rate = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
                     let bits_per_sample = u16::from_le_bytes([bytes[14], bytes[15]]);
                     let fmt = FmtChunk {
                         audio_format,

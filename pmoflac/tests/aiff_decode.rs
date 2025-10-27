@@ -1,8 +1,6 @@
 use tokio::io::AsyncReadExt;
 
-use pmoflac::{
-    decode_aiff_stream, encode_flac_stream, EncoderOptions, PcmFormat, StreamInfo,
-};
+use pmoflac::{decode_aiff_stream, encode_flac_stream, EncoderOptions, PcmFormat, StreamInfo};
 
 const TEST_AIFF: &str = "test_data/wood24.aiff";
 

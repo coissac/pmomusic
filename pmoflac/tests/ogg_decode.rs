@@ -256,7 +256,7 @@ async fn ogg_decoder_detects_corrupted_crc() -> Result<(), Box<dyn std::error::E
     // Find the second "OggS" (skip the first one to corrupt an audio page, not header)
     let mut oggs_positions = Vec::new();
     for i in 0..bytes.len().saturating_sub(4) {
-        if &bytes[i..i+4] == b"OggS" {
+        if &bytes[i..i + 4] == b"OggS" {
             oggs_positions.push(i);
             if oggs_positions.len() >= 2 {
                 break;
