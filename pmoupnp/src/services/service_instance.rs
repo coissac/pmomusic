@@ -489,7 +489,7 @@ impl ServiceInstance {
     pub fn usn(&self) -> String {
         let device = self.device.read().unwrap();
         match device.as_ref() {
-            Some(device) => format!("uuid:{}::urn:{}", device.udn(), self.service_type()),
+            Some(device) => format!("{}::urn:{}", device.udn_with_prefix(), self.service_type()),
             None => format!("uuid::urn:{}", self.service_type()),
         }
     }
