@@ -15,6 +15,7 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::sync::Arc;
 
 #[cfg(feature = "openapi")]
@@ -39,6 +40,21 @@ pub struct DownloadStatus {
     pub finished: bool,
     /// Erreur éventuelle
     pub error: Option<String>,
+    /// Informations sur la conversion
+    pub conversion: Option<ConversionStatus>,
+}
+
+/// Informations sur la conversion en cours ou réalisée
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct ConversionStatus {
+    /// Mode de conversion (ex: "passthrough", "transcode")
+    #[cfg_attr(feature = "openapi", schema(example = "passthrough"))]
+    pub mode: String,
+    /// Codec source détecté (si disponible)
+    pub input_codec: Option<String>,
+    /// Informations complémentaires lisibles (optionnel)
+    pub details: Option<String>,
 }
 
 /// Requête pour ajouter un item au cache
@@ -134,29 +150,73 @@ pub async fn get_download_status<C: CacheConfig>(
     State(cache): State<Arc<Cache<C>>>,
     Path(pk): Path<String>,
 ) -> impl IntoResponse {
-    // Vérifier que l'item existe dans la DB
-    if cache.db.get(&pk, false).is_err() {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: "NOT_FOUND".to_string(),
-                message: format!("Item with pk '{}' not found in cache", pk),
-            }),
-        )
-            .into_response();
-    }
+    let entry = match cache.db.get(&pk, false) {
+        Ok(entry) => entry,
+        Err(_) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: "NOT_FOUND".to_string(),
+                    message: format!("Item with pk '{}' not found in cache", pk),
+                }),
+            )
+                .into_response();
+        }
+    };
 
-    let in_progress = cache.get_download(&pk).await.is_some();
-    let current_size = cache.current_size(&pk).await;
-    let transformed_size = cache.transformed_size(&pk).await;
-    let expected_size = cache.expected_size(&pk).await;
-    let finished = cache.is_finished(&pk).await;
+    let download = cache.get_download(&pk).await;
+    let file_path = cache.get_file_path(&pk);
+    let file_size = if file_path.exists() {
+        std::fs::metadata(&file_path).ok().map(|m| m.len())
+    } else {
+        None
+    };
 
-    let error = if let Some(download) = cache.get_download(&pk).await {
+    let in_progress = download.is_some();
+    let current_size = if let Some(download) = download.as_ref() {
+        Some(download.current_size().await)
+    } else {
+        file_size
+    };
+
+    let transformed_size = if let Some(download) = download.as_ref() {
+        Some(download.transformed_size().await)
+    } else {
+        file_size
+    };
+
+    let expected_size = if let Some(download) = download.as_ref() {
+        download.expected_size().await
+    } else {
+        file_size
+    };
+
+    let finished = if let Some(download) = download.as_ref() {
+        download.finished().await
+    } else {
+        file_path.exists()
+    };
+
+    let error = if let Some(download) = download.as_ref() {
         download.error().await
     } else {
         None
     };
+
+    let mut conversion = if let Some(download) = download.as_ref() {
+        download
+            .transform_metadata()
+            .await
+            .map(ConversionStatus::from)
+    } else {
+        None
+    };
+
+    if conversion.is_none() {
+        if let Some(meta) = entry.metadata.as_ref() {
+            conversion = conversion_from_json(meta);
+        }
+    }
 
     let status = DownloadStatus {
         pk,
@@ -166,9 +226,26 @@ pub async fn get_download_status<C: CacheConfig>(
         expected_size,
         finished,
         error,
+        conversion,
     };
 
     (StatusCode::OK, Json(status)).into_response()
+}
+
+impl From<crate::download::TransformMetadata> for ConversionStatus {
+    fn from(value: crate::download::TransformMetadata) -> Self {
+        Self {
+            mode: value.mode.unwrap_or_else(|| "unknown".to_string()),
+            input_codec: value.input_codec,
+            details: value.details,
+        }
+    }
+}
+
+fn conversion_from_json(value: &Value) -> Option<ConversionStatus> {
+    value
+        .get("conversion")
+        .and_then(|conv| serde_json::from_value(conv.clone()).ok())
 }
 
 /// Ajoute un item au cache depuis une URL

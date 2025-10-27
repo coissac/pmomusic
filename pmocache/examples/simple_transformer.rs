@@ -11,9 +11,7 @@ fn main() {
     println!("   dl.wait_until_finished().await?;\n");
 
     println!("2. Téléchargement avec transformation:");
-    println!(
-        "   let transformer: StreamTransformer = Box::new(|response, mut file, update_progress| {{"
-    );
+    println!("   let transformer: StreamTransformer = Box::new(|response, mut file, ctx| {{");
     println!("       Box::pin(async move {{");
     println!("           let mut stream = response.bytes_stream();");
     println!("           let mut total = 0u64;");
@@ -26,7 +24,7 @@ fn main() {
     println!();
     println!("               file.write_all(&transformed).await.map_err(|e| e.to_string())?;");
     println!("               total += transformed.len() as u64;");
-    println!("               update_progress(total);");
+    println!("               ctx.report_progress(total);");
     println!("           }}");
     println!();
     println!("           file.flush().await.map_err(|e| e.to_string())?;");

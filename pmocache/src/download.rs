@@ -15,17 +15,19 @@ use tokio_util::io::ReaderStream;
 /// La fonction reçoit :
 /// - Un `CacheInput` abstrait (HTTP ou lecteur en streaming)
 /// - Un writer pour écrire les données transformées
-/// - Un callback pour mettre à jour la progression
+/// - Un contexte fournissant des utilitaires (progression, métadonnées)
 ///
 /// Elle retourne un `Future` qui se résout en `Result`.
 pub type StreamTransformer = Box<
     dyn FnOnce(
             CacheInput,
             tokio::fs::File,
-            Arc<dyn Fn(u64) + Send + Sync>,
+            TransformContextHandle,
         ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>>
         + Send,
 >;
+
+pub type TransformContextHandle = Arc<TransformContext>;
 
 type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send>>;
 
@@ -180,6 +182,7 @@ struct DownloadState {
     finished: bool,
     read_position: u64,
     error: Option<String>,
+    transform_metadata: Option<TransformMetadata>,
 }
 
 /// Objet représentant un téléchargement en cours
@@ -200,6 +203,7 @@ impl Download {
                 finished: false,
                 read_position: 0,
                 error: None,
+                transform_metadata: None,
             })),
         })
     }
@@ -273,6 +277,45 @@ impl Download {
     pub async fn error(&self) -> Option<String> {
         let state = self.state.read().await;
         state.error.clone()
+    }
+
+    pub async fn transform_metadata(&self) -> Option<TransformMetadata> {
+        let state = self.state.read().await;
+        state.transform_metadata.clone()
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TransformMetadata {
+    pub mode: Option<String>,
+    pub input_codec: Option<String>,
+    pub details: Option<String>,
+}
+
+pub struct TransformContext {
+    state: Arc<RwLock<DownloadState>>,
+    progress_cb: Arc<dyn Fn(u64) + Send + Sync>,
+}
+
+impl TransformContext {
+    fn new(state: Arc<RwLock<DownloadState>>, progress_cb: Arc<dyn Fn(u64) + Send + Sync>) -> Self {
+        Self { state, progress_cb }
+    }
+
+    /// Reports progress (in bytes) to the download state.
+    pub fn report_progress(&self, bytes: u64) {
+        (self.progress_cb)(bytes);
+    }
+
+    /// Returns the underlying progress callback (useful for piping into other APIs).
+    pub fn progress_callback(&self) -> Arc<dyn Fn(u64) + Send + Sync> {
+        Arc::clone(&self.progress_cb)
+    }
+
+    /// Stores metadata describing the transformation that occurred.
+    pub async fn set_metadata(&self, metadata: TransformMetadata) {
+        let mut state = self.state.write().await;
+        state.transform_metadata = Some(metadata);
     }
 }
 
@@ -402,7 +445,9 @@ async fn process_input(
                 });
             });
 
-        match transformer(input, file, Arc::clone(&progress_callback)).await {
+        let context = Arc::new(TransformContext::new(Arc::clone(&state), progress_callback));
+
+        match transformer(input, file, Arc::clone(&context)).await {
             Ok(_) => {
                 let mut s = state.write().await;
                 if s.current_size == 0 {

@@ -102,6 +102,9 @@
             <span v-if="track.metadata?.bitrate">
               {{ formatBitrate(track.metadata.bitrate) }}
             </span>
+            <span v-if="conversionLabel(track)">
+              {{ conversionLabel(track) }}
+            </span>
           </div>
           <div class="collection" v-if="track.collection">
             {{ track.collection }}
@@ -153,6 +156,7 @@
             <p v-if="selectedTrack.metadata.sample_rate"><strong>Sample Rate:</strong> {{ formatSampleRate(selectedTrack.metadata.sample_rate) }}</p>
             <p v-if="selectedTrack.metadata.bitrate"><strong>Bitrate:</strong> {{ formatBitrate(selectedTrack.metadata.bitrate) }}</p>
             <p v-if="selectedTrack.metadata.channels"><strong>Channels:</strong> {{ selectedTrack.metadata.channels }}</p>
+            <p v-if="conversionLabel(selectedTrack)"><strong>Conversion:</strong> {{ conversionLabel(selectedTrack) }}</p>
           </div>
           <div class="cache-section">
             <h4>Cache Info</h4>
@@ -412,6 +416,37 @@ function formatDate(dateString: string) {
   if (days === 1) return "Yesterday";
   if (days < 7) return `${days} days ago`;
   return d.toLocaleDateString();
+}
+
+function formatConversion(
+  conversion?: { mode?: string; input_codec?: string; details?: string } | null
+): string | undefined {
+  if (!conversion || !conversion.mode) return undefined;
+  const modeLower = conversion.mode.toLowerCase();
+  const modeLabel =
+    modeLower === "passthrough"
+      ? "Passthrough"
+      : modeLower === "transcode"
+      ? "Transcoded"
+      : conversion.mode.charAt(0).toUpperCase() + conversion.mode.slice(1);
+
+  if (conversion.input_codec) {
+    const codec = conversion.input_codec.toUpperCase();
+    if (modeLower === "passthrough") {
+      return `${modeLabel} (${codec})`;
+    }
+    return `${modeLabel} (${codec} → FLAC)`;
+  }
+
+  if (conversion.details) {
+    return `${modeLabel} – ${conversion.details}`;
+  }
+
+  return modeLabel;
+}
+
+function conversionLabel(track: AudioCacheEntry | null): string | undefined {
+  return formatConversion(track?.metadata?.conversion ?? undefined);
 }
 
 onMounted(() => {

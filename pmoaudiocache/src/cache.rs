@@ -103,7 +103,16 @@ pub async fn add_with_metadata_extraction(
     let flac_bytes = tokio::fs::read(&file_path).await?;
 
     // Extraire les métadonnées
-    let metadata = crate::metadata::AudioMetadata::from_bytes(&flac_bytes)?;
+    let mut metadata = crate::metadata::AudioMetadata::from_bytes(&flac_bytes)?;
+
+    if let Some(transform) = cache.transform_metadata(&pk).await {
+        if let Some(mode) = transform.mode {
+            metadata.conversion = Some(crate::metadata::AudioConversionInfo {
+                mode,
+                source_codec: transform.input_codec,
+            });
+        }
+    }
     let metadata_json: Value = serde_json::to_value(&metadata)
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
     // Stocker dans la DB

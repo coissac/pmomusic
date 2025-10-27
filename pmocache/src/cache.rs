@@ -94,9 +94,10 @@ impl<C: CacheConfig> Cache<C> {
     ///
     /// let transformer_factory = Arc::new(|| {
     ///     // Créer un transformer qui convertit les données
-    ///     Box::new(|input, file, progress| {
+    ///     Box::new(|input, file, ctx| {
     ///         Box::pin(async move {
     ///             // Transformation personnalisée
+    ///             ctx.report_progress(0);
     ///             Ok(())
     ///         })
     ///     }) as StreamTransformer
@@ -607,6 +608,15 @@ impl<C: CacheConfig> Cache<C> {
         } else {
             // Fichier terminé, la taille finale est la taille du fichier
             self.transformed_size(pk).await
+        }
+    }
+
+    /// Retourne les métadonnées de transformation (si disponibles)
+    pub async fn transform_metadata(&self, pk: &str) -> Option<crate::download::TransformMetadata> {
+        if let Some(download) = self.get_download(pk).await {
+            download.transform_metadata().await
+        } else {
+            None
         }
     }
 

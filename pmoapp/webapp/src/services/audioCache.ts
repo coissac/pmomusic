@@ -18,6 +18,7 @@ export interface AudioCacheMetadata {
   sample_rate?: number;
   bitrate?: number;
   channels?: number;
+  conversion?: ConversionInfo;
   [key: string]: unknown;
 }
 
@@ -28,6 +29,12 @@ export interface AudioCacheEntry {
   last_used: string | null;
   collection?: string | null;
   metadata?: AudioCacheMetadata | null;
+}
+
+export interface ConversionInfo {
+  mode: string;
+  input_codec?: string;
+  details?: string;
 }
 
 export interface AddTrackRequest {
@@ -43,9 +50,13 @@ export interface AddTrackResponse {
 
 export interface DownloadStatus {
   pk: string;
-  status: "pending" | "downloading" | "completed" | "failed";
-  progress?: number;
+  in_progress: boolean;
+  finished: boolean;
+  current_size?: number;
+  transformed_size?: number;
+  expected_size?: number;
   error?: string;
+  conversion?: ConversionInfo;
 }
 
 export interface ApiError {
