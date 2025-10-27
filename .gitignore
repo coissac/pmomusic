@@ -10,6 +10,7 @@
 **/*.a
 **/*.aif
 **/*.aiff
+**/*.flac   
 xxx
 /dcai/
 **/.pmomusic.yml
