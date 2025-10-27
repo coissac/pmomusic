@@ -15,23 +15,57 @@ use crate::{
     util::interleaved_i32_to_le_bytes,
 };
 
+/// Size of chunks when reading FLAC input data (32 KB).
 const INGEST_CHUNK_SIZE: usize = 32 * 1024;
+
+/// Channel capacity for async message passing between tasks.
 const CHANNEL_CAPACITY: usize = 8;
 
+/// An async stream that decodes FLAC audio into PCM samples.
+///
+/// This struct implements `AsyncRead`, allowing you to read decoded PCM data
+/// as it becomes available. The decoding happens in a background task.
+///
+/// # Example
+///
+/// ```no_run
+/// use pmoflac::decode_flac_stream;
+/// use tokio::fs::File;
+/// use tokio::io::AsyncReadExt;
+///
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let file = File::open("audio.flac").await?;
+/// let mut stream = decode_flac_stream(file).await?;
+///
+/// println!("Sample rate: {}", stream.info().sample_rate);
+///
+/// let mut pcm = Vec::new();
+/// stream.read_to_end(&mut pcm).await?;
+/// stream.wait().await?;
+/// # Ok(())
+/// # }
+/// ```
 pub struct FlacDecodedStream {
     info: StreamInfo,
     reader: ManagedAsyncReader,
 }
 
 impl FlacDecodedStream {
+    /// Returns metadata about the FLAC stream (sample rate, channels, etc.).
     pub fn info(&self) -> &StreamInfo {
         &self.info
     }
 
+    /// Consumes the stream and returns its components.
     pub fn into_parts(self) -> (StreamInfo, ManagedAsyncReader) {
         (self.info, self.reader)
     }
 
+    /// Waits for the background decoding task to complete.
+    ///
+    /// This should be called after reading all data to ensure proper cleanup
+    /// and to catch any errors that occurred during decoding.
     pub async fn wait(self) -> Result<(), FlacError> {
         self.reader.wait().await
     }
@@ -47,6 +81,57 @@ impl AsyncRead for FlacDecodedStream {
     }
 }
 
+/// Decodes a FLAC stream into PCM audio data.
+///
+/// This function spawns background tasks to perform the decoding asynchronously.
+/// The returned `FlacDecodedStream` implements `AsyncRead` for streaming the PCM output.
+///
+/// # Threading Model
+///
+/// - A Tokio task reads chunks from the input and forwards them via a channel
+/// - A blocking task (via `spawn_blocking`) runs the FLAC decoder (claxon)
+/// - Another Tokio task writes decoded PCM to an internal duplex stream
+///
+/// This architecture ensures true streaming: output is produced as input is consumed,
+/// without buffering entire files.
+///
+/// # Arguments
+///
+/// * `reader` - Any async reader containing FLAC-encoded data
+///
+/// # Returns
+///
+/// A `FlacDecodedStream` that can be read to obtain PCM samples in little-endian
+/// interleaved format. The stream's `info()` method provides metadata.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The input is not valid FLAC data
+/// - An I/O error occurs while reading
+/// - The decoder encounters corrupted data
+///
+/// # Example
+///
+/// ```no_run
+/// use pmoflac::decode_flac_stream;
+/// use tokio::io::AsyncReadExt;
+///
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let flac_data: &[u8] = &[/* ... */];
+/// let mut stream = decode_flac_stream(flac_data).await?;
+///
+/// let info = stream.info().clone();
+/// println!("{} Hz, {} channels, {} bits/sample",
+///     info.sample_rate, info.channels, info.bits_per_sample);
+///
+/// let mut pcm = Vec::new();
+/// stream.read_to_end(&mut pcm).await?;
+/// stream.wait().await?;
+/// # Ok(())
+/// # }
+/// ```
 pub async fn decode_flac_stream<R>(reader: R) -> Result<FlacDecodedStream, FlacError>
 where
     R: AsyncRead + Unpin + Send + 'static,

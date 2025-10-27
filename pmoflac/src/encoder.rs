@@ -17,23 +17,59 @@ use crate::{
     util::le_bytes_to_interleaved_i32,
 };
 
+/// Channel capacity for async message passing between tasks.
 const CHANNEL_CAPACITY: usize = 8;
+
+/// Number of PCM frames to process per chunk (4096 frames = ~93ms at 44.1kHz).
 const PCM_FRAMES_PER_CHUNK: usize = 4096;
 
+/// An async stream that encodes PCM audio into FLAC format.
+///
+/// This struct implements `AsyncRead`, allowing you to read encoded FLAC data
+/// as it becomes available. The encoding happens in a background task.
+///
+/// # Example
+///
+/// ```no_run
+/// use pmoflac::{encode_flac_stream, EncoderOptions, PcmFormat};
+/// use tokio::io::AsyncReadExt;
+///
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let pcm_data: &[u8] = &[/* 16-bit stereo PCM */];
+/// let format = PcmFormat {
+///     sample_rate: 44_100,
+///     channels: 2,
+///     bits_per_sample: 16,
+/// };
+///
+/// let mut stream = encode_flac_stream(pcm_data, format, EncoderOptions::default()).await?;
+/// let mut flac_output = Vec::new();
+/// stream.read_to_end(&mut flac_output).await?;
+/// stream.wait().await?;
+/// # Ok(())
+/// # }
+/// ```
 pub struct FlacEncodedStream {
     format: PcmFormat,
     reader: ManagedAsyncReader,
 }
 
 impl FlacEncodedStream {
+    /// Returns the PCM format used for encoding.
     pub fn format(&self) -> PcmFormat {
         self.format
     }
 
+    /// Consumes the stream and returns its components.
     pub fn into_parts(self) -> (PcmFormat, ManagedAsyncReader) {
         (self.format, self.reader)
     }
 
+    /// Waits for the background encoding task to complete.
+    ///
+    /// This should be called after reading all data to ensure proper cleanup
+    /// and to catch any errors that occurred during encoding.
     pub async fn wait(self) -> Result<(), FlacError> {
         self.reader.wait().await
     }
@@ -49,11 +85,22 @@ impl tokio::io::AsyncRead for FlacEncodedStream {
     }
 }
 
+/// Options for configuring FLAC encoding.
 #[derive(Debug, Clone)]
 pub struct EncoderOptions {
+    /// Compression level (0-12). Higher means better compression but slower.
+    /// Default: 5 (balanced)
     pub compression_level: u32,
+
+    /// Whether to verify the encoding by decoding in parallel.
+    /// Default: false (disabled for performance)
     pub verify: bool,
+
+    /// Total number of samples (optional). If known, improves seeking in output.
     pub total_samples: Option<u64>,
+
+    /// Block size in samples (optional). If None, libFLAC chooses automatically.
+    /// Typical values: 1152, 2304, 4096.
     pub block_size: Option<u32>,
 }
 
@@ -68,6 +115,81 @@ impl Default for EncoderOptions {
     }
 }
 
+/// Encodes PCM audio data into a FLAC stream.
+///
+/// This function spawns background tasks to perform the encoding asynchronously.
+/// The returned `FlacEncodedStream` implements `AsyncRead` for streaming the FLAC output.
+///
+/// # Threading Model
+///
+/// - A Tokio task reads PCM chunks and converts them to i32 samples
+/// - A blocking task (via `spawn_blocking`) runs the libFLAC encoder
+/// - The encoder's write callback sends encoded data via a channel
+/// - Another Tokio task writes FLAC data to an internal duplex stream
+///
+/// This architecture ensures true streaming: FLAC frames are produced as soon as
+/// enough PCM data is available, without waiting for the entire input.
+///
+/// # Arguments
+///
+/// * `reader` - Any async reader containing PCM audio in little-endian interleaved format
+/// * `format` - Describes the PCM format (sample rate, channels, bit depth)
+/// * `options` - Encoding options (compression level, verify, etc.)
+///
+/// # PCM Input Format
+///
+/// The PCM data must be:
+/// - **Little-endian** byte order
+/// - **Interleaved** channels (L, R, L, R for stereo)
+/// - **Signed integers** with bit depth matching `format.bits_per_sample`
+///
+/// # Returns
+///
+/// A `FlacEncodedStream` that can be read to obtain FLAC-encoded data.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The PCM format is invalid (e.g., unsupported bit depth)
+/// - The input stream has incomplete sample data
+/// - libFLAC initialization fails
+/// - An I/O error occurs
+///
+/// # Example
+///
+/// ```no_run
+/// use pmoflac::{encode_flac_stream, EncoderOptions, PcmFormat};
+/// use tokio::io::AsyncReadExt;
+///
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// // Generate 1 second of silence at 44.1kHz stereo 16-bit
+/// let sample_rate = 44_100u32;
+/// let channels = 2u8;
+/// let pcm_data = vec![0u8; sample_rate as usize * channels as usize * 2];
+///
+/// let format = PcmFormat {
+///     sample_rate,
+///     channels,
+///     bits_per_sample: 16,
+/// };
+///
+/// let options = EncoderOptions {
+///     compression_level: 8,
+///     total_samples: Some(sample_rate as u64),
+///     ..Default::default()
+/// };
+///
+/// let mut stream = encode_flac_stream(&pcm_data[..], format, options).await?;
+/// let mut flac_data = Vec::new();
+/// stream.read_to_end(&mut flac_data).await?;
+/// stream.wait().await?;
+///
+/// println!("Encoded {} bytes of PCM to {} bytes of FLAC",
+///     pcm_data.len(), flac_data.len());
+/// # Ok(())
+/// # }
+/// ```
 pub async fn encode_flac_stream<R>(
     reader: R,
     format: PcmFormat,

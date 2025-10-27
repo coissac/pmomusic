@@ -17,31 +17,87 @@ impl StreamInfo {
     }
 }
 
-/// Basic PCM format used when encoding to FLAC.
+/// Describes the format of PCM audio data.
+///
+/// This is used when encoding PCM to FLAC to specify the audio properties.
 #[derive(Debug, Clone, Copy)]
 pub struct PcmFormat {
+    /// Sample rate in Hz (e.g., 44100, 48000, 96000)
     pub sample_rate: u32,
+
+    /// Number of audio channels (1 = mono, 2 = stereo, etc.)
     pub channels: u8,
+
+    /// Bits per sample (typically 16 or 24)
     pub bits_per_sample: u8,
 }
 
 impl PcmFormat {
+    /// Validates the PCM format parameters.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any parameter is invalid or out of the supported range.
+    ///
+    /// # Warnings
+    ///
+    /// This function will log warnings (via the error message) for unusual but
+    /// technically valid configurations.
     pub fn validate(&self) -> Result<(), String> {
+        // Validate channels
         if self.channels == 0 {
             return Err("channel count must be greater than 0".into());
         }
         if self.channels > 8 {
-            return Err("channel count greater than 8 is unsupported".into());
+            return Err("channel count greater than 8 is unsupported by FLAC".into());
         }
+
+        // Validate sample rate
         if self.sample_rate == 0 {
             return Err("sample rate must be greater than 0".into());
         }
+        if self.sample_rate > 655_350 {
+            return Err("sample rate exceeds FLAC maximum (655350 Hz)".into());
+        }
+
+        // Warn about unusual sample rates
+        const STANDARD_RATES: &[u32] = &[
+            8000, 11025, 16000, 22050, 32000, 44100, 48000, 88200, 96000, 176400, 192000, 352800,
+            384000,
+        ];
+        if !STANDARD_RATES.contains(&self.sample_rate) {
+            eprintln!(
+                "Warning: non-standard sample rate {} Hz (valid but unusual)",
+                self.sample_rate
+            );
+        }
+
+        // Validate bit depth
         if self.bits_per_sample == 0 || self.bits_per_sample > 32 {
             return Err("bits per sample must be in 1..=32".into());
         }
+
+        // FLAC officially supports 4-32 bits/sample
+        if self.bits_per_sample < 4 {
+            eprintln!(
+                "Warning: bits_per_sample={} is less than 4 (unusual for FLAC)",
+                self.bits_per_sample
+            );
+        }
+
+        // Warn about common bit depths
+        const COMMON_BIT_DEPTHS: &[u8] = &[8, 16, 24, 32];
+        if !COMMON_BIT_DEPTHS.contains(&self.bits_per_sample) {
+            eprintln!(
+                "Warning: non-standard bit depth {} (valid but unusual)",
+                self.bits_per_sample
+            );
+        }
+
         Ok(())
     }
 
+    /// Returns the number of bytes needed to store one sample at this bit depth.
     pub fn bytes_per_sample(&self) -> usize {
         bytes_per_sample(self.bits_per_sample)
     }
