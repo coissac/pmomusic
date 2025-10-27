@@ -4,25 +4,19 @@ use std::{
     task::{Context, Poll},
 };
 
-use bytes::Bytes;
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
+    io::AsyncRead,
     sync::{mpsc, oneshot},
 };
 
 use crate::{
     common::ChannelReader,
+    decoder_common::{spawn_ingest_task, spawn_writer_task, CHANNEL_CAPACITY, DUPLEX_BUFFER_SIZE},
     error::FlacError,
     pcm::StreamInfo,
     stream::ManagedAsyncReader,
     util::interleaved_i32_to_le_bytes,
 };
-
-/// Size of chunks when reading FLAC input data (32 KB).
-const INGEST_CHUNK_SIZE: usize = 32 * 1024;
-
-/// Channel capacity for async message passing between tasks.
-const CHANNEL_CAPACITY: usize = 8;
 
 /// An async stream that decodes FLAC audio into PCM samples.
 ///
@@ -139,30 +133,11 @@ pub async fn decode_flac_stream<R>(reader: R) -> Result<FlacDecodedStream, FlacE
 where
     R: AsyncRead + Unpin + Send + 'static,
 {
-    let (ingest_tx, ingest_rx) = mpsc::channel::<Result<Bytes, FlacError>>(CHANNEL_CAPACITY);
+    let (ingest_tx, ingest_rx) = mpsc::channel(CHANNEL_CAPACITY);
+    spawn_ingest_task(reader, ingest_tx);
 
-    tokio::spawn(async move {
-        let mut reader = tokio::io::BufReader::new(reader);
-        let mut buf = vec![0u8; INGEST_CHUNK_SIZE];
-        loop {
-            match reader.read(&mut buf).await {
-                Ok(0) => break,
-                Ok(n) => {
-                    let chunk = Bytes::copy_from_slice(&buf[..n]);
-                    if ingest_tx.send(Ok(chunk)).await.is_err() {
-                        break;
-                    }
-                }
-                Err(err) => {
-                    let _ = ingest_tx.send(Err(FlacError::Io(err))).await;
-                    break;
-                }
-            }
-        }
-    });
-
-    let (pcm_tx, mut pcm_rx) = mpsc::channel::<Result<Vec<u8>, FlacError>>(CHANNEL_CAPACITY);
-    let (pcm_reader, mut pcm_writer) = tokio::io::duplex(256 * 1024);
+    let (pcm_tx, pcm_rx) = mpsc::channel(CHANNEL_CAPACITY);
+    let (pcm_reader, pcm_writer) = tokio::io::duplex(DUPLEX_BUFFER_SIZE);
     let (info_tx, info_rx) = oneshot::channel::<Result<StreamInfo, FlacError>>();
 
     let blocking_handle = tokio::task::spawn_blocking(move || -> Result<(), FlacError> {
@@ -230,23 +205,7 @@ where
         Ok(())
     });
 
-    let writer_handle = tokio::spawn(async move {
-        while let Some(chunk_result) = pcm_rx.recv().await {
-            let chunk = chunk_result?;
-            if chunk.is_empty() {
-                continue;
-            }
-            pcm_writer.write_all(&chunk).await?;
-        }
-        pcm_writer.shutdown().await?;
-        match blocking_handle.await {
-            Ok(res) => res,
-            Err(err) => Err(FlacError::TaskJoin {
-                role: "flac-decode",
-                details: err.to_string(),
-            }),
-        }
-    });
+    let writer_handle = spawn_writer_task(pcm_rx, pcm_writer, blocking_handle, "flac-decode");
 
     let info = info_rx.await.map_err(|_| FlacError::ChannelClosed)??;
     let reader = ManagedAsyncReader::new("flac-decode-writer", pcm_reader, writer_handle);
