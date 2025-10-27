@@ -760,27 +760,12 @@ dependencies = [
 
 [[package]]
 name = "crc"
-version = "2.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "49fc9a695bca7f35f5f4c15cddc84415f66a74ea78eef08e90c5024f2b540e23"
-dependencies = [
- "crc-catalog 1.1.1",
-]
-
-[[package]]
-name = "crc"
 version = "3.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9710d3b3739c2e349eb44fe848ad0b7c8cb1e42bd87ee49371df2f7acaf3e675"
 dependencies = [
- "crc-catalog 2.4.0",
+ "crc-catalog",
 ]
-
-[[package]]
-name = "crc-catalog"
-version = "1.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ccaeedb56da03b09f598226e25e80088cb4cd25f316e6e4df7d695f0feeb1403"
 
 [[package]]
 name = "crc-catalog"
@@ -1164,30 +1149,12 @@ checksum = "1ced73b1dacfc750a6db6c0a0c3a3853c8b41997e2e2c563dc90804ae6867959"
 
 [[package]]
 name = "flacenc"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb6da14d3c6605689b5c9ed5187a5218a6d3888e14b747bc18fd4e4bafd452bd"
-dependencies = [
- "built",
- "crc 2.1.0",
- "crossbeam-channel",
- "heapless",
- "log",
- "md-5",
- "num-traits",
- "rustversion",
- "seq-macro",
- "serde",
-]
-
-[[package]]
-name = "flacenc"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "22846e369206f5c3caa4c59071041fe70c1c2863ebdd2341e6ad17490d53772b"
 dependencies = [
  "built",
- "crc 3.3.0",
+ "crc",
  "crossbeam-channel",
  "heapless",
  "log",
@@ -2701,8 +2668,6 @@ dependencies = [
  "axum 0.8.6",
  "bytes",
  "chrono",
- "claxon",
- "flacenc 0.4.0",
  "futures-util",
  "lofty",
  "paste",
@@ -2712,11 +2677,9 @@ dependencies = [
  "pmoflac",
  "pmoserver",
  "quick-xml 0.37.5",
- "reqwest",
  "rusqlite",
  "serde",
  "serde_json",
- "symphonia",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -2861,7 +2824,7 @@ dependencies = [
  "chrono",
  "claxon",
  "ffmpeg-next",
- "flacenc 0.5.0",
+ "flacenc",
  "futures",
  "hex",
  "hound",
