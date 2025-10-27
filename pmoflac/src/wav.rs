@@ -157,126 +157,143 @@ where
     let (info_tx, info_rx) = oneshot::channel::<Result<StreamInfo, WavError>>();
 
     let blocking_handle = tokio::task::spawn_blocking(move || -> Result<(), WavError> {
-        let channel_reader = ChannelReader::<WavError>::new(ingest_rx);
-        let mut wav_reader = StreamingWavReader::new(channel_reader);
+        let mut info_tx = Some(info_tx);
 
-        let riff = wav_reader.read_exact(12)?;
-        if &riff[0..4] != b"RIFF" {
-            return Err(WavError::Decode("missing RIFF header".into()));
-        }
-        if &riff[8..12] != b"WAVE" {
-            return Err(WavError::Decode("missing WAVE signature".into()));
-        }
+        let result: Result<(), WavError> = (|| {
+            let channel_reader = ChannelReader::<WavError>::new(ingest_rx);
+            let mut wav_reader = StreamingWavReader::new(channel_reader);
 
-        let mut fmt_chunk: Option<FmtChunk> = None;
-        let mut data_found = false;
-
-        loop {
-            let mut chunk_header = [0u8; 8];
-            match wav_reader.read_exact(8) {
-                Ok(bytes) => chunk_header.copy_from_slice(bytes),
-                Err(WavError::Decode(msg)) if msg.contains("unexpected EOF") => break,
-                Err(err) => return Err(err),
+            let riff = wav_reader.read_exact(12)?;
+            if &riff[0..4] != b"RIFF" {
+                return Err(WavError::Decode("missing RIFF header".into()));
             }
-            let chunk_id = &chunk_header[..4];
-            let chunk_size = u32::from_le_bytes([
-                chunk_header[4],
-                chunk_header[5],
-                chunk_header[6],
-                chunk_header[7],
-            ]) as usize;
+            if &riff[8..12] != b"WAVE" {
+                return Err(WavError::Decode("missing WAVE signature".into()));
+            }
 
-            let padded_size = (chunk_size + 1) & !1; // align to even bytes
+            let mut fmt_chunk: Option<FmtChunk> = None;
+            let mut data_found = false;
 
-            match chunk_id {
-                b"fmt " => {
-                    let bytes = wav_reader.read_exact(chunk_size)?;
-                    if chunk_size < 16 {
-                        return Err(WavError::Decode("fmt chunk too small".into()));
-                    }
-                    let audio_format = u16::from_le_bytes([bytes[0], bytes[1]]);
-                    let channels = u16::from_le_bytes([bytes[2], bytes[3]]);
-                    let sample_rate = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
-                    let bits_per_sample = u16::from_le_bytes([bytes[14], bytes[15]]);
-                    let fmt = FmtChunk {
-                        audio_format,
-                        channels,
-                        sample_rate,
-                        bits_per_sample,
-                    };
-                    fmt.validate()?;
-                    fmt_chunk = Some(fmt);
-                    if padded_size > chunk_size {
-                        wav_reader.skip(padded_size - chunk_size)?;
-                    }
+            loop {
+                let mut chunk_header = [0u8; 8];
+                match wav_reader.read_exact(8) {
+                    Ok(bytes) => chunk_header.copy_from_slice(bytes),
+                    Err(WavError::Decode(msg)) if msg.contains("unexpected EOF") => break,
+                    Err(err) => return Err(err),
                 }
-                b"data" => {
-                    let fmt = fmt_chunk
-                        .as_ref()
-                        .ok_or_else(|| WavError::Decode("data chunk before fmt chunk".into()))?;
+                let chunk_id = &chunk_header[..4];
+                let chunk_size = u32::from_le_bytes([
+                    chunk_header[4],
+                    chunk_header[5],
+                    chunk_header[6],
+                    chunk_header[7],
+                ]) as usize;
 
-                    let info = StreamInfo {
-                        sample_rate: fmt.sample_rate,
-                        channels: fmt.channels as u8,
-                        bits_per_sample: fmt.bits_per_sample as u8,
-                        total_samples: None,
-                        max_block_size: 0,
-                        min_block_size: 0,
-                    };
+                let padded_size = (chunk_size + 1) & !1; // align to even bytes
 
-                    if info_tx.send(Ok(info.clone())).is_err() {
-                        return Ok(());
-                    }
-
-                    let mut remaining = chunk_size;
-                    let bytes_per_frame = fmt.bytes_per_sample() * fmt.channels as usize;
-                    let mut buffer = vec![0u8; 4096];
-
-                    while remaining > 0 {
-                        let to_read = remaining.min(buffer.len());
-                        let read = wav_reader.reader.read(&mut buffer[..to_read])?;
-                        if read == 0 {
-                            break;
+                match chunk_id {
+                    b"fmt " => {
+                        let bytes = wav_reader.read_exact(chunk_size)?;
+                        if chunk_size < 16 {
+                            return Err(WavError::Decode("fmt chunk too small".into()));
                         }
-                        remaining -= read;
-                        let aligned = read - (read % bytes_per_frame);
-                        if aligned > 0 {
-                            if pcm_tx
-                                .blocking_send(Ok(buffer[..aligned].to_vec()))
-                                .is_err()
-                            {
+                        let audio_format = u16::from_le_bytes([bytes[0], bytes[1]]);
+                        let channels = u16::from_le_bytes([bytes[2], bytes[3]]);
+                        let sample_rate =
+                            u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+                        let bits_per_sample = u16::from_le_bytes([bytes[14], bytes[15]]);
+                        let fmt = FmtChunk {
+                            audio_format,
+                            channels,
+                            sample_rate,
+                            bits_per_sample,
+                        };
+                        fmt.validate()?;
+                        fmt_chunk = Some(fmt);
+                        if padded_size > chunk_size {
+                            wav_reader.skip(padded_size - chunk_size)?;
+                        }
+                    }
+                    b"data" => {
+                        let fmt = fmt_chunk.as_ref().ok_or_else(|| {
+                            WavError::Decode("data chunk before fmt chunk".into())
+                        })?;
+
+                        let info = StreamInfo {
+                            sample_rate: fmt.sample_rate,
+                            channels: fmt.channels as u8,
+                            bits_per_sample: fmt.bits_per_sample as u8,
+                            total_samples: None,
+                            max_block_size: 0,
+                            min_block_size: 0,
+                        };
+
+                        if let Some(tx) = info_tx.take() {
+                            if tx.send(Ok(info.clone())).is_err() {
                                 return Ok(());
                             }
                         }
-                        if aligned < read {
-                            return Err(WavError::Decode(
-                                "incomplete frame at end of chunk".into(),
-                            ));
+
+                        let mut remaining = chunk_size;
+                        let bytes_per_frame = fmt.bytes_per_sample() * fmt.channels as usize;
+                        let mut buffer = vec![0u8; 4096];
+
+                        while remaining > 0 {
+                            let to_read = remaining.min(buffer.len());
+                            let read = wav_reader.reader.read(&mut buffer[..to_read])?;
+                            if read == 0 {
+                                break;
+                            }
+                            remaining -= read;
+                            let aligned = read - (read % bytes_per_frame);
+                            if aligned > 0 {
+                                if pcm_tx
+                                    .blocking_send(Ok(buffer[..aligned].to_vec()))
+                                    .is_err()
+                                {
+                                    return Ok(());
+                                }
+                            }
+                            if aligned < read {
+                                return Err(WavError::Decode(
+                                    "incomplete frame at end of chunk".into(),
+                                ));
+                            }
                         }
-                    }
 
-                    if padded_size > chunk_size {
-                        let mut pad = [0u8; 1];
-                        wav_reader.reader.read_exact(&mut pad)?;
-                    }
+                        if padded_size > chunk_size {
+                            let mut pad = [0u8; 1];
+                            wav_reader.reader.read_exact(&mut pad)?;
+                        }
 
-                    data_found = true;
-                    break;
-                }
-                _ => {
-                    wav_reader.skip(chunk_size)?;
-                    if padded_size > chunk_size {
-                        wav_reader.skip(padded_size - chunk_size)?;
+                        data_found = true;
+                        break;
+                    }
+                    _ => {
+                        wav_reader.skip(chunk_size)?;
+                        if padded_size > chunk_size {
+                            wav_reader.skip(padded_size - chunk_size)?;
+                        }
                     }
                 }
             }
-        }
 
-        if !data_found {
-            return Err(WavError::Decode("no data chunk found in WAV stream".into()));
-        }
+            if !data_found {
+                return Err(WavError::Decode("no data chunk found in WAV stream".into()));
+            }
 
-        Ok(())
+            Ok(())
+        })();
+
+        match result {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                if let Some(tx) = info_tx.take() {
+                    let _ = tx.send(Err(err.clone()));
+                }
+                Err(err)
+            }
+        }
     });
 
     let writer_handle = spawn_writer_task(pcm_rx, pcm_writer, blocking_handle, "wav-decode");

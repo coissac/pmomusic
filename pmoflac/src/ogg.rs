@@ -184,81 +184,98 @@ where
     let (info_tx, info_rx) = oneshot::channel::<Result<StreamInfo, OggError>>();
 
     let blocking_handle = tokio::task::spawn_blocking(move || -> Result<(), OggError> {
-        let channel_reader = ChannelReader::<OggContainerError>::new(ingest_rx);
-        let mut packet_reader = OggPacketReader::new(channel_reader, OggReaderOptions::default());
+        let mut info_tx = Some(info_tx);
 
-        // Read Vorbis headers (3 packets: identification, comment, setup)
-        let ident_packet = packet_reader
-            .next_packet()?
-            .ok_or_else(|| OggError::Decode("missing Vorbis identification header".into()))?;
-        let ident_hdr = read_header_ident(&ident_packet)?;
+        let result: Result<(), OggError> = (|| {
+            let channel_reader = ChannelReader::<OggContainerError>::new(ingest_rx);
+            let mut packet_reader =
+                OggPacketReader::new(channel_reader, OggReaderOptions::default());
 
-        let comment_packet = packet_reader
-            .next_packet()?
-            .ok_or_else(|| OggError::Decode("missing Vorbis comment header".into()))?;
-        let _comment_hdr: CommentHeader = read_header_comment(&comment_packet)?;
+            // Read Vorbis headers (3 packets: identification, comment, setup)
+            let ident_packet = packet_reader
+                .next_packet()?
+                .ok_or_else(|| OggError::Decode("missing Vorbis identification header".into()))?;
+            let ident_hdr = read_header_ident(&ident_packet)?;
 
-        let setup_packet = packet_reader
-            .next_packet()?
-            .ok_or_else(|| OggError::Decode("missing Vorbis setup header".into()))?;
-        let setup_hdr = read_header_setup(
-            &setup_packet,
-            ident_hdr.audio_channels,
-            (ident_hdr.blocksize_0, ident_hdr.blocksize_1),
-        )?;
+            let comment_packet = packet_reader
+                .next_packet()?
+                .ok_or_else(|| OggError::Decode("missing Vorbis comment header".into()))?;
+            let _comment_hdr: CommentHeader = read_header_comment(&comment_packet)?;
 
-        let info = StreamInfo {
-            sample_rate: ident_hdr.audio_sample_rate,
-            channels: ident_hdr.audio_channels,
-            bits_per_sample: 16,
-            total_samples: None,
-            max_block_size: 1 << ident_hdr.blocksize_1,
-            min_block_size: 1 << ident_hdr.blocksize_0,
-        };
+            let setup_packet = packet_reader
+                .next_packet()?
+                .ok_or_else(|| OggError::Decode("missing Vorbis setup header".into()))?;
+            let setup_hdr = read_header_setup(
+                &setup_packet,
+                ident_hdr.audio_channels,
+                (ident_hdr.blocksize_0, ident_hdr.blocksize_1),
+            )?;
 
-        if info_tx.send(Ok(info.clone())).is_err() {
-            return Ok(());
-        }
+            let info = StreamInfo {
+                sample_rate: ident_hdr.audio_sample_rate,
+                channels: ident_hdr.audio_channels,
+                bits_per_sample: 16,
+                total_samples: None,
+                max_block_size: 1 << ident_hdr.blocksize_1,
+                min_block_size: 1 << ident_hdr.blocksize_0,
+            };
 
-        // Decode audio packets
-        let mut pcm_bytes = Vec::new();
-        let mut produced_audio = false;
-        let mut pwr = PreviousWindowRight::new();
-
-        while let Some(packet) = packet_reader.next_packet()? {
-            let decoded: InterleavedSamples<i16> =
-                read_audio_packet_generic(&ident_hdr, &setup_hdr, &packet, &mut pwr)?;
-
-            if decoded.samples.is_empty() {
-                continue;
+            if let Some(tx) = info_tx.take() {
+                if tx.send(Ok(info.clone())).is_err() {
+                    return Ok(());
+                }
             }
 
-            produced_audio = true;
+            // Decode audio packets
+            let mut pcm_bytes = Vec::new();
+            let mut produced_audio = false;
+            let mut pwr = PreviousWindowRight::new();
 
-            // Reuse buffer capacity from previous iteration
-            pcm_bytes.clear();
-            pcm_bytes.reserve(decoded.samples.len() * 2);
-            for sample in decoded.samples {
-                pcm_bytes.extend_from_slice(&sample.to_le_bytes());
+            while let Some(packet) = packet_reader.next_packet()? {
+                let decoded: InterleavedSamples<i16> =
+                    read_audio_packet_generic(&ident_hdr, &setup_hdr, &packet, &mut pwr)?;
+
+                if decoded.samples.is_empty() {
+                    continue;
+                }
+
+                produced_audio = true;
+
+                // Reuse buffer capacity from previous iteration
+                pcm_bytes.clear();
+                pcm_bytes.reserve(decoded.samples.len() * 2);
+                for sample in decoded.samples {
+                    pcm_bytes.extend_from_slice(&sample.to_le_bytes());
+                }
+
+                let chunk = std::mem::take(&mut pcm_bytes);
+                if pcm_tx.blocking_send(Ok(chunk)).is_err() {
+                    break;
+                }
+
+                // Pre-allocate for next iteration
+                pcm_bytes =
+                    Vec::with_capacity(info.max_block_size as usize * info.channels as usize * 2);
             }
 
-            let chunk = std::mem::take(&mut pcm_bytes);
-            if pcm_tx.blocking_send(Ok(chunk)).is_err() {
-                break;
+            if !produced_audio {
+                let err = OggError::Decode("stream contained no decodable Vorbis packets".into());
+                let _ = pcm_tx.blocking_send(Err(err.clone()));
+                return Err(err);
             }
 
-            // Pre-allocate for next iteration
-            pcm_bytes =
-                Vec::with_capacity(info.max_block_size as usize * info.channels as usize * 2);
-        }
+            Ok(())
+        })();
 
-        if !produced_audio {
-            let err = OggError::Decode("stream contained no decodable Vorbis packets".into());
-            let _ = pcm_tx.blocking_send(Err(err.clone()));
-            return Err(err);
+        match result {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                if let Some(tx) = info_tx.take() {
+                    let _ = tx.send(Err(err.clone()));
+                }
+                Err(err)
+            }
         }
-
-        Ok(())
     });
 
     let writer_handle = spawn_writer_task(pcm_rx, pcm_writer, blocking_handle, "ogg-decode");
