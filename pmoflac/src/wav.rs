@@ -4,12 +4,7 @@
 //! header incrementally, validates the format, and then streams `data` chunk
 //! payload as little-endian PCM frames through the common async pipeline.
 
-use std::{
-    fmt,
-    io::{self, Read},
-    pin::Pin,
-    task::{Context, Poll},
-};
+use std::{fmt, io::Read};
 
 use tokio::{
     io::AsyncRead,
@@ -19,7 +14,8 @@ use tokio::{
 use crate::{
     common::ChannelReader,
     decoder_common::{
-        spawn_ingest_task, spawn_writer_task, DecoderError, CHANNEL_CAPACITY, DUPLEX_BUFFER_SIZE,
+        spawn_ingest_task, spawn_writer_task, DecodedStream, DecoderError, CHANNEL_CAPACITY,
+        DUPLEX_BUFFER_SIZE,
     },
     pcm::StreamInfo,
     stream::ManagedAsyncReader,
@@ -145,35 +141,8 @@ impl FmtChunk {
     }
 }
 
-/// An async stream that yields PCM decoded from WAV data.
-pub struct WavDecodedStream {
-    info: StreamInfo,
-    reader: ManagedAsyncReader<WavError>,
-}
-
-impl WavDecodedStream {
-    pub fn info(&self) -> &StreamInfo {
-        &self.info
-    }
-
-    pub fn into_parts(self) -> (StreamInfo, ManagedAsyncReader<WavError>) {
-        (self.info, self.reader)
-    }
-
-    pub async fn wait(self) -> Result<(), WavError> {
-        self.reader.wait().await
-    }
-}
-
-impl AsyncRead for WavDecodedStream {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.reader).poll_read(cx, buf)
-    }
-}
+/// Async stream alias for decoded WAV audio.
+pub type WavDecodedStream = DecodedStream<WavError>;
 
 /// Decode a WAV stream into PCM audio.
 pub async fn decode_wav_stream<R>(reader: R) -> Result<WavDecodedStream, WavError>
@@ -315,5 +284,5 @@ where
     let info = info_rx.await.map_err(|_| WavError::ChannelClosed)??;
     let reader = ManagedAsyncReader::new("wav-decode-writer", pcm_reader, writer_handle);
 
-    Ok(WavDecodedStream { info, reader })
+    Ok(DecodedStream::new(info, reader))
 }

@@ -4,21 +4,17 @@
 //! ingestion/producer pattern established for the other decoders while staying
 //! 100% streaming (no seeking or buffering entire files).
 
-use std::{
-    io,
-    pin::Pin,
-    task::{Context, Poll},
-};
-
 use opus::{Channels, Decoder as OpusDecoder, Error as OpusError};
 use tokio::{
-    io::{AsyncRead, ReadBuf},
+    io::AsyncRead,
     sync::{mpsc, oneshot},
 };
 
 use crate::{
     common::ChannelReader,
-    decoder_common::{spawn_ingest_task, spawn_writer_task, CHANNEL_CAPACITY, DUPLEX_BUFFER_SIZE},
+    decoder_common::{
+        spawn_ingest_task, spawn_writer_task, DecodedStream, CHANNEL_CAPACITY, DUPLEX_BUFFER_SIZE,
+    },
     ogg_common::{OggContainerError, OggPacketReader, OggReaderOptions},
     pcm::StreamInfo,
     stream::ManagedAsyncReader,
@@ -36,38 +32,8 @@ impl From<OpusError> for OggContainerError {
     }
 }
 
-/// An async stream that decodes Ogg/Opus audio into PCM samples.
-pub struct OggOpusDecodedStream {
-    info: StreamInfo,
-    reader: ManagedAsyncReader<OggOpusError>,
-}
-
-impl OggOpusDecodedStream {
-    /// Returns metadata about the decoded stream.
-    pub fn info(&self) -> &StreamInfo {
-        &self.info
-    }
-
-    /// Consumes the stream and returns its components.
-    pub fn into_parts(self) -> (StreamInfo, ManagedAsyncReader<OggOpusError>) {
-        (self.info, self.reader)
-    }
-
-    /// Waits for the decoding pipeline to finish.
-    pub async fn wait(self) -> Result<(), OggOpusError> {
-        self.reader.wait().await
-    }
-}
-
-impl AsyncRead for OggOpusDecodedStream {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.reader).poll_read(cx, buf)
-    }
-}
+/// Async stream alias for decoded Ogg/Opus audio.
+pub type OggOpusDecodedStream = DecodedStream<OggOpusError>;
 
 /// Decodes an Ogg/Opus stream into PCM audio (16-bit little-endian).
 pub async fn decode_ogg_opus_stream<R>(reader: R) -> Result<OggOpusDecodedStream, OggOpusError>
@@ -195,7 +161,7 @@ where
     let info = info_rx.await.map_err(|_| OggOpusError::ChannelClosed)??;
     let reader = ManagedAsyncReader::new("ogg-opus-writer", pcm_reader, writer_handle);
 
-    Ok(OggOpusDecodedStream { info, reader })
+    Ok(DecodedStream::new(info, reader))
 }
 
 /// Parsed OpusHead metadata.

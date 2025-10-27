@@ -101,25 +101,21 @@
 //! }
 //! ```
 
-use std::{
-    io,
-    pin::Pin,
-    task::{Context, Poll},
-};
-
 use lewton::{
     audio::{self, read_audio_packet_generic, PreviousWindowRight},
     header::{self, read_header_comment, read_header_ident, read_header_setup, CommentHeader},
     samples::InterleavedSamples,
 };
 use tokio::{
-    io::{AsyncRead, ReadBuf},
+    io::AsyncRead,
     sync::{mpsc, oneshot},
 };
 
 use crate::{
     common::ChannelReader,
-    decoder_common::{spawn_ingest_task, spawn_writer_task, CHANNEL_CAPACITY, DUPLEX_BUFFER_SIZE},
+    decoder_common::{
+        spawn_ingest_task, spawn_writer_task, DecodedStream, CHANNEL_CAPACITY, DUPLEX_BUFFER_SIZE,
+    },
     ogg_common::{OggContainerError, OggPacketReader, OggReaderOptions},
     pcm::StreamInfo,
     stream::ManagedAsyncReader,
@@ -140,48 +136,8 @@ impl From<audio::AudioReadError> for OggContainerError {
     }
 }
 
-/// An async stream that decodes Ogg/Vorbis audio into PCM samples.
-///
-/// This struct implements `AsyncRead`, allowing you to read decoded PCM data
-/// as it becomes available. The decoding happens in a background task.
-pub struct OggDecodedStream {
-    info: StreamInfo,
-    reader: ManagedAsyncReader<OggError>,
-}
-
-impl OggDecodedStream {
-    /// Returns metadata about the decoded Ogg/Vorbis stream.
-    ///
-    /// This includes sample rate, channel count, bits per sample, and block sizes.
-    pub fn info(&self) -> &StreamInfo {
-        &self.info
-    }
-
-    /// Consumes the stream and returns its components.
-    ///
-    /// Useful for chaining with encoders without buffering the PCM data.
-    pub fn into_parts(self) -> (StreamInfo, ManagedAsyncReader<OggError>) {
-        (self.info, self.reader)
-    }
-
-    /// Waits for the background decoding task to complete.
-    ///
-    /// This should be called after reading all data to ensure proper cleanup
-    /// and to catch any errors that occurred during decoding.
-    pub async fn wait(self) -> Result<(), OggError> {
-        self.reader.wait().await
-    }
-}
-
-impl AsyncRead for OggDecodedStream {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.reader).poll_read(cx, buf)
-    }
-}
+/// Async stream alias for decoded Ogg/Vorbis audio.
+pub type OggDecodedStream = DecodedStream<OggError>;
 
 /// Decodes an Ogg/Vorbis stream into PCM audio (16-bit little-endian interleaved).
 ///
@@ -310,5 +266,5 @@ where
     let info = info_rx.await.map_err(|_| OggError::ChannelClosed)??;
     let reader = ManagedAsyncReader::new("ogg-decode-writer", pcm_reader, writer_handle);
 
-    Ok(OggDecodedStream { info, reader })
+    Ok(DecodedStream::new(info, reader))
 }
