@@ -20,39 +20,15 @@ use tokio::{
 
 use crate::{
     common::ChannelReader,
-    decoder_common::{spawn_ingest_task, spawn_writer_task, CHANNEL_CAPACITY, DUPLEX_BUFFER_SIZE},
+    decoder_common::{
+        spawn_ingest_task, spawn_writer_task, DecoderError, CHANNEL_CAPACITY, DUPLEX_BUFFER_SIZE,
+    },
     pcm::StreamInfo,
     stream::ManagedAsyncReader,
 };
 
 /// Errors that can occur while decoding AIFF data.
-#[derive(thiserror::Error, Debug, Clone)]
-pub enum AiffError {
-    #[error("I/O error ({kind:?}): {message}")]
-    Io {
-        kind: io::ErrorKind,
-        message: String,
-    },
-    #[error("AIFF decode error: {0}")]
-    Decode(String),
-    #[error("internal channel closed unexpectedly")]
-    ChannelClosed,
-}
-
-impl From<io::Error> for AiffError {
-    fn from(err: io::Error) -> Self {
-        AiffError::Io {
-            kind: err.kind(),
-            message: err.to_string(),
-        }
-    }
-}
-
-impl From<String> for AiffError {
-    fn from(value: String) -> Self {
-        AiffError::Decode(value)
-    }
-}
+pub type AiffError = DecoderError;
 
 /// Streaming reader that buffers bytes as they arrive and exposes convenience helpers.
 struct StreamingAiffReader<E>

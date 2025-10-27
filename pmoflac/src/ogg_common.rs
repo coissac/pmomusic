@@ -25,7 +25,7 @@ use std::{
     io::{self, Read},
 };
 
-use crate::common::ChannelReader;
+use crate::{common::ChannelReader, decoder_common::DecoderError};
 
 /// Maximum number of bytes to scan when searching for Ogg sync pattern.
 ///
@@ -60,42 +60,7 @@ impl Default for OggReaderOptions {
     }
 }
 
-/// Shared error type for Ogg container parsing.
-#[derive(thiserror::Error, Debug, Clone)]
-pub enum OggContainerError {
-    #[error("I/O error ({kind:?}): {message}")]
-    Io {
-        kind: io::ErrorKind,
-        message: String,
-    },
-    #[error("ogg container error: {0}")]
-    Decode(String),
-    #[error("internal channel closed unexpectedly")]
-    ChannelClosed,
-    #[error("{role} task failed: {details}")]
-    TaskJoin { role: &'static str, details: String },
-}
-
-impl From<io::Error> for OggContainerError {
-    fn from(err: io::Error) -> Self {
-        OggContainerError::Io {
-            kind: err.kind(),
-            message: err.to_string(),
-        }
-    }
-}
-
-impl From<String> for OggContainerError {
-    fn from(value: String) -> Self {
-        OggContainerError::Decode(value)
-    }
-}
-
-impl From<&str> for OggContainerError {
-    fn from(value: &str) -> Self {
-        OggContainerError::Decode(value.into())
-    }
-}
+pub type OggContainerError = DecoderError;
 
 /// Streaming Ogg packet reader that assembles packets from Ogg pages.
 ///

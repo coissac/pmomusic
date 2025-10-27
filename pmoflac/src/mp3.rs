@@ -101,41 +101,15 @@ use tokio::{
 
 use crate::{
     common::ChannelReader,
-    decoder_common::{spawn_ingest_task, spawn_writer_task, CHANNEL_CAPACITY, DUPLEX_BUFFER_SIZE},
+    decoder_common::{
+        spawn_ingest_task, spawn_writer_task, DecoderError, CHANNEL_CAPACITY, DUPLEX_BUFFER_SIZE,
+    },
     pcm::StreamInfo,
     stream::ManagedAsyncReader,
 };
 
 /// Errors that can occur while decoding MP3 data.
-#[derive(thiserror::Error, Debug, Clone)]
-pub enum Mp3Error {
-    #[error("I/O error ({kind:?}): {message}")]
-    Io {
-        kind: io::ErrorKind,
-        message: String,
-    },
-    #[error("MP3 decode error: {0}")]
-    Decode(String),
-    #[error("internal channel closed unexpectedly")]
-    ChannelClosed,
-    #[error("{role} task failed: {details}")]
-    TaskJoin { role: &'static str, details: String },
-}
-
-impl From<io::Error> for Mp3Error {
-    fn from(err: io::Error) -> Self {
-        Mp3Error::Io {
-            kind: err.kind(),
-            message: err.to_string(),
-        }
-    }
-}
-
-impl From<String> for Mp3Error {
-    fn from(msg: String) -> Self {
-        Mp3Error::Decode(msg)
-    }
-}
+pub type Mp3Error = DecoderError;
 
 /// An async stream that decodes MP3 audio into PCM samples.
 ///

@@ -18,39 +18,15 @@ use tokio::{
 
 use crate::{
     common::ChannelReader,
-    decoder_common::{spawn_ingest_task, spawn_writer_task, CHANNEL_CAPACITY, DUPLEX_BUFFER_SIZE},
+    decoder_common::{
+        spawn_ingest_task, spawn_writer_task, DecoderError, CHANNEL_CAPACITY, DUPLEX_BUFFER_SIZE,
+    },
     pcm::StreamInfo,
     stream::ManagedAsyncReader,
 };
 
 /// Errors that can occur while decoding WAV data.
-#[derive(thiserror::Error, Debug, Clone)]
-pub enum WavError {
-    #[error("I/O error ({kind:?}): {message}")]
-    Io {
-        kind: io::ErrorKind,
-        message: String,
-    },
-    #[error("WAV decode error: {0}")]
-    Decode(String),
-    #[error("internal channel closed unexpectedly")]
-    ChannelClosed,
-}
-
-impl From<io::Error> for WavError {
-    fn from(err: io::Error) -> Self {
-        WavError::Io {
-            kind: err.kind(),
-            message: err.to_string(),
-        }
-    }
-}
-
-impl From<String> for WavError {
-    fn from(value: String) -> Self {
-        WavError::Decode(value)
-    }
-}
+pub type WavError = DecoderError;
 
 /// Streaming WAV reader state.
 struct StreamingWavReader<E>

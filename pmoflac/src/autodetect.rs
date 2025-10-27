@@ -23,17 +23,17 @@ pub enum DecodeAudioError {
     #[error("unknown or unsupported audio format")]
     UnknownFormat,
     #[error("FLAC decode error: {0}")]
-    Flac(#[from] FlacError),
+    Flac(FlacError),
     #[error("MP3 decode error: {0}")]
-    Mp3(#[from] Mp3Error),
+    Mp3(Mp3Error),
     #[error("Ogg/Vorbis decode error: {0}")]
     Vorbis(OggError),
     #[error("Ogg/Opus decode error: {0}")]
     Opus(OggOpusError),
     #[error("WAV decode error: {0}")]
-    Wav(#[from] WavError),
+    Wav(WavError),
     #[error("AIFF decode error: {0}")]
-    Aiff(#[from] AiffError),
+    Aiff(AiffError),
 }
 
 pub async fn decode_audio_stream<R>(reader: R) -> Result<DecodedAudioStream, DecodeAudioError>
@@ -59,11 +59,15 @@ where
 
     let stream = match format {
         DetectedFormat::Flac => {
-            let stream = decode_flac_stream(prefixed).await?;
+            let stream = decode_flac_stream(prefixed)
+                .await
+                .map_err(DecodeAudioError::Flac)?;
             DecodedAudioStream::Flac(stream)
         }
         DetectedFormat::Mp3 => {
-            let stream = decode_mp3_stream(prefixed).await?;
+            let stream = decode_mp3_stream(prefixed)
+                .await
+                .map_err(DecodeAudioError::Mp3)?;
             DecodedAudioStream::Mp3(stream)
         }
         DetectedFormat::OggVorbis => {
@@ -79,11 +83,15 @@ where
             DecodedAudioStream::OggOpus(stream)
         }
         DetectedFormat::Wav => {
-            let stream = decode_wav_stream(prefixed).await?;
+            let stream = decode_wav_stream(prefixed)
+                .await
+                .map_err(DecodeAudioError::Wav)?;
             DecodedAudioStream::Wav(stream)
         }
         DetectedFormat::Aiff => {
-            let stream = decode_aiff_stream(prefixed).await?;
+            let stream = decode_aiff_stream(prefixed)
+                .await
+                .map_err(DecodeAudioError::Aiff)?;
             DecodedAudioStream::Aiff(stream)
         }
     };
@@ -114,16 +122,16 @@ impl DecodedAudioStream {
 
     pub async fn wait(self) -> Result<(), DecodeAudioError> {
         match self {
-            DecodedAudioStream::Flac(inner) => inner.wait().await.map_err(DecodeAudioError::from),
-            DecodedAudioStream::Mp3(inner) => inner.wait().await.map_err(DecodeAudioError::from),
+            DecodedAudioStream::Flac(inner) => inner.wait().await.map_err(DecodeAudioError::Flac),
+            DecodedAudioStream::Mp3(inner) => inner.wait().await.map_err(DecodeAudioError::Mp3),
             DecodedAudioStream::OggVorbis(inner) => {
                 inner.wait().await.map_err(DecodeAudioError::Vorbis)
             }
             DecodedAudioStream::OggOpus(inner) => {
                 inner.wait().await.map_err(DecodeAudioError::Opus)
             }
-            DecodedAudioStream::Wav(inner) => inner.wait().await.map_err(DecodeAudioError::from),
-            DecodedAudioStream::Aiff(inner) => inner.wait().await.map_err(DecodeAudioError::from),
+            DecodedAudioStream::Wav(inner) => inner.wait().await.map_err(DecodeAudioError::Wav),
+            DecodedAudioStream::Aiff(inner) => inner.wait().await.map_err(DecodeAudioError::Aiff),
         }
     }
 
@@ -186,12 +194,12 @@ pub enum DecodedReader {
 impl DecodedReader {
     pub async fn wait(self) -> Result<(), DecodeAudioError> {
         match self {
-            DecodedReader::Flac(inner) => inner.wait().await.map_err(DecodeAudioError::from),
-            DecodedReader::Mp3(inner) => inner.wait().await.map_err(DecodeAudioError::from),
+            DecodedReader::Flac(inner) => inner.wait().await.map_err(DecodeAudioError::Flac),
+            DecodedReader::Mp3(inner) => inner.wait().await.map_err(DecodeAudioError::Mp3),
             DecodedReader::OggVorbis(inner) => inner.wait().await.map_err(DecodeAudioError::Vorbis),
             DecodedReader::OggOpus(inner) => inner.wait().await.map_err(DecodeAudioError::Opus),
-            DecodedReader::Wav(inner) => inner.wait().await.map_err(DecodeAudioError::from),
-            DecodedReader::Aiff(inner) => inner.wait().await.map_err(DecodeAudioError::from),
+            DecodedReader::Wav(inner) => inner.wait().await.map_err(DecodeAudioError::Wav),
+            DecodedReader::Aiff(inner) => inner.wait().await.map_err(DecodeAudioError::Aiff),
         }
     }
 }
