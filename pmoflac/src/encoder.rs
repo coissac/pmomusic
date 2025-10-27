@@ -52,7 +52,7 @@ const PCM_FRAMES_PER_CHUNK: usize = 4096;
 /// ```
 pub struct FlacEncodedStream {
     format: PcmFormat,
-    reader: ManagedAsyncReader,
+    reader: ManagedAsyncReader<FlacError>,
 }
 
 impl FlacEncodedStream {
@@ -62,7 +62,7 @@ impl FlacEncodedStream {
     }
 
     /// Consumes the stream and returns its components.
-    pub fn into_parts(self) -> (PcmFormat, ManagedAsyncReader) {
+    pub fn into_parts(self) -> (PcmFormat, ManagedAsyncReader<FlacError>) {
         (self.format, self.reader)
     }
 
@@ -166,7 +166,7 @@ impl Default for EncoderOptions {
 /// // Generate 1 second of silence at 44.1kHz stereo 16-bit
 /// let sample_rate = 44_100u32;
 /// let channels = 2u8;
-/// let pcm_data = vec![0u8; sample_rate as usize * channels as usize * 2];
+/// let pcm_len = sample_rate as usize * channels as usize * 2;
 ///
 /// let format = PcmFormat {
 ///     sample_rate,
@@ -180,13 +180,17 @@ impl Default for EncoderOptions {
 ///     ..Default::default()
 /// };
 ///
-/// let mut stream = encode_flac_stream(&pcm_data[..], format, options).await?;
+/// let mut stream = encode_flac_stream(
+///     tokio::io::repeat(0).take(pcm_len as u64),
+///     format,
+///     options,
+/// ).await?;
 /// let mut flac_data = Vec::new();
 /// stream.read_to_end(&mut flac_data).await?;
 /// stream.wait().await?;
 ///
 /// println!("Encoded {} bytes of PCM to {} bytes of FLAC",
-///     pcm_data.len(), flac_data.len());
+///     pcm_len, flac_data.len());
 /// # Ok(())
 /// # }
 /// ```

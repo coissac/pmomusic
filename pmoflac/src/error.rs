@@ -25,3 +25,9 @@ impl From<claxon::Error> for FlacError {
         FlacError::Decode(err.to_string())
     }
 }
+
+impl From<String> for FlacError {
+    fn from(msg: String) -> Self {
+        FlacError::Decode(msg)
+    }
+}

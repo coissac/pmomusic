@@ -1,17 +1,20 @@
 //! # pmoflac
 //!
-//! Asynchronous FLAC encoding and decoding library for Rust.
+//! Asynchronous audio encoding and decoding library for Rust.
 //!
-//! This library provides streaming FLAC encoding and decoding with a Tokio-based async API.
-//! The key feature is **true streaming**: data is processed incrementally without buffering
-//! entire files in memory.
+//! This library provides streaming FLAC and MP3 decoding, as well as FLAC encoding,
+//! with a Tokio-based async API. The key feature is **true streaming**: data is
+//! processed incrementally without buffering entire files in memory.
 //!
 //! ## Features
 //!
+//! - **MP3 decoding**: Stream MP3 files to PCM data
+//! - **FLAC encoding/decoding**: Bidirectional FLAC ↔ PCM conversion
 //! - **Async streaming API**: Built on Tokio's `AsyncRead` trait
 //! - **Low memory footprint**: Processes data in chunks, not entire files
 //! - **Zero-copy where possible**: Efficient buffer management
 //! - **Thread-safe**: Uses channels for inter-task communication
+//! - **Composable**: Chain decoders and encoders (e.g., MP3 → PCM → FLAC)
 //!
 //! ## Example: Decode FLAC to PCM
 //!
@@ -60,6 +63,37 @@
 //!     Ok(())
 //! }
 //! ```
+//!
+//! ## Example: Transcode MP3 to FLAC
+//!
+//! ```no_run
+//! use pmoflac::{decode_mp3_stream, encode_flac_stream, PcmFormat, EncoderOptions};
+//! use tokio::fs::File;
+//! use tokio::io;
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     // Decode MP3 to PCM stream
+//!     let mp3_file = File::open("input.mp3").await?;
+//!     let mp3_stream = decode_mp3_stream(mp3_file).await?;
+//!     let (info, pcm_reader) = mp3_stream.into_parts();
+//!
+//!     // Encode PCM stream to FLAC
+//!     let format = PcmFormat {
+//!         sample_rate: info.sample_rate,
+//!         channels: info.channels,
+//!         bits_per_sample: info.bits_per_sample,
+//!     };
+//!     let mut flac_stream = encode_flac_stream(pcm_reader, format, EncoderOptions::default()).await?;
+//!
+//!     // Write to output file
+//!     let mut output = File::create("output.flac").await?;
+//!     io::copy(&mut flac_stream, &mut output).await?;
+//!     flac_stream.wait().await?;
+//!
+//!     Ok(())
+//! }
+//! ```
 
 pub mod decoder;
 pub mod encoder;
@@ -67,8 +101,11 @@ pub mod error;
 mod pcm;
 mod stream;
 mod util;
+pub mod mp3;
+mod common;
 
 pub use decoder::{decode_flac_stream, FlacDecodedStream};
 pub use encoder::{encode_flac_stream, EncoderOptions, FlacEncodedStream};
 pub use error::FlacError;
+pub use mp3::{decode_mp3_stream, Mp3DecodedStream, Mp3Error};
 pub use pcm::{PcmFormat, StreamInfo};

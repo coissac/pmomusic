@@ -1,5 +1,5 @@
 use std::{
-    io::{self, Read},
+    io,
     pin::Pin,
     task::{Context, Poll},
 };
@@ -11,7 +11,10 @@ use tokio::{
 };
 
 use crate::{
-    error::FlacError, pcm::StreamInfo, stream::ManagedAsyncReader,
+    common::ChannelReader,
+    error::FlacError,
+    pcm::StreamInfo,
+    stream::ManagedAsyncReader,
     util::interleaved_i32_to_le_bytes,
 };
 
@@ -48,7 +51,7 @@ const CHANNEL_CAPACITY: usize = 8;
 /// ```
 pub struct FlacDecodedStream {
     info: StreamInfo,
-    reader: ManagedAsyncReader,
+    reader: ManagedAsyncReader<FlacError>,
 }
 
 impl FlacDecodedStream {
@@ -58,7 +61,7 @@ impl FlacDecodedStream {
     }
 
     /// Consumes the stream and returns its components.
-    pub fn into_parts(self) -> (StreamInfo, ManagedAsyncReader) {
+    pub fn into_parts(self) -> (StreamInfo, ManagedAsyncReader<FlacError>) {
         (self.info, self.reader)
     }
 
@@ -163,7 +166,7 @@ where
     let (info_tx, info_rx) = oneshot::channel::<Result<StreamInfo, FlacError>>();
 
     let blocking_handle = tokio::task::spawn_blocking(move || -> Result<(), FlacError> {
-        let mut channel_reader = ChannelReader::new(ingest_rx);
+        let mut channel_reader = ChannelReader::<FlacError>::new(ingest_rx);
         let mut flac_reader = match claxon::FlacReader::new(&mut channel_reader) {
             Ok(reader) => reader,
             Err(err) => {
@@ -249,56 +252,4 @@ where
     let reader = ManagedAsyncReader::new("flac-decode-writer", pcm_reader, writer_handle);
 
     Ok(FlacDecodedStream { info, reader })
-}
-
-struct ChannelReader {
-    rx: mpsc::Receiver<Result<Bytes, FlacError>>,
-    current: Bytes,
-    offset: usize,
-    finished: bool,
-}
-
-impl ChannelReader {
-    fn new(rx: mpsc::Receiver<Result<Bytes, FlacError>>) -> Self {
-        Self {
-            rx,
-            current: Bytes::new(),
-            offset: 0,
-            finished: false,
-        }
-    }
-}
-
-impl Read for ChannelReader {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        loop {
-            if self.offset < self.current.len() {
-                let n = std::cmp::min(buf.len(), self.current.len() - self.offset);
-                buf[..n].copy_from_slice(&self.current[self.offset..self.offset + n]);
-                self.offset += n;
-                return Ok(n);
-            }
-            if self.finished {
-                return Ok(0);
-            }
-
-            match self.rx.blocking_recv() {
-                Some(Ok(bytes)) => {
-                    if bytes.is_empty() {
-                        continue;
-                    }
-                    self.current = bytes;
-                    self.offset = 0;
-                }
-                Some(Err(err)) => {
-                    self.finished = true;
-                    return Err(io::Error::new(io::ErrorKind::Other, err.to_string()));
-                }
-                None => {
-                    self.finished = true;
-                    return Ok(0);
-                }
-            }
-        }
-    }
 }

@@ -9,20 +9,26 @@ use tokio::{
     task::JoinHandle,
 };
 
-use crate::error::FlacError;
-
 /// Async reader that is backed by a spawned task writing into it.
-pub struct ManagedAsyncReader {
+///
+/// This is generic over the error type to support both FLAC and MP3 decoders.
+pub struct ManagedAsyncReader<E>
+where
+    E: std::error::Error,
+{
     inner: Option<DuplexStream>,
-    join: Option<JoinHandle<Result<(), FlacError>>>,
+    join: Option<JoinHandle<Result<(), E>>>,
     role: &'static str,
 }
 
-impl ManagedAsyncReader {
+impl<E> ManagedAsyncReader<E>
+where
+    E: std::error::Error,
+{
     pub fn new(
         role: &'static str,
         inner: DuplexStream,
-        join: JoinHandle<Result<(), FlacError>>,
+        join: JoinHandle<Result<(), E>>,
     ) -> Self {
         Self {
             inner: Some(inner),
@@ -32,14 +38,17 @@ impl ManagedAsyncReader {
     }
 
     /// Waits for the producer task to finish.
-    pub async fn wait(mut self) -> Result<(), FlacError> {
+    pub async fn wait(mut self) -> Result<(), E>
+    where
+        E: From<String>,
+    {
         match self.join.take() {
             Some(handle) => match handle.await {
                 Ok(res) => res,
-                Err(err) => Err(FlacError::TaskJoin {
-                    role: self.role,
-                    details: err.to_string(),
-                }),
+                Err(err) => {
+                    let msg = format!("task '{}' failed: {}", self.role, err);
+                    Err(E::from(msg))
+                }
             },
             None => Ok(()),
         }
@@ -58,7 +67,10 @@ impl ManagedAsyncReader {
     }
 }
 
-impl AsyncRead for ManagedAsyncReader {
+impl<E> AsyncRead for ManagedAsyncReader<E>
+where
+    E: std::error::Error,
+{
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -68,7 +80,10 @@ impl AsyncRead for ManagedAsyncReader {
     }
 }
 
-impl Drop for ManagedAsyncReader {
+impl<E> Drop for ManagedAsyncReader<E>
+where
+    E: std::error::Error,
+{
     fn drop(&mut self) {
         if let Some(handle) = self.join.take() {
             handle.abort();
