@@ -341,18 +341,41 @@ impl ParadiseClientStream {
                 "🎧 Client connecting to stream"
             );
             channel.ensure_started().await?;
-            let mut index = 0usize;
+            let mut last_track_id: Option<String> = None;
             loop {
                 let entries = channel.playlist().active_snapshot().await;
 
-                if index >= entries.len() {
-                    channel.ensure_started().await?;
-                    channel.playlist().wait_for_track_count(index).await;
-                    continue;
-                }
+                // Find the next track after last_track_id
+                let next_entry = if let Some(ref last_id) = last_track_id {
+                    // Find the position of the last track we read
+                    let last_pos = entries.iter().position(|e| e.track_id == *last_id);
 
-                let entry = entries[index].clone();
-                index += 1;
+                    // Get the next track (or wait if none available)
+                    match last_pos {
+                        Some(pos) if pos + 1 < entries.len() => {
+                            Some(entries[pos + 1].clone())
+                        }
+                        _ => {
+                            // Last track not found (was removed) or no next track available
+                            // Wait for more tracks to be added
+                            channel.ensure_started().await?;
+                            let current_len = entries.len();
+                            channel.playlist().wait_for_track_count(current_len).await;
+                            continue;
+                        }
+                    }
+                } else {
+                    // First track for this client
+                    if entries.is_empty() {
+                        channel.ensure_started().await?;
+                        channel.playlist().wait_for_track_count(0).await;
+                        continue;
+                    }
+                    Some(entries[0].clone())
+                };
+
+                let entry = next_entry.unwrap();
+                last_track_id = Some(entry.track_id.clone());
 
                 let audio_pk = entry
                     .audio_pk
