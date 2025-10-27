@@ -104,6 +104,7 @@ mod util;
 pub mod mp3;
 pub mod ogg;
 pub mod opus;
+pub mod wav;
 mod common;
 mod decoder_common;
 
@@ -113,4 +114,5 @@ pub use error::FlacError;
 pub use mp3::{decode_mp3_stream, Mp3DecodedStream, Mp3Error};
 pub use ogg::{decode_ogg_vorbis_stream, OggDecodedStream, OggError};
 pub use opus::{decode_ogg_opus_stream, OggOpusDecodedStream, OggOpusError};
+pub use wav::{decode_wav_stream, WavDecodedStream, WavError};
 pub use pcm::{PcmFormat, StreamInfo};
