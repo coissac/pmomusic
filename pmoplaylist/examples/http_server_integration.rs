@@ -8,7 +8,7 @@
 //! cargo run -p pmoplaylist --example http_server_integration
 //! ```
 
-use pmoplaylist::{DEFAULT_IMAGE, FifoPlaylist, Track};
+use pmoplaylist::{FifoPlaylist, Track, DEFAULT_IMAGE};
 use std::sync::Arc;
 
 #[tokio::main]

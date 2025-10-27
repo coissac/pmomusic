@@ -10,7 +10,7 @@
 //! cargo run -p pmoplaylist --example radio_streaming
 //! ```
 
-use pmoplaylist::{DEFAULT_IMAGE, FifoPlaylist, Track};
+use pmoplaylist::{FifoPlaylist, Track, DEFAULT_IMAGE};
 use std::time::Duration;
 use tokio::time::sleep;
 

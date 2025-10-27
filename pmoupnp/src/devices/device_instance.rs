@@ -149,8 +149,7 @@ impl UpnpObject for DeviceInstance {
 
         // UDN
         let mut udn = Element::new("UDN");
-        udn.children
-            .push(XMLNode::Text(self.udn_with_prefix()));
+        udn.children.push(XMLNode::Text(self.udn_with_prefix()));
         elem.children.push(XMLNode::Element(udn));
 
         // serviceList

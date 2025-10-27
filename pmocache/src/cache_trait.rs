@@ -141,8 +141,7 @@ pub trait FileCache<C: CacheConfig>: Send + Sync {
     ///
     /// `true` si l'entrée existe en base de données et que le fichier est présent
     fn is_valid_pk(&self, pk: &str) -> bool {
-        self.get_database().get(pk, false).is_ok()
-            && self.file_path(pk).exists()
+        self.get_database().get(pk, false).is_ok() && self.file_path(pk).exists()
     }
 }
 
@@ -176,4 +175,3 @@ pub fn pk_from_content_header(header: &[u8]) -> String {
     let result = hasher.finalize();
     hex::encode(&result[..16]) // 16 octets = 32 caractères hex
 }
-

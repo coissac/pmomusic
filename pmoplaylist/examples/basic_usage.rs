@@ -5,7 +5,7 @@
 //! cargo run -p pmoplaylist --example basic_usage
 //! ```
 
-use pmoplaylist::{DEFAULT_IMAGE, FifoPlaylist, Track};
+use pmoplaylist::{FifoPlaylist, Track, DEFAULT_IMAGE};
 
 #[tokio::main]
 async fn main() {

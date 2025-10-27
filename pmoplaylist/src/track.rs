@@ -1,8 +1,8 @@
 //! PlaylistTrack : résultat d'un pop() avec helpers pour accéder au cache
 
 use crate::Result;
-use pmocache::cache_trait::FileCache;
 use pmoaudiocache::AudioMetadataExt;
+use pmocache::cache_trait::FileCache;
 use std::path::PathBuf;
 
 /// Un morceau récupéré depuis une playlist

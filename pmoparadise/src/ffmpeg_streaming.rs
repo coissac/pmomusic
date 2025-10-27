@@ -26,7 +26,7 @@ pub fn init() -> Result<()> {
 /// PCM chunk with decoded audio data
 #[derive(Debug, Clone)]
 pub struct PCMChunk {
-    pub samples: Vec<i16>,  // Interleaved 16-bit samples
+    pub samples: Vec<i16>, // Interleaved 16-bit samples
     pub sample_rate: u32,
     pub channels: u32,
     pub position_ms: u64,
@@ -52,7 +52,7 @@ impl ProgressiveDecoder {
             let mut buffer = vec![0u8; 8192];
             loop {
                 match stream.read(&mut buffer) {
-                    Ok(0) => break,  // EOF
+                    Ok(0) => break, // EOF
                     Ok(n) => {
                         let chunk = Bytes::copy_from_slice(&buffer[..n]);
                         if tx.send(Ok(chunk)).is_err() {

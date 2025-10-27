@@ -150,7 +150,10 @@ async fn stream_flac_to_flac(
         .await
         .map_err(|e| format!("Encoder/Decoder error: {}", e))?;
 
-    tracing::debug!("Streaming FLAC conversion complete: {} bytes", total_written);
+    tracing::debug!(
+        "Streaming FLAC conversion complete: {} bytes",
+        total_written
+    );
 
     Ok(())
 }
@@ -182,9 +185,7 @@ async fn buffer_and_convert_to_flac(
     // 2. Si c'est déjà du FLAC, on l'écrit directement
     if buffer.len() >= 4 && &buffer[0..4] == b"fLaC" {
         tracing::debug!("Input is already FLAC, writing directly");
-        file.write_all(&buffer)
-            .await
-            .map_err(|e| e.to_string())?;
+        file.write_all(&buffer).await.map_err(|e| e.to_string())?;
         file.flush().await.map_err(|e| e.to_string())?;
         progress(buffer.len() as u64);
         return Ok(());
@@ -193,11 +194,10 @@ async fn buffer_and_convert_to_flac(
     tracing::debug!("Converting to FLAC with Symphonia + pmoflac");
 
     // 3. Décoder l'audio avec Symphonia (dans un blocking task car c'est CPU-intensive)
-    let (samples, channels, sample_rate, bits_per_sample) = tokio::task::spawn_blocking(move || {
-        decode_with_symphonia_sync(buffer)
-    })
-    .await
-    .map_err(|e| format!("Decode task panicked: {}", e))??;
+    let (samples, channels, sample_rate, bits_per_sample) =
+        tokio::task::spawn_blocking(move || decode_with_symphonia_sync(buffer))
+            .await
+            .map_err(|e| format!("Decode task panicked: {}", e))??;
 
     tracing::debug!(
         "Decoded {} samples, {} channels, {} Hz, {} bits",
@@ -341,9 +341,7 @@ fn decode_with_symphonia_sync(buffer: Vec<u8>) -> Result<(Vec<i32>, usize, u32, 
                 decoder.reset();
                 continue;
             }
-            Err(SymphoniaError::IoError(e))
-                if e.kind() == std::io::ErrorKind::UnexpectedEof =>
-            {
+            Err(SymphoniaError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
                 break;
             }
             Err(e) => {
@@ -490,10 +488,7 @@ impl tokio::io::AsyncRead for StreamToAsyncRead {
                     self.chunk_offset = 0;
                 }
                 Poll::Ready(Some(Err(e))) => {
-                    return Poll::Ready(Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        e,
-                    )));
+                    return Poll::Ready(Err(std::io::Error::new(std::io::ErrorKind::Other, e)));
                 }
                 Poll::Ready(None) => {
                     // Stream terminé

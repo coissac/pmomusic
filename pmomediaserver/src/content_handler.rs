@@ -28,9 +28,12 @@ fn to_didl_lite(containers: &[Container], items: &[pmodidl::Item]) -> Result<Str
         items: items.to_vec(),
     };
 
-    let body =
-        quick_xml::se::to_string(&didl).map_err(|e| format!("Failed to serialize DIDL-Lite: {}", e))?;
-    Ok(format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>{}", body))
+    let body = quick_xml::se::to_string(&didl)
+        .map_err(|e| format!("Failed to serialize DIDL-Lite: {}", e))?;
+    Ok(format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>{}",
+        body
+    ))
 }
 
 /// Handler pour le service ContentDirectory
@@ -99,8 +102,8 @@ impl ContentHandler {
         if object_id == "0" {
             // Retourner le container racine
             let root = self.build_root_container().await;
-        let didl = to_didl_lite(&[root], &[])?;
-        Ok((didl, 1, 1, 1))
+            let didl = to_didl_lite(&[root], &[])?;
+            Ok((didl, 1, 1, 1))
         } else {
             // Essayer de trouver l'objet dans les sources
             // Vérifier si c'est un container racine d'une source

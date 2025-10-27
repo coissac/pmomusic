@@ -70,7 +70,9 @@ impl PlaylistManager {
 
         #[cfg(not(feature = "pmoconfig"))]
         {
-            PLAYLIST_MANAGER.get().expect("PlaylistManager not initialized. Call init() first.")
+            PLAYLIST_MANAGER
+                .get()
+                .expect("PlaylistManager not initialized. Call init() first.")
         }
     }
 
@@ -102,7 +104,8 @@ impl PlaylistManager {
         if let Some(persistence) = &self.inner.persistence {
             let title = playlist.title().await;
             let core = playlist.core.read().await;
-            persistence.save_playlist(&playlist.id, &title, &core.config, &core.tracks)
+            persistence
+                .save_playlist(&playlist.id, &title, &core.config, &core.tracks)
                 .await?;
         }
 
@@ -185,12 +188,7 @@ impl PlaylistManager {
                 // Reconstruire la playlist
                 let mut playlists = self.inner.playlists.write().await;
 
-                let playlist = Arc::new(Playlist::new(
-                    id.to_string(),
-                    title.clone(),
-                    config,
-                    true,
-                ));
+                let playlist = Arc::new(Playlist::new(id.to_string(), title.clone(), config, true));
 
                 // Restaurer les tracks
                 {
@@ -265,7 +263,9 @@ impl PlaylistManager {
                     if let Some(persistence) = &self.inner.persistence {
                         let title = playlist.title().await;
                         let core = playlist.core.read().await;
-                        let _ = persistence.save_playlist(&playlist.id, &title, &core.config, &core.tracks).await;
+                        let _ = persistence
+                            .save_playlist(&playlist.id, &title, &core.config, &core.tracks)
+                            .await;
                     }
                 }
             }
@@ -286,8 +286,7 @@ pub(crate) async fn delete_playlist_internal(id: &str) -> Result<()> {
 
 /// Helper pour acc�der au cache audio
 pub(crate) fn audio_cache() -> Result<Arc<pmoaudiocache::Cache>> {
-    pmoupnp::get_audio_cache()
-        .ok_or_else(|| crate::Error::ManagerNotInitialized)
+    pmoupnp::get_audio_cache().ok_or_else(|| crate::Error::ManagerNotInitialized)
 }
 
 /// Fonction raccourcie pour acc�der au singleton

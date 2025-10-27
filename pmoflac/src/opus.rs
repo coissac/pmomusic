@@ -5,7 +5,7 @@
 //! 100% streaming (no seeking or buffering entire files).
 
 use std::{
-    io::{self, Read},
+    io,
     pin::Pin,
     task::{Context, Poll},
 };
@@ -19,6 +19,7 @@ use tokio::{
 use crate::{
     common::ChannelReader,
     decoder_common::{spawn_ingest_task, spawn_writer_task, CHANNEL_CAPACITY, DUPLEX_BUFFER_SIZE},
+    ogg_common::{OggContainerError, OggPacketReader, OggReaderOptions},
     pcm::StreamInfo,
     stream::ManagedAsyncReader,
 };
@@ -26,38 +27,12 @@ use crate::{
 /// Maximum number of samples per Opus frame at 48 kHz (120 ms).
 const MAX_FRAME_SAMPLES: usize = 5760;
 
-/// Errors that can occur while decoding Ogg/Opus data.
-#[derive(thiserror::Error, Debug, Clone)]
-pub enum OggOpusError {
-    #[error("I/O error ({kind:?}): {message}")]
-    Io {
-        kind: io::ErrorKind,
-        message: String,
-    },
-    #[error("Ogg/Opus decode error: {0}")]
-    Decode(String),
-    #[error("internal channel closed unexpectedly")]
-    ChannelClosed,
-}
+/// Shared error alias for the Opus decoder.
+pub type OggOpusError = OggContainerError;
 
-impl From<io::Error> for OggOpusError {
-    fn from(err: io::Error) -> Self {
-        OggOpusError::Io {
-            kind: err.kind(),
-            message: err.to_string(),
-        }
-    }
-}
-
-impl From<OpusError> for OggOpusError {
+impl From<OpusError> for OggContainerError {
     fn from(err: OpusError) -> Self {
-        OggOpusError::Decode(err.to_string())
-    }
-}
-
-impl From<String> for OggOpusError {
-    fn from(value: String) -> Self {
-        OggOpusError::Decode(value)
+        OggContainerError::Decode(err.to_string())
     }
 }
 
@@ -107,8 +82,15 @@ where
     let (info_tx, info_rx) = oneshot::channel::<Result<StreamInfo, OggOpusError>>();
 
     let blocking_handle = tokio::task::spawn_blocking(move || -> Result<(), OggOpusError> {
-        let channel_reader = ChannelReader::<OggOpusError>::new(ingest_rx);
-        let mut packet_reader = StreamingPacketReader::new(channel_reader);
+        let channel_reader = ChannelReader::<OggContainerError>::new(ingest_rx);
+        let mut packet_reader = OggPacketReader::new(
+            channel_reader,
+            OggReaderOptions {
+                validate_crc: false,
+                find_sync: false,
+                ..OggReaderOptions::default()
+            },
+        );
 
         let header_packet = packet_reader
             .next_packet()?
@@ -274,142 +256,4 @@ impl OpusTags {
         }
         Ok(OpusTags)
     }
-}
-
-/// Streaming Ogg packet reader reused for Opus packets.
-struct StreamingPacketReader<E>
-where
-    E: std::error::Error + std::fmt::Display,
-{
-    reader: ChannelReader<E>,
-    current_packet: Vec<u8>,
-    pending_packets: std::collections::VecDeque<Vec<u8>>,
-    finished: bool,
-    stream_serial: Option<u32>,
-}
-
-impl<E> StreamingPacketReader<E>
-where
-    E: std::error::Error + std::fmt::Display,
-{
-    fn new(reader: ChannelReader<E>) -> Self {
-        Self {
-            reader,
-            current_packet: Vec::new(),
-            pending_packets: std::collections::VecDeque::new(),
-            finished: false,
-            stream_serial: None,
-        }
-    }
-
-    fn next_packet(&mut self) -> Result<Option<Vec<u8>>, OggOpusError> {
-        loop {
-            if let Some(packet) = self.pending_packets.pop_front() {
-                return Ok(Some(packet));
-            }
-            if self.finished {
-                return Ok(None);
-            }
-            self.read_page()?;
-        }
-    }
-
-    fn read_page(&mut self) -> Result<(), OggOpusError> {
-        let mut header = [0u8; 27];
-        if !read_exact_or_eof(&mut self.reader, &mut header)? {
-            self.finished = true;
-            return Ok(());
-        }
-
-        if &header[0..4] != b"OggS" {
-            return Err(OggOpusError::Decode("invalid Ogg capture pattern".into()));
-        }
-        if header[4] != 0 {
-            return Err(OggOpusError::Decode("unsupported Ogg version".into()));
-        }
-
-        let header_type = header[5];
-        let bitstream_serial = u32::from_le_bytes([header[14], header[15], header[16], header[17]]);
-
-        if let Some(serial) = self.stream_serial {
-            if serial != bitstream_serial {
-                return Err(OggOpusError::Decode(
-                    "multiple logical Ogg streams are unsupported".to_string(),
-                ));
-            }
-        } else {
-            self.stream_serial = Some(bitstream_serial);
-        }
-
-        let page_segments = header[26] as usize;
-        let mut segment_table = vec![0u8; page_segments];
-        read_exact_checked(&mut self.reader, &mut segment_table)?;
-
-        let data_len: usize = segment_table.iter().map(|&v| v as usize).sum();
-        let mut data = vec![0u8; data_len];
-        read_exact_checked(&mut self.reader, &mut data)?;
-
-        if header_type & 0x01 != 0 && self.current_packet.is_empty() {
-            return Err(OggOpusError::Decode(
-                "continuation flag set without existing packet".into(),
-            ));
-        }
-        if header_type & 0x01 == 0 && !self.current_packet.is_empty() {
-            return Err(OggOpusError::Decode(
-                "expected continuation flag for unfinished packet".into(),
-            ));
-        }
-
-        let mut offset = 0usize;
-        for &seg_len in &segment_table {
-            let len = seg_len as usize;
-            let end = offset
-                .checked_add(len)
-                .ok_or_else(|| OggOpusError::Decode("segment length overflow".into()))?;
-            if end > data.len() {
-                return Err(OggOpusError::Decode("segment exceeds page data".into()));
-            }
-            self.current_packet.extend_from_slice(&data[offset..end]);
-            offset = end;
-
-            if seg_len < 255 {
-                let packet = std::mem::take(&mut self.current_packet);
-                self.pending_packets.push_back(packet);
-            }
-        }
-
-        if offset != data.len() {
-            return Err(OggOpusError::Decode("page data not fully consumed".into()));
-        }
-
-        if header_type & 0x04 != 0 && self.current_packet.is_empty() {
-            self.finished = true;
-        }
-
-        Ok(())
-    }
-}
-
-fn read_exact_or_eof<R: Read>(reader: &mut R, buf: &mut [u8]) -> io::Result<bool> {
-    let mut read = 0;
-    while read < buf.len() {
-        match reader.read(&mut buf[read..])? {
-            0 if read == 0 => return Ok(false),
-            0 => {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "unexpected EOF while reading",
-                ))
-            }
-            n => read += n,
-        }
-    }
-    Ok(true)
-}
-
-fn read_exact_checked<R: Read>(reader: &mut R, buf: &mut [u8]) -> Result<(), OggOpusError> {
-    if !read_exact_or_eof(reader, buf)? {
-        return Err(OggOpusError::Decode("unexpected EOF in Ogg stream".into()));
-    }
-    Ok(())
 }

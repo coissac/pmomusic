@@ -104,6 +104,7 @@ pub mod encoder;
 pub mod error;
 pub mod mp3;
 pub mod ogg;
+mod ogg_common;
 pub mod opus;
 mod pcm;
 mod stream;
