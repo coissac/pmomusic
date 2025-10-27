@@ -576,7 +576,11 @@ impl Config {
     pub fn get_device_udn(&self, devtype: &str, name: &str) -> Result<String> {
         let path = &["devices", devtype, name, "udn"];
         match self.get_value(path) {
-            Ok(Value::String(udn)) => Ok(udn),
+            Ok(Value::String(udn)) => {
+                let udn_str = udn.trim();
+                let sanitized = udn_str.strip_prefix("uuid:").unwrap_or(udn_str).to_string();
+                Ok(sanitized)
+            }
             _ => {
                 let new_udn = Uuid::new_v4().to_string();
                 self.set_value(path, Value::String(new_udn.clone()))?;
@@ -597,7 +601,9 @@ impl Config {
     ///
     /// Returns a `Result` indicating success or failure
     pub fn set_device_udn(&self, devtype: &str, name: &str, udn: String) -> Result<()> {
-        self.set_value(&["devices", devtype, name, "udn"], Value::String(udn))
+        let udn_str = udn.trim();
+        let sanitized = udn_str.strip_prefix("uuid:").unwrap_or(udn_str).to_string();
+        self.set_value(&["devices", devtype, name, "udn"], Value::String(sanitized))
     }
 
     impl_string_config!(
