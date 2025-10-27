@@ -622,6 +622,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4bfbf56724aa9eca8afa4fcfadeb479e722935bb2a0900c2d37e0cc477af0688"
 
 [[package]]
+name = "cmake"
+version = "0.1.54"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7caa3f9de89ddbe2c607f4101924c5abec803763ae9534e4f4d7d8f84aa81f0"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "color_quant"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1988,6 +1997,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "58f929b4d672ea937a23a1ab494143d968337a5f47e56d0815df1e0890ddf174"
 
 [[package]]
+name = "libflac-sys"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6fc5cbb957a914952ee9b8667e82b984c6dc280087df01497fc5b4776d303582"
+dependencies = [
+ "cmake",
+ "libc",
+]
+
+[[package]]
 name = "libfuzzer-sys"
 version = "0.4.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2610,6 +2629,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum 0.8.6",
+ "bytes",
  "chrono",
  "claxon",
  "flacenc 0.4.0",
@@ -2619,6 +2639,7 @@ dependencies = [
  "pmocache",
  "pmoconfig",
  "pmodidl",
+ "pmoflac",
  "pmoserver",
  "quick-xml 0.37.5",
  "reqwest",
@@ -2704,6 +2725,19 @@ dependencies = [
  "serde",
  "utoipa",
  "utoipa-swagger-ui",
+]
+
+[[package]]
+name = "pmoflac"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "claxon",
+ "libc",
+ "libflac-sys",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]

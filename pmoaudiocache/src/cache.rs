@@ -33,23 +33,25 @@ impl CacheConfig for AudioConfig {
 /// Type alias pour le cache audio avec conversion FLAC
 pub type Cache = pmocache::Cache<AudioConfig>;
 
-/// Créateur de transformer FLAC
+/// Créateur de transformer FLAC (legacy)
+///
+/// ⚠️ DEPRECATED: Cette fonction est conservée pour compatibilité mais utilise
+/// une approche avec buffer complet. Utilisez `create_streaming_flac_transformer()`
+/// pour de meilleures performances et un vrai streaming.
 ///
 /// Convertit automatiquement tout fichier audio téléchargé en format FLAC
-/// en traitant les données au vol, sans tout charger en mémoire.
+/// en bufferisant d'abord tout le fichier.
 ///
 /// # Workflow
 ///
-/// 1. Télécharger les bytes par chunks depuis le stream HTTP
-/// 2. Buffer temporaire pour accumuler les données nécessaires à Symphonia
-/// 3. Décoder l'audio en PCM via Symphonia
-/// 4. Encoder le PCM en FLAC progressivement via flacenc
-/// 5. Écrire les frames FLAC directement dans le fichier
-/// 6. Mettre à jour la progression après chaque chunk
+/// 1. Buffer tous les bytes du stream
+/// 2. Décoder l'audio en PCM via Symphonia
+/// 3. Encoder le PCM en FLAC via flacenc
+/// 4. Écrire le fichier FLAC complet
 ///
-/// Note: Bien que nous utilisions un buffer temporaire, celui-ci est géré
-/// de manière efficace et les données FLAC sont écrites au fur et à mesure.
-fn create_flac_transformer() -> StreamTransformer {
+/// Note: Cette approche nécessite de charger tout le fichier en mémoire.
+#[allow(dead_code)]
+fn create_flac_transformer_legacy() -> StreamTransformer {
     Box::new(|input, mut file, progress| {
         Box::pin(async move {
             use futures_util::StreamExt;
@@ -337,7 +339,7 @@ fn create_flac_transformer() -> StreamTransformer {
 /// let cache = cache::new_cache("./audio_cache", 1000).unwrap();
 /// ```
 pub fn new_cache(dir: &str, limit: usize) -> Result<Cache> {
-    let transformer_factory = Arc::new(|| create_flac_transformer());
+    let transformer_factory = Arc::new(|| crate::streaming::create_streaming_flac_transformer());
     Cache::with_transformer(dir, limit, Some(transformer_factory))
 }
 
