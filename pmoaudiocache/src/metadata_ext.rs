@@ -3,8 +3,8 @@
 //! Ce module utilise la macro `define_metadata_properties!` de pmocache
 //! pour générer automatiquement des méthodes d'accès typées aux métadonnées audio.
 
-use pmocache::define_metadata_properties;
 use crate::AudioConfig;
+use pmocache::define_metadata_properties;
 
 // Génération automatique du trait AudioMetadataExt avec toutes les propriétés audio
 define_metadata_properties! {

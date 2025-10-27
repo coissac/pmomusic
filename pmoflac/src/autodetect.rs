@@ -27,9 +27,9 @@ pub enum DecodeAudioError {
     #[error("MP3 decode error: {0}")]
     Mp3(#[from] Mp3Error),
     #[error("Ogg/Vorbis decode error: {0}")]
-    Vorbis(#[from] OggError),
+    Vorbis(OggError),
     #[error("Ogg/Opus decode error: {0}")]
-    Opus(#[from] OggOpusError),
+    Opus(OggOpusError),
     #[error("WAV decode error: {0}")]
     Wav(#[from] WavError),
     #[error("AIFF decode error: {0}")]
@@ -67,11 +67,15 @@ where
             DecodedAudioStream::Mp3(stream)
         }
         DetectedFormat::OggVorbis => {
-            let stream = decode_ogg_vorbis_stream(prefixed).await?;
+            let stream = decode_ogg_vorbis_stream(prefixed)
+                .await
+                .map_err(DecodeAudioError::Vorbis)?;
             DecodedAudioStream::OggVorbis(stream)
         }
         DetectedFormat::OggOpus => {
-            let stream = decode_ogg_opus_stream(prefixed).await?;
+            let stream = decode_ogg_opus_stream(prefixed)
+                .await
+                .map_err(DecodeAudioError::Opus)?;
             DecodedAudioStream::OggOpus(stream)
         }
         DetectedFormat::Wav => {
@@ -113,10 +117,10 @@ impl DecodedAudioStream {
             DecodedAudioStream::Flac(inner) => inner.wait().await.map_err(DecodeAudioError::from),
             DecodedAudioStream::Mp3(inner) => inner.wait().await.map_err(DecodeAudioError::from),
             DecodedAudioStream::OggVorbis(inner) => {
-                inner.wait().await.map_err(DecodeAudioError::from)
+                inner.wait().await.map_err(DecodeAudioError::Vorbis)
             }
             DecodedAudioStream::OggOpus(inner) => {
-                inner.wait().await.map_err(DecodeAudioError::from)
+                inner.wait().await.map_err(DecodeAudioError::Opus)
             }
             DecodedAudioStream::Wav(inner) => inner.wait().await.map_err(DecodeAudioError::from),
             DecodedAudioStream::Aiff(inner) => inner.wait().await.map_err(DecodeAudioError::from),
@@ -184,8 +188,8 @@ impl DecodedReader {
         match self {
             DecodedReader::Flac(inner) => inner.wait().await.map_err(DecodeAudioError::from),
             DecodedReader::Mp3(inner) => inner.wait().await.map_err(DecodeAudioError::from),
-            DecodedReader::OggVorbis(inner) => inner.wait().await.map_err(DecodeAudioError::from),
-            DecodedReader::OggOpus(inner) => inner.wait().await.map_err(DecodeAudioError::from),
+            DecodedReader::OggVorbis(inner) => inner.wait().await.map_err(DecodeAudioError::Vorbis),
+            DecodedReader::OggOpus(inner) => inner.wait().await.map_err(DecodeAudioError::Opus),
             DecodedReader::Wav(inner) => inner.wait().await.map_err(DecodeAudioError::from),
             DecodedReader::Aiff(inner) => inner.wait().await.map_err(DecodeAudioError::from),
         }

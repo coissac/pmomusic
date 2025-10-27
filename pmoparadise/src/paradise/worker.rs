@@ -881,7 +881,7 @@ fn ms_to_frames(ms: u64, sample_rate: u32) -> usize {
 
 fn decode_block_audio(data: Vec<u8>) -> anyhow::Result<DecodedBlock> {
     use symphonia::core::audio::SampleBuffer;
-    use symphonia::core::codecs::{CODEC_TYPE_NULL, DecoderOptions};
+    use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
     use symphonia::core::errors::Error as SymphoniaError;
     use symphonia::core::formats::FormatOptions;
     use symphonia::core::io::MediaSourceStream;
