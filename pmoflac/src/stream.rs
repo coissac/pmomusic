@@ -25,11 +25,7 @@ impl<E> ManagedAsyncReader<E>
 where
     E: std::error::Error,
 {
-    pub fn new(
-        role: &'static str,
-        inner: DuplexStream,
-        join: JoinHandle<Result<(), E>>,
-    ) -> Self {
+    pub fn new(role: &'static str, inner: DuplexStream, join: JoinHandle<Result<(), E>>) -> Self {
         Self {
             inner: Some(inner),
             join: Some(join),

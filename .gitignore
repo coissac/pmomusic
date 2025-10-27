@@ -13,6 +13,7 @@
 **/*.aiff
 **/*.wav
 **/*.opus
+**/*.mp4
 xxx
 /dcai/
 **/.pmomusic.yml

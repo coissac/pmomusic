@@ -1,8 +1,6 @@
 use tokio::io::AsyncReadExt;
 
-use pmoflac::{
-    decode_mp3_stream, encode_flac_stream, EncoderOptions, PcmFormat, StreamInfo,
-};
+use pmoflac::{decode_mp3_stream, encode_flac_stream, EncoderOptions, PcmFormat, StreamInfo};
 
 const TEST_MP3: &str = "test_data/file_example_MP3_5MG.mp3";
 

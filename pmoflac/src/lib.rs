@@ -95,26 +95,28 @@
 //! }
 //! ```
 
+pub mod aiff;
+pub mod autodetect;
+mod common;
 pub mod decoder;
+mod decoder_common;
 pub mod encoder;
 pub mod error;
-mod pcm;
-mod stream;
-mod util;
 pub mod mp3;
 pub mod ogg;
 pub mod opus;
-pub mod aiff;
+mod pcm;
+mod stream;
+mod util;
 pub mod wav;
-mod common;
-mod decoder_common;
 
+pub use aiff::{decode_aiff_stream, AiffDecodedStream, AiffError};
+pub use autodetect::{decode_audio_stream, DecodeAudioError, DecodedAudioStream, DecodedReader};
 pub use decoder::{decode_flac_stream, FlacDecodedStream};
 pub use encoder::{encode_flac_stream, EncoderOptions, FlacEncodedStream};
 pub use error::FlacError;
 pub use mp3::{decode_mp3_stream, Mp3DecodedStream, Mp3Error};
 pub use ogg::{decode_ogg_vorbis_stream, OggDecodedStream, OggError};
 pub use opus::{decode_ogg_opus_stream, OggOpusDecodedStream, OggOpusError};
-pub use aiff::{decode_aiff_stream, AiffDecodedStream, AiffError};
-pub use wav::{decode_wav_stream, WavDecodedStream, WavError};
 pub use pcm::{PcmFormat, StreamInfo};
+pub use wav::{decode_wav_stream, WavDecodedStream, WavError};

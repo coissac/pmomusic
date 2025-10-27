@@ -262,9 +262,7 @@ where
 
     let writer_handle = spawn_writer_task(pcm_rx, pcm_writer, blocking_handle, "mp3-decode");
 
-    let info = info_rx
-        .await
-        .map_err(|_| Mp3Error::ChannelClosed)??;
+    let info = info_rx.await.map_err(|_| Mp3Error::ChannelClosed)??;
     let reader = ManagedAsyncReader::new("mp3-decode-writer", pcm_reader, writer_handle);
 
     Ok(Mp3DecodedStream { info, reader })

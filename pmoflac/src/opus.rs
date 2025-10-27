@@ -18,9 +18,7 @@ use tokio::{
 
 use crate::{
     common::ChannelReader,
-    decoder_common::{
-        spawn_ingest_task, spawn_writer_task, CHANNEL_CAPACITY, DUPLEX_BUFFER_SIZE,
-    },
+    decoder_common::{spawn_ingest_task, spawn_writer_task, CHANNEL_CAPACITY, DUPLEX_BUFFER_SIZE},
     pcm::StreamInfo,
     stream::ManagedAsyncReader,
 };
@@ -159,12 +157,14 @@ where
 
         while let Some(packet) = packet_reader.next_packet()? {
             if pcm_buffer.len() < MAX_FRAME_SAMPLES * channels {
-                pcm_buffer
-                    .resize(MAX_FRAME_SAMPLES * channels, 0);
+                pcm_buffer.resize(MAX_FRAME_SAMPLES * channels, 0);
             }
 
-            let decoded_frames =
-                decoder.decode(&packet, &mut pcm_buffer[..MAX_FRAME_SAMPLES * channels], false)?;
+            let decoded_frames = decoder.decode(
+                &packet,
+                &mut pcm_buffer[..MAX_FRAME_SAMPLES * channels],
+                false,
+            )?;
             if decoded_frames == 0 {
                 continue;
             }
@@ -240,7 +240,9 @@ impl OpusHead {
         }
         let channels = data[9];
         if channels == 0 {
-            return Err(OggOpusError::Decode("Opus channel count must be > 0".into()));
+            return Err(OggOpusError::Decode(
+                "Opus channel count must be > 0".into(),
+            ));
         }
 
         let pre_skip = u16::from_le_bytes([data[10], data[11]]);

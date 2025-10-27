@@ -326,7 +326,8 @@ where
             }
 
             // Pre-allocate for next iteration
-            pcm_bytes = Vec::with_capacity(info.max_block_size as usize * info.channels as usize * 2);
+            pcm_bytes =
+                Vec::with_capacity(info.max_block_size as usize * info.channels as usize * 2);
         }
 
         if !produced_audio {
@@ -576,9 +577,9 @@ where
         let mut offset: usize = 0;
         for &seg_len in &segment_table {
             let len = seg_len as usize;
-            let end = offset.checked_add(len).ok_or_else(|| {
-                OggError::Decode("segment length overflow".into())
-            })?;
+            let end = offset
+                .checked_add(len)
+                .ok_or_else(|| OggError::Decode("segment length overflow".into()))?;
             if end > data.len() {
                 return Err(OggError::Decode("segment exceeds page data".into()));
             }
@@ -656,4 +657,3 @@ mod crc {
         ret
     }
 }
-

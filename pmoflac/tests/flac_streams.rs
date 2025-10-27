@@ -224,7 +224,8 @@ async fn encoder_streams_without_buffering_all_input() -> Result<(), FlacError> 
     let chunks_read_counter = slow_reader.chunks_read();
 
     // Start encoding
-    let mut encoder_stream = encode_flac_stream(slow_reader, format, EncoderOptions::default()).await?;
+    let mut encoder_stream =
+        encode_flac_stream(slow_reader, format, EncoderOptions::default()).await?;
 
     // Try to read some FLAC data before all PCM data has been consumed
     let mut first_chunk = vec![0u8; 4096];
@@ -247,12 +248,11 @@ async fn encoder_streams_without_buffering_all_input() -> Result<(), FlacError> 
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Check that we've started getting output
-    let (first_read, mut encoder_stream) = read_handle.await.map_err(|e| {
-        FlacError::TaskJoin {
+    let (first_read, mut encoder_stream) =
+        read_handle.await.map_err(|e| FlacError::TaskJoin {
             role: "read-test",
             details: e.to_string(),
-        }
-    })??;
+        })??;
 
     assert!(first_read > 0, "Should have received some FLAC data");
     assert!(

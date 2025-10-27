@@ -20,9 +20,7 @@ use tokio::{
 
 use crate::{
     common::ChannelReader,
-    decoder_common::{
-        spawn_ingest_task, spawn_writer_task, CHANNEL_CAPACITY, DUPLEX_BUFFER_SIZE,
-    },
+    decoder_common::{spawn_ingest_task, spawn_writer_task, CHANNEL_CAPACITY, DUPLEX_BUFFER_SIZE},
     pcm::StreamInfo,
     stream::ManagedAsyncReader,
 };
@@ -221,7 +219,9 @@ where
         }
         let form_type = <[u8; 4]>::try_from(&form_header[8..12]).unwrap();
         if form_type != *b"AIFF" && form_type != *b"AIFC" {
-            return Err(AiffError::Decode("unsupported FORM type (expected AIFF/AIFC)".into()));
+            return Err(AiffError::Decode(
+                "unsupported FORM type (expected AIFF/AIFC)".into(),
+            ));
         }
 
         let mut comm_chunk: Option<CommChunk> = None;
@@ -234,7 +234,8 @@ where
                 Err(err) => return Err(err),
             };
             let chunk_id = <[u8; 4]>::try_from(&header[..4]).unwrap();
-            let chunk_size = u32::from_be_bytes([header[4], header[5], header[6], header[7]]) as usize;
+            let chunk_size =
+                u32::from_be_bytes([header[4], header[5], header[6], header[7]]) as usize;
 
             let padded_size = if chunk_size % 2 == 0 {
                 chunk_size
@@ -258,7 +259,9 @@ where
 
                     let compression = if form_type == *b"AIFC" {
                         if data.len() < 22 {
-                            return Err(AiffError::Decode("AIFC COMM chunk missing compression type".into()));
+                            return Err(AiffError::Decode(
+                                "AIFC COMM chunk missing compression type".into(),
+                            ));
                         }
                         match &data[18..22] {
                             b"NONE" => Compression::BigEndianPcm,
@@ -290,13 +293,15 @@ where
                     }
                 }
                 b"SSND" => {
-                    let comm = comm_chunk
-                        .as_ref()
-                        .ok_or_else(|| AiffError::Decode("SSND chunk encountered before COMM".into()))?;
+                    let comm = comm_chunk.as_ref().ok_or_else(|| {
+                        AiffError::Decode("SSND chunk encountered before COMM".into())
+                    })?;
 
                     let header = aiff_reader.read_exact_vec(8)?;
-                    let offset = u32::from_be_bytes([header[0], header[1], header[2], header[3]]) as usize;
-                    let _block_size = u32::from_be_bytes([header[4], header[5], header[6], header[7]]) as usize;
+                    let offset =
+                        u32::from_be_bytes([header[0], header[1], header[2], header[3]]) as usize;
+                    let _block_size =
+                        u32::from_be_bytes([header[4], header[5], header[6], header[7]]) as usize;
 
                     if offset > 0 {
                         aiff_reader.skip(offset)?;
@@ -368,7 +373,9 @@ where
         }
 
         if !stream_info_sent {
-            return Err(AiffError::Decode("no SSND chunk found in AIFF stream".into()));
+            return Err(AiffError::Decode(
+                "no SSND chunk found in AIFF stream".into(),
+            ));
         }
 
         Ok(())
@@ -424,9 +431,8 @@ fn convert_be_pcm(mut chunk: Vec<u8>, bits_per_sample: u16) -> Result<Vec<u8>, A
         3 => {
             let mut out = Vec::with_capacity(chunk.len());
             for sample in chunk.chunks(3) {
-                let value = ((sample[0] as i32) << 16)
-                    | ((sample[1] as i32) << 8)
-                    | (sample[2] as i32);
+                let value =
+                    ((sample[0] as i32) << 16) | ((sample[1] as i32) << 8) | (sample[2] as i32);
                 let value = if value & 0x0080_0000 != 0 {
                     value | !0x00FF_FFFF
                 } else {
