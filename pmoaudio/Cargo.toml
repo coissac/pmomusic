@@ -3,9 +3,18 @@ name = "pmoaudio"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+simd = []
+
 [dependencies]
 tokio = { version = "1.42", features = ["full"] }
 async-trait = "0.1"
+pmoflac = { path = "../pmoflac" }
+paste = "1"
+soxr = "0.6.0"
+bytemuck = "1.24.0"
 
 [dev-dependencies]
 tokio-test = "0.4"
+tempfile = "3"

@@ -11,17 +11,17 @@ use tokio::sync::mpsc;
 pub struct DspNode {
     rx: mpsc::Receiver<Arc<AudioChunk>>,
     subscribers: MultiSubscriberNode,
-    gain: f32,
+    gain_db: f32,
 }
 
 impl DspNode {
-    pub fn new(channel_size: usize, gain: f32) -> (Self, mpsc::Sender<Arc<AudioChunk>>) {
+    pub fn new(channel_size: usize, gain_db: f32) -> (Self, mpsc::Sender<Arc<AudioChunk>>) {
         let (tx, rx) = mpsc::channel(channel_size);
 
         let node = Self {
             rx,
             subscribers: MultiSubscriberNode::new(),
-            gain,
+            gain_db,
         };
 
         (node, tx)
@@ -34,33 +34,36 @@ impl DspNode {
     /// Applique le gain aux chunks
     pub async fn run(mut self) -> Result<(), AudioError> {
         while let Some(chunk) = self.rx.recv().await {
-            if (self.gain - 1.0).abs() < f32::EPSILON {
-                // Gain = 1.0, pas de transformation nécessaire
+            if self.gain_db.abs() < f32::EPSILON {
+                // Gain = 0 dB, pas de transformation nécessaire
                 self.subscribers.push(chunk).await?;
-            } else {
-                // Clone les données pour les modifier
-                let (mut left_data, mut right_data) = chunk.clone_data();
-
-                // Appliquer le gain
-                for sample in &mut left_data {
-                    *sample *= self.gain;
-                }
-                for sample in &mut right_data {
-                    *sample *= self.gain;
-                }
-
-                let new_chunk =
-                    AudioChunk::new(chunk.order, left_data, right_data, chunk.sample_rate);
-
-                self.subscribers.push(Arc::new(new_chunk)).await?;
+                continue;
             }
+
+            let gain_linear = AudioChunk::gain_linear_from_db(self.gain_db as f64) as f32;
+            let mut pairs = chunk.to_pairs_f32();
+            for frame in &mut pairs {
+                frame[0] *= gain_linear;
+                frame[1] *= gain_linear;
+            }
+
+            let mut new_chunk = AudioChunk::from_pairs_f32(
+                chunk.order(),
+                pairs,
+                chunk.sample_rate(),
+                chunk.bit_depth(),
+            );
+            if chunk.gain_db().abs() > f64::EPSILON {
+                new_chunk = new_chunk.set_gain_db(chunk.gain_db());
+            }
+            self.subscribers.push(new_chunk).await?;
         }
         Ok(())
     }
 
     /// Met à jour le gain dynamiquement (nécessite un `Arc<RwLock<f32>>` dans une version réelle)
-    pub fn set_gain(&mut self, gain: f32) {
-        self.gain = gain;
+    pub fn set_gain_db(&mut self, gain_db: f32) {
+        self.gain_db = gain_db;
     }
 }
 
@@ -102,24 +105,26 @@ impl LowPassDspNode {
     #[allow(dead_code)]
     pub async fn run(mut self) -> Result<(), AudioError> {
         while let Some(chunk) = self.rx.recv().await {
-            let (left_data, right_data) = chunk.clone_data();
-            let mut new_left = Vec::with_capacity(left_data.len());
-            let mut new_right = Vec::with_capacity(right_data.len());
+            let pairs = chunk.to_pairs_f32();
+            let mut filtered = Vec::with_capacity(pairs.len());
 
-            // Appliquer le filtre
-            for &sample in &left_data {
-                self.prev_left = self.prev_left + self.alpha * (sample - self.prev_left);
-                new_left.push(self.prev_left);
+            for sample in pairs.iter() {
+                self.prev_left = self.prev_left + self.alpha * (sample[0] - self.prev_left);
+                self.prev_right = self.prev_right + self.alpha * (sample[1] - self.prev_right);
+                filtered.push([self.prev_left, self.prev_right]);
             }
 
-            for &sample in &right_data {
-                self.prev_right = self.prev_right + self.alpha * (sample - self.prev_right);
-                new_right.push(self.prev_right);
+            let mut new_chunk = AudioChunk::from_pairs_f32(
+                chunk.order(),
+                filtered,
+                chunk.sample_rate(),
+                chunk.bit_depth(),
+            );
+            if chunk.gain_db().abs() > f64::EPSILON {
+                new_chunk = new_chunk.set_gain_db(chunk.gain_db());
             }
 
-            let new_chunk = AudioChunk::new(chunk.order, new_left, new_right, chunk.sample_rate);
-
-            self.subscribers.push(Arc::new(new_chunk)).await?;
+            self.subscribers.push(new_chunk).await?;
         }
         Ok(())
     }
@@ -128,10 +133,11 @@ impl LowPassDspNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::BitDepth;
 
     #[tokio::test]
     async fn test_dsp_node_unity_gain() {
-        let (mut node, tx) = DspNode::new(10, 1.0);
+        let (mut node, tx) = DspNode::new(10, 0.0);
         let (out_tx, mut out_rx) = mpsc::channel(10);
 
         node.add_subscriber(out_tx);
@@ -141,18 +147,24 @@ mod tests {
         });
 
         // Envoyer un chunk
-        let chunk = AudioChunk::new(0, vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0], 48000);
-        let chunk_arc = Arc::new(chunk);
-        tx.send(chunk_arc.clone()).await.unwrap();
+        let chunk = AudioChunk::from_channels_f32(
+            0,
+            vec![0.25, 0.5, 0.75],
+            vec![0.1, 0.2, 0.3],
+            48000,
+            BitDepth::B24,
+        );
+        tx.send(chunk.clone()).await.unwrap();
 
         // Avec gain = 1.0, le chunk ne devrait pas être cloné
         let received = out_rx.recv().await.unwrap();
-        assert!(Arc::ptr_eq(&chunk_arc, &received));
+        assert!(Arc::ptr_eq(&chunk, &received));
     }
 
     #[tokio::test]
     async fn test_dsp_node_gain() {
-        let (mut node, tx) = DspNode::new(10, 2.0);
+        let gain_db = AudioChunk::gain_db_from_linear(2.0) as f32;
+        let (mut node, tx) = DspNode::new(10, gain_db);
         let (out_tx, mut out_rx) = mpsc::channel(10);
 
         node.add_subscriber(out_tx);
@@ -162,17 +174,25 @@ mod tests {
         });
 
         // Envoyer un chunk
-        let chunk = AudioChunk::new(0, vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0], 48000);
-        tx.send(Arc::new(chunk)).await.unwrap();
+        let chunk = AudioChunk::from_channels_f32(
+            0,
+            vec![0.25, 0.5, 0.75],
+            vec![0.1, 0.2, 0.3],
+            48000,
+            BitDepth::B24,
+        );
+        tx.send(chunk).await.unwrap();
 
         // Vérifier que le gain a été appliqué
         let received = out_rx.recv().await.unwrap();
-        assert_eq!(received.left[0], 2.0);
-        assert_eq!(received.left[1], 4.0);
-        assert_eq!(received.left[2], 6.0);
-        assert_eq!(received.right[0], 8.0);
-        assert_eq!(received.right[1], 10.0);
-        assert_eq!(received.right[2], 12.0);
+        let frames = received.to_pairs_f32();
+        const EPS: f32 = 1e-3;
+        assert!((frames[0][0] - 0.5).abs() < EPS);
+        assert!((frames[1][0] - 1.0).abs() < EPS);
+        assert!((frames[2][0] - 1.0).abs() < EPS); // Clamp at full scale
+        assert!((frames[0][1] - 0.2).abs() < EPS);
+        assert!((frames[1][1] - 0.4).abs() < EPS);
+        assert!((frames[2][1] - 0.6).abs() < EPS);
     }
 
     #[tokio::test]
@@ -187,25 +207,26 @@ mod tests {
         });
 
         // Envoyer un chunk avec un signal carré
-        let chunk = AudioChunk::new(
+        let chunk = AudioChunk::from_channels_f32(
             0,
             vec![1.0, 1.0, 1.0, -1.0, -1.0, -1.0],
             vec![1.0, 1.0, 1.0, -1.0, -1.0, -1.0],
             48000,
+            BitDepth::B24,
         );
-        tx.send(Arc::new(chunk)).await.unwrap();
+        tx.send(chunk).await.unwrap();
 
         // Le filtre devrait lisser le signal
         let received = out_rx.recv().await.unwrap();
-
-        // Vérifier que le signal est lissé (valeurs intermédiaires)
-        assert!(received.left[0].abs() < 1.0); // Premier échantillon lissé
-        assert!(received.left[2].abs() < 1.0); // Signal ne devrait pas atteindre 1.0 immédiatement
+        let frames = received.to_pairs_f32();
+        assert!(frames[0][0].abs() < 1.0); // Premier échantillon lissé
+        assert!(frames[2][0].abs() < 1.0); // Signal ne devrait pas atteindre 1.0 immédiatement
     }
 
     #[tokio::test]
     async fn test_dsp_node_multiple_subscribers() {
-        let (mut node, tx) = DspNode::new(10, 0.5);
+        let gain_db = AudioChunk::gain_db_from_linear(0.5) as f32;
+        let (mut node, tx) = DspNode::new(10, gain_db);
         let (out_tx1, mut out_rx1) = mpsc::channel(10);
         let (out_tx2, mut out_rx2) = mpsc::channel(10);
 
@@ -216,15 +237,18 @@ mod tests {
             node.run().await.unwrap();
         });
 
-        let chunk = AudioChunk::new(0, vec![2.0, 4.0], vec![2.0, 4.0], 48000);
-        tx.send(Arc::new(chunk)).await.unwrap();
+        let chunk =
+            AudioChunk::from_channels_f32(0, vec![0.8, 0.4], vec![0.8, 0.4], 48000, BitDepth::B24);
+        tx.send(chunk).await.unwrap();
 
         // Les deux abonnés devraient recevoir le même Arc
         let received1 = out_rx1.recv().await.unwrap();
         let received2 = out_rx2.recv().await.unwrap();
 
         assert!(Arc::ptr_eq(&received1, &received2));
-        assert_eq!(received1.left[0], 1.0); // 2.0 * 0.5
-        assert_eq!(received1.left[1], 2.0); // 4.0 * 0.5
+        let frames = received1.to_pairs_f32();
+        const EPS: f32 = 1e-3;
+        assert!((frames[0][0] - 0.4).abs() < EPS); // 0.8 * 0.5
+        assert!((frames[1][0] - 0.2).abs() < EPS); // 0.4 * 0.5
     }
 }

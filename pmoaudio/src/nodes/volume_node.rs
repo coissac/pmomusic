@@ -126,13 +126,14 @@ impl VolumeNode {
                     match chunk_opt {
                         Some(chunk) => {
                             let local_volume = *self.volume.read().await;
-                            let total_volume = local_volume * master_volume;
+                            let total_volume = (local_volume * master_volume).max(0.0);
 
-                            // Créer un nouveau chunk avec le gain modifié
-                            let modified_chunk = chunk.with_modified_gain(total_volume);
+                            // Créer un nouveau chunk avec le gain modifié (conversion vers dB)
+                            let modified_chunk =
+                                chunk.with_modified_gain_linear(total_volume as f64);
 
                             // Envoyer aux subscribers
-                            self.subscribers.push(Arc::new(modified_chunk)).await?;
+                            self.subscribers.push(modified_chunk).await?;
                         }
                         None => {
                             // Channel fermé, terminer
@@ -255,6 +256,7 @@ impl HardwareVolumeNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::BitDepth;
 
     #[tokio::test]
     async fn test_volume_node_basic() {
@@ -266,12 +268,13 @@ mod tests {
         let handle = tokio::spawn(async move { node.run().await });
 
         // Envoyer un chunk avec gain 1.0
-        let chunk = AudioChunk::with_gain(0, vec![1.0; 100], vec![1.0; 100], 48000, 1.0);
-        tx.send(Arc::new(chunk)).await.unwrap();
+        let chunk =
+            AudioChunk::from_channels_f32(0, vec![1.0; 100], vec![1.0; 100], 48000, BitDepth::B24);
+        tx.send(chunk).await.unwrap();
 
         // Recevoir le chunk modifié
         let modified = out_rx.recv().await.unwrap();
-        assert!((modified.gain - 0.5).abs() < f32::EPSILON);
+        assert!((modified.gain_linear() - 0.5).abs() < 1e-6);
 
         drop(tx);
         handle.await.unwrap().unwrap();
@@ -332,8 +335,9 @@ mod tests {
         tokio::spawn(async move { slave.run().await });
 
         // Envoyer un chunk au slave
-        let chunk = AudioChunk::with_gain(0, vec![1.0; 100], vec![1.0; 100], 48000, 1.0);
-        slave_tx.send(Arc::new(chunk)).await.unwrap();
+        let chunk =
+            AudioChunk::from_channels_f32(0, vec![1.0; 100], vec![1.0; 100], 48000, BitDepth::B24);
+        slave_tx.send(chunk).await.unwrap();
 
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
@@ -343,14 +347,15 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
         // Envoyer un autre chunk
-        let chunk2 = AudioChunk::with_gain(1, vec![1.0; 100], vec![1.0; 100], 48000, 1.0);
-        slave_tx.send(Arc::new(chunk2)).await.unwrap();
+        let chunk2 =
+            AudioChunk::from_channels_f32(1, vec![1.0; 100], vec![1.0; 100], 48000, BitDepth::B24);
+        slave_tx.send(chunk2).await.unwrap();
 
-        // Le deuxième chunk devrait avoir un gain de 0.8 * 0.5 = 0.4
-        let _first = out_rx.recv().await.unwrap(); // gain = 0.8
-        let second = out_rx.recv().await.unwrap(); // gain = 0.4
+        // Le deuxième chunk devrait avoir un gain de 0.8 * 0.5 = 0.4 (≈ -7.96 dB)
+        let _first = out_rx.recv().await.unwrap(); // gain ≈ 0.8
+        let second = out_rx.recv().await.unwrap(); // gain ≈ 0.4
 
-        assert!((second.gain - 0.4).abs() < 0.01);
+        assert!((second.gain_linear() - 0.4).abs() < 0.01);
 
         drop(master_tx);
         drop(slave_tx);

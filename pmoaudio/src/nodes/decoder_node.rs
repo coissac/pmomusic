@@ -40,41 +40,45 @@ impl DecoderNode {
     /// Mode mock décodage - simule un changement de sample rate
     pub async fn run_with_resampling(mut self, target_sample_rate: u32) -> Result<(), AudioError> {
         while let Some(chunk) = self.rx.recv().await {
-            if chunk.sample_rate == target_sample_rate {
+            if chunk.sample_rate() == target_sample_rate {
                 // Pas besoin de resampling
                 self.subscribers.push(chunk).await?;
             } else {
                 // Simuler un resampling (mock simple)
-                let ratio = target_sample_rate as f64 / chunk.sample_rate as f64;
+                let ratio = target_sample_rate as f64 / chunk.sample_rate() as f64;
                 let new_len = (chunk.len() as f64 * ratio) as usize;
 
-                let (left_data, right_data) = chunk.clone_data();
-                let mut new_left = Vec::with_capacity(new_len);
-                let mut new_right = Vec::with_capacity(new_len);
+                let pairs = chunk.to_pairs_f32();
+                let mut resampled = Vec::with_capacity(new_len);
 
                 // Resampling linéaire simple (mock)
                 for i in 0..new_len {
                     let src_pos = i as f64 / ratio;
                     let src_idx = src_pos as usize;
 
-                    if src_idx < left_data.len() - 1 {
+                    if src_idx + 1 < pairs.len() {
                         let frac = src_pos - src_idx as f64;
-                        let left_sample = left_data[src_idx] * (1.0 - frac as f32)
-                            + left_data[src_idx + 1] * frac as f32;
-                        let right_sample = right_data[src_idx] * (1.0 - frac as f32)
-                            + right_data[src_idx + 1] * frac as f32;
+                        let alpha = (1.0 - frac) as f32;
+                        let beta = frac as f32;
+                        let left_sample = pairs[src_idx][0] * alpha + pairs[src_idx + 1][0] * beta;
+                        let right_sample = pairs[src_idx][1] * alpha + pairs[src_idx + 1][1] * beta;
 
-                        new_left.push(left_sample);
-                        new_right.push(right_sample);
-                    } else if src_idx < left_data.len() {
-                        new_left.push(left_data[src_idx]);
-                        new_right.push(right_data[src_idx]);
+                        resampled.push([left_sample, right_sample]);
+                    } else if src_idx < pairs.len() {
+                        resampled.push(pairs[src_idx]);
                     }
                 }
 
-                let new_chunk =
-                    AudioChunk::new(chunk.order, new_left, new_right, target_sample_rate);
-                self.subscribers.push(Arc::new(new_chunk)).await?;
+                let mut new_chunk = AudioChunk::from_pairs_f32(
+                    chunk.order(),
+                    resampled,
+                    target_sample_rate,
+                    chunk.bit_depth(),
+                );
+                if chunk.gain_db().abs() > f64::EPSILON {
+                    new_chunk = new_chunk.set_gain_db(chunk.gain_db());
+                }
+                self.subscribers.push(new_chunk).await?;
             }
         }
         Ok(())
@@ -84,6 +88,7 @@ impl DecoderNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::BitDepth;
 
     #[tokio::test]
     async fn test_decoder_passthrough() {
@@ -97,13 +102,18 @@ mod tests {
         });
 
         // Envoyer un chunk
-        let chunk = AudioChunk::new(0, vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0], 48000);
-        let chunk_arc = Arc::new(chunk);
-        tx.send(chunk_arc.clone()).await.unwrap();
+        let chunk = AudioChunk::from_channels_f32(
+            0,
+            vec![1.0, 2.0, 3.0],
+            vec![4.0, 5.0, 6.0],
+            48000,
+            BitDepth::B24,
+        );
+        tx.send(chunk.clone()).await.unwrap();
 
         // Recevoir le chunk
         let received = out_rx.recv().await.unwrap();
-        assert!(Arc::ptr_eq(&chunk_arc, &received));
+        assert!(Arc::ptr_eq(&chunk, &received));
     }
 
     #[tokio::test]
@@ -118,12 +128,13 @@ mod tests {
         });
 
         // Envoyer un chunk à 48000 Hz
-        let chunk = AudioChunk::new(0, vec![1.0; 100], vec![1.0; 100], 48000);
-        tx.send(Arc::new(chunk)).await.unwrap();
+        let chunk =
+            AudioChunk::from_channels_f32(0, vec![1.0; 100], vec![1.0; 100], 48000, BitDepth::B24);
+        tx.send(chunk).await.unwrap();
 
         // Recevoir le chunk resampleé
         let received = out_rx.recv().await.unwrap();
-        assert_eq!(received.sample_rate, 96000);
+        assert_eq!(received.sample_rate(), 96000);
         // Le chunk devrait être environ 2x plus grand
         assert!(received.len() > 150 && received.len() < 250);
     }
@@ -140,12 +151,12 @@ mod tests {
         });
 
         // Envoyer un chunk déjà au bon sample rate
-        let chunk = AudioChunk::new(0, vec![1.0; 100], vec![1.0; 100], 48000);
-        let chunk_arc = Arc::new(chunk);
-        tx.send(chunk_arc.clone()).await.unwrap();
+        let chunk =
+            AudioChunk::from_channels_f32(0, vec![1.0; 100], vec![1.0; 100], 48000, BitDepth::B24);
+        tx.send(chunk.clone()).await.unwrap();
 
         // Le chunk devrait être passé sans modification
         let received = out_rx.recv().await.unwrap();
-        assert!(Arc::ptr_eq(&chunk_arc, &received));
+        assert!(Arc::ptr_eq(&chunk, &received));
     }
 }

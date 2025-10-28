@@ -33,9 +33,9 @@ impl SinkNode {
             println!(
                 "[{}] Received chunk #{} - {} samples @ {} Hz",
                 self.name,
-                chunk.order,
+                chunk.order(),
                 chunk.len(),
-                chunk.sample_rate
+                chunk.sample_rate()
             );
         }
         Ok(())
@@ -95,34 +95,41 @@ impl SinkStats {
 
     pub fn process_chunk(&mut self, chunk: &AudioChunk) {
         self.chunks_received += 1;
-        self.total_samples += chunk.len() as u64;
-        self.total_duration_sec += chunk.len() as f64 / chunk.sample_rate as f64;
+        let len = chunk.len() as u64;
+        self.total_samples += len;
+        self.total_duration_sec += chunk.len() as f64 / chunk.sample_rate() as f64;
 
-        // Calculer les peaks
-        for &sample in chunk.left.iter() {
-            if sample.abs() > self.peak_left {
-                self.peak_left = sample.abs();
+        let inv_max = 1.0f32 / chunk.bit_depth().max_value();
+        let mut peak_left = self.peak_left;
+        let mut peak_right = self.peak_right;
+        let mut sum_squares_left = 0.0f64;
+        let mut sum_squares_right = 0.0f64;
+
+        for frame in chunk.frames() {
+            let left = frame[0] as f32 * inv_max;
+            let right = frame[1] as f32 * inv_max;
+            let left_abs = left.abs();
+            let right_abs = right.abs();
+            if left_abs > peak_left {
+                peak_left = left_abs;
             }
+            if right_abs > peak_right {
+                peak_right = right_abs;
+            }
+            let l64 = left as f64;
+            let r64 = right as f64;
+            sum_squares_left += l64 * l64;
+            sum_squares_right += r64 * r64;
         }
 
-        for &sample in chunk.right.iter() {
-            if sample.abs() > self.peak_right {
-                self.peak_right = sample.abs();
-            }
-        }
+        self.peak_left = peak_left;
+        self.peak_right = peak_right;
 
-        // Calculer RMS (moyenne des carrés)
-        let sum_squares_left: f64 = chunk.left.iter().map(|&x| (x * x) as f64).sum();
-        let sum_squares_right: f64 = chunk.right.iter().map(|&x| (x * x) as f64).sum();
-
-        self.rms_left = ((self.rms_left.powi(2)
-            * (self.total_samples - chunk.len() as u64) as f64
-            + sum_squares_left)
+        let prev_samples = self.total_samples - len;
+        self.rms_left = ((self.rms_left.powi(2) * prev_samples as f64 + sum_squares_left)
             / self.total_samples as f64)
             .sqrt();
-        self.rms_right = ((self.rms_right.powi(2)
-            * (self.total_samples - chunk.len() as u64) as f64
-            + sum_squares_right)
+        self.rms_right = ((self.rms_right.powi(2) * prev_samples as f64 + sum_squares_right)
             / self.total_samples as f64)
             .sqrt();
     }
@@ -141,6 +148,9 @@ impl SinkStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::BitDepth;
+
+    const BD: BitDepth = BitDepth::B24;
 
     #[tokio::test]
     async fn test_sink_node_silent() {
@@ -150,8 +160,8 @@ mod tests {
 
         // Envoyer quelques chunks
         for i in 0..3 {
-            let chunk = AudioChunk::new(i, vec![0.0; 100], vec![0.0; 100], 48000);
-            tx.send(Arc::new(chunk)).await.unwrap();
+            let chunk = AudioChunk::from_channels_f32(i, vec![0.0; 100], vec![0.0; 100], 48000, BD);
+            tx.send(chunk).await.unwrap();
         }
 
         drop(tx);
@@ -166,8 +176,9 @@ mod tests {
 
         // Envoyer des chunks avec signal connu
         for i in 0..3 {
-            let chunk = AudioChunk::new(i, vec![1.0; 1000], vec![0.5; 1000], 48000);
-            tx.send(Arc::new(chunk)).await.unwrap();
+            let chunk =
+                AudioChunk::from_channels_f32(i, vec![1.0; 1000], vec![0.5; 1000], 48000, BD);
+            tx.send(chunk).await.unwrap();
         }
 
         drop(tx);
@@ -175,8 +186,8 @@ mod tests {
 
         assert_eq!(stats.chunks_received, 3);
         assert_eq!(stats.total_samples, 3000);
-        assert_eq!(stats.peak_left, 1.0);
-        assert_eq!(stats.peak_right, 0.5);
+        assert!((stats.peak_left - 1.0).abs() < 1e-6);
+        assert!((stats.peak_right - 0.5).abs() < 1e-6);
         assert!((stats.rms_left - 1.0).abs() < 0.001);
         assert!((stats.rms_right - 0.5).abs() < 0.001);
     }
@@ -189,8 +200,8 @@ mod tests {
 
         // Envoyer des chunks
         for i in 0..5 {
-            let chunk = AudioChunk::new(i, vec![0.0; 100], vec![0.0; 100], 48000);
-            tx.send(Arc::new(chunk)).await.unwrap();
+            let chunk = AudioChunk::from_channels_f32(i, vec![0.0; 100], vec![0.0; 100], 48000, BD);
+            tx.send(chunk).await.unwrap();
         }
 
         drop(tx);

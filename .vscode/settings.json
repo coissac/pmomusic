@@ -3,5 +3,13 @@
     "git.enabled": false,
     "claude-code.environmentVariables": [
         
-    ]
+    ],
+    // Exclusions via VS Code
+    "files.exclude": {
+        "target": true,
+        "**/target": true,
+        "node_modules": true
+    },
+    "rust-analyzer.procMacro.enable": true,
+    "rust-analyzer.numThreads": 4
 }

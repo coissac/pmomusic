@@ -190,6 +190,7 @@ impl BufferNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::BitDepth;
 
     #[tokio::test]
     async fn test_buffer_node_basic() {
@@ -205,14 +206,14 @@ mod tests {
 
         // Envoyer des chunks
         for i in 0..3 {
-            let chunk = AudioChunk::new(i, vec![0.0; 100], vec![0.0; 100], 48000);
-            tx.send(Arc::new(chunk)).await.unwrap();
+            let chunk = AudioChunk::new(i, vec![[0i32; 2]; 100], 48000, BitDepth::B24);
+            tx.send(chunk).await.unwrap();
         }
 
         // Recevoir les chunks
         for i in 0..3 {
             let chunk = out_rx.recv().await.unwrap();
-            assert_eq!(chunk.order, i);
+            assert_eq!(chunk.order(), i);
         }
     }
 
@@ -231,14 +232,14 @@ mod tests {
 
         // Envoyer 5 chunks
         for i in 0..5 {
-            let chunk = AudioChunk::new(i, vec![0.0; 100], vec![0.0; 100], 48000);
-            tx.send(Arc::new(chunk)).await.unwrap();
+            let chunk = AudioChunk::new(i, vec![[0i32; 2]; 100], 48000, BitDepth::B24);
+            tx.send(chunk).await.unwrap();
         }
 
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
         // L'abonné devrait recevoir les chunks 0, 1, 2 (avec 2 chunks de retard)
         let chunk = out_rx.try_recv().unwrap();
-        assert_eq!(chunk.order, 0);
+        assert_eq!(chunk.order(), 0);
     }
 }

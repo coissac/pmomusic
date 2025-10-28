@@ -12,6 +12,8 @@ pub mod chromecast_sink;
 pub mod decoder_node;
 pub mod disk_sink;
 pub mod dsp_node;
+pub mod file_source;
+pub mod flac_file_sink;
 pub mod mpd_sink;
 pub mod sink_node;
 pub mod source_node;

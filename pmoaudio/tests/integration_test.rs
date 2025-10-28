@@ -1,13 +1,14 @@
 //! Tests d'intégration pour le pipeline audio complet
 
-use pmoaudio::{BufferNode, DecoderNode, DspNode, SinkNode, SourceNode, TimerNode};
+use pmoaudio::{AudioChunk, BufferNode, DecoderNode, DspNode, SinkNode, SourceNode, TimerNode};
 
 #[tokio::test]
 async fn test_complete_pipeline() {
     // Créer un pipeline complet : Source → Decoder → DSP → Buffer → Timer → Sink
 
     let (mut decoder, decoder_tx) = DecoderNode::new(10);
-    let (mut dsp, dsp_tx) = DspNode::new(10, 0.5); // Gain de 0.5
+    let gain_db = AudioChunk::gain_db_from_linear(0.5) as f32;
+    let (mut dsp, dsp_tx) = DspNode::new(10, gain_db); // Gain de 0.5
     let (mut buffer, buffer_tx) = BufferNode::new(50, 10);
     let (mut timer, timer_tx) = TimerNode::new(10);
     let (sink, sink_tx) = SinkNode::new("Integration Test".to_string(), 10);

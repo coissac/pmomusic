@@ -93,8 +93,8 @@ impl TimerNode {
             // Mettre à jour le sample rate si nécessaire
             {
                 let mut sr = self.current_sample_rate.write().await;
-                if *sr != chunk.sample_rate {
-                    *sr = chunk.sample_rate;
+                if *sr != chunk.sample_rate() {
+                    *sr = chunk.sample_rate();
                 }
             }
 
@@ -116,8 +116,8 @@ impl TimerNode {
         while let Some(chunk) = self.rx.recv().await {
             {
                 let mut sr = self.current_sample_rate.write().await;
-                if *sr != chunk.sample_rate {
-                    *sr = chunk.sample_rate;
+                if *sr != chunk.sample_rate() {
+                    *sr = chunk.sample_rate();
                 }
             }
 
@@ -190,6 +190,7 @@ impl TimerHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::BitDepth;
 
     #[tokio::test]
     async fn test_timer_node_position_calculation() {
@@ -207,8 +208,9 @@ mod tests {
 
         // Envoyer 3 chunks de 1000 samples à 48000 Hz
         for i in 0..3 {
-            let chunk = AudioChunk::new(i, vec![0.0; 1000], vec![0.0; 1000], 48000);
-            tx.send(Arc::new(chunk)).await.unwrap();
+            let stereo = vec![[0i32; 2]; 1000];
+            let chunk = AudioChunk::new(i, stereo, 48000, BitDepth::B24);
+            tx.send(chunk).await.unwrap();
         }
 
         // Attendre que les chunks soient traités
@@ -237,16 +239,21 @@ mod tests {
         });
 
         // Envoyer un chunk
-        let chunk = AudioChunk::new(42, vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0], 48000);
-        let chunk_arc = Arc::new(chunk);
-        tx.send(chunk_arc.clone()).await.unwrap();
+        let chunk = AudioChunk::from_channels_i32(
+            42,
+            vec![100, 200, 300],
+            vec![400, 500, 600],
+            48000,
+            BitDepth::B24,
+        );
+        tx.send(chunk.clone()).await.unwrap();
 
         // Recevoir le chunk
         let received = out_rx.recv().await.unwrap();
 
         // Vérifier que c'est le même Arc (pas de clone des données)
-        assert!(Arc::ptr_eq(&chunk_arc, &received));
-        assert_eq!(received.order, 42);
+        assert!(Arc::ptr_eq(&chunk, &received));
+        assert_eq!(received.order(), 42);
     }
 
     #[tokio::test]
@@ -263,8 +270,8 @@ mod tests {
         });
 
         // Chunk à 48000 Hz
-        let chunk1 = AudioChunk::new(0, vec![0.0; 48000], vec![0.0; 48000], 48000);
-        tx.send(Arc::new(chunk1)).await.unwrap();
+        let chunk1 = AudioChunk::new(0, vec![[0i32; 2]; 48000], 48000, BitDepth::B24);
+        tx.send(chunk1).await.unwrap();
         out_rx.recv().await.unwrap();
 
         // Après 48000 samples à 48000 Hz = 1 seconde
@@ -272,8 +279,8 @@ mod tests {
         assert!((pos1 - 1.0).abs() < 0.0001);
 
         // Chunk à 96000 Hz
-        let chunk2 = AudioChunk::new(1, vec![0.0; 96000], vec![0.0; 96000], 96000);
-        tx.send(Arc::new(chunk2)).await.unwrap();
+        let chunk2 = AudioChunk::new(1, vec![[0i32; 2]; 96000], 96000, BitDepth::B24);
+        tx.send(chunk2).await.unwrap();
         out_rx.recv().await.unwrap();
 
         // Position calculée avec le nouveau sample rate
