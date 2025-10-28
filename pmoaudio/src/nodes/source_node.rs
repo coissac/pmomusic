@@ -1,6 +1,6 @@
 use crate::{
     nodes::{AudioError, MultiSubscriberNode},
-    AudioChunk,
+    AudioChunk, BitDepth,
 };
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -11,6 +11,8 @@ use tokio::sync::mpsc;
 pub struct SourceNode {
     subscribers: MultiSubscriberNode,
 }
+
+const DEFAULT_BIT_DEPTH: BitDepth = BitDepth::B24;
 
 impl SourceNode {
     pub fn new() -> Self {
@@ -29,7 +31,7 @@ impl SourceNode {
         size: usize,
         sample_rate: u32,
         frequency: f32,
-    ) -> AudioChunk {
+    ) -> Arc<AudioChunk> {
         let mut left = Vec::with_capacity(size);
         let mut right = Vec::with_capacity(size);
 
@@ -40,7 +42,7 @@ impl SourceNode {
             right.push(sample * 0.8); // Légèrement différent pour la stéréo
         }
 
-        AudioChunk::new(order, left, right, sample_rate)
+        AudioChunk::from_channels_f32(order, left, right, sample_rate, DEFAULT_BIT_DEPTH)
     }
 
     /// Génère et envoie des chunks de test
@@ -53,7 +55,7 @@ impl SourceNode {
     ) -> Result<(), AudioError> {
         for i in 0..count {
             let chunk = Self::generate_test_chunk(i, chunk_size, sample_rate, frequency);
-            self.subscribers.push(Arc::new(chunk)).await?;
+            self.subscribers.push(chunk).await?;
         }
         Ok(())
     }
@@ -66,9 +68,9 @@ impl SourceNode {
         sample_rate: u32,
     ) -> Result<(), AudioError> {
         for i in 0..count {
-            let chunk =
-                AudioChunk::new(i, vec![0.0; chunk_size], vec![0.0; chunk_size], sample_rate);
-            self.subscribers.push(Arc::new(chunk)).await?;
+            let stereo = vec![[0i32; 2]; chunk_size];
+            let chunk = AudioChunk::new(i, stereo, sample_rate, DEFAULT_BIT_DEPTH);
+            self.subscribers.push(chunk).await?;
         }
         Ok(())
     }
@@ -89,7 +91,7 @@ impl SourceNode {
 
         while start.elapsed() < duration {
             let chunk = Self::generate_test_chunk(order, chunk_size, sample_rate, frequency);
-            self.subscribers.push(Arc::new(chunk)).await?;
+            self.subscribers.push(chunk).await?;
 
             order += 1;
 
@@ -124,9 +126,9 @@ mod tests {
         // Vérifier la réception
         for i in 0..3 {
             let chunk = rx.recv().await.unwrap();
-            assert_eq!(chunk.order, i);
+            assert_eq!(chunk.order(), i);
             assert_eq!(chunk.len(), 100);
-            assert_eq!(chunk.sample_rate, 48000);
+            assert_eq!(chunk.sample_rate(), 48000);
         }
     }
 
@@ -136,7 +138,8 @@ mod tests {
 
         // Vérifier qu'on a bien une sinusoïde
         // À 440 Hz avec 48000 samples/s, on devrait avoir 440 cycles
-        let left = &*chunk.left;
+        let pairs = chunk.to_pairs_f32();
+        let left: Vec<f32> = pairs.iter().map(|frame| frame[0]).collect();
 
         // Trouver les passages par zéro
         let mut zero_crossings = 0;
@@ -161,8 +164,8 @@ mod tests {
 
         for _ in 0..2 {
             let chunk = rx.recv().await.unwrap();
-            assert!(chunk.left.iter().all(|&x| x == 0.0));
-            assert!(chunk.right.iter().all(|&x| x == 0.0));
+            assert!(chunk.frames().iter().all(|frame| frame[0] == 0));
+            assert!(chunk.frames().iter().all(|frame| frame[1] == 0));
         }
     }
 }

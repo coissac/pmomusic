@@ -243,10 +243,10 @@ impl MpdSink {
         // Boucle principale
         while let Some(chunk) = self.rx.recv().await {
             // Appliquer le gain si nécessaire
-            let chunk_to_send = if (chunk.gain - 1.0).abs() > f32::EPSILON {
-                chunk.apply_gain()
+            let chunk_to_send = if chunk.gain_db().abs() > f64::EPSILON {
+                Arc::clone(&chunk).apply_gain()
             } else {
-                (*chunk).clone()
+                Arc::clone(&chunk)
             };
 
             // Envoyer au serveur MPD
@@ -329,7 +329,7 @@ impl MpdStats {
     pub fn record_chunk(&mut self, chunk: &AudioChunk) {
         self.chunks_sent += 1;
         self.total_samples += chunk.len() as u64;
-        self.total_duration_sec += chunk.len() as f64 / chunk.sample_rate as f64;
+        self.total_duration_sec += chunk.len() as f64 / chunk.sample_rate() as f64;
     }
 
     pub fn finalize(&mut self) {
@@ -349,6 +349,7 @@ impl MpdStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::BitDepth;
 
     #[tokio::test]
     async fn test_mpd_sink_basic() {
@@ -364,8 +365,14 @@ mod tests {
 
         // Envoyer quelques chunks
         for i in 0..5 {
-            let chunk = AudioChunk::new(i, vec![0.5; 1000], vec![0.5; 1000], 48000);
-            tx.send(Arc::new(chunk)).await.unwrap();
+            let chunk = AudioChunk::from_channels_f32(
+                i,
+                vec![0.5; 1000],
+                vec![0.5; 1000],
+                48000,
+                BitDepth::B24,
+            );
+            tx.send(chunk).await.unwrap();
         }
 
         drop(tx);

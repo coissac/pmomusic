@@ -220,10 +220,10 @@ impl DiskSink {
                             }
 
                             // Appliquer le gain avant l'écriture
-                            let chunk_with_gain = if (chunk.gain - 1.0).abs() > f32::EPSILON {
-                                chunk.apply_gain()
+                            let chunk_with_gain = if chunk.gain_db().abs() > f64::EPSILON {
+                                Arc::clone(&chunk).apply_gain()
                             } else {
-                                (*chunk).clone()
+                                Arc::clone(&chunk)
                             };
 
                             // Écrire le chunk
@@ -308,26 +308,25 @@ impl AudioFileWriter {
     async fn write_chunk(&mut self, chunk: &AudioChunk) -> Result<(), AudioError> {
         // Enregistrer le sample rate du premier chunk
         if self.sample_rate.is_none() {
-            self.sample_rate = Some(chunk.sample_rate);
+            let sr = chunk.sample_rate();
+            self.sample_rate = Some(sr);
 
             // Pour WAV, écrire l'en-tête (simplifié)
             if matches!(self.format, AudioFileFormat::Wav) {
-                self.write_wav_header(chunk.sample_rate).await?;
+                self.write_wav_header(sr).await?;
             }
         }
 
-        // Entrelacer les canaux gauche et droit
-        let mut interleaved = Vec::with_capacity(chunk.len() * 2);
-        for i in 0..chunk.len() {
-            interleaved.push(chunk.left[i]);
-            interleaved.push(chunk.right[i]);
-        }
-
         // Convertir en bytes (little-endian 16-bit PCM)
-        let mut bytes = Vec::with_capacity(interleaved.len() * 2);
-        for &sample in &interleaved {
-            let sample_i16 = (sample.clamp(-1.0, 1.0) * 32767.0) as i16;
+        let mut bytes = Vec::with_capacity(chunk.len() * 4);
+        let max_val = chunk.bit_depth().max_value();
+        for frame in chunk.frames() {
+            let left = (frame[0] as f32 / max_val).clamp(-1.0, 1.0);
+            let right = (frame[1] as f32 / max_val).clamp(-1.0, 1.0);
+            let sample_i16 = (left * 32767.0) as i16;
             bytes.extend_from_slice(&sample_i16.to_le_bytes());
+            let sample_r16 = (right * 32767.0) as i16;
+            bytes.extend_from_slice(&sample_r16.to_le_bytes());
         }
 
         self.file.write_all(&bytes).await.map_err(|e| {
@@ -436,7 +435,7 @@ impl DiskSinkStats {
     pub fn record_chunk(&mut self, chunk: &AudioChunk) {
         self.chunks_written += 1;
         self.total_samples += chunk.len() as u64;
-        self.total_duration_sec += chunk.len() as f64 / chunk.sample_rate as f64;
+        self.total_duration_sec += chunk.len() as f64 / chunk.sample_rate() as f64;
     }
 
     pub fn finalize(&mut self) {
@@ -455,6 +454,7 @@ impl DiskSinkStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::BitDepth;
 
     #[tokio::test]
     async fn test_disk_sink_basic() {
@@ -474,8 +474,14 @@ mod tests {
 
         // Envoyer quelques chunks
         for i in 0..5 {
-            let chunk = AudioChunk::new(i, vec![0.5; 1000], vec![0.5; 1000], 48000);
-            tx.send(Arc::new(chunk)).await.unwrap();
+            let chunk = AudioChunk::from_channels_f32(
+                i,
+                vec![0.5; 1000],
+                vec![0.5; 1000],
+                48000,
+                BitDepth::B24,
+            );
+            tx.send(chunk).await.unwrap();
         }
 
         drop(tx);

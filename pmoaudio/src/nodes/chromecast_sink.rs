@@ -194,10 +194,10 @@ impl ChromecastSink {
         // Boucle principale
         while let Some(chunk) = self.rx.recv().await {
             // Appliquer le gain si nécessaire
-            let chunk_to_send = if (chunk.gain - 1.0).abs() > f32::EPSILON {
-                chunk.apply_gain()
+            let chunk_to_send = if chunk.gain_db().abs() > f64::EPSILON {
+                Arc::clone(&chunk).apply_gain()
             } else {
-                (*chunk).clone()
+                Arc::clone(&chunk)
             };
 
             // Envoyer au Chromecast
@@ -238,7 +238,7 @@ impl ChromecastStats {
     pub fn record_chunk(&mut self, chunk: &AudioChunk) {
         self.chunks_sent += 1;
         self.total_samples += chunk.len() as u64;
-        self.total_duration_sec += chunk.len() as f64 / chunk.sample_rate as f64;
+        self.total_duration_sec += chunk.len() as f64 / chunk.sample_rate() as f64;
     }
 
     pub fn finalize(&mut self) {
@@ -257,7 +257,10 @@ impl ChromecastStats {
 
 #[cfg(test)]
 mod tests {
+    use std::i32;
+
     use super::*;
+    use crate::BitDepth;
 
     #[tokio::test]
     async fn test_chromecast_sink_basic() {
@@ -273,8 +276,9 @@ mod tests {
 
         // Envoyer quelques chunks
         for i in 0..5 {
-            let chunk = AudioChunk::new(i, vec![0.5; 1000], vec![0.5; 1000], 48000);
-            tx.send(Arc::new(chunk)).await.unwrap();
+            let stereo = vec![[i32::MAX / 2; 2]; 1000];
+            let chunk = AudioChunk::new(i, stereo, 48000, BitDepth::B24);
+            tx.send(chunk).await.unwrap();
         }
 
         drop(tx);

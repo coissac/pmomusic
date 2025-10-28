@@ -1,6 +1,8 @@
 # Makefile pour projet Rust + Vue.js
 # Variables de configuration
 CARGO = cargo
+CARGO_NIGHTLY = rustup run nightly cargo
+FEATURES ?=
 NPM = npm
 WEBAPP_DIR = pmoapp/webapp
 DIST_DIR = $(WEBAPP_DIR)/dist
@@ -14,7 +16,9 @@ YELLOW = \033[1;33m
 RED = \033[0;31m
 NC = \033[0m # No Color
 
-.PHONY: all help build release debug test doc webapp clean install dev check fmt clippy watch
+.DEFAULT_GOAL := simd
+
+.PHONY: all help build release debug test doc webapp clean install dev check fmt clippy watch simd scalar
 
 # Cible par défaut
 all: build
@@ -31,13 +35,13 @@ build: webapp release
 ## release: Compile le binaire Rust en mode release
 release: webapp
 	@echo "$(YELLOW)→ Compilation Rust (release)...$(NC)"
-	$(CARGO) build --release
+	$(CARGO) build --release $(FEATURES)
 	@echo "$(GREEN)✓ Binaire disponible : $(RUST_TARGET)/$(BINARY_NAME)$(NC)"
 
 ## debug: Compile le binaire Rust en mode debug
 debug: webapp
 	@echo "$(YELLOW)→ Compilation Rust (debug)...$(NC)"
-	$(CARGO) build
+	$(CARGO) build $(FEATURES)
 	@echo "$(GREEN)✓ Binaire disponible : target/debug/$(BINARY_NAME)$(NC)"
 
 ## test: Exécute tous les tests Rust
@@ -45,6 +49,18 @@ test:
 	@echo "$(YELLOW)→ Exécution des tests Rust...$(NC)"
 	$(CARGO) test --all
 	@echo "$(GREEN)✓ Tests terminés$(NC)"
+
+## simd: Compile l'application en mode SIMD (nightly requis)
+simd:
+	@echo "$(YELLOW)→ Build SIMD (nightly)...$(NC)"
+	$(MAKE) release CARGO="$(CARGO_NIGHTLY)" FEATURES="--features simd"
+	@echo "$(GREEN)✓ Build SIMD terminé$(NC)"
+
+## scalar: Compile l'application en mode scalaire
+scalar:
+	@echo "$(YELLOW)→ Build scalaire...$(NC)"
+	$(MAKE) release FEATURES=""
+	@echo "$(GREEN)✓ Build scalaire terminé$(NC)"
 
 ## test-doc: Teste les exemples dans la documentation
 test-doc:
