@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<s:Envelope s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/" xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+  <s:Body>
+    <u:GetProtocolInfoResponse xmlns:u="urn:schemas-upnp-org:service:ConnectionManager:1">
+      <Source></Source>
+      <Sink></Sink>
+    </u:GetProtocolInfoResponse>
+  </s:Body>
+</s:Envelope>
