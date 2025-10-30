@@ -1,48 +1,20 @@
 use bytemuck::{cast_slice, cast_slice_mut};
+use crate::BitDepth;
 
 #[cfg(feature = "simd")]
 use std::simd::num::{SimdFloat, SimdInt};
 #[cfg(feature = "simd")]
 use std::simd::{Simd, StdFloat};
 
-/// Génère une implémentation de `BitDepth` pour une profondeur donnée.
-/// Exemple :
-/// ```ignore
-/// use pmoaudio::dsp::int_float::{BitDepth, BitMax};
-///
-/// BitMax!(8);
-/// assert_eq!(<Bit8 as BitDepth>::MAX_VALUE, 127.0);
-/// ```
-macro_rules! BitMax {
-    ($bits:literal) => {
-        paste::paste! {
-            pub struct [<Bit $bits>];
-
-            impl BitDepth for [<Bit $bits>] {
-                const MAX_VALUE: f32 = ((1u32 << ($bits - 1)) as f32) - 1.0;
-            }
-        }
-    };
-}
-
-pub trait BitDepth {
-    const MAX_VALUE: f32; // Valeur max pour normaliser vers [-1.0, +1.0]
-}
-
-// Définir automatiquement les bit-depths
-BitMax!(8);
-BitMax!(16);
-BitMax!(24);
-BitMax!(32);
-
 /* ====================== CŒURS CANONIQUES EN AoS ====================== */
 
-// i32 L/R -> [[f32;2]]
+// i32 L/R -> [[f32;2]] - version interne avec constante compile-time
 #[cfg(feature = "simd")]
-pub fn i32_stereo_to_pairs_f32<B: BitDepth>(
+fn i32_stereo_to_pairs_f32_inner(
     left: &[i32],
     right: &[i32],
     out_pairs: &mut [[f32; 2]],
+    max_value: f32,
 ) {
     debug_assert_eq!(left.len(), right.len());
     debug_assert_eq!(out_pairs.len(), left.len());
@@ -51,7 +23,7 @@ pub fn i32_stereo_to_pairs_f32<B: BitDepth>(
     type Vf32 = Simd<f32, LANES>;
     type Vi32 = Simd<i32, LANES>;
 
-    let scale = Vf32::splat(1.0 / B::MAX_VALUE);
+    let scale = Vf32::splat(1.0 / max_value);
 
     let (l_chunks, l_tail) = left.as_chunks::<LANES>();
     let (r_chunks, r_tail) = right.as_chunks::<LANES>();
@@ -69,47 +41,59 @@ pub fn i32_stereo_to_pairs_f32<B: BitDepth>(
         }
     }
 
+    let scale_scalar = 1.0 / max_value;
     for (dst, (&l, &r)) in o_tail.iter_mut().zip(l_tail.iter().zip(r_tail.iter())) {
-        dst[0] = l as f32 * (1.0 / B::MAX_VALUE);
-        dst[1] = r as f32 * (1.0 / B::MAX_VALUE);
+        dst[0] = l as f32 * scale_scalar;
+        dst[1] = r as f32 * scale_scalar;
     }
 }
 
 #[cfg(not(feature = "simd"))]
-pub fn i32_stereo_to_pairs_f32<B: BitDepth>(
+fn i32_stereo_to_pairs_f32_inner(
     left: &[i32],
     right: &[i32],
     out_pairs: &mut [[f32; 2]],
+    max_value: f32,
 ) {
     debug_assert_eq!(left.len(), right.len());
     debug_assert_eq!(out_pairs.len(), left.len());
 
-    let scale = 1.0 / B::MAX_VALUE;
+    let scale = 1.0 / max_value;
     for ((out, &l), &r) in out_pairs.iter_mut().zip(left).zip(right) {
         out[0] = l as f32 * scale;
         out[1] = r as f32 * scale;
     }
 }
 
-// [[f32;2]] -> i32 L/R
+/// Convertit deux canaux i32 (L/R) en pairs f32 normalisées [-1.0, 1.0]
+pub fn i32_stereo_to_pairs_f32(
+    left: &[i32],
+    right: &[i32],
+    out_pairs: &mut [[f32; 2]],
+    bit_depth: BitDepth,
+) {
+    i32_stereo_to_pairs_f32_inner(left, right, out_pairs, bit_depth.max_value());
+}
+
+// [[f32;2]] -> i32 L/R - version interne
 #[cfg(feature = "simd")]
-pub fn pairs_f32_to_i32_stereo<B: BitDepth>(
+fn pairs_f32_to_i32_stereo_inner(
     input_pairs: &[[f32; 2]],
     left: &mut [i32],
     right: &mut [i32],
+    max_value: f32,
 ) {
     debug_assert_eq!(input_pairs.len(), left.len());
     debug_assert_eq!(input_pairs.len(), right.len());
 
     const LANES: usize = 8;
     type Vf32 = Simd<f32, LANES>;
-    type Vi32 = Simd<i32, LANES>;
 
-    let vmax = B::MAX_VALUE;
-    let vmin = -B::MAX_VALUE;
-    let vscale = Vf32::splat(vmax);
+    let vmin = -max_value;
+    let vmax_clamp = max_value - 1.0; // évite l'overflow après round→cast
+    let vscale = Vf32::splat(max_value);
     let vminv = Vf32::splat(vmin);
-    let vmaxv = Vf32::splat(vmax - 1.0); // évite l’overflow après round→cast
+    let vmaxv = Vf32::splat(vmax_clamp);
 
     let (in_chunks, in_tail) = input_pairs.as_chunks::<LANES>();
     let (l_chunks, l_tail) = left.as_chunks_mut::<LANES>();
@@ -137,52 +121,65 @@ pub fn pairs_f32_to_i32_stereo<B: BitDepth>(
     }
 
     for (j, (l, r)) in in_tail.iter().zip(l_tail.iter_mut().zip(r_tail.iter_mut())) {
-        let lx = (j[0] * vmax).clamp(vmin, vmax - 1.0).round();
-        let rx = (j[1] * vmax).clamp(vmin, vmax - 1.0).round();
+        let lx = (j[0] * max_value).clamp(vmin, vmax_clamp).round();
+        let rx = (j[1] * max_value).clamp(vmin, vmax_clamp).round();
         *l = lx as i32;
         *r = rx as i32;
     }
 }
 
 #[cfg(not(feature = "simd"))]
-pub fn pairs_f32_to_i32_stereo<B: BitDepth>(
+fn pairs_f32_to_i32_stereo_inner(
     input_pairs: &[[f32; 2]],
     left: &mut [i32],
     right: &mut [i32],
+    max_value: f32,
 ) {
     debug_assert_eq!(input_pairs.len(), left.len());
     debug_assert_eq!(input_pairs.len(), right.len());
 
-    let vmax = B::MAX_VALUE;
-    let vmin = -B::MAX_VALUE;
+    let vmin = -max_value;
+    let vmax_clamp = max_value - 1.0;
     for (i, pair) in input_pairs.iter().enumerate() {
-        let lx = (pair[0] * vmax).clamp(vmin, vmax - 1.0).round();
-        let rx = (pair[1] * vmax).clamp(vmin, vmax - 1.0).round();
+        let lx = (pair[0] * max_value).clamp(vmin, vmax_clamp).round();
+        let rx = (pair[1] * max_value).clamp(vmin, vmax_clamp).round();
         left[i] = lx as i32;
         right[i] = rx as i32;
     }
 }
 
+/// Convertit pairs f32 normalisées [-1.0, 1.0] en deux canaux i32 (L/R)
+pub fn pairs_f32_to_i32_stereo(
+    input_pairs: &[[f32; 2]],
+    left: &mut [i32],
+    right: &mut [i32],
+    bit_depth: BitDepth,
+) {
+    pairs_f32_to_i32_stereo_inner(input_pairs, left, right, bit_depth.max_value());
+}
+
 /* ====================== WRAPPERS INTERLEAVÉS ====================== */
 
-// i32 L/R -> interleaved [f32]
-pub fn i32_stereo_to_interleaved_f32<B: BitDepth>(
+/// Convertit deux canaux i32 (L/R) en buffer f32 interleaved normalisé [-1.0, 1.0]
+pub fn i32_stereo_to_interleaved_f32(
     left: &[i32],
     right: &[i32],
     out_interleaved: &mut [f32],
+    bit_depth: BitDepth,
 ) {
     debug_assert_eq!(out_interleaved.len(), left.len() * 2);
     let out_pairs: &mut [[f32; 2]] = cast_slice_mut(out_interleaved);
-    i32_stereo_to_pairs_f32::<B>(left, right, out_pairs);
+    i32_stereo_to_pairs_f32(left, right, out_pairs, bit_depth);
 }
 
-// interleaved [f32] -> i32 L/R
-pub fn interleaved_f32_to_i32_stereo<B: BitDepth>(
+/// Convertit buffer f32 interleaved normalisé [-1.0, 1.0] en deux canaux i32 (L/R)
+pub fn interleaved_f32_to_i32_stereo(
     input_interleaved: &[f32],
     left: &mut [i32],
     right: &mut [i32],
+    bit_depth: BitDepth,
 ) {
     debug_assert_eq!(input_interleaved.len(), left.len() * 2);
     let input_pairs: &[[f32; 2]] = cast_slice(input_interleaved);
-    pairs_f32_to_i32_stereo::<B>(input_pairs, left, right);
+    pairs_f32_to_i32_stereo(input_pairs, left, right, bit_depth);
 }

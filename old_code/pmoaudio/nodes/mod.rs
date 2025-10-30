@@ -3,9 +3,10 @@
 //! Ce module contient tous les types de nodes disponibles pour construire
 //! un pipeline audio, ainsi que les traits et structures de support.
 
-use crate::AudioChunk;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+
+use crate::AudioSegment;
 
 pub mod buffer_node;
 pub mod chromecast_sink;
@@ -31,7 +32,7 @@ pub trait AudioNode: Send + Sync {
     /// # Erreurs
     ///
     /// Retourne `AudioError::SendError` si l'envoi échoue
-    async fn push(&mut self, chunk: Arc<AudioChunk>) -> Result<(), AudioError>;
+    async fn push(&mut self, chunk: Arc<AudioSegment>) -> Result<(), AudioError>;
 
     /// Ferme le node proprement
     async fn close(&mut self);
@@ -52,15 +53,15 @@ pub trait AudioNode: Send + Sync {
 /// let node = SingleSubscriberNode::new(tx);
 /// ```
 pub struct SingleSubscriberNode {
-    tx: mpsc::Sender<Arc<AudioChunk>>,
+    tx: mpsc::Sender<Arc<AudioSegment>>,
 }
 
 impl SingleSubscriberNode {
-    pub fn new(tx: mpsc::Sender<Arc<AudioChunk>>) -> Self {
+    pub fn new(tx: mpsc::Sender<Arc<AudioSegment>>) -> Self {
         Self { tx }
     }
 
-    pub async fn push(&self, chunk: Arc<AudioChunk>) -> Result<(), AudioError> {
+    pub async fn push(&self, chunk: Arc<AudioSegment>) -> Result<(), AudioError> {
         self.tx.send(chunk).await.map_err(|_| AudioError::SendError)
     }
 }
@@ -68,7 +69,7 @@ impl SingleSubscriberNode {
 /// Node avec plusieurs abonnés (partage le même Arc)
 ///
 /// Permet de broadcaster un chunk à plusieurs destinations.
-/// Tous les abonnés reçoivent le même `Arc<AudioChunk>`, donc pas de copie
+/// Tous les abonnés reçoivent le même `Arc<AudioSegment>`, donc pas de copie
 /// des données audio - seul le compteur de référence Arc est incrémenté.
 ///
 /// # Exemples
@@ -86,7 +87,7 @@ impl SingleSubscriberNode {
 /// // Les deux abonnés recevront les mêmes chunks
 /// ```
 pub struct MultiSubscriberNode {
-    subscribers: Vec<mpsc::Sender<Arc<AudioChunk>>>,
+    subscribers: Vec<mpsc::Sender<Arc<AudioSegment>>>,
 }
 
 impl MultiSubscriberNode {
@@ -96,11 +97,11 @@ impl MultiSubscriberNode {
         }
     }
 
-    pub fn add_subscriber(&mut self, tx: mpsc::Sender<Arc<AudioChunk>>) {
+    pub fn add_subscriber(&mut self, tx: mpsc::Sender<Arc<AudioSegment>>) {
         self.subscribers.push(tx);
     }
 
-    pub async fn push(&self, chunk: Arc<AudioChunk>) -> Result<(), AudioError> {
+    pub async fn push(&self, chunk: Arc<AudioSegment>) -> Result<(), AudioError> {
         for tx in &self.subscribers {
             // On partage le même Arc avec tous les abonnés
             tx.send(chunk.clone())
@@ -110,7 +111,7 @@ impl MultiSubscriberNode {
         Ok(())
     }
 
-    pub async fn try_push(&self, chunk: Arc<AudioChunk>) -> Result<(), AudioError> {
+    pub async fn try_push(&self, chunk: Arc<AudioSegment>) -> Result<(), AudioError> {
         for tx in &self.subscribers {
             // try_send non-bloquant, ignore si saturé
             let _ = tx.try_send(chunk.clone());
