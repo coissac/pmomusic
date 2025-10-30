@@ -1,6 +1,6 @@
 use crate::{
     nodes::{AudioError, MultiSubscriberNode},
-    AudioChunk,
+    AudioSegment,
 };
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -8,7 +8,7 @@ use tokio::sync::{mpsc, RwLock};
 
 /// Subscriber avec son propre offset dans le buffer
 struct BufferSubscriber {
-    tx: mpsc::Sender<Arc<AudioChunk>>,
+    tx: mpsc::Sender<Arc<AudioSegment>>,
     offset: usize, // Position dans le buffer circulaire
 }
 
@@ -48,10 +48,10 @@ struct BufferSubscriber {
 /// }
 /// ```
 pub struct BufferNode {
-    buffer: Arc<RwLock<VecDeque<Arc<AudioChunk>>>>,
+    buffer: Arc<RwLock<VecDeque<Arc<AudioSegment>>>>,
     subscribers: Arc<RwLock<Vec<BufferSubscriber>>>,
     buffer_size: usize,
-    rx: mpsc::Receiver<Arc<AudioChunk>>,
+    rx: mpsc::Receiver<Arc<AudioSegment>>,
     next_subscribers: MultiSubscriberNode, // Pour passer au node suivant
 }
 
@@ -61,7 +61,7 @@ impl BufferNode {
     /// # Arguments
     /// * `buffer_size` - Taille maximale du buffer circulaire
     /// * `channel_size` - Taille du channel bounded pour backpressure
-    pub fn new(buffer_size: usize, channel_size: usize) -> (Self, mpsc::Sender<Arc<AudioChunk>>) {
+    pub fn new(buffer_size: usize, channel_size: usize) -> (Self, mpsc::Sender<Arc<AudioSegment>>) {
         let (tx, rx) = mpsc::channel(channel_size);
 
         let node = Self {
@@ -78,7 +78,7 @@ impl BufferNode {
     /// Ajoute un abonné avec un offset spécifique (pour multiroom)
     pub async fn add_subscriber_with_offset(
         &self,
-        tx: mpsc::Sender<Arc<AudioChunk>>,
+        tx: mpsc::Sender<Arc<AudioSegment>>,
         offset: usize,
     ) {
         let mut subs = self.subscribers.write().await;
@@ -86,12 +86,12 @@ impl BufferNode {
     }
 
     /// Ajoute un abonné sans offset (commence au chunk courant)
-    pub async fn add_subscriber(&self, tx: mpsc::Sender<Arc<AudioChunk>>) {
+    pub async fn add_subscriber(&self, tx: mpsc::Sender<Arc<AudioSegment>>) {
         self.add_subscriber_with_offset(tx, 0).await;
     }
 
     /// Ajoute un abonné pour le node suivant (sans buffer)
-    pub fn add_next_subscriber(&mut self, tx: mpsc::Sender<Arc<AudioChunk>>) {
+    pub fn add_next_subscriber(&mut self, tx: mpsc::Sender<Arc<AudioSegment>>) {
         self.next_subscribers.add_subscriber(tx);
     }
 
@@ -206,7 +206,7 @@ mod tests {
 
         // Envoyer des chunks
         for i in 0..3 {
-            let chunk = AudioChunk::new(i, vec![[0i32; 2]; 100], 48000, BitDepth::B24);
+            let chunk = AudioSegment::AudioChunk(AudioChunk::new(i, vec![[0i32; 2]; 100], 48000, BitDepth::B24));
             tx.send(chunk).await.unwrap();
         }
 
@@ -232,7 +232,7 @@ mod tests {
 
         // Envoyer 5 chunks
         for i in 0..5 {
-            let chunk = AudioChunk::new(i, vec![[0i32; 2]; 100], 48000, BitDepth::B24);
+            let chunk = AudioSegment::new(i, vec![[0i32; 2]; 100], 48000, BitDepth::B24);
             tx.send(chunk).await.unwrap();
         }
 

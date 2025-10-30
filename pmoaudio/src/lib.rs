@@ -82,18 +82,32 @@ use std::simd::*;
 
 mod audio_chunk;
 pub mod events;
-mod nodes;
+// mod nodes; // Temporairement déplacé hors du module
+mod sync_marker;
+mod audio_segment;
+mod sample_types;
+pub mod conversions;
+#[macro_use]
+mod macros;
 
 pub mod bit_depth;
 pub mod dsp;
 
-pub use audio_chunk::AudioChunk;
+pub use audio_segment::{AudioSegment, _AudioSegment};
+pub use sync_marker::{SyncMarker};
+
+pub use audio_chunk::{AudioChunk, AudioChunkData, db_to_linear, gain_db_from_linear, gain_linear_from_db, linear_to_db};
 pub use bit_depth::{Bit16, Bit24, Bit32, Bit8, BitDepth};
+pub use sample_types::{I24, Sample};
+
 
 pub use events::{
     AudioDataEvent, EventPublisher, EventReceiver, NodeEvent, NodeListener, SourceNameUpdateEvent,
     VolumeChangeEvent,
 };
+
+// Nodes temporairement désactivés
+/*
 pub use nodes::{
     buffer_node::BufferNode,
     chromecast_sink::{ChromecastConfig, ChromecastSink, ChromecastStats, StreamEncoding},
@@ -109,3 +123,4 @@ pub use nodes::{
     volume_node::{HardwareVolumeNode, VolumeHandle, VolumeNode},
     AudioError, AudioNode, MultiSubscriberNode, SingleSubscriberNode,
 };
+*/

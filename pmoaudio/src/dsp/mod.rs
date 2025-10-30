@@ -1,3 +1,5 @@
+//! Module DSP pour les conversions et traitements audio optimisés (SIMD)
+
 pub mod depth;
 pub mod gain;
 pub mod int_float;
