@@ -6,20 +6,38 @@
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
+use crate::type_constraints::{TypeMismatch, TypeRequirement};
 use crate::AudioSegment;
 
+/// Taille par défaut du buffer de channel MPSC pour les nodes
+/// Cette valeur détermine combien de segments audio peuvent être mis en attente
+/// avant que le producteur soit bloqué (backpressure).
+pub const DEFAULT_CHANNEL_SIZE: usize = 16;
+
+/// Durée par défaut des chunks audio en millisecondes
+/// Cette valeur détermine la latence de traitement et le compromis efficacité/réactivité.
+/// 50ms offre un bon équilibre pour la plupart des applications de lecture audio.
+pub const DEFAULT_CHUNK_DURATION_MS: f64 = 50.0;
+
+// Modules actifs
+pub mod converter_nodes;
+pub mod file_source;
+pub mod flac_file_sink;
+pub mod http_source;
+
+// Modules temporairement désactivés
+/*
 pub mod buffer_node;
 pub mod chromecast_sink;
 pub mod decoder_node;
 pub mod disk_sink;
 pub mod dsp_node;
-pub mod file_source;
-pub mod flac_file_sink;
 pub mod mpd_sink;
 pub mod sink_node;
 pub mod source_node;
 pub mod timer_node;
 pub mod volume_node;
+*/
 
 /// Trait de base pour tous les nodes audio
 ///
@@ -36,6 +54,59 @@ pub trait AudioNode: Send + Sync {
 
     /// Ferme le node proprement
     async fn close(&mut self);
+}
+
+/// Trait pour les nodes qui déclarent leurs types acceptés/produits
+///
+/// Ce trait permet de vérifier la compatibilité des types entre nodes
+/// avant de les connecter dans un pipeline.
+///
+/// # Exemples
+///
+/// ```no_run
+/// use pmoaudio::{FileSource, FlacFileSink, TypedAudioNode};
+/// use pmoaudio::type_constraints::check_compatibility;
+///
+/// // Vérifier la compatibilité avant de connecter
+/// let source = FileSource::new("input.flac");
+/// let (sink, tx) = FlacFileSink::new("output.flac");
+///
+/// let source_output = source.output_type();
+/// let sink_input = sink.input_type();
+///
+/// match check_compatibility(&source_output, &sink_input) {
+///     Ok(()) => println!("Types compatibles!"),
+///     Err(e) => eprintln!("Types incompatibles: {}", e),
+/// }
+/// ```
+pub trait TypedAudioNode {
+    /// Retourne les types que ce node peut accepter en entrée
+    ///
+    /// Pour les sources (qui ne consomment rien), retourne `None`.
+    fn input_type(&self) -> Option<TypeRequirement>;
+
+    /// Retourne les types que ce node peut produire en sortie
+    ///
+    /// Pour les sinks (qui ne produisent rien), retourne `None`.
+    fn output_type(&self) -> Option<TypeRequirement>;
+
+    /// Vérifie si ce node peut accepter les chunks d'un producer donné
+    ///
+    /// # Erreurs
+    ///
+    /// Retourne `AudioError::TypeMismatch` si les types sont incompatibles
+    fn can_accept_from(&self, producer: &dyn TypedAudioNode) -> Result<(), AudioError> {
+        match (producer.output_type(), self.input_type()) {
+            (Some(prod), Some(cons)) => crate::type_constraints::check_compatibility(&prod, &cons)
+                .map_err(|e| AudioError::TypeMismatch(e)),
+            (None, Some(_)) => Err(AudioError::TypeMismatch(TypeMismatch {
+                producer: TypeRequirement::any(), // Placeholder
+                consumer: self.input_type().unwrap(),
+                incompatible_type: None,
+            })),
+            _ => Ok(()), // Si pas de contrainte, toujours compatible
+        }
+    }
 }
 
 /// Node avec un seul abonné (pas de clone inutile)
@@ -135,6 +206,8 @@ pub enum AudioError {
     ReceiveError,
     /// Erreur de traitement avec message descriptif
     ProcessingError(String),
+    /// Incompatibilité de types entre nodes
+    TypeMismatch(TypeMismatch),
 }
 
 impl std::fmt::Display for AudioError {
@@ -143,6 +216,7 @@ impl std::fmt::Display for AudioError {
             AudioError::SendError => write!(f, "Failed to send audio chunk"),
             AudioError::ReceiveError => write!(f, "Failed to receive audio chunk"),
             AudioError::ProcessingError(msg) => write!(f, "Processing error: {}", msg),
+            AudioError::TypeMismatch(tm) => write!(f, "{}", tm),
         }
     }
 }

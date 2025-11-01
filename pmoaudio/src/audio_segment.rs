@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use pmometadata::TrackMetadata;
 
-use crate::{AudioChunk, AudioChunkData, BitDepth, SyncMarker, linear_to_db};
+use crate::{gain_db_from_linear, AudioChunk, AudioChunkData, BitDepth, SyncMarker};
 
 pub enum _AudioSegment {
     Chunk(Arc<AudioChunk>),
@@ -60,7 +60,7 @@ impl AudioSegment {
         _bit_depth: BitDepth, // Conservé pour compatibilité API
         gain_linear: f64,
     ) -> Arc<Self> {
-        let chunk_data = AudioChunkData::new(stereo, sample_rate, linear_to_db(gain_linear));
+        let chunk_data = AudioChunkData::new(stereo, sample_rate, gain_db_from_linear(gain_linear));
         let chunk = AudioChunk::I32(chunk_data);
         Arc::new(Self {
             order,
@@ -98,7 +98,11 @@ impl AudioSegment {
         sample_rate: u32,
         bit_depth: BitDepth,
     ) -> Arc<Self> {
-        assert_eq!(left.len(), right.len(), "channels must have identical length");
+        assert_eq!(
+            left.len(),
+            right.len(),
+            "channels must have identical length"
+        );
 
         // Convertir f32 → i32 selon le bit_depth
         let max_value = bit_depth.max_value();
@@ -152,9 +156,10 @@ impl AudioSegment {
     }
 
     pub fn new_track_boundary(
-        order: u64, 
-        timestamp_sec: f64, 
-        metadata: Arc<dyn TrackMetadata>)  -> Arc<Self> {
+        order: u64,
+        timestamp_sec: f64,
+        metadata: Arc<dyn TrackMetadata>,
+    ) -> Arc<Self> {
         let marker = Arc::new(SyncMarker::TrackBoundary {
             metadata: Arc::clone(&metadata),
         });
@@ -166,13 +171,13 @@ impl AudioSegment {
     }
 
     pub fn new_stream_metadata(
-        order: u64, 
+        order: u64,
         timestamp_sec: f64,
         key: String,
-        value: String
-    ) -> Arc<Self>  {
+        value: String,
+    ) -> Arc<Self> {
         let marker = Arc::new(SyncMarker::StreamMetadata { key, value });
-        
+
         Arc::new(Self {
             order,
             timestamp_sec,
@@ -183,51 +188,41 @@ impl AudioSegment {
     pub fn new_top_zero_sync() -> Arc<Self> {
         let marker = Arc::new(SyncMarker::TopZeroSync);
 
-        Arc::new(Self{
+        Arc::new(Self {
             order: 0,
             timestamp_sec: 0.0,
-            segment: _AudioSegment::Sync(marker)
+            segment: _AudioSegment::Sync(marker),
         })
     }
 
-    pub fn new_hearbeat(
-        order: u64, 
-        timestamp_sec: f64,
-    ) -> Arc<Self> {
+    pub fn new_hearbeat(order: u64, timestamp_sec: f64) -> Arc<Self> {
         let marker = Arc::new(SyncMarker::Heartbeat);
 
-        Arc::new(Self{
-            order: order,
-            timestamp_sec: timestamp_sec,
-            segment: _AudioSegment::Sync(marker)
-        })
-    }
-
-    pub fn new_end_of_stream(
-        order: u64, 
-        timestamp_sec: f64,
-    ) -> Arc<Self> {
-        let marker = Arc::new(SyncMarker::EndOfStream);
-
-        Arc::new(Self{
+        Arc::new(Self {
             order: order,
             timestamp_sec: timestamp_sec,
             segment: _AudioSegment::Sync(marker),
         })
     }
 
-    pub fn new_error(
-        order: u64, 
-        timestamp_sec: f64,
-        error: String,
-    ) -> Arc<Self> {
+    pub fn new_end_of_stream(order: u64, timestamp_sec: f64) -> Arc<Self> {
+        let marker = Arc::new(SyncMarker::EndOfStream);
+
+        Arc::new(Self {
+            order: order,
+            timestamp_sec: timestamp_sec,
+            segment: _AudioSegment::Sync(marker),
+        })
+    }
+
+    pub fn new_error(order: u64, timestamp_sec: f64, error: String) -> Arc<Self> {
         let marker = Arc::new(SyncMarker::Error(error));
 
-       Arc::new(Self{
-           order: order,
-           timestamp_sec: timestamp_sec,
-           segment:  _AudioSegment::Sync(marker),
-       })
+        Arc::new(Self {
+            order: order,
+            timestamp_sec: timestamp_sec,
+            segment: _AudioSegment::Sync(marker),
+        })
     }
 
     pub fn is_audio_chunk(&self) -> bool {
@@ -460,13 +455,7 @@ mod tests {
 
     #[test]
     fn test_audio_segment_gain_manipulation() {
-        let segment = AudioSegment::new_chunk(
-            0,
-            0.0,
-            vec![[100i32, 200i32]],
-            44100,
-            BitDepth::B32,
-        );
+        let segment = AudioSegment::new_chunk(0, 0.0, vec![[100i32, 200i32]], 44100, BitDepth::B32);
 
         // Test with_gain_db
         let segment_6db = segment.with_gain_db(6.0).unwrap();
@@ -486,13 +475,8 @@ mod tests {
 
     #[test]
     fn test_audio_segment_conversions() {
-        let segment = AudioSegment::new_chunk(
-            0,
-            0.0,
-            vec![[1000000i32, 2000000i32]],
-            44100,
-            BitDepth::B32,
-        );
+        let segment =
+            AudioSegment::new_chunk(0, 0.0, vec![[1000000i32, 2000000i32]], 44100, BitDepth::B32);
 
         // Test to_f32_chunk
         let f32_chunk = segment.to_f32_chunk();

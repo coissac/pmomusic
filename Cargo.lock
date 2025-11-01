@@ -2630,6 +2630,7 @@ name = "pmoaudiocache"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum 0.8.6",
  "bytes",
  "chrono",
@@ -2640,11 +2641,13 @@ dependencies = [
  "pmoconfig",
  "pmodidl",
  "pmoflac",
+ "pmometadata",
  "pmoserver",
  "quick-xml 0.37.5",
  "rusqlite",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

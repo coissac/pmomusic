@@ -1,7 +1,7 @@
 //! AudioChunk : Représentation générique de données audio stéréo
 //!
 //! Cette nouvelle architecture supporte différents types de samples :
-//! - Entiers : i8, i16, I24 (24-bit), i32
+//! - Entiers : i16, I24 (24-bit), i32
 //! - Flottants : f32, f64
 //!
 //! L'utilisation de génériques permet de factoriser le code tout en gardant
@@ -18,7 +18,7 @@ use crate::{dsp, BitDepth, Sample, I24};
 /// Représente un chunk audio stéréo typé avec partage zero-copy via Arc
 ///
 /// Cette structure générique encapsule des données audio de n'importe quel type
-/// de sample (i8, i16, I24, i32, f32, f64). Les données sont partagées via `Arc`
+/// de sample (i16, I24, i32, f32, f64). Les données sont partagées via `Arc`
 /// pour permettre un partage efficace entre plusieurs consumers sans copier.
 ///
 /// # Optimisation zero-copy
@@ -118,7 +118,7 @@ impl<T: Sample> AudioChunkData<T> {
     /// Gain sous forme linéaire
     #[inline]
     pub fn gain_linear(&self) -> f64 {
-        db_to_linear(self.gain_db)
+        gain_linear_from_db(self.gain_db)
     }
 
     /// Retourne une vue immuable sur les frames `[L, R]`
@@ -146,7 +146,7 @@ impl<T: Sample> AudioChunkData<T> {
 
     /// Définit le gain à l'aide d'un facteur linéaire (>0)
     pub fn set_gain_linear(&self, gain_linear: f64) -> Arc<Self> {
-        self.set_gain_db(linear_to_db(gain_linear))
+        self.set_gain_db(gain_db_from_linear(gain_linear))
     }
 
     /// Modifie le gain de ce chunk (ajoute un delta en dB)
@@ -156,11 +156,11 @@ impl<T: Sample> AudioChunkData<T> {
 
     /// Modifie le gain via un facteur linéaire multiplié au gain courant
     pub fn with_modified_gain_linear(&self, gain_linear: f64) -> Arc<Self> {
-        self.with_modified_gain_db(linear_to_db(gain_linear))
+        self.with_modified_gain_db(gain_db_from_linear(gain_linear))
     }
 }
 
-// Méthodes spécifiques pour les types entiers (i8, i16, I24, i32)
+// Méthodes spécifiques pour les types entiers (i16, I24, i32)
 impl AudioChunkData<i32> {
     /// Applique le gain et retourne un nouveau chunk avec les données modifiées
     ///
@@ -172,14 +172,18 @@ impl AudioChunkData<i32> {
         }
 
         let mut stereo = self.clone_frames();
-        dsp::apply_gain_stereo(&mut stereo, self.gain_db);
+        dsp::apply_gain_stereo_i32(&mut stereo, self.gain_db);
 
         AudioChunkData::new(stereo, self.sample_rate, 0.0)
     }
 
     /// Construit un chunk depuis deux vecteurs `i32` séparés (L/R)
     pub fn from_channels(left: Vec<i32>, right: Vec<i32>, sample_rate: u32) -> Arc<Self> {
-        assert_eq!(left.len(), right.len(), "channels must have identical length");
+        assert_eq!(
+            left.len(),
+            right.len(),
+            "channels must have identical length"
+        );
         let stereo = left
             .into_iter()
             .zip(right.into_iter())
@@ -213,7 +217,7 @@ impl AudioChunkData<f32> {
             return self; // Pas de gain à appliquer
         }
 
-        let gain_linear = db_to_linear(self.gain_db) as f32;
+        let gain_linear = gain_linear_from_db(self.gain_db) as f32;
         let mut stereo = self.clone_frames();
         for frame in &mut stereo {
             frame[0] *= gain_linear;
@@ -225,7 +229,11 @@ impl AudioChunkData<f32> {
 
     /// Construit un chunk depuis deux vecteurs `f32` séparés (L/R)
     pub fn from_channels(left: Vec<f32>, right: Vec<f32>, sample_rate: u32) -> Arc<Self> {
-        assert_eq!(left.len(), right.len(), "channels must have identical length");
+        assert_eq!(
+            left.len(),
+            right.len(),
+            "channels must have identical length"
+        );
         let stereo = left
             .into_iter()
             .zip(right.into_iter())
@@ -243,7 +251,7 @@ impl AudioChunkData<f64> {
             return self; // Pas de gain à appliquer
         }
 
-        let gain_linear = db_to_linear(self.gain_db);
+        let gain_linear = gain_linear_from_db(self.gain_db);
         let mut stereo = self.clone_frames();
         for frame in &mut stereo {
             frame[0] *= gain_linear;
@@ -255,7 +263,11 @@ impl AudioChunkData<f64> {
 
     /// Construit un chunk depuis deux vecteurs `f64` séparés (L/R)
     pub fn from_channels(left: Vec<f64>, right: Vec<f64>, sample_rate: u32) -> Arc<Self> {
-        assert_eq!(left.len(), right.len(), "channels must have identical length");
+        assert_eq!(
+            left.len(),
+            right.len(),
+            "channels must have identical length"
+        );
         let stereo = left
             .into_iter()
             .zip(right.into_iter())
@@ -276,7 +288,6 @@ impl AudioChunkData<f64> {
 ///
 /// # Variantes
 ///
-/// - `I8` : Échantillons 8-bit signés
 /// - `I16` : Échantillons 16-bit signés
 /// - `I24` : Échantillons 24-bit signés (stockés sur i32)
 /// - `I32` : Échantillons 32-bit signés
@@ -298,7 +309,6 @@ impl AudioChunkData<f64> {
 /// ```
 #[derive(Debug, Clone)]
 pub enum AudioChunk {
-    I8(Arc<AudioChunkData<i8>>),
     I16(Arc<AudioChunkData<i16>>),
     I24(Arc<AudioChunkData<I24>>),
     I32(Arc<AudioChunkData<i32>>),
@@ -310,7 +320,6 @@ impl AudioChunk {
     /// Retourne le nombre de frames du chunk
     pub fn len(&self) -> usize {
         match self {
-            AudioChunk::I8(d) => d.len(),
             AudioChunk::I16(d) => d.len(),
             AudioChunk::I24(d) => d.len(),
             AudioChunk::I32(d) => d.len(),
@@ -327,7 +336,6 @@ impl AudioChunk {
     /// Taux d'échantillonnage (Hz)
     pub fn sample_rate(&self) -> u32 {
         match self {
-            AudioChunk::I8(d) => d.sample_rate(),
             AudioChunk::I16(d) => d.sample_rate(),
             AudioChunk::I24(d) => d.sample_rate(),
             AudioChunk::I32(d) => d.sample_rate(),
@@ -339,7 +347,6 @@ impl AudioChunk {
     /// Gain courant en décibels
     pub fn gain_db(&self) -> f64 {
         match self {
-            AudioChunk::I8(d) => d.gain_db(),
             AudioChunk::I16(d) => d.gain_db(),
             AudioChunk::I24(d) => d.gain_db(),
             AudioChunk::I32(d) => d.gain_db(),
@@ -350,13 +357,12 @@ impl AudioChunk {
 
     /// Gain sous forme linéaire
     pub fn gain_linear(&self) -> f64 {
-        db_to_linear(self.gain_db())
+        gain_linear_from_db(self.gain_db())
     }
 
     /// Définit le gain en dB
     pub fn set_gain_db(&self, gain_db: f64) -> Self {
         match self {
-            AudioChunk::I8(d) => AudioChunk::I8(d.set_gain_db(gain_db)),
             AudioChunk::I16(d) => AudioChunk::I16(d.set_gain_db(gain_db)),
             AudioChunk::I24(d) => AudioChunk::I24(d.set_gain_db(gain_db)),
             AudioChunk::I32(d) => AudioChunk::I32(d.set_gain_db(gain_db)),
@@ -367,7 +373,7 @@ impl AudioChunk {
 
     /// Définit le gain via un facteur linéaire
     pub fn set_gain_linear(&self, gain_linear: f64) -> Self {
-        self.set_gain_db(linear_to_db(gain_linear))
+        self.set_gain_db(gain_db_from_linear(gain_linear))
     }
 
     /// Modifie le gain (ajoute un delta en dB)
@@ -380,31 +386,20 @@ impl AudioChunk {
     /// Le gain du chunk résultant est remis à 0.0 dB.
     pub fn apply_gain(self) -> Self {
         match self {
-            AudioChunk::I8(d) => {
-                // Pour i8, on convert en i32, applique gain, puis reconvertit
-                // TODO: optimiser avec une version directe
-                let gain_db = d.gain_db();
-                if gain_db.abs() < f64::EPSILON {
-                    return AudioChunk::I8(d);
-                }
-                let gain_linear = db_to_linear(gain_db) as f32;
-                let mut stereo = d.clone_frames();
-                for frame in &mut stereo {
-                    frame[0] = (frame[0] as f32 * gain_linear).round().clamp(-128.0, 127.0) as i8;
-                    frame[1] = (frame[1] as f32 * gain_linear).round().clamp(-128.0, 127.0) as i8;
-                }
-                AudioChunk::I8(AudioChunkData::new(stereo, d.sample_rate(), 0.0))
-            }
             AudioChunk::I16(d) => {
                 let gain_db = d.gain_db();
                 if gain_db.abs() < f64::EPSILON {
                     return AudioChunk::I16(d);
                 }
-                let gain_linear = db_to_linear(gain_db) as f32;
+                let gain_linear = gain_linear_from_db(gain_db) as f32;
                 let mut stereo = d.clone_frames();
                 for frame in &mut stereo {
-                    frame[0] = (frame[0] as f32 * gain_linear).round().clamp(-32768.0, 32767.0) as i16;
-                    frame[1] = (frame[1] as f32 * gain_linear).round().clamp(-32768.0, 32767.0) as i16;
+                    frame[0] = (frame[0] as f32 * gain_linear)
+                        .round()
+                        .clamp(-32768.0, 32767.0) as i16;
+                    frame[1] = (frame[1] as f32 * gain_linear)
+                        .round()
+                        .clamp(-32768.0, 32767.0) as i16;
                 }
                 AudioChunk::I16(AudioChunkData::new(stereo, d.sample_rate(), 0.0))
             }
@@ -413,11 +408,15 @@ impl AudioChunk {
                 if gain_db.abs() < f64::EPSILON {
                     return AudioChunk::I24(d);
                 }
-                let gain_linear = db_to_linear(gain_db) as f32;
+                let gain_linear = gain_linear_from_db(gain_db) as f32;
                 let mut stereo = d.clone_frames();
                 for frame in &mut stereo {
-                    let l = (frame[0].as_i32() as f32 * gain_linear).round().clamp(-8_388_608.0, 8_388_607.0) as i32;
-                    let r = (frame[1].as_i32() as f32 * gain_linear).round().clamp(-8_388_608.0, 8_388_607.0) as i32;
+                    let l = (frame[0].as_i32() as f32 * gain_linear)
+                        .round()
+                        .clamp(-8_388_608.0, 8_388_607.0) as i32;
+                    let r = (frame[1].as_i32() as f32 * gain_linear)
+                        .round()
+                        .clamp(-8_388_608.0, 8_388_607.0) as i32;
                     frame[0] = I24::new_clamped(l);
                     frame[1] = I24::new_clamped(r);
                 }
@@ -432,12 +431,420 @@ impl AudioChunk {
     /// Retourne le nom du type de sample
     pub fn type_name(&self) -> &'static str {
         match self {
-            AudioChunk::I8(_) => "i8",
             AudioChunk::I16(_) => "i16",
             AudioChunk::I24(_) => "I24",
             AudioChunk::I32(_) => "i32",
             AudioChunk::F32(_) => "f32",
             AudioChunk::F64(_) => "f64",
+        }
+    }
+
+    /// Tente de convertir vers AudioIntegerChunk (retourne None si float)
+    pub fn try_as_integer(&self) -> Option<AudioIntegerChunk> {
+        match self {
+            AudioChunk::I16(d) => Some(AudioIntegerChunk::I16(d.clone())),
+            AudioChunk::I24(d) => Some(AudioIntegerChunk::I24(d.clone())),
+            AudioChunk::I32(d) => Some(AudioIntegerChunk::I32(d.clone())),
+            AudioChunk::F32(_) | AudioChunk::F64(_) => None,
+        }
+    }
+
+    /// Tente de convertir vers AudioFloatChunk (retourne None si integer)
+    pub fn try_as_float(&self) -> Option<AudioFloatChunk> {
+        match self {
+            AudioChunk::F32(d) => Some(AudioFloatChunk::F32(d.clone())),
+            AudioChunk::F64(d) => Some(AudioFloatChunk::F64(d.clone())),
+            AudioChunk::I16(_) | AudioChunk::I24(_) | AudioChunk::I32(_) => None,
+        }
+    }
+
+    /// Vérifie si le chunk est de type entier
+    pub fn is_integer(&self) -> bool {
+        matches!(
+            self,
+            AudioChunk::I16(_) | AudioChunk::I24(_) | AudioChunk::I32(_)
+        )
+    }
+
+    /// Vérifie si le chunk est de type flottant
+    pub fn is_float(&self) -> bool {
+        matches!(self, AudioChunk::F32(_) | AudioChunk::F64(_))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum AudioIntegerChunk {
+    I16(Arc<AudioChunkData<i16>>),
+    I24(Arc<AudioChunkData<I24>>),
+    I32(Arc<AudioChunkData<i32>>),
+}
+
+impl AudioIntegerChunk {
+    /// Retourne le nombre de frames du chunk
+    pub fn len(&self) -> usize {
+        match self {
+            AudioIntegerChunk::I16(d) => d.len(),
+            AudioIntegerChunk::I24(d) => d.len(),
+            AudioIntegerChunk::I32(d) => d.len(),
+        }
+    }
+
+    /// Vérifie si le chunk est vide
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Taux d'échantillonnage (Hz)
+    pub fn sample_rate(&self) -> u32 {
+        match self {
+            AudioIntegerChunk::I16(d) => d.sample_rate(),
+            AudioIntegerChunk::I24(d) => d.sample_rate(),
+            AudioIntegerChunk::I32(d) => d.sample_rate(),
+        }
+    }
+
+    /// Gain courant en décibels
+    pub fn gain_db(&self) -> f64 {
+        match self {
+            AudioIntegerChunk::I16(d) => d.gain_db(),
+            AudioIntegerChunk::I24(d) => d.gain_db(),
+            AudioIntegerChunk::I32(d) => d.gain_db(),
+        }
+    }
+
+    /// Gain sous forme linéaire
+    pub fn gain_linear(&self) -> f64 {
+        gain_linear_from_db(self.gain_db())
+    }
+
+    /// Définit le gain en dB
+    pub fn set_gain_db(&self, gain_db: f64) -> Self {
+        match self {
+            AudioIntegerChunk::I16(d) => AudioIntegerChunk::I16(d.set_gain_db(gain_db)),
+            AudioIntegerChunk::I24(d) => AudioIntegerChunk::I24(d.set_gain_db(gain_db)),
+            AudioIntegerChunk::I32(d) => AudioIntegerChunk::I32(d.set_gain_db(gain_db)),
+        }
+    }
+
+    /// Définit le gain via un facteur linéaire
+    pub fn set_gain_linear(&self, gain_linear: f64) -> Self {
+        self.set_gain_db(gain_db_from_linear(gain_linear))
+    }
+
+    /// Modifie le gain (ajoute un delta en dB)
+    pub fn with_modified_gain_db(&self, delta_gain_db: f64) -> Self {
+        self.set_gain_db(self.gain_db() + delta_gain_db)
+    }
+
+    /// Applique le gain et retourne un nouveau chunk avec les données modifiées
+    ///
+    /// Le gain du chunk résultant est remis à 0.0 dB.
+    pub fn apply_gain(self) -> Self {
+        match self {
+            AudioIntegerChunk::I16(d) => {
+                let gain_db = d.gain_db();
+                if gain_db.abs() < f64::EPSILON {
+                    return AudioIntegerChunk::I16(d);
+                }
+                let gain_linear = gain_linear_from_db(gain_db) as f32;
+                let mut stereo = d.clone_frames();
+                for frame in &mut stereo {
+                    frame[0] = (frame[0] as f32 * gain_linear)
+                        .round()
+                        .clamp(-32768.0, 32767.0) as i16;
+                    frame[1] = (frame[1] as f32 * gain_linear)
+                        .round()
+                        .clamp(-32768.0, 32767.0) as i16;
+                }
+                AudioIntegerChunk::I16(AudioChunkData::new(stereo, d.sample_rate(), 0.0))
+            }
+            AudioIntegerChunk::I24(d) => {
+                let gain_db = d.gain_db();
+                if gain_db.abs() < f64::EPSILON {
+                    return AudioIntegerChunk::I24(d);
+                }
+                let gain_linear = gain_linear_from_db(gain_db) as f32;
+                let mut stereo = d.clone_frames();
+                for frame in &mut stereo {
+                    let l = (frame[0].as_i32() as f32 * gain_linear)
+                        .round()
+                        .clamp(-8_388_608.0, 8_388_607.0) as i32;
+                    let r = (frame[1].as_i32() as f32 * gain_linear)
+                        .round()
+                        .clamp(-8_388_608.0, 8_388_607.0) as i32;
+                    frame[0] = I24::new_clamped(l);
+                    frame[1] = I24::new_clamped(r);
+                }
+                AudioIntegerChunk::I24(AudioChunkData::new(stereo, d.sample_rate(), 0.0))
+            }
+            AudioIntegerChunk::I32(d) => AudioIntegerChunk::I32(d.apply_gain()),
+        }
+    }
+
+    /// Retourne le nom du type de sample
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            AudioIntegerChunk::I16(_) => "i16",
+            AudioIntegerChunk::I24(_) => "I24",
+            AudioIntegerChunk::I32(_) => "i32",
+        }
+    }
+
+    /// Vérifie si le chunk est de type I16
+    pub fn is_i16(&self) -> bool {
+        matches!(self, AudioIntegerChunk::I16(_))
+    }
+
+    /// Vérifie si le chunk est de type I24
+    pub fn is_i24(&self) -> bool {
+        matches!(self, AudioIntegerChunk::I24(_))
+    }
+
+    /// Vérifie si le chunk est de type I32
+    pub fn is_i32(&self) -> bool {
+        matches!(self, AudioIntegerChunk::I32(_))
+    }
+
+    /// Retourne la profondeur de bit du chunk
+    pub fn bit_depth(&self) -> u8 {
+        match self {
+            AudioIntegerChunk::I16(_) => 16,
+            AudioIntegerChunk::I24(_) => 24,
+            AudioIntegerChunk::I32(_) => 32,
+        }
+    }
+
+    /// Convertit vers AudioChunk
+    pub fn as_audio_chunk(&self) -> AudioChunk {
+        match self {
+            AudioIntegerChunk::I16(d) => AudioChunk::I16(d.clone()),
+            AudioIntegerChunk::I24(d) => AudioChunk::I24(d.clone()),
+            AudioIntegerChunk::I32(d) => AudioChunk::I32(d.clone()),
+        }
+    }
+
+    /// Convertit vers I16 (avec conversion si nécessaire)
+    pub fn to_i16(&self) -> AudioIntegerChunk {
+        match self {
+            AudioIntegerChunk::I16(_) => self.clone(),
+            AudioIntegerChunk::I24(d) => {
+                // I24 -> I32 -> I16
+                let i32_chunk = crate::conversions::convert_i24_to_i32(d);
+                let converted = crate::conversions::convert_i32_to_i16(&i32_chunk);
+                AudioIntegerChunk::I16(converted)
+            }
+            AudioIntegerChunk::I32(d) => {
+                let converted = crate::conversions::convert_i32_to_i16(d);
+                AudioIntegerChunk::I16(converted)
+            }
+        }
+    }
+
+    /// Convertit vers I24 (avec conversion si nécessaire)
+    pub fn to_i24(&self) -> AudioIntegerChunk {
+        match self {
+            AudioIntegerChunk::I16(d) => {
+                // I16 -> I32 -> I24
+                let i32_chunk = crate::conversions::convert_i16_to_i32(d);
+                let converted = crate::conversions::convert_i32_to_i24(&i32_chunk);
+                AudioIntegerChunk::I24(converted)
+            }
+            AudioIntegerChunk::I24(_) => self.clone(),
+            AudioIntegerChunk::I32(d) => {
+                let converted = crate::conversions::convert_i32_to_i24(d);
+                AudioIntegerChunk::I24(converted)
+            }
+        }
+    }
+
+    /// Convertit vers I32 (avec conversion si nécessaire)
+    pub fn to_i32(&self) -> AudioIntegerChunk {
+        match self {
+            AudioIntegerChunk::I16(d) => {
+                let converted = crate::conversions::convert_i16_to_i32(d);
+                AudioIntegerChunk::I32(converted)
+            }
+            AudioIntegerChunk::I24(d) => {
+                let converted = crate::conversions::convert_i24_to_i32(d);
+                AudioIntegerChunk::I32(converted)
+            }
+            AudioIntegerChunk::I32(_) => self.clone(),
+        }
+    }
+
+    /// Retourne un itérateur sur les frames
+    pub fn frames(&self) -> Box<dyn Iterator<Item = [i32; 2]> + '_> {
+        match self {
+            AudioIntegerChunk::I16(d) => {
+                Box::new(d.frames().iter().map(|f| [f[0] as i32, f[1] as i32]))
+            }
+            AudioIntegerChunk::I24(d) => {
+                Box::new(d.frames().iter().map(|f| [f[0].as_i32(), f[1].as_i32()]))
+            }
+            AudioIntegerChunk::I32(d) => Box::new(d.frames().iter().map(|f| [f[0], f[1]])),
+        }
+    }
+}
+
+impl From<AudioChunk> for AudioIntegerChunk {
+    /// Convertit depuis AudioChunk (panic si le chunk est float)
+    fn from(chunk: AudioChunk) -> Self {
+        match chunk {
+            AudioChunk::I16(d) => AudioIntegerChunk::I16(d),
+            AudioChunk::I24(d) => AudioIntegerChunk::I24(d),
+            AudioChunk::I32(d) => AudioIntegerChunk::I32(d),
+            AudioChunk::F32(_) | AudioChunk::F64(_) => {
+                panic!("Cannot convert float AudioChunk to AudioIntegerChunk")
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum AudioFloatChunk {
+    F32(Arc<AudioChunkData<f32>>),
+    F64(Arc<AudioChunkData<f64>>),
+}
+
+impl AudioFloatChunk {
+    /// Retourne le nombre de frames du chunk
+    pub fn len(&self) -> usize {
+        match self {
+            AudioFloatChunk::F32(d) => d.len(),
+            AudioFloatChunk::F64(d) => d.len(),
+        }
+    }
+
+    /// Vérifie si le chunk est vide
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Taux d'échantillonnage (Hz)
+    pub fn sample_rate(&self) -> u32 {
+        match self {
+            AudioFloatChunk::F32(d) => d.sample_rate(),
+            AudioFloatChunk::F64(d) => d.sample_rate(),
+        }
+    }
+
+    /// Gain courant en décibels
+    pub fn gain_db(&self) -> f64 {
+        match self {
+            AudioFloatChunk::F32(d) => d.gain_db(),
+            AudioFloatChunk::F64(d) => d.gain_db(),
+        }
+    }
+
+    /// Gain sous forme linéaire
+    pub fn gain_linear(&self) -> f64 {
+        gain_linear_from_db(self.gain_db())
+    }
+
+    /// Définit le gain en dB
+    pub fn set_gain_db(&self, gain_db: f64) -> Self {
+        match self {
+            AudioFloatChunk::F32(d) => AudioFloatChunk::F32(d.set_gain_db(gain_db)),
+            AudioFloatChunk::F64(d) => AudioFloatChunk::F64(d.set_gain_db(gain_db)),
+        }
+    }
+
+    /// Définit le gain via un facteur linéaire
+    pub fn set_gain_linear(&self, gain_linear: f64) -> Self {
+        self.set_gain_db(gain_db_from_linear(gain_linear))
+    }
+
+    /// Modifie le gain (ajoute un delta en dB)
+    pub fn with_modified_gain_db(&self, delta_gain_db: f64) -> Self {
+        self.set_gain_db(self.gain_db() + delta_gain_db)
+    }
+
+    /// Applique le gain et retourne un nouveau chunk avec les données modifiées
+    ///
+    /// Le gain du chunk résultant est remis à 0.0 dB.
+    pub fn apply_gain(self) -> Self {
+        match self {
+            AudioFloatChunk::F32(d) => AudioFloatChunk::F32(d.apply_gain()),
+            AudioFloatChunk::F64(d) => AudioFloatChunk::F64(d.apply_gain()),
+        }
+    }
+
+    /// Retourne le nom du type de sample
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            AudioFloatChunk::F32(_) => "f32",
+            AudioFloatChunk::F64(_) => "f64",
+        }
+    }
+
+    /// Vérifie si le chunk est de type F32
+    pub fn is_f32(&self) -> bool {
+        matches!(self, AudioFloatChunk::F32(_))
+    }
+
+    /// Vérifie si le chunk est de type F64
+    pub fn is_f64(&self) -> bool {
+        matches!(self, AudioFloatChunk::F64(_))
+    }
+
+    /// Retourne la profondeur de bit du chunk (32 ou 64)
+    pub fn bit_depth(&self) -> u8 {
+        match self {
+            AudioFloatChunk::F32(_) => 32,
+            AudioFloatChunk::F64(_) => 64,
+        }
+    }
+
+    /// Convertit vers AudioChunk
+    pub fn as_audio_chunk(&self) -> AudioChunk {
+        match self {
+            AudioFloatChunk::F32(d) => AudioChunk::F32(d.clone()),
+            AudioFloatChunk::F64(d) => AudioChunk::F64(d.clone()),
+        }
+    }
+
+    /// Convertit vers F32 (avec conversion si nécessaire)
+    pub fn to_f32(&self) -> AudioFloatChunk {
+        match self {
+            AudioFloatChunk::F32(_) => self.clone(),
+            AudioFloatChunk::F64(d) => {
+                let converted = crate::conversions::convert_f64_to_f32(d);
+                AudioFloatChunk::F32(converted)
+            }
+        }
+    }
+
+    /// Convertit vers F64 (avec conversion si nécessaire)
+    pub fn to_f64(&self) -> AudioFloatChunk {
+        match self {
+            AudioFloatChunk::F32(d) => {
+                let converted = crate::conversions::convert_f32_to_f64(d);
+                AudioFloatChunk::F64(converted)
+            }
+            AudioFloatChunk::F64(_) => self.clone(),
+        }
+    }
+
+    /// Retourne un itérateur sur les frames
+    pub fn frames(&self) -> Box<dyn Iterator<Item = [f64; 2]> + '_> {
+        match self {
+            AudioFloatChunk::F32(d) => {
+                Box::new(d.frames().iter().map(|f| [f[0] as f64, f[1] as f64]))
+            }
+            AudioFloatChunk::F64(d) => Box::new(d.frames().iter().map(|f| [f[0], f[1]])),
+        }
+    }
+}
+
+impl From<AudioChunk> for AudioFloatChunk {
+    /// Convertit depuis AudioChunk (panic si le chunk est entier)
+    fn from(chunk: AudioChunk) -> Self {
+        match chunk {
+            AudioChunk::F32(d) => AudioFloatChunk::F32(d),
+            AudioChunk::F64(d) => AudioFloatChunk::F64(d),
+            AudioChunk::I16(_) | AudioChunk::I24(_) | AudioChunk::I32(_) => {
+                panic!("Cannot convert integer AudioChunk to AudioFloatChunk")
+            }
         }
     }
 }
@@ -450,7 +857,7 @@ const MIN_GAIN_DB: f64 = -120.0;
 
 /// Convertit un gain linéaire (>0) en décibels
 #[inline]
-pub fn linear_to_db(gain_linear: f64) -> f64 {
+pub fn gain_db_from_linear(gain_linear: f64) -> f64 {
     if gain_linear <= 0.0 {
         MIN_GAIN_DB
     } else {
@@ -460,18 +867,8 @@ pub fn linear_to_db(gain_linear: f64) -> f64 {
 
 /// Convertit un gain en décibels vers un gain linéaire
 #[inline]
-pub fn db_to_linear(gain_db: f64) -> f64 {
-    10f64.powf(gain_db / 20.0)
-}
-
-/// Convertit un gain linéaire en décibels (méthode publique pour compatibilité)
-pub fn gain_db_from_linear(gain_linear: f64) -> f64 {
-    linear_to_db(gain_linear)
-}
-
-/// Convertit un gain en décibels vers un gain linéaire (méthode publique pour compatibilité)
 pub fn gain_linear_from_db(gain_db: f64) -> f64 {
-    db_to_linear(gain_db)
+    10f64.powf(gain_db / 20.0)
 }
 
 // ============================================================================
@@ -515,10 +912,10 @@ mod tests {
     #[test]
     fn test_gain_conversion() {
         let linear = 2.0;
-        let db = linear_to_db(linear);
+        let db = gain_db_from_linear(linear);
         assert!((db - 6.0206).abs() < 0.01); // 2x ≈ +6dB
 
-        let back = db_to_linear(db);
+        let back = gain_linear_from_db(db);
         assert!((back - linear).abs() < 0.001);
     }
 }

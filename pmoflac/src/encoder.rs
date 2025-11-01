@@ -1,5 +1,5 @@
 use std::{
-    ffi::c_void,
+    ffi::{c_void, CString},
     io,
     pin::Pin,
     task::{Context, Poll},
@@ -85,8 +85,24 @@ impl tokio::io::AsyncRead for FlacEncodedStream {
     }
 }
 
+use std::sync::Arc;
+
+/// Extracted metadata values for FLAC encoding.
+///
+/// This is a simple struct containing the extracted values from TrackMetadata,
+/// used to pass metadata into the blocking encoder task.
+#[derive(Debug, Clone, Default)]
+struct ExtractedMetadata {
+    title: Option<String>,
+    artist: Option<String>,
+    album: Option<String>,
+    year: Option<u32>,
+    genre: Option<String>,
+    track_number: Option<u32>,
+}
+
 /// Options for configuring FLAC encoding.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct EncoderOptions {
     /// Compression level (0-12). Higher means better compression but slower.
     /// Default: 5 (balanced)
@@ -102,6 +118,10 @@ pub struct EncoderOptions {
     /// Block size in samples (optional). If None, libFLAC chooses automatically.
     /// Typical values: 1152, 2304, 4096.
     pub block_size: Option<u32>,
+
+    /// Metadata to embed in the FLAC file (Vorbis Comments).
+    /// Default: None (no metadata)
+    pub metadata: Option<Arc<dyn pmometadata::TrackMetadata + Send + Sync>>,
 }
 
 impl Default for EncoderOptions {
@@ -111,7 +131,20 @@ impl Default for EncoderOptions {
             verify: false,
             total_samples: None,
             block_size: None,
+            metadata: None,
         }
+    }
+}
+
+impl std::fmt::Debug for EncoderOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EncoderOptions")
+            .field("compression_level", &self.compression_level)
+            .field("verify", &self.verify)
+            .field("total_samples", &self.total_samples)
+            .field("block_size", &self.block_size)
+            .field("metadata", &self.metadata.as_ref().map(|_| "Some(...)"))
+            .finish()
     }
 }
 
@@ -212,6 +245,33 @@ where
         ));
     }
 
+    // Extract metadata before spawn_blocking (since TrackMetadata has async methods)
+    let extracted_metadata = if let Some(metadata) = &options.metadata {
+        let title = metadata.get_title().await.ok().flatten();
+        let artist = metadata.get_artist().await.ok().flatten();
+        let album = metadata.get_album().await.ok().flatten();
+        let year = metadata.get_year().await.ok().flatten();
+
+        // Try to extract genre and track_number from extra fields
+        let extra = metadata.get_extra().await.ok().flatten();
+        let genre = extra.as_ref().and_then(|e| e.get("genre").cloned());
+        let track_number = extra.as_ref().and_then(|e| {
+            e.get("track_number")
+                .and_then(|s| s.parse::<u32>().ok())
+        });
+
+        Some(ExtractedMetadata {
+            title,
+            artist,
+            album,
+            year,
+            genre,
+            track_number,
+        })
+    } else {
+        None
+    };
+
     let (pcm_tx, pcm_rx) = mpsc::channel::<Result<PcmChunk, FlacError>>(CHANNEL_CAPACITY);
     let format_for_reader = format;
     tokio::spawn(async move {
@@ -228,6 +288,7 @@ where
         run_encoder(
             format_for_encoder,
             options_for_encoder,
+            extracted_metadata,
             pcm_rx,
             flac_tx,
             init_tx,
@@ -306,9 +367,112 @@ where
     Ok(())
 }
 
+/// RAII guard for FLAC metadata block
+struct MetadataGuard {
+    metadata: *mut libflac_sys::FLAC__StreamMetadata,
+}
+
+impl Drop for MetadataGuard {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.metadata.is_null() {
+                libflac_sys::FLAC__metadata_object_delete(self.metadata);
+            }
+        }
+    }
+}
+
+/// Sets up Vorbis Comment metadata for the FLAC encoder
+unsafe fn setup_metadata(
+    encoder: *mut libflac_sys::FLAC__StreamEncoder,
+    metadata: &ExtractedMetadata,
+) -> Result<MetadataGuard, FlacError> {
+    use libflac_sys::*;
+
+    // Create a Vorbis Comment block
+    let meta = FLAC__metadata_object_new(FLAC__METADATA_TYPE_VORBIS_COMMENT);
+    if meta.is_null() {
+        return Err(FlacError::LibFlacInit(
+            "Failed to create metadata block".into(),
+        ));
+    }
+
+    let guard = MetadataGuard { metadata: meta };
+
+    // Helper to append a Vorbis comment
+    let append_comment = |field_name: &str, value: &str| -> Result<(), FlacError> {
+        let c_field_name = CString::new(field_name).map_err(|_| {
+            FlacError::LibFlacInit("Failed to create CString for field name".into())
+        })?;
+        let c_value = CString::new(value).map_err(|_| {
+            FlacError::LibFlacInit("Failed to create CString for field value".into())
+        })?;
+
+        let mut entry: FLAC__StreamMetadata_VorbisComment_Entry = std::mem::zeroed();
+        let success = FLAC__metadata_object_vorbiscomment_entry_from_name_value_pair(
+            &mut entry as *mut _,
+            c_field_name.as_ptr(),
+            c_value.as_ptr(),
+        );
+
+        if success == 0 {
+            return Err(FlacError::LibFlacInit(format!(
+                "Failed to create metadata entry for {}",
+                field_name
+            )));
+        }
+
+        let append_success =
+            FLAC__metadata_object_vorbiscomment_append_comment(meta, entry, 0 /* copy */);
+
+        if append_success == 0 {
+            return Err(FlacError::LibFlacInit(format!(
+                "Failed to append metadata entry for {}",
+                field_name
+            )));
+        }
+
+        Ok(())
+    };
+
+    // Add all available metadata fields
+    if let Some(title) = &metadata.title {
+        append_comment("TITLE", title)?;
+    }
+    if let Some(artist) = &metadata.artist {
+        append_comment("ARTIST", artist)?;
+    }
+    if let Some(album) = &metadata.album {
+        append_comment("ALBUM", album)?;
+    }
+    if let Some(year) = metadata.year {
+        append_comment("DATE", &year.to_string())?;
+    }
+    if let Some(genre) = &metadata.genre {
+        append_comment("GENRE", genre)?;
+    }
+    if let Some(track_number) = metadata.track_number {
+        append_comment("TRACKNUMBER", &track_number.to_string())?;
+    }
+
+    // Set the metadata on the encoder
+    let mut metadata_array = [meta];
+    let set_success =
+        FLAC__stream_encoder_set_metadata(encoder, metadata_array.as_mut_ptr(), 1);
+
+    if set_success == 0 {
+        return Err(FlacError::LibFlacInit(
+            "Failed to set metadata on encoder".into(),
+        ));
+    }
+
+    Ok(guard)
+}
+
 fn run_encoder(
     format: PcmFormat,
     options: EncoderOptions,
+    metadata: Option<ExtractedMetadata>,
     mut rx: mpsc::Receiver<Result<PcmChunk, FlacError>>,
     tx: mpsc::Sender<Result<Vec<u8>, FlacError>>,
     init_tx: oneshot::Sender<Result<(), FlacError>>,
@@ -374,6 +538,13 @@ fn run_encoder(
                 "set_blocksize failed",
             )?;
         }
+
+        // Setup metadata if provided
+        let _metadata_guard = if let Some(meta) = metadata {
+            Some(setup_metadata(encoder, &meta)?)
+        } else {
+            None
+        };
 
         let init_status = FLAC__stream_encoder_init_stream(
             encoder,

@@ -14,22 +14,6 @@ use crate::{dsp, AudioChunk, AudioChunkData, BitDepth, I24};
 // Ces fonctions utilisent la fonction DSP optimisée SIMD `bitdepth_change_stereo`
 // pour les conversions i32 ↔ i32 avec différents bit depths.
 
-/// Convertit i32 vers i8 (downsampling via bit depth change)
-pub fn convert_i32_to_i8(chunk: &AudioChunkData<i32>) -> Arc<AudioChunkData<i8>> {
-    let mut stereo = chunk.clone_frames();
-
-    // Utiliser la fonction DSP optimisée pour passer de B32 → B8
-    dsp::bitdepth_change_stereo(&mut stereo, BitDepth::B32, BitDepth::B8);
-
-    // Convertir i32 → i8 (les valeurs sont maintenant dans la plage i8)
-    let stereo_i8: Vec<[i8; 2]> = stereo
-        .into_iter()
-        .map(|[l, r]| [l as i8, r as i8])
-        .collect();
-
-    AudioChunkData::new(stereo_i8, chunk.sample_rate(), chunk.gain_db())
-}
-
 /// Convertit i32 vers i16 (downsampling via bit depth change)
 pub fn convert_i32_to_i16(chunk: &AudioChunkData<i32>) -> Arc<AudioChunkData<i16>> {
     let mut stereo = chunk.clone_frames();
@@ -60,21 +44,6 @@ pub fn convert_i32_to_i24(chunk: &AudioChunkData<i32>) -> Arc<AudioChunkData<I24
         .collect();
 
     AudioChunkData::new(stereo_i24, chunk.sample_rate(), chunk.gain_db())
-}
-
-/// Convertit i8 vers i32 (upsampling via bit depth change)
-pub fn convert_i8_to_i32(chunk: &AudioChunkData<i8>) -> Arc<AudioChunkData<i32>> {
-    // Convertir i8 → i32 d'abord
-    let mut stereo: Vec<[i32; 2]> = chunk
-        .frames()
-        .iter()
-        .map(|[l, r]| [*l as i32, *r as i32])
-        .collect();
-
-    // Utiliser la fonction DSP optimisée pour passer de B8 → B32
-    dsp::bitdepth_change_stereo(&mut stereo, BitDepth::B8, BitDepth::B32);
-
-    AudioChunkData::new(stereo, chunk.sample_rate(), chunk.gain_db())
 }
 
 /// Convertit i16 vers i32 (upsampling via bit depth change)
@@ -142,21 +111,24 @@ pub fn convert_i32_to_f64(chunk: &AudioChunkData<i32>) -> Arc<AudioChunkData<f64
     convert_f32_to_f64(&f32_chunk)
 }
 
-/// Convertit I24 vers f32
+/// Convertit I24 vers f32 via les fonctions DSP optimisées SIMD
 pub fn convert_i24_to_f32(chunk: &AudioChunkData<I24>) -> Arc<AudioChunkData<f32>> {
     let frames = chunk.frames();
-    let max_value = 8_388_608.0f32; // 2^23
+    let len = frames.len();
 
-    let stereo: Vec<[f32; 2]> = frames
-        .iter()
-        .map(|[l, r]| {
-            let lf = l.as_i32() as f32 / max_value;
-            let rf = r.as_i32() as f32 / max_value;
-            [lf, rf]
-        })
-        .collect();
+    // Séparer les canaux I24 en i32
+    let mut left = Vec::with_capacity(len);
+    let mut right = Vec::with_capacity(len);
+    for [l, r] in frames {
+        left.push(l.as_i32());
+        right.push(r.as_i32());
+    }
 
-    AudioChunkData::new(stereo, chunk.sample_rate(), chunk.gain_db())
+    // Utiliser la fonction SIMD optimisée du module DSP pour I24
+    let mut out_pairs = vec![[0.0f32; 2]; len];
+    dsp::i24_as_i32_stereo_to_pairs_f32(&left, &right, &mut out_pairs);
+
+    AudioChunkData::new(out_pairs, chunk.sample_rate(), chunk.gain_db())
 }
 
 /// Convertit I24 vers f64
@@ -176,61 +148,30 @@ pub fn convert_i24_to_f64(chunk: &AudioChunkData<I24>) -> Arc<AudioChunkData<f64
     AudioChunkData::new(stereo, chunk.sample_rate(), chunk.gain_db())
 }
 
-/// Convertit i16 vers f32
+/// Convertit i16 vers f32 via les fonctions DSP optimisées SIMD
 pub fn convert_i16_to_f32(chunk: &AudioChunkData<i16>) -> Arc<AudioChunkData<f32>> {
     let frames = chunk.frames();
-    let max_value = 32_768.0f32; // 2^15
+    let len = frames.len();
 
-    let stereo: Vec<[f32; 2]> = frames
-        .iter()
-        .map(|[l, r]| {
-            let lf = *l as f32 / max_value;
-            let rf = *r as f32 / max_value;
-            [lf, rf]
-        })
-        .collect();
+    // Séparer les canaux
+    let mut left = Vec::with_capacity(len);
+    let mut right = Vec::with_capacity(len);
+    for [l, r] in frames {
+        left.push(*l);
+        right.push(*r);
+    }
 
-    AudioChunkData::new(stereo, chunk.sample_rate(), chunk.gain_db())
+    // Utiliser la fonction SIMD optimisée du module DSP
+    let mut out_pairs = vec![[0.0f32; 2]; len];
+    dsp::i16_stereo_to_pairs_f32(&left, &right, &mut out_pairs);
+
+    AudioChunkData::new(out_pairs, chunk.sample_rate(), chunk.gain_db())
 }
 
 /// Convertit i16 vers f64
 pub fn convert_i16_to_f64(chunk: &AudioChunkData<i16>) -> Arc<AudioChunkData<f64>> {
     let frames = chunk.frames();
     let max_value = 32_768.0f64; // 2^15
-
-    let stereo: Vec<[f64; 2]> = frames
-        .iter()
-        .map(|[l, r]| {
-            let lf = *l as f64 / max_value;
-            let rf = *r as f64 / max_value;
-            [lf, rf]
-        })
-        .collect();
-
-    AudioChunkData::new(stereo, chunk.sample_rate(), chunk.gain_db())
-}
-
-/// Convertit i8 vers f32
-pub fn convert_i8_to_f32(chunk: &AudioChunkData<i8>) -> Arc<AudioChunkData<f32>> {
-    let frames = chunk.frames();
-    let max_value = 128.0f32; // 2^7
-
-    let stereo: Vec<[f32; 2]> = frames
-        .iter()
-        .map(|[l, r]| {
-            let lf = *l as f32 / max_value;
-            let rf = *r as f32 / max_value;
-            [lf, rf]
-        })
-        .collect();
-
-    AudioChunkData::new(stereo, chunk.sample_rate(), chunk.gain_db())
-}
-
-/// Convertit i8 vers f64
-pub fn convert_i8_to_f64(chunk: &AudioChunkData<i8>) -> Arc<AudioChunkData<f64>> {
-    let frames = chunk.frames();
-    let max_value = 128.0f64; // 2^7
 
     let stereo: Vec<[f64; 2]> = frames
         .iter()
@@ -279,19 +220,21 @@ pub fn convert_f64_to_i32(chunk: &AudioChunkData<f64>) -> Arc<AudioChunkData<i32
     convert_f32_to_i32(&f32_chunk)
 }
 
-/// Convertit f32 vers I24
+/// Convertit f32 vers I24 via les fonctions DSP optimisées SIMD
 pub fn convert_f32_to_i24(chunk: &AudioChunkData<f32>) -> Arc<AudioChunkData<I24>> {
     let frames = chunk.frames();
-    let max_value = 8_388_607.0f32; // 2^23 - 1
-    let min_value = -8_388_608.0f32; // -2^23
+    let len = frames.len();
 
-    let stereo: Vec<[I24; 2]> = frames
-        .iter()
-        .map(|[l, r]| {
-            let l_scaled = (l * max_value).clamp(min_value, max_value).round() as i32;
-            let r_scaled = (r * max_value).clamp(min_value, max_value).round() as i32;
-            [I24::new_clamped(l_scaled), I24::new_clamped(r_scaled)]
-        })
+    // Utiliser la fonction SIMD optimisée du module DSP
+    let mut left = vec![0i32; len];
+    let mut right = vec![0i32; len];
+    dsp::pairs_f32_to_i24_as_i32_stereo(frames, &mut left, &mut right);
+
+    // Recombiner en frames I24
+    let stereo: Vec<[I24; 2]> = left
+        .into_iter()
+        .zip(right.into_iter())
+        .map(|(l, r)| [I24::new_clamped(l), I24::new_clamped(r)])
         .collect();
 
     AudioChunkData::new(stereo, chunk.sample_rate(), chunk.gain_db())
@@ -315,19 +258,21 @@ pub fn convert_f64_to_i24(chunk: &AudioChunkData<f64>) -> Arc<AudioChunkData<I24
     AudioChunkData::new(stereo, chunk.sample_rate(), chunk.gain_db())
 }
 
-/// Convertit f32 vers i16
+/// Convertit f32 vers i16 via les fonctions DSP optimisées SIMD
 pub fn convert_f32_to_i16(chunk: &AudioChunkData<f32>) -> Arc<AudioChunkData<i16>> {
     let frames = chunk.frames();
-    let max_value = 32_767.0f32; // 2^15 - 1
-    let min_value = -32_768.0f32; // -2^15
+    let len = frames.len();
 
-    let stereo: Vec<[i16; 2]> = frames
-        .iter()
-        .map(|[l, r]| {
-            let l16 = (l * max_value).clamp(min_value, max_value).round() as i16;
-            let r16 = (r * max_value).clamp(min_value, max_value).round() as i16;
-            [l16, r16]
-        })
+    // Utiliser la fonction SIMD optimisée du module DSP
+    let mut left = vec![0i16; len];
+    let mut right = vec![0i16; len];
+    dsp::pairs_f32_to_i16_stereo(frames, &mut left, &mut right);
+
+    // Recombiner en frames
+    let stereo: Vec<[i16; 2]> = left
+        .into_iter()
+        .zip(right.into_iter())
+        .map(|(l, r)| [l, r])
         .collect();
 
     AudioChunkData::new(stereo, chunk.sample_rate(), chunk.gain_db())
@@ -351,42 +296,6 @@ pub fn convert_f64_to_i16(chunk: &AudioChunkData<f64>) -> Arc<AudioChunkData<i16
     AudioChunkData::new(stereo, chunk.sample_rate(), chunk.gain_db())
 }
 
-/// Convertit f32 vers i8
-pub fn convert_f32_to_i8(chunk: &AudioChunkData<f32>) -> Arc<AudioChunkData<i8>> {
-    let frames = chunk.frames();
-    let max_value = 127.0f32; // 2^7 - 1
-    let min_value = -128.0f32; // -2^7
-
-    let stereo: Vec<[i8; 2]> = frames
-        .iter()
-        .map(|[l, r]| {
-            let l8 = (l * max_value).clamp(min_value, max_value).round() as i8;
-            let r8 = (r * max_value).clamp(min_value, max_value).round() as i8;
-            [l8, r8]
-        })
-        .collect();
-
-    AudioChunkData::new(stereo, chunk.sample_rate(), chunk.gain_db())
-}
-
-/// Convertit f64 vers i8
-pub fn convert_f64_to_i8(chunk: &AudioChunkData<f64>) -> Arc<AudioChunkData<i8>> {
-    let frames = chunk.frames();
-    let max_value = 127.0f64; // 2^7 - 1
-    let min_value = -128.0f64; // -2^7
-
-    let stereo: Vec<[i8; 2]> = frames
-        .iter()
-        .map(|[l, r]| {
-            let l8 = (l * max_value).clamp(min_value, max_value).round() as i8;
-            let r8 = (r * max_value).clamp(min_value, max_value).round() as i8;
-            [l8, r8]
-        })
-        .collect();
-
-    AudioChunkData::new(stereo, chunk.sample_rate(), chunk.gain_db())
-}
-
 // ============================================================================
 // Conversions F32 ↔ F64
 // ============================================================================
@@ -394,10 +303,7 @@ pub fn convert_f64_to_i8(chunk: &AudioChunkData<f64>) -> Arc<AudioChunkData<i8>>
 /// Convertit f32 vers f64 (upcast simple)
 pub fn convert_f32_to_f64(chunk: &AudioChunkData<f32>) -> Arc<AudioChunkData<f64>> {
     let frames = chunk.frames();
-    let stereo: Vec<[f64; 2]> = frames
-        .iter()
-        .map(|[l, r]| [*l as f64, *r as f64])
-        .collect();
+    let stereo: Vec<[f64; 2]> = frames.iter().map(|[l, r]| [*l as f64, *r as f64]).collect();
 
     AudioChunkData::new(stereo, chunk.sample_rate(), chunk.gain_db())
 }
@@ -405,10 +311,7 @@ pub fn convert_f32_to_f64(chunk: &AudioChunkData<f32>) -> Arc<AudioChunkData<f64
 /// Convertit f64 vers f32 (downcast simple)
 pub fn convert_f64_to_f32(chunk: &AudioChunkData<f64>) -> Arc<AudioChunkData<f32>> {
     let frames = chunk.frames();
-    let stereo: Vec<[f32; 2]> = frames
-        .iter()
-        .map(|[l, r]| [*l as f32, *r as f32])
-        .collect();
+    let stereo: Vec<[f32; 2]> = frames.iter().map(|[l, r]| [*l as f32, *r as f32]).collect();
 
     AudioChunkData::new(stereo, chunk.sample_rate(), chunk.gain_db())
 }
@@ -420,10 +323,9 @@ pub fn convert_f64_to_f32(chunk: &AudioChunkData<f64>) -> Arc<AudioChunkData<f32
 impl AudioChunk {
     /// Convertit ce chunk vers f32
     ///
-    /// Chaque type utilise sa plage native (I8=±2^7, I16=±2^15, I24=±2^23, I32=±2^31)
+    /// Chaque type utilise sa plage native (I16=±2^15, I24=±2^23, I32=±2^31)
     pub fn to_f32(&self) -> AudioChunk {
         match self {
-            AudioChunk::I8(d) => AudioChunk::F32(convert_i8_to_f32(d)),
             AudioChunk::I16(d) => AudioChunk::F32(convert_i16_to_f32(d)),
             AudioChunk::I24(d) => AudioChunk::F32(convert_i24_to_f32(d)),
             AudioChunk::I32(d) => AudioChunk::F32(convert_i32_to_f32(d)),
@@ -434,10 +336,9 @@ impl AudioChunk {
 
     /// Convertit ce chunk vers f64
     ///
-    /// Chaque type utilise sa plage native (I8=±2^7, I16=±2^15, I24=±2^23, I32=±2^31)
+    /// Chaque type utilise sa plage native (I16=±2^15, I24=±2^23, I32=±2^31)
     pub fn to_f64(&self) -> AudioChunk {
         match self {
-            AudioChunk::I8(d) => AudioChunk::F64(convert_i8_to_f64(d)),
             AudioChunk::I16(d) => AudioChunk::F64(convert_i16_to_f64(d)),
             AudioChunk::I24(d) => AudioChunk::F64(convert_i24_to_f64(d)),
             AudioChunk::I32(d) => AudioChunk::F64(convert_i32_to_f64(d)),
@@ -451,7 +352,6 @@ impl AudioChunk {
     /// I32 = 32 bits complets (±2^31)
     pub fn to_i32(&self) -> AudioChunk {
         match self {
-            AudioChunk::I8(d) => AudioChunk::I32(convert_i8_to_i32(d)),
             AudioChunk::I16(d) => AudioChunk::I32(convert_i16_to_i32(d)),
             AudioChunk::I24(d) => AudioChunk::I32(convert_i24_to_i32(d)),
             AudioChunk::I32(d) => AudioChunk::I32(d.clone()),
@@ -463,11 +363,6 @@ impl AudioChunk {
     /// Convertit ce chunk vers I24
     pub fn to_i24(&self) -> AudioChunk {
         match self {
-            AudioChunk::I8(d) => {
-                // I8 → I32 → I24
-                let i32_chunk = convert_i8_to_i32(d);
-                AudioChunk::I24(convert_i32_to_i24(&i32_chunk))
-            }
             AudioChunk::I16(d) => {
                 // I16 → I32 → I24
                 let i32_chunk = convert_i16_to_i32(d);
@@ -483,11 +378,6 @@ impl AudioChunk {
     /// Convertit ce chunk vers i16
     pub fn to_i16(&self) -> AudioChunk {
         match self {
-            AudioChunk::I8(d) => {
-                // I8 → I32 → I16
-                let i32_chunk = convert_i8_to_i32(d);
-                AudioChunk::I16(convert_i32_to_i16(&i32_chunk))
-            }
             AudioChunk::I16(d) => AudioChunk::I16(d.clone()),
             AudioChunk::I24(d) => {
                 // I24 → I32 → I16
@@ -499,26 +389,6 @@ impl AudioChunk {
             AudioChunk::F64(d) => AudioChunk::I16(convert_f64_to_i16(d)),
         }
     }
-
-    /// Convertit ce chunk vers i8
-    pub fn to_i8(&self) -> AudioChunk {
-        match self {
-            AudioChunk::I8(d) => AudioChunk::I8(d.clone()),
-            AudioChunk::I16(d) => {
-                // I16 → I32 → I8
-                let i32_chunk = convert_i16_to_i32(d);
-                AudioChunk::I8(convert_i32_to_i8(&i32_chunk))
-            }
-            AudioChunk::I24(d) => {
-                // I24 → I32 → I8
-                let i32_chunk = convert_i24_to_i32(d);
-                AudioChunk::I8(convert_i32_to_i8(&i32_chunk))
-            }
-            AudioChunk::I32(d) => AudioChunk::I8(convert_i32_to_i8(d)),
-            AudioChunk::F32(d) => AudioChunk::I8(convert_f32_to_i8(d)),
-            AudioChunk::F64(d) => AudioChunk::I8(convert_f64_to_i8(d)),
-        }
-    }
 }
 
 // ============================================================================
@@ -526,12 +396,6 @@ impl AudioChunk {
 // ============================================================================
 
 // ---------- From<Arc<AudioChunkData<T>>> pour AudioChunk ----------
-
-impl From<Arc<AudioChunkData<i8>>> for AudioChunk {
-    fn from(data: Arc<AudioChunkData<i8>>) -> Self {
-        AudioChunk::I8(data)
-    }
-}
 
 impl From<Arc<AudioChunkData<i16>>> for AudioChunk {
     fn from(data: Arc<AudioChunkData<i16>>) -> Self {
@@ -564,25 +428,6 @@ impl From<Arc<AudioChunkData<f64>>> for AudioChunk {
 }
 
 // ---------- From entre AudioChunkData types (sans BitDepth requis) ----------
-
-// I8 conversions
-impl From<&AudioChunkData<i8>> for Arc<AudioChunkData<i32>> {
-    fn from(chunk: &AudioChunkData<i8>) -> Self {
-        convert_i8_to_i32(chunk)
-    }
-}
-
-impl From<&AudioChunkData<i8>> for Arc<AudioChunkData<f32>> {
-    fn from(chunk: &AudioChunkData<i8>) -> Self {
-        convert_i8_to_f32(chunk)
-    }
-}
-
-impl From<&AudioChunkData<i8>> for Arc<AudioChunkData<f64>> {
-    fn from(chunk: &AudioChunkData<i8>) -> Self {
-        convert_i8_to_f64(chunk)
-    }
-}
 
 // I16 conversions
 impl From<&AudioChunkData<i16>> for Arc<AudioChunkData<i32>> {
@@ -623,11 +468,6 @@ impl From<&AudioChunkData<I24>> for Arc<AudioChunkData<f64>> {
 }
 
 // I32 conversions vers types int (downsampling)
-impl From<&AudioChunkData<i32>> for Arc<AudioChunkData<i8>> {
-    fn from(chunk: &AudioChunkData<i32>) -> Self {
-        convert_i32_to_i8(chunk)
-    }
-}
 
 impl From<&AudioChunkData<i32>> for Arc<AudioChunkData<i16>> {
     fn from(chunk: &AudioChunkData<i32>) -> Self {
@@ -661,12 +501,6 @@ impl From<&AudioChunkData<f32>> for Arc<AudioChunkData<f64>> {
     }
 }
 
-impl From<&AudioChunkData<f32>> for Arc<AudioChunkData<i8>> {
-    fn from(chunk: &AudioChunkData<f32>) -> Self {
-        convert_f32_to_i8(chunk)
-    }
-}
-
 impl From<&AudioChunkData<f32>> for Arc<AudioChunkData<i16>> {
     fn from(chunk: &AudioChunkData<f32>) -> Self {
         convert_f32_to_i16(chunk)
@@ -689,12 +523,6 @@ impl From<&AudioChunkData<f32>> for Arc<AudioChunkData<i32>> {
 impl From<&AudioChunkData<f64>> for Arc<AudioChunkData<f32>> {
     fn from(chunk: &AudioChunkData<f64>) -> Self {
         convert_f64_to_f32(chunk)
-    }
-}
-
-impl From<&AudioChunkData<f64>> for Arc<AudioChunkData<i8>> {
-    fn from(chunk: &AudioChunkData<f64>) -> Self {
-        convert_f64_to_i8(chunk)
     }
 }
 
@@ -785,10 +613,7 @@ mod tests {
 
     #[test]
     fn test_i24_conversions() {
-        let stereo = vec![
-            [I24::new(1_000_000).unwrap(), I24::new(-500_000).unwrap()];
-            10
-        ];
+        let stereo = vec![[I24::new(1_000_000).unwrap(), I24::new(-500_000).unwrap()]; 10];
         let chunk_i24 = AudioChunkData::new(stereo.clone(), 48_000, 0.0);
 
         // I24 → F32 → I24
@@ -855,10 +680,7 @@ mod tests {
     #[test]
     fn test_from_trait_i24() {
         // Test conversions I24 via From
-        let stereo_i24 = vec![
-            [I24::new(1_000_000).unwrap(), I24::new(-500_000).unwrap()];
-            50
-        ];
+        let stereo_i24 = vec![[I24::new(1_000_000).unwrap(), I24::new(-500_000).unwrap()]; 50];
         let chunk_i24 = AudioChunkData::new(stereo_i24, 48_000, 0.0);
 
         // I24 → I32 via From
@@ -892,10 +714,7 @@ mod tests {
     #[test]
     fn test_from_trait_roundtrip() {
         // Test round-trip I24 → F32 → I24 via From
-        let original = vec![
-            [I24::new(1_000_000).unwrap(), I24::new(-500_000).unwrap()];
-            10
-        ];
+        let original = vec![[I24::new(1_000_000).unwrap(), I24::new(-500_000).unwrap()]; 10];
         let chunk_i24 = AudioChunkData::new(original.clone(), 48_000, 0.0);
 
         // I24 → F32 via From

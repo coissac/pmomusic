@@ -14,12 +14,6 @@
 /// ```
 #[macro_export]
 macro_rules! extract_chunk_data {
-    ($chunk:expr, I8) => {
-        match $chunk {
-            $crate::AudioChunk::I8(data) => Some(data),
-            _ => None,
-        }
-    };
     ($chunk:expr, I16) => {
         match $chunk {
             $crate::AudioChunk::I16(data) => Some(data),
@@ -68,7 +62,6 @@ macro_rules! extract_chunk_data {
 macro_rules! match_chunk {
     ($chunk:expr, $data:ident => $body:expr) => {
         match $chunk {
-            $crate::AudioChunk::I8($data) => $body,
             $crate::AudioChunk::I16($data) => $body,
             $crate::AudioChunk::I24($data) => $body,
             $crate::AudioChunk::I32($data) => $body,
@@ -94,24 +87,11 @@ macro_rules! match_chunk {
 macro_rules! map_chunk {
     ($chunk:expr, $data:ident => $transform:expr) => {
         match $chunk {
-            $crate::AudioChunk::I8($data) => {
-                $crate::AudioChunk::I8($transform)
-            }
-            $crate::AudioChunk::I16($data) => {
-                $crate::AudioChunk::I16($transform)
-            }
-            $crate::AudioChunk::I24($data) => {
-                $crate::AudioChunk::I24($transform)
-            }
-            $crate::AudioChunk::I32($data) => {
-                $crate::AudioChunk::I32($transform)
-            }
-            $crate::AudioChunk::F32($data) => {
-                $crate::AudioChunk::F32($transform)
-            }
-            $crate::AudioChunk::F64($data) => {
-                $crate::AudioChunk::F64($transform)
-            }
+            $crate::AudioChunk::I16($data) => $crate::AudioChunk::I16($transform),
+            $crate::AudioChunk::I24($data) => $crate::AudioChunk::I24($transform),
+            $crate::AudioChunk::I32($data) => $crate::AudioChunk::I32($transform),
+            $crate::AudioChunk::F32($data) => $crate::AudioChunk::F32($transform),
+            $crate::AudioChunk::F64($data) => $crate::AudioChunk::F64($transform),
         }
     };
 }
@@ -130,9 +110,6 @@ macro_rules! map_chunk {
 /// ```
 #[macro_export]
 macro_rules! is_chunk_type {
-    ($chunk:expr, I8) => {
-        matches!($chunk, $crate::AudioChunk::I8(_))
-    };
     ($chunk:expr, I16) => {
         matches!($chunk, $crate::AudioChunk::I16(_))
     };
@@ -280,13 +257,15 @@ mod tests {
         let segment = AudioSegment::new_hearbeat(1, 1.0);
         assert!(extract_sync_marker!(&*segment).is_some());
 
-        let audio_segment = AudioSegment::new_chunk(0, 0.0, vec![[100i32, 200i32]], 44100, BitDepth::B32);
+        let audio_segment =
+            AudioSegment::new_chunk(0, 0.0, vec![[100i32, 200i32]], 44100, BitDepth::B32);
         assert!(extract_sync_marker!(&*audio_segment).is_none());
     }
 
     #[test]
     fn test_match_segment() {
-        let audio_segment = AudioSegment::new_chunk(0, 0.0, vec![[100i32, 200i32]], 44100, BitDepth::B32);
+        let audio_segment =
+            AudioSegment::new_chunk(0, 0.0, vec![[100i32, 200i32]], 44100, BitDepth::B32);
 
         let result = match_segment!(&*audio_segment,
             chunk => format!("audio: {}", chunk.type_name()),
