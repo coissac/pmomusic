@@ -32,13 +32,13 @@
 //! ```
 #![allow(async_fn_in_trait)]
 
+use async_trait::async_trait;
+use std::sync::Arc;
 use std::{
     collections::HashMap,
     time::{Duration, SystemTime},
 };
 use tokio::sync::RwLock;
-use std::sync::Arc;
-use async_trait::async_trait;
 
 /// Helper macro for copying a single metadata field.
 macro_rules! copy_a_metadata {
@@ -157,7 +157,7 @@ pub trait TrackMetadata: Send + Sync {
     async fn get_title(&self) -> MetadataResult<String> {
         Err(MetadataError::NotImplemented)
     }
-    
+
     async fn set_title(&mut self, _value: Option<String>) -> MetadataResult<()> {
         Err(MetadataError::NotImplemented)
     }
@@ -165,7 +165,7 @@ pub trait TrackMetadata: Send + Sync {
     async fn get_artist(&self) -> MetadataResult<String> {
         Err(MetadataError::NotImplemented)
     }
-    
+
     async fn set_artist(&mut self, _value: Option<String>) -> MetadataResult<()> {
         Err(MetadataError::NotImplemented)
     }
@@ -173,7 +173,7 @@ pub trait TrackMetadata: Send + Sync {
     async fn get_album(&self) -> MetadataResult<String> {
         Err(MetadataError::NotImplemented)
     }
-    
+
     async fn set_album(&mut self, _value: Option<String>) -> MetadataResult<()> {
         Err(MetadataError::NotImplemented)
     }
@@ -181,7 +181,7 @@ pub trait TrackMetadata: Send + Sync {
     async fn get_year(&self) -> MetadataResult<u32> {
         Err(MetadataError::NotImplemented)
     }
-    
+
     async fn set_year(&mut self, _value: Option<u32>) -> MetadataResult<()> {
         Err(MetadataError::NotImplemented)
     }
@@ -189,7 +189,7 @@ pub trait TrackMetadata: Send + Sync {
     async fn get_duration(&self) -> MetadataResult<Duration> {
         Err(MetadataError::NotImplemented)
     }
-    
+
     async fn set_duration(&mut self, _value: Option<Duration>) -> MetadataResult<()> {
         Err(MetadataError::NotImplemented)
     }
@@ -197,7 +197,7 @@ pub trait TrackMetadata: Send + Sync {
     async fn get_track_id(&self) -> MetadataResult<String> {
         Err(MetadataError::NotImplemented)
     }
-    
+
     async fn set_track_id(&mut self, _value: Option<String>) -> MetadataResult<()> {
         Err(MetadataError::NotImplemented)
     }
@@ -205,7 +205,7 @@ pub trait TrackMetadata: Send + Sync {
     async fn get_channel_id(&self) -> MetadataResult<String> {
         Err(MetadataError::NotImplemented)
     }
-    
+
     async fn set_channel_id(&mut self, _value: Option<String>) -> MetadataResult<()> {
         Err(MetadataError::NotImplemented)
     }
@@ -213,7 +213,7 @@ pub trait TrackMetadata: Send + Sync {
     async fn get_event(&self) -> MetadataResult<String> {
         Err(MetadataError::NotImplemented)
     }
-    
+
     async fn set_event(&mut self, _value: Option<String>) -> MetadataResult<()> {
         Err(MetadataError::NotImplemented)
     }
@@ -221,7 +221,7 @@ pub trait TrackMetadata: Send + Sync {
     async fn get_rating(&self) -> MetadataResult<f32> {
         Err(MetadataError::NotImplemented)
     }
-    
+
     async fn set_rating(&mut self, _value: Option<f32>) -> MetadataResult<()> {
         Err(MetadataError::NotImplemented)
     }
@@ -229,7 +229,7 @@ pub trait TrackMetadata: Send + Sync {
     async fn get_cover_url(&self) -> MetadataResult<String> {
         Err(MetadataError::NotImplemented)
     }
-    
+
     async fn set_cover_url(&mut self, _value: Option<String>) -> MetadataResult<()> {
         Err(MetadataError::NotImplemented)
     }
@@ -237,7 +237,7 @@ pub trait TrackMetadata: Send + Sync {
     async fn get_cover_pk(&self) -> MetadataResult<String> {
         Err(MetadataError::NotImplemented)
     }
-    
+
     async fn set_cover_pk(&mut self, _value: Option<String>) -> MetadataResult<()> {
         Err(MetadataError::NotImplemented)
     }
@@ -245,7 +245,7 @@ pub trait TrackMetadata: Send + Sync {
     async fn get_extra(&self) -> MetadataResult<HashMap<String, String>> {
         Err(MetadataError::NotImplemented)
     }
-    
+
     async fn set_extra(&mut self, _value: Option<HashMap<String, String>>) -> MetadataResult<()> {
         Err(MetadataError::NotImplemented)
     }
@@ -253,7 +253,7 @@ pub trait TrackMetadata: Send + Sync {
     async fn get_updated_at(&self) -> MetadataResult<SystemTime> {
         Err(MetadataError::NotImplemented)
     }
-    
+
     async fn touch(&mut self) -> MetadataResult<()> {
         Err(MetadataError::NotImplemented)
     }
@@ -318,8 +318,8 @@ where
     let src_guard = src.read().await;
 
     copy_metadata!(
-        src_guard, dest, title, artist, album, year, duration, track_id,
-        channel_id, event, rating, cover_url, cover_pk, extra
+        src_guard, dest, title, artist, album, year, duration, track_id, channel_id, event, rating,
+        cover_url, cover_pk, extra
     );
 
     // Try to update the timestamp, but ignore transient errors
@@ -359,7 +359,7 @@ impl TrackMetadata for MemoryTrackMetadata {
     async fn get_title(&self) -> MetadataResult<String> {
         Ok(self.title.clone())
     }
-    
+
     async fn set_title(&mut self, value: Option<String>) -> MetadataResult<()> {
         self.title = value;
         self.touch().await?;
@@ -369,7 +369,7 @@ impl TrackMetadata for MemoryTrackMetadata {
     async fn get_artist(&self) -> MetadataResult<String> {
         Ok(self.artist.clone())
     }
-    
+
     async fn set_artist(&mut self, value: Option<String>) -> MetadataResult<()> {
         self.artist = value;
         self.touch().await?;
@@ -379,7 +379,7 @@ impl TrackMetadata for MemoryTrackMetadata {
     async fn get_album(&self) -> MetadataResult<String> {
         Ok(self.album.clone())
     }
-    
+
     async fn set_album(&mut self, value: Option<String>) -> MetadataResult<()> {
         self.album = value;
         self.touch().await?;
@@ -389,7 +389,7 @@ impl TrackMetadata for MemoryTrackMetadata {
     async fn get_year(&self) -> MetadataResult<u32> {
         Ok(self.year)
     }
-    
+
     async fn set_year(&mut self, value: Option<u32>) -> MetadataResult<()> {
         self.year = value;
         self.touch().await?;
@@ -399,7 +399,7 @@ impl TrackMetadata for MemoryTrackMetadata {
     async fn get_duration(&self) -> MetadataResult<Duration> {
         Ok(self.duration)
     }
-    
+
     async fn set_duration(&mut self, value: Option<Duration>) -> MetadataResult<()> {
         self.duration = value;
         self.touch().await?;
@@ -409,7 +409,7 @@ impl TrackMetadata for MemoryTrackMetadata {
     async fn get_track_id(&self) -> MetadataResult<String> {
         Ok(self.track_id.clone())
     }
-    
+
     async fn set_track_id(&mut self, value: Option<String>) -> MetadataResult<()> {
         self.track_id = value;
         self.touch().await?;
@@ -419,7 +419,7 @@ impl TrackMetadata for MemoryTrackMetadata {
     async fn get_channel_id(&self) -> MetadataResult<String> {
         Ok(self.channel_id.clone())
     }
-    
+
     async fn set_channel_id(&mut self, value: Option<String>) -> MetadataResult<()> {
         self.channel_id = value;
         self.touch().await?;
@@ -429,7 +429,7 @@ impl TrackMetadata for MemoryTrackMetadata {
     async fn get_event(&self) -> MetadataResult<String> {
         Ok(self.event.clone())
     }
-    
+
     async fn set_event(&mut self, value: Option<String>) -> MetadataResult<()> {
         self.event = value;
         self.touch().await?;
@@ -439,7 +439,7 @@ impl TrackMetadata for MemoryTrackMetadata {
     async fn get_rating(&self) -> MetadataResult<f32> {
         Ok(self.rating)
     }
-    
+
     async fn set_rating(&mut self, value: Option<f32>) -> MetadataResult<()> {
         self.rating = value;
         self.touch().await?;
@@ -449,7 +449,7 @@ impl TrackMetadata for MemoryTrackMetadata {
     async fn get_cover_url(&self) -> MetadataResult<String> {
         Ok(self.cover_url.clone())
     }
-    
+
     async fn set_cover_url(&mut self, value: Option<String>) -> MetadataResult<()> {
         self.cover_url = value;
         self.touch().await?;
@@ -459,7 +459,7 @@ impl TrackMetadata for MemoryTrackMetadata {
     async fn get_cover_pk(&self) -> MetadataResult<String> {
         Ok(self.cover_pk.clone())
     }
-    
+
     async fn set_cover_pk(&mut self, value: Option<String>) -> MetadataResult<()> {
         self.cover_pk = value;
         self.touch().await?;
@@ -469,7 +469,7 @@ impl TrackMetadata for MemoryTrackMetadata {
     async fn get_extra(&self) -> MetadataResult<HashMap<String, String>> {
         Ok(self.extra.clone())
     }
-    
+
     async fn set_extra(&mut self, value: Option<HashMap<String, String>>) -> MetadataResult<()> {
         self.extra = value;
         self.touch().await?;
@@ -479,7 +479,7 @@ impl TrackMetadata for MemoryTrackMetadata {
     async fn get_updated_at(&self) -> MetadataResult<SystemTime> {
         Ok(self.updated_at)
     }
-    
+
     async fn touch(&mut self) -> MetadataResult<()> {
         self.updated_at = Some(SystemTime::now());
         Ok(Some(()))
@@ -518,7 +518,10 @@ mod tests {
     async fn test_memory_metadata_set_get_artist() {
         let mut metadata = MemoryTrackMetadata::new();
 
-        metadata.set_artist(Some("Artist Name".to_string())).await.unwrap();
+        metadata
+            .set_artist(Some("Artist Name".to_string()))
+            .await
+            .unwrap();
         assert_eq!(
             metadata.get_artist().await.unwrap(),
             Some("Artist Name".to_string())
@@ -529,7 +532,10 @@ mod tests {
     async fn test_memory_metadata_set_get_album() {
         let mut metadata = MemoryTrackMetadata::new();
 
-        metadata.set_album(Some("Album Name".to_string())).await.unwrap();
+        metadata
+            .set_album(Some("Album Name".to_string()))
+            .await
+            .unwrap();
         assert_eq!(
             metadata.get_album().await.unwrap(),
             Some("Album Name".to_string())
@@ -565,7 +571,10 @@ mod tests {
     async fn test_memory_metadata_set_get_track_id() {
         let mut metadata = MemoryTrackMetadata::new();
 
-        metadata.set_track_id(Some("track123".to_string())).await.unwrap();
+        metadata
+            .set_track_id(Some("track123".to_string()))
+            .await
+            .unwrap();
         assert_eq!(
             metadata.get_track_id().await.unwrap(),
             Some("track123".to_string())
@@ -576,7 +585,10 @@ mod tests {
     async fn test_memory_metadata_set_get_channel_id() {
         let mut metadata = MemoryTrackMetadata::new();
 
-        metadata.set_channel_id(Some("channel456".to_string())).await.unwrap();
+        metadata
+            .set_channel_id(Some("channel456".to_string()))
+            .await
+            .unwrap();
         assert_eq!(
             metadata.get_channel_id().await.unwrap(),
             Some("channel456".to_string())
@@ -587,7 +599,10 @@ mod tests {
     async fn test_memory_metadata_set_get_event() {
         let mut metadata = MemoryTrackMetadata::new();
 
-        metadata.set_event(Some("event789".to_string())).await.unwrap();
+        metadata
+            .set_event(Some("event789".to_string()))
+            .await
+            .unwrap();
         assert_eq!(
             metadata.get_event().await.unwrap(),
             Some("event789".to_string())
@@ -598,7 +613,10 @@ mod tests {
     async fn test_memory_metadata_set_get_cover_url() {
         let mut metadata = MemoryTrackMetadata::new();
 
-        metadata.set_cover_url(Some("https://example.com/cover.jpg".to_string())).await.unwrap();
+        metadata
+            .set_cover_url(Some("https://example.com/cover.jpg".to_string()))
+            .await
+            .unwrap();
         assert_eq!(
             metadata.get_cover_url().await.unwrap(),
             Some("https://example.com/cover.jpg".to_string())
@@ -609,7 +627,10 @@ mod tests {
     async fn test_memory_metadata_set_get_cover_pk() {
         let mut metadata = MemoryTrackMetadata::new();
 
-        metadata.set_cover_pk(Some("pk123".to_string())).await.unwrap();
+        metadata
+            .set_cover_pk(Some("pk123".to_string()))
+            .await
+            .unwrap();
         assert_eq!(
             metadata.get_cover_pk().await.unwrap(),
             Some("pk123".to_string())
@@ -632,7 +653,10 @@ mod tests {
         let mut metadata = MemoryTrackMetadata::new();
 
         metadata.set_title(Some("Title".to_string())).await.unwrap();
-        assert_eq!(metadata.get_title().await.unwrap(), Some("Title".to_string()));
+        assert_eq!(
+            metadata.get_title().await.unwrap(),
+            Some("Title".to_string())
+        );
 
         metadata.set_title(None).await.unwrap();
         assert_eq!(metadata.get_title().await.unwrap(), None);
@@ -670,8 +694,12 @@ mod tests {
     #[tokio::test]
     async fn test_copy_metadata_into_basic() {
         let mut src = MemoryTrackMetadata::new();
-        src.set_title(Some("Source Title".to_string())).await.unwrap();
-        src.set_artist(Some("Source Artist".to_string())).await.unwrap();
+        src.set_title(Some("Source Title".to_string()))
+            .await
+            .unwrap();
+        src.set_artist(Some("Source Artist".to_string()))
+            .await
+            .unwrap();
         src.set_year(Some(2024)).await.unwrap();
 
         let dest = MemoryTrackMetadata::new();
@@ -682,8 +710,14 @@ mod tests {
         copy_metadata_into(&src_lock, &dest_lock).await.unwrap();
 
         let dest_guard = dest_lock.read().await;
-        assert_eq!(dest_guard.get_title().await.unwrap(), Some("Source Title".to_string()));
-        assert_eq!(dest_guard.get_artist().await.unwrap(), Some("Source Artist".to_string()));
+        assert_eq!(
+            dest_guard.get_title().await.unwrap(),
+            Some("Source Title".to_string())
+        );
+        assert_eq!(
+            dest_guard.get_artist().await.unwrap(),
+            Some("Source Artist".to_string())
+        );
         assert_eq!(dest_guard.get_year().await.unwrap(), Some(2024));
     }
 
@@ -701,7 +735,10 @@ mod tests {
         copy_metadata_into(&src_lock, &dest_lock).await.unwrap();
 
         let dest_guard = dest_lock.read().await;
-        assert_eq!(dest_guard.get_title().await.unwrap(), Some("Title".to_string()));
+        assert_eq!(
+            dest_guard.get_title().await.unwrap(),
+            Some("Title".to_string())
+        );
         assert_eq!(dest_guard.get_artist().await.unwrap(), None);
     }
 
@@ -729,12 +766,20 @@ mod tests {
         src.set_artist(Some("Artist".to_string())).await.unwrap();
         src.set_album(Some("Album".to_string())).await.unwrap();
         src.set_year(Some(2024)).await.unwrap();
-        src.set_duration(Some(Duration::from_secs(180))).await.unwrap();
-        src.set_track_id(Some("track123".to_string())).await.unwrap();
-        src.set_channel_id(Some("channel456".to_string())).await.unwrap();
+        src.set_duration(Some(Duration::from_secs(180)))
+            .await
+            .unwrap();
+        src.set_track_id(Some("track123".to_string()))
+            .await
+            .unwrap();
+        src.set_channel_id(Some("channel456".to_string()))
+            .await
+            .unwrap();
         src.set_event(Some("event789".to_string())).await.unwrap();
         src.set_rating(Some(4.5)).await.unwrap();
-        src.set_cover_url(Some("https://example.com/cover.jpg".to_string())).await.unwrap();
+        src.set_cover_url(Some("https://example.com/cover.jpg".to_string()))
+            .await
+            .unwrap();
         src.set_cover_pk(Some("pk123".to_string())).await.unwrap();
 
         let mut extra = HashMap::new();
@@ -749,17 +794,44 @@ mod tests {
         copy_metadata_into(&src_lock, &dest_lock).await.unwrap();
 
         let dest_guard = dest_lock.read().await;
-        assert_eq!(dest_guard.get_title().await.unwrap(), Some("Title".to_string()));
-        assert_eq!(dest_guard.get_artist().await.unwrap(), Some("Artist".to_string()));
-        assert_eq!(dest_guard.get_album().await.unwrap(), Some("Album".to_string()));
+        assert_eq!(
+            dest_guard.get_title().await.unwrap(),
+            Some("Title".to_string())
+        );
+        assert_eq!(
+            dest_guard.get_artist().await.unwrap(),
+            Some("Artist".to_string())
+        );
+        assert_eq!(
+            dest_guard.get_album().await.unwrap(),
+            Some("Album".to_string())
+        );
         assert_eq!(dest_guard.get_year().await.unwrap(), Some(2024));
-        assert_eq!(dest_guard.get_duration().await.unwrap(), Some(Duration::from_secs(180)));
-        assert_eq!(dest_guard.get_track_id().await.unwrap(), Some("track123".to_string()));
-        assert_eq!(dest_guard.get_channel_id().await.unwrap(), Some("channel456".to_string()));
-        assert_eq!(dest_guard.get_event().await.unwrap(), Some("event789".to_string()));
+        assert_eq!(
+            dest_guard.get_duration().await.unwrap(),
+            Some(Duration::from_secs(180))
+        );
+        assert_eq!(
+            dest_guard.get_track_id().await.unwrap(),
+            Some("track123".to_string())
+        );
+        assert_eq!(
+            dest_guard.get_channel_id().await.unwrap(),
+            Some("channel456".to_string())
+        );
+        assert_eq!(
+            dest_guard.get_event().await.unwrap(),
+            Some("event789".to_string())
+        );
         assert_eq!(dest_guard.get_rating().await.unwrap(), Some(4.5));
-        assert_eq!(dest_guard.get_cover_url().await.unwrap(), Some("https://example.com/cover.jpg".to_string()));
-        assert_eq!(dest_guard.get_cover_pk().await.unwrap(), Some("pk123".to_string()));
+        assert_eq!(
+            dest_guard.get_cover_url().await.unwrap(),
+            Some("https://example.com/cover.jpg".to_string())
+        );
+        assert_eq!(
+            dest_guard.get_cover_pk().await.unwrap(),
+            Some("pk123".to_string())
+        );
         assert_eq!(dest_guard.get_extra().await.unwrap(), Some(extra));
     }
 
@@ -781,7 +853,13 @@ mod tests {
 
         // Verify the data was copied
         let dest_guard = dest_lock.read().await;
-        assert_eq!(dest_guard.get_title().await.unwrap(), Some("Title".to_string()));
-        assert_eq!(dest_guard.get_artist().await.unwrap(), Some("Artist".to_string()));
+        assert_eq!(
+            dest_guard.get_title().await.unwrap(),
+            Some("Title".to_string())
+        );
+        assert_eq!(
+            dest_guard.get_artist().await.unwrap(),
+            Some("Artist".to_string())
+        );
     }
 }

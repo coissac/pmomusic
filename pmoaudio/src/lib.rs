@@ -81,12 +81,13 @@ async fn main() {
 use std::simd::*;
 
 mod audio_chunk;
-pub mod events;
-// mod nodes; // Temporairement déplacé hors du module
-mod sync_marker;
 mod audio_segment;
-mod sample_types;
 pub mod conversions;
+pub mod events;
+pub mod nodes;
+mod sample_types;
+mod sync_marker;
+pub mod type_constraints;
 #[macro_use]
 mod macros;
 
@@ -94,16 +95,30 @@ pub mod bit_depth;
 pub mod dsp;
 
 pub use audio_segment::{AudioSegment, _AudioSegment};
-pub use sync_marker::{SyncMarker};
+pub use sync_marker::SyncMarker;
 
-pub use audio_chunk::{AudioChunk, AudioChunkData, db_to_linear, gain_db_from_linear, gain_linear_from_db, linear_to_db};
+pub use audio_chunk::{
+    gain_db_from_linear, gain_linear_from_db, AudioChunk, AudioChunkData, AudioFloatChunk,
+    AudioIntegerChunk,
+};
 pub use bit_depth::{Bit16, Bit24, Bit32, Bit8, BitDepth};
-pub use sample_types::{I24, Sample};
-
+pub use sample_types::{Sample, I24};
+pub use type_constraints::{
+    check_compatibility, SampleType, TypeCategory, TypeMismatch, TypeRequirement,
+};
 
 pub use events::{
     AudioDataEvent, EventPublisher, EventReceiver, NodeEvent, NodeListener, SourceNameUpdateEvent,
     VolumeChangeEvent,
+};
+
+// Exports publics des nodes
+pub use nodes::{
+    converter_nodes::{ToF32Node, ToF64Node, ToI16Node, ToI24Node, ToI32Node},
+    file_source::FileSource,
+    flac_file_sink::{FlacFileSink, FlacFileSinkStats},
+    http_source::HttpSource,
+    AudioError, AudioNode, MultiSubscriberNode, SingleSubscriberNode, TypedAudioNode,
 };
 
 // Nodes temporairement désactivés
@@ -114,13 +129,10 @@ pub use nodes::{
     decoder_node::DecoderNode,
     disk_sink::{AudioFileFormat, DiskSink, DiskSinkConfig, DiskSinkStats},
     dsp_node::DspNode,
-    file_source::FileSource,
-    flac_file_sink::{FlacFileSink, FlacFileSinkStats},
     mpd_sink::{MpdAudioFormat, MpdConfig, MpdHandle, MpdSink, MpdStats},
     sink_node::{SinkNode, SinkStats},
     source_node::SourceNode,
     timer_node::{TimerHandle, TimerNode},
     volume_node::{HardwareVolumeNode, VolumeHandle, VolumeNode},
-    AudioError, AudioNode, MultiSubscriberNode, SingleSubscriberNode,
 };
 */

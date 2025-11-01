@@ -1,16 +1,16 @@
 /// Applique un gain (en dB) sur des échantillons stéréo interleavés `[L,R]`.
-pub fn apply_gain_stereo(samples: &mut [[i32; 2]], gain_db: f64) {
+pub fn apply_gain_stereo_i32(samples: &mut [[i32; 2]], gain_db: f64) {
     let gain = 10f64.powf(gain_db / 20.0);
     let g_q31 = (gain * (1u64 << 31) as f64).round() as i32;
 
     #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
     unsafe {
-        apply_gain_stereo_neon(samples, g_q31);
+        apply_gain_stereo_i32_neon(samples, g_q31);
         return;
     }
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     unsafe {
-        apply_gain_stereo_avx2(samples, g_q31);
+        apply_gain_stereo_i32_avx2(samples, g_q31);
         return;
     }
 
@@ -20,7 +20,7 @@ pub fn apply_gain_stereo(samples: &mut [[i32; 2]], gain_db: f64) {
         all(target_arch = "x86_64", target_feature = "avx2")
     )))]
     {
-        apply_gain_stereo_scalar(samples, g_q31);
+        apply_gain_stereo_i32_scalar(samples, g_q31);
     }
 }
 
@@ -29,7 +29,7 @@ pub fn apply_gain_stereo(samples: &mut [[i32; 2]], gain_db: f64) {
     all(target_arch = "x86_64", target_feature = "avx2")
 )))]
 #[inline(always)]
-fn apply_gain_stereo_scalar(samples: &mut [[i32; 2]], g_q31: i32) {
+fn apply_gain_stereo_i32_scalar(samples: &mut [[i32; 2]], g_q31: i32) {
     for frame in samples.iter_mut() {
         // L
         let prod_l = (frame[0] as i64 * g_q31 as i64 + (1 << 30)) >> 31;
@@ -43,7 +43,7 @@ fn apply_gain_stereo_scalar(samples: &mut [[i32; 2]], g_q31: i32) {
 
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 #[inline(always)]
-unsafe fn apply_gain_stereo_neon(samples: &mut [[i32; 2]], g_q31: i32) {
+unsafe fn apply_gain_stereo_i32_neon(samples: &mut [[i32; 2]], g_q31: i32) {
     use core::arch::aarch64::*;
     let gvec = vdupq_n_s32(g_q31);
     let mut i = 0;
@@ -59,12 +59,12 @@ unsafe fn apply_gain_stereo_neon(samples: &mut [[i32; 2]], g_q31: i32) {
 
     // reste scalaire
     let slice = std::slice::from_raw_parts_mut(ptr.add(i), n - i);
-    apply_gain_scalar(slice, g_q31);
+    apply_gain_i32_scalar(slice, g_q31);
 }
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
-unsafe fn apply_gain_stereo_avx2(samples: &mut [[i32; 2]], g_q31: i32) {
+unsafe fn apply_gain_stereo_i32_avx2(samples: &mut [[i32; 2]], g_q31: i32) {
     use core::arch::x86_64::*;
     let g = _mm256_set1_epi32(g_q31);
     let mut i = 0;
@@ -80,12 +80,12 @@ unsafe fn apply_gain_stereo_avx2(samples: &mut [[i32; 2]], g_q31: i32) {
 
     // reste scalaire
     let slice = std::slice::from_raw_parts_mut(ptr.add(i), n - i);
-    apply_gain_scalar(slice, g_q31);
+    apply_gain_i32_scalar(slice, g_q31);
 }
 
 /// version mono utilisée pour le reste scalaire
 #[inline(always)]
-fn apply_gain_scalar(samples: &mut [i32], g_q31: i32) {
+fn apply_gain_i32_scalar(samples: &mut [i32], g_q31: i32) {
     for s in samples.iter_mut() {
         let prod = (*s as i64 * g_q31 as i64 + (1 << 30)) >> 31;
         *s = prod.clamp(i32::MIN as i64, i32::MAX as i64) as i32;

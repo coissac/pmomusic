@@ -175,23 +175,6 @@ impl TryFrom<i32> for I24 {
 // Implémentations du trait Sample pour tous les types
 // ============================================================================
 
-impl Sample for i8 {
-    const NAME: &'static str = "i8";
-    const MIN: Self = i8::MIN;
-    const MAX: Self = i8::MAX;
-    const ZERO: Self = 0;
-
-    #[inline]
-    fn to_f64(self) -> f64 {
-        self as f64 / 128.0
-    }
-
-    #[inline]
-    fn from_f64(value: f64) -> Self {
-        (value * 127.0).clamp(-128.0, 127.0).round() as i8
-    }
-}
-
 impl Sample for i16 {
     const NAME: &'static str = "i16";
     const MIN: Self = i16::MIN;
@@ -222,7 +205,9 @@ impl Sample for I24 {
 
     #[inline]
     fn from_f64(value: f64) -> Self {
-        let scaled = (value * 8_388_607.0).clamp(-8_388_608.0, 8_388_607.0).round() as i32;
+        let scaled = (value * 8_388_607.0)
+            .clamp(-8_388_608.0, 8_388_607.0)
+            .round() as i32;
         I24(scaled)
     }
 }
@@ -240,7 +225,9 @@ impl Sample for i32 {
 
     #[inline]
     fn from_f64(value: f64) -> Self {
-        (value * 2_147_483_647.0).clamp(-2_147_483_648.0, 2_147_483_647.0).round() as i32
+        (value * 2_147_483_647.0)
+            .clamp(-2_147_483_648.0, 2_147_483_647.0)
+            .round() as i32
     }
 }
 

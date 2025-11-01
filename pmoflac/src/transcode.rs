@@ -15,8 +15,9 @@ use tokio::io::{AsyncRead, AsyncReadExt, BufReader, ReadBuf};
 
 use crate::{
     autodetect::{decode_audio_stream, DecodeAudioError, DecodedAudioStream},
-    encode_flac_stream, prefixed_reader::PrefixedReader, EncoderOptions, FlacEncodedStream,
-    FlacError, PcmFormat, StreamInfo,
+    encode_flac_stream,
+    prefixed_reader::PrefixedReader,
+    EncoderOptions, FlacEncodedStream, FlacError, PcmFormat, StreamInfo,
 };
 
 const READ_CHUNK: usize = 4096;

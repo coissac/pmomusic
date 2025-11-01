@@ -30,12 +30,20 @@ fn example_create_chunks() {
     // Chunk I32 stéréo
     let stereo_i32 = vec![[1000i32, 2000i32], [3000i32, 4000i32]];
     let chunk_i32 = AudioChunkData::new(stereo_i32, 48000, 0.0);
-    println!("Chunk I32: {} frames @ {}Hz", chunk_i32.len(), chunk_i32.sample_rate());
+    println!(
+        "Chunk I32: {} frames @ {}Hz",
+        chunk_i32.len(),
+        chunk_i32.sample_rate()
+    );
 
     // Chunk F32 stéréo (normalisé [-1.0, 1.0])
     let stereo_f32 = vec![[0.5f32, -0.5f32], [0.8f32, -0.8f32]];
     let chunk_f32 = AudioChunkData::new(stereo_f32, 48000, 0.0);
-    println!("Chunk F32: {} frames @ {}Hz", chunk_f32.len(), chunk_f32.sample_rate());
+    println!(
+        "Chunk F32: {} frames @ {}Hz",
+        chunk_f32.len(),
+        chunk_f32.sample_rate()
+    );
 
     // Chunk depuis canaux séparés
     let left = vec![100i32, 200i32, 300i32];
@@ -77,7 +85,10 @@ fn example_conversions() {
     // Utilisation des traits From/Into
     let chunk_i16 = AudioChunkData::new(vec![[1000i16, 2000i16]], 48000, 0.0);
     let chunk_i32_from_i16: std::sync::Arc<AudioChunkData<i32>> = (&*chunk_i16).into();
-    println!("\nConversion I16 → I32 via Into: {} frames", chunk_i32_from_i16.len());
+    println!(
+        "\nConversion I16 → I32 via Into: {} frames",
+        chunk_i32_from_i16.len()
+    );
 
     println!();
 }
@@ -163,30 +174,33 @@ fn example_gain_manipulation() {
     println!(">>> Manipulation du gain\n");
 
     // Créer un segment
-    let segment = AudioSegment::new_chunk(
-        0,
-        0.0,
-        vec![[1000i32, 2000i32]],
-        48000,
-        BitDepth::B32,
-    );
+    let segment = AudioSegment::new_chunk(0, 0.0, vec![[1000i32, 2000i32]], 48000, BitDepth::B32);
 
     println!("Gain initial: {} dB", segment.gain_db().unwrap());
 
     // Définir un gain absolu
     let segment_6db = segment.with_gain_db(6.0).unwrap();
-    println!("Après with_gain_db(6.0): {} dB", segment_6db.gain_db().unwrap());
+    println!(
+        "Après with_gain_db(6.0): {} dB",
+        segment_6db.gain_db().unwrap()
+    );
 
     // Ajuster le gain (relatif)
     let segment_9db = segment_6db.adjust_gain_db(3.0).unwrap();
-    println!("Après adjust_gain_db(+3.0): {} dB", segment_9db.gain_db().unwrap());
+    println!(
+        "Après adjust_gain_db(+3.0): {} dB",
+        segment_9db.gain_db().unwrap()
+    );
 
     // Les segments originaux ne sont pas modifiés (immutabilité)
-    println!("Gain du segment original: {} dB", segment.gain_db().unwrap());
+    println!(
+        "Gain du segment original: {} dB",
+        segment.gain_db().unwrap()
+    );
 
     // Conversion gain linéaire ↔ dB
-    let linear_gain = db_to_linear(6.0);
-    let gain_db = linear_to_db(linear_gain);
+    let linear_gain = gain_linear_from_db(6.0);
+    let gain_db = gain_db_from_linear(linear_gain);
     println!("\n6 dB = {:.4}x (linéaire)", linear_gain);
     println!("{:.4}x = {:.2} dB", linear_gain, gain_db);
 
