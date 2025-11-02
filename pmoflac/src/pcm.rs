@@ -66,9 +66,9 @@ impl PcmFormat {
             384000,
         ];
         if !STANDARD_RATES.contains(&self.sample_rate) {
-            eprintln!(
-                "Warning: non-standard sample rate {} Hz (valid but unusual)",
-                self.sample_rate
+            tracing::warn!(
+                sample_rate = %self.sample_rate,
+                "non-standard sample rate (valid but unusual)"
             );
         }
 
@@ -79,18 +79,18 @@ impl PcmFormat {
 
         // FLAC officially supports 4-32 bits/sample
         if self.bits_per_sample < 4 {
-            eprintln!(
-                "Warning: bits_per_sample={} is less than 4 (unusual for FLAC)",
-                self.bits_per_sample
+            tracing::warn!(
+                bits_per_sample = %self.bits_per_sample,
+                "bits_per_sample is less than 4 (unusual for FLAC)"
             );
         }
 
         // Warn about common bit depths
         const COMMON_BIT_DEPTHS: &[u8] = &[8, 16, 24, 32];
         if !COMMON_BIT_DEPTHS.contains(&self.bits_per_sample) {
-            eprintln!(
-                "Warning: non-standard bit depth {} (valid but unusual)",
-                self.bits_per_sample
+            tracing::warn!(
+                bits_per_sample = %self.bits_per_sample,
+                "non-standard bit depth (valid but unusual)"
             );
         }
 
