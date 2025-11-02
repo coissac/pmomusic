@@ -230,7 +230,7 @@ impl SourceCacheManager {
     {
         let pk = self
             .audio_cache
-            .add_from_reader(source_uri, reader, length, Some(&self.collection_id))
+            .add_from_reader(Some(source_uri), reader, length, Some(&self.collection_id))
             .await
             .map_err(|e| MusicSourceError::CacheError(e.to_string()))?;
         Ok(pk)

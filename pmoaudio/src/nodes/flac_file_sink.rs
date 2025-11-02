@@ -220,7 +220,7 @@ fn generate_track_path(base_path: &Path, track_number: usize) -> PathBuf {
 
 /// Signal retourné par pump_segments indiquant pourquoi l'encodage s'est arrêté.
 enum StopReason {
-    TrackBoundary(Arc<dyn pmometadata::TrackMetadata + Send + Sync>),
+    TrackBoundary(Arc<tokio::sync::RwLock<dyn pmometadata::TrackMetadata>>),
     EndOfStream,
     ChannelClosed,
 }
@@ -229,8 +229,8 @@ enum StopReason {
 /// Retourne une erreur si EndOfStream est reçu avant tout audio.
 async fn wait_for_first_audio_chunk_with_metadata(
     rx: &mut mpsc::Receiver<Arc<AudioSegment>>,
-) -> Result<(Arc<AudioSegment>, Option<Arc<dyn pmometadata::TrackMetadata + Send + Sync>>), AudioError> {
-    let mut track_metadata: Option<Arc<dyn pmometadata::TrackMetadata + Send + Sync>> = None;
+) -> Result<(Arc<AudioSegment>, Option<Arc<tokio::sync::RwLock<dyn pmometadata::TrackMetadata>>>), AudioError> {
+    let mut track_metadata: Option<Arc<tokio::sync::RwLock<dyn pmometadata::TrackMetadata>>> = None;
 
     loop {
         let segment = rx
@@ -583,7 +583,7 @@ mod tests {
             metadata.set_year(Some(2024)).await.unwrap();
 
             let track_boundary =
-                crate::AudioSegment::new_track_boundary(0, 0.0, std::sync::Arc::new(metadata));
+                crate::AudioSegment::new_track_boundary(0, 0.0, std::sync::Arc::new(tokio::sync::RwLock::new(metadata)));
             tx.send(track_boundary).await.unwrap();
 
             // Générer et envoyer des chunks audio

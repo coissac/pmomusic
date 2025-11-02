@@ -234,7 +234,7 @@ impl<C: CacheConfig> Cache<C> {
     ///
     /// # Arguments
     ///
-    /// * `source_uri` - Identifiant logique du flux (pour traçabilité dans la DB)
+    /// * `source_uri` - Identifiant logique optionnel du flux (pour traçabilité dans la DB). Si None, l'origin_url ne sera pas sauvegardée.
     /// * `reader` - Flux asynchrone fournissant les données
     /// * `length` - Taille attendue (si connue)
     /// * `collection` - Collection optionnelle à laquelle appartient l'élément
@@ -244,7 +244,7 @@ impl<C: CacheConfig> Cache<C> {
     /// La clé primaire (pk) du fichier dans le cache, calculée à partir du contenu
     pub async fn add_from_reader<R>(
         &self,
-        source_uri: &str,
+        source_uri: Option<&str>,
         mut reader: R,
         length: Option<u64>,
         collection: Option<&str>,
@@ -259,7 +259,11 @@ impl<C: CacheConfig> Cache<C> {
 
         // 2. Calculer le pk basé sur le contenu
         let pk = crate::cache_trait::pk_from_content_header(&header);
-        tracing::debug!("Computed pk {} for source_uri {}", pk, source_uri);
+        if let Some(uri) = source_uri {
+            tracing::debug!("Computed pk {} for source_uri {}", pk, uri);
+        } else {
+            tracing::debug!("Computed pk {} from reader", pk);
+        }
 
         // 3. Vérifier si le fichier est déjà en cache
         if self.db.get(&pk, false).is_ok() {
@@ -300,7 +304,9 @@ impl<C: CacheConfig> Cache<C> {
         }
 
         self.db.add(&pk, None, collection)?;
-        self.db.set_origin_url(&pk, source_uri);
+        if let Some(uri) = source_uri {
+            self.db.set_origin_url(&pk, uri)?;
+        }
 
         if let Err(e) = self.enforce_limit().await {
             tracing::warn!("Error enforcing cache limit: {}", e);
@@ -354,7 +360,7 @@ impl<C: CacheConfig> Cache<C> {
         let reader = tokio::fs::File::open(&canonical_path).await?;
 
         // add_from_reader() s'occupe de lire les 512 premiers octets et de calculer le pk
-        self.add_from_reader(&file_url, reader, length, collection)
+        self.add_from_reader(Some(&file_url), reader, length, collection)
             .await
     }
 

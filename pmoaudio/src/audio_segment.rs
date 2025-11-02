@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 use pmometadata::TrackMetadata;
 
@@ -158,7 +159,7 @@ impl AudioSegment {
     pub fn new_track_boundary(
         order: u64,
         timestamp_sec: f64,
-        metadata: Arc<dyn TrackMetadata>,
+        metadata: Arc<RwLock<dyn TrackMetadata>>,
     ) -> Arc<Self> {
         let marker = Arc::new(SyncMarker::TrackBoundary {
             metadata: Arc::clone(&metadata),
@@ -299,7 +300,7 @@ impl AudioSegment {
     }
 
     /// Récupère les métadatas du track si c'est un TrackBoundary
-    pub fn as_track_metadata(&self) -> Option<&Arc<dyn TrackMetadata>> {
+    pub fn as_track_metadata(&self) -> Option<&Arc<RwLock<dyn TrackMetadata>>> {
         match &self.segment {
             _AudioSegment::Sync(marker) => match &**marker {
                 SyncMarker::TrackBoundary { metadata } => Some(metadata),

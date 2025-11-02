@@ -107,7 +107,7 @@ impl FileSource {
                 }
 
                 // Émettre TrackBoundary
-                let track_boundary = AudioSegment::new_track_boundary(0, 0.0, Arc::new(metadata));
+                let track_boundary = AudioSegment::new_track_boundary(0, 0.0, Arc::new(tokio::sync::RwLock::new(metadata)));
                 self.subscribers.push(track_boundary).await?;
             }
             Err(e) => {
