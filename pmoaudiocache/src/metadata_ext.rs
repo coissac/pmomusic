@@ -3,8 +3,11 @@
 //! Ce module utilise la macro `define_metadata_properties!` de pmocache
 //! pour générer automatiquement des méthodes d'accès typées aux métadonnées audio.
 
-use crate::AudioConfig;
+use crate::{AudioCacheTrackMetadata, AudioConfig};
 use pmocache::define_metadata_properties;
+use pmometadata::TrackMetadata;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 // Génération automatique du trait AudioMetadataExt avec toutes les propriétés audio
 define_metadata_properties! {
@@ -31,5 +34,17 @@ define_metadata_properties! {
         bitrate: i64 as i64,
         channels: i64 as i64,
         bit_depth: i64 as i64,
+    }
+}
+
+/// Fournit un accès direct à une implémentation `TrackMetadata` basée sur le cache.
+pub trait AudioTrackMetadataExt {
+    fn track_metadata(&self, pk: impl Into<String>) -> Arc<RwLock<dyn TrackMetadata>>;
+}
+
+impl AudioTrackMetadataExt for Arc<pmocache::Cache<AudioConfig>> {
+    fn track_metadata(&self, pk: impl Into<String>) -> Arc<RwLock<dyn TrackMetadata>> {
+        let metadata = AudioCacheTrackMetadata::new(self.clone(), pk);
+        Arc::new(RwLock::new(metadata))
     }
 }

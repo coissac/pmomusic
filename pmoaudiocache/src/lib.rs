@@ -79,7 +79,9 @@
 pub mod cache;
 pub mod metadata;
 pub mod metadata_ext;
+pub mod nodes;
 pub mod streaming;
+pub mod track_metadata;
 
 #[cfg(feature = "pmoserver")]
 pub mod openapi;
@@ -90,7 +92,9 @@ pub mod config_ext;
 // Re-exports principaux
 pub use cache::{add_with_metadata_extraction, get_metadata, new_cache, AudioConfig, Cache};
 pub use metadata::AudioMetadata;
-pub use metadata_ext::AudioMetadataExt;
+pub use metadata_ext::{AudioMetadataExt, AudioTrackMetadataExt};
+pub use nodes::{FlacCacheSink, FlacCacheSinkStats};
+pub use track_metadata::AudioCacheTrackMetadata;
 
 #[cfg(feature = "pmoconfig")]
 pub use config_ext::AudioCacheConfigExt;

@@ -2616,13 +2616,17 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bytemuck",
+ "futures-util",
  "paste",
  "pmoflac",
  "pmometadata",
+ "reqwest",
  "soxr",
  "tempfile",
  "tokio",
  "tokio-test",
+ "tokio-util",
+ "wiremock",
 ]
 
 [[package]]
@@ -2637,6 +2641,7 @@ dependencies = [
  "futures-util",
  "lofty",
  "paste",
+ "pmoaudio",
  "pmocache",
  "pmoconfig",
  "pmodidl",

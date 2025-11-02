@@ -2,12 +2,13 @@ use std::{
     ffi::{c_void, CString},
     io,
     pin::Pin,
+    sync::Arc,
     task::{Context, Poll},
 };
 
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
-    sync::{mpsc, oneshot},
+    sync::{mpsc, oneshot, RwLock},
 };
 
 use crate::{
@@ -85,8 +86,6 @@ impl tokio::io::AsyncRead for FlacEncodedStream {
     }
 }
 
-use std::sync::Arc;
-
 /// Extracted metadata values for FLAC encoding.
 ///
 /// This is a simple struct containing the extracted values from TrackMetadata,
@@ -121,7 +120,7 @@ pub struct EncoderOptions {
 
     /// Metadata to embed in the FLAC file (Vorbis Comments).
     /// Default: None (no metadata)
-    pub metadata: Option<Arc<dyn pmometadata::TrackMetadata + Send + Sync>>,
+    pub metadata: Option<Arc<RwLock<dyn pmometadata::TrackMetadata>>>,
 }
 
 impl Default for EncoderOptions {
@@ -246,7 +245,8 @@ where
     }
 
     // Extract metadata before spawn_blocking (since TrackMetadata has async methods)
-    let extracted_metadata = if let Some(metadata) = &options.metadata {
+    let extracted_metadata = if let Some(metadata_lock) = &options.metadata {
+        let metadata = metadata_lock.read().await;
         let title = metadata.get_title().await.ok().flatten();
         let artist = metadata.get_artist().await.ok().flatten();
         let album = metadata.get_album().await.ok().flatten();
