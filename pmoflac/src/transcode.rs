@@ -15,7 +15,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, BufReader, ReadBuf};
 
 use crate::{
     autodetect::{decode_audio_stream, DecodeAudioError, DecodedAudioStream},
-    encode_flac_stream, EncoderOptions, FlacEncodedStream, FlacError, PcmFormat, StreamInfo,
+    encode_flac_stream, prefixed_reader::PrefixedReader, EncoderOptions, FlacEncodedStream,
+    FlacError, PcmFormat, StreamInfo,
 };
 
 const READ_CHUNK: usize = 4096;
@@ -304,43 +305,6 @@ fn parse_flac_stream_info(block: &[u8]) -> Option<StreamInfo> {
         max_block_size,
         min_block_size,
     })
-}
-
-struct PrefixedReader<R> {
-    prefix: Vec<u8>,
-    position: usize,
-    reader: R,
-}
-
-impl<R> PrefixedReader<R> {
-    fn new(prefix: Vec<u8>, reader: R) -> Self {
-        Self {
-            prefix,
-            position: 0,
-            reader,
-        }
-    }
-}
-
-unsafe impl<R: Send> Send for PrefixedReader<R> {}
-impl<R: Unpin> Unpin for PrefixedReader<R> {}
-
-impl<R: AsyncRead + Unpin> AsyncRead for PrefixedReader<R> {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        if self.position < self.prefix.len() && buf.remaining() > 0 {
-            let remaining = self.prefix.len() - self.position;
-            let to_copy = remaining.min(buf.remaining());
-            buf.put_slice(&self.prefix[self.position..self.position + to_copy]);
-            self.position += to_copy;
-            return Poll::Ready(Ok(()));
-        }
-
-        Pin::new(&mut self.reader).poll_read(cx, buf)
-    }
 }
 
 #[cfg(test)]

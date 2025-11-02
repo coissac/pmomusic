@@ -1,5 +1,5 @@
 use std::{
-    cmp, io,
+    io,
     pin::Pin,
     task::{Context, Poll},
 };
@@ -8,9 +8,9 @@ use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
 
 use crate::{
     decode_aiff_stream, decode_flac_stream, decode_mp3_stream, decode_ogg_opus_stream,
-    decode_ogg_vorbis_stream, decode_wav_stream, pcm::StreamInfo, AiffDecodedStream, AiffError,
-    FlacDecodedStream, FlacError, Mp3DecodedStream, Mp3Error, OggDecodedStream, OggError,
-    OggOpusDecodedStream, OggOpusError, WavDecodedStream, WavError,
+    decode_ogg_vorbis_stream, decode_wav_stream, pcm::StreamInfo, prefixed_reader::PrefixedReader,
+    AiffDecodedStream, AiffError, FlacDecodedStream, FlacError, Mp3DecodedStream, Mp3Error,
+    OggDecodedStream, OggError, OggOpusDecodedStream, OggOpusError, WavDecodedStream, WavError,
 };
 
 const MAX_SNIFF_BYTES: usize = 64 * 1024;
@@ -290,39 +290,3 @@ enum DetectedFormat {
     Wav,
     Aiff,
 }
-
-struct PrefixedReader<R> {
-    prefix: Vec<u8>,
-    position: usize,
-    reader: R,
-}
-
-impl<R> PrefixedReader<R> {
-    fn new(prefix: Vec<u8>, reader: R) -> Self {
-        Self {
-            prefix,
-            position: 0,
-            reader,
-        }
-    }
-}
-
-impl<R: AsyncRead + Unpin> AsyncRead for PrefixedReader<R> {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        if self.position < self.prefix.len() && buf.remaining() > 0 {
-            let remaining = self.prefix.len() - self.position;
-            let to_copy = cmp::min(remaining, buf.remaining());
-            buf.put_slice(&self.prefix[self.position..self.position + to_copy]);
-            self.position += to_copy;
-            return Poll::Ready(Ok(()));
-        }
-        Pin::new(&mut self.reader).poll_read(cx, buf)
-    }
-}
-
-impl<R: Unpin> Unpin for PrefixedReader<R> {}
-unsafe impl<R: Send> Send for PrefixedReader<R> {}
