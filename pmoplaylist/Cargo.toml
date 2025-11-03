@@ -8,6 +8,9 @@ edition = "2021"
 pmoaudiocache = { path = "../pmoaudiocache" }
 pmocache = { path = "../pmocache" }
 
+# Métadonnées
+pmometadata = { path = "../pmometadata" }
+
 # DIDL-Lite pour UPnP
 pmodidl = { path = "../pmodidl" }
 
