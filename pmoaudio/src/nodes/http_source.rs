@@ -763,7 +763,7 @@ mod tests {
             if let Some(marker) = segment.as_sync_marker() {
                 if let crate::SyncMarker::TrackBoundary { metadata, .. } = &**marker {
                     // Vérifier que le titre extrait est "Test Radio Stream"
-                    if let Some(title) = metadata.get_title().await.ok().flatten() {
+                    if let Some(title) = metadata.read().await.get_title().await.ok().flatten() {
                         assert_eq!(title, "Test Radio Stream");
                         found_metadata = true;
                     }
@@ -888,7 +888,7 @@ mod tests {
         while let Some(segment) = rx.recv().await {
             if let Some(marker) = segment.as_sync_marker() {
                 if let crate::SyncMarker::TrackBoundary { metadata, .. } = &**marker {
-                    if let Some(title) = metadata.get_title().await.ok().flatten() {
+                    if let Some(title) = metadata.read().await.get_title().await.ok().flatten() {
                         assert_eq!(title, "my-song.flac");
                         found_title = true;
                     }

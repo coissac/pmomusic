@@ -274,24 +274,31 @@ mod tests {
         let pk = "track-test";
         cache.db.add(pk, None, None).unwrap();
 
-        let mut meta = cache.track_metadata(pk);
+        let track = cache.track_metadata(pk);
 
-        meta.set_title(Some("Title".into())).await.unwrap();
-        meta.set_artist(Some("Artist".into())).await.unwrap();
-        meta.set_album(Some("Album".into())).await.unwrap();
-        meta.set_year(Some(2024)).await.unwrap();
-        meta.set_duration(Some(Duration::from_secs(90)))
-            .await
-            .unwrap();
-        meta.set_track_id(Some("trk".into())).await.unwrap();
-        meta.set_channel_id(Some("chn".into())).await.unwrap();
-        meta.set_event(Some("event".into())).await.unwrap();
-        meta.set_rating(Some(4.5)).await.unwrap();
-        meta.set_cover_url(Some("http://cover".into()))
-            .await
-            .unwrap();
-        meta.set_cover_pk(Some("cover123".into())).await.unwrap();
+        {
+            let mut meta = track.write().await;
 
+            meta.set_title(Some("Title".into())).await.unwrap();
+            meta.set_artist(Some("Artist".into())).await.unwrap();
+            meta.set_album(Some("Album".into())).await.unwrap();
+            meta.set_year(Some(2024)).await.unwrap();
+            meta.set_duration(Some(Duration::from_secs(90)))
+                .await
+                .unwrap();
+            meta.set_track_id(Some("trk".into())).await.unwrap();
+            meta.set_channel_id(Some("chn".into())).await.unwrap();
+            meta.set_event(Some("event".into())).await.unwrap();
+            meta.set_rating(Some(4.5)).await.unwrap();
+            meta.set_cover_url(Some("http://cover".into()))
+                .await
+                .unwrap();
+            meta.set_cover_pk(Some("cover123".into())).await.unwrap();
+        }
+        {
+            let meta  = track.read().await;
+
+        
         assert_eq!(meta.get_title().await.unwrap(), Some("Title".into()));
         assert_eq!(meta.get_artist().await.unwrap(), Some("Artist".into()));
         assert_eq!(meta.get_album().await.unwrap(), Some("Album".into()));
@@ -310,5 +317,6 @@ mod tests {
         );
         assert_eq!(meta.get_cover_pk().await.unwrap(), Some("cover123".into()));
         assert!(meta.get_updated_at().await.unwrap().is_some());
+    }
     }
 }

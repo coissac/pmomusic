@@ -19,6 +19,7 @@ use tokio::{
     sync::{mpsc, RwLock},
 };
 use tokio_util::sync::CancellationToken;
+use tracing::warn;
 
 /// Sink qui encode les `AudioSegment` reçus au format FLAC et les stocke dans le cache audio.
 ///
@@ -33,6 +34,7 @@ pub struct FlacCacheSink {
     tx: mpsc::Sender<Arc<AudioSegment>>,
     rx: mpsc::Receiver<Arc<AudioSegment>>,
     cache: Arc<pmoaudiocache::Cache>,
+    covers: Arc<pmocovers::Cache>,
     collection: Option<String>,
     encoder_options: EncoderOptions,
     pcm_buffer_capacity: usize,
@@ -46,8 +48,8 @@ impl FlacCacheSink {
     /// # Arguments
     ///
     /// * `cache` - Arc vers le cache audio où stocker les fichiers FLAC encodés
-    pub fn new(cache: Arc<pmoaudiocache::Cache>) -> Self {
-        Self::with_channel_size(cache, DEFAULT_CHANNEL_SIZE)
+    pub fn new(cache: Arc<pmoaudiocache::Cache>, covers: Arc<pmocovers::Cache>) -> Self {
+        Self::with_channel_size(cache, covers, DEFAULT_CHANNEL_SIZE)
     }
 
     /// Crée un sink FLAC cache avec une taille de buffer MPSC personnalisée.
@@ -56,8 +58,12 @@ impl FlacCacheSink {
     ///
     /// * `cache` - Arc vers le cache audio
     /// * `channel_size` - Taille du buffer MPSC (nombre de segments en attente avant backpressure)
-    pub fn with_channel_size(cache: Arc<pmoaudiocache::Cache>, channel_size: usize) -> Self {
-        Self::with_config(cache, channel_size, EncoderOptions::default(), None)
+    pub fn with_channel_size(
+        cache: Arc<pmoaudiocache::Cache>,
+        covers: Arc<pmocovers::Cache>,
+        channel_size: usize,
+    ) -> Self {
+        Self::with_config(cache, covers, channel_size, EncoderOptions::default(), None)
     }
 
     /// Crée un sink FLAC cache avec une configuration complète.
@@ -70,6 +76,7 @@ impl FlacCacheSink {
     /// * `collection` - Collection optionnelle à laquelle appartiennent les fichiers
     pub fn with_config(
         cache: Arc<pmoaudiocache::Cache>,
+        covers: Arc<pmocovers::Cache>,
         channel_size: usize,
         encoder_options: EncoderOptions,
         collection: Option<String>,
@@ -79,6 +86,7 @@ impl FlacCacheSink {
             tx,
             rx,
             cache,
+            covers,
             collection,
             encoder_options,
             pcm_buffer_capacity: 8,
@@ -109,6 +117,7 @@ impl FlacCacheSink {
             tx: _,
             mut rx,
             cache,
+            covers,
             collection,
             encoder_options,
             pcm_buffer_capacity,
@@ -182,7 +191,9 @@ impl FlacCacheSink {
             let copy_future = async {
                 tokio::io::copy(&mut flac_stream, &mut flac_buffer)
                     .await
-                    .map_err(|e| AudioError::ProcessingError(format!("FLAC write failed: {}", e)))?;
+                    .map_err(|e| {
+                        AudioError::ProcessingError(format!("FLAC write failed: {}", e))
+                    })?;
                 flac_stream
                     .wait()
                     .await
@@ -191,8 +202,10 @@ impl FlacCacheSink {
             };
 
             // Attendre les deux tâches en parallèle
-            let (copy_result, pump_result): (Result<(), AudioError>, Result<(u64, u64, f64, StopReason), AudioError>) =
-                tokio::join!(copy_future, pump_future);
+            let (copy_result, pump_result): (
+                Result<(), AudioError>,
+                Result<(u64, u64, f64, StopReason), AudioError>,
+            ) = tokio::join!(copy_future, pump_future);
             copy_result?;
             let (chunks, samples, duration_sec, stop_reason) = pump_result?;
 
@@ -200,7 +213,12 @@ impl FlacCacheSink {
             let flac_reader = Cursor::new(flac_buffer.clone());
             let collection_ref = collection.as_deref();
             let pk = cache
-                .add_from_reader(None, flac_reader, Some(flac_buffer.len() as u64), collection_ref)
+                .add_from_reader(
+                    None,
+                    flac_reader,
+                    Some(flac_buffer.len() as u64),
+                    collection_ref,
+                )
                 .await
                 .map_err(|e| {
                     AudioError::ProcessingError(format!("Failed to add to cache: {}", e))
@@ -219,15 +237,42 @@ impl FlacCacheSink {
                             e
                         ))
                     })?;
+
+                let url = match dest_metadata.read().await.get_cover_url().await {
+                    Ok(url) => url,
+                    Err(e) if e.is_transient() => None,
+                    Err(_) => {
+                        warn!("Cannot obtain cover for audio asset {}", pk);
+                        None
+                    }
+                };
+
+                if url.is_some() {
+                    let _ = match covers
+                        .add_from_url(&url.unwrap(), collection.as_deref())
+                        .await
+                    {
+                        Ok(pk_covers) => {
+                            dest_metadata
+                                .write()
+                                .await
+                                .set_cover_pk(Some(pk_covers))
+                                .await
+                        }
+                        Err(_) => {
+                            warn!("Cannot obtain cover for audio asset {}", pk);
+                            Ok(Some(()))
+                        }
+                    };
+                }
             }
 
             // Ajouter à la playlist si enregistrée
             #[cfg(feature = "playlist")]
             if let Some(ref playlist_handle) = playlist_handle {
-                playlist_handle.push(pk.clone()).await
-                    .map_err(|e| AudioError::ProcessingError(
-                        format!("Failed to add to playlist: {}", e)
-                    ))?;
+                playlist_handle.push(pk.clone()).await.map_err(|e| {
+                    AudioError::ProcessingError(format!("Failed to add to playlist: {}", e))
+                })?;
             }
 
             // Ajouter les stats de cette track
@@ -600,10 +645,7 @@ impl AudioPipelineNode for FlacCacheSink {
         panic!("FlacCacheSink is a terminal sink and cannot have children");
     }
 
-    async fn run(
-        self: Box<Self>,
-        stop_token: CancellationToken,
-    ) -> Result<(), AudioError> {
+    async fn run(self: Box<Self>, stop_token: CancellationToken) -> Result<(), AudioError> {
         self.run_internal(stop_token).await?;
         Ok(())
     }
