@@ -1,11 +1,11 @@
 //! Sink qui encode les AudioSegment au format FLAC et les stocke dans le cache audio
 
-use crate::metadata_ext::AudioTrackMetadataExt;
 use pmoaudio::{
     nodes::{AudioError, TypedAudioNode, DEFAULT_CHANNEL_SIZE},
     type_constraints::TypeRequirement,
-    AudioChunk, AudioSegment, SyncMarker, _AudioSegment,
+    AudioChunk, AudioPipelineNode, AudioSegment, SyncMarker, _AudioSegment,
 };
+use pmoaudiocache::AudioTrackMetadataExt;
 use pmoflac::{encode_flac_stream, EncoderOptions, PcmFormat};
 use std::{
     collections::VecDeque,
@@ -18,6 +18,7 @@ use tokio::{
     io::{self, AsyncRead, ReadBuf},
     sync::{mpsc, RwLock},
 };
+use tokio_util::sync::CancellationToken;
 
 /// Sink qui encode les `AudioSegment` reçus au format FLAC et les stocke dans le cache audio.
 ///
@@ -26,13 +27,17 @@ use tokio::{
 /// - Crée une nouvelle entrée de cache pour chaque TrackBoundary rencontré
 /// - Adapte automatiquement l'encodage FLAC selon la profondeur de bit du chunk (8/16/24/32-bit)
 /// - Copie les métadonnées du TrackBoundary dans le cache après ingestion
+/// - Peut optionnellement ajouter les tracks à une playlist via `register_playlist()`
 /// - Termine l'encodage proprement quand il reçoit EndOfStream
 pub struct FlacCacheSink {
+    tx: mpsc::Sender<Arc<AudioSegment>>,
     rx: mpsc::Receiver<Arc<AudioSegment>>,
-    cache: Arc<crate::Cache>,
+    cache: Arc<pmoaudiocache::Cache>,
     collection: Option<String>,
     encoder_options: EncoderOptions,
     pcm_buffer_capacity: usize,
+    #[cfg(feature = "playlist")]
+    playlist_handle: Option<Arc<pmoplaylist::WriteHandle>>,
 }
 
 impl FlacCacheSink {
@@ -41,7 +46,7 @@ impl FlacCacheSink {
     /// # Arguments
     ///
     /// * `cache` - Arc vers le cache audio où stocker les fichiers FLAC encodés
-    pub fn new(cache: Arc<crate::Cache>) -> (Self, mpsc::Sender<Arc<AudioSegment>>) {
+    pub fn new(cache: Arc<pmoaudiocache::Cache>) -> Self {
         Self::with_channel_size(cache, DEFAULT_CHANNEL_SIZE)
     }
 
@@ -51,10 +56,7 @@ impl FlacCacheSink {
     ///
     /// * `cache` - Arc vers le cache audio
     /// * `channel_size` - Taille du buffer MPSC (nombre de segments en attente avant backpressure)
-    pub fn with_channel_size(
-        cache: Arc<crate::Cache>,
-        channel_size: usize,
-    ) -> (Self, mpsc::Sender<Arc<AudioSegment>>) {
+    pub fn with_channel_size(cache: Arc<pmoaudiocache::Cache>, channel_size: usize) -> Self {
         Self::with_config(cache, channel_size, EncoderOptions::default(), None)
     }
 
@@ -67,33 +69,51 @@ impl FlacCacheSink {
     /// * `encoder_options` - Options d'encodage FLAC (compression, etc.)
     /// * `collection` - Collection optionnelle à laquelle appartiennent les fichiers
     pub fn with_config(
-        cache: Arc<crate::Cache>,
+        cache: Arc<pmoaudiocache::Cache>,
         channel_size: usize,
         encoder_options: EncoderOptions,
         collection: Option<String>,
-    ) -> (Self, mpsc::Sender<Arc<AudioSegment>>) {
+    ) -> Self {
         let (tx, rx) = mpsc::channel(channel_size);
-        let sink = Self {
+        Self {
+            tx,
             rx,
             cache,
             collection,
             encoder_options,
             pcm_buffer_capacity: 8,
-        };
-        (sink, tx)
+            #[cfg(feature = "playlist")]
+            playlist_handle: None,
+        }
     }
 
-    /// Lance l'encodage et l'ingestion dans le cache.
+    /// Enregistre une playlist pour recevoir automatiquement les tracks sauvées dans le cache.
+    ///
+    /// # Arguments
+    ///
+    /// * `handle` - WriteHandle de la playlist qui recevra les pk des tracks
+    #[cfg(feature = "playlist")]
+    pub fn register_playlist(&mut self, handle: pmoplaylist::WriteHandle) {
+        self.playlist_handle = Some(Arc::new(handle));
+    }
+
+    /// Lance l'encodage et l'ingestion dans le cache (version interne).
     ///
     /// Cette méthode crée une nouvelle entrée de cache pour chaque TrackBoundary rencontré.
     /// Les métadonnées du TrackBoundary sont copiées dans le cache après l'ingestion.
-    pub async fn run(self) -> Result<FlacCacheSinkStats, AudioError> {
+    async fn run_internal(
+        self,
+        stop_token: CancellationToken,
+    ) -> Result<FlacCacheSinkStats, AudioError> {
         let FlacCacheSink {
+            tx: _,
             mut rx,
             cache,
             collection,
             encoder_options,
             pcm_buffer_capacity,
+            #[cfg(feature = "playlist")]
+            playlist_handle,
         } = self;
 
         let mut all_tracks = Vec::new();
@@ -102,7 +122,7 @@ impl FlacCacheSink {
         loop {
             // Attendre le premier chunk audio pour cette track, en capturant les métadonnées du TrackBoundary
             let (first_segment, track_metadata) =
-                match wait_for_first_audio_chunk_with_metadata(&mut rx).await {
+                match wait_for_first_audio_chunk_with_metadata(&mut rx, &stop_token).await {
                     Ok(result) => result,
                     Err(_) => {
                         // Plus d'audio disponible
@@ -157,6 +177,7 @@ impl FlacCacheSink {
                 pcm_tx,
                 bits_per_sample,
                 sample_rate,
+                &stop_token,
             );
             let copy_future = async {
                 tokio::io::copy(&mut flac_stream, &mut flac_buffer)
@@ -200,6 +221,15 @@ impl FlacCacheSink {
                     })?;
             }
 
+            // Ajouter à la playlist si enregistrée
+            #[cfg(feature = "playlist")]
+            if let Some(ref playlist_handle) = playlist_handle {
+                playlist_handle.push(pk.clone()).await
+                    .map_err(|e| AudioError::ProcessingError(
+                        format!("Failed to add to playlist: {}", e)
+                    ))?;
+            }
+
             // Ajouter les stats de cette track
             all_tracks.push(TrackStats {
                 pk,
@@ -238,6 +268,7 @@ enum StopReason {
 /// Retourne une erreur si EndOfStream est reçu avant tout audio.
 async fn wait_for_first_audio_chunk_with_metadata(
     rx: &mut mpsc::Receiver<Arc<AudioSegment>>,
+    stop_token: &CancellationToken,
 ) -> Result<
     (
         Arc<AudioSegment>,
@@ -248,10 +279,14 @@ async fn wait_for_first_audio_chunk_with_metadata(
     let mut track_metadata: Option<Arc<RwLock<dyn pmometadata::TrackMetadata>>> = None;
 
     loop {
-        let segment = rx
-            .recv()
-            .await
-            .ok_or_else(|| AudioError::ProcessingError("No audio data received".into()))?;
+        let segment = tokio::select! {
+            result = rx.recv() => {
+                result.ok_or_else(|| AudioError::ProcessingError("No audio data received".into()))?
+            }
+            _ = stop_token.cancelled() => {
+                return Err(AudioError::ProcessingError("Cancelled".into()));
+            }
+        };
 
         match &segment.segment {
             _AudioSegment::Chunk(chunk) => {
@@ -260,8 +295,8 @@ async fn wait_for_first_audio_chunk_with_metadata(
                 }
                 return Ok((segment, track_metadata));
             }
-            _AudioSegment::Sync(marker) => match **marker {
-                SyncMarker::TrackBoundary { ref metadata, .. } => {
+            _AudioSegment::Sync(marker) => match &**marker {
+                SyncMarker::TrackBoundary { metadata, .. } => {
                     // Capturer les métadonnées du TrackBoundary
                     track_metadata = Some(metadata.clone());
                     continue;
@@ -287,6 +322,7 @@ async fn pump_track_segments(
     pcm_tx: mpsc::Sender<Vec<u8>>,
     bits_per_sample: u8,
     expected_rate: u32,
+    stop_token: &CancellationToken,
 ) -> Result<(u64, u64, f64, StopReason), AudioError> {
     let mut chunks = 0u64;
     let mut samples = 0u64;
@@ -308,9 +344,17 @@ async fn pump_track_segments(
 
     // Boucle sur les segments suivants
     loop {
-        let segment = match rx.recv().await {
-            Some(seg) => seg,
-            None => {
+        let segment = tokio::select! {
+            result = rx.recv() => {
+                match result {
+                    Some(seg) => seg,
+                    None => {
+                        drop(pcm_tx); // Fermer le channel PCM
+                        return Ok((chunks, samples, duration_sec, StopReason::ChannelClosed));
+                    }
+                }
+            }
+            _ = stop_token.cancelled() => {
                 drop(pcm_tx); // Fermer le channel PCM
                 return Ok((chunks, samples, duration_sec, StopReason::ChannelClosed));
             }
@@ -327,7 +371,7 @@ async fn pump_track_segments(
                     )));
                 }
 
-                let pcm_bytes = chunk_to_pcm_bytes(chunk, bits_per_sample)?;
+                let pcm_bytes = chunk_to_pcm_bytes(&chunk, bits_per_sample)?;
                 if pcm_bytes.is_empty() {
                     continue;
                 }
@@ -544,6 +588,25 @@ pub struct TrackStats {
 #[derive(Debug, Clone)]
 pub struct FlacCacheSinkStats {
     pub tracks: Vec<TrackStats>,
+}
+
+#[async_trait::async_trait]
+impl AudioPipelineNode for FlacCacheSink {
+    fn get_tx(&self) -> Option<mpsc::Sender<Arc<AudioSegment>>> {
+        Some(self.tx.clone())
+    }
+
+    fn register(&mut self, _child: Box<dyn AudioPipelineNode>) {
+        panic!("FlacCacheSink is a terminal sink and cannot have children");
+    }
+
+    async fn run(
+        self: Box<Self>,
+        stop_token: CancellationToken,
+    ) -> Result<(), AudioError> {
+        self.run_internal(stop_token).await?;
+        Ok(())
+    }
 }
 
 impl TypedAudioNode for FlacCacheSink {

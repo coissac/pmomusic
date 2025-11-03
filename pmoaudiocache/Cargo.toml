@@ -13,7 +13,6 @@ pmodidl = { path = "../pmodidl" }
 # Streaming FLAC asynchrone
 pmoflac = { path = "../pmoflac" }
 pmometadata = { path = "../pmometadata" }
-pmoaudio = { path = "../pmoaudio" }
 
 # Base de données
 rusqlite = { version = "0.37", features = ["bundled"] }

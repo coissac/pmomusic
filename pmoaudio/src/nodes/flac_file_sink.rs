@@ -1,7 +1,7 @@
 use crate::{
     nodes::{AudioError, TypedAudioNode, DEFAULT_CHANNEL_SIZE},
     type_constraints::TypeRequirement,
-    AudioChunk, AudioSegment, SyncMarker,
+    AudioChunk, AudioPipelineNode, AudioSegment, SyncMarker,
 };
 use pmoflac::{encode_flac_stream, EncoderOptions, PcmFormat};
 use std::{
@@ -16,6 +16,7 @@ use tokio::{
     io::{self, AsyncRead, AsyncWriteExt, ReadBuf},
     sync::mpsc,
 };
+use tokio_util::sync::CancellationToken;
 
 /// Sink qui encode les `AudioSegment` reçus au format FLAC.
 ///
@@ -25,6 +26,7 @@ use tokio::{
 /// - Adapte automatiquement l'encodage FLAC selon la profondeur de bit du chunk (8/16/24/32-bit)
 /// - Termine l'encodage proprement quand il reçoit EndOfStream
 pub struct FlacFileSink {
+    tx: mpsc::Sender<Arc<AudioSegment>>,
     rx: mpsc::Receiver<Arc<AudioSegment>>,
     base_path: PathBuf,
     encoder_options: EncoderOptions,
@@ -38,7 +40,7 @@ impl FlacFileSink {
     ///
     /// * `base_path` - Chemin de base pour les fichiers FLAC. Si des TrackBoundary sont reçus,
     ///   des fichiers seront créés avec des suffixes (_01, _02, etc.)
-    pub fn new<P: Into<PathBuf>>(base_path: P) -> (Self, mpsc::Sender<Arc<AudioSegment>>) {
+    pub fn new<P: Into<PathBuf>>(base_path: P) -> Self {
         Self::with_channel_size(base_path, DEFAULT_CHANNEL_SIZE)
     }
 
@@ -51,7 +53,7 @@ impl FlacFileSink {
     pub fn with_channel_size<P: Into<PathBuf>>(
         base_path: P,
         channel_size: usize,
-    ) -> (Self, mpsc::Sender<Arc<AudioSegment>>) {
+    ) -> Self {
         Self::with_config(base_path, channel_size, EncoderOptions::default())
     }
 
@@ -66,15 +68,15 @@ impl FlacFileSink {
         base_path: P,
         channel_size: usize,
         encoder_options: EncoderOptions,
-    ) -> (Self, mpsc::Sender<Arc<AudioSegment>>) {
+    ) -> Self {
         let (tx, rx) = mpsc::channel(channel_size);
-        let sink = Self {
+        Self {
+            tx,
             rx,
             base_path: base_path.into(),
             encoder_options,
             pcm_buffer_capacity: 8,
-        };
-        (sink, tx)
+        }
     }
 
     /// Lance l'encodage vers le(s) fichier(s) cible(s).
@@ -84,27 +86,28 @@ impl FlacFileSink {
     /// - Track 0 : base_path.flac
     /// - Track 1 : base_path_01.flac
     /// - Track 2 : base_path_02.flac, etc.
-    pub async fn run(self) -> Result<FlacFileSinkStats, AudioError> {
-        let FlacFileSink {
-            mut rx,
-            base_path,
-            encoder_options,
-            pcm_buffer_capacity,
-        } = self;
+    async fn run_internal(
+        mut rx: mpsc::Receiver<Arc<AudioSegment>>,
+        base_path: PathBuf,
+        encoder_options: EncoderOptions,
+        pcm_buffer_capacity: usize,
+        stop_token: CancellationToken,
+    ) -> Result<(), AudioError> {
 
-        let mut all_tracks = Vec::new();
         let mut track_number = 0;
 
         loop {
+            // Vérifier si l'arrêt a été demandé
+            if stop_token.is_cancelled() {
+                return Ok(());
+            }
+
             // Attendre le premier chunk audio pour cette track, en capturant les métadonnées du TrackBoundary
-            let (first_segment, track_metadata) = match wait_for_first_audio_chunk_with_metadata(&mut rx).await {
+            let (first_segment, track_metadata) = match wait_for_first_audio_chunk_with_metadata(&mut rx, &stop_token).await {
                 Ok(result) => result,
                 Err(_) => {
-                    // Plus d'audio disponible
-                    if all_tracks.is_empty() {
-                        return Err(AudioError::ProcessingError("No audio data received".into()));
-                    }
-                    break;
+                    // Plus d'audio disponible ou arrêt demandé
+                    return Ok(());
                 }
             };
 
@@ -149,7 +152,7 @@ impl FlacFileSink {
 
             // Exécuter pump et copy en parallèle avec tokio::select! en boucle
             let pump_future =
-                pump_track_segments(first_segment, &mut rx, pcm_tx, bits_per_sample, sample_rate);
+                pump_track_segments(first_segment, &mut rx, pcm_tx, bits_per_sample, sample_rate, &stop_token);
             let copy_future = async {
                 let copy_result = tokio::io::copy(&mut flac_stream, &mut output).await;
                 let flush_result = output.flush().await;
@@ -168,16 +171,7 @@ impl FlacFileSink {
             // Attendre les deux tâches en parallèle
             let (copy_result, pump_result) = tokio::join!(copy_future, pump_future);
             copy_result?;
-            let (chunks, samples, duration_sec, stop_reason) = pump_result?;
-
-            // Ajouter les stats de cette track
-            all_tracks.push(TrackStats {
-                path: track_path,
-                track_number,
-                chunks_received: chunks,
-                total_samples: samples,
-                total_duration_sec: duration_sec,
-            });
+            let stop_reason = pump_result?;
 
             // Vérifier le stop_reason pour savoir si on continue
             match stop_reason {
@@ -186,14 +180,12 @@ impl FlacFileSink {
                     track_number += 1;
                     continue;
                 }
-                StopReason::EndOfStream | StopReason::ChannelClosed => {
+                StopReason::EndOfStream | StopReason::ChannelClosed | StopReason::Cancelled => {
                     // Fin de l'encodage
-                    break;
+                    return Ok(());
                 }
             }
         }
-
-        Ok(FlacFileSinkStats { tracks: all_tracks })
     }
 }
 
@@ -223,20 +215,26 @@ enum StopReason {
     TrackBoundary(Arc<tokio::sync::RwLock<dyn pmometadata::TrackMetadata>>),
     EndOfStream,
     ChannelClosed,
+    Cancelled,
 }
 
 /// Attend et retourne le premier chunk audio avec les métadonnées du TrackBoundary si présent.
-/// Retourne une erreur si EndOfStream est reçu avant tout audio.
+/// Retourne une erreur si EndOfStream est reçu avant tout audio ou si l'arrêt est demandé.
 async fn wait_for_first_audio_chunk_with_metadata(
     rx: &mut mpsc::Receiver<Arc<AudioSegment>>,
+    stop_token: &CancellationToken,
 ) -> Result<(Arc<AudioSegment>, Option<Arc<tokio::sync::RwLock<dyn pmometadata::TrackMetadata>>>), AudioError> {
     let mut track_metadata: Option<Arc<tokio::sync::RwLock<dyn pmometadata::TrackMetadata>>> = None;
 
     loop {
-        let segment = rx
-            .recv()
-            .await
-            .ok_or_else(|| AudioError::ProcessingError("No audio data received".into()))?;
+        let segment = tokio::select! {
+            result = rx.recv() => {
+                result.ok_or_else(|| AudioError::ProcessingError("No audio data received".into()))?
+            }
+            _ = stop_token.cancelled() => {
+                return Err(AudioError::ProcessingError("Cancelled".into()));
+            }
+        };
 
         match &segment.segment {
             crate::_AudioSegment::Chunk(chunk) => {
@@ -274,11 +272,8 @@ async fn pump_track_segments(
     pcm_tx: mpsc::Sender<Vec<u8>>,
     bits_per_sample: u8,
     expected_rate: u32,
-) -> Result<(u64, u64, f64, StopReason), AudioError> {
-    let mut chunks = 0u64;
-    let mut samples = 0u64;
-    let mut duration_sec = 0.0f64;
-
+    stop_token: &CancellationToken,
+) -> Result<StopReason, AudioError> {
     // Traiter le premier segment
     if let Some(chunk) = first_segment.as_chunk() {
         let pcm_bytes = chunk_to_pcm_bytes(chunk, bits_per_sample)?;
@@ -287,19 +282,24 @@ async fn pump_track_segments(
                 .send(pcm_bytes)
                 .await
                 .map_err(|_| AudioError::SendError)?;
-            chunks += 1;
-            samples += chunk.len() as u64;
-            duration_sec += chunk.len() as f64 / expected_rate as f64;
         }
     }
 
     // Boucle sur les segments suivants
     loop {
-        let segment = match rx.recv().await {
-            Some(seg) => seg,
-            None => {
-                drop(pcm_tx); // Fermer le channel PCM
-                return Ok((chunks, samples, duration_sec, StopReason::ChannelClosed));
+        let segment = tokio::select! {
+            result = rx.recv() => {
+                match result {
+                    Some(seg) => seg,
+                    None => {
+                        drop(pcm_tx);
+                        return Ok(StopReason::ChannelClosed);
+                    }
+                }
+            }
+            _ = stop_token.cancelled() => {
+                drop(pcm_tx);
+                return Ok(StopReason::Cancelled);
             }
         };
 
@@ -323,25 +323,16 @@ async fn pump_track_segments(
                     .send(pcm_bytes)
                     .await
                     .map_err(|_| AudioError::SendError)?;
-
-                chunks += 1;
-                samples += chunk.len() as u64;
-                duration_sec += chunk.len() as f64 / expected_rate as f64;
             }
             crate::_AudioSegment::Sync(marker) => {
                 match &**marker {
                     SyncMarker::TrackBoundary { metadata, .. } => {
                         drop(pcm_tx); // Fermer le channel PCM
-                        return Ok((
-                            chunks,
-                            samples,
-                            duration_sec,
-                            StopReason::TrackBoundary(metadata.clone()),
-                        ));
+                        return Ok(StopReason::TrackBoundary(metadata.clone()));
                     }
                     SyncMarker::EndOfStream => {
                         drop(pcm_tx); // Fermer le channel PCM
-                        return Ok((chunks, samples, duration_sec, StopReason::EndOfStream));
+                        return Ok(StopReason::EndOfStream);
                     }
                     _ => {} // Ignorer les autres syncmarkers
                 }
@@ -535,6 +526,32 @@ pub struct FlacFileSinkStats {
     pub tracks: Vec<TrackStats>,
 }
 
+#[async_trait::async_trait]
+impl AudioPipelineNode for FlacFileSink {
+    fn get_tx(&self) -> Option<mpsc::Sender<Arc<AudioSegment>>> {
+        Some(self.tx.clone())
+    }
+
+    fn register(&mut self, _child: Box<dyn AudioPipelineNode>) {
+        panic!("FlacFileSink is a terminal node and cannot have children");
+    }
+
+    async fn run(
+        self: Box<Self>,
+        stop_token: CancellationToken,
+    ) -> Result<(), AudioError> {
+        let FlacFileSink {
+            tx: _tx,
+            rx,
+            base_path,
+            encoder_options,
+            pcm_buffer_capacity,
+        } = *self;
+
+        Self::run_internal(rx, base_path, encoder_options, pcm_buffer_capacity, stop_token).await
+    }
+}
+
 impl TypedAudioNode for FlacFileSink {
     fn input_type(&self) -> Option<TypeRequirement> {
         // FlacFileSink accepte n'importe quel type entier (I16, I24, I32)
@@ -565,8 +582,12 @@ mod tests {
         let frames = 256;
 
         // Créer le sink
-        let (sink, tx) = FlacFileSink::with_channel_size(&output_path, 16);
-        let sink_handle = tokio::spawn(async move { sink.run().await.unwrap() });
+        let sink = FlacFileSink::with_channel_size(&output_path, 16);
+        let tx = sink.get_tx().unwrap();
+        let stop_token = CancellationToken::new();
+        let sink_handle = tokio::spawn(async move {
+            Box::new(sink).run(stop_token).await.unwrap()
+        });
 
         // Envoyer des segments avec métadonnées
         tokio::spawn(async move {
@@ -682,8 +703,12 @@ mod tests {
         flac_stream.wait().await.unwrap();
 
         // Maintenant utiliser FlacFileSink pour réécrire le fichier
-        let (sink, tx) = FlacFileSink::with_channel_size(&output_path, 16);
-        let sink_handle = tokio::spawn(async move { sink.run().await.unwrap() });
+        let sink = FlacFileSink::with_channel_size(&output_path, 16);
+        let tx = sink.get_tx().unwrap();
+        let stop_token = CancellationToken::new();
+        let sink_handle = tokio::spawn(async move {
+            Box::new(sink).run(stop_token).await.unwrap()
+        });
 
         // Lire le fichier input et envoyer les segments au sink
         tokio::spawn(async move {
@@ -745,10 +770,7 @@ mod tests {
             decode_stream.wait().await.unwrap();
         });
 
-        let stats = sink_handle.await.unwrap();
-        assert_eq!(stats.tracks.len(), 1);
-        assert!(stats.tracks[0].chunks_received > 0);
-        assert_eq!(stats.tracks[0].total_samples, frames as u64);
+        sink_handle.await.unwrap();
 
         // Vérifier que le fichier de sortie est valide
         let file = File::open(&output_path).await.unwrap();

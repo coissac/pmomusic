@@ -18,6 +18,7 @@ paste = "1"
 soxr = "0.6.0"
 bytemuck = "1.24.0"
 reqwest = { version = "0.12", features = ["stream"] }
+tracing = "0.1"
 
 [dev-dependencies]
 tokio-test = "0.4"

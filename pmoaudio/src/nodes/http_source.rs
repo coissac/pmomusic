@@ -1,14 +1,14 @@
 use crate::{
-    nodes::{AudioError, MultiSubscriberNode, TypedAudioNode, DEFAULT_CHUNK_DURATION_MS},
+    nodes::{AudioError, TypedAudioNode, DEFAULT_CHUNK_DURATION_MS},
     type_constraints::TypeRequirement,
-    AudioChunk, AudioChunkData, AudioSegment, I24,
+    AudioChunk, AudioChunkData, AudioPipelineNode, AudioSegment, I24,
 };
 use futures_util::StreamExt;
 use pmoflac::{decode_audio_stream, StreamInfo};
 use pmometadata::{MemoryTrackMetadata, TrackMetadata};
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tokio_util::io::StreamReader;
+use tokio_util::{io::StreamReader, sync::CancellationToken};
 
 /// HttpSource - Récupère un fichier audio via HTTP et publie des `AudioSegment`
 ///
@@ -93,7 +93,8 @@ use tokio_util::io::StreamReader;
 pub struct HttpSource {
     url: String,
     chunk_frames: usize,
-    subscribers: MultiSubscriberNode,
+    child_txs: Vec<mpsc::Sender<Arc<AudioSegment>>>,
+    children: Vec<Box<dyn AudioPipelineNode>>,
 }
 
 impl HttpSource {
@@ -136,85 +137,22 @@ impl HttpSource {
         Self {
             url: url.into(),
             chunk_frames,
-            subscribers: MultiSubscriberNode::new(),
+            child_txs: Vec::new(),
+            children: Vec::new(),
         }
     }
 
-    /// Ajoute un abonné qui recevra les segments audio.
-    ///
-    /// Chaque abonné recevra une copie (via `Arc`) de tous les segments audio
-    /// produits par cette source, y compris les syncmarkers.
-    ///
-    /// # Arguments
-    ///
-    /// * `tx` - Channel sender pour recevoir les `AudioSegment`
-    ///
-    /// # Exemples
-    ///
-    /// ```no_run
-    /// use pmoaudio::HttpSource;
-    /// use tokio::sync::mpsc;
-    ///
-    /// let mut source = HttpSource::new("http://example.com/audio.flac");
-    /// let (tx, rx) = mpsc::channel(16);
-    /// source.add_subscriber(tx);
-    /// ```
-    pub fn add_subscriber(&mut self, tx: mpsc::Sender<Arc<AudioSegment>>) {
-        self.subscribers.add_subscriber(tx);
-    }
-
-    /// Lance le téléchargement et la lecture du flux audio.
-    ///
-    /// Cette méthode consomme `self` et exécute le pipeline complet:
-    /// 1. Effectue la requête HTTP GET vers l'URL spécifiée
-    /// 2. Vérifie le status HTTP (doit être 2xx)
-    /// 3. Extrait les métadonnées des headers HTTP
-    /// 4. Décode le flux audio en streaming
-    /// 5. Émet les syncmarkers et chunks audio vers les abonnés
-    ///
-    /// La méthode se termine quand le flux est complètement lu ou en cas d'erreur.
-    ///
-    /// # Erreurs
-    ///
-    /// Retourne `AudioError::ProcessingError` si:
-    /// - La requête HTTP échoue (réseau, DNS, etc.)
-    /// - Le serveur retourne un status code non-2xx
-    /// - Le format audio n'est pas supporté
-    /// - Le décodage échoue
-    /// - Le fichier a un nombre de canaux non supporté (doit être 1 ou 2)
-    /// - La profondeur de bit n'est pas supportée (doit être 8, 16, 24 ou 32 bits)
-    ///
-    /// # Exemples
-    ///
-    /// ```no_run
-    /// use pmoaudio::HttpSource;
-    /// use tokio::sync::mpsc;
-    ///
-    /// #[tokio::main]
-    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let mut source = HttpSource::new("http://example.com/audio.flac");
-    ///     let (tx, mut rx) = mpsc::channel(16);
-    ///     source.add_subscriber(tx);
-    ///
-    ///     let handle = tokio::spawn(async move {
-    ///         source.run().await
-    ///     });
-    ///
-    ///     // Traiter les segments
-    ///     while let Some(segment) = rx.recv().await {
-    ///         println!("Segment reçu: order={}", segment.order);
-    ///     }
-    ///
-    ///     handle.await??;
-    ///     Ok(())
-    /// }
-    /// ```
-    pub async fn run(self) -> Result<(), AudioError> {
+    async fn run_internal(
+        url: String,
+        chunk_frames: usize,
+        child_txs: Vec<mpsc::Sender<Arc<AudioSegment>>>,
+        stop_token: CancellationToken,
+    ) -> Result<(), AudioError> {
         // Effectuer la requête HTTP
-        let response = reqwest::get(&self.url)
+        let response = reqwest::get(&url)
             .await
             .map_err(|e| {
-                AudioError::ProcessingError(format!("HTTP request failed for {}: {}", self.url, e))
+                AudioError::ProcessingError(format!("HTTP request failed for {}: {}", url, e))
             })?;
 
         // Vérifier le status
@@ -222,12 +160,12 @@ impl HttpSource {
             return Err(AudioError::ProcessingError(format!(
                 "HTTP request returned status {}: {}",
                 response.status(),
-                self.url
+                url
             )));
         }
 
         // Extraire les métadonnées depuis les headers HTTP
-        let metadata = extract_metadata_from_headers(&response, &self.url).await;
+        let metadata = extract_metadata_from_headers(&response, &url).await;
 
         // Convertir le stream de bytes en AsyncRead
         let bytes_stream = response.bytes_stream();
@@ -244,38 +182,54 @@ impl HttpSource {
         validate_stream(&stream_info)?;
 
         // Calculer la taille des chunks si non spécifiée (0 = auto)
-        let chunk_frames = if self.chunk_frames == 0 {
+        let chunk_frames_final = if chunk_frames == 0 {
             let frames =
                 (stream_info.sample_rate as f64 * DEFAULT_CHUNK_DURATION_MS / 1000.0) as usize;
             frames.next_power_of_two().max(256)
         } else {
-            self.chunk_frames.max(1)
+            chunk_frames.max(1)
         };
 
         // Émettre TopZeroSync
         let top_zero = AudioSegment::new_top_zero_sync();
-        self.subscribers.push(top_zero).await?;
+        for tx in &child_txs {
+            tx.send(top_zero.clone()).await.map_err(|_| AudioError::SendError)?;
+        }
 
         // Émettre TrackBoundary avec les métadonnées HTTP
         let track_boundary = AudioSegment::new_track_boundary(0, 0.0, Arc::new(tokio::sync::RwLock::new(metadata)));
-        self.subscribers.push(track_boundary).await?;
+        for tx in &child_txs {
+            tx.send(track_boundary.clone()).await.map_err(|_| AudioError::SendError)?;
+        }
 
         // Préparer la lecture des chunks audio
         let frame_bytes = stream_info.bytes_per_sample() * stream_info.channels as usize;
-        let chunk_byte_len = chunk_frames * frame_bytes;
+        let chunk_byte_len = chunk_frames_final * frame_bytes;
         let mut pending = Vec::new();
-        let mut read_buf = vec![0u8; frame_bytes * 512.max(chunk_frames)];
+        let mut read_buf = vec![0u8; frame_bytes * 512.max(chunk_frames_final)];
         let mut chunk_index = 0u64;
         let mut total_frames = 0u64;
 
         // Lire et émettre les chunks audio
         loop {
+            // Vérifier l'arrêt
+            if stop_token.is_cancelled() {
+                return Ok(());
+            }
+
             // Remplir le buffer
             if pending.len() < chunk_byte_len {
                 use tokio::io::AsyncReadExt;
-                let read = stream.read(&mut read_buf).await.map_err(|e| {
-                    AudioError::ProcessingError(format!("I/O error while decoding: {}", e))
-                })?;
+                let read = tokio::select! {
+                    result = stream.read(&mut read_buf) => {
+                        result.map_err(|e| {
+                            AudioError::ProcessingError(format!("I/O error while decoding: {}", e))
+                        })?
+                    }
+                    _ = stop_token.cancelled() => {
+                        return Ok(());
+                    }
+                };
                 if read == 0 {
                     break;
                 }
@@ -288,7 +242,7 @@ impl HttpSource {
 
             // Extraire un chunk
             let frames_in_pending = pending.len() / frame_bytes;
-            let frames_to_emit = frames_in_pending.min(chunk_frames);
+            let frames_to_emit = frames_in_pending.min(chunk_frames_final);
             let take_bytes = frames_to_emit * frame_bytes;
             let chunk_bytes = pending.drain(..take_bytes).collect::<Vec<u8>>();
 
@@ -303,7 +257,13 @@ impl HttpSource {
                 chunk_index,
                 timestamp_sec,
             )?;
-            self.subscribers.push(segment).await?;
+
+            for tx in &child_txs {
+                if tx.send(segment.clone()).await.is_err() {
+                    // Un enfant est mort, arrêter
+                    return Ok(());
+                }
+            }
 
             chunk_index += 1;
             total_frames += frames_to_emit as u64;
@@ -316,7 +276,9 @@ impl HttpSource {
                 let timestamp_sec = total_frames as f64 / stream_info.sample_rate as f64;
                 let segment =
                     bytes_to_segment(&pending, &stream_info, frames, chunk_index, timestamp_sec)?;
-                self.subscribers.push(segment).await?;
+                for tx in &child_txs {
+                    let _ = tx.send(segment.clone()).await;
+                }
                 total_frames += frames as u64;
                 chunk_index += 1;
             }
@@ -325,7 +287,9 @@ impl HttpSource {
         // Émettre EndOfStream
         let final_timestamp = total_frames as f64 / stream_info.sample_rate as f64;
         let eos = AudioSegment::new_end_of_stream(chunk_index, final_timestamp);
-        self.subscribers.push(eos).await?;
+        for tx in &child_txs {
+            let _ = tx.send(eos.clone()).await;
+        }
 
         // Attendre la fin du décodage
         stream
@@ -510,6 +474,61 @@ fn bytes_to_segment(
     }))
 }
 
+#[async_trait::async_trait]
+impl AudioPipelineNode for HttpSource {
+    fn get_tx(&self) -> Option<mpsc::Sender<Arc<AudioSegment>>> {
+        None // HttpSource est une source, pas d'input
+    }
+
+    fn register(&mut self, child: Box<dyn AudioPipelineNode>) {
+        if let Some(tx) = child.get_tx() {
+            self.child_txs.push(tx);
+        }
+        self.children.push(child);
+    }
+
+    async fn run(
+        self: Box<Self>,
+        stop_token: CancellationToken,
+    ) -> Result<(), AudioError> {
+        let HttpSource {
+            url,
+            chunk_frames,
+            child_txs,
+            children,
+        } = *self;
+
+        // Spawner tous les enfants
+        let mut child_handles = Vec::new();
+        for child in children {
+            let child_token = stop_token.child_token();
+            let handle = tokio::spawn(async move {
+                child.run(child_token).await
+            });
+            child_handles.push(handle);
+        }
+
+        // Lancer la logique interne
+        let work_result = Self::run_internal(url, chunk_frames, child_txs, stop_token.clone()).await;
+
+        // Attendre que tous les enfants se terminent
+        for handle in child_handles {
+            match handle.await {
+                Ok(Ok(())) => {},
+                Ok(Err(e)) => return Err(e),
+                Err(e) => {
+                    return Err(AudioError::ProcessingError(format!(
+                        "Child task panicked: {}",
+                        e
+                    )))
+                }
+            }
+        }
+
+        work_result
+    }
+}
+
 impl TypedAudioNode for HttpSource {
     fn input_type(&self) -> Option<TypeRequirement> {
         // HttpSource est une source, elle ne consomme pas d'audio
@@ -533,6 +552,47 @@ mod tests {
         matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
     };
+
+    /// Nœud de test qui collecte tous les segments et les envoie à un channel de test
+    struct TestCollectorNode {
+        input_tx: mpsc::Sender<Arc<AudioSegment>>,
+        input_rx: mpsc::Receiver<Arc<AudioSegment>>,
+        output_tx: mpsc::Sender<Arc<AudioSegment>>,
+    }
+
+    impl TestCollectorNode {
+        fn new(output_tx: mpsc::Sender<Arc<AudioSegment>>) -> Self {
+            let (input_tx, input_rx) = mpsc::channel(16);
+            Self {
+                input_tx,
+                input_rx,
+                output_tx,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl AudioPipelineNode for TestCollectorNode {
+        fn get_tx(&self) -> Option<mpsc::Sender<Arc<AudioSegment>>> {
+            Some(self.input_tx.clone())
+        }
+
+        fn register(&mut self, _child: Box<dyn AudioPipelineNode>) {
+            panic!("TestCollectorNode is a sink and cannot have children");
+        }
+
+        async fn run(
+            mut self: Box<Self>,
+            _stop_token: CancellationToken,
+        ) -> Result<(), AudioError> {
+            while let Some(segment) = self.input_rx.recv().await {
+                if self.output_tx.send(segment).await.is_err() {
+                    break;
+                }
+            }
+            Ok(())
+        }
+    }
 
     /// Test de création basique de HttpSource
     #[test]
@@ -599,12 +659,18 @@ mod tests {
         // Créer la source HTTP pointant vers le mock
         let url = format!("{}/test.flac", mock_server.uri());
         let mut source = HttpSource::with_chunk_size(&url, 64);
-        let (tx, mut rx) = mpsc::channel(16);
-        source.add_subscriber(tx);
 
-        // Lancer le téléchargement et le décodage
+        // Créer un noeud collecteur pour recevoir les segments
+        let (tx, mut rx) = mpsc::channel(16);
+        let collector = TestCollectorNode::new(tx);
+
+        // Construire le pipeline
+        source.register(Box::new(collector));
+
+        // Lancer le pipeline
+        let stop_token = CancellationToken::new();
         tokio::spawn(async move {
-            source.run().await.unwrap();
+            Box::new(source).run(stop_token).await.unwrap();
         });
 
         // Vérifier les segments reçus
@@ -683,10 +749,12 @@ mod tests {
         let url = format!("{}/stream", mock_server.uri());
         let mut source = HttpSource::new(&url);
         let (tx, mut rx) = mpsc::channel(16);
-        source.add_subscriber(tx);
+        let collector = TestCollectorNode::new(tx);
+        source.register(Box::new(collector));
 
+        let stop_token = CancellationToken::new();
         tokio::spawn(async move {
-            source.run().await.unwrap();
+            Box::new(source).run(stop_token).await.unwrap();
         });
 
         // Chercher le TrackBoundary pour vérifier les métadonnées
@@ -720,9 +788,11 @@ mod tests {
         let url = format!("{}/notfound.flac", mock_server.uri());
         let mut source = HttpSource::new(&url);
         let (tx, _rx) = mpsc::channel(16);
-        source.add_subscriber(tx);
+        let collector = TestCollectorNode::new(tx);
+        source.register(Box::new(collector));
 
-        let result = source.run().await;
+        let stop_token = CancellationToken::new();
+        let result = Box::new(source).run(stop_token).await;
         assert!(result.is_err(), "Doit retourner une erreur pour HTTP 404");
 
         if let Err(AudioError::ProcessingError(msg)) = result {
@@ -751,9 +821,11 @@ mod tests {
         let url = format!("{}/invalid.flac", mock_server.uri());
         let mut source = HttpSource::new(&url);
         let (tx, _rx) = mpsc::channel(16);
-        source.add_subscriber(tx);
+        let collector = TestCollectorNode::new(tx);
+        source.register(Box::new(collector));
 
-        let result = source.run().await;
+        let stop_token = CancellationToken::new();
+        let result = Box::new(source).run(stop_token).await;
         assert!(
             result.is_err(),
             "Doit retourner une erreur pour un format invalide"
@@ -804,10 +876,12 @@ mod tests {
         let url = format!("{}/my-song.flac", mock_server.uri());
         let mut source = HttpSource::new(&url);
         let (tx, mut rx) = mpsc::channel(16);
-        source.add_subscriber(tx);
+        let collector = TestCollectorNode::new(tx);
+        source.register(Box::new(collector));
 
+        let stop_token = CancellationToken::new();
         tokio::spawn(async move {
-            source.run().await.unwrap();
+            Box::new(source).run(stop_token).await.unwrap();
         });
 
         let mut found_title = false;

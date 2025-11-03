@@ -1,9 +1,11 @@
 //! PlaylistTrack : résultat d'un pop() avec helpers pour accéder au cache
 
 use crate::Result;
-use pmoaudiocache::AudioMetadataExt;
+use pmoaudiocache::{AudioMetadataExt, AudioTrackMetadataExt};
 use pmocache::cache_trait::FileCache;
-use std::path::PathBuf;
+use pmometadata::TrackMetadata;
+use std::{path::PathBuf, sync::Arc};
+use tokio::sync::RwLock;
 
 /// Un morceau récupéré depuis une playlist
 ///
@@ -85,6 +87,34 @@ impl PlaylistTrack {
         let cache = crate::manager::audio_cache()?;
         pmoaudiocache::get_metadata(&*cache, &self.cache_pk)
             .map_err(|e| crate::Error::CacheError(e.to_string()))
+    }
+
+    /// Retourne une instance de TrackMetadata pour ce morceau
+    ///
+    /// Cette méthode fournit un accès unifié aux métadonnées via le trait `TrackMetadata`.
+    /// L'instance retournée implémente toutes les méthodes du trait et permet un accès
+    /// asynchrone thread-safe aux métadonnées via RwLock.
+    ///
+    /// # Exemples
+    ///
+    /// ```no_run
+    /// # use pmoplaylist::*;
+    /// # async fn example(track: PlaylistTrack) -> Result<()> {
+    /// // Obtenir l'instance TrackMetadata
+    /// let metadata = track.track_metadata()?;
+    ///
+    /// // Accéder aux métadonnées via le trait
+    /// let title = metadata.read().await.get_title().await?;
+    /// let artist = metadata.read().await.get_artist().await?;
+    ///
+    /// println!("Titre: {:?}", title);
+    /// println!("Artiste: {:?}", artist);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn track_metadata(&self) -> Result<Arc<RwLock<dyn TrackMetadata>>> {
+        let cache = crate::manager::audio_cache()?;
+        Ok(cache.track_metadata(&self.cache_pk))
     }
 
     /// Récupère uniquement le titre du morceau (méthode légère)

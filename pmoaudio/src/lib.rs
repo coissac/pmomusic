@@ -85,6 +85,7 @@ mod audio_segment;
 pub mod conversions;
 pub mod events;
 pub mod nodes;
+pub mod pipeline;
 mod sample_types;
 mod sync_marker;
 pub mod type_constraints;
@@ -112,13 +113,16 @@ pub use events::{
     VolumeChangeEvent,
 };
 
+// Export du trait de pipeline
+pub use pipeline::AudioPipelineNode;
+
 // Exports publics des nodes
 pub use nodes::{
     converter_nodes::{ToF32Node, ToF64Node, ToI16Node, ToI24Node, ToI32Node},
     file_source::FileSource,
     flac_file_sink::{FlacFileSink, FlacFileSinkStats},
     http_source::HttpSource,
-    AudioError, AudioNode, MultiSubscriberNode, SingleSubscriberNode, TypedAudioNode,
+    AudioError, AudioNode, TypedAudioNode,
 };
 
 // Nodes temporairement désactivés

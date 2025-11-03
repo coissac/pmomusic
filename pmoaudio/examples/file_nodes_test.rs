@@ -1,14 +1,20 @@
-//! Test d'intégration pour FileSource et FlacFileSink
+//! Test d'intégration pour FileSource et FlacFileSink avec la nouvelle architecture AudioPipelineNode
 //!
 //! Ce programme teste la chaîne complète :
 //! 1. Lecture d'un fichier audio avec FileSource
 //! 2. Écriture vers FLAC avec FlacFileSink
 //!
+//! La nouvelle architecture permet de :
+//! - Construire le pipeline en enregistrant des enfants avec register()
+//! - Lancer tout le pipeline avec un seul appel à run() sur la racine
+//! - Arrêter proprement tout le pipeline avec un CancellationToken
+//!
 //! Usage:
 //!   cargo run --example file_nodes_test -- <input_file> <output_file>
 
-use pmoaudio::{FileSource, FlacFileSink};
+use pmoaudio::{AudioPipelineNode, FileSource, FlacFileSink};
 use std::env;
+use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -28,47 +34,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     // Créer le pipeline: FileSource → FlacFileSink
-    let mut source = FileSource::new(input_path); // Calcul automatique de la taille des chunks (~50ms)
-    let (sink, tx) = FlacFileSink::new(output_path); // Utilise le buffer par défaut (16 segments)
+    let mut source = FileSource::new(input_path);
+    let sink = FlacFileSink::new(output_path);
 
-    source.add_subscriber(tx);
+    // Enregistrer le sink comme enfant de la source
+    source.register(Box::new(sink));
 
-    // Lancer le sink dans une tâche séparée
-    let sink_handle = tokio::spawn(async move {
-        println!("FlacFileSink started");
-        let result = sink.run().await;
-        println!("FlacFileSink finished");
-        result
-    });
+    // Créer un token d'arrêt pour contrôle manuel si besoin
+    let stop_token = CancellationToken::new();
 
-    // Lancer le source
-    println!("FileSource started");
-    let source_result = source.run().await;
-    println!("FileSource finished");
+    // Lancer tout le pipeline - run() spawne automatiquement tous les enfants
+    println!("Pipeline started");
+    println!("  FileSource: reading from {}", input_path);
+    println!("  FlacFileSink: writing to {}", output_path);
 
-    // Vérifier les résultats
-    match source_result {
-        Ok(()) => println!("✓ FileSource completed successfully"),
+    let result = Box::new(source).run(stop_token).await;
+
+    // Vérifier le résultat
+    match result {
+        Ok(()) => {
+            println!();
+            println!("✓ Pipeline completed successfully");
+            println!("  Output file: {}", output_path);
+        }
         Err(e) => {
-            eprintln!("✗ FileSource error: {}", e);
+            eprintln!();
+            eprintln!("✗ Pipeline error: {}", e);
             return Err(e.into());
         }
-    }
-
-    let stats = sink_handle.await??;
-    println!("✓ FlacFileSink completed successfully");
-    println!();
-    println!("Statistics:");
-    println!("  Tracks written: {}", stats.tracks.len());
-    for (i, track) in stats.tracks.iter().enumerate() {
-        println!("  Track {}:", i);
-        println!("    Output file:     {:?}", track.path);
-        println!("    Chunks received: {}", track.chunks_received);
-        println!("    Total samples:   {}", track.total_samples);
-        println!(
-            "    Duration:        {:.2} seconds",
-            track.total_duration_sec
-        );
     }
 
     Ok(())

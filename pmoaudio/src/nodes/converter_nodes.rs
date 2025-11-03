@@ -8,376 +8,174 @@
 //! les incompatibilités de type entre producers et consumers.
 
 use crate::{
-    nodes::{AudioError, MultiSubscriberNode, TypedAudioNode},
+    nodes::{AudioError, TypedAudioNode},
     type_constraints::{SampleType, TypeRequirement},
-    AudioSegment,
+    AudioPipelineNode, AudioSegment,
 };
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
-/// Node de conversion vers I16
-///
-/// Convertit n'importe quel type de chunk audio vers I16 (16-bit signed integer).
-/// Utilise les conversions DSP SIMD optimisées.
-pub struct ToI16Node {
-    rx: mpsc::Receiver<Arc<AudioSegment>>,
-    subscribers: MultiSubscriberNode,
-}
-
-impl ToI16Node {
-    /// Crée un nouveau node de conversion vers I16
-    pub fn new() -> (Self, mpsc::Sender<Arc<AudioSegment>>) {
-        Self::with_channel_size(16)
-    }
-
-    /// Crée un nouveau node avec une taille de buffer spécifique
-    pub fn with_channel_size(channel_size: usize) -> (Self, mpsc::Sender<Arc<AudioSegment>>) {
-        let (tx, rx) = mpsc::channel(channel_size);
-        let node = Self {
-            rx,
-            subscribers: MultiSubscriberNode::new(),
-        };
-        (node, tx)
-    }
-
-    /// Ajoute un abonné qui recevra les segments audio convertis
-    pub fn add_subscriber(&mut self, tx: mpsc::Sender<Arc<AudioSegment>>) {
-        self.subscribers.add_subscriber(tx);
-    }
-
-    /// Lance le traitement de conversion
-    pub async fn run(mut self) -> Result<(), AudioError> {
-        while let Some(segment) = self.rx.recv().await {
-            // Si c'est un syncmarker, passer directement
-            if !segment.is_audio_chunk() {
-                self.subscribers.push(segment).await?;
-                continue;
-            }
-
-            // Convertir le chunk audio vers I16
-            let converted_segment = if let Some(chunk) = segment.as_chunk() {
-                let converted_chunk = chunk.to_i16();
-                Arc::new(AudioSegment {
-                    order: segment.order,
-                    timestamp_sec: segment.timestamp_sec,
-                    segment: crate::_AudioSegment::Chunk(Arc::new(converted_chunk)),
-                })
-            } else {
-                segment
-            };
-
-            self.subscribers.push(converted_segment).await?;
+// Macro pour générer les converter nodes avec la nouvelle architecture AudioPipelineNode
+macro_rules! converter_node {
+    ($node_name:ident, $convert_method:ident, $output_type:expr, $doc:expr) => {
+        #[doc = $doc]
+        pub struct $node_name {
+            tx: mpsc::Sender<Arc<AudioSegment>>,
+            rx: mpsc::Receiver<Arc<AudioSegment>>,
+            child_txs: Vec<mpsc::Sender<Arc<AudioSegment>>>,
+            children: Vec<Box<dyn AudioPipelineNode>>,
         }
 
-        Ok(())
-    }
-}
-
-impl TypedAudioNode for ToI16Node {
-    fn input_type(&self) -> Option<TypeRequirement> {
-        // Accepte n'importe quel type
-        Some(TypeRequirement::any())
-    }
-
-    fn output_type(&self) -> Option<TypeRequirement> {
-        // Produit uniquement I16
-        Some(TypeRequirement::specific(SampleType::I16))
-    }
-}
-
-impl Default for ToI16Node {
-    fn default() -> Self {
-        Self::new().0
-    }
-}
-
-/// Node de conversion vers I24
-///
-/// Convertit n'importe quel type de chunk audio vers I24 (24-bit signed integer).
-/// Utilise les conversions DSP SIMD optimisées.
-pub struct ToI24Node {
-    rx: mpsc::Receiver<Arc<AudioSegment>>,
-    subscribers: MultiSubscriberNode,
-}
-
-impl ToI24Node {
-    /// Crée un nouveau node de conversion vers I24
-    pub fn new() -> (Self, mpsc::Sender<Arc<AudioSegment>>) {
-        Self::with_channel_size(16)
-    }
-
-    /// Crée un nouveau node avec une taille de buffer spécifique
-    pub fn with_channel_size(channel_size: usize) -> (Self, mpsc::Sender<Arc<AudioSegment>>) {
-        let (tx, rx) = mpsc::channel(channel_size);
-        let node = Self {
-            rx,
-            subscribers: MultiSubscriberNode::new(),
-        };
-        (node, tx)
-    }
-
-    /// Ajoute un abonné qui recevra les segments audio convertis
-    pub fn add_subscriber(&mut self, tx: mpsc::Sender<Arc<AudioSegment>>) {
-        self.subscribers.add_subscriber(tx);
-    }
-
-    /// Lance le traitement de conversion
-    pub async fn run(mut self) -> Result<(), AudioError> {
-        while let Some(segment) = self.rx.recv().await {
-            if !segment.is_audio_chunk() {
-                self.subscribers.push(segment).await?;
-                continue;
+        impl $node_name {
+            /// Crée un nouveau node de conversion
+            pub fn new() -> Self {
+                Self::with_channel_size(16)
             }
 
-            let converted_segment = if let Some(chunk) = segment.as_chunk() {
-                let converted_chunk = chunk.to_i24();
-                Arc::new(AudioSegment {
-                    order: segment.order,
-                    timestamp_sec: segment.timestamp_sec,
-                    segment: crate::_AudioSegment::Chunk(Arc::new(converted_chunk)),
-                })
-            } else {
-                segment
-            };
-
-            self.subscribers.push(converted_segment).await?;
+            /// Crée un nouveau node avec une taille de buffer spécifique
+            pub fn with_channel_size(channel_size: usize) -> Self {
+                let (tx, rx) = mpsc::channel(channel_size);
+                Self {
+                    tx,
+                    rx,
+                    child_txs: Vec::new(),
+                    children: Vec::new(),
+                }
+            }
         }
 
-        Ok(())
-    }
-}
-
-impl TypedAudioNode for ToI24Node {
-    fn input_type(&self) -> Option<TypeRequirement> {
-        Some(TypeRequirement::any())
-    }
-
-    fn output_type(&self) -> Option<TypeRequirement> {
-        Some(TypeRequirement::specific(SampleType::I24))
-    }
-}
-
-impl Default for ToI24Node {
-    fn default() -> Self {
-        Self::new().0
-    }
-}
-
-/// Node de conversion vers I32
-///
-/// Convertit n'importe quel type de chunk audio vers I32 (32-bit signed integer).
-/// Utilise les conversions DSP SIMD optimisées.
-pub struct ToI32Node {
-    rx: mpsc::Receiver<Arc<AudioSegment>>,
-    subscribers: MultiSubscriberNode,
-}
-
-impl ToI32Node {
-    /// Crée un nouveau node de conversion vers I32
-    pub fn new() -> (Self, mpsc::Sender<Arc<AudioSegment>>) {
-        Self::with_channel_size(16)
-    }
-
-    /// Crée un nouveau node avec une taille de buffer spécifique
-    pub fn with_channel_size(channel_size: usize) -> (Self, mpsc::Sender<Arc<AudioSegment>>) {
-        let (tx, rx) = mpsc::channel(channel_size);
-        let node = Self {
-            rx,
-            subscribers: MultiSubscriberNode::new(),
-        };
-        (node, tx)
-    }
-
-    /// Ajoute un abonné qui recevra les segments audio convertis
-    pub fn add_subscriber(&mut self, tx: mpsc::Sender<Arc<AudioSegment>>) {
-        self.subscribers.add_subscriber(tx);
-    }
-
-    /// Lance le traitement de conversion
-    pub async fn run(mut self) -> Result<(), AudioError> {
-        while let Some(segment) = self.rx.recv().await {
-            if !segment.is_audio_chunk() {
-                self.subscribers.push(segment).await?;
-                continue;
+        #[async_trait::async_trait]
+        impl AudioPipelineNode for $node_name {
+            fn get_tx(&self) -> Option<mpsc::Sender<Arc<AudioSegment>>> {
+                Some(self.tx.clone())
             }
 
-            let converted_segment = if let Some(chunk) = segment.as_chunk() {
-                let converted_chunk = chunk.to_i32();
-                Arc::new(AudioSegment {
-                    order: segment.order,
-                    timestamp_sec: segment.timestamp_sec,
-                    segment: crate::_AudioSegment::Chunk(Arc::new(converted_chunk)),
-                })
-            } else {
-                segment
-            };
-
-            self.subscribers.push(converted_segment).await?;
-        }
-
-        Ok(())
-    }
-}
-
-impl TypedAudioNode for ToI32Node {
-    fn input_type(&self) -> Option<TypeRequirement> {
-        Some(TypeRequirement::any())
-    }
-
-    fn output_type(&self) -> Option<TypeRequirement> {
-        Some(TypeRequirement::specific(SampleType::I32))
-    }
-}
-
-impl Default for ToI32Node {
-    fn default() -> Self {
-        Self::new().0
-    }
-}
-
-/// Node de conversion vers F32
-///
-/// Convertit n'importe quel type de chunk audio vers F32 (32-bit floating point).
-/// Utilise les conversions DSP SIMD optimisées.
-pub struct ToF32Node {
-    rx: mpsc::Receiver<Arc<AudioSegment>>,
-    subscribers: MultiSubscriberNode,
-}
-
-impl ToF32Node {
-    /// Crée un nouveau node de conversion vers F32
-    pub fn new() -> (Self, mpsc::Sender<Arc<AudioSegment>>) {
-        Self::with_channel_size(16)
-    }
-
-    /// Crée un nouveau node avec une taille de buffer spécifique
-    pub fn with_channel_size(channel_size: usize) -> (Self, mpsc::Sender<Arc<AudioSegment>>) {
-        let (tx, rx) = mpsc::channel(channel_size);
-        let node = Self {
-            rx,
-            subscribers: MultiSubscriberNode::new(),
-        };
-        (node, tx)
-    }
-
-    /// Ajoute un abonné qui recevra les segments audio convertis
-    pub fn add_subscriber(&mut self, tx: mpsc::Sender<Arc<AudioSegment>>) {
-        self.subscribers.add_subscriber(tx);
-    }
-
-    /// Lance le traitement de conversion
-    pub async fn run(mut self) -> Result<(), AudioError> {
-        while let Some(segment) = self.rx.recv().await {
-            if !segment.is_audio_chunk() {
-                self.subscribers.push(segment).await?;
-                continue;
+            fn register(&mut self, child: Box<dyn AudioPipelineNode>) {
+                if let Some(tx) = child.get_tx() {
+                    self.child_txs.push(tx);
+                }
+                self.children.push(child);
             }
 
-            let converted_segment = if let Some(chunk) = segment.as_chunk() {
-                let converted_chunk = chunk.to_f32();
-                Arc::new(AudioSegment {
-                    order: segment.order,
-                    timestamp_sec: segment.timestamp_sec,
-                    segment: crate::_AudioSegment::Chunk(Arc::new(converted_chunk)),
-                })
-            } else {
-                segment
-            };
+            async fn run(
+                mut self: Box<Self>,
+                stop_token: CancellationToken,
+            ) -> Result<(), AudioError> {
+                // Spawner tous les enfants
+                let mut child_handles = Vec::new();
+                for child in self.children {
+                    let child_token = stop_token.child_token();
+                    let handle = tokio::spawn(async move { child.run(child_token).await });
+                    child_handles.push(handle);
+                }
 
-            self.subscribers.push(converted_segment).await?;
+                // Boucle de traitement
+                loop {
+                    let segment = tokio::select! {
+                        result = self.rx.recv() => {
+                            match result {
+                                Some(seg) => seg,
+                                None => break,
+                            }
+                        }
+                        _ = stop_token.cancelled() => {
+                            break;
+                        }
+                    };
+
+                    // Convertir si c'est un chunk audio, sinon passer tel quel
+                    let output_segment = if segment.is_audio_chunk() {
+                        if let Some(chunk) = segment.as_chunk() {
+                            let converted_chunk = chunk.$convert_method();
+                            Arc::new(AudioSegment {
+                                order: segment.order,
+                                timestamp_sec: segment.timestamp_sec,
+                                segment: crate::_AudioSegment::Chunk(Arc::new(converted_chunk)),
+                            })
+                        } else {
+                            segment
+                        }
+                    } else {
+                        segment
+                    };
+
+                    // Envoyer à tous les enfants
+                    for tx in &self.child_txs {
+                        if tx.send(output_segment.clone()).await.is_err() {
+                            // Un enfant est mort, arrêter
+                            break;
+                        }
+                    }
+                }
+
+                // Attendre que tous les enfants se terminent
+                for handle in child_handles {
+                    match handle.await {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => return Err(e),
+                        Err(e) => {
+                            return Err(AudioError::ProcessingError(format!(
+                                "Child task panicked: {}",
+                                e
+                            )))
+                        }
+                    }
+                }
+
+                Ok(())
+            }
         }
 
-        Ok(())
-    }
-}
-
-impl TypedAudioNode for ToF32Node {
-    fn input_type(&self) -> Option<TypeRequirement> {
-        Some(TypeRequirement::any())
-    }
-
-    fn output_type(&self) -> Option<TypeRequirement> {
-        Some(TypeRequirement::specific(SampleType::F32))
-    }
-}
-
-impl Default for ToF32Node {
-    fn default() -> Self {
-        Self::new().0
-    }
-}
-
-/// Node de conversion vers F64
-///
-/// Convertit n'importe quel type de chunk audio vers F64 (64-bit floating point).
-/// Utilise les conversions DSP SIMD optimisées.
-pub struct ToF64Node {
-    rx: mpsc::Receiver<Arc<AudioSegment>>,
-    subscribers: MultiSubscriberNode,
-}
-
-impl ToF64Node {
-    /// Crée un nouveau node de conversion vers F64
-    pub fn new() -> (Self, mpsc::Sender<Arc<AudioSegment>>) {
-        Self::with_channel_size(16)
-    }
-
-    /// Crée un nouveau node avec une taille de buffer spécifique
-    pub fn with_channel_size(channel_size: usize) -> (Self, mpsc::Sender<Arc<AudioSegment>>) {
-        let (tx, rx) = mpsc::channel(channel_size);
-        let node = Self {
-            rx,
-            subscribers: MultiSubscriberNode::new(),
-        };
-        (node, tx)
-    }
-
-    /// Ajoute un abonné qui recevra les segments audio convertis
-    pub fn add_subscriber(&mut self, tx: mpsc::Sender<Arc<AudioSegment>>) {
-        self.subscribers.add_subscriber(tx);
-    }
-
-    /// Lance le traitement de conversion
-    pub async fn run(mut self) -> Result<(), AudioError> {
-        while let Some(segment) = self.rx.recv().await {
-            if !segment.is_audio_chunk() {
-                self.subscribers.push(segment).await?;
-                continue;
+        impl TypedAudioNode for $node_name {
+            fn input_type(&self) -> Option<TypeRequirement> {
+                Some(TypeRequirement::any())
             }
 
-            let converted_segment = if let Some(chunk) = segment.as_chunk() {
-                let converted_chunk = chunk.to_f64();
-                Arc::new(AudioSegment {
-                    order: segment.order,
-                    timestamp_sec: segment.timestamp_sec,
-                    segment: crate::_AudioSegment::Chunk(Arc::new(converted_chunk)),
-                })
-            } else {
-                segment
-            };
-
-            self.subscribers.push(converted_segment).await?;
+            fn output_type(&self) -> Option<TypeRequirement> {
+                Some(TypeRequirement::specific($output_type))
+            }
         }
 
-        Ok(())
-    }
+        impl Default for $node_name {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+    };
 }
 
-impl TypedAudioNode for ToF64Node {
-    fn input_type(&self) -> Option<TypeRequirement> {
-        Some(TypeRequirement::any())
-    }
-
-    fn output_type(&self) -> Option<TypeRequirement> {
-        Some(TypeRequirement::specific(SampleType::F64))
-    }
-}
-
-impl Default for ToF64Node {
-    fn default() -> Self {
-        Self::new().0
-    }
-}
+// Générer les 5 converter nodes
+converter_node!(
+    ToI16Node,
+    to_i16,
+    SampleType::I16,
+    "Node de conversion vers I16 (16-bit signed integer)"
+);
+converter_node!(
+    ToI24Node,
+    to_i24,
+    SampleType::I24,
+    "Node de conversion vers I24 (24-bit signed integer)"
+);
+converter_node!(
+    ToI32Node,
+    to_i32,
+    SampleType::I32,
+    "Node de conversion vers I32 (32-bit signed integer)"
+);
+converter_node!(
+    ToF32Node,
+    to_f32,
+    SampleType::F32,
+    "Node de conversion vers F32 (32-bit floating point)"
+);
+converter_node!(
+    ToF64Node,
+    to_f64,
+    SampleType::F64,
+    "Node de conversion vers F64 (64-bit floating point)"
+);
 
 #[cfg(test)]
 mod tests {
@@ -386,7 +184,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_to_f32_node_type_requirements() {
-        let (node, _tx) = ToF32Node::new();
+        let node = ToF32Node::new();
 
         // Vérifier les types d'entrée/sortie
         assert_eq!(
@@ -405,14 +203,60 @@ mod tests {
         );
     }
 
+    // Nœud de test simple qui collecte les segments
+    struct TestCollectorNode {
+        input_tx: mpsc::Sender<Arc<AudioSegment>>,
+        input_rx: mpsc::Receiver<Arc<AudioSegment>>,
+        output_tx: mpsc::Sender<Arc<AudioSegment>>,
+    }
+
+    impl TestCollectorNode {
+        fn new(output_tx: mpsc::Sender<Arc<AudioSegment>>) -> Self {
+            let (input_tx, input_rx) = mpsc::channel(16);
+            Self {
+                input_tx,
+                input_rx,
+                output_tx,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl AudioPipelineNode for TestCollectorNode {
+        fn get_tx(&self) -> Option<mpsc::Sender<Arc<AudioSegment>>> {
+            Some(self.input_tx.clone())
+        }
+
+        fn register(&mut self, _child: Box<dyn AudioPipelineNode>) {
+            panic!("TestCollectorNode is a sink");
+        }
+
+        async fn run(
+            mut self: Box<Self>,
+            _stop_token: CancellationToken,
+        ) -> Result<(), AudioError> {
+            while let Some(segment) = self.input_rx.recv().await {
+                if self.output_tx.send(segment).await.is_err() {
+                    break;
+                }
+            }
+            Ok(())
+        }
+    }
+
     #[tokio::test]
     async fn test_to_i16_node_converts_from_i32() {
-        let (mut node, tx) = ToI16Node::new();
+        let mut node = ToI16Node::new();
         let (out_tx, mut out_rx) = mpsc::channel(16);
-        node.add_subscriber(out_tx);
+        let collector = TestCollectorNode::new(out_tx);
+        node.register(Box::new(collector));
+
+        // Récupérer le tx du node
+        let tx = node.get_tx().unwrap();
 
         // Lancer le node dans une tâche
-        let handle = tokio::spawn(async move { node.run().await });
+        let stop_token = CancellationToken::new();
+        let handle = tokio::spawn(async move { Box::new(node).run(stop_token).await });
 
         // Créer et envoyer un chunk I32
         let stereo = vec![[1_000_000i32 << 16, -500_000i32 << 16]; 100];
@@ -451,12 +295,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_syncmarkers_passthrough() {
-        let (mut node, tx) = ToI16Node::new();
+        let mut node = ToI16Node::new();
         let (out_tx, mut out_rx) = mpsc::channel(16);
-        node.add_subscriber(out_tx);
+        let collector = TestCollectorNode::new(out_tx);
+        node.register(Box::new(collector));
+
+        let tx = node.get_tx().unwrap();
+        let stop_token = CancellationToken::new();
 
         tokio::spawn(async move {
-            node.run().await.unwrap();
+            Box::new(node).run(stop_token).await.unwrap();
         });
 
         // Envoyer un syncmarker
