@@ -1,6 +1,6 @@
 use crate::{
     nodes::{AudioError, TypedAudioNode, DEFAULT_CHUNK_DURATION_MS},
-    pipeline::AudioPipelineNode,
+    pipeline::{AudioPipelineNode, Node, NodeLogic},
     type_constraints::TypeRequirement,
     AudioChunk, AudioChunkData, AudioSegment, I24,
 };
@@ -10,6 +10,199 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::{fs::File, io::AsyncReadExt, sync::mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// NOUVELLE ARCHITECTURE - FileSourceLogic
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Logique pure de lecture de fichier audio
+///
+/// Contient seulement la logique de décodage et d'envoi des segments,
+/// sans la plomberie d'orchestration (gérée par Node<FileSourceLogic>).
+pub struct FileSourceLogic {
+    path: PathBuf,
+    chunk_frames: usize,
+}
+
+impl FileSourceLogic {
+    pub fn new<P: Into<PathBuf>>(path: P, chunk_frames: usize) -> Self {
+        Self {
+            path: path.into(),
+            chunk_frames,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl NodeLogic for FileSourceLogic {
+    async fn process(
+        &mut self,
+        _input: Option<mpsc::Receiver<Arc<AudioSegment>>>,
+        output: Vec<mpsc::Sender<Arc<AudioSegment>>>,
+        stop_token: CancellationToken,
+    ) -> Result<(), AudioError> {
+        tracing::debug!("FileSourceLogic::process started, path={:?}, {} children", self.path, output.len());
+
+        // Macro helper pour envoyer à tous les enfants
+        macro_rules! send_to_children {
+            ($segment:expr) => {
+                for tx in &output {
+                    tx.send($segment.clone())
+                        .await
+                        .map_err(|_| AudioError::ChildDied)?;
+                }
+            };
+        }
+
+        // Ouvrir le fichier
+        let file = File::open(&self.path).await.map_err(|e| {
+            AudioError::IoError(format!("Failed to open {:?}: {}", self.path, e))
+        })?;
+
+        // Décoder le flux audio
+        let mut stream = decode_audio_stream(file)
+            .await
+            .map_err(|e| AudioError::ProcessingError(format!("Decode error: {}", e)))?;
+        let stream_info = stream.info().clone();
+
+        validate_stream(&stream_info)?;
+
+        // Calculer la taille des chunks si non spécifiée (0 = auto)
+        let chunk_frames = if self.chunk_frames == 0 {
+            let frames =
+                (stream_info.sample_rate as f64 * DEFAULT_CHUNK_DURATION_MS / 1000.0) as usize;
+            frames.next_power_of_two().max(256)
+        } else {
+            self.chunk_frames.max(1)
+        };
+
+        // Émettre TopZeroSync
+        let top_zero = AudioSegment::new_top_zero_sync();
+        send_to_children!(top_zero);
+
+        // Extraire et émettre les métadonnées du fichier
+        if let Ok(file_metadata) = AudioFileMetadata::from_file(&self.path) {
+            let mut metadata = MemoryTrackMetadata::new();
+            if let Some(title) = file_metadata.title {
+                let _ = metadata.set_title(Some(title)).await;
+            }
+            if let Some(artist) = file_metadata.artist {
+                let _ = metadata.set_artist(Some(artist)).await;
+            }
+            if let Some(album) = file_metadata.album {
+                let _ = metadata.set_album(Some(album)).await;
+            }
+            if let Some(year) = file_metadata.year {
+                let _ = metadata.set_year(Some(year)).await;
+            }
+            if let Some(duration_secs) = file_metadata.duration_secs {
+                let _ = metadata
+                    .set_duration(Some(Duration::from_secs(duration_secs)))
+                    .await;
+            }
+
+            let track_boundary = AudioSegment::new_track_boundary(
+                0,
+                0.0,
+                Arc::new(tokio::sync::RwLock::new(metadata)),
+            );
+            send_to_children!(track_boundary);
+        }
+
+        // Préparer la lecture des chunks audio
+        let frame_bytes = stream_info.bytes_per_sample() * stream_info.channels as usize;
+        let chunk_byte_len = chunk_frames * frame_bytes;
+        let mut pending = Vec::new();
+        let mut read_buf = vec![0u8; frame_bytes * 512.max(chunk_frames)];
+        let mut chunk_index = 0u64;
+        let mut total_frames = 0u64;
+
+        // Lire et émettre les chunks audio
+        loop {
+            tokio::select! {
+                _ = stop_token.cancelled() => {
+                    tracing::info!("FileSourceLogic: stop requested");
+                    break;
+                }
+
+                read_result = stream.read(&mut read_buf) => {
+                    // Remplir le buffer
+                    if pending.len() < chunk_byte_len {
+                        let read = read_result.map_err(|e| {
+                            AudioError::IoError(format!("I/O error while decoding: {}", e))
+                        })?;
+                        if read == 0 && pending.is_empty() {
+                            break;
+                        }
+                        if read > 0 {
+                            pending.extend_from_slice(&read_buf[..read]);
+                        }
+                    }
+
+                    if pending.is_empty() {
+                        break;
+                    }
+
+                    // Extraire un chunk
+                    let frames_in_pending = pending.len() / frame_bytes;
+                    let frames_to_emit = frames_in_pending.min(chunk_frames);
+                    if frames_to_emit == 0 {
+                        break;
+                    }
+                    let take_bytes = frames_to_emit * frame_bytes;
+                    let chunk_bytes = pending.drain(..take_bytes).collect::<Vec<u8>>();
+
+                    // Calculer le timestamp
+                    let timestamp_sec = total_frames as f64 / stream_info.sample_rate as f64;
+
+                    // Créer et envoyer le segment audio
+                    let segment = bytes_to_segment(
+                        &chunk_bytes,
+                        &stream_info,
+                        frames_to_emit,
+                        chunk_index,
+                        timestamp_sec,
+                    )?;
+
+                    send_to_children!(segment);
+
+                    chunk_index += 1;
+                    total_frames += frames_to_emit as u64;
+                }
+            }
+        }
+
+        // Traiter le reste éventuel (moins qu'un chunk complet)
+        if !pending.is_empty() {
+            let frames = pending.len() / frame_bytes;
+            if frames > 0 {
+                let timestamp_sec = total_frames as f64 / stream_info.sample_rate as f64;
+                let segment =
+                    bytes_to_segment(&pending, &stream_info, frames, chunk_index, timestamp_sec)?;
+                send_to_children!(segment);
+                total_frames += frames as u64;
+                chunk_index += 1;
+            }
+        }
+
+        // Émettre EndOfStream
+        let final_timestamp = total_frames as f64 / stream_info.sample_rate as f64;
+        let eos = AudioSegment::new_end_of_stream(chunk_index, final_timestamp);
+        send_to_children!(eos);
+
+        // Attendre la fin du décodage
+        stream
+            .wait()
+            .await
+            .map_err(|e| AudioError::ProcessingError(format!("Decode task failed: {}", e)))?;
+
+        Ok(())
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// WRAPPER FileSource - Délègue à Node<FileSourceLogic>
+// ═══════════════════════════════════════════════════════════════════════════════
 
 /// FileSource - Lit un fichier audio et publie des `AudioSegment`
 ///
@@ -21,11 +214,13 @@ use tracing;
 /// - `TopZeroSync` au début du flux
 /// - `TrackBoundary` avec les métadonnées du fichier
 /// - `EndOfStream` à la fin du flux
+///
+/// # Architecture
+///
+/// Utilise la nouvelle architecture avec `Node<FileSourceLogic>` pour séparer
+/// la logique métier (décodage) de la plomberie (spawning, monitoring).
 pub struct FileSource {
-    path: PathBuf,
-    chunk_frames: usize,
-    child_txs: Vec<mpsc::Sender<Arc<AudioSegment>>>,
-    children: Vec<Box<dyn AudioPipelineNode>>,
+    inner: Node<FileSourceLogic>,
 }
 
 impl FileSource {
@@ -44,12 +239,28 @@ impl FileSource {
     /// * `path` - chemin du fichier audio à lire
     /// * `chunk_frames` - nombre d'échantillons par canal par chunk (0 = auto)
     pub fn with_chunk_size<P: Into<PathBuf>>(path: P, chunk_frames: usize) -> Self {
+        let logic = FileSourceLogic::new(path, chunk_frames);
         Self {
-            path: path.into(),
-            chunk_frames,
-            child_txs: Vec::new(),
-            children: Vec::new(),
+            inner: Node::new_source(logic),
         }
+    }
+}
+
+#[async_trait::async_trait]
+impl AudioPipelineNode for FileSource {
+    fn get_tx(&self) -> Option<mpsc::Sender<Arc<AudioSegment>>> {
+        self.inner.get_tx()
+    }
+
+    fn register(&mut self, child: Box<dyn AudioPipelineNode>) {
+        self.inner.register(child)
+    }
+
+    async fn run(
+        self: Box<Self>,
+        stop_token: CancellationToken,
+    ) -> Result<(), AudioError> {
+        Box::new(self.inner).run(stop_token).await
     }
 }
 
@@ -188,229 +399,6 @@ fn bytes_to_segment(
     }))
 }
 
-#[async_trait::async_trait]
-impl AudioPipelineNode for FileSource {
-    fn get_tx(&self) -> Option<mpsc::Sender<Arc<AudioSegment>>> {
-        // FileSource est une source, elle n'a pas d'input
-        None
-    }
-
-    fn register(&mut self, child: Box<dyn AudioPipelineNode>) {
-        // Extraire le tx du child avant de le stocker
-        if let Some(tx) = child.get_tx() {
-            self.child_txs.push(tx.clone());
-        }
-        self.children.push(child);
-    }
-
-    async fn run(
-        self: Box<Self>,
-        stop_token: CancellationToken,
-    ) -> Result<(), AudioError> {
-        let Self {
-            path,
-            chunk_frames,
-            child_txs,
-            children,
-        } = *self;
-
-        // 1. Spawner tous les enfants AVANT de commencer à lire
-        let mut child_handles = Vec::new();
-        for child in children {
-            let child_token = stop_token.child_token();
-            let handle = tokio::spawn(async move {
-                child.run(child_token).await
-            });
-            child_handles.push(handle);
-        }
-
-        // 2. Faire le travail de lecture du fichier
-        let work_result: Result<(), AudioError> = async {
-            // Macro helper pour envoyer à tous les enfants
-            macro_rules! send_to_children {
-                ($segment:expr) => {
-                    for tx in &child_txs {
-                        if tx.send($segment.clone()).await.is_err() {
-                            tracing::warn!("FileSource: child died during send");
-                            return Err(AudioError::SendError);
-                        }
-                    }
-                };
-            }
-
-            // Ouvrir le fichier
-            let file = File::open(&path).await.map_err(|e| {
-                AudioError::ProcessingError(format!("Failed to open {:?}: {}", path, e))
-            })?;
-
-            // Décoder le flux audio
-            let mut stream = decode_audio_stream(file)
-                .await
-                .map_err(|e| AudioError::ProcessingError(format!("Decode error: {}", e)))?;
-            let stream_info = stream.info().clone();
-
-            validate_stream(&stream_info)?;
-
-            // Calculer la taille des chunks si non spécifiée (0 = auto)
-            let chunk_frames = if chunk_frames == 0 {
-                let frames =
-                    (stream_info.sample_rate as f64 * DEFAULT_CHUNK_DURATION_MS / 1000.0) as usize;
-                frames.next_power_of_two().max(256)
-            } else {
-                chunk_frames.max(1)
-            };
-
-            // Émettre TopZeroSync
-            let top_zero = AudioSegment::new_top_zero_sync();
-            send_to_children!(top_zero);
-
-            // Extraire et émettre les métadonnées du fichier
-            if let Ok(file_metadata) = AudioFileMetadata::from_file(&path) {
-                let mut metadata = MemoryTrackMetadata::new();
-                if let Some(title) = file_metadata.title {
-                    let _ = metadata.set_title(Some(title)).await;
-                }
-                if let Some(artist) = file_metadata.artist {
-                    let _ = metadata.set_artist(Some(artist)).await;
-                }
-                if let Some(album) = file_metadata.album {
-                    let _ = metadata.set_album(Some(album)).await;
-                }
-                if let Some(year) = file_metadata.year {
-                    let _ = metadata.set_year(Some(year)).await;
-                }
-                if let Some(duration_secs) = file_metadata.duration_secs {
-                    let _ = metadata
-                        .set_duration(Some(Duration::from_secs(duration_secs)))
-                        .await;
-                }
-
-                let track_boundary = AudioSegment::new_track_boundary(
-                    0,
-                    0.0,
-                    Arc::new(tokio::sync::RwLock::new(metadata)),
-                );
-                send_to_children!(track_boundary);
-            }
-
-            // Préparer la lecture des chunks audio
-            let frame_bytes = stream_info.bytes_per_sample() * stream_info.channels as usize;
-            let chunk_byte_len = chunk_frames * frame_bytes;
-            let mut pending = Vec::new();
-            let mut read_buf = vec![0u8; frame_bytes * 512.max(chunk_frames)];
-            let mut chunk_index = 0u64;
-            let mut total_frames = 0u64;
-
-            // Lire et émettre les chunks audio
-            loop {
-                tokio::select! {
-                    _ = stop_token.cancelled() => {
-                        tracing::info!("FileSource: stop requested");
-                        break;
-                    }
-
-                    read_result = stream.read(&mut read_buf) => {
-                        // Remplir le buffer
-                        if pending.len() < chunk_byte_len {
-                            let read = read_result.map_err(|e| {
-                                AudioError::ProcessingError(format!("I/O error while decoding: {}", e))
-                            })?;
-                            if read == 0 && pending.is_empty() {
-                                break;
-                            }
-                            if read > 0 {
-                                pending.extend_from_slice(&read_buf[..read]);
-                            }
-                        }
-
-                        if pending.is_empty() {
-                            break;
-                        }
-
-                        // Extraire un chunk
-                        let frames_in_pending = pending.len() / frame_bytes;
-                        let frames_to_emit = frames_in_pending.min(chunk_frames);
-                        if frames_to_emit == 0 {
-                            break;
-                        }
-                        let take_bytes = frames_to_emit * frame_bytes;
-                        let chunk_bytes = pending.drain(..take_bytes).collect::<Vec<u8>>();
-
-                        // Calculer le timestamp
-                        let timestamp_sec = total_frames as f64 / stream_info.sample_rate as f64;
-
-                        // Créer et envoyer le segment audio
-                        let segment = bytes_to_segment(
-                            &chunk_bytes,
-                            &stream_info,
-                            frames_to_emit,
-                            chunk_index,
-                            timestamp_sec,
-                        )?;
-                        send_to_children!(segment);
-
-                        chunk_index += 1;
-                        total_frames += frames_to_emit as u64;
-                    }
-                }
-            }
-
-            // Traiter le reste éventuel (moins qu'un chunk complet)
-            if !pending.is_empty() {
-                let frames = pending.len() / frame_bytes;
-                if frames > 0 {
-                    let timestamp_sec = total_frames as f64 / stream_info.sample_rate as f64;
-                    let segment =
-                        bytes_to_segment(&pending, &stream_info, frames, chunk_index, timestamp_sec)?;
-                    send_to_children!(segment);
-                    total_frames += frames as u64;
-                    chunk_index += 1;
-                }
-            }
-
-            // Émettre EndOfStream
-            let final_timestamp = total_frames as f64 / stream_info.sample_rate as f64;
-            let eos = AudioSegment::new_end_of_stream(chunk_index, final_timestamp);
-            send_to_children!(eos);
-
-            // Attendre la fin du décodage
-            stream
-                .wait()
-                .await
-                .map_err(|e| AudioError::ProcessingError(format!("Decode task failed: {}", e)))?;
-
-            Ok(())
-        }.await;
-
-        // 3. Arrêter les enfants qui tournent encore (descendant uniquement)
-        stop_token.cancel();
-
-        // 4. Fermer les channels pour signaler EOF
-        drop(child_txs);
-
-        // 5. Attendre que TOUS les enfants se terminent
-        for handle in child_handles {
-            match handle.await {
-                Ok(Ok(())) => {
-                    // Enfant terminé normalement
-                }
-                Ok(Err(e)) => {
-                    // Enfant en erreur → propager
-                    tracing::error!("FileSource: child error: {}", e);
-                    return Err(e);
-                }
-                Err(e) => {
-                    // Panic dans l'enfant
-                    tracing::error!("FileSource: child panic: {}", e);
-                    return Err(AudioError::ProcessingError(format!("Child panic: {}", e)));
-                }
-            }
-        }
-
-        // 6. Retourner notre propre résultat (montant vers le parent)
-        work_result
-    }
-}
 
 impl TypedAudioNode for FileSource {
     fn input_type(&self) -> Option<TypeRequirement> {

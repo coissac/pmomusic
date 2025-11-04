@@ -216,7 +216,7 @@ mod tests {
         let len = match_chunk!(&chunk, data => data.len());
         assert_eq!(len, 1);
 
-        let sample_rate = match_chunk!(&chunk, data => data.sample_rate());
+        let sample_rate = match_chunk!(&chunk, data => data.get_sample_rate());
         assert_eq!(sample_rate, 44100);
     }
 
@@ -227,7 +227,7 @@ mod tests {
         let modified = map_chunk!(&chunk, data => data.set_gain_db(6.0));
 
         match_chunk!(&modified, data => {
-            assert_eq!(data.gain_db(), 6.0);
+            assert_eq!(data.get_gain_db(), 6.0);
         });
     }
 
