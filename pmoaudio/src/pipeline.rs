@@ -482,6 +482,15 @@ impl<L: NodeLogic> Node<L> {
     pub fn logic(&self) -> &L {
         &self.logic
     }
+
+    /// Retourne une référence mutable vers la logique métier du nœud
+    ///
+    /// Permet de configurer la logique après construction mais avant run().
+    /// Utile pour définir des options qui ne peuvent pas être connues
+    /// au moment de la construction du nœud.
+    pub fn logic_mut(&mut self) -> &mut L {
+        &mut self.logic
+    }
 }
 
 #[async_trait::async_trait]

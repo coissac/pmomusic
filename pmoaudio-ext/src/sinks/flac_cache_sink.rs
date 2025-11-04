@@ -653,10 +653,7 @@ impl AudioPipelineNode for FlacCacheSink {
         // Transférer le playlist_handle_pending à la logique si présent
         #[cfg(feature = "playlist")]
         if let Some(handle) = self.playlist_handle_pending.take() {
-            // FIXME: Node devrait exposer une méthode logic_mut() pour permettre
-            // la configuration post-construction. Pour l'instant, on ignore ce handle.
-            // L'utilisateur devra configurer la playlist avant construction.
-            let _ = handle;
+            self.inner.logic_mut().set_playlist_handle(handle);
         }
 
         Box::new(self.inner).run(stop_token).await
