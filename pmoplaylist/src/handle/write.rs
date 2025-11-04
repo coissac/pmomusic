@@ -1,6 +1,5 @@
 //! WriteHandle : accès exclusif en écriture à une playlist
 
-use crate::playlist::core::PlaylistConfig;
 use crate::playlist::record::Record;
 use crate::playlist::Playlist;
 use crate::Result;
@@ -185,7 +184,7 @@ impl WriteHandle {
 
         // Créer la nouvelle playlist persistante
         let manager = crate::manager::PlaylistManager();
-        let mut new_handle = manager.create_persistent_playlist(new_id).await?;
+        let new_handle = manager.create_persistent_playlist(new_id).await?;
 
         // Copier le titre et la config
         new_handle.set_title(title).await?;

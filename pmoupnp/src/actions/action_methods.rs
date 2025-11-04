@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tracing::{info, trace};
+use tracing::info;
 use xmltree::{Element, XMLNode};
 
 use crate::actions::{Action, ActionHandler, ActionInstance, Argument, ArgumentSet};

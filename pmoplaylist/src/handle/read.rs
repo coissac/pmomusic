@@ -4,7 +4,7 @@ use crate::playlist::Playlist;
 use crate::track::PlaylistTrack;
 use crate::Result;
 use pmocache::cache_trait::FileCache;
-use pmodidl::{Container, Item, Resource};
+use pmodidl::{Container, Item};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
