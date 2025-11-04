@@ -251,8 +251,6 @@ impl NodeLogic for FlacCacheSinkLogic {
 
 pub struct FlacCacheSink {
     inner: Node<FlacCacheSinkLogic>,
-    #[cfg(feature = "playlist")]
-    playlist_handle_pending: Option<Arc<pmoplaylist::WriteHandle>>,
 }
 
 impl FlacCacheSink {
@@ -297,8 +295,6 @@ impl FlacCacheSink {
         let logic = FlacCacheSinkLogic::new(cache, covers, collection, encoder_options, 8);
         Self {
             inner: Node::new_with_input(logic, channel_size),
-            #[cfg(feature = "playlist")]
-            playlist_handle_pending: None,
         }
     }
 
@@ -309,7 +305,7 @@ impl FlacCacheSink {
     /// * `handle` - WriteHandle de la playlist qui recevra les pk des tracks
     #[cfg(feature = "playlist")]
     pub fn register_playlist(&mut self, handle: pmoplaylist::WriteHandle) {
-        self.playlist_handle_pending = Some(Arc::new(handle));
+        self.inner.logic_mut().set_playlist_handle(Arc::new(handle));
     }
 }
 
@@ -649,13 +645,7 @@ impl AudioPipelineNode for FlacCacheSink {
         panic!("FlacCacheSink is a terminal sink and cannot have children");
     }
 
-    async fn run(mut self: Box<Self>, stop_token: CancellationToken) -> Result<(), AudioError> {
-        // Transférer le playlist_handle_pending à la logique si présent
-        #[cfg(feature = "playlist")]
-        if let Some(handle) = self.playlist_handle_pending.take() {
-            self.inner.logic_mut().set_playlist_handle(handle);
-        }
-
+    async fn run(self: Box<Self>, stop_token: CancellationToken) -> Result<(), AudioError> {
         Box::new(self.inner).run(stop_token).await
     }
 }
