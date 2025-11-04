@@ -74,6 +74,12 @@ pmoserver = { path = "../pmoserver", optional = true }
 utoipa = { version = "5.4.0", optional = true }
 axum = { version = "0.8.4", optional = true }
 
+# pmoaudio node support
+pmoaudio = { path = "../pmoaudio", optional = true }
+pmoflac = { path = "../pmoflac", optional = true }
+pmometadata = { path = "../pmometadata", optional = true }
+futures-util = { version = "0.3", optional = true }
+
 [features]
 default = ["metadata-only", "pmoconfig"]
 # Mode métadonnées seules (pas de décodage FLAC)
@@ -90,6 +96,8 @@ pmoconfig = ["dep:pmoconfig"]
 cache = []
 # Active le streaming progressif avec FFmpeg (latence réduite)
 ffmpeg = ["dep:ffmpeg-next"]
+# Active le support pmoaudio node (RadioParadiseStreamSource)
+pmoaudio = ["dep:pmoaudio", "dep:pmoflac", "dep:pmometadata", "dep:futures-util"]
 
 [dev-dependencies]
 # Tests
