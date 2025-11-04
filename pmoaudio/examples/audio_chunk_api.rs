@@ -33,7 +33,7 @@ fn example_create_chunks() {
     println!(
         "Chunk I32: {} frames @ {}Hz",
         chunk_i32.len(),
-        chunk_i32.sample_rate()
+        chunk_i32.get_sample_rate()
     );
 
     // Chunk F32 stéréo (normalisé [-1.0, 1.0])
@@ -42,7 +42,7 @@ fn example_create_chunks() {
     println!(
         "Chunk F32: {} frames @ {}Hz",
         chunk_f32.len(),
-        chunk_f32.sample_rate()
+        chunk_f32.get_sample_rate()
     );
 
     // Chunk depuis canaux séparés
@@ -57,7 +57,7 @@ fn example_create_chunks() {
         48000,
         6.0, // +6 dB
     );
-    println!("Chunk with gain: {} dB\n", chunk_with_gain.gain_db());
+    println!("Chunk with gain: {} dB\n", chunk_with_gain.get_gain_db());
 }
 
 fn example_conversions() {

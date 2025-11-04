@@ -105,25 +105,25 @@ impl<T: Sample> AudioChunkData<T> {
 
     /// Taux d'échantillonnage (Hz)
     #[inline]
-    pub fn sample_rate(&self) -> u32 {
+    pub fn get_sample_rate(&self) -> u32 {
         self.sample_rate
     }
 
     /// Gain courant en décibels
     #[inline]
-    pub fn gain_db(&self) -> f64 {
+    pub fn get_gain_db(&self) -> f64 {
         self.gain_db
     }
 
     /// Gain sous forme linéaire
     #[inline]
-    pub fn gain_linear(&self) -> f64 {
+    pub fn get_gain_linear(&self) -> f64 {
         gain_linear_from_db(self.gain_db)
     }
 
     /// Retourne une vue immuable sur les frames `[L, R]`
     #[inline]
-    pub fn frames(&self) -> &[[T; 2]] {
+    pub fn get_frames(&self) -> &[[T; 2]] {
         &self.stereo
     }
 
@@ -336,22 +336,22 @@ impl AudioChunk {
     /// Taux d'échantillonnage (Hz)
     pub fn sample_rate(&self) -> u32 {
         match self {
-            AudioChunk::I16(d) => d.sample_rate(),
-            AudioChunk::I24(d) => d.sample_rate(),
-            AudioChunk::I32(d) => d.sample_rate(),
-            AudioChunk::F32(d) => d.sample_rate(),
-            AudioChunk::F64(d) => d.sample_rate(),
+            AudioChunk::I16(d) => d.get_sample_rate(),
+            AudioChunk::I24(d) => d.get_sample_rate(),
+            AudioChunk::I32(d) => d.get_sample_rate(),
+            AudioChunk::F32(d) => d.get_sample_rate(),
+            AudioChunk::F64(d) => d.get_sample_rate(),
         }
     }
 
     /// Gain courant en décibels
     pub fn gain_db(&self) -> f64 {
         match self {
-            AudioChunk::I16(d) => d.gain_db(),
-            AudioChunk::I24(d) => d.gain_db(),
-            AudioChunk::I32(d) => d.gain_db(),
-            AudioChunk::F32(d) => d.gain_db(),
-            AudioChunk::F64(d) => d.gain_db(),
+            AudioChunk::I16(d) => d.get_gain_db(),
+            AudioChunk::I24(d) => d.get_gain_db(),
+            AudioChunk::I32(d) => d.get_gain_db(),
+            AudioChunk::F32(d) => d.get_gain_db(),
+            AudioChunk::F64(d) => d.get_gain_db(),
         }
     }
 
@@ -387,7 +387,7 @@ impl AudioChunk {
     pub fn apply_gain(self) -> Self {
         match self {
             AudioChunk::I16(d) => {
-                let gain_db = d.gain_db();
+                let gain_db = d.get_gain_db();
                 if gain_db.abs() < f64::EPSILON {
                     return AudioChunk::I16(d);
                 }
@@ -401,10 +401,10 @@ impl AudioChunk {
                         .round()
                         .clamp(-32768.0, 32767.0) as i16;
                 }
-                AudioChunk::I16(AudioChunkData::new(stereo, d.sample_rate(), 0.0))
+                AudioChunk::I16(AudioChunkData::new(stereo, d.get_sample_rate(), 0.0))
             }
             AudioChunk::I24(d) => {
-                let gain_db = d.gain_db();
+                let gain_db = d.get_gain_db();
                 if gain_db.abs() < f64::EPSILON {
                     return AudioChunk::I24(d);
                 }
@@ -420,7 +420,7 @@ impl AudioChunk {
                     frame[0] = I24::new_clamped(l);
                     frame[1] = I24::new_clamped(r);
                 }
-                AudioChunk::I24(AudioChunkData::new(stereo, d.sample_rate(), 0.0))
+                AudioChunk::I24(AudioChunkData::new(stereo, d.get_sample_rate(), 0.0))
             }
             AudioChunk::I32(d) => AudioChunk::I32(d.apply_gain()),
             AudioChunk::F32(d) => AudioChunk::F32(d.apply_gain()),
@@ -497,18 +497,18 @@ impl AudioIntegerChunk {
     /// Taux d'échantillonnage (Hz)
     pub fn sample_rate(&self) -> u32 {
         match self {
-            AudioIntegerChunk::I16(d) => d.sample_rate(),
-            AudioIntegerChunk::I24(d) => d.sample_rate(),
-            AudioIntegerChunk::I32(d) => d.sample_rate(),
+            AudioIntegerChunk::I16(d) => d.get_sample_rate(),
+            AudioIntegerChunk::I24(d) => d.get_sample_rate(),
+            AudioIntegerChunk::I32(d) => d.get_sample_rate(),
         }
     }
 
     /// Gain courant en décibels
     pub fn gain_db(&self) -> f64 {
         match self {
-            AudioIntegerChunk::I16(d) => d.gain_db(),
-            AudioIntegerChunk::I24(d) => d.gain_db(),
-            AudioIntegerChunk::I32(d) => d.gain_db(),
+            AudioIntegerChunk::I16(d) => d.get_gain_db(),
+            AudioIntegerChunk::I24(d) => d.get_gain_db(),
+            AudioIntegerChunk::I32(d) => d.get_gain_db(),
         }
     }
 
@@ -542,7 +542,7 @@ impl AudioIntegerChunk {
     pub fn apply_gain(self) -> Self {
         match self {
             AudioIntegerChunk::I16(d) => {
-                let gain_db = d.gain_db();
+                let gain_db = d.get_gain_db();
                 if gain_db.abs() < f64::EPSILON {
                     return AudioIntegerChunk::I16(d);
                 }
@@ -556,10 +556,10 @@ impl AudioIntegerChunk {
                         .round()
                         .clamp(-32768.0, 32767.0) as i16;
                 }
-                AudioIntegerChunk::I16(AudioChunkData::new(stereo, d.sample_rate(), 0.0))
+                AudioIntegerChunk::I16(AudioChunkData::new(stereo, d.get_sample_rate(), 0.0))
             }
             AudioIntegerChunk::I24(d) => {
-                let gain_db = d.gain_db();
+                let gain_db = d.get_gain_db();
                 if gain_db.abs() < f64::EPSILON {
                     return AudioIntegerChunk::I24(d);
                 }
@@ -575,7 +575,7 @@ impl AudioIntegerChunk {
                     frame[0] = I24::new_clamped(l);
                     frame[1] = I24::new_clamped(r);
                 }
-                AudioIntegerChunk::I24(AudioChunkData::new(stereo, d.sample_rate(), 0.0))
+                AudioIntegerChunk::I24(AudioChunkData::new(stereo, d.get_sample_rate(), 0.0))
             }
             AudioIntegerChunk::I32(d) => AudioIntegerChunk::I32(d.apply_gain()),
         }
@@ -676,12 +676,12 @@ impl AudioIntegerChunk {
     pub fn frames(&self) -> Box<dyn Iterator<Item = [i32; 2]> + '_> {
         match self {
             AudioIntegerChunk::I16(d) => {
-                Box::new(d.frames().iter().map(|f| [f[0] as i32, f[1] as i32]))
+                Box::new(d.get_frames().iter().map(|f| [f[0] as i32, f[1] as i32]))
             }
             AudioIntegerChunk::I24(d) => {
-                Box::new(d.frames().iter().map(|f| [f[0].as_i32(), f[1].as_i32()]))
+                Box::new(d.get_frames().iter().map(|f| [f[0].as_i32(), f[1].as_i32()]))
             }
-            AudioIntegerChunk::I32(d) => Box::new(d.frames().iter().map(|f| [f[0], f[1]])),
+            AudioIntegerChunk::I32(d) => Box::new(d.get_frames().iter().map(|f| [f[0], f[1]])),
         }
     }
 }
@@ -723,16 +723,16 @@ impl AudioFloatChunk {
     /// Taux d'échantillonnage (Hz)
     pub fn sample_rate(&self) -> u32 {
         match self {
-            AudioFloatChunk::F32(d) => d.sample_rate(),
-            AudioFloatChunk::F64(d) => d.sample_rate(),
+            AudioFloatChunk::F32(d) => d.get_sample_rate(),
+            AudioFloatChunk::F64(d) => d.get_sample_rate(),
         }
     }
 
     /// Gain courant en décibels
     pub fn gain_db(&self) -> f64 {
         match self {
-            AudioFloatChunk::F32(d) => d.gain_db(),
-            AudioFloatChunk::F64(d) => d.gain_db(),
+            AudioFloatChunk::F32(d) => d.get_gain_db(),
+            AudioFloatChunk::F64(d) => d.get_gain_db(),
         }
     }
 
@@ -829,9 +829,9 @@ impl AudioFloatChunk {
     pub fn frames(&self) -> Box<dyn Iterator<Item = [f64; 2]> + '_> {
         match self {
             AudioFloatChunk::F32(d) => {
-                Box::new(d.frames().iter().map(|f| [f[0] as f64, f[1] as f64]))
+                Box::new(d.get_frames().iter().map(|f| [f[0] as f64, f[1] as f64]))
             }
-            AudioFloatChunk::F64(d) => Box::new(d.frames().iter().map(|f| [f[0], f[1]])),
+            AudioFloatChunk::F64(d) => Box::new(d.get_frames().iter().map(|f| [f[0], f[1]])),
         }
     }
 }
@@ -885,9 +885,9 @@ mod tests {
         let chunk = AudioChunkData::new(stereo, 48000, 0.0);
 
         assert_eq!(chunk.len(), 2);
-        assert_eq!(chunk.sample_rate(), 48000);
+        assert_eq!(chunk.get_sample_rate(), 48000);
         assert!(!chunk.is_empty());
-        assert_eq!(chunk.gain_db(), 0.0);
+        assert_eq!(chunk.get_gain_db(), 0.0);
     }
 
     #[test]
@@ -896,7 +896,7 @@ mod tests {
         let chunk = AudioChunkData::new(stereo, 48000, -6.0);
 
         assert_eq!(chunk.len(), 2);
-        assert_eq!(chunk.gain_db(), -6.0);
+        assert_eq!(chunk.get_gain_db(), -6.0);
     }
 
     #[test]

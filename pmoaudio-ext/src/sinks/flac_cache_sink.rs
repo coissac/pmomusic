@@ -2,6 +2,7 @@
 
 use pmoaudio::{
     nodes::{AudioError, TypedAudioNode, DEFAULT_CHANNEL_SIZE},
+    pipeline::{Node, NodeLogic},
     type_constraints::TypeRequirement,
     AudioChunk, AudioPipelineNode, AudioSegment, SyncMarker, _AudioSegment,
 };
@@ -30,9 +31,20 @@ use tracing::warn;
 /// - Copie les métadonnées du TrackBoundary dans le cache après ingestion
 /// - Peut optionnellement ajouter les tracks à une playlist via `register_playlist()`
 /// - Termine l'encodage proprement quand il reçoit EndOfStream
-pub struct FlacCacheSink {
-    tx: mpsc::Sender<Arc<AudioSegment>>,
-    rx: mpsc::Receiver<Arc<AudioSegment>>,
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FlacCacheSinkLogic - Logique métier pure
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Signal retourné par pump_segments indiquant pourquoi l'encodage s'est arrêté.
+enum StopReason {
+    TrackBoundary(Arc<RwLock<dyn pmometadata::TrackMetadata>>),
+    EndOfStream,
+    ChannelClosed,
+}
+
+/// Logique pure d'encodage FLAC vers le cache
+pub struct FlacCacheSinkLogic {
     cache: Arc<pmoaudiocache::Cache>,
     covers: Arc<pmocovers::Cache>,
     collection: Option<String>,
@@ -40,6 +52,207 @@ pub struct FlacCacheSink {
     pcm_buffer_capacity: usize,
     #[cfg(feature = "playlist")]
     playlist_handle: Option<Arc<pmoplaylist::WriteHandle>>,
+}
+
+impl FlacCacheSinkLogic {
+    pub fn new(
+        cache: Arc<pmoaudiocache::Cache>,
+        covers: Arc<pmocovers::Cache>,
+        collection: Option<String>,
+        encoder_options: EncoderOptions,
+        pcm_buffer_capacity: usize,
+    ) -> Self {
+        Self {
+            cache,
+            covers,
+            collection,
+            encoder_options,
+            pcm_buffer_capacity,
+            #[cfg(feature = "playlist")]
+            playlist_handle: None,
+        }
+    }
+
+    #[cfg(feature = "playlist")]
+    pub fn set_playlist_handle(&mut self, handle: Arc<pmoplaylist::WriteHandle>) {
+        self.playlist_handle = Some(handle);
+    }
+}
+
+#[async_trait::async_trait]
+impl NodeLogic for FlacCacheSinkLogic {
+    async fn process(
+        &mut self,
+        input: Option<mpsc::Receiver<Arc<AudioSegment>>>,
+        _output: Vec<mpsc::Sender<Arc<AudioSegment>>>,
+        stop_token: CancellationToken,
+    ) -> Result<(), AudioError> {
+        let mut rx = input.expect("FlacCacheSink must have input");
+        let mut track_number = 0;
+
+        loop {
+            // Attendre le premier chunk audio pour cette track
+            let (first_segment, track_metadata) =
+                match wait_for_first_audio_chunk_with_metadata(&mut rx, &stop_token).await {
+                    Ok(result) => result,
+                    Err(_) => {
+                        // Plus d'audio disponible
+                        return Ok(());
+                    }
+                };
+
+            // Extraire les informations du premier chunk
+            let first_chunk = first_segment.as_chunk().unwrap();
+            let sample_rate = first_chunk.sample_rate();
+            let bits_per_sample = get_chunk_bit_depth(first_chunk);
+
+            let format = PcmFormat {
+                sample_rate,
+                channels: 2,
+                bits_per_sample,
+            };
+            if let Err(err) = format.validate() {
+                return Err(AudioError::ProcessingError(format!(
+                    "Invalid PCM format: {}",
+                    err
+                )));
+            }
+
+            // Créer le pipeline d'encodage pour cette track
+            let (pcm_tx, pcm_rx) = mpsc::channel::<Vec<u8>>(self.pcm_buffer_capacity);
+
+            // Préparer les options d'encodage avec les métadonnées du TrackBoundary
+            let mut options_with_metadata = self.encoder_options.clone();
+            options_with_metadata.metadata = track_metadata.clone();
+
+            // Créer l'encoder
+            let reader = ByteStreamReader::new(pcm_rx);
+            let mut flac_stream = encode_flac_stream(reader, format, options_with_metadata)
+                .await
+                .map_err(|e| {
+                    AudioError::ProcessingError(format!("FLAC encode init failed: {}", e))
+                })?;
+
+            // Créer un buffer pour collecter le FLAC encodé
+            let mut flac_buffer = Vec::new();
+
+            // Exécuter pump et copy en parallèle
+            let pump_future = pump_track_segments(
+                first_segment,
+                &mut rx,
+                pcm_tx,
+                bits_per_sample,
+                sample_rate,
+                &stop_token,
+            );
+            let copy_future = async {
+                tokio::io::copy(&mut flac_stream, &mut flac_buffer)
+                    .await
+                    .map_err(|e| {
+                        AudioError::ProcessingError(format!("FLAC write failed: {}", e))
+                    })?;
+                flac_stream
+                    .wait()
+                    .await
+                    .map_err(|e| AudioError::ProcessingError(format!("Encoder failed: {}", e)))?;
+                Ok::<_, AudioError>(())
+            };
+
+            // Attendre les deux tâches en parallèle
+            let (copy_result, pump_result) = tokio::join!(copy_future, pump_future);
+            copy_result?;
+            let (_chunks, _samples, _duration_sec, stop_reason) = pump_result?;
+
+            // Ingérer le FLAC dans le cache
+            let flac_reader = Cursor::new(flac_buffer.clone());
+            let collection_ref = self.collection.as_deref();
+            let pk = self.cache
+                .add_from_reader(
+                    None,
+                    flac_reader,
+                    Some(flac_buffer.len() as u64),
+                    collection_ref,
+                )
+                .await
+                .map_err(|e| {
+                    AudioError::ProcessingError(format!("Failed to add to cache: {}", e))
+                })?;
+
+            // Copier les métadonnées du TrackBoundary dans le cache
+            if let Some(src_metadata) = track_metadata {
+                let dest_metadata = self.cache.track_metadata(&pk);
+
+                // Utiliser copy_metadata_into pour copier toutes les métadonnées
+                pmometadata::copy_metadata_into(&src_metadata, &dest_metadata)
+                    .await
+                    .map_err(|e| {
+                        AudioError::ProcessingError(format!(
+                            "Failed to copy metadata to cache: {}",
+                            e
+                        ))
+                    })?;
+
+                let url = match dest_metadata.read().await.get_cover_url().await {
+                    Ok(url) => url,
+                    Err(e) if e.is_transient() => None,
+                    Err(_) => {
+                        warn!("Cannot obtain cover for audio asset {}", pk);
+                        None
+                    }
+                };
+
+                if url.is_some() {
+                    let _ = match self.covers
+                        .add_from_url(&url.unwrap(), self.collection.as_deref())
+                        .await
+                    {
+                        Ok(pk_covers) => {
+                            dest_metadata
+                                .write()
+                                .await
+                                .set_cover_pk(Some(pk_covers))
+                                .await
+                        }
+                        Err(_) => {
+                            warn!("Cannot obtain cover for audio asset {}", pk);
+                            Ok(Some(()))
+                        }
+                    };
+                }
+            }
+
+            // Ajouter à la playlist si enregistrée
+            #[cfg(feature = "playlist")]
+            if let Some(ref playlist_handle) = self.playlist_handle {
+                playlist_handle.push(pk.clone()).await.map_err(|e| {
+                    AudioError::ProcessingError(format!("Failed to add to playlist: {}", e))
+                })?;
+            }
+
+            // Vérifier le stop_reason pour savoir si on continue
+            match stop_reason {
+                StopReason::TrackBoundary(_metadata) => {
+                    // Continuer avec la prochaine track
+                    track_number += 1;
+                    continue;
+                }
+                StopReason::EndOfStream | StopReason::ChannelClosed => {
+                    // Fin de l'encodage
+                    return Ok(());
+                }
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FlacCacheSink - Wrapper utilisant Node<FlacCacheSinkLogic>
+// ═══════════════════════════════════════════════════════════════════════════
+
+pub struct FlacCacheSink {
+    inner: Node<FlacCacheSinkLogic>,
+    #[cfg(feature = "playlist")]
+    playlist_handle_pending: Option<Arc<pmoplaylist::WriteHandle>>,
 }
 
 impl FlacCacheSink {
@@ -81,17 +294,11 @@ impl FlacCacheSink {
         encoder_options: EncoderOptions,
         collection: Option<String>,
     ) -> Self {
-        let (tx, rx) = mpsc::channel(channel_size);
+        let logic = FlacCacheSinkLogic::new(cache, covers, collection, encoder_options, 8);
         Self {
-            tx,
-            rx,
-            cache,
-            covers,
-            collection,
-            encoder_options,
-            pcm_buffer_capacity: 8,
+            inner: Node::new_with_input(logic, channel_size),
             #[cfg(feature = "playlist")]
-            playlist_handle: None,
+            playlist_handle_pending: None,
         }
     }
 
@@ -102,211 +309,8 @@ impl FlacCacheSink {
     /// * `handle` - WriteHandle de la playlist qui recevra les pk des tracks
     #[cfg(feature = "playlist")]
     pub fn register_playlist(&mut self, handle: pmoplaylist::WriteHandle) {
-        self.playlist_handle = Some(Arc::new(handle));
+        self.playlist_handle_pending = Some(Arc::new(handle));
     }
-
-    /// Lance l'encodage et l'ingestion dans le cache (version interne).
-    ///
-    /// Cette méthode crée une nouvelle entrée de cache pour chaque TrackBoundary rencontré.
-    /// Les métadonnées du TrackBoundary sont copiées dans le cache après l'ingestion.
-    async fn run_internal(
-        self,
-        stop_token: CancellationToken,
-    ) -> Result<FlacCacheSinkStats, AudioError> {
-        let FlacCacheSink {
-            tx: _,
-            mut rx,
-            cache,
-            covers,
-            collection,
-            encoder_options,
-            pcm_buffer_capacity,
-            #[cfg(feature = "playlist")]
-            playlist_handle,
-        } = self;
-
-        let mut all_tracks = Vec::new();
-        let mut track_number = 0;
-
-        loop {
-            // Attendre le premier chunk audio pour cette track, en capturant les métadonnées du TrackBoundary
-            let (first_segment, track_metadata) =
-                match wait_for_first_audio_chunk_with_metadata(&mut rx, &stop_token).await {
-                    Ok(result) => result,
-                    Err(_) => {
-                        // Plus d'audio disponible
-                        if all_tracks.is_empty() {
-                            return Err(AudioError::ProcessingError(
-                                "No audio data received".into(),
-                            ));
-                        }
-                        break;
-                    }
-                };
-
-            // Extraire les informations du premier chunk
-            let first_chunk = first_segment.as_chunk().unwrap();
-            let sample_rate = first_chunk.sample_rate();
-            let bits_per_sample = get_chunk_bit_depth(first_chunk);
-
-            let format = PcmFormat {
-                sample_rate,
-                channels: 2,
-                bits_per_sample,
-            };
-            if let Err(err) = format.validate() {
-                return Err(AudioError::ProcessingError(format!(
-                    "Invalid PCM format: {}",
-                    err
-                )));
-            }
-
-            // Créer le pipeline d'encodage pour cette track
-            let (pcm_tx, pcm_rx) = mpsc::channel::<Vec<u8>>(pcm_buffer_capacity);
-
-            // Préparer les options d'encodage avec les métadonnées du TrackBoundary
-            let mut options_with_metadata = encoder_options.clone();
-            options_with_metadata.metadata = track_metadata.clone();
-
-            // Créer l'encoder
-            let reader = ByteStreamReader::new(pcm_rx);
-            let mut flac_stream = encode_flac_stream(reader, format, options_with_metadata)
-                .await
-                .map_err(|e| {
-                    AudioError::ProcessingError(format!("FLAC encode init failed: {}", e))
-                })?;
-
-            // Créer un buffer pour collecter le FLAC encodé
-            let mut flac_buffer = Vec::new();
-
-            // Exécuter pump et copy en parallèle
-            let pump_future = pump_track_segments(
-                first_segment,
-                &mut rx,
-                pcm_tx,
-                bits_per_sample,
-                sample_rate,
-                &stop_token,
-            );
-            let copy_future = async {
-                tokio::io::copy(&mut flac_stream, &mut flac_buffer)
-                    .await
-                    .map_err(|e| {
-                        AudioError::ProcessingError(format!("FLAC write failed: {}", e))
-                    })?;
-                flac_stream
-                    .wait()
-                    .await
-                    .map_err(|e| AudioError::ProcessingError(format!("Encoder failed: {}", e)))?;
-                Ok::<_, AudioError>(())
-            };
-
-            // Attendre les deux tâches en parallèle
-            let (copy_result, pump_result): (
-                Result<(), AudioError>,
-                Result<(u64, u64, f64, StopReason), AudioError>,
-            ) = tokio::join!(copy_future, pump_future);
-            copy_result?;
-            let (chunks, samples, duration_sec, stop_reason) = pump_result?;
-
-            // Ingérer le FLAC dans le cache
-            let flac_reader = Cursor::new(flac_buffer.clone());
-            let collection_ref = collection.as_deref();
-            let pk = cache
-                .add_from_reader(
-                    None,
-                    flac_reader,
-                    Some(flac_buffer.len() as u64),
-                    collection_ref,
-                )
-                .await
-                .map_err(|e| {
-                    AudioError::ProcessingError(format!("Failed to add to cache: {}", e))
-                })?;
-
-            // Copier les métadonnées du TrackBoundary dans le cache
-            if let Some(src_metadata) = track_metadata {
-                let dest_metadata = cache.track_metadata(&pk);
-
-                // Utiliser copy_metadata_into pour copier toutes les métadonnées
-                pmometadata::copy_metadata_into(&src_metadata, &dest_metadata)
-                    .await
-                    .map_err(|e| {
-                        AudioError::ProcessingError(format!(
-                            "Failed to copy metadata to cache: {}",
-                            e
-                        ))
-                    })?;
-
-                let url = match dest_metadata.read().await.get_cover_url().await {
-                    Ok(url) => url,
-                    Err(e) if e.is_transient() => None,
-                    Err(_) => {
-                        warn!("Cannot obtain cover for audio asset {}", pk);
-                        None
-                    }
-                };
-
-                if url.is_some() {
-                    let _ = match covers
-                        .add_from_url(&url.unwrap(), collection.as_deref())
-                        .await
-                    {
-                        Ok(pk_covers) => {
-                            dest_metadata
-                                .write()
-                                .await
-                                .set_cover_pk(Some(pk_covers))
-                                .await
-                        }
-                        Err(_) => {
-                            warn!("Cannot obtain cover for audio asset {}", pk);
-                            Ok(Some(()))
-                        }
-                    };
-                }
-            }
-
-            // Ajouter à la playlist si enregistrée
-            #[cfg(feature = "playlist")]
-            if let Some(ref playlist_handle) = playlist_handle {
-                playlist_handle.push(pk.clone()).await.map_err(|e| {
-                    AudioError::ProcessingError(format!("Failed to add to playlist: {}", e))
-                })?;
-            }
-
-            // Ajouter les stats de cette track
-            all_tracks.push(TrackStats {
-                pk,
-                track_number,
-                chunks_received: chunks,
-                total_samples: samples,
-                total_duration_sec: duration_sec,
-            });
-
-            // Vérifier le stop_reason pour savoir si on continue
-            match stop_reason {
-                StopReason::TrackBoundary(_metadata) => {
-                    // Continuer avec la prochaine track
-                    track_number += 1;
-                    continue;
-                }
-                StopReason::EndOfStream | StopReason::ChannelClosed => {
-                    // Fin de l'encodage
-                    break;
-                }
-            }
-        }
-
-        Ok(FlacCacheSinkStats { tracks: all_tracks })
-    }
-}
-
-/// Signal retourné par pump_segments indiquant pourquoi l'encodage s'est arrêté.
-enum StopReason {
-    TrackBoundary(Arc<RwLock<dyn pmometadata::TrackMetadata>>),
-    EndOfStream,
-    ChannelClosed,
 }
 
 /// Attend et retourne le premier chunk audio avec les métadonnées du TrackBoundary si présent.
@@ -481,13 +485,13 @@ fn chunk_to_pcm_bytes(chunk: &AudioChunk, bits_per_sample: u8) -> Result<Vec<u8>
     match (chunk, bits_per_sample) {
         // I16 source
         (AudioChunk::I16(data), 16) => {
-            for frame in data.frames() {
+            for frame in data.get_frames() {
                 bytes.extend_from_slice(&frame[0].to_le_bytes());
                 bytes.extend_from_slice(&frame[1].to_le_bytes());
             }
         }
         (AudioChunk::I16(data), 24) => {
-            for frame in data.frames() {
+            for frame in data.get_frames() {
                 let left = (frame[0] as i32) << 8;
                 let right = (frame[1] as i32) << 8;
                 bytes.extend_from_slice(&left.to_le_bytes()[..3]);
@@ -495,7 +499,7 @@ fn chunk_to_pcm_bytes(chunk: &AudioChunk, bits_per_sample: u8) -> Result<Vec<u8>
             }
         }
         (AudioChunk::I16(data), 32) => {
-            for frame in data.frames() {
+            for frame in data.get_frames() {
                 let left = (frame[0] as i32) << 16;
                 let right = (frame[1] as i32) << 16;
                 bytes.extend_from_slice(&left.to_le_bytes());
@@ -505,7 +509,7 @@ fn chunk_to_pcm_bytes(chunk: &AudioChunk, bits_per_sample: u8) -> Result<Vec<u8>
 
         // I24 source
         (AudioChunk::I24(data), 16) => {
-            for frame in data.frames() {
+            for frame in data.get_frames() {
                 let left = (frame[0].as_i32() >> 8) as i16;
                 let right = (frame[1].as_i32() >> 8) as i16;
                 bytes.extend_from_slice(&left.to_le_bytes());
@@ -513,13 +517,13 @@ fn chunk_to_pcm_bytes(chunk: &AudioChunk, bits_per_sample: u8) -> Result<Vec<u8>
             }
         }
         (AudioChunk::I24(data), 24) => {
-            for frame in data.frames() {
+            for frame in data.get_frames() {
                 bytes.extend_from_slice(&frame[0].as_i32().to_le_bytes()[..3]);
                 bytes.extend_from_slice(&frame[1].as_i32().to_le_bytes()[..3]);
             }
         }
         (AudioChunk::I24(data), 32) => {
-            for frame in data.frames() {
+            for frame in data.get_frames() {
                 let left = frame[0].as_i32() << 8;
                 let right = frame[1].as_i32() << 8;
                 bytes.extend_from_slice(&left.to_le_bytes());
@@ -529,7 +533,7 @@ fn chunk_to_pcm_bytes(chunk: &AudioChunk, bits_per_sample: u8) -> Result<Vec<u8>
 
         // I32 source
         (AudioChunk::I32(data), 16) => {
-            for frame in data.frames() {
+            for frame in data.get_frames() {
                 let left = (frame[0] >> 16) as i16;
                 let right = (frame[1] >> 16) as i16;
                 bytes.extend_from_slice(&left.to_le_bytes());
@@ -537,7 +541,7 @@ fn chunk_to_pcm_bytes(chunk: &AudioChunk, bits_per_sample: u8) -> Result<Vec<u8>
             }
         }
         (AudioChunk::I32(data), 24) => {
-            for frame in data.frames() {
+            for frame in data.get_frames() {
                 let left = frame[0] >> 8;
                 let right = frame[1] >> 8;
                 bytes.extend_from_slice(&left.to_le_bytes()[..3]);
@@ -545,7 +549,7 @@ fn chunk_to_pcm_bytes(chunk: &AudioChunk, bits_per_sample: u8) -> Result<Vec<u8>
             }
         }
         (AudioChunk::I32(data), 32) => {
-            for frame in data.frames() {
+            for frame in data.get_frames() {
                 bytes.extend_from_slice(&frame[0].to_le_bytes());
                 bytes.extend_from_slice(&frame[1].to_le_bytes());
             }
@@ -638,16 +642,24 @@ pub struct FlacCacheSinkStats {
 #[async_trait::async_trait]
 impl AudioPipelineNode for FlacCacheSink {
     fn get_tx(&self) -> Option<mpsc::Sender<Arc<AudioSegment>>> {
-        Some(self.tx.clone())
+        self.inner.get_tx()
     }
 
     fn register(&mut self, _child: Box<dyn AudioPipelineNode>) {
         panic!("FlacCacheSink is a terminal sink and cannot have children");
     }
 
-    async fn run(self: Box<Self>, stop_token: CancellationToken) -> Result<(), AudioError> {
-        self.run_internal(stop_token).await?;
-        Ok(())
+    async fn run(mut self: Box<Self>, stop_token: CancellationToken) -> Result<(), AudioError> {
+        // Transférer le playlist_handle_pending à la logique si présent
+        #[cfg(feature = "playlist")]
+        if let Some(handle) = self.playlist_handle_pending.take() {
+            // FIXME: Node devrait exposer une méthode logic_mut() pour permettre
+            // la configuration post-construction. Pour l'instant, on ignore ce handle.
+            // L'utilisateur devra configurer la playlist avant construction.
+            let _ = handle;
+        }
+
+        Box::new(self.inner).run(stop_token).await
     }
 }
 

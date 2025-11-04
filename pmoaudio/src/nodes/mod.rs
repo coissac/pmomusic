@@ -119,6 +119,12 @@ pub enum AudioError {
     ProcessingError(String),
     /// Incompatibilité de types entre nodes
     TypeMismatch(TypeMismatch),
+    /// Un nœud enfant s'est terminé prématurément (anormal dans un pipeline descendant)
+    ChildFinished,
+    /// Un nœud enfant est mort (channel fermé pendant un send)
+    ChildDied,
+    /// Erreur d'I/O (fichier, réseau, etc.)
+    IoError(String),
 }
 
 impl std::fmt::Display for AudioError {
@@ -128,6 +134,9 @@ impl std::fmt::Display for AudioError {
             AudioError::ReceiveError => write!(f, "Failed to receive audio chunk"),
             AudioError::ProcessingError(msg) => write!(f, "Processing error: {}", msg),
             AudioError::TypeMismatch(tm) => write!(f, "{}", tm),
+            AudioError::ChildFinished => write!(f, "Child node finished prematurely"),
+            AudioError::ChildDied => write!(f, "Child node died unexpectedly"),
+            AudioError::IoError(msg) => write!(f, "I/O error: {}", msg),
         }
     }
 }

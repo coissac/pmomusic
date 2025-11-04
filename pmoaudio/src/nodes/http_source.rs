@@ -1,5 +1,6 @@
 use crate::{
     nodes::{AudioError, TypedAudioNode, DEFAULT_CHUNK_DURATION_MS},
+    pipeline::{Node, NodeLogic},
     type_constraints::TypeRequirement,
     AudioChunk, AudioChunkData, AudioPipelineNode, AudioSegment, I24,
 };
@@ -90,69 +91,57 @@ use tokio_util::{io::StreamReader, sync::CancellationToken};
 /// - Pas de buffering complet du fichier en mémoire
 /// - La taille des chunks audio est calculée automatiquement pour ~50ms de latence
 /// - Compatible avec les streams infinis (radios web, etc.)
-pub struct HttpSource {
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HttpSourceLogic - Logique métier pure
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Logique pure de lecture HTTP et décodage audio
+pub struct HttpSourceLogic {
     url: String,
     chunk_frames: usize,
-    child_txs: Vec<mpsc::Sender<Arc<AudioSegment>>>,
-    children: Vec<Box<dyn AudioPipelineNode>>,
 }
 
-impl HttpSource {
-    /// Crée une nouvelle source HTTP avec calcul automatique de la taille des chunks.
-    ///
-    /// La taille des chunks sera calculée automatiquement pour obtenir environ 50ms
-    /// de latence par chunk, en fonction du sample rate du fichier distant.
-    ///
-    /// # Arguments
-    ///
-    /// * `url` - URL HTTP ou HTTPS du fichier audio à télécharger
-    ///
-    /// # Exemples
-    ///
-    /// ```no_run
-    /// use pmoaudio::HttpSource;
-    ///
-    /// let source = HttpSource::new("http://example.com/music.flac");
-    /// ```
-    pub fn new<S: Into<String>>(url: S) -> Self {
-        Self::with_chunk_size(url, 0)
-    }
-
-    /// Crée une nouvelle source HTTP avec une taille de chunk spécifique.
-    ///
-    /// # Arguments
-    ///
-    /// * `url` - URL HTTP ou HTTPS du fichier audio à télécharger
-    /// * `chunk_frames` - nombre d'échantillons par canal par chunk (0 = auto-calcul)
-    ///
-    /// # Exemples
-    ///
-    /// ```no_run
-    /// use pmoaudio::HttpSource;
-    ///
-    /// // Utiliser des chunks de 2048 frames
-    /// let source = HttpSource::with_chunk_size("http://example.com/music.mp3", 2048);
-    /// ```
-    pub fn with_chunk_size<S: Into<String>>(url: S, chunk_frames: usize) -> Self {
+impl HttpSourceLogic {
+    pub fn new<S: Into<String>>(url: S, chunk_frames: usize) -> Self {
         Self {
             url: url.into(),
             chunk_frames,
-            child_txs: Vec::new(),
-            children: Vec::new(),
         }
     }
 
-    async fn run_internal(
-        url: String,
-        chunk_frames: usize,
-        child_txs: Vec<mpsc::Sender<Arc<AudioSegment>>>,
+    pub fn get_url(&self) -> String {
+        self.url.clone()
+    }
+
+    pub fn get_chunc_frames(&self) -> usize  {
+        self.chunk_frames
+    }
+}
+
+#[async_trait::async_trait]
+impl NodeLogic for HttpSourceLogic {
+    async fn process(
+        &mut self,
+        _input: Option<mpsc::Receiver<Arc<AudioSegment>>>,
+        output: Vec<mpsc::Sender<Arc<AudioSegment>>>,
         stop_token: CancellationToken,
     ) -> Result<(), AudioError> {
+        macro_rules! send_to_children {
+            ($segment:expr) => {
+                for tx in &output {
+                    tx.send($segment.clone())
+                        .await
+                        .map_err(|_| AudioError::ChildDied)?;
+                }
+            };
+        }
+
         // Effectuer la requête HTTP
-        let response = reqwest::get(&url)
+        let response = reqwest::get(&self.url)
             .await
             .map_err(|e| {
-                AudioError::ProcessingError(format!("HTTP request failed for {}: {}", url, e))
+                AudioError::ProcessingError(format!("HTTP request failed for {}: {}", self.url, e))
             })?;
 
         // Vérifier le status
@@ -160,12 +149,12 @@ impl HttpSource {
             return Err(AudioError::ProcessingError(format!(
                 "HTTP request returned status {}: {}",
                 response.status(),
-                url
+                self.url
             )));
         }
 
         // Extraire les métadonnées depuis les headers HTTP
-        let metadata = extract_metadata_from_headers(&response, &url).await;
+        let metadata = extract_metadata_from_headers(&response, &self.url).await;
 
         // Convertir le stream de bytes en AsyncRead
         let bytes_stream = response.bytes_stream();
@@ -182,25 +171,24 @@ impl HttpSource {
         validate_stream(&stream_info)?;
 
         // Calculer la taille des chunks si non spécifiée (0 = auto)
-        let chunk_frames_final = if chunk_frames == 0 {
+        let chunk_frames_final = if self.chunk_frames == 0 {
             let frames =
                 (stream_info.sample_rate as f64 * DEFAULT_CHUNK_DURATION_MS / 1000.0) as usize;
             frames.next_power_of_two().max(256)
         } else {
-            chunk_frames.max(1)
+            self.chunk_frames.max(1)
         };
 
         // Émettre TopZeroSync
-        let top_zero = AudioSegment::new_top_zero_sync();
-        for tx in &child_txs {
-            tx.send(top_zero.clone()).await.map_err(|_| AudioError::SendError)?;
-        }
+        send_to_children!(AudioSegment::new_top_zero_sync());
 
         // Émettre TrackBoundary avec les métadonnées HTTP
-        let track_boundary = AudioSegment::new_track_boundary(0, 0.0, Arc::new(tokio::sync::RwLock::new(metadata)));
-        for tx in &child_txs {
-            tx.send(track_boundary.clone()).await.map_err(|_| AudioError::SendError)?;
-        }
+        let track_boundary = AudioSegment::new_track_boundary(
+            0,
+            0.0,
+            Arc::new(tokio::sync::RwLock::new(metadata)),
+        );
+        send_to_children!(track_boundary);
 
         // Préparer la lecture des chunks audio
         let frame_bytes = stream_info.bytes_per_sample() * stream_info.channels as usize;
@@ -258,12 +246,7 @@ impl HttpSource {
                 timestamp_sec,
             )?;
 
-            for tx in &child_txs {
-                if tx.send(segment.clone()).await.is_err() {
-                    // Un enfant est mort, arrêter
-                    return Ok(());
-                }
-            }
+            send_to_children!(segment);
 
             chunk_index += 1;
             total_frames += frames_to_emit as u64;
@@ -276,9 +259,7 @@ impl HttpSource {
                 let timestamp_sec = total_frames as f64 / stream_info.sample_rate as f64;
                 let segment =
                     bytes_to_segment(&pending, &stream_info, frames, chunk_index, timestamp_sec)?;
-                for tx in &child_txs {
-                    let _ = tx.send(segment.clone()).await;
-                }
+                send_to_children!(segment);
                 total_frames += frames as u64;
                 chunk_index += 1;
             }
@@ -287,9 +268,7 @@ impl HttpSource {
         // Émettre EndOfStream
         let final_timestamp = total_frames as f64 / stream_info.sample_rate as f64;
         let eos = AudioSegment::new_end_of_stream(chunk_index, final_timestamp);
-        for tx in &child_txs {
-            let _ = tx.send(eos.clone()).await;
-        }
+        send_to_children!(eos);
 
         // Attendre la fin du décodage
         stream
@@ -298,6 +277,66 @@ impl HttpSource {
             .map_err(|e| AudioError::ProcessingError(format!("Decode task failed: {}", e)))?;
 
         Ok(())
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HttpSource - Wrapper utilisant Node<HttpSourceLogic>
+// ═══════════════════════════════════════════════════════════════════════════
+
+pub struct HttpSource {
+    inner: Node<HttpSourceLogic>,
+}
+
+impl HttpSource {
+    /// Crée une nouvelle source HTTP avec calcul automatique de la taille des chunks.
+    ///
+    /// La taille des chunks sera calculée automatiquement pour obtenir environ 50ms
+    /// de latence par chunk, en fonction du sample rate du fichier distant.
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - URL HTTP ou HTTPS du fichier audio à télécharger
+    ///
+    /// # Exemples
+    ///
+    /// ```no_run
+    /// use pmoaudio::HttpSource;
+    ///
+    /// let source = HttpSource::new("http://example.com/music.flac");
+    /// ```
+    pub fn new<S: Into<String>>(url: S) -> Self {
+        Self::with_chunk_size(url, 0)
+    }
+
+    /// Crée une nouvelle source HTTP avec une taille de chunk spécifique.
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - URL HTTP ou HTTPS du fichier audio à télécharger
+    /// * `chunk_frames` - nombre d'échantillons par canal par chunk (0 = auto-calcul)
+    ///
+    /// # Exemples
+    ///
+    /// ```no_run
+    /// use pmoaudio::HttpSource;
+    ///
+    /// // Utiliser des chunks de 2048 frames
+    /// let source = HttpSource::with_chunk_size("http://example.com/music.mp3", 2048);
+    /// ```
+    pub fn with_chunk_size<S: Into<String>>(url: S, chunk_frames: usize) -> Self {
+        let logic = HttpSourceLogic::new(url.into(), chunk_frames);
+        Self {
+            inner: Node::new_source(logic),
+        }
+    }
+
+    pub fn get_url(&self) -> String {
+        self.inner.logic().get_url()
+    }
+
+    pub fn get_chunc_frames(&self) -> usize {
+        self.inner.logic().get_chunc_frames()
     }
 }
 
@@ -477,55 +516,18 @@ fn bytes_to_segment(
 #[async_trait::async_trait]
 impl AudioPipelineNode for HttpSource {
     fn get_tx(&self) -> Option<mpsc::Sender<Arc<AudioSegment>>> {
-        None // HttpSource est une source, pas d'input
+        self.inner.get_tx()
     }
 
     fn register(&mut self, child: Box<dyn AudioPipelineNode>) {
-        if let Some(tx) = child.get_tx() {
-            self.child_txs.push(tx);
-        }
-        self.children.push(child);
+        self.inner.register(child)
     }
 
     async fn run(
         self: Box<Self>,
         stop_token: CancellationToken,
     ) -> Result<(), AudioError> {
-        let HttpSource {
-            url,
-            chunk_frames,
-            child_txs,
-            children,
-        } = *self;
-
-        // Spawner tous les enfants
-        let mut child_handles = Vec::new();
-        for child in children {
-            let child_token = stop_token.child_token();
-            let handle = tokio::spawn(async move {
-                child.run(child_token).await
-            });
-            child_handles.push(handle);
-        }
-
-        // Lancer la logique interne
-        let work_result = Self::run_internal(url, chunk_frames, child_txs, stop_token.clone()).await;
-
-        // Attendre que tous les enfants se terminent
-        for handle in child_handles {
-            match handle.await {
-                Ok(Ok(())) => {},
-                Ok(Err(e)) => return Err(e),
-                Err(e) => {
-                    return Err(AudioError::ProcessingError(format!(
-                        "Child task panicked: {}",
-                        e
-                    )))
-                }
-            }
-        }
-
-        work_result
+        Box::new(self.inner).run(stop_token).await
     }
 }
 
@@ -598,16 +600,16 @@ mod tests {
     #[test]
     fn test_http_source_creation() {
         let source = HttpSource::new("http://example.com/audio.flac");
-        assert_eq!(source.url, "http://example.com/audio.flac");
-        assert_eq!(source.chunk_frames, 0);
+        assert_eq!(source.get_url(), "http://example.com/audio.flac");
+        assert_eq!(source.get_chunc_frames(), 0);
     }
 
     /// Test de création avec taille de chunk personnalisée
     #[test]
     fn test_http_source_with_chunk_size() {
         let source = HttpSource::with_chunk_size("http://example.com/audio.mp3", 1024);
-        assert_eq!(source.url, "http://example.com/audio.mp3");
-        assert_eq!(source.chunk_frames, 1024);
+        assert_eq!(source.get_url(), "http://example.com/audio.mp3");
+        assert_eq!(source.get_chunc_frames(), 1024);
     }
 
     /// Test de téléchargement et décodage d'un fichier FLAC via HTTP

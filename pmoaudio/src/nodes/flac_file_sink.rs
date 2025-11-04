@@ -1,5 +1,6 @@
 use crate::{
     nodes::{AudioError, TypedAudioNode, DEFAULT_CHANNEL_SIZE},
+    pipeline::{Node, NodeLogic},
     type_constraints::TypeRequirement,
     AudioChunk, AudioPipelineNode, AudioSegment, SyncMarker,
 };
@@ -25,80 +26,57 @@ use tokio_util::sync::CancellationToken;
 /// - Crée un nouveau fichier FLAC pour chaque TrackBoundary rencontré
 /// - Adapte automatiquement l'encodage FLAC selon la profondeur de bit du chunk (8/16/24/32-bit)
 /// - Termine l'encodage proprement quand il reçoit EndOfStream
-pub struct FlacFileSink {
-    tx: mpsc::Sender<Arc<AudioSegment>>,
-    rx: mpsc::Receiver<Arc<AudioSegment>>,
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FlacFileSinkLogic - Logique métier pure
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Signal retourné par pump_segments indiquant pourquoi l'encodage s'est arrêté.
+enum StopReason {
+    TrackBoundary(Arc<tokio::sync::RwLock<dyn pmometadata::TrackMetadata>>),
+    EndOfStream,
+    ChannelClosed,
+    Cancelled,
+}
+
+/// Logique pure d'encodage FLAC
+pub struct FlacFileSinkLogic {
     base_path: PathBuf,
     encoder_options: EncoderOptions,
     pcm_buffer_capacity: usize,
 }
 
-impl FlacFileSink {
-    /// Crée un sink FLAC avec les options par défaut (compression 5, buffer de 16 segments).
-    ///
-    /// # Arguments
-    ///
-    /// * `base_path` - Chemin de base pour les fichiers FLAC. Si des TrackBoundary sont reçus,
-    ///   des fichiers seront créés avec des suffixes (_01, _02, etc.)
-    pub fn new<P: Into<PathBuf>>(base_path: P) -> Self {
-        Self::with_channel_size(base_path, DEFAULT_CHANNEL_SIZE)
-    }
-
-    /// Crée un sink FLAC avec une taille de buffer MPSC personnalisée.
-    ///
-    /// # Arguments
-    ///
-    /// * `base_path` - Chemin de base pour les fichiers FLAC
-    /// * `channel_size` - Taille du buffer MPSC (nombre de segments en attente avant backpressure)
-    pub fn with_channel_size<P: Into<PathBuf>>(
+impl FlacFileSinkLogic {
+    pub fn new<P: Into<PathBuf>>(
         base_path: P,
-        channel_size: usize,
-    ) -> Self {
-        Self::with_config(base_path, channel_size, EncoderOptions::default())
-    }
-
-    /// Crée un sink FLAC avec une configuration complète.
-    ///
-    /// # Arguments
-    ///
-    /// * `base_path` - Chemin de base pour les fichiers FLAC
-    /// * `channel_size` - Taille du buffer MPSC
-    /// * `encoder_options` - Options d'encodage FLAC (compression, etc.)
-    pub fn with_config<P: Into<PathBuf>>(
-        base_path: P,
-        channel_size: usize,
-        encoder_options: EncoderOptions,
-    ) -> Self {
-        let (tx, rx) = mpsc::channel(channel_size);
-        Self {
-            tx,
-            rx,
-            base_path: base_path.into(),
-            encoder_options,
-            pcm_buffer_capacity: 8,
-        }
-    }
-
-    /// Lance l'encodage vers le(s) fichier(s) cible(s).
-    ///
-    /// Cette méthode crée un nouveau fichier FLAC pour chaque TrackBoundary rencontré.
-    /// Les fichiers sont nommés selon la convention :
-    /// - Track 0 : base_path.flac
-    /// - Track 1 : base_path_01.flac
-    /// - Track 2 : base_path_02.flac, etc.
-    async fn run_internal(
-        mut rx: mpsc::Receiver<Arc<AudioSegment>>,
-        base_path: PathBuf,
         encoder_options: EncoderOptions,
         pcm_buffer_capacity: usize,
+    ) -> Self {
+        Self {
+            base_path: base_path.into(),
+            encoder_options,
+            pcm_buffer_capacity,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl NodeLogic for FlacFileSinkLogic {
+    async fn process(
+        &mut self,
+        input: Option<mpsc::Receiver<Arc<AudioSegment>>>,
+        _output: Vec<mpsc::Sender<Arc<AudioSegment>>>,
         stop_token: CancellationToken,
     ) -> Result<(), AudioError> {
-
+        let mut rx = input.expect("FlacFileSink must have input");
         let mut track_number = 0;
+
+        tracing::debug!("FlacFileSinkLogic::process started, base_path={:?}", self.base_path);
 
         loop {
             // Vérifier si l'arrêt a été demandé
             if stop_token.is_cancelled() {
+                tracing::debug!("FlacFileSinkLogic cancelled");
                 return Ok(());
             }
 
@@ -116,6 +94,11 @@ impl FlacFileSink {
             let sample_rate = first_chunk.sample_rate();
             let bits_per_sample = get_chunk_bit_depth(first_chunk);
 
+            tracing::debug!(
+                "FlacFileSinkLogic: encoding track {} with {}bit @ {}Hz",
+                track_number, bits_per_sample, sample_rate
+            );
+
             let format = PcmFormat {
                 sample_rate,
                 channels: 2,
@@ -129,13 +112,13 @@ impl FlacFileSink {
             }
 
             // Générer le chemin du fichier pour cette track
-            let track_path = generate_track_path(&base_path, track_number);
+            let track_path = generate_track_path(&self.base_path, track_number);
 
             // Créer le pipeline d'encodage pour cette track
-            let (pcm_tx, pcm_rx) = mpsc::channel::<Vec<u8>>(pcm_buffer_capacity);
+            let (pcm_tx, pcm_rx) = mpsc::channel::<Vec<u8>>(self.pcm_buffer_capacity);
 
             // Préparer les options d'encodage avec les métadonnées du TrackBoundary
-            let mut options_with_metadata = encoder_options.clone();
+            let mut options_with_metadata = self.encoder_options.clone();
             options_with_metadata.metadata = track_metadata;
 
             // Créer l'encoder et le fichier
@@ -189,6 +172,57 @@ impl FlacFileSink {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// FlacFileSink - Wrapper utilisant Node<FlacFileSinkLogic>
+// ═══════════════════════════════════════════════════════════════════════════
+
+pub struct FlacFileSink {
+    inner: Node<FlacFileSinkLogic>,
+}
+
+impl FlacFileSink {
+    /// Crée un sink FLAC avec les options par défaut (compression 5, buffer de 16 segments).
+    ///
+    /// # Arguments
+    ///
+    /// * `base_path` - Chemin de base pour les fichiers FLAC. Si des TrackBoundary sont reçus,
+    ///   des fichiers seront créés avec des suffixes (_01, _02, etc.)
+    pub fn new<P: Into<PathBuf>>(base_path: P) -> Self {
+        Self::with_channel_size(base_path, DEFAULT_CHANNEL_SIZE)
+    }
+
+    /// Crée un sink FLAC avec une taille de buffer MPSC personnalisée.
+    ///
+    /// # Arguments
+    ///
+    /// * `base_path` - Chemin de base pour les fichiers FLAC
+    /// * `channel_size` - Taille du buffer MPSC (nombre de segments en attente avant backpressure)
+    pub fn with_channel_size<P: Into<PathBuf>>(
+        base_path: P,
+        channel_size: usize,
+    ) -> Self {
+        Self::with_config(base_path, channel_size, EncoderOptions::default())
+    }
+
+    /// Crée un sink FLAC avec une configuration complète.
+    ///
+    /// # Arguments
+    ///
+    /// * `base_path` - Chemin de base pour les fichiers FLAC
+    /// * `channel_size` - Taille du buffer MPSC
+    /// * `encoder_options` - Options d'encodage FLAC (compression, etc.)
+    pub fn with_config<P: Into<PathBuf>>(
+        base_path: P,
+        channel_size: usize,
+        encoder_options: EncoderOptions,
+    ) -> Self {
+        let logic = FlacFileSinkLogic::new(base_path, encoder_options, 8);
+        Self {
+            inner: Node::new_with_input(logic, channel_size),
+        }
+    }
+}
+
 /// Génère le chemin de fichier pour une track donnée.
 /// - track 0 → base_path.flac
 /// - track 1 → base_path_01.flac
@@ -208,14 +242,6 @@ fn generate_track_path(base_path: &Path, track_number: usize) -> PathBuf {
         let parent = base_path.parent().unwrap_or(Path::new("."));
         parent.join(format!("{}_{:02}.{}", stem, track_number, extension))
     }
-}
-
-/// Signal retourné par pump_segments indiquant pourquoi l'encodage s'est arrêté.
-enum StopReason {
-    TrackBoundary(Arc<tokio::sync::RwLock<dyn pmometadata::TrackMetadata>>),
-    EndOfStream,
-    ChannelClosed,
-    Cancelled,
 }
 
 /// Attend et retourne le premier chunk audio avec les métadonnées du TrackBoundary si présent.
@@ -372,13 +398,13 @@ fn chunk_to_pcm_bytes(chunk: &AudioChunk, bits_per_sample: u8) -> Result<Vec<u8>
     match (chunk, bits_per_sample) {
         // I16 source
         (AudioChunk::I16(data), 16) => {
-            for frame in data.frames() {
+            for frame in data.get_frames() {
                 bytes.extend_from_slice(&frame[0].to_le_bytes());
                 bytes.extend_from_slice(&frame[1].to_le_bytes());
             }
         }
         (AudioChunk::I16(data), 24) => {
-            for frame in data.frames() {
+            for frame in data.get_frames() {
                 let left = (frame[0] as i32) << 8;
                 let right = (frame[1] as i32) << 8;
                 bytes.extend_from_slice(&left.to_le_bytes()[..3]);
@@ -386,7 +412,7 @@ fn chunk_to_pcm_bytes(chunk: &AudioChunk, bits_per_sample: u8) -> Result<Vec<u8>
             }
         }
         (AudioChunk::I16(data), 32) => {
-            for frame in data.frames() {
+            for frame in data.get_frames() {
                 let left = (frame[0] as i32) << 16;
                 let right = (frame[1] as i32) << 16;
                 bytes.extend_from_slice(&left.to_le_bytes());
@@ -396,7 +422,7 @@ fn chunk_to_pcm_bytes(chunk: &AudioChunk, bits_per_sample: u8) -> Result<Vec<u8>
 
         // I24 source
         (AudioChunk::I24(data), 16) => {
-            for frame in data.frames() {
+            for frame in data.get_frames() {
                 let left = (frame[0].as_i32() >> 8) as i16;
                 let right = (frame[1].as_i32() >> 8) as i16;
                 bytes.extend_from_slice(&left.to_le_bytes());
@@ -404,13 +430,13 @@ fn chunk_to_pcm_bytes(chunk: &AudioChunk, bits_per_sample: u8) -> Result<Vec<u8>
             }
         }
         (AudioChunk::I24(data), 24) => {
-            for frame in data.frames() {
+            for frame in data.get_frames() {
                 bytes.extend_from_slice(&frame[0].as_i32().to_le_bytes()[..3]);
                 bytes.extend_from_slice(&frame[1].as_i32().to_le_bytes()[..3]);
             }
         }
         (AudioChunk::I24(data), 32) => {
-            for frame in data.frames() {
+            for frame in data.get_frames() {
                 let left = frame[0].as_i32() << 8;
                 let right = frame[1].as_i32() << 8;
                 bytes.extend_from_slice(&left.to_le_bytes());
@@ -420,7 +446,7 @@ fn chunk_to_pcm_bytes(chunk: &AudioChunk, bits_per_sample: u8) -> Result<Vec<u8>
 
         // I32 source
         (AudioChunk::I32(data), 16) => {
-            for frame in data.frames() {
+            for frame in data.get_frames() {
                 let left = (frame[0] >> 16) as i16;
                 let right = (frame[1] >> 16) as i16;
                 bytes.extend_from_slice(&left.to_le_bytes());
@@ -428,7 +454,7 @@ fn chunk_to_pcm_bytes(chunk: &AudioChunk, bits_per_sample: u8) -> Result<Vec<u8>
             }
         }
         (AudioChunk::I32(data), 24) => {
-            for frame in data.frames() {
+            for frame in data.get_frames() {
                 let left = frame[0] >> 8;
                 let right = frame[1] >> 8;
                 bytes.extend_from_slice(&left.to_le_bytes()[..3]);
@@ -436,7 +462,7 @@ fn chunk_to_pcm_bytes(chunk: &AudioChunk, bits_per_sample: u8) -> Result<Vec<u8>
             }
         }
         (AudioChunk::I32(data), 32) => {
-            for frame in data.frames() {
+            for frame in data.get_frames() {
                 bytes.extend_from_slice(&frame[0].to_le_bytes());
                 bytes.extend_from_slice(&frame[1].to_le_bytes());
             }
@@ -529,7 +555,7 @@ pub struct FlacFileSinkStats {
 #[async_trait::async_trait]
 impl AudioPipelineNode for FlacFileSink {
     fn get_tx(&self) -> Option<mpsc::Sender<Arc<AudioSegment>>> {
-        Some(self.tx.clone())
+        self.inner.get_tx()
     }
 
     fn register(&mut self, _child: Box<dyn AudioPipelineNode>) {
@@ -540,15 +566,7 @@ impl AudioPipelineNode for FlacFileSink {
         self: Box<Self>,
         stop_token: CancellationToken,
     ) -> Result<(), AudioError> {
-        let FlacFileSink {
-            tx: _tx,
-            rx,
-            base_path,
-            encoder_options,
-            pcm_buffer_capacity,
-        } = *self;
-
-        Self::run_internal(rx, base_path, encoder_options, pcm_buffer_capacity, stop_token).await
+        Box::new(self.inner).run(stop_token).await
     }
 }
 
