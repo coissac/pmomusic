@@ -51,11 +51,6 @@ pub trait FileCache<C: CacheConfig>: Send + Sync {
         C::file_extension()
     }
 
-    /// Retourne le nom de la table
-    fn table_name(&self) -> &'static str {
-        C::table_name()
-    }
-
     /// Construit le chemin complet d'un fichier dans le cache
     ///
     /// Format: `{pk}.{qualificatif}.{extension}`
@@ -116,16 +111,6 @@ pub trait FileCache<C: CacheConfig>: Send + Sync {
     /// La clé primaire (pk) du fichier dans le cache
     async fn add_from_file(&self, path: &str, collection: Option<&str>) -> Result<String>;
 
-    /// S'assure qu'un fichier est présent dans le cache
-    ///
-    /// Si le fichier existe déjà, retourne sa clé. Sinon, le télécharge.
-    ///
-    /// # Arguments
-    ///
-    /// * `url` - URL du fichier
-    /// * `collection` - Collection optionnelle à laquelle appartient le fichier
-    async fn ensure_from_url(&self, url: &str, collection: Option<&str>) -> Result<String>;
-
     /// Récupère le chemin d'un fichier dans le cache
     ///
     /// # Arguments
@@ -145,14 +130,48 @@ pub trait FileCache<C: CacheConfig>: Send + Sync {
 
     /// Consolide le cache en supprimant les orphelins et en re-téléchargeant les fichiers manquants
     async fn consolidate(&self) -> Result<()>;
+
+    /// Vérifie si une clé primaire est valide (existe en DB et fichier présent)
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Clé primaire à vérifier
+    ///
+    /// # Returns
+    ///
+    /// `true` si l'entrée existe en base de données et que le fichier est présent
+    fn is_valid_pk(&self, pk: &str) -> bool {
+        self.get_database().get(pk, false).is_ok() && self.file_path(pk).exists()
+    }
 }
 
-/// Génère une clé primaire à partir d'une URL
+/// Génère une clé primaire à partir des premiers octets d'un document
 ///
-/// Utilise SHA1 pour hasher l'URL et retourne les 8 premiers octets en hexadécimal.
-pub fn pk_from_url(url: &str) -> String {
-    let mut hasher = Sha1::new();
-    hasher.update(url.as_bytes());
+/// Utilise SHA256 pour hasher les premiers octets du contenu et retourne les 16 premiers octets
+/// en hexadécimal (32 caractères). L'utilisation de 16 octets au lieu de 8 réduit considérablement
+/// les risques de collision.
+///
+/// # Arguments
+///
+/// * `header` - Les premiers octets du document (typiquement 512 octets)
+///
+/// # Returns
+///
+/// Une chaîne hexadécimale de 32 caractères servant de clé primaire unique
+///
+/// # Exemple
+///
+/// ```
+/// use pmocache::pk_from_content_header;
+///
+/// let data = b"Some file content...";
+/// let pk = pk_from_content_header(data);
+/// assert_eq!(pk.len(), 32);  // 16 bytes = 32 hex chars
+/// ```
+pub fn pk_from_content_header(header: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(header);
     let result = hasher.finalize();
-    hex::encode(&result[..8])
+    hex::encode(&result[..16]) // 16 octets = 32 caractères hex
 }

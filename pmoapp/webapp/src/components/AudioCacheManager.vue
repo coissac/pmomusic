@@ -93,14 +93,17 @@
           </div>
           <div class="pk">{{ track.pk }}</div>
           <div class="meta">
-            <span v-if="track.metadata?.duration_ms">
-              {{ formatDuration(track.metadata.duration_ms) }}
+            <span v-if="durationMs(track) !== undefined">
+              {{ formatDuration(durationMs(track)!) }}
             </span>
             <span v-if="track.metadata?.sample_rate">
               {{ formatSampleRate(track.metadata.sample_rate) }}
             </span>
             <span v-if="track.metadata?.bitrate">
               {{ formatBitrate(track.metadata.bitrate) }}
+            </span>
+            <span v-if="conversionLabel(track)">
+              {{ conversionLabel(track) }}
             </span>
           </div>
           <div class="collection" v-if="track.collection">
@@ -147,15 +150,22 @@
             <p v-if="selectedTrack.metadata.year"><strong>Year:</strong> {{ selectedTrack.metadata.year }}</p>
             <p v-if="selectedTrack.metadata.genre"><strong>Genre:</strong> {{ selectedTrack.metadata.genre }}</p>
             <p v-if="selectedTrack.metadata.track_number"><strong>Track:</strong> {{ selectedTrack.metadata.track_number }}</p>
-            <p v-if="selectedTrack.metadata.duration_ms"><strong>Duration:</strong> {{ formatDuration(selectedTrack.metadata.duration_ms) }}</p>
+            <p v-if="durationMs(selectedTrack) !== undefined">
+              <strong>Duration:</strong> {{ formatDuration(durationMs(selectedTrack)!) }}
+            </p>
             <p v-if="selectedTrack.metadata.sample_rate"><strong>Sample Rate:</strong> {{ formatSampleRate(selectedTrack.metadata.sample_rate) }}</p>
             <p v-if="selectedTrack.metadata.bitrate"><strong>Bitrate:</strong> {{ formatBitrate(selectedTrack.metadata.bitrate) }}</p>
             <p v-if="selectedTrack.metadata.channels"><strong>Channels:</strong> {{ selectedTrack.metadata.channels }}</p>
+            <p v-if="conversionLabel(selectedTrack)"><strong>Conversion:</strong> {{ conversionLabel(selectedTrack) }}</p>
           </div>
           <div class="cache-section">
             <h4>Cache Info</h4>
             <p><strong>PK:</strong> {{ selectedTrack.pk }}</p>
-            <p><strong>Source URL:</strong> <a :href="selectedTrack.source_url" target="_blank">{{ selectedTrack.source_url }}</a></p>
+            <p v-if="resolveTrackOrigin(selectedTrack)">
+              <strong>Source URL:</strong>
+              <a :href="resolveTrackOrigin(selectedTrack)" target="_blank">{{ resolveTrackOrigin(selectedTrack) }}</a>
+            </p>
+            <p v-else><strong>Source URL:</strong> Unknown</p>
             <p><strong>Hits:</strong> {{ selectedTrack.hits }}</p>
             <p v-if="selectedTrack.collection"><strong>Collection:</strong> {{ selectedTrack.collection }}</p>
             <p v-if="selectedTrack.last_used"><strong>Last Used:</strong> {{ formatDate(selectedTrack.last_used) }}</p>
@@ -206,6 +216,8 @@ import {
   consolidateCache,
   getTrackUrl,
   getOriginalTrackUrl,
+  getOriginUrl,
+  getDurationMs,
   formatDuration,
   formatBitrate,
   formatSampleRate,
@@ -388,6 +400,14 @@ function copyTrackUrl(pk: string) {
   alert("✅ URL copied!");
 }
 
+function resolveTrackOrigin(track: AudioCacheEntry | null): string | undefined {
+  return track ? getOriginUrl(track) : undefined;
+}
+
+function durationMs(track: AudioCacheEntry | null): number | undefined {
+  return track ? getDurationMs(track.metadata) : undefined;
+}
+
 function formatDate(dateString: string) {
   const d = new Date(dateString);
   const diff = Date.now() - d.getTime();
@@ -396,6 +416,37 @@ function formatDate(dateString: string) {
   if (days === 1) return "Yesterday";
   if (days < 7) return `${days} days ago`;
   return d.toLocaleDateString();
+}
+
+function formatConversion(
+  conversion?: { mode?: string; input_codec?: string; details?: string } | null
+): string | undefined {
+  if (!conversion || !conversion.mode) return undefined;
+  const modeLower = conversion.mode.toLowerCase();
+  const modeLabel =
+    modeLower === "passthrough"
+      ? "Passthrough"
+      : modeLower === "transcode"
+      ? "Transcoded"
+      : conversion.mode.charAt(0).toUpperCase() + conversion.mode.slice(1);
+
+  if (conversion.input_codec) {
+    const codec = conversion.input_codec.toUpperCase();
+    if (modeLower === "passthrough") {
+      return `${modeLabel} (${codec})`;
+    }
+    return `${modeLabel} (${codec} → FLAC)`;
+  }
+
+  if (conversion.details) {
+    return `${modeLabel} – ${conversion.details}`;
+  }
+
+  return modeLabel;
+}
+
+function conversionLabel(track: AudioCacheEntry | null): string | undefined {
+  return formatConversion(track?.metadata?.conversion ?? undefined);
 }
 
 onMounted(() => {

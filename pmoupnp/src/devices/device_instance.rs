@@ -79,14 +79,14 @@ impl UpnpInstance for DeviceInstance {
         // Obtenir ou créer un UDN persistant via la configuration
         let device_name = model.get_name();
         let device_type = model.device_category();
-        let udn = if let Ok(config_udn) =
-            pmoconfig::get_config().get_device_udn(&device_type, device_name)
-        {
-            config_udn
-        } else {
-            // Fallback : générer un UDN
-            tracing::warn!("Failed to get/save UDN from config, using generated UUID");
-            format!("uuid:{}_{}", model.udn_prefix(), uuid::Uuid::new_v4())
+        let udn = match pmoconfig::get_config().get_device_udn(&device_type, device_name) {
+            Ok(config_udn) => Self::normalize_udn(config_udn),
+            Err(err) => {
+                tracing::warn!(
+                    "Failed to get/save UDN from config ({err:?}), using generated UUID"
+                );
+                Self::normalize_udn(uuid::Uuid::new_v4().to_string())
+            }
         };
 
         // Obtenir l'IP locale et le port depuis la configuration
@@ -149,7 +149,7 @@ impl UpnpObject for DeviceInstance {
 
         // UDN
         let mut udn = Element::new("UDN");
-        udn.children.push(XMLNode::Text(self.udn.clone()));
+        udn.children.push(XMLNode::Text(self.udn_with_prefix()));
         elem.children.push(XMLNode::Element(udn));
 
         // serviceList
@@ -198,6 +198,15 @@ impl DeviceInstance {
     /// Retourne l'UDN du device.
     pub fn udn(&self) -> &str {
         &self.udn
+    }
+
+    /// Retourne l'UDN avec le préfixe `uuid:` requis par la spécification.
+    pub fn udn_with_prefix(&self) -> String {
+        if self.udn.starts_with("uuid:") {
+            self.udn.clone()
+        } else {
+            format!("uuid:{}", self.udn)
+        }
     }
 
     /// Retourne l'URL de base du serveur (protocole + host + port).
@@ -402,5 +411,12 @@ impl DeviceInstance {
         }
 
         ssdp_device
+    }
+
+    fn normalize_udn<S: Into<String>>(raw: S) -> String {
+        let value: String = raw.into();
+        let trimmed = value.trim();
+        let sanitized = trimmed.strip_prefix("uuid:").unwrap_or(trimmed);
+        sanitized.to_string()
     }
 }

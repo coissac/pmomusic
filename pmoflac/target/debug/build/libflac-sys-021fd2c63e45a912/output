@@ -1,0 +1,126 @@
+CMAKE_TOOLCHAIN_FILE_aarch64-apple-darwin = None
+CMAKE_TOOLCHAIN_FILE_aarch64_apple_darwin = None
+HOST_CMAKE_TOOLCHAIN_FILE = None
+CMAKE_TOOLCHAIN_FILE = None
+CMAKE_GENERATOR_aarch64-apple-darwin = None
+CMAKE_GENERATOR_aarch64_apple_darwin = None
+HOST_CMAKE_GENERATOR = None
+CMAKE_GENERATOR = None
+CMAKE_PREFIX_PATH_aarch64-apple-darwin = None
+CMAKE_PREFIX_PATH_aarch64_apple_darwin = None
+HOST_CMAKE_PREFIX_PATH = None
+CMAKE_PREFIX_PATH = None
+CMAKE_aarch64-apple-darwin = None
+CMAKE_aarch64_apple_darwin = None
+HOST_CMAKE = None
+CMAKE = None
+running: cd "/Users/coissac/Sync/maison/Petite_maisons/src/pmomusic/pmoflac/target/debug/build/libflac-sys-021fd2c63e45a912/out/build" && CMAKE_PREFIX_PATH="" LC_ALL="C" "cmake" "/Users/coissac/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libflac-sys-0.3.4/flac" "-DCMAKE_OSX_ARCHITECTURES=arm64" "-DBUILD_CXXLIBS=OFF" "-DBUILD_PROGRAMS=OFF" "-DBUILD_EXAMPLES=OFF" "-DBUILD_TESTING=OFF" "-DBUILD_DOCS=OFF" "-DINSTALL_MANPAGES=OFF" "-DINSTALL_PKGCONFIG_MODULES=OFF" "-DINSTALL_CMAKE_CONFIG_MODULE=OFF" "-DWITH_OGG=OFF" "-DCMAKE_INSTALL_PREFIX=/Users/coissac/Sync/maison/Petite_maisons/src/pmomusic/pmoflac/target/debug/build/libflac-sys-021fd2c63e45a912/out" "-DCMAKE_C_FLAGS= -ffunction-sections -fdata-sections -fPIC --target=arm64-apple-macosx -mmacosx-version-min=15.5" "-DCMAKE_C_COMPILER=/usr/bin/cc" "-DCMAKE_CXX_FLAGS= -ffunction-sections -fdata-sections -fPIC --target=arm64-apple-macosx -mmacosx-version-min=15.5" "-DCMAKE_CXX_COMPILER=/usr/bin/c++" "-DCMAKE_ASM_FLAGS= -ffunction-sections -fdata-sections -fPIC --target=arm64-apple-macosx -mmacosx-version-min=15.5" "-DCMAKE_ASM_COMPILER=/usr/bin/cc" "-DCMAKE_BUILD_TYPE=Debug"
+-- The C compiler identification is AppleClang 17.0.0.17000013
+-- The CXX compiler identification is AppleClang 17.0.0.17000013
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/cc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Performing Test Iconv_IS_BUILT_IN
+-- Performing Test Iconv_IS_BUILT_IN - Failed
+-- Found Iconv: /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/libiconv.tbd
+-- Performing Test HAVE_MBSTATE
+-- Performing Test HAVE_MBSTATE - Success
+-- Performing Test DODEFINE_EXTENSIONS
+-- Performing Test DODEFINE_EXTENSIONS - Success
+-- Looking for byteswap.h
+-- Looking for byteswap.h - not found
+-- Looking for inttypes.h
+-- Looking for inttypes.h - found
+-- Looking for stdint.h
+-- Looking for stdint.h - found
+-- Looking for stdbool.h
+-- Looking for stdbool.h - found
+-- Looking for arm_neon.h
+-- Looking for arm_neon.h - found
+-- Looking for x86intrin.h
+-- Looking for x86intrin.h - not found
+-- Looking for fseeko
+-- Looking for fseeko - found
+-- Performing Test HAVE_BSWAP16
+-- Performing Test HAVE_BSWAP16 - Success
+-- Performing Test HAVE_BSWAP32
+-- Performing Test HAVE_BSWAP32 - Success
+-- Performing Test HAVE_LANGINFO_CODESET
+-- Performing Test HAVE_LANGINFO_CODESET - Success
+-- Performing Test HAVE_WERROR_FLAG
+-- Performing Test HAVE_WERROR_FLAG - Success
+-- Performing Test HAVE_DECL_AFTER_STMT_FLAG
+-- Performing Test HAVE_DECL_AFTER_STMT_FLAG - Success
+-- Performing Test HAVE_STACKREALIGN_FLAG
+-- Performing Test HAVE_STACKREALIGN_FLAG - Success
+-- Performing Test HAVE_WEFFCXX_FLAG
+-- Performing Test HAVE_WEFFCXX_FLAG - Success
+-- Performing Test HAVE_STACK_PROTECTOR_FLAG
+-- Performing Test HAVE_STACK_PROTECTOR_FLAG - Success
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE
+-- Looking for cpuid.h
+-- Looking for cpuid.h - not found
+-- Looking for sys/param.h
+-- Looking for sys/param.h - found
+-- Looking for lround
+-- Looking for lround - found
+-- Check CPU architecture is x64
+-- Check CPU architecture is x64 - no
+-- Check CPU architecture is x86
+-- Check CPU architecture is x86 - no
+-- Check CPU architecture is arm64
+-- Check CPU architecture is arm64 - yes
+-- Check whether A64 NEON can be used
+-- Check whether A64 NEON can be used - yes
+-- Performing Test HAVE_ASSOC_MATH
+-- Performing Test HAVE_ASSOC_MATH - Success
+-- Looking for string.h
+-- Looking for string.h - found
+-- Found Intl: /opt/homebrew/lib/libintl.dylib (found version "0.26.0")
+-- Configuring done (7.6s)
+-- Generating done (0.0s)
+-- Build files have been written to: /Users/coissac/Sync/maison/Petite_maisons/src/pmomusic/pmoflac/target/debug/build/libflac-sys-021fd2c63e45a912/out/build
+running: cd "/Users/coissac/Sync/maison/Petite_maisons/src/pmomusic/pmoflac/target/debug/build/libflac-sys-021fd2c63e45a912/out/build" && LC_ALL="C" "cmake" "--build" "/Users/coissac/Sync/maison/Petite_maisons/src/pmomusic/pmoflac/target/debug/build/libflac-sys-021fd2c63e45a912/out/build" "--target" "FLAC" "--config" "Debug" "--parallel" "16"
+[  3%] Building C object src/libFLAC/CMakeFiles/FLAC.dir/bitmath.c.o
+[  6%] Building C object src/libFLAC/CMakeFiles/FLAC.dir/bitreader.c.o
+[ 10%] Building C object src/libFLAC/CMakeFiles/FLAC.dir/fixed_intrin_avx2.c.o
+[ 13%] Building C object src/libFLAC/CMakeFiles/FLAC.dir/fixed.c.o
+[ 16%] Building C object src/libFLAC/CMakeFiles/FLAC.dir/lpc.c.o
+[ 23%] Building C object src/libFLAC/CMakeFiles/FLAC.dir/bitwriter.c.o
+[ 23%] Building C object src/libFLAC/CMakeFiles/FLAC.dir/fixed_intrin_sse42.c.o
+[ 33%] Building C object src/libFLAC/CMakeFiles/FLAC.dir/lpc_intrin_sse41.c.o
+[ 43%] Building C object src/libFLAC/CMakeFiles/FLAC.dir/lpc_intrin_neon.c.o
+[ 43%] Building C object src/libFLAC/CMakeFiles/FLAC.dir/cpu.c.o
+[ 43%] Building C object src/libFLAC/CMakeFiles/FLAC.dir/format.c.o
+[ 46%] Building C object src/libFLAC/CMakeFiles/FLAC.dir/fixed_intrin_ssse3.c.o
+[ 46%] Building C object src/libFLAC/CMakeFiles/FLAC.dir/crc.c.o
+[ 46%] Building C object src/libFLAC/CMakeFiles/FLAC.dir/fixed_intrin_sse2.c.o
+[ 53%] Building C object src/libFLAC/CMakeFiles/FLAC.dir/lpc_intrin_sse2.c.o
+[ 53%] Building C object src/libFLAC/CMakeFiles/FLAC.dir/float.c.o
+[ 66%] Building C object src/libFLAC/CMakeFiles/FLAC.dir/lpc_intrin_avx2.c.o
+[ 66%] Building C object src/libFLAC/CMakeFiles/FLAC.dir/memory.c.o
+[ 66%] Building C object src/libFLAC/CMakeFiles/FLAC.dir/md5.c.o
+[ 66%] Building C object src/libFLAC/CMakeFiles/FLAC.dir/lpc_intrin_fma.c.o
+[ 70%] Building C object src/libFLAC/CMakeFiles/FLAC.dir/metadata_iterators.c.o
+[ 73%] Building C object src/libFLAC/CMakeFiles/FLAC.dir/stream_decoder.c.o
+[ 76%] Building C object src/libFLAC/CMakeFiles/FLAC.dir/stream_encoder.c.o
+[ 90%] Building C object src/libFLAC/CMakeFiles/FLAC.dir/stream_encoder_intrin_avx2.c.o
+[ 90%] Building C object src/libFLAC/CMakeFiles/FLAC.dir/stream_encoder_intrin_ssse3.c.o
+[ 90%] Building C object src/libFLAC/CMakeFiles/FLAC.dir/stream_encoder_intrin_sse2.c.o
+[ 90%] Building C object src/libFLAC/CMakeFiles/FLAC.dir/metadata_object.c.o
+[ 96%] Building C object src/libFLAC/CMakeFiles/FLAC.dir/stream_encoder_framing.c.o
+[ 96%] Building C object src/libFLAC/CMakeFiles/FLAC.dir/window.c.o
+[100%] Linking C static library libFLAC.a
+[100%] Built target FLAC
+cargo:root=/Users/coissac/Sync/maison/Petite_maisons/src/pmomusic/pmoflac/target/debug/build/libflac-sys-021fd2c63e45a912/out
+cargo:rustc-link-search=native=/Users/coissac/Sync/maison/Petite_maisons/src/pmomusic/pmoflac/target/debug/build/libflac-sys-021fd2c63e45a912/out/build/src/libFLAC
+cargo:rustc-link-lib=static=FLAC

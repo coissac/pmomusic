@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root xmlns="urn:schemas-upnp-org:device-1-0">
+  <specVersion>
+    <major>1</major>
+    <minor>1</minor>
+  </specVersion>
+  <device>
+    <deviceType>urn:schemas-upnp-org:device:MediaServer:1</deviceType>
+    <manufacturer>lesbonscomptes.com/upmpdcli</manufacturer>
+    <modelName>Upmpdcli Media Server</modelName>
+    <friendlyName>pizzicato-Music-mediaserver</friendlyName>
+    <iconList>
+      <icon>
+        <mimetype>image/png</mimetype>
+        <width>64</width>
+        <height>64</height>
+        <depth>32</depth>
+        <url>/uuid-c110358f-d885-b44a-d6d3-dca6329ead0d/icon.png</url>
+      </icon>
+    </iconList>
+    <UDN>uuid:c110358f-d885-b44a-d6d3-dca6329ead0d</UDN>
+    <serviceList>
+      <service>
+        <serviceType>urn:schemas-upnp-org:service:ContentDirectory:1</serviceType>
+        <serviceId>urn:upnp-org:serviceId:ContentDirectory</serviceId>
+        <SCPDURL>/uuid-c110358f-d885-b44a-d6d3-dca6329ead0d/urn-schemas-upnp-org-service-ContentDirectory-1.xml</SCPDURL>
+        <controlURL>/uuid-c110358f-d885-b44a-d6d3-dca6329ead0d/ctl-urn-schemas-upnp-org-service-ContentDirectory-1</controlURL>
+        <eventSubURL>/uuid-c110358f-d885-b44a-d6d3-dca6329ead0d/evt-urn-schemas-upnp-org-service-ContentDirectory-1</eventSubURL>
+      </service>
+      <service>
+        <serviceType>urn:schemas-upnp-org:service:ConnectionManager:1</serviceType>
+        <serviceId>urn:upnp-org:serviceId:ConnectionManager</serviceId>
+        <SCPDURL>/uuid-c110358f-d885-b44a-d6d3-dca6329ead0d/urn-schemas-upnp-org-service-ConnectionManager-1.xml</SCPDURL>
+        <controlURL>/uuid-c110358f-d885-b44a-d6d3-dca6329ead0d/ctl-urn-schemas-upnp-org-service-ConnectionManager-1</controlURL>
+        <eventSubURL>/uuid-c110358f-d885-b44a-d6d3-dca6329ead0d/evt-urn-schemas-upnp-org-service-ConnectionManager-1</eventSubURL>
+      </service>
+    </serviceList>
+  </device>
+</root>

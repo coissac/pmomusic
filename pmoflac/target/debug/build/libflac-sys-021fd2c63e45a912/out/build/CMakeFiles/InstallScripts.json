@@ -1,0 +1,14 @@
+{
+	"InstallScripts" : 
+	[
+		"/Users/coissac/Sync/maison/Petite_maisons/src/pmomusic/pmoflac/target/debug/build/libflac-sys-021fd2c63e45a912/out/build/cmake_install.cmake",
+		"/Users/coissac/Sync/maison/Petite_maisons/src/pmomusic/pmoflac/target/debug/build/libflac-sys-021fd2c63e45a912/out/build/src/cmake_install.cmake",
+		"/Users/coissac/Sync/maison/Petite_maisons/src/pmomusic/pmoflac/target/debug/build/libflac-sys-021fd2c63e45a912/out/build/src/libFLAC/cmake_install.cmake",
+		"/Users/coissac/Sync/maison/Petite_maisons/src/pmomusic/pmoflac/target/debug/build/libflac-sys-021fd2c63e45a912/out/build/src/share/replaygain_analysis/cmake_install.cmake",
+		"/Users/coissac/Sync/maison/Petite_maisons/src/pmomusic/pmoflac/target/debug/build/libflac-sys-021fd2c63e45a912/out/build/src/share/replaygain_synthesis/cmake_install.cmake",
+		"/Users/coissac/Sync/maison/Petite_maisons/src/pmomusic/pmoflac/target/debug/build/libflac-sys-021fd2c63e45a912/out/build/src/share/getopt/cmake_install.cmake",
+		"/Users/coissac/Sync/maison/Petite_maisons/src/pmomusic/pmoflac/target/debug/build/libflac-sys-021fd2c63e45a912/out/build/src/share/utf8/cmake_install.cmake",
+		"/Users/coissac/Sync/maison/Petite_maisons/src/pmomusic/pmoflac/target/debug/build/libflac-sys-021fd2c63e45a912/out/build/src/share/grabbag/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

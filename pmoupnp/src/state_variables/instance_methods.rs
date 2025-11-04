@@ -294,39 +294,29 @@ impl StateVarInstance {
     ) -> Result<(), StateValueError> {
         use crate::variable_types::StateVarType;
 
-        // Convertir Reflect → StateValue
+        let reflect_ref = reflect_value.as_ref();
+
+        // Cas particulier : variable de type String avec marshal
         let state_value = if self.as_state_var_type() == StateVarType::String {
-            // Pour les String : essayer le marshal si défini
             if let Some(ref marshal) = self.model.marshal {
-                // D'abord, essayer de convertir Reflect → StateValue temporaire
-                match StateValue::from_reflect(reflect_value.as_ref(), self.as_state_var_type()) {
-                    Ok(temp_value) => {
-                        // Utiliser le marshal pour obtenir la String marshallée
-                        match marshal(&temp_value) {
-                            Ok(marshalled_string) => StateValue::String(marshalled_string),
-                            Err(e) => {
-                                tracing::warn!(
-                                    "Failed to marshal value for variable '{}': {:?}, using standard conversion",
-                                    self.get_name(),
-                                    e
-                                );
-                                // Fallback
-                                temp_value
-                            }
-                        }
+                match marshal(reflect_ref) {
+                    Ok(serialized) => StateValue::String(serialized),
+                    Err(e) => {
+                        tracing::warn!(
+                            "Marshal failed for '{}': {:?}, using default Reflect→StateValue conversion",
+                            self.get_name(),
+                            e
+                        );
+                        StateValue::from_reflect(reflect_ref, self.as_state_var_type())?
                     }
-                    Err(e) => return Err(e),
                 }
             } else {
-                // Pas de marshal, conversion standard
-                StateValue::from_reflect(reflect_value.as_ref(), self.as_state_var_type())?
+                StateValue::from_reflect(reflect_ref, self.as_state_var_type())?
             }
         } else {
-            // Pas un String, conversion standard
-            StateValue::from_reflect(reflect_value.as_ref(), self.as_state_var_type())?
+            StateValue::from_reflect(reflect_ref, self.as_state_var_type())?
         };
 
-        // Déléguer à set_value() pour factoriser (mise à jour + notifications)
         self.set_value(state_value).await
     }
 }

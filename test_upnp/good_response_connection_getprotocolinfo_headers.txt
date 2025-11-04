@@ -1,0 +1,6 @@
+HTTP/1.1 200 OK
+Date: Mon, 27 Oct 2025 00:43:01 GMT
+SERVER: Linux/6.12.32-v8+ UPnP/1.1 Portable SDK for UPnP devices/6.2.0
+Content-Type: text/xml; charset="utf-8"
+Content-Length: 1443
+

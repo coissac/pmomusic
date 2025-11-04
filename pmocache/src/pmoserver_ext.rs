@@ -123,7 +123,7 @@ async fn serve_file_with_streaming<C: CacheConfig>(
     content_type: &'static str,
     param_generator: Option<ParamGenerator<C>>,
 ) -> Response {
-    let file_path = cache.file_path_with_qualifier(pk, param);
+    let file_path = cache.get_file_path_with_qualifier(pk, param);
 
     // Si le fichier n'existe pas et qu'on a un générateur, l'utiliser
     if !file_path.exists() {

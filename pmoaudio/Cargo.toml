@@ -3,9 +3,25 @@ name = "pmoaudio"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+simd = []
+
 [dependencies]
 tokio = { version = "1.42", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io"] }
 async-trait = "0.1"
+futures-util = "0.3"
+pmoflac = { path = "../pmoflac" }
+pmometadata = { path = "../pmometadata" }
+paste = "1"
+soxr = "0.6.0"
+bytemuck = "1.24.0"
+reqwest = { version = "0.12", features = ["stream"] }
+tracing = "0.1"
 
 [dev-dependencies]
 tokio-test = "0.4"
+tempfile = "3"
+wiremock = "0.6"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

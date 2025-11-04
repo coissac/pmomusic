@@ -1,6 +1,5 @@
 //! Construction de réponses SOAP
 
-use std::collections::HashMap;
 use xmltree::{Element, XMLNode};
 
 /// Construit une réponse SOAP UPnP
@@ -17,13 +16,12 @@ use xmltree::{Element, XMLNode};
 pub fn build_soap_response(
     service_urn: &str,
     action: &str,
-    values: HashMap<String, String>,
+    values: Vec<(String, String)>,
 ) -> Result<String, xmltree::Error> {
     // Construire l'élément de réponse
     // Format: <u:ActionResponse xmlns:u="service-urn">
-    let response_name = format!("{}Response", action);
+    let response_name = format!("u:{}Response", action);
     let mut response_elem = Element::new(&response_name);
-    response_elem.namespace = Some(service_urn.to_string());
     response_elem
         .attributes
         .insert("xmlns:u".to_string(), service_urn.to_string());
@@ -54,6 +52,7 @@ pub fn build_soap_response(
     // Sérialiser en XML
     let mut buf = Vec::new();
     let config = xmltree::EmitterConfig::new()
+        .write_document_declaration(true)
         .perform_indent(true)
         .indent_string("  ");
     envelope.write_with_config(&mut buf, config)?;
@@ -67,9 +66,9 @@ mod tests {
 
     #[test]
     fn test_build_response() {
-        let mut values = HashMap::new();
-        values.insert("Track".to_string(), "5".to_string());
-        values.insert("TrackDuration".to_string(), "00:03:45".to_string());
+        let mut values = Vec::new();
+        values.push(("Track".to_string(), "5".to_string()));
+        values.push(("TrackDuration".to_string(), "00:03:45".to_string()));
 
         let xml = build_soap_response(
             "urn:schemas-upnp-org:service:AVTransport:1",
@@ -86,7 +85,7 @@ mod tests {
 
     #[test]
     fn test_build_empty_response() {
-        let values = HashMap::new();
+        let values = Vec::new();
 
         let xml = build_soap_response("urn:schemas-upnp-org:service:AVTransport:1", "Stop", values)
             .unwrap();

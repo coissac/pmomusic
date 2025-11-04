@@ -31,4 +31,5 @@ tracing = "0.1.41"
 
 [features]
 default = ["pmoserver"]
-pmoserver = ["dep:pmoserver", "dep:pmoconfig", "dep:axum", "dep:utoipa", "pmocache/openapi", "pmocache/pmoserver"]
+pmoconfig = ["dep:pmoconfig", "pmocache/pmoconfig"]
+pmoserver = ["pmoconfig", "dep:pmoserver", "dep:axum", "dep:utoipa", "pmocache/openapi", "pmocache/pmoserver"]

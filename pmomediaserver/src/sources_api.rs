@@ -151,31 +151,17 @@ async fn register_paradise(Json(params): Json<ParadiseParams>) -> impl IntoRespo
     };
 
     // Créer et enregistrer la source depuis le registry
-    let source = if let Some(capacity) = params.fifo_capacity {
-        match RadioParadiseSource::from_registry(client, capacity) {
-            Ok(s) => Arc::new(s),
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: format!("Failed to create source: {}", e),
-                    }),
-                )
-                    .into_response();
-            }
-        }
-    } else {
-        match RadioParadiseSource::from_registry_default(client) {
-            Ok(s) => Arc::new(s),
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: format!("Failed to create source: {}", e),
-                    }),
-                )
-                    .into_response();
-            }
+    // Note: params.fifo_capacity is currently not used by from_registry
+    let source = match RadioParadiseSource::from_registry(client) {
+        Ok(s) => Arc::new(s),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to create source: {}", e),
+                }),
+            )
+                .into_response();
         }
     };
 

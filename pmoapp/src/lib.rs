@@ -238,8 +238,6 @@
 //! - [Vite Documentation](https://vitejs.dev/)
 
 use rust_embed::RustEmbed;
-use std::future::Future;
-use std::pin::Pin;
 
 /// Structure représentant l'application web embarquée.
 ///

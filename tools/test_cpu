@@ -1,0 +1,123 @@
+#!/bin/bash
+
+echo "=== Identification CPU ==="
+echo ""
+
+# Architecture
+ARCH=$(uname -m)
+echo "Architecture: $ARCH"
+
+# Modèle CPU
+if [ -f /proc/cpuinfo ]; then
+    MODEL=$(grep "model name" /proc/cpuinfo | head -1 | cut -d: -f2 | xargs)
+    if [ -z "$MODEL" ]; then
+        # Sur ARM, pas de "model name"
+        MODEL=$(grep "Hardware" /proc/cpuinfo | head -1 | cut -d: -f2 | xargs)
+    fi
+    echo "Modèle: $MODEL"
+fi
+
+# Nombre de cœurs
+CORES=$(nproc)
+echo "Cœurs: $CORES"
+
+echo ""
+echo "=== Capacités SIMD ==="
+
+if [[ "$ARCH" == "x86_64" || "$ARCH" == "i686" ]]; then
+    # x86/x86_64
+    echo "Type: x86/x86_64"
+    
+    if grep -q "avx512" /proc/cpuinfo; then
+        echo "✅ AVX-512 disponible"
+    fi
+    
+    if grep -q "avx2" /proc/cpuinfo; then
+        echo "✅ AVX2 disponible (recommandé pour SIMD)"
+    fi
+    
+    if grep -q "avx" /proc/cpuinfo; then
+        echo "✅ AVX disponible"
+    fi
+    
+    if grep -q "sse4_2" /proc/cpuinfo; then
+        echo "✅ SSE4.2 disponible"
+    fi
+    
+    if grep -q "fma" /proc/cpuinfo; then
+        echo "✅ FMA (Fused Multiply-Add) disponible"
+    fi
+    
+elif [[ "$ARCH" == "aarch64" ]]; then
+    # ARM 64-bit
+    echo "Type: ARM 64-bit"
+    
+    FEATURES=$(grep "Features" /proc/cpuinfo | head -1)
+    
+    if echo "$FEATURES" | grep -q "asimd"; then
+        echo "✅ NEON/Advanced SIMD disponible (recommandé)"
+    fi
+    
+    if echo "$FEATURES" | grep -q "fp"; then
+        echo "✅ FPU matériel disponible"
+    fi
+    
+    if echo "$FEATURES" | grep -q "sve"; then
+        echo "✅ SVE (Scalable Vector Extension) disponible"
+    fi
+    
+elif [[ "$ARCH" == "armv7l" || "$ARCH" == "armv6l" ]]; then
+    # ARM 32-bit
+    echo "Type: ARM 32-bit"
+    
+    FEATURES=$(grep "Features" /proc/cpuinfo | head -1)
+    
+    if echo "$FEATURES" | grep -q "neon"; then
+        echo "✅ NEON disponible (SIMD)"
+    fi
+    
+    if echo "$FEATURES" | grep -q "vfpv4"; then
+        echo "✅ VFPv4 (FPU simple précision) disponible"
+    elif echo "$FEATURES" | grep -q "vfp"; then
+        echo "✅ VFP (FPU basique) disponible"
+    else
+        echo "❌ Pas de FPU matériel (Cortex-M0/M3?)"
+    fi
+fi
+
+echo ""
+echo "=== Recommandation pour audio DSP ==="
+
+if [[ "$ARCH" == "x86_64" ]]; then
+    if grep -q "avx2" /proc/cpuinfo; then
+        echo "🚀 Float f64 + SIMD (std::simd avec AVX2)"
+        echo "   Performance optimale garantie"
+    else
+        echo "✅ Float f64 + SIMD (std::simd avec SSE)"
+        echo "   Bonne performance"
+    fi
+    
+elif [[ "$ARCH" == "aarch64" ]]; then
+    if grep -q "asimd" /proc/cpuinfo; then
+        echo "🚀 Float f64 + SIMD (std::simd avec NEON)"
+        echo "   Performance optimale sur ARM64"
+    else
+        echo "⚠️  ARM64 sans NEON (rare)"
+    fi
+    
+elif [[ "$ARCH" == "armv7l" ]]; then
+    if grep -q "neon" /proc/cpuinfo; then
+        echo "✅ Float f32 + NEON SIMD"
+        echo "   Bonne performance sur ARM32"
+    elif grep -q "vfp" /proc/cpuinfo; then
+        echo "⚖️  Float f32 scalaire (avec FPU)"
+        echo "   Performance correcte, équivalent à integer"
+    else
+        echo "💡 Integer fixed-point Q23"
+        echo "   Pas de FPU, integer sera plus rapide"
+    fi
+    
+elif [[ "$ARCH" == "armv6l" ]]; then
+    echo "💡 Integer fixed-point Q23"
+    echo "   CPU ancien, pas de FPU performant"
+fi

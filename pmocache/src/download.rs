@@ -15,17 +15,19 @@ use tokio_util::io::ReaderStream;
 /// La fonction reçoit :
 /// - Un `CacheInput` abstrait (HTTP ou lecteur en streaming)
 /// - Un writer pour écrire les données transformées
-/// - Un callback pour mettre à jour la progression
+/// - Un contexte fournissant des utilitaires (progression, métadonnées)
 ///
 /// Elle retourne un `Future` qui se résout en `Result`.
 pub type StreamTransformer = Box<
     dyn FnOnce(
             CacheInput,
             tokio::fs::File,
-            Arc<dyn Fn(u64) + Send + Sync>,
+            TransformContextHandle,
         ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>>
         + Send,
 >;
+
+pub type TransformContextHandle = Arc<TransformContext>;
 
 type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send>>;
 
@@ -180,6 +182,7 @@ struct DownloadState {
     finished: bool,
     read_position: u64,
     error: Option<String>,
+    transform_metadata: Option<TransformMetadata>,
 }
 
 /// Objet représentant un téléchargement en cours
@@ -200,6 +203,7 @@ impl Download {
                 finished: false,
                 read_position: 0,
                 error: None,
+                transform_metadata: None,
             })),
         })
     }
@@ -274,6 +278,45 @@ impl Download {
         let state = self.state.read().await;
         state.error.clone()
     }
+
+    pub async fn transform_metadata(&self) -> Option<TransformMetadata> {
+        let state = self.state.read().await;
+        state.transform_metadata.clone()
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TransformMetadata {
+    pub mode: Option<String>,
+    pub input_codec: Option<String>,
+    pub details: Option<String>,
+}
+
+pub struct TransformContext {
+    state: Arc<RwLock<DownloadState>>,
+    progress_cb: Arc<dyn Fn(u64) + Send + Sync>,
+}
+
+impl TransformContext {
+    fn new(state: Arc<RwLock<DownloadState>>, progress_cb: Arc<dyn Fn(u64) + Send + Sync>) -> Self {
+        Self { state, progress_cb }
+    }
+
+    /// Reports progress (in bytes) to the download state.
+    pub fn report_progress(&self, bytes: u64) {
+        (self.progress_cb)(bytes);
+    }
+
+    /// Returns the underlying progress callback (useful for piping into other APIs).
+    pub fn progress_callback(&self) -> Arc<dyn Fn(u64) + Send + Sync> {
+        Arc::clone(&self.progress_cb)
+    }
+
+    /// Stores metadata describing the transformation that occurred.
+    pub async fn set_metadata(&self, metadata: TransformMetadata) {
+        let mut state = self.state.write().await;
+        state.transform_metadata = Some(metadata);
+    }
 }
 
 /// Lance le téléchargement d'une URL dans un fichier.
@@ -346,7 +389,7 @@ async fn download_impl(
                 Ok(resp) => resp,
                 Err(e) => {
                     let mut s = state.write().await;
-                    let error = format!("Failed to fetch URL: {}", e);
+                    let error = format!("Failed to fetch URL '{}': {}", url, e);
                     s.error = Some(error.clone());
                     s.finished = true;
                     return Err(error);
@@ -402,7 +445,9 @@ async fn process_input(
                 });
             });
 
-        match transformer(input, file, Arc::clone(&progress_callback)).await {
+        let context = Arc::new(TransformContext::new(Arc::clone(&state), progress_callback));
+
+        match transformer(input, file, Arc::clone(&context)).await {
             Ok(_) => {
                 let mut s = state.write().await;
                 if s.current_size == 0 {
@@ -459,4 +504,99 @@ async fn default_copy(
     let mut s = state.write().await;
     s.finished = true;
     Ok(())
+}
+
+/// Lit les premiers octets d'une URL sans télécharger le fichier complet
+///
+/// Cette fonction effectue une requête HTTP partielle (Range header) pour télécharger
+/// uniquement les premiers octets d'un fichier. C'est utilisé pour calculer l'identifiant
+/// basé sur le contenu sans avoir à télécharger tout le fichier.
+///
+/// # Arguments
+///
+/// * `url` - URL du fichier à télécharger
+/// * `max_bytes` - Nombre maximum d'octets à lire (par défaut 512)
+///
+/// # Returns
+///
+/// Un `Vec<u8>` contenant les premiers octets du fichier
+///
+/// # Exemple
+///
+/// ```rust,ignore
+/// use pmocache::download::peek_header;
+///
+/// let header = peek_header("http://example.com/file.dat", 512).await?;
+/// let pk = pk_from_content_header(&header);
+/// ```
+pub async fn peek_header(url: &str, max_bytes: usize) -> Result<Vec<u8>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    // Essayer d'abord avec une requête Range
+    let range_header = format!("bytes=0-{}", max_bytes - 1);
+    let mut response = client
+        .get(url)
+        .header("Range", range_header)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch URL '{}': {}", url, e))?;
+
+    // Si le serveur ne supporte pas Range (status 200 au lieu de 206),
+    // on lit quand même mais on limite la lecture
+    if !response.status().is_success() && response.status() != reqwest::StatusCode::PARTIAL_CONTENT
+    {
+        return Err(format!("HTTP error: {}", response.status()));
+    }
+
+    let mut buffer = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+        buffer.extend_from_slice(&chunk);
+        if buffer.len() >= max_bytes {
+            buffer.truncate(max_bytes);
+            break;
+        }
+    }
+
+    Ok(buffer)
+}
+
+/// Lit les premiers octets d'un reader asynchrone
+///
+/// Cette fonction lit jusqu'à `max_bytes` octets depuis un reader asynchrone.
+/// C'est utilisé pour calculer l'identifiant basé sur le contenu des fichiers locaux
+/// ou des streams.
+///
+/// # Arguments
+///
+/// * `reader` - Le reader asynchrone à lire
+/// * `max_bytes` - Nombre maximum d'octets à lire (par défaut 512)
+///
+/// # Returns
+///
+/// Un `Vec<u8>` contenant les premiers octets lus
+///
+/// # Exemple
+///
+/// ```rust,ignore
+/// use pmocache::download::peek_reader_header;
+/// use tokio::fs::File;
+///
+/// let mut file = File::open("file.dat").await?;
+/// let header = peek_reader_header(&mut file, 512).await?;
+/// let pk = pk_from_content_header(&header);
+/// ```
+pub async fn peek_reader_header<R>(reader: &mut R, max_bytes: usize) -> Result<Vec<u8>, String>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut buffer = vec![0u8; max_bytes];
+    let n = reader
+        .read(&mut buffer)
+        .await
+        .map_err(|e| format!("Failed to read from stream: {}", e))?;
+    buffer.truncate(n);
+    Ok(buffer)
 }

@@ -10,6 +10,10 @@ pmocache = { path = "../pmocache" }
 # DIDL-Lite pour UPnP
 pmodidl = { path = "../pmodidl" }
 
+# Streaming FLAC asynchrone
+pmoflac = { path = "../pmoflac" }
+pmometadata = { path = "../pmometadata" }
+
 # Base de données
 rusqlite = { version = "0.37", features = ["bundled"] }
 chrono = "0.4"
@@ -17,20 +21,17 @@ chrono = "0.4"
 # Métadonnées audio
 lofty = "0.22"
 
-# Encodage/décodage audio
-symphonia = { version = "0.5", features = ["all"] }
-claxon = "0.4"  # Décodeur FLAC
-flacenc = "0.4"  # Encodeur FLAC
-futures-util = "0.3"  # Pour le streaming
-
-# HTTP client
-reqwest = { version = "0.12", features = ["blocking"] }
+# Outils de streaming
+futures-util = "0.3"
+bytes = "1.0"
 
 # Utilitaires
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 quick-xml = { version = "0.37", features = ["serialize"] }
+paste = "1.0"
+async-trait = "0.1"
 
 # Async
 tokio = { version = "1.0", features = ["full"] }
@@ -45,7 +46,9 @@ tracing = "0.1.41"
 
 [dev-dependencies]
 tracing-subscriber = "0.3"
+tempfile = "3"
 
 [features]
 default = ["pmoserver"]
-pmoserver = ["dep:pmoserver", "dep:pmoconfig", "dep:axum", "dep:utoipa", "pmocache/pmoserver", "pmocache/openapi"]
+pmoconfig = ["dep:pmoconfig", "pmocache/pmoconfig"]
+pmoserver = ["pmoconfig", "dep:pmoserver", "dep:axum", "dep:utoipa", "pmocache/pmoserver", "pmocache/openapi"]

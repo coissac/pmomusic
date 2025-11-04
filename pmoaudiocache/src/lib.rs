@@ -1,145 +1,101 @@
-//! # pmoaudiocache - Cache de pistes audio pour PMOMusic
+//! # pmoaudiocache – Cache de pistes audio pour PMOMusic
 //!
-//! Cette crate fournit un système de cache pour les pistes audio avec conversion
-//! automatique en FLAC et extraction des métadonnées.
+//! `pmoaudiocache` s'appuie sur [`pmocache`] pour fournir un cache spécialisé
+//! dans les fichiers audio. Il assure la conversion transparente au format FLAC,
+//! l'extraction des métadonnées et la mise à disposition d'outils pour les exposer.
 //!
-//! ## Vue d'ensemble
+//! ## Fonctionnalités
 //!
-//! `pmoaudiocache` étend `pmocache` pour gérer spécifiquement les fichiers audio :
-//! - **Téléchargement asynchrone** via le système de download de `pmocache`
-//! - **Conversion automatique en FLAC** lors du téléchargement (via transformer)
-//! - **Extraction et stockage des métadonnées** en JSON dans la base de données
-//! - **Gestion de collections** basées sur artiste/album
-//! - **Streaming progressif** automatique (via `pmocache`)
-//! - **API REST complète** fournie par `pmocache`
+//! - conversion automatique des entrées en FLAC grâce à un `StreamTransformer` ;
+//! - extraction des tags (artiste, album, titre, etc.) via [`metadata::AudioMetadata`] ;
+//! - stockage des métadonnées dans la table `metadata` de `pmocache::DB` ;
+//! - helpers pour renseigner les collections à partir des tags ;
+//! - intégration optionnelle avec `pmoserver` (routes REST + diffusion de fichiers).
 //!
-//! ## Architecture
-//!
-//! Cette crate est une spécialisation minimale de `pmocache` :
-//! - Configuration via `AudioConfig`
-//! - Transformer FLAC pour la conversion automatique
-//! - Helpers pour l'extraction et la lecture des métadonnées
-//!
-//! Tout le reste (DB, API REST, streaming) est fourni par `pmocache`.
-//!
-//! ## Utilisation
-//!
-//! ### Exemple basique
+//! ## Exemple rapide
 //!
 //! ```rust,no_run
 //! use pmoaudiocache::cache;
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
-//!     // Créer le cache
-//!     let cache = cache::new_cache("./audio_cache", 1000, "http://localhost:8080")?;
+//!     let cache = cache::new_cache("./audio_cache", 500)?;
 //!
-//!     // Ajouter une piste avec extraction des métadonnées
+//!     // Télécharge la piste, déclenche la conversion FLAC et stocke les métadonnées.
 //!     let pk = cache::add_with_metadata_extraction(
 //!         &cache,
-//!         "http://example.com/track.flac",
-//!         None  // collection auto-détectée depuis métadonnées
+//!         "https://example.com/track.mp3",
+//!         None,
 //!     ).await?;
 //!
-//!     // Lire les métadonnées
+//!     // Lecture des métadonnées extraites
 //!     let metadata = cache::get_metadata(&cache, &pk)?;
-//!     println!("{} - {}",
-//!         metadata.artist.as_deref().unwrap_or("Unknown"),
-//!         metadata.title.as_deref().unwrap_or("Unknown")
+//!     println!(
+//!         "Titre: {}",
+//!         metadata.title.as_deref().unwrap_or("Inconnu")
 //!     );
 //!
-//!     // Le fichier FLAC est disponible immédiatement après le download
-//!     let file_path = cache.get(&pk).await?;
-//!     println!("FLAC file: {:?}", file_path);
+//!     // Accès au fichier FLAC converti
+//!     let flac_path = cache.get(&pk).await?;
+//!     println!("Fichier converti: {flac_path:?}");
 //!
 //!     Ok(())
 //! }
 //! ```
 //!
-//! ### Utilisation avec pmoserver
+//! ## Intégration serveur (feature `pmoserver`)
 //!
-//! ```rust,no_run
-//! use pmoaudiocache::AudioCacheExt;
-//! use pmoserver::ServerBuilder;
+//! Lorsque la feature `pmoserver` est activée, [`AudioCacheExt`] permet
+//! d'enregistrer automatiquement les routes suivantes :
 //!
-//! #[tokio::main]
-//! async fn main() -> anyhow::Result<()> {
-//!     let mut server = ServerBuilder::new_configured().build();
+//! - `GET /audio/tracks/{pk}` : téléchargement/stream du FLAC original ;
+//! - `GET /audio/tracks/{pk}/{qualifier}` : variantes (ex: `orig`) ;
+//! - `GET /api/audio` / `POST /api/audio` / `DELETE /api/audio` : API REST générique ;
+//! - `GET /api/audio/{pk}/status` : suivi de téléchargement ;
+//! - endpoints OpenAPI/Swagger lorsqu'`openapi` est activée.
 //!
-//!     // Initialiser le cache audio avec configuration automatique
-//!     server.init_audio_cache_configured().await?;
+//! ## Métadonnées gérées
 //!
-//!     server.start().await;
-//!     server.wait().await;
-//!     Ok(())
-//! }
-//! ```
+//! Le module [`metadata`] extrait notamment :
+//! - titre, artiste, album, genre ;
+//! - numéros de piste/disque et totaux associés ;
+//! - année, durée, bitrate, sample rate, nombre de canaux.
 //!
-//! ## API HTTP (avec feature "pmoserver")
+//! En l'absence d'artiste/album, aucune collection automatique n'est créée.
 //!
-//! Lorsque la feature `pmoserver` est activée, les routes suivantes sont disponibles :
+//! ## Modules
 //!
-//! ### Routes de fichiers
-//! - `GET /audio/tracks/{pk}` - Stream du fichier FLAC original
-//! - `GET /audio/tracks/{pk}/orig` - Alias pour l'original
+//! - [`cache`] : instanciation du cache et helpers de téléchargement ;
+//! - [`metadata`] : extraction/structure des métadonnées audio ;
+//! - [`config_ext`] *(feature `pmoconfig`)* : dérivation de la configuration depuis `pmoconfig`;
+//! - [`openapi`] *(feature `pmoserver`)* : documentation des routes REST.
 //!
-//! ### API REST
-//! - `GET /api/audio` - Liste toutes les pistes
-//! - `POST /api/audio` - Ajoute une piste depuis une URL
-//! - `GET /api/audio/{pk}` - Informations complètes d'une piste
-//! - `DELETE /api/audio/{pk}` - Supprime une piste
-//! - `GET /api/audio/{pk}/status` - Statut du téléchargement
-//! - `POST /api/audio/consolidate` - Consolide le cache
-//! - `DELETE /api/audio` - Purge tout le cache
+//! ## Crates voisines
 //!
-//! ## Métadonnées supportées
-//!
-//! Les métadonnées suivantes sont extraites automatiquement :
-//! - Titre, artiste, album
-//! - Année, genre
-//! - Numéro de piste/disque
-//! - Durée, taux d'échantillonnage, bitrate
-//! - Nombre de canaux
-//!
-//! ## Format des collections
-//!
-//! Les collections sont identifiées par une clé au format `"artist:album"`, avec :
-//! - Conversion en minuscules
-//! - Remplacement des espaces par des underscores
-//! - Exemple : `"Pink Floyd - Wish You Were Here"` → `"pink_floyd:wish_you_were_here"`
-//!
-//! ## Différences avec l'ancienne version
-//!
-//! Cette version refactorisée de `pmoaudiocache` :
-//! - ✅ **Supprime le champ `conversion_status`** : le système `Download` de `pmocache` gère déjà l'état asynchrone
-//! - ✅ **Utilise `pmocache::DB`** : plus de DB personnalisée, les métadonnées sont en JSON
-//! - ✅ **API REST générique** : fournie par `pmocache`, plus de code custom
-//! - ✅ **Code réduit de 52%** : de ~1681 lignes à ~800 lignes
-//! - ✅ **Streaming progressif** : automatique via `pmocache`
-//! - ✅ **Politique LRU optimisée** : nouvel index composite dans `pmocache`
-//!
-//! ## Dépendances principales
-//!
-//! - `pmocache` : Cache générique avec download asynchrone
-//! - `lofty` : Extraction de métadonnées audio
-//! - `tokio` : Runtime asynchrone
-//!
-//! ## Voir aussi
-//!
-//! - [`pmocache`] : Cache générique
-//! - [`pmocovers`] : Cache d'images (architecture similaire)
-//! - [`pmoserver`] : Serveur HTTP
+//! - [`pmocache`] : fondation générique ;
+//! - [`pmocovers`] : spécialisation images (architecture similaire) ;
+//! - [`pmoserver`] : serveur HTTP optionnel.
 
 pub mod cache;
-pub mod flac;
 pub mod metadata;
+pub mod metadata_ext;
+pub mod streaming;
+pub mod track_metadata;
 
 #[cfg(feature = "pmoserver")]
 pub mod openapi;
 
+#[cfg(feature = "pmoconfig")]
+pub mod config_ext;
+
 // Re-exports principaux
 pub use cache::{add_with_metadata_extraction, get_metadata, new_cache, AudioConfig, Cache};
 pub use metadata::AudioMetadata;
+pub use metadata_ext::{AudioMetadataExt, AudioTrackMetadataExt};
+pub use track_metadata::AudioCacheTrackMetadata;
+
+#[cfg(feature = "pmoconfig")]
+pub use config_ext::AudioCacheConfigExt;
 
 #[cfg(feature = "pmoserver")]
 pub use openapi::ApiDoc;
@@ -207,9 +163,10 @@ impl AudioCacheExt for pmoserver::Server {
     }
 
     async fn init_audio_cache_configured(&mut self) -> anyhow::Result<Arc<Cache>> {
+        use crate::AudioCacheConfigExt;
         let config = pmoconfig::get_config();
-        let cache_dir = config.get_audio_cache_dir()?;
-        let limit = config.get_audio_cache_size()?;
+        let cache_dir = config.get_audiocache_dir()?;
+        let limit = config.get_audiocache_size()?;
         self.init_audio_cache(&cache_dir, limit).await
     }
 }

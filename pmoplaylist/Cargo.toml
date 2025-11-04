@@ -1,9 +1,43 @@
 [package]
 name = "pmoplaylist"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
+# Caches PMO
+pmoaudiocache = { path = "../pmoaudiocache" }
+pmocache = { path = "../pmocache" }
+
+# Métadonnées
+pmometadata = { path = "../pmometadata" }
+
+# DIDL-Lite pour UPnP
 pmodidl = { path = "../pmodidl" }
-tokio = { version = "1.42.0", features = ["sync", "time", "macros", "rt", "rt-multi-thread"] }
-serde = { version = "1.0.228", features = ["derive"] }
+
+# UPnP (pour accéder au cache audio global)
+pmoupnp = { path = "../pmoupnp" }
+
+# Configuration (optionnelle)
+pmoconfig = { path = "../pmoconfig", optional = true }
+
+# Base de données
+rusqlite = { version = "0.37", features = ["bundled"] }
+
+# Utilitaires
+anyhow = "1.0"
+thiserror = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Async
+tokio = { version = "1.0", features = ["full"] }
+
+# Singleton
+once_cell = "1.20"
+
+# Logging
+tracing = "0.1"
+
+[features]
+default = ["pmoconfig"]
+pmoconfig = ["dep:pmoconfig"]

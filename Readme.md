@@ -98,3 +98,10 @@ jj rebase --continue
 
 pour résoudre les conflits
 
+## Installer rust sur mac
+
+```bash
+brew install rustup-init
+rustup-init
+rustup default stable
+```

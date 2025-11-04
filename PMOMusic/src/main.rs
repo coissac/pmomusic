@@ -3,16 +3,19 @@ use pmomediarenderer::MEDIA_RENDERER;
 use pmomediaserver::{MEDIA_SERVER, sources::SourcesExt};
 use pmoserver::Server;
 use pmosource::MusicSourceExt;
-use pmoupnp::{UpnpServerExt, upnp_api::UpnpApiExt};
+use pmoupnp::UpnpServerExt;
 use tracing::info;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ========== PHASE 1 : Infrastructure UPnP ==========
-    let mut server = Server::create_upnp_server().await?;
+    // #[cfg(tokio_unstable)]
+    // console_subscriber::init();
 
-    // Routes personnalisées de l'application
+    let server = Server::create_upnp_server().await?; // Routes personnalisées de l'application
     server
+        .write()
+        .await
         .add_route("/info", || async {
             serde_json::json!({"version": "1.0.0"})
         })
@@ -21,6 +24,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialiser le système de gestion des sources musicales avec API REST
     info!("📡 Initializing music sources management system...");
     server
+        .write()
+        .await
         .init_music_sources()
         .await
         .expect("Failed to initialize music sources API");
@@ -36,12 +41,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // }
 
     // Enregistrer Radio Paradise (inclut l'initialisation de l'API)
-    if let Err(e) = server.register_paradise().await {
+    if let Err(e) = server.write().await.register_paradise().await {
         tracing::warn!("⚠️ Failed to register Radio Paradise: {}", e);
     }
 
     // Lister toutes les sources enregistrées
-    let sources = server.list_music_sources().await;
+    let sources = server.read().await.list_music_sources().await;
     info!("✅ {} music source(s) registered", sources.len());
     for source in sources {
         info!("  - {} ({})", source.name(), source.id());
@@ -51,6 +56,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("📡 Registering UPnP devices...");
 
     let renderer_instance = server
+        .write()
+        .await
         .register_device(MEDIA_RENDERER.clone())
         .await
         .expect("Failed to register MediaRenderer");
@@ -62,6 +69,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let server_instance = server
+        .write()
+        .await
         .register_device(MEDIA_SERVER.clone())
         .await
         .expect("Failed to register MediaServer");
@@ -74,16 +83,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Ajouter la webapp via le trait WebAppExt
     info!("📡 Registering Web application...");
-    server.add_webapp_with_redirect::<Webapp>("/app").await;
+    server
+        .write()
+        .await
+        .add_webapp_with_redirect::<Webapp>("/app")
+        .await;
 
     // ========== PHASE 3 : Démarrage du serveur ==========
 
     info!("🌐 Starting HTTP server...");
-    server.start().await;
+    server.write().await.start().await;
 
     info!("✅ PMOMusic is ready!");
     info!("Press Ctrl+C to stop...");
-    server.wait().await;
+    server.write().await.wait().await;
 
     Ok(())
 }

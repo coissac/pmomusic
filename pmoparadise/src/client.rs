@@ -1,7 +1,7 @@
 //! HTTP client for Radio Paradise API
 
 use crate::error::{Error, Result};
-use crate::models::{Bitrate, Block, EventId, NowPlaying};
+use crate::models::{Block, EventId, NowPlaying};
 use reqwest::Client;
 use std::time::Duration;
 use url::Url;
@@ -13,10 +13,13 @@ pub const DEFAULT_API_BASE: &str = "https://api.radioparadise.com/api";
 pub const DEFAULT_BLOCK_BASE: &str = "https://apps.radioparadise.com/blocks/chan/0";
 
 /// Default image base URL
-pub const DEFAULT_IMAGE_BASE: &str = "https://img.radioparadise.com/covers/l/";
+pub const DEFAULT_IMAGE_BASE: &str = "https://img.radioparadise.com/";
 
-/// Default timeout for HTTP requests
-pub const DEFAULT_TIMEOUT_SECS: u64 = 30;
+/// Default timeout for metadata HTTP requests
+pub const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
+
+/// Default timeout for large block downloads/streams
+pub const DEFAULT_BLOCK_TIMEOUT_SECS: u64 = 180;
 
 /// Default User-Agent
 pub const DEFAULT_USER_AGENT: &str = "pmoparadise/0.1.0";
@@ -46,17 +49,16 @@ pub struct RadioParadiseClient {
     pub(crate) client: Client,
     api_base: String,
     block_base: String,
-    image_base: String,
-    bitrate: Bitrate,
     channel: u8,
-    pub(crate) timeout: Duration,
+    pub(crate) request_timeout: Duration,
+    pub(crate) block_timeout: Duration,
     next_block_url: Option<String>,
 }
 
 impl RadioParadiseClient {
     /// Create a new client with default settings
     ///
-    /// Uses FLAC quality (bitrate 4) and channel 0 (main mix)
+    /// Uses FLAC quality and channel 0 (main mix)
     pub async fn new() -> Result<Self> {
         Self::builder().build().await
     }
@@ -74,17 +76,11 @@ impl RadioParadiseClient {
             client,
             api_base: DEFAULT_API_BASE.to_string(),
             block_base: DEFAULT_BLOCK_BASE.to_string(),
-            image_base: DEFAULT_IMAGE_BASE.to_string(),
-            bitrate: Bitrate::default(),
             channel: 0,
-            timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
+            request_timeout: Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS),
+            block_timeout: Duration::from_secs(DEFAULT_BLOCK_TIMEOUT_SECS),
             next_block_url: None,
         }
-    }
-
-    /// Get the current bitrate setting
-    pub fn bitrate(&self) -> Bitrate {
-        self.bitrate
     }
 
     /// Get the current channel (0 = main mix)
@@ -102,21 +98,6 @@ impl RadioParadiseClient {
         cloned.channel = channel;
         cloned.block_base = Self::block_base_for_channel(channel);
         cloned.next_block_url = None;
-        cloned
-    }
-
-    /// Clone the client with a different bitrate while preserving other settings.
-    pub fn clone_with_bitrate(&self, bitrate: Bitrate) -> Self {
-        let mut cloned = self.clone();
-        cloned.bitrate = bitrate;
-        cloned.next_block_url = None;
-        cloned
-    }
-
-    /// Clone the client with an updated channel and bitrate.
-    pub fn clone_with_channel_and_bitrate(&self, channel: u8, bitrate: Bitrate) -> Self {
-        let mut cloned = self.clone_with_channel(channel);
-        cloned.bitrate = bitrate;
         cloned
     }
 
@@ -150,7 +131,7 @@ impl RadioParadiseClient {
         let mut url = Url::parse(&format!("{}/get_block", self.api_base))?;
 
         url.query_pairs_mut()
-            .append_pair("bitrate", &self.bitrate.as_u8().to_string())
+            .append_pair("bitrate", "4") // FLAC lossless
             .append_pair("info", "true")
             .append_pair("channel", &self.channel.to_string());
 
@@ -162,7 +143,12 @@ impl RadioParadiseClient {
         #[cfg(feature = "logging")]
         tracing::debug!("Fetching block: {}", url);
 
-        let response = self.client.get(url).timeout(self.timeout).send().await?;
+        let response = self
+            .client
+            .get(url)
+            .timeout(self.request_timeout)
+            .send()
+            .await?;
 
         if !response.status().is_success() {
             return Err(Error::other(format!(
@@ -173,9 +159,14 @@ impl RadioParadiseClient {
 
         let mut block: Block = response.json().await?;
 
-        // Set image_base if not provided
-        if block.image_base.is_none() {
-            block.image_base = Some(self.image_base.clone());
+        // Normalize protocol-relative URLs from API (//img.radioparadise.com/)
+        if let Some(ref base) = block.image_base {
+            if base.starts_with("//") {
+                block.image_base = Some(format!("https:{}", base));
+            }
+        } else {
+            // Fallback if API doesn't provide image_base (should never happen)
+            block.image_base = Some(DEFAULT_IMAGE_BASE.to_string());
         }
 
         #[cfg(feature = "logging")]
@@ -198,29 +189,6 @@ impl RadioParadiseClient {
     pub async fn now_playing(&self) -> Result<NowPlaying> {
         let block = self.get_block(None).await?;
         Ok(NowPlaying::from_block(block))
-    }
-
-    /// Get the full URL for a cover image
-    ///
-    /// # Arguments
-    ///
-    /// * `cover_path` - The cover filename/path from song metadata
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use pmoparadise::RadioParadiseClient;
-    /// # #[tokio::main]
-    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let client = RadioParadiseClient::new().await?;
-    /// let url = client.cover_url("B00000I0JF.jpg")?;
-    /// println!("Cover URL: {}", url);
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn cover_url(&self, cover_path: &str) -> Result<Url> {
-        let url_str = format!("{}{}", self.image_base, cover_path);
-        Ok(Url::parse(&url_str)?)
     }
 
     /// Prefetch metadata for the next block
@@ -267,10 +235,9 @@ pub struct ClientBuilder {
     client: Option<Client>,
     api_base: String,
     block_base: String,
-    image_base: String,
-    bitrate: Bitrate,
     channel: u8,
-    timeout: Duration,
+    request_timeout: Duration,
+    block_timeout: Duration,
     user_agent: String,
     proxy: Option<String>,
 }
@@ -281,10 +248,9 @@ impl Default for ClientBuilder {
             client: None,
             api_base: DEFAULT_API_BASE.to_string(),
             block_base: DEFAULT_BLOCK_BASE.to_string(),
-            image_base: DEFAULT_IMAGE_BASE.to_string(),
-            bitrate: Bitrate::default(),
             channel: 0,
-            timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
+            request_timeout: Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS),
+            block_timeout: Duration::from_secs(DEFAULT_BLOCK_TIMEOUT_SECS),
             user_agent: DEFAULT_USER_AGENT.to_string(),
             proxy: None,
         }
@@ -315,26 +281,6 @@ impl ClientBuilder {
         self
     }
 
-    /// Set the image base URL
-    pub fn image_base(mut self, url: impl Into<String>) -> Self {
-        self.image_base = url.into();
-        self
-    }
-
-    /// Set the bitrate/quality level
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// # use pmoparadise::{RadioParadiseClient, Bitrate};
-    /// let builder = RadioParadiseClient::builder()
-    ///     .bitrate(Bitrate::Aac320);
-    /// ```
-    pub fn bitrate(mut self, bitrate: Bitrate) -> Self {
-        self.bitrate = bitrate;
-        self
-    }
-
     /// Set the channel (0 = main mix, 1 = mellow, 2 = rock, 3 = world/etc)
     pub fn channel(mut self, channel: u8) -> Self {
         self.channel = channel;
@@ -343,7 +289,13 @@ impl ClientBuilder {
 
     /// Set the request timeout
     pub fn timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
+        self.request_timeout = timeout;
+        self
+    }
+
+    /// Set the timeout specifically for block downloads/streams
+    pub fn block_timeout(mut self, timeout: Duration) -> Self {
+        self.block_timeout = timeout;
         self
     }
 
@@ -366,7 +318,7 @@ impl ClientBuilder {
         } else {
             let mut builder = Client::builder()
                 .user_agent(&self.user_agent)
-                .timeout(self.timeout);
+                .timeout(self.request_timeout);
 
             if let Some(proxy_url) = &self.proxy {
                 let proxy = reqwest::Proxy::all(proxy_url)
@@ -387,10 +339,9 @@ impl ClientBuilder {
             client,
             api_base: self.api_base,
             block_base,
-            image_base: self.image_base,
-            bitrate: self.bitrate,
             channel: self.channel,
-            timeout: self.timeout,
+            request_timeout: self.request_timeout,
+            block_timeout: self.block_timeout,
             next_block_url: None,
         })
     }
@@ -404,17 +355,6 @@ mod tests {
     fn test_builder_defaults() {
         let builder = ClientBuilder::default();
         assert_eq!(builder.api_base, DEFAULT_API_BASE);
-        assert_eq!(builder.bitrate, Bitrate::Flac);
         assert_eq!(builder.channel, 0);
-    }
-
-    #[test]
-    fn test_cover_url() {
-        let client = RadioParadiseClient::with_client(Client::new());
-        let url = client.cover_url("test.jpg").unwrap();
-        assert_eq!(
-            url.as_str(),
-            "https://img.radioparadise.com/covers/l/test.jpg"
-        );
     }
 }

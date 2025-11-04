@@ -7,8 +7,8 @@
 //! ## Features
 //!
 //! - **Metadata Access**: Get current and historical block metadata with song information
-//! - **Block Streaming**: Stream continuous FLAC/AAC blocks with automatic prefetching
-//! - **Multiple Quality Levels**: Support for MP3, AAC (64/128/320 kbps), and FLAC
+//! - **Block Streaming**: Stream continuous FLAC blocks with automatic prefetching
+//! - **FLAC Quality**: Lossless CD quality or better
 //! - **Per-Track Extraction** (optional): Extract individual tracks from FLAC blocks
 //! - **Async/Await**: Built on tokio for efficient async I/O
 //! - **Type-Safe**: Strongly typed API with comprehensive error handling
@@ -49,7 +49,7 @@
 //! ## Streaming Blocks
 //!
 //! Radio Paradise broadcasts music in continuous "blocks" - each block is a single
-//! FLAC or AAC file containing multiple songs with metadata indicating timing offsets.
+//! FLAC file containing multiple songs with metadata indicating timing offsets.
 //!
 //! ```no_run
 //! use pmoparadise::RadioParadiseClient;
@@ -67,24 +67,6 @@
 //!         let bytes = chunk?;
 //!         // Feed to audio player, write to file, etc.
 //!     }
-//!
-//!     Ok(())
-//! }
-//! ```
-//!
-//! ## Quality Levels
-//!
-//! Radio Paradise offers multiple quality levels via the [`Bitrate`] enum:
-//!
-//! ```no_run
-//! use pmoparadise::{RadioParadiseClient, Bitrate};
-//!
-//! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let client = RadioParadiseClient::builder()
-//!         .bitrate(Bitrate::Aac320)
-//!         .build()
-//!         .await?;
 //!
 //!     Ok(())
 //! }
@@ -135,7 +117,7 @@
 //!
 //! Radio Paradise streams use a block-based format:
 //!
-//! - Each block is a single audio file (FLAC or AAC)
+//! - Each block is a single FLAC audio file
 //! - Blocks contain multiple songs (typically 10-15 minutes total)
 //! - Metadata includes timing offsets (`song[i].elapsed` in ms) for each song
 //! - Block URLs follow the pattern: `https://apps.radioparadise.com/blocks/chan/0/4/<start>-<end>.flac`
@@ -227,9 +209,9 @@
 //!
 //! - `default = ["metadata-only"]`: Standard metadata and streaming (no FLAC decoding)
 //! - `per-track`: Enable FLAC decoding and per-track extraction (adds `claxon`, `hound`, `tempfile`)
-//! - `logging`: Enable tracing logs for debugging
-//! - `mediaserver`: Enable UPnP/DLNA Media Server (adds `pmoupnp`, `pmoserver`, `pmodidl`)
-//! - `cache`: Enable cover and audio caching support (adds `pmocovers`, `pmoaudiocache`, enables `logging`)
+//! - `pmoserver`: Enable REST API extension for pmoserver integration (adds `utoipa`, `axum`)
+//! - `server`: Enable server-side features (cache registry integration)
+//! - `cache`: Enable cover and audio caching support (adds `pmocovers`, `pmoaudiocache`)
 //!
 //! ## See Also
 //!
@@ -239,35 +221,40 @@
 pub mod client;
 pub mod error;
 pub mod models;
+pub mod paradise;
 pub mod source;
 pub mod stream;
+pub mod streaming;
 
 #[cfg(feature = "per-track")]
 pub mod track;
 
-#[cfg(feature = "mediaserver")]
-pub mod mediaserver;
+#[cfg(feature = "ffmpeg")]
+pub mod ffmpeg_streaming;
 
 #[cfg(feature = "pmoserver")]
 pub mod pmoserver_ext;
 
+#[cfg(feature = "pmoconfig")]
+pub mod config_ext;
+
 // Re-exports for convenience
 pub use client::{ClientBuilder, RadioParadiseClient};
 pub use error::{Error, Result};
-pub use models::{Bitrate, Block, DurationMs, EventId, NowPlaying, Song};
+pub use models::{Block, DurationMs, EventId, NowPlaying, Song};
 pub use source::RadioParadiseSource;
 pub use stream::BlockStream;
 
 #[cfg(feature = "per-track")]
 pub use track::{TrackMetadata, TrackStream};
 
-#[cfg(feature = "mediaserver")]
-pub use mediaserver::{MediaServerBuilder, RadioParadiseMediaServer};
-
 #[cfg(feature = "pmoserver")]
 pub use pmoserver_ext::{
     create_api_router, RadioParadiseApiDoc, RadioParadiseExt, RadioParadiseState,
 };
+
+#[cfg(feature = "pmoconfig")]
+pub use config_ext::RadioParadiseConfigExt;
 
 // Version information
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

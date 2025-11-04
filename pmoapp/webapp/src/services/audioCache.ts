@@ -2,27 +2,39 @@
  * Service API pour interagir avec le cache de pistes audio
  */
 
-export interface AudioMetadata {
+export interface AudioCacheMetadata {
+  origin_url?: string;
   title?: string;
   artist?: string;
   album?: string;
   year?: number;
   genre?: string;
   track_number?: number;
+  track_total?: number;
   disc_number?: number;
+  disc_total?: number;
   duration_ms?: number;
+  duration_secs?: number;
   sample_rate?: number;
   bitrate?: number;
   channels?: number;
+  conversion?: ConversionInfo;
+  [key: string]: unknown;
 }
 
 export interface AudioCacheEntry {
   pk: string;
-  source_url: string;
+  id: string | null;
   hits: number;
   last_used: string | null;
-  collection?: string;
-  metadata?: AudioMetadata;
+  collection?: string | null;
+  metadata?: AudioCacheMetadata | null;
+}
+
+export interface ConversionInfo {
+  mode: string;
+  input_codec?: string;
+  details?: string;
 }
 
 export interface AddTrackRequest {
@@ -38,14 +50,40 @@ export interface AddTrackResponse {
 
 export interface DownloadStatus {
   pk: string;
-  status: "pending" | "downloading" | "completed" | "failed";
-  progress?: number;
+  in_progress: boolean;
+  finished: boolean;
+  current_size?: number;
+  transformed_size?: number;
+  expected_size?: number;
   error?: string;
+  conversion?: ConversionInfo;
 }
 
 export interface ApiError {
   error: string;
   message: string;
+}
+
+export function getOriginUrl(entry: AudioCacheEntry): string | undefined {
+  const metadata = entry.metadata;
+  if (metadata && typeof metadata === "object") {
+    const origin = (metadata as { origin_url?: unknown }).origin_url;
+    if (typeof origin === "string" && origin.trim().length > 0) {
+      return origin;
+    }
+  }
+  return undefined;
+}
+
+export function getDurationMs(metadata?: AudioCacheMetadata | null): number | undefined {
+  if (!metadata) return undefined;
+  if (typeof metadata.duration_ms === "number" && !Number.isNaN(metadata.duration_ms)) {
+    return metadata.duration_ms;
+  }
+  if (typeof metadata.duration_secs === "number" && !Number.isNaN(metadata.duration_secs)) {
+    return metadata.duration_secs * 1000;
+  }
+  return undefined;
 }
 
 /**

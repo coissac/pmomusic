@@ -489,7 +489,7 @@ impl ServiceInstance {
     pub fn usn(&self) -> String {
         let device = self.device.read().unwrap();
         match device.as_ref() {
-            Some(device) => format!("uuid:{}::urn:{}", device.udn(), self.service_type()),
+            Some(device) => format!("{}::urn:{}", device.udn_with_prefix(), self.service_type()),
             None => format!("uuid::urn:{}", self.service_type()),
         }
     }
@@ -979,8 +979,7 @@ impl ServiceInstance {
 
         // Essayer de downcaster vers des types primitifs courants
         if let Some(v) = value.as_any().downcast_ref::<String>() {
-            // Échapper les caractères XML spéciaux
-            return escape(v).to_string();
+            return v.clone();
         } else if let Some(v) = value.as_any().downcast_ref::<u8>() {
             return v.to_string();
         } else if let Some(v) = value.as_any().downcast_ref::<u16>() {
@@ -1000,7 +999,7 @@ impl ServiceInstance {
         } else if let Some(v) = value.as_any().downcast_ref::<bool>() {
             return if *v { "1" } else { "0" }.to_string();
         } else if let Some(v) = value.as_any().downcast_ref::<char>() {
-            return escape(&v.to_string()).to_string();
+            return v.to_string();
         }
 
         // Pour les structures complexes, essayer de sérialiser avec bevy_reflect
@@ -1345,7 +1344,7 @@ async fn control_handler(State(instance): State<Arc<ServiceInstance>>, body: Str
     match action_instance_for_run.run(soap_values).await {
         Ok(output_data) => {
             // Convertir ActionData (Reflect) → HashMap<String, String> pour SOAP
-            let mut soap_values = HashMap::new();
+            let mut soap_values: Vec<(String, String)> = Vec::new();
 
             for arg_inst in action_instance.arguments_set().all() {
                 let arg_model = arg_inst.as_ref().get_model();
@@ -1353,7 +1352,7 @@ async fn control_handler(State(instance): State<Arc<ServiceInstance>>, body: Str
                     if let Some(reflect_value) = output_data.get(arg_inst.get_name()) {
                         let soap_string =
                             ServiceInstance::reflect_to_string(reflect_value.as_ref());
-                        soap_values.insert(arg_inst.get_name().to_string(), soap_string);
+                        soap_values.push((arg_inst.get_name().to_string(), soap_string));
                     }
                 }
             }
