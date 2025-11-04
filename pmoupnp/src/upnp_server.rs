@@ -188,22 +188,26 @@ pub trait UpnpServerExt {
     /// `true` si SSDP est actif, `false` sinon
     fn ssdp_enabled(&self) -> bool;
 
-    /// Crée et initialise un serveur UPnP complet (factory method)
+    /// Crée et initialise le serveur UPnP global (factory method)
     ///
-    /// Cette méthode factory initialise l'infrastructure UPnP complète :
-    /// - Serveur HTTP (via pmoserver)
+    /// Cette méthode factory initialise le **singleton global** du serveur avec
+    /// l'infrastructure UPnP complète :
+    /// - Serveur HTTP (via pmoserver singleton)
     /// - Caches (couvertures + audio)
     /// - Logging
     /// - Serveur SSDP
     ///
+    /// Cette fonction est **idempotente** : elle peut être appelée plusieurs fois.
+    /// Si le serveur est déjà initialisé, elle retourne simplement la référence existante.
+    ///
     /// Après cette méthode, l'utilisateur doit :
     /// - Enregistrer ses devices via `register_device()`
-    /// - Enregistrer ses sources musicales
-    /// - Appeler `wait()` pour attendre l'arrêt
+    /// - Enregistrer ses sources musicales (via fonctions globales)
+    /// - Appeler `start()` puis `wait()` pour attendre l'arrêt
     ///
     /// # Returns
     ///
-    /// Un serveur UPnP prêt à l'emploi
+    /// Une référence Arc vers le serveur UPnP global, prêt à l'emploi
     ///
     /// # Errors
     ///
@@ -215,11 +219,11 @@ pub trait UpnpServerExt {
     /// use pmoupnp::UpnpServerExt;
     /// use pmoserver::Server;
     ///
-    /// let mut server = Server::create_upnp_server().await?;
-    /// server.register_device(my_device).await?;
-    /// server.wait().await;
+    /// let server = Server::create_upnp_server().await?;
+    /// server.write().await.register_device(my_device).await?;
+    /// server.read().await.wait().await;
     /// ```
-    async fn create_upnp_server() -> Result<Server, anyhow::Error>;
+    async fn create_upnp_server() -> Result<Arc<tokio::sync::RwLock<Server>>, anyhow::Error>;
 }
 
 // Implémentation du trait UpnpServer pour pmoserver::Server
@@ -367,20 +371,17 @@ impl UpnpServerExt for Server {
     }
 
     async fn init_caches(&mut self) -> Result<(Arc<CoverCache>, Arc<AudioCache>), anyhow::Error> {
+        use pmoaudiocache::AudioCacheConfigExt;
+        use pmocovers::CoverCacheConfigExt;
+
         let config = pmoconfig::get_config();
 
         let cover_cache = self
-            .init_cover_cache(
-                &config.get_cover_cache_dir()?,
-                config.get_cover_cache_size()?,
-            )
+            .init_cover_cache(&config.get_covers_dir()?, config.get_covers_size()?)
             .await?;
 
         let audio_cache = self
-            .init_audio_cache(
-                &config.get_audio_cache_dir()?,
-                config.get_audio_cache_size()?,
-            )
+            .init_audio_cache(&config.get_audiocache_dir()?, config.get_audiocache_size()?)
             .await?;
 
         Ok((cover_cache, audio_cache))
@@ -417,21 +418,20 @@ impl UpnpServerExt for Server {
         SSDP_SERVER.read().unwrap().is_some()
     }
 
-    async fn create_upnp_server() -> Result<Server, anyhow::Error> {
-        use pmoserver::ServerBuilder;
+    async fn create_upnp_server() -> Result<Arc<tokio::sync::RwLock<Server>>, anyhow::Error> {
         use tracing::{error, info, warn};
 
-        // 1. Créer le serveur depuis la config
-        info!("🔧 Creating UPnP server from configuration...");
-        let mut server = ServerBuilder::new_configured().build();
+        // 1. Initialiser le serveur global singleton
+        info!("🔧 Initializing global UPnP server from configuration...");
+        let server_arc = pmoserver::init_server();
 
         // 2. Initialiser le logging HTTP (routes de logs + tracing)
         info!("📝 Initializing logging...");
-        server.init_logging().await;
+        server_arc.write().await.init_logging().await;
 
         // 3. Initialiser les caches
         info!("💾 Initializing caches...");
-        match server.init_caches().await {
+        match server_arc.write().await.init_caches().await {
             Ok(_) => {
                 info!("✅ Caches initialized");
             }
@@ -443,15 +443,16 @@ impl UpnpServerExt for Server {
 
         // 4. Le serveur HTTP n'est PAS encore démarré
         // Il sera démarré après l'enregistrement des devices et routes
-        info!("🌐 HTTP server configured at {}", server.info().base_url);
+        let base_url = server_arc.read().await.info().base_url;
+        info!("🌐 HTTP server configured at {}", base_url);
 
         // 5. Enregistrer l'API d'introspection UPnP
         info!("📡 Registering UPnP API...");
-        server.register_upnp_api().await;
+        server_arc.write().await.register_upnp_api().await;
 
         // 6. Initialiser SSDP
         info!("📡 Initializing SSDP discovery...");
-        match server.init_ssdp() {
+        match server_arc.write().await.init_ssdp() {
             Ok(_) => info!("✅ SSDP server initialized"),
             Err(e) => {
                 let kind = e.kind();
@@ -480,7 +481,7 @@ impl UpnpServerExt for Server {
 
         info!("🎉 UPnP server infrastructure ready");
         info!("📝 Next: Register devices and music sources");
-        Ok(server)
+        Ok(server_arc)
     }
 }
 

@@ -3,6 +3,7 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Number;
 use std::collections::HashMap;
+use url::Url;
 
 /// Deserialize a string or number into a u64
 fn deserialize_string_or_u64<'de, D>(deserializer: D) -> Result<u64, D::Error>
@@ -118,65 +119,6 @@ where
         }
         Some(StringOrF32::Float(f)) => Ok(Some(f)),
         Some(StringOrF32::Int(i)) => Ok(Some(i as f32)),
-    }
-}
-
-/// Bitrate quality levels for Radio Paradise streams
-///
-/// Radio Paradise offers 5 quality levels:
-/// - 0: 128 kbps MP3
-/// - 1: AAC 64 kbps
-/// - 2: AAC 128 kbps
-/// - 3: AAC 320 kbps
-/// - 4: FLAC lossless (CD quality or better)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[repr(u8)]
-pub enum Bitrate {
-    /// 128 kbps MP3
-    Mp3_128 = 0,
-    /// AAC 64 kbps
-    Aac64 = 1,
-    /// AAC 128 kbps
-    Aac128 = 2,
-    /// AAC 320 kbps
-    Aac320 = 3,
-    /// FLAC lossless
-    Flac = 4,
-}
-
-impl Bitrate {
-    /// Convert from u8 value
-    pub fn from_u8(value: u8) -> Result<Self, crate::error::Error> {
-        match value {
-            0 => Ok(Self::Mp3_128),
-            1 => Ok(Self::Aac64),
-            2 => Ok(Self::Aac128),
-            3 => Ok(Self::Aac320),
-            4 => Ok(Self::Flac),
-            _ => Err(crate::error::Error::InvalidBitrate(value)),
-        }
-    }
-
-    /// Convert to u8 value
-    pub fn as_u8(self) -> u8 {
-        self as u8
-    }
-
-    /// Get human-readable description
-    pub fn description(&self) -> &'static str {
-        match self {
-            Self::Mp3_128 => "MP3 128 kbps",
-            Self::Aac64 => "AAC 64 kbps",
-            Self::Aac128 => "AAC 128 kbps",
-            Self::Aac320 => "AAC 320 kbps",
-            Self::Flac => "FLAC Lossless",
-        }
-    }
-}
-
-impl Default for Bitrate {
-    fn default() -> Self {
-        Self::Flac
     }
 }
 
@@ -306,9 +248,9 @@ impl Block {
 
     /// Get the full URL for a cover image
     pub fn cover_url(&self, cover_path: &str) -> Option<String> {
-        self.image_base
-            .as_ref()
-            .map(|base| format!("{}{}", base, cover_path))
+        let base = self.image_base.as_ref()?;
+        let base_url = Url::parse(base).ok()?;
+        base_url.join(cover_path).ok().map(|url| url.to_string())
     }
 
     /// Find which song is playing at a given timestamp (ms from block start)
@@ -374,13 +316,6 @@ impl NowPlaying {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_bitrate_conversion() {
-        assert_eq!(Bitrate::from_u8(0).unwrap(), Bitrate::Mp3_128);
-        assert_eq!(Bitrate::from_u8(4).unwrap(), Bitrate::Flac);
-        assert!(Bitrate::from_u8(5).is_err());
-    }
 
     #[test]
     fn test_song_timing() {

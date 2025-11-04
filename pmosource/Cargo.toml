@@ -30,6 +30,10 @@ pmoplaylist = { path = "../pmoplaylist" }
 pmoaudiocache = { path = "../pmoaudiocache", optional = true }
 pmocovers = { path = "../pmocovers", optional = true }
 
+# Serialization (required for cache metadata)
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
 # Server extension (optional)
 pmoserver = { path = "../pmoserver", optional = true }
 pmoconfig = { path = "../pmoconfig", optional = true }
@@ -37,8 +41,6 @@ pmoupnp = { path = "../pmoupnp", optional = true }
 
 # Web framework for API (optional)
 axum = { version = "0.8", optional = true }
-serde = { version = "1.0", features = ["derive"], optional = true }
-serde_json = { version = "1.0", optional = true }
 utoipa = { version = "5.3", optional = true }
 tracing = { version = "0.1", optional = true }
 lazy_static = { version = "1.4", optional = true }
@@ -46,4 +48,4 @@ lazy_static = { version = "1.4", optional = true }
 [features]
 default = ["cache"]
 cache = ["pmoaudiocache", "pmocovers"]
-server = ["pmoserver", "pmoconfig", "pmoupnp", "axum", "serde", "serde_json", "utoipa", "tracing", "lazy_static"]
+server = ["pmoserver", "pmoconfig", "pmoupnp", "axum", "utoipa", "tracing", "lazy_static"]

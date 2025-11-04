@@ -18,4 +18,6 @@ members = [
     "pmoparadise",
     "pmosource",
     "pmoplaylist",
+    "pmoflac",
+    "pmometadata",
 ]

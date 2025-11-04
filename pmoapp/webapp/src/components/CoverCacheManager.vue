@@ -71,7 +71,7 @@
         <div class="image-wrapper">
           <img
             :src="getImageUrl(image.pk, 256)"
-            :alt="image.source_url"
+            :alt="resolveOrigin(image) || image.pk"
             loading="lazy"
             @error="handleImageError"
           />
@@ -81,8 +81,8 @@
         </div>
         <div class="image-info">
           <div class="pk">{{ image.pk }}</div>
-          <div class="url" :title="image.source_url">
-            {{ truncateUrl(image.source_url) }}
+          <div class="url" :title="resolveOrigin(image) || 'Unknown source'">
+            {{ truncateUrl(resolveOrigin(image)) }}
           </div>
           <div class="meta">
             <span v-if="image.last_used" class="last-used">
@@ -108,13 +108,17 @@
         <button class="modal-close" @click="selectedImage = null">✕</button>
         <img
           :src="getImageUrl(selectedImage.pk)"
-          :alt="selectedImage.source_url"
+          :alt="resolveOrigin(selectedImage) || selectedImage.pk"
           class="modal-image"
         />
         <div class="modal-info">
           <h3>Image Details</h3>
           <p><strong>PK:</strong> {{ selectedImage.pk }}</p>
-          <p><strong>Source URL:</strong> <a :href="selectedImage.source_url" target="_blank">{{ selectedImage.source_url }}</a></p>
+          <p v-if="resolveOrigin(selectedImage)">
+            <strong>Source URL:</strong>
+            <a :href="resolveOrigin(selectedImage)" target="_blank">{{ resolveOrigin(selectedImage) }}</a>
+          </p>
+          <p v-else><strong>Source URL:</strong> Unknown</p>
           <p><strong>Hits:</strong> {{ selectedImage.hits }}</p>
           <p v-if="selectedImage.last_used"><strong>Last Used:</strong> {{ formatDate(selectedImage.last_used) }}</p>
           <div class="modal-actions">
@@ -141,6 +145,8 @@ import {
   purgeCache,
   consolidateCache,
   getImageUrl,
+  getOriginUrl,
+  waitForDownload,
 } from "../services/coverCache";
 
 // --- États ---
@@ -190,11 +196,16 @@ async function handleAddImage() {
   isAdding.value = true; addError.value=""; addSuccess.value="";
   try {
     const result = await addImage(newImageUrl.value);
+    addSuccess.value = `Image downloading... PK: ${result.pk}`;
+
+    // Attendre que le téléchargement et la transformation soient terminés
+    await waitForDownload(result.pk);
+
     addSuccess.value = `Image added! PK: ${result.pk}`;
     newImageUrl.value = "";
     await refreshImages();
   } catch(e:any) { addError.value = e.message ?? "Failed to add image"; }
-  finally { isAdding.value=false; setTimeout(()=>addSuccess.value="",1500); }
+  finally { isAdding.value=false; setTimeout(()=>addSuccess.value="",3000); }
 }
 
 async function handleDeleteImage(pk:string){
@@ -223,7 +234,14 @@ function copyImageUrl(pk:string){
   alert("✅ URL copied!");
 }
 
-function truncateUrl(url:string,maxLength=40){ return url.length<=maxLength?url:url.slice(0,maxLength-3)+"..."; }
+function resolveOrigin(entry: CacheEntry | null): string | undefined {
+  return entry ? getOriginUrl(entry) : undefined;
+}
+
+function truncateUrl(url?:string,maxLength=40){
+  if(!url) return "Unknown source";
+  return url.length<=maxLength?url:url.slice(0,maxLength-3)+"...";
+}
 function formatDate(dateString:string){
   const d=new Date(dateString), diff=Date.now()-d.getTime(), days=Math.floor(diff/(1000*60*60*24));
   if(days===0)return"Today"; if(days===1)return"Yesterday"; if(days<7)return`${days} days ago`; return d.toLocaleDateString();

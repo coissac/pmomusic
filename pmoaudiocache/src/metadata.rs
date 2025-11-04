@@ -68,9 +68,67 @@ pub struct AudioMetadata {
     /// Bitrate moyen (kbps)
     #[cfg_attr(feature = "pmoserver", schema(example = 1411))]
     pub bitrate: Option<u32>,
+
+    /// Informations sur la conversion appliquée lors de l'ingestion
+    #[cfg_attr(feature = "pmoserver", schema(example = json!({"mode":"transcode","source_codec":"mp3"})))]
+    pub conversion: Option<AudioConversionInfo>,
+}
+
+/// Informations sur le processus de conversion
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "pmoserver", derive(ToSchema))]
+pub struct AudioConversionInfo {
+    /// Mode de conversion (ex: "passthrough", "transcode")
+    #[cfg_attr(feature = "pmoserver", schema(example = "transcode"))]
+    pub mode: String,
+
+    /// Codec source détecté
+    #[cfg_attr(feature = "pmoserver", schema(example = "mp3"))]
+    pub source_codec: Option<String>,
 }
 
 impl AudioMetadata {
+    /// Extrait les métadonnées depuis un fichier audio taggé
+    ///
+    /// Fonction interne commune pour extraire les métadonnées depuis un TaggedFile
+    fn from_tagged_file(tagged_file: lofty::file::TaggedFile) -> Self {
+        let properties = tagged_file.properties();
+        let tag = tagged_file
+            .primary_tag()
+            .or_else(|| tagged_file.first_tag());
+
+        let mut metadata = Self {
+            title: None,
+            artist: None,
+            album: None,
+            year: None,
+            track_number: None,
+            track_total: None,
+            disc_number: None,
+            disc_total: None,
+            genre: None,
+            duration_secs: Some(properties.duration().as_secs()),
+            sample_rate: properties.sample_rate(),
+            channels: properties.channels(),
+            bitrate: properties.audio_bitrate(),
+            conversion: None,
+        };
+
+        if let Some(tag) = tag {
+            metadata.title = tag.title().map(|s| s.to_string());
+            metadata.artist = tag.artist().map(|s| s.to_string());
+            metadata.album = tag.album().map(|s| s.to_string());
+            metadata.year = tag.year();
+            metadata.track_number = tag.track();
+            metadata.track_total = tag.track_total();
+            metadata.disc_number = tag.disk();
+            metadata.disc_total = tag.disk_total();
+            metadata.genre = tag.genre().map(|s| s.to_string());
+        }
+
+        metadata
+    }
+
     /// Extrait les métadonnées d'un fichier audio
     ///
     /// # Arguments
@@ -88,41 +146,7 @@ impl AudioMetadata {
     /// ```
     pub fn from_file(path: &Path) -> Result<Self> {
         let tagged_file = Probe::open(path)?.options(ParseOptions::new()).read()?;
-
-        let properties = tagged_file.properties();
-        let tag = tagged_file
-            .primary_tag()
-            .or_else(|| tagged_file.first_tag());
-
-        let mut metadata = Self {
-            title: None,
-            artist: None,
-            album: None,
-            year: None,
-            track_number: None,
-            track_total: None,
-            disc_number: None,
-            disc_total: None,
-            genre: None,
-            duration_secs: Some(properties.duration().as_secs()),
-            sample_rate: properties.sample_rate(),
-            channels: properties.channels(),
-            bitrate: properties.audio_bitrate(),
-        };
-
-        if let Some(tag) = tag {
-            metadata.title = tag.title().map(|s| s.to_string());
-            metadata.artist = tag.artist().map(|s| s.to_string());
-            metadata.album = tag.album().map(|s| s.to_string());
-            metadata.year = tag.year();
-            metadata.track_number = tag.track();
-            metadata.track_total = tag.track_total();
-            metadata.disc_number = tag.disk();
-            metadata.disc_total = tag.disk_total();
-            metadata.genre = tag.genre().map(|s| s.to_string());
-        }
-
-        Ok(metadata)
+        Ok(Self::from_tagged_file(tagged_file))
     }
 
     /// Crée des métadonnées depuis des données brutes audio
@@ -136,41 +160,7 @@ impl AudioMetadata {
             .guess_file_type()?
             .options(ParseOptions::new())
             .read()?;
-
-        let properties = tagged_file.properties();
-        let tag = tagged_file
-            .primary_tag()
-            .or_else(|| tagged_file.first_tag());
-
-        let mut metadata = Self {
-            title: None,
-            artist: None,
-            album: None,
-            year: None,
-            track_number: None,
-            track_total: None,
-            disc_number: None,
-            disc_total: None,
-            genre: None,
-            duration_secs: Some(properties.duration().as_secs()),
-            sample_rate: properties.sample_rate(),
-            channels: properties.channels(),
-            bitrate: properties.audio_bitrate(),
-        };
-
-        if let Some(tag) = tag {
-            metadata.title = tag.title().map(|s| s.to_string());
-            metadata.artist = tag.artist().map(|s| s.to_string());
-            metadata.album = tag.album().map(|s| s.to_string());
-            metadata.year = tag.year();
-            metadata.track_number = tag.track();
-            metadata.track_total = tag.track_total();
-            metadata.disc_number = tag.disk();
-            metadata.disc_total = tag.disk_total();
-            metadata.genre = tag.genre().map(|s| s.to_string());
-        }
-
-        Ok(metadata)
+        Ok(Self::from_tagged_file(tagged_file))
     }
 
     /// Génère une clé de collection basée sur l'artiste et l'album
@@ -185,6 +175,82 @@ impl AudioMetadata {
                 Some(format!("{}:{}", normalized_artist, normalized_album))
             }
             _ => None,
+        }
+    }
+
+    /// Retourne la durée formatée pour DIDL-Lite (H:MM:SS)
+    ///
+    /// # Exemple
+    ///
+    /// ```
+    /// use pmoaudiocache::AudioMetadata;
+    ///
+    /// let metadata = AudioMetadata {
+    ///     duration_secs: Some(3665),
+    ///     ..Default::default()
+    /// };
+    ///
+    /// assert_eq!(metadata.duration_formatted(), Some("1:01:05".to_string()));
+    /// ```
+    pub fn duration_formatted(&self) -> Option<String> {
+        self.duration_secs.map(|d| {
+            let hours = d / 3600;
+            let minutes = (d % 3600) / 60;
+            let seconds = d % 60;
+            format!("{}:{:02}:{:02}", hours, minutes, seconds)
+        })
+    }
+
+    /// Convertit les métadonnées en Resource DIDL-Lite
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - URL de la ressource audio
+    ///
+    /// # Exemple
+    ///
+    /// ```no_run
+    /// use pmoaudiocache::AudioMetadata;
+    ///
+    /// let metadata = AudioMetadata {
+    ///     duration_secs: Some(180),
+    ///     sample_rate: Some(44100),
+    ///     channels: Some(2),
+    ///     ..Default::default()
+    /// };
+    ///
+    /// let resource = metadata.to_didl_resource("http://localhost:8080/audio/tracks/abc123".into());
+    /// assert_eq!(resource.url, "http://localhost:8080/audio/tracks/abc123");
+    /// ```
+    pub fn to_didl_resource(&self, url: String) -> pmodidl::Resource {
+        pmodidl::Resource {
+            protocol_info: "http-get:*:audio/flac:*".to_string(),
+            bits_per_sample: None,
+            sample_frequency: self.sample_rate.map(|sr| sr.to_string()),
+            nr_audio_channels: self.channels.map(|ch| ch.to_string()),
+            duration: self.duration_formatted(),
+            url,
+        }
+    }
+}
+
+impl Default for AudioMetadata {
+    fn default() -> Self {
+        Self {
+            title: None,
+            artist: None,
+            album: None,
+            year: None,
+            track_number: None,
+            track_total: None,
+            disc_number: None,
+            disc_total: None,
+            genre: None,
+            duration_secs: None,
+            sample_rate: None,
+            channels: None,
+            bitrate: None,
+            conversion: None,
         }
     }
 }
@@ -209,6 +275,7 @@ mod tests {
             sample_rate: Some(44100),
             channels: Some(2),
             bitrate: Some(1411),
+            conversion: None,
         };
 
         assert_eq!(
@@ -233,6 +300,7 @@ mod tests {
             sample_rate: None,
             channels: None,
             bitrate: None,
+            conversion: None,
         };
 
         assert_eq!(metadata.collection_key(), None);

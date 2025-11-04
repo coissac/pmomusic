@@ -1,0 +1,153 @@
+use tokio::{
+    io::AsyncRead,
+    sync::{mpsc, oneshot},
+};
+
+use crate::{
+    common::ChannelReader,
+    decoder_common::{
+        spawn_ingest_task, spawn_writer_task, DecodedStream, CHANNEL_CAPACITY, DUPLEX_BUFFER_SIZE,
+    },
+    error::FlacError,
+    pcm::StreamInfo,
+    stream::ManagedAsyncReader,
+    util::interleaved_i32_to_le_bytes,
+};
+
+/// Async stream alias for decoded FLAC audio.
+pub type FlacDecodedStream = DecodedStream<FlacError>;
+
+/// Decodes a FLAC stream into PCM audio data.
+///
+/// This function spawns background tasks to perform the decoding asynchronously.
+/// The returned `FlacDecodedStream` implements `AsyncRead` for streaming the PCM output.
+///
+/// # Threading Model
+///
+/// - A Tokio task reads chunks from the input and forwards them via a channel
+/// - A blocking task (via `spawn_blocking`) runs the FLAC decoder (claxon)
+/// - Another Tokio task writes decoded PCM to an internal duplex stream
+///
+/// This architecture ensures true streaming: output is produced as input is consumed,
+/// without buffering entire files.
+///
+/// # Arguments
+///
+/// * `reader` - Any async reader containing FLAC-encoded data
+///
+/// # Returns
+///
+/// A `FlacDecodedStream` that can be read to obtain PCM samples in little-endian
+/// interleaved format. The stream's `info()` method provides metadata.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The input is not valid FLAC data
+/// - An I/O error occurs while reading
+/// - The decoder encounters corrupted data
+///
+/// # Example
+///
+/// ```no_run
+/// use pmoflac::decode_flac_stream;
+/// use tokio::io::AsyncReadExt;
+///
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let flac_data: &[u8] = &[/* ... */];
+/// let mut stream = decode_flac_stream(flac_data).await?;
+///
+/// let info = stream.info().clone();
+/// println!("{} Hz, {} channels, {} bits/sample",
+///     info.sample_rate, info.channels, info.bits_per_sample);
+///
+/// let mut pcm = Vec::new();
+/// stream.read_to_end(&mut pcm).await?;
+/// stream.wait().await?;
+/// # Ok(())
+/// # }
+/// ```
+pub async fn decode_flac_stream<R>(reader: R) -> Result<FlacDecodedStream, FlacError>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    let (ingest_tx, ingest_rx) = mpsc::channel(CHANNEL_CAPACITY);
+    spawn_ingest_task(reader, ingest_tx);
+
+    let (pcm_tx, pcm_rx) = mpsc::channel(CHANNEL_CAPACITY);
+    let (pcm_reader, pcm_writer) = tokio::io::duplex(DUPLEX_BUFFER_SIZE);
+    let (info_tx, info_rx) = oneshot::channel::<Result<StreamInfo, FlacError>>();
+
+    let blocking_handle = tokio::task::spawn_blocking(move || -> Result<(), FlacError> {
+        let mut channel_reader = ChannelReader::<FlacError>::new(ingest_rx);
+        let mut flac_reader = match claxon::FlacReader::new(&mut channel_reader) {
+            Ok(reader) => reader,
+            Err(err) => {
+                let msg = err.to_string();
+                let _ = info_tx.send(Err(FlacError::Decode(msg.clone())));
+                return Err(FlacError::Decode(msg));
+            }
+        };
+
+        let flac_info = flac_reader.streaminfo();
+        let info = StreamInfo {
+            sample_rate: flac_info.sample_rate,
+            channels: flac_info.channels as u8,
+            bits_per_sample: flac_info.bits_per_sample as u8,
+            total_samples: flac_info.samples,
+            max_block_size: flac_info.max_block_size,
+            min_block_size: flac_info.min_block_size,
+        };
+        if info_tx.send(Ok(info.clone())).is_err() {
+            return Ok(());
+        }
+
+        let mut blocks = flac_reader.blocks();
+        let mut buffer = Vec::new();
+        let mut interleaved = Vec::new();
+        let mut pcm_bytes = Vec::new();
+        loop {
+            match blocks.read_next_or_eof(buffer) {
+                Ok(Some(block)) => {
+                    let frames = block.duration() as usize;
+                    let channels = block.channels() as usize;
+
+                    interleaved.clear();
+                    interleaved.reserve(frames * channels);
+                    for frame_idx in 0..frames {
+                        for channel_idx in 0..channels {
+                            interleaved.push(block.sample(channel_idx as u32, frame_idx as u32));
+                        }
+                    }
+
+                    pcm_bytes.clear();
+                    pcm_bytes.reserve(frames * channels * info.bytes_per_sample());
+                    interleaved_i32_to_le_bytes(&interleaved, info.bits_per_sample, &mut pcm_bytes);
+                    let chunk = std::mem::take(&mut pcm_bytes);
+                    if pcm_tx.blocking_send(Ok(chunk)).is_err() {
+                        break;
+                    }
+
+                    pcm_bytes = Vec::with_capacity(frames * channels * info.bytes_per_sample());
+                    buffer = block.into_buffer();
+                }
+                Ok(None) => break,
+                Err(err) => {
+                    let msg = err.to_string();
+                    let _ = pcm_tx.blocking_send(Err(FlacError::Decode(msg.clone())));
+                    return Err(FlacError::Decode(msg));
+                }
+            }
+        }
+
+        Ok(())
+    });
+
+    let writer_handle = spawn_writer_task(pcm_rx, pcm_writer, blocking_handle, "flac-decode");
+
+    let info = info_rx.await.map_err(|_| FlacError::ChannelClosed)??;
+    let reader = ManagedAsyncReader::new("flac-decode-writer", pcm_reader, writer_handle);
+
+    Ok(DecodedStream::new(info, reader))
+}

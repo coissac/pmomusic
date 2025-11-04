@@ -3,10 +3,29 @@
 //! Ce module contient tous les types de nodes disponibles pour construire
 //! un pipeline audio, ainsi que les traits et structures de support.
 
-use crate::AudioChunk;
 use std::sync::Arc;
-use tokio::sync::mpsc;
 
+use crate::type_constraints::{TypeMismatch, TypeRequirement};
+use crate::AudioSegment;
+
+/// Taille par défaut du buffer de channel MPSC pour les nodes
+/// Cette valeur détermine combien de segments audio peuvent être mis en attente
+/// avant que le producteur soit bloqué (backpressure).
+pub const DEFAULT_CHANNEL_SIZE: usize = 16;
+
+/// Durée par défaut des chunks audio en millisecondes
+/// Cette valeur détermine la latence de traitement et le compromis efficacité/réactivité.
+/// 50ms offre un bon équilibre pour la plupart des applications de lecture audio.
+pub const DEFAULT_CHUNK_DURATION_MS: f64 = 50.0;
+
+// Modules actifs
+pub mod converter_nodes;
+pub mod file_source;
+pub mod flac_file_sink;
+pub mod http_source;
+
+// Modules temporairement désactivés
+/*
 pub mod buffer_node;
 pub mod chromecast_sink;
 pub mod decoder_node;
@@ -17,6 +36,7 @@ pub mod sink_node;
 pub mod source_node;
 pub mod timer_node;
 pub mod volume_node;
+*/
 
 /// Trait de base pour tous les nodes audio
 ///
@@ -29,97 +49,62 @@ pub trait AudioNode: Send + Sync {
     /// # Erreurs
     ///
     /// Retourne `AudioError::SendError` si l'envoi échoue
-    async fn push(&mut self, chunk: Arc<AudioChunk>) -> Result<(), AudioError>;
+    async fn push(&mut self, chunk: Arc<AudioSegment>) -> Result<(), AudioError>;
 
     /// Ferme le node proprement
     async fn close(&mut self);
 }
 
-/// Node avec un seul abonné (pas de clone inutile)
+/// Trait pour les nodes qui déclarent leurs types acceptés/produits
 ///
-/// Optimisé pour les cas où un node n'a qu'un seul destinataire.
-/// Le Arc du chunk est simplement transféré sans clonage supplémentaire.
-///
-/// # Exemples
-///
-/// ```
-/// use pmoaudio::SingleSubscriberNode;
-/// use tokio::sync::mpsc;
-///
-/// let (tx, rx) = mpsc::channel(10);
-/// let node = SingleSubscriberNode::new(tx);
-/// ```
-pub struct SingleSubscriberNode {
-    tx: mpsc::Sender<Arc<AudioChunk>>,
-}
-
-impl SingleSubscriberNode {
-    pub fn new(tx: mpsc::Sender<Arc<AudioChunk>>) -> Self {
-        Self { tx }
-    }
-
-    pub async fn push(&self, chunk: Arc<AudioChunk>) -> Result<(), AudioError> {
-        self.tx.send(chunk).await.map_err(|_| AudioError::SendError)
-    }
-}
-
-/// Node avec plusieurs abonnés (partage le même Arc)
-///
-/// Permet de broadcaster un chunk à plusieurs destinations.
-/// Tous les abonnés reçoivent le même `Arc<AudioChunk>`, donc pas de copie
-/// des données audio - seul le compteur de référence Arc est incrémenté.
+/// Ce trait permet de vérifier la compatibilité des types entre nodes
+/// avant de les connecter dans un pipeline.
 ///
 /// # Exemples
 ///
-/// ```
-/// use pmoaudio::MultiSubscriberNode;
-/// use tokio::sync::mpsc;
+/// ```no_run
+/// use pmoaudio::{FileSource, FlacFileSink, TypedAudioNode};
+/// use pmoaudio::type_constraints::check_compatibility;
 ///
-/// let mut node = MultiSubscriberNode::new();
-/// let (tx1, rx1) = mpsc::channel(10);
-/// let (tx2, rx2) = mpsc::channel(10);
+/// // Vérifier la compatibilité avant de connecter
+/// let source = FileSource::new("input.flac");
+/// let (sink, tx) = FlacFileSink::new("output.flac");
 ///
-/// node.add_subscriber(tx1);
-/// node.add_subscriber(tx2);
-/// // Les deux abonnés recevront les mêmes chunks
+/// let source_output = source.output_type();
+/// let sink_input = sink.input_type();
+///
+/// match check_compatibility(&source_output, &sink_input) {
+///     Ok(()) => println!("Types compatibles!"),
+///     Err(e) => eprintln!("Types incompatibles: {}", e),
+/// }
 /// ```
-pub struct MultiSubscriberNode {
-    subscribers: Vec<mpsc::Sender<Arc<AudioChunk>>>,
-}
+pub trait TypedAudioNode {
+    /// Retourne les types que ce node peut accepter en entrée
+    ///
+    /// Pour les sources (qui ne consomment rien), retourne `None`.
+    fn input_type(&self) -> Option<TypeRequirement>;
 
-impl MultiSubscriberNode {
-    pub fn new() -> Self {
-        Self {
-            subscribers: Vec::new(),
+    /// Retourne les types que ce node peut produire en sortie
+    ///
+    /// Pour les sinks (qui ne produisent rien), retourne `None`.
+    fn output_type(&self) -> Option<TypeRequirement>;
+
+    /// Vérifie si ce node peut accepter les chunks d'un producer donné
+    ///
+    /// # Erreurs
+    ///
+    /// Retourne `AudioError::TypeMismatch` si les types sont incompatibles
+    fn can_accept_from(&self, producer: &dyn TypedAudioNode) -> Result<(), AudioError> {
+        match (producer.output_type(), self.input_type()) {
+            (Some(prod), Some(cons)) => crate::type_constraints::check_compatibility(&prod, &cons)
+                .map_err(|e| AudioError::TypeMismatch(e)),
+            (None, Some(_)) => Err(AudioError::TypeMismatch(TypeMismatch {
+                producer: TypeRequirement::any(), // Placeholder
+                consumer: self.input_type().unwrap(),
+                incompatible_type: None,
+            })),
+            _ => Ok(()), // Si pas de contrainte, toujours compatible
         }
-    }
-
-    pub fn add_subscriber(&mut self, tx: mpsc::Sender<Arc<AudioChunk>>) {
-        self.subscribers.push(tx);
-    }
-
-    pub async fn push(&self, chunk: Arc<AudioChunk>) -> Result<(), AudioError> {
-        for tx in &self.subscribers {
-            // On partage le même Arc avec tous les abonnés
-            tx.send(chunk.clone())
-                .await
-                .map_err(|_| AudioError::SendError)?;
-        }
-        Ok(())
-    }
-
-    pub async fn try_push(&self, chunk: Arc<AudioChunk>) -> Result<(), AudioError> {
-        for tx in &self.subscribers {
-            // try_send non-bloquant, ignore si saturé
-            let _ = tx.try_send(chunk.clone());
-        }
-        Ok(())
-    }
-}
-
-impl Default for MultiSubscriberNode {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -132,6 +117,14 @@ pub enum AudioError {
     ReceiveError,
     /// Erreur de traitement avec message descriptif
     ProcessingError(String),
+    /// Incompatibilité de types entre nodes
+    TypeMismatch(TypeMismatch),
+    /// Un nœud enfant s'est terminé prématurément (anormal dans un pipeline descendant)
+    ChildFinished,
+    /// Un nœud enfant est mort (channel fermé pendant un send)
+    ChildDied,
+    /// Erreur d'I/O (fichier, réseau, etc.)
+    IoError(String),
 }
 
 impl std::fmt::Display for AudioError {
@@ -140,6 +133,10 @@ impl std::fmt::Display for AudioError {
             AudioError::SendError => write!(f, "Failed to send audio chunk"),
             AudioError::ReceiveError => write!(f, "Failed to receive audio chunk"),
             AudioError::ProcessingError(msg) => write!(f, "Processing error: {}", msg),
+            AudioError::TypeMismatch(tm) => write!(f, "{}", tm),
+            AudioError::ChildFinished => write!(f, "Child node finished prematurely"),
+            AudioError::ChildDied => write!(f, "Child node died unexpectedly"),
+            AudioError::IoError(msg) => write!(f, "I/O error: {}", msg),
         }
     }
 }

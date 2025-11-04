@@ -29,7 +29,7 @@ pub type StringValueParser =
 
 /// Type pour les fonctions de sérialisation de valeurs vers des chaînes
 pub type ValueSerializer =
-    Arc<dyn Fn(&StateValue) -> Result<String, StateVariableError> + Send + Sync>;
+    Arc<dyn Fn(&dyn Reflect) -> Result<String, StateVariableError> + Send + Sync>;
 
 pub struct StateVariable {
     object: UpnpObjectType,

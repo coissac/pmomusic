@@ -125,7 +125,8 @@ pub async fn log_sse(
 
     // Récupérer l'historique du buffer et le niveau actuel
     let history = state.dump();
-    let current_level = state.get_max_level();
+    let stream_state = state.clone();
+    let current_level = stream_state.get_max_level();
 
     let stream = async_stream::stream! {
         // 1. Envoyer d'abord tous les logs historiques filtrés par le niveau actuel
@@ -144,6 +145,10 @@ pub async fn log_sse(
 
         // 2. Puis streamer les nouveaux logs en temps réel
         while let Ok(entry) = rx.recv().await {
+            let max_level = stream_state.get_max_level();
+            if !is_level_allowed(&entry.level, max_level) {
+                continue;
+            }
             if !filter_entry(&entry, &params) {
                 continue;
             }
@@ -294,16 +299,25 @@ pub fn init_logging() -> LogState {
     };
 
     if enable_console {
-        subscriber
-            .with(
-                tracing_subscriber::fmt::layer()
-                    .with_target(true)
-                    .with_level(true)
-                    .with_ansi(true),
-            )
-            .init();
+        let subscriber = subscriber.with(
+            tracing_subscriber::fmt::layer()
+                .with_target(true)
+                .with_level(true)
+                .with_ansi(true),
+        );
+        if let Err(e) = subscriber.try_init() {
+            eprintln!(
+                "⚠️ tracing subscriber already initialised, skipping console layer: {}",
+                e
+            );
+        }
     } else {
-        subscriber.init();
+        if let Err(e) = subscriber.try_init() {
+            eprintln!(
+                "⚠️ tracing subscriber already initialised, skipping default registry: {}",
+                e
+            );
+        }
     }
 
     log_state

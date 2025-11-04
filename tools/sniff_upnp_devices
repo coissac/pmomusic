@@ -1,0 +1,180 @@
+#!/bin/bash
+
+# UPnP Device Sniffer avec déduplication
+# Découverte et analyse des devices UPnP sur le réseau
+
+set -e
+
+# Couleurs pour l'affichage
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
+
+# Configuration
+INTERFACE="${1:-en0}"
+TIMEOUT="${2:-5}"
+TEMP_FILE=$(mktemp)
+SEEN_FILE=$(mktemp)
+
+echo -e "${CYAN}"
+echo "╔══════════════════════════════════════╗"
+echo "║     UPnP Device Sniffer PRO          ║"
+echo "║    Avec déduplication des devices    ║"
+echo "╚══════════════════════════════════════╝"
+echo -e "${NC}"
+
+# Nettoyage à la sortie
+cleanup() {
+    rm -f "$TEMP_FILE" "$SEEN_FILE"
+    echo -e "${YELLOW}🧹 Fichiers temporaires nettoyés.${NC}"
+}
+trap cleanup EXIT
+
+# Fonction pour extraire les codecs audio
+extract_audio_codecs() {
+    grep -i "protocolInfo" | grep -i "audio" | \
+    sed 's/.*\(audio.*\)/\1/' | sort -u | head -8
+}
+
+# Fonction pour formater l'URL
+format_url() {
+    echo "$1" | sed 's/.*http/http/' | sed 's/\/$//'
+}
+
+# Fonction pour normaliser le nom du device
+normalize_name() {
+    echo "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g'
+}
+
+# Fonction pour vérifier si un device a déjà été vu
+is_device_seen() {
+    local key="$1"
+    grep -q "^$key$" "$SEEN_FILE" 2>/dev/null
+}
+
+# Fonction pour marquer un device comme vu
+mark_device_seen() {
+    local key="$1"
+    echo "$key" >> "$SEEN_FILE"
+}
+
+echo -e "${YELLOW}🔍 Recherche des devices UPnP sur $INTERFACE (${TIMEOUT}s)...${NC}"
+echo -e "${YELLOW}📡 Filtrage des doublons activé...${NC}"
+echo
+
+# Phase 1: Collecte des devices avec déduplication
+echo -e "${BLUE}📦 Phase 1: Collecte des devices...${NC}"
+
+DEVICE_COUNT=0
+
+gssdp-discover --timeout $TIMEOUT -i $INTERFACE 2>/dev/null | \
+while IFS= read -r line; do
+    if [[ $line == *"Location:"* ]]; then
+        url=$(format_url "$(echo "$line" | awk '{print $2}')")
+        
+        # Récupération des infos de base pour la déduplication
+        if curl_output=$(curl -s --connect-timeout 2 "$url" 2>/dev/null); then
+            friendly_name=$(echo "$curl_output" | grep -i "friendlyName" | head -1 | sed 's/.*<friendlyName>\(.*\)<\/friendlyName>.*/\1/')
+            model_name=$(echo "$curl_output" | grep -i "modelName" | head -1 | sed 's/.*<modelName>\(.*\)<\/modelName>.*/\1/')
+            
+            # Création d'une clé unique pour la déduplication
+            device_key=$(normalize_name "${friendly_name}-${model_name}")
+            
+            # Vérifier si on a déjà vu ce device
+            if ! is_device_seen "$device_key"; then
+                mark_device_seen "$device_key"
+                ((DEVICE_COUNT++))
+                
+                # Stocker les données pour l'affichage
+                echo "===DEVICE_START===" >> "$TEMP_FILE"
+                echo "URL:$url" >> "$TEMP_FILE"
+                echo "FRIENDLY_NAME:$friendly_name" >> "$TEMP_FILE"
+                echo "MODEL:$model_name" >> "$TEMP_FILE"
+                echo "MANUFACTURER:$(echo "$curl_output" | grep -i "manufacturer" | head -1 | sed 's/.*<manufacturer>\(.*\)<\/manufacturer>.*/\1/')" >> "$TEMP_FILE"
+                echo "CURL_OUTPUT:$curl_output" >> "$TEMP_FILE"
+                echo "===DEVICE_END===" >> "$TEMP_FILE"
+            else
+                echo -e "${YELLOW}   ⚡ Doublon ignoré: $friendly_name${NC}" >&2
+            fi
+        fi
+    fi
+done
+
+# Phase 2: Affichage organisé des devices uniques
+echo -e "${BLUE}📊 Phase 2: Analyse des devices uniques...${NC}"
+echo
+
+FINAL_COUNT=0
+
+# Lire le fichier temporaire et afficher les résultats
+while IFS= read -r line; do
+    case $line in
+        "===DEVICE_START===")
+            unset url friendly_name model_name manufacturer curl_output
+            ;;
+        "===DEVICE_END===")
+            if [[ -n "$url" ]]; then
+                ((FINAL_COUNT++))
+                echo -e "${GREEN}╔══════════════════════════════════════╗${NC}"
+                echo -e "${GREEN}║ Device #$FINAL_COUNT${NC}"
+                echo -e "${GREEN}║ URL: $url${NC}"
+                echo -e "${GREEN}╚══════════════════════════════════════╗${NC}"
+                
+                echo -e "${BLUE}📝 Informations:${NC}"
+                echo -e "   Nom: ${YELLOW}${friendly_name:-Non trouvé}${NC}"
+                echo -e "   Modèle: ${YELLOW}${model_name:-Non trouvé}${NC}"
+                echo -e "   Fabricant: ${YELLOW}${manufacturer:-Non trouvé}${NC}"
+                
+                # Codecs audio supportés
+                echo -e "${BLUE}🎵 Codecs audio:${NC}"
+                audio_codecs=$(echo "$curl_output" | extract_audio_codecs)
+                if [ -n "$audio_codecs" ]; then
+                    echo "$audio_codecs" | while read codec; do
+                        echo -e "   ✅ ${GREEN}$codec${NC}"
+                    done
+                else
+                    echo -e "   ❌ ${RED}Aucun codec audio détecté${NC}"
+                fi
+                
+                # Services détectés
+                echo -e "${BLUE}🔌 Services principaux:${NC}"
+                services=$(echo "$curl_output" | grep -i "serviceType" | sed 's/.*<serviceType>\(.*\)<\/serviceType>.*/\1/' | head -3)
+                if [ -n "$services" ]; then
+                    echo "$services" | while read service; do
+                        echo -e "   🔧 ${PURPLE}$service${NC}"
+                    done
+                fi
+                
+                echo
+            fi
+            ;;
+        URL:*)
+            url="${line#URL:}"
+            ;;
+        FRIENDLY_NAME:*)
+            friendly_name="${line#FRIENDLY_NAME:}"
+            ;;
+        MODEL:*)
+            model_name="${line#MODEL:}"
+            ;;
+        MANUFACTURER:*)
+            manufacturer="${line#MANUFACTURER:}"
+            ;;
+        CURL_OUTPUT:*)
+            curl_output="${line#CURL_OUTPUT:}"
+            ;;
+    esac
+done < "$TEMP_FILE"
+
+# Résumé final
+echo -e "${CYAN}"
+echo "╔══════════════════════════════════════╗"
+echo "║           SCAN TERMINÉ               ║"
+echo "╠══════════════════════════════════════╣"
+echo "║ Devices uniques:   $FINAL_COUNT           ║"
+echo "╚══════════════════════════════════════╝"
+echo -e "${NC}"
