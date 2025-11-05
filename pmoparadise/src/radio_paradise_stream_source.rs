@@ -389,3 +389,162 @@ impl TypedAudioNode for RadioParadiseStreamSource {
         Some(TypeRequirement::any_integer())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Channel;
+
+    #[test]
+    fn test_cache_fifo_basic() {
+        let client = RadioParadiseClient::new(Channel::MainMix);
+        let mut logic = RadioParadiseStreamSourceLogic::new(client, DEFAULT_CHUNK_DURATION_MS);
+
+        // Ajouter 5 blocs
+        for i in 1..=5 {
+            logic.mark_block_downloaded(EventId(i));
+        }
+
+        // Vérifier que tous sont dans le cache
+        for i in 1..=5 {
+            assert!(logic.is_recent_block(EventId(i)), "Block {} should be in cache", i);
+        }
+        assert_eq!(logic.recent_blocks.len(), 5);
+    }
+
+    #[test]
+    fn test_cache_fifo_exactly_10_elements() {
+        let client = RadioParadiseClient::new(Channel::MainMix);
+        let mut logic = RadioParadiseStreamSourceLogic::new(client, DEFAULT_CHUNK_DURATION_MS);
+
+        // Ajouter exactement 10 blocs
+        for i in 1..=10 {
+            logic.mark_block_downloaded(EventId(i));
+        }
+
+        // Vérifier qu'on a exactement 10 éléments
+        assert_eq!(logic.recent_blocks.len(), 10, "Cache should have exactly 10 elements");
+
+        // Tous devraient être dans le cache
+        for i in 1..=10 {
+            assert!(logic.is_recent_block(EventId(i)), "Block {} should be in cache", i);
+        }
+    }
+
+    #[test]
+    fn test_cache_fifo_eviction_oldest() {
+        let client = RadioParadiseClient::new(Channel::MainMix);
+        let mut logic = RadioParadiseStreamSourceLogic::new(client, DEFAULT_CHUNK_DURATION_MS);
+
+        // Remplir le cache avec 10 éléments (1..=10)
+        for i in 1..=10 {
+            logic.mark_block_downloaded(EventId(i));
+        }
+
+        // Ajouter un 11ème élément
+        logic.mark_block_downloaded(EventId(11));
+
+        // Le cache doit toujours avoir 10 éléments
+        assert_eq!(logic.recent_blocks.len(), 10, "Cache should still have 10 elements");
+
+        // Le premier (plus ancien) doit avoir été évincé
+        assert!(!logic.is_recent_block(EventId(1)), "Oldest block (1) should be evicted");
+
+        // Les éléments 2..=11 doivent être présents
+        for i in 2..=11 {
+            assert!(logic.is_recent_block(EventId(i)), "Block {} should be in cache", i);
+        }
+    }
+
+    #[test]
+    fn test_cache_fifo_multiple_evictions() {
+        let client = RadioParadiseClient::new(Channel::MainMix);
+        let mut logic = RadioParadiseStreamSourceLogic::new(client, DEFAULT_CHUNK_DURATION_MS);
+
+        // Remplir avec 10 éléments
+        for i in 1..=10 {
+            logic.mark_block_downloaded(EventId(i));
+        }
+
+        // Ajouter 5 éléments supplémentaires
+        for i in 11..=15 {
+            logic.mark_block_downloaded(EventId(i));
+        }
+
+        // Toujours 10 éléments
+        assert_eq!(logic.recent_blocks.len(), 10, "Cache should have 10 elements");
+
+        // Les 5 premiers doivent avoir été évincés
+        for i in 1..=5 {
+            assert!(!logic.is_recent_block(EventId(i)), "Block {} should be evicted", i);
+        }
+
+        // Les éléments 6..=15 doivent être présents
+        for i in 6..=15 {
+            assert!(logic.is_recent_block(EventId(i)), "Block {} should be in cache", i);
+        }
+    }
+
+    #[test]
+    fn test_cache_never_exceeds_capacity() {
+        let client = RadioParadiseClient::new(Channel::MainMix);
+        let mut logic = RadioParadiseStreamSourceLogic::new(client, DEFAULT_CHUNK_DURATION_MS);
+
+        // Vérifier la capacité pré-allouée
+        assert_eq!(logic.recent_blocks.capacity(), RECENT_BLOCKS_CACHE_SIZE);
+
+        // Ajouter beaucoup d'éléments
+        for i in 1..=100 {
+            logic.mark_block_downloaded(EventId(i));
+
+            // À chaque itération, vérifier qu'on ne dépasse jamais 10
+            assert!(
+                logic.recent_blocks.len() <= RECENT_BLOCKS_CACHE_SIZE,
+                "Cache size {} exceeded max {}",
+                logic.recent_blocks.len(),
+                RECENT_BLOCKS_CACHE_SIZE
+            );
+        }
+
+        // Finalement, on doit avoir exactement 10 éléments
+        assert_eq!(logic.recent_blocks.len(), 10);
+
+        // Ce doivent être les 10 derniers (91..=100)
+        for i in 91..=100 {
+            assert!(logic.is_recent_block(EventId(i)), "Block {} should be in cache", i);
+        }
+    }
+
+    #[test]
+    fn test_cache_fifo_order_preserved() {
+        let client = RadioParadiseClient::new(Channel::MainMix);
+        let mut logic = RadioParadiseStreamSourceLogic::new(client, DEFAULT_CHUNK_DURATION_MS);
+
+        // Ajouter 10 éléments
+        for i in 1..=10 {
+            logic.mark_block_downloaded(EventId(i));
+        }
+
+        // Vérifier l'ordre dans la VecDeque (le front devrait être le plus ancien)
+        let front = logic.recent_blocks.front().copied();
+        assert_eq!(front, Some(EventId(1)), "Front should be the oldest element");
+
+        let back = logic.recent_blocks.back().copied();
+        assert_eq!(back, Some(EventId(10)), "Back should be the newest element");
+    }
+
+    #[test]
+    fn test_block_queue_push() {
+        let client = RadioParadiseClient::new(Channel::MainMix);
+        let mut logic = RadioParadiseStreamSourceLogic::new(client, DEFAULT_CHUNK_DURATION_MS);
+
+        // Tester push_block_id
+        logic.push_block_id(EventId(100));
+        logic.push_block_id(EventId(200));
+        logic.push_block_id(EventId(300));
+
+        assert_eq!(logic.block_queue.len(), 3);
+        assert_eq!(logic.block_queue.front(), Some(&EventId(100)));
+        assert_eq!(logic.block_queue.back(), Some(&EventId(300)));
+    }
+}
