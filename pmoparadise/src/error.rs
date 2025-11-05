@@ -34,16 +34,6 @@ pub enum Error {
     #[error("Invalid event ID: {0}")]
     InvalidEvent(String),
 
-    /// FLAC decoding error (per-track feature)
-    #[cfg(feature = "per-track")]
-    #[error("FLAC decoding error: {0}")]
-    FlacDecode(String),
-
-    /// WAV encoding error (per-track feature)
-    #[cfg(feature = "per-track")]
-    #[error("WAV encoding error: {0}")]
-    WavEncode(#[from] hound::Error),
-
     /// Track not found in block
     #[error("Track not found at index {0}")]
     TrackNotFound(usize),
@@ -65,13 +55,5 @@ impl Error {
     /// Create a generic error from a string
     pub fn other(msg: impl Into<String>) -> Self {
         Self::Other(msg.into())
-    }
-}
-
-// Implement conversion from claxon errors for per-track feature
-#[cfg(feature = "per-track")]
-impl From<claxon::Error> for Error {
-    fn from(err: claxon::Error) -> Self {
-        Error::FlacDecode(err.to_string())
     }
 }
