@@ -68,8 +68,52 @@ pub use openapi::ApiDoc;
 #[cfg(feature = "pmoconfig")]
 pub use config_ext::CoverCacheConfigExt;
 
-#[cfg(feature = "pmoserver")]
+// ============================================================================
+// Registre global singleton
+// ============================================================================
+
+use once_cell::sync::OnceCell;
 use std::sync::Arc;
+
+static COVER_CACHE: OnceCell<Arc<Cache>> = OnceCell::new();
+
+/// Enregistre le cache de couvertures global
+///
+/// Cette fonction doit être appelée au démarrage de l'application
+/// pour rendre le cache de couvertures disponible globalement.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use pmocovers::{new_cache, register_cover_cache};
+/// use std::sync::Arc;
+///
+/// let cache = Arc::new(new_cache("./covers", 100)?);
+/// register_cover_cache(cache);
+/// ```
+pub fn register_cover_cache(cache: Arc<Cache>) {
+    let _ = COVER_CACHE.set(cache);
+}
+
+/// Accès global au cache de couvertures
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use pmocovers::get_cover_cache;
+///
+/// if let Some(cache) = get_cover_cache() {
+///     // Utiliser le cache
+/// }
+/// ```
+pub fn get_cover_cache() -> Option<Arc<Cache>> {
+    COVER_CACHE.get().cloned()
+}
+
+// ============================================================================
+// Extension pmoserver
+// ============================================================================
+
 #[cfg(feature = "pmoserver")]
 use utoipa::OpenApi;
 

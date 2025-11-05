@@ -312,8 +312,8 @@ pub(crate) fn audio_cache() -> Result<Arc<pmoaudiocache::Cache>> {
         .get()
         .cloned()
         .or_else(|| {
-            // Fallback: essayer pmoupnp si disponible
-            pmoupnp::get_audio_cache()
+            // Fallback: essayer le registre global de pmoaudiocache
+            pmoaudiocache::get_audio_cache()
         })
         .ok_or_else(|| crate::Error::ManagerNotInitialized)
 }
