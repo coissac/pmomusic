@@ -9,8 +9,8 @@ use url::Url;
 /// Default Radio Paradise API base URL
 pub const DEFAULT_API_BASE: &str = "https://api.radioparadise.com/api";
 
-/// Default block base URL pattern
-pub const DEFAULT_BLOCK_BASE: &str = "https://apps.radioparadise.com/blocks/chan/0";
+/// Default block base URL (channel is appended)
+pub const DEFAULT_BLOCK_BASE: &str = "https://apps.radioparadise.com/blocks/chan";
 
 /// Default image base URL
 pub const DEFAULT_IMAGE_BASE: &str = "https://img.radioparadise.com/";
@@ -23,6 +23,9 @@ pub const DEFAULT_BLOCK_TIMEOUT_SECS: u64 = 180;
 
 /// Default User-Agent
 pub const DEFAULT_USER_AGENT: &str = "pmoparadise/0.1.0";
+
+/// Default channel (0 = main mix)
+pub const DEFAULT_CHANNEL: u8 = 0;
 
 /// Radio Paradise HTTP client
 ///
@@ -48,7 +51,6 @@ pub const DEFAULT_USER_AGENT: &str = "pmoparadise/0.1.0";
 pub struct RadioParadiseClient {
     pub(crate) client: Client,
     api_base: String,
-    block_base: String,
     channel: u8,
     pub(crate) request_timeout: Duration,
     pub(crate) block_timeout: Duration,
@@ -71,12 +73,14 @@ impl RadioParadiseClient {
     /// Create a client with a custom reqwest::Client
     ///
     /// Useful for sharing HTTP connection pools or custom proxy settings
+    ///
+    /// Note: Uses default settings (channel 0, default timeouts).
+    /// For more control, use `ClientBuilder::default().client(client).build()`.
     pub fn with_client(client: Client) -> Self {
         Self {
             client,
             api_base: DEFAULT_API_BASE.to_string(),
-            block_base: DEFAULT_BLOCK_BASE.to_string(),
-            channel: 0,
+            channel: DEFAULT_CHANNEL,
             request_timeout: Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS),
             block_timeout: Duration::from_secs(DEFAULT_BLOCK_TIMEOUT_SECS),
             next_block_url: None,
@@ -88,15 +92,15 @@ impl RadioParadiseClient {
         self.channel
     }
 
-    fn block_base_for_channel(channel: u8) -> String {
-        format!("https://apps.radioparadise.com/blocks/chan/{}", channel)
+    /// Get the block base URL for this client's channel
+    pub fn block_base(&self) -> String {
+        format!("{}/{}", DEFAULT_BLOCK_BASE, self.channel)
     }
 
     /// Clone the client with a different channel while preserving other settings.
     pub fn clone_with_channel(&self, channel: u8) -> Self {
         let mut cloned = self.clone();
         cloned.channel = channel;
-        cloned.block_base = Self::block_base_for_channel(channel);
         cloned.next_block_url = None;
         cloned
     }
@@ -234,7 +238,6 @@ impl RadioParadiseClient {
 pub struct ClientBuilder {
     client: Option<Client>,
     api_base: String,
-    block_base: String,
     channel: u8,
     request_timeout: Duration,
     block_timeout: Duration,
@@ -247,8 +250,7 @@ impl Default for ClientBuilder {
         Self {
             client: None,
             api_base: DEFAULT_API_BASE.to_string(),
-            block_base: DEFAULT_BLOCK_BASE.to_string(),
-            channel: 0,
+            channel: DEFAULT_CHANNEL,
             request_timeout: Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS),
             block_timeout: Duration::from_secs(DEFAULT_BLOCK_TIMEOUT_SECS),
             user_agent: DEFAULT_USER_AGENT.to_string(),
@@ -272,12 +274,6 @@ impl ClientBuilder {
     /// Set the API base URL
     pub fn api_base(mut self, url: impl Into<String>) -> Self {
         self.api_base = url.into();
-        self
-    }
-
-    /// Set the block base URL
-    pub fn block_base(mut self, url: impl Into<String>) -> Self {
-        self.block_base = url.into();
         self
     }
 
@@ -329,16 +325,9 @@ impl ClientBuilder {
             builder.build()?
         };
 
-        let block_base = if self.block_base == DEFAULT_BLOCK_BASE {
-            RadioParadiseClient::block_base_for_channel(self.channel)
-        } else {
-            self.block_base.clone()
-        };
-
         Ok(RadioParadiseClient {
             client,
             api_base: self.api_base,
-            block_base,
             channel: self.channel,
             request_timeout: self.request_timeout,
             block_timeout: self.block_timeout,
@@ -355,6 +344,6 @@ mod tests {
     fn test_builder_defaults() {
         let builder = ClientBuilder::default();
         assert_eq!(builder.api_base, DEFAULT_API_BASE);
-        assert_eq!(builder.channel, 0);
+        assert_eq!(builder.channel, DEFAULT_CHANNEL);
     }
 }
