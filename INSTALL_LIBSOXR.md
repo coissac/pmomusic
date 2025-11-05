@@ -1,10 +1,15 @@
-# Installation de libsoxr sans droits sudo
+# Installation des dépendances système sans droits sudo
 
-Ce document explique comment installer libsoxr localement sans privilèges administrateur, nécessaire pour compiler `pmoaudio` avec le support de resampling.
+Ce document explique comment installer les dépendances système de `pmoaudio` localement sans privilèges administrateur.
+
+## Dépendances requises
+
+1. **libsoxr** - Nécessaire pour `ResamplingNode` (resampling audio haute qualité)
+2. **libasound2** (ALSA) - Nécessaire pour `AudioSink` via rodio (lecture audio sur Linux)
 
 ## Contexte
 
-Le crate `soxr` (utilisé par `ResamplingNode`) nécessite la bibliothèque système `libsoxr`. Dans un environnement sans droits sudo, voici comment l'installer localement.
+Les crates `soxr` et `rodio` nécessitent des bibliothèques système. Dans un environnement sans droits sudo, voici comment les installer localement.
 
 ## Méthode : Installation locale via apt-get download
 
@@ -12,7 +17,12 @@ Le crate `soxr` (utilisé par `ResamplingNode`) nécessite la bibliothèque syst
 
 ```bash
 cd ~/.local
+
+# Pour libsoxr (ResamplingNode)
 apt-get download libsoxr-dev libsoxr0
+
+# Pour ALSA (AudioSink)
+apt-get download libasound2-dev
 ```
 
 Cela télécharge les fichiers `.deb` sans les installer système-wide.
@@ -20,8 +30,12 @@ Cela télécharge les fichiers `.deb` sans les installer système-wide.
 ### 2. Extraire les packages
 
 ```bash
+# Extraire libsoxr
 dpkg -x libsoxr-dev_*.deb .
 dpkg -x libsoxr0_*.deb .
+
+# Extraire ALSA
+dpkg -x libasound2-dev_*.deb .
 ```
 
 Les fichiers sont extraits dans `~/.local/usr/lib/x86_64-linux-gnu/` et `~/.local/usr/include/`.
@@ -40,12 +54,20 @@ export LD_LIBRARY_PATH="/root/.local/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
 ### 4. Vérifier l'installation
 
 ```bash
+# Vérifier libsoxr
 pkg-config --libs --cflags soxr
+
+# Vérifier ALSA
+pkg-config --libs --cflags alsa
 ```
 
-Devrait retourner :
+Devrait retourner quelque chose comme :
 ```
+# soxr
 -I/root/.local/usr/include -L/root/.local/usr/lib/x86_64-linux-gnu -lsoxr
+
+# alsa
+-I/root/.local/usr/include -L/root/.local/usr/lib/x86_64-linux-gnu -lasound
 ```
 
 ## Utilisation avec Cargo
@@ -83,12 +105,13 @@ cargo test
 
 ```bash
 brew install libsoxr
+# Note: ALSA n'est pas nécessaire sur macOS (rodio utilise CoreAudio)
 ```
 
 ### Debian/Ubuntu (avec sudo)
 
 ```bash
-sudo apt-get install libsoxr-dev
+sudo apt-get install libsoxr-dev libasound2-dev
 ```
 
 ### Fedora/RHEL
@@ -99,12 +122,12 @@ sudo dnf install soxr-devel
 
 ## Troubleshooting
 
-### Erreur : "Package 'soxr' was not found"
+### Erreur : "Package 'soxr' was not found" ou "Package 'alsa' was not found"
 
 - Vérifier que `PKG_CONFIG_PATH` contient le bon chemin
-- Vérifier que le fichier `soxr.pc` existe dans ce répertoire
+- Vérifier que les fichiers `soxr.pc` et `alsa.pc` existent dans ce répertoire
 
-### Erreur de link : "unable to find library -lsoxr"
+### Erreur de link : "unable to find library -lsoxr" ou "-lasound"
 
 - Pour `cargo build` : vérifier `LD_LIBRARY_PATH`
 - Pour `cargo test` : utiliser la configuration rustflags (Option A ci-dessus)

@@ -118,6 +118,7 @@ pub use pipeline::AudioPipelineNode;
 
 // Exports publics des nodes
 pub use nodes::{
+    audio_sink::AudioSink,
     converter_nodes::{ToF32Node, ToF64Node, ToI16Node, ToI24Node, ToI32Node},
     file_source::FileSource,
     flac_file_sink::{FlacFileSink, FlacFileSinkStats},
