@@ -1,5 +1,5 @@
 use crate::{
-    dsp::{i16_stereo_to_pairs_f32, i24_as_i32_stereo_to_pairs_f32, i32_stereo_to_interleaved_f32, pairs_f32_to_i16_stereo},
+    dsp::{i16_stereo_to_pairs_f32, i24_as_i32_stereo_to_pairs_f32, i32_stereo_to_interleaved_f32},
     nodes::{AudioError, TypedAudioNode, DEFAULT_CHANNEL_SIZE},
     pipeline::{Node, NodeLogic},
     type_constraints::TypeRequirement,
@@ -7,7 +7,9 @@ use crate::{
 };
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::collections::VecDeque;
+use std::sync::mpsc as std_mpsc;
 use std::sync::{Arc, Mutex};
+use std::thread;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -224,12 +226,16 @@ impl NodeLogic for AudioSinkLogic {
             sample_format
         );
 
-        // Créer le stream selon le format hardware
-        let stream = match sample_format {
+        // Créer un channel pour commander le thread du stream
+        let (stream_cmd_tx, stream_cmd_rx) = std_mpsc::channel::<bool>();
+
+        // Spawn un thread dédié pour le stream cpal (car Stream n'est pas Send)
+        let stream_thread = thread::spawn(move || {
+            // Créer le stream selon le format hardware
+            let stream = match sample_format {
             cpal::SampleFormat::I16 => {
                 tracing::debug!("Using I16 output format");
-                device
-                    .build_output_stream(
+                match device.build_output_stream(
                         &config.into(),
                         move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
                             let mut buf = buffer_clone.lock().unwrap();
@@ -245,13 +251,17 @@ impl NodeLogic for AudioSinkLogic {
                             tracing::error!("Audio stream error: {}", err);
                         },
                         None,
-                    )
-                    .map_err(|e| AudioError::ProcessingError(format!("Failed to build I16 stream: {}", e)))?
+                    ) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            tracing::error!("Failed to build I16 stream: {}", e);
+                            return;
+                        }
+                    }
             }
             cpal::SampleFormat::U16 => {
                 tracing::debug!("Using U16 output format");
-                device
-                    .build_output_stream(
+                match device.build_output_stream(
                         &config.into(),
                         move |data: &mut [u16], _: &cpal::OutputCallbackInfo| {
                             let mut buf = buffer_clone.lock().unwrap();
@@ -266,13 +276,17 @@ impl NodeLogic for AudioSinkLogic {
                             tracing::error!("Audio stream error: {}", err);
                         },
                         None,
-                    )
-                    .map_err(|e| AudioError::ProcessingError(format!("Failed to build U16 stream: {}", e)))?
+                    ) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            tracing::error!("Failed to build U16 stream: {}", e);
+                            return;
+                        }
+                    }
             }
             cpal::SampleFormat::F32 => {
                 tracing::debug!("Using F32 output format");
-                device
-                    .build_output_stream(
+                match device.build_output_stream(
                         &config.into(),
                         move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                             let mut buf = buffer_clone.lock().unwrap();
@@ -285,21 +299,34 @@ impl NodeLogic for AudioSinkLogic {
                             tracing::error!("Audio stream error: {}", err);
                         },
                         None,
-                    )
-                    .map_err(|e| AudioError::ProcessingError(format!("Failed to build F32 stream: {}", e)))?
+                    ) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            tracing::error!("Failed to build F32 stream: {}", e);
+                            return;
+                        }
+                    }
             }
             _ => {
-                return Err(AudioError::ProcessingError(format!(
-                    "Unsupported sample format: {:?}",
-                    sample_format
-                )));
-            }
-        };
+                tracing::error!("Unsupported sample format: {:?}", sample_format);
+                return;
+                }
+            };
 
-        // Démarrer le stream
-        stream
-            .play()
-            .map_err(|e| AudioError::ProcessingError(format!("Failed to play stream: {}", e)))?;
+            // Démarrer le stream
+            if let Err(e) = stream.play() {
+                tracing::error!("Failed to start stream: {}", e);
+                return;
+            }
+
+            tracing::debug!("Stream thread started");
+
+            // Attendre la commande d'arrêt
+            let _ = stream_cmd_rx.recv();
+
+            // Le stream se fermera automatiquement quand il sera droppé
+            tracing::debug!("Stream thread exiting");
+        });
 
         tracing::debug!("AudioSink initialized with format {:?}", sample_format);
 
@@ -308,7 +335,8 @@ impl NodeLogic for AudioSinkLogic {
             // Vérifier si l'arrêt a été demandé
             if stop_token.is_cancelled() {
                 tracing::debug!("AudioSinkLogic cancelled");
-                drop(stream);
+                let _ = stream_cmd_tx.send(true);
+                let _ = stream_thread.join();
                 return Ok(());
             }
 
@@ -317,7 +345,8 @@ impl NodeLogic for AudioSinkLogic {
                 let buf = buffer.lock().unwrap();
                 if buf.is_finished() {
                     tracing::debug!("AudioSink: finished playing all samples");
-                    drop(stream);
+                    let _ = stream_cmd_tx.send(true);
+                    let _ = stream_thread.join();
                     return Ok(());
                 }
             }
@@ -333,14 +362,16 @@ impl NodeLogic for AudioSinkLogic {
                             while !buffer.lock().unwrap().is_empty() {
                                 tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
                             }
-                            drop(stream);
+                            let _ = stream_cmd_tx.send(true);
+                            let _ = stream_thread.join();
                             return Ok(());
                         }
                     }
                 }
                 _ = stop_token.cancelled() => {
                     tracing::debug!("AudioSinkLogic cancelled during recv");
-                    drop(stream);
+                    let _ = stream_cmd_tx.send(true);
+                    let _ = stream_thread.join();
                     return Ok(());
                 }
                 _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
@@ -380,7 +411,8 @@ impl NodeLogic for AudioSinkLogic {
                                 tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
                             }
 
-                            drop(stream);
+                            let _ = stream_cmd_tx.send(true);
+                            let _ = stream_thread.join();
                             return Ok(());
                         }
                         SyncMarker::Error(ref message) => {
