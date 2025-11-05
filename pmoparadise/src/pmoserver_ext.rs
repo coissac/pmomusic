@@ -5,6 +5,7 @@
 
 use crate::channels::{max_channel_id, ChannelDescriptor, ALL_CHANNELS};
 use crate::{Block, NowPlaying, RadioParadiseClient};
+use async_trait::async_trait;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -352,6 +353,7 @@ pub fn create_api_router(state: RadioParadiseState) -> Router {
 ///
 /// Permet d'initialiser Radio Paradise avec routes HTTP complètes
 #[cfg(feature = "pmoserver")]
+#[async_trait]
 pub trait RadioParadiseExt {
     /// Initialise l'API Radio Paradise
     ///
@@ -366,6 +368,7 @@ pub trait RadioParadiseExt {
 }
 
 #[cfg(feature = "pmoserver")]
+#[async_trait]
 impl RadioParadiseExt for pmoserver::Server {
     async fn init_radioparadise(&mut self) -> anyhow::Result<RadioParadiseState> {
         let state = RadioParadiseState::new().await?;
