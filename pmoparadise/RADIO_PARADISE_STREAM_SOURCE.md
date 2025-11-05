@@ -118,18 +118,20 @@ AudioSegment::new_audio(42, AudioChunk::I16(...))
 const RECENT_BLOCKS_CACHE_SIZE: usize = 10;
 
 fn mark_block_downloaded(&mut self, event_id: EventId) {
-    self.recent_blocks.push_back(event_id);
-
-    // Limiter la taille du cache : retirer le plus ancien
-    if self.recent_blocks.len() > RECENT_BLOCKS_CACHE_SIZE {
+    // Retirer le plus ancien si on est déjà à la limite (évite de dépasser la capacité)
+    if self.recent_blocks.len() >= RECENT_BLOCKS_CACHE_SIZE {
         self.recent_blocks.pop_front();
     }
+
+    // Puis ajouter le nouveau bloc
+    self.recent_blocks.push_back(event_id);
 }
 ```
 
 **Avantages VecDeque** :
 - ✅ Ordre FIFO garanti (le plus ancien est toujours retiré)
 - ✅ Simple et prévisible
+- ✅ Ne dépasse jamais la capacité pré-allouée (retire avant d'ajouter)
 - ✅ Pour 10 éléments, `contains()` en O(n) reste très performant
 
 ## Support FLAC
