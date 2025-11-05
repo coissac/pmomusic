@@ -218,6 +218,7 @@
 //! - [Radio Paradise](https://radioparadise.com) - Official website
 //! - [Radio Paradise API](https://api.radioparadise.com) - API documentation
 
+pub mod channels;
 pub mod client;
 pub mod error;
 pub mod models;

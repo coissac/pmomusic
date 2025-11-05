@@ -3,7 +3,7 @@
 //! Ce module fournit un trait d'extension pour ajouter facilement l'API Radio Paradise
 //! à un serveur pmoserver.
 
-use crate::paradise::{max_channel_id, ALL_CHANNELS};
+use crate::channels::{max_channel_id, ChannelDescriptor, ALL_CHANNELS};
 use crate::{Block, NowPlaying, RadioParadiseClient};
 use axum::{
     extract::{Path, Query, State},
@@ -73,8 +73,8 @@ pub struct ChannelInfo {
     pub description: String,
 }
 
-impl From<&crate::paradise::ChannelDescriptor> for ChannelInfo {
-    fn from(descriptor: &crate::paradise::ChannelDescriptor) -> Self {
+impl From<&ChannelDescriptor> for ChannelInfo {
+    fn from(descriptor: &ChannelDescriptor) -> Self {
         Self {
             id: descriptor.id,
             name: descriptor.display_name.to_string(),
