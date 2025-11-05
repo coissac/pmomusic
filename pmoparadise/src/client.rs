@@ -9,9 +9,6 @@ use url::Url;
 /// Default Radio Paradise API base URL
 pub const DEFAULT_API_BASE: &str = "https://api.radioparadise.com/api";
 
-/// Default block base URL pattern
-pub const DEFAULT_BLOCK_BASE: &str = "https://apps.radioparadise.com/blocks/chan/0";
-
 /// Default image base URL
 pub const DEFAULT_IMAGE_BASE: &str = "https://img.radioparadise.com/";
 
@@ -72,11 +69,12 @@ impl RadioParadiseClient {
     ///
     /// Useful for sharing HTTP connection pools or custom proxy settings
     pub fn with_client(client: Client) -> Self {
+        let channel = 0;
         Self {
             client,
             api_base: DEFAULT_API_BASE.to_string(),
-            block_base: DEFAULT_BLOCK_BASE.to_string(),
-            channel: 0,
+            block_base: Self::block_base_for_channel(channel),
+            channel,
             request_timeout: Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS),
             block_timeout: Duration::from_secs(DEFAULT_BLOCK_TIMEOUT_SECS),
             next_block_url: None,
@@ -234,7 +232,6 @@ impl RadioParadiseClient {
 pub struct ClientBuilder {
     client: Option<Client>,
     api_base: String,
-    block_base: String,
     channel: u8,
     request_timeout: Duration,
     block_timeout: Duration,
@@ -247,7 +244,6 @@ impl Default for ClientBuilder {
         Self {
             client: None,
             api_base: DEFAULT_API_BASE.to_string(),
-            block_base: DEFAULT_BLOCK_BASE.to_string(),
             channel: 0,
             request_timeout: Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS),
             block_timeout: Duration::from_secs(DEFAULT_BLOCK_TIMEOUT_SECS),
@@ -275,15 +271,10 @@ impl ClientBuilder {
         self
     }
 
-    /// Set the block base URL
-    pub fn block_base(mut self, url: impl Into<String>) -> Self {
-        self.block_base = url.into();
-        self
-    }
-
     /// Set the channel (0 = main mix, 1 = mellow, 2 = rock, 3 = world/etc)
     pub fn channel(mut self, channel: u8) -> Self {
         self.channel = channel;
+        // block_base sera calculé dynamiquement dans build() à partir du channel
         self
     }
 
@@ -329,11 +320,8 @@ impl ClientBuilder {
             builder.build()?
         };
 
-        let block_base = if self.block_base == DEFAULT_BLOCK_BASE {
-            RadioParadiseClient::block_base_for_channel(self.channel)
-        } else {
-            self.block_base.clone()
-        };
+        // Calculer block_base dynamiquement à partir du channel
+        let block_base = RadioParadiseClient::block_base_for_channel(self.channel);
 
         Ok(RadioParadiseClient {
             client,
