@@ -51,12 +51,8 @@ symphonia = { version = "0.5", features = ["all"] }
 # Audio decoding - claxon for FLAC streaming
 claxon = "0.4"
 
-# FFmpeg for progressive streaming (decoding + encoding) - optional
-ffmpeg-next = { version = "8.0", optional = true }
-
-# Per-track feature dependencies
-hound = { version = "3.5", optional = true }
-tempfile = { version = "3.8", optional = true }
+# pmoaudio-ext with playlist support (optional for examples)
+pmoaudio-ext = { path = "../pmoaudio-ext", optional = true, features = ["playlist"] }
 
 # Common music source traits
 pmosource = { path = "../pmosource" }
@@ -74,12 +70,16 @@ pmoserver = { path = "../pmoserver", optional = true }
 utoipa = { version = "5.4.0", optional = true }
 axum = { version = "0.8.4", optional = true }
 
+# pmoaudio node support
+pmoaudio = { path = "../pmoaudio", optional = true }
+pmoflac = { path = "../pmoflac", optional = true }
+pmometadata = { path = "../pmometadata", optional = true }
+futures-util = { version = "0.3", optional = true }
+
 [features]
 default = ["metadata-only", "pmoconfig"]
 # Mode métadonnées seules (pas de décodage FLAC)
 metadata-only = []
-# Active l'extraction par-track (WAV export, etc.)
-per-track = ["dep:hound", "dep:tempfile"]
 # Active l'API REST pmoserver
 pmoserver = ["dep:pmoserver", "dep:utoipa", "dep:axum", "server"]
 # Feature pour activer le support serveur (cache registry)
@@ -88,8 +88,10 @@ server = ["pmosource/server", "pmoconfig"]
 pmoconfig = ["dep:pmoconfig"]
 # Feature cache (deprecated - toujours actif maintenant)
 cache = []
-# Active le streaming progressif avec FFmpeg (latence réduite)
-ffmpeg = ["dep:ffmpeg-next"]
+# Active le support pmoaudio node (RadioParadiseStreamSource)
+pmoaudio = ["dep:pmoaudio", "dep:pmoflac", "dep:pmometadata", "dep:futures-util"]
+# Active le support complet avec playlist (pour les exemples avancés)
+full = ["pmoaudio", "dep:pmoaudio-ext"]
 
 [dev-dependencies]
 # Tests
@@ -104,17 +106,3 @@ pmoaudiocache = { path = "../pmoaudiocache" }
 [[example]]
 name = "now_playing"
 path = "examples/now_playing.rs"
-
-[[example]]
-name = "stream_block"
-path = "examples/stream_block.rs"
-
-[[example]]
-name = "extract_track"
-path = "examples/extract_track.rs"
-required-features = ["per-track"]
-
-[[example]]
-name = "with_cache"
-path = "examples/with_cache.rs"
-required-features = ["cache"]

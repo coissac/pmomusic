@@ -122,10 +122,10 @@ impl SourceCacheManager {
         let cache = self.track_cache.read().await;
 
         if let Some(metadata) = cache.get(object_id) {
-            if let Some(ref pk) = metadata.cached_audio_pk {
+            if let Some(ref _pk) = metadata.cached_audio_pk {
                 #[cfg(feature = "server")]
                 {
-                    let url = pmoupnp::cache_registry::build_audio_url(pk, Some("stream"))
+                    let url = pmoupnp::cache_registry::build_audio_url(_pk, Some("stream"))
                         .map_err(|e| MusicSourceError::CacheError(e.to_string()))?;
                     return Ok(url);
                 }
@@ -147,7 +147,7 @@ impl SourceCacheManager {
         let cache = self.track_cache.read().await;
 
         if let Some(metadata) = cache.get(object_id) {
-            if let Some(ref pk) = metadata.cached_audio_pk {
+            if let Some(ref _pk) = metadata.cached_audio_pk {
                 // TODO: Ajouter get_info() à AudioCache
                 // Pour l'instant, on retourne juste Cached sans taille
                 return Ok(CacheStatus::Cached { size_bytes: 0 });
@@ -181,10 +181,10 @@ impl SourceCacheManager {
     /// # Returns
     ///
     /// L'URL complète de l'image
-    pub fn cover_url(&self, pk: &str, size: Option<usize>) -> Result<String> {
+    pub fn cover_url(&self, _pk: &str, _size: Option<usize>) -> Result<String> {
         #[cfg(feature = "server")]
         {
-            pmoupnp::cache_registry::build_cover_url(pk, size)
+            pmoupnp::cache_registry::build_cover_url(_pk, _size)
                 .map_err(|e| MusicSourceError::CacheError(e.to_string()))
         }
         #[cfg(not(feature = "server"))]

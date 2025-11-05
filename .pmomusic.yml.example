@@ -17,8 +17,8 @@ host:
       udn: uuid:28963b75-4c5f-4da7-b10e-ffafd
 accounts:
   qobuz:
-    username: eric@coissac.eu
-    password: '*Misfcr73110$'
+    username: your-email@example.com
+    password: 'YOUR_PASSWORD_HERE'
 devices:
   mediarenderer:
     pmo_mediarenderer:

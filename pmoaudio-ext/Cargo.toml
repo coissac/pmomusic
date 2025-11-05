@@ -13,8 +13,9 @@ pmoaudiocache = { path = "../pmoaudiocache", optional = true }
 pmoflac = { path = "../pmoflac", optional = true }
 pmometadata = { path = "../pmometadata", optional = true }
 
-# Optional dependency for playlist integration
+# Optional dependencies for playlist integration
 pmoplaylist = { path = "../pmoplaylist", optional = true }
+pmocache = { path = "../pmocache", optional = true }
 # Async runtime
 tokio = { version = "1.0", features = ["full"] }
 tokio-util = { version = "0.7" }
@@ -26,5 +27,5 @@ tracing = "0.1"
 [features]
 default = []
 cache-sink = ["dep:pmoaudiocache", "dep:pmoflac", "dep:pmometadata"]
-playlist = ["dep:pmoplaylist"]
+playlist = ["cache-sink", "dep:pmoplaylist", "dep:pmocache"]
 all = ["cache-sink", "playlist"]

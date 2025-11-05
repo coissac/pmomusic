@@ -1,5 +1,4 @@
 use anyhow::Result;
-use sha1::{Digest, Sha1};
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
