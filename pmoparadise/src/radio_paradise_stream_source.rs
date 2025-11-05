@@ -233,38 +233,71 @@ fn pcm_to_audio_segment(
 ) -> Result<Arc<AudioSegment>, AudioError> {
     use pmoaudio::{AudioChunk, AudioChunkData, _AudioSegment};
 
+    let bytes_per_sample = (bits_per_sample / 8) as usize;
+    let channels = 2; // Stereo
+    let frame_bytes = bytes_per_sample * channels;
+    let frames = pcm_data.len() / frame_bytes;
+
+    // Valider que la taille des données est correcte
+    if pcm_data.len() % frame_bytes != 0 {
+        return Err(AudioError::ProcessingError(format!(
+            "Invalid PCM data size: {} bytes is not a multiple of frame size {} ({}bit, {} channels)",
+            pcm_data.len(),
+            frame_bytes,
+            bits_per_sample,
+            channels
+        )));
+    }
+
     let chunk = match bits_per_sample {
         16 => {
-            // Convertir bytes en stereo pairs [i16; 2]
-            let stereo: Vec<[i16; 2]> = pcm_data
-                .chunks_exact(4) // 2 bytes * 2 channels = 4 bytes per frame
-                .map(|frame| {
-                    let left = i16::from_le_bytes([frame[0], frame[1]]);
-                    let right = i16::from_le_bytes([frame[2], frame[3]]);
-                    [left, right]
-                })
-                .collect();
-
+            // Type I16
+            let mut stereo = Vec::with_capacity(frames);
+            for frame_idx in 0..frames {
+                let base = frame_idx * frame_bytes;
+                let left = i16::from_le_bytes([pcm_data[base], pcm_data[base + 1]]);
+                let right = i16::from_le_bytes([pcm_data[base + 2], pcm_data[base + 3]]);
+                stereo.push([left, right]);
+            }
             let chunk_data = AudioChunkData::new(stereo, sample_rate, 0.0);
             AudioChunk::I16(chunk_data)
         }
         24 => {
-            // Convertir bytes en stereo pairs [I24; 2]
-            let stereo: Vec<[I24; 2]> = pcm_data
-                .chunks_exact(6) // 3 bytes * 2 channels = 6 bytes per frame
-                .map(|frame| {
-                    // Left channel (bytes 0,1,2)
-                    let left_value = i32::from_le_bytes([frame[0], frame[1], frame[2], 0]) >> 8;
-                    let left = I24::new_clamped(left_value);
+            // Type I24 avec sign extension correcte
+            let mut stereo = Vec::with_capacity(frames);
+            for frame_idx in 0..frames {
+                let base = frame_idx * frame_bytes;
 
-                    // Right channel (bytes 3,4,5)
-                    let right_value = i32::from_le_bytes([frame[3], frame[4], frame[5], 0]) >> 8;
-                    let right = I24::new_clamped(right_value);
+                // Left channel (bytes 0,1,2) avec sign extension
+                let left_i32 = {
+                    let mut buf = [0u8; 4];
+                    buf[..3].copy_from_slice(&pcm_data[base..base + 3]);
+                    // Sign extend si négatif
+                    if pcm_data[base + 2] & 0x80 != 0 {
+                        buf[3] = 0xFF;
+                    }
+                    i32::from_le_bytes(buf)
+                };
+                let left = I24::new(left_i32).ok_or_else(|| {
+                    AudioError::ProcessingError(format!("Invalid I24 value: {}", left_i32))
+                })?;
 
-                    [left, right]
-                })
-                .collect();
+                // Right channel (bytes 3,4,5) avec sign extension
+                let right_i32 = {
+                    let mut buf = [0u8; 4];
+                    buf[..3].copy_from_slice(&pcm_data[base + 3..base + 6]);
+                    // Sign extend si négatif
+                    if pcm_data[base + 5] & 0x80 != 0 {
+                        buf[3] = 0xFF;
+                    }
+                    i32::from_le_bytes(buf)
+                };
+                let right = I24::new(right_i32).ok_or_else(|| {
+                    AudioError::ProcessingError(format!("Invalid I24 value: {}", right_i32))
+                })?;
 
+                stereo.push([left, right]);
+            }
             let chunk_data = AudioChunkData::new(stereo, sample_rate, 0.0);
             AudioChunk::I24(chunk_data)
         }
