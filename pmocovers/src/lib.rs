@@ -68,8 +68,74 @@ pub use openapi::ApiDoc;
 #[cfg(feature = "pmoconfig")]
 pub use config_ext::CoverCacheConfigExt;
 
-#[cfg(feature = "pmoserver")]
+// ============================================================================
+// Registre global singleton
+// ============================================================================
+
+use once_cell::sync::OnceCell;
 use std::sync::Arc;
+
+static COVER_CACHE: OnceCell<Arc<Cache>> = OnceCell::new();
+
+/// Enregistre le cache de couvertures global
+///
+/// Cette fonction doit être appelée au démarrage de l'application
+/// pour rendre le cache de couvertures disponible globalement.
+///
+/// # Arguments
+///
+/// * `cache` - Instance partagée du cache de couvertures à enregistrer
+///
+/// # Behavior
+///
+/// - Si appelée plusieurs fois, seul le premier appel prend effet
+/// - Thread-safe: peut être appelée depuis plusieurs threads simultanément
+/// - Une fois enregistré, le cache est accessible via [`get_cover_cache`]
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use pmocovers::{new_cache, register_cover_cache};
+/// use std::sync::Arc;
+///
+/// let cache = Arc::new(new_cache("./covers", 100)?);
+/// register_cover_cache(cache);
+/// ```
+pub fn register_cover_cache(cache: Arc<Cache>) {
+    let _ = COVER_CACHE.set(cache);
+}
+
+/// Accès global au cache de couvertures
+///
+/// Retourne une référence au cache de couvertures enregistré via [`register_cover_cache`],
+/// ou `None` si aucun cache n'a été enregistré.
+///
+/// # Returns
+///
+/// * `Some(Arc<Cache>)` - Instance partagée du cache de couvertures si enregistré
+/// * `None` - Si aucun cache n'a été enregistré
+///
+/// # Thread Safety
+///
+/// Cette fonction est thread-safe et peut être appelée depuis plusieurs threads.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use pmocovers::get_cover_cache;
+///
+/// if let Some(cache) = get_cover_cache() {
+///     // Utiliser le cache
+/// }
+/// ```
+pub fn get_cover_cache() -> Option<Arc<Cache>> {
+    COVER_CACHE.get().cloned()
+}
+
+// ============================================================================
+// Extension pmoserver
+// ============================================================================
+
 #[cfg(feature = "pmoserver")]
 use utoipa::OpenApi;
 

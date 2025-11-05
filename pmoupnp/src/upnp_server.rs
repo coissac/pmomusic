@@ -26,7 +26,6 @@ use pmoserver::Server;
 use utoipa::OpenApi;
 
 use crate::UpnpModel;
-use crate::cache_registry::CACHE_REGISTRY;
 use crate::devices::errors::DeviceError;
 use crate::devices::{Device, DeviceInstance, DeviceRegistry};
 use crate::ssdp::SsdpServer;
@@ -330,12 +329,8 @@ impl UpnpServerExt for Server {
         let openapi = pmocovers::ApiDoc::openapi();
         self.add_openapi(api_router, openapi, "covers").await;
 
-        // Enregistrer base_url et cache dans le registre global
-        {
-            let mut registry = CACHE_REGISTRY.write().unwrap();
-            registry.set_base_url(base_url);
-            registry.set_cover_cache(cache.clone());
-        }
+        // Enregistrer le cache dans le registre global
+        pmocovers::register_cover_cache(cache.clone());
 
         Ok(cache)
     }
@@ -360,12 +355,8 @@ impl UpnpServerExt for Server {
         let openapi = pmoaudiocache::ApiDoc::openapi();
         self.add_openapi(api_router, openapi, "audio").await;
 
-        // Enregistrer base_url et cache dans le registre global
-        {
-            let mut registry = CACHE_REGISTRY.write().unwrap();
-            registry.set_base_url(base_url);
-            registry.set_audio_cache(cache.clone());
-        }
+        // Enregistrer le cache dans le registre global
+        pmoaudiocache::register_audio_cache(cache.clone());
 
         Ok(cache)
     }
@@ -388,11 +379,11 @@ impl UpnpServerExt for Server {
     }
 
     fn cover_cache(&self) -> Option<Arc<CoverCache>> {
-        crate::cache_registry::get_cover_cache()
+        pmocovers::get_cover_cache()
     }
 
     fn audio_cache(&self) -> Option<Arc<AudioCache>> {
-        crate::cache_registry::get_audio_cache()
+        pmoaudiocache::get_audio_cache()
     }
 
     // ========= SSDP Management Implementation =========

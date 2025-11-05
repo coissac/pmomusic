@@ -15,6 +15,9 @@ use tokio::sync::RwLock;
 /// Singleton PlaylistManager
 static PLAYLIST_MANAGER: OnceCell<PlaylistManager> = OnceCell::new();
 
+/// Registre global du cache audio
+static AUDIO_CACHE: OnceCell<Arc<pmoaudiocache::Cache>> = OnceCell::new();
+
 /// Structure interne du manager
 struct ManagerInner {
     playlists: RwLock<HashMap<String, Arc<Playlist>>>,
@@ -284,9 +287,35 @@ pub(crate) async fn delete_playlist_internal(id: &str) -> Result<()> {
     PlaylistManager::get().delete_playlist(id).await
 }
 
+/// Enregistre le cache audio global
+///
+/// Cette fonction doit être appelée au démarrage de l'application
+/// pour rendre le cache audio disponible au PlaylistManager.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use pmoplaylist::register_audio_cache;
+/// use pmoaudiocache::Cache as AudioCache;
+/// use std::sync::Arc;
+///
+/// let audio_cache = Arc::new(AudioCache::new("./cache", 1000)?);
+/// register_audio_cache(audio_cache);
+/// ```
+pub fn register_audio_cache(cache: Arc<pmoaudiocache::Cache>) {
+    let _ = AUDIO_CACHE.set(cache);
+}
+
 /// Helper pour acc�der au cache audio
 pub(crate) fn audio_cache() -> Result<Arc<pmoaudiocache::Cache>> {
-    pmoupnp::get_audio_cache().ok_or_else(|| crate::Error::ManagerNotInitialized)
+    AUDIO_CACHE
+        .get()
+        .cloned()
+        .or_else(|| {
+            // Fallback: essayer le registre global de pmoaudiocache
+            pmoaudiocache::get_audio_cache()
+        })
+        .ok_or_else(|| crate::Error::ManagerNotInitialized)
 }
 
 /// Fonction raccourcie pour acc�der au singleton

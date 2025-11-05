@@ -101,6 +101,70 @@ pub use config_ext::AudioCacheConfigExt;
 pub use openapi::ApiDoc;
 
 // ============================================================================
+// Registre global singleton
+// ============================================================================
+
+use once_cell::sync::OnceCell;
+use std::sync::Arc;
+
+static AUDIO_CACHE: OnceCell<Arc<Cache>> = OnceCell::new();
+
+/// Enregistre le cache audio global
+///
+/// Cette fonction doit être appelée au démarrage de l'application
+/// pour rendre le cache audio disponible globalement.
+///
+/// # Arguments
+///
+/// * `cache` - Instance partagée du cache audio à enregistrer
+///
+/// # Behavior
+///
+/// - Si appelée plusieurs fois, seul le premier appel prend effet
+/// - Thread-safe: peut être appelée depuis plusieurs threads simultanément
+/// - Une fois enregistré, le cache est accessible via [`get_audio_cache`]
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use pmoaudiocache::{new_cache, register_audio_cache};
+/// use std::sync::Arc;
+///
+/// let cache = Arc::new(new_cache("./cache", 1000)?);
+/// register_audio_cache(cache);
+/// ```
+pub fn register_audio_cache(cache: Arc<Cache>) {
+    let _ = AUDIO_CACHE.set(cache);
+}
+
+/// Accès global au cache audio
+///
+/// Retourne une référence au cache audio enregistré via [`register_audio_cache`],
+/// ou `None` si aucun cache n'a été enregistré.
+///
+/// # Returns
+///
+/// * `Some(Arc<Cache>)` - Instance partagée du cache audio si enregistré
+/// * `None` - Si aucun cache n'a été enregistré
+///
+/// # Thread Safety
+///
+/// Cette fonction est thread-safe et peut être appelée depuis plusieurs threads.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use pmoaudiocache::get_audio_cache;
+///
+/// if let Some(cache) = get_audio_cache() {
+///     // Utiliser le cache
+/// }
+/// ```
+pub fn get_audio_cache() -> Option<Arc<Cache>> {
+    AUDIO_CACHE.get().cloned()
+}
+
+// ============================================================================
 // Extension pmoserver (inline comme pmocovers)
 // ============================================================================
 
@@ -131,8 +195,6 @@ pub trait AudioCacheExt {
 
 #[cfg(feature = "pmoserver")]
 use pmocache::pmoserver_ext::{create_api_router, create_file_router};
-#[cfg(feature = "pmoserver")]
-use std::sync::Arc;
 #[cfg(feature = "pmoserver")]
 use utoipa::OpenApi;
 

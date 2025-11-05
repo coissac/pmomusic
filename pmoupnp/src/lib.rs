@@ -2,7 +2,6 @@ mod object_set;
 mod object_trait;
 
 pub mod actions;
-pub mod cache_registry;
 pub mod devices;
 pub mod services;
 pub mod soap;
@@ -16,9 +15,10 @@ pub mod variable_types;
 use std::sync::RwLock;
 use std::{collections::HashMap, sync::Arc};
 
-pub use crate::cache_registry::{
-    get_audio_cache, get_cover_cache, register_audio_cache, register_cover_cache,
-};
+// Réexports pour compatibilité (seulement get_*, pas register_*)
+pub use pmoaudiocache::get_audio_cache;
+pub use pmocovers::get_cover_cache;
+
 pub use crate::object_trait::*;
 pub use crate::upnp_server::UpnpServerExt;
 
