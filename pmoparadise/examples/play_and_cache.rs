@@ -100,6 +100,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?);
     tracing::debug!("Cover cache initialized at: {}", cover_cache_dir);
 
+    // Enregistrer les caches dans le registre global pmoupnp
+    // (requis par pmoplaylist pour valider les pks)
+    pmoupnp::register_audio_cache(audio_cache.clone());
+    pmoupnp::register_cover_cache(cover_cache.clone());
+    tracing::debug!("Caches registered in pmoupnp global registry");
+
     // Utiliser le gestionnaire de playlist singleton
     tracing::info!("Getting playlist manager...");
     let playlist_manager = pmoplaylist::PlaylistManager();

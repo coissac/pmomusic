@@ -157,6 +157,44 @@ pub fn get_audio_cache() -> Option<Arc<AudioCache>> {
     CACHE_REGISTRY.read().unwrap().audio_cache()
 }
 
+/// Enregistre le cache audio global
+///
+/// Cette fonction doit être appelée au démarrage de l'application
+/// pour rendre le cache audio disponible globalement.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use pmoupnp::cache_registry::register_audio_cache;
+/// use pmoaudiocache::Cache as AudioCache;
+/// use std::sync::Arc;
+///
+/// let audio_cache = Arc::new(AudioCache::new("./cache", 1000)?);
+/// register_audio_cache(audio_cache);
+/// ```
+pub fn register_audio_cache(cache: Arc<AudioCache>) {
+    CACHE_REGISTRY.write().unwrap().set_audio_cache(cache);
+}
+
+/// Enregistre le cache de couvertures global
+///
+/// Cette fonction doit être appelée au démarrage de l'application
+/// pour rendre le cache de couvertures disponible globalement.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use pmoupnp::cache_registry::register_cover_cache;
+/// use pmocovers::Cache as CoverCache;
+/// use std::sync::Arc;
+///
+/// let cover_cache = Arc::new(CoverCache::new("./covers", 100)?);
+/// register_cover_cache(cover_cache);
+/// ```
+pub fn register_cover_cache(cache: Arc<CoverCache>) {
+    CACHE_REGISTRY.write().unwrap().set_cover_cache(cache);
+}
+
 /// Construit l'URL complète pour une couverture
 ///
 /// Fonction globale qui utilise le registre de caches pour construire l'URL.

@@ -16,7 +16,9 @@ pub mod variable_types;
 use std::sync::RwLock;
 use std::{collections::HashMap, sync::Arc};
 
-pub use crate::cache_registry::{get_audio_cache, get_cover_cache};
+pub use crate::cache_registry::{
+    get_audio_cache, get_cover_cache, register_audio_cache, register_cover_cache,
+};
 pub use crate::object_trait::*;
 pub use crate::upnp_server::UpnpServerExt;
 
