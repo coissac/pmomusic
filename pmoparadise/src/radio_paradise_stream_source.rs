@@ -17,7 +17,7 @@ use pmoaudio::{
 use pmoflac::decode_audio_stream;
 use pmometadata::{MemoryTrackMetadata, TrackMetadata};
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::VecDeque,
     sync::Arc,
     time::Duration,
 };
@@ -38,7 +38,7 @@ const RECENT_BLOCKS_CACHE_SIZE: usize = 10;
 pub struct RadioParadiseStreamSourceLogic {
     client: RadioParadiseClient,
     chunk_frames: usize,
-    recent_blocks: HashSet<EventId>,
+    recent_blocks: VecDeque<EventId>,
     block_queue: VecDeque<EventId>,
 }
 
@@ -50,7 +50,7 @@ impl RadioParadiseStreamSourceLogic {
         Self {
             client,
             chunk_frames,
-            recent_blocks: HashSet::with_capacity(RECENT_BLOCKS_CACHE_SIZE),
+            recent_blocks: VecDeque::with_capacity(RECENT_BLOCKS_CACHE_SIZE),
             block_queue: VecDeque::new(),
         }
     }
@@ -65,16 +65,13 @@ impl RadioParadiseStreamSourceLogic {
         self.recent_blocks.contains(&event_id)
     }
 
-    /// Marque un bloc comme récemment téléchargé
+    /// Marque un bloc comme récemment téléchargé (FIFO)
     fn mark_block_downloaded(&mut self, event_id: EventId) {
-        self.recent_blocks.insert(event_id);
+        self.recent_blocks.push_back(event_id);
 
-        // Limiter la taille du cache
+        // Limiter la taille du cache : retirer le plus ancien
         if self.recent_blocks.len() > RECENT_BLOCKS_CACHE_SIZE {
-            // Retirer un élément (HashSet n'a pas d'ordre, donc on retire le premier)
-            if let Some(&first) = self.recent_blocks.iter().next() {
-                self.recent_blocks.remove(&first);
-            }
+            self.recent_blocks.pop_front();
         }
     }
 

@@ -20,7 +20,7 @@ RadioParadiseStreamSource (wrapper)
 
 Responsabilités :
 - **File d'attente** : `VecDeque<EventId>` pour les blocks à télécharger
-- **Cache anti-redondance** : `HashSet<EventId>` pour 10 blocs récents
+- **Cache anti-redondance** : `VecDeque<EventId>` pour 10 blocs récents (FIFO)
 - **Téléchargement** : Fetch bloc FLAC (bitrate=4 uniquement)
 - **Décodage** : Stream FLAC via `pmoflac::decode_audio_stream`
 - **Timing** : Calcul précis pour insertion TrackBoundary
@@ -36,7 +36,7 @@ Responsabilités :
                           ▼
 ┌─────────────────────────────────────────────────────────┐
 │ 2. Vérification cache                                   │
-│    └─> HashSet::contains(&event_id)                    │
+│    └─> VecDeque::contains(&event_id)                   │
 └─────────────────────────────────────────────────────────┘
                           │
                           ▼
@@ -118,16 +118,19 @@ AudioSegment::new_audio(42, AudioChunk::I16(...))
 const RECENT_BLOCKS_CACHE_SIZE: usize = 10;
 
 fn mark_block_downloaded(&mut self, event_id: EventId) {
-    self.recent_blocks.insert(event_id);
+    self.recent_blocks.push_back(event_id);
 
+    // Limiter la taille du cache : retirer le plus ancien
     if self.recent_blocks.len() > RECENT_BLOCKS_CACHE_SIZE {
-        // Retirer un élément (ordre non garanti avec HashSet)
-        if let Some(&first) = self.recent_blocks.iter().next() {
-            self.recent_blocks.remove(&first);
-        }
+        self.recent_blocks.pop_front();
     }
 }
 ```
+
+**Avantages VecDeque** :
+- ✅ Ordre FIFO garanti (le plus ancien est toujours retiré)
+- ✅ Simple et prévisible
+- ✅ Pour 10 éléments, `contains()` en O(n) reste très performant
 
 ## Support FLAC
 
