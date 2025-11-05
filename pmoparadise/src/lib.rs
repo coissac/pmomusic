@@ -215,10 +215,6 @@ pub mod client;
 pub mod error;
 pub mod models;
 pub mod source;
-pub mod stream;
-
-#[cfg(feature = "per-track")]
-pub mod track;
 
 #[cfg(feature = "pmoserver")]
 pub mod pmoserver_ext;
@@ -234,13 +230,9 @@ pub use client::{ClientBuilder, RadioParadiseClient};
 pub use error::{Error, Result};
 pub use models::{Block, DurationMs, EventId, NowPlaying, Song};
 pub use source::RadioParadiseSource;
-pub use stream::BlockStream;
 
 #[cfg(feature = "pmoaudio")]
 pub use radio_paradise_stream_source::RadioParadiseStreamSource;
-
-#[cfg(feature = "per-track")]
-pub use track::{TrackMetadata, TrackStream};
 
 #[cfg(feature = "pmoserver")]
 pub use pmoserver_ext::{

@@ -51,10 +51,6 @@ symphonia = { version = "0.5", features = ["all"] }
 # Audio decoding - claxon for FLAC streaming
 claxon = "0.4"
 
-# Per-track feature dependencies
-hound = { version = "3.5", optional = true }
-tempfile = { version = "3.8", optional = true }
-
 # Common music source traits
 pmosource = { path = "../pmosource" }
 
@@ -81,8 +77,6 @@ futures-util = { version = "0.3", optional = true }
 default = ["metadata-only", "pmoconfig"]
 # Mode métadonnées seules (pas de décodage FLAC)
 metadata-only = []
-# Active l'extraction par-track (WAV export, etc.)
-per-track = ["dep:hound", "dep:tempfile"]
 # Active l'API REST pmoserver
 pmoserver = ["dep:pmoserver", "dep:utoipa", "dep:axum", "server"]
 # Feature pour activer le support serveur (cache registry)
@@ -107,17 +101,3 @@ pmoaudiocache = { path = "../pmoaudiocache" }
 [[example]]
 name = "now_playing"
 path = "examples/now_playing.rs"
-
-[[example]]
-name = "stream_block"
-path = "examples/stream_block.rs"
-
-[[example]]
-name = "extract_track"
-path = "examples/extract_track.rs"
-required-features = ["per-track"]
-
-[[example]]
-name = "with_cache"
-path = "examples/with_cache.rs"
-required-features = ["cache"]
