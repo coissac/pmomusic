@@ -38,3 +38,4 @@ upmpdcli/
 /*.xml
 test_upnp*.cargo/
 .cargo/
+setup-env.sh

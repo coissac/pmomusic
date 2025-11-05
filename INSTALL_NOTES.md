@@ -2,30 +2,34 @@
 
 ## Prérequis système
 
-### libsoxr (obligatoire pour pmoaudio)
+### libsoxr (obligatoire pour pmoaudio - resampling)
 
 La bibliothèque `libsoxr` est requise pour le resampling audio dans `pmoaudio`.
+
+### libasound2/ALSA (obligatoire pour pmoaudio - lecture audio sur Linux)
+
+La bibliothèque ALSA est requise pour `AudioSink` via `cpal` sur Linux. Sur macOS et Windows, aucune dépendance externe n'est nécessaire (CoreAudio et WASAPI sont utilisés).
 
 **Installation** :
 
 ```bash
 # Debian/Ubuntu
-sudo apt-get install libsoxr-dev
+sudo apt-get install libsoxr-dev libasound2-dev
 
 # Fedora/RHEL
-sudo dnf install libsoxr-devel
+sudo dnf install libsoxr-devel alsa-lib-devel
 
 # Arch Linux
-sudo pacman -S libsoxr
+sudo pacman -S libsoxr alsa-lib
 
-# macOS (Homebrew)
+# macOS (Homebrew) - ALSA non nécessaire sur macOS
 brew install libsoxr
 
 # Alpine Linux
-apk add soxr-dev
+apk add soxr-dev alsa-lib-dev
 ```
 
-**Sans privilèges root** : Si vous n'avez pas les droits sudo, demandez à l'administrateur système d'installer `libsoxr-dev`.
+**Sans privilèges root** : Si vous n'avez pas les droits sudo, consultez `INSTALL_LIBSOXR.md` pour l'installation locale de `libsoxr` et `libasound2`.
 
 ---
 
