@@ -57,7 +57,7 @@ mod config_ext;
 // Réexports publics
 pub use error::{Error, Result};
 pub use handle::{ReadHandle, WriteHandle};
-pub use manager::{PlaylistManager, PlaylistManager as Manager};
+pub use manager::{register_audio_cache, PlaylistManager, PlaylistManager as Manager};
 pub use track::PlaylistTrack;
 
 #[cfg(feature = "pmoconfig")]
