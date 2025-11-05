@@ -27,7 +27,6 @@ use pmoaudio_ext::{FlacCacheSink, PlaylistSource};
 use pmoaudiocache::Cache as AudioCache;
 use pmocovers::Cache as CoverCache;
 use pmoparadise::{RadioParadiseClient, RadioParadiseStreamSource};
-use pmoplaylist::Manager as PlaylistManager;
 use std::env;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -183,9 +182,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut playlist_source = PlaylistSource::new(reader, audio_cache.clone());
     tracing::debug!("PlaylistSource created");
 
-    // Créer le sink audio avec volume à 80%
-    let audio_sink = AudioSink::with_volume(0.8);
-    tracing::debug!("AudioSink created with volume 0.8");
+    // Créer le sink audio
+    let audio_sink = AudioSink::new();
+    tracing::debug!("AudioSink created");
 
     // Connecter playlist → audio
     playlist_source.register(Box::new(audio_sink));
