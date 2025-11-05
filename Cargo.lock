@@ -2685,6 +2685,7 @@ dependencies = [
  "async-trait",
  "pmoaudio",
  "pmoaudiocache",
+ "pmocache",
  "pmocovers",
  "pmoflac",
  "pmometadata",

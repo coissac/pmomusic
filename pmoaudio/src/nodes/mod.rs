@@ -23,6 +23,7 @@ pub mod converter_nodes;
 pub mod file_source;
 pub mod flac_file_sink;
 pub mod http_source;
+pub mod resampling_node;
 
 // Modules temporairement désactivés
 /*
