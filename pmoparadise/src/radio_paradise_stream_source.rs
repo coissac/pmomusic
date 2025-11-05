@@ -67,8 +67,8 @@ impl RadioParadiseStreamSourceLogic {
 
     /// Marque un bloc comme récemment téléchargé (FIFO)
     fn mark_block_downloaded(&mut self, event_id: EventId) {
-        // Retirer le plus ancien si on est déjà à la limite (évite de dépasser la capacité)
-        if self.recent_blocks.len() >= RECENT_BLOCKS_CACHE_SIZE {
+        // Retirer tous les éléments excédentaires (garantit <= CACHE_SIZE)
+        while self.recent_blocks.len() >= RECENT_BLOCKS_CACHE_SIZE {
             self.recent_blocks.pop_front();
         }
 
