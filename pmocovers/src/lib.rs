@@ -82,6 +82,16 @@ static COVER_CACHE: OnceCell<Arc<Cache>> = OnceCell::new();
 /// Cette fonction doit être appelée au démarrage de l'application
 /// pour rendre le cache de couvertures disponible globalement.
 ///
+/// # Arguments
+///
+/// * `cache` - Instance partagée du cache de couvertures à enregistrer
+///
+/// # Behavior
+///
+/// - Si appelée plusieurs fois, seul le premier appel prend effet
+/// - Thread-safe: peut être appelée depuis plusieurs threads simultanément
+/// - Une fois enregistré, le cache est accessible via [`get_cover_cache`]
+///
 /// # Examples
 ///
 /// ```rust,ignore
@@ -96,6 +106,18 @@ pub fn register_cover_cache(cache: Arc<Cache>) {
 }
 
 /// Accès global au cache de couvertures
+///
+/// Retourne une référence au cache de couvertures enregistré via [`register_cover_cache`],
+/// ou `None` si aucun cache n'a été enregistré.
+///
+/// # Returns
+///
+/// * `Some(Arc<Cache>)` - Instance partagée du cache de couvertures si enregistré
+/// * `None` - Si aucun cache n'a été enregistré
+///
+/// # Thread Safety
+///
+/// Cette fonction est thread-safe et peut être appelée depuis plusieurs threads.
 ///
 /// # Examples
 ///

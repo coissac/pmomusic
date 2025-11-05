@@ -114,6 +114,16 @@ static AUDIO_CACHE: OnceCell<Arc<Cache>> = OnceCell::new();
 /// Cette fonction doit être appelée au démarrage de l'application
 /// pour rendre le cache audio disponible globalement.
 ///
+/// # Arguments
+///
+/// * `cache` - Instance partagée du cache audio à enregistrer
+///
+/// # Behavior
+///
+/// - Si appelée plusieurs fois, seul le premier appel prend effet
+/// - Thread-safe: peut être appelée depuis plusieurs threads simultanément
+/// - Une fois enregistré, le cache est accessible via [`get_audio_cache`]
+///
 /// # Examples
 ///
 /// ```rust,ignore
@@ -128,6 +138,18 @@ pub fn register_audio_cache(cache: Arc<Cache>) {
 }
 
 /// Accès global au cache audio
+///
+/// Retourne une référence au cache audio enregistré via [`register_audio_cache`],
+/// ou `None` si aucun cache n'a été enregistré.
+///
+/// # Returns
+///
+/// * `Some(Arc<Cache>)` - Instance partagée du cache audio si enregistré
+/// * `None` - Si aucun cache n'a été enregistré
+///
+/// # Thread Safety
+///
+/// Cette fonction est thread-safe et peut être appelée depuis plusieurs threads.
 ///
 /// # Examples
 ///
