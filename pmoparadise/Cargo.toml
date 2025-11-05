@@ -51,6 +51,9 @@ symphonia = { version = "0.5", features = ["all"] }
 # Audio decoding - claxon for FLAC streaming
 claxon = "0.4"
 
+# pmoaudio-ext with playlist support (optional for examples)
+pmoaudio-ext = { path = "../pmoaudio-ext", optional = true, features = ["playlist"] }
+
 # Common music source traits
 pmosource = { path = "../pmosource" }
 
@@ -87,6 +90,8 @@ pmoconfig = ["dep:pmoconfig"]
 cache = []
 # Active le support pmoaudio node (RadioParadiseStreamSource)
 pmoaudio = ["dep:pmoaudio", "dep:pmoflac", "dep:pmometadata", "dep:futures-util"]
+# Active le support complet avec playlist (pour les exemples avancés)
+full = ["pmoaudio", "dep:pmoaudio-ext"]
 
 [dev-dependencies]
 # Tests
