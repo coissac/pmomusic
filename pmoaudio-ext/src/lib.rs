@@ -7,7 +7,7 @@
 //! # Features
 //!
 //! - `cache-sink` : Active le `FlacCacheSink` qui encode l'audio en FLAC et le stocke dans pmoaudiocache
-//! - `playlist` : Active l'intégration avec pmoplaylist pour les sinks
+//! - `playlist` : Active l'intégration avec pmoplaylist (sources et sinks)
 //! - `all` : Active toutes les features d'un coup
 //!
 //! # Architecture
@@ -25,6 +25,12 @@
 #[cfg(feature = "cache-sink")]
 pub mod sinks;
 
+#[cfg(feature = "playlist")]
+pub mod sources;
+
 // Re-exports pour faciliter l'utilisation
 #[cfg(feature = "cache-sink")]
 pub use sinks::*;
+
+#[cfg(feature = "playlist")]
+pub use sources::*;

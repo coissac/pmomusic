@@ -4,7 +4,6 @@ pub mod core;
 pub mod record;
 
 use self::core::{PlaylistConfig, PlaylistCore};
-use self::record::Record;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::SystemTime;

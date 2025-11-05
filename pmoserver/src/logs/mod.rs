@@ -25,11 +25,10 @@ use tracing::Level;
 use tracing_subscriber::{
     Registry,
     filter::LevelFilter,
-    layer::{Filter, SubscriberExt},
+    layer::SubscriberExt,
     reload,
     util::SubscriberInitExt,
 };
-use utoipa::OpenApi;
 
 /// Représente une entrée de log
 #[derive(Debug, Clone, Serialize)]
@@ -440,7 +439,7 @@ fn level_to_levelfilter(level: Level) -> LevelFilter {
 
 /// Crée le router pour l'API de gestion des logs
 pub fn create_logs_router(log_state: LogState) -> axum::Router {
-    use axum::routing::{get, post};
+    use axum::routing::get;
     axum::Router::new()
         .route("/log_setup", get(log_setup_get).post(log_setup_post))
         .with_state(log_state)
