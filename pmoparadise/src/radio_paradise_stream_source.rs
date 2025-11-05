@@ -12,7 +12,7 @@ use pmoaudio::{
     nodes::{AudioError, TypedAudioNode, DEFAULT_CHUNK_DURATION_MS},
     pipeline::{Node, NodeLogic},
     type_constraints::TypeRequirement,
-    AudioChunk, AudioPipelineNode, AudioSegment, SyncMarker, I24,
+    AudioPipelineNode, AudioSegment, SyncMarker, I24,
 };
 use pmoflac::decode_audio_stream;
 use pmometadata::{MemoryTrackMetadata, TrackMetadata};
@@ -21,6 +21,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+use tokio::io::AsyncReadExt;
 use tokio::sync::{mpsc, RwLock};
 use tokio_util::{io::StreamReader, sync::CancellationToken};
 
@@ -110,7 +111,7 @@ impl RadioParadiseStreamSourceLogic {
             .await
             .map_err(|e| AudioError::ProcessingError(format!("FLAC decode failed: {}", e)))?;
 
-        let stream_info = decoder.stream_info();
+        let stream_info = decoder.info().clone();
         let sample_rate = stream_info.sample_rate;
         let bits_per_sample = stream_info.bits_per_sample;
 
@@ -121,45 +122,67 @@ impl RadioParadiseStreamSourceLogic {
         let mut total_samples = 0u64;
 
         // Envoyer TopZeroSync au début du bloc
-        self.send_to_children(
-            output,
-            Arc::new(AudioSegment::new_sync(
-                *order,
-                SyncMarker::TopZeroSync,
-            )),
-        ).await?;
+        let top_zero = Arc::new(AudioSegment {
+            order: *order,
+            timestamp_sec: 0.0,
+            segment: pmoaudio::_AudioSegment::Sync(Arc::new(SyncMarker::TopZeroSync)),
+        });
+        self.send_to_children(output, top_zero).await?;
+
+        // Buffer pour lecture
+        let bytes_per_sample = (bits_per_sample / 8) as usize;
+        let frame_bytes = bytes_per_sample * 2; // stereo
+        let chunk_frames = self.chunk_frames;
+        let chunk_byte_len = chunk_frames * frame_bytes;
+        let mut read_buf = vec![0u8; chunk_byte_len * 2];
+        let mut pending: Vec<u8> = Vec::with_capacity(chunk_byte_len * 2);
 
         // Traiter les chunks audio
-        while let Some(result) = decoder.next().await {
+        loop {
             // Vérifier stop_token
             if stop_token.is_cancelled() {
                 return Ok(());
             }
 
-            let pcm_data = result
-                .map_err(|e| AudioError::ProcessingError(format!("Decode error: {}", e)))?;
+            // Remplir le buffer
+            if pending.len() < chunk_byte_len {
+                let read = decoder.read(&mut read_buf).await
+                    .map_err(|e| AudioError::ProcessingError(format!("Read error: {}", e)))?;
 
-            // Convertir en AudioChunk selon la profondeur de bit
-            let chunk = pcm_to_audio_chunk(&pcm_data, sample_rate, bits_per_sample)?;
-            let chunk_len = chunk.len() as u64;
+                if read == 0 {
+                    break; // EOF
+                }
+                pending.extend_from_slice(&read_buf[..read]);
+            }
+
+            if pending.is_empty() {
+                break;
+            }
+
+            // Extraire un chunk
+            let frames_in_pending = pending.len() / frame_bytes;
+            let frames_to_emit = frames_in_pending.min(chunk_frames);
+            let take_bytes = frames_to_emit * frame_bytes;
+            let pcm_data = pending.drain(..take_bytes).collect::<Vec<u8>>();
+
+            // Calculer le nombre de frames (samples par canal)
+            let bytes_per_sample = (bits_per_sample / 8) as usize;
+            let chunk_len = (pcm_data.len() / (bytes_per_sample * 2)) as u64; // 2 = stereo
 
             // Vérifier si on doit insérer un TrackBoundary avant ce chunk
-            if let Some((idx, song)) = next_song {
+            if let Some((_idx, song)) = next_song {
                 let elapsed_ms = (total_samples * 1000) / sample_rate as u64;
 
                 if elapsed_ms >= song.elapsed {
                     // Envoyer TrackBoundary AVANT le chunk (avec le même order)
                     let metadata = song_to_metadata(song, block);
-                    self.send_to_children(
-                        output,
-                        Arc::new(AudioSegment::new_sync(
-                            *order,
-                            SyncMarker::TrackBoundary {
-                                metadata,
-                                track_number: idx,
-                            },
-                        )),
-                    ).await?;
+                    let timestamp_sec = total_samples as f64 / sample_rate as f64;
+                    let track_boundary = AudioSegment::new_track_boundary(
+                        *order,
+                        timestamp_sec,
+                        metadata,
+                    );
+                    self.send_to_children(output, track_boundary).await?;
 
                     // Passer à la song suivante
                     song_index += 1;
@@ -168,10 +191,15 @@ impl RadioParadiseStreamSourceLogic {
             }
 
             // Envoyer le chunk audio
-            self.send_to_children(
-                output,
-                Arc::new(AudioSegment::new_chunk(*order, chunk)),
-            ).await?;
+            let timestamp_sec = total_samples as f64 / sample_rate as f64;
+            let audio_segment = pcm_to_audio_segment(
+                &pcm_data,
+                *order,
+                timestamp_sec,
+                sample_rate,
+                bits_per_sample,
+            )?;
+            self.send_to_children(output, audio_segment).await?;
 
             *order += 1;
             total_samples += chunk_len;
@@ -195,60 +223,79 @@ impl RadioParadiseStreamSourceLogic {
     }
 }
 
-/// Convertit PCM bytes en AudioChunk
-fn pcm_to_audio_chunk(
+/// Convertit PCM bytes en AudioSegment
+fn pcm_to_audio_segment(
     pcm_data: &[u8],
+    order: u64,
+    timestamp_sec: f64,
     sample_rate: u32,
     bits_per_sample: u8,
-) -> Result<AudioChunk, AudioError> {
-    match bits_per_sample {
-        16 => {
-            // Convertir bytes en i16
-            let samples: Vec<i16> = pcm_data
-                .chunks_exact(2)
-                .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
-                .collect();
+) -> Result<Arc<AudioSegment>, AudioError> {
+    use pmoaudio::{AudioChunk, AudioChunkData, _AudioSegment};
 
-            Ok(AudioChunk::I16(pmoaudio::AudioChunkData::from_interleaved(
-                &samples,
-                sample_rate,
-            )))
-        }
-        24 => {
-            // Convertir bytes en I24
-            let samples: Vec<I24> = pcm_data
-                .chunks_exact(3)
-                .map(|chunk| {
-                    let value = i32::from_le_bytes([chunk[0], chunk[1], chunk[2], 0]) >> 8;
-                    I24::from_i32(value)
+    let chunk = match bits_per_sample {
+        16 => {
+            // Convertir bytes en stereo pairs [i16; 2]
+            let stereo: Vec<[i16; 2]> = pcm_data
+                .chunks_exact(4) // 2 bytes * 2 channels = 4 bytes per frame
+                .map(|frame| {
+                    let left = i16::from_le_bytes([frame[0], frame[1]]);
+                    let right = i16::from_le_bytes([frame[2], frame[3]]);
+                    [left, right]
                 })
                 .collect();
 
-            Ok(AudioChunk::I24(pmoaudio::AudioChunkData::from_interleaved(
-                &samples,
-                sample_rate,
+            let chunk_data = AudioChunkData::new(stereo, sample_rate, 0.0);
+            AudioChunk::I16(chunk_data)
+        }
+        24 => {
+            // Convertir bytes en stereo pairs [I24; 2]
+            let stereo: Vec<[I24; 2]> = pcm_data
+                .chunks_exact(6) // 3 bytes * 2 channels = 6 bytes per frame
+                .map(|frame| {
+                    // Left channel (bytes 0,1,2)
+                    let left_value = i32::from_le_bytes([frame[0], frame[1], frame[2], 0]) >> 8;
+                    let left = I24::new_clamped(left_value);
+
+                    // Right channel (bytes 3,4,5)
+                    let right_value = i32::from_le_bytes([frame[3], frame[4], frame[5], 0]) >> 8;
+                    let right = I24::new_clamped(right_value);
+
+                    [left, right]
+                })
+                .collect();
+
+            let chunk_data = AudioChunkData::new(stereo, sample_rate, 0.0);
+            AudioChunk::I24(chunk_data)
+        }
+        _ => {
+            return Err(AudioError::ProcessingError(format!(
+                "Unsupported bit depth: {}",
+                bits_per_sample
             )))
         }
-        _ => Err(AudioError::ProcessingError(format!(
-            "Unsupported bit depth: {}",
-            bits_per_sample
-        ))),
-    }
+    };
+
+    Ok(Arc::new(AudioSegment {
+        order,
+        timestamp_sec,
+        segment: _AudioSegment::Chunk(Arc::new(chunk)),
+    }))
 }
 
 /// Convertit Song en TrackMetadata
 fn song_to_metadata(song: &Song, block: &Block) -> Arc<RwLock<dyn TrackMetadata>> {
     let mut metadata = MemoryTrackMetadata::new();
 
-    metadata.set_title(Some(song.title.clone()));
-    metadata.set_artist(Some(song.artist.clone()));
+    let _ = metadata.set_title(Some(song.title.clone()));
+    let _ = metadata.set_artist(Some(song.artist.clone()));
 
     if let Some(ref album) = song.album {
-        metadata.set_album(Some(album.clone()));
+        let _ = metadata.set_album(Some(album.clone()));
     }
 
     if let Some(year) = song.year {
-        metadata.set_year(Some(year));
+        let _ = metadata.set_year(Some(year));
     }
 
     // Cover URL si disponible
@@ -258,9 +305,8 @@ fn song_to_metadata(song: &Song, block: &Block) -> Arc<RwLock<dyn TrackMetadata>
             let metadata_clone = metadata_arc.clone();
 
             tokio::spawn(async move {
-                if let Ok(mut meta) = metadata_clone.write().await {
-                    let _ = meta.set_cover_url(Some(cover_url)).await;
-                }
+                let mut meta = metadata_clone.write().await;
+                let _ = meta.set_cover_url(Some(cover_url)).await;
             });
 
             return metadata_arc;
@@ -323,13 +369,11 @@ impl NodeLogic for RadioParadiseStreamSourceLogic {
         }
 
         // Envoyer EndOfStream
+        let eos = AudioSegment::new_end_of_stream(order, 0.0);
         for tx in &output {
-            tx.send(Arc::new(AudioSegment::new_sync(
-                order,
-                SyncMarker::EndOfStream,
-            )))
-            .await
-            .map_err(|_| AudioError::ChildDied)?;
+            tx.send(eos.clone())
+                .await
+                .map_err(|_| AudioError::ChildDied)?;
         }
 
         Ok(())
@@ -347,7 +391,7 @@ pub struct RadioParadiseStreamSource {
 impl RadioParadiseStreamSource {
     /// Crée une nouvelle source Radio Paradise avec durée de chunk par défaut
     pub fn new(client: RadioParadiseClient) -> Self {
-        Self::with_chunk_duration(client, DEFAULT_CHUNK_DURATION_MS)
+        Self::with_chunk_duration(client, DEFAULT_CHUNK_DURATION_MS as u32)
     }
 
     /// Crée une nouvelle source avec durée de chunk personnalisée
