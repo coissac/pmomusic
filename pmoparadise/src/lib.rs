@@ -216,7 +216,6 @@ pub mod error;
 pub mod models;
 pub mod source;
 pub mod stream;
-pub mod streaming;
 
 #[cfg(feature = "per-track")]
 pub mod track;
