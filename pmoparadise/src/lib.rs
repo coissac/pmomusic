@@ -229,9 +229,6 @@ pub mod streaming;
 #[cfg(feature = "per-track")]
 pub mod track;
 
-#[cfg(feature = "ffmpeg")]
-pub mod ffmpeg_streaming;
-
 #[cfg(feature = "pmoserver")]
 pub mod pmoserver_ext;
 

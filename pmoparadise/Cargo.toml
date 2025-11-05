@@ -51,9 +51,6 @@ symphonia = { version = "0.5", features = ["all"] }
 # Audio decoding - claxon for FLAC streaming
 claxon = "0.4"
 
-# FFmpeg for progressive streaming (decoding + encoding) - optional
-ffmpeg-next = { version = "8.0", optional = true }
-
 # Per-track feature dependencies
 hound = { version = "3.5", optional = true }
 tempfile = { version = "3.8", optional = true }
@@ -94,8 +91,6 @@ server = ["pmosource/server", "pmoconfig"]
 pmoconfig = ["dep:pmoconfig"]
 # Feature cache (deprecated - toujours actif maintenant)
 cache = []
-# Active le streaming progressif avec FFmpeg (latence réduite)
-ffmpeg = ["dep:ffmpeg-next"]
 # Active le support pmoaudio node (RadioParadiseStreamSource)
 pmoaudio = ["dep:pmoaudio", "dep:pmoflac", "dep:pmometadata", "dep:futures-util"]
 
