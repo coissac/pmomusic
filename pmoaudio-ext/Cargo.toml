@@ -27,5 +27,5 @@ tracing = "0.1"
 [features]
 default = []
 cache-sink = ["dep:pmoaudiocache", "dep:pmoflac", "dep:pmometadata"]
-playlist = ["dep:pmoplaylist", "dep:pmoaudiocache", "dep:pmocache", "dep:pmoflac"]
+playlist = ["cache-sink", "dep:pmoplaylist", "dep:pmocache"]
 all = ["cache-sink", "playlist"]

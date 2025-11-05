@@ -16,18 +16,20 @@
 //! ```
 //!
 //! Usage:
-//!   cargo run --example play_and_cache --features playlist -- <channel_id>
+//!   cargo run --example play_and_cache --features full -- <channel_id>
 //!
 //! Exemple:
-//!   cargo run --example play_and_cache --features playlist -- 0    # Main Mix
-//!   cargo run --example play_and_cache --features playlist -- 2    # Rock Mix
+//!   cargo run --example play_and_cache --features full -- 0    # Main Mix
+//!   cargo run --example play_and_cache --features full -- 2    # Rock Mix
 
 use pmoaudio::{AudioPipelineNode, AudioSink};
 use pmoaudio_ext::{FlacCacheSink, PlaylistSource};
-use pmoaudiocache::AudioCacheConfigExt;
-use pmocovers::CoverCacheConfigExt;
+use pmoaudiocache::Cache as AudioCache;
+use pmocovers::Cache as CoverCache;
 use pmoparadise::{RadioParadiseClient, RadioParadiseStreamSource};
+use pmoplaylist::Manager as PlaylistManager;
 use std::env;
+use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
@@ -76,20 +78,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialiser les caches et le gestionnaire de playlist
     // ═══════════════════════════════════════════════════════════════════════════
 
-    tracing::info!("Initializing configuration...");
-    let mut config = pmoconfig::Config::load_config(&std::env::var("PMO_CONFIG_DIR").unwrap_or_else(|_| "/tmp/pmomusic".to_string()))?;
+    let base_dir = std::env::var("PMO_CONFIG_DIR").unwrap_or_else(|_| "/tmp/pmomusic_test".to_string());
+    std::fs::create_dir_all(&base_dir)?;
 
-    tracing::info!("Initializing audio cache...");
-    let audio_cache = config.init_audio_cache_configured().await?;
-    tracing::debug!("Audio cache initialized: {:?}", audio_cache.root());
+    tracing::info!("Initializing caches in: {}", base_dir);
 
-    tracing::info!("Initializing cover cache...");
-    let cover_cache = config.init_cover_cache_configured().await?;
-    tracing::debug!("Cover cache initialized: {:?}", cover_cache.root());
+    // Créer le cache audio
+    let audio_cache_dir = format!("{}/audio_cache", base_dir);
+    std::fs::create_dir_all(&audio_cache_dir)?;
+    let audio_cache = Arc::new(AudioCache::new(
+        &audio_cache_dir,
+        1000, // 1000 MB limit
+    )?);
+    tracing::debug!("Audio cache initialized at: {}", audio_cache_dir);
 
-    tracing::info!("Initializing playlist manager...");
-    let playlist_manager = pmoplaylist::Manager::init().await;
-    tracing::debug!("Playlist manager initialized");
+    // Créer le cache de covers
+    let cover_cache_dir = format!("{}/cover_cache", base_dir);
+    std::fs::create_dir_all(&cover_cache_dir)?;
+    let cover_cache = Arc::new(CoverCache::new(
+        &cover_cache_dir,
+        100, // 100 MB limit
+    )?);
+    tracing::debug!("Cover cache initialized at: {}", cover_cache_dir);
+
+    // Utiliser le gestionnaire de playlist singleton
+    tracing::info!("Getting playlist manager...");
+    let playlist_manager = pmoplaylist::PlaylistManager();
+    tracing::debug!("Playlist manager obtained");
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Créer la playlist pour ce channel
