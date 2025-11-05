@@ -24,6 +24,9 @@ pub const DEFAULT_BLOCK_TIMEOUT_SECS: u64 = 180;
 /// Default User-Agent
 pub const DEFAULT_USER_AGENT: &str = "pmoparadise/0.1.0";
 
+/// Default channel (0 = main mix)
+pub const DEFAULT_CHANNEL: u8 = 0;
+
 /// Radio Paradise HTTP client
 ///
 /// This client provides access to Radio Paradise's streaming API,
@@ -70,11 +73,14 @@ impl RadioParadiseClient {
     /// Create a client with a custom reqwest::Client
     ///
     /// Useful for sharing HTTP connection pools or custom proxy settings
+    ///
+    /// Note: Uses default settings (channel 0, default timeouts).
+    /// For more control, use `ClientBuilder::default().client(client).build()`.
     pub fn with_client(client: Client) -> Self {
         Self {
             client,
             api_base: DEFAULT_API_BASE.to_string(),
-            channel: 0,
+            channel: DEFAULT_CHANNEL,
             request_timeout: Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS),
             block_timeout: Duration::from_secs(DEFAULT_BLOCK_TIMEOUT_SECS),
             next_block_url: None,
@@ -244,7 +250,7 @@ impl Default for ClientBuilder {
         Self {
             client: None,
             api_base: DEFAULT_API_BASE.to_string(),
-            channel: 0,
+            channel: DEFAULT_CHANNEL,
             request_timeout: Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS),
             block_timeout: Duration::from_secs(DEFAULT_BLOCK_TIMEOUT_SECS),
             user_agent: DEFAULT_USER_AGENT.to_string(),
@@ -274,7 +280,6 @@ impl ClientBuilder {
     /// Set the channel (0 = main mix, 1 = mellow, 2 = rock, 3 = world/etc)
     pub fn channel(mut self, channel: u8) -> Self {
         self.channel = channel;
-        // block_base sera calculé dynamiquement dans build() à partir du channel
         self
     }
 
@@ -339,6 +344,6 @@ mod tests {
     fn test_builder_defaults() {
         let builder = ClientBuilder::default();
         assert_eq!(builder.api_base, DEFAULT_API_BASE);
-        assert_eq!(builder.channel, 0);
+        assert_eq!(builder.channel, DEFAULT_CHANNEL);
     }
 }
