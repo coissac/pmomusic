@@ -164,54 +164,46 @@
 //! }
 //! ```
 //!
-//! ## Caching Support (Feature: `cache`)
+//! ## Audio Streaming (Feature: `pmoaudio`)
 //!
-//! `pmoparadise` can optionally integrate with `pmocovers` and `pmoaudiocache` to cache
-//! cover images and audio tracks locally:
+//! For direct audio streaming and integration with pmoaudio pipelines,
+//! use `RadioParadiseStreamSource`:
 //!
 //! ```no_run
-//! # #[cfg(feature = "cache")]
+//! # #[cfg(feature = "pmoaudio")]
 //! # {
-//! use pmoparadise::{RadioParadiseClient, RadioParadiseSource};
-//! use std::sync::Arc;
+//! use pmoparadise::{RadioParadiseClient, RadioParadiseStreamSource};
+//! use pmoaudio::pipeline::Node;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     // Create caches
-//!     let cover_cache = Arc::new(pmocovers::cache::new_cache("./cache/covers", 500)?);
-//!     let audio_cache = Arc::new(pmoaudiocache::cache::new_cache("./cache/audio", 100)?);
-//!
-//!     // Create client and source with caching
 //!     let client = RadioParadiseClient::new().await?;
-//!     let source = RadioParadiseSource::new(
-//!         client,
-//!         50,
-//!         cover_cache,
-//!         audio_cache,
-//!     );
+//!     let stream_source = RadioParadiseStreamSource::new(client, None).await?;
 //!
-//!     println!("Source ready: {}", source.name());
+//!     // Create audio node from stream source
+//!     let node = Node::from_logic(stream_source);
+//!
+//!     // Use in pmoaudio pipeline...
 //!
 //!     Ok(())
 //! }
 //! # }
 //! ```
 //!
-//! **Benefits**:
-//! - Cover images are automatically downloaded and converted to WebP
-//! - Audio tracks are cached as FLAC with metadata preserved
-//! - Subsequent access is instant (no re-download)
-//! - URIs returned by `resolve_uri()` point to cached versions
-//!
-//! See the `with_cache` example for a complete demonstration.
+//! **RadioParadiseStreamSource**:
+//! - Downloads and decodes FLAC blocks in real-time
+//! - Automatically detects bit depth (16/24/32-bit)
+//! - Inserts track boundaries with metadata
+//! - Integrates seamlessly with pmoaudio pipelines
 //!
 //! ## Cargo Features
 //!
-//! - `default = ["metadata-only"]`: Standard metadata and streaming (no FLAC decoding)
+//! - `default`: Standard metadata and streaming (no FLAC decoding)
 //! - `per-track`: Enable FLAC decoding and per-track extraction (adds `claxon`, `hound`, `tempfile`)
 //! - `pmoserver`: Enable REST API extension for pmoserver integration (adds `utoipa`, `axum`)
-//! - `server`: Enable server-side features (cache registry integration)
-//! - `cache`: Enable cover and audio caching support (adds `pmocovers`, `pmoaudiocache`)
+//! - `pmoaudio`: Enable RadioParadiseStreamSource for pmoaudio integration
+//! - `pmoconfig`: Enable configuration integration with pmoconfig
+//! - `server`: Enable RadioParadiseSource stub for backward compatibility (deprecated)
 //!
 //! ## See Also
 //!
@@ -222,7 +214,6 @@ pub mod channels;
 pub mod client;
 pub mod error;
 pub mod models;
-pub mod paradise;
 pub mod source;
 pub mod stream;
 pub mod streaming;

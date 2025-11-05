@@ -36,7 +36,7 @@ use anyhow::{anyhow, Result};
 use pmoconfig::Config;
 use serde_yaml::{Number, Value};
 
-use crate::paradise::constants;
+use crate::channels::HISTORY_DEFAULT_MAX_TRACKS;
 
 /// Nom du répertoire pour Radio Paradise (relatif au config_dir)
 ///
@@ -222,7 +222,7 @@ impl RadioParadiseConfigExt for Config {
             Ok(Value::Number(n)) if n.is_i64() => Ok(n.as_i64().unwrap() as usize),
             _ => {
                 // Use default and persist it
-                let default = constants::HISTORY_DEFAULT_MAX_TRACKS;
+                let default = HISTORY_DEFAULT_MAX_TRACKS;
                 self.set_paradise_history_size(default)?;
                 Ok(default)
             }
@@ -245,7 +245,7 @@ mod tests {
     #[test]
     fn test_default_values() {
         assert_eq!(DEFAULT_HISTORY_DATABASE_DIR, "paradise");
-        assert_eq!(constants::HISTORY_DEFAULT_MAX_TRACKS, 100);
+        assert_eq!(HISTORY_DEFAULT_MAX_TRACKS, 100);
     }
 
     #[test]
