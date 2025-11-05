@@ -19,6 +19,7 @@ pub const DEFAULT_CHANNEL_SIZE: usize = 16;
 pub const DEFAULT_CHUNK_DURATION_MS: f64 = 50.0;
 
 // Modules actifs
+pub mod audio_sink;
 pub mod converter_nodes;
 pub mod file_source;
 pub mod flac_file_sink;
