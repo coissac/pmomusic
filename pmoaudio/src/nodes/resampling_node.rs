@@ -68,7 +68,13 @@ impl ResamplingLogic {
     /// Resample un chunk audio vers le sample rate cible
     fn resample_chunk(&mut self, chunk: &AudioChunk) -> Result<AudioChunk, AudioError> {
         let source_sr = chunk.sample_rate();
-        let bit_depth = BitDepth::from_audio_chunk(chunk);
+        let bit_depth = match chunk {
+            AudioChunk::I16(_) => BitDepth::B16,
+            AudioChunk::I24(_) => BitDepth::B24,
+            AudioChunk::I32(_) => BitDepth::B32,
+            AudioChunk::F32(_) => BitDepth::B32, // Traiter comme 32-bit
+            AudioChunk::F64(_) => BitDepth::B32, // Traiter comme 32-bit
+        };
 
         // Si déjà au bon sample rate, retourner tel quel
         if source_sr == self.target_sample_rate {
@@ -179,44 +185,44 @@ impl NodeLogic for ResamplingLogic {
 fn extract_channels_i32(chunk: &AudioChunk) -> Result<(Vec<i32>, Vec<i32>), AudioError> {
     match chunk {
         AudioChunk::I16(data) => {
-            let stereo = data.stereo();
-            let left = stereo.iter().map(|frame| frame[0] as i32).collect();
-            let right = stereo.iter().map(|frame| frame[1] as i32).collect();
+            let frames = data.get_frames();
+            let left = frames.iter().map(|frame| frame[0] as i32).collect();
+            let right = frames.iter().map(|frame| frame[1] as i32).collect();
             Ok((left, right))
         }
         AudioChunk::I24(data) => {
-            let stereo = data.stereo();
-            let left = stereo.iter().map(|frame| frame[0].to_i32()).collect();
-            let right = stereo.iter().map(|frame| frame[1].to_i32()).collect();
+            let frames = data.get_frames();
+            let left = frames.iter().map(|frame| frame[0].as_i32()).collect();
+            let right = frames.iter().map(|frame| frame[1].as_i32()).collect();
             Ok((left, right))
         }
         AudioChunk::I32(data) => {
-            let stereo = data.stereo();
-            let left = stereo.iter().map(|frame| frame[0]).collect();
-            let right = stereo.iter().map(|frame| frame[1]).collect();
+            let frames = data.get_frames();
+            let left = frames.iter().map(|frame| frame[0]).collect();
+            let right = frames.iter().map(|frame| frame[1]).collect();
             Ok((left, right))
         }
         AudioChunk::F32(data) => {
-            let stereo = data.stereo();
+            let frames = data.get_frames();
             // Convertir f32 → i32 (dénormaliser)
-            let left = stereo
+            let left = frames
                 .iter()
                 .map(|frame| (frame[0] * i32::MAX as f32) as i32)
                 .collect();
-            let right = stereo
+            let right = frames
                 .iter()
                 .map(|frame| (frame[1] * i32::MAX as f32) as i32)
                 .collect();
             Ok((left, right))
         }
         AudioChunk::F64(data) => {
-            let stereo = data.stereo();
+            let frames = data.get_frames();
             // Convertir f64 → i32 (dénormaliser)
-            let left = stereo
+            let left = frames
                 .iter()
                 .map(|frame| (frame[0] * i32::MAX as f64) as i32)
                 .collect();
-            let right = stereo
+            let right = frames
                 .iter()
                 .map(|frame| (frame[1] * i32::MAX as f64) as i32)
                 .collect();
