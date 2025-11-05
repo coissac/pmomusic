@@ -284,36 +284,50 @@ fn pcm_to_audio_segment(
 }
 
 /// Convertit Song en TrackMetadata
+///
+/// Cette fonction est synchrone, donc on wrap la metadata dans Arc<RwLock<>>
+/// et on spawn une tâche async pour la configurer
 fn song_to_metadata(song: &Song, block: &Block) -> Arc<RwLock<dyn TrackMetadata>> {
-    let mut metadata = MemoryTrackMetadata::new();
+    let metadata = MemoryTrackMetadata::new();
+    let metadata_arc = Arc::new(RwLock::new(metadata)) as Arc<RwLock<dyn TrackMetadata>>;
+    let metadata_clone = metadata_arc.clone();
 
-    let _ = metadata.set_title(Some(song.title.clone()));
-    let _ = metadata.set_artist(Some(song.artist.clone()));
+    // Clone des données pour la task async
+    let title = song.title.clone();
+    let artist = song.artist.clone();
+    let album = song.album.clone();
+    let year = song.year;
+    let cover_url = song.cover.as_ref().and_then(|cover| block.cover_url(cover));
 
-    if let Some(ref album) = song.album {
-        let _ = metadata.set_album(Some(album.clone()));
-    }
+    // Configurer les métadonnées de manière asynchrone
+    tokio::spawn(async move {
+        let mut meta = metadata_clone.write().await;
 
-    if let Some(year) = song.year {
-        let _ = metadata.set_year(Some(year));
-    }
-
-    // Cover URL si disponible
-    if let Some(ref cover_path) = song.cover {
-        if let Some(cover_url) = block.cover_url(cover_path) {
-            let metadata_arc = Arc::new(RwLock::new(metadata)) as Arc<RwLock<dyn TrackMetadata>>;
-            let metadata_clone = metadata_arc.clone();
-
-            tokio::spawn(async move {
-                let mut meta = metadata_clone.write().await;
-                let _ = meta.set_cover_url(Some(cover_url)).await;
-            });
-
-            return metadata_arc;
+        // Ces méthodes peuvent échouer (retournent Result), donc on propage avec ?
+        if let Err(e) = meta.set_title(Some(title)).await {
+            eprintln!("Warning: Failed to set title: {}", e);
         }
-    }
+        if let Err(e) = meta.set_artist(Some(artist)).await {
+            eprintln!("Warning: Failed to set artist: {}", e);
+        }
+        if let Some(album) = album {
+            if let Err(e) = meta.set_album(Some(album)).await {
+                eprintln!("Warning: Failed to set album: {}", e);
+            }
+        }
+        if let Some(year) = year {
+            if let Err(e) = meta.set_year(Some(year)).await {
+                eprintln!("Warning: Failed to set year: {}", e);
+            }
+        }
+        if let Some(cover_url) = cover_url {
+            if let Err(e) = meta.set_cover_url(Some(cover_url)).await {
+                eprintln!("Warning: Failed to set cover_url: {}", e);
+            }
+        }
+    });
 
-    Arc::new(RwLock::new(metadata))
+    metadata_arc
 }
 
 #[async_trait::async_trait]
