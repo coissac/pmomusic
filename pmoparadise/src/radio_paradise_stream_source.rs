@@ -301,6 +301,28 @@ fn pcm_to_audio_segment(
             let chunk_data = AudioChunkData::new(stereo, sample_rate, 0.0);
             AudioChunk::I24(chunk_data)
         }
+        32 => {
+            // Type I32
+            let mut stereo = Vec::with_capacity(frames);
+            for frame_idx in 0..frames {
+                let base = frame_idx * frame_bytes;
+                let left = i32::from_le_bytes([
+                    pcm_data[base],
+                    pcm_data[base + 1],
+                    pcm_data[base + 2],
+                    pcm_data[base + 3],
+                ]);
+                let right = i32::from_le_bytes([
+                    pcm_data[base + 4],
+                    pcm_data[base + 5],
+                    pcm_data[base + 6],
+                    pcm_data[base + 7],
+                ]);
+                stereo.push([left, right]);
+            }
+            let chunk_data = AudioChunkData::new(stereo, sample_rate, 0.0);
+            AudioChunk::I32(chunk_data)
+        }
         _ => {
             return Err(AudioError::ProcessingError(format!(
                 "Unsupported bit depth: {}",
@@ -476,7 +498,8 @@ impl TypedAudioNode for RadioParadiseStreamSource {
     }
 
     fn output_type(&self) -> Option<TypeRequirement> {
-        // Radio Paradise FLAC peut être 16-bit ou 24-bit
+        // Radio Paradise FLAC peut être 16-bit, 24-bit, ou 32-bit
+        // La profondeur est détectée automatiquement depuis le header FLAC
         Some(TypeRequirement::any_integer())
     }
 }
