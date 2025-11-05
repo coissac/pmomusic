@@ -36,4 +36,5 @@ all.txt
 pmo_src.txt
 upmpdcli/
 /*.xml
-test_upnp
+test_upnp*.cargo/
+.cargo/

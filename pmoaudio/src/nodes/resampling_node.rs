@@ -379,3 +379,199 @@ impl TypedAudioNode for ResamplingNode {
         Some(TypeRequirement::any())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{AudioChunk, AudioChunkData, SyncMarker};
+
+    #[test]
+    fn test_extract_channels_i16() {
+        let chunk = AudioChunk::I16(AudioChunkData::new(
+            vec![[100, 200], [300, 400]],
+            48000,
+            0.0,
+        ));
+
+        let (left, right) = extract_channels_i32(&chunk).unwrap();
+
+        assert_eq!(left, vec![100i32, 300i32]);
+        assert_eq!(right, vec![200i32, 400i32]);
+    }
+
+    #[test]
+    fn test_extract_channels_i24() {
+        let chunk = AudioChunk::I24(AudioChunkData::new(
+            vec![
+                [I24::new(1_000_000).unwrap(), I24::new(2_000_000).unwrap()],
+                [I24::new(3_000_000).unwrap(), I24::new(4_000_000).unwrap()],
+            ],
+            48000,
+            0.0,
+        ));
+
+        let (left, right) = extract_channels_i32(&chunk).unwrap();
+
+        assert_eq!(left, vec![1_000_000i32, 3_000_000i32]);
+        assert_eq!(right, vec![2_000_000i32, 4_000_000i32]);
+    }
+
+    #[test]
+    fn test_reconstruct_chunk_i16() {
+        let original = AudioChunk::I16(AudioChunkData::new(
+            vec![[100, 200]],
+            44100,
+            0.0,
+        ));
+
+        let left = vec![100i32, 300i32];
+        let right = vec![200i32, 400i32];
+
+        let result = reconstruct_chunk(&original, left, right, 48000).unwrap();
+
+        if let AudioChunk::I16(data) = result {
+            assert_eq!(data.get_sample_rate(), 48000);
+            let frames = data.get_frames();
+            assert_eq!(frames.len(), 2);
+            assert_eq!(frames[0], [100i16, 200i16]);
+            assert_eq!(frames[1], [300i16, 400i16]);
+        } else {
+            panic!("Expected I16 chunk");
+        }
+    }
+
+    #[test]
+    fn test_reconstruct_chunk_i24() {
+        let original = AudioChunk::I24(AudioChunkData::new(
+            vec![[I24::new(1_000_000).unwrap(), I24::new(2_000_000).unwrap()]],
+            44100,
+            0.0,
+        ));
+
+        let left = vec![1_000_000i32, 3_000_000i32];
+        let right = vec![2_000_000i32, 4_000_000i32];
+
+        let result = reconstruct_chunk(&original, left, right, 48000).unwrap();
+
+        if let AudioChunk::I24(data) = result {
+            assert_eq!(data.get_sample_rate(), 48000);
+            let frames = data.get_frames();
+            assert_eq!(frames.len(), 2);
+            assert_eq!(frames[0][0].as_i32(), 1_000_000);
+            assert_eq!(frames[0][1].as_i32(), 2_000_000);
+        } else {
+            panic!("Expected I24 chunk");
+        }
+    }
+
+    #[test]
+    fn test_resample_chunk_no_change_if_same_rate() {
+        let mut logic = ResamplingLogic::new(48000);
+
+        let chunk = AudioChunk::I16(AudioChunkData::new(
+            vec![[100, 200], [300, 400]],
+            48000, // Déjà à 48kHz
+            0.0,
+        ));
+
+        let result = logic.resample_chunk(&chunk).unwrap();
+
+        // Doit retourner le même chunk sans resampling
+        if let AudioChunk::I16(data) = result {
+            assert_eq!(data.get_sample_rate(), 48000);
+            assert_eq!(data.get_frames().len(), 2);
+        } else {
+            panic!("Expected I16 chunk");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_resampling_logic_passes_sync_markers() {
+        let mut logic = ResamplingLogic::new(48000);
+
+        let (input_tx, input_rx) = mpsc::channel(10);
+        let (output_tx, mut output_rx) = mpsc::channel(10);
+        let stop_token = CancellationToken::new();
+
+        // Créer un TrackBoundary
+        let metadata = Arc::new(tokio::sync::RwLock::new(
+            pmometadata::MemoryTrackMetadata::new()
+        ));
+        let boundary = AudioSegment::new_track_boundary(0, 0.0, metadata);
+
+        // Envoyer le boundary
+        input_tx.send(boundary.clone()).await.unwrap();
+        drop(input_tx);
+
+        // Lancer le traitement
+        tokio::spawn(async move {
+            logic
+                .process(Some(input_rx), vec![output_tx], stop_token)
+                .await
+                .unwrap();
+        });
+
+        // Vérifier que le boundary passe tel quel
+        let result = output_rx.recv().await.unwrap();
+        assert!(result.as_sync_marker().is_some());
+
+        if let Some(marker) = result.as_sync_marker() {
+            assert!(matches!(**marker, SyncMarker::TrackBoundary { .. }));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_resampling_node_integration() {
+        // Test d'intégration complet avec ResamplingNode
+        let (input_tx, input_rx) = mpsc::channel(10);
+        let (output_tx, mut output_rx) = mpsc::channel(10);
+        let stop_token = CancellationToken::new();
+
+        let mut logic = ResamplingLogic::new(48000);
+
+        // Créer un chunk à 44.1kHz
+        let chunk_44k = AudioChunk::I16(AudioChunkData::new(
+            vec![[1000, 2000]; 100], // 100 frames
+            44100,
+            0.0,
+        ));
+
+        let segment = Arc::new(AudioSegment {
+            order: 0,
+            timestamp_sec: 0.0,
+            segment: crate::_AudioSegment::Chunk(Arc::new(chunk_44k)),
+        });
+
+        input_tx.send(segment).await.unwrap();
+        drop(input_tx);
+
+        // Lancer le traitement
+        tokio::spawn(async move {
+            logic
+                .process(Some(input_rx), vec![output_tx], stop_token)
+                .await
+                .unwrap();
+        });
+
+        // Vérifier le résultat
+        let result = output_rx.recv().await.unwrap();
+        assert!(result.is_audio_chunk());
+
+        if let Some(chunk) = result.as_chunk() {
+            // Le chunk doit être I16 (même type)
+            assert!(matches!(chunk.as_ref(), AudioChunk::I16(_)));
+
+            // Le sample rate doit être 48000
+            assert_eq!(chunk.sample_rate(), 48000);
+
+            // Le nombre de frames doit avoir changé (ratio ~1.088)
+            // 100 frames @ 44.1kHz ≈ 109 frames @ 48kHz
+            if let AudioChunk::I16(data) = chunk.as_ref() {
+                let frames = data.get_frames().len();
+                assert!(frames >= 105 && frames <= 115, "Expected ~109 frames, got {}", frames);
+            }
+        } else {
+            panic!("Expected audio chunk");
+        }
+    }
+}

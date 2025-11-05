@@ -72,12 +72,12 @@
 //! - `EndOfStream` final uniquement lors de l'arrêt
 
 use pmoaudio::{
-    nodes::{AudioError, Node, NodeLogic, TypedAudioNode, DEFAULT_CHUNK_DURATION_MS},
-    pipeline::AudioPipelineNode,
+    nodes::{AudioError, TypedAudioNode, DEFAULT_CHUNK_DURATION_MS},
+    pipeline::{AudioPipelineNode, Node, NodeLogic},
     type_constraints::TypeRequirement,
     AudioChunk, AudioChunkData, AudioSegment, I24,
 };
-use pmoaudiocache::AudioCache;
+use pmoaudiocache::Cache as AudioCache;
 use pmoflac::{decode_audio_stream, StreamInfo};
 use pmoplaylist::ReadHandle;
 use std::{path::PathBuf, sync::Arc, time::Duration};
@@ -595,5 +595,258 @@ impl TypedAudioNode for PlaylistSource {
     fn output_type(&self) -> Option<TypeRequirement> {
         // Format hétérogène - accepte tout
         Some(TypeRequirement::any())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Tests unitaires pour les fonctions helper
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_validate_stream_valid_stereo_16bit() {
+        let info = StreamInfo {
+            sample_rate: 44100,
+            channels: 2,
+            bits_per_sample: 16,
+            total_samples: Some(1000),
+            max_block_size: 4096,
+            min_block_size: 256,
+        };
+        assert!(validate_stream(&info).is_ok());
+    }
+
+    #[test]
+    fn test_validate_stream_valid_mono_24bit() {
+        let info = StreamInfo {
+            sample_rate: 48000,
+            channels: 1,
+            bits_per_sample: 24,
+            total_samples: Some(1000),
+            max_block_size: 4096,
+            min_block_size: 256,
+        };
+        assert!(validate_stream(&info).is_ok());
+    }
+
+    #[test]
+    fn test_validate_stream_invalid_channel_count() {
+        let info = StreamInfo {
+            sample_rate: 44100,
+            channels: 5, // Invalid
+            bits_per_sample: 16,
+            total_samples: Some(1000),
+            max_block_size: 4096,
+            min_block_size: 256,
+        };
+        assert!(validate_stream(&info).is_err());
+    }
+
+    #[test]
+    fn test_validate_stream_invalid_bit_depth() {
+        let info = StreamInfo {
+            sample_rate: 44100,
+            channels: 2,
+            bits_per_sample: 12, // Invalid
+            total_samples: Some(1000),
+            max_block_size: 4096,
+            min_block_size: 256,
+        };
+        assert!(validate_stream(&info).is_err());
+    }
+
+    #[test]
+    fn test_bytes_to_segment_i16_stereo() {
+        // Create mock PCM data (2 frames, stereo, 16-bit)
+        // Frame 1: L=100, R=200
+        // Frame 2: L=300, R=400
+        let chunk_bytes = vec![
+            100u8, 0, // L1
+            200, 0,   // R1
+            44, 1,    // L2 (300 = 0x012C)
+            144, 1,   // R2 (400 = 0x0190)
+        ];
+
+        let info = StreamInfo {
+            sample_rate: 44100,
+            channels: 2,
+            bits_per_sample: 16,
+            total_samples: Some(2),
+            max_block_size: 4096,
+            min_block_size: 256,
+        };
+
+        let segment = bytes_to_segment(&chunk_bytes, &info, 2, 0, 0.0).unwrap();
+
+        assert_eq!(segment.order, 0);
+        assert_eq!(segment.timestamp_sec, 0.0);
+
+        match &segment.segment {
+            pmoaudio::_AudioSegment::Chunk(chunk) => {
+                match chunk.as_ref() {
+                    AudioChunk::I16(data) => {
+                        let frames = data.get_frames();
+                        assert_eq!(frames.len(), 2);
+                        assert_eq!(frames[0], [100, 200]);
+                        assert_eq!(frames[1], [300, 400]);
+                        assert_eq!(data.get_sample_rate(), 44100);
+                    }
+                    _ => panic!("Expected I16 chunk"),
+                }
+            }
+            _ => panic!("Expected audio chunk"),
+        }
+    }
+
+    #[test]
+    fn test_bytes_to_segment_i16_mono() {
+        // Create mock PCM data (2 frames, mono, 16-bit)
+        let chunk_bytes = vec![
+            100u8, 0, // Frame 1
+            200, 0,   // Frame 2
+        ];
+
+        let info = StreamInfo {
+            sample_rate: 48000,
+            channels: 1,
+            bits_per_sample: 16,
+            total_samples: Some(2),
+            max_block_size: 4096,
+            min_block_size: 256,
+        };
+
+        let segment = bytes_to_segment(&chunk_bytes, &info, 2, 5, 1.5).unwrap();
+
+        assert_eq!(segment.order, 5);
+        assert_eq!(segment.timestamp_sec, 1.5);
+
+        match &segment.segment {
+            pmoaudio::_AudioSegment::Chunk(chunk) => {
+                match chunk.as_ref() {
+                    AudioChunk::I16(data) => {
+                        let frames = data.get_frames();
+                        assert_eq!(frames.len(), 2);
+                        // Mono is duplicated to both channels
+                        assert_eq!(frames[0], [100, 100]);
+                        assert_eq!(frames[1], [200, 200]);
+                    }
+                    _ => panic!("Expected I16 chunk"),
+                }
+            }
+            _ => panic!("Expected audio chunk"),
+        }
+    }
+
+    #[test]
+    fn test_bytes_to_segment_i24_stereo() {
+        // Create mock PCM data (1 frame, stereo, 24-bit)
+        // Frame 1: L=1000 (0x0003E8), R=-1000 (0xFFFC18)
+        let chunk_bytes = vec![
+            0xE8, 0x03, 0x00, // L (1000)
+            0x18, 0xFC, 0xFF, // R (-1000, sign-extended)
+        ];
+
+        let info = StreamInfo {
+            sample_rate: 96000,
+            channels: 2,
+            bits_per_sample: 24,
+            total_samples: Some(1),
+            max_block_size: 4096,
+            min_block_size: 256,
+        };
+
+        let segment = bytes_to_segment(&chunk_bytes, &info, 1, 0, 0.0).unwrap();
+
+        match &segment.segment {
+            pmoaudio::_AudioSegment::Chunk(chunk) => {
+                match chunk.as_ref() {
+                    AudioChunk::I24(data) => {
+                        let frames = data.get_frames();
+                        assert_eq!(frames.len(), 1);
+                        assert_eq!(frames[0][0].as_i32(), 1000);
+                        assert_eq!(frames[0][1].as_i32(), -1000);
+                    }
+                    _ => panic!("Expected I24 chunk"),
+                }
+            }
+            _ => panic!("Expected audio chunk"),
+        }
+    }
+
+    #[test]
+    fn test_bytes_to_segment_i32_stereo() {
+        // Create mock PCM data (1 frame, stereo, 32-bit)
+        let chunk_bytes = vec![
+            0x00, 0x10, 0x00, 0x00, // L (4096)
+            0x00, 0x20, 0x00, 0x00, // R (8192)
+        ];
+
+        let info = StreamInfo {
+            sample_rate: 44100,
+            channels: 2,
+            bits_per_sample: 32,
+            total_samples: Some(1),
+            max_block_size: 4096,
+            min_block_size: 256,
+        };
+
+        let segment = bytes_to_segment(&chunk_bytes, &info, 1, 0, 0.0).unwrap();
+
+        match &segment.segment {
+            pmoaudio::_AudioSegment::Chunk(chunk) => {
+                match chunk.as_ref() {
+                    AudioChunk::I32(data) => {
+                        let frames = data.get_frames();
+                        assert_eq!(frames.len(), 1);
+                        assert_eq!(frames[0], [4096, 8192]);
+                    }
+                    _ => panic!("Expected I32 chunk"),
+                }
+            }
+            _ => panic!("Expected audio chunk"),
+        }
+    }
+
+    #[test]
+    fn test_bytes_to_segment_unsupported_bit_depth() {
+        let chunk_bytes = vec![0u8; 8];
+
+        let info = StreamInfo {
+            sample_rate: 44100,
+            channels: 2,
+            bits_per_sample: 8, // Currently unsupported by bytes_to_segment
+            total_samples: Some(1),
+            max_block_size: 4096,
+            min_block_size: 256,
+        };
+
+        let result = bytes_to_segment(&chunk_bytes, &info, 1, 0, 0.0);
+        assert!(result.is_err());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Tests d'intégration pour PlaylistSource
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    // Note: Les tests d'intégration complets nécessitent une vraie playlist et un cache.
+    // Ces tests peuvent être ajoutés dans un module d'intégration séparé avec des
+    // fixtures FLAC de test.
+
+    #[test]
+    fn test_playlist_source_type_check() {
+        // Test de création basique - vérifie que le code compile
+        // Ce test ne peut pas être exécuté sans mock ou fixture réelles
+        // car ReadHandle n'implémente pas Clone
+        use std::sync::Arc;
+
+        // Vérification de type - ces lignes ne sont jamais exécutées
+        if false {
+            let _handle: ReadHandle = unreachable!();
+            let _cache: Arc<AudioCache> = unreachable!();
+            let _source = PlaylistSource::new(_handle, _cache);
+        }
     }
 }
