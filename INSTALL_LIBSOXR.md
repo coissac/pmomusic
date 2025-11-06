@@ -199,13 +199,37 @@ export LD_LIBRARY_PATH="$HOME/.local/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
 export RUSTFLAGS="-L $HOME/.local/usr/lib/x86_64-linux-gnu"
 ```
 
-Ou utilisez le script fourni :
+**Astuce :** Créez un fichier `setup-env.sh` pour ne pas avoir à retaper ces commandes à chaque session :
+
+```bash
+cat > setup-env.sh << 'EOF'
+#!/bin/bash
+# Script de configuration des variables d'environnement pour PMOMusic
+# Usage: source setup-env.sh
+
+# Configuration des chemins pour libsoxr et libasound2
+export PKG_CONFIG_PATH="$HOME/.local/usr/lib/x86_64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH"
+export LD_LIBRARY_PATH="$HOME/.local/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
+export RUSTFLAGS="-L $HOME/.local/usr/lib/x86_64-linux-gnu"
+
+echo "Variables d'environnement configurées pour PMOMusic"
+echo "  PKG_CONFIG_PATH=$PKG_CONFIG_PATH"
+echo "  LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+echo "  RUSTFLAGS=$RUSTFLAGS"
+echo ""
+echo "Vous pouvez maintenant compiler avec: cargo build"
+EOF
+
+chmod +x setup-env.sh
+```
+
+Puis dans chaque session :
 
 ```bash
 source setup-env.sh
 ```
 
-⚠️ **Note :** Les scripts `setup-deps.sh` et `setup-env.sh` sont déjà dans `.gitignore`
+⚠️ **Note :** Le fichier `setup-env.sh` est dans `.gitignore` (configuration locale), vous devez le créer vous-même avec le contenu ci-dessus.
 
 #### 3. Vérifier l'installation
 

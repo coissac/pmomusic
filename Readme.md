@@ -10,15 +10,26 @@ Pour compiler PMOMusic dans un environnement sans privilèges sudo (comme Claude
 # 1. Installation automatique de libsoxr et libasound2 (une seule fois)
 ./setup-deps.sh
 
-# 2. Configuration de l'environnement (à chaque nouvelle session)
+# 2. Créer le fichier setup-env.sh (une seule fois, voir INSTALL_LIBSOXR.md pour le contenu)
+cat > setup-env.sh << 'EOF'
+#!/bin/bash
+export PKG_CONFIG_PATH="$HOME/.local/usr/lib/x86_64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH"
+export LD_LIBRARY_PATH="$HOME/.local/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
+export RUSTFLAGS="-L $HOME/.local/usr/lib/x86_64-linux-gnu"
+echo "Variables d'environnement configurées pour PMOMusic"
+EOF
+
+# 3. Configuration de l'environnement (à chaque nouvelle session)
 source setup-env.sh
 
-# 3. Compilation
+# 4. Compilation
 cargo build
 
-# 4. Test de l'exemple Radio Paradise
+# 5. Test de l'exemple Radio Paradise
 cargo run --package pmoparadise --example play_and_cache --features full -- 0
 ```
+
+⚠️ **Note :** Le fichier `setup-env.sh` est dans `.gitignore` car il contient une configuration locale.
 
 ### Documentation
 
