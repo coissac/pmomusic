@@ -17,6 +17,9 @@ use tokio::io::AsyncRead;
 use tokio::sync::RwLock;
 use tracing;
 
+/// Taille minimale de prébuffering par défaut (512 KB = ~5 secondes de FLAC)
+pub const DEFAULT_PREBUFFER_SIZE: u64 = 512 * 1024;
+
 /// Paramètres statiques d'un cache spécialisé.
 pub trait CacheConfig: Send + Sync {
     /// Extension des fichiers générés (ex: `"webp"`, `"flac"`).
@@ -58,6 +61,8 @@ pub struct Cache<C: CacheConfig> {
     downloads: Arc<RwLock<HashMap<String, Arc<Download>>>>,
     /// Factory pour créer des transformers (optionnel)
     transformer_factory: Option<Arc<dyn Fn() -> StreamTransformer + Send + Sync>>,
+    /// Taille minimale de prébuffering en octets (0 = désactivé)
+    min_prebuffer_size: u64,
     /// Phantom data pour le type de configuration
     _phantom: std::marker::PhantomData<C>,
 }
@@ -124,8 +129,37 @@ impl<C: CacheConfig> Cache<C> {
             db: Arc::new(db),
             downloads: Arc::new(RwLock::new(HashMap::new())),
             transformer_factory,
+            min_prebuffer_size: DEFAULT_PREBUFFER_SIZE,
             _phantom: std::marker::PhantomData,
         })
+    }
+
+    /// Configure la taille minimale de prébuffering
+    ///
+    /// # Arguments
+    ///
+    /// * `size` - Taille minimale en octets (0 = désactivé)
+    ///
+    /// # Exemple
+    ///
+    /// ```rust,no_run
+    /// use pmocache::{Cache, CacheConfig};
+    ///
+    /// struct MyConfig;
+    /// impl CacheConfig for MyConfig {
+    ///     fn file_extension() -> &'static str { "dat" }
+    /// }
+    ///
+    /// let mut cache = Cache::<MyConfig>::new("./cache", 1000).unwrap();
+    /// cache.set_prebuffer_size(1024 * 1024); // 1 MB de prébuffering
+    /// ```
+    pub fn set_prebuffer_size(&mut self, size: u64) {
+        self.min_prebuffer_size = size;
+    }
+
+    /// Retourne la taille minimale de prébuffering configurée
+    pub fn get_prebuffer_size(&self) -> u64 {
+        self.min_prebuffer_size
     }
 
     /// Télécharge un fichier depuis une URL et l'ajoute au cache
@@ -178,23 +212,22 @@ impl<C: CacheConfig> Cache<C> {
         }
 
         // 4. Vérifier si un download est déjà en cours pour ce pk
-        {
+        let download_handle = {
             let downloads = self.downloads.read().await;
-            if downloads.contains_key(&pk) {
-                // Download déjà en cours pour ce contenu, attendre que le fichier soit créé
-                tracing::debug!("Download already in progress for pk {}", pk);
-                drop(downloads); // Libérer le lock avant la boucle d'attente
+            downloads.get(&pk).cloned()
+        };
 
-                // Attendre que le fichier soit créé (pour le cache progressif)
-                let file_path = self.get_file_path(&pk);
-                let mut attempts = 0;
-                while !file_path.exists() && attempts < 100 {
-                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                    attempts += 1;
-                }
+        if let Some(download) = download_handle {
+            // Download déjà en cours pour ce contenu, attendre le prébuffering
+            tracing::debug!("Download already in progress for pk {}, waiting for prebuffering", pk);
 
-                return Ok(pk);
+            if self.min_prebuffer_size > 0 {
+                download.wait_until_min_size(self.min_prebuffer_size).await
+                    .map_err(|e| anyhow!("Prebuffering failed: {}", e))?;
+                tracing::debug!("Prebuffering complete for pk {}", pk);
             }
+
+            return Ok(pk);
         }
 
         // 5. Lancer le téléchargement complet avec transformer
@@ -217,6 +250,13 @@ impl<C: CacheConfig> Cache<C> {
             tracing::warn!("Error enforcing cache limit: {}", e);
         }
 
+        // Attendre le prébuffering (pour le cache progressif)
+        if self.min_prebuffer_size > 0 {
+            download.wait_until_min_size(self.min_prebuffer_size).await
+                .map_err(|e| anyhow!("Prebuffering failed: {}", e))?;
+            tracing::debug!("Prebuffering complete for pk {} ({} bytes)", pk, self.min_prebuffer_size);
+        }
+
         // Lancer une tâche de nettoyage en background
         let downloads_clone = self.downloads.clone();
         let pk_clone = pk.clone();
@@ -224,23 +264,6 @@ impl<C: CacheConfig> Cache<C> {
             let _ = download.wait_until_finished().await;
             downloads_clone.write().await.remove(&pk_clone);
         });
-
-        // Attendre que le fichier soit créé sur disque (pour le cache progressif)
-        // On attend jusqu'à 5 secondes maximum
-        let file_path = self.get_file_path(&pk);
-        let mut attempts = 0;
-        while !file_path.exists() && attempts < 100 {
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            attempts += 1;
-        }
-
-        if !file_path.exists() {
-            tracing::warn!(
-                "File {} not created after waiting 5 seconds, pk={}",
-                file_path.display(),
-                pk
-            );
-        }
 
         Ok(pk)
     }
@@ -304,12 +327,22 @@ impl<C: CacheConfig> Cache<C> {
         }
 
         // 4. Vérifier si un download est déjà en cours pour ce pk
-        {
+        let download_handle = {
             let downloads = self.downloads.read().await;
-            if downloads.contains_key(&pk) {
-                tracing::debug!("Download already in progress for pk {}", pk);
-                return Ok(pk);
+            downloads.get(&pk).cloned()
+        };
+
+        if let Some(download) = download_handle {
+            // Download déjà en cours pour ce contenu, attendre le prébuffering
+            tracing::debug!("Download already in progress for pk {}, waiting for prebuffering", pk);
+
+            if self.min_prebuffer_size > 0 {
+                download.wait_until_min_size(self.min_prebuffer_size).await
+                    .map_err(|e| anyhow!("Prebuffering failed: {}", e))?;
+                tracing::debug!("Prebuffering complete for pk {}", pk);
             }
+
+            return Ok(pk);
         }
 
         // 5. Reconstituer le reader complet (header + reste)
@@ -339,29 +372,20 @@ impl<C: CacheConfig> Cache<C> {
             tracing::warn!("Error enforcing cache limit: {}", e);
         }
 
+        // Attendre le prébuffering (pour le cache progressif)
+        if self.min_prebuffer_size > 0 {
+            download.wait_until_min_size(self.min_prebuffer_size).await
+                .map_err(|e| anyhow!("Prebuffering failed: {}", e))?;
+            tracing::debug!("Prebuffering complete for pk {} ({} bytes)", pk, self.min_prebuffer_size);
+        }
+
+        // Lancer une tâche de nettoyage en background
         let downloads_clone = self.downloads.clone();
         let pk_clone = pk.clone();
         tokio::spawn(async move {
             let _ = download.wait_until_finished().await;
             downloads_clone.write().await.remove(&pk_clone);
         });
-
-        // Attendre que le fichier soit créé sur disque (pour le cache progressif)
-        // On attend jusqu'à 5 secondes maximum
-        let file_path = self.get_file_path(&pk);
-        let mut attempts = 0;
-        while !file_path.exists() && attempts < 100 {
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            attempts += 1;
-        }
-
-        if !file_path.exists() {
-            tracing::warn!(
-                "File {} not created after waiting 5 seconds, pk={}",
-                file_path.display(),
-                pk
-            );
-        }
 
         Ok(pk)
     }
