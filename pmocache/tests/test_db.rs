@@ -43,7 +43,6 @@ fn test_add_and_get() {
 }
 
 #[test]
-#[ignore] // Test trop lent, à investiguer
 fn test_add_with_metadata() {
     let (_temp_dir, db) = create_test_db();
 
