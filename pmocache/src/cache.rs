@@ -181,8 +181,18 @@ impl<C: CacheConfig> Cache<C> {
         {
             let downloads = self.downloads.read().await;
             if downloads.contains_key(&pk) {
-                // Download déjà en cours pour ce contenu, retourner la clé
+                // Download déjà en cours pour ce contenu, attendre que le fichier soit créé
                 tracing::debug!("Download already in progress for pk {}", pk);
+                drop(downloads); // Libérer le lock avant la boucle d'attente
+
+                // Attendre que le fichier soit créé (pour le cache progressif)
+                let file_path = self.get_file_path(&pk);
+                let mut attempts = 0;
+                while !file_path.exists() && attempts < 100 {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    attempts += 1;
+                }
+
                 return Ok(pk);
             }
         }
@@ -214,6 +224,23 @@ impl<C: CacheConfig> Cache<C> {
             let _ = download.wait_until_finished().await;
             downloads_clone.write().await.remove(&pk_clone);
         });
+
+        // Attendre que le fichier soit créé sur disque (pour le cache progressif)
+        // On attend jusqu'à 5 secondes maximum
+        let file_path = self.get_file_path(&pk);
+        let mut attempts = 0;
+        while !file_path.exists() && attempts < 100 {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            attempts += 1;
+        }
+
+        if !file_path.exists() {
+            tracing::warn!(
+                "File {} not created after waiting 5 seconds, pk={}",
+                file_path.display(),
+                pk
+            );
+        }
 
         Ok(pk)
     }
@@ -318,6 +345,23 @@ impl<C: CacheConfig> Cache<C> {
             let _ = download.wait_until_finished().await;
             downloads_clone.write().await.remove(&pk_clone);
         });
+
+        // Attendre que le fichier soit créé sur disque (pour le cache progressif)
+        // On attend jusqu'à 5 secondes maximum
+        let file_path = self.get_file_path(&pk);
+        let mut attempts = 0;
+        while !file_path.exists() && attempts < 100 {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            attempts += 1;
+        }
+
+        if !file_path.exists() {
+            tracing::warn!(
+                "File {} not created after waiting 5 seconds, pk={}",
+                file_path.display(),
+                pk
+            );
+        }
 
         Ok(pk)
     }
