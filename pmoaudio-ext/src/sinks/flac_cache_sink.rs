@@ -10,7 +10,6 @@ use pmoaudiocache::AudioTrackMetadataExt;
 use pmoflac::{encode_flac_stream, EncoderOptions, PcmFormat};
 use std::{
     collections::VecDeque,
-    io::Cursor,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
@@ -133,36 +132,36 @@ impl NodeLogic for FlacCacheSinkLogic {
                     AudioError::ProcessingError(format!("FLAC encode init failed: {}", e))
                 })?;
 
-            // Lancer pump_track_segments en parallèle
-            let pump_handle = tokio::spawn(pump_track_segments(
+            // Ingérer le FLAC progressivement dans le cache
+            // add_from_reader lance l'ingestion en arrière-plan et retourne dès que
+            // le prebuffer (512 KB) est atteint, permettant un streaming progressif
+            let collection_ref = self.collection.as_deref();
+            let cache_future = self.cache.add_from_reader(
+                None,
+                flac_stream,
+                None, // Taille inconnue car streaming
+                collection_ref,
+            );
+
+            // Exécuter pump et add_from_reader en parallèle
+            let pump_future = pump_track_segments(
                 first_segment,
                 &mut rx,
                 pcm_tx,
                 bits_per_sample,
                 sample_rate,
-                stop_token.clone(),
-            ));
+                &stop_token,
+            );
 
-            // Ingérer le FLAC progressivement dans le cache
-            // add_from_reader retourne dès que le prebuffer (512 KB) est atteint
-            let collection_ref = self.collection.as_deref();
-            let pk = self.cache
-                .add_from_reader(
-                    None,
-                    flac_stream,
-                    None, // Taille inconnue car streaming
-                    collection_ref,
-                )
-                .await
-                .map_err(|e| {
-                    AudioError::ProcessingError(format!("Failed to add to cache: {}", e))
-                })?;
+            // Attendre les deux tâches en parallèle
+            let (cache_result, pump_result) = tokio::join!(cache_future, pump_future);
+
+            let pk = cache_result.map_err(|e| {
+                AudioError::ProcessingError(format!("Failed to add to cache: {}", e))
+            })?;
 
             tracing::debug!("Track added to cache with pk {}, prebuffer complete", pk);
 
-            // Attendre la fin du pump
-            let pump_result = pump_handle.await
-                .map_err(|e| AudioError::ProcessingError(format!("Pump task failed: {}", e)))?;
             let (_chunks, _samples, _duration_sec, stop_reason) = pump_result?;
 
             // Copier les métadonnées du TrackBoundary dans le cache
