@@ -200,14 +200,28 @@ impl<C: CacheConfig> Cache<C> {
         let pk = crate::cache_trait::pk_from_content_header(&header);
         tracing::debug!("Computed pk {} for URL {}", pk, url);
 
-        // 3. Vérifier si le fichier est déjà en cache
+        // 3. Vérifier si le fichier est déjà en cache ET complet
         if self.db.get(&pk, false).is_ok() {
             let file_path = self.get_file_path(&pk);
             if file_path.exists() {
-                // Déjà en cache, update timestamp et retour rapide
-                tracing::debug!("File with pk {} already in cache, updating timestamp", pk);
-                self.db.update_hit(&pk)?;
-                return Ok(pk);
+                // Vérifier si le fichier semble complet (taille >= min_prebuffer_size)
+                if let Ok(metadata) = std::fs::metadata(&file_path) {
+                    let file_size = metadata.len();
+                    if self.min_prebuffer_size > 0 && file_size < self.min_prebuffer_size {
+                        tracing::warn!(
+                            "File with pk {} in cache is too small ({} bytes < {} bytes), will re-download/re-ingest",
+                            pk, file_size, self.min_prebuffer_size
+                        );
+                        // Supprimer le fichier incomplet
+                        let _ = std::fs::remove_file(&file_path);
+                        // Continuer avec le téléchargement/ingestion
+                    } else {
+                        // Déjà en cache et complet, update timestamp et retour rapide
+                        tracing::debug!("File with pk {} already in cache, updating timestamp", pk);
+                        self.db.update_hit(&pk)?;
+                        return Ok(pk);
+                    }
+                }
             }
         }
 
@@ -315,14 +329,28 @@ impl<C: CacheConfig> Cache<C> {
             tracing::debug!("Computed pk {} from reader", pk);
         }
 
-        // 3. Vérifier si le fichier est déjà en cache
+        // 3. Vérifier si le fichier est déjà en cache ET complet
         if self.db.get(&pk, false).is_ok() {
             let file_path = self.get_file_path(&pk);
             if file_path.exists() {
-                // Déjà en cache, update timestamp et retour rapide
-                tracing::debug!("File with pk {} already in cache, updating timestamp", pk);
-                self.db.update_hit(&pk)?;
-                return Ok(pk);
+                // Vérifier si le fichier semble complet (taille >= min_prebuffer_size)
+                if let Ok(metadata) = std::fs::metadata(&file_path) {
+                    let file_size = metadata.len();
+                    if self.min_prebuffer_size > 0 && file_size < self.min_prebuffer_size {
+                        tracing::warn!(
+                            "File with pk {} in cache is too small ({} bytes < {} bytes), will re-download/re-ingest",
+                            pk, file_size, self.min_prebuffer_size
+                        );
+                        // Supprimer le fichier incomplet
+                        let _ = std::fs::remove_file(&file_path);
+                        // Continuer avec le téléchargement/ingestion
+                    } else {
+                        // Déjà en cache et complet, update timestamp et retour rapide
+                        tracing::debug!("File with pk {} already in cache, updating timestamp", pk);
+                        self.db.update_hit(&pk)?;
+                        return Ok(pk);
+                    }
+                }
             }
         }
 
