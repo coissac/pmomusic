@@ -127,56 +127,43 @@ impl NodeLogic for FlacCacheSinkLogic {
 
             // Créer l'encoder
             let reader = ByteStreamReader::new(pcm_rx);
-            let mut flac_stream = encode_flac_stream(reader, format, options_with_metadata)
+            let flac_stream = encode_flac_stream(reader, format, options_with_metadata)
                 .await
                 .map_err(|e| {
                     AudioError::ProcessingError(format!("FLAC encode init failed: {}", e))
                 })?;
 
-            // Créer un buffer pour collecter le FLAC encodé
-            let mut flac_buffer = Vec::new();
-
-            // Exécuter pump et copy en parallèle
-            let pump_future = pump_track_segments(
+            // Lancer pump_track_segments en parallèle
+            let pump_handle = tokio::spawn(pump_track_segments(
                 first_segment,
                 &mut rx,
                 pcm_tx,
                 bits_per_sample,
                 sample_rate,
-                &stop_token,
-            );
-            let copy_future = async {
-                tokio::io::copy(&mut flac_stream, &mut flac_buffer)
-                    .await
-                    .map_err(|e| {
-                        AudioError::ProcessingError(format!("FLAC write failed: {}", e))
-                    })?;
-                flac_stream
-                    .wait()
-                    .await
-                    .map_err(|e| AudioError::ProcessingError(format!("Encoder failed: {}", e)))?;
-                Ok::<_, AudioError>(())
-            };
+                stop_token.clone(),
+            ));
 
-            // Attendre les deux tâches en parallèle
-            let (copy_result, pump_result) = tokio::join!(copy_future, pump_future);
-            copy_result?;
-            let (_chunks, _samples, _duration_sec, stop_reason) = pump_result?;
-
-            // Ingérer le FLAC dans le cache
-            let flac_reader = Cursor::new(flac_buffer.clone());
+            // Ingérer le FLAC progressivement dans le cache
+            // add_from_reader retourne dès que le prebuffer (512 KB) est atteint
             let collection_ref = self.collection.as_deref();
             let pk = self.cache
                 .add_from_reader(
                     None,
-                    flac_reader,
-                    Some(flac_buffer.len() as u64),
+                    flac_stream,
+                    None, // Taille inconnue car streaming
                     collection_ref,
                 )
                 .await
                 .map_err(|e| {
                     AudioError::ProcessingError(format!("Failed to add to cache: {}", e))
                 })?;
+
+            tracing::debug!("Track added to cache with pk {}, prebuffer complete", pk);
+
+            // Attendre la fin du pump
+            let pump_result = pump_handle.await
+                .map_err(|e| AudioError::ProcessingError(format!("Pump task failed: {}", e)))?;
+            let (_chunks, _samples, _duration_sec, stop_reason) = pump_result?;
 
             // Copier les métadonnées du TrackBoundary dans le cache
             if let Some(src_metadata) = track_metadata {
