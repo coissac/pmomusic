@@ -363,10 +363,12 @@ async fn pump_track_segments(
     if let Some(chunk) = first_segment.as_chunk() {
         let pcm_bytes = chunk_to_pcm_bytes(chunk, bits_per_sample)?;
         if !pcm_bytes.is_empty() {
-            pcm_tx
-                .send(pcm_bytes)
-                .await
-                .map_err(|_| AudioError::SendError)?;
+            // Si le send échoue, c'est que le receiver est fermé
+            // (par exemple, le fichier était déjà en cache et add_from_reader a retourné immédiatement)
+            if pcm_tx.send(pcm_bytes).await.is_err() {
+                drop(pcm_tx);
+                return Ok((chunks, samples, duration_sec, StopReason::ChannelClosed));
+            }
             chunks += 1;
             samples += chunk.len() as u64;
             duration_sec += chunk.len() as f64 / expected_rate as f64;
@@ -407,10 +409,12 @@ async fn pump_track_segments(
                     continue;
                 }
 
-                pcm_tx
-                    .send(pcm_bytes)
-                    .await
-                    .map_err(|_| AudioError::SendError)?;
+                // Si le send échoue, c'est que le receiver est fermé
+                // (par exemple, le fichier était déjà en cache et add_from_reader a retourné immédiatement)
+                if pcm_tx.send(pcm_bytes).await.is_err() {
+                    drop(pcm_tx);
+                    return Ok((chunks, samples, duration_sec, StopReason::ChannelClosed));
+                }
 
                 chunks += 1;
                 samples += chunk.len() as u64;
