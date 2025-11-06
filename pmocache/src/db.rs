@@ -678,7 +678,7 @@ impl DB {
         let conn = self.lock_conn("get_oldest");
 
         let mut stmt = conn.prepare(
-            "SELECT pk, source_url, collection, hits, last_used, metadata_json
+            "SELECT pk, id, collection, hits, last_used
              FROM asset
              ORDER BY last_used ASC, hits ASC
              LIMIT ?1",

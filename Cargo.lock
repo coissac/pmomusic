@@ -2928,6 +2928,7 @@ dependencies = [
  "serde_yaml",
  "sha1",
  "sha2",
+ "tempfile",
  "tokio",
  "tokio-util",
  "tracing",
