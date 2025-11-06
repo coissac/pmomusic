@@ -29,7 +29,22 @@ brew install libsoxr
 apk add soxr-dev alsa-lib-dev
 ```
 
-**Sans privilèges root** : Si vous n'avez pas les droits sudo, consultez `INSTALL_LIBSOXR.md` pour l'installation locale de `libsoxr` et `libasound2`.
+**Sans privilèges root (Claude Code, environnements sans sudo)** :
+
+🚀 **Installation automatique** :
+
+```bash
+# 1. Installation des dépendances (une seule fois)
+./setup-deps.sh
+
+# 2. Configuration de l'environnement (à chaque session)
+source setup-env.sh
+
+# 3. Compilation
+cargo build
+```
+
+Pour plus de détails, consultez `INSTALL_LIBSOXR.md`.
 
 ---
 

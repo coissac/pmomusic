@@ -152,7 +152,22 @@ cargo test
 
 ### Configuration initiale (à faire une seule fois)
 
-Dans une session Claude Code (https://claude.ai/code), vous n'avez pas de droits sudo. Suivez ces étapes :
+Dans une session Claude Code (https://claude.ai/code), vous n'avez pas de droits sudo.
+
+**🚀 Méthode rapide (recommandée) :**
+
+```bash
+# 1. Installation automatique des dépendances (une seule fois)
+./setup-deps.sh
+
+# 2. Configuration des variables d'environnement (à chaque session)
+source setup-env.sh
+
+# 3. Compilation
+cargo build
+```
+
+**📋 Méthode manuelle (si les scripts ne fonctionnent pas) :**
 
 #### 1. Installation des dépendances
 
@@ -184,23 +199,13 @@ export LD_LIBRARY_PATH="$HOME/.local/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
 export RUSTFLAGS="-L $HOME/.local/usr/lib/x86_64-linux-gnu"
 ```
 
-**Astuce :** Copier ces trois lignes dans un fichier `setup-env.sh` à la racine du projet :
-
-```bash
-cat > setup-env.sh << 'EOF'
-export PKG_CONFIG_PATH="$HOME/.local/usr/lib/x86_64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH"
-export LD_LIBRARY_PATH="$HOME/.local/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
-export RUSTFLAGS="-L $HOME/.local/usr/lib/x86_64-linux-gnu"
-EOF
-```
-
-Puis dans chaque session :
+Ou utilisez le script fourni :
 
 ```bash
 source setup-env.sh
 ```
 
-⚠️ **NE PAS committer `setup-env.sh`** - ajouter au `.gitignore`
+⚠️ **Note :** Les scripts `setup-deps.sh` et `setup-env.sh` sont déjà dans `.gitignore`
 
 #### 3. Vérifier l'installation
 
@@ -228,9 +233,16 @@ cargo run --package pmoparadise --example play_and_cache --features full -- 0
 
 À chaque fois que vous démarrez une nouvelle session Claude Code :
 
-1. **Exporter les variables d'environnement** (ou `source setup-env.sh`)
-2. Compiler avec `cargo build`
-3. Exécuter les exemples ou tests
+```bash
+# 1. Configuration de l'environnement
+source setup-env.sh
+
+# 2. Compilation
+cargo build
+
+# 3. Exécution des exemples
+cargo run --package pmoparadise --example play_and_cache --features full -- 0
+```
 
 **IMPORTANT :** Si vous oubliez d'exporter les variables, vous obtiendrez des erreurs comme :
 ```
@@ -244,7 +256,7 @@ ou
 rust-lld: error: unable to find library -lasound
 ```
 
-Solution : Exporter les variables et recompiler.
+**Solution :** Exécutez `source setup-env.sh` et recompilez.
 
 ### Notes importantes
 
