@@ -138,8 +138,12 @@ pub trait FileCache<C: CacheConfig>: Send + Sync {
     ///
     /// # Returns
     ///
-    /// `true` si l'entrée existe en base de données et que le fichier est présent ET complet
-    /// (avec marker .complete) OU en cours de download
+    /// `true` si l'entrée existe en base de données et que le fichier est présent ET:
+    /// - SOIT le fichier est complet (marker .complete existe)
+    /// - SOIT le download est en cours (fichier récent sans marker)
+    ///
+    /// Ceci permet le progressive caching: les fichiers en cours de download sont acceptés
+    /// dès que le prebuffer est atteint, sans attendre le marker de completion.
     fn is_valid_pk(&self, pk: &str) -> bool {
         if self.get_database().get(pk, false).is_err() {
             tracing::debug!("is_valid_pk({}): DB entry not found", pk);
@@ -152,22 +156,36 @@ pub trait FileCache<C: CacheConfig>: Send + Sync {
             return false;
         }
 
-        // Vérifier si le fichier est récent (modifié dans les 60 dernières secondes)
-        // Ceci détecte les downloads en cours même sans marker .complete
-        // Le marker sera vérifié plus tard lors de la lecture effective
+        // Vérifier d'abord si le marker de completion existe
+        let completion_marker = file_path.with_extension(
+            format!("{}.complete", C::file_extension())
+        );
+
+        if completion_marker.exists() {
+            tracing::debug!("is_valid_pk({}): Completion marker found, file is complete", pk);
+            return true;
+        }
+
+        // Pas de marker - vérifier si le download est en cours (fichier récent)
+        // Un fichier en cours de download aura une modification récente
         if let Ok(metadata) = file_path.metadata() {
             if let Ok(modified) = metadata.modified() {
                 if let Ok(elapsed) = modified.elapsed() {
                     let age_secs = elapsed.as_secs();
-                    let is_recent = age_secs < 60;
-                    tracing::debug!("is_valid_pk({}): File age={}s, is_recent={}", pk, age_secs, is_recent);
-                    return is_recent;
+                    if age_secs < 60 {
+                        tracing::debug!("is_valid_pk({}): No marker but file is recent ({}s), download in progress", pk, age_secs);
+                        return true;
+                    } else {
+                        tracing::debug!("is_valid_pk({}): No marker and file is old ({}s), incomplete download", pk, age_secs);
+                        return false;
+                    }
                 }
             }
         }
 
-        tracing::debug!("is_valid_pk({}): Could not check file age, accepting by default", pk);
-        true  // Si on ne peut pas vérifier la date, on accepter par défaut
+        // Ne peut pas vérifier le statut - rejeter par sécurité
+        tracing::debug!("is_valid_pk({}): Could not check file status, rejecting", pk);
+        false
     }
 }
 
