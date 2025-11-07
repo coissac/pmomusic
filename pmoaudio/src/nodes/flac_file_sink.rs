@@ -133,9 +133,24 @@ impl NodeLogic for FlacFileSinkLogic {
                 AudioError::ProcessingError(format!("Failed to create {:?}: {}", track_path, e))
             })?;
 
-            // Exécuter pump et copy en parallèle avec tokio::select! en boucle
-            let pump_future =
-                pump_track_segments(first_segment, &mut rx, pcm_tx, bits_per_sample, sample_rate, &stop_token);
+            // Créer un channel dédié pour dispatcher les chunks vers ce pump
+            let (track_tx, track_rx) = mpsc::channel::<Arc<AudioSegment>>(16);
+
+            // Lancer le pump en arrière-plan avec son channel dédié
+            // Cela permet à plusieurs pumps de tourner simultanément (cache progressive compliant)
+            let pump_handle = tokio::spawn(pump_track_segments_from_channel(
+                first_segment,
+                track_rx,
+                pcm_tx,
+                bits_per_sample,
+                sample_rate,
+            ));
+
+            // Dispatcher les segments vers track_tx en parallèle de l'écriture du fichier
+            // Utiliser tokio::select! pour éviter le deadlock et permettre cache progressif
+            tracing::debug!("FlacFileSink: Starting dispatcher loop with file write");
+
+            // Pin la future pour pouvoir l'utiliser dans select!
             let copy_future = async {
                 let copy_result = tokio::io::copy(&mut flac_stream, &mut output).await;
                 let flush_result = output.flush().await;
@@ -150,22 +165,118 @@ impl NodeLogic for FlacFileSinkLogic {
                     .map_err(|e| AudioError::ProcessingError(format!("Encoder failed: {}", e)))?;
                 Ok::<_, AudioError>(())
             };
+            tokio::pin!(copy_future);
 
-            // Attendre les deux tâches en parallèle
-            let (copy_result, pump_result) = tokio::join!(copy_future, pump_future);
-            copy_result?;
-            let stop_reason = pump_result?;
+            // Phase 1: Dispatcher jusqu'à ce que le fichier soit complètement écrit
+            let mut copy_done = false;
+            loop {
+                tokio::select! {
+                    // Attendre l'écriture du fichier
+                    result = &mut copy_future, if !copy_done => {
+                        result?;
+                        tracing::info!("FlacFileSink: File write complete for track {}", track_number);
+                        copy_done = true;
+                        // Continue dispatching jusqu'au TrackBoundary
+                    }
 
-            // Vérifier le stop_reason pour savoir si on continue
-            match stop_reason {
-                StopReason::TrackBoundary(_metadata) => {
-                    // Continuer avec la prochaine track
-                    track_number += 1;
-                    continue;
-                }
-                StopReason::EndOfStream | StopReason::ChannelClosed | StopReason::Cancelled => {
-                    // Fin de l'encodage
-                    return Ok(());
+                    // Dispatcher les segments depuis rx vers track_tx
+                    result = rx.recv() => {
+                        match result {
+                            Some(segment) => {
+                                match &segment.segment {
+                                    crate::_AudioSegment::Chunk(_) => {
+                                        // Dispatcher vers le pump
+                                        if track_tx.send(segment).await.is_err() {
+                                            // Le pump est mort - erreur fatale
+                                            tracing::error!("FlacFileSink: pump died unexpectedly");
+                                            return Err(AudioError::ProcessingError("Pump task died".to_string()));
+                                        }
+                                    }
+                                    crate::_AudioSegment::Sync(marker) => match &**marker {
+                                        SyncMarker::TrackBoundary { .. } => {
+                                            // Nouveau morceau - fermer le pump et passer au suivant
+                                            tracing::debug!("FlacFileSink: TrackBoundary received");
+
+                                            // Vérifier que copy est terminé avant de continuer
+                                            if !copy_done {
+                                                copy_future.await?;
+                                                tracing::info!("FlacFileSink: File write complete for track {}", track_number);
+                                            }
+
+                                            drop(track_tx); // Ferme le channel, le pump se termine proprement
+                                            drop(pump_handle);
+
+                                            // Créer le marqueur de complétude
+                                            let completion_marker = track_path.with_extension("flac.complete");
+                                            if let Err(e) = tokio::fs::File::create(&completion_marker).await {
+                                                tracing::warn!("FlacFileSink: Failed to create completion marker {:?}: {}", completion_marker, e);
+                                            } else {
+                                                tracing::debug!("FlacFileSink: Created completion marker {:?}", completion_marker);
+                                            }
+
+                                            track_number += 1;
+                                            break; // Sort de la Phase 1, retour à la loop externe pour next track
+                                        }
+                                        SyncMarker::EndOfStream => {
+                                            tracing::debug!("FlacFileSink: EndOfStream received");
+
+                                            // Vérifier que copy est terminé
+                                            if !copy_done {
+                                                copy_future.await?;
+                                                tracing::info!("FlacFileSink: File write complete for track {}", track_number);
+                                            }
+
+                                            drop(track_tx);
+                                            drop(pump_handle);
+
+                                            // Créer le marqueur de complétude
+                                            let completion_marker = track_path.with_extension("flac.complete");
+                                            if let Err(e) = tokio::fs::File::create(&completion_marker).await {
+                                                tracing::warn!("FlacFileSink: Failed to create completion marker {:?}: {}", completion_marker, e);
+                                            } else {
+                                                tracing::debug!("FlacFileSink: Created completion marker {:?}", completion_marker);
+                                            }
+
+                                            return Ok(());
+                                        }
+                                        _ => {
+                                            // Transmettre les autres syncmarkers au pump
+                                            let _ = track_tx.send(segment).await;
+                                        }
+                                    },
+                                }
+                            }
+                            None => {
+                                // EOF sur rx
+                                tracing::debug!("FlacFileSink: EOF on rx");
+
+                                // Vérifier que copy est terminé
+                                if !copy_done {
+                                    copy_future.await?;
+                                    tracing::info!("FlacFileSink: File write complete for track {}", track_number);
+                                }
+
+                                drop(track_tx);
+                                drop(pump_handle);
+
+                                // Créer le marqueur de complétude
+                                let completion_marker = track_path.with_extension("flac.complete");
+                                if let Err(e) = tokio::fs::File::create(&completion_marker).await {
+                                    tracing::warn!("FlacFileSink: Failed to create completion marker {:?}: {}", completion_marker, e);
+                                } else {
+                                    tracing::debug!("FlacFileSink: Created completion marker {:?}", completion_marker);
+                                }
+
+                                return Ok(());
+                            }
+                        }
+                    }
+
+                    _ = stop_token.cancelled() => {
+                        drop(track_tx);
+                        drop(pump_handle);
+                        return Ok(());
+                    }
                 }
             }
         }
@@ -362,6 +473,71 @@ async fn pump_track_segments(
                     }
                     _ => {} // Ignorer les autres syncmarkers
                 }
+            }
+        }
+    }
+}
+
+/// Pompe les segments pour une seule track depuis un channel dédié.
+///
+/// Cette version permet d'avoir plusieurs pumps en parallèle (cache progressive compliant),
+/// car chaque pump a son propre channel et ne bloque pas le traitement des tracks suivantes.
+async fn pump_track_segments_from_channel(
+    first_segment: Arc<AudioSegment>,
+    mut track_rx: mpsc::Receiver<Arc<AudioSegment>>,
+    pcm_tx: mpsc::Sender<Vec<u8>>,
+    bits_per_sample: u8,
+    expected_rate: u32,
+) -> Result<(), AudioError> {
+    // Traiter le premier segment
+    if let Some(chunk) = first_segment.as_chunk() {
+        let pcm_bytes = chunk_to_pcm_bytes(chunk, bits_per_sample)?;
+        if !pcm_bytes.is_empty() {
+            if pcm_tx.send(pcm_bytes).await.is_err() {
+                drop(pcm_tx);
+                tracing::debug!("pump_track_segments_from_channel: pcm_tx closed on first segment");
+                return Ok(());
+            }
+        }
+    }
+
+    // Boucle sur les segments depuis le channel dédié
+    loop {
+        let segment = match track_rx.recv().await {
+            Some(seg) => seg,
+            None => {
+                // Channel fermé - la track est terminée (TrackBoundary a été reçu en amont)
+                drop(pcm_tx);
+                tracing::debug!("pump_track_segments_from_channel: channel closed, track finished");
+                return Ok(());
+            }
+        };
+
+        match &segment.segment {
+            crate::_AudioSegment::Chunk(chunk) => {
+                if chunk.sample_rate() != expected_rate {
+                    return Err(AudioError::ProcessingError(format!(
+                        "FlacFileSink: inconsistent sample rate ({} vs {})",
+                        chunk.sample_rate(),
+                        expected_rate
+                    )));
+                }
+
+                let pcm_bytes = chunk_to_pcm_bytes(&chunk, bits_per_sample)?;
+                if pcm_bytes.is_empty() {
+                    continue;
+                }
+
+                if pcm_tx.send(pcm_bytes).await.is_err() {
+                    // Le fichier a fermé le channel (erreur)
+                    drop(pcm_tx);
+                    tracing::debug!("pump_track_segments_from_channel: pcm_tx closed");
+                    return Ok(());
+                }
+            }
+            crate::_AudioSegment::Sync(_marker) => {
+                // Ignorer les syncmarkers - le TrackBoundary est géré en amont
+                // Le channel sera fermé quand le TrackBoundary est détecté
             }
         }
     }
