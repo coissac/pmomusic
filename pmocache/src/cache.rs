@@ -387,22 +387,22 @@ impl<C: CacheConfig> Cache<C> {
     where
         R: AsyncRead + Send + Unpin + 'static,
     {
-        // 1. Lire les premiers octets pour calculer le pk
-        // Pour éviter les collisions entre fichiers FLAC au même format, on skip le header (512 octets)
-        // et on utilise les octets 512-1024 (début du contenu audio) pour calculer le pk
-        let buffer_size = if explicit_pk.is_none() { 1024 } else { 512 };
-        let header = crate::download::peek_reader_header(&mut reader, buffer_size)
+        // 1. Lire jusqu'à 1024 octets (ou ce qui est disponible)
+        let header = crate::download::peek_reader_header(&mut reader, 1024)
             .await
             .map_err(|e| anyhow!("Failed to peek reader header: {}", e))?;
 
-        // 2. Calculer le pk: si pas de pk explicite, utiliser octets 512-1024 au lieu de 0-512
+        // 2. Calculer le pk en utilisant au plus les 512 derniers octets
+        // Ceci évite les collisions pour les fichiers avec headers identiques (ex: FLAC)
+        // tout en fonctionnant pour les petits fichiers (images < 512 octets)
         let pk = if let Some(explicit) = explicit_pk {
             explicit
         } else {
-            // Skip les 512 premiers octets (header FLAC) et utiliser les 512 suivants
             let pk_bytes = if header.len() > 512 {
+                // Fichier >= 512 octets: utiliser les octets 512+ (au plus 512 octets)
                 &header[512..]
             } else {
+                // Petit fichier < 512 octets: utiliser tout le contenu
                 &header[..]
             };
             crate::cache_trait::pk_from_content_header(pk_bytes)
