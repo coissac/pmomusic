@@ -299,6 +299,8 @@ impl NodeLogic for FlacCacheSinkLogic {
 
             // Phase 3: Continuer à dispatcher jusqu'au TrackBoundary
             tracing::debug!("FlacCacheSink: Continuing dispatch until TrackBoundary (pump runs in background)");
+            let mut track_tx = Some(track_tx);
+            let mut pump_handle = Some(pump_handle);
             let mut pump_closed = false;
             loop {
                 let segment = tokio::select! {
@@ -307,19 +309,15 @@ impl NodeLogic for FlacCacheSinkLogic {
                             Some(seg) => seg,
                             None => {
                                 // EOF sur rx
-                                if !pump_closed {
-                                    drop(track_tx);
-                                    drop(pump_handle);
-                                }
+                                drop(track_tx);
+                                drop(pump_handle);
                                 return Ok(());
                             }
                         }
                     }
                     _ = stop_token.cancelled() => {
-                        if !pump_closed {
-                            drop(track_tx);
-                            drop(pump_handle);
-                        }
+                        drop(track_tx);
+                        drop(pump_handle);
                         return Ok(());
                     }
                 };
@@ -328,28 +326,32 @@ impl NodeLogic for FlacCacheSinkLogic {
                     _AudioSegment::Chunk(_) => {
                         // Continuer à dispatcher vers le pump (sauf si déjà fermé)
                         if !pump_closed {
-                            if track_tx.send(segment).await.is_err() {
-                                // Le pump a fermé son channel - cela peut arriver si le fichier
-                                // était déjà en cache (add_from_reader retourne immédiatement)
-                                tracing::debug!("FlacCacheSink: pump closed track_tx, checking pump status");
-                                drop(track_tx);
+                            if let Some(ref tx) = track_tx {
+                                if tx.send(segment).await.is_err() {
+                                    // Le pump a fermé son channel - cela peut arriver si le fichier
+                                    // était déjà en cache (add_from_reader retourne immédiatement)
+                                    tracing::debug!("FlacCacheSink: pump closed track_tx, checking pump status");
+                                    drop(track_tx.take());
 
-                                // Attendre que le pump se termine et vérifier le résultat
-                                match pump_handle.await {
-                                    Ok(Ok(_)) => {
-                                        // Le pump s'est terminé proprement (fichier était en cache)
-                                        tracing::debug!("FlacCacheSink: pump completed successfully, ignoring remaining chunks until TrackBoundary");
-                                        pump_closed = true;
-                                    }
-                                    Ok(Err(e)) => {
-                                        // Le pump a rencontré une erreur
-                                        tracing::error!("FlacCacheSink: pump died with error: {}", e);
-                                        return Err(e);
-                                    }
-                                    Err(e) => {
-                                        // Le pump task a paniqué
-                                        tracing::error!("FlacCacheSink: pump task panicked: {}", e);
-                                        return Err(AudioError::ProcessingError("Pump task panicked".to_string()));
+                                    // Attendre que le pump se termine et vérifier le résultat
+                                    if let Some(handle) = pump_handle.take() {
+                                        match handle.await {
+                                            Ok(Ok(_)) => {
+                                                // Le pump s'est terminé proprement (fichier était en cache)
+                                                tracing::debug!("FlacCacheSink: pump completed successfully, ignoring remaining chunks until TrackBoundary");
+                                                pump_closed = true;
+                                            }
+                                            Ok(Err(e)) => {
+                                                // Le pump a rencontré une erreur
+                                                tracing::error!("FlacCacheSink: pump died with error: {}", e);
+                                                return Err(e);
+                                            }
+                                            Err(e) => {
+                                                // Le pump task a paniqué
+                                                tracing::error!("FlacCacheSink: pump task panicked: {}", e);
+                                                return Err(AudioError::ProcessingError("Pump task panicked".to_string()));
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -360,25 +362,23 @@ impl NodeLogic for FlacCacheSinkLogic {
                         SyncMarker::TrackBoundary { .. } => {
                             // Nouveau morceau - fermer le pump si pas déjà fermé
                             tracing::debug!("FlacCacheSink: TrackBoundary received, closing pump");
-                            if !pump_closed {
-                                drop(track_tx); // Ferme le channel, le pump se termine proprement
-                                drop(pump_handle);
-                            }
+                            drop(track_tx.take());
+                            drop(pump_handle.take());
                             track_number += 1;
                             break; // Sort de la Phase 3, retour à la loop externe pour next track
                         }
                         SyncMarker::EndOfStream => {
                             tracing::debug!("FlacCacheSink: EndOfStream received");
-                            if !pump_closed {
-                                drop(track_tx);
-                                drop(pump_handle);
-                            }
+                            drop(track_tx.take());
+                            drop(pump_handle.take());
                             return Ok(());
                         }
                         _ => {
                             // Transmettre les autres syncmarkers au pump (sauf si fermé)
                             if !pump_closed {
-                                let _ = track_tx.send(segment).await;
+                                if let Some(ref tx) = track_tx {
+                                    let _ = tx.send(segment).await;
+                                }
                             }
                         }
                     },
