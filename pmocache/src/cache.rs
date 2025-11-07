@@ -393,17 +393,17 @@ impl<C: CacheConfig> Cache<C> {
             .await
             .map_err(|e| anyhow!("Failed to read header bytes: {}", e))?;
 
-        // 2. Calculer le pk en utilisant au plus les 512 derniers octets
-        // Ceci évite les collisions pour les fichiers avec headers identiques (ex: FLAC)
-        // tout en fonctionnant pour les petits fichiers (images < 512 octets)
+        // 2. Calculer le pk selon la taille du fichier
+        // - Fichiers >= 1024 octets (FLAC): skip header (512 premiers octets), utilise octets 512-1024
+        // - Fichiers < 1024 octets (images, petits fichiers): utilise TOUT le contenu
         let pk = if let Some(explicit) = explicit_pk {
             explicit
         } else {
-            let pk_bytes = if header.len() > 512 {
-                // Fichier >= 512 octets: utiliser les octets 512-1024 (contenu audio pour FLAC)
+            let pk_bytes = if header.len() >= 1024 {
+                // Gros fichier (>= 1024 octets): skip les 512 premiers (header FLAC)
                 &header[512..]
             } else {
-                // Petit fichier < 512 octets: utiliser tout le contenu
+                // Petit fichier (< 1024 octets): utiliser TOUT le contenu
                 &header[..]
             };
             crate::cache_trait::pk_from_content_header(pk_bytes)
