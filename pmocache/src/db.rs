@@ -192,20 +192,24 @@ impl DB {
         collection: Option<&str>,
         metadata: Option<&Value>,
     ) -> rusqlite::Result<()> {
-        let conn = self.lock_conn("add_with_metadata");
+        // Bloc pour limiter la durée du lock
+        {
+            let conn = self.lock_conn("add_with_metadata");
 
-        conn.execute(
-            "INSERT INTO asset (pk, id, collection, hits, last_used)
-             VALUES (?1, ?2, ?3, 0, ?4)
-             ON CONFLICT(pk) DO UPDATE SET
-                 id = excluded.id,
-                 collection = excluded.collection,
-                 last_used = excluded.last_used",
-            params![pk, id, collection, Utc::now().to_rfc3339()],
-        )?;
+            conn.execute(
+                "INSERT INTO asset (pk, id, collection, hits, last_used)
+                 VALUES (?1, ?2, ?3, 0, ?4)
+                 ON CONFLICT(pk) DO UPDATE SET
+                     id = excluded.id,
+                     collection = excluded.collection,
+                     last_used = excluded.last_used",
+                params![pk, id, collection, Utc::now().to_rfc3339()],
+            )?;
+        } // Lock libéré ici
 
-        if metadata.is_some() {
-            self.set_metadata(pk, metadata.unwrap())?
+        // Appeler set_metadata après avoir libéré le lock pour éviter un deadlock
+        if let Some(metadata) = metadata {
+            self.set_metadata(pk, metadata)?;
         }
 
         Ok(())
@@ -678,7 +682,7 @@ impl DB {
         let conn = self.lock_conn("get_oldest");
 
         let mut stmt = conn.prepare(
-            "SELECT pk, source_url, collection, hits, last_used, metadata_json
+            "SELECT pk, id, collection, hits, last_used
              FROM asset
              ORDER BY last_used ASC, hits ASC
              LIMIT ?1",

@@ -13,9 +13,12 @@ use serde_json::{Number, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::io::AsyncRead;
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::RwLock;
 use tracing;
+
+/// Taille minimale de prébuffering par défaut (512 KB = ~5 secondes de FLAC)
+pub const DEFAULT_PREBUFFER_SIZE: u64 = 512 * 1024;
 
 /// Paramètres statiques d'un cache spécialisé.
 pub trait CacheConfig: Send + Sync {
@@ -58,11 +61,110 @@ pub struct Cache<C: CacheConfig> {
     downloads: Arc<RwLock<HashMap<String, Arc<Download>>>>,
     /// Factory pour créer des transformers (optionnel)
     transformer_factory: Option<Arc<dyn Fn() -> StreamTransformer + Send + Sync>>,
+    /// Taille minimale de prébuffering en octets (0 = désactivé)
+    min_prebuffer_size: u64,
     /// Phantom data pour le type de configuration
     _phantom: std::marker::PhantomData<C>,
 }
 
 impl<C: CacheConfig> Cache<C> {
+    /// Retourne le chemin du fichier marker de complétion
+    fn get_completion_marker_path(&self, pk: &str) -> PathBuf {
+        self.get_file_path(pk).with_extension(format!("{}.complete", C::file_extension()))
+    }
+
+    /// Vérifie si un fichier est en cache et complet
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(true)` si le fichier est en cache et complet (fichier .complete existe)
+    /// - `Ok(false)` si le fichier n'est pas en cache ou incomplet (et supprime les fichiers incomplets)
+    /// - `Err` en cas d'erreur
+    async fn check_cached_and_complete(&self, pk: &str) -> Result<bool> {
+        if self.db.get(pk, false).is_ok() {
+            let file_path = self.get_file_path(pk);
+            let completion_marker = self.get_completion_marker_path(pk);
+
+            if file_path.exists() {
+                // Vérifier si le fichier marker de complétion existe
+                if completion_marker.exists() {
+                    tracing::debug!("File with pk {} is complete (marker exists)", pk);
+                    return Ok(true);
+                } else {
+                    tracing::warn!(
+                        "File with pk {} in cache has no completion marker, will re-download/re-ingest",
+                        pk
+                    );
+                    // Supprimer le fichier incomplet
+                    let _ = std::fs::remove_file(&file_path);
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    /// Vérifie si un download est en cours et attend le prébuffering si nécessaire
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(Some(pk))` si un download est en cours (et prébuffering terminé)
+    /// - `Ok(None)` si aucun download en cours
+    /// - `Err` en cas d'erreur de prébuffering
+    async fn check_ongoing_download(&self, pk: &str) -> Result<Option<String>> {
+        let download_handle = {
+            let downloads = self.downloads.read().await;
+            downloads.get(pk).cloned()
+        };
+
+        if let Some(download) = download_handle {
+            tracing::debug!("Download already in progress for pk {}, waiting for prebuffering", pk);
+
+            if self.min_prebuffer_size > 0 {
+                download.wait_until_min_size(self.min_prebuffer_size).await
+                    .map_err(|e| anyhow!("Prebuffering failed: {}", e))?;
+                tracing::debug!("Prebuffering complete for pk {}", pk);
+            }
+
+            return Ok(Some(pk.to_string()));
+        }
+
+        Ok(None)
+    }
+
+    /// Finalise l'ajout d'un fichier au cache
+    ///
+    /// Cette fonction helper gère le prébuffering et le nettoyage en background
+    async fn finalize_download(&self, pk: &str, download: Arc<Download>) -> Result<String> {
+        // Attendre le prébuffering (pour le cache progressif)
+        if self.min_prebuffer_size > 0 {
+            download.wait_until_min_size(self.min_prebuffer_size).await
+                .map_err(|e| anyhow!("Prebuffering failed: {}", e))?;
+            tracing::debug!("Prebuffering complete for pk {} ({} bytes)", pk, self.min_prebuffer_size);
+        }
+
+        // Lancer une tâche de nettoyage et marquage de complétion en background
+        let downloads_clone = self.downloads.clone();
+        let pk_clone = pk.to_string();
+        let completion_marker = self.get_completion_marker_path(pk);
+
+        tokio::spawn(async move {
+            let result = download.wait_until_finished().await;
+            downloads_clone.write().await.remove(&pk_clone);
+
+            // Créer le fichier marker de complétion si le téléchargement a réussi
+            if result.is_ok() {
+                if let Err(e) = std::fs::write(&completion_marker, "") {
+                    tracing::warn!("Failed to create completion marker for pk {}: {}", pk_clone, e);
+                } else {
+                    tracing::debug!("Created completion marker for pk {}", pk_clone);
+                }
+            }
+        });
+
+        Ok(pk.to_string())
+    }
+
     /// Crée un nouveau cache sans transformer
     ///
     /// # Arguments
@@ -124,8 +226,37 @@ impl<C: CacheConfig> Cache<C> {
             db: Arc::new(db),
             downloads: Arc::new(RwLock::new(HashMap::new())),
             transformer_factory,
+            min_prebuffer_size: DEFAULT_PREBUFFER_SIZE,
             _phantom: std::marker::PhantomData,
         })
+    }
+
+    /// Configure la taille minimale de prébuffering
+    ///
+    /// # Arguments
+    ///
+    /// * `size` - Taille minimale en octets (0 = désactivé)
+    ///
+    /// # Exemple
+    ///
+    /// ```rust,no_run
+    /// use pmocache::{Cache, CacheConfig};
+    ///
+    /// struct MyConfig;
+    /// impl CacheConfig for MyConfig {
+    ///     fn file_extension() -> &'static str { "dat" }
+    /// }
+    ///
+    /// let mut cache = Cache::<MyConfig>::new("./cache", 1000).unwrap();
+    /// cache.set_prebuffer_size(1024 * 1024); // 1 MB de prébuffering
+    /// ```
+    pub fn set_prebuffer_size(&mut self, size: u64) {
+        self.min_prebuffer_size = size;
+    }
+
+    /// Retourne la taille minimale de prébuffering configurée
+    pub fn get_prebuffer_size(&self) -> u64 {
+        self.min_prebuffer_size
     }
 
     /// Télécharge un fichier depuis une URL et l'ajoute au cache
@@ -166,25 +297,16 @@ impl<C: CacheConfig> Cache<C> {
         let pk = crate::cache_trait::pk_from_content_header(&header);
         tracing::debug!("Computed pk {} for URL {}", pk, url);
 
-        // 3. Vérifier si le fichier est déjà en cache
-        if self.db.get(&pk, false).is_ok() {
-            let file_path = self.get_file_path(&pk);
-            if file_path.exists() {
-                // Déjà en cache, update timestamp et retour rapide
-                tracing::debug!("File with pk {} already in cache, updating timestamp", pk);
-                self.db.update_hit(&pk)?;
-                return Ok(pk);
-            }
+        // 3. Vérifier si le fichier est déjà en cache ET complet
+        if self.check_cached_and_complete(&pk).await? {
+            tracing::debug!("File with pk {} already in cache, updating timestamp", pk);
+            self.db.update_hit(&pk)?;
+            return Ok(pk);
         }
 
         // 4. Vérifier si un download est déjà en cours pour ce pk
-        {
-            let downloads = self.downloads.read().await;
-            if downloads.contains_key(&pk) {
-                // Download déjà en cours pour ce contenu, retourner la clé
-                tracing::debug!("Download already in progress for pk {}", pk);
-                return Ok(pk);
-            }
+        if let Some(pk) = self.check_ongoing_download(&pk).await? {
+            return Ok(pk);
         }
 
         // 5. Lancer le téléchargement complet avec transformer
@@ -202,20 +324,14 @@ impl<C: CacheConfig> Cache<C> {
         // Ajouter immédiatement à la DB
         self.db.add(&pk, None, collection)?;
         self.db.set_origin_url(&pk, url)?;
+
         // Appliquer la politique d'éviction LRU si nécessaire
         if let Err(e) = self.enforce_limit().await {
             tracing::warn!("Error enforcing cache limit: {}", e);
         }
 
-        // Lancer une tâche de nettoyage en background
-        let downloads_clone = self.downloads.clone();
-        let pk_clone = pk.clone();
-        tokio::spawn(async move {
-            let _ = download.wait_until_finished().await;
-            downloads_clone.write().await.remove(&pk_clone);
-        });
-
-        Ok(pk)
+        // Finaliser avec prébuffering et nettoyage
+        self.finalize_download(&pk, download).await
     }
 
     /// Ajoute un fichier à partir d'un flux asynchrone.
@@ -252,43 +368,65 @@ impl<C: CacheConfig> Cache<C> {
     where
         R: AsyncRead + Send + Unpin + 'static,
     {
-        // 1. Lire les 512 premiers octets pour calculer le pk
-        let header = crate::download::peek_reader_header(&mut reader, 512)
+        self.add_from_reader_with_pk(source_uri, reader, length, collection, None).await
+    }
+
+    /// Ajoute un fichier à partir d'un flux avec un pk explicite optionnel.
+    ///
+    /// Si `explicit_pk` est fourni, utilise ce pk au lieu de le calculer à partir du contenu.
+    /// Ceci est utile quand plusieurs fichiers ont le même header mais doivent être cachés séparément
+    /// (par exemple, des fichiers FLAC avec le même format mais du contenu différent).
+    pub async fn add_from_reader_with_pk<R>(
+        &self,
+        source_uri: Option<&str>,
+        mut reader: R,
+        length: Option<u64>,
+        collection: Option<&str>,
+        explicit_pk: Option<String>,
+    ) -> Result<String>
+    where
+        R: AsyncRead + Send + Unpin + 'static,
+    {
+        // 1. Lire jusqu'à 1024 octets (ou ce qui est disponible)
+        let header = crate::download::peek_reader_header(&mut reader, 1024)
             .await
             .map_err(|e| anyhow!("Failed to peek reader header: {}", e))?;
 
-        // 2. Calculer le pk basé sur le contenu
-        let pk = crate::cache_trait::pk_from_content_header(&header);
+        // 2. Calculer le pk en utilisant au plus les 512 derniers octets
+        // Ceci évite les collisions pour les fichiers avec headers identiques (ex: FLAC)
+        // tout en fonctionnant pour les petits fichiers (images < 512 octets)
+        let pk = if let Some(explicit) = explicit_pk {
+            explicit
+        } else {
+            let pk_bytes = if header.len() > 512 {
+                // Fichier >= 512 octets: utiliser les octets 512+ (au plus 512 octets)
+                &header[512..]
+            } else {
+                // Petit fichier < 512 octets: utiliser tout le contenu
+                &header[..]
+            };
+            crate::cache_trait::pk_from_content_header(pk_bytes)
+        };
         if let Some(uri) = source_uri {
             tracing::debug!("Computed pk {} for source_uri {}", pk, uri);
         } else {
             tracing::debug!("Computed pk {} from reader", pk);
         }
 
-        // 3. Vérifier si le fichier est déjà en cache
-        if self.db.get(&pk, false).is_ok() {
-            let file_path = self.get_file_path(&pk);
-            if file_path.exists() {
-                // Déjà en cache, update timestamp et retour rapide
-                tracing::debug!("File with pk {} already in cache, updating timestamp", pk);
-                self.db.update_hit(&pk)?;
-                return Ok(pk);
-            }
+        // 3. Vérifier si le fichier est déjà en cache ET complet
+        if self.check_cached_and_complete(&pk).await? {
+            tracing::debug!("File with pk {} already in cache, updating timestamp", pk);
+            self.db.update_hit(&pk)?;
+            return Ok(pk);
         }
 
         // 4. Vérifier si un download est déjà en cours pour ce pk
-        {
-            let downloads = self.downloads.read().await;
-            if downloads.contains_key(&pk) {
-                tracing::debug!("Download already in progress for pk {}", pk);
-                return Ok(pk);
-            }
+        if let Some(pk) = self.check_ongoing_download(&pk).await? {
+            return Ok(pk);
         }
 
         // 5. Reconstituer le reader complet (header + reste)
-        // Utiliser tokio::io::chain pour créer un reader composé
         use std::io::Cursor;
-        use tokio::io::AsyncReadExt;
         let header_reader = Cursor::new(header);
         let full_reader = header_reader.chain(reader);
 
@@ -312,14 +450,8 @@ impl<C: CacheConfig> Cache<C> {
             tracing::warn!("Error enforcing cache limit: {}", e);
         }
 
-        let downloads_clone = self.downloads.clone();
-        let pk_clone = pk.clone();
-        tokio::spawn(async move {
-            let _ = download.wait_until_finished().await;
-            downloads_clone.write().await.remove(&pk_clone);
-        });
-
-        Ok(pk)
+        // Finaliser avec prébuffering et nettoyage
+        self.finalize_download(&pk, download).await
     }
 
     /// Ajoute un fichier local au cache
@@ -497,15 +629,22 @@ impl<C: CacheConfig> Cache<C> {
     }
 
     /// Consolide le cache en supprimant les orphelins et en re-téléchargeant les fichiers manquants
+    ///
+    /// Cette fonction :
+    /// - Supprime les entrées DB sans fichiers (ou re-télécharge si URL disponible)
+    /// - Supprime les fichiers sans marker de complétion et leurs entrées DB
+    /// - Supprime les fichiers sans entrées DB correspondantes
     pub async fn consolidate(&self) -> Result<()> {
         // Récupérer la liste des entrées à traiter
         let entries = self.db.get_all(false)?;
 
-        // Supprimer les entrées sans fichiers correspondants
+        // Supprimer les entrées sans fichiers correspondants OU sans marker de complétion
         for entry in entries {
             let file_path = self.get_file_path(&entry.pk);
+            let completion_marker = self.get_completion_marker_path(&entry.pk);
 
             if !file_path.exists() {
+                // Fichier manquant, essayer de re-télécharger
                 match self.db.get_origin_url(&entry.pk)? {
                     Some(url) => {
                         if let Err(err) = self.add_from_url(&url, entry.collection.as_deref()).await
@@ -522,6 +661,14 @@ impl<C: CacheConfig> Cache<C> {
                         self.db.delete(&entry.pk)?;
                     }
                 }
+            } else if !completion_marker.exists() {
+                // Fichier existe mais pas de marker de complétion -> fichier incomplet
+                tracing::warn!(
+                    "Removing incomplete file {} (no completion marker)",
+                    entry.pk
+                );
+                let _ = tokio::fs::remove_file(&file_path).await;
+                self.db.delete(&entry.pk)?;
             }
         }
 
@@ -531,11 +678,20 @@ impl<C: CacheConfig> Cache<C> {
             let path = entry.path();
             if path.is_file() && path != self.dir.join("cache.db") {
                 if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+                    // Ignorer les fichiers .complete
+                    if file_name.ends_with(".complete") {
+                        continue;
+                    }
+
                     // Format attendu: {pk}.{qualifier}.{EXT}
                     // On extrait le pk (première partie avant le premier point)
                     if let Some(pk) = file_name.split('.').next() {
                         if self.db.get(pk, false).is_err() {
-                            tokio::fs::remove_file(path).await?;
+                            tracing::debug!("Removing orphan file: {}", file_name);
+                            tokio::fs::remove_file(&path).await?;
+                            // Supprimer aussi le marker de complétion s'il existe
+                            let completion_marker = self.get_completion_marker_path(pk);
+                            let _ = tokio::fs::remove_file(&completion_marker).await;
                         }
                     }
                 }
@@ -770,17 +926,10 @@ impl<C: CacheConfig> Cache<C> {
 
         let mut removed = 0;
         for entry in old_entries {
-            // Supprimer tous les fichiers avec ce pk (toutes variantes)
-            if let Ok(mut dir_entries) = tokio::fs::read_dir(&self.dir).await {
-                while let Ok(Some(dir_entry)) = dir_entries.next_entry().await {
-                    if let Some(filename) = dir_entry.file_name().to_str() {
-                        // Format: {pk}.{param}.{ext}
-                        if filename.starts_with(&entry.pk)
-                            && filename.starts_with(&format!("{}.", entry.pk))
-                        {
-                            let _ = tokio::fs::remove_file(dir_entry.path()).await;
-                        }
-                    }
+            // Utiliser get_file_paths() pour obtenir tous les fichiers de cette entrée
+            if let Ok(paths) = self.get_file_paths(&entry.pk) {
+                for path in paths {
+                    let _ = tokio::fs::remove_file(path).await;
                 }
             }
 

@@ -233,9 +233,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let playback_handle = tokio::spawn(async move {
-        // Attendre un peu que le premier track soit disponible
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-        tracing::info!("[PLAYBACK] Pipeline starting...");
+        // Pas de sleep - le cache progressif permet de démarrer immédiatement
+        // dès que le prebuffer (512 KB) est atteint
+        tracing::info!("[PLAYBACK] Pipeline starting (will wait for prebuffer)...");
         let result = Box::new(playlist_source).run(stop_token_playback).await;
         match &result {
             Ok(()) => tracing::info!("[PLAYBACK] Pipeline completed successfully"),

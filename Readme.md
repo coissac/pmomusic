@@ -1,5 +1,43 @@
 # Développement de l'application PMOMusic en RUST
 
+## 🚀 Démarrage rapide
+
+### Installation des dépendances (environnement sans sudo)
+
+Pour compiler PMOMusic dans un environnement sans privilèges sudo (comme Claude Code) :
+
+```bash
+# 1. Installation automatique de libsoxr et libasound2 (une seule fois)
+./setup-deps.sh
+
+# 2. Créer le fichier setup-env.sh (une seule fois, voir INSTALL_LIBSOXR.md pour le contenu)
+cat > setup-env.sh << 'EOF'
+#!/bin/bash
+export PKG_CONFIG_PATH="$HOME/.local/usr/lib/x86_64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH"
+export LD_LIBRARY_PATH="$HOME/.local/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
+export RUSTFLAGS="-L $HOME/.local/usr/lib/x86_64-linux-gnu"
+echo "Variables d'environnement configurées pour PMOMusic"
+EOF
+
+# 3. Configuration de l'environnement (à chaque nouvelle session)
+source setup-env.sh
+
+# 4. Compilation
+cargo build
+
+# 5. Test de l'exemple Radio Paradise
+cargo run --package pmoparadise --example play_and_cache --features full -- 0
+```
+
+⚠️ **Note :** Le fichier `setup-env.sh` est dans `.gitignore` car il contient une configuration locale.
+
+### Documentation
+
+- **[INSTALL_NOTES.md](INSTALL_NOTES.md)** - Guide d'installation général
+- **[INSTALL_LIBSOXR.md](INSTALL_LIBSOXR.md)** - Installation détaillée de libsoxr et ALSA
+
+---
+
 ## Création de la structure
 
 ```bash

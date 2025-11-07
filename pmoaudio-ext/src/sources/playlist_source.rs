@@ -237,11 +237,15 @@ impl NodeLogic for PlaylistSourceLogic {
             tracing::debug!("PlaylistSourceLogic: decoding track: {:?}", file_path);
 
             // Décoder et émettre les chunks PCM
+            // Passer le cache et pk pour gérer le cache progressif
+            let cache_pk = track.cache_pk();
             if let Err(e) = decode_and_emit_track(
                 &file_path,
                 self.chunk_frames,
                 &output,
                 &stop_token,
+                &self.cache,
+                cache_pk,
             )
             .await
             {
@@ -264,11 +268,16 @@ impl NodeLogic for PlaylistSourceLogic {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Décode un fichier et émet ses chunks audio
+///
+/// Gère le cache progressif : si EOF est atteint et que le download est toujours en cours,
+/// attend et réessaie au lieu de terminer immédiatement.
 async fn decode_and_emit_track(
     path: &PathBuf,
     chunk_frames: usize,
     output: &[mpsc::Sender<Arc<AudioSegment>>],
     stop_token: &CancellationToken,
+    cache: &Arc<AudioCache>,
+    cache_pk: &str,
 ) -> Result<(), AudioError> {
     // Ouvrir et décoder
     let file = File::open(path)
@@ -320,9 +329,23 @@ async fn decode_and_emit_track(
                     let read = read_result.map_err(|e| {
                         AudioError::IoError(format!("I/O error while decoding: {}", e))
                     })?;
-                    if read == 0 && pending.is_empty() {
-                        break;
+
+                    // Si EOF atteint (read == 0)
+                    if read == 0 {
+                        // Vérifier si le download est toujours en cours (cache progressif)
+                        if cache.get_download(cache_pk).await.is_some() {
+                            // Download en cours - attendre un peu et réessayer
+                            tracing::trace!("decode_and_emit_track: EOF reached but download ongoing, waiting...");
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                            continue; // Retry la lecture
+                        }
+
+                        // Download terminé - c'est vraiment la fin du fichier
+                        if pending.is_empty() {
+                            break;
+                        }
                     }
+
                     if read > 0 {
                         pending.extend_from_slice(&read_buf[..read]);
                     }

@@ -10,7 +10,6 @@ use pmoaudiocache::AudioTrackMetadataExt;
 use pmoflac::{encode_flac_stream, EncoderOptions, PcmFormat};
 use std::{
     collections::VecDeque,
-    io::Cursor,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
@@ -127,16 +126,26 @@ impl NodeLogic for FlacCacheSinkLogic {
 
             // Créer l'encoder
             let reader = ByteStreamReader::new(pcm_rx);
-            let mut flac_stream = encode_flac_stream(reader, format, options_with_metadata)
+            let flac_stream = encode_flac_stream(reader, format, options_with_metadata)
                 .await
                 .map_err(|e| {
                     AudioError::ProcessingError(format!("FLAC encode init failed: {}", e))
                 })?;
 
-            // Créer un buffer pour collecter le FLAC encodé
-            let mut flac_buffer = Vec::new();
+            // Ingérer le FLAC progressivement dans le cache
+            // add_from_reader lance l'ingestion en arrière-plan et retourne dès que
+            // le prebuffer (512 KB) est atteint, permettant un streaming progressif
+            // Le cache skip automatiquement le header FLAC (512 octets) pour calculer le pk
+            // à partir du contenu audio, évitant les collisions entre morceaux au même format
+            let collection_ref = self.collection.as_deref();
+            let cache_future = self.cache.add_from_reader(
+                None,
+                flac_stream,
+                None, // Taille inconnue car streaming
+                collection_ref,
+            );
 
-            // Exécuter pump et copy en parallèle
+            // Exécuter pump et add_from_reader en parallèle
             let pump_future = pump_track_segments(
                 first_segment,
                 &mut rx,
@@ -145,40 +154,20 @@ impl NodeLogic for FlacCacheSinkLogic {
                 sample_rate,
                 &stop_token,
             );
-            let copy_future = async {
-                tokio::io::copy(&mut flac_stream, &mut flac_buffer)
-                    .await
-                    .map_err(|e| {
-                        AudioError::ProcessingError(format!("FLAC write failed: {}", e))
-                    })?;
-                flac_stream
-                    .wait()
-                    .await
-                    .map_err(|e| AudioError::ProcessingError(format!("Encoder failed: {}", e)))?;
-                Ok::<_, AudioError>(())
-            };
 
             // Attendre les deux tâches en parallèle
-            let (copy_result, pump_result) = tokio::join!(copy_future, pump_future);
-            copy_result?;
+            let (cache_result, pump_result) = tokio::join!(cache_future, pump_future);
+
+            let pk = cache_result.map_err(|e| {
+                AudioError::ProcessingError(format!("Failed to add to cache: {}", e))
+            })?;
+
+            tracing::debug!("Track added to cache with pk {}, prebuffer complete", pk);
+
             let (_chunks, _samples, _duration_sec, stop_reason) = pump_result?;
 
-            // Ingérer le FLAC dans le cache
-            let flac_reader = Cursor::new(flac_buffer.clone());
-            let collection_ref = self.collection.as_deref();
-            let pk = self.cache
-                .add_from_reader(
-                    None,
-                    flac_reader,
-                    Some(flac_buffer.len() as u64),
-                    collection_ref,
-                )
-                .await
-                .map_err(|e| {
-                    AudioError::ProcessingError(format!("Failed to add to cache: {}", e))
-                })?;
-
             // Copier les métadonnées du TrackBoundary dans le cache
+            // IMPORTANT: Faire ceci AVANT d'ajouter à la playlist pour que les métadonnées soient disponibles
             if let Some(src_metadata) = track_metadata {
                 let dest_metadata = self.cache.track_metadata(&pk);
 
@@ -221,13 +210,24 @@ impl NodeLogic for FlacCacheSinkLogic {
                 }
             }
 
-            // Ajouter à la playlist si enregistrée
+            // Ajouter à la playlist IMMÉDIATEMENT (avant le drainage!)
+            // Ceci permet à la lecture de commencer pendant que les segments sont drainés
             #[cfg(feature = "playlist")]
             if let Some(ref playlist_handle) = self.playlist_handle {
                 playlist_handle.push(pk.clone()).await.map_err(|e| {
                     AudioError::ProcessingError(format!("Failed to add to playlist: {}", e))
                 })?;
             }
+
+            // Si le fichier était déjà en cache (ChannelClosed), drainer les segments restants
+            // jusqu'au prochain TrackBoundary ou EndOfStream
+            // IMPORTANT: Faire ceci APRÈS l'ajout à la playlist pour ne pas bloquer la lecture
+            let stop_reason = if matches!(stop_reason, StopReason::ChannelClosed) {
+                tracing::debug!("File was already in cache, draining remaining segments");
+                drain_until_track_boundary(&mut rx, &stop_token).await?
+            } else {
+                stop_reason
+            };
 
             // Vérifier le stop_reason pour savoir si on continue
             match stop_reason {
@@ -360,6 +360,50 @@ async fn wait_for_first_audio_chunk_with_metadata(
     }
 }
 
+/// Draine tous les segments jusqu'au prochain TrackBoundary ou EndOfStream
+///
+/// Cette fonction est utilisée quand le fichier était déjà en cache et que
+/// nous devons ignorer les segments restants pour rester synchronisé avec la source.
+async fn drain_until_track_boundary(
+    rx: &mut mpsc::Receiver<Arc<AudioSegment>>,
+    stop_token: &CancellationToken,
+) -> Result<StopReason, AudioError> {
+    loop {
+        let segment = tokio::select! {
+            result = rx.recv() => {
+                match result {
+                    Some(seg) => seg,
+                    None => {
+                        return Ok(StopReason::ChannelClosed);
+                    }
+                }
+            }
+            _ = stop_token.cancelled() => {
+                return Ok(StopReason::ChannelClosed);
+            }
+        };
+
+        match &segment.segment {
+            _AudioSegment::Chunk(_) => {
+                // Ignorer les chunks audio
+                continue;
+            }
+            _AudioSegment::Sync(marker) => match &**marker {
+                SyncMarker::TrackBoundary { metadata, .. } => {
+                    return Ok(StopReason::TrackBoundary(metadata.clone()));
+                }
+                SyncMarker::EndOfStream => {
+                    return Ok(StopReason::EndOfStream);
+                }
+                _ => {
+                    // Ignorer les autres syncmarkers
+                    continue;
+                }
+            },
+        }
+    }
+}
+
 /// Pompe les segments pour une seule track (s'arrête au TrackBoundary).
 async fn pump_track_segments(
     first_segment: Arc<AudioSegment>,
@@ -377,10 +421,12 @@ async fn pump_track_segments(
     if let Some(chunk) = first_segment.as_chunk() {
         let pcm_bytes = chunk_to_pcm_bytes(chunk, bits_per_sample)?;
         if !pcm_bytes.is_empty() {
-            pcm_tx
-                .send(pcm_bytes)
-                .await
-                .map_err(|_| AudioError::SendError)?;
+            // Si le send échoue, c'est que le receiver est fermé
+            // (par exemple, le fichier était déjà en cache et add_from_reader a retourné immédiatement)
+            if pcm_tx.send(pcm_bytes).await.is_err() {
+                drop(pcm_tx);
+                return Ok((chunks, samples, duration_sec, StopReason::ChannelClosed));
+            }
             chunks += 1;
             samples += chunk.len() as u64;
             duration_sec += chunk.len() as f64 / expected_rate as f64;
@@ -421,10 +467,12 @@ async fn pump_track_segments(
                     continue;
                 }
 
-                pcm_tx
-                    .send(pcm_bytes)
-                    .await
-                    .map_err(|_| AudioError::SendError)?;
+                // Si le send échoue, c'est que le receiver est fermé
+                // (par exemple, le fichier était déjà en cache et add_from_reader a retourné immédiatement)
+                if pcm_tx.send(pcm_bytes).await.is_err() {
+                    drop(pcm_tx);
+                    return Ok((chunks, samples, duration_sec, StopReason::ChannelClosed));
+                }
 
                 chunks += 1;
                 samples += chunk.len() as u64;
