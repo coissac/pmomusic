@@ -154,32 +154,30 @@ impl NodeLogic for FlacCacheSinkLogic {
                 collection_ref,
             );
 
-            // Exécuter pump et add_from_reader en parallèle
-            let pump_future = pump_track_segments(
+            // Spawner pump_future avec ownership de rx
+            // Cela permet d'attendre cache_future séparément et de pusher à la playlist immédiatement
+            let pump_handle = tokio::spawn(pump_track_segments_owned(
                 first_segment,
-                &mut rx,
+                rx, // move ownership!
                 pcm_tx,
                 bits_per_sample,
                 sample_rate,
-                &stop_token,
-            );
+                stop_token.clone(),
+            ));
 
-            // Attendre les deux tâches en parallèle
-            tracing::debug!("FlacCacheSink: Waiting for cache and pump to complete");
-            let (cache_result, pump_result) = tokio::join!(cache_future, pump_future);
-
-            tracing::debug!("FlacCacheSink: tokio::join! completed, checking results");
-            let pk = cache_result.map_err(|e| {
+            // Attendre SEULEMENT le prebuffer (cache retourne après 512KB)
+            let start = std::time::Instant::now();
+            tracing::debug!("FlacCacheSink: Waiting for cache prebuffer to complete");
+            let pk = cache_future.await.map_err(|e| {
                 AudioError::ProcessingError(format!("Failed to add to cache: {}", e))
             })?;
 
-            tracing::debug!("FlacCacheSink: Track added to cache with pk {}, prebuffer complete", pk);
-
-            let (_chunks, _samples, _duration_sec, stop_reason) = pump_result?;
+            let prebuffer_time = start.elapsed();
+            tracing::info!("FlacCacheSink: Prebuffer complete with pk {} in {:?}, pushing to playlist NOW", pk, prebuffer_time);
 
             // Copier les métadonnées du TrackBoundary dans le cache
             // IMPORTANT: Faire ceci AVANT d'ajouter à la playlist pour que les métadonnées soient disponibles
-            if let Some(src_metadata) = track_metadata {
+            if let Some(src_metadata) = track_metadata.clone() {
                 let dest_metadata = self.cache.track_metadata(&pk);
 
                 // Utiliser copy_metadata_into pour copier toutes les métadonnées
@@ -221,14 +219,26 @@ impl NodeLogic for FlacCacheSinkLogic {
                 }
             }
 
-            // Ajouter à la playlist IMMÉDIATEMENT (avant le drainage!)
-            // Ceci permet à la lecture de commencer pendant que les segments sont drainés
+            // Push IMMÉDIATEMENT à la playlist (après prebuffer, avant pump complet!)
             #[cfg(feature = "playlist")]
             if let Some(ref playlist_handle) = self.playlist_handle {
+                let push_start = std::time::Instant::now();
+                tracing::debug!("FlacCacheSink: Pushing pk {} to playlist", pk);
                 playlist_handle.push(pk.clone()).await.map_err(|e| {
                     AudioError::ProcessingError(format!("Failed to add to playlist: {}", e))
                 })?;
+                tracing::info!("FlacCacheSink: Successfully pushed to playlist in {:?}", push_start.elapsed());
             }
+
+            // MAINTENANT attendre que pump finisse (il continue en arrière-plan)
+            tracing::debug!("FlacCacheSink: Waiting for pump to complete");
+            let pump_result = pump_handle.await.map_err(|e| {
+                AudioError::ProcessingError(format!("Pump task panicked: {}", e))
+            })?;
+
+            let (_chunks, _samples, _duration_sec, stop_reason, rx_returned) = pump_result?;
+            rx = rx_returned; // récupérer rx pour la prochaine track
+            tracing::debug!("FlacCacheSink: Pump completed");
 
             // Si le fichier était déjà en cache (ChannelClosed), drainer les segments restants
             // jusqu'au prochain TrackBoundary ou EndOfStream
@@ -502,6 +512,99 @@ async fn pump_track_segments(
                 SyncMarker::EndOfStream => {
                     drop(pcm_tx); // Fermer le channel PCM
                     return Ok((chunks, samples, duration_sec, StopReason::EndOfStream));
+                }
+                _ => {} // Ignorer les autres syncmarkers
+            },
+        }
+    }
+}
+
+/// Pompe les segments pour une seule track (s'arrête au TrackBoundary).
+///
+/// Version qui prend ownership de rx pour permettre un await séparé du cache.
+/// Retourne rx à la fin pour permettre le traitement des tracks suivantes.
+async fn pump_track_segments_owned(
+    first_segment: Arc<AudioSegment>,
+    mut rx: mpsc::Receiver<Arc<AudioSegment>>,
+    pcm_tx: mpsc::Sender<Vec<u8>>,
+    bits_per_sample: u8,
+    expected_rate: u32,
+    stop_token: CancellationToken,
+) -> Result<(u64, u64, f64, StopReason, mpsc::Receiver<Arc<AudioSegment>>), AudioError> {
+    let mut chunks = 0u64;
+    let mut samples = 0u64;
+    let mut duration_sec = 0.0f64;
+
+    // Traiter le premier segment
+    if let Some(chunk) = first_segment.as_chunk() {
+        let pcm_bytes = chunk_to_pcm_bytes(chunk, bits_per_sample)?;
+        if !pcm_bytes.is_empty() {
+            if pcm_tx.send(pcm_bytes).await.is_err() {
+                drop(pcm_tx);
+                return Ok((chunks, samples, duration_sec, StopReason::ChannelClosed, rx));
+            }
+            chunks += 1;
+            samples += chunk.len() as u64;
+            duration_sec += chunk.len() as f64 / expected_rate as f64;
+        }
+    }
+
+    // Boucle sur les segments suivants
+    loop {
+        let segment = tokio::select! {
+            result = rx.recv() => {
+                match result {
+                    Some(seg) => seg,
+                    None => {
+                        drop(pcm_tx);
+                        return Ok((chunks, samples, duration_sec, StopReason::ChannelClosed, rx));
+                    }
+                }
+            }
+            _ = stop_token.cancelled() => {
+                drop(pcm_tx);
+                return Ok((chunks, samples, duration_sec, StopReason::ChannelClosed, rx));
+            }
+        };
+
+        match &segment.segment {
+            _AudioSegment::Chunk(chunk) => {
+                if chunk.sample_rate() != expected_rate {
+                    return Err(AudioError::ProcessingError(format!(
+                        "FlacCacheSink: inconsistent sample rate ({} vs {})",
+                        chunk.sample_rate(),
+                        expected_rate
+                    )));
+                }
+
+                let pcm_bytes = chunk_to_pcm_bytes(&chunk, bits_per_sample)?;
+                if pcm_bytes.is_empty() {
+                    continue;
+                }
+
+                if pcm_tx.send(pcm_bytes).await.is_err() {
+                    drop(pcm_tx);
+                    return Ok((chunks, samples, duration_sec, StopReason::ChannelClosed, rx));
+                }
+
+                chunks += 1;
+                samples += chunk.len() as u64;
+                duration_sec += chunk.len() as f64 / expected_rate as f64;
+            }
+            _AudioSegment::Sync(marker) => match &**marker {
+                SyncMarker::TrackBoundary { metadata, .. } => {
+                    drop(pcm_tx);
+                    return Ok((
+                        chunks,
+                        samples,
+                        duration_sec,
+                        StopReason::TrackBoundary(metadata.clone()),
+                        rx,
+                    ));
+                }
+                SyncMarker::EndOfStream => {
+                    drop(pcm_tx);
+                    return Ok((chunks, samples, duration_sec, StopReason::EndOfStream, rx));
                 }
                 _ => {} // Ignorer les autres syncmarkers
             },
