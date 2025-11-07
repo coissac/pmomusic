@@ -135,6 +135,8 @@ impl NodeLogic for FlacCacheSinkLogic {
             // Ingérer le FLAC progressivement dans le cache
             // add_from_reader lance l'ingestion en arrière-plan et retourne dès que
             // le prebuffer (512 KB) est atteint, permettant un streaming progressif
+            // Le cache skip automatiquement le header FLAC (512 octets) pour calculer le pk
+            // à partir du contenu audio, évitant les collisions entre morceaux au même format
             let collection_ref = self.collection.as_deref();
             let cache_future = self.cache.add_from_reader(
                 None,

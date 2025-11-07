@@ -368,13 +368,45 @@ impl<C: CacheConfig> Cache<C> {
     where
         R: AsyncRead + Send + Unpin + 'static,
     {
-        // 1. Lire les 512 premiers octets pour calculer le pk
-        let header = crate::download::peek_reader_header(&mut reader, 512)
+        self.add_from_reader_with_pk(source_uri, reader, length, collection, None).await
+    }
+
+    /// Ajoute un fichier à partir d'un flux avec un pk explicite optionnel.
+    ///
+    /// Si `explicit_pk` est fourni, utilise ce pk au lieu de le calculer à partir du contenu.
+    /// Ceci est utile quand plusieurs fichiers ont le même header mais doivent être cachés séparément
+    /// (par exemple, des fichiers FLAC avec le même format mais du contenu différent).
+    pub async fn add_from_reader_with_pk<R>(
+        &self,
+        source_uri: Option<&str>,
+        mut reader: R,
+        length: Option<u64>,
+        collection: Option<&str>,
+        explicit_pk: Option<String>,
+    ) -> Result<String>
+    where
+        R: AsyncRead + Send + Unpin + 'static,
+    {
+        // 1. Lire les premiers octets pour calculer le pk
+        // Pour éviter les collisions entre fichiers FLAC au même format, on skip le header (512 octets)
+        // et on utilise les octets 512-1024 (début du contenu audio) pour calculer le pk
+        let buffer_size = if explicit_pk.is_none() { 1024 } else { 512 };
+        let header = crate::download::peek_reader_header(&mut reader, buffer_size)
             .await
             .map_err(|e| anyhow!("Failed to peek reader header: {}", e))?;
 
-        // 2. Calculer le pk basé sur le contenu
-        let pk = crate::cache_trait::pk_from_content_header(&header);
+        // 2. Calculer le pk: si pas de pk explicite, utiliser octets 512-1024 au lieu de 0-512
+        let pk = if let Some(explicit) = explicit_pk {
+            explicit
+        } else {
+            // Skip les 512 premiers octets (header FLAC) et utiliser les 512 suivants
+            let pk_bytes = if header.len() > 512 {
+                &header[512..]
+            } else {
+                &header[..]
+            };
+            crate::cache_trait::pk_from_content_header(pk_bytes)
+        };
         if let Some(uri) = source_uri {
             tracing::debug!("Computed pk {} for source_uri {}", pk, uri);
         } else {
