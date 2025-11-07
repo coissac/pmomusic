@@ -86,16 +86,22 @@ impl NodeLogic for FlacCacheSinkLogic {
         _output: Vec<mpsc::Sender<Arc<AudioSegment>>>,
         stop_token: CancellationToken,
     ) -> Result<(), AudioError> {
+        tracing::debug!("FlacCacheSink::process() started");
         let mut rx = input.expect("FlacCacheSink must have input");
         let mut track_number = 0;
 
         loop {
             // Attendre le premier chunk audio pour cette track
+            tracing::debug!("FlacCacheSink: Waiting for first audio chunk (track_number={})", track_number);
             let (first_segment, track_metadata) =
                 match wait_for_first_audio_chunk_with_metadata(&mut rx, &stop_token).await {
-                    Ok(result) => result,
-                    Err(_) => {
+                    Ok(result) => {
+                        tracing::debug!("FlacCacheSink: Got first audio chunk");
+                        result
+                    }
+                    Err(e) => {
                         // Plus d'audio disponible
+                        tracing::debug!("FlacCacheSink: No more audio available: {}", e);
                         return Ok(());
                     }
                 };
@@ -125,12 +131,14 @@ impl NodeLogic for FlacCacheSinkLogic {
             options_with_metadata.metadata = track_metadata.clone();
 
             // Créer l'encoder
+            tracing::debug!("FlacCacheSink: Creating FLAC encoder");
             let reader = ByteStreamReader::new(pcm_rx);
             let flac_stream = encode_flac_stream(reader, format, options_with_metadata)
                 .await
                 .map_err(|e| {
                     AudioError::ProcessingError(format!("FLAC encode init failed: {}", e))
                 })?;
+            tracing::debug!("FlacCacheSink: FLAC encoder created");
 
             // Ingérer le FLAC progressivement dans le cache
             // add_from_reader lance l'ingestion en arrière-plan et retourne dès que
@@ -138,6 +146,7 @@ impl NodeLogic for FlacCacheSinkLogic {
             // Le cache skip automatiquement le header FLAC (512 octets) pour calculer le pk
             // à partir du contenu audio, évitant les collisions entre morceaux au même format
             let collection_ref = self.collection.as_deref();
+            tracing::debug!("FlacCacheSink: Starting cache ingestion and pump in parallel");
             let cache_future = self.cache.add_from_reader(
                 None,
                 flac_stream,
@@ -156,13 +165,15 @@ impl NodeLogic for FlacCacheSinkLogic {
             );
 
             // Attendre les deux tâches en parallèle
+            tracing::debug!("FlacCacheSink: Waiting for cache and pump to complete");
             let (cache_result, pump_result) = tokio::join!(cache_future, pump_future);
 
+            tracing::debug!("FlacCacheSink: tokio::join! completed, checking results");
             let pk = cache_result.map_err(|e| {
                 AudioError::ProcessingError(format!("Failed to add to cache: {}", e))
             })?;
 
-            tracing::debug!("Track added to cache with pk {}, prebuffer complete", pk);
+            tracing::debug!("FlacCacheSink: Track added to cache with pk {}, prebuffer complete", pk);
 
             let (_chunks, _samples, _duration_sec, stop_reason) = pump_result?;
 
