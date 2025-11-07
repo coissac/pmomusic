@@ -332,15 +332,17 @@ async fn decode_and_emit_track(
 
                     // Si EOF atteint (read == 0)
                     if read == 0 {
-                        // Vérifier si le download est toujours en cours (cache progressif)
-                        if cache.get_download(cache_pk).await.is_some() {
-                            // Download en cours - attendre un peu et réessayer
-                            tracing::trace!("decode_and_emit_track: EOF reached but download ongoing, waiting...");
-                            tokio::time::sleep(Duration::from_millis(100)).await;
+                        // Vérifier si le fichier est complètement écrit (completion marker existe)
+                        // Si pas de marker, le fichier est encore en cours d'écriture (cache progressif)
+                        if !cache.is_download_complete(cache_pk) {
+                            // Fichier encore en cours d'écriture - attendre un peu et réessayer
+                            tracing::trace!("decode_and_emit_track: EOF reached but file not complete (no marker), waiting 50ms...");
+                            tokio::time::sleep(Duration::from_millis(50)).await;
                             continue; // Retry la lecture
                         }
 
-                        // Download terminé - c'est vraiment la fin du fichier
+                        // Completion marker existe - c'est vraiment la fin du fichier
+                        tracing::trace!("decode_and_emit_track: EOF reached and file is complete (marker exists)");
                         if pending.is_empty() {
                             break;
                         }

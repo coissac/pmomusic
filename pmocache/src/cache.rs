@@ -716,6 +716,27 @@ impl<C: CacheConfig> Cache<C> {
         downloads.get(pk).cloned()
     }
 
+    /// Vérifie si le téléchargement/ingestion d'un fichier est complètement terminé
+    ///
+    /// Cette méthode vérifie l'existence du fichier marker de complétion (.complete)
+    /// qui est créé uniquement quand le fichier est complètement écrit et fermé.
+    ///
+    /// Utile pour différencier:
+    /// - EOF temporaire : fichier encore en cours d'écriture (retourne false)
+    /// - EOF réel : fichier complètement écrit (retourne true)
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Clé primaire du fichier
+    ///
+    /// # Returns
+    ///
+    /// `true` si le fichier est complètement écrit (marker existe), `false` sinon
+    pub fn is_download_complete(&self, pk: &str) -> bool {
+        let completion_marker = self.get_completion_marker_path(pk);
+        completion_marker.exists()
+    }
+
     /// Retourne la taille actuelle téléchargée (source)
     ///
     /// Si le download est en cours, retourne la taille téléchargée.
