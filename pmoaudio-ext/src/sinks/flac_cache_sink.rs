@@ -323,9 +323,38 @@ impl NodeLogic for FlacCacheSinkLogic {
                     _AudioSegment::Chunk(_) => {
                         // Continuer à dispatcher vers le pump
                         if track_tx.send(segment).await.is_err() {
-                            // Le pump est mort - erreur
-                            tracing::error!("FlacCacheSink: pump died during post-prebuffer phase");
-                            return Err(AudioError::ProcessingError("Pump task died".to_string()));
+                            // Le pump a fermé son channel - cela peut arriver si le fichier
+                            // était déjà en cache (add_from_reader retourne immédiatement)
+                            tracing::debug!("FlacCacheSink: pump closed track_tx, checking pump status");
+                            drop(track_tx);
+
+                            // Attendre que le pump se termine et vérifier le résultat
+                            match pump_handle.await {
+                                Ok(Ok(_)) => {
+                                    // Le pump s'est terminé proprement (fichier était en cache)
+                                    tracing::debug!("FlacCacheSink: pump completed successfully, draining remaining segments");
+                                    // Drainer les segments restants jusqu'au TrackBoundary
+                                    match drain_until_track_boundary(&mut rx, &stop_token).await? {
+                                        StopReason::TrackBoundary(_) => {
+                                            track_number += 1;
+                                            break; // Continue avec la prochaine track
+                                        }
+                                        StopReason::EndOfStream | StopReason::ChannelClosed => {
+                                            return Ok(());
+                                        }
+                                    }
+                                }
+                                Ok(Err(e)) => {
+                                    // Le pump a rencontré une erreur
+                                    tracing::error!("FlacCacheSink: pump died with error: {}", e);
+                                    return Err(e);
+                                }
+                                Err(e) => {
+                                    // Le pump task a paniqué
+                                    tracing::error!("FlacCacheSink: pump task panicked: {}", e);
+                                    return Err(AudioError::ProcessingError("Pump task panicked".to_string()));
+                                }
+                            }
                         }
                     }
                     _AudioSegment::Sync(marker) => match &**marker {
