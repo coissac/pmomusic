@@ -164,16 +164,8 @@ impl NodeLogic for FlacCacheSinkLogic {
 
             let (_chunks, _samples, _duration_sec, stop_reason) = pump_result?;
 
-            // Si le fichier était déjà en cache (ChannelClosed), drainer les segments restants
-            // jusqu'au prochain TrackBoundary ou EndOfStream
-            let stop_reason = if matches!(stop_reason, StopReason::ChannelClosed) {
-                tracing::debug!("File was already in cache, draining remaining segments");
-                drain_until_track_boundary(&mut rx, &stop_token).await?
-            } else {
-                stop_reason
-            };
-
             // Copier les métadonnées du TrackBoundary dans le cache
+            // IMPORTANT: Faire ceci AVANT d'ajouter à la playlist pour que les métadonnées soient disponibles
             if let Some(src_metadata) = track_metadata {
                 let dest_metadata = self.cache.track_metadata(&pk);
 
@@ -216,13 +208,24 @@ impl NodeLogic for FlacCacheSinkLogic {
                 }
             }
 
-            // Ajouter à la playlist si enregistrée
+            // Ajouter à la playlist IMMÉDIATEMENT (avant le drainage!)
+            // Ceci permet à la lecture de commencer pendant que les segments sont drainés
             #[cfg(feature = "playlist")]
             if let Some(ref playlist_handle) = self.playlist_handle {
                 playlist_handle.push(pk.clone()).await.map_err(|e| {
                     AudioError::ProcessingError(format!("Failed to add to playlist: {}", e))
                 })?;
             }
+
+            // Si le fichier était déjà en cache (ChannelClosed), drainer les segments restants
+            // jusqu'au prochain TrackBoundary ou EndOfStream
+            // IMPORTANT: Faire ceci APRÈS l'ajout à la playlist pour ne pas bloquer la lecture
+            let stop_reason = if matches!(stop_reason, StopReason::ChannelClosed) {
+                tracing::debug!("File was already in cache, draining remaining segments");
+                drain_until_track_boundary(&mut rx, &stop_token).await?
+            } else {
+                stop_reason
+            };
 
             // Vérifier le stop_reason pour savoir si on continue
             match stop_reason {
