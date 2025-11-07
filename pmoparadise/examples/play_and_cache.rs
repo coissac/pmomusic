@@ -4,7 +4,8 @@
 //! 1. RadioParadiseStreamSource - Télécharge et décode un bloc FLAC
 //! 2. FlacCacheSink - Cache chaque piste en FLAC et alimente une playlist
 //! 3. PlaylistSource - Lit la playlist pendant le téléchargement
-//! 4. AudioSink - Joue l'audio sur la sortie standard
+//! 4. TimerNode - Régule le débit pour éviter EOF prématurés (progressive cache)
+//! 5. AudioSink - Joue l'audio sur la sortie standard
 //!
 //! Architecture :
 //! ```text
@@ -12,7 +13,10 @@
 //!   RadioParadiseStreamSource → FlacCacheSink (avec playlist abonnée)
 //!
 //! Pipeline 2 (Playback):
-//!   PlaylistSource (lit la playlist) → AudioSink (joue l'audio)
+//!   PlaylistSource → TimerNode (rate limiting) → AudioSink
+//!                      ↓
+//!                 Prévention EOF
+//!                 (3s max lead)
 //! ```
 //!
 //! Usage:
@@ -22,7 +26,7 @@
 //!   cargo run --example play_and_cache --features full -- 0    # Main Mix
 //!   cargo run --example play_and_cache --features full -- 2    # Rock Mix
 
-use pmoaudio::{AudioPipelineNode, AudioSink};
+use pmoaudio::{AudioPipelineNode, AudioSink, TimerNode};
 use pmoaudio_ext::{FlacCacheSink, PlaylistSource};
 use pmoaudiocache::Cache as AudioCache;
 use pmocovers::Cache as CoverCache;
@@ -195,6 +199,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut playlist_source = PlaylistSource::new(reader, audio_cache.clone());
     tracing::debug!("PlaylistSource created");
 
+    // Créer le timer node pour réguler le débit (empêche EOF prématurés)
+    // Tolère 3 secondes d'avance max pour permettre le buffering
+    let mut timer = TimerNode::new(3.0);
+    tracing::debug!("TimerNode created (max_lead_time=3.0s)");
+
     // Créer le sink audio
     let audio_sink = if use_null_audio {
         AudioSink::with_null_output()
@@ -203,9 +212,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     tracing::debug!("AudioSink created");
 
-    // Connecter playlist → audio
-    playlist_source.register(Box::new(audio_sink));
-    tracing::info!("Playback pipeline connected: PlaylistSource → AudioSink");
+    // Connecter timer → audio (AVANT de mettre timer dans une Box)
+    timer.register(Box::new(audio_sink));
+
+    // Connecter playlist → timer
+    playlist_source.register(Box::new(timer));
+    tracing::info!("Playback pipeline connected: PlaylistSource → TimerNode → AudioSink");
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Lancer les deux pipelines en parallèle

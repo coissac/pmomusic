@@ -124,6 +124,7 @@ pub use nodes::{
     flac_file_sink::{FlacFileSink, FlacFileSinkStats},
     http_source::HttpSource,
     resampling_node::ResamplingNode,
+    timer_node::TimerNode,
     AudioError, AudioNode, TypedAudioNode,
 };
 

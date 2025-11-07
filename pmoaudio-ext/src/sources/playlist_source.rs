@@ -279,6 +279,28 @@ async fn decode_and_emit_track(
     cache: &Arc<AudioCache>,
     cache_pk: &str,
 ) -> Result<(), AudioError> {
+    // Attendre que le fichier soit suffisamment gros pour le sniffing
+    // Le cache progressif permet de commencer la lecture après le prebuffer (512 KB)
+    loop {
+        let metadata = tokio::fs::metadata(path)
+            .await
+            .map_err(|e| AudioError::IoError(format!("Failed to stat {:?}: {}", path, e)))?;
+
+        let file_size = metadata.len();
+        const MIN_FILE_SIZE: u64 = 512 * 1024; // 512 KB (prebuffer size)
+
+        if file_size >= MIN_FILE_SIZE || cache.is_download_complete(cache_pk) {
+            tracing::trace!("decode_and_emit_track: file ready ({} bytes), starting decode", file_size);
+            break;
+        }
+
+        tracing::trace!(
+            "decode_and_emit_track: file too small ({} bytes), waiting 50ms...",
+            file_size
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
     // Ouvrir et décoder
     let file = File::open(path)
         .await
@@ -333,16 +355,16 @@ async fn decode_and_emit_track(
                     // Si EOF atteint (read == 0)
                     if read == 0 {
                         // Vérifier si le fichier est complètement écrit (completion marker existe)
-                        // Si pas de marker, le fichier est encore en cours d'écriture (cache progressif)
                         if !cache.is_download_complete(cache_pk) {
-                            // Fichier encore en cours d'écriture - attendre un peu et réessayer
-                            tracing::trace!("decode_and_emit_track: EOF reached but file not complete (no marker), waiting 50ms...");
-                            tokio::time::sleep(Duration::from_millis(50)).await;
-                            continue; // Retry la lecture
+                            // Fichier encore en cours d'écriture - attendre et réessayer
+                            // Retry plus longtemps pour le cache progressif
+                            tracing::trace!("decode_and_emit_track: EOF but file incomplete, waiting 200ms...");
+                            tokio::time::sleep(Duration::from_millis(200)).await;
+                            continue; // Retry
                         }
 
-                        // Completion marker existe - c'est vraiment la fin du fichier
-                        tracing::trace!("decode_and_emit_track: EOF reached and file is complete (marker exists)");
+                        // Completion marker existe - vraie fin du fichier
+                        tracing::trace!("decode_and_emit_track: EOF and file complete");
                         if pending.is_empty() {
                             break;
                         }
