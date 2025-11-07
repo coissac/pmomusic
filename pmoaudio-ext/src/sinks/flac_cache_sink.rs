@@ -164,6 +164,15 @@ impl NodeLogic for FlacCacheSinkLogic {
 
             let (_chunks, _samples, _duration_sec, stop_reason) = pump_result?;
 
+            // Si le fichier était déjà en cache (ChannelClosed), drainer les segments restants
+            // jusqu'au prochain TrackBoundary ou EndOfStream
+            let stop_reason = if matches!(stop_reason, StopReason::ChannelClosed) {
+                tracing::debug!("File was already in cache, draining remaining segments");
+                drain_until_track_boundary(&mut rx, &stop_token).await?
+            } else {
+                stop_reason
+            };
+
             // Copier les métadonnées du TrackBoundary dans le cache
             if let Some(src_metadata) = track_metadata {
                 let dest_metadata = self.cache.track_metadata(&pk);
@@ -339,6 +348,50 @@ async fn wait_for_first_audio_chunk_with_metadata(
                 }
                 _ => {
                     // Ignorer TopZeroSync, Heartbeat, etc.
+                    continue;
+                }
+            },
+        }
+    }
+}
+
+/// Draine tous les segments jusqu'au prochain TrackBoundary ou EndOfStream
+///
+/// Cette fonction est utilisée quand le fichier était déjà en cache et que
+/// nous devons ignorer les segments restants pour rester synchronisé avec la source.
+async fn drain_until_track_boundary(
+    rx: &mut mpsc::Receiver<Arc<AudioSegment>>,
+    stop_token: &CancellationToken,
+) -> Result<StopReason, AudioError> {
+    loop {
+        let segment = tokio::select! {
+            result = rx.recv() => {
+                match result {
+                    Some(seg) => seg,
+                    None => {
+                        return Ok(StopReason::ChannelClosed);
+                    }
+                }
+            }
+            _ = stop_token.cancelled() => {
+                return Ok(StopReason::ChannelClosed);
+            }
+        };
+
+        match &segment.segment {
+            _AudioSegment::Chunk(_) => {
+                // Ignorer les chunks audio
+                continue;
+            }
+            _AudioSegment::Sync(marker) => match &**marker {
+                SyncMarker::TrackBoundary { metadata, .. } => {
+                    return Ok(StopReason::TrackBoundary(metadata.clone()));
+                }
+                SyncMarker::EndOfStream => {
+                    return Ok(StopReason::EndOfStream);
+                }
+                _ => {
+                    // Ignorer les autres syncmarkers
                     continue;
                 }
             },

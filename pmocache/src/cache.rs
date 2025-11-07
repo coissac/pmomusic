@@ -68,32 +68,36 @@ pub struct Cache<C: CacheConfig> {
 }
 
 impl<C: CacheConfig> Cache<C> {
+    /// Retourne le chemin du fichier marker de complétion
+    fn get_completion_marker_path(&self, pk: &str) -> PathBuf {
+        self.get_file_path(pk).with_extension(format!("{}.complete", C::file_extension()))
+    }
+
     /// Vérifie si un fichier est en cache et complet
     ///
     /// # Returns
     ///
-    /// - `Ok(true)` si le fichier est en cache et complet
-    /// - `Ok(false)` si le fichier n'est pas en cache ou incomplet (et supprime le fichier incomplet)
+    /// - `Ok(true)` si le fichier est en cache et complet (fichier .complete existe)
+    /// - `Ok(false)` si le fichier n'est pas en cache ou incomplet (et supprime les fichiers incomplets)
     /// - `Err` en cas d'erreur
     async fn check_cached_and_complete(&self, pk: &str) -> Result<bool> {
         if self.db.get(pk, false).is_ok() {
             let file_path = self.get_file_path(pk);
+            let completion_marker = self.get_completion_marker_path(pk);
+
             if file_path.exists() {
-                // Vérifier si le fichier semble complet (taille >= min_prebuffer_size)
-                if let Ok(metadata) = std::fs::metadata(&file_path) {
-                    let file_size = metadata.len();
-                    if self.min_prebuffer_size > 0 && file_size < self.min_prebuffer_size {
-                        tracing::warn!(
-                            "File with pk {} in cache is too small ({} bytes < {} bytes), will re-download/re-ingest",
-                            pk, file_size, self.min_prebuffer_size
-                        );
-                        // Supprimer le fichier incomplet
-                        let _ = std::fs::remove_file(&file_path);
-                        return Ok(false);
-                    } else {
-                        // Déjà en cache et complet
-                        return Ok(true);
-                    }
+                // Vérifier si le fichier marker de complétion existe
+                if completion_marker.exists() {
+                    tracing::debug!("File with pk {} is complete (marker exists)", pk);
+                    return Ok(true);
+                } else {
+                    tracing::warn!(
+                        "File with pk {} in cache has no completion marker, will re-download/re-ingest",
+                        pk
+                    );
+                    // Supprimer le fichier incomplet
+                    let _ = std::fs::remove_file(&file_path);
+                    return Ok(false);
                 }
             }
         }
@@ -139,12 +143,23 @@ impl<C: CacheConfig> Cache<C> {
             tracing::debug!("Prebuffering complete for pk {} ({} bytes)", pk, self.min_prebuffer_size);
         }
 
-        // Lancer une tâche de nettoyage en background
+        // Lancer une tâche de nettoyage et marquage de complétion en background
         let downloads_clone = self.downloads.clone();
         let pk_clone = pk.to_string();
+        let completion_marker = self.get_completion_marker_path(pk);
+
         tokio::spawn(async move {
-            let _ = download.wait_until_finished().await;
+            let result = download.wait_until_finished().await;
             downloads_clone.write().await.remove(&pk_clone);
+
+            // Créer le fichier marker de complétion si le téléchargement a réussi
+            if result.is_ok() {
+                if let Err(e) = std::fs::write(&completion_marker, "") {
+                    tracing::warn!("Failed to create completion marker for pk {}: {}", pk_clone, e);
+                } else {
+                    tracing::debug!("Created completion marker for pk {}", pk_clone);
+                }
+            }
         });
 
         Ok(pk.to_string())
@@ -582,15 +597,22 @@ impl<C: CacheConfig> Cache<C> {
     }
 
     /// Consolide le cache en supprimant les orphelins et en re-téléchargeant les fichiers manquants
+    ///
+    /// Cette fonction :
+    /// - Supprime les entrées DB sans fichiers (ou re-télécharge si URL disponible)
+    /// - Supprime les fichiers sans marker de complétion et leurs entrées DB
+    /// - Supprime les fichiers sans entrées DB correspondantes
     pub async fn consolidate(&self) -> Result<()> {
         // Récupérer la liste des entrées à traiter
         let entries = self.db.get_all(false)?;
 
-        // Supprimer les entrées sans fichiers correspondants
+        // Supprimer les entrées sans fichiers correspondants OU sans marker de complétion
         for entry in entries {
             let file_path = self.get_file_path(&entry.pk);
+            let completion_marker = self.get_completion_marker_path(&entry.pk);
 
             if !file_path.exists() {
+                // Fichier manquant, essayer de re-télécharger
                 match self.db.get_origin_url(&entry.pk)? {
                     Some(url) => {
                         if let Err(err) = self.add_from_url(&url, entry.collection.as_deref()).await
@@ -607,6 +629,14 @@ impl<C: CacheConfig> Cache<C> {
                         self.db.delete(&entry.pk)?;
                     }
                 }
+            } else if !completion_marker.exists() {
+                // Fichier existe mais pas de marker de complétion -> fichier incomplet
+                tracing::warn!(
+                    "Removing incomplete file {} (no completion marker)",
+                    entry.pk
+                );
+                let _ = tokio::fs::remove_file(&file_path).await;
+                self.db.delete(&entry.pk)?;
             }
         }
 
@@ -616,11 +646,20 @@ impl<C: CacheConfig> Cache<C> {
             let path = entry.path();
             if path.is_file() && path != self.dir.join("cache.db") {
                 if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+                    // Ignorer les fichiers .complete
+                    if file_name.ends_with(".complete") {
+                        continue;
+                    }
+
                     // Format attendu: {pk}.{qualifier}.{EXT}
                     // On extrait le pk (première partie avant le premier point)
                     if let Some(pk) = file_name.split('.').next() {
                         if self.db.get(pk, false).is_err() {
-                            tokio::fs::remove_file(path).await?;
+                            tracing::debug!("Removing orphan file: {}", file_name);
+                            tokio::fs::remove_file(&path).await?;
+                            // Supprimer aussi le marker de complétion s'il existe
+                            let completion_marker = self.get_completion_marker_path(pk);
+                            let _ = tokio::fs::remove_file(&completion_marker).await;
                         }
                     }
                 }

@@ -56,6 +56,46 @@ pub fn new_cache(dir: &str, limit: usize) -> Result<Cache> {
     Cache::with_transformer(dir, limit, Some(transformer_factory))
 }
 
+/// Crée un cache audio et lance la consolidation en arrière-plan
+///
+/// Cette fonction crée le cache et lance immédiatement une consolidation
+/// pour nettoyer les fichiers incomplets (sans marker de complétion).
+///
+/// # Arguments
+///
+/// * `dir` - Répertoire de stockage du cache
+/// * `limit` - Limite de taille du cache (nombre de pistes)
+///
+/// # Returns
+///
+/// Arc vers l'instance du cache configurée pour la conversion FLAC automatique
+///
+/// # Exemple
+///
+/// ```rust,no_run
+/// use pmoaudiocache::cache;
+///
+/// # async fn example() -> anyhow::Result<()> {
+/// let cache = cache::new_cache_with_consolidation("./audio_cache", 1000).await?;
+/// # Ok(())
+/// # }
+/// ```
+pub async fn new_cache_with_consolidation(dir: &str, limit: usize) -> Result<Arc<Cache>> {
+    let cache = Arc::new(new_cache(dir, limit)?);
+
+    // Lancer la consolidation en arrière-plan pour nettoyer les fichiers incomplets
+    let cache_clone = cache.clone();
+    tokio::spawn(async move {
+        if let Err(e) = cache_clone.consolidate().await {
+            tracing::warn!("Failed to consolidate cache on startup: {}", e);
+        } else {
+            tracing::info!("Cache consolidated successfully on startup");
+        }
+    });
+
+    Ok(cache)
+}
+
 /// Ajoute une piste audio depuis une URL avec extraction et stockage des métadonnées
 ///
 /// Cette fonction étend `add_from_url` du cache en ajoutant :
