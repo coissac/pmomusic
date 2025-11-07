@@ -50,8 +50,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Récupérer les arguments
     let args: Vec<String> = env::args().collect();
-    if args.len() != 2 {
-        eprintln!("Usage: {} <channel_id>", args[0]);
+    if args.len() < 2 {
+        eprintln!("Usage: {} <channel_id> [--null-audio]", args[0]);
         eprintln!();
         eprintln!("Downloads a Radio Paradise block, caches it, and plays it simultaneously.");
         eprintln!();
@@ -60,6 +60,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("  1 - Mellow Mix (smooth, chilled music)");
         eprintln!("  2 - Rock Mix (classic & modern rock)");
         eprintln!("  3 - World/Etc Mix (global sounds)");
+        eprintln!();
+        eprintln!("Options:");
+        eprintln!("  --null-audio    Don't play audio (for testing without audio device)");
         std::process::exit(1);
     }
 
@@ -71,7 +74,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    let use_null_audio = args.len() > 2 && args[2] == "--null-audio";
+
     tracing::info!("Channel ID: {}", channel_id);
+    if use_null_audio {
+        tracing::info!("Using null audio output (no playback)");
+    }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Initialiser les caches et le gestionnaire de playlist
@@ -188,7 +196,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::debug!("PlaylistSource created");
 
     // Créer le sink audio
-    let audio_sink = AudioSink::new();
+    let audio_sink = if use_null_audio {
+        AudioSink::with_null_output()
+    } else {
+        AudioSink::new()
+    };
     tracing::debug!("AudioSink created");
 
     // Connecter playlist → audio
