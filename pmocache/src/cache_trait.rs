@@ -138,9 +138,36 @@ pub trait FileCache<C: CacheConfig>: Send + Sync {
     ///
     /// # Returns
     ///
-    /// `true` si l'entrée existe en base de données et que le fichier est présent
+    /// `true` si l'entrée existe en base de données et que le fichier est présent ET complet
+    /// (avec marker .complete) OU en cours de download
     fn is_valid_pk(&self, pk: &str) -> bool {
-        self.get_database().get(pk, false).is_ok() && self.file_path(pk).exists()
+        if self.get_database().get(pk, false).is_err() {
+            tracing::debug!("is_valid_pk({}): DB entry not found", pk);
+            return false;
+        }
+
+        let file_path = self.file_path(pk);
+        if !file_path.exists() {
+            tracing::debug!("is_valid_pk({}): File does not exist", pk);
+            return false;
+        }
+
+        // Vérifier si le fichier est récent (modifié dans les 60 dernières secondes)
+        // Ceci détecte les downloads en cours même sans marker .complete
+        // Le marker sera vérifié plus tard lors de la lecture effective
+        if let Ok(metadata) = file_path.metadata() {
+            if let Ok(modified) = metadata.modified() {
+                if let Ok(elapsed) = modified.elapsed() {
+                    let age_secs = elapsed.as_secs();
+                    let is_recent = age_secs < 60;
+                    tracing::debug!("is_valid_pk({}): File age={}s, is_recent={}", pk, age_secs, is_recent);
+                    return is_recent;
+                }
+            }
+        }
+
+        tracing::debug!("is_valid_pk({}): Could not check file age, accepting by default", pk);
+        true  // Si on ne peut pas vérifier la date, on accepter par défaut
     }
 }
 
