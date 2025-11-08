@@ -435,7 +435,7 @@ impl FlacCacheSink {
         encoder_options: EncoderOptions,
         collection: Option<String>,
     ) -> Self {
-        let logic = FlacCacheSinkLogic::new(cache, covers, collection, encoder_options, 8);
+        let logic = FlacCacheSinkLogic::new(cache, covers, collection, encoder_options, 256);
         Self {
             inner: Node::new_with_input(logic, channel_size),
         }
