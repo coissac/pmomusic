@@ -88,11 +88,28 @@ impl NodeLogic for FlacCacheSinkLogic {
         tracing::debug!("FlacCacheSink::process() started");
         let mut rx = input.expect("FlacCacheSink must have input");
         let mut track_number = 0;
+        // Stocker les métadonnées du prochain TrackBoundary reçu en Phase 3
+        let mut next_track_metadata: Option<Arc<RwLock<dyn pmometadata::TrackMetadata>>> = None;
 
         loop {
             // Attendre le premier chunk audio pour cette track
             tracing::debug!("FlacCacheSink: Waiting for first audio chunk (track_number={})", track_number);
-            let (first_segment, track_metadata) =
+            let (first_segment, track_metadata) = if let Some(metadata) = next_track_metadata.take() {
+                // On a déjà reçu le TrackBoundary en Phase 3 de la track précédente
+                tracing::debug!("FlacCacheSink: Using TrackBoundary metadata from previous track's Phase 3");
+                // Attendre juste le premier chunk
+                match wait_for_first_audio_chunk(&mut rx, &stop_token).await {
+                    Ok(chunk) => {
+                        tracing::debug!("FlacCacheSink: Got first audio chunk");
+                        (chunk, Some(metadata))
+                    }
+                    Err(e) => {
+                        tracing::debug!("FlacCacheSink: No more audio available: {}", e);
+                        return Ok(());
+                    }
+                }
+            } else {
+                // Première track ou pas de TrackBoundary reçu en avance
                 match wait_for_first_audio_chunk_with_metadata(&mut rx, &stop_token).await {
                     Ok(result) => {
                         tracing::debug!("FlacCacheSink: Got first audio chunk");
@@ -103,7 +120,8 @@ impl NodeLogic for FlacCacheSinkLogic {
                         tracing::debug!("FlacCacheSink: No more audio available: {}", e);
                         return Ok(());
                     }
-                };
+                }
+            };
 
             // Extraire les informations du premier chunk
             let first_chunk = first_segment.as_chunk().unwrap();
@@ -395,9 +413,11 @@ impl NodeLogic for FlacCacheSinkLogic {
                         // Si pump_closed, ignorer silencieusement le chunk
                     }
                     _AudioSegment::Sync(marker) => match &**marker {
-                        SyncMarker::TrackBoundary { .. } => {
+                        SyncMarker::TrackBoundary { metadata } => {
                             // Nouveau morceau - fermer le pump si pas déjà fermé
-                            tracing::debug!("FlacCacheSink: TrackBoundary received, closing pump");
+                            tracing::debug!("FlacCacheSink: TrackBoundary received, closing pump and storing metadata for next track");
+                            // Stocker les métadonnées pour la prochaine track
+                            next_track_metadata = Some(metadata.clone());
                             drop(track_tx.take());
                             drop(pump_handle.take());
                             track_number += 1;
@@ -488,8 +508,49 @@ impl FlacCacheSink {
     }
 }
 
-/// Attend et retourne le premier chunk audio avec les métadonnées du TrackBoundary si présent.
-/// Retourne une erreur si EndOfStream est reçu avant tout audio.
+/// Attend le premier chunk audio (sans attendre de TrackBoundary)
+/// Utilisé quand on a déjà reçu le TrackBoundary en Phase 3 de la track précédente
+async fn wait_for_first_audio_chunk(
+    rx: &mut mpsc::Receiver<Arc<AudioSegment>>,
+    stop_token: &CancellationToken,
+) -> Result<Arc<AudioSegment>, AudioError> {
+    loop {
+        let segment = tokio::select! {
+            result = rx.recv() => {
+                result.ok_or_else(|| AudioError::ProcessingError("No audio data received".into()))?
+            }
+            _ = stop_token.cancelled() => {
+                return Err(AudioError::ProcessingError("Cancelled".into()));
+            }
+        };
+
+        match &segment.segment {
+            _AudioSegment::Chunk(chunk) => {
+                if chunk.len() == 0 {
+                    return Err(AudioError::ProcessingError("Received empty chunk".into()));
+                }
+                return Ok(segment);
+            }
+            _AudioSegment::Sync(marker) => match &**marker {
+                SyncMarker::TrackBoundary { .. } => {
+                    // On ne devrait pas recevoir de TrackBoundary ici car on l'a déjà
+                    tracing::warn!("FlacCacheSink: Unexpected TrackBoundary while waiting for first chunk");
+                    continue;
+                }
+                SyncMarker::EndOfStream => {
+                    return Err(AudioError::ProcessingError(
+                        "EndOfStream received before any audio".into(),
+                    ));
+                }
+                _ => {
+                    // Ignorer TopZeroSync, Heartbeat, etc.
+                    continue;
+                }
+            },
+        }
+    }
+}
+
 async fn wait_for_first_audio_chunk_with_metadata(
     rx: &mut mpsc::Receiver<Arc<AudioSegment>>,
     stop_token: &CancellationToken,

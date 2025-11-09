@@ -137,19 +137,22 @@ impl RadioParadiseStreamSourceLogic {
         self.send_to_children(output, top_zero).await?;
         tracing::debug!("TopZeroSync sent");
 
-        // Envoyer TrackBoundary pour la première song AVANT le premier chunk
-        // Cela garantit que FlacCacheSink reçoit les métadonnées dès le début
-        let mut next_song: Option<(usize, &Song)> = if let Some((_idx, song)) = songs.get(0).copied() {
-            tracing::debug!("Sending TrackBoundary for first song before audio chunks");
+        // Envoyer TrackBoundary pour la première song AVANT le premier chunk audio
+        // Même si son elapsed > 0, cela garantit que FlacCacheSink a des métadonnées
+        // dès le début (sinon il attendrait indéfiniment un TrackBoundary)
+        let mut next_song: Option<(usize, &Song)> = if let Some((idx, song)) = songs.get(0).copied() {
+            tracing::debug!("Sending TrackBoundary for first song (idx={}, elapsed={}ms) at timestamp 0",
+                idx, song.elapsed);
             let metadata = song_to_metadata(song, block).await;
             let track_boundary = AudioSegment::new_track_boundary(
                 *order,
-                0.0,  // timestamp = 0 au début du bloc
+                0.0,  // timestamp = 0 au début du stream
                 metadata,
             );
             self.send_to_children(output, track_boundary).await?;
             song_index = 1;
-            songs.get(1).copied()  // Passer à la song suivante
+            // Le prochain TrackBoundary sera pour la deuxième song quand elapsed_ms >= song.elapsed
+            songs.get(1).copied()
         } else {
             None
         };
@@ -197,11 +200,15 @@ impl RadioParadiseStreamSourceLogic {
             let chunk_len = (pcm_data.len() / (bytes_per_sample * 2)) as u64; // 2 = stereo
 
             // Vérifier si on doit insérer un TrackBoundary avant ce chunk
-            if let Some((_idx, song)) = next_song {
+            if let Some((idx, song)) = next_song {
                 let elapsed_ms = (total_samples * 1000) / sample_rate as u64;
 
                 if elapsed_ms >= song.elapsed {
                     // Envoyer TrackBoundary AVANT le chunk (avec le même order)
+                    tracing::debug!(
+                        "Sending TrackBoundary for song {} at elapsed_ms={} (song.elapsed={}, timestamp_sec={:.2})",
+                        idx, elapsed_ms, song.elapsed, (total_samples as f64 / sample_rate as f64)
+                    );
                     let metadata = song_to_metadata(song, block).await;
                     let timestamp_sec = total_samples as f64 / sample_rate as f64;
                     let track_boundary = AudioSegment::new_track_boundary(
@@ -214,6 +221,7 @@ impl RadioParadiseStreamSourceLogic {
                     // Passer à la song suivante
                     song_index += 1;
                     next_song = songs.get(song_index).copied();
+                    tracing::debug!("Moved to next song, song_index={}, next_song present={}", song_index, next_song.is_some());
                 }
             }
 
