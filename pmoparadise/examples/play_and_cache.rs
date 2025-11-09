@@ -129,8 +129,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let playlist_id = format!("radio-paradise-ch{}", channel_id);
     tracing::info!("Creating playlist: {}", playlist_id);
 
-    // Créer la playlist (ou la vider si elle existe)
-    let mut writer = playlist_manager.create_persistent_playlist(playlist_id.clone()).await?;
+    // Créer une playlist éphémère (non persistante) pour cet exemple
+    let mut writer = playlist_manager.get_write_handle(playlist_id.clone()).await?;
     writer.set_title(format!("Radio Paradise - Channel {}", channel_id)).await?;
     writer.flush().await?; // Vider la playlist si elle existait
     tracing::debug!("Playlist created and flushed");

@@ -19,7 +19,6 @@ use tokio::{
     sync::{mpsc, RwLock},
 };
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
 
 /// Sink qui encode les `AudioSegment` reçus au format FLAC et les stocke dans le cache audio.
 ///
@@ -258,31 +257,43 @@ impl NodeLogic for FlacCacheSinkLogic {
                     })?;
 
                 let url = match dest_metadata.read().await.get_cover_url().await {
-                    Ok(url) => url,
-                    Err(e) if e.is_transient() => None,
-                    Err(_) => {
-                        warn!("Cannot obtain cover for audio asset {}", pk);
+                    Ok(url) => {
+                        tracing::debug!("FlacCacheSink: Got cover URL for pk {}: {:?}", pk, url);
+                        url
+                    }
+                    Err(e) if e.is_transient() => {
+                        tracing::debug!("FlacCacheSink: Transient error getting cover URL for pk {}: {}", pk, e);
+                        None
+                    }
+                    Err(e) => {
+                        tracing::warn!("FlacCacheSink: Cannot obtain cover URL for audio asset {}: {}", pk, e);
                         None
                     }
                 };
 
-                if url.is_some() {
-                    let _ = match self.covers
-                        .add_from_url(&url.unwrap(), self.collection.as_deref())
+                if let Some(cover_url) = url {
+                    tracing::debug!("FlacCacheSink: Attempting to cache cover from URL: {}", cover_url);
+                    match self.covers
+                        .add_from_url(&cover_url, self.collection.as_deref())
                         .await
                     {
                         Ok(pk_covers) => {
-                            dest_metadata
+                            tracing::info!("FlacCacheSink: Successfully cached cover for pk {} with cover pk {}", pk, pk_covers);
+                            if let Err(e) = dest_metadata
                                 .write()
                                 .await
                                 .set_cover_pk(Some(pk_covers))
                                 .await
+                            {
+                                tracing::error!("FlacCacheSink: Failed to set cover_pk for audio asset {}: {:?}", pk, e);
+                            }
                         }
-                        Err(_) => {
-                            warn!("Cannot obtain cover for audio asset {}", pk);
-                            Ok(Some(()))
+                        Err(e) => {
+                            tracing::warn!("FlacCacheSink: Failed to cache cover for audio asset {}: {}", pk, e);
                         }
-                    };
+                    }
+                } else {
+                    tracing::debug!("FlacCacheSink: No cover URL available for pk {}", pk);
                 }
             }
 
