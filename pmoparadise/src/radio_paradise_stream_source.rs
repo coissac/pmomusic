@@ -124,7 +124,6 @@ impl RadioParadiseStreamSourceLogic {
         // Préparer les songs ordonnées pour tracking
         let songs = block.songs_ordered();
         let mut song_index = 0;
-        let mut next_song: Option<(usize, &Song)> = songs.get(0).copied();
         let mut total_samples = 0u64;
         tracing::debug!("Block has {} songs", songs.len());
 
@@ -136,7 +135,25 @@ impl RadioParadiseStreamSourceLogic {
             segment: pmoaudio::_AudioSegment::Sync(Arc::new(SyncMarker::TopZeroSync)),
         });
         self.send_to_children(output, top_zero).await?;
-        tracing::debug!("TopZeroSync sent, starting audio chunk loop");
+        tracing::debug!("TopZeroSync sent");
+
+        // Envoyer TrackBoundary pour la première song AVANT le premier chunk
+        // Cela garantit que FlacCacheSink reçoit les métadonnées dès le début
+        let mut next_song: Option<(usize, &Song)> = if let Some((_idx, song)) = songs.get(0).copied() {
+            tracing::debug!("Sending TrackBoundary for first song before audio chunks");
+            let metadata = song_to_metadata(song, block).await;
+            let track_boundary = AudioSegment::new_track_boundary(
+                *order,
+                0.0,  // timestamp = 0 au début du bloc
+                metadata,
+            );
+            self.send_to_children(output, track_boundary).await?;
+            song_index = 1;
+            songs.get(1).copied()  // Passer à la song suivante
+        } else {
+            None
+        };
+        tracing::debug!("Starting audio chunk loop");
 
 
         // Buffer pour lecture
