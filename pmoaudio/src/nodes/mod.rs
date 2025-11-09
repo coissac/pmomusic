@@ -25,6 +25,7 @@ pub mod file_source;
 pub mod flac_file_sink;
 pub mod http_source;
 pub mod resampling_node;
+pub mod timer_node;
 
 // Modules temporairement désactivés
 /*
@@ -36,7 +37,6 @@ pub mod dsp_node;
 pub mod mpd_sink;
 pub mod sink_node;
 pub mod source_node;
-pub mod timer_node;
 pub mod volume_node;
 */
 

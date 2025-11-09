@@ -86,6 +86,7 @@ impl RadioParadiseStreamSourceLogic {
         order: &mut u64,
     ) -> Result<(), AudioError> {
         // Télécharger le FLAC
+        tracing::debug!("Sending HTTP GET request for block FLAC");
         let response = self.client.client
             .get(&block.url)
             .timeout(self.client.block_timeout)
@@ -93,6 +94,7 @@ impl RadioParadiseStreamSourceLogic {
             .await
             .map_err(|e| AudioError::ProcessingError(format!("Block download failed: {}", e)))?;
 
+        tracing::debug!("HTTP response received, status={}", response.status());
         if !response.status().is_success() {
             return Err(AudioError::ProcessingError(format!(
                 "Block download returned status {}",
@@ -101,12 +103,15 @@ impl RadioParadiseStreamSourceLogic {
         }
 
         // Créer un stream reader
+        tracing::debug!("Creating byte stream reader");
         let byte_stream = response.bytes_stream().map(|result| {
             result.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
         });
         let stream_reader = StreamReader::new(byte_stream);
+        tracing::debug!("Stream reader created");
 
         // Décoder le FLAC
+        tracing::debug!("Decoding FLAC stream...");
         let mut decoder = decode_audio_stream(stream_reader)
             .await
             .map_err(|e| AudioError::ProcessingError(format!("FLAC decode failed: {}", e)))?;
@@ -114,20 +119,25 @@ impl RadioParadiseStreamSourceLogic {
         let stream_info = decoder.info().clone();
         let sample_rate = stream_info.sample_rate;
         let bits_per_sample = stream_info.bits_per_sample;
+        tracing::debug!("FLAC decoder initialized: {}Hz, {} bits/sample", sample_rate, bits_per_sample);
 
         // Préparer les songs ordonnées pour tracking
         let songs = block.songs_ordered();
         let mut song_index = 0;
         let mut next_song: Option<(usize, &Song)> = songs.get(0).copied();
         let mut total_samples = 0u64;
+        tracing::debug!("Block has {} songs", songs.len());
 
         // Envoyer TopZeroSync au début du bloc
+        tracing::debug!("Sending TopZeroSync to {} outputs", output.len());
         let top_zero = Arc::new(AudioSegment {
             order: *order,
             timestamp_sec: 0.0,
             segment: pmoaudio::_AudioSegment::Sync(Arc::new(SyncMarker::TopZeroSync)),
         });
         self.send_to_children(output, top_zero).await?;
+        tracing::debug!("TopZeroSync sent, starting audio chunk loop");
+
 
         // Buffer pour lecture
         let bytes_per_sample = (bits_per_sample / 8) as usize;
@@ -393,48 +403,68 @@ impl NodeLogic for RadioParadiseStreamSourceLogic {
         output: Vec<mpsc::Sender<Arc<AudioSegment>>>,
         stop_token: CancellationToken,
     ) -> Result<(), AudioError> {
+        tracing::debug!("RadioParadiseStreamSource::process() started, block_queue has {} items", self.block_queue.len());
+        for (i, event_id) in self.block_queue.iter().enumerate() {
+            tracing::debug!("  block_queue[{}] = {}", i, event_id);
+        }
+
         let mut order = 0u64;
 
         loop {
             // Attendre un block ID (timeout court pour une radio)
+            tracing::debug!("Waiting for block_id from queue (timeout={}s)...", BLOCK_ID_TIMEOUT_SECS);
             let event_id = match tokio::time::timeout(
                 Duration::from_secs(BLOCK_ID_TIMEOUT_SECS),
                 async {
                     while self.block_queue.is_empty() {
+                        tracing::trace!("block_queue is empty, sleeping...");
                         tokio::time::sleep(Duration::from_millis(100)).await;
 
                         if stop_token.is_cancelled() {
+                            tracing::debug!("stop_token cancelled while waiting for block_id");
                             return None;
                         }
                     }
                     self.block_queue.pop_front()
                 }
             ).await {
-                Ok(Some(id)) => id,
-                Ok(None) => break, // Cancelled
+                Ok(Some(id)) => {
+                    tracing::debug!("Got event_id {} from queue", id);
+                    id
+                }
+                Ok(None) => {
+                    tracing::debug!("Loop cancelled, breaking");
+                    break;
+                } // Cancelled
                 Err(_) => {
                     // Timeout - pas de nouveau bloc, on termine
+                    tracing::warn!("Timeout waiting for block_id, breaking");
                     break;
                 }
             };
 
             // Vérifier si déjà téléchargé récemment
             if self.is_recent_block(event_id) {
+                tracing::debug!("Block {} was recently downloaded, skipping", event_id);
                 continue;
             }
 
             // Récupérer les métadonnées du bloc
+            tracing::debug!("Fetching block metadata for event_id {}...", event_id);
             let block = self.client
                 .get_block(Some(event_id))
                 .await
                 .map_err(|e| AudioError::ProcessingError(format!("Failed to get block: {}", e)))?;
+            tracing::debug!("Block metadata received: url={}", block.url);
 
             // Marquer comme téléchargé
             self.mark_block_downloaded(event_id);
 
             // Télécharger et décoder le bloc
+            tracing::info!("Starting download and decode for block {}...", event_id);
             self.download_and_decode_block(&block, &output, &stop_token, &mut order)
                 .await?;
+            tracing::info!("Finished download and decode for block {}", event_id);
         }
 
         // Envoyer EndOfStream
