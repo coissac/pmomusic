@@ -185,7 +185,7 @@ impl RadioParadiseStreamSourceLogic {
 
                 if elapsed_ms >= song.elapsed {
                     // Envoyer TrackBoundary AVANT le chunk (avec le même order)
-                    let metadata = song_to_metadata(song, block);
+                    let metadata = song_to_metadata(song, block).await;
                     let timestamp_sec = total_samples as f64 / sample_rate as f64;
                     let track_boundary = AudioSegment::new_track_boundary(
                         *order,
@@ -350,47 +350,52 @@ fn pcm_to_audio_segment(
 
 /// Convertit Song en TrackMetadata
 ///
-/// Cette fonction est synchrone, donc on wrap la metadata dans Arc<RwLock<>>
-/// et on spawn une tâche async pour la configurer
-fn song_to_metadata(song: &Song, block: &Block) -> Arc<RwLock<dyn TrackMetadata>> {
+/// Configure toutes les métadonnées de manière asynchrone et attend que la configuration
+/// soit terminée avant de retourner, garantissant que les métadonnées (y compris cover_url)
+/// sont disponibles immédiatement pour les nodes suivants
+async fn song_to_metadata(song: &Song, block: &Block) -> Arc<RwLock<dyn TrackMetadata>> {
     let metadata = MemoryTrackMetadata::new();
     let metadata_arc = Arc::new(RwLock::new(metadata)) as Arc<RwLock<dyn TrackMetadata>>;
-    let metadata_clone = metadata_arc.clone();
 
-    // Clone des données pour la task async
+    // Cloner les données
     let title = song.title.clone();
     let artist = song.artist.clone();
     let album = song.album.clone();
     let year = song.year;
     let cover_url = song.cover.as_ref().and_then(|cover| block.cover_url(cover));
 
-    // Configurer les métadonnées de manière asynchrone
-    tokio::spawn(async move {
-        let mut meta = metadata_clone.write().await;
+    // Configurer les métadonnées de manière synchrone (mais async await)
+    {
+        let mut meta = metadata_arc.write().await;
 
-        // Ces méthodes peuvent échouer (retournent Result), donc on propage avec ?
+        // Ces méthodes peuvent échouer (retournent Result), donc on log les erreurs
         if let Err(e) = meta.set_title(Some(title)).await {
-            eprintln!("Warning: Failed to set title: {}", e);
+            tracing::warn!("Failed to set title: {}", e);
         }
         if let Err(e) = meta.set_artist(Some(artist)).await {
-            eprintln!("Warning: Failed to set artist: {}", e);
+            tracing::warn!("Failed to set artist: {}", e);
         }
         if let Some(album) = album {
             if let Err(e) = meta.set_album(Some(album)).await {
-                eprintln!("Warning: Failed to set album: {}", e);
+                tracing::warn!("Failed to set album: {}", e);
             }
         }
         if let Some(year) = year {
             if let Err(e) = meta.set_year(Some(year)).await {
-                eprintln!("Warning: Failed to set year: {}", e);
+                tracing::warn!("Failed to set year: {}", e);
             }
         }
-        if let Some(cover_url) = cover_url {
-            if let Err(e) = meta.set_cover_url(Some(cover_url)).await {
-                eprintln!("Warning: Failed to set cover_url: {}", e);
+        if let Some(ref url) = cover_url {
+            tracing::debug!("RadioParadiseStreamSource: Setting cover_url to: {}", url);
+            if let Err(e) = meta.set_cover_url(Some(url.clone())).await {
+                tracing::warn!("Failed to set cover_url: {}", e);
+            } else {
+                tracing::debug!("RadioParadiseStreamSource: Successfully set cover_url");
             }
+        } else {
+            tracing::debug!("RadioParadiseStreamSource: No cover URL available for song");
         }
-    });
+    }
 
     metadata_arc
 }
