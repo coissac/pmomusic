@@ -228,18 +228,19 @@ impl AsyncRead for FlacClientStream {
         loop {
             // If in header state, send the header first
             if matches!(self.state, FlacStreamState::SendingHeader) {
-                if let Ok(guard) = self.handle.flac_header.try_read() {
-                    if let Some(header) = guard.as_ref() {
-                        self.buffer.extend(header.iter());
-                        info!("Sending cached FLAC header to new client ({} bytes)", header.len());
-                        self.state = FlacStreamState::Streaming;
-                        continue; // Now copy header to output buffer
-                    } else {
-                        // Header not yet captured, skip to streaming
-                        self.state = FlacStreamState::Streaming;
-                    }
+                let header_opt = if let Ok(guard) = self.handle.flac_header.try_read() {
+                    guard.clone()
                 } else {
-                    // Can't acquire lock, skip to streaming
+                    None
+                };
+
+                if let Some(header) = header_opt {
+                    self.buffer.extend(header.iter());
+                    info!("Sending cached FLAC header to new client ({} bytes)", header.len());
+                    self.state = FlacStreamState::Streaming;
+                    continue; // Now copy header to output buffer
+                } else {
+                    // Header not yet captured or can't acquire lock, skip to streaming
                     self.state = FlacStreamState::Streaming;
                 }
             }
@@ -381,18 +382,19 @@ impl AsyncRead for IcyClientStream {
         loop {
             // If in header state, send the header first
             if matches!(self.state, FlacStreamState::SendingHeader) {
-                if let Ok(guard) = self.handle.flac_header.try_read() {
-                    if let Some(header) = guard.as_ref() {
-                        self.buffer.extend(header.iter());
-                        info!("Sending cached FLAC header to new ICY client ({} bytes)", header.len());
-                        self.state = FlacStreamState::Streaming;
-                        continue; // Now copy header to output buffer
-                    } else {
-                        // Header not yet captured, skip to streaming
-                        self.state = FlacStreamState::Streaming;
-                    }
+                let header_opt = if let Ok(guard) = self.handle.flac_header.try_read() {
+                    guard.clone()
                 } else {
-                    // Can't acquire lock, skip to streaming
+                    None
+                };
+
+                if let Some(header) = header_opt {
+                    self.buffer.extend(header.iter());
+                    info!("Sending cached FLAC header to new ICY client ({} bytes)", header.len());
+                    self.state = FlacStreamState::Streaming;
+                    continue; // Now copy header to output buffer
+                } else {
+                    // Header not yet captured or can't acquire lock, skip to streaming
                     self.state = FlacStreamState::Streaming;
                 }
             }
