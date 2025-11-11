@@ -24,8 +24,9 @@
 //! Then open in VLC:
 //!   vlc http://localhost:8080/test/stream
 //!
-//! For ICY metadata (Now Playing):
-//!   vlc --http-continuous --icy-metadata http://localhost:8080/test/stream
+//! VLC automatically requests ICY metadata (Now Playing info).
+//! To test metadata updates:
+//!   curl http://localhost:8080/test/metadata
 
 use axum::{
     body::Body,
@@ -125,10 +126,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("  3 - World/Etc Mix (global sounds)");
         eprintln!();
         eprintln!("After starting, open in VLC:");
-        eprintln!("  vlc http://localhost:8080/stream");
+        eprintln!("  vlc http://localhost:8080/test/stream");
         eprintln!();
-        eprintln!("For ICY metadata (Now Playing):");
-        eprintln!("  vlc --http-continuous --icy-metadata http://localhost:8080/stream");
+        eprintln!("VLC automatically requests ICY metadata (Now Playing)");
         std::process::exit(1);
     }
 
@@ -229,8 +229,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Open in VLC:");
     tracing::info!("  vlc http://localhost:8080/test/stream");
     tracing::info!("");
-    tracing::info!("For ICY metadata:");
-    tracing::info!("  vlc --http-continuous --icy-metadata http://localhost:8080/test/stream");
+    tracing::info!("VLC automatically requests ICY metadata (Now Playing)");
     tracing::info!("");
     tracing::info!("Metadata endpoint:");
     tracing::info!("  curl http://localhost:8080/test/metadata");
