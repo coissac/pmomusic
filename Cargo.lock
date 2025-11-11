@@ -2867,6 +2867,7 @@ name = "pmoaudio-ext"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "bytes",
  "pmoaudio",
  "pmoaudiocache",
  "pmocache",
@@ -2874,6 +2875,7 @@ dependencies = [
  "pmoflac",
  "pmometadata",
  "pmoplaylist",
+ "serde",
  "tokio",
  "tokio-util",
  "tracing",

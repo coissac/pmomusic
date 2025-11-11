@@ -9,3 +9,9 @@ mod flac_cache_sink;
 
 #[cfg(feature = "cache-sink")]
 pub use flac_cache_sink::{FlacCacheSink, FlacCacheSinkStats, TrackStats};
+
+#[cfg(feature = "http-stream")]
+mod streaming_flac_sink;
+
+#[cfg(feature = "http-stream")]
+pub use streaming_flac_sink::{StreamingFlacSink, StreamHandle, MetadataSnapshot, FlacClientStream, IcyClientStream};
