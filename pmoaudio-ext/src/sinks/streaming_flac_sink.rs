@@ -81,7 +81,9 @@ use tracing::{debug, error, info, trace, warn};
 const DEFAULT_ICY_METAINT: usize = 16000;
 
 /// Broadcast channel capacity for FLAC bytes.
-const BROADCAST_CAPACITY: usize = 512;
+/// Increased to 4096 to handle network backpressure and late-joining clients.
+/// At ~12-15 chunks/sec (8KB each), this provides ~5 minutes of buffer.
+const BROADCAST_CAPACITY: usize = 4096;
 
 /// Snapshot of track metadata at a point in time.
 ///
