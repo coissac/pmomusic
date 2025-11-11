@@ -6,13 +6,13 @@
 //!
 //! Architecture:
 //! ```text
-//! RadioParadiseStreamSource → StreamingFlacSink
-//!                                    ↓
-//!                              StreamHandle
-//!                                    ↓
-//!                            pmoserver (Axum)
-//!                                    ↓
-//!                        VLC / Media Player Client
+//! RadioParadiseStreamSource → TimerNode → StreamingFlacSink
+//!                                             ↓
+//!                                       StreamHandle
+//!                                             ↓
+//!                                     pmoserver (Axum)
+//!                                             ↓
+//!                                 VLC / Media Player Client
 //! ```
 //!
 //! Usage:
@@ -33,7 +33,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
-use pmoaudio::AudioPipelineNode;
+use pmoaudio::{AudioPipelineNode, TimerNode};
 use pmoaudio_ext::StreamingFlacSink;
 use pmoflac::EncoderOptions;
 use pmoparadise::{RadioParadiseClient, RadioParadiseStreamSource};
@@ -183,6 +183,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     source.push_block_id(block.event);
     tracing::debug!("RadioParadiseStreamSource created with block {}", block.event);
 
+    // Create timer node for real-time pacing (3 seconds buffer)
+    let mut timer = TimerNode::new(3.0);
+    tracing::debug!("TimerNode created with 3.0s max lead time");
+
     // Create streaming FLAC sink
     let encoder_options = EncoderOptions {
         compression_level: 5,
@@ -193,9 +197,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (streaming_sink, stream_handle) = StreamingFlacSink::new(encoder_options, 16);
     tracing::debug!("StreamingFlacSink created");
 
-    // Connect source → sink
-    source.register(Box::new(streaming_sink));
-    tracing::info!("Pipeline connected: RadioParadiseStreamSource → StreamingFlacSink");
+    // Connect source → timer → sink
+    timer.register(Box::new(streaming_sink));
+    source.register(Box::new(timer));
+    tracing::info!("Pipeline connected: RadioParadiseStreamSource → TimerNode → StreamingFlacSink");
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Setup pmoserver with streaming routes
