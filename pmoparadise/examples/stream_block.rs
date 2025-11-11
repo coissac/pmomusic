@@ -22,9 +22,9 @@
 //!   cargo run --example stream_block --features full -- 0    # Main Mix
 //!
 //! Then open in VLC:
-//!   vlc http://localhost:8080/test/stream
+//!   vlc http://localhost:8080/test/stream           (pure FLAC)
+//!   vlc http://localhost:8080/test/stream-icy       (FLAC + ICY metadata)
 //!
-//! The stream includes ICY metadata for "Now Playing" information.
 //! To check current metadata:
 //!   curl http://localhost:8080/test/metadata
 
@@ -49,18 +49,34 @@ struct AppState {
     stream_handle: pmoaudio_ext::StreamHandle,
 }
 
-/// Main HTTP handler for streaming
+/// Main HTTP handler for streaming (pure FLAC, no ICY metadata)
 async fn stream_handler(
     State(state): State<Arc<AppState>>,
     _headers: HeaderMap,
 ) -> Result<Response, StatusCode> {
-    tracing::info!("New client connected");
+    tracing::info!("New client connected (pure FLAC mode)");
 
-    // Always use ICY mode for metadata support
-    tracing::info!("Serving FLAC stream with ICY metadata");
+    // Pure FLAC stream without ICY metadata
+    let flac_stream = state.stream_handle.subscribe_flac();
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "audio/flac")
+        .header("Cache-Control", "no-cache, no-store")
+        .body(Body::from_stream(ReaderStream::new(flac_stream)))
+        .unwrap())
+}
+
+/// ICY streaming handler (FLAC with embedded metadata)
+async fn stream_icy_handler(
+    State(state): State<Arc<AppState>>,
+    _headers: HeaderMap,
+) -> Result<Response, StatusCode> {
+    tracing::info!("New client connected (ICY mode)");
+
+    // FLAC stream with ICY metadata
     let icy_stream = state.stream_handle.subscribe_icy();
 
-    // Build response with ICY headers
     Ok(Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "audio/flac")
@@ -105,9 +121,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("  3 - World/Etc Mix (global sounds)");
         eprintln!();
         eprintln!("After starting, open in VLC:");
-        eprintln!("  vlc http://localhost:8080/test/stream");
-        eprintln!();
-        eprintln!("The stream includes ICY metadata for Now Playing info");
+        eprintln!("  vlc http://localhost:8080/test/stream           (pure FLAC)");
+        eprintln!("  vlc http://localhost:8080/test/stream-icy       (FLAC + ICY metadata)");
         std::process::exit(1);
     }
 
@@ -192,8 +207,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app_state = Arc::new(AppState { stream_handle });
 
-    // Add streaming route
+    // Add streaming routes
     server.add_handler_with_state("/test/stream", stream_handler, app_state.clone()).await;
+    server.add_handler_with_state("/test/stream-icy", stream_icy_handler, app_state.clone()).await;
 
     // Add metadata route
     server.add_handler_with_state("/test/metadata", metadata_handler, app_state.clone()).await;
@@ -205,12 +221,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("========================================");
     tracing::info!("Ready to stream!");
     tracing::info!("");
-    tracing::info!("Open in VLC:");
+    tracing::info!("Pure FLAC stream (for VLC, standard players):");
     tracing::info!("  vlc http://localhost:8080/test/stream");
     tracing::info!("");
-    tracing::info!("Stream includes ICY metadata for Now Playing info");
+    tracing::info!("FLAC + ICY metadata stream (for ICY-aware clients):");
+    tracing::info!("  http://localhost:8080/test/stream-icy");
     tracing::info!("");
-    tracing::info!("Metadata endpoint:");
+    tracing::info!("Metadata endpoint (JSON):");
     tracing::info!("  curl http://localhost:8080/test/metadata");
     tracing::info!("========================================");
     tracing::info!("");
