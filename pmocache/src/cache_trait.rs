@@ -152,8 +152,22 @@ pub trait FileCache<C: CacheConfig>: Send + Sync {
 
         let file_path = self.file_path(pk);
         if !file_path.exists() {
-            tracing::debug!("is_valid_pk({}): File does not exist", pk);
-            return false;
+            // Si l'entrée DB existe mais pas le fichier, c'est probablement en cours d'ingestion
+            // Attendre jusqu'à 1 seconde que le fichier soit créé (le tokio::spawn peut mettre un peu de temps)
+            tracing::debug!("is_valid_pk({}): File does not exist yet, waiting for file creation (ingestion in progress)", pk);
+
+            let mut attempts = 0;
+            while !file_path.exists() && attempts < 100 {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                attempts += 1;
+            }
+
+            if !file_path.exists() {
+                tracing::warn!("is_valid_pk({}): File not created after 1s despite DB entry existing", pk);
+                return false;
+            }
+
+            tracing::debug!("is_valid_pk({}): File created after {}ms", pk, attempts * 10);
         }
 
         // Vérifier d'abord si le marker de completion existe
