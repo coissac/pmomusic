@@ -144,7 +144,7 @@ pub trait FileCache<C: CacheConfig>: Send + Sync {
     ///
     /// Ceci permet le progressive caching: les fichiers en cours de download sont acceptés
     /// dès que le prebuffer est atteint, sans attendre le marker de completion.
-    fn is_valid_pk(&self, pk: &str) -> bool {
+    async fn is_valid_pk(&self, pk: &str) -> bool {
         if self.get_database().get(pk, false).is_err() {
             tracing::debug!("is_valid_pk({}): DB entry not found", pk);
             return false;
@@ -158,7 +158,7 @@ pub trait FileCache<C: CacheConfig>: Send + Sync {
 
             let mut attempts = 0;
             while !file_path.exists() && attempts < 100 {
-                std::thread::sleep(std::time::Duration::from_millis(10));
+                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
                 attempts += 1;
             }
 
