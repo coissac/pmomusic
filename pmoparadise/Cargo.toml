@@ -52,7 +52,7 @@ symphonia = { version = "0.5", features = ["all"] }
 claxon = "0.4"
 
 # pmoaudio-ext with playlist support (optional for examples)
-pmoaudio-ext = { path = "../pmoaudio-ext", optional = true, features = ["playlist"] }
+pmoaudio-ext = { path = "../pmoaudio-ext", optional = true, features = ["playlist", "http-stream"] }
 
 # Common music source traits
 pmosource = { path = "../pmosource" }
@@ -91,7 +91,7 @@ cache = []
 # Active le support pmoaudio node (RadioParadiseStreamSource)
 pmoaudio = ["dep:pmoaudio", "dep:pmoflac", "dep:pmometadata", "dep:futures-util"]
 # Active le support complet avec playlist (pour les exemples avancés)
-full = ["pmoaudio", "dep:pmoaudio-ext", "pmoconfig"]
+full = ["pmoaudio", "dep:pmoaudio-ext", "pmoconfig", "dep:pmoserver"]
 
 [dev-dependencies]
 # Tests
@@ -106,3 +106,8 @@ pmoaudiocache = { path = "../pmoaudiocache" }
 [[example]]
 name = "now_playing"
 path = "examples/now_playing.rs"
+
+[[example]]
+name = "stream_block"
+path = "examples/stream_block.rs"
+required-features = ["full"]
