@@ -81,7 +81,7 @@ use tracing::{debug, error, info, trace, warn};
 const DEFAULT_ICY_METAINT: usize = 16000;
 
 /// Broadcast channel capacity for FLAC bytes.
-const BROADCAST_CAPACITY: usize = 64;
+const BROADCAST_CAPACITY: usize = 512;
 
 /// Snapshot of track metadata at a point in time.
 ///
@@ -139,6 +139,9 @@ pub struct StreamHandle {
 
     /// Stop token to signal pipeline shutdown
     stop_token: CancellationToken,
+
+    /// Cached FLAC header (sent to new subscribers first)
+    flac_header: Arc<RwLock<Option<Bytes>>>,
 }
 
 impl StreamHandle {
@@ -154,6 +157,7 @@ impl StreamHandle {
             buffer: VecDeque::new(),
             finished: false,
             handle: self.clone(),
+            state: FlacStreamState::SendingHeader,
         }
     }
 
@@ -180,6 +184,7 @@ impl StreamHandle {
             cached_icy_metadata: Bytes::new(),
             finished: false,
             handle: self.clone(),
+            state: FlacStreamState::SendingHeader,
         }
     }
 
@@ -199,12 +204,19 @@ impl StreamHandle {
     }
 }
 
+/// State for FLAC stream subscription.
+enum FlacStreamState {
+    SendingHeader,
+    Streaming,
+}
+
 /// Pure FLAC client stream (implements AsyncRead).
 pub struct FlacClientStream {
     rx: broadcast::Receiver<Bytes>,
     buffer: VecDeque<u8>,
     finished: bool,
     handle: StreamHandle,
+    state: FlacStreamState,
 }
 
 impl AsyncRead for FlacClientStream {
@@ -214,6 +226,24 @@ impl AsyncRead for FlacClientStream {
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         loop {
+            // If in header state, send the header first
+            if matches!(self.state, FlacStreamState::SendingHeader) {
+                if let Ok(guard) = self.handle.flac_header.try_read() {
+                    if let Some(header) = guard.as_ref() {
+                        self.buffer.extend(header.iter());
+                        info!("Sending cached FLAC header to new client ({} bytes)", header.len());
+                        self.state = FlacStreamState::Streaming;
+                        continue; // Now copy header to output buffer
+                    } else {
+                        // Header not yet captured, skip to streaming
+                        self.state = FlacStreamState::Streaming;
+                    }
+                } else {
+                    // Can't acquire lock, skip to streaming
+                    self.state = FlacStreamState::Streaming;
+                }
+            }
+
             // If we have buffered data, copy it
             if !self.buffer.is_empty() {
                 let to_copy = self.buffer.len().min(buf.remaining());
@@ -280,6 +310,7 @@ pub struct IcyClientStream {
     cached_icy_metadata: Bytes,
     finished: bool,
     handle: StreamHandle,
+    state: FlacStreamState,
 }
 
 impl IcyClientStream {
@@ -348,6 +379,24 @@ impl AsyncRead for IcyClientStream {
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         loop {
+            // If in header state, send the header first
+            if matches!(self.state, FlacStreamState::SendingHeader) {
+                if let Ok(guard) = self.handle.flac_header.try_read() {
+                    if let Some(header) = guard.as_ref() {
+                        self.buffer.extend(header.iter());
+                        info!("Sending cached FLAC header to new ICY client ({} bytes)", header.len());
+                        self.state = FlacStreamState::Streaming;
+                        continue; // Now copy header to output buffer
+                    } else {
+                        // Header not yet captured, skip to streaming
+                        self.state = FlacStreamState::Streaming;
+                    }
+                } else {
+                    // Can't acquire lock, skip to streaming
+                    self.state = FlacStreamState::Streaming;
+                }
+            }
+
             // If we have buffered data, copy it
             if !self.buffer.is_empty() {
                 let to_copy = self.buffer.len().min(buf.remaining());
@@ -450,6 +499,7 @@ struct StreamingFlacSinkLogic {
     pcm_rx: Option<mpsc::Receiver<Vec<u8>>>,
     metadata: Arc<RwLock<MetadataSnapshot>>,
     flac_broadcast: broadcast::Sender<Bytes>,
+    flac_header: Arc<RwLock<Option<Bytes>>>,
     encoder_state: Option<EncoderState>,
     sample_rate: Option<u32>,
 }
@@ -487,8 +537,9 @@ impl StreamingFlacSinkLogic {
 
         // Spawn broadcaster task
         let flac_broadcast = self.flac_broadcast.clone();
+        let flac_header = self.flac_header.clone();
         let broadcaster_task = tokio::spawn(async move {
-            if let Err(e) = broadcast_flac_stream(flac_stream, flac_broadcast).await {
+            if let Err(e) = broadcast_flac_stream(flac_stream, flac_broadcast, flac_header).await {
                 error!("Broadcaster task error: {}", e);
             }
         });
@@ -643,11 +694,13 @@ impl NodeLogic for StreamingFlacSinkLogic {
 async fn broadcast_flac_stream(
     mut flac_stream: FlacEncodedStream,
     broadcast_tx: broadcast::Sender<Bytes>,
+    header_cache: Arc<RwLock<Option<Bytes>>>,
 ) -> Result<(), AudioError> {
     info!("Broadcaster task started");
 
     let mut buffer = vec![0u8; 8192]; // 8KB buffer for reading
     let mut total_bytes = 0u64;
+    let mut header_captured = false;
 
     loop {
         match flac_stream.read(&mut buffer).await {
@@ -662,6 +715,14 @@ async fn broadcast_flac_stream(
 
                 // Broadcast to all clients
                 let bytes = Bytes::copy_from_slice(&buffer[..n]);
+
+                // Capture first chunk as header if it contains "fLaC"
+                if !header_captured && bytes.len() >= 4 && &bytes[0..4] == b"fLaC" {
+                    *header_cache.write().await = Some(bytes.clone());
+                    header_captured = true;
+                    info!("FLAC header captured ({} bytes)", bytes.len());
+                }
+
                 if let Err(e) = broadcast_tx.send(bytes) {
                     // No receivers, but that's okay - clients may not be connected yet
                     trace!("No active receivers for FLAC broadcast: {}", e);
@@ -726,6 +787,9 @@ impl StreamingFlacSink {
         // Broadcast channel for FLAC bytes
         let (flac_broadcast, _) = broadcast::channel(BROADCAST_CAPACITY);
 
+        // FLAC header cache
+        let flac_header = Arc::new(RwLock::new(None));
+
         // Stop token and client counter
         let stop_token = CancellationToken::new();
         let active_clients = Arc::new(AtomicUsize::new(0));
@@ -735,6 +799,7 @@ impl StreamingFlacSink {
             metadata: metadata.clone(),
             active_clients,
             stop_token: stop_token.clone(),
+            flac_header: flac_header.clone(),
         };
 
         let logic = StreamingFlacSinkLogic {
@@ -744,6 +809,7 @@ impl StreamingFlacSink {
             pcm_rx: Some(pcm_rx),
             metadata,
             flac_broadcast,
+            flac_header,
             encoder_state: None,
             sample_rate: None,
         };
