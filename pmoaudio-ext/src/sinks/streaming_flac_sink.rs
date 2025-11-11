@@ -101,9 +101,12 @@ pub struct MetadataSnapshot {
     /// Track duration
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration: Option<Duration>,
-    /// Cover image URL
+    /// Cover image URL (external/original)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cover_url: Option<String>,
+    /// Cover primary key in local cache (for constructing server URL)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cover_pk: Option<String>,
     /// Track number
     #[serde(skip_serializing_if = "Option::is_none")]
     pub track_number: Option<u32>,
@@ -287,10 +290,27 @@ impl IcyClientStream {
     ///
     /// ICY format: StreamTitle='Artist - Title';StreamUrl='url';
     /// Padded to multiple of 16 bytes, prefixed with length byte.
+    ///
+    /// If cover_pk is available, constructs a URL for the cover image:
+    /// - If pmoserver is initialized: http://server/covers/image/{pk}/256
+    /// - Otherwise: relative URL /covers/image/{pk}/256
     fn format_icy_metadata(meta: &MetadataSnapshot) -> Bytes {
         let title = meta.title.as_deref().unwrap_or("Unknown");
         let artist = meta.artist.as_deref().unwrap_or("Unknown Artist");
-        let metadata_str = format!("StreamTitle='{} - {}';", artist, title);
+
+        // Build ICY metadata string with cover URL if available
+        let mut metadata_str = format!("StreamTitle='{} - {}';", artist, title);
+
+        // Add cover URL if we have a cover_pk
+        if let Some(pk) = &meta.cover_pk {
+            // Use relative URL /covers/image/{pk}/256
+            // This works when streaming from the same server that serves covers
+            // VLC and other players will resolve relative URLs correctly
+            metadata_str.push_str(&format!("StreamUrl='/covers/image/{}/256';", pk));
+        } else if let Some(url) = &meta.cover_url {
+            // Fallback to external cover URL if no local pk
+            metadata_str.push_str(&format!("StreamUrl='{}';", url));
+        }
 
         // ICY metadata is padded to multiple of 16 bytes
         let metadata_bytes = metadata_str.as_bytes();
@@ -494,6 +514,7 @@ impl StreamingFlacSinkLogic {
         snapshot.album = metadata.get_album().await.ok();
         snapshot.duration = metadata.get_duration().await.ok();
         snapshot.cover_url = metadata.get_cover_url().await.ok();
+        snapshot.cover_pk = metadata.get_cover_pk().await.ok();
         snapshot.album_artist = metadata.get_album_artist().await.ok();
         snapshot.year = metadata.get_year().await.ok();
 
@@ -509,11 +530,12 @@ impl StreamingFlacSinkLogic {
         snapshot.version += 1;
 
         debug!(
-            "Metadata updated: v{} @ {:.2}s - {} - {}",
+            "Metadata updated: v{} @ {:.2}s - {} - {} (cover_pk: {:?})",
             snapshot.version,
             timestamp_sec,
             snapshot.artist.as_deref().unwrap_or("?"),
-            snapshot.title.as_deref().unwrap_or("?")
+            snapshot.title.as_deref().unwrap_or("?"),
+            snapshot.cover_pk
         );
 
         Ok(())
