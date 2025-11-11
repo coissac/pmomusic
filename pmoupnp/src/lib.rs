@@ -2,6 +2,7 @@ mod object_set;
 mod object_trait;
 
 pub mod actions;
+pub mod cache_registry;
 pub mod devices;
 pub mod services;
 pub mod soap;
