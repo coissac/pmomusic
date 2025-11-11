@@ -37,7 +37,7 @@ use pmoaudio::AudioPipelineNode;
 use pmoaudio_ext::StreamingFlacSink;
 use pmoflac::EncoderOptions;
 use pmoparadise::{RadioParadiseClient, RadioParadiseStreamSource};
-use pmoserver::{ServerBuilder, init_logging, LoggingOptions};
+use pmoserver::{ServerBuilder, init_logging};
 use std::env;
 use std::sync::Arc;
 use tokio_util::io::ReaderStream;
@@ -107,18 +107,7 @@ async fn health_handler() -> &'static str {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging via pmoserver
-    init_logging(LoggingOptions {
-        console_json: false,
-        console_level: "info",
-        file_json: false,
-        file_level: "debug",
-        file_path: None,
-        directives: vec![
-            "pmoaudio=debug".to_string(),
-            "pmoaudio_ext=debug".to_string(),
-            "pmoparadise=debug".to_string(),
-        ],
-    })?;
+    let _log_state = init_logging();
 
     tracing::info!("=== Radio Paradise HTTP Streaming Test ===");
 

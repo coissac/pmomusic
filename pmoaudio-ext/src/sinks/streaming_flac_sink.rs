@@ -57,7 +57,7 @@
 use std::collections::VecDeque;
 use std::io;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -65,12 +65,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bytes::Bytes;
 use pmoaudio::{
-    audio_chunk::AudioChunk,
-    audio_segment::{AudioSegment, _AudioSegment},
-    error::AudioError,
     pipeline::{AudioPipelineNode, Node, NodeLogic, PipelineHandle, StopReason},
-    sync_marker::SyncMarker,
-    typed_node::{TypeRequirement, TypedAudioNode},
+    AudioChunk, AudioError, AudioSegment, SyncMarker, TypeRequirement, TypedAudioNode,
+    _AudioSegment,
 };
 use pmoflac::{encode_flac_stream, EncoderOptions, FlacEncodedStream, PcmFormat};
 use pmometadata::TrackMetadata;
@@ -371,21 +368,26 @@ impl AsyncRead for IcyClientStream {
             // Check if we need to insert metadata
             if self.byte_count % self.metaint == 0 && self.byte_count > 0 {
                 // Time to insert ICY metadata
-                // We need to do this in an async context, so we'll buffer it
-                let meta_fut = self.get_metadata_if_changed();
-
-                // This is a bit tricky - we need to await in poll context
-                // For now, use try_recv and insert empty metadata if version changed
-                // TODO: Make this properly async
-                let meta = self.metadata.try_read();
-                if let Ok(meta) = meta {
-                    if meta.version > self.current_metadata_version {
-                        self.current_metadata_version = meta.version;
-                        self.cached_icy_metadata = Self::format_icy_metadata(&meta);
+                // Use try_read to avoid blocking in poll context
+                let update = {
+                    if let Ok(meta) = self.metadata.try_read() {
+                        if meta.version > self.current_metadata_version {
+                            Some((meta.version, Self::format_icy_metadata(&meta)))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
                     }
+                };
+
+                if let Some((new_version, new_metadata)) = update {
+                    self.current_metadata_version = new_version;
+                    self.cached_icy_metadata = new_metadata;
                 }
 
-                self.buffer.extend(self.cached_icy_metadata.iter());
+                let icy_data = self.cached_icy_metadata.clone();
+                self.buffer.extend(icy_data.iter());
                 self.byte_count = 0; // Reset counter after metadata
                 continue;
             }
@@ -463,7 +465,7 @@ impl StreamingFlacSinkLogic {
 
         // Take the PCM receiver (we only initialize once)
         let pcm_rx = self.pcm_rx.take().ok_or_else(|| {
-            AudioError::ConfigurationError("PCM receiver already consumed".into())
+            AudioError::ProcessingError("PCM receiver already consumed".into())
         })?;
 
         // Create ByteStreamReader for the encoder
@@ -509,14 +511,13 @@ impl StreamingFlacSinkLogic {
         let mut snapshot = self.metadata.write().await;
 
         // Extract all metadata fields
-        snapshot.title = metadata.get_title().await.ok();
-        snapshot.artist = metadata.get_artist().await.ok();
-        snapshot.album = metadata.get_album().await.ok();
-        snapshot.duration = metadata.get_duration().await.ok();
-        snapshot.cover_url = metadata.get_cover_url().await.ok();
-        snapshot.cover_pk = metadata.get_cover_pk().await.ok();
-        snapshot.album_artist = metadata.get_album_artist().await.ok();
-        snapshot.year = metadata.get_year().await.ok();
+        snapshot.title = metadata.get_title().await.ok().flatten();
+        snapshot.artist = metadata.get_artist().await.ok().flatten();
+        snapshot.album = metadata.get_album().await.ok().flatten();
+        snapshot.duration = metadata.get_duration().await.ok().flatten();
+        snapshot.cover_url = metadata.get_cover_url().await.ok().flatten();
+        snapshot.cover_pk = metadata.get_cover_pk().await.ok().flatten();
+        snapshot.year = metadata.get_year().await.ok().flatten();
 
         // Extract extra fields
         if let Ok(Some(extra)) = metadata.get_extra().await {
@@ -551,7 +552,7 @@ impl NodeLogic for StreamingFlacSinkLogic {
         stop_token: CancellationToken,
     ) -> Result<(), AudioError> {
         let mut input = input.ok_or_else(|| {
-            AudioError::ConfigurationError("StreamingFlacSink requires an input".into())
+            AudioError::ProcessingError("StreamingFlacSink requires an input".into())
         })?;
 
         info!("StreamingFlacSink started");
@@ -573,7 +574,7 @@ impl NodeLogic for StreamingFlacSinkLogic {
                                 _AudioSegment::Chunk(chunk) => {
                                     // Detect sample rate from first chunk and initialize encoder
                                     if self.sample_rate.is_none() {
-                                        let sample_rate = chunk.get_sample_rate();
+                                        let sample_rate = chunk.sample_rate();
                                         self.sample_rate = Some(sample_rate);
                                         info!("Detected sample rate: {} Hz", sample_rate);
 
@@ -582,7 +583,7 @@ impl NodeLogic for StreamingFlacSinkLogic {
                                     }
 
                                     // Convert chunk to PCM bytes
-                                    let pcm_bytes = chunk_to_pcm_bytes(chunk, self.bits_per_sample)?;
+                                    let pcm_bytes = chunk_to_pcm_bytes(&chunk, self.bits_per_sample)?;
 
                                     trace!(
                                         "Sending PCM chunk: {} bytes, {} samples @ {:.2}s",
@@ -612,7 +613,7 @@ impl NodeLogic for StreamingFlacSinkLogic {
                                         }
 
                                         _ => {
-                                            trace!("Sync marker: {:?}", marker);
+                                            trace!("Received other sync marker");
                                         }
                                     }
                                 }
@@ -748,7 +749,7 @@ impl StreamingFlacSink {
         };
 
         let sink = Self {
-            inner: Node::new(logic),
+            inner: Node::new_with_input(logic, 16),
         };
 
         (sink, handle)
