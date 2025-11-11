@@ -253,6 +253,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Start pmoserver (blocks until Ctrl+C)
     tracing::info!("[SERVER] Starting pmoserver...");
     server.start().await;
+    server.wait().await;
 
     // Server stopped, cancel pipeline
     tracing::info!("Server stopped, canceling pipeline...");
