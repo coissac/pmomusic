@@ -24,8 +24,8 @@
 //! Then open in VLC:
 //!   vlc http://localhost:8080/test/stream
 //!
-//! VLC automatically requests ICY metadata (Now Playing info).
-//! To test metadata updates:
+//! The stream includes ICY metadata for "Now Playing" information.
+//! To check current metadata:
 //!   curl http://localhost:8080/test/metadata
 
 use axum::{
@@ -52,46 +52,25 @@ struct AppState {
 /// Main HTTP handler for streaming
 async fn stream_handler(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
 ) -> Result<Response, StatusCode> {
     tracing::info!("New client connected");
 
-    // Check if client wants ICY metadata (VLC with --icy-metadata flag)
-    let want_icy = headers
-        .get("Icy-MetaData")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v == "1")
-        .unwrap_or(false);
+    // Always use ICY mode for metadata support
+    tracing::info!("Serving FLAC stream with ICY metadata");
+    let icy_stream = state.stream_handle.subscribe_icy();
 
-    if want_icy {
-        tracing::info!("Client requested ICY metadata mode");
-
-        // Subscribe to ICY stream
-        let icy_stream = state.stream_handle.subscribe_icy();
-
-        // Build response with ICY headers
-        Ok(Response::builder()
-            .status(StatusCode::OK)
-            .header("Content-Type", "audio/flac")
-            .header("icy-metaint", "16000")
-            .header("icy-name", "Radio Paradise Stream Test")
-            .header("Cache-Control", "no-cache, no-store")
-            .body(Body::from_stream(ReaderStream::new(icy_stream)))
-            .unwrap())
-    } else {
-        tracing::info!("Client requested pure FLAC mode");
-
-        // Subscribe to pure FLAC stream
-        let flac_stream = state.stream_handle.subscribe_flac();
-
-        // Build response
-        Ok(Response::builder()
-            .status(StatusCode::OK)
-            .header("Content-Type", "audio/flac")
-            .header("Cache-Control", "no-cache, no-store")
-            .body(Body::from_stream(ReaderStream::new(flac_stream)))
-            .unwrap())
-    }
+    // Build response with ICY headers
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "audio/flac")
+        .header("icy-metaint", "16000")
+        .header("icy-name", "Radio Paradise Stream Test")
+        .header("icy-genre", "Eclectic")
+        .header("icy-pub", "1")
+        .header("Cache-Control", "no-cache, no-store")
+        .body(Body::from_stream(ReaderStream::new(icy_stream)))
+        .unwrap())
 }
 
 /// Metadata endpoint (JSON)
@@ -128,7 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("After starting, open in VLC:");
         eprintln!("  vlc http://localhost:8080/test/stream");
         eprintln!();
-        eprintln!("VLC automatically requests ICY metadata (Now Playing)");
+        eprintln!("The stream includes ICY metadata for Now Playing info");
         std::process::exit(1);
     }
 
@@ -229,7 +208,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Open in VLC:");
     tracing::info!("  vlc http://localhost:8080/test/stream");
     tracing::info!("");
-    tracing::info!("VLC automatically requests ICY metadata (Now Playing)");
+    tracing::info!("Stream includes ICY metadata for Now Playing info");
     tracing::info!("");
     tracing::info!("Metadata endpoint:");
     tracing::info!("  curl http://localhost:8080/test/metadata");
