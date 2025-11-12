@@ -4,6 +4,9 @@
 //! using the StreamingFlacSink over HTTP via pmoserver. Perfect for
 //! testing with VLC or other media players that support HTTP streaming.
 //!
+//! The example streams ONE block then terminates cleanly using END_OF_BLOCKS_SIGNAL.
+//! For continuous streaming, push multiple block_ids without the END signal.
+//!
 //! Architecture:
 //! ```text
 //! RadioParadiseStreamSource → TimerNode → StreamingFlacSink
@@ -38,7 +41,7 @@ use axum::{
 use pmoaudio::{AudioPipelineNode, TimerNode};
 use pmoaudio_ext::{StreamingFlacSink, StreamingOggFlacSink};
 use pmoflac::EncoderOptions;
-use pmoparadise::{RadioParadiseClient, RadioParadiseStreamSource};
+use pmoparadise::{RadioParadiseClient, RadioParadiseStreamSource, END_OF_BLOCKS_SIGNAL};
 use pmoserver::{ServerBuilder, init_logging};
 use std::env;
 use std::sync::Arc;
@@ -206,11 +209,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut source_flac = RadioParadiseStreamSource::new(client.clone());
     source_flac.push_block_id(block.event);
-    tracing::debug!("RadioParadiseStreamSource (FLAC) created with block {}", block.event);
+    source_flac.push_block_id(END_OF_BLOCKS_SIGNAL); // Signal: no more blocks after this one
+    tracing::debug!("RadioParadiseStreamSource (FLAC) created with block {} + END signal", block.event);
 
-    let mut timer_flac = TimerNode::new(3.0);
-    tracing::debug!("TimerNode (FLAC) created with 3.0s max lead time");
+    // Use SMALL channel size to make backpressure more reactive
+    // Instead of trying to buffer 3s of audio (60 chunks), use a much smaller buffer
+    // This forces tighter backpressure control
+    let max_lead_time = 3.0;
+    let channel_size = 8; // Small buffer for reactive backpressure
+    tracing::debug!("Using channel size: {} chunks ({:.1}s buffer at 50ms/chunk)", channel_size, channel_size as f64 * 0.05);
 
+    let mut timer_flac = TimerNode::with_channel_size(max_lead_time, channel_size);
+    tracing::debug!("TimerNode (FLAC) created with {:.1}s max lead time, {} chunk buffer", max_lead_time, channel_size);
+
+    // StreamingFlacSink doesn't take channel_size - it uses bits_per_sample (16, 24, or 32)
     let (streaming_sink, stream_handle) = StreamingFlacSink::new(encoder_options.clone(), 16);
     tracing::debug!("StreamingFlacSink created");
 
@@ -224,11 +236,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut source_ogg = RadioParadiseStreamSource::new(client);
     source_ogg.push_block_id(block.event);
-    tracing::debug!("RadioParadiseStreamSource (OGG) created with block {}", block.event);
+    source_ogg.push_block_id(END_OF_BLOCKS_SIGNAL); // Signal: no more blocks after this one
+    tracing::debug!("RadioParadiseStreamSource (OGG) created with block {} + END signal", block.event);
 
-    let mut timer_ogg = TimerNode::new(3.0);
-    tracing::debug!("TimerNode (OGG) created with 3.0s max lead time");
+    let mut timer_ogg = TimerNode::with_channel_size(max_lead_time, channel_size);
+    tracing::debug!("TimerNode (OGG) created with {:.1}s max lead time, {} chunk buffer", max_lead_time, channel_size);
 
+    // StreamingOggFlacSink doesn't take channel_size - it uses bits_per_sample (16, 24, or 32)
     let (ogg_sink, ogg_handle) = StreamingOggFlacSink::new(encoder_options, 16);
     tracing::debug!("StreamingOggFlacSink created");
 
