@@ -710,20 +710,23 @@ async fn broadcast_ogg_flac_stream(
     total_ogg_bytes += comment_bytes.len() as u64;
     let _ = broadcast_tx.send(comment_bytes);
 
-    // Step 4: Read FLAC frames and wrap in OGG pages
-    let mut frame_buffer = Vec::new();
+    // Step 4: Read FLAC stream and create OGG packets
+    // According to OGG FLAC spec, we put the complete FLAC stream in a single logical bitstream,
+    // but split it into reasonable page sizes for streaming
+
+    let mut flac_data = Vec::new();
     let mut read_buffer = vec![0u8; 8192];
 
     loop {
         match flac_stream.read(&mut read_buffer).await {
             Ok(0) => {
-                // EOF - wrap any remaining data
-                if !frame_buffer.is_empty() {
-                    let eos_page = ogg_writer.create_page(&frame_buffer, false, true, false);
+                // EOF - create final page with EOS flag and any remaining data
+                if !flac_data.is_empty() {
+                    let eos_page = ogg_writer.create_page(&flac_data, false, true, false);
                     let eos_bytes = Bytes::from(eos_page);
                     total_ogg_bytes += eos_bytes.len() as u64;
                     let _ = broadcast_tx.send(eos_bytes);
-                    info!("Sent EOS page ({} bytes)", frame_buffer.len());
+                    info!("Sent final EOS page with {} bytes of data", flac_data.len());
                 } else {
                     // Send empty EOS page
                     let eos_page = ogg_writer.create_page(&[], false, true, false);
@@ -737,12 +740,14 @@ async fn broadcast_ogg_flac_stream(
                 break;
             }
             Ok(n) => {
-                frame_buffer.extend_from_slice(&read_buffer[..n]);
+                // Accumulate FLAC data
+                flac_data.extend_from_slice(&read_buffer[..n]);
 
-                // Wrap in OGG pages when we have enough data (target ~4KB per page)
-                while frame_buffer.len() >= 4096 {
-                    let page_data = frame_buffer.drain(..4096.min(frame_buffer.len())).collect::<Vec<u8>>();
-                    let ogg_page = ogg_writer.create_page(&page_data, false, false, false);
+                // Create pages when we have a reasonable amount of data (8KB chunks)
+                // This respects FLAC frame boundaries better than arbitrary 4KB splits
+                while flac_data.len() >= 8192 {
+                    let chunk = flac_data.drain(..8192).collect::<Vec<u8>>();
+                    let ogg_page = ogg_writer.create_page(&chunk, false, false, false);
                     let ogg_bytes = Bytes::from(ogg_page);
                     total_ogg_bytes += ogg_bytes.len() as u64;
 
@@ -827,17 +832,49 @@ fn create_ogg_flac_identification(flac_header: &[u8]) -> Result<Vec<u8>, AudioEr
         return Err(AudioError::ProcessingError("Invalid FLAC header".into()));
     }
 
+    // Extract STREAMINFO block (first metadata block)
+    // Format: 1 byte type+flags, 3 bytes length, N bytes data
+    if flac_header.len() < 8 {
+        return Err(AudioError::ProcessingError("FLAC header too short".into()));
+    }
+
+    let first_block_type = flac_header[4] & 0x7F; // Remove last-metadata-block flag
+    if first_block_type != 0 {
+        return Err(AudioError::ProcessingError("First FLAC metadata block is not STREAMINFO".into()));
+    }
+
+    // Extract block length (3 bytes big-endian after type byte)
+    let block_length = u32::from_be_bytes([0, flac_header[5], flac_header[6], flac_header[7]]) as usize;
+
+    info!("STREAMINFO block_length = {} bytes", block_length);
+
+    // STREAMINFO should be exactly 34 bytes of data
+    if block_length != 34 {
+        warn!("STREAMINFO block length is {} (expected 34)", block_length);
+    }
+
+    // Total STREAMINFO block size = 1 (type) + 3 (length) + block_length
+    let streaminfo_size = 4 + block_length;
+
+    if flac_header.len() < 4 + streaminfo_size {
+        return Err(AudioError::ProcessingError("FLAC header truncated".into()));
+    }
+
+    // Extract just the STREAMINFO block (type + length + data)
+    let streaminfo = &flac_header[4..4 + streaminfo_size];
+
+    info!("Extracted STREAMINFO: {} bytes (type+length+data)", streaminfo.len());
+
     let mut packet = Vec::new();
 
-    // OGG-FLAC identification header (13 bytes)
+    // OGG-FLAC identification header
     packet.push(0x7F);                    // Byte 0: 0x7F
     packet.extend_from_slice(b"FLAC");    // Bytes 1-4: "FLAC"
     packet.push(0x01);                    // Byte 5: Major version
     packet.push(0x00);                    // Byte 6: Minor version
-    packet.extend_from_slice(&0u16.to_be_bytes()); // Bytes 7-8: Number of header packets (0)
-
-    // Native FLAC stream (fLaC + metadata blocks)
-    packet.extend_from_slice(flac_header);
+    packet.extend_from_slice(&1u16.to_be_bytes()); // Bytes 7-8: 1 header packet (Vorbis Comment)
+    packet.extend_from_slice(b"fLaC");    // Bytes 9-12: Native FLAC signature
+    packet.extend_from_slice(streaminfo);  // Bytes 13+: STREAMINFO block only
 
     Ok(packet)
 }
