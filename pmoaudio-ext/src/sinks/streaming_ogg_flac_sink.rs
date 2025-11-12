@@ -185,7 +185,13 @@ impl AsyncRead for OggFlacClientStream {
                     self.buffer.extend(bytes.iter());
                 }
                 Err(broadcast::error::TryRecvError::Empty) => {
-                    cx.waker().wake_by_ref();
+                    // No data available right now.
+                    // Schedule a wakeup after a small delay to avoid busy-loop polling.
+                    let waker = cx.waker().clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                        waker.wake();
+                    });
                     return Poll::Pending;
                 }
                 Err(broadcast::error::TryRecvError::Lagged(skipped)) => {

@@ -271,8 +271,13 @@ impl AsyncRead for FlacClientStream {
                     self.buffer.extend(bytes.iter());
                 }
                 Err(broadcast::error::TryRecvError::Empty) => {
-                    // No data available, register waker and return pending
-                    cx.waker().wake_by_ref();
+                    // No data available right now.
+                    // Schedule a wakeup after a small delay to avoid busy-loop polling.
+                    let waker = cx.waker().clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                        waker.wake();
+                    });
                     return Poll::Pending;
                 }
                 Err(broadcast::error::TryRecvError::Lagged(skipped)) => {
@@ -464,7 +469,13 @@ impl AsyncRead for IcyClientStream {
                     }
                 }
                 Err(broadcast::error::TryRecvError::Empty) => {
-                    cx.waker().wake_by_ref();
+                    // No data available right now.
+                    // Schedule a wakeup after a small delay to avoid busy-loop polling.
+                    let waker = cx.waker().clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                        waker.wake();
+                    });
                     return Poll::Pending;
                 }
                 Err(broadcast::error::TryRecvError::Lagged(skipped)) => {
@@ -716,7 +727,9 @@ async fn broadcast_flac_stream(
             }
             Ok(n) => {
                 total_bytes += n as u64;
-                trace!("Read {} bytes from FLAC encoder (total: {})", n, total_bytes);
+                if total_bytes % 100000 == 0 || total_bytes < 10000 {
+                    info!("Read {} bytes from FLAC encoder (total: {})", n, total_bytes);
+                }
 
                 // Broadcast to all clients
                 let bytes = Bytes::copy_from_slice(&buffer[..n]);
@@ -728,9 +741,12 @@ async fn broadcast_flac_stream(
                     info!("FLAC header captured ({} bytes)", bytes.len());
                 }
 
+                let num_receivers = broadcast_tx.receiver_count();
                 if let Err(e) = broadcast_tx.send(bytes) {
                     // No receivers, but that's okay - clients may not be connected yet
                     trace!("No active receivers for FLAC broadcast: {}", e);
+                } else if num_receivers > 0 {
+                    trace!("Broadcasted {} bytes to {} receivers", n, num_receivers);
                 }
             }
             Err(e) => {
