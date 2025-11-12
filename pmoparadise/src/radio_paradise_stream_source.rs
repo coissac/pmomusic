@@ -6,6 +6,7 @@
 use crate::{
     client::RadioParadiseClient,
     models::{Block, EventId, Song},
+    node_stats::NodeStats,
 };
 use futures_util::StreamExt;
 use pmoaudio::{
@@ -43,6 +44,7 @@ pub struct RadioParadiseStreamSourceLogic {
     chunk_frames: usize,
     recent_blocks: VecDeque<EventId>,
     block_queue: VecDeque<EventId>,
+    stats: Arc<NodeStats>,
 }
 
 impl RadioParadiseStreamSourceLogic {
@@ -55,6 +57,7 @@ impl RadioParadiseStreamSourceLogic {
             chunk_frames,
             recent_blocks: VecDeque::with_capacity(RECENT_BLOCKS_CACHE_SIZE),
             block_queue: VecDeque::new(),
+            stats: NodeStats::new("RadioParadiseStreamSource"),
         }
     }
 
@@ -303,6 +306,8 @@ impl RadioParadiseStreamSourceLogic {
         output: &[mpsc::Sender<Arc<AudioSegment>>],
         segment: Arc<AudioSegment>,
     ) -> Result<(), AudioError> {
+        self.stats.record_segment_received(segment.timestamp_sec);
+
         for (i, tx) in output.iter().enumerate() {
             let capacity_before = tx.capacity();
             tracing::trace!(
@@ -317,11 +322,23 @@ impl RadioParadiseStreamSourceLogic {
             let send_duration = send_start.elapsed();
 
             if send_duration.as_millis() > 10 {
+                let duration_ms = send_duration.as_millis() as u64;
+                self.stats.record_backpressure(duration_ms);
                 tracing::debug!(
                     "send_to_children: Send to child {} BLOCKED for {:.3}s (backpressure triggered, timestamp={:.3}s)",
                     i, send_duration.as_secs_f64(), segment.timestamp_sec
                 );
             }
+
+            // Estimer la taille du segment pour les stats (frames * 2 channels * bytes_per_sample)
+            let segment_bytes = match &segment.segment {
+                pmoaudio::_AudioSegment::Chunk(chunk) => {
+                    // Approximation: frames * 2 (stereo) * 4 bytes (i32/f32)
+                    chunk.len() * 2 * 4
+                }
+                _ => 0,
+            };
+            self.stats.record_segment_sent(segment_bytes);
         }
         Ok(())
     }
@@ -601,6 +618,9 @@ impl NodeLogic for RadioParadiseStreamSourceLogic {
                 last_timestamp, total_elapsed, (total_elapsed / last_timestamp) * 100.0
             );
         }
+
+        // Log des statistiques finales
+        tracing::info!("\n{}", self.stats.report());
 
         Ok(())
     }

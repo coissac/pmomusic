@@ -216,6 +216,9 @@ pub mod error;
 pub mod models;
 pub mod source;
 
+#[cfg(feature = "pmoaudio")]
+pub mod node_stats;
+
 #[cfg(feature = "pmoserver")]
 pub mod pmoserver_ext;
 

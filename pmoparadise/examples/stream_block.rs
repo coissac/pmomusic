@@ -212,12 +212,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     source_flac.push_block_id(END_OF_BLOCKS_SIGNAL); // Signal: no more blocks after this one
     tracing::debug!("RadioParadiseStreamSource (FLAC) created with block {} + END signal", block.event);
 
-    // Calculate channel size to match max_lead_time
-    // With 50ms chunks and 3.0s lead time: 3.0 / 0.05 = 60 chunks
+    // Use SMALL channel size to make backpressure more reactive
+    // Instead of trying to buffer 3s of audio (60 chunks), use a much smaller buffer
+    // This forces tighter backpressure control
     let max_lead_time = 3.0;
-    let chunk_duration_sec = 0.05;
-    let channel_size = ((max_lead_time / chunk_duration_sec) as usize).max(16);
-    tracing::debug!("Calculated channel size: {} chunks ({:.1}s buffer)", channel_size, channel_size as f64 * chunk_duration_sec);
+    let channel_size = 8; // Small buffer for reactive backpressure
+    tracing::debug!("Using channel size: {} chunks ({:.1}s buffer at 50ms/chunk)", channel_size, channel_size as f64 * 0.05);
 
     let mut timer_flac = TimerNode::with_channel_size(max_lead_time, channel_size);
     tracing::debug!("TimerNode (FLAC) created with {:.1}s max lead time, {} chunk buffer", max_lead_time, channel_size);
