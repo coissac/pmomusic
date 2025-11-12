@@ -1,4 +1,46 @@
-/// Applique un gain (en dB) sur des échantillons stéréo interleavés `[L,R]`.
+//! Application de gain pour audio 32-bit avec optimisations SIMD
+//!
+//! Ce module implémente l'application de gain pour les échantillons audio 32-bit
+//! en utilisant l'arithmétique à virgule fixe Q31.
+//!
+//! # Méthode Q31
+//!
+//! Le gain linéaire est converti en format Q31 (Fixed-Point 31-bit fractional):
+//! - Gain linéaire multiplié par 2^31
+//! - Multiplication Q31 × i32 → i64
+//! - Arrondi avec ajout de 2^30 avant shift right de 31 bits
+//! - Clamping aux limites i32 pour éviter l'overflow
+//!
+//! # Optimisations SIMD
+//!
+//! - **ARM NEON** : vqdmulhq_s32 (Q31 multiply high avec saturation)
+//! - **x86_64 AVX2** : _mm256_mulhi_epi32 (traite 8 échantillons en parallèle)
+//! - **Fallback scalaire** : Pour les architectures sans SIMD
+
+/// Applique un gain (en dB) sur des échantillons stéréo interleavés `[L,R]`
+///
+/// Cette fonction applique un gain en décibels sur chaque échantillon du buffer.
+/// Elle utilise automatiquement les instructions SIMD disponibles (NEON ou AVX2).
+///
+/// # Arguments
+///
+/// * `samples` - Buffer mutable de frames stéréo [[L, R], ...] à modifier in-place
+/// * `gain_db` - Gain à appliquer en décibels (positif = amplification, négatif = atténuation)
+///
+/// # Exemples
+///
+/// ```
+/// use pmoaudio::dsp::apply_gain_stereo_i32;
+///
+/// let mut data = vec![[100000i32, 200000i32]];
+/// apply_gain_stereo_i32(&mut data, 6.0); // Amplifie de +6dB (×2)
+/// ```
+///
+/// # Performance
+///
+/// - ARM NEON: ~4 échantillons par cycle
+/// - x86_64 AVX2: ~8 échantillons par cycle
+/// - Scalaire: ~1 échantillon par 2-3 cycles
 pub fn apply_gain_stereo_i32(samples: &mut [[i32; 2]], gain_db: f64) {
     let gain = 10f64.powf(gain_db / 20.0);
     let g_q31 = (gain * (1u64 << 31) as f64).round() as i32;

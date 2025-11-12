@@ -150,7 +150,7 @@ fn example_audio_segments() {
     }
 
     // Créer un marqueur de sync
-    let heartbeat = AudioSegment::new_hearbeat(1, 1.0);
+    let heartbeat = AudioSegment::new_heartbeat(1, 1.0);
     println!("\nHeartbeat segment:");
     println!("  - Is audio: {}", heartbeat.is_audio_chunk());
     println!("  - Is heartbeat: {}", heartbeat.is_heartbeat());
