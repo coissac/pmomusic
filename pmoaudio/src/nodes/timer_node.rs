@@ -153,18 +153,26 @@ impl NodeLogic for TimerNodeLogic {
                         let elapsed = start.elapsed().as_secs_f64();
                         let lead_time = chunk_timestamp - elapsed;
 
+                        tracing::trace!(
+                            "TimerNodeLogic: chunk received (ts={:.3}s, elapsed={:.3}s, lead_time={:.3}s, max_lead={:.1}s)",
+                            chunk_timestamp, elapsed, lead_time, self.max_lead_time_sec
+                        );
+
                         if lead_time > self.max_lead_time_sec {
                             // On est trop en avance, attendre
                             let sleep_duration = lead_time - self.max_lead_time_sec;
-                            tracing::trace!(
-                                "TimerNodeLogic: SLEEPING {:.3}s (lead_time={:.3}s > max={:.1}s)",
+                            tracing::debug!(
+                                "TimerNodeLogic: SLEEPING {:.3}s (lead_time={:.3}s > max={:.1}s, chunk_ts={:.3}s)",
                                 sleep_duration,
                                 lead_time,
-                                self.max_lead_time_sec
+                                self.max_lead_time_sec,
+                                chunk_timestamp
                             );
 
                             tokio::select! {
-                                _ = tokio::time::sleep(Duration::from_secs_f64(sleep_duration)) => {}
+                                _ = tokio::time::sleep(Duration::from_secs_f64(sleep_duration)) => {
+                                    tracing::trace!("TimerNodeLogic: woke up from sleep");
+                                }
                                 _ = stop_token.cancelled() => {
                                     tracing::debug!("TimerNodeLogic cancelled during sleep");
                                     break;
@@ -177,6 +185,11 @@ impl NodeLogic for TimerNodeLogic {
                                 -lead_time,
                                 chunk_timestamp,
                                 elapsed
+                            );
+                        } else {
+                            tracing::trace!(
+                                "TimerNodeLogic: chunk on time (lead_time={:.3}s within tolerance)",
+                                lead_time
                             );
                         }
                     } else {

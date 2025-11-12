@@ -175,11 +175,16 @@ impl RadioParadiseStreamSourceLogic {
         let mut pending: Vec<u8> = Vec::with_capacity(chunk_byte_len * 2);
 
         // Traiter les chunks audio
+        let mut chunk_count = 0;
         loop {
             // Vérifier stop_token
             if stop_token.is_cancelled() {
                 // Retourner le timestamp actuel et start_instant si on est interrompu
                 let current_timestamp = total_samples as f64 / sample_rate as f64;
+                tracing::debug!(
+                    "Block decode cancelled: sent {} chunks, {:.2}s duration",
+                    chunk_count, current_timestamp
+                );
                 return Ok((current_timestamp, start_instant));
             }
 
@@ -189,6 +194,10 @@ impl RadioParadiseStreamSourceLogic {
                     .map_err(|e| AudioError::ProcessingError(format!("Read error: {}", e)))?;
 
                 if read == 0 {
+                    tracing::debug!(
+                        "FLAC decode EOF reached: sent {} chunks, {:.2}s total",
+                        chunk_count, total_samples as f64 / sample_rate as f64
+                    );
                     break; // EOF
                 }
                 pending.extend_from_slice(&read_buf[..read]);
@@ -247,6 +256,7 @@ impl RadioParadiseStreamSourceLogic {
 
             *order += 1;
             total_samples += chunk_len;
+            chunk_count += 1;
         }
 
         // Retourner le timestamp du dernier chunk (durée totale du bloc) et l'instant de début
@@ -262,10 +272,25 @@ impl RadioParadiseStreamSourceLogic {
         output: &[mpsc::Sender<Arc<AudioSegment>>],
         segment: Arc<AudioSegment>,
     ) -> Result<(), AudioError> {
-        for tx in output {
+        for (i, tx) in output.iter().enumerate() {
+            let capacity_before = tx.capacity();
+            tracing::trace!(
+                "send_to_children: Sending to child {} (channel capacity={}, timestamp={:.3}s)",
+                i, capacity_before, segment.timestamp_sec
+            );
+
+            let send_start = std::time::Instant::now();
             tx.send(segment.clone())
                 .await
                 .map_err(|_| AudioError::ChildDied)?;
+            let send_duration = send_start.elapsed();
+
+            if send_duration.as_millis() > 10 {
+                tracing::debug!(
+                    "send_to_children: Send to child {} BLOCKED for {:.3}s (backpressure triggered, timestamp={:.3}s)",
+                    i, send_duration.as_secs_f64(), segment.timestamp_sec
+                );
+            }
         }
         Ok(())
     }
