@@ -19,7 +19,10 @@ pub const DEFAULT_IMAGE_BASE: &str = "https://img.radioparadise.com/";
 pub const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 
 /// Default timeout for large block downloads/streams
-pub const DEFAULT_BLOCK_TIMEOUT_SECS: u64 = 180;
+/// IMPORTANT: Radio Paradise blocks can be ~20 minutes long, and with backpressure
+/// from the audio pipeline, the HTTP stream must stay open for the entire duration.
+/// Setting this to 2 hours to safely handle even the longest blocks.
+pub const DEFAULT_BLOCK_TIMEOUT_SECS: u64 = 7200; // 2 hours
 
 /// Default User-Agent
 pub const DEFAULT_USER_AGENT: &str = "pmoparadise/0.1.0";

@@ -208,11 +208,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     source_flac.push_block_id(block.event);
     tracing::debug!("RadioParadiseStreamSource (FLAC) created with block {}", block.event);
 
-    let mut timer_flac = TimerNode::new(3.0);
-    tracing::debug!("TimerNode (FLAC) created with 3.0s max lead time");
+    // Calculate channel size to match max_lead_time
+    // With 50ms chunks and 3.0s lead time: 3.0 / 0.05 = 60 chunks
+    let max_lead_time = 3.0;
+    let chunk_duration_sec = 0.05;
+    let channel_size = ((max_lead_time / chunk_duration_sec) as usize).max(16);
+    tracing::debug!("Calculated channel size: {} chunks ({:.1}s buffer)", channel_size, channel_size as f64 * chunk_duration_sec);
 
-    let (streaming_sink, stream_handle) = StreamingFlacSink::new(encoder_options.clone(), 16);
-    tracing::debug!("StreamingFlacSink created");
+    let mut timer_flac = TimerNode::with_channel_size(max_lead_time, channel_size);
+    tracing::debug!("TimerNode (FLAC) created with {:.1}s max lead time, {} chunk buffer", max_lead_time, channel_size);
+
+    let (streaming_sink, stream_handle) = StreamingFlacSink::new(encoder_options.clone(), channel_size.min(255) as u8);
+    tracing::debug!("StreamingFlacSink created with {} chunk buffer", channel_size);
 
     timer_flac.register(Box::new(streaming_sink));
     source_flac.register(Box::new(timer_flac));
@@ -226,11 +233,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     source_ogg.push_block_id(block.event);
     tracing::debug!("RadioParadiseStreamSource (OGG) created with block {}", block.event);
 
-    let mut timer_ogg = TimerNode::new(3.0);
-    tracing::debug!("TimerNode (OGG) created with 3.0s max lead time");
+    let mut timer_ogg = TimerNode::with_channel_size(max_lead_time, channel_size);
+    tracing::debug!("TimerNode (OGG) created with {:.1}s max lead time, {} chunk buffer", max_lead_time, channel_size);
 
-    let (ogg_sink, ogg_handle) = StreamingOggFlacSink::new(encoder_options, 16);
-    tracing::debug!("StreamingOggFlacSink created");
+    let (ogg_sink, ogg_handle) = StreamingOggFlacSink::new(encoder_options, channel_size.min(255) as u8);
+    tracing::debug!("StreamingOggFlacSink created with {} chunk buffer", channel_size);
 
     timer_ogg.register(Box::new(ogg_sink));
     source_ogg.register(Box::new(timer_ogg));

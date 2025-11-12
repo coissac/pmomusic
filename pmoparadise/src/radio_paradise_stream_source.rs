@@ -89,7 +89,11 @@ impl RadioParadiseStreamSourceLogic {
         order: &mut u64,
     ) -> Result<(f64, Instant), AudioError> {
         // Télécharger le FLAC
-        tracing::debug!("Sending HTTP GET request for block FLAC");
+        tracing::info!(
+            "Sending HTTP GET request for block FLAC (expected duration: {:.1}min, url: {})",
+            block.length as f64 / 60000.0,
+            block.url
+        );
         let response = self.client.client
             .get(&block.url)
             .timeout(self.client.block_timeout)
@@ -103,6 +107,17 @@ impl RadioParadiseStreamSourceLogic {
                 "Block download returned status {}",
                 response.status()
             )));
+        }
+
+        // Vérifier la taille du contenu si disponible
+        if let Some(content_length) = response.content_length() {
+            tracing::info!(
+                "HTTP Content-Length: {} bytes ({:.1} MB)",
+                content_length,
+                content_length as f64 / 1_048_576.0
+            );
+        } else {
+            tracing::warn!("HTTP response has no Content-Length header");
         }
 
         // Créer un stream reader
@@ -176,14 +191,19 @@ impl RadioParadiseStreamSourceLogic {
 
         // Traiter les chunks audio
         let mut chunk_count = 0;
+        let mut total_bytes_decoded = 0u64;
+        let expected_duration_sec = block.length as f64 / 1000.0;
+
         loop {
             // Vérifier stop_token
             if stop_token.is_cancelled() {
                 // Retourner le timestamp actuel et start_instant si on est interrompu
                 let current_timestamp = total_samples as f64 / sample_rate as f64;
-                tracing::debug!(
-                    "Block decode cancelled: sent {} chunks, {:.2}s duration",
-                    chunk_count, current_timestamp
+                tracing::warn!(
+                    "Block decode CANCELLED: sent {} chunks, {:.2}s duration ({:.1}% of expected {:.2}s), decoded {} bytes",
+                    chunk_count, current_timestamp,
+                    (current_timestamp / expected_duration_sec) * 100.0,
+                    expected_duration_sec, total_bytes_decoded
                 );
                 return Ok((current_timestamp, start_instant));
             }
@@ -194,12 +214,23 @@ impl RadioParadiseStreamSourceLogic {
                     .map_err(|e| AudioError::ProcessingError(format!("Read error: {}", e)))?;
 
                 if read == 0 {
-                    tracing::debug!(
-                        "FLAC decode EOF reached: sent {} chunks, {:.2}s total",
-                        chunk_count, total_samples as f64 / sample_rate as f64
-                    );
+                    let actual_duration = total_samples as f64 / sample_rate as f64;
+                    let percentage = (actual_duration / expected_duration_sec) * 100.0;
+
+                    if percentage < 95.0 {
+                        tracing::error!(
+                            "FLAC decode EOF PREMATURE: sent {} chunks, {:.2}s actual vs {:.2}s expected ({:.1}%), decoded {} bytes",
+                            chunk_count, actual_duration, expected_duration_sec, percentage, total_bytes_decoded
+                        );
+                    } else {
+                        tracing::info!(
+                            "FLAC decode EOF reached: sent {} chunks, {:.2}s duration ({:.1}% of expected), decoded {} bytes",
+                            chunk_count, actual_duration, percentage, total_bytes_decoded
+                        );
+                    }
                     break; // EOF
                 }
+                total_bytes_decoded += read as u64;
                 pending.extend_from_slice(&read_buf[..read]);
             }
 
@@ -540,7 +571,7 @@ impl NodeLogic for RadioParadiseStreamSourceLogic {
         }
 
         // Envoyer EndOfStream avec le timestamp du dernier chunk
-        tracing::debug!("Sending EndOfStream with timestamp {:.2}s", last_timestamp);
+        tracing::info!("Sending EndOfStream with timestamp {:.2}s to {} outputs", last_timestamp, output.len());
         let eos = AudioSegment::new_end_of_stream(order, last_timestamp);
         for tx in &output {
             tx.send(eos.clone())
@@ -548,31 +579,23 @@ impl NodeLogic for RadioParadiseStreamSourceLogic {
                 .map_err(|_| AudioError::ChildDied)?;
         }
 
-        // IMPORTANT: Attendre que la durée réelle du bloc soit écoulée avant de fermer le channel
-        // Sinon, le TimerNode reçoit EOF et se termine avant d'avoir fini de diffuser tous les chunks
-        if let Some(start_instant) = last_start_instant {
-            let elapsed = start_instant.elapsed().as_secs_f64();
-            if elapsed < last_timestamp {
-                let remaining = last_timestamp - elapsed;
-                tracing::info!(
-                    "Waiting {:.2}s for block playback to complete (elapsed={:.2}s, duration={:.2}s)",
-                    remaining, elapsed, last_timestamp
-                );
+        // IMPORTANT: Attendre que tous les channels soient fermés par les enfants
+        // Cela garantit que tous les chunks (y compris ceux en attente dans les buffers MPSC)
+        // ont été traités avant que nous ne fermions notre bout
+        tracing::info!("Waiting for all child nodes to close their channels...");
+        for (i, tx) in output.iter().enumerate() {
+            tracing::debug!("Waiting for child {} to close channel...", i);
+            tx.closed().await;
+            tracing::debug!("Child {} channel closed", i);
+        }
+        tracing::info!("All child channels closed, pipeline complete");
 
-                tokio::select! {
-                    _ = tokio::time::sleep(Duration::from_secs_f64(remaining)) => {
-                        tracing::debug!("Block playback duration complete");
-                    }
-                    _ = stop_token.cancelled() => {
-                        tracing::debug!("Cancelled while waiting for playback completion");
-                    }
-                }
-            } else {
-                tracing::debug!(
-                    "Block already played in real-time (elapsed={:.2}s >= duration={:.2}s)",
-                    elapsed, last_timestamp
-                );
-            }
+        if let Some(start_instant) = last_start_instant {
+            let total_elapsed = start_instant.elapsed().as_secs_f64();
+            tracing::info!(
+                "Block processing complete: duration={:.2}s, total_elapsed={:.2}s ({:.1}% of real-time)",
+                last_timestamp, total_elapsed, (total_elapsed / last_timestamp) * 100.0
+            );
         }
 
         Ok(())
