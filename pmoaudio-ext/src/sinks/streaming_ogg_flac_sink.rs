@@ -734,26 +734,33 @@ async fn broadcast_ogg_flac_stream(
     let comment_page = ogg_writer.create_page(&vorbis_comment, false, false, false);
     let comment_bytes = Bytes::from(comment_page);
 
-    // Cache the header (BOS + Comment pages)
-    let mut cached_header = Vec::new();
-    cached_header.extend_from_slice(&bos_bytes);
-    cached_header.extend_from_slice(&comment_bytes);
-    *header_cache.write().await = Some(Bytes::from(cached_header));
-    header_captured = true;
-    info!("OGG-FLAC header cached ({} bytes: BOS + Vorbis Comment)", bos_bytes.len() + comment_bytes.len());
+    // Start building the startup cache (BOS + Comment pages + initial data pages)
+    // We'll buffer the first few data pages and add them to the cache later
+    let mut startup_cache = Vec::new();
+    startup_cache.extend_from_slice(&bos_bytes);
+    startup_cache.extend_from_slice(&comment_bytes);
 
-    // Broadcast header
+    // Broadcast header immediately
     let _ = broadcast_tx.send(bos_bytes);
     total_ogg_bytes += comment_bytes.len() as u64;
     let _ = broadcast_tx.send(comment_bytes);
 
+    //  We'll cache the full startup sequence (header + initial data) after creating first data pages
+    header_captured = false; // Will be set to true after caching startup data
+
     // Step 4: Read FLAC stream and create OGG packets
     // According to OGG FLAC spec, we put the complete FLAC stream in a single logical bitstream,
     // but split it into reasonable page sizes for streaming
+    //
+    // IMPORTANT: The FLAC encoder may output additional data after the metadata blocks
+    // before the first real FLAC frame. We need to skip this data.
 
     let mut flac_data = Vec::new();
     let mut read_buffer = vec![0u8; 8192];
     let mut is_first_data_page = true; // Track if this is the first page with FLAC frames
+    let mut found_first_sync = false;  // Track if we've found the first FLAC frame sync code
+    let mut startup_pages_count = 0;   // Count startup pages added to cache
+    const STARTUP_PAGES_TO_CACHE: usize = 20; // Cache first 20 data pages (~160KB, ~2-3 seconds)
 
     loop {
         match flac_stream.read(&mut read_buffer).await {
@@ -798,16 +805,102 @@ async fn broadcast_ogg_flac_stream(
                 // Accumulate FLAC data
                 flac_data.extend_from_slice(&read_buffer[..n]);
 
+                trace!("Read {} bytes, total accumulated: {} bytes", n, flac_data.len());
+
+                // If we haven't found the first sync code yet, search for it
+                if !found_first_sync {
+                    trace!("Searching for FLAC sync code in {} bytes", flac_data.len());
+                    // Search for FLAC sync code (0xFF 0xF8-0xFF)
+                    if let Some(sync_pos) = flac_data.windows(2).position(|w| w[0] == 0xFF && (w[1] & 0xFC) == 0xF8) {
+                        // Found it! Discard everything before the sync code
+                        if sync_pos > 0 {
+                            info!("Discarding {} bytes of non-frame data before first FLAC frame", sync_pos);
+                            flac_data.drain(..sync_pos);
+                        } else {
+                            info!("FLAC sync code found at start of buffer (no data to discard)");
+                        }
+                        found_first_sync = true;
+
+                        // DEBUG: Log first bytes after sync
+                        let preview_len = std::cmp::min(64, flac_data.len());
+                        let preview_hex: String = flac_data[..preview_len]
+                            .iter()
+                            .take(32)
+                            .map(|b| format!("{:02x}", b))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        info!("First FLAC frame sync found, buffer now has {} bytes", flac_data.len());
+                        info!("First 32 bytes after sync: {}", preview_hex);
+                    } else if flac_data.len() > 100_000 {
+                        // Safety limit: if we've accumulated more than 100KB without finding sync, something is wrong
+                        error!("Accumulated {}KB without finding FLAC sync code", flac_data.len() / 1024);
+                        return Err(AudioError::ProcessingError(
+                            "Failed to find FLAC frame sync code in stream".into()
+                        ));
+                    } else {
+                        // Haven't found sync yet and buffer isn't too large, keep accumulating
+                        trace!("No sync code found yet, continuing to accumulate");
+                        continue;
+                    }
+                }
+
                 // Create pages when we have a reasonable amount of data (8KB chunks)
                 // All pages after the first are continuations of the same logical FLAC packet
-                while flac_data.len() >= 8192 {
+                while found_first_sync && flac_data.len() >= 8192 {
                     let chunk = flac_data.drain(..8192).collect::<Vec<u8>>();
+
+                    // DEBUG: Log first bytes of first chunk
+                    if is_first_data_page {
+                        let preview_hex: String = chunk
+                            .iter()
+                            .take(32)
+                            .map(|b| format!("{:02x}", b))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        info!("Creating FIRST OGG data page with {} bytes", chunk.len());
+                        info!("First 32 bytes of chunk: {}", preview_hex);
+                    }
+
                     // First data page: not a continuation
                     // Subsequent pages: continuations of the FLAC stream
                     let is_continuation = !is_first_data_page;
                     let ogg_page = ogg_writer.create_page(&chunk, false, false, is_continuation);
                     let ogg_bytes = Bytes::from(ogg_page);
                     total_ogg_bytes += ogg_bytes.len() as u64;
+
+                    // Add to startup cache if we haven't reached the limit
+                    if startup_pages_count < STARTUP_PAGES_TO_CACHE {
+                        startup_cache.extend_from_slice(&ogg_bytes);
+                        startup_pages_count += 1;
+
+                        // Finalize the startup cache after collecting enough pages
+                        if startup_pages_count == STARTUP_PAGES_TO_CACHE {
+                            // DEBUG: Verify the third page (first data page) starts with FLAC sync
+                            let third_page_search = startup_cache.windows(4).enumerate()
+                                .filter(|(_, w)| w == b"OggS")
+                                .nth(2); // Find third "OggS" marker
+                            if let Some((third_page_offset, _)) = third_page_search {
+                                // Skip OGG page header (27 bytes) + segment table to find data
+                                if third_page_offset + 27 < startup_cache.len() {
+                                    let num_segs = startup_cache[third_page_offset + 26] as usize;
+                                    let data_offset = third_page_offset + 27 + num_segs;
+                                    if data_offset + 16 <= startup_cache.len() {
+                                        let data_preview: String = startup_cache[data_offset..data_offset+16]
+                                            .iter()
+                                            .map(|b| format!("{:02x}", b))
+                                            .collect::<Vec<_>>()
+                                            .join(" ");
+                                        info!("Third page in cache (offset 0x{:x}) starts with: {}", third_page_offset, data_preview);
+                                    }
+                                }
+                            }
+
+                            *header_cache.write().await = Some(Bytes::from(startup_cache.clone()));
+                            header_captured = true;
+                            info!("OGG-FLAC startup cache finalized ({} bytes: header + {} data pages)",
+                                  startup_cache.len(), STARTUP_PAGES_TO_CACHE);
+                        }
+                    }
 
                     if is_first_data_page {
                         debug!("Sending first FLAC data page ({} bytes)", ogg_bytes.len());
