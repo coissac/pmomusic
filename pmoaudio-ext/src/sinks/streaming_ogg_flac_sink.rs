@@ -60,9 +60,9 @@ use pmoaudio::{
     AudioChunk, AudioError, AudioSegment, SyncMarker, TypeRequirement, TypedAudioNode,
     _AudioSegment,
 };
-use pmoflac::{EncoderOptions, PcmFormat};
+use pmoflac::{encode_flac_stream, EncoderOptions, FlacEncodedStream, PcmFormat};
 use pmometadata::TrackMetadata;
-use tokio::io::{AsyncRead, ReadBuf};
+use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
 use tokio::sync::{broadcast, mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, trace, warn};
@@ -212,17 +212,71 @@ impl Drop for OggFlacClientStream {
     }
 }
 
+/// Internal state for encoder initialization.
+struct EncoderState {
+    broadcaster_task: tokio::task::JoinHandle<()>,
+}
+
 /// Logic for the streaming OGG-FLAC sink.
 struct StreamingOggFlacSinkLogic {
     encoder_options: EncoderOptions,
     bits_per_sample: u8,
+    pcm_tx: mpsc::Sender<Vec<u8>>,
+    pcm_rx: Option<mpsc::Receiver<Vec<u8>>>,
     metadata: Arc<RwLock<MetadataSnapshot>>,
     ogg_broadcast: broadcast::Sender<Bytes>,
     ogg_header: Arc<RwLock<Option<Bytes>>>,
+    encoder_state: Option<EncoderState>,
     sample_rate: Option<u32>,
 }
 
 impl StreamingOggFlacSinkLogic {
+    /// Initialize the FLAC encoder once we know the sample rate.
+    async fn initialize_encoder(&mut self, sample_rate: u32) -> Result<(), AudioError> {
+        if self.encoder_state.is_some() {
+            return Ok(()); // Already initialized
+        }
+
+        info!("Initializing OGG-FLAC encoder with sample rate: {} Hz", sample_rate);
+
+        // Take the PCM receiver (we only initialize once)
+        let pcm_rx = self.pcm_rx.take().ok_or_else(|| {
+            AudioError::ProcessingError("PCM receiver already consumed".into())
+        })?;
+
+        // Create ByteStreamReader for the encoder
+        let pcm_reader = ByteStreamReader::new(pcm_rx);
+
+        // Create PCM format
+        let pcm_format = PcmFormat {
+            sample_rate,
+            channels: 2,
+            bits_per_sample: self.bits_per_sample,
+        };
+
+        // Start the FLAC encoder
+        let flac_stream = encode_flac_stream(pcm_reader, pcm_format, self.encoder_options.clone())
+            .await
+            .map_err(|e| AudioError::ProcessingError(format!("Failed to start FLAC encoder: {}", e)))?;
+
+        info!("OGG-FLAC encoder initialized successfully");
+
+        // Spawn OGG wrapper + broadcaster task
+        let ogg_broadcast = self.ogg_broadcast.clone();
+        let ogg_header = self.ogg_header.clone();
+        let broadcaster_task = tokio::spawn(async move {
+            if let Err(e) = broadcast_ogg_flac_stream(flac_stream, ogg_broadcast, ogg_header).await {
+                error!("OGG broadcaster task error: {}", e);
+            }
+        });
+
+        self.encoder_state = Some(EncoderState { broadcaster_task });
+
+        info!("OGG broadcaster task spawned");
+
+        Ok(())
+    }
+
     /// Update metadata from a TrackBoundary marker.
     async fn update_metadata(
         &mut self,
@@ -294,21 +348,31 @@ impl NodeLogic for StreamingOggFlacSinkLogic {
                         Some(seg) => {
                             match &seg.segment {
                                 _AudioSegment::Chunk(chunk) => {
-                                    // Detect sample rate from first chunk
+                                    // Detect sample rate from first chunk and initialize encoder
                                     if self.sample_rate.is_none() {
                                         let sample_rate = chunk.sample_rate();
                                         self.sample_rate = Some(sample_rate);
                                         info!("Detected sample rate: {} Hz", sample_rate);
-                                        // TODO: Initialize OGG-FLAC encoder
+
+                                        // Initialize the FLAC encoder now
+                                        self.initialize_encoder(sample_rate).await?;
                                     }
 
+                                    // Convert chunk to PCM bytes
+                                    let pcm_bytes = chunk_to_pcm_bytes(&chunk, self.bits_per_sample)?;
+
                                     trace!(
-                                        "Received chunk: {} samples @ {:.2}s",
+                                        "Sending PCM chunk: {} bytes, {} samples @ {:.2}s",
+                                        pcm_bytes.len(),
                                         chunk.len(),
                                         seg.timestamp_sec
                                     );
 
-                                    // TODO: Convert chunk to PCM and send to encoder
+                                    // Send to FLAC encoder
+                                    if let Err(e) = self.pcm_tx.send(pcm_bytes).await {
+                                        warn!("Failed to send PCM data to encoder: {}", e);
+                                        break;
+                                    }
                                 }
 
                                 _AudioSegment::Sync(marker) => {
@@ -379,6 +443,9 @@ impl StreamingOggFlacSink {
             panic!("bits_per_sample must be 16, 24, or 32");
         }
 
+        // Create PCM channel (bounded for backpressure)
+        let (pcm_tx, pcm_rx) = mpsc::channel::<Vec<u8>>(16);
+
         // Shared metadata
         let metadata = Arc::new(RwLock::new(MetadataSnapshot::default()));
 
@@ -403,9 +470,12 @@ impl StreamingOggFlacSink {
         let logic = StreamingOggFlacSinkLogic {
             encoder_options,
             bits_per_sample,
+            pcm_tx,
+            pcm_rx: Some(pcm_rx),
             metadata,
             ogg_broadcast,
             ogg_header,
+            encoder_state: None,
             sample_rate: None,
         };
 
@@ -444,4 +514,218 @@ impl TypedAudioNode for StreamingOggFlacSink {
     fn output_type(&self) -> Option<TypeRequirement> {
         None
     }
+}
+
+/// AsyncRead adapter for mpsc::Receiver<Vec<u8>>.
+struct ByteStreamReader {
+    rx: mpsc::Receiver<Vec<u8>>,
+    buffer: VecDeque<u8>,
+    finished: bool,
+}
+
+impl ByteStreamReader {
+    fn new(rx: mpsc::Receiver<Vec<u8>>) -> Self {
+        Self {
+            rx,
+            buffer: VecDeque::new(),
+            finished: false,
+        }
+    }
+}
+
+impl AsyncRead for ByteStreamReader {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        loop {
+            if !self.buffer.is_empty() {
+                let to_copy = self.buffer.len().min(buf.remaining());
+                if to_copy == 0 {
+                    return Poll::Ready(Ok(()));
+                }
+
+                let slice = self.buffer.make_contiguous();
+                buf.put_slice(&slice[..to_copy]);
+                self.buffer.drain(..to_copy);
+                return Poll::Ready(Ok(()));
+            }
+
+            if self.finished {
+                return Poll::Ready(Ok(()));
+            }
+
+            match Pin::new(&mut self.rx).poll_recv(cx) {
+                Poll::Ready(Some(bytes)) => {
+                    if bytes.is_empty() {
+                        continue;
+                    }
+                    self.buffer.extend(bytes);
+                }
+                Poll::Ready(None) => {
+                    self.finished = true;
+                    return Poll::Ready(Ok(()));
+                }
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+    }
+}
+
+/// Convert an AudioChunk to PCM bytes with specified bit depth.
+fn chunk_to_pcm_bytes(chunk: &AudioChunk, bits_per_sample: u8) -> Result<Vec<u8>, AudioError> {
+    match chunk {
+        AudioChunk::F32(_) | AudioChunk::F64(_) => {
+            return Err(AudioError::ProcessingError(
+                "StreamingOggFlacSink only supports integer audio chunks".into(),
+            ));
+        }
+        _ => {}
+    }
+
+    let len = chunk.len();
+    let bytes_per_frame = (bits_per_sample / 8) as usize * 2;
+    let mut bytes = Vec::with_capacity(len * bytes_per_frame);
+
+    match (chunk, bits_per_sample) {
+        (AudioChunk::I16(data), 16) => {
+            for frame in data.get_frames() {
+                bytes.extend_from_slice(&frame[0].to_le_bytes());
+                bytes.extend_from_slice(&frame[1].to_le_bytes());
+            }
+        }
+        (AudioChunk::I16(data), 24) => {
+            for frame in data.get_frames() {
+                let left = (frame[0] as i32) << 8;
+                let right = (frame[1] as i32) << 8;
+                bytes.extend_from_slice(&left.to_le_bytes()[..3]);
+                bytes.extend_from_slice(&right.to_le_bytes()[..3]);
+            }
+        }
+        (AudioChunk::I16(data), 32) => {
+            for frame in data.get_frames() {
+                let left = (frame[0] as i32) << 16;
+                let right = (frame[1] as i32) << 16;
+                bytes.extend_from_slice(&left.to_le_bytes());
+                bytes.extend_from_slice(&right.to_le_bytes());
+            }
+        }
+        (AudioChunk::I24(data), 16) => {
+            for frame in data.get_frames() {
+                let left = (frame[0].as_i32() >> 8) as i16;
+                let right = (frame[1].as_i32() >> 8) as i16;
+                bytes.extend_from_slice(&left.to_le_bytes());
+                bytes.extend_from_slice(&right.to_le_bytes());
+            }
+        }
+        (AudioChunk::I24(data), 24) => {
+            for frame in data.get_frames() {
+                bytes.extend_from_slice(&frame[0].as_i32().to_le_bytes()[..3]);
+                bytes.extend_from_slice(&frame[1].as_i32().to_le_bytes()[..3]);
+            }
+        }
+        (AudioChunk::I24(data), 32) => {
+            for frame in data.get_frames() {
+                let left = frame[0].as_i32() << 8;
+                let right = frame[1].as_i32() << 8;
+                bytes.extend_from_slice(&left.to_le_bytes());
+                bytes.extend_from_slice(&right.to_le_bytes());
+            }
+        }
+        (AudioChunk::I32(data), 16) => {
+            for frame in data.get_frames() {
+                let left = (frame[0] >> 16) as i16;
+                let right = (frame[1] >> 16) as i16;
+                bytes.extend_from_slice(&left.to_le_bytes());
+                bytes.extend_from_slice(&right.to_le_bytes());
+            }
+        }
+        (AudioChunk::I32(data), 24) => {
+            for frame in data.get_frames() {
+                let left = frame[0] >> 8;
+                let right = frame[1] >> 8;
+                bytes.extend_from_slice(&left.to_le_bytes()[..3]);
+                bytes.extend_from_slice(&right.to_le_bytes()[..3]);
+            }
+        }
+        (AudioChunk::I32(data), 32) => {
+            for frame in data.get_frames() {
+                bytes.extend_from_slice(&frame[0].to_le_bytes());
+                bytes.extend_from_slice(&frame[1].to_le_bytes());
+            }
+        }
+        _ => {
+            return Err(AudioError::ProcessingError(format!(
+                "Unsupported bits_per_sample: {}",
+                bits_per_sample
+            )));
+        }
+    }
+
+    Ok(bytes)
+}
+
+/// OGG wrapper + broadcaster task: reads FLAC bytes from encoder, wraps in OGG pages, and broadcasts.
+///
+/// For now, this is a simplified version that just passes through FLAC bytes without OGG wrapping.
+/// TODO: Implement proper OGG page generation with BOS/EOS flags and Vorbis Comments.
+async fn broadcast_ogg_flac_stream(
+    mut flac_stream: FlacEncodedStream,
+    broadcast_tx: broadcast::Sender<Bytes>,
+    header_cache: Arc<RwLock<Option<Bytes>>>,
+) -> Result<(), AudioError> {
+    info!("OGG-FLAC broadcaster task started (FLAC passthrough mode - OGG wrapping TODO)");
+
+    let mut buffer = vec![0u8; 8192]; // 8KB buffer for reading
+    let mut total_bytes = 0u64;
+    let mut header_captured = false;
+
+    loop {
+        match flac_stream.read(&mut buffer).await {
+            Ok(0) => {
+                // EOF
+                info!("OGG-FLAC encoder stream ended, total bytes: {}", total_bytes);
+                break;
+            }
+            Ok(n) => {
+                total_bytes += n as u64;
+                trace!("Read {} bytes from FLAC encoder (total: {})", n, total_bytes);
+
+                // Broadcast to all clients (TODO: wrap in OGG pages)
+                let bytes = Bytes::copy_from_slice(&buffer[..n]);
+
+                // Capture first chunk as header if it contains "fLaC"
+                if !header_captured && bytes.len() >= 4 && &bytes[0..4] == b"fLaC" {
+                    *header_cache.write().await = Some(bytes.clone());
+                    header_captured = true;
+                    info!("FLAC header captured ({} bytes) - will be wrapped in OGG later", bytes.len());
+                }
+
+                if let Err(e) = broadcast_tx.send(bytes) {
+                    // No receivers, but that's okay - clients may not be connected yet
+                    trace!("No active receivers for OGG-FLAC broadcast: {}", e);
+                }
+            }
+            Err(e) => {
+                error!("Error reading from FLAC encoder: {}", e);
+                return Err(AudioError::ProcessingError(format!(
+                    "FLAC encoder read error: {}",
+                    e
+                )));
+            }
+        }
+    }
+
+    // Wait for the encoder to finish cleanly
+    if let Err(e) = flac_stream.wait().await {
+        error!("FLAC encoder error during cleanup: {}", e);
+        return Err(AudioError::ProcessingError(format!(
+            "FLAC encoder error: {}",
+            e
+        )));
+    }
+
+    info!("OGG-FLAC broadcaster task completed successfully");
+    Ok(())
 }
