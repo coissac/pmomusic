@@ -753,20 +753,24 @@ async fn broadcast_ogg_flac_stream(
 
     let mut flac_data = Vec::new();
     let mut read_buffer = vec![0u8; 8192];
+    let mut is_first_data_page = true; // Track if this is the first page with FLAC frames
 
     loop {
         match flac_stream.read(&mut read_buffer).await {
             Ok(0) => {
                 // EOF - create final page with EOS flag and any remaining data
                 if !flac_data.is_empty() {
-                    let eos_page = ogg_writer.create_page(&flac_data, false, true, false);
+                    // Last page is a continuation if we've sent data pages before
+                    let is_continuation = !is_first_data_page;
+                    let eos_page = ogg_writer.create_page(&flac_data, false, true, is_continuation);
                     let eos_bytes = Bytes::from(eos_page);
                     total_ogg_bytes += eos_bytes.len() as u64;
                     let _ = broadcast_tx.send(eos_bytes);
                     info!("Sent final EOS page with {} bytes of data", flac_data.len());
                 } else {
-                    // Send empty EOS page
-                    let eos_page = ogg_writer.create_page(&[], false, true, false);
+                    // Send empty EOS page as continuation if we've sent pages before
+                    let is_continuation = !is_first_data_page;
+                    let eos_page = ogg_writer.create_page(&[], false, true, is_continuation);
                     let eos_bytes = Bytes::from(eos_page);
                     total_ogg_bytes += eos_bytes.len() as u64;
                     let _ = broadcast_tx.send(eos_bytes);
@@ -795,12 +799,20 @@ async fn broadcast_ogg_flac_stream(
                 flac_data.extend_from_slice(&read_buffer[..n]);
 
                 // Create pages when we have a reasonable amount of data (8KB chunks)
-                // This respects FLAC frame boundaries better than arbitrary 4KB splits
+                // All pages after the first are continuations of the same logical FLAC packet
                 while flac_data.len() >= 8192 {
                     let chunk = flac_data.drain(..8192).collect::<Vec<u8>>();
-                    let ogg_page = ogg_writer.create_page(&chunk, false, false, false);
+                    // First data page: not a continuation
+                    // Subsequent pages: continuations of the FLAC stream
+                    let is_continuation = !is_first_data_page;
+                    let ogg_page = ogg_writer.create_page(&chunk, false, false, is_continuation);
                     let ogg_bytes = Bytes::from(ogg_page);
                     total_ogg_bytes += ogg_bytes.len() as u64;
+
+                    if is_first_data_page {
+                        debug!("Sending first FLAC data page ({} bytes)", ogg_bytes.len());
+                        is_first_data_page = false;
+                    }
 
                     if let Err(e) = broadcast_tx.send(ogg_bytes) {
                         trace!("No active receivers for OGG-FLAC broadcast: {}", e);
