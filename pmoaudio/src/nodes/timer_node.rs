@@ -95,7 +95,7 @@ impl NodeLogic for TimerNodeLogic {
         stop_token: CancellationToken,
     ) -> Result<(), AudioError> {
         let mut rx = input.expect("TimerNode must have input");
-        tracing::debug!(
+        tracing::info!(
             "TimerNodeLogic::process started (max_lead_time={:.1}s), {} children",
             self.max_lead_time_sec,
             output.len()
