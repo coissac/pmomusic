@@ -25,10 +25,10 @@ use tokio::io::AsyncReadExt;
 use tokio::sync::{mpsc, RwLock};
 use tokio_util::{io::StreamReader, sync::CancellationToken};
 
-/// Timeout pour attendre un nouveau block ID
-/// Pour une radio en temps réel, 3s est raisonnable
-/// Pour des tests avec un seul bloc, on veut quelque chose de plus long
-const BLOCK_ID_TIMEOUT_SECS: u64 = 3600; // 1 heure
+/// Signal spécial pour indiquer qu'il n'y aura plus de blocs
+/// Quand ce blockid est poussé dans la queue, le source termine proprement
+/// après avoir fini de traiter le bloc en cours
+pub const END_OF_BLOCKS_SIGNAL: EventId = EventId::MAX;
 
 /// Nombre de blocs récents à mémoriser pour éviter les re-téléchargements
 const RECENT_BLOCKS_CACHE_SIZE: usize = 10;
@@ -512,34 +512,38 @@ impl NodeLogic for RadioParadiseStreamSourceLogic {
         let mut last_start_instant: Option<Instant> = None;
 
         loop {
-            // Attendre un block ID (timeout court pour une radio)
-            tracing::debug!("Waiting for block_id from queue (timeout={}s)...", BLOCK_ID_TIMEOUT_SECS);
-            let event_id = match tokio::time::timeout(
-                Duration::from_secs(BLOCK_ID_TIMEOUT_SECS),
-                async {
-                    while self.block_queue.is_empty() {
-                        tracing::trace!("block_queue is empty, sleeping...");
-                        tokio::time::sleep(Duration::from_millis(100)).await;
+            // Attendre un block ID depuis la queue (pas de timeout - mode idle)
+            tracing::debug!("Waiting for block_id from queue (idle mode, no timeout)...");
+            let event_id = loop {
+                // Vérifier d'abord le stop_token
+                if stop_token.is_cancelled() {
+                    tracing::info!("Stop token cancelled while waiting for block_id");
+                    break None;
+                }
 
-                        if stop_token.is_cancelled() {
-                            tracing::debug!("stop_token cancelled while waiting for block_id");
-                            return None;
-                        }
-                    }
-                    self.block_queue.pop_front()
-                }
-            ).await {
-                Ok(Some(id)) => {
+                // Essayer de pop un event_id
+                if let Some(id) = self.block_queue.pop_front() {
                     tracing::debug!("Got event_id {} from queue", id);
-                    id
+
+                    // Vérifier si c'est le signal de fin
+                    if id == END_OF_BLOCKS_SIGNAL {
+                        tracing::info!("Received END_OF_BLOCKS_SIGNAL, finishing after current block");
+                        break None;
+                    }
+
+                    break Some(id);
                 }
-                Ok(None) => {
-                    tracing::debug!("Loop cancelled, breaking");
-                    break;
-                } // Cancelled
-                Err(_) => {
-                    // Timeout - pas de nouveau bloc, on termine
-                    tracing::warn!("Timeout waiting for block_id, breaking");
+
+                // Queue vide, attendre un peu et réessayer
+                tracing::trace!("block_queue is empty, sleeping 100ms...");
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            };
+
+            // Si on n'a pas d'event_id, on termine
+            let event_id = match event_id {
+                Some(id) => id,
+                None => {
+                    tracing::info!("No more blocks to process, exiting loop");
                     break;
                 }
             };

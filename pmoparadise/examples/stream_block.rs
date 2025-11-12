@@ -4,6 +4,9 @@
 //! using the StreamingFlacSink over HTTP via pmoserver. Perfect for
 //! testing with VLC or other media players that support HTTP streaming.
 //!
+//! The example streams ONE block then terminates cleanly using END_OF_BLOCKS_SIGNAL.
+//! For continuous streaming, push multiple block_ids without the END signal.
+//!
 //! Architecture:
 //! ```text
 //! RadioParadiseStreamSource → TimerNode → StreamingFlacSink
@@ -38,7 +41,7 @@ use axum::{
 use pmoaudio::{AudioPipelineNode, TimerNode};
 use pmoaudio_ext::{StreamingFlacSink, StreamingOggFlacSink};
 use pmoflac::EncoderOptions;
-use pmoparadise::{RadioParadiseClient, RadioParadiseStreamSource};
+use pmoparadise::{RadioParadiseClient, RadioParadiseStreamSource, END_OF_BLOCKS_SIGNAL};
 use pmoserver::{ServerBuilder, init_logging};
 use std::env;
 use std::sync::Arc;
@@ -206,7 +209,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut source_flac = RadioParadiseStreamSource::new(client.clone());
     source_flac.push_block_id(block.event);
-    tracing::debug!("RadioParadiseStreamSource (FLAC) created with block {}", block.event);
+    source_flac.push_block_id(END_OF_BLOCKS_SIGNAL); // Signal: no more blocks after this one
+    tracing::debug!("RadioParadiseStreamSource (FLAC) created with block {} + END signal", block.event);
 
     // Calculate channel size to match max_lead_time
     // With 50ms chunks and 3.0s lead time: 3.0 / 0.05 = 60 chunks
@@ -232,7 +236,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut source_ogg = RadioParadiseStreamSource::new(client);
     source_ogg.push_block_id(block.event);
-    tracing::debug!("RadioParadiseStreamSource (OGG) created with block {}", block.event);
+    source_ogg.push_block_id(END_OF_BLOCKS_SIGNAL); // Signal: no more blocks after this one
+    tracing::debug!("RadioParadiseStreamSource (OGG) created with block {} + END signal", block.event);
 
     let mut timer_ogg = TimerNode::with_channel_size(max_lead_time, channel_size);
     tracing::debug!("TimerNode (OGG) created with {:.1}s max lead time, {} chunk buffer", max_lead_time, channel_size);
