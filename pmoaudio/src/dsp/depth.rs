@@ -1,3 +1,25 @@
+//! Conversion de bit-depth pour audio stéréo avec optimisations SIMD
+//!
+//! Ce module fournit des fonctions pour convertir la profondeur de bit (bit-depth)
+//! des échantillons audio stéréo. Les conversions sont optimisées avec SIMD lorsque
+//! la feature "simd" est activée.
+//!
+//! # Stratégies de conversion
+//!
+//! - **Augmentation de bit-depth** : Décalage à gauche (multiplication par 2^n)
+//!   - Exemple : 16-bit → 24-bit : shift left de 8 bits
+//!   - Préserve la dynamique complète du signal
+//!
+//! - **Réduction de bit-depth** : Décalage à droite avec clamping
+//!   - Exemple : 24-bit → 16-bit : shift right de 8 bits
+//!   - Clamp aux limites du format destination pour éviter l'overflow
+//!   - Division entière (pas d'arrondi) pour les performances
+//!
+//! # Optimisations SIMD
+//!
+//! Quand la feature "simd" est activée, les conversions traitent 8 frames stéréo
+//! en parallèle en utilisant les instructions vectorielles SIMD disponibles.
+
 #[cfg(feature = "simd")]
 use std::simd::prelude::*;
 #[cfg(feature = "simd")]
@@ -5,6 +27,28 @@ use std::simd::Simd;
 
 use crate::BitDepth;
 
+/// Convertit la profondeur de bit (bit-depth) d'un buffer audio stéréo
+///
+/// Cette fonction modifie les échantillons in-place pour convertir de `source_bits`
+/// vers `dest_bits`. Si les profondeurs sont identiques, aucune opération n'est effectuée.
+///
+/// # Arguments
+///
+/// * `data` - Buffer mutable de frames stéréo [[L, R], ...] à convertir in-place
+/// * `source_bits` - Profondeur de bit source (16, 24, ou 32 bits)
+/// * `dest_bits` - Profondeur de bit destination (16, 24, ou 32 bits)
+///
+/// # Exemples
+///
+/// ```
+/// use pmoaudio::dsp::bitdepth_change_stereo;
+/// use pmoaudio::BitDepth;
+///
+/// let mut data = vec![[1000i32, 2000i32], [3000i32, 4000i32]];
+/// bitdepth_change_stereo(&mut data, BitDepth::B16, BitDepth::B24);
+/// // Les valeurs sont maintenant décalées de 8 bits à gauche
+/// assert_eq!(data[0], [256000, 512000]);
+/// ```
 #[inline(always)]
 pub fn bitdepth_change_stereo(data: &mut [[i32; 2]], source_bits: BitDepth, dest_bits: BitDepth) {
     use std::cmp::Ordering::*;

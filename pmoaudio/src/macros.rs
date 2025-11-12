@@ -248,13 +248,13 @@ mod tests {
 
         assert!(extract_audio_chunk!(&*segment).is_some());
 
-        let sync_segment = AudioSegment::new_hearbeat(1, 1.0);
+        let sync_segment = AudioSegment::new_heartbeat(1, 1.0);
         assert!(extract_audio_chunk!(&*sync_segment).is_none());
     }
 
     #[test]
     fn test_extract_sync_marker() {
-        let segment = AudioSegment::new_hearbeat(1, 1.0);
+        let segment = AudioSegment::new_heartbeat(1, 1.0);
         assert!(extract_sync_marker!(&*segment).is_some());
 
         let audio_segment =
@@ -273,7 +273,7 @@ mod tests {
         );
         assert_eq!(result, "audio: i32");
 
-        let sync_segment = AudioSegment::new_hearbeat(1, 1.0);
+        let sync_segment = AudioSegment::new_heartbeat(1, 1.0);
         let result = match_segment!(&*sync_segment,
             _chunk => "audio".to_string(),
             _marker => "sync".to_string()

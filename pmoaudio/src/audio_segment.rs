@@ -196,12 +196,12 @@ impl AudioSegment {
         })
     }
 
-    pub fn new_hearbeat(order: u64, timestamp_sec: f64) -> Arc<Self> {
+    pub fn new_heartbeat(order: u64, timestamp_sec: f64) -> Arc<Self> {
         let marker = Arc::new(SyncMarker::Heartbeat);
 
         Arc::new(Self {
-            order: order,
-            timestamp_sec: timestamp_sec,
+            order,
+            timestamp_sec,
             segment: _AudioSegment::Sync(marker),
         })
     }
@@ -446,7 +446,7 @@ mod tests {
         assert_eq!(segment.chunk_type_name(), Some("i32"));
 
         // Test avec un marqueur sync
-        let sync_segment = AudioSegment::new_hearbeat(10, 2.0);
+        let sync_segment = AudioSegment::new_heartbeat(10, 2.0);
         assert!(!sync_segment.is_audio_chunk());
         assert!(sync_segment.is_heartbeat());
         assert!(sync_segment.as_chunk().is_none());
@@ -469,7 +469,7 @@ mod tests {
         assert_eq!(segment_plus_3db.gain_db(), Some(9.0));
 
         // Test sur un sync marker (devrait retourner None)
-        let sync = AudioSegment::new_hearbeat(1, 1.0);
+        let sync = AudioSegment::new_heartbeat(1, 1.0);
         assert!(sync.with_gain_db(6.0).is_none());
         assert!(sync.adjust_gain_db(3.0).is_none());
     }
@@ -490,7 +490,7 @@ mod tests {
         assert_eq!(i32_chunk.unwrap().type_name(), "i32");
 
         // Test sur un sync marker
-        let sync = AudioSegment::new_hearbeat(1, 1.0);
+        let sync = AudioSegment::new_heartbeat(1, 1.0);
         assert!(sync.to_f32_chunk().is_none());
         assert!(sync.to_i32_chunk().is_none());
     }
@@ -504,7 +504,7 @@ mod tests {
         assert_eq!(segment.as_error(), Some(error_msg));
 
         // Autre type de segment ne devrait pas être une erreur
-        let sync = AudioSegment::new_hearbeat(1, 1.0);
+        let sync = AudioSegment::new_heartbeat(1, 1.0);
         assert!(!sync.is_error());
         assert_eq!(sync.as_error(), None);
     }

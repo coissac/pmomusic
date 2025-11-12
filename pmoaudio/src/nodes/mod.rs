@@ -28,6 +28,21 @@ pub mod resampling_node;
 pub mod timer_node;
 
 // Modules temporairement désactivés
+//
+// Les modules suivants sont désactivés car ils sont en cours de refactoring
+// pour s'aligner avec la nouvelle architecture du pipeline. Ils seront réactivés
+// une fois la migration complétée :
+//
+// - buffer_node : Node de buffer pour stocker des chunks audio
+// - chromecast_sink : Sink pour diffuser vers des appareils Chromecast
+// - decoder_node : Node de décodage audio générique
+// - disk_sink : Sink pour écrire l'audio sur disque (remplacé par flac_file_sink)
+// - dsp_node : Node de traitement DSP générique
+// - mpd_sink : Sink pour diffuser vers MPD (Music Player Daemon)
+// - sink_node : Trait de base pour les sinks (refactorisé dans pipeline.rs)
+// - source_node : Trait de base pour les sources (refactorisé dans pipeline.rs)
+// - volume_node : Node de contrôle de volume (fonctionnalité intégrée dans AudioChunk)
+//
 /*
 pub mod buffer_node;
 pub mod chromecast_sink;

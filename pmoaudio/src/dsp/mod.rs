@@ -1,4 +1,37 @@
 //! Module DSP pour les conversions et traitements audio optimisés (SIMD)
+//!
+//! Ce module fournit des fonctions optimisées pour le traitement audio numérique (DSP).
+//! Toutes les fonctions sont optimisées avec SIMD lorsque la feature "simd" est activée.
+//!
+//! # Sous-modules
+//!
+//! - [`depth`] - Conversion de profondeur de bit (bit-depth) entre 16/24/32 bits
+//! - [`gain_16bits`] - Application de gain pour audio 16-bit
+//! - [`gain_24bits`] - Application de gain pour audio 24-bit
+//! - [`gain_32bits`] - Application de gain pour audio 32-bit
+//! - [`int_float`] - Conversions entre formats entiers et virgule flottante
+//! - [`resampling`] - Rééchantillonnage (wrapper autour de libsoxr)
+//!
+//! # Optimisations
+//!
+//! Les fonctions de ce module utilisent des optimisations SIMD (Single Instruction Multiple Data)
+//! pour traiter plusieurs échantillons en parallèle quand la feature "simd" est activée.
+//! Sans SIMD, les implémentations scalaires restent efficaces grâce aux optimisations du compilateur.
+//!
+//! # Exemples
+//!
+//! ```
+//! use pmoaudio::dsp::{bitdepth_change_stereo, apply_gain_stereo_i32};
+//! use pmoaudio::BitDepth;
+//!
+//! // Conversion de bit-depth
+//! let mut data = vec![[1000i32, 2000i32]];
+//! bitdepth_change_stereo(&mut data, BitDepth::B16, BitDepth::B24);
+//!
+//! // Application de gain
+//! let mut data = vec![[100000i32, 200000i32]];
+//! apply_gain_stereo_i32(&mut data, 2.0); // +6dB
+//! ```
 
 pub mod depth;
 pub mod gain_16bits;
