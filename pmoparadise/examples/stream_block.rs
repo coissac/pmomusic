@@ -218,8 +218,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut timer_flac = TimerNode::with_channel_size(max_lead_time, channel_size);
     tracing::debug!("TimerNode (FLAC) created with {:.1}s max lead time, {} chunk buffer", max_lead_time, channel_size);
 
-    let (streaming_sink, stream_handle) = StreamingFlacSink::new(encoder_options.clone(), channel_size.min(255) as u8);
-    tracing::debug!("StreamingFlacSink created with {} chunk buffer", channel_size);
+    // StreamingFlacSink doesn't take channel_size - it uses bits_per_sample (16, 24, or 32)
+    let (streaming_sink, stream_handle) = StreamingFlacSink::new(encoder_options.clone(), 16);
+    tracing::debug!("StreamingFlacSink created");
 
     timer_flac.register(Box::new(streaming_sink));
     source_flac.register(Box::new(timer_flac));
@@ -236,8 +237,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut timer_ogg = TimerNode::with_channel_size(max_lead_time, channel_size);
     tracing::debug!("TimerNode (OGG) created with {:.1}s max lead time, {} chunk buffer", max_lead_time, channel_size);
 
-    let (ogg_sink, ogg_handle) = StreamingOggFlacSink::new(encoder_options, channel_size.min(255) as u8);
-    tracing::debug!("StreamingOggFlacSink created with {} chunk buffer", channel_size);
+    // StreamingOggFlacSink doesn't take channel_size - it uses bits_per_sample (16, 24, or 32)
+    let (ogg_sink, ogg_handle) = StreamingOggFlacSink::new(encoder_options, 16);
+    tracing::debug!("StreamingOggFlacSink created");
 
     timer_ogg.register(Box::new(ogg_sink));
     source_ogg.register(Box::new(timer_ogg));
