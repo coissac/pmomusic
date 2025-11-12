@@ -137,7 +137,7 @@ impl NodeLogic for TimerNodeLogic {
                         SyncMarker::TopZeroSync => {
                             // Reset le timer de référence
                             self.start_time = Some(Instant::now());
-                            tracing::info!("TimerNodeLogic: TopZeroSync received, timer reset");
+                            tracing::debug!("TimerNodeLogic: TopZeroSync received, timer reset");
                         }
                         _ => {
                             // Autres markers: passthrough transparent
@@ -156,7 +156,7 @@ impl NodeLogic for TimerNodeLogic {
                         if lead_time > self.max_lead_time_sec {
                             // On est trop en avance, attendre
                             let sleep_duration = lead_time - self.max_lead_time_sec;
-                            tracing::info!(
+                            tracing::trace!(
                                 "TimerNodeLogic: SLEEPING {:.3}s (lead_time={:.3}s > max={:.1}s)",
                                 sleep_duration,
                                 lead_time,
@@ -166,7 +166,7 @@ impl NodeLogic for TimerNodeLogic {
                             tokio::select! {
                                 _ = tokio::time::sleep(Duration::from_secs_f64(sleep_duration)) => {}
                                 _ = stop_token.cancelled() => {
-                                    tracing::info!("TimerNodeLogic cancelled during sleep");
+                                    tracing::debug!("TimerNodeLogic cancelled during sleep");
                                     break;
                                 }
                             }

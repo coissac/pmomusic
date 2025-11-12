@@ -752,7 +752,7 @@ async fn broadcast_flac_stream(
             Ok(n) => {
                 total_bytes += n as u64;
                 if total_bytes % 100000 == 0 || total_bytes < 10000 {
-                    info!("Read {} bytes from FLAC encoder (total: {})", n, total_bytes);
+                    trace!("Read {} bytes from FLAC encoder (total: {})", n, total_bytes);
                 }
 
                 // Precise pacing based on audio timestamp
