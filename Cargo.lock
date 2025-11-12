@@ -2875,6 +2875,7 @@ dependencies = [
  "pmoflac",
  "pmometadata",
  "pmoplaylist",
+ "rand 0.8.5",
  "serde",
  "tokio",
  "tokio-util",

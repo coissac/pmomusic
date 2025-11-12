@@ -667,44 +667,84 @@ fn chunk_to_pcm_bytes(chunk: &AudioChunk, bits_per_sample: u8) -> Result<Vec<u8>
 }
 
 /// OGG wrapper + broadcaster task: reads FLAC bytes from encoder, wraps in OGG pages, and broadcasts.
-///
-/// For now, this is a simplified version that just passes through FLAC bytes without OGG wrapping.
-/// TODO: Implement proper OGG page generation with BOS/EOS flags and Vorbis Comments.
 async fn broadcast_ogg_flac_stream(
     mut flac_stream: FlacEncodedStream,
     broadcast_tx: broadcast::Sender<Bytes>,
     header_cache: Arc<RwLock<Option<Bytes>>>,
 ) -> Result<(), AudioError> {
-    info!("OGG-FLAC broadcaster task started (FLAC passthrough mode - OGG wrapping TODO)");
+    info!("OGG-FLAC broadcaster task started");
 
-    let mut buffer = vec![0u8; 8192]; // 8KB buffer for reading
-    let mut total_bytes = 0u64;
+    let stream_serial = rand::random::<u32>();
+    let mut ogg_writer = OggPageWriter::new(stream_serial);
+
+    let mut total_ogg_bytes = 0u64;
     let mut header_captured = false;
 
+    // Step 1: Read FLAC header (fLaC + metadata blocks)
+    let flac_header = read_flac_header(&mut flac_stream).await?;
+    info!("Read FLAC header: {} bytes", flac_header.len());
+
+    // Step 2: Create BOS page with FLAC identification
+    let bos_page = ogg_writer.create_page(&flac_header, true, false, false);
+    let bos_bytes = Bytes::from(bos_page);
+
+    // Step 3: Create Vorbis Comment page (empty for now, metadata comes from /metadata endpoint)
+    let vorbis_comment = create_empty_vorbis_comment();
+    let comment_page = ogg_writer.create_page(&vorbis_comment, false, false, false);
+    let comment_bytes = Bytes::from(comment_page);
+
+    // Cache the header (BOS + Comment pages)
+    let mut cached_header = Vec::new();
+    cached_header.extend_from_slice(&bos_bytes);
+    cached_header.extend_from_slice(&comment_bytes);
+    *header_cache.write().await = Some(Bytes::from(cached_header));
+    header_captured = true;
+    info!("OGG-FLAC header cached ({} bytes: BOS + Vorbis Comment)", bos_bytes.len() + comment_bytes.len());
+
+    // Broadcast header
+    let _ = broadcast_tx.send(bos_bytes);
+    total_ogg_bytes += comment_bytes.len() as u64;
+    let _ = broadcast_tx.send(comment_bytes);
+
+    // Step 4: Read FLAC frames and wrap in OGG pages
+    let mut frame_buffer = Vec::new();
+    let mut read_buffer = vec![0u8; 8192];
+
     loop {
-        match flac_stream.read(&mut buffer).await {
+        match flac_stream.read(&mut read_buffer).await {
             Ok(0) => {
-                // EOF
-                info!("OGG-FLAC encoder stream ended, total bytes: {}", total_bytes);
+                // EOF - wrap any remaining data
+                if !frame_buffer.is_empty() {
+                    let eos_page = ogg_writer.create_page(&frame_buffer, false, true, false);
+                    let eos_bytes = Bytes::from(eos_page);
+                    total_ogg_bytes += eos_bytes.len() as u64;
+                    let _ = broadcast_tx.send(eos_bytes);
+                    info!("Sent EOS page ({} bytes)", frame_buffer.len());
+                } else {
+                    // Send empty EOS page
+                    let eos_page = ogg_writer.create_page(&[], false, true, false);
+                    let eos_bytes = Bytes::from(eos_page);
+                    total_ogg_bytes += eos_bytes.len() as u64;
+                    let _ = broadcast_tx.send(eos_bytes);
+                    info!("Sent empty EOS page");
+                }
+
+                info!("OGG-FLAC stream ended, total OGG bytes: {}", total_ogg_bytes);
                 break;
             }
             Ok(n) => {
-                total_bytes += n as u64;
-                trace!("Read {} bytes from FLAC encoder (total: {})", n, total_bytes);
+                frame_buffer.extend_from_slice(&read_buffer[..n]);
 
-                // Broadcast to all clients (TODO: wrap in OGG pages)
-                let bytes = Bytes::copy_from_slice(&buffer[..n]);
+                // Wrap in OGG pages when we have enough data (target ~4KB per page)
+                while frame_buffer.len() >= 4096 {
+                    let page_data = frame_buffer.drain(..4096.min(frame_buffer.len())).collect::<Vec<u8>>();
+                    let ogg_page = ogg_writer.create_page(&page_data, false, false, false);
+                    let ogg_bytes = Bytes::from(ogg_page);
+                    total_ogg_bytes += ogg_bytes.len() as u64;
 
-                // Capture first chunk as header if it contains "fLaC"
-                if !header_captured && bytes.len() >= 4 && &bytes[0..4] == b"fLaC" {
-                    *header_cache.write().await = Some(bytes.clone());
-                    header_captured = true;
-                    info!("FLAC header captured ({} bytes) - will be wrapped in OGG later", bytes.len());
-                }
-
-                if let Err(e) = broadcast_tx.send(bytes) {
-                    // No receivers, but that's okay - clients may not be connected yet
-                    trace!("No active receivers for OGG-FLAC broadcast: {}", e);
+                    if let Err(e) = broadcast_tx.send(ogg_bytes) {
+                        trace!("No active receivers for OGG-FLAC broadcast: {}", e);
+                    }
                 }
             }
             Err(e) => {
@@ -728,4 +768,185 @@ async fn broadcast_ogg_flac_stream(
 
     info!("OGG-FLAC broadcaster task completed successfully");
     Ok(())
+}
+
+/// Read FLAC header (fLaC + all metadata blocks until first frame)
+async fn read_flac_header(stream: &mut FlacEncodedStream) -> Result<Vec<u8>, AudioError> {
+    let mut header = Vec::new();
+    let mut buffer = [0u8; 4];
+
+    // Read "fLaC" magic
+    stream.read_exact(&mut buffer).await.map_err(|e| {
+        AudioError::ProcessingError(format!("Failed to read FLAC magic: {}", e))
+    })?;
+
+    if &buffer != b"fLaC" {
+        return Err(AudioError::ProcessingError("Invalid FLAC stream: missing fLaC magic".into()));
+    }
+
+    header.extend_from_slice(&buffer);
+
+    // Read metadata blocks
+    loop {
+        // Read metadata block header (1 byte type + 3 bytes length)
+        let mut block_header = [0u8; 4];
+        stream.read_exact(&mut block_header).await.map_err(|e| {
+            AudioError::ProcessingError(format!("Failed to read metadata block header: {}", e))
+        })?;
+
+        let is_last = (block_header[0] & 0x80) != 0;
+        let block_length = u32::from_be_bytes([0, block_header[1], block_header[2], block_header[3]]) as usize;
+
+        header.extend_from_slice(&block_header);
+
+        // Read metadata block data
+        let mut block_data = vec![0u8; block_length];
+        stream.read_exact(&mut block_data).await.map_err(|e| {
+            AudioError::ProcessingError(format!("Failed to read metadata block data: {}", e))
+        })?;
+
+        header.extend_from_slice(&block_data);
+
+        if is_last {
+            break;
+        }
+    }
+
+    Ok(header)
+}
+
+/// Create empty Vorbis Comment block
+fn create_empty_vorbis_comment() -> Vec<u8> {
+    let mut data = Vec::new();
+
+    // Vendor string
+    let vendor = "pmoaudio OGG-FLAC streamer";
+    let vendor_bytes = vendor.as_bytes();
+    data.extend_from_slice(&(vendor_bytes.len() as u32).to_le_bytes());
+    data.extend_from_slice(vendor_bytes);
+
+    // Number of comments (0 for now - metadata via /metadata endpoint)
+    data.extend_from_slice(&0u32.to_le_bytes());
+
+    data
+}
+
+/// OGG page writer (same as in pmoflac::ogg_flac_encoder)
+struct OggPageWriter {
+    stream_serial: u32,
+    page_sequence: u32,
+    granule_position: u64,
+}
+
+impl OggPageWriter {
+    fn new(stream_serial: u32) -> Self {
+        Self {
+            stream_serial,
+            page_sequence: 0,
+            granule_position: 0,
+        }
+    }
+
+    fn create_page(&mut self, packet_data: &[u8], is_bos: bool, is_eos: bool, is_continuation: bool) -> Vec<u8> {
+        use std::io::Write;
+
+        let mut segments = Vec::new();
+        let mut remaining = packet_data.len();
+
+        // Segment the packet into 255-byte chunks
+        while remaining > 0 {
+            let segment_size = remaining.min(255);
+            segments.push(segment_size as u8);
+            remaining -= segment_size;
+        }
+
+        // If packet ends exactly on a 255-byte boundary, add empty segment
+        if !packet_data.is_empty() && packet_data.len() % 255 == 0 && !is_continuation {
+            segments.push(0);
+        }
+
+        let segment_count = segments.len();
+        let header_size = 27 + segment_count;
+        let total_size = header_size + packet_data.len();
+
+        let mut page = Vec::with_capacity(total_size);
+
+        // OGG page header
+        page.write_all(b"OggS").unwrap();
+        page.write_all(&[0]).unwrap(); // Version
+
+        // Header type
+        let mut header_type = 0u8;
+        if is_continuation {
+            header_type |= 0x01;
+        }
+        if is_bos {
+            header_type |= 0x02;
+        }
+        if is_eos {
+            header_type |= 0x04;
+        }
+        page.write_all(&[header_type]).unwrap();
+
+        // Granule position
+        page.write_all(&self.granule_position.to_le_bytes()).unwrap();
+
+        // Stream serial number
+        page.write_all(&self.stream_serial.to_le_bytes()).unwrap();
+
+        // Page sequence number
+        page.write_all(&self.page_sequence.to_le_bytes()).unwrap();
+        self.page_sequence += 1;
+
+        // CRC checksum (zero for now, calculated later)
+        let crc_offset = page.len();
+        page.write_all(&[0, 0, 0, 0]).unwrap();
+
+        // Number of segments
+        page.write_all(&[segment_count as u8]).unwrap();
+
+        // Segment table
+        page.write_all(&segments).unwrap();
+
+        // Packet data
+        page.write_all(packet_data).unwrap();
+
+        // Calculate and insert CRC32
+        let crc = calculate_ogg_crc(&page);
+        page[crc_offset..crc_offset + 4].copy_from_slice(&crc.to_le_bytes());
+
+        page
+    }
+}
+
+/// Calculate OGG CRC32 checksum
+fn calculate_ogg_crc(data: &[u8]) -> u32 {
+    const CRC_TABLE: [u32; 256] = generate_crc_table();
+
+    let mut crc: u32 = 0;
+    for &byte in data {
+        crc = (crc << 8) ^ CRC_TABLE[((crc >> 24) ^ (byte as u32)) as usize];
+    }
+    crc
+}
+
+/// Generate CRC lookup table at compile time
+const fn generate_crc_table() -> [u32; 256] {
+    let mut table = [0u32; 256];
+    let mut i = 0;
+    while i < 256 {
+        let mut r = i << 24;
+        let mut j = 0;
+        while j < 8 {
+            if (r & 0x80000000) != 0 {
+                r = (r << 1) ^ 0x04c11db7;
+            } else {
+                r <<= 1;
+            }
+            j += 1;
+        }
+        table[i as usize] = r;
+        i += 1;
+    }
+    table
 }
