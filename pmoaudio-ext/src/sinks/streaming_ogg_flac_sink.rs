@@ -844,71 +844,149 @@ async fn broadcast_ogg_flac_stream(
                     }
                 }
 
-                // Create pages when we have a reasonable amount of data (8KB chunks)
-                // All pages after the first are continuations of the same logical FLAC packet
-                while found_first_sync && flac_data.len() >= 8192 {
-                    let chunk = flac_data.drain(..8192).collect::<Vec<u8>>();
+                // Parse FLAC frames and create OGG packets based on frame boundaries
+                // Each FLAC frame becomes one OGG packet (may span multiple OGG pages if large)
+                while found_first_sync && flac_data.len() >= 16 {
+                    // Try to parse the next FLAC frame header
+                    if let Some((block_size, header_len)) = parse_flac_frame_header(&flac_data) {
+                        // We found a valid frame header!
+                        // Now we need to find the complete frame (header + audio data + footer)
 
-                    // DEBUG: Log first bytes of first chunk
-                    if is_first_data_page {
-                        let preview_hex: String = chunk
-                            .iter()
-                            .take(32)
-                            .map(|b| format!("{:02x}", b))
-                            .collect::<Vec<_>>()
-                            .join(" ");
-                        info!("Creating FIRST OGG data page with {} bytes", chunk.len());
-                        info!("First 32 bytes of chunk: {}", preview_hex);
-                    }
+                        // FLAC frame structure: header (variable) + audio data (variable) + footer (2 bytes CRC-16)
+                        // We need to find the next sync code to determine frame boundary
 
-                    // First data page: not a continuation
-                    // Subsequent pages: continuations of the FLAC stream
-                    let is_continuation = !is_first_data_page;
-                    let ogg_page = ogg_writer.create_page(&chunk, false, false, is_continuation);
-                    let ogg_bytes = Bytes::from(ogg_page);
-                    total_ogg_bytes += ogg_bytes.len() as u64;
+                        // Search for the next sync code starting after this frame's header
+                        let next_sync_pos = if flac_data.len() > header_len + 100 {
+                            // Look for next frame sync (0xFF 0xF8-0xFF)
+                            flac_data[header_len + 50..]  // Skip at least 50 bytes (frames are typically >100 bytes)
+                                .windows(2)
+                                .position(|w| w[0] == 0xFF && (w[1] & 0xFC) == 0xF8)
+                                .map(|pos| pos + header_len + 50)
+                        } else {
+                            None
+                        };
 
-                    // Add to startup cache if we haven't reached the limit
-                    if startup_pages_count < STARTUP_PAGES_TO_CACHE {
-                        startup_cache.extend_from_slice(&ogg_bytes);
-                        startup_pages_count += 1;
+                        if let Some(frame_end) = next_sync_pos {
+                            // We found the next frame, so current frame is complete
+                            let frame_data: Vec<u8> = flac_data.drain(..frame_end).collect();
 
-                        // Finalize the startup cache after collecting enough pages
-                        if startup_pages_count == STARTUP_PAGES_TO_CACHE {
-                            // DEBUG: Verify the third page (first data page) starts with FLAC sync
-                            let third_page_search = startup_cache.windows(4).enumerate()
-                                .filter(|(_, w)| w == b"OggS")
-                                .nth(2); // Find third "OggS" marker
-                            if let Some((third_page_offset, _)) = third_page_search {
-                                // Skip OGG page header (27 bytes) + segment table to find data
-                                if third_page_offset + 27 < startup_cache.len() {
-                                    let num_segs = startup_cache[third_page_offset + 26] as usize;
-                                    let data_offset = third_page_offset + 27 + num_segs;
-                                    if data_offset + 16 <= startup_cache.len() {
-                                        let data_preview: String = startup_cache[data_offset..data_offset+16]
-                                            .iter()
-                                            .map(|b| format!("{:02x}", b))
-                                            .collect::<Vec<_>>()
-                                            .join(" ");
-                                        info!("Third page in cache (offset 0x{:x}) starts with: {}", third_page_offset, data_preview);
+                            // DEBUG: Log first FLAC frame
+                            if is_first_data_page {
+                                let preview_hex: String = frame_data
+                                    .iter()
+                                    .take(32)
+                                    .map(|b| format!("{:02x}", b))
+                                    .collect::<Vec<_>>()
+                                    .join(" ");
+                                info!("First FLAC frame: {} bytes, {} samples", frame_data.len(), block_size);
+                                info!("First 32 bytes: {}", preview_hex);
+                            }
+
+                            // Increment granule position BEFORE creating the page
+                            // Granule position represents total samples decoded up to END of this page
+                            ogg_writer.increment_granule_position(block_size as u64);
+
+                            // Create OGG packet for this FLAC frame
+                            // Each FLAC frame is a complete OGG packet (is_continuation = false)
+                            // If frame is too large (>64KB), it will span multiple OGG pages automatically
+                            let max_page_size = 65025; // Max OGG page payload (255 segments * 255 bytes)
+
+                            if frame_data.len() <= max_page_size {
+                                // Frame fits in one OGG page
+                                let ogg_page = ogg_writer.create_page(&frame_data, false, false, false);
+                                let ogg_bytes = Bytes::from(ogg_page);
+                                total_ogg_bytes += ogg_bytes.len() as u64;
+
+                                // Add to startup cache
+                                if startup_pages_count < STARTUP_PAGES_TO_CACHE {
+                                    startup_cache.extend_from_slice(&ogg_bytes);
+                                    startup_pages_count += 1;
+
+                                    if startup_pages_count == STARTUP_PAGES_TO_CACHE {
+                                        *header_cache.write().await = Some(Bytes::from(startup_cache.clone()));
+                                        header_captured = true;
+                                        info!("OGG-FLAC startup cache finalized ({} bytes: header + {} frames)",
+                                              startup_cache.len(), STARTUP_PAGES_TO_CACHE);
                                     }
+                                }
+
+                                if let Err(e) = broadcast_tx.send(ogg_bytes) {
+                                    trace!("No active receivers for OGG-FLAC broadcast: {}", e);
+                                }
+                            } else {
+                                // Frame is too large, split across multiple OGG pages
+                                let mut remaining = &frame_data[..];
+                                let mut is_first_page = true;
+
+                                while !remaining.is_empty() {
+                                    let chunk_size = remaining.len().min(max_page_size);
+                                    let chunk = &remaining[..chunk_size];
+                                    remaining = &remaining[chunk_size..];
+
+                                    // First page: not continuation, subsequent pages: continuation
+                                    let is_continuation = !is_first_page;
+                                    let ogg_page = ogg_writer.create_page(chunk, false, false, is_continuation);
+                                    let ogg_bytes = Bytes::from(ogg_page);
+                                    total_ogg_bytes += ogg_bytes.len() as u64;
+
+                                    // Add to startup cache
+                                    if startup_pages_count < STARTUP_PAGES_TO_CACHE {
+                                        startup_cache.extend_from_slice(&ogg_bytes);
+                                        startup_pages_count += 1;
+
+                                        if startup_pages_count == STARTUP_PAGES_TO_CACHE {
+                                            *header_cache.write().await = Some(Bytes::from(startup_cache.clone()));
+                                            header_captured = true;
+                                            info!("OGG-FLAC startup cache finalized ({} bytes: header + {} frames)",
+                                                  startup_cache.len(), STARTUP_PAGES_TO_CACHE);
+                                        }
+                                    }
+
+                                    if let Err(e) = broadcast_tx.send(ogg_bytes) {
+                                        trace!("No active receivers for OGG-FLAC broadcast: {}", e);
+                                    }
+
+                                    is_first_page = false;
                                 }
                             }
 
-                            *header_cache.write().await = Some(Bytes::from(startup_cache.clone()));
-                            header_captured = true;
-                            info!("OGG-FLAC startup cache finalized ({} bytes: header + {} data pages)",
-                                  startup_cache.len(), STARTUP_PAGES_TO_CACHE);
+                            if is_first_data_page {
+                                debug!("Sent first FLAC frame ({} samples)", block_size);
+                                is_first_data_page = false;
+                            }
+
+                        } else if flac_data.len() > 100_000 {
+                            // Safety: if we've accumulated >100KB without finding next frame, send what we have
+                            warn!("Accumulated {} bytes without finding next frame, sending as-is", flac_data.len());
+                            let chunk: Vec<u8> = flac_data.drain(..).collect();
+                            ogg_writer.increment_granule_position(block_size as u64);
+                            let ogg_page = ogg_writer.create_page(&chunk, false, false, false);
+                            let ogg_bytes = Bytes::from(ogg_page);
+
+                            if startup_pages_count < STARTUP_PAGES_TO_CACHE {
+                                startup_cache.extend_from_slice(&ogg_bytes);
+                                startup_pages_count += 1;
+                            }
+
+                            if let Err(e) = broadcast_tx.send(ogg_bytes) {
+                                trace!("No active receivers: {}", e);
+                            }
+
+                            if is_first_data_page {
+                                is_first_data_page = false;
+                            }
+                        } else {
+                            // Need more data to find frame boundary
+                            break;
                         }
-                    }
-
-                    if is_first_data_page {
-                        debug!("Sending first FLAC data page ({} bytes)", ogg_bytes.len());
-                        is_first_data_page = false;
-                    }
-
-                    if let Err(e) = broadcast_tx.send(ogg_bytes) {
-                        trace!("No active receivers for OGG-FLAC broadcast: {}", e);
+                    } else {
+                        // Invalid frame header - this shouldn't happen after finding first sync
+                        error!("Lost FLAC sync after initial frame! Data: {:02x} {:02x} {:02x} {:02x}",
+                               flac_data.get(0).unwrap_or(&0),
+                               flac_data.get(1).unwrap_or(&0),
+                               flac_data.get(2).unwrap_or(&0),
+                               flac_data.get(3).unwrap_or(&0));
+                        return Err(AudioError::ProcessingError("Lost FLAC frame sync".into()));
                     }
                 }
             }
@@ -1051,6 +1129,103 @@ fn create_empty_vorbis_comment() -> Vec<u8> {
     data
 }
 
+/// Parse FLAC frame header to extract block size (number of samples)
+///
+/// Returns (block_size, header_end_offset) or None if invalid
+fn parse_flac_frame_header(data: &[u8]) -> Option<(u32, usize)> {
+    if data.len() < 4 {
+        return None;
+    }
+
+    // Check sync code: 0xFF followed by 0xF8-0xFF (14 bits set)
+    if data[0] != 0xFF || (data[1] & 0xFC) != 0xF8 {
+        return None;
+    }
+
+    // Byte 2: block size (4 bits) and sample rate (4 bits)
+    let block_size_code = (data[2] >> 4) & 0x0F;
+
+    // Byte 3: channel assignment (4 bits) and sample size (3 bits) and reserved (1 bit)
+
+    // Variable-length frame/sample number (UTF-8 style coding)
+    let mut offset = 4;
+    if offset >= data.len() {
+        return None;
+    }
+
+    // Skip UTF-8 coded number (1-7 bytes)
+    let first_byte = data[4];
+    let utf8_len = if first_byte & 0x80 == 0 {
+        1
+    } else if first_byte & 0xE0 == 0xC0 {
+        2
+    } else if first_byte & 0xF0 == 0xE0 {
+        3
+    } else if first_byte & 0xF8 == 0xF0 {
+        4
+    } else if first_byte & 0xFC == 0xF8 {
+        5
+    } else if first_byte & 0xFE == 0xFC {
+        6
+    } else if first_byte & 0xFF == 0xFE {
+        7
+    } else {
+        return None; // Invalid UTF-8 coding
+    };
+    offset += utf8_len;
+
+    // Decode block size
+    let block_size = match block_size_code {
+        0x00 => return None, // Reserved
+        0x01 => 192,
+        0x02 => 576,
+        0x03 => 1152,
+        0x04 => 2304,
+        0x05 => 4608,
+        0x06 => {
+            // 8-bit value at end of header + 1
+            if offset >= data.len() {
+                return None;
+            }
+            let val = data[offset] as u32 + 1;
+            offset += 1;
+            val
+        }
+        0x07 => {
+            // 16-bit value at end of header + 1
+            if offset + 1 >= data.len() {
+                return None;
+            }
+            let val = u16::from_be_bytes([data[offset], data[offset + 1]]) as u32 + 1;
+            offset += 2;
+            val
+        }
+        0x08 => 256,
+        0x09 => 512,
+        0x0A => 1024,
+        0x0B => 2048,
+        0x0C => 4096,
+        0x0D => 8192,
+        0x0E => 16384,
+        0x0F => 32768,
+        _ => return None,
+    };
+
+    // Skip sample rate bytes if needed
+    let sample_rate_code = data[2] & 0x0F;
+    match sample_rate_code {
+        0x0C => offset += 1,  // 8-bit kHz value
+        0x0D => offset += 1,  // 16-bit Hz value (first byte)
+        0x0E => offset += 2,  // 16-bit 10Hz value
+        _ => {}
+    }
+
+    // Skip CRC-8
+    offset += 1;
+
+    Some((block_size, offset))
+}
+
 /// OGG page writer (same as in pmoflac::ogg_flac_encoder)
 struct OggPageWriter {
     stream_serial: u32,
@@ -1065,6 +1240,14 @@ impl OggPageWriter {
             page_sequence: 0,
             granule_position: 0,
         }
+    }
+
+    fn set_granule_position(&mut self, pos: u64) {
+        self.granule_position = pos;
+    }
+
+    fn increment_granule_position(&mut self, samples: u64) {
+        self.granule_position += samples;
     }
 
     fn create_page(&mut self, packet_data: &[u8], is_bos: bool, is_eos: bool, is_continuation: bool) -> Vec<u8> {
