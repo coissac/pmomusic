@@ -518,7 +518,7 @@ impl<L: NodeLogic> AudioPipelineNode for Node<L> {
             ..
         } = *self;
 
-        tracing::info!("Node::run() starting with {} children", children.len());
+        tracing::debug!("Node::run() starting with {} children", children.len());
 
         // ═══════════════════════════════════════════════════════════════════
         // PHASE 1: SPAWNER TOUS LES ENFANTS
@@ -526,14 +526,14 @@ impl<L: NodeLogic> AudioPipelineNode for Node<L> {
 
         let mut child_handles = Vec::new();
         for (i, child) in children.into_iter().enumerate() {
-            tracing::info!("Spawning child {}", i);
+            tracing::debug!("Spawning child {}", i);
             let child_token = stop_token.child_token();
             let handle = tokio::spawn(async move {
                 child.run(child_token).await
             });
             child_handles.push(handle);
         }
-        tracing::info!("All {} children spawned", child_handles.len());
+        tracing::debug!("All {} children spawned", child_handles.len());
 
         // ═══════════════════════════════════════════════════════════════════
         // PHASE 2: MONITORER LES ENFANTS EN PARALLÈLE
