@@ -19,7 +19,7 @@ use pmometadata::{MemoryTrackMetadata, TrackMetadata};
 use std::{
     collections::VecDeque,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::io::AsyncReadExt;
 use tokio::sync::{mpsc, RwLock};
@@ -80,14 +80,14 @@ impl RadioParadiseStreamSourceLogic {
     }
 
     /// Télécharge et décode un bloc FLAC
-    /// Retourne le timestamp du dernier chunk audio envoyé
+    /// Retourne (timestamp_final, instant_debut) pour permettre le timing correct
     async fn download_and_decode_block(
         &mut self,
         block: &Block,
         output: &[mpsc::Sender<Arc<AudioSegment>>],
         stop_token: &CancellationToken,
         order: &mut u64,
-    ) -> Result<f64, AudioError> {
+    ) -> Result<(f64, Instant), AudioError> {
         // Télécharger le FLAC
         tracing::debug!("Sending HTTP GET request for block FLAC");
         let response = self.client.client
@@ -129,6 +129,10 @@ impl RadioParadiseStreamSourceLogic {
         let mut song_index = 0;
         let mut total_samples = 0u64;
         tracing::debug!("Block has {} songs", songs.len());
+
+        // Noter l'instant de début AVANT d'envoyer TopZeroSync
+        // Ceci permet de synchroniser la durée réelle du bloc
+        let start_instant = Instant::now();
 
         // Envoyer TopZeroSync au début du bloc
         tracing::debug!("Sending TopZeroSync to {} outputs", output.len());
@@ -174,9 +178,9 @@ impl RadioParadiseStreamSourceLogic {
         loop {
             // Vérifier stop_token
             if stop_token.is_cancelled() {
-                // Retourner le timestamp actuel si on est interrompu
+                // Retourner le timestamp actuel et start_instant si on est interrompu
                 let current_timestamp = total_samples as f64 / sample_rate as f64;
-                return Ok(current_timestamp);
+                return Ok((current_timestamp, start_instant));
             }
 
             // Remplir le buffer
@@ -245,11 +249,11 @@ impl RadioParadiseStreamSourceLogic {
             total_samples += chunk_len;
         }
 
-        // Retourner le timestamp du dernier chunk (durée totale du bloc)
+        // Retourner le timestamp du dernier chunk (durée totale du bloc) et l'instant de début
         let final_timestamp = total_samples as f64 / sample_rate as f64;
         tracing::debug!("Block decode complete: {} samples, {:.2}s duration", total_samples, final_timestamp);
 
-        Ok(final_timestamp)
+        Ok((final_timestamp, start_instant))
     }
 
     /// Envoie un segment à tous les enfants
@@ -449,6 +453,7 @@ impl NodeLogic for RadioParadiseStreamSourceLogic {
 
         let mut order = 0u64;
         let mut last_timestamp = 0.0;
+        let mut last_start_instant: Option<Instant> = None;
 
         loop {
             // Attendre un block ID (timeout court pour une radio)
@@ -502,9 +507,10 @@ impl NodeLogic for RadioParadiseStreamSourceLogic {
 
             // Télécharger et décoder le bloc
             tracing::info!("Starting download and decode for block {}...", event_id);
-            let block_duration = self.download_and_decode_block(&block, &output, &stop_token, &mut order)
+            let (block_duration, start_instant) = self.download_and_decode_block(&block, &output, &stop_token, &mut order)
                 .await?;
             last_timestamp = block_duration;
+            last_start_instant = Some(start_instant);
             tracing::info!("Finished download and decode for block {} (duration: {:.2}s)", event_id, block_duration);
         }
 
@@ -515,6 +521,33 @@ impl NodeLogic for RadioParadiseStreamSourceLogic {
             tx.send(eos.clone())
                 .await
                 .map_err(|_| AudioError::ChildDied)?;
+        }
+
+        // IMPORTANT: Attendre que la durée réelle du bloc soit écoulée avant de fermer le channel
+        // Sinon, le TimerNode reçoit EOF et se termine avant d'avoir fini de diffuser tous les chunks
+        if let Some(start_instant) = last_start_instant {
+            let elapsed = start_instant.elapsed().as_secs_f64();
+            if elapsed < last_timestamp {
+                let remaining = last_timestamp - elapsed;
+                tracing::info!(
+                    "Waiting {:.2}s for block playback to complete (elapsed={:.2}s, duration={:.2}s)",
+                    remaining, elapsed, last_timestamp
+                );
+
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs_f64(remaining)) => {
+                        tracing::debug!("Block playback duration complete");
+                    }
+                    _ = stop_token.cancelled() => {
+                        tracing::debug!("Cancelled while waiting for playback completion");
+                    }
+                }
+            } else {
+                tracing::debug!(
+                    "Block already played in real-time (elapsed={:.2}s >= duration={:.2}s)",
+                    elapsed, last_timestamp
+                );
+            }
         }
 
         Ok(())
