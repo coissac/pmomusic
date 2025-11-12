@@ -86,6 +86,20 @@ const DEFAULT_ICY_METAINT: usize = 16000;
 /// while keeping metadata synchronized (larger buffers cause metadata drift).
 const BROADCAST_CAPACITY: usize = 128;
 
+/// Maximum lead time for HTTP broadcast pacing (in seconds).
+/// The broadcaster will sleep if it's ahead of real-time by more than this amount.
+/// This is much smaller than the pipeline TimerNode's 3.0s to provide tighter control.
+const BROADCAST_MAX_LEAD_TIME: f64 = 0.5;
+
+/// PCM chunk with audio data and timestamp for precise pacing.
+#[derive(Debug)]
+struct PcmChunk {
+    /// Raw PCM audio bytes
+    bytes: Vec<u8>,
+    /// Timestamp in seconds (from AudioSegment)
+    timestamp_sec: f64,
+}
+
 /// Snapshot of track metadata at a point in time.
 ///
 /// This structure is shared between the sink and clients to provide
@@ -511,8 +525,8 @@ struct EncoderState {
 struct StreamingFlacSinkLogic {
     encoder_options: EncoderOptions,
     bits_per_sample: u8,
-    pcm_tx: mpsc::Sender<Vec<u8>>,
-    pcm_rx: Option<mpsc::Receiver<Vec<u8>>>,
+    pcm_tx: mpsc::Sender<PcmChunk>,
+    pcm_rx: Option<mpsc::Receiver<PcmChunk>>,
     metadata: Arc<RwLock<MetadataSnapshot>>,
     flac_broadcast: broadcast::Sender<Bytes>,
     flac_header: Arc<RwLock<Option<Bytes>>>,
@@ -534,8 +548,11 @@ impl StreamingFlacSinkLogic {
             AudioError::ProcessingError("PCM receiver already consumed".into())
         })?;
 
+        // Create shared timestamp for pacing
+        let current_timestamp = Arc::new(RwLock::new(0.0f64));
+
         // Create ByteStreamReader for the encoder
-        let pcm_reader = ByteStreamReader::new(pcm_rx);
+        let pcm_reader = ByteStreamReader::new(pcm_rx, current_timestamp.clone());
 
         // Create PCM format
         let pcm_format = PcmFormat {
@@ -551,11 +568,11 @@ impl StreamingFlacSinkLogic {
 
         info!("FLAC encoder initialized successfully");
 
-        // Spawn broadcaster task
+        // Spawn broadcaster task with timestamp for pacing
         let flac_broadcast = self.flac_broadcast.clone();
         let flac_header = self.flac_header.clone();
         let broadcaster_task = tokio::spawn(async move {
-            if let Err(e) = broadcast_flac_stream(flac_stream, flac_broadcast, flac_header).await {
+            if let Err(e) = broadcast_flac_stream(flac_stream, flac_broadcast, flac_header, current_timestamp).await {
                 error!("Broadcaster task error: {}", e);
             }
         });
@@ -659,8 +676,12 @@ impl NodeLogic for StreamingFlacSinkLogic {
                                         seg.timestamp_sec
                                     );
 
-                                    // Send to FLAC encoder
-                                    if let Err(e) = self.pcm_tx.send(pcm_bytes).await {
+                                    // Send to FLAC encoder with timestamp
+                                    let pcm_chunk = PcmChunk {
+                                        bytes: pcm_bytes,
+                                        timestamp_sec: seg.timestamp_sec,
+                                    };
+                                    if let Err(e) = self.pcm_tx.send(pcm_chunk).await {
                                         warn!("Failed to send PCM data to encoder: {}", e);
                                         break;
                                     }
@@ -707,16 +728,19 @@ impl NodeLogic for StreamingFlacSinkLogic {
 }
 
 /// Broadcaster task: reads FLAC bytes from encoder and broadcasts to all clients.
+/// Implements precise real-time pacing based on audio timestamps.
 async fn broadcast_flac_stream(
     mut flac_stream: FlacEncodedStream,
     broadcast_tx: broadcast::Sender<Bytes>,
     header_cache: Arc<RwLock<Option<Bytes>>>,
+    current_timestamp: Arc<RwLock<f64>>,
 ) -> Result<(), AudioError> {
-    info!("Broadcaster task started");
+    info!("Broadcaster task started with precise timestamp-based pacing");
 
     let mut buffer = vec![0u8; 8192]; // 8KB buffer for reading
     let mut total_bytes = 0u64;
     let mut header_captured = false;
+    let start_time = std::time::Instant::now();
 
     loop {
         match flac_stream.read(&mut buffer).await {
@@ -729,6 +753,20 @@ async fn broadcast_flac_stream(
                 total_bytes += n as u64;
                 if total_bytes % 100000 == 0 || total_bytes < 10000 {
                     info!("Read {} bytes from FLAC encoder (total: {})", n, total_bytes);
+                }
+
+                // Precise pacing based on audio timestamp
+                let audio_timestamp = *current_timestamp.read().await;
+                let elapsed = start_time.elapsed().as_secs_f64();
+                let lead_time = audio_timestamp - elapsed;
+
+                if lead_time > BROADCAST_MAX_LEAD_TIME {
+                    let sleep_duration = lead_time - BROADCAST_MAX_LEAD_TIME;
+                    debug!(
+                        "Broadcaster pacing: sleeping {:.3}s (audio_ts={:.3}s, elapsed={:.3}s, lead={:.3}s)",
+                        sleep_duration, audio_timestamp, elapsed, lead_time
+                    );
+                    tokio::time::sleep(tokio::time::Duration::from_secs_f64(sleep_duration)).await;
                 }
 
                 // Broadcast to all clients
@@ -800,7 +838,7 @@ impl StreamingFlacSink {
         }
 
         // Create PCM channel (bounded for backpressure)
-        let (pcm_tx, pcm_rx) = mpsc::channel::<Vec<u8>>(16);
+        let (pcm_tx, pcm_rx) = mpsc::channel::<PcmChunk>(16);
 
         // Shared metadata
         let metadata = Arc::new(RwLock::new(MetadataSnapshot::default()));
@@ -965,19 +1003,23 @@ fn chunk_to_pcm_bytes(chunk: &AudioChunk, bits_per_sample: u8) -> Result<Vec<u8>
     Ok(bytes)
 }
 
-/// AsyncRead adapter for mpsc::Receiver<Vec<u8>>.
+/// AsyncRead adapter for mpsc::Receiver<PcmChunk>.
+/// Extracts bytes from PcmChunk and provides them to the FLAC encoder.
 struct ByteStreamReader {
-    rx: mpsc::Receiver<Vec<u8>>,
+    rx: mpsc::Receiver<PcmChunk>,
     buffer: VecDeque<u8>,
     finished: bool,
+    /// Shared timestamp for broadcaster pacing
+    current_timestamp: Arc<RwLock<f64>>,
 }
 
 impl ByteStreamReader {
-    fn new(rx: mpsc::Receiver<Vec<u8>>) -> Self {
+    fn new(rx: mpsc::Receiver<PcmChunk>, current_timestamp: Arc<RwLock<f64>>) -> Self {
         Self {
             rx,
             buffer: VecDeque::new(),
             finished: false,
+            current_timestamp,
         }
     }
 }
@@ -1006,11 +1048,15 @@ impl AsyncRead for ByteStreamReader {
             }
 
             match Pin::new(&mut self.rx).poll_recv(cx) {
-                Poll::Ready(Some(bytes)) => {
-                    if bytes.is_empty() {
+                Poll::Ready(Some(chunk)) => {
+                    if chunk.bytes.is_empty() {
                         continue;
                     }
-                    self.buffer.extend(bytes);
+                    // Update shared timestamp for broadcaster pacing
+                    if let Ok(mut ts) = self.current_timestamp.try_write() {
+                        *ts = chunk.timestamp_sec;
+                    }
+                    self.buffer.extend(chunk.bytes);
                 }
                 Poll::Ready(None) => {
                     self.finished = true;

@@ -71,6 +71,19 @@ use tracing::{debug, error, info, trace, warn};
 /// Same as StreamingFlacSink for consistency.
 const BROADCAST_CAPACITY: usize = 128;
 
+/// Maximum lead time for HTTP broadcast pacing (in seconds).
+/// The broadcaster will sleep if it's ahead of real-time by more than this amount.
+const BROADCAST_MAX_LEAD_TIME: f64 = 0.5;
+
+/// PCM chunk with audio data and timestamp for precise pacing.
+#[derive(Debug)]
+struct PcmChunk {
+    /// Raw PCM audio bytes
+    bytes: Vec<u8>,
+    /// Timestamp in seconds (from AudioSegment)
+    timestamp_sec: f64,
+}
+
 /// Snapshot of track metadata (reuse from streaming_flac_sink)
 pub use super::streaming_flac_sink::MetadataSnapshot;
 
@@ -227,8 +240,8 @@ struct EncoderState {
 struct StreamingOggFlacSinkLogic {
     encoder_options: EncoderOptions,
     bits_per_sample: u8,
-    pcm_tx: mpsc::Sender<Vec<u8>>,
-    pcm_rx: Option<mpsc::Receiver<Vec<u8>>>,
+    pcm_tx: mpsc::Sender<PcmChunk>,
+    pcm_rx: Option<mpsc::Receiver<PcmChunk>>,
     metadata: Arc<RwLock<MetadataSnapshot>>,
     ogg_broadcast: broadcast::Sender<Bytes>,
     ogg_header: Arc<RwLock<Option<Bytes>>>,
@@ -250,8 +263,11 @@ impl StreamingOggFlacSinkLogic {
             AudioError::ProcessingError("PCM receiver already consumed".into())
         })?;
 
+        // Create shared timestamp for pacing
+        let current_timestamp = Arc::new(RwLock::new(0.0f64));
+
         // Create ByteStreamReader for the encoder
-        let pcm_reader = ByteStreamReader::new(pcm_rx);
+        let pcm_reader = ByteStreamReader::new(pcm_rx, current_timestamp.clone());
 
         // Create PCM format
         let pcm_format = PcmFormat {
@@ -267,11 +283,11 @@ impl StreamingOggFlacSinkLogic {
 
         info!("OGG-FLAC encoder initialized successfully");
 
-        // Spawn OGG wrapper + broadcaster task
+        // Spawn OGG wrapper + broadcaster task with timestamp for pacing
         let ogg_broadcast = self.ogg_broadcast.clone();
         let ogg_header = self.ogg_header.clone();
         let broadcaster_task = tokio::spawn(async move {
-            if let Err(e) = broadcast_ogg_flac_stream(flac_stream, ogg_broadcast, ogg_header).await {
+            if let Err(e) = broadcast_ogg_flac_stream(flac_stream, ogg_broadcast, ogg_header, current_timestamp).await {
                 error!("OGG broadcaster task error: {}", e);
             }
         });
@@ -374,8 +390,12 @@ impl NodeLogic for StreamingOggFlacSinkLogic {
                                         seg.timestamp_sec
                                     );
 
-                                    // Send to FLAC encoder
-                                    if let Err(e) = self.pcm_tx.send(pcm_bytes).await {
+                                    // Send to FLAC encoder with timestamp
+                                    let pcm_chunk = PcmChunk {
+                                        bytes: pcm_bytes,
+                                        timestamp_sec: seg.timestamp_sec,
+                                    };
+                                    if let Err(e) = self.pcm_tx.send(pcm_chunk).await {
                                         warn!("Failed to send PCM data to encoder: {}", e);
                                         break;
                                     }
@@ -450,7 +470,7 @@ impl StreamingOggFlacSink {
         }
 
         // Create PCM channel (bounded for backpressure)
-        let (pcm_tx, pcm_rx) = mpsc::channel::<Vec<u8>>(16);
+        let (pcm_tx, pcm_rx) = mpsc::channel::<PcmChunk>(16);
 
         // Shared metadata
         let metadata = Arc::new(RwLock::new(MetadataSnapshot::default()));
@@ -522,19 +542,23 @@ impl TypedAudioNode for StreamingOggFlacSink {
     }
 }
 
-/// AsyncRead adapter for mpsc::Receiver<Vec<u8>>.
+/// AsyncRead adapter for mpsc::Receiver<PcmChunk>.
+/// Extracts bytes from PcmChunk and provides them to the FLAC encoder.
 struct ByteStreamReader {
-    rx: mpsc::Receiver<Vec<u8>>,
+    rx: mpsc::Receiver<PcmChunk>,
     buffer: VecDeque<u8>,
     finished: bool,
+    /// Shared timestamp for broadcaster pacing
+    current_timestamp: Arc<RwLock<f64>>,
 }
 
 impl ByteStreamReader {
-    fn new(rx: mpsc::Receiver<Vec<u8>>) -> Self {
+    fn new(rx: mpsc::Receiver<PcmChunk>, current_timestamp: Arc<RwLock<f64>>) -> Self {
         Self {
             rx,
             buffer: VecDeque::new(),
             finished: false,
+            current_timestamp,
         }
     }
 }
@@ -563,11 +587,15 @@ impl AsyncRead for ByteStreamReader {
             }
 
             match Pin::new(&mut self.rx).poll_recv(cx) {
-                Poll::Ready(Some(bytes)) => {
-                    if bytes.is_empty() {
+                Poll::Ready(Some(chunk)) => {
+                    if chunk.bytes.is_empty() {
                         continue;
                     }
-                    self.buffer.extend(bytes);
+                    // Update shared timestamp for broadcaster pacing
+                    if let Ok(mut ts) = self.current_timestamp.try_write() {
+                        *ts = chunk.timestamp_sec;
+                    }
+                    self.buffer.extend(chunk.bytes);
                 }
                 Poll::Ready(None) => {
                     self.finished = true;
@@ -673,18 +701,21 @@ fn chunk_to_pcm_bytes(chunk: &AudioChunk, bits_per_sample: u8) -> Result<Vec<u8>
 }
 
 /// OGG wrapper + broadcaster task: reads FLAC bytes from encoder, wraps in OGG pages, and broadcasts.
+/// Implements precise real-time pacing based on audio timestamps.
 async fn broadcast_ogg_flac_stream(
     mut flac_stream: FlacEncodedStream,
     broadcast_tx: broadcast::Sender<Bytes>,
     header_cache: Arc<RwLock<Option<Bytes>>>,
+    current_timestamp: Arc<RwLock<f64>>,
 ) -> Result<(), AudioError> {
-    info!("OGG-FLAC broadcaster task started");
+    info!("OGG-FLAC broadcaster task started with precise timestamp-based pacing");
 
     let stream_serial = rand::random::<u32>();
     let mut ogg_writer = OggPageWriter::new(stream_serial);
 
     let mut total_ogg_bytes = 0u64;
     let mut header_captured = false;
+    let start_time = std::time::Instant::now();
 
     // Step 1: Read FLAC header (fLaC + metadata blocks)
     let flac_header = read_flac_header(&mut flac_stream).await?;
@@ -746,6 +777,20 @@ async fn broadcast_ogg_flac_stream(
                 break;
             }
             Ok(n) => {
+                // Precise pacing based on audio timestamp
+                let audio_timestamp = *current_timestamp.read().await;
+                let elapsed = start_time.elapsed().as_secs_f64();
+                let lead_time = audio_timestamp - elapsed;
+
+                if lead_time > BROADCAST_MAX_LEAD_TIME {
+                    let sleep_duration = lead_time - BROADCAST_MAX_LEAD_TIME;
+                    debug!(
+                        "OGG broadcaster pacing: sleeping {:.3}s (audio_ts={:.3}s, elapsed={:.3}s, lead={:.3}s)",
+                        sleep_duration, audio_timestamp, elapsed, lead_time
+                    );
+                    tokio::time::sleep(tokio::time::Duration::from_secs_f64(sleep_duration)).await;
+                }
+
                 // Accumulate FLAC data
                 flac_data.extend_from_slice(&read_buffer[..n]);
 
