@@ -518,18 +518,22 @@ impl<L: NodeLogic> AudioPipelineNode for Node<L> {
             ..
         } = *self;
 
+        tracing::info!("Node::run() starting with {} children", children.len());
+
         // ═══════════════════════════════════════════════════════════════════
         // PHASE 1: SPAWNER TOUS LES ENFANTS
         // ═══════════════════════════════════════════════════════════════════
 
         let mut child_handles = Vec::new();
-        for child in children {
+        for (i, child) in children.into_iter().enumerate() {
+            tracing::info!("Spawning child {}", i);
             let child_token = stop_token.child_token();
             let handle = tokio::spawn(async move {
                 child.run(child_token).await
             });
             child_handles.push(handle);
         }
+        tracing::info!("All {} children spawned", child_handles.len());
 
         // ═══════════════════════════════════════════════════════════════════
         // PHASE 2: MONITORER LES ENFANTS EN PARALLÈLE
@@ -626,9 +630,10 @@ impl<L: NodeLogic> AudioPipelineNode for Node<L> {
 
                 // Logique métier du nœud
                 process_result = logic.process(rx, child_txs.clone(), stop_token.clone()) => {
+                    tracing::info!("Node logic.process() returned");
                     match process_result {
                         Ok(()) => {
-                            tracing::debug!("Node process completed successfully");
+                            tracing::info!("Node process completed successfully");
                             (StopReason::Completed, Ok(()), false)
                         }
                         Err(e) => {
