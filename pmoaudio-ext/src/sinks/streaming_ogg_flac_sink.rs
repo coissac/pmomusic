@@ -684,8 +684,12 @@ async fn broadcast_ogg_flac_stream(
     let flac_header = read_flac_header(&mut flac_stream).await?;
     info!("Read FLAC header: {} bytes", flac_header.len());
 
-    // Step 2: Create BOS page with FLAC identification
-    let bos_page = ogg_writer.create_page(&flac_header, true, false, false);
+    // Step 2: Create OGG-FLAC identification packet (BOS)
+    // Format according to https://xiph.org/flac/ogg_mapping.html
+    let ogg_flac_id = create_ogg_flac_identification(&flac_header)?;
+    info!("Created OGG-FLAC identification packet: {} bytes", ogg_flac_id.len());
+
+    let bos_page = ogg_writer.create_page(&ogg_flac_id, true, false, false);
     let bos_bytes = Bytes::from(bos_page);
 
     // Step 3: Create Vorbis Comment page (empty for now, metadata comes from /metadata endpoint)
@@ -813,6 +817,29 @@ async fn read_flac_header(stream: &mut FlacEncodedStream) -> Result<Vec<u8>, Aud
     }
 
     Ok(header)
+}
+
+/// Create OGG-FLAC identification packet (first packet in BOS page)
+/// Format: https://xiph.org/flac/ogg_mapping.html
+fn create_ogg_flac_identification(flac_header: &[u8]) -> Result<Vec<u8>, AudioError> {
+    // Verify we have at least "fLaC" magic
+    if flac_header.len() < 4 || &flac_header[0..4] != b"fLaC" {
+        return Err(AudioError::ProcessingError("Invalid FLAC header".into()));
+    }
+
+    let mut packet = Vec::new();
+
+    // OGG-FLAC identification header (13 bytes)
+    packet.push(0x7F);                    // Byte 0: 0x7F
+    packet.extend_from_slice(b"FLAC");    // Bytes 1-4: "FLAC"
+    packet.push(0x01);                    // Byte 5: Major version
+    packet.push(0x00);                    // Byte 6: Minor version
+    packet.extend_from_slice(&0u16.to_be_bytes()); // Bytes 7-8: Number of header packets (0)
+
+    // Native FLAC stream (fLaC + metadata blocks)
+    packet.extend_from_slice(flac_header);
+
+    Ok(packet)
 }
 
 /// Create empty Vorbis Comment block

@@ -78,13 +78,14 @@ impl RadioParadiseStreamSourceLogic {
     }
 
     /// Télécharge et décode un bloc FLAC
+    /// Retourne le timestamp du dernier chunk audio envoyé
     async fn download_and_decode_block(
         &mut self,
         block: &Block,
         output: &[mpsc::Sender<Arc<AudioSegment>>],
         stop_token: &CancellationToken,
         order: &mut u64,
-    ) -> Result<(), AudioError> {
+    ) -> Result<f64, AudioError> {
         // Télécharger le FLAC
         tracing::debug!("Sending HTTP GET request for block FLAC");
         let response = self.client.client
@@ -171,7 +172,9 @@ impl RadioParadiseStreamSourceLogic {
         loop {
             // Vérifier stop_token
             if stop_token.is_cancelled() {
-                return Ok(());
+                // Retourner le timestamp actuel si on est interrompu
+                let current_timestamp = total_samples as f64 / sample_rate as f64;
+                return Ok(current_timestamp);
             }
 
             // Remplir le buffer
@@ -240,7 +243,11 @@ impl RadioParadiseStreamSourceLogic {
             total_samples += chunk_len;
         }
 
-        Ok(())
+        // Retourner le timestamp du dernier chunk (durée totale du bloc)
+        let final_timestamp = total_samples as f64 / sample_rate as f64;
+        tracing::debug!("Block decode complete: {} samples, {:.2}s duration", total_samples, final_timestamp);
+
+        Ok(final_timestamp)
     }
 
     /// Envoie un segment à tous les enfants
@@ -439,6 +446,7 @@ impl NodeLogic for RadioParadiseStreamSourceLogic {
         }
 
         let mut order = 0u64;
+        let mut last_timestamp = 0.0;
 
         loop {
             // Attendre un block ID (timeout court pour une radio)
@@ -492,13 +500,15 @@ impl NodeLogic for RadioParadiseStreamSourceLogic {
 
             // Télécharger et décoder le bloc
             tracing::info!("Starting download and decode for block {}...", event_id);
-            self.download_and_decode_block(&block, &output, &stop_token, &mut order)
+            let block_duration = self.download_and_decode_block(&block, &output, &stop_token, &mut order)
                 .await?;
-            tracing::info!("Finished download and decode for block {}", event_id);
+            last_timestamp = block_duration;
+            tracing::info!("Finished download and decode for block {} (duration: {:.2}s)", event_id, block_duration);
         }
 
-        // Envoyer EndOfStream
-        let eos = AudioSegment::new_end_of_stream(order, 0.0);
+        // Envoyer EndOfStream avec le timestamp du dernier chunk
+        tracing::debug!("Sending EndOfStream with timestamp {:.2}s", last_timestamp);
+        let eos = AudioSegment::new_end_of_stream(order, last_timestamp);
         for tx in &output {
             tx.send(eos.clone())
                 .await
