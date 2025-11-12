@@ -25,8 +25,10 @@ use tokio::io::AsyncReadExt;
 use tokio::sync::{mpsc, RwLock};
 use tokio_util::{io::StreamReader, sync::CancellationToken};
 
-/// Timeout pour attendre un nouveau block ID (radio en temps réel)
-const BLOCK_ID_TIMEOUT_SECS: u64 = 3;
+/// Timeout pour attendre un nouveau block ID
+/// Pour une radio en temps réel, 3s est raisonnable
+/// Pour des tests avec un seul bloc, on veut quelque chose de plus long
+const BLOCK_ID_TIMEOUT_SECS: u64 = 3600; // 1 heure
 
 /// Nombre de blocs récents à mémoriser pour éviter les re-téléchargements
 const RECENT_BLOCKS_CACHE_SIZE: usize = 10;
