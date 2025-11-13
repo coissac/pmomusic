@@ -700,44 +700,73 @@ fn chunk_to_pcm_bytes(chunk: &AudioChunk, bits_per_sample: u8) -> Result<Vec<u8>
     Ok(bytes)
 }
 
-/// Find the position where we should split the buffer to send complete FLAC frames.
-/// Returns the byte position just before the last FLAC frame starts.
-///
-/// FLAC frames start with a sync code: 14 bits set to 1, followed by a 0 bit.
-/// This corresponds to byte patterns: 0xFF 0xF8 through 0xFF 0xFF.
-///
-/// The sync code marks the START of a frame. To send complete frames, we find the
-/// last sync code and send everything BEFORE it (which contains complete frames),
-/// keeping the data from the last sync code onward for the next iteration.
-fn find_complete_frames_boundary(data: &[u8]) -> usize {
+/// Parse FLAC block size from frame header
+/// Returns number of samples in the frame, or None if parsing fails
+fn parse_flac_block_size(data: &[u8], offset: usize) -> Option<u32> {
+    if offset + 4 > data.len() {
+        return None;
+    }
+
+    // FLAC frame header starts with sync code 0xFF 0xF8-0xFF
+    if data[offset] != 0xFF || data[offset + 1] < 0xF8 {
+        return None;
+    }
+
+    // Byte 2 contains block size code in bits 4-7
+    let block_size_code = (data[offset + 2] >> 4) & 0x0F;
+
+    // Decode block size according to FLAC spec
+    let block_size = match block_size_code {
+        0x00 => return None, // Reserved
+        0x01 => 192,
+        0x02..=0x05 => 576 * (1 << (block_size_code - 2)),
+        0x06 => return None, // Get 8-bit value from end of header (not implemented)
+        0x07 => return None, // Get 16-bit value from end of header (not implemented)
+        0x08..=0x0F => 256 * (1 << (block_size_code - 8)),
+        _ => return None,
+    };
+
+    Some(block_size)
+}
+
+/// Find complete FLAC frames and calculate total samples
+/// Returns (byte_position, total_samples) or (0, 0) if no complete frames
+fn find_complete_frames_with_samples(data: &[u8]) -> (usize, u64) {
     if data.len() < 4 {
-        return 0;
+        return (0, 0);
     }
 
     let mut sync_positions = Vec::new();
+    let mut frame_samples = Vec::new();
 
-    // Search for FLAC sync codes
-    // FLAC sync is 14 bits of 1: first byte is always 0xFF
-    // Second byte: 0xF8-0xFF (most common: 0xF8 for fixed blocksize, 0xF9 for variable)
-    // We search more conservatively for 0xF8-0xFE to avoid false positives
+    // Search for FLAC sync codes and parse block sizes
     for i in 0..data.len() - 1 {
         let byte1 = data[i];
         let byte2 = data[i + 1];
 
-        // Check for FLAC sync pattern: 0xFF followed by 0xF8-0xFE
-        // We exclude 0xFF 0xFF as it's less common and more likely to be a false positive
         if byte1 == 0xFF && byte2 >= 0xF8 && byte2 <= 0xFE {
             sync_positions.push(i);
+
+            // Try to parse block size for this frame
+            if let Some(samples) = parse_flac_block_size(data, i) {
+                frame_samples.push(samples);
+            } else {
+                // If we can't parse, assume typical 4096 samples
+                frame_samples.push(4096);
+            }
         }
     }
 
     // We need at least 2 sync codes to identify one complete frame
-    // The last sync code marks the start of a potentially incomplete frame
-    // Return the position of the last sync code - everything before it is complete
     if sync_positions.len() >= 2 {
-        *sync_positions.last().unwrap()
+        let boundary = *sync_positions.last().unwrap();
+        // Sum samples for all complete frames (all except the last incomplete one)
+        let total_samples: u64 = frame_samples.iter().take(sync_positions.len() - 1)
+            .map(|&s| s as u64)
+            .sum();
+        (boundary, total_samples)
     } else {
-        0
+        (0, 0)
     }
 }
 
@@ -758,10 +787,15 @@ async fn broadcast_ogg_flac_stream(
     let mut total_ogg_bytes = 0u64;
     let mut header_captured = false;
     let start_time = std::time::Instant::now();
+    let mut last_granule_update_time = 0.0f64;
 
     // Step 1: Read FLAC header (fLaC + metadata blocks)
     let flac_header = read_flac_header(&mut flac_stream).await?;
     info!("Read FLAC header: {} bytes", flac_header.len());
+
+    // Extract sample rate from STREAMINFO for granule position calculation
+    let sample_rate = extract_sample_rate_from_streaminfo(&flac_header)?;
+    info!("Extracted sample rate from STREAMINFO: {} Hz", sample_rate);
 
     // Step 2: Create OGG-FLAC identification packet (BOS)
     // Format according to https://xiph.org/flac/ogg_mapping.html
@@ -822,19 +856,20 @@ async fn broadcast_ogg_flac_stream(
                 flac_accumulator.extend_from_slice(&read_buffer[..n]);
 
                 // Find where to split: position of last sync code (start of last incomplete frame)
-                // Everything before this position contains only complete frames
-                let boundary = find_complete_frames_boundary(&flac_accumulator);
+                // Also calculate total samples for granule position
+                let (boundary, samples_in_frames) = find_complete_frames_with_samples(&flac_accumulator);
 
                 trace!(
-                    "Buffer state: accumulator={} bytes, boundary={} bytes, will_send={}",
+                    "Buffer state: accumulator={} bytes, boundary={} bytes, samples={}, will_send={}",
                     flac_accumulator.len(),
                     boundary,
+                    samples_in_frames,
                     boundary >= 4096
                 );
 
                 // Only broadcast if we have at least one complete frame (4KB minimum for efficiency)
                 // OGG pages can be larger than pure FLAC broadcasts since they include page overhead
-                if boundary >= 4096 {
+                if boundary >= 4096 && samples_in_frames > 0 {
                     // Precise pacing based on audio timestamp
                     let audio_timestamp = *current_timestamp.read().await;
                     let elapsed = start_time.elapsed().as_secs_f64();
@@ -853,6 +888,9 @@ async fn broadcast_ogg_flac_stream(
                     let remaining = flac_accumulator.split_off(boundary);
                     let complete_frames = std::mem::replace(&mut flac_accumulator, remaining);
 
+                    // Update granule position (cumulative sample count)
+                    ogg_writer.add_samples(samples_in_frames);
+
                     // Wrap complete FLAC frames in OGG page
                     let ogg_page = ogg_writer.create_page(&complete_frames, false, false, false);
                     let ogg_bytes = Bytes::from(ogg_page);
@@ -861,7 +899,7 @@ async fn broadcast_ogg_flac_stream(
                     if let Err(e) = broadcast_tx.send(ogg_bytes.clone()) {
                         trace!("No active receivers for OGG-FLAC broadcast: {}", e);
                     } else {
-                        trace!("Broadcasted OGG page with {} bytes of FLAC data ({} bytes total with OGG overhead)", complete_frames.len(), ogg_bytes.len());
+                        trace!("Broadcasted OGG page with {} bytes of FLAC data, {} samples ({} bytes total with OGG overhead)", complete_frames.len(), samples_in_frames, ogg_bytes.len());
                     }
                 }
             }
@@ -1019,7 +1057,7 @@ fn create_empty_vorbis_comment() -> Vec<u8> {
     block
 }
 
-/// OGG page writer (same as in pmoflac::ogg_flac_encoder)
+/// OGG page writer with granule position tracking for FLAC
 struct OggPageWriter {
     stream_serial: u32,
     page_sequence: u32,
@@ -1033,6 +1071,11 @@ impl OggPageWriter {
             page_sequence: 0,
             granule_position: 0,
         }
+    }
+
+    /// Add samples to the granule position (for FLAC: cumulative PCM sample count)
+    fn add_samples(&mut self, samples: u64) {
+        self.granule_position += samples;
     }
 
     fn create_page(&mut self, packet_data: &[u8], is_bos: bool, is_eos: bool, is_continuation: bool) -> Vec<u8> {
