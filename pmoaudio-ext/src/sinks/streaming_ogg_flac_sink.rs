@@ -79,6 +79,12 @@ const BROADCAST_CAPACITY: usize = 128;
 /// HTTP chunk delivery combined with the broadcast channel architecture.
 const BROADCAST_MAX_LEAD_TIME: f64 = 3.0;
 
+/// Minimum duration (in seconds) of audio data to accumulate before sending an HTTP chunk.
+/// ffplay requires continuous data flow and cannot handle single-frame chunks with pauses.
+/// Accumulating ~50ms (2-3 FLAC frames @ 1024 samples) creates larger, more frequent chunks.
+/// Lower values = more frequent chunks = better for strict clients like ffplay.
+const HTTP_CHUNK_MIN_DURATION: f64 = 0.05;
+
 /// PCM chunk with audio data and timestamp for precise pacing.
 #[derive(Debug)]
 struct PcmChunk {
@@ -723,6 +729,11 @@ async fn broadcast_ogg_flac_stream(
     let start_time = std::time::Instant::now();
     let mut last_granule_update_time = 0.0f64;
 
+    // HTTP chunk accumulation for ffplay compatibility
+    // Accumulate multiple OGG pages before sending to create larger, less frequent HTTP chunks
+    let mut chunk_accumulator: Vec<u8> = Vec::new();
+    let mut chunk_samples: u64 = 0;
+
     // Step 1: Read FLAC header (fLaC + metadata blocks)
     let flac_header = read_flac_header(&mut flac_stream).await?;
     info!("Read FLAC header: {} bytes", flac_header.len());
@@ -839,6 +850,25 @@ async fn broadcast_ogg_flac_stream(
                     let elapsed = start_time.elapsed().as_secs_f64();
                     let lead_time = audio_timestamp - elapsed;
 
+                    // Flush chunk accumulator before pacing sleep
+                    // This prevents accumulating data during sleep and ensures timely delivery
+                    if lead_time > BROADCAST_MAX_LEAD_TIME && !chunk_accumulator.is_empty() {
+                        let chunk_duration = chunk_samples as f64 / sample_rate as f64;
+                        let chunk_bytes = Bytes::from(chunk_accumulator.clone());
+                        if let Err(e) = broadcast_tx.send(chunk_bytes.clone()) {
+                            trace!("No active receivers for OGG-FLAC broadcast: {}", e);
+                        } else {
+                            trace!(
+                                "Flushed OGG chunk before pacing sleep: {:.1}ms ({} samples, {} bytes)",
+                                chunk_duration * 1000.0,
+                                chunk_samples,
+                                chunk_bytes.len()
+                            );
+                        }
+                        chunk_accumulator.clear();
+                        chunk_samples = 0;
+                    }
+
                     // Pacing sleep to prevent HTTP chunked bursts
                     // The TimerNode upstream already handles real-time pacing, but we add
                     // a small sleep here to smooth out HTTP delivery
@@ -856,13 +886,32 @@ async fn broadcast_ogg_flac_stream(
 
                     // Wrap this single FLAC frame in ONE OGG page (per OGG-FLAC spec)
                     let ogg_page = ogg_writer.create_page(&first_frame, false, false, false);
-                    let ogg_bytes = Bytes::from(ogg_page);
-                    total_ogg_bytes += ogg_bytes.len() as u64;
+                    total_ogg_bytes += ogg_page.len() as u64;
 
-                    if let Err(e) = broadcast_tx.send(ogg_bytes.clone()) {
-                        trace!("No active receivers for OGG-FLAC broadcast: {}", e);
-                    } else {
-                        trace!("Broadcasted OGG page with 1 FLAC frame ({} bytes), {} samples ({} bytes total with OGG overhead)", first_frame.len(), first_frame_samples, ogg_bytes.len());
+                    // Accumulate OGG pages into chunk buffer
+                    chunk_accumulator.extend_from_slice(&ogg_page);
+                    chunk_samples += first_frame_samples as u64;
+
+                    // Calculate accumulated duration
+                    let chunk_duration = chunk_samples as f64 / sample_rate as f64;
+
+                    // Send chunk if we've accumulated enough duration
+                    // This creates larger, less frequent HTTP chunks for ffplay compatibility
+                    if chunk_duration >= HTTP_CHUNK_MIN_DURATION {
+                        let chunk_bytes = Bytes::from(chunk_accumulator.clone());
+                        if let Err(e) = broadcast_tx.send(chunk_bytes.clone()) {
+                            trace!("No active receivers for OGG-FLAC broadcast: {}", e);
+                        } else {
+                            trace!(
+                                "Broadcasted OGG chunk: {:.1}ms ({} samples, {} bytes, {} pages)",
+                                chunk_duration * 1000.0,
+                                chunk_samples,
+                                chunk_bytes.len(),
+                                chunk_accumulator.len() / ogg_page.len().max(1)
+                            );
+                        }
+                        chunk_accumulator.clear();
+                        chunk_samples = 0;
                     }
                 }
             }
@@ -873,6 +922,22 @@ async fn broadcast_ogg_flac_stream(
                     e
                 )));
             }
+        }
+    }
+
+    // Flush any remaining accumulated data
+    if !chunk_accumulator.is_empty() {
+        let chunk_duration = chunk_samples as f64 / sample_rate as f64;
+        let chunk_bytes = Bytes::from(chunk_accumulator.clone());
+        if let Err(e) = broadcast_tx.send(chunk_bytes.clone()) {
+            trace!("No active receivers for OGG-FLAC broadcast: {}", e);
+        } else {
+            trace!(
+                "Flushed final OGG chunk: {:.1}ms ({} samples, {} bytes)",
+                chunk_duration * 1000.0,
+                chunk_samples,
+                chunk_bytes.len()
+            );
         }
     }
 
