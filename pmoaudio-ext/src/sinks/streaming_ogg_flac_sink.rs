@@ -838,16 +838,17 @@ async fn broadcast_ogg_flac_stream(
                     let elapsed = start_time.elapsed().as_secs_f64();
                     let lead_time = audio_timestamp - elapsed;
 
-                    // DISABLED: Pacing sleep causes HTTP chunked bursts that may confuse ffplay
-                    // The TimerNode upstream already handles real-time pacing
-                    // if lead_time > BROADCAST_MAX_LEAD_TIME {
-                    //     let sleep_duration = lead_time - BROADCAST_MAX_LEAD_TIME;
-                    //     debug!(
-                    //         "OGG broadcaster pacing: sleeping {:.3}s (audio_ts={:.3}s, elapsed={:.3}s, lead={:.3}s)",
-                    //         sleep_duration, audio_timestamp, elapsed, lead_time
-                    //     );
-                    //     tokio::time::sleep(tokio::time::Duration::from_secs_f64(sleep_duration)).await;
-                    // }
+                    // Pacing sleep to prevent HTTP chunked bursts
+                    // The TimerNode upstream already handles real-time pacing, but we add
+                    // a small sleep here to smooth out HTTP delivery
+                    if lead_time > BROADCAST_MAX_LEAD_TIME {
+                        let sleep_duration = lead_time - BROADCAST_MAX_LEAD_TIME;
+                        debug!(
+                            "OGG broadcaster pacing: sleeping {:.3}s (audio_ts={:.3}s, elapsed={:.3}s, lead={:.3}s)",
+                            sleep_duration, audio_timestamp, elapsed, lead_time
+                        );
+                        tokio::time::sleep(tokio::time::Duration::from_secs_f64(sleep_duration)).await;
+                    }
 
                     // Update granule position (cumulative sample count)
                     ogg_writer.add_samples(first_frame_samples as u64);
