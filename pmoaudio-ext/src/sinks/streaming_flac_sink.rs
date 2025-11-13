@@ -727,27 +727,59 @@ impl NodeLogic for StreamingFlacSinkLogic {
     }
 }
 
+/// Find the last FLAC frame boundary in the buffer.
+/// Returns the position after the last complete frame, or 0 if no complete frame is found.
+///
+/// FLAC frames start with a sync code: 14 bits set to 1, followed by a 0 bit.
+/// This corresponds to byte patterns: 0xFF 0xF8 or 0xFF 0xF9.
+fn find_last_flac_frame_boundary(data: &[u8]) -> usize {
+    if data.len() < 2 {
+        return 0;
+    }
+
+    let mut last_boundary = 0;
+
+    // Search for FLAC sync codes (0xFF 0xF8 or 0xFF 0xF9)
+    for i in 0..data.len() - 1 {
+        if data[i] == 0xFF && (data[i + 1] == 0xF8 || data[i + 1] == 0xF9) {
+            // Found a potential sync code
+            // We consider everything before this position as a complete frame
+            if i > 0 {
+                last_boundary = i;
+            }
+        }
+    }
+
+    last_boundary
+}
+
 /// Broadcaster task: reads FLAC bytes from encoder and broadcasts to all clients.
 /// Implements precise real-time pacing based on audio timestamps.
+/// Ensures data is sent at FLAC frame boundaries to prevent sync errors in strict decoders like FFPlay.
 async fn broadcast_flac_stream(
     mut flac_stream: FlacEncodedStream,
     broadcast_tx: broadcast::Sender<Bytes>,
     header_cache: Arc<RwLock<Option<Bytes>>>,
     current_timestamp: Arc<RwLock<f64>>,
 ) -> Result<(), AudioError> {
-    info!("Broadcaster task started with precise timestamp-based pacing");
+    info!("Broadcaster task started with FLAC frame boundary detection");
 
-    // Reduced buffer size from 8KB to 512 bytes for smoother streaming
-    // This prevents burst transmission that causes buffer cycling in FFPlay
-    let mut buffer = vec![0u8; 512];
+    // Use larger read buffer (16KB) to reduce syscalls and accumulator for frame boundary detection
+    // The accumulator is necessary to ensure we only send complete FLAC frames
+    let mut read_buffer = vec![0u8; 16384];
+    let mut accumulator = Vec::with_capacity(32768); // Pre-allocate to reduce reallocations
     let mut total_bytes = 0u64;
     let mut header_captured = false;
     let start_time = std::time::Instant::now();
 
     loop {
-        match flac_stream.read(&mut buffer).await {
+        match flac_stream.read(&mut read_buffer).await {
             Ok(0) => {
-                // EOF
+                // EOF - send any remaining data
+                if !accumulator.is_empty() {
+                    let bytes = Bytes::from(std::mem::take(&mut accumulator));
+                    let _ = broadcast_tx.send(bytes);
+                }
                 info!("FLAC encoder stream ended, total bytes: {}", total_bytes);
                 break;
             }
@@ -757,36 +789,47 @@ async fn broadcast_flac_stream(
                     trace!("Read {} bytes from FLAC encoder (total: {})", n, total_bytes);
                 }
 
-                // Precise pacing based on audio timestamp
-                let audio_timestamp = *current_timestamp.read().await;
-                let elapsed = start_time.elapsed().as_secs_f64();
-                let lead_time = audio_timestamp - elapsed;
+                // Append to accumulator
+                accumulator.extend_from_slice(&read_buffer[..n]);
 
-                if lead_time > BROADCAST_MAX_LEAD_TIME {
-                    let sleep_duration = lead_time - BROADCAST_MAX_LEAD_TIME;
-                    debug!(
-                        "Broadcaster pacing: sleeping {:.3}s (audio_ts={:.3}s, elapsed={:.3}s, lead={:.3}s)",
-                        sleep_duration, audio_timestamp, elapsed, lead_time
-                    );
-                    tokio::time::sleep(tokio::time::Duration::from_secs_f64(sleep_duration)).await;
-                }
+                // Find the last complete FLAC frame boundary
+                let boundary = find_last_flac_frame_boundary(&accumulator);
 
-                // Broadcast to all clients
-                let bytes = Bytes::copy_from_slice(&buffer[..n]);
+                // Only broadcast if we have at least one complete frame (4KB minimum for efficiency)
+                if boundary > 4096 {
+                    // Precise pacing based on audio timestamp
+                    let audio_timestamp = *current_timestamp.read().await;
+                    let elapsed = start_time.elapsed().as_secs_f64();
+                    let lead_time = audio_timestamp - elapsed;
 
-                // Capture first chunk as header if it contains "fLaC"
-                if !header_captured && bytes.len() >= 4 && &bytes[0..4] == b"fLaC" {
-                    *header_cache.write().await = Some(bytes.clone());
-                    header_captured = true;
-                    info!("FLAC header captured ({} bytes)", bytes.len());
-                }
+                    if lead_time > BROADCAST_MAX_LEAD_TIME {
+                        let sleep_duration = lead_time - BROADCAST_MAX_LEAD_TIME;
+                        debug!(
+                            "Broadcaster pacing: sleeping {:.3}s (audio_ts={:.3}s, elapsed={:.3}s, lead={:.3}s)",
+                            sleep_duration, audio_timestamp, elapsed, lead_time
+                        );
+                        tokio::time::sleep(tokio::time::Duration::from_secs_f64(sleep_duration)).await;
+                    }
 
-                let num_receivers = broadcast_tx.receiver_count();
-                if let Err(e) = broadcast_tx.send(bytes) {
-                    // No receivers, but that's okay - clients may not be connected yet
-                    trace!("No active receivers for FLAC broadcast: {}", e);
-                } else if num_receivers > 0 {
-                    trace!("Broadcasted {} bytes to {} receivers", n, num_receivers);
+                    // Split at boundary to avoid copying - extract prefix, keep suffix
+                    let remaining = accumulator.split_off(boundary);
+                    let to_send = std::mem::replace(&mut accumulator, remaining);
+                    let bytes = Bytes::from(to_send);
+
+                    // Capture first chunk as header if it contains "fLaC"
+                    if !header_captured && bytes.len() >= 4 && &bytes[0..4] == b"fLaC" {
+                        *header_cache.write().await = Some(bytes.clone());
+                        header_captured = true;
+                        info!("FLAC header captured ({} bytes)", bytes.len());
+                    }
+
+                    let num_receivers = broadcast_tx.receiver_count();
+                    if let Err(e) = broadcast_tx.send(bytes.clone()) {
+                        // No receivers, but that's okay - clients may not be connected yet
+                        trace!("No active receivers for FLAC broadcast: {}", e);
+                    } else if num_receivers > 0 {
+                        trace!("Broadcasted {} bytes to {} receivers", bytes.len(), num_receivers);
+                    }
                 }
             }
             Err(e) => {
