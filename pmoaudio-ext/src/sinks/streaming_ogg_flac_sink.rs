@@ -786,13 +786,47 @@ async fn broadcast_ogg_flac_stream(
                 // Append to accumulator
                 flac_accumulator.extend_from_slice(&read_buffer[..n]);
 
-                // Find where to split: position of last sync code (start of last incomplete frame)
-                // Also calculate total samples for granule position
-                let (boundary, samples_in_frames) = flac_frame_utils::find_complete_frames_with_samples(&flac_accumulator);
+                // Process complete FLAC frames one at a time
+                // OGG-FLAC spec requires: "Each audio data packet contains one complete FLAC frame"
+                loop {
+                    // Find all complete frames in the accumulator
+                    if flac_accumulator.len() < 4 {
+                        break; // Need at least 4 bytes for sync code check
+                    }
 
-                // Only broadcast if we have at least one complete frame (4KB minimum for efficiency)
-                // OGG pages can be larger than pure FLAC broadcasts since they include page overhead
-                if boundary >= 4096 && samples_in_frames > 0 {
+                    // Find all sync positions with their sample counts
+                    let mut sync_data = Vec::new();
+                    for i in 0..flac_accumulator.len() - 1 {
+                        let byte1 = flac_accumulator[i];
+                        let byte2 = flac_accumulator[i + 1];
+
+                        if byte1 == 0xFF && byte2 >= 0xF8 && byte2 <= 0xFE {
+                            if let Some(samples) = flac_frame_utils::parse_flac_block_size(&flac_accumulator, i) {
+                                sync_data.push((i, samples));
+                            }
+                        }
+                    }
+
+                    // Need at least 2 sync codes to identify one complete frame
+                    if sync_data.len() < 2 {
+                        break; // No complete frames yet
+                    }
+
+                    // Extract the first complete frame (from first sync to second sync)
+                    let first_frame_start = sync_data[0].0;
+                    let first_frame_samples = sync_data[0].1;
+                    let second_frame_start = sync_data[1].0;
+
+                    // Verify first frame starts at position 0 (otherwise we have garbage data)
+                    if first_frame_start != 0 {
+                        warn!("OGG-FLAC: Skipping {} bytes of garbage data before first frame", first_frame_start);
+                        flac_accumulator.drain(0..first_frame_start);
+                        continue;
+                    }
+
+                    // Extract just the first frame
+                    let first_frame: Vec<u8> = flac_accumulator.drain(0..second_frame_start).collect();
+
                     // Precise pacing based on audio timestamp
                     let audio_timestamp = *current_timestamp.read().await;
                     let elapsed = start_time.elapsed().as_secs_f64();
@@ -807,22 +841,18 @@ async fn broadcast_ogg_flac_stream(
                         tokio::time::sleep(tokio::time::Duration::from_secs_f64(sleep_duration)).await;
                     }
 
-                    // Split at boundary to avoid copying - extract prefix, keep suffix
-                    let remaining = flac_accumulator.split_off(boundary);
-                    let complete_frames = std::mem::replace(&mut flac_accumulator, remaining);
-
                     // Update granule position (cumulative sample count)
-                    ogg_writer.add_samples(samples_in_frames);
+                    ogg_writer.add_samples(first_frame_samples as u64);
 
-                    // Wrap complete FLAC frames in OGG page
-                    let ogg_page = ogg_writer.create_page(&complete_frames, false, false, false);
+                    // Wrap this single FLAC frame in ONE OGG page (per OGG-FLAC spec)
+                    let ogg_page = ogg_writer.create_page(&first_frame, false, false, false);
                     let ogg_bytes = Bytes::from(ogg_page);
                     total_ogg_bytes += ogg_bytes.len() as u64;
 
                     if let Err(e) = broadcast_tx.send(ogg_bytes.clone()) {
                         trace!("No active receivers for OGG-FLAC broadcast: {}", e);
                     } else {
-                        trace!("Broadcasted OGG page with {} bytes of FLAC data, {} samples ({} bytes total with OGG overhead)", complete_frames.len(), samples_in_frames, ogg_bytes.len());
+                        trace!("Broadcasted OGG page with 1 FLAC frame ({} bytes), {} samples ({} bytes total with OGG overhead)", first_frame.len(), first_frame_samples, ogg_bytes.len());
                     }
                 }
             }
