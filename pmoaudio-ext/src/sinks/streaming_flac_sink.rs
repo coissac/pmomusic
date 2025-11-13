@@ -787,14 +787,16 @@ async fn broadcast_flac_stream(
                     let elapsed = start_time.elapsed().as_secs_f64();
                     let lead_time = audio_timestamp - elapsed;
 
-                    if lead_time > BROADCAST_MAX_LEAD_TIME {
-                        let sleep_duration = lead_time - BROADCAST_MAX_LEAD_TIME;
-                        debug!(
-                            "Broadcaster pacing: sleeping {:.3}s (audio_ts={:.3}s, elapsed={:.3}s, lead={:.3}s)",
-                            sleep_duration, audio_timestamp, elapsed, lead_time
-                        );
-                        tokio::time::sleep(tokio::time::Duration::from_secs_f64(sleep_duration)).await;
-                    }
+                    // DISABLED: Pacing sleep causes HTTP chunked bursts that may confuse ffplay
+                    // The TimerNode upstream already handles real-time pacing
+                    // if lead_time > BROADCAST_MAX_LEAD_TIME {
+                    //     let sleep_duration = lead_time - BROADCAST_MAX_LEAD_TIME;
+                    //     debug!(
+                    //         "Broadcaster pacing: sleeping {:.3}s (audio_ts={:.3}s, elapsed={:.3}s, lead={:.3}s)",
+                    //         sleep_duration, audio_timestamp, elapsed, lead_time
+                    //     );
+                    //     tokio::time::sleep(tokio::time::Duration::from_secs_f64(sleep_duration)).await;
+                    // }
 
                     // Split at boundary to avoid copying - extract prefix, keep suffix
                     let remaining = accumulator.split_off(boundary);
