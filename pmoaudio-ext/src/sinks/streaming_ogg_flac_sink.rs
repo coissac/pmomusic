@@ -53,6 +53,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use super::flac_frame_utils;
 use async_trait::async_trait;
 use bytes::Bytes;
 use pmoaudio::{
@@ -700,76 +701,6 @@ fn chunk_to_pcm_bytes(chunk: &AudioChunk, bits_per_sample: u8) -> Result<Vec<u8>
     Ok(bytes)
 }
 
-/// Parse FLAC block size from frame header
-/// Returns number of samples in the frame, or None if parsing fails
-fn parse_flac_block_size(data: &[u8], offset: usize) -> Option<u32> {
-    if offset + 4 > data.len() {
-        return None;
-    }
-
-    // FLAC frame header starts with sync code 0xFF 0xF8-0xFF
-    if data[offset] != 0xFF || data[offset + 1] < 0xF8 {
-        return None;
-    }
-
-    // Byte 2 contains block size code in bits 4-7
-    let block_size_code = (data[offset + 2] >> 4) & 0x0F;
-
-    // Decode block size according to FLAC spec
-    let block_size = match block_size_code {
-        0x00 => return None, // Reserved
-        0x01 => 192,
-        0x02..=0x05 => 576 * (1 << (block_size_code - 2)),
-        0x06 => return None, // Get 8-bit value from end of header (not implemented)
-        0x07 => return None, // Get 16-bit value from end of header (not implemented)
-        0x08..=0x0F => 256 * (1 << (block_size_code - 8)),
-        _ => return None,
-    };
-
-    Some(block_size)
-}
-
-/// Find complete FLAC frames and calculate total samples
-/// Returns (byte_position, total_samples) or (0, 0) if no complete frames
-fn find_complete_frames_with_samples(data: &[u8]) -> (usize, u64) {
-    if data.len() < 4 {
-        return (0, 0);
-    }
-
-    let mut sync_positions = Vec::new();
-    let mut frame_samples = Vec::new();
-
-    // Search for FLAC sync codes and parse block sizes
-    for i in 0..data.len() - 1 {
-        let byte1 = data[i];
-        let byte2 = data[i + 1];
-
-        if byte1 == 0xFF && byte2 >= 0xF8 && byte2 <= 0xFE {
-            sync_positions.push(i);
-
-            // Try to parse block size for this frame
-            if let Some(samples) = parse_flac_block_size(data, i) {
-                frame_samples.push(samples);
-            } else {
-                // If we can't parse, assume typical 4096 samples
-                frame_samples.push(4096);
-            }
-        }
-    }
-
-    // We need at least 2 sync codes to identify one complete frame
-    if sync_positions.len() >= 2 {
-        let boundary = *sync_positions.last().unwrap();
-        // Sum samples for all complete frames (all except the last incomplete one)
-        let total_samples: u64 = frame_samples.iter().take(sync_positions.len() - 1)
-            .map(|&s| s as u64)
-            .sum();
-        (boundary, total_samples)
-    } else {
-        (0, 0)
-    }
-}
-
 /// OGG wrapper + broadcaster task: reads FLAC bytes from encoder, wraps in OGG pages, and broadcasts.
 /// Implements precise real-time pacing based on audio timestamps.
 /// Ensures FLAC frames are only sent at frame boundaries to prevent sync errors in strict decoders like FFPlay.
@@ -857,17 +788,7 @@ async fn broadcast_ogg_flac_stream(
 
                 // Find where to split: position of last sync code (start of last incomplete frame)
                 // Also calculate total samples for granule position
-                let (boundary, samples_in_frames) = find_complete_frames_with_samples(&flac_accumulator);
-
-                if flac_accumulator.len() > 1000 {
-                    debug!(
-                        "OGG Frame detection: accumulator={} bytes, boundary={} bytes, samples={}, will_send={}",
-                        flac_accumulator.len(),
-                        boundary,
-                        samples_in_frames,
-                        boundary >= 4096 && samples_in_frames > 0
-                    );
-                }
+                let (boundary, samples_in_frames) = flac_frame_utils::find_complete_frames_with_samples(&flac_accumulator);
 
                 // Only broadcast if we have at least one complete frame (4KB minimum for efficiency)
                 // OGG pages can be larger than pure FLAC broadcasts since they include page overhead
