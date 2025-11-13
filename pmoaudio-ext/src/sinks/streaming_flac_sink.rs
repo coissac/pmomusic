@@ -89,8 +89,9 @@ const BROADCAST_CAPACITY: usize = 128;
 
 /// Maximum lead time for HTTP broadcast pacing (in seconds).
 /// The broadcaster will sleep if it's ahead of real-time by more than this amount.
-/// Increased to 3.0s to allow ffplay and other strict decoders to build up sufficient buffer.
-/// VLC works fine with 0.5s, but ffplay needs more buffer to avoid choppy playback.
+/// 3.0s allows VLC to work properly. ffplay has issues with HTTP chunked streaming
+/// regardless of this value - the root cause appears to be how ffplay handles sparse
+/// HTTP chunk delivery combined with the broadcast channel architecture.
 const BROADCAST_MAX_LEAD_TIME: f64 = 3.0;
 
 /// PCM chunk with audio data and timestamp for precise pacing.
