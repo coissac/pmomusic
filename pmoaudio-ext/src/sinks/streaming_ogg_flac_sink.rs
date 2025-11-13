@@ -859,13 +859,15 @@ async fn broadcast_ogg_flac_stream(
                 // Also calculate total samples for granule position
                 let (boundary, samples_in_frames) = find_complete_frames_with_samples(&flac_accumulator);
 
-                trace!(
-                    "Buffer state: accumulator={} bytes, boundary={} bytes, samples={}, will_send={}",
-                    flac_accumulator.len(),
-                    boundary,
-                    samples_in_frames,
-                    boundary >= 4096
-                );
+                if flac_accumulator.len() > 1000 {
+                    debug!(
+                        "OGG Frame detection: accumulator={} bytes, boundary={} bytes, samples={}, will_send={}",
+                        flac_accumulator.len(),
+                        boundary,
+                        samples_in_frames,
+                        boundary >= 4096 && samples_in_frames > 0
+                    );
+                }
 
                 // Only broadcast if we have at least one complete frame (4KB minimum for efficiency)
                 // OGG pages can be larger than pure FLAC broadcasts since they include page overhead
@@ -924,6 +926,46 @@ async fn broadcast_ogg_flac_stream(
 
     info!("OGG-FLAC broadcaster task completed successfully");
     Ok(())
+}
+
+/// Extract sample rate from STREAMINFO block in FLAC header
+fn extract_sample_rate_from_streaminfo(flac_header: &[u8]) -> Result<u32, AudioError> {
+    // Verify we have at least "fLaC" magic + STREAMINFO block header
+    if flac_header.len() < 8 {
+        return Err(AudioError::ProcessingError("FLAC header too short".into()));
+    }
+
+    if &flac_header[0..4] != b"fLaC" {
+        return Err(AudioError::ProcessingError("Invalid FLAC magic".into()));
+    }
+
+    // First metadata block should be STREAMINFO (type 0)
+    let block_type = flac_header[4] & 0x7F;
+    if block_type != 0 {
+        return Err(AudioError::ProcessingError("First block is not STREAMINFO".into()));
+    }
+
+    // STREAMINFO data starts at offset 8 (after magic + block header)
+    // Sample rate is at offset 10-12 of STREAMINFO data (bytes 18-20 of header)
+    if flac_header.len() < 21 {
+        return Err(AudioError::ProcessingError("STREAMINFO block truncated".into()));
+    }
+
+    // Sample rate: 20 bits starting at byte 10 of STREAMINFO
+    // Format: [byte10: SSSSSSSS] [byte11: SSSSSSSS] [byte12: SSSSCCCC]
+    // S = sample rate bits, C = channels bits
+    let byte10 = flac_header[18] as u32;
+    let byte11 = flac_header[19] as u32;
+    let byte12 = flac_header[20] as u32;
+
+    // Extract 20 bits for sample rate (top 20 bits of 3 bytes)
+    let sample_rate = (byte10 << 12) | (byte11 << 4) | (byte12 >> 4);
+
+    if sample_rate == 0 {
+        return Err(AudioError::ProcessingError("Invalid sample rate (0)".into()));
+    }
+
+    Ok(sample_rate)
 }
 
 /// Read FLAC header (fLaC + all metadata blocks until first frame)
