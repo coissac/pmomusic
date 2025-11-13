@@ -138,9 +138,68 @@ pub trait FileCache<C: CacheConfig>: Send + Sync {
     ///
     /// # Returns
     ///
-    /// `true` si l'entrée existe en base de données et que le fichier est présent
-    fn is_valid_pk(&self, pk: &str) -> bool {
-        self.get_database().get(pk, false).is_ok() && self.file_path(pk).exists()
+    /// `true` si l'entrée existe en base de données et que le fichier est présent ET:
+    /// - SOIT le fichier est complet (marker .complete existe)
+    /// - SOIT le download est en cours (fichier récent sans marker)
+    ///
+    /// Ceci permet le progressive caching: les fichiers en cours de download sont acceptés
+    /// dès que le prebuffer est atteint, sans attendre le marker de completion.
+    async fn is_valid_pk(&self, pk: &str) -> bool {
+        if self.get_database().get(pk, false).is_err() {
+            tracing::debug!("is_valid_pk({}): DB entry not found", pk);
+            return false;
+        }
+
+        let file_path = self.file_path(pk);
+        if !file_path.exists() {
+            // Si l'entrée DB existe mais pas le fichier, c'est probablement en cours d'ingestion
+            // Attendre jusqu'à 1 seconde que le fichier soit créé (le tokio::spawn peut mettre un peu de temps)
+            tracing::debug!("is_valid_pk({}): File does not exist yet, waiting for file creation (ingestion in progress)", pk);
+
+            let mut attempts = 0;
+            while !file_path.exists() && attempts < 100 {
+                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                attempts += 1;
+            }
+
+            if !file_path.exists() {
+                tracing::warn!("is_valid_pk({}): File not created after 1s despite DB entry existing", pk);
+                return false;
+            }
+
+            tracing::debug!("is_valid_pk({}): File created after {}ms", pk, attempts * 10);
+        }
+
+        // Vérifier d'abord si le marker de completion existe
+        let completion_marker = file_path.with_extension(
+            format!("{}.complete", C::file_extension())
+        );
+
+        if completion_marker.exists() {
+            tracing::debug!("is_valid_pk({}): Completion marker found, file is complete", pk);
+            return true;
+        }
+
+        // Pas de marker - vérifier si le download est en cours (fichier récent)
+        // Un fichier en cours de download aura une modification récente
+        if let Ok(metadata) = file_path.metadata() {
+            if let Ok(modified) = metadata.modified() {
+                if let Ok(elapsed) = modified.elapsed() {
+                    let age_secs = elapsed.as_secs();
+                    if age_secs < 60 {
+                        tracing::debug!("is_valid_pk({}): No marker but file is recent ({}s), download in progress", pk, age_secs);
+                        return true;
+                    } else {
+                        tracing::debug!("is_valid_pk({}): No marker and file is old ({}s), incomplete download", pk, age_secs);
+                        return false;
+                    }
+                }
+            }
+        }
+
+        // Ne peut pas vérifier le statut - rejeter par sécurité
+        tracing::debug!("is_valid_pk({}): Could not check file status, rejecting", pk);
+        false
     }
 }
 

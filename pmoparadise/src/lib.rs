@@ -216,6 +216,9 @@ pub mod error;
 pub mod models;
 pub mod source;
 
+#[cfg(feature = "pmoaudio")]
+pub mod node_stats;
+
 #[cfg(feature = "pmoserver")]
 pub mod pmoserver_ext;
 
@@ -232,7 +235,7 @@ pub use models::{Block, DurationMs, EventId, NowPlaying, Song};
 pub use source::RadioParadiseSource;
 
 #[cfg(feature = "pmoaudio")]
-pub use radio_paradise_stream_source::RadioParadiseStreamSource;
+pub use radio_paradise_stream_source::{RadioParadiseStreamSource, END_OF_BLOCKS_SIGNAL};
 
 #[cfg(feature = "pmoserver")]
 pub use pmoserver_ext::{

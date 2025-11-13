@@ -4,7 +4,8 @@
 //! 1. RadioParadiseStreamSource - Télécharge et décode un bloc FLAC
 //! 2. FlacCacheSink - Cache chaque piste en FLAC et alimente une playlist
 //! 3. PlaylistSource - Lit la playlist pendant le téléchargement
-//! 4. AudioSink - Joue l'audio sur la sortie standard
+//! 4. TimerNode - Régule le débit pour éviter EOF prématurés (progressive cache)
+//! 5. AudioSink - Joue l'audio sur la sortie standard
 //!
 //! Architecture :
 //! ```text
@@ -12,7 +13,10 @@
 //!   RadioParadiseStreamSource → FlacCacheSink (avec playlist abonnée)
 //!
 //! Pipeline 2 (Playback):
-//!   PlaylistSource (lit la playlist) → AudioSink (joue l'audio)
+//!   PlaylistSource → TimerNode (rate limiting) → AudioSink
+//!                      ↓
+//!                 Prévention EOF
+//!                 (3s max lead)
 //! ```
 //!
 //! Usage:
@@ -22,7 +26,7 @@
 //!   cargo run --example play_and_cache --features full -- 0    # Main Mix
 //!   cargo run --example play_and_cache --features full -- 2    # Rock Mix
 
-use pmoaudio::{AudioPipelineNode, AudioSink};
+use pmoaudio::{AudioPipelineNode, AudioSink, TimerNode};
 use pmoaudio_ext::{FlacCacheSink, PlaylistSource};
 use pmoaudiocache::Cache as AudioCache;
 use pmocovers::Cache as CoverCache;
@@ -50,8 +54,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Récupérer les arguments
     let args: Vec<String> = env::args().collect();
-    if args.len() != 2 {
-        eprintln!("Usage: {} <channel_id>", args[0]);
+    if args.len() < 2 {
+        eprintln!("Usage: {} <channel_id> [--null-audio]", args[0]);
         eprintln!();
         eprintln!("Downloads a Radio Paradise block, caches it, and plays it simultaneously.");
         eprintln!();
@@ -60,6 +64,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("  1 - Mellow Mix (smooth, chilled music)");
         eprintln!("  2 - Rock Mix (classic & modern rock)");
         eprintln!("  3 - World/Etc Mix (global sounds)");
+        eprintln!();
+        eprintln!("Options:");
+        eprintln!("  --null-audio    Don't play audio (for testing without audio device)");
         std::process::exit(1);
     }
 
@@ -71,7 +78,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    let use_null_audio = args.len() > 2 && args[2] == "--null-audio";
+
     tracing::info!("Channel ID: {}", channel_id);
+    if use_null_audio {
+        tracing::info!("Using null audio output (no playback)");
+    }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Initialiser les caches et le gestionnaire de playlist
@@ -117,8 +129,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let playlist_id = format!("radio-paradise-ch{}", channel_id);
     tracing::info!("Creating playlist: {}", playlist_id);
 
-    // Créer la playlist (ou la vider si elle existe)
-    let mut writer = playlist_manager.create_persistent_playlist(playlist_id.clone()).await?;
+    // Créer une playlist éphémère (non persistante) pour cet exemple
+    let writer = playlist_manager.get_write_handle(playlist_id.clone()).await?;
     writer.set_title(format!("Radio Paradise - Channel {}", channel_id)).await?;
     writer.flush().await?; // Vider la playlist si elle existait
     tracing::debug!("Playlist created and flushed");
@@ -187,13 +199,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut playlist_source = PlaylistSource::new(reader, audio_cache.clone());
     tracing::debug!("PlaylistSource created");
 
+    // Créer le timer node pour réguler le débit (empêche EOF prématurés)
+    // Tolère 3 secondes d'avance max pour permettre le buffering
+    let mut timer = TimerNode::new(3.0);
+    tracing::debug!("TimerNode created (max_lead_time=3.0s)");
+
     // Créer le sink audio
-    let audio_sink = AudioSink::new();
+    let audio_sink = if use_null_audio {
+        AudioSink::with_null_output()
+    } else {
+        AudioSink::new()
+    };
     tracing::debug!("AudioSink created");
 
-    // Connecter playlist → audio
-    playlist_source.register(Box::new(audio_sink));
-    tracing::info!("Playback pipeline connected: PlaylistSource → AudioSink");
+    // Connecter timer → audio (AVANT de mettre timer dans une Box)
+    timer.register(Box::new(audio_sink));
+
+    // Connecter playlist → timer
+    playlist_source.register(Box::new(timer));
+    tracing::info!("Playback pipeline connected: PlaylistSource → TimerNode → AudioSink");
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Lancer les deux pipelines en parallèle
@@ -233,9 +257,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let playback_handle = tokio::spawn(async move {
-        // Attendre un peu que le premier track soit disponible
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-        tracing::info!("[PLAYBACK] Pipeline starting...");
+        // Pas de sleep - le cache progressif permet de démarrer immédiatement
+        // dès que le prebuffer (512 KB) est atteint
+        tracing::info!("[PLAYBACK] Pipeline starting (will wait for prebuffer)...");
         let result = Box::new(playlist_source).run(stop_token_playback).await;
         match &result {
             Ok(()) => tracing::info!("[PLAYBACK] Pipeline completed successfully"),

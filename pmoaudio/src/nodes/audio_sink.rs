@@ -172,11 +172,70 @@ fn chunk_to_f32_interleaved(chunk: &AudioChunk) -> Vec<f32> {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Logique pure de lecture audio via cpal
-pub struct AudioSinkLogic {}
+pub struct AudioSinkLogic {
+    use_null_output: bool,
+}
 
 impl AudioSinkLogic {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            use_null_output: false,
+        }
+    }
+
+    pub fn with_null_output() -> Self {
+        Self {
+            use_null_output: true,
+        }
+    }
+
+    /// Version null output - consomme les segments sans les jouer
+    async fn process_null_output(
+        mut rx: mpsc::Receiver<Arc<AudioSegment>>,
+        stop_token: CancellationToken,
+    ) -> Result<(), AudioError> {
+        loop {
+            let segment = tokio::select! {
+                result = rx.recv() => {
+                    match result {
+                        Some(seg) => seg,
+                        None => {
+                            tracing::debug!("AudioSinkLogic (null): input channel closed");
+                            return Ok(());
+                        }
+                    }
+                }
+                _ = stop_token.cancelled() => {
+                    tracing::debug!("AudioSinkLogic (null): cancelled");
+                    return Ok(());
+                }
+            };
+
+            // Juste logger les segments sans les jouer
+            match &segment.segment {
+                crate::_AudioSegment::Chunk(chunk) => {
+                    tracing::trace!(
+                        "AudioSink (null): consumed chunk with {} frames at {}Hz",
+                        chunk.len(),
+                        chunk.sample_rate()
+                    );
+                }
+                crate::_AudioSegment::Sync(marker) => {
+                    match **marker {
+                        SyncMarker::TrackBoundary { .. } => {
+                            tracing::debug!("AudioSink (null): TrackBoundary received");
+                        }
+                        SyncMarker::EndOfStream => {
+                            tracing::debug!("AudioSink (null): EndOfStream received");
+                            return Ok(());
+                        }
+                        _ => {
+                            tracing::trace!("AudioSink (null): sync marker");
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -197,6 +256,12 @@ impl NodeLogic for AudioSinkLogic {
         let mut rx = input.expect("AudioSink must have input");
 
         tracing::debug!("AudioSinkLogic::process started");
+
+        // Si null output, juste consommer les segments sans jouer
+        if self.use_null_output {
+            tracing::debug!("Using null audio output (no playback)");
+            return Self::process_null_output(rx, stop_token).await;
+        }
 
         // Créer le buffer partagé
         let buffer = Arc::new(Mutex::new(SharedBuffer::new()));
@@ -483,6 +548,14 @@ impl AudioSink {
     pub fn with_channel_size(channel_size: usize) -> Self {
         Self {
             inner: Node::new_with_input(AudioSinkLogic::new(), channel_size),
+        }
+    }
+
+    /// Crée un AudioSink avec null output (pour tests sans carte audio)
+    /// Consomme les segments audio sans les jouer
+    pub fn with_null_output() -> Self {
+        Self {
+            inner: Node::new_with_input(AudioSinkLogic::with_null_output(), DEFAULT_CHANNEL_SIZE),
         }
     }
 }
