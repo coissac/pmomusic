@@ -3,6 +3,9 @@
 //! This module provides functions to detect and validate FLAC frame boundaries
 //! in a stream of bytes. It implements comprehensive FLAC frame header validation
 //! to avoid false positives from random data that matches the sync pattern.
+//!
+//! Frame header validation includes CRC-8 verification as per FLAC specification
+//! to eliminate false positives that would cause decoder errors.
 
 /// Validate and parse FLAC block size from frame header
 ///
@@ -78,11 +81,206 @@ pub(crate) fn parse_flac_block_size(data: &[u8], offset: usize) -> Option<u32> {
     Some(block_size)
 }
 
+/// Calculate FLAC CRC-8 checksum for frame header validation
+///
+/// The FLAC CRC-8 uses polynomial x^8 + x^2 + x^1 + x^0 (0x07)
+/// and is initialized with 0. It covers all bytes of the frame header
+/// including the sync code, up to but not including the CRC byte itself.
+fn calculate_flac_crc8(data: &[u8]) -> u8 {
+    const CRC8_TABLE: [u8; 256] = generate_flac_crc8_table();
+
+    let mut crc: u8 = 0;
+    for &byte in data {
+        crc = CRC8_TABLE[(crc ^ byte) as usize];
+    }
+    crc
+}
+
+/// Generate FLAC CRC-8 lookup table at compile time
+/// Polynomial: x^8 + x^2 + x^1 + x^0 = 0x07
+const fn generate_flac_crc8_table() -> [u8; 256] {
+    let mut table = [0u8; 256];
+    let mut i = 0;
+    while i < 256 {
+        let mut crc = i as u8;
+        let mut j = 0;
+        while j < 8 {
+            if (crc & 0x80) != 0 {
+                crc = (crc << 1) ^ 0x07;
+            } else {
+                crc <<= 1;
+            }
+            j += 1;
+        }
+        table[i] = crc;
+        i += 1;
+    }
+    table
+}
+
+/// Decode UTF-8 coded frame/sample number from FLAC frame header
+/// Returns (value, bytes_consumed) or None if invalid
+fn decode_utf8_number(data: &[u8], offset: usize) -> Option<(u64, usize)> {
+    if offset >= data.len() {
+        return None;
+    }
+
+    let first_byte = data[offset];
+
+    // Determine number of bytes based on first byte
+    let (num_bytes, mask) = if (first_byte & 0x80) == 0 {
+        // 0xxxxxxx - 1 byte
+        return Some((first_byte as u64, 1));
+    } else if (first_byte & 0xE0) == 0xC0 {
+        // 110xxxxx - 2 bytes
+        (2, 0x1F)
+    } else if (first_byte & 0xF0) == 0xE0 {
+        // 1110xxxx - 3 bytes
+        (3, 0x0F)
+    } else if (first_byte & 0xF8) == 0xF0 {
+        // 11110xxx - 4 bytes
+        (4, 0x07)
+    } else if (first_byte & 0xFC) == 0xF8 {
+        // 111110xx - 5 bytes
+        (5, 0x03)
+    } else if (first_byte & 0xFE) == 0xFC {
+        // 1111110x - 6 bytes
+        (6, 0x01)
+    } else if first_byte == 0xFE {
+        // 11111110 - 7 bytes (max for FLAC)
+        (7, 0x00)
+    } else {
+        return None; // Invalid UTF-8 pattern
+    };
+
+    // Check we have enough bytes
+    if offset + num_bytes > data.len() {
+        return None;
+    }
+
+    // Decode the value
+    let mut value = (first_byte & mask) as u64;
+    for i in 1..num_bytes {
+        let byte = data[offset + i];
+        // Continuation bytes must match 10xxxxxx
+        if (byte & 0xC0) != 0x80 {
+            return None;
+        }
+        value = (value << 6) | ((byte & 0x3F) as u64);
+    }
+
+    Some((value, num_bytes))
+}
+
+/// Get the complete frame header length including CRC-8
+/// Returns Some(header_length) if valid, None otherwise
+///
+/// This function parses the complete frame header structure:
+/// - Sync code (2 bytes)
+/// - Block size + sample rate codes (1 byte)
+/// - Channel assignment + bits per sample (1 byte)
+/// - Frame/sample number UTF-8 (1-7 bytes)
+/// - Optional block size (1-2 bytes if code is 6 or 7)
+/// - Optional sample rate (1-2 bytes if code is 12, 13, or 14)
+/// - CRC-8 (1 byte)
+pub(crate) fn get_frame_header_length(data: &[u8], offset: usize) -> Option<usize> {
+    if offset + 4 > data.len() {
+        return None;
+    }
+
+    // Basic validation (reuse existing checks)
+    if parse_flac_block_size(data, offset).is_none() {
+        return None;
+    }
+
+    let byte2 = data[offset + 2];
+    let block_size_code = (byte2 >> 4) & 0x0F;
+    let sample_rate_code = byte2 & 0x0F;
+
+    // Start after the fixed 4-byte header
+    let mut pos = offset + 4;
+
+    // Decode UTF-8 frame/sample number
+    let (_number, utf8_bytes) = decode_utf8_number(data, pos)?;
+    pos += utf8_bytes;
+
+    // Optional block size (if code is 6 or 7)
+    match block_size_code {
+        0x06 => {
+            if pos >= data.len() {
+                return None;
+            }
+            pos += 1; // 8-bit block size - 1
+        }
+        0x07 => {
+            if pos + 1 >= data.len() {
+                return None;
+            }
+            pos += 2; // 16-bit block size - 1
+        }
+        _ => {}
+    }
+
+    // Optional sample rate (if code is 12, 13, or 14)
+    match sample_rate_code {
+        0x0C => {
+            if pos >= data.len() {
+                return None;
+            }
+            pos += 1; // 8-bit sample rate in kHz
+        }
+        0x0D => {
+            if pos + 1 >= data.len() {
+                return None;
+            }
+            pos += 2; // 16-bit sample rate in Hz
+        }
+        0x0E => {
+            if pos + 1 >= data.len() {
+                return None;
+            }
+            pos += 2; // 16-bit sample rate in 10 Hz
+        }
+        _ => {}
+    }
+
+    // CRC-8 is the last byte
+    if pos >= data.len() {
+        return None;
+    }
+    pos += 1; // CRC-8 byte
+
+    Some(pos - offset)
+}
+
+/// Validate complete FLAC frame header including CRC-8
+/// Returns true if the header is valid, false otherwise
+pub(crate) fn validate_frame_header_crc(data: &[u8], offset: usize) -> bool {
+    // Get the complete header length
+    let header_length = match get_frame_header_length(data, offset) {
+        Some(len) => len,
+        None => return false,
+    };
+
+    if offset + header_length > data.len() {
+        return false;
+    }
+
+    // The CRC-8 is the last byte of the header
+    let stored_crc = data[offset + header_length - 1];
+
+    // Calculate CRC-8 over all bytes except the CRC itself
+    let header_bytes = &data[offset..offset + header_length - 1];
+    let calculated_crc = calculate_flac_crc8(header_bytes);
+
+    calculated_crc == stored_crc
+}
+
 /// Find the position where we should split the buffer to send complete FLAC frames
 ///
 /// Returns the byte position just before the last FLAC frame starts.
 ///
-/// FLAC frames start with a validated sync code (see `parse_flac_block_size`).
+/// FLAC frames start with a validated sync code with CRC-8 verification.
 /// The sync code marks the START of a frame. To send complete frames, we find the
 /// last sync code and send everything BEFORE it (which contains complete frames),
 /// keeping the data from the last sync code onward for the next iteration.
@@ -95,15 +293,15 @@ pub(crate) fn find_complete_frames_boundary(data: &[u8]) -> usize {
 
     let mut sync_positions = Vec::new();
 
-    // Search for FLAC sync codes and validate frame headers
+    // Search for FLAC sync codes and validate frame headers with CRC-8
     for i in 0..data.len() - 1 {
         let byte1 = data[i];
         let byte2 = data[i + 1];
 
         // Check for potential sync code pattern
         if byte1 == 0xFF && byte2 >= 0xF8 && byte2 <= 0xFE {
-            // Validate the complete frame header before accepting
-            if parse_flac_block_size(data, i).is_some() {
+            // Validate the complete frame header including CRC-8
+            if validate_frame_header_crc(data, i) {
                 sync_positions.push(i);
             }
         }
@@ -134,17 +332,20 @@ pub(crate) fn find_complete_frames_with_samples(data: &[u8]) -> (usize, u64) {
     let mut sync_positions = Vec::new();
     let mut frame_samples = Vec::new();
 
-    // Search for FLAC sync codes and validate frame headers
+    // Search for FLAC sync codes and validate frame headers with CRC-8
     for i in 0..data.len() - 1 {
         let byte1 = data[i];
         let byte2 = data[i + 1];
 
         // Check for potential sync code pattern
         if byte1 == 0xFF && byte2 >= 0xF8 && byte2 <= 0xFE {
-            // Validate the complete frame header before accepting
-            if let Some(samples) = parse_flac_block_size(data, i) {
-                sync_positions.push(i);
-                frame_samples.push(samples);
+            // Validate the complete frame header including CRC-8
+            if validate_frame_header_crc(data, i) {
+                // Also get the block size for this frame
+                if let Some(samples) = parse_flac_block_size(data, i) {
+                    sync_positions.push(i);
+                    frame_samples.push(samples);
+                }
             }
         }
     }
