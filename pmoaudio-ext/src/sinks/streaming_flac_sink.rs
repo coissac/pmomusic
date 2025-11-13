@@ -737,7 +737,9 @@ async fn broadcast_flac_stream(
 ) -> Result<(), AudioError> {
     info!("Broadcaster task started with precise timestamp-based pacing");
 
-    let mut buffer = vec![0u8; 8192]; // 8KB buffer for reading
+    // Reduced buffer size from 8KB to 512 bytes for smoother streaming
+    // This prevents burst transmission that causes buffer cycling in FFPlay
+    let mut buffer = vec![0u8; 512];
     let mut total_bytes = 0u64;
     let mut header_captured = false;
     let start_time = std::time::Instant::now();
