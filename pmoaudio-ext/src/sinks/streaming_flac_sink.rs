@@ -62,6 +62,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
+use super::flac_frame_utils;
 use async_trait::async_trait;
 use bytes::Bytes;
 use pmoaudio::{
@@ -727,46 +728,6 @@ impl NodeLogic for StreamingFlacSinkLogic {
     }
 }
 
-/// Find the position where we should split the buffer to send complete FLAC frames.
-/// Returns the byte position just before the last FLAC frame starts.
-///
-/// FLAC frames start with a sync code: 14 bits set to 1, followed by a 0 bit.
-/// This corresponds to byte patterns: 0xFF 0xF8 through 0xFF 0xFF.
-///
-/// The sync code marks the START of a frame. To send complete frames, we find the
-/// last sync code and send everything BEFORE it (which contains complete frames),
-/// keeping the data from the last sync code onward for the next iteration.
-fn find_complete_frames_boundary(data: &[u8]) -> usize {
-    if data.len() < 4 {
-        return 0;
-    }
-
-    let mut sync_positions = Vec::new();
-
-    // Search for FLAC sync codes
-    // FLAC sync is 14 bits of 1: first byte is always 0xFF
-    // Second byte: 0xF8-0xFF (most common: 0xF8 for fixed blocksize, 0xF9 for variable)
-    // We search more conservatively for 0xF8-0xFE to avoid false positives
-    for i in 0..data.len() - 1 {
-        let byte1 = data[i];
-        let byte2 = data[i + 1];
-
-        // Check for FLAC sync pattern: 0xFF followed by 0xF8-0xFE
-        // We exclude 0xFF 0xFF as it's less common and more likely to be a false positive
-        if byte1 == 0xFF && byte2 >= 0xF8 && byte2 <= 0xFE {
-            sync_positions.push(i);
-        }
-    }
-
-    // We need at least 2 sync codes to identify one complete frame
-    // The last sync code marks the start of a potentially incomplete frame
-    // Return the position of the last sync code - everything before it is complete
-    if sync_positions.len() >= 2 {
-        *sync_positions.last().unwrap()
-    } else {
-        0
-    }
-}
 
 /// Broadcaster task: reads FLAC bytes from encoder and broadcasts to all clients.
 /// Implements precise real-time pacing based on audio timestamps.
@@ -809,7 +770,7 @@ async fn broadcast_flac_stream(
 
                 // Find where to split: position of last sync code (start of last incomplete frame)
                 // Everything before this position contains only complete frames
-                let boundary = find_complete_frames_boundary(&accumulator);
+                let boundary = flac_frame_utils::find_complete_frames_boundary(&accumulator);
 
                 trace!(
                     "Buffer state: accumulator={} bytes, boundary={} bytes, will_send={}",

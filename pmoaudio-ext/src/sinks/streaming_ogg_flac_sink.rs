@@ -53,6 +53,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use super::flac_frame_utils;
 use async_trait::async_trait;
 use bytes::Bytes;
 use pmoaudio::{
@@ -700,110 +701,6 @@ fn chunk_to_pcm_bytes(chunk: &AudioChunk, bits_per_sample: u8) -> Result<Vec<u8>
     Ok(bytes)
 }
 
-/// Parse FLAC block size from frame header with validation
-/// Returns number of samples in the frame, or None if parsing fails or header is invalid
-fn parse_flac_block_size(data: &[u8], offset: usize) -> Option<u32> {
-    if offset + 4 > data.len() {
-        return None;
-    }
-
-    // FLAC frame header starts with sync code 0xFF 0xF8-0xFF
-    if data[offset] != 0xFF || data[offset + 1] < 0xF8 {
-        return None;
-    }
-
-    // Validate reserved bit (bit 1 of byte 1 must be 0)
-    if (data[offset + 1] & 0x02) != 0 {
-        return None; // Reserved bit set = not a valid frame header
-    }
-
-    let byte2 = data[offset + 2];
-    let byte3 = data[offset + 3];
-
-    // Byte 2 contains block size code in bits 4-7
-    let block_size_code = (byte2 >> 4) & 0x0F;
-
-    // Byte 2 bits 0-3 contain sample rate code
-    let sample_rate_code = byte2 & 0x0F;
-
-    // Validate sample rate code (0x0F is invalid)
-    if sample_rate_code == 0x0F {
-        return None; // Invalid sample rate = not a valid frame header
-    }
-
-    // Byte 3 bits 1-3 contain channel assignment
-    let channel_assignment = (byte3 >> 4) & 0x0F;
-
-    // Validate channel assignment (values 0x0B-0x0F are reserved/invalid)
-    if channel_assignment >= 0x0B {
-        return None; // Invalid channel assignment = not a valid frame header
-    }
-
-    // Byte 3 bits 1-3 contain bits per sample code
-    let bits_per_sample = (byte3 >> 1) & 0x07;
-
-    // Validate bits per sample (values 0x03 and 0x07 are reserved)
-    if bits_per_sample == 0x03 || bits_per_sample == 0x07 {
-        return None; // Invalid bits per sample = not a valid frame header
-    }
-
-    // Validate reserved bit in byte 3 (bit 0 must be 0)
-    if (byte3 & 0x01) != 0 {
-        return None; // Reserved bit set = not a valid frame header
-    }
-
-    // Decode block size according to FLAC spec
-    let block_size = match block_size_code {
-        0x00 => return None, // Reserved
-        0x01 => 192,
-        0x02..=0x05 => 576 * (1 << (block_size_code - 2)),
-        0x06 => return None, // Get 8-bit value from end of header (not fully validated)
-        0x07 => return None, // Get 16-bit value from end of header (not fully validated)
-        0x08..=0x0F => 256 * (1 << (block_size_code - 8)),
-        _ => return None,
-    };
-
-    Some(block_size)
-}
-
-/// Find complete FLAC frames and calculate total samples
-/// Returns (byte_position, total_samples) or (0, 0) if no complete frames
-fn find_complete_frames_with_samples(data: &[u8]) -> (usize, u64) {
-    if data.len() < 4 {
-        return (0, 0);
-    }
-
-    let mut sync_positions = Vec::new();
-    let mut frame_samples = Vec::new();
-
-    // Search for FLAC sync codes and validate frame headers
-    for i in 0..data.len() - 1 {
-        let byte1 = data[i];
-        let byte2 = data[i + 1];
-
-        // Check for potential sync code pattern
-        if byte1 == 0xFF && byte2 >= 0xF8 && byte2 <= 0xFE {
-            // Validate the complete frame header before accepting
-            if let Some(samples) = parse_flac_block_size(data, i) {
-                sync_positions.push(i);
-                frame_samples.push(samples);
-            }
-        }
-    }
-
-    // We need at least 2 sync codes to identify one complete frame
-    if sync_positions.len() >= 2 {
-        let boundary = *sync_positions.last().unwrap();
-        // Sum samples for all complete frames (all except the last incomplete one)
-        let total_samples: u64 = frame_samples.iter().take(sync_positions.len() - 1)
-            .map(|&s| s as u64)
-            .sum();
-        (boundary, total_samples)
-    } else {
-        (0, 0)
-    }
-}
-
 /// OGG wrapper + broadcaster task: reads FLAC bytes from encoder, wraps in OGG pages, and broadcasts.
 /// Implements precise real-time pacing based on audio timestamps.
 /// Ensures FLAC frames are only sent at frame boundaries to prevent sync errors in strict decoders like FFPlay.
@@ -891,7 +788,7 @@ async fn broadcast_ogg_flac_stream(
 
                 // Find where to split: position of last sync code (start of last incomplete frame)
                 // Also calculate total samples for granule position
-                let (boundary, samples_in_frames) = find_complete_frames_with_samples(&flac_accumulator);
+                let (boundary, samples_in_frames) = flac_frame_utils::find_complete_frames_with_samples(&flac_accumulator);
 
                 // Only broadcast if we have at least one complete frame (4KB minimum for efficiency)
                 // OGG pages can be larger than pure FLAC broadcasts since they include page overhead
