@@ -51,7 +51,7 @@ impl ReadHandle {
 
             // Vérifier validité dans le cache
             let cache = crate::manager::audio_cache()?;
-            if cache.is_valid_pk(&cache_pk) {
+            if cache.is_valid_pk(&cache_pk).await {
                 // Valide, avancer le curseur et retourner
                 self.cursor.fetch_add(1, Ordering::SeqCst);
                 return Ok(Some(PlaylistTrack::new(cache_pk)));
@@ -92,7 +92,7 @@ impl ReadHandle {
             Some(record) => {
                 // Vérifier validité
                 let cache = crate::manager::audio_cache()?;
-                if cache.is_valid_pk(&record.cache_pk) {
+                if cache.is_valid_pk(&record.cache_pk).await {
                     Ok(Some(PlaylistTrack::new(record.cache_pk.clone())))
                 } else {
                     Ok(None)
@@ -125,7 +125,7 @@ impl ReadHandle {
 
         for i in pos..core.len() {
             if let Some(record) = core.get(i) {
-                if cache.is_valid_pk(&record.cache_pk) {
+                if cache.is_valid_pk(&record.cache_pk).await {
                     count += 1;
                 }
             }
@@ -200,7 +200,7 @@ impl ReadHandle {
             };
 
             // Vérifier validité
-            if !cache.is_valid_pk(&record.cache_pk) {
+            if !cache.is_valid_pk(&record.cache_pk).await {
                 continue;
             }
 

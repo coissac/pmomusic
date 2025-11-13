@@ -600,3 +600,37 @@ where
     buffer.truncate(n);
     Ok(buffer)
 }
+
+/// Lit exactement `size` octets du reader, ou jusqu'à EOF.
+///
+/// Contrairement à `peek_reader_header`, cette fonction boucle jusqu'à avoir lu
+/// exactement `size` octets (ou atteindre EOF). Ceci est crucial pour calculer
+/// un pk fiable sur un nombre d'octets précis.
+///
+/// # Returns
+///
+/// Le buffer contenant exactement `size` octets, ou moins si EOF est atteint
+pub async fn read_exact_or_eof<R>(reader: &mut R, size: usize) -> Result<Vec<u8>, String>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut buffer = vec![0u8; size];
+    let mut total_read = 0;
+
+    while total_read < size {
+        let n = reader
+            .read(&mut buffer[total_read..])
+            .await
+            .map_err(|e| format!("Failed to read from stream: {}", e))?;
+
+        if n == 0 {
+            // EOF atteint
+            buffer.truncate(total_read);
+            return Ok(buffer);
+        }
+
+        total_read += n;
+    }
+
+    Ok(buffer)
+}

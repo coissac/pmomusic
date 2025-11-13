@@ -17,10 +17,6 @@ pmometadata = { path = "../pmometadata", optional = true }
 pmoplaylist = { path = "../pmoplaylist", optional = true }
 pmocache = { path = "../pmocache", optional = true }
 
-# Optional dependencies for streaming feature
-bytes = { version = "1.5", optional = true }
-serde = { version = "1.0", features = ["derive"], optional = true }
-
 # Async runtime
 tokio = { version = "1.0", features = ["full"] }
 tokio-util = { version = "0.7" }
@@ -28,10 +24,15 @@ async-trait = "0.1"
 
 # Utilities
 tracing = "0.1"
+rand = "0.8"
+
+# HTTP streaming dependencies
+bytes = { version = "1.0", optional = true }
+serde = { version = "1.0", features = ["derive"], optional = true }
 
 [features]
 default = []
 cache-sink = ["dep:pmoaudiocache", "dep:pmoflac", "dep:pmometadata"]
 playlist = ["cache-sink", "dep:pmoplaylist", "dep:pmocache"]
-streaming = ["dep:pmoflac", "dep:pmometadata", "dep:bytes", "dep:serde"]
-all = ["cache-sink", "playlist", "streaming"]
+http-stream = ["dep:pmoflac", "dep:pmometadata", "dep:bytes", "dep:serde"]
+all = ["cache-sink", "playlist", "http-stream"]
