@@ -795,14 +795,18 @@ async fn broadcast_ogg_flac_stream(
                     }
 
                     // Find all sync positions with their sample counts
+                    // Use CRC-8 validation to eliminate false positives
                     let mut sync_data = Vec::new();
                     for i in 0..flac_accumulator.len() - 1 {
                         let byte1 = flac_accumulator[i];
                         let byte2 = flac_accumulator[i + 1];
 
                         if byte1 == 0xFF && byte2 >= 0xF8 && byte2 <= 0xFE {
-                            if let Some(samples) = flac_frame_utils::parse_flac_block_size(&flac_accumulator, i) {
-                                sync_data.push((i, samples));
+                            // Validate frame header with CRC-8 to avoid false positives
+                            if flac_frame_utils::validate_frame_header_crc(&flac_accumulator, i) {
+                                if let Some(samples) = flac_frame_utils::parse_flac_block_size(&flac_accumulator, i) {
+                                    sync_data.push((i, samples));
+                                }
                             }
                         }
                     }
