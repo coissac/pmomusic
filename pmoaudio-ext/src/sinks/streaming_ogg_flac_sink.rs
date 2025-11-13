@@ -700,15 +700,57 @@ fn chunk_to_pcm_bytes(chunk: &AudioChunk, bits_per_sample: u8) -> Result<Vec<u8>
     Ok(bytes)
 }
 
+/// Find the position where we should split the buffer to send complete FLAC frames.
+/// Returns the byte position just before the last FLAC frame starts.
+///
+/// FLAC frames start with a sync code: 14 bits set to 1, followed by a 0 bit.
+/// This corresponds to byte patterns: 0xFF 0xF8 through 0xFF 0xFF.
+///
+/// The sync code marks the START of a frame. To send complete frames, we find the
+/// last sync code and send everything BEFORE it (which contains complete frames),
+/// keeping the data from the last sync code onward for the next iteration.
+fn find_complete_frames_boundary(data: &[u8]) -> usize {
+    if data.len() < 4 {
+        return 0;
+    }
+
+    let mut sync_positions = Vec::new();
+
+    // Search for FLAC sync codes
+    // FLAC sync is 14 bits of 1: first byte is always 0xFF
+    // Second byte: 0xF8-0xFF (most common: 0xF8 for fixed blocksize, 0xF9 for variable)
+    // We search more conservatively for 0xF8-0xFE to avoid false positives
+    for i in 0..data.len() - 1 {
+        let byte1 = data[i];
+        let byte2 = data[i + 1];
+
+        // Check for FLAC sync pattern: 0xFF followed by 0xF8-0xFE
+        // We exclude 0xFF 0xFF as it's less common and more likely to be a false positive
+        if byte1 == 0xFF && byte2 >= 0xF8 && byte2 <= 0xFE {
+            sync_positions.push(i);
+        }
+    }
+
+    // We need at least 2 sync codes to identify one complete frame
+    // The last sync code marks the start of a potentially incomplete frame
+    // Return the position of the last sync code - everything before it is complete
+    if sync_positions.len() >= 2 {
+        *sync_positions.last().unwrap()
+    } else {
+        0
+    }
+}
+
 /// OGG wrapper + broadcaster task: reads FLAC bytes from encoder, wraps in OGG pages, and broadcasts.
 /// Implements precise real-time pacing based on audio timestamps.
+/// Ensures FLAC frames are only sent at frame boundaries to prevent sync errors in strict decoders like FFPlay.
 async fn broadcast_ogg_flac_stream(
     mut flac_stream: FlacEncodedStream,
     broadcast_tx: broadcast::Sender<Bytes>,
     header_cache: Arc<RwLock<Option<Bytes>>>,
     current_timestamp: Arc<RwLock<f64>>,
 ) -> Result<(), AudioError> {
-    info!("OGG-FLAC broadcaster task started with precise timestamp-based pacing");
+    info!("OGG-FLAC broadcaster task started with FLAC frame boundary detection");
 
     let stream_serial = rand::random::<u32>();
     let mut ogg_writer = OggPageWriter::new(stream_serial);
@@ -748,22 +790,21 @@ async fn broadcast_ogg_flac_stream(
     let _ = broadcast_tx.send(comment_bytes);
 
     // Step 4: Read FLAC stream and create OGG packets
-    // According to OGG FLAC spec, we put the complete FLAC stream in a single logical bitstream,
-    // but split it into reasonable page sizes for streaming
-
-    let mut flac_data = Vec::new();
-    let mut read_buffer = vec![0u8; 8192];
+    // Use larger read buffer (16KB) to reduce syscalls and accumulator for frame boundary detection
+    // The accumulator is necessary to ensure we only send complete FLAC frames
+    let mut read_buffer = vec![0u8; 16384];
+    let mut flac_accumulator = Vec::with_capacity(32768);
 
     loop {
         match flac_stream.read(&mut read_buffer).await {
             Ok(0) => {
                 // EOF - create final page with EOS flag and any remaining data
-                if !flac_data.is_empty() {
-                    let eos_page = ogg_writer.create_page(&flac_data, false, true, false);
+                if !flac_accumulator.is_empty() {
+                    let eos_page = ogg_writer.create_page(&flac_accumulator, false, true, false);
                     let eos_bytes = Bytes::from(eos_page);
                     total_ogg_bytes += eos_bytes.len() as u64;
                     let _ = broadcast_tx.send(eos_bytes);
-                    info!("Sent final EOS page with {} bytes of data", flac_data.len());
+                    info!("Sent final EOS page with {} bytes of data", flac_accumulator.len());
                 } else {
                     // Send empty EOS page
                     let eos_page = ogg_writer.create_page(&[], false, true, false);
@@ -777,33 +818,50 @@ async fn broadcast_ogg_flac_stream(
                 break;
             }
             Ok(n) => {
-                // Precise pacing based on audio timestamp
-                let audio_timestamp = *current_timestamp.read().await;
-                let elapsed = start_time.elapsed().as_secs_f64();
-                let lead_time = audio_timestamp - elapsed;
+                // Append to accumulator
+                flac_accumulator.extend_from_slice(&read_buffer[..n]);
 
-                if lead_time > BROADCAST_MAX_LEAD_TIME {
-                    let sleep_duration = lead_time - BROADCAST_MAX_LEAD_TIME;
-                    debug!(
-                        "OGG broadcaster pacing: sleeping {:.3}s (audio_ts={:.3}s, elapsed={:.3}s, lead={:.3}s)",
-                        sleep_duration, audio_timestamp, elapsed, lead_time
-                    );
-                    tokio::time::sleep(tokio::time::Duration::from_secs_f64(sleep_duration)).await;
-                }
+                // Find where to split: position of last sync code (start of last incomplete frame)
+                // Everything before this position contains only complete frames
+                let boundary = find_complete_frames_boundary(&flac_accumulator);
 
-                // Accumulate FLAC data
-                flac_data.extend_from_slice(&read_buffer[..n]);
+                trace!(
+                    "Buffer state: accumulator={} bytes, boundary={} bytes, will_send={}",
+                    flac_accumulator.len(),
+                    boundary,
+                    boundary >= 4096
+                );
 
-                // Create pages when we have a reasonable amount of data (8KB chunks)
-                // This respects FLAC frame boundaries better than arbitrary 4KB splits
-                while flac_data.len() >= 8192 {
-                    let chunk = flac_data.drain(..8192).collect::<Vec<u8>>();
-                    let ogg_page = ogg_writer.create_page(&chunk, false, false, false);
+                // Only broadcast if we have at least one complete frame (4KB minimum for efficiency)
+                // OGG pages can be larger than pure FLAC broadcasts since they include page overhead
+                if boundary >= 4096 {
+                    // Precise pacing based on audio timestamp
+                    let audio_timestamp = *current_timestamp.read().await;
+                    let elapsed = start_time.elapsed().as_secs_f64();
+                    let lead_time = audio_timestamp - elapsed;
+
+                    if lead_time > BROADCAST_MAX_LEAD_TIME {
+                        let sleep_duration = lead_time - BROADCAST_MAX_LEAD_TIME;
+                        debug!(
+                            "OGG broadcaster pacing: sleeping {:.3}s (audio_ts={:.3}s, elapsed={:.3}s, lead={:.3}s)",
+                            sleep_duration, audio_timestamp, elapsed, lead_time
+                        );
+                        tokio::time::sleep(tokio::time::Duration::from_secs_f64(sleep_duration)).await;
+                    }
+
+                    // Split at boundary to avoid copying - extract prefix, keep suffix
+                    let remaining = flac_accumulator.split_off(boundary);
+                    let complete_frames = std::mem::replace(&mut flac_accumulator, remaining);
+
+                    // Wrap complete FLAC frames in OGG page
+                    let ogg_page = ogg_writer.create_page(&complete_frames, false, false, false);
                     let ogg_bytes = Bytes::from(ogg_page);
                     total_ogg_bytes += ogg_bytes.len() as u64;
 
-                    if let Err(e) = broadcast_tx.send(ogg_bytes) {
+                    if let Err(e) = broadcast_tx.send(ogg_bytes.clone()) {
                         trace!("No active receivers for OGG-FLAC broadcast: {}", e);
+                    } else {
+                        trace!("Broadcasted OGG page with {} bytes of FLAC data ({} bytes total with OGG overhead)", complete_frames.len(), ogg_bytes.len());
                     }
                 }
             }
@@ -930,20 +988,35 @@ fn create_ogg_flac_identification(flac_header: &[u8]) -> Result<Vec<u8>, AudioEr
     Ok(packet)
 }
 
-/// Create empty Vorbis Comment block
+/// Create empty Vorbis Comment block as a proper FLAC metadata block
 fn create_empty_vorbis_comment() -> Vec<u8> {
-    let mut data = Vec::new();
+    let mut vorbis_data = Vec::new();
 
-    // Vendor string
+    // Vendor string (Vorbis Comment format)
     let vendor = "pmoaudio OGG-FLAC streamer";
     let vendor_bytes = vendor.as_bytes();
-    data.extend_from_slice(&(vendor_bytes.len() as u32).to_le_bytes());
-    data.extend_from_slice(vendor_bytes);
+    vorbis_data.extend_from_slice(&(vendor_bytes.len() as u32).to_le_bytes());
+    vorbis_data.extend_from_slice(vendor_bytes);
 
     // Number of comments (0 for now - metadata via /metadata endpoint)
-    data.extend_from_slice(&0u32.to_le_bytes());
+    vorbis_data.extend_from_slice(&0u32.to_le_bytes());
 
-    data
+    // Now wrap in FLAC metadata block format
+    let mut block = Vec::new();
+
+    // Byte 0: block type (4 = VORBIS_COMMENT) + last-metadata-block flag (bit 7 = 1)
+    block.push(0x84); // 0x80 | 0x04 = last block + VORBIS_COMMENT type
+
+    // Bytes 1-3: block length (24-bit big-endian)
+    let length = vorbis_data.len() as u32;
+    block.push((length >> 16) as u8);
+    block.push((length >> 8) as u8);
+    block.push(length as u8);
+
+    // Block data
+    block.extend_from_slice(&vorbis_data);
+
+    block
 }
 
 /// OGG page writer (same as in pmoflac::ogg_flac_encoder)
