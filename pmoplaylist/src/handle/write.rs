@@ -30,7 +30,7 @@ impl WriteHandle {
 
         // Vérifier que le pk existe dans le cache
         let cache = crate::manager::audio_cache()?;
-        if !cache.is_valid_pk(&cache_pk) {
+        if !cache.is_valid_pk(&cache_pk).await {
             return Err(crate::Error::CacheEntryNotFound(cache_pk));
         }
 
@@ -59,7 +59,7 @@ impl WriteHandle {
         // Vérifier tous les pks d'abord
         let cache = crate::manager::audio_cache()?;
         for pk in &cache_pks {
-            if !cache.is_valid_pk(pk) {
+            if !cache.is_valid_pk(pk).await {
                 return Err(crate::Error::CacheEntryNotFound(pk.clone()));
             }
         }

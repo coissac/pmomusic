@@ -237,11 +237,15 @@ impl NodeLogic for PlaylistSourceLogic {
             tracing::debug!("PlaylistSourceLogic: decoding track: {:?}", file_path);
 
             // Décoder et émettre les chunks PCM
+            // Passer le cache et pk pour gérer le cache progressif
+            let cache_pk = track.cache_pk();
             if let Err(e) = decode_and_emit_track(
                 &file_path,
                 self.chunk_frames,
                 &output,
                 &stop_token,
+                &self.cache,
+                cache_pk,
             )
             .await
             {
@@ -264,12 +268,39 @@ impl NodeLogic for PlaylistSourceLogic {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Décode un fichier et émet ses chunks audio
+///
+/// Gère le cache progressif : si EOF est atteint et que le download est toujours en cours,
+/// attend et réessaie au lieu de terminer immédiatement.
 async fn decode_and_emit_track(
     path: &PathBuf,
     chunk_frames: usize,
     output: &[mpsc::Sender<Arc<AudioSegment>>],
     stop_token: &CancellationToken,
+    cache: &Arc<AudioCache>,
+    cache_pk: &str,
 ) -> Result<(), AudioError> {
+    // Attendre que le fichier soit suffisamment gros pour le sniffing
+    // Le cache progressif permet de commencer la lecture après le prebuffer (512 KB)
+    loop {
+        let metadata = tokio::fs::metadata(path)
+            .await
+            .map_err(|e| AudioError::IoError(format!("Failed to stat {:?}: {}", path, e)))?;
+
+        let file_size = metadata.len();
+        const MIN_FILE_SIZE: u64 = 512 * 1024; // 512 KB (prebuffer size)
+
+        if file_size >= MIN_FILE_SIZE || cache.is_download_complete(cache_pk) {
+            tracing::trace!("decode_and_emit_track: file ready ({} bytes), starting decode", file_size);
+            break;
+        }
+
+        tracing::trace!(
+            "decode_and_emit_track: file too small ({} bytes), waiting 50ms...",
+            file_size
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
     // Ouvrir et décoder
     let file = File::open(path)
         .await
@@ -320,9 +351,25 @@ async fn decode_and_emit_track(
                     let read = read_result.map_err(|e| {
                         AudioError::IoError(format!("I/O error while decoding: {}", e))
                     })?;
-                    if read == 0 && pending.is_empty() {
-                        break;
+
+                    // Si EOF atteint (read == 0)
+                    if read == 0 {
+                        // Vérifier si le fichier est complètement écrit (completion marker existe)
+                        if !cache.is_download_complete(cache_pk) {
+                            // Fichier encore en cours d'écriture - attendre et réessayer
+                            // Retry plus longtemps pour le cache progressif
+                            tracing::trace!("decode_and_emit_track: EOF but file incomplete, waiting 200ms...");
+                            tokio::time::sleep(Duration::from_millis(200)).await;
+                            continue; // Retry
+                        }
+
+                        // Completion marker existe - vraie fin du fichier
+                        tracing::trace!("decode_and_emit_track: EOF and file complete");
+                        if pending.is_empty() {
+                            break;
+                        }
                     }
+
                     if read > 0 {
                         pending.extend_from_slice(&read_buf[..read]);
                     }
