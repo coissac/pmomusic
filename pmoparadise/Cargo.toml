@@ -51,8 +51,8 @@ symphonia = { version = "0.5", features = ["all"] }
 # Audio decoding - claxon for FLAC streaming
 claxon = "0.4"
 
-# pmoaudio-ext with playlist support (optional for examples)
-pmoaudio-ext = { path = "../pmoaudio-ext", optional = true, features = ["playlist"] }
+# pmoaudio-ext with playlist and streaming support (optional for examples)
+pmoaudio-ext = { path = "../pmoaudio-ext", optional = true, features = ["playlist", "streaming"] }
 
 # Common music source traits
 pmosource = { path = "../pmosource" }
