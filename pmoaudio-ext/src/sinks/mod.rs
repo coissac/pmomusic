@@ -11,16 +11,21 @@ mod flac_cache_sink;
 pub use flac_cache_sink::{FlacCacheSink, FlacCacheSinkStats, TrackStats};
 
 #[cfg(feature = "http-stream")]
+mod broadcast_pacing;
+
+#[cfg(feature = "http-stream")]
 mod flac_frame_utils;
 
 #[cfg(feature = "http-stream")]
 mod streaming_flac_sink;
 
 #[cfg(feature = "http-stream")]
-pub use streaming_flac_sink::{StreamingFlacSink, StreamHandle, MetadataSnapshot, FlacClientStream, IcyClientStream};
+pub use streaming_flac_sink::{
+    FlacClientStream, IcyClientStream, MetadataSnapshot, StreamHandle, StreamingFlacSink,
+};
 
 #[cfg(feature = "http-stream")]
 mod streaming_ogg_flac_sink;
 
 #[cfg(feature = "http-stream")]
-pub use streaming_ogg_flac_sink::{StreamingOggFlacSink, OggFlacStreamHandle, OggFlacClientStream};
+pub use streaming_ogg_flac_sink::{OggFlacClientStream, OggFlacStreamHandle, StreamingOggFlacSink};

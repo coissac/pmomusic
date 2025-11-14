@@ -91,13 +91,15 @@ impl NodeStats {
     /// Enregistre l'envoi d'un segment
     pub fn record_segment_sent(&self, bytes: usize) {
         self.segments_sent.fetch_add(1, Ordering::Relaxed);
-        self.bytes_processed.fetch_add(bytes as u64, Ordering::Relaxed);
+        self.bytes_processed
+            .fetch_add(bytes as u64, Ordering::Relaxed);
     }
 
     /// Enregistre un événement de backpressure
     pub fn record_backpressure(&self, duration_ms: u64) {
         self.backpressure_blocks.fetch_add(1, Ordering::Relaxed);
-        self.backpressure_time_ms.fetch_add(duration_ms, Ordering::Relaxed);
+        self.backpressure_time_ms
+            .fetch_add(duration_ms, Ordering::Relaxed);
     }
 
     /// Retourne un rapport formaté des statistiques
@@ -112,7 +114,11 @@ impl NodeStats {
         let first_ts = self.first_segment_timestamp.load(Ordering::Relaxed);
         let last_ts = self.last_segment_timestamp.load(Ordering::Relaxed);
 
-        let first_ts_sec = if first_ts == u64::MAX { 0.0 } else { first_ts as f64 / 1000.0 };
+        let first_ts_sec = if first_ts == u64::MAX {
+            0.0
+        } else {
+            first_ts as f64 / 1000.0
+        };
         let last_ts_sec = last_ts as f64 / 1000.0;
         let audio_duration = last_ts_sec - first_ts_sec;
 
@@ -126,12 +132,27 @@ impl NodeStats {
              Audio: {:.1}s (first: {:.1}s, last: {:.1}s) | Real-time ratio: {:.1}%\n\
              Backpressure: {} blocks, {:.2}s total ({:.1}% of time)",
             self.name,
-            elapsed, received, sent, received.saturating_sub(sent),
-            mb, throughput_mbps,
-            audio_duration, first_ts_sec, last_ts_sec,
-            if audio_duration > 0.0 { (elapsed / audio_duration) * 100.0 } else { 0.0 },
-            bp_blocks, bp_time_ms as f64 / 1000.0,
-            if elapsed > 0.0 { (bp_time_ms as f64 / 1000.0 / elapsed) * 100.0 } else { 0.0 }
+            elapsed,
+            received,
+            sent,
+            received.saturating_sub(sent),
+            mb,
+            throughput_mbps,
+            audio_duration,
+            first_ts_sec,
+            last_ts_sec,
+            if audio_duration > 0.0 {
+                (elapsed / audio_duration) * 100.0
+            } else {
+                0.0
+            },
+            bp_blocks,
+            bp_time_ms as f64 / 1000.0,
+            if elapsed > 0.0 {
+                (bp_time_ms as f64 / 1000.0 / elapsed) * 100.0
+            } else {
+                0.0
+            }
         )
     }
 }

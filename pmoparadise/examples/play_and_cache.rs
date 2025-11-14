@@ -46,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .add_directive("pmoaudio_ext=debug".parse()?)
                 .add_directive("pmoplaylist=debug".parse()?)
                 .add_directive("pmoparadise=debug".parse()?)
-                .add_directive("pmoaudiocache=debug".parse()?)
+                .add_directive("pmoaudiocache=debug".parse()?),
         )
         .init();
 
@@ -89,7 +89,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialiser les caches et le gestionnaire de playlist
     // ═══════════════════════════════════════════════════════════════════════════
 
-    let base_dir = std::env::var("PMO_CONFIG_DIR").unwrap_or_else(|_| "/tmp/pmomusic_test".to_string());
+    let base_dir =
+        std::env::var("PMO_CONFIG_DIR").unwrap_or_else(|_| "/tmp/pmomusic_test".to_string());
     std::fs::create_dir_all(&base_dir)?;
 
     tracing::info!("Initializing caches in: {}", base_dir);
@@ -130,8 +131,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Creating playlist: {}", playlist_id);
 
     // Créer une playlist éphémère (non persistante) pour cet exemple
-    let writer = playlist_manager.get_write_handle(playlist_id.clone()).await?;
-    writer.set_title(format!("Radio Paradise - Channel {}", channel_id)).await?;
+    let writer = playlist_manager
+        .get_write_handle(playlist_id.clone())
+        .await?;
+    writer
+        .set_title(format!("Radio Paradise - Channel {}", channel_id))
+        .await?;
     writer.flush().await?; // Vider la playlist si elle existait
     tracing::debug!("Playlist created and flushed");
 
@@ -178,7 +183,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Créer la source Radio Paradise
     let mut download_source = RadioParadiseStreamSource::new(client);
     download_source.push_block_id(block.event);
-    tracing::debug!("RadioParadiseStreamSource created with block {}", block.event);
+    tracing::debug!(
+        "RadioParadiseStreamSource created with block {}",
+        block.event
+    );
 
     // Créer le sink de cache FLAC
     let mut cache_sink = FlacCacheSink::new(audio_cache.clone(), cover_cache.clone());

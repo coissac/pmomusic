@@ -73,15 +73,46 @@ use tokio_util::sync::CancellationToken;
 pub struct TimerNodeLogic {
     /// Avance maximale tolérée en secondes (buffer)
     max_lead_time_sec: f64,
+    /// Tolérance supplémentaire avant de resynchroniser l'horloge
+    catchup_slack_sec: f64,
     /// Instant de référence (reset au TopZeroSync)
     start_time: Option<Instant>,
+    /// Nombre de chunks traités (pour instrumentation)
+    chunk_count: u64,
+    /// Dernier log d'instrumentation
+    last_stats_log: Option<Instant>,
 }
 
 impl TimerNodeLogic {
     pub fn new(max_lead_time_sec: f64) -> Self {
+        let max_lead = max_lead_time_sec.max(0.0);
+        let slack = (max_lead * 0.25).max(0.5);
         Self {
-            max_lead_time_sec: max_lead_time_sec.max(0.0),
+            max_lead_time_sec: max_lead,
+            catchup_slack_sec: slack,
             start_time: None,
+            chunk_count: 0,
+            last_stats_log: None,
+        }
+    }
+
+    fn maybe_log_stats(&mut self, chunk_timestamp: f64, elapsed: f64, lead_time: f64) {
+        let now = Instant::now();
+        let should_log = match self.last_stats_log {
+            None => true,
+            Some(last) => now.duration_since(last) >= Duration::from_secs(1),
+        };
+
+        if should_log {
+            self.last_stats_log = Some(now);
+            tracing::debug!(
+                "TimerNode stats: chunks={} ts={:.3}s elapsed={:.3}s lead={:.3}s max={:.3}s",
+                self.chunk_count,
+                chunk_timestamp,
+                elapsed,
+                lead_time,
+                self.max_lead_time_sec
+            );
         }
     }
 }
@@ -104,10 +135,20 @@ impl NodeLogic for TimerNodeLogic {
         // Macro helper pour envoyer à tous les enfants
         macro_rules! send_to_children {
             ($segment:expr) => {
-                for tx in &output {
+                for (idx, tx) in output.iter().enumerate() {
+                    let send_start = Instant::now();
                     tx.send($segment.clone())
                         .await
                         .map_err(|_| AudioError::ChildDied)?;
+                    let send_duration = send_start.elapsed();
+                    if send_duration.as_millis() >= 50 {
+                        tracing::debug!(
+                            "TimerNode: send to child {} blocked for {:.3}s (segment ts={:.3}s)",
+                            idx,
+                            send_duration.as_secs_f64(),
+                            $segment.timestamp_sec
+                        );
+                    }
                 }
             };
         }
@@ -149,9 +190,34 @@ impl NodeLogic for TimerNodeLogic {
                 _AudioSegment::Chunk(_) => {
                     // Vérifier le pacing seulement si on a un timer de référence
                     if let Some(start) = self.start_time {
+                        self.chunk_count += 1;
                         let chunk_timestamp = segment.timestamp_sec;
-                        let elapsed = start.elapsed().as_secs_f64();
-                        let lead_time = chunk_timestamp - elapsed;
+                        let mut elapsed = start.elapsed().as_secs_f64();
+                        let mut lead_time = chunk_timestamp - elapsed;
+
+                        // Si on a accumulé beaucoup trop d'avance (source ultra rapide),
+                        // on recale l'horloge pour éviter de dormir pendant des dizaines de secondes.
+                        let catchup_threshold = self.max_lead_time_sec + self.catchup_slack_sec;
+                        if lead_time > catchup_threshold {
+                            let desired_elapsed =
+                                (chunk_timestamp - self.max_lead_time_sec).max(0.0);
+                            let adjust = (desired_elapsed - elapsed).max(0.0);
+                            let new_start =
+                                Instant::now() - Duration::from_secs_f64(desired_elapsed);
+                            self.start_time = Some(new_start);
+                            elapsed = desired_elapsed;
+                            lead_time = chunk_timestamp - elapsed;
+                            tracing::warn!(
+                                "TimerNode: lead {:.3}s > {:.3}s (max {:.3}s + slack {:.3}s) → fast-forward clock by {:.3}s",
+                                chunk_timestamp - start.elapsed().as_secs_f64(),
+                                catchup_threshold,
+                                self.max_lead_time_sec,
+                                self.catchup_slack_sec,
+                                adjust
+                            );
+                        }
+
+                        self.maybe_log_stats(chunk_timestamp, elapsed, lead_time);
 
                         tracing::trace!(
                             "TimerNodeLogic: chunk received (ts={:.3}s, elapsed={:.3}s, lead_time={:.3}s, max_lead={:.1}s)",
@@ -159,9 +225,9 @@ impl NodeLogic for TimerNodeLogic {
                         );
 
                         if lead_time > self.max_lead_time_sec {
-                            // On est trop en avance, attendre
-                            let sleep_duration = lead_time - self.max_lead_time_sec;
-                            tracing::debug!(
+                            // On est trop en avance, attendre juste assez pour retomber à max_lead_time
+                            let sleep_duration = (lead_time - self.max_lead_time_sec).max(0.0);
+                            tracing::trace!(
                                 "TimerNodeLogic: SLEEPING {:.3}s (lead_time={:.3}s > max={:.1}s, chunk_ts={:.3}s)",
                                 sleep_duration,
                                 lead_time,
@@ -274,3 +340,4 @@ impl TypedAudioNode for TimerNode {
         Some(TypeRequirement::any())
     }
 }
+

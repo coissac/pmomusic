@@ -70,7 +70,8 @@ pub struct Cache<C: CacheConfig> {
 impl<C: CacheConfig> Cache<C> {
     /// Retourne le chemin du fichier marker de complétion
     fn get_completion_marker_path(&self, pk: &str) -> PathBuf {
-        self.get_file_path(pk).with_extension(format!("{}.complete", C::file_extension()))
+        self.get_file_path(pk)
+            .with_extension(format!("{}.complete", C::file_extension()))
     }
 
     /// Vérifie si un fichier est en cache et complet
@@ -118,10 +119,15 @@ impl<C: CacheConfig> Cache<C> {
         };
 
         if let Some(download) = download_handle {
-            tracing::debug!("Download already in progress for pk {}, waiting for prebuffering", pk);
+            tracing::debug!(
+                "Download already in progress for pk {}, waiting for prebuffering",
+                pk
+            );
 
             if self.min_prebuffer_size > 0 {
-                download.wait_until_min_size(self.min_prebuffer_size).await
+                download
+                    .wait_until_min_size(self.min_prebuffer_size)
+                    .await
                     .map_err(|e| anyhow!("Prebuffering failed: {}", e))?;
                 tracing::debug!("Prebuffering complete for pk {}", pk);
             }
@@ -138,9 +144,15 @@ impl<C: CacheConfig> Cache<C> {
     async fn finalize_download(&self, pk: &str, download: Arc<Download>) -> Result<String> {
         // Attendre le prébuffering (pour le cache progressif)
         if self.min_prebuffer_size > 0 {
-            download.wait_until_min_size(self.min_prebuffer_size).await
+            download
+                .wait_until_min_size(self.min_prebuffer_size)
+                .await
                 .map_err(|e| anyhow!("Prebuffering failed: {}", e))?;
-            tracing::debug!("Prebuffering complete for pk {} ({} bytes)", pk, self.min_prebuffer_size);
+            tracing::debug!(
+                "Prebuffering complete for pk {} ({} bytes)",
+                pk,
+                self.min_prebuffer_size
+            );
         }
 
         // Lancer une tâche de nettoyage et marquage de complétion en background
@@ -155,7 +167,11 @@ impl<C: CacheConfig> Cache<C> {
             // Créer le fichier marker de complétion si le téléchargement a réussi
             if result.is_ok() {
                 if let Err(e) = std::fs::write(&completion_marker, "") {
-                    tracing::warn!("Failed to create completion marker for pk {}: {}", pk_clone, e);
+                    tracing::warn!(
+                        "Failed to create completion marker for pk {}: {}",
+                        pk_clone,
+                        e
+                    );
                 } else {
                     tracing::debug!("Created completion marker for pk {}", pk_clone);
                 }
@@ -368,7 +384,8 @@ impl<C: CacheConfig> Cache<C> {
     where
         R: AsyncRead + Send + Unpin + 'static,
     {
-        self.add_from_reader_with_pk(source_uri, reader, length, collection, None).await
+        self.add_from_reader_with_pk(source_uri, reader, length, collection, None)
+            .await
     }
 
     /// Ajoute un fichier à partir d'un flux avec un pk explicite optionnel.

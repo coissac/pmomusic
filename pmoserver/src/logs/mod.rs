@@ -23,11 +23,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use tracing::Level;
 use tracing_subscriber::{
-    Registry,
-    filter::LevelFilter,
-    layer::SubscriberExt,
-    reload,
-    util::SubscriberInitExt,
+    Registry, filter::LevelFilter, layer::SubscriberExt, reload, util::SubscriberInitExt,
 };
 
 /// Représente une entrée de log
@@ -73,6 +69,11 @@ impl LogState {
                 level_filter
             );
         }
+    }
+
+    /// Définit le niveau initial avant tout rechargement dynamique
+    pub fn set_initial_level(&self, level: Level) {
+        *self.max_level.write().unwrap() = level;
     }
 
     pub fn get_max_level(&self) -> Level {
@@ -266,15 +267,41 @@ impl Default for LoggingOptions {
 /// ```
 pub fn init_logging() -> LogState {
     let config = get_config();
-    // Créer un filtre rechargeable qui commence à TRACE
+    // Créer un filtre rechargeable qui commence au niveau déterminé par
+    // RUST_LOG (prioritaire) ou la configuration.
 
-    let log_level = match config.get_log_min_level() {
-        Ok(l) => match string_to_level(&l) {
-            Some(lev) => level_to_levelfilter(lev),
-            None => LevelFilter::TRACE,
-        },
-        Err(_) => LevelFilter::TRACE,
+    let (initial_level, level_source) = match std::env::var("RUST_LOG") {
+        Ok(value) => {
+            let trimmed = value.trim();
+            if let Some(level) = string_to_level(trimmed) {
+                (level, format!("RUST_LOG ({})", trimmed))
+            } else {
+                eprintln!(
+                    "⚠️ Invalid RUST_LOG value '{}', falling back to configuration",
+                    value
+                );
+                let fallback = config
+                    .get_log_min_level()
+                    .ok()
+                    .and_then(|cfg| string_to_level(cfg.trim()))
+                    .unwrap_or(Level::TRACE);
+                (fallback, "config".to_string())
+            }
+        }
+        Err(_) => {
+            let level = config
+                .get_log_min_level()
+                .ok()
+                .and_then(|cfg| string_to_level(cfg.trim()))
+                .unwrap_or(Level::TRACE);
+            (level, "config".to_string())
+        }
     };
+    let log_level = level_to_levelfilter(initial_level);
+    eprintln!(
+        "ℹ️ Initial log level set to {:?} (source: {})",
+        initial_level, level_source
+    );
 
     let (filter, reload_handle) = reload::Layer::new(log_level);
 
@@ -285,6 +312,7 @@ pub fn init_logging() -> LogState {
 
     // Créer le LogState avec le handle de rechargement
     let log_state = LogState::new(buffer_capacity, reload_handle);
+    log_state.set_initial_level(initial_level);
 
     // Construire le subscriber avec le filtre rechargeable AVANT le SseLayer
     // L'ordre est important : le filtre doit être appliqué en premier

@@ -255,10 +255,9 @@ where
         // Try to extract genre and track_number from extra fields
         let extra = metadata.get_extra().await.ok().flatten();
         let genre = extra.as_ref().and_then(|e| e.get("genre").cloned());
-        let track_number = extra.as_ref().and_then(|e| {
-            e.get("track_number")
-                .and_then(|s| s.parse::<u32>().ok())
-        });
+        let track_number = extra
+            .as_ref()
+            .and_then(|e| e.get("track_number").and_then(|s| s.parse::<u32>().ok()));
 
         Some(ExtractedMetadata {
             title,
@@ -457,8 +456,7 @@ unsafe fn setup_metadata(
 
     // Set the metadata on the encoder
     let mut metadata_array = [meta];
-    let set_success =
-        FLAC__stream_encoder_set_metadata(encoder, metadata_array.as_mut_ptr(), 1);
+    let set_success = FLAC__stream_encoder_set_metadata(encoder, metadata_array.as_mut_ptr(), 1);
 
     if set_success == 0 {
         return Err(FlacError::LibFlacInit(

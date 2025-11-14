@@ -678,9 +678,11 @@ impl AudioIntegerChunk {
             AudioIntegerChunk::I16(d) => {
                 Box::new(d.get_frames().iter().map(|f| [f[0] as i32, f[1] as i32]))
             }
-            AudioIntegerChunk::I24(d) => {
-                Box::new(d.get_frames().iter().map(|f| [f[0].as_i32(), f[1].as_i32()]))
-            }
+            AudioIntegerChunk::I24(d) => Box::new(
+                d.get_frames()
+                    .iter()
+                    .map(|f| [f[0].as_i32(), f[1].as_i32()]),
+            ),
             AudioIntegerChunk::I32(d) => Box::new(d.get_frames().iter().map(|f| [f[0], f[1]])),
         }
     }

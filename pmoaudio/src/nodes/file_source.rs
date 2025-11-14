@@ -41,7 +41,11 @@ impl NodeLogic for FileSourceLogic {
         output: Vec<mpsc::Sender<Arc<AudioSegment>>>,
         stop_token: CancellationToken,
     ) -> Result<(), AudioError> {
-        tracing::debug!("FileSourceLogic::process started, path={:?}, {} children", self.path, output.len());
+        tracing::debug!(
+            "FileSourceLogic::process started, path={:?}, {} children",
+            self.path,
+            output.len()
+        );
 
         // Macro helper pour envoyer à tous les enfants
         macro_rules! send_to_children {
@@ -55,9 +59,9 @@ impl NodeLogic for FileSourceLogic {
         }
 
         // Ouvrir le fichier
-        let file = File::open(&self.path).await.map_err(|e| {
-            AudioError::IoError(format!("Failed to open {:?}: {}", self.path, e))
-        })?;
+        let file = File::open(&self.path)
+            .await
+            .map_err(|e| AudioError::IoError(format!("Failed to open {:?}: {}", self.path, e)))?;
 
         // Décoder le flux audio
         let mut stream = decode_audio_stream(file)
@@ -256,10 +260,7 @@ impl AudioPipelineNode for FileSource {
         self.inner.register(child)
     }
 
-    async fn run(
-        self: Box<Self>,
-        stop_token: CancellationToken,
-    ) -> Result<(), AudioError> {
+    async fn run(self: Box<Self>, stop_token: CancellationToken) -> Result<(), AudioError> {
         Box::new(self.inner).run(stop_token).await
     }
 }
@@ -399,7 +400,6 @@ fn bytes_to_segment(
     }))
 }
 
-
 impl TypedAudioNode for FileSource {
     fn input_type(&self) -> Option<TypeRequirement> {
         // FileSource est une source, elle ne consomme pas d'audio
@@ -464,11 +464,7 @@ mod tests {
         impl TestCollectorNode {
             fn new(test_tx: mpsc::Sender<Arc<AudioSegment>>) -> Self {
                 let (tx, rx) = mpsc::channel(16);
-                Self {
-                    tx,
-                    rx,
-                    test_tx,
-                }
+                Self { tx, rx, test_tx }
             }
         }
 

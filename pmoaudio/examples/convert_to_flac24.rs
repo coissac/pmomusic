@@ -88,7 +88,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match result {
         Ok(()) => {
             println!();
-            println!("✓ Conversion completed successfully in {:.2}s", elapsed.as_secs_f64());
+            println!(
+                "✓ Conversion completed successfully in {:.2}s",
+                elapsed.as_secs_f64()
+            );
             println!("  Output file: {}", output_path);
             println!();
 

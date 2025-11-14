@@ -374,8 +374,8 @@ mod tests {
         // Real-world example: first frame at 0, false positive at 7
         let data = vec![
             0xFF, 0xF8, 0xC9, 0xA8, // Valid frame header at position 0
-            0x00, 0x8D, 0x4C,
-            0xFF, 0xFE, 0x00, 0x00, // False positive at position 7 (0xFE has reserved bit set)
+            0x00, 0x8D, 0x4C, 0xFF, 0xFE, 0x00,
+            0x00, // False positive at position 7 (0xFE has reserved bit set)
         ];
 
         // Position 0 should be valid

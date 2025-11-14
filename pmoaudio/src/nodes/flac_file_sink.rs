@@ -71,7 +71,10 @@ impl NodeLogic for FlacFileSinkLogic {
         let mut rx = input.expect("FlacFileSink must have input");
         let mut track_number = 0;
 
-        tracing::debug!("FlacFileSinkLogic::process started, base_path={:?}", self.base_path);
+        tracing::debug!(
+            "FlacFileSinkLogic::process started, base_path={:?}",
+            self.base_path
+        );
 
         loop {
             // Vérifier si l'arrêt a été demandé
@@ -81,13 +84,14 @@ impl NodeLogic for FlacFileSinkLogic {
             }
 
             // Attendre le premier chunk audio pour cette track, en capturant les métadonnées du TrackBoundary
-            let (first_segment, track_metadata) = match wait_for_first_audio_chunk_with_metadata(&mut rx, &stop_token).await {
-                Ok(result) => result,
-                Err(_) => {
-                    // Plus d'audio disponible ou arrêt demandé
-                    return Ok(());
-                }
-            };
+            let (first_segment, track_metadata) =
+                match wait_for_first_audio_chunk_with_metadata(&mut rx, &stop_token).await {
+                    Ok(result) => result,
+                    Err(_) => {
+                        // Plus d'audio disponible ou arrêt demandé
+                        return Ok(());
+                    }
+                };
 
             // Extraire les informations du premier chunk
             let first_chunk = first_segment.as_chunk().unwrap();
@@ -96,7 +100,9 @@ impl NodeLogic for FlacFileSinkLogic {
 
             tracing::debug!(
                 "FlacFileSinkLogic: encoding track {} with {}bit @ {}Hz",
-                track_number, bits_per_sample, sample_rate
+                track_number,
+                bits_per_sample,
+                sample_rate
             );
 
             let format = PcmFormat {
@@ -308,10 +314,7 @@ impl FlacFileSink {
     ///
     /// * `base_path` - Chemin de base pour les fichiers FLAC
     /// * `channel_size` - Taille du buffer MPSC (nombre de segments en attente avant backpressure)
-    pub fn with_channel_size<P: Into<PathBuf>>(
-        base_path: P,
-        channel_size: usize,
-    ) -> Self {
+    pub fn with_channel_size<P: Into<PathBuf>>(base_path: P, channel_size: usize) -> Self {
         Self::with_config(base_path, channel_size, EncoderOptions::default())
     }
 
@@ -360,7 +363,13 @@ fn generate_track_path(base_path: &Path, track_number: usize) -> PathBuf {
 async fn wait_for_first_audio_chunk_with_metadata(
     rx: &mut mpsc::Receiver<Arc<AudioSegment>>,
     stop_token: &CancellationToken,
-) -> Result<(Arc<AudioSegment>, Option<Arc<tokio::sync::RwLock<dyn pmometadata::TrackMetadata>>>), AudioError> {
+) -> Result<
+    (
+        Arc<AudioSegment>,
+        Option<Arc<tokio::sync::RwLock<dyn pmometadata::TrackMetadata>>>,
+    ),
+    AudioError,
+> {
     let mut track_metadata: Option<Arc<tokio::sync::RwLock<dyn pmometadata::TrackMetadata>>> = None;
 
     loop {
@@ -738,10 +747,7 @@ impl AudioPipelineNode for FlacFileSink {
         panic!("FlacFileSink is a terminal node and cannot have children");
     }
 
-    async fn run(
-        self: Box<Self>,
-        stop_token: CancellationToken,
-    ) -> Result<(), AudioError> {
+    async fn run(self: Box<Self>, stop_token: CancellationToken) -> Result<(), AudioError> {
         Box::new(self.inner).run(stop_token).await
     }
 }
@@ -768,7 +774,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_flac_file_sink_writes_metadata() {
-
         let temp_dir = tempfile::tempdir().unwrap();
         let output_path = temp_dir.path().join("output_with_metadata.flac");
 
@@ -779,9 +784,8 @@ mod tests {
         let sink = FlacFileSink::with_channel_size(&output_path, 16);
         let tx = sink.get_tx().unwrap();
         let stop_token = CancellationToken::new();
-        let sink_handle = tokio::spawn(async move {
-            Box::new(sink).run(stop_token).await.unwrap()
-        });
+        let sink_handle =
+            tokio::spawn(async move { Box::new(sink).run(stop_token).await.unwrap() });
 
         // Envoyer des segments avec métadonnées
         tokio::spawn(async move {
@@ -792,13 +796,25 @@ mod tests {
 
             // TrackBoundary avec métadonnées
             let mut metadata = MemoryTrackMetadata::new();
-            metadata.set_title(Some("Test Track Title".to_string())).await.unwrap();
-            metadata.set_artist(Some("Test Artist".to_string())).await.unwrap();
-            metadata.set_album(Some("Test Album".to_string())).await.unwrap();
+            metadata
+                .set_title(Some("Test Track Title".to_string()))
+                .await
+                .unwrap();
+            metadata
+                .set_artist(Some("Test Artist".to_string()))
+                .await
+                .unwrap();
+            metadata
+                .set_album(Some("Test Album".to_string()))
+                .await
+                .unwrap();
             metadata.set_year(Some(2024)).await.unwrap();
 
-            let track_boundary =
-                crate::AudioSegment::new_track_boundary(0, 0.0, std::sync::Arc::new(tokio::sync::RwLock::new(metadata)));
+            let track_boundary = crate::AudioSegment::new_track_boundary(
+                0,
+                0.0,
+                std::sync::Arc::new(tokio::sync::RwLock::new(metadata)),
+            );
             tx.send(track_boundary).await.unwrap();
 
             // Générer et envoyer des chunks audio
@@ -900,9 +916,8 @@ mod tests {
         let sink = FlacFileSink::with_channel_size(&output_path, 16);
         let tx = sink.get_tx().unwrap();
         let stop_token = CancellationToken::new();
-        let sink_handle = tokio::spawn(async move {
-            Box::new(sink).run(stop_token).await.unwrap()
-        });
+        let sink_handle =
+            tokio::spawn(async move { Box::new(sink).run(stop_token).await.unwrap() });
 
         // Lire le fichier input et envoyer les segments au sink
         tokio::spawn(async move {

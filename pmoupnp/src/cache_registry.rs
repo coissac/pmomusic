@@ -55,11 +55,10 @@ pub fn get_audio_cache() -> Option<Arc<AudioCache>> {
 /// ```
 pub fn build_cover_url(pk: &str, size: Option<usize>) -> anyhow::Result<String> {
     // Récupérer l'URL de base depuis la variable d'environnement ou une config
-    let base_url = std::env::var("PMO_SERVER_URL")
-        .unwrap_or_else(|_| "http://localhost:8080".to_string());
+    let base_url =
+        std::env::var("PMO_SERVER_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
 
-    let cache = get_cover_cache()
-        .ok_or_else(|| anyhow::anyhow!("No registered cover cache"))?;
+    let cache = get_cover_cache().ok_or_else(|| anyhow::anyhow!("No registered cover cache"))?;
 
     let param = match size {
         Some(size_) => Some(size_.to_string()),
@@ -86,11 +85,10 @@ pub fn build_cover_url(pk: &str, size: Option<usize>) -> anyhow::Result<String> 
 /// ```
 pub fn build_audio_url(pk: &str, param: Option<&str>) -> anyhow::Result<String> {
     // Récupérer l'URL de base depuis la variable d'environnement ou une config
-    let base_url = std::env::var("PMO_SERVER_URL")
-        .unwrap_or_else(|_| "http://localhost:8080".to_string());
+    let base_url =
+        std::env::var("PMO_SERVER_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
 
-    let cache = get_audio_cache()
-        .ok_or_else(|| anyhow::anyhow!("No registered audio cache"))?;
+    let cache = get_audio_cache().ok_or_else(|| anyhow::anyhow!("No registered audio cache"))?;
 
     let route = cache.route_for(pk, param);
     Ok(format!("{}{}", base_url, route))

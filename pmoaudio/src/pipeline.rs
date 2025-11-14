@@ -104,10 +104,7 @@ pub trait AudioPipelineNode: Send + 'static {
     /// - Un seul `cancel()` par nœud (en sortant de la boucle de travail)
     /// - L'enfant ne cancel JAMAIS le parent
     /// - `cancel()` est idempotent (pas de problème si appelé plusieurs fois)
-    async fn run(
-        self: Box<Self>,
-        stop_token: CancellationToken,
-    ) -> Result<(), AudioError>;
+    async fn run(self: Box<Self>, stop_token: CancellationToken) -> Result<(), AudioError>;
 
     /// Lance le pipeline en arrière-plan et retourne un handle de contrôle
     ///
@@ -148,9 +145,7 @@ pub trait AudioPipelineNode: Send + 'static {
         let stop_token = CancellationToken::new();
         let token_for_task = stop_token.clone();
 
-        let join_handle = tokio::spawn(async move {
-            self.run(token_for_task).await
-        });
+        let join_handle = tokio::spawn(async move { self.run(token_for_task).await });
 
         PipelineHandle {
             stop_token,
@@ -373,12 +368,14 @@ impl PipelineHandle {
     pub async fn wait(self) -> Result<(), AudioError> {
         match self.join_handle.await {
             Ok(result) => result,
-            Err(e) if e.is_panic() => Err(AudioError::ProcessingError(
-                format!("Pipeline task panicked: {}", e)
-            )),
-            Err(e) => Err(AudioError::ProcessingError(
-                format!("Pipeline task cancelled: {}", e)
-            )),
+            Err(e) if e.is_panic() => Err(AudioError::ProcessingError(format!(
+                "Pipeline task panicked: {}",
+                e
+            ))),
+            Err(e) => Err(AudioError::ProcessingError(format!(
+                "Pipeline task cancelled: {}",
+                e
+            ))),
         }
     }
 
@@ -506,10 +503,7 @@ impl<L: NodeLogic> AudioPipelineNode for Node<L> {
         self.children.push(child);
     }
 
-    async fn run(
-        mut self: Box<Self>,
-        stop_token: CancellationToken,
-    ) -> Result<(), AudioError> {
+    async fn run(mut self: Box<Self>, stop_token: CancellationToken) -> Result<(), AudioError> {
         let Node {
             mut logic,
             rx,
@@ -528,9 +522,7 @@ impl<L: NodeLogic> AudioPipelineNode for Node<L> {
         for (i, child) in children.into_iter().enumerate() {
             tracing::debug!("Spawning child {}", i);
             let child_token = stop_token.child_token();
-            let handle = tokio::spawn(async move {
-                child.run(child_token).await
-            });
+            let handle = tokio::spawn(async move { child.run(child_token).await });
             child_handles.push(handle);
         }
         tracing::debug!("All {} children spawned", child_handles.len());
@@ -573,9 +565,10 @@ impl<L: NodeLogic> AudioPipelineNode for Node<L> {
                             // Un enfant a paniqué
                             tracing::error!("Child panicked: {}", e);
                             if !has_error {
-                                first_error = Some(AudioError::ProcessingError(
-                                    format!("Child task panicked: {}", e)
-                                ));
+                                first_error = Some(AudioError::ProcessingError(format!(
+                                    "Child task panicked: {}",
+                                    e
+                                )));
                                 has_error = true;
                             }
                         }
@@ -595,78 +588,79 @@ impl<L: NodeLogic> AudioPipelineNode for Node<L> {
         // PHASE 3: EXÉCUTER LA LOGIQUE MÉTIER EN RACE AVEC LE MONITORING
         // ═══════════════════════════════════════════════════════════════════
 
-        let (stop_reason, process_result, child_monitor_consumed) = if let Some(monitor) = &mut child_monitor {
-            // Il y a des enfants à surveiller
-            tokio::select! {
-                // Cancel externe demandé
-                _ = stop_token.cancelled() => {
-                    tracing::debug!("Node cancelled via stop_token");
-                    (StopReason::Cancelled, Ok(()), false)
-                }
+        let (stop_reason, process_result, child_monitor_consumed) =
+            if let Some(monitor) = &mut child_monitor {
+                // Il y a des enfants à surveiller
+                tokio::select! {
+                    // Cancel externe demandé
+                    _ = stop_token.cancelled() => {
+                        tracing::debug!("Node cancelled via stop_token");
+                        (StopReason::Cancelled, Ok(()), false)
+                    }
 
-                // Monitoring des enfants - retourne quand tous sont terminés ou sur erreur
-                child_result = monitor => {
-                    match child_result {
-                        Ok(Ok(())) => {
-                            // Tous les enfants terminés avec succès
-                            // Le parent devrait aussi terminer bientôt
-                            tracing::debug!("All children finished successfully");
-                            (StopReason::Completed, Ok(()), true)
+                    // Monitoring des enfants - retourne quand tous sont terminés ou sur erreur
+                    child_result = monitor => {
+                        match child_result {
+                            Ok(Ok(())) => {
+                                // Tous les enfants terminés avec succès
+                                // Le parent devrait aussi terminer bientôt
+                                tracing::debug!("All children finished successfully");
+                                (StopReason::Completed, Ok(()), true)
+                            }
+                            Ok(Err(e)) => {
+                                // Un enfant a eu une erreur - arrêter immédiatement
+                                tracing::warn!("Child error: {}", e);
+                                (StopReason::Error(e.clone()), Err(e), true)
+                            }
+                            Err(e) => {
+                                // Le monitor task a paniqué
+                                let error = AudioError::ProcessingError(
+                                    format!("Child monitor panicked: {}", e)
+                                );
+                                (StopReason::Error(error.clone()), Err(error), true)
+                            }
                         }
-                        Ok(Err(e)) => {
-                            // Un enfant a eu une erreur - arrêter immédiatement
-                            tracing::warn!("Child error: {}", e);
-                            (StopReason::Error(e.clone()), Err(e), true)
-                        }
-                        Err(e) => {
-                            // Le monitor task a paniqué
-                            let error = AudioError::ProcessingError(
-                                format!("Child monitor panicked: {}", e)
-                            );
-                            (StopReason::Error(error.clone()), Err(error), true)
+                    }
+
+                    // Logique métier du nœud
+                    process_result = logic.process(rx, child_txs.clone(), stop_token.clone()) => {
+                        tracing::info!("Node logic.process() returned");
+                        match process_result {
+                            Ok(()) => {
+                                tracing::info!("Node process completed successfully");
+                                (StopReason::Completed, Ok(()), false)
+                            }
+                            Err(e) => {
+                                tracing::error!("Node process error: {}", e);
+                                (StopReason::Error(e.clone()), Err(e), false)
+                            }
                         }
                     }
                 }
+            } else {
+                // Pas d'enfants (nœud terminal) - juste exécuter la logique
+                tokio::select! {
+                    // Cancel externe demandé
+                    _ = stop_token.cancelled() => {
+                        tracing::debug!("Node cancelled via stop_token");
+                        (StopReason::Cancelled, Ok(()), true) // true car pas de monitor à attendre
+                    }
 
-                // Logique métier du nœud
-                process_result = logic.process(rx, child_txs.clone(), stop_token.clone()) => {
-                    tracing::info!("Node logic.process() returned");
-                    match process_result {
-                        Ok(()) => {
-                            tracing::info!("Node process completed successfully");
-                            (StopReason::Completed, Ok(()), false)
-                        }
-                        Err(e) => {
-                            tracing::error!("Node process error: {}", e);
-                            (StopReason::Error(e.clone()), Err(e), false)
+                    // Logique métier du nœud
+                    process_result = logic.process(rx, child_txs.clone(), stop_token.clone()) => {
+                        match process_result {
+                            Ok(()) => {
+                                tracing::debug!("Node process completed successfully (terminal)");
+                                (StopReason::Completed, Ok(()), true) // true car pas de monitor
+                            }
+                            Err(e) => {
+                                tracing::error!("Node process error: {}", e);
+                                (StopReason::Error(e.clone()), Err(e), true) // true car pas de monitor
+                            }
                         }
                     }
                 }
-            }
-        } else {
-            // Pas d'enfants (nœud terminal) - juste exécuter la logique
-            tokio::select! {
-                // Cancel externe demandé
-                _ = stop_token.cancelled() => {
-                    tracing::debug!("Node cancelled via stop_token");
-                    (StopReason::Cancelled, Ok(()), true) // true car pas de monitor à attendre
-                }
-
-                // Logique métier du nœud
-                process_result = logic.process(rx, child_txs.clone(), stop_token.clone()) => {
-                    match process_result {
-                        Ok(()) => {
-                            tracing::debug!("Node process completed successfully (terminal)");
-                            (StopReason::Completed, Ok(()), true) // true car pas de monitor
-                        }
-                        Err(e) => {
-                            tracing::error!("Node process error: {}", e);
-                            (StopReason::Error(e.clone()), Err(e), true) // true car pas de monitor
-                        }
-                    }
-                }
-            }
-        };
+            };
 
         // ═══════════════════════════════════════════════════════════════════
         // PHASE 4: CLEANUP COORDONNÉ

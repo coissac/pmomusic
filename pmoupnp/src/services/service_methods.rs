@@ -60,7 +60,9 @@ impl UpnpObject for Service {
 
         // eventSubURL
         let mut event_sub_url = Element::new("eventSubURL");
-        event_sub_url.children.push(XMLNode::Text(self.event_route()));
+        event_sub_url
+            .children
+            .push(XMLNode::Text(self.event_route()));
         elem.children.push(XMLNode::Element(event_sub_url));
 
         elem

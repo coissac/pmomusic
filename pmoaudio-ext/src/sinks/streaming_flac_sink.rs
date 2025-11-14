@@ -62,7 +62,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use super::flac_frame_utils;
+use super::{broadcast_pacing::BroadcastPacer, flac_frame_utils};
 use async_trait::async_trait;
 use bytes::Bytes;
 use pmoaudio::{
@@ -81,16 +81,29 @@ use tracing::{debug, error, info, trace, warn};
 /// Standard value used by most streaming servers.
 const DEFAULT_ICY_METAINT: usize = 16000;
 
-/// Broadcast channel capacity for FLAC bytes.
-/// Set to 128 to provide ~10 seconds of buffer for network jitter.
-/// With TimerNode pacing the stream to real-time, this is sufficient
-/// while keeping metadata synchronized (larger buffers cause metadata drift).
-const BROADCAST_CAPACITY: usize = 128;
-
-/// Maximum lead time for HTTP broadcast pacing (in seconds).
+/// Default maximum lead time for HTTP broadcast pacing (in seconds).
 /// The broadcaster will sleep if it's ahead of real-time by more than this amount.
-/// This is much smaller than the pipeline TimerNode's 3.0s to provide tighter control.
-const BROADCAST_MAX_LEAD_TIME: f64 = 0.5;
+const DEFAULT_BROADCAST_MAX_LEAD_TIME: f64 = 0.5;
+
+/// Calculate broadcast channel capacity based on max_lead_time.
+///
+/// Estimates the number of items needed to buffer max_lead_time seconds of audio.
+/// Assumes ~20 items per second (50ms per chunk).
+///
+/// # Arguments
+///
+/// * `max_lead_time` - Maximum lead time in seconds
+///
+/// # Returns
+///
+/// Broadcast channel capacity (minimum 100 items)
+fn calculate_broadcast_capacity(max_lead_time: f64) -> usize {
+    // Estimation: ~20 items/second (chunks de 50ms en moyenne)
+    // Pour 10s: 200 items
+    let estimated_items_per_second = 20.0;
+    let capacity = (max_lead_time * estimated_items_per_second) as usize;
+    capacity.max(100) // Minimum 100 items
+}
 
 /// PCM chunk with audio data and timestamp for precise pacing.
 #[derive(Debug)]
@@ -190,7 +203,11 @@ impl StreamHandle {
     /// Subscribe to the FLAC stream with custom ICY metadata interval.
     pub fn subscribe_icy_with_interval(&self, metaint: usize) -> IcyClientStream {
         let count = self.active_clients.fetch_add(1, Ordering::SeqCst);
-        debug!("New ICY client subscribed (total: {}, metaint: {})", count + 1, metaint);
+        debug!(
+            "New ICY client subscribed (total: {}, metaint: {})",
+            count + 1,
+            metaint
+        );
 
         IcyClientStream {
             rx: self.flac_broadcast.subscribe(),
@@ -254,7 +271,10 @@ impl AsyncRead for FlacClientStream {
 
                 if let Some(header) = header_opt {
                     self.buffer.extend(header.iter());
-                    info!("Sending cached FLAC header to new client ({} bytes)", header.len());
+                    info!(
+                        "Sending cached FLAC header to new client ({} bytes)",
+                        header.len()
+                    );
                     self.state = FlacStreamState::Streaming;
                     continue; // Now copy header to output buffer
                 } else {
@@ -413,7 +433,10 @@ impl AsyncRead for IcyClientStream {
 
                 if let Some(header) = header_opt {
                     self.buffer.extend(header.iter());
-                    info!("Sending cached FLAC header to new ICY client ({} bytes)", header.len());
+                    info!(
+                        "Sending cached FLAC header to new ICY client ({} bytes)",
+                        header.len()
+                    );
                     self.state = FlacStreamState::Streaming;
                     continue; // Now copy header to output buffer
                 } else {
@@ -533,6 +556,7 @@ struct StreamingFlacSinkLogic {
     flac_header: Arc<RwLock<Option<Bytes>>>,
     encoder_state: Option<EncoderState>,
     sample_rate: Option<u32>,
+    broadcast_max_lead_time: f64,
 }
 
 impl StreamingFlacSinkLogic {
@@ -542,12 +566,16 @@ impl StreamingFlacSinkLogic {
             return Ok(()); // Already initialized
         }
 
-        info!("Initializing FLAC encoder with sample rate: {} Hz", sample_rate);
+        info!(
+            "Initializing FLAC encoder with sample rate: {} Hz",
+            sample_rate
+        );
 
         // Take the PCM receiver (we only initialize once)
-        let pcm_rx = self.pcm_rx.take().ok_or_else(|| {
-            AudioError::ProcessingError("PCM receiver already consumed".into())
-        })?;
+        let pcm_rx = self
+            .pcm_rx
+            .take()
+            .ok_or_else(|| AudioError::ProcessingError("PCM receiver already consumed".into()))?;
 
         // Create shared timestamp for pacing
         let current_timestamp = Arc::new(RwLock::new(0.0f64));
@@ -565,15 +593,26 @@ impl StreamingFlacSinkLogic {
         // Start the FLAC encoder
         let flac_stream = encode_flac_stream(pcm_reader, pcm_format, self.encoder_options.clone())
             .await
-            .map_err(|e| AudioError::ProcessingError(format!("Failed to start FLAC encoder: {}", e)))?;
+            .map_err(|e| {
+                AudioError::ProcessingError(format!("Failed to start FLAC encoder: {}", e))
+            })?;
 
         info!("FLAC encoder initialized successfully");
 
         // Spawn broadcaster task with timestamp for pacing
         let flac_broadcast = self.flac_broadcast.clone();
         let flac_header = self.flac_header.clone();
+        let max_lead = self.broadcast_max_lead_time;
         let broadcaster_task = tokio::spawn(async move {
-            if let Err(e) = broadcast_flac_stream(flac_stream, flac_broadcast, flac_header, current_timestamp).await {
+            if let Err(e) = broadcast_flac_stream(
+                flac_stream,
+                flac_broadcast,
+                flac_header,
+                current_timestamp,
+                max_lead,
+            )
+            .await
+            {
                 error!("Broadcaster task error: {}", e);
             }
         });
@@ -682,9 +721,18 @@ impl NodeLogic for StreamingFlacSinkLogic {
                                         bytes: pcm_bytes,
                                         timestamp_sec: seg.timestamp_sec,
                                     };
+                                    let send_start = std::time::Instant::now();
                                     if let Err(e) = self.pcm_tx.send(pcm_chunk).await {
                                         warn!("Failed to send PCM data to encoder: {}", e);
                                         break;
+                                    }
+                                    let send_duration = send_start.elapsed();
+                                    if send_duration.as_millis() >= 50 {
+                                        debug!(
+                                            "StreamingFlacSink: pcm_tx send blocked for {:.3}s (ts={:.3}s)",
+                                            send_duration.as_secs_f64(),
+                                            seg.timestamp_sec
+                                        );
                                     }
                                 }
 
@@ -728,7 +776,6 @@ impl NodeLogic for StreamingFlacSinkLogic {
     }
 }
 
-
 /// Broadcaster task: reads FLAC bytes from encoder and broadcasts to all clients.
 /// Implements precise real-time pacing based on audio timestamps.
 /// Ensures data is sent at FLAC frame boundaries to prevent sync errors in strict decoders like FFPlay.
@@ -737,8 +784,12 @@ async fn broadcast_flac_stream(
     broadcast_tx: broadcast::Sender<Bytes>,
     header_cache: Arc<RwLock<Option<Bytes>>>,
     current_timestamp: Arc<RwLock<f64>>,
+    broadcast_max_lead_time: f64,
 ) -> Result<(), AudioError> {
-    info!("Broadcaster task started with FLAC frame boundary detection");
+    info!(
+        "Broadcaster task started with FLAC frame boundary detection (max_lead={:.3}s)",
+        broadcast_max_lead_time
+    );
 
     // Use larger read buffer (16KB) to reduce syscalls and accumulator for frame boundary detection
     // The accumulator is necessary to ensure we only send complete FLAC frames
@@ -746,9 +797,17 @@ async fn broadcast_flac_stream(
     let mut accumulator = Vec::with_capacity(32768); // Pre-allocate to reduce reallocations
     let mut total_bytes = 0u64;
     let mut header_captured = false;
-    let start_time = std::time::Instant::now();
+    let mut pacer = BroadcastPacer::new(broadcast_max_lead_time, "FLAC");
+    let mut stats_last_log = std::time::Instant::now();
+
+    // Timing instrumentation for burst detection
+    let mut last_broadcast_time = std::time::Instant::now();
+    let mut broadcast_count = 0u64;
+    let mut total_read_time = 0.0f64;
+    let mut read_count = 0u64;
 
     loop {
+        let read_start = std::time::Instant::now();
         match flac_stream.read(&mut read_buffer).await {
             Ok(0) => {
                 // EOF - send any remaining data
@@ -760,13 +819,37 @@ async fn broadcast_flac_stream(
                 break;
             }
             Ok(n) => {
+                let read_duration = read_start.elapsed().as_secs_f64();
+                read_count += 1;
+                total_read_time += read_duration;
+
+                if read_duration > 0.01 {
+                    debug!(
+                        "FLAC: flac_stream.read() took {:.3}s for {} bytes (avg: {:.3}s over {} reads)",
+                        read_duration,
+                        n,
+                        total_read_time / read_count as f64,
+                        read_count
+                    );
+                }
+
                 total_bytes += n as u64;
                 if total_bytes % 100000 == 0 || total_bytes < 10000 {
-                    trace!("Read {} bytes from FLAC encoder (total: {})", n, total_bytes);
+                    trace!(
+                        "Read {} bytes from FLAC encoder (total: {})",
+                        n,
+                        total_bytes
+                    );
                 }
 
                 // Append to accumulator
                 accumulator.extend_from_slice(&read_buffer[..n]);
+
+                trace!(
+                    "FLAC: accumulator now {} bytes after reading {} bytes",
+                    accumulator.len(),
+                    n
+                );
 
                 // Find where to split: position of last sync code (start of last incomplete frame)
                 // Everything before this position contains only complete frames
@@ -781,24 +864,64 @@ async fn broadcast_flac_stream(
 
                 // Only broadcast if we have at least one complete frame (1KB minimum to avoid excessive small sends)
                 if boundary >= 1024 {
-                    // Precise pacing based on audio timestamp
+                    // ╔═══════════════════════════════════════════════════════════════╗
+                    // ║ BACKPRESSURE INTELLIGENTE BASÉE SUR LE TIMING                 ║
+                    // ║                                                               ║
+                    // ║ BroadcastPacer gère :                                         ║
+                    // ║ 1. Détection TopZeroSync (audio_ts < 0.1)                    ║
+                    // ║ 2. Drop des chunks en retard (audio_ts < elapsed)            ║
+                    // ║ 3. Pacing pour contrôler le débit (max_lead_time)            ║
+                    // ║                                                               ║
+                    // ║ Cela crée la backpressure vers TimerBufferNode tout en       ║
+                    // ║ permettant de dropper les chunks vraiment périmés.           ║
+                    // ╚═══════════════════════════════════════════════════════════════╝
                     let audio_timestamp = *current_timestamp.read().await;
-                    let elapsed = start_time.elapsed().as_secs_f64();
-                    let lead_time = audio_timestamp - elapsed;
 
-                    if lead_time > BROADCAST_MAX_LEAD_TIME {
-                        let sleep_duration = lead_time - BROADCAST_MAX_LEAD_TIME;
+                    if stats_last_log.elapsed() >= Duration::from_secs(1) {
                         debug!(
-                            "Broadcaster pacing: sleeping {:.3}s (audio_ts={:.3}s, elapsed={:.3}s, lead={:.3}s)",
-                            sleep_duration, audio_timestamp, elapsed, lead_time
+                            "Broadcaster pacing snapshot: audio_ts={:.3}s buffer_bytes={}",
+                            audio_timestamp,
+                            accumulator.len()
                         );
-                        tokio::time::sleep(tokio::time::Duration::from_secs_f64(sleep_duration)).await;
+                        stats_last_log = std::time::Instant::now();
+                    }
+
+                    // Check timing et apply pacing (skip si en retard)
+                    if pacer.check_and_pace(audio_timestamp).await.is_err() {
+                        // Chunk en retard : vider l'accumulator et continuer
+                        accumulator.clear();
+                        continue;
                     }
 
                     // Split at boundary to avoid copying - extract prefix, keep suffix
                     let remaining = accumulator.split_off(boundary);
                     let to_send = std::mem::replace(&mut accumulator, remaining);
                     let bytes = Bytes::from(to_send);
+
+                    // Measure broadcast interval for burst detection
+                    let broadcast_interval = last_broadcast_time.elapsed().as_secs_f64();
+                    last_broadcast_time = std::time::Instant::now();
+                    broadcast_count += 1;
+
+                    // Log if interval is unusual (too short = burst, too long = stall)
+                    if broadcast_interval < 0.01 || broadcast_interval > 0.1 {
+                        debug!(
+                            "FLAC: broadcast interval {:.3}s ({}ms) - size={} bytes (count={})",
+                            broadcast_interval,
+                            (broadcast_interval * 1000.0) as u32,
+                            bytes.len(),
+                            broadcast_count
+                        );
+                    }
+
+                    // Periodic stats
+                    if broadcast_count % 100 == 0 {
+                        debug!(
+                            "FLAC: {} broadcasts sent, accumulator={} bytes remaining",
+                            broadcast_count,
+                            accumulator.len()
+                        );
+                    }
 
                     // Capture first chunk as header if it contains "fLaC"
                     if !header_captured && bytes.len() >= 4 && &bytes[0..4] == b"fLaC" {
@@ -812,7 +935,11 @@ async fn broadcast_flac_stream(
                         // No receivers, but that's okay - clients may not be connected yet
                         trace!("No active receivers for FLAC broadcast: {}", e);
                     } else if num_receivers > 0 {
-                        trace!("Broadcasted {} bytes to {} receivers", bytes.len(), num_receivers);
+                        trace!(
+                            "Broadcasted {} bytes to {} receivers",
+                            bytes.len(),
+                            num_receivers
+                        );
                     }
                 }
             }
@@ -857,9 +984,19 @@ impl StreamingFlacSink {
     /// A tuple of `(sink, handle)` where:
     /// - `sink` is added to the audio pipeline
     /// - `handle` is used by HTTP handlers to serve streams
-    pub fn new(
+    pub fn new(encoder_options: EncoderOptions, bits_per_sample: u8) -> (Self, StreamHandle) {
+        Self::with_max_broadcast_lead(
+            encoder_options,
+            bits_per_sample,
+            DEFAULT_BROADCAST_MAX_LEAD_TIME,
+        )
+    }
+
+    /// Create a sink with a custom broadcast pacing limit.
+    pub fn with_max_broadcast_lead(
         encoder_options: EncoderOptions,
         bits_per_sample: u8,
+        broadcast_max_lead_time: f64,
     ) -> (Self, StreamHandle) {
         // Validate bit depth
         if ![16, 24, 32].contains(&bits_per_sample) {
@@ -872,8 +1009,15 @@ impl StreamingFlacSink {
         // Shared metadata
         let metadata = Arc::new(RwLock::new(MetadataSnapshot::default()));
 
+        // Calculate broadcast capacity based on max_lead_time
+        let broadcast_capacity = calculate_broadcast_capacity(broadcast_max_lead_time);
+        info!(
+            "StreamingFlacSink: using broadcast capacity of {} items (max_lead_time={:.1}s)",
+            broadcast_capacity, broadcast_max_lead_time
+        );
+
         // Broadcast channel for FLAC bytes
-        let (flac_broadcast, _) = broadcast::channel(BROADCAST_CAPACITY);
+        let (flac_broadcast, _) = broadcast::channel(broadcast_capacity);
 
         // FLAC header cache
         let flac_header = Arc::new(RwLock::new(None));
@@ -900,6 +1044,7 @@ impl StreamingFlacSink {
             flac_header,
             encoder_state: None,
             sample_rate: None,
+            broadcast_max_lead_time: broadcast_max_lead_time.max(0.0),
         };
 
         let sink = Self {

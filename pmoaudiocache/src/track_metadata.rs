@@ -296,27 +296,26 @@ mod tests {
             meta.set_cover_pk(Some("cover123".into())).await.unwrap();
         }
         {
-            let meta  = track.read().await;
+            let meta = track.read().await;
 
-        
-        assert_eq!(meta.get_title().await.unwrap(), Some("Title".into()));
-        assert_eq!(meta.get_artist().await.unwrap(), Some("Artist".into()));
-        assert_eq!(meta.get_album().await.unwrap(), Some("Album".into()));
-        assert_eq!(meta.get_year().await.unwrap(), Some(2024));
-        assert_eq!(
-            meta.get_duration().await.unwrap(),
-            Some(Duration::from_secs(90))
-        );
-        assert_eq!(meta.get_track_id().await.unwrap(), Some("trk".into()));
-        assert_eq!(meta.get_channel_id().await.unwrap(), Some("chn".into()));
-        assert_eq!(meta.get_event().await.unwrap(), Some("event".into()));
-        assert_eq!(meta.get_rating().await.unwrap(), Some(4.5));
-        assert_eq!(
-            meta.get_cover_url().await.unwrap(),
-            Some("http://cover".into())
-        );
-        assert_eq!(meta.get_cover_pk().await.unwrap(), Some("cover123".into()));
-        assert!(meta.get_updated_at().await.unwrap().is_some());
-    }
+            assert_eq!(meta.get_title().await.unwrap(), Some("Title".into()));
+            assert_eq!(meta.get_artist().await.unwrap(), Some("Artist".into()));
+            assert_eq!(meta.get_album().await.unwrap(), Some("Album".into()));
+            assert_eq!(meta.get_year().await.unwrap(), Some(2024));
+            assert_eq!(
+                meta.get_duration().await.unwrap(),
+                Some(Duration::from_secs(90))
+            );
+            assert_eq!(meta.get_track_id().await.unwrap(), Some("trk".into()));
+            assert_eq!(meta.get_channel_id().await.unwrap(), Some("chn".into()));
+            assert_eq!(meta.get_event().await.unwrap(), Some("event".into()));
+            assert_eq!(meta.get_rating().await.unwrap(), Some(4.5));
+            assert_eq!(
+                meta.get_cover_url().await.unwrap(),
+                Some("http://cover".into())
+            );
+            assert_eq!(meta.get_cover_pk().await.unwrap(), Some("cover123".into()));
+            assert!(meta.get_updated_at().await.unwrap().is_some());
+        }
     }
 }

@@ -93,10 +93,16 @@ impl NodeLogic for FlacCacheSinkLogic {
 
         loop {
             // Attendre le premier chunk audio pour cette track
-            tracing::debug!("FlacCacheSink: Waiting for first audio chunk (track_number={})", track_number);
-            let (first_segment, track_metadata) = if let Some(metadata) = next_track_metadata.take() {
+            tracing::debug!(
+                "FlacCacheSink: Waiting for first audio chunk (track_number={})",
+                track_number
+            );
+            let (first_segment, track_metadata) = if let Some(metadata) = next_track_metadata.take()
+            {
                 // On a déjà reçu le TrackBoundary en Phase 3 de la track précédente
-                tracing::debug!("FlacCacheSink: Using TrackBoundary metadata from previous track's Phase 3");
+                tracing::debug!(
+                    "FlacCacheSink: Using TrackBoundary metadata from previous track's Phase 3"
+                );
                 // Attendre juste le premier chunk
                 match wait_for_first_audio_chunk(&mut rx, &stop_token).await {
                     Ok(chunk) => {
@@ -296,18 +302,30 @@ impl NodeLogic for FlacCacheSinkLogic {
                         url
                     }
                     Err(e) if e.is_transient() => {
-                        tracing::debug!("FlacCacheSink: Transient error getting cover URL for pk {}: {}", pk, e);
+                        tracing::debug!(
+                            "FlacCacheSink: Transient error getting cover URL for pk {}: {}",
+                            pk,
+                            e
+                        );
                         None
                     }
                     Err(e) => {
-                        tracing::warn!("FlacCacheSink: Cannot obtain cover URL for audio asset {}: {}", pk, e);
+                        tracing::warn!(
+                            "FlacCacheSink: Cannot obtain cover URL for audio asset {}: {}",
+                            pk,
+                            e
+                        );
                         None
                     }
                 };
 
                 if let Some(cover_url) = url {
-                    tracing::debug!("FlacCacheSink: Attempting to cache cover from URL: {}", cover_url);
-                    match self.covers
+                    tracing::debug!(
+                        "FlacCacheSink: Attempting to cache cover from URL: {}",
+                        cover_url
+                    );
+                    match self
+                        .covers
                         .add_from_url(&cover_url, self.collection.as_deref())
                         .await
                     {
@@ -323,7 +341,11 @@ impl NodeLogic for FlacCacheSinkLogic {
                             }
                         }
                         Err(e) => {
-                            tracing::warn!("FlacCacheSink: Failed to cache cover for audio asset {}: {}", pk, e);
+                            tracing::warn!(
+                                "FlacCacheSink: Failed to cache cover for audio asset {}: {}",
+                                pk,
+                                e
+                            );
                         }
                     }
                 } else {
@@ -339,20 +361,27 @@ impl NodeLogic for FlacCacheSinkLogic {
                 playlist_handle.push(pk.clone()).await.map_err(|e| {
                     AudioError::ProcessingError(format!("Failed to add to playlist: {}", e))
                 })?;
-                tracing::info!("FlacCacheSink: Successfully pushed to playlist in {:?}", push_start.elapsed());
+                tracing::info!(
+                    "FlacCacheSink: Successfully pushed to playlist in {:?}",
+                    push_start.elapsed()
+                );
             }
 
             // Si EndOfStream a été reçu pendant le prebuffer, on a déjà tout traité
             // Il faut juste attendre que le pump se termine et retourner
             if end_of_stream_received {
-                tracing::debug!("FlacCacheSink: EndOfStream was received during prebuffer, track complete");
+                tracing::debug!(
+                    "FlacCacheSink: EndOfStream was received during prebuffer, track complete"
+                );
                 drop(pump_handle);
                 track_number += 1;
                 continue; // Passer à la track suivante (qui n'arrivera pas car EndOfStream)
             }
 
             // Phase 3: Continuer à dispatcher jusqu'au TrackBoundary
-            tracing::debug!("FlacCacheSink: Continuing dispatch until TrackBoundary (pump runs in background)");
+            tracing::debug!(
+                "FlacCacheSink: Continuing dispatch until TrackBoundary (pump runs in background)"
+            );
             let mut track_tx = track_tx_opt; // track_tx_opt contient Some(track_tx) car end_of_stream_received est false
             let mut pump_handle = Some(pump_handle);
             let mut pump_closed = false;
@@ -384,7 +413,9 @@ impl NodeLogic for FlacCacheSinkLogic {
                                 if tx.send(segment).await.is_err() {
                                     // Le pump a fermé son channel - cela peut arriver si le fichier
                                     // était déjà en cache (add_from_reader retourne immédiatement)
-                                    tracing::debug!("FlacCacheSink: pump closed track_tx, checking pump status");
+                                    tracing::debug!(
+                                        "FlacCacheSink: pump closed track_tx, checking pump status"
+                                    );
                                     drop(track_tx.take());
 
                                     // Attendre que le pump se termine et vérifier le résultat
@@ -397,13 +428,21 @@ impl NodeLogic for FlacCacheSinkLogic {
                                             }
                                             Ok(Err(e)) => {
                                                 // Le pump a rencontré une erreur
-                                                tracing::error!("FlacCacheSink: pump died with error: {}", e);
+                                                tracing::error!(
+                                                    "FlacCacheSink: pump died with error: {}",
+                                                    e
+                                                );
                                                 return Err(e);
                                             }
                                             Err(e) => {
                                                 // Le pump task a paniqué
-                                                tracing::error!("FlacCacheSink: pump task panicked: {}", e);
-                                                return Err(AudioError::ProcessingError("Pump task panicked".to_string()));
+                                                tracing::error!(
+                                                    "FlacCacheSink: pump task panicked: {}",
+                                                    e
+                                                );
+                                                return Err(AudioError::ProcessingError(
+                                                    "Pump task panicked".to_string(),
+                                                ));
                                             }
                                         }
                                     }
@@ -534,7 +573,9 @@ async fn wait_for_first_audio_chunk(
             _AudioSegment::Sync(marker) => match &**marker {
                 SyncMarker::TrackBoundary { .. } => {
                     // On ne devrait pas recevoir de TrackBoundary ici car on l'a déjà
-                    tracing::warn!("FlacCacheSink: Unexpected TrackBoundary while waiting for first chunk");
+                    tracing::warn!(
+                        "FlacCacheSink: Unexpected TrackBoundary while waiting for first chunk"
+                    );
                     continue;
                 }
                 SyncMarker::EndOfStream => {

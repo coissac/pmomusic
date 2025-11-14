@@ -90,8 +90,11 @@ async fn test_generate_variant() {
     // Créer et ajouter une image
     let img = create_test_image(400, 400);
     let mut buffer = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut buffer), image::ImageFormat::Png)
-        .unwrap();
+    img.write_to(
+        &mut std::io::Cursor::new(&mut buffer),
+        image::ImageFormat::Png,
+    )
+    .unwrap();
 
     let test_file = tempfile::NamedTempFile::with_suffix(".png").unwrap();
     std::fs::write(test_file.path(), &buffer).unwrap();
@@ -130,8 +133,11 @@ async fn test_generate_variant_caching() {
     // Créer et ajouter une image
     let img = create_test_image(400, 400);
     let mut buffer = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut buffer), image::ImageFormat::Png)
-        .unwrap();
+    img.write_to(
+        &mut std::io::Cursor::new(&mut buffer),
+        image::ImageFormat::Png,
+    )
+    .unwrap();
 
     let test_file = tempfile::NamedTempFile::with_suffix(".png").unwrap();
     std::fs::write(test_file.path(), &buffer).unwrap();

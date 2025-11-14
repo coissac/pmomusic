@@ -205,11 +205,8 @@ impl NodeLogic for PlaylistSourceLogic {
                 Ok(m) => m,
                 Err(e) => {
                     tracing::warn!("PlaylistSourceLogic: failed to get metadata: {}", e);
-                    let error_marker = AudioSegment::new_error(
-                        0,
-                        0.0,
-                        format!("Failed to get metadata: {}", e),
-                    );
+                    let error_marker =
+                        AudioSegment::new_error(0, 0.0, format!("Failed to get metadata: {}", e));
                     send_to_children!(error_marker);
                     continue;
                 }
@@ -224,11 +221,8 @@ impl NodeLogic for PlaylistSourceLogic {
                 Ok(p) => p,
                 Err(e) => {
                     tracing::warn!("PlaylistSourceLogic: failed to get file path: {}", e);
-                    let error_marker = AudioSegment::new_error(
-                        0,
-                        0.0,
-                        format!("Failed to get file path: {}", e),
-                    );
+                    let error_marker =
+                        AudioSegment::new_error(0, 0.0, format!("Failed to get file path: {}", e));
                     send_to_children!(error_marker);
                     continue;
                 }
@@ -290,7 +284,10 @@ async fn decode_and_emit_track(
         const MIN_FILE_SIZE: u64 = 512 * 1024; // 512 KB (prebuffer size)
 
         if file_size >= MIN_FILE_SIZE || cache.is_download_complete(cache_pk) {
-            tracing::trace!("decode_and_emit_track: file ready ({} bytes), starting decode", file_size);
+            tracing::trace!(
+                "decode_and_emit_track: file ready ({} bytes), starting decode",
+                file_size
+            );
             break;
         }
 
@@ -417,7 +414,8 @@ async fn decode_and_emit_track(
         let frames = pending.len() / frame_bytes;
         if frames > 0 {
             let timestamp_sec = total_frames as f64 / stream_info.sample_rate as f64;
-            let segment = bytes_to_segment(&pending, &stream_info, frames, chunk_index, timestamp_sec)?;
+            let segment =
+                bytes_to_segment(&pending, &stream_info, frames, chunk_index, timestamp_sec)?;
             for tx in output {
                 tx.send(segment.clone())
                     .await
@@ -609,7 +607,8 @@ impl PlaylistSource {
         chunk_frames: usize,
         poll_interval_ms: u64,
     ) -> Self {
-        let logic = PlaylistSourceLogic::new(playlist_handle, cache, chunk_frames, poll_interval_ms);
+        let logic =
+            PlaylistSourceLogic::new(playlist_handle, cache, chunk_frames, poll_interval_ms);
         Self {
             inner: Node::new_source(logic),
         }
@@ -626,10 +625,7 @@ impl AudioPipelineNode for PlaylistSource {
         self.inner.register(child)
     }
 
-    async fn run(
-        self: Box<Self>,
-        stop_token: CancellationToken,
-    ) -> Result<(), AudioError> {
+    async fn run(self: Box<Self>, stop_token: CancellationToken) -> Result<(), AudioError> {
         Box::new(self.inner).run(stop_token).await
     }
 }
@@ -712,9 +708,9 @@ mod tests {
         // Frame 2: L=300, R=400
         let chunk_bytes = vec![
             100u8, 0, // L1
-            200, 0,   // R1
-            44, 1,    // L2 (300 = 0x012C)
-            144, 1,   // R2 (400 = 0x0190)
+            200, 0, // R1
+            44, 1, // L2 (300 = 0x012C)
+            144, 1, // R2 (400 = 0x0190)
         ];
 
         let info = StreamInfo {
@@ -732,18 +728,16 @@ mod tests {
         assert_eq!(segment.timestamp_sec, 0.0);
 
         match &segment.segment {
-            pmoaudio::_AudioSegment::Chunk(chunk) => {
-                match chunk.as_ref() {
-                    AudioChunk::I16(data) => {
-                        let frames = data.get_frames();
-                        assert_eq!(frames.len(), 2);
-                        assert_eq!(frames[0], [100, 200]);
-                        assert_eq!(frames[1], [300, 400]);
-                        assert_eq!(data.get_sample_rate(), 44100);
-                    }
-                    _ => panic!("Expected I16 chunk"),
+            pmoaudio::_AudioSegment::Chunk(chunk) => match chunk.as_ref() {
+                AudioChunk::I16(data) => {
+                    let frames = data.get_frames();
+                    assert_eq!(frames.len(), 2);
+                    assert_eq!(frames[0], [100, 200]);
+                    assert_eq!(frames[1], [300, 400]);
+                    assert_eq!(data.get_sample_rate(), 44100);
                 }
-            }
+                _ => panic!("Expected I16 chunk"),
+            },
             _ => panic!("Expected audio chunk"),
         }
     }
@@ -753,7 +747,7 @@ mod tests {
         // Create mock PCM data (2 frames, mono, 16-bit)
         let chunk_bytes = vec![
             100u8, 0, // Frame 1
-            200, 0,   // Frame 2
+            200, 0, // Frame 2
         ];
 
         let info = StreamInfo {
@@ -808,17 +802,15 @@ mod tests {
         let segment = bytes_to_segment(&chunk_bytes, &info, 1, 0, 0.0).unwrap();
 
         match &segment.segment {
-            pmoaudio::_AudioSegment::Chunk(chunk) => {
-                match chunk.as_ref() {
-                    AudioChunk::I24(data) => {
-                        let frames = data.get_frames();
-                        assert_eq!(frames.len(), 1);
-                        assert_eq!(frames[0][0].as_i32(), 1000);
-                        assert_eq!(frames[0][1].as_i32(), -1000);
-                    }
-                    _ => panic!("Expected I24 chunk"),
+            pmoaudio::_AudioSegment::Chunk(chunk) => match chunk.as_ref() {
+                AudioChunk::I24(data) => {
+                    let frames = data.get_frames();
+                    assert_eq!(frames.len(), 1);
+                    assert_eq!(frames[0][0].as_i32(), 1000);
+                    assert_eq!(frames[0][1].as_i32(), -1000);
                 }
-            }
+                _ => panic!("Expected I24 chunk"),
+            },
             _ => panic!("Expected audio chunk"),
         }
     }
@@ -843,16 +835,14 @@ mod tests {
         let segment = bytes_to_segment(&chunk_bytes, &info, 1, 0, 0.0).unwrap();
 
         match &segment.segment {
-            pmoaudio::_AudioSegment::Chunk(chunk) => {
-                match chunk.as_ref() {
-                    AudioChunk::I32(data) => {
-                        let frames = data.get_frames();
-                        assert_eq!(frames.len(), 1);
-                        assert_eq!(frames[0], [4096, 8192]);
-                    }
-                    _ => panic!("Expected I32 chunk"),
+            pmoaudio::_AudioSegment::Chunk(chunk) => match chunk.as_ref() {
+                AudioChunk::I32(data) => {
+                    let frames = data.get_frames();
+                    assert_eq!(frames.len(), 1);
+                    assert_eq!(frames[0], [4096, 8192]);
                 }
-            }
+                _ => panic!("Expected I32 chunk"),
+            },
             _ => panic!("Expected audio chunk"),
         }
     }

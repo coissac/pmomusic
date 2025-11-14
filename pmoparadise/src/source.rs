@@ -58,8 +58,7 @@ impl RadioParadiseSource {
     #[cfg(feature = "server")]
     pub fn from_registry(_client: RadioParadiseClient) -> Result<Self> {
         Err(MusicSourceError::SourceUnavailable(
-            "RadioParadiseSource is deprecated. Use RadioParadiseStreamSource instead."
-                .to_string(),
+            "RadioParadiseSource is deprecated. Use RadioParadiseStreamSource instead.".to_string(),
         ))
     }
 
@@ -139,8 +138,7 @@ impl MusicSource for RadioParadiseSource {
 
     async fn resolve_uri(&self, _object_id: &str) -> Result<String> {
         Err(MusicSourceError::SourceUnavailable(
-            "RadioParadiseSource is deprecated. Use RadioParadiseStreamSource instead."
-                .to_string(),
+            "RadioParadiseSource is deprecated. Use RadioParadiseStreamSource instead.".to_string(),
         ))
     }
 
@@ -150,8 +148,7 @@ impl MusicSource for RadioParadiseSource {
 
     async fn append_track(&self, _track: Item) -> Result<()> {
         Err(MusicSourceError::SourceUnavailable(
-            "RadioParadiseSource is deprecated and does not support FIFO operations."
-                .to_string(),
+            "RadioParadiseSource is deprecated and does not support FIFO operations.".to_string(),
         ))
     }
 

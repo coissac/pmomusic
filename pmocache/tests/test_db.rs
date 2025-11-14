@@ -295,14 +295,28 @@ fn test_metadata_types() {
     db.add(pk, None, None).unwrap();
 
     // Tester les différents types de métadonnées
-    db.set_a_metadata(pk, "string_val", Value::String("test".to_string())).unwrap();
+    db.set_a_metadata(pk, "string_val", Value::String("test".to_string()))
+        .unwrap();
     db.set_a_metadata(pk, "number_val", json!(42)).unwrap();
-    db.set_a_metadata(pk, "bool_val", Value::Bool(true)).unwrap();
+    db.set_a_metadata(pk, "bool_val", Value::Bool(true))
+        .unwrap();
     db.set_a_metadata(pk, "null_val", Value::Null).unwrap();
 
     // Vérifier les valeurs
-    assert_eq!(db.get_metadata_value(pk, "string_val").unwrap(), Some(Value::String("test".to_string())));
-    assert_eq!(db.get_metadata_value(pk, "number_val").unwrap(), Some(json!(42)));
-    assert_eq!(db.get_metadata_value(pk, "bool_val").unwrap(), Some(Value::Bool(true)));
-    assert_eq!(db.get_metadata_value(pk, "null_val").unwrap(), Some(Value::Null));
+    assert_eq!(
+        db.get_metadata_value(pk, "string_val").unwrap(),
+        Some(Value::String("test".to_string()))
+    );
+    assert_eq!(
+        db.get_metadata_value(pk, "number_val").unwrap(),
+        Some(json!(42))
+    );
+    assert_eq!(
+        db.get_metadata_value(pk, "bool_val").unwrap(),
+        Some(Value::Bool(true))
+    );
+    assert_eq!(
+        db.get_metadata_value(pk, "null_val").unwrap(),
+        Some(Value::Null)
+    );
 }
