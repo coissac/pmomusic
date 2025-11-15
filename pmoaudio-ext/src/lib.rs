@@ -25,12 +25,18 @@
 #[cfg(any(feature = "cache-sink", feature = "http-stream"))]
 pub mod sinks;
 
+#[cfg(any(feature = "cache-sink", feature = "http-stream"))]
+pub mod nodes;
+
 #[cfg(feature = "playlist")]
 pub mod sources;
 
 // Re-exports pour faciliter l'utilisation
 #[cfg(any(feature = "cache-sink", feature = "http-stream"))]
 pub use sinks::*;
+
+#[cfg(any(feature = "cache-sink", feature = "http-stream"))]
+pub use nodes::*;
 
 #[cfg(feature = "playlist")]
 pub use sources::*;

@@ -18,8 +18,9 @@ use anyhow::Result;
 use pmoaudio::AudioPipelineNode;
 use pmoaudio_ext::{
     FlacClientStream, IcyClientStream, MetadataSnapshot, OggFlacClientStream, OggFlacStreamHandle,
-    StreamHandle, StreamingFlacSink, StreamingOggFlacSink,
+    StreamHandle, StreamingFlacSink, StreamingOggFlacSink, TrackBoundaryCoverNode,
 };
+use pmocovers::Cache as CoverCache;
 use pmoflac::EncoderOptions;
 use tokio::io::{AsyncRead, ReadBuf};
 use tokio::sync::Notify;
@@ -101,6 +102,7 @@ impl ParadiseStreamChannel {
         descriptor: ChannelDescriptor,
         client: RadioParadiseClient,
         config: ParadiseStreamChannelConfig,
+        cover_cache: Option<Arc<CoverCache>>,
     ) -> Self {
         let mut source = RadioParadiseStreamSource::new(client.clone());
         let block_handle = source.block_handle();
@@ -116,8 +118,15 @@ impl ParadiseStreamChannel {
             config.max_lead_seconds,
         );
 
-        source.register(Box::new(flac_sink));
-        source.register(Box::new(ogg_sink));
+        if let Some(cache) = cover_cache {
+            let mut cover_node = TrackBoundaryCoverNode::new(cache);
+            cover_node.register(Box::new(flac_sink));
+            cover_node.register(Box::new(ogg_sink));
+            source.register(Box::new(cover_node));
+        } else {
+            source.register(Box::new(flac_sink));
+            source.register(Box::new(ogg_sink));
+        }
         stream_handle.set_auto_stop(false);
         ogg_handle.set_auto_stop(false);
 
@@ -165,12 +174,13 @@ impl ParadiseStreamChannel {
     pub async fn new(
         descriptor: ChannelDescriptor,
         config: ParadiseStreamChannelConfig,
+        cover_cache: Option<Arc<CoverCache>>,
     ) -> Result<Self> {
         let client = RadioParadiseClient::builder()
             .channel(descriptor.id)
             .build()
             .await?;
-        Ok(Self::with_client(descriptor, client, config))
+        Ok(Self::with_client(descriptor, client, config, cover_cache))
     }
 
     /// S'abonne au flux FLAC pur.
@@ -360,15 +370,24 @@ impl ParadiseChannelManager {
         Self { channels }
     }
 
-    pub async fn with_defaults() -> Result<Self> {
+    pub async fn with_defaults_with_cover_cache(
+        cover_cache: Option<Arc<CoverCache>>,
+    ) -> Result<Self> {
         let mut map = HashMap::new();
         for descriptor in ALL_CHANNELS.iter().copied() {
-            let channel =
-                ParadiseStreamChannel::new(descriptor, ParadiseStreamChannelConfig::default())
-                    .await?;
+            let channel = ParadiseStreamChannel::new(
+                descriptor,
+                ParadiseStreamChannelConfig::default(),
+                cover_cache.clone(),
+            )
+            .await?;
             map.insert(descriptor.id, Arc::new(channel));
         }
         Ok(Self { channels: map })
+    }
+
+    pub async fn with_defaults() -> Result<Self> {
+        Self::with_defaults_with_cover_cache(None).await
     }
 
     pub fn get(&self, id: u8) -> Option<Arc<ParadiseStreamChannel>> {
