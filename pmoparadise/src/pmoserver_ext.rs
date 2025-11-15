@@ -341,14 +341,12 @@ pub struct RadioParadiseApiDoc;
 
 /// Crée le router pour l'API Radio Paradise
 pub fn create_api_router(state: RadioParadiseState) -> Router {
-    let api = Router::new()
+    Router::new()
         .route("/now-playing", get(get_now_playing))
         .route("/block/current", get(get_current_block))
         .route("/block/{event_id}", get(get_block_by_id))
         .route("/channels", get(get_channels))
-        .with_state(state);
-
-    Router::new().nest("/radioparadise", api)
+        .with_state(state)
 }
 
 /// Trait d'extension pour pmoserver::Server

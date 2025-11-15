@@ -25,6 +25,10 @@ utoipa = { version = "5.3", optional = true }
 pmoqobuz = { path = "../pmoqobuz", optional = true }
 pmoparadise = { path = "../pmoparadise", optional = true }
 pmoconfig = { path = "../pmoconfig", optional = true }
+anyhow = { version = "1.0", optional = true }
+pmoaudiocache = { path = "../pmoaudiocache", optional = true }
+pmocovers = { path = "../pmocovers", optional = true }
+tokio-util = { version = "0.7", features = ["io"], optional = true }
 
 [features]
 default = ["pmosource/server"]
@@ -33,6 +37,14 @@ api = ["dep:axum", "dep:utoipa", "pmosource/server"]
 # Feature pour activer le support Qobuz configuré
 qobuz = ["api", "dep:pmoqobuz", "dep:pmoconfig", "pmoqobuz/server"]
 # Feature pour activer le support Radio Paradise
-paradise = ["api", "dep:pmoparadise", "pmoparadise/server"]
+paradise = [
+    "api",
+    "dep:pmoparadise",
+    "pmoparadise/full",
+    "dep:anyhow",
+    "dep:pmoaudiocache",
+    "dep:pmocovers",
+    "dep:tokio-util"
+]
 # Feature pour activer l'API REST de Radio Paradise (en plus de la source UPnP)
 paradise-api = ["paradise", "pmoparadise/pmoserver"]

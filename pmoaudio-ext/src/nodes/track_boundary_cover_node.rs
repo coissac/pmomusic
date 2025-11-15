@@ -35,6 +35,7 @@ impl TrackBoundaryCoverNode {
     }
 }
 
+#[async_trait::async_trait]
 impl AudioPipelineNode for TrackBoundaryCoverNode {
     fn get_tx(&self) -> Option<mpsc::Sender<Arc<AudioSegment>>> {
         self.inner.get_tx()

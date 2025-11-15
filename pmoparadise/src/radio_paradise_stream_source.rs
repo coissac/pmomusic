@@ -415,7 +415,7 @@ impl RadioParadiseStreamSourceLogic {
             if send_duration.as_millis() > 10 {
                 let duration_ms = send_duration.as_millis() as u64;
                 self.stats.record_backpressure(duration_ms);
-                tracing::debug!(
+                tracing::trace!(
                     "send_to_children: Send to child {} BLOCKED for {:.3}s (channel capacity before send={}, timestamp={:.3}s)",
                     i,
                     send_duration.as_secs_f64(),

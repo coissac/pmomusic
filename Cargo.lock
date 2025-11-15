@@ -3211,11 +3211,14 @@ dependencies = [
 name = "pmomediaserver"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "axum 0.8.7",
  "bevy_reflect",
  "once_cell",
+ "pmoaudiocache",
  "pmoconfig",
+ "pmocovers",
  "pmodidl",
  "pmoparadise",
  "pmoqobuz",
@@ -3227,6 +3230,7 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-util",
  "tracing",
  "utoipa",
 ]

@@ -79,7 +79,7 @@ use pmometadata::TrackMetadata;
 use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
 use tokio::sync::{mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, trace, warn};
 
 /// Default ICY metadata interval (bytes of audio between metadata blocks).
 /// Standard value used by most streaming servers.
@@ -291,7 +291,7 @@ impl AsyncRead for FlacClientStream {
 
                 if let Some(header) = header_opt {
                     self.buffer.extend(header.iter());
-                    info!(
+                    debug!(
                         "Sending cached FLAC header to new client ({} bytes)",
                         header.len()
                     );
@@ -356,10 +356,10 @@ impl Drop for FlacClientStream {
 
         if count == 1 {
             if self.handle.auto_stop.load(Ordering::SeqCst) {
-                info!("Last client disconnected, signaling pipeline stop");
+                debug!("Last client disconnected, signaling pipeline stop");
                 self.handle.stop_token.cancel();
             } else {
-                info!("Last client disconnected, keeping pipeline alive");
+                debug!("Last client disconnected, keeping pipeline alive");
             }
         }
     }
@@ -465,7 +465,7 @@ impl AsyncRead for IcyClientStream {
 
                 if let Some(header) = header_opt {
                     self.buffer.extend(header.iter());
-                    info!(
+                    debug!(
                         "Sending cached FLAC header to new ICY client ({} bytes)",
                         header.len()
                     );
@@ -568,10 +568,10 @@ impl Drop for IcyClientStream {
 
         if count == 1 {
             if self.handle.auto_stop.load(Ordering::SeqCst) {
-                info!("Last client disconnected, signaling pipeline stop");
+                debug!("Last client disconnected, signaling pipeline stop");
                 self.handle.stop_token.cancel();
             } else {
-                info!("Last client disconnected, keeping pipeline alive");
+                debug!("Last client disconnected, keeping pipeline alive");
             }
         }
     }
@@ -603,7 +603,7 @@ impl StreamingFlacSinkLogic {
             return Ok(()); // Already initialized
         }
 
-        info!(
+        debug!(
             "Initializing FLAC encoder with sample rate: {} Hz",
             sample_rate
         );
@@ -634,7 +634,7 @@ impl StreamingFlacSinkLogic {
                 AudioError::ProcessingError(format!("Failed to start FLAC encoder: {}", e))
             })?;
 
-        info!("FLAC encoder initialized successfully");
+        debug!("FLAC encoder initialized successfully");
 
         // Spawn broadcaster task with timestamp for pacing
         let flac_broadcast = self.flac_broadcast.clone();
@@ -656,7 +656,7 @@ impl StreamingFlacSinkLogic {
 
         self.encoder_state = Some(EncoderState { broadcaster_task });
 
-        info!("Broadcaster task spawned");
+        debug!("Broadcaster task spawned");
 
         Ok(())
     }
@@ -716,7 +716,7 @@ impl NodeLogic for StreamingFlacSinkLogic {
             AudioError::ProcessingError("StreamingFlacSink requires an input".into())
         })?;
 
-        info!("StreamingFlacSink started");
+        debug!("StreamingFlacSink started");
 
         // We'll initialize the encoder lazily when we get the first chunk
         // For now, just process segments
@@ -724,7 +724,7 @@ impl NodeLogic for StreamingFlacSinkLogic {
         loop {
             tokio::select! {
                 _ = stop_token.cancelled() => {
-                    info!("StreamingFlacSink stopped by cancellation");
+                    debug!("StreamingFlacSink stopped by cancellation");
                     break;
                 }
 
@@ -737,7 +737,7 @@ impl NodeLogic for StreamingFlacSinkLogic {
                                     if self.sample_rate.is_none() {
                                         let sample_rate = chunk.sample_rate();
                                         self.sample_rate = Some(sample_rate);
-                                        info!("Detected sample rate: {} Hz", sample_rate);
+                                        debug!("Detected sample rate: {} Hz", sample_rate);
 
                                         // Initialize the FLAC encoder now
                                         self.initialize_encoder(sample_rate).await?;
@@ -765,11 +765,11 @@ impl NodeLogic for StreamingFlacSinkLogic {
                                     }
                                     let send_duration = send_start.elapsed();
                                     if send_duration.as_millis() >= 50 {
-                                        debug!(
-                                            "StreamingFlacSink: pcm_tx send blocked for {:.3}s (ts={:.3}s)",
-                                            send_duration.as_secs_f64(),
-                                            seg.timestamp_sec
-                                        );
+                    trace!(
+                        "StreamingFlacSink: pcm_tx send blocked for {:.3}s (ts={:.3}s)",
+                        send_duration.as_secs_f64(),
+                        seg.timestamp_sec
+                    );
                                     }
                                 }
 
@@ -782,7 +782,7 @@ impl NodeLogic for StreamingFlacSinkLogic {
                                         }
 
                                         SyncMarker::EndOfStream => {
-                                            info!("End of stream marker received");
+                                            debug!("End of stream marker received");
                                             break;
                                         }
 
@@ -800,7 +800,7 @@ impl NodeLogic for StreamingFlacSinkLogic {
                         }
 
                         None => {
-                            info!("Input channel closed");
+                            debug!("Input channel closed");
                             break;
                         }
                     }
@@ -808,12 +808,12 @@ impl NodeLogic for StreamingFlacSinkLogic {
             }
         }
 
-        info!("StreamingFlacSink processing complete");
+        debug!("StreamingFlacSink processing complete");
         Ok(())
     }
 
     async fn cleanup(&mut self, reason: StopReason) -> Result<(), AudioError> {
-        info!("StreamingFlacSink cleanup: {:?}", reason);
+        debug!("StreamingFlacSink cleanup: {:?}", reason);
         Ok(())
     }
 }
@@ -828,7 +828,7 @@ async fn broadcast_flac_stream(
     current_timestamp: Arc<RwLock<f64>>,
     broadcast_max_lead_time: f64,
 ) -> Result<(), AudioError> {
-    info!(
+    trace!(
         "Broadcaster task started with FLAC frame boundary detection (max_lead={:.3}s)",
         broadcast_max_lead_time
     );
@@ -861,7 +861,7 @@ async fn broadcast_flac_stream(
                         break;
                     }
                 }
-                info!("FLAC encoder stream ended, total bytes: {}", total_bytes);
+                trace!("FLAC encoder stream ended, total bytes: {}", total_bytes);
                 break;
             }
             Ok(n) => {
@@ -870,7 +870,7 @@ async fn broadcast_flac_stream(
                 total_read_time += read_duration;
 
                 if read_duration > 0.01 {
-                    debug!(
+                    trace!(
                         "FLAC: flac_stream.read() took {:.3}s for {} bytes (avg: {:.3}s over {} reads)",
                         read_duration,
                         n,
@@ -924,7 +924,7 @@ async fn broadcast_flac_stream(
                     let audio_timestamp = *current_timestamp.read().await;
 
                     if stats_last_log.elapsed() >= Duration::from_secs(1) {
-                        debug!(
+                        trace!(
                             "Broadcaster pacing snapshot: audio_ts={:.3}s buffer_bytes={}",
                             audio_timestamp,
                             accumulator.len()
@@ -951,7 +951,7 @@ async fn broadcast_flac_stream(
 
                     // Log if interval is unusual (too short = burst, too long = stall)
                     if broadcast_interval < 0.01 || broadcast_interval > 0.1 {
-                        debug!(
+                        trace!(
                             "FLAC: broadcast interval {:.3}s ({}ms) - size={} bytes (count={})",
                             broadcast_interval,
                             (broadcast_interval * 1000.0) as u32,
@@ -962,7 +962,7 @@ async fn broadcast_flac_stream(
 
                     // Periodic stats
                     if broadcast_count % 100 == 0 {
-                        debug!(
+                        trace!(
                             "FLAC: {} broadcasts sent, accumulator={} bytes remaining",
                             broadcast_count,
                             accumulator.len()
@@ -973,7 +973,7 @@ async fn broadcast_flac_stream(
                     if !header_captured && bytes.len() >= 4 && &bytes[0..4] == b"fLaC" {
                         *header_cache.write().await = Some(bytes.clone());
                         header_captured = true;
-                        info!("FLAC header captured ({} bytes)", bytes.len());
+                        trace!("FLAC header captured ({} bytes)", bytes.len());
                     }
 
                     let num_receivers = broadcast_tx.receiver_count();
@@ -1013,7 +1013,7 @@ async fn broadcast_flac_stream(
         )));
     }
 
-    info!("Broadcaster task completed successfully");
+    trace!("Broadcaster task completed successfully");
     Ok(())
 }
 
@@ -1062,7 +1062,7 @@ impl StreamingFlacSink {
 
         // Calculate broadcast capacity based on max_lead_time
         let broadcast_capacity = calculate_broadcast_capacity(broadcast_max_lead_time);
-        info!(
+        debug!(
             "StreamingFlacSink: using broadcast capacity of {} items (max_lead_time={:.1}s)",
             broadcast_capacity, broadcast_max_lead_time
         );

@@ -1,113 +1,264 @@
-//! DEPRECATED: Stub implementation of RadioParadiseSource
+//! RadioParadiseSource - Implementation of MusicSource for Radio Paradise
 //!
-//! **⚠️ This module is deprecated and will be removed in a future version.**
-//!
-//! The orchestration-based RadioParadiseSource has been replaced by
-//! `RadioParadiseStreamSource`, which integrates directly with the pmoaudio
-//! pipeline for streaming and decoding.
-//!
-//! ## Migration Guide
-//!
-//! **Old approach** (deprecated):
-//! ```rust,ignore
-//! use pmoparadise::RadioParadiseSource;
-//! let source = RadioParadiseSource::from_registry(client)?;
-//! ```
-//!
-//! **New approach** (recommended):
-//! ```rust,ignore
-//! use pmoparadise::RadioParadiseStreamSource;
-//! use pmoaudio::pipeline::Node;
-//!
-//! let stream_source = RadioParadiseStreamSource::new(client, None).await?;
-//! let node = Node::from_logic(stream_source);
-//! // Use node in pmoaudio pipeline
-//! ```
-//!
-//! This stub implementation is provided only for backward compatibility with
-//! existing code (e.g., pmomediaserver) until it can be updated to use
-//! RadioParadiseStreamSource.
+//! This module provides a UPnP ContentDirectory source for Radio Paradise,
+//! exposing live streams and historical playlists for all 4 channels.
 
-use crate::client::RadioParadiseClient;
-use pmosource::pmodidl::{Container, Item};
+use crate::channels::{ChannelDescriptor, ALL_CHANNELS};
+use pmosource::pmodidl::{Container, Item, Resource};
 use pmosource::{async_trait, BrowseResult, MusicSource, MusicSourceError, Result};
+use std::sync::Arc;
 use std::time::SystemTime;
+use tokio::sync::RwLock;
+
+#[cfg(feature = "playlist")]
+use pmoplaylist::PlaylistManager;
 
 /// Default Radio Paradise image (embedded in binary)
 const DEFAULT_IMAGE: &[u8] = include_bytes!("../assets/default.webp");
 
-/// DEPRECATED: Stub implementation of RadioParadiseSource
+/// RadioParadiseSource - UPnP ContentDirectory source for Radio Paradise
 ///
-/// This is a minimal stub that implements the MusicSource trait with no-op
-/// implementations. It exists only to maintain API compatibility during the
-/// migration to RadioParadiseStreamSource.
+/// Provides access to:
+/// - Live OGG streams for all 4 channels (Main, Mellow, Rock, Eclectic)
+/// - Historical playlists (FIFO) for each channel
 ///
-/// **Do not use this in new code.** Use `RadioParadiseStreamSource` instead.
-#[derive(Clone, Debug)]
+/// # Object ID Schema
+///
+/// - Root: `radio-paradise`
+/// - Channel container: `radio-paradise:channel:{slug}`
+/// - Live stream item: `radio-paradise:channel:{slug}:live`
+/// - History container: `radio-paradise:channel:{slug}:history`
+/// - History track: `radio-paradise:channel:{slug}:history:track:{pk}`
+#[derive(Debug, Clone)]
 pub struct RadioParadiseSource {
-    _client: RadioParadiseClient,
+    /// Base URL for streaming server (e.g., "http://localhost:8080")
+    base_url: String,
+    /// Update counter for change notifications
+    update_counter: Arc<RwLock<u32>>,
+    /// Last change timestamp
+    last_change: Arc<RwLock<SystemTime>>,
 }
 
 impl RadioParadiseSource {
-    /// DEPRECATED: Create a new RadioParadiseSource from registry
+    /// Create a new RadioParadiseSource
     ///
-    /// This method is deprecated and will always return an error indicating
-    /// that the orchestration-based source is no longer supported.
+    /// # Arguments
     ///
-    /// Use `RadioParadiseStreamSource` instead for audio streaming.
-    #[cfg(feature = "server")]
-    pub fn from_registry(_client: RadioParadiseClient) -> Result<Self> {
-        Err(MusicSourceError::SourceUnavailable(
-            "RadioParadiseSource is deprecated. Use RadioParadiseStreamSource instead.".to_string(),
-        ))
+    /// * `base_url` - Base URL for streaming server (e.g., "http://localhost:8080")
+    ///
+    /// # Note
+    ///
+    /// With the "playlist" feature enabled, this source will use the global PlaylistManager
+    /// singleton to access history playlists.
+    pub fn new(base_url: impl Into<String>) -> Self {
+        Self {
+            base_url: base_url.into(),
+            update_counter: Arc::new(RwLock::new(0)),
+            last_change: Arc::new(RwLock::new(SystemTime::now())),
+        }
     }
 
-    /// DEPRECATED: Create a new RadioParadiseSource from registry with defaults
-    ///
-    /// This method creates a stub instance that will log deprecation warnings
-    /// but allows existing code to compile.
-    ///
-    /// Use `RadioParadiseStreamSource` instead for audio streaming.
-    #[cfg(feature = "server")]
-    pub fn from_registry_default(client: RadioParadiseClient) -> Self {
-        tracing::warn!(
-            "RadioParadiseSource::from_registry_default is deprecated. \
-             Use RadioParadiseStreamSource for audio streaming."
-        );
-        Self { _client: client }
+    /// Build a live stream URL for a channel
+    fn build_live_url(&self, slug: &str) -> String {
+        format!("{}/radioparadise/stream/{}/ogg", self.base_url, slug)
     }
 
-    /// DEPRECATED: Create a new RadioParadiseSource with default settings
-    ///
-    /// This method is deprecated and only exists for API compatibility.
-    pub fn new_default(client: RadioParadiseClient) -> Self {
-        tracing::warn!(
-            "RadioParadiseSource::new_default is deprecated. \
-             Use RadioParadiseStreamSource for audio streaming."
-        );
-        Self { _client: client }
+    /// Get the playlist ID for a channel's history
+    #[cfg(feature = "playlist")]
+    fn history_playlist_id(slug: &str) -> String {
+        format!("radioparadise-history-{}", slug)
     }
 
-    /// DEPRECATED: Create a new RadioParadiseSource with cache
-    ///
-    /// This method is deprecated and only exists for API compatibility.
-    pub fn new_with_cache(client: RadioParadiseClient, _cache_size: usize) -> Self {
-        tracing::warn!(
-            "RadioParadiseSource::new_with_cache is deprecated. \
-             Use RadioParadiseStreamSource for audio streaming."
-        );
-        Self { _client: client }
+    /// Get channel descriptor by slug
+    fn get_channel_by_slug(slug: &str) -> Option<&'static ChannelDescriptor> {
+        ALL_CHANNELS.iter().find(|ch| ch.slug == slug)
     }
+
+    /// Parse an object ID into its components
+    fn parse_object_id(id: &str) -> ObjectIdType {
+        let parts: Vec<&str> = id.split(':').collect();
+        match parts.as_slice() {
+            ["radio-paradise"] => ObjectIdType::Root,
+            ["radio-paradise", "channel", slug] => ObjectIdType::Channel {
+                slug: (*slug).to_string(),
+            },
+            ["radio-paradise", "channel", slug, "live"] => ObjectIdType::LiveStream {
+                slug: (*slug).to_string(),
+            },
+            ["radio-paradise", "channel", slug, "history"] => ObjectIdType::History {
+                slug: (*slug).to_string(),
+            },
+            ["radio-paradise", "channel", slug, "history", "track", pk] => {
+                ObjectIdType::HistoryTrack {
+                    slug: (*slug).to_string(),
+                    pk: (*pk).to_string(),
+                }
+            }
+            _ => ObjectIdType::Unknown,
+        }
+    }
+
+    /// Build a channel container
+    fn build_channel_container(&self, descriptor: &ChannelDescriptor) -> Container {
+        Container {
+            id: format!("radio-paradise:channel:{}", descriptor.slug),
+            parent_id: "radio-paradise".to_string(),
+            restricted: Some("1".to_string()),
+            child_count: Some("2".to_string()), // Live + History
+            searchable: Some("0".to_string()),
+            title: descriptor.display_name.to_string(),
+            class: "object.container".to_string(),
+            containers: vec![],
+            items: vec![],
+        }
+    }
+
+    /// Build a live stream item for a channel
+    fn build_live_stream_item(&self, descriptor: &ChannelDescriptor) -> Item {
+        let stream_url = self.build_live_url(descriptor.slug);
+
+        Item {
+            id: format!("radio-paradise:channel:{}:live", descriptor.slug),
+            parent_id: format!("radio-paradise:channel:{}", descriptor.slug),
+            restricted: Some("1".to_string()),
+            title: format!("{} - Live Stream", descriptor.display_name),
+            creator: Some("Radio Paradise".to_string()),
+            class: "object.item.audioItem.audioBroadcast".to_string(),
+            artist: Some("Radio Paradise".to_string()),
+            album: Some(descriptor.display_name.to_string()),
+            genre: Some("Radio".to_string()),
+            album_art: None,
+            album_art_pk: None,
+            date: None,
+            original_track_number: None,
+            resources: vec![Resource {
+                protocol_info: "http-get:*:audio/ogg:*".to_string(),
+                bits_per_sample: None,
+                sample_frequency: None,
+                nr_audio_channels: Some("2".to_string()),
+                duration: None,
+                url: stream_url,
+            }],
+            descriptions: vec![],
+        }
+    }
+
+    /// Build a history container for a channel
+    fn build_history_container(&self, descriptor: &ChannelDescriptor) -> Container {
+        Container {
+            id: format!("radio-paradise:channel:{}:history", descriptor.slug),
+            parent_id: format!("radio-paradise:channel:{}", descriptor.slug),
+            restricted: Some("1".to_string()),
+            child_count: None, // Will be determined by playlist
+            searchable: Some("1".to_string()),
+            title: format!("{} - History", descriptor.display_name),
+            class: "object.container.playlistContainer".to_string(),
+            containers: vec![],
+            items: vec![],
+        }
+    }
+
+    /// Get items from history playlist
+    #[cfg(feature = "playlist")]
+    async fn get_history_items(
+        &self,
+        slug: &str,
+        offset: usize,
+        count: usize,
+    ) -> Result<Vec<Item>> {
+        let playlist_id = Self::history_playlist_id(slug);
+
+        // Get read handle for the playlist from the singleton
+        let manager = pmoplaylist::PlaylistManager();
+        let reader = manager
+            .get_read_handle(&playlist_id)
+            .await
+            .map_err(|e| {
+                MusicSourceError::BrowseError(format!(
+                    "Failed to get playlist {}: {}",
+                    playlist_id, e
+                ))
+            })?;
+
+        // Get entries from playlist
+        let entries = reader.get_entries(offset, count).await.map_err(|e| {
+            MusicSourceError::BrowseError(format!("Failed to read playlist entries: {}", e))
+        })?;
+
+        // Convert entries to Items
+        let mut items = Vec::new();
+        for entry in entries {
+            if let Ok(item) = self.playlist_entry_to_item(slug, &entry).await {
+                items.push(item);
+            }
+        }
+
+        Ok(items)
+    }
+
+    /// Convert a playlist entry to a DIDL Item
+    #[cfg(feature = "playlist")]
+    async fn playlist_entry_to_item(
+        &self,
+        slug: &str,
+        entry: &pmoplaylist::PlaylistEntry,
+    ) -> Result<Item> {
+        let metadata = &entry.metadata;
+
+        // Build audio URL from cache
+        let audio_url = format!(
+            "{}/cache/audio/{}",
+            self.base_url,
+            entry.pk
+        );
+
+        // Build item
+        Ok(Item {
+            id: format!("radio-paradise:channel:{}:history:track:{}", slug, entry.pk),
+            parent_id: format!("radio-paradise:channel:{}:history", slug),
+            restricted: Some("1".to_string()),
+            title: metadata.title.clone().unwrap_or_else(|| "Unknown Title".to_string()),
+            creator: metadata.artist.clone(),
+            class: "object.item.audioItem.musicTrack".to_string(),
+            artist: metadata.artist.clone(),
+            album: metadata.album.clone(),
+            genre: metadata.genre.clone(),
+            album_art: None,
+            album_art_pk: metadata.cover_pk.clone(),
+            date: metadata.year.map(|y| y.to_string()),
+            original_track_number: metadata.track_number.map(|n| n.to_string()),
+            resources: vec![Resource {
+                protocol_info: "http-get:*:audio/flac:*".to_string(),
+                bits_per_sample: metadata.bits_per_sample.map(|b| b.to_string()),
+                sample_frequency: metadata.sample_rate.map(|s| s.to_string()),
+                nr_audio_channels: Some("2".to_string()),
+                duration: metadata.duration.map(|d| format!("{}:{:02}:{:02}", d / 3600, (d % 3600) / 60, d % 60)),
+                url: audio_url,
+            }],
+            descriptions: vec![],
+        })
+    }
+}
+
+/// Types of object IDs in the Radio Paradise source
+#[derive(Debug, Clone, PartialEq)]
+enum ObjectIdType {
+    Root,
+    Channel { slug: String },
+    LiveStream { slug: String },
+    History { slug: String },
+    HistoryTrack { slug: String, pk: String },
+    Unknown,
 }
 
 #[async_trait]
 impl MusicSource for RadioParadiseSource {
     fn name(&self) -> &str {
-        "Radio Paradise (DEPRECATED)"
+        "Radio Paradise"
     }
 
     fn id(&self) -> &str {
-        "radio-paradise-deprecated"
+        "radio-paradise"
     }
 
     fn default_image(&self) -> &[u8] {
@@ -116,55 +267,124 @@ impl MusicSource for RadioParadiseSource {
 
     async fn root_container(&self) -> Result<Container> {
         Ok(Container {
-            id: "radio-paradise-deprecated".to_string(),
+            id: "radio-paradise".to_string(),
             parent_id: "0".to_string(),
             restricted: Some("1".to_string()),
-            child_count: Some("0".to_string()),
+            child_count: Some("4".to_string()), // 4 channels
             searchable: Some("0".to_string()),
-            title: "Radio Paradise (DEPRECATED)".to_string(),
+            title: "Radio Paradise".to_string(),
             class: "object.container".to_string(),
             containers: vec![],
             items: vec![],
         })
     }
 
-    async fn browse(&self, _object_id: &str) -> Result<BrowseResult> {
-        tracing::warn!("RadioParadiseSource::browse called but source is deprecated");
-        Ok(BrowseResult::Mixed {
-            containers: vec![],
-            items: vec![],
-        })
+    async fn browse(&self, object_id: &str) -> Result<BrowseResult> {
+        match Self::parse_object_id(object_id) {
+            ObjectIdType::Root => {
+                // Return the 4 channel containers
+                let containers: Vec<Container> = ALL_CHANNELS
+                    .iter()
+                    .map(|ch| self.build_channel_container(ch))
+                    .collect();
+
+                Ok(BrowseResult::Containers(containers))
+            }
+
+            ObjectIdType::Channel { slug } => {
+                // Return live stream item + history container
+                let descriptor = Self::get_channel_by_slug(&slug).ok_or_else(|| {
+                    MusicSourceError::ObjectNotFound(format!("Unknown channel: {}", slug))
+                })?;
+
+                let live_item = self.build_live_stream_item(descriptor);
+                let history_container = self.build_history_container(descriptor);
+
+                Ok(BrowseResult::Mixed {
+                    containers: vec![history_container],
+                    items: vec![live_item],
+                })
+            }
+
+            ObjectIdType::History { slug } => {
+                // Return items from history playlist
+                #[cfg(feature = "playlist")]
+                {
+                    let items = self.get_history_items(&slug, 0, 100).await?;
+                    Ok(BrowseResult::Items(items))
+                }
+
+                #[cfg(not(feature = "playlist"))]
+                {
+                    let _ = slug;
+                    Ok(BrowseResult::Items(vec![]))
+                }
+            }
+
+            ObjectIdType::LiveStream { .. } | ObjectIdType::HistoryTrack { .. } => {
+                // These are leaf nodes, cannot be browsed
+                Err(MusicSourceError::ObjectNotFound(format!(
+                    "Object {} is not a container",
+                    object_id
+                )))
+            }
+
+            ObjectIdType::Unknown => Err(MusicSourceError::ObjectNotFound(format!(
+                "Unknown object ID: {}",
+                object_id
+            ))),
+        }
     }
 
-    async fn resolve_uri(&self, _object_id: &str) -> Result<String> {
-        Err(MusicSourceError::SourceUnavailable(
-            "RadioParadiseSource is deprecated. Use RadioParadiseStreamSource instead.".to_string(),
-        ))
+    async fn resolve_uri(&self, object_id: &str) -> Result<String> {
+        match Self::parse_object_id(object_id) {
+            ObjectIdType::LiveStream { slug } => {
+                // Return live stream URL
+                Ok(self.build_live_url(&slug))
+            }
+
+            ObjectIdType::HistoryTrack { pk, .. } => {
+                // Return cached audio URL
+                Ok(format!("{}/cache/audio/{}", self.base_url, pk))
+            }
+
+            _ => Err(MusicSourceError::ObjectNotFound(format!(
+                "Cannot resolve URI for object: {}",
+                object_id
+            ))),
+        }
     }
 
     fn supports_fifo(&self) -> bool {
-        false
+        // History playlists are FIFO
+        cfg!(feature = "playlist")
     }
 
     async fn append_track(&self, _track: Item) -> Result<()> {
-        Err(MusicSourceError::SourceUnavailable(
-            "RadioParadiseSource is deprecated and does not support FIFO operations.".to_string(),
+        // Tracks are added automatically by FlacCacheSink
+        Err(MusicSourceError::NotSupported(
+            "Tracks are automatically added to history by the streaming system".to_string(),
         ))
     }
 
     async fn remove_oldest(&self) -> Result<Option<Item>> {
+        // Managed automatically by playlist FIFO
         Ok(None)
     }
 
     async fn update_id(&self) -> u32 {
-        0
+        *self.update_counter.read().await
     }
 
     async fn last_change(&self) -> Option<SystemTime> {
-        None
+        Some(*self.last_change.read().await)
     }
 
-    async fn get_items(&self, _offset: usize, _count: usize) -> Result<Vec<Item>> {
+    async fn get_items(&self, offset: usize, count: usize) -> Result<Vec<Item>> {
+        // For Radio Paradise, we don't have a global FIFO
+        // Each channel has its own history
+        // Return empty for now - clients should browse specific channel histories
+        let _ = (offset, count);
         Ok(vec![])
     }
 }

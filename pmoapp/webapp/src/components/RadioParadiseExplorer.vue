@@ -16,7 +16,6 @@
         </button>
         <button
           @click="togglePlayback"
-          :disabled="!nowPlaying || !nowPlaying.stream_url"
           class="btn-play"
         >
           {{ isPlaying ? '⏹️ Stop' : '▶️ Play' }}
@@ -26,46 +25,228 @@
             {{ channel.name }}
           </option>
         </select>
-        <select
-          v-if="bitrates.length"
-          v-model="selectedBitrate"
-          @change="changeBitrate"
-          class="bitrate-select"
-        >
-          <option v-for="bitrate in bitrates" :key="bitrate.id" :value="bitrate.id">
-            {{ bitrate.name }}
-          </option>
-        </select>
       </div>
     </div>
 
-    <div v-if="bitrates.length" class="bitrate-tags">
-      <span
-        v-for="bitrate in bitrates"
-        :key="`chip-${bitrate.id}`"
-        :class="['bitrate-chip', { active: selectedBitrate === bitrate.id }]"
-      >
-        {{ bitrate.name }}
-      </span>
+    <!-- Stream Format & Mode Selection -->
+    <div class="stream-controls-section">
+      <h3>🎚️ Stream Configuration</h3>
+      <div class="stream-controls-grid">
+        <div class="control-group">
+          <label>Stream Format</label>
+          <div class="format-chips">
+            <button
+              v-for="format in streamFormats"
+              :key="format.id"
+              :class="['format-chip', { active: selectedFormat === format.id }]"
+              @click="selectedFormat = format.id"
+            >
+              {{ format.name }}
+            </button>
+          </div>
+          <div class="format-description">{{ currentFormatDescription }}</div>
+        </div>
+        <div class="control-group">
+          <label>Playback Mode</label>
+          <div class="mode-chips">
+            <button
+              :class="['mode-chip', { active: playbackMode === 'live' }]"
+              @click="playbackMode = 'live'"
+            >
+              📡 Live
+            </button>
+            <button
+              :class="['mode-chip', { active: playbackMode === 'historic' }]"
+              @click="playbackMode = 'historic'"
+            >
+              🕰️ Historic
+            </button>
+          </div>
+        </div>
+        <div v-if="playbackMode === 'historic'" class="control-group">
+          <label>Client ID (for history tracking)</label>
+          <input
+            v-model="historicClientId"
+            type="text"
+            placeholder="Enter unique client ID"
+            class="client-id-input"
+          />
+        </div>
+      </div>
     </div>
 
-    <div v-if="bitratesError" class="error-message inline-error">
-      ❌ {{ bitratesError }}
+    <!-- Stream Diagnostics -->
+    <div class="stream-diagnostics-section">
+      <div class="section-header">
+        <h3>🔧 Stream Diagnostics</h3>
+        <button class="btn-tertiary" @click="copyStreamUrl">
+          📋 Copy Stream URL
+        </button>
+      </div>
+      <div class="diagnostics-grid">
+        <div class="diagnostic-card">
+          <div class="diagnostic-label">Current Stream URL</div>
+          <div class="diagnostic-value">
+            <code>{{ currentStreamUrl }}</code>
+          </div>
+        </div>
+        <div class="diagnostic-card">
+          <div class="diagnostic-label">Format</div>
+          <div class="diagnostic-value">{{ selectedFormat.toUpperCase() }}</div>
+        </div>
+        <div class="diagnostic-card">
+          <div class="diagnostic-label">Mode</div>
+          <div class="diagnostic-value">{{ playbackMode === 'live' ? 'Live Stream' : 'Historical Playback' }}</div>
+        </div>
+        <div class="diagnostic-card">
+          <div class="diagnostic-label">Channel Slug</div>
+          <div class="diagnostic-value">{{ currentChannelSlug }}</div>
+        </div>
+      </div>
+      <div class="stream-urls-list">
+        <div class="url-item" v-for="format in streamFormats" :key="`url-${format.id}`">
+          <strong>{{ format.name }}:</strong>
+          <a :href="getStreamUrlFor(format.id)" target="_blank" class="stream-link">
+            {{ getStreamUrlFor(format.id) }}
+          </a>
+        </div>
+      </div>
     </div>
 
-    <!-- Audio Player -->
-    <div v-if="isPlaying || audioError" class="audio-player-container">
-      <audio
-        v-if="!audioError"
-        ref="audioPlayer"
-        controls
-        @ended="handleAudioEnded"
-        @error="handleAudioError"
-      ></audio>
-      <p v-if="audioError" class="audio-error">{{ audioError }}</p>
-      <button @click="stopPlayback" class="btn-stop">
-        {{ audioError ? '✕ Close' : '⏹️ Stop' }}
-      </button>
+    <!-- Live Stream Metadata -->
+    <div v-if="playbackMode === 'live'" class="stream-metadata-section">
+      <div class="section-header">
+        <h3>📻 Live Stream Metadata</h3>
+        <button class="btn-secondary" @click="fetchStreamMetadata" :disabled="streamMetadataLoading">
+          <span v-if="streamMetadataLoading">⏳ Loading…</span>
+          <span v-else>🔄 Refresh Metadata</span>
+        </button>
+      </div>
+      <div v-if="streamMetadataError" class="error-message inline-error">
+        ❌ {{ streamMetadataError }}
+      </div>
+      <div v-else-if="streamMetadata" class="metadata-content">
+        <pre class="metadata-json">{{ JSON.stringify(streamMetadata, null, 2) }}</pre>
+      </div>
+      <div v-else class="empty-placeholder">
+        Click "Refresh Metadata" to fetch current stream metadata
+      </div>
+      <div v-if="streamMetadataLastUpdated" class="section-meta">
+        Last updated: {{ formatTimestamp(streamMetadataLastUpdated) }}
+      </div>
+    </div>
+
+    <!-- Quick Test Tools -->
+    <div class="quick-test-section">
+      <h3>🧪 Quick Test Commands</h3>
+      <p class="section-description">Copy and paste these commands to test streams with external players</p>
+      <div class="test-commands">
+        <div class="command-group">
+          <div class="command-label">
+            <strong>ffplay (FLAC)</strong>
+            <button class="btn-copy-small" @click="copyToClipboard(ffplayFlacCommand)">📋</button>
+          </div>
+          <code class="command-text">{{ ffplayFlacCommand }}</code>
+        </div>
+        <div class="command-group">
+          <div class="command-label">
+            <strong>ffplay (OGG)</strong>
+            <button class="btn-copy-small" @click="copyToClipboard(ffplayOggCommand)">📋</button>
+          </div>
+          <code class="command-text">{{ ffplayOggCommand }}</code>
+        </div>
+        <div class="command-group">
+          <div class="command-label">
+            <strong>VLC</strong>
+            <button class="btn-copy-small" @click="copyToClipboard(vlcCommand)">📋</button>
+          </div>
+          <code class="command-text">{{ vlcCommand }}</code>
+        </div>
+        <div class="command-group">
+          <div class="command-label">
+            <strong>curl (Download to file)</strong>
+            <button class="btn-copy-small" @click="copyToClipboard(curlCommand)">📋</button>
+          </div>
+          <code class="command-text">{{ curlCommand }}</code>
+        </div>
+      </div>
+    </div>
+
+    <!-- Enhanced Media Player -->
+    <div v-if="isPlaying || audioError" class="enhanced-player-section">
+      <div class="player-header">
+        <h3>🎵 Now Playing on Radio Paradise</h3>
+        <div class="player-controls-header">
+          <button @click="refreshPlayerMetadata" :disabled="playerMetadataLoading" class="btn-refresh-meta">
+            <span v-if="playerMetadataLoading">⏳</span>
+            <span v-else>🔄</span>
+          </button>
+          <button @click="stopPlayback" class="btn-stop">
+            {{ audioError ? '✕ Close' : '⏹️ Stop' }}
+          </button>
+        </div>
+      </div>
+
+      <div v-if="audioError" class="audio-error-banner">
+        ❌ {{ audioError }}
+      </div>
+
+      <div v-else class="player-content">
+        <!-- Cover Art & Metadata -->
+        <div class="player-info">
+          <div v-if="playerMetadata?.image_url" class="player-cover">
+            <img :src="playerMetadata.image_url" :alt="playerMetadata.title || 'Album cover'">
+          </div>
+          <div v-else class="player-cover-placeholder">
+            🎵
+          </div>
+
+          <div class="player-metadata">
+            <div v-if="playerMetadata" class="metadata-display">
+              <div class="player-title">{{ playerMetadata.title || 'Unknown Title' }}</div>
+              <div class="player-artist">{{ playerMetadata.artist || 'Unknown Artist' }}</div>
+              <div v-if="playerMetadata.album" class="player-album">{{ playerMetadata.album }}</div>
+              <div v-if="playerMetadata.year" class="player-year">{{ playerMetadata.year }}</div>
+            </div>
+            <div v-else class="metadata-loading">
+              <span v-if="playerMetadataLoading">Loading metadata...</span>
+              <span v-else>No metadata available</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Audio Element with Controls -->
+        <div class="player-audio-controls">
+          <audio
+            ref="audioPlayer"
+            controls
+            @ended="handleAudioEnded"
+            @error="handleAudioError"
+            @play="handleAudioPlay"
+            @pause="handleAudioPause"
+          ></audio>
+        </div>
+
+        <!-- Stream Info -->
+        <div class="player-stream-info">
+          <div class="stream-info-item">
+            <span class="info-label">Channel:</span>
+            <span class="info-value">{{ channels.find(c => c.id === selectedChannel)?.name || 'Unknown' }}</span>
+          </div>
+          <div class="stream-info-item">
+            <span class="info-label">Format:</span>
+            <span class="info-value">{{ selectedFormat.toUpperCase() }}</span>
+          </div>
+          <div class="stream-info-item">
+            <span class="info-label">Mode:</span>
+            <span class="info-value">{{ playbackMode === 'live' ? 'Live' : 'Historic' }}</span>
+          </div>
+          <div v-if="playerMetadataLastUpdated" class="stream-info-item">
+            <span class="info-label">Updated:</span>
+            <span class="info-value">{{ formatTimestamp(playerMetadataLastUpdated) }}</span>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div v-if="error" class="error-message">
@@ -161,225 +342,6 @@
             <div class="song-duration">{{ formatDuration(song.duration_ms) }}</div>
             <div class="song-elapsed">@{{ formatDuration(song.elapsed_ms) }}</div>
             <div v-if="song.rating" class="song-rating">⭐ {{ song.rating.toFixed(1) }}</div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="channel-status-section">
-      <div class="section-header">
-        <h3>📡 Channel Status</h3>
-        <button class="btn-secondary" @click="fetchChannelStatus" :disabled="channelStatusLoading">
-          <span v-if="channelStatusLoading">⏳ Refreshing…</span>
-          <span v-else>Refresh Status</span>
-        </button>
-      </div>
-      <div v-if="channelStatusError" class="error-message">
-        ❌ {{ channelStatusError }}
-      </div>
-      <div v-else-if="channelStatus">
-        <div class="status-grid">
-          <div class="status-card">
-            <div class="status-label">Channel</div>
-            <div class="status-value">{{ channelStatus.slug }}</div>
-          </div>
-          <div class="status-card">
-            <div class="status-label">Active Clients</div>
-            <div class="status-value">{{ channelStatus.active_clients }}</div>
-          </div>
-          <div class="status-card">
-            <div class="status-label">Queue Length</div>
-            <div class="status-value">{{ channelStatus.queue_length }}</div>
-          </div>
-          <div class="status-card">
-            <div class="status-label">Update ID</div>
-            <div class="status-value">{{ channelStatus.update_id }}</div>
-          </div>
-          <div class="status-card">
-            <div class="status-label">Last Change</div>
-            <div class="status-value">
-              {{ channelStatus.last_change ? formatTimestamp(new Date(channelStatus.last_change)) : '—' }}
-            </div>
-          </div>
-          <div class="status-card">
-            <div class="status-label">History Entries</div>
-            <div class="status-value">
-              {{ channelStatus.history_entries }} / {{ channelStatus.history_max_tracks }}
-            </div>
-          </div>
-          <div class="status-card">
-            <div class="status-label">Cache Collection</div>
-            <div class="status-value">{{ channelStatus.cache_collection_id }}</div>
-          </div>
-          <div class="status-card">
-            <div class="status-label">Cache Tracks</div>
-            <div class="status-value">
-              {{ channelStatus.cache_cached_tracks }} / {{ channelStatus.cache_total_tracks }}
-            </div>
-          </div>
-        </div>
-        <div class="section-meta" v-if="channelStatusLastUpdated">
-          Last refresh: {{ formatTimestamp(channelStatusLastUpdated) }}
-        </div>
-      </div>
-    </div>
-
-    <div class="channel-tracks-section">
-      <div class="section-header">
-        <h3>🎧 Live Playlist</h3>
-        <div class="section-actions">
-          <button class="btn-tertiary" @click="refreshChannelData" :disabled="channelPlaylistLoading || channelStatusLoading">
-            <span v-if="channelPlaylistLoading || channelStatusLoading">⏳ Refreshing…</span>
-            <span v-else>Refresh All</span>
-          </button>
-          <button class="btn-secondary" @click="fetchChannelPlaylist" :disabled="channelPlaylistLoading">
-            <span v-if="channelPlaylistLoading">⏳ Loading…</span>
-            <span v-else>Refresh Playlist</span>
-          </button>
-        </div>
-      </div>
-      <div class="section-meta">
-        <span>Queue length:</span>
-        <strong>{{ channelPlaylist.queue_length }}</strong>
-        <span v-if="channelPlaylist.update_id">Update ID: {{ channelPlaylist.update_id }}</span>
-        <span v-if="channelPlaylistLastUpdated">
-          Last refresh: {{ formatTimestamp(channelPlaylistLastUpdated) }}
-        </span>
-      </div>
-      <div v-if="channelPlaylistError" class="error-message">
-        ❌ {{ channelPlaylistError }}
-      </div>
-      <div v-else-if="channelPlaylistLoading" class="loading-message">
-        ⏳ Loading playlist…
-      </div>
-      <div v-else>
-        <div v-if="channelPlaylist.items.length" class="track-grid">
-          <div
-            v-for="item in channelPlaylist.items"
-            :key="trackObjectId(item)"
-            :class="['track-card', { active: activeTrackId === trackObjectId(item) }]"
-          >
-            <div class="track-card-header">
-              <span :class="cacheStatusClass(item.cache_status)">
-                {{ cacheStatusLabel(item.cache_status) }}
-              </span>
-              <span class="track-metadata">Pending listeners: {{ item.pending_clients }}</span>
-            </div>
-            <div class="track-headline">
-              <div class="track-title">{{ item.title }}</div>
-              <div class="track-artist">{{ item.artist || 'Unknown artist' }}</div>
-            </div>
-            <div class="track-meta">
-              <span v-if="item.album">{{ item.album }}</span>
-              <span v-if="item.duration_ms">⏱ {{ formatDuration(item.duration_ms) }}</span>
-              <span v-if="item.elapsed_ms">▶️ @{{ formatDuration(item.elapsed_ms) }}</span>
-              <span v-if="item.started_at">🕒 {{ formatTimestamp(new Date(item.started_at)) }}</span>
-              <span v-if="item.cache_status?.size_bytes">💾 {{ formatBytes(item.cache_status.size_bytes) }}</span>
-            </div>
-            <div class="track-actions">
-              <button class="btn-secondary" @click="playTrackItem(item)">▶️ Play Track</button>
-              <button
-                class="btn-secondary"
-                @click="requestCacheForTrack(item)"
-                :disabled="trackExtrasFor(item).cacheRequestLoading"
-              >
-                <span v-if="trackExtrasFor(item).cacheRequestLoading">⏳ Caching…</span>
-                <span v-else>💾 Request Cache</span>
-              </button>
-              <button
-                class="btn-tertiary"
-                @click="refreshTrackCacheStatus(item)"
-                :disabled="trackExtrasFor(item).cacheStatusLoading"
-              >
-                <span v-if="trackExtrasFor(item).cacheStatusLoading">⏳ Updating…</span>
-                <span v-else>🔄 Cache Status</span>
-              </button>
-              <button
-                class="btn-tertiary"
-                @click="fetchTrackFormats(item)"
-                :disabled="trackExtrasFor(item).formatsLoading"
-              >
-                <span v-if="trackExtrasFor(item).formatsLoading">⏳ Formats…</span>
-                <span v-else>🎚️ Formats</span>
-              </button>
-              <a
-                v-if="trackExtrasFor(item).uri"
-                :href="trackExtrasFor(item).uri"
-                target="_blank"
-                class="stream-link"
-              >
-                Open resolved URI
-              </a>
-            </div>
-            <div v-if="trackExtrasFor(item).cacheRequestMessage" class="inline-success">
-              ✅ {{ trackExtrasFor(item).cacheRequestMessage }}
-            </div>
-            <div v-if="trackExtrasFor(item).cacheError" class="inline-error">
-              ❌ {{ trackExtrasFor(item).cacheError }}
-            </div>
-            <div v-if="trackExtrasFor(item).resolveError" class="inline-error">
-              ❌ Resolve error: {{ trackExtrasFor(item).resolveError }}
-            </div>
-            <div v-if="trackExtrasFor(item).formatsError" class="inline-error">
-              ❌ Formats error: {{ trackExtrasFor(item).formatsError }}
-            </div>
-            <div
-              v-if="trackExtrasFor(item).formats && trackExtrasFor(item).formats.length"
-              class="formats-list"
-            >
-              <div
-                v-for="format in trackExtrasFor(item).formats"
-                :key="format.format_id"
-                class="format-row"
-              >
-                <strong>{{ format.format_id }}</strong>
-                <span>{{ format.mime_type }}</span>
-                <span v-if="format.sample_rate">{{ format.sample_rate }} Hz</span>
-                <span v-if="format.bit_depth">{{ format.bit_depth }} bit</span>
-                <span v-if="format.bitrate">{{ format.bitrate }} kbps</span>
-                <span v-if="format.channels">{{ format.channels }} ch</span>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div v-else class="empty-placeholder">
-          No tracks currently queued. Try refreshing after playback starts.
-        </div>
-      </div>
-    </div>
-
-    <div class="channel-history-section">
-      <div class="section-header">
-        <h3>🕰️ Recent History</h3>
-        <button class="btn-secondary" @click="fetchChannelHistory" :disabled="channelHistoryLoading">
-          <span v-if="channelHistoryLoading">⏳ Loading…</span>
-          <span v-else>Refresh History</span>
-        </button>
-      </div>
-      <div class="section-meta" v-if="channelHistoryLastUpdated">
-        Last refresh: {{ formatTimestamp(channelHistoryLastUpdated) }}
-      </div>
-      <div v-if="channelHistoryError" class="error-message">
-        ❌ {{ channelHistoryError }}
-      </div>
-      <div v-else-if="channelHistoryLoading" class="loading-message">
-        ⏳ Loading history…
-      </div>
-      <div v-else class="history-list">
-        <div v-if="channelHistory.length === 0" class="empty-placeholder">
-          No history entries yet.
-        </div>
-        <div
-          v-for="entry in channelHistory"
-          :key="`${entry.track_id}-${entry.started_at}`"
-          class="history-item"
-        >
-          <div class="history-title">{{ entry.title }}</div>
-          <div class="history-meta">
-            <span>{{ entry.artist }}</span>
-            <span v-if="entry.album">• {{ entry.album }}</span>
-            <span>• {{ formatDuration(entry.duration_ms) }}</span>
-            <span>• {{ formatTimestamp(new Date(entry.started_at)) }}</span>
           </div>
         </div>
       </div>
@@ -500,24 +462,99 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 
 const API_BASE = '/api/radioparadise'
 const SOURCE_API_BASE = '/api/sources'
 const SOURCE_ID = 'radio-paradise'
+const STREAM_BASE = '/radioparadise/stream'
 
 const loading = ref(false)
 const error = ref(null)
 const nowPlaying = ref(null)
 const channels = ref([])
-const bitrates = ref([])
 const selectedChannel = ref(0)
-const selectedBitrate = ref(null)
 const audioPlayer = ref(null)
 const isPlaying = ref(false)
 const audioError = ref('')
-const activeTrackId = ref(null)
 const lastUpdated = ref(null)
+
+// New stream format controls
+const selectedFormat = ref('flac')
+const playbackMode = ref('live')
+const historicClientId = ref('test-client-' + Math.random().toString(36).substring(7))
+
+const streamFormats = [
+  { id: 'flac', name: 'FLAC', description: 'Pure FLAC lossless audio stream' },
+  { id: 'ogg', name: 'OGG-FLAC', description: 'FLAC in OGG container for better streaming' }
+]
+
+// Channel slug mapping
+const channelSlugs = ['main', 'mellow', 'rock', 'eclectic']
+
+// Computed properties
+const currentChannelSlug = computed(() => {
+  return channelSlugs[selectedChannel.value] || 'main'
+})
+
+const currentFormatDescription = computed(() => {
+  const format = streamFormats.find(f => f.id === selectedFormat.value)
+  return format ? format.description : ''
+})
+
+const currentStreamUrl = computed(() => {
+  return getStreamUrlFor(selectedFormat.value)
+})
+
+// Test commands computed properties
+const ffplayFlacCommand = computed(() => {
+  const url = getFullStreamUrl('flac')
+  return `ffplay -nodisp "${url}"`
+})
+
+const ffplayOggCommand = computed(() => {
+  const url = getFullStreamUrl('ogg')
+  return `ffplay -nodisp "${url}"`
+})
+
+const vlcCommand = computed(() => {
+  const url = getFullStreamUrl(selectedFormat.value)
+  return `vlc "${url}"`
+})
+
+const curlCommand = computed(() => {
+  const url = getFullStreamUrl(selectedFormat.value)
+  const ext = selectedFormat.value === 'ogg' ? 'ogg' : 'flac'
+  const slug = currentChannelSlug.value
+  return `curl "${url}" -o "${slug}-stream.${ext}"`
+})
+
+function getStreamUrlFor(format) {
+  const slug = currentChannelSlug.value
+  if (playbackMode.value === 'historic') {
+    return `${STREAM_BASE}/${slug}/historic/${historicClientId.value}/${format}`
+  }
+  return `${STREAM_BASE}/${slug}/${format}`
+}
+
+function getFullStreamUrl(format) {
+  // Get full URL including protocol and host
+  const baseUrl = window.location.origin
+  return baseUrl + getStreamUrlFor(format)
+}
+
+function copyStreamUrl() {
+  copyToClipboard(currentStreamUrl.value)
+}
+
+function copyToClipboard(text) {
+  navigator.clipboard.writeText(text).then(() => {
+    console.log('Copied to clipboard:', text)
+    // Could add a toast notification here
+  }).catch(err => {
+    console.error('Failed to copy:', err)
+  })
+}
 const upcomingBlock = ref(null)
 const upcomingLoading = ref(false)
 const upcomingError = ref('')
@@ -526,32 +563,20 @@ const blockSearchResult = ref(null)
 const blockSearchLoading = ref(false)
 const blockSearchError = ref('')
 const channelsError = ref('')
-const bitratesError = ref('')
-const channelStatus = ref(null)
-const channelStatusLoading = ref(false)
-const channelStatusError = ref('')
-const channelStatusLastUpdated = ref(null)
 
-const channelPlaylist = ref({
-  items: [],
-  queue_length: 0,
-  update_id: 0,
-  slug: '',
-  channel_id: selectedChannel.value
-})
-const channelPlaylistLoading = ref(false)
-const channelPlaylistError = ref('')
-const channelPlaylistLastUpdated = ref(null)
+// Stream metadata state
+const streamMetadata = ref(null)
+const streamMetadataLoading = ref(false)
+const streamMetadataError = ref('')
+const streamMetadataLastUpdated = ref(null)
 
-const channelHistory = ref([])
-const channelHistoryLoading = ref(false)
-const channelHistoryError = ref('')
-const channelHistoryLastUpdated = ref(null)
+// Player metadata state (for the enhanced player)
+const playerMetadata = ref(null)
+const playerMetadataLoading = ref(false)
+const playerMetadataLastUpdated = ref(null)
 
-const trackExtras = ref({})
 let refreshTimerId = null
-let channelRefreshTimerId = null
-const CHANNEL_REFRESH_INTERVAL = 7000
+let playerMetadataTimerId = null
 
 // Format duration from milliseconds to MM:SS
 function formatDuration(ms) {
@@ -574,9 +599,6 @@ function buildQuery(extra = {}) {
   if (selectedChannel.value != null) {
     params.set('channel', selectedChannel.value.toString())
   }
-  if (selectedBitrate.value != null) {
-    params.set('bitrate', selectedBitrate.value.toString())
-  }
 
   Object.entries(extra).forEach(([key, value]) => {
     if (value !== undefined && value !== null && value !== '') {
@@ -595,14 +617,6 @@ async function fetchBlockByEvent(eventId) {
     throw new Error(`HTTP ${response.status}: ${response.statusText}`)
   }
   return await response.json()
-}
-
-function channelObjectId(channelId) {
-  return `${SOURCE_ID}:channel:${channelId}`
-}
-
-function trackObjectId(item) {
-  return item?.track_id || item?.id || item?.object_id || ''
 }
 
 function playAudio(url) {
@@ -625,7 +639,6 @@ function playAudio(url) {
       console.error('Failed to start playback:', e)
       audioError.value = `Cannot play stream: ${e.message}`
       isPlaying.value = false
-      activeTrackId.value = null
     })
   })
 }
@@ -645,10 +658,6 @@ async function refreshNowPlaying() {
     lastUpdated.value = new Date()
     upcomingBlock.value = null
     upcomingError.value = ''
-
-    if (isPlaying.value && !activeTrackId.value) {
-      playStream()
-    }
   } catch (e) {
     error.value = `Failed to fetch now playing: ${e.message}`
     console.error('Error fetching now playing:', e)
@@ -657,308 +666,96 @@ async function refreshNowPlaying() {
   }
 }
 
-function cacheStatusLabel(cacheInfo) {
-  const status = cacheInfo?.status || 'not_cached'
-  switch (status) {
-    case 'cached':
-      return 'Cached'
-    case 'caching':
-      return cacheInfo?.progress != null
-        ? `Caching ${(cacheInfo.progress * 100).toFixed(0)}%`
-        : 'Caching'
-    case 'failed':
-      return 'Failed'
-    case 'not_cached':
-    default:
-      return 'Not cached'
-  }
-}
-
-function cacheStatusClass(cacheInfo) {
-  const status = cacheInfo?.status || 'not_cached'
-  return {
-    'status-badge': true,
-    cached: status === 'cached',
-    caching: status === 'caching',
-    failed: status === 'failed',
-    pending: status === 'not_cached'
-  }
-}
-
-function formatBytes(bytes) {
-  if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes <= 0) {
-    return '0 B'
-  }
-  const units = ['B', 'KB', 'MB', 'GB']
-  let value = bytes
-  let unitIndex = 0
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024
-    unitIndex += 1
-  }
-  return `${value.toFixed(value >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`
-}
-
-async function fetchChannelStatus({ silent = false } = {}) {
-  if (!silent) {
-    channelStatusLoading.value = true
-  }
-  channelStatusError.value = ''
+async function fetchStreamMetadata() {
+  streamMetadataLoading.value = true
+  streamMetadataError.value = ''
   try {
-    const response = await fetch(`${API_BASE}/channels/${selectedChannel.value}/status`)
+    const slug = currentChannelSlug.value
+    const response = await fetch(`/radioparadise/metadata/${slug}`)
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`)
     }
-    channelStatus.value = await response.json()
-    channelStatusLastUpdated.value = new Date()
+    streamMetadata.value = await response.json()
+    streamMetadataLastUpdated.value = new Date()
   } catch (e) {
-    channelStatusError.value = `Failed to load channel status: ${e.message}`
-    console.error('Error fetching channel status:', e)
+    streamMetadataError.value = `Failed to fetch stream metadata: ${e.message}`
+    console.error('Error fetching stream metadata:', e)
   } finally {
-    if (!silent) {
-      channelStatusLoading.value = false
-    }
+    streamMetadataLoading.value = false
   }
 }
 
-async function fetchChannelPlaylist({ silent = false, limit = 24 } = {}) {
-  if (!silent) {
-    channelPlaylistLoading.value = true
-  }
-  channelPlaylistError.value = ''
+// Fetch player metadata (for enhanced player)
+async function refreshPlayerMetadata() {
+  playerMetadataLoading.value = true
   try {
-    const params = new URLSearchParams()
-    if (limit != null) {
-      params.set('limit', String(limit))
-    }
-    const response = await fetch(
-      `${API_BASE}/channels/${selectedChannel.value}/playlist?${params.toString()}`
-    )
+    const slug = currentChannelSlug.value
+    const response = await fetch(`/radioparadise/metadata/${slug}`)
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`)
     }
-    const data = await response.json()
-    channelPlaylist.value = {
-      ...data,
-      items: (data.items || []).map((item) => ({
-        ...item,
-        cache_status: item.cache_status || { status: 'not_cached', progress: 0 }
-      }))
-    }
-    channelPlaylistLastUpdated.value = new Date()
-    const validIds = new Set(channelPlaylist.value.items.map((item) => trackObjectId(item)).filter(Boolean))
-    trackExtras.value = Object.fromEntries(
-      Object.entries(trackExtras.value).filter(([id]) => validIds.has(id))
-    )
+    const metadata = await response.json()
+    playerMetadata.value = metadata
+    playerMetadataLastUpdated.value = new Date()
+
+    // Update Media Session API if available
+    updateMediaSession(metadata)
   } catch (e) {
-    channelPlaylistError.value = `Failed to load playlist: ${e.message}`
-    console.error('Error fetching channel playlist:', e)
+    console.error('Error fetching player metadata:', e)
+    // Don't show error to user, just log it
   } finally {
-    if (!silent) {
-      channelPlaylistLoading.value = false
-    }
+    playerMetadataLoading.value = false
   }
 }
 
-async function fetchChannelHistory({ silent = false, limit = 25 } = {}) {
-  if (!silent) {
-    channelHistoryLoading.value = true
-  }
-  channelHistoryError.value = ''
-  try {
-    const params = new URLSearchParams()
-    if (limit != null) {
-      params.set('limit', String(limit))
-    }
-    const response = await fetch(
-      `${API_BASE}/channels/${selectedChannel.value}/history?${params.toString()}`
-    )
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-    }
-    const data = await response.json()
-    channelHistory.value = data.entries || []
-    channelHistoryLastUpdated.value = new Date()
-  } catch (e) {
-    channelHistoryError.value = `Failed to load history: ${e.message}`
-    console.error('Error fetching channel history:', e)
-  } finally {
-    if (!silent) {
-      channelHistoryLoading.value = false
-    }
-  }
-}
-
-async function refreshChannelData({ silent = false } = {}) {
-  await Promise.all([
-    fetchChannelStatus({ silent }),
-    fetchChannelPlaylist({ silent }),
-    fetchChannelHistory({ silent })
-  ])
-}
-
-function updateTrackExtras(trackId, patch) {
-  if (!trackId) {
-    return
-  }
-  const current = trackExtras.value[trackId] || {
-    uri: '',
-    lastResolvedAt: null,
-    resolving: false,
-    resolveError: '',
-    formats: [],
-    formatsLoading: false,
-    formatsError: '',
-    cacheRequestLoading: false,
-    cacheRequestMessage: '',
-    cacheError: '',
-    cacheStatusLoading: false
-  }
-  trackExtras.value = {
-    ...trackExtras.value,
-    [trackId]: {
-      ...current,
-      ...patch
-    }
-  }
-}
-
-function trackExtrasFor(item) {
-  const trackId = trackObjectId(item)
-  return trackExtras.value[trackId] || {}
-}
-
-async function resolveTrackUri(trackId) {
-  if (!trackId) {
-    throw new Error('Missing track identifier')
-  }
-  updateTrackExtras(trackId, { resolving: true, resolveError: '' })
-  try {
-    const params = new URLSearchParams()
-    params.set('object_id', trackId)
-    const response = await fetch(`${SOURCE_API_BASE}/${SOURCE_ID}/resolve?${params.toString()}`)
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-    }
-    const data = await response.json()
-    updateTrackExtras(trackId, {
-      resolving: false,
-      uri: data.uri,
-      lastResolvedAt: new Date()
+// Update browser Media Session API for notifications/lock screen
+function updateMediaSession(metadata) {
+  if ('mediaSession' in navigator && metadata) {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: metadata.title || 'Unknown Title',
+      artist: metadata.artist || 'Unknown Artist',
+      album: metadata.album || 'Radio Paradise',
+      artwork: metadata.image_url ? [
+        { src: metadata.image_url, sizes: '512x512', type: 'image/jpeg' }
+      ] : []
     })
-    return data.uri
-  } catch (e) {
-    updateTrackExtras(trackId, { resolving: false, resolveError: e.message })
-    throw e
+
+    // Set up action handlers
+    navigator.mediaSession.setActionHandler('play', () => {
+      audioPlayer.value?.play()
+    })
+    navigator.mediaSession.setActionHandler('pause', () => {
+      audioPlayer.value?.pause()
+    })
+    navigator.mediaSession.setActionHandler('stop', () => {
+      stopPlayback()
+    })
   }
 }
 
-async function refreshTrackCacheStatus(item) {
-  const trackId = trackObjectId(item)
-  if (!trackId) {
-    return
+// Start auto-refresh of player metadata
+function startPlayerMetadataRefresh() {
+  // Clear any existing timer
+  if (playerMetadataTimerId) {
+    clearInterval(playerMetadataTimerId)
   }
-  updateTrackExtras(trackId, { cacheStatusLoading: true, cacheError: '' })
-  try {
-    const params = new URLSearchParams()
-    params.set('object_id', trackId)
-    const response = await fetch(
-      `${SOURCE_API_BASE}/${SOURCE_ID}/cache/status?${params.toString()}`
-    )
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+
+  // Fetch immediately
+  refreshPlayerMetadata()
+
+  // Then refresh every 10 seconds while playing
+  playerMetadataTimerId = window.setInterval(() => {
+    if (isPlaying.value) {
+      refreshPlayerMetadata()
     }
-    const data = await response.json()
-    const status = data.status || { status: 'not_cached' }
-    channelPlaylist.value = {
-      ...channelPlaylist.value,
-      items: channelPlaylist.value.items.map((entry) =>
-        trackObjectId(entry) === trackId ? { ...entry, cache_status: status } : entry
-      )
-    }
-    updateTrackExtras(trackId, { cacheStatusLoading: false, cacheError: '', cacheStatus: status })
-  } catch (e) {
-    updateTrackExtras(trackId, { cacheStatusLoading: false, cacheError: e.message })
-    console.error('Error refreshing cache status:', e)
-  }
+  }, 10000)
 }
 
-async function requestCacheForTrack(item) {
-  const trackId = trackObjectId(item)
-  if (!trackId) {
-    return
-  }
-  updateTrackExtras(trackId, {
-    cacheRequestLoading: true,
-    cacheRequestMessage: '',
-    cacheError: ''
-  })
-  try {
-    const response = await fetch(`${SOURCE_API_BASE}/${SOURCE_ID}/cache`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ object_id: trackId })
-    })
-    if (!response.ok) {
-      const body = await response.json().catch(() => ({}))
-      const message = body?.error || response.statusText
-      throw new Error(message)
-    }
-    const data = await response.json()
-    const status = data.status || data?.cache_status
-    if (status) {
-      channelPlaylist.value = {
-        ...channelPlaylist.value,
-        items: channelPlaylist.value.items.map((entry) =>
-          trackObjectId(entry) === trackId ? { ...entry, cache_status: status } : entry
-        )
-      }
-    }
-    updateTrackExtras(trackId, {
-      cacheRequestLoading: false,
-      cacheRequestMessage: 'Cache request accepted'
-    })
-  } catch (e) {
-    updateTrackExtras(trackId, {
-      cacheRequestLoading: false,
-      cacheRequestMessage: '',
-      cacheError: e.message
-    })
-    console.error('Error requesting cache:', e)
-  } finally {
-    await refreshTrackCacheStatus(item)
-  }
-}
-
-async function fetchTrackFormats(item) {
-  const trackId = trackObjectId(item)
-  if (!trackId) {
-    return
-  }
-  const extras = trackExtrasFor(item)
-  if (extras.formats?.length && !extras.formatsError) {
-    return
-  }
-  updateTrackExtras(trackId, { formatsLoading: true, formatsError: '' })
-  try {
-    const params = new URLSearchParams()
-    params.set('object_id', trackId)
-    const response = await fetch(
-      `${SOURCE_API_BASE}/${SOURCE_ID}/formats?${params.toString()}`
-    )
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-    }
-    const data = await response.json()
-    updateTrackExtras(trackId, {
-      formatsLoading: false,
-      formats: data.formats || []
-    })
-  } catch (e) {
-    updateTrackExtras(trackId, { formatsLoading: false, formatsError: e.message })
-    console.error('Error fetching track formats:', e)
+// Stop auto-refresh of player metadata
+function stopPlayerMetadataRefresh() {
+  if (playerMetadataTimerId) {
+    clearInterval(playerMetadataTimerId)
+    playerMetadataTimerId = null
   }
 }
 
@@ -985,27 +782,6 @@ async function fetchChannels() {
   }
 }
 
-// Fetch available bitrates
-async function fetchBitrates() {
-  try {
-    const response = await fetch(`${API_BASE}/bitrates`)
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-    }
-    const data = await response.json()
-    bitrates.value = data
-    bitratesError.value = ''
-
-    if (bitrates.value.length > 0 && selectedBitrate.value === null) {
-      const flac = bitrates.value.find(bitrate => /flac/i.test(bitrate.name))
-      selectedBitrate.value = (flac || bitrates.value[0]).id
-    }
-  } catch (e) {
-    bitratesError.value = `Failed to fetch bitrates: ${e.message}`
-    console.error('Error fetching bitrates:', e)
-  }
-}
-
 // Select a channel
 function selectChannel(channelId) {
   if (selectedChannel.value === channelId) {
@@ -1016,31 +792,24 @@ function selectChannel(channelId) {
 }
 
 async function changeChannel() {
-  trackExtras.value = {}
   await refreshNowPlaying()
-  await refreshChannelData()
-  blockSearchResult.value = null
-  blockSearchError.value = ''
-}
-
-async function changeBitrate() {
-  trackExtras.value = {}
-  await refreshNowPlaying()
-  await refreshChannelData()
   blockSearchResult.value = null
   blockSearchError.value = ''
 }
 
 function playStream() {
-  if (!nowPlaying.value?.stream_url) {
+  // Use the custom stream URL based on selected format and mode
+  const streamUrl = currentStreamUrl.value
+
+  if (!streamUrl) {
     audioError.value = 'No stream URL available'
     isPlaying.value = false
-    activeTrackId.value = null
     return
   }
 
-  activeTrackId.value = null
-  playAudio(nowPlaying.value.stream_url)
+  playAudio(streamUrl)
+  // Start fetching metadata for the player
+  startPlayerMetadataRefresh()
 }
 
 function stopPlayback() {
@@ -1051,7 +820,15 @@ function stopPlayback() {
   }
   isPlaying.value = false
   audioError.value = ''
-  activeTrackId.value = null
+
+  // Stop metadata refresh
+  stopPlayerMetadataRefresh()
+  playerMetadata.value = null
+
+  // Clear Media Session
+  if ('mediaSession' in navigator) {
+    navigator.mediaSession.metadata = null
+  }
 }
 
 function togglePlayback() {
@@ -1064,7 +841,7 @@ function togglePlayback() {
 
 function handleAudioEnded() {
   isPlaying.value = false
-  activeTrackId.value = null
+  stopPlayerMetadataRefresh()
 }
 
 function handleAudioError() {
@@ -1075,7 +852,17 @@ function handleAudioError() {
     audioError.value = 'Unknown audio playback error'
   }
   isPlaying.value = false
-  activeTrackId.value = null
+  stopPlayerMetadataRefresh()
+}
+
+function handleAudioPlay() {
+  isPlaying.value = true
+  startPlayerMetadataRefresh()
+}
+
+function handleAudioPause() {
+  // Note: We don't set isPlaying to false here because the user might resume
+  // Only stop metadata refresh if the audio is actually stopped (not just paused)
 }
 
 async function loadUpcomingBlock() {
@@ -1127,46 +914,10 @@ function clearBlockSearch() {
   blockSearchError.value = ''
 }
 
-async function playTrackItem(item) {
-  const trackId = trackObjectId(item)
-  if (!trackId) {
-    audioError.value = 'Unable to determine track identifier'
-    isPlaying.value = false
-    return
-  }
-
-  try {
-    let uri = null
-    try {
-      uri = await resolveTrackUri(trackId)
-    } catch (resolveError) {
-      console.warn('Falling back to direct resource due to resolve error:', resolveError)
-    }
-
-    if (!uri) {
-      const fallback = item?.resources?.find((res) => res.url)?.url
-      uri = fallback
-    }
-
-    if (!uri) {
-      throw new Error('No audio resource available for this track')
-    }
-
-    activeTrackId.value = trackId
-    playAudio(uri)
-  } catch (e) {
-    audioError.value = e.message
-    isPlaying.value = false
-    activeTrackId.value = null
-  }
-}
-
 // Initialize on mount
 onMounted(async () => {
   await fetchChannels()
-  await fetchBitrates()
   await refreshNowPlaying()
-  await refreshChannelData()
 
   // Auto-refresh every 30 seconds
   refreshTimerId = window.setInterval(() => {
@@ -1174,21 +925,14 @@ onMounted(async () => {
       refreshNowPlaying()
     }
   }, 30000)
-
-  // Auto-refresh channel tracks every few seconds
-  channelRefreshTimerId = window.setInterval(() => {
-    if (!channelPlaylistLoading.value && !channelStatusLoading.value) {
-      refreshChannelData({ silent: true })
-    }
-  }, CHANNEL_REFRESH_INTERVAL)
 })
 
 onUnmounted(() => {
   if (refreshTimerId) {
     clearInterval(refreshTimerId)
   }
-  if (channelRefreshTimerId) {
-    clearInterval(channelRefreshTimerId)
+  if (playerMetadataTimerId) {
+    clearInterval(playerMetadataTimerId)
   }
 })
 </script>
@@ -1951,31 +1695,540 @@ onUnmounted(() => {
   flex-wrap: wrap;
 }
 
-.audio-player-container {
-  margin: 12px 0 24px;
-  padding: 16px;
-  border-radius: 8px;
-  background: rgba(0, 0, 0, 0.2);
-  border: 1px solid #333;
+/* Enhanced Media Player Section */
+.enhanced-player-section {
+  background: linear-gradient(135deg, #1a1a2e 0%, #0f0f1e 100%);
+  border-radius: 12px;
+  padding: 24px;
+  margin: 20px 0 32px;
+  border: 2px solid rgba(0, 212, 255, 0.4);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.player-header {
   display: flex;
-  gap: 12px;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid rgba(0, 212, 255, 0.2);
+}
+
+.player-header h3 {
+  margin: 0;
+  color: #00d4ff;
+  font-size: 1.3rem;
+}
+
+.player-controls-header {
+  display: flex;
+  gap: 10px;
   align-items: center;
 }
 
-.audio-error {
-  margin: 0;
-  color: #ff6b6b;
-  flex: 1;
+.btn-refresh-meta {
+  background: rgba(0, 212, 255, 0.15);
+  border: 1px solid rgba(0, 212, 255, 0.4);
+  color: #00d4ff;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 1.1rem;
+  transition: all 0.2s;
+  min-width: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-refresh-meta:hover:not(:disabled) {
+  background: rgba(0, 212, 255, 0.25);
+  border-color: rgba(0, 212, 255, 0.6);
+}
+
+.btn-refresh-meta:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .btn-stop {
   padding: 8px 16px;
-  border-radius: 4px;
-  border: none;
+  border-radius: 6px;
+  border: 1px solid rgba(231, 76, 60, 0.4);
   cursor: pointer;
-  background: rgba(231, 76, 60, 0.2);
+  background: rgba(231, 76, 60, 0.15);
   color: #e74c3c;
   font-weight: bold;
+  transition: all 0.2s;
+}
+
+.btn-stop:hover {
+  background: rgba(231, 76, 60, 0.25);
+  border-color: rgba(231, 76, 60, 0.6);
+}
+
+.audio-error-banner {
+  background: rgba(255, 68, 68, 0.15);
+  border: 1px solid rgba(255, 68, 68, 0.4);
+  color: #ff6b6b;
+  padding: 16px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  font-weight: 500;
+}
+
+.player-content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.player-info {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+}
+
+.player-cover {
+  flex-shrink: 0;
+}
+
+.player-cover img {
+  width: 180px;
+  height: 180px;
+  object-fit: cover;
+  border-radius: 12px;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.6);
+  border: 2px solid rgba(0, 212, 255, 0.2);
+}
+
+.player-cover-placeholder {
+  width: 180px;
+  height: 180px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #2a2a3e 0%, #1a1a2e 100%);
+  border-radius: 12px;
+  border: 2px dashed rgba(0, 212, 255, 0.3);
+  font-size: 4rem;
+  color: rgba(0, 212, 255, 0.3);
+}
+
+.player-metadata {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.metadata-display {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.player-title {
+  font-size: 1.8rem;
+  font-weight: bold;
+  color: #ffffff;
+  line-height: 1.2;
+  word-wrap: break-word;
+}
+
+.player-artist {
+  font-size: 1.4rem;
+  color: #00d4ff;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.player-album {
+  font-size: 1.1rem;
+  color: #9aa0a6;
+  font-style: italic;
+}
+
+.player-year {
+  font-size: 0.95rem;
+  color: #666;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 4px 10px;
+  border-radius: 4px;
+  display: inline-block;
+  align-self: flex-start;
+  margin-top: 4px;
+}
+
+.metadata-loading {
+  color: #9aa0a6;
+  font-size: 1rem;
+  font-style: italic;
+}
+
+.player-audio-controls {
+  width: 100%;
+}
+
+.player-audio-controls audio {
+  width: 100%;
+  border-radius: 8px;
+  background: #0a0a0a;
+  outline: none;
+}
+
+.player-stream-info {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+  border: 1px solid rgba(0, 212, 255, 0.15);
+}
+
+.stream-info-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.info-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #9aa0a6;
+  font-weight: 600;
+}
+
+.info-value {
+  font-size: 1rem;
+  color: #f5f5f5;
+  font-weight: 500;
+}
+
+/* Stream Controls Section */
+.stream-controls-section {
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 20px;
+  border: 1px solid rgba(0, 212, 255, 0.3);
+}
+
+.stream-controls-section h3 {
+  margin-top: 0;
+  color: #00d4ff;
+  margin-bottom: 16px;
+}
+
+.stream-controls-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 20px;
+}
+
+.control-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.control-group label {
+  font-weight: 600;
+  color: #9aa0a6;
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.format-chips,
+.mode-chips {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.format-chip,
+.mode-chip {
+  padding: 10px 18px;
+  border-radius: 6px;
+  border: 2px solid rgba(0, 212, 255, 0.3);
+  background: rgba(0, 212, 255, 0.08);
+  color: #00d4ff;
+  cursor: pointer;
+  font-weight: 600;
+  transition: all 0.2s;
+  font-size: 0.9rem;
+}
+
+.format-chip:hover,
+.mode-chip:hover {
+  background: rgba(0, 212, 255, 0.15);
+  border-color: rgba(0, 212, 255, 0.5);
+  transform: translateY(-2px);
+}
+
+.format-chip.active,
+.mode-chip.active {
+  background: rgba(0, 212, 255, 0.25);
+  border-color: #00d4ff;
+  box-shadow: 0 0 12px rgba(0, 212, 255, 0.3);
+}
+
+.format-description {
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 4px;
+  font-size: 0.85rem;
+  color: #9aa0a6;
+  font-style: italic;
+}
+
+.client-id-input {
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid #333;
+  background: #0f0f0f;
+  color: #fff;
+  font-family: 'Courier New', monospace;
+  font-size: 0.9rem;
+}
+
+.client-id-input:focus {
+  outline: none;
+  border-color: #00d4ff;
+  box-shadow: 0 0 8px rgba(0, 212, 255, 0.2);
+}
+
+/* Stream Diagnostics Section */
+.stream-diagnostics-section {
+  background: #1a1a1a;
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 20px;
+  border: 1px solid #333;
+}
+
+.stream-diagnostics-section h3 {
+  margin-top: 0;
+  color: #00d4ff;
+}
+
+/* Stream Metadata Section */
+.stream-metadata-section {
+  background: #1a1a1a;
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 20px;
+  border: 1px solid #333;
+}
+
+.stream-metadata-section h3 {
+  margin-top: 0;
+  color: #00d4ff;
+}
+
+.metadata-content {
+  margin-top: 12px;
+}
+
+.metadata-json {
+  background: #0f0f0f;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 16px;
+  overflow-x: auto;
+  font-family: 'Courier New', monospace;
+  font-size: 0.85rem;
+  color: #00d4ff;
+  line-height: 1.5;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.metadata-json::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.metadata-json::-webkit-scrollbar-track {
+  background: #1a1a1a;
+  border-radius: 4px;
+}
+
+.metadata-json::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 4px;
+}
+
+.metadata-json::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+/* Quick Test Section */
+.quick-test-section {
+  background: linear-gradient(135deg, #2a1a1a 0%, #1a1a1a 100%);
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 20px;
+  border: 1px solid rgba(255, 193, 7, 0.3);
+}
+
+.quick-test-section h3 {
+  margin-top: 0;
+  color: #ffc107;
+  margin-bottom: 8px;
+}
+
+.section-description {
+  color: #9aa0a6;
+  font-size: 0.9rem;
+  margin-bottom: 16px;
+}
+
+.test-commands {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.command-group {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 193, 7, 0.2);
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.command-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.command-label strong {
+  color: #ffc107;
+  font-size: 0.9rem;
+}
+
+.btn-copy-small {
+  background: rgba(255, 193, 7, 0.15);
+  border: 1px solid rgba(255, 193, 7, 0.3);
+  color: #ffc107;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: all 0.2s;
+}
+
+.btn-copy-small:hover {
+  background: rgba(255, 193, 7, 0.25);
+  border-color: rgba(255, 193, 7, 0.5);
+}
+
+.command-text {
+  display: block;
+  background: #0a0a0a;
+  padding: 10px 12px;
+  border-radius: 4px;
+  font-family: 'Courier New', monospace;
+  font-size: 0.85rem;
+  color: #00d4ff;
+  overflow-x: auto;
+  white-space: nowrap;
+  border: 1px solid #222;
+}
+
+.command-text::-webkit-scrollbar {
+  height: 6px;
+}
+
+.command-text::-webkit-scrollbar-track {
+  background: #111;
+  border-radius: 3px;
+}
+
+.command-text::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 3px;
+}
+
+.command-text::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+.diagnostics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.diagnostic-card {
+  background: rgba(0, 212, 255, 0.05);
+  border: 1px solid rgba(0, 212, 255, 0.15);
+  border-radius: 6px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.diagnostic-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #9aa0a6;
+  font-weight: 600;
+}
+
+.diagnostic-value {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #f5f5f5;
+}
+
+.diagnostic-value code {
+  background: rgba(0, 0, 0, 0.4);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-family: 'Courier New', monospace;
+  font-size: 0.85rem;
+  color: #00d4ff;
+  word-break: break-all;
+  display: block;
+  margin-top: 4px;
+}
+
+.stream-urls-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: rgba(0, 0, 0, 0.3);
+  padding: 16px;
+  border-radius: 6px;
+}
+
+.url-item {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.url-item:last-child {
+  border-bottom: none;
+}
+
+.url-item strong {
+  color: #00d4ff;
+  min-width: 120px;
 }
 
 @media (max-width: 768px) {
@@ -2004,6 +2257,54 @@ onUnmounted(() => {
   .search-controls {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .stream-controls-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .diagnostics-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* Enhanced Player Responsive */
+  .player-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .player-controls-header {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .player-info {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+
+  .player-cover img,
+  .player-cover-placeholder {
+    width: 150px;
+    height: 150px;
+  }
+
+  .player-title {
+    font-size: 1.4rem;
+  }
+
+  .player-artist {
+    font-size: 1.1rem;
+  }
+
+  .player-album {
+    font-size: 1rem;
+  }
+
+  .player-stream-info {
+    grid-template-columns: 1fr;
   }
 }
 </style>

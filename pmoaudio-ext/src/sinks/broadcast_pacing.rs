@@ -6,7 +6,7 @@
 //! - Paces broadcast to match audio playback rate
 
 use std::time::Instant;
-use tracing::{debug, info, warn};
+use tracing::{trace, warn};
 
 /// Error returned when a frame should be skipped (too late)
 #[derive(Debug)]
@@ -56,7 +56,7 @@ impl BroadcastPacer {
         let elapsed_since_start = self.start_time.elapsed().as_secs_f64();
         if audio_timestamp < 0.1 && elapsed_since_start > 1.0 {
             self.start_time = Instant::now();
-            info!(
+            trace!(
                 "{} broadcaster: TopZeroSync detected, resetting timer",
                 self.label
             );
@@ -94,7 +94,7 @@ impl BroadcastPacer {
 
         // Log pour info si on est très en avance, mais on ne dort PAS
         if self.max_lead_time > 0.0 && lead_time > self.max_lead_time {
-            debug!(
+            trace!(
                 "{} broadcaster: lead_time={:.3}s > max={:.3}s (audio_ts={:.3}s, elapsed={:.3}s) - relying on natural backpressure",
                 self.label, lead_time, self.max_lead_time, audio_timestamp, elapsed
             );

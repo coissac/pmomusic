@@ -15,7 +15,7 @@ use std::{
 };
 
 use tokio::sync::Notify;
-use tracing::warn;
+use tracing::{trace, warn};
 
 /// Paquet diffusé contenant la charge utile + méta timing.
 #[derive(Clone)]
@@ -99,7 +99,7 @@ impl<T> State<T> {
             }
         }
         if purged > 0 {
-            tracing::debug!(
+            trace!(
                 "TimedBroadcast: purged {} expired packet(s) (head_seq={})",
                 purged,
                 self.head_seq

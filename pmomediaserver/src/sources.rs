@@ -177,18 +177,13 @@ impl SourcesExt for Server {
 
         tracing::info!("Initializing Radio Paradise source...");
 
-        // Créer le client (Radio Paradise ne nécessite pas d'authentification)
-        let client = RadioParadiseClient::new().await.map_err(|e| {
-            SourceInitError::ParadiseError(format!("Failed to create client: {}", e))
-        })?;
+        // Obtenir l'URL de base du serveur
+        let base_url = self.base_url();
 
-        // Créer la source depuis le registry avec capacité FIFO par défaut
-        let source = RadioParadiseSource::from_registry_default(client).map_err(|e| {
-            SourceInitError::ParadiseError(format!("Failed to create source: {}", e))
-        })?;
+        // Créer la source Radio Paradise (utilise le singleton PlaylistManager)
+        let source = RadioParadiseSource::new(base_url.to_string());
 
         // Enregistrer la source
-        // Note: La FIFO sera peuplée automatiquement lors du premier browse
         self.register_music_source(Arc::new(source)).await;
 
         tracing::info!("✅ Radio Paradise source registered successfully");

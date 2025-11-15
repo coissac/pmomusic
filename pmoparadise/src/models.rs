@@ -161,6 +161,27 @@ pub struct Song {
     #[serde(default, deserialize_with = "deserialize_optional_string_or_f32")]
     pub rating: Option<f32>,
 
+    /// Gapless URL for individual song FLAC
+    /// This URL points to a FLAC file containing only this song
+    #[serde(default)]
+    pub gapless_url: Option<String>,
+
+    /// Scheduled playback time on Radio Paradise (Unix timestamp in milliseconds, UTC)
+    #[serde(default)]
+    pub sched_time_millis: Option<u64>,
+
+    /// Radio Paradise song ID (unique identifier)
+    #[serde(default)]
+    pub song_id: Option<String>,
+
+    /// Radio Paradise artist ID (for building artist URLs)
+    #[serde(default)]
+    pub artist_id: Option<String>,
+
+    /// Large cover image path (best quality)
+    #[serde(default)]
+    pub cover_large: Option<String>,
+
     /// Additional metadata
     #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,

@@ -14,14 +14,18 @@ use crate::{
     client::RadioParadiseClient,
     radio_paradise_stream_source::RadioParadiseStreamSource,
 };
-use anyhow::Result;
-use pmoaudio::AudioPipelineNode;
+use anyhow::{anyhow, Result};
+use pmoaudio::{nodes::DEFAULT_CHANNEL_SIZE, AudioPipelineNode};
 use pmoaudio_ext::{
-    FlacClientStream, IcyClientStream, MetadataSnapshot, OggFlacClientStream, OggFlacStreamHandle,
-    StreamHandle, StreamingFlacSink, StreamingOggFlacSink, TrackBoundaryCoverNode,
+    FlacCacheSink, FlacClientStream, IcyClientStream, MetadataSnapshot, OggFlacClientStream,
+    OggFlacStreamHandle, PlaylistSource, StreamHandle, StreamingFlacSink, StreamingOggFlacSink,
+    TrackBoundaryCoverNode,
 };
+use pmoaudiocache::Cache as AudioCache;
 use pmocovers::Cache as CoverCache;
 use pmoflac::EncoderOptions;
+use pmoplaylist::WriteHandle;
+use thiserror::Error;
 use tokio::io::{AsyncRead, ReadBuf};
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
@@ -41,6 +45,82 @@ impl Default for ParadiseStreamChannelConfig {
             max_lead_seconds: 1.0,
         }
     }
+}
+
+/// Options pour activer l'archivage/historique d'un canal.
+pub struct ParadiseHistoryOptions {
+    pub audio_cache: Arc<AudioCache>,
+    pub cover_cache: Arc<CoverCache>,
+    pub playlist_id: String,
+    pub playlist_writer: WriteHandle,
+    pub collection: Option<String>,
+    pub replay_max_lead_seconds: f64,
+}
+
+/// Builder pratique pour configurer automatiquement les playlists historiques.
+#[derive(Clone)]
+pub struct ParadiseHistoryBuilder {
+    pub audio_cache: Arc<AudioCache>,
+    pub cover_cache: Arc<CoverCache>,
+    pub playlist_prefix: String,
+    pub playlist_title_prefix: Option<String>,
+    pub max_history_tracks: Option<usize>,
+    pub collection_prefix: Option<String>,
+    pub replay_max_lead_seconds: f64,
+}
+
+impl ParadiseHistoryBuilder {
+    pub fn new(audio_cache: Arc<AudioCache>, cover_cache: Arc<CoverCache>) -> Self {
+        Self {
+            audio_cache,
+            cover_cache,
+            playlist_prefix: "radio-paradise-history".into(),
+            playlist_title_prefix: Some("Radio Paradise History".into()),
+            max_history_tracks: Some(500),
+            collection_prefix: Some("radio-paradise".into()),
+            replay_max_lead_seconds: 1.0,
+        }
+    }
+
+    pub async fn build_for_channel(
+        &self,
+        descriptor: &ChannelDescriptor,
+    ) -> Result<ParadiseHistoryOptions, pmoplaylist::Error> {
+        let playlist_id = format!("{}-{}", self.playlist_prefix, descriptor.slug);
+        let manager = pmoplaylist::PlaylistManager();
+        let writer = manager
+            .get_persistent_write_handle(playlist_id.clone())
+            .await?;
+
+        if let Some(prefix) = &self.playlist_title_prefix {
+            let title = format!("{} - {}", prefix, descriptor.display_name);
+            writer.set_title(title).await?;
+        }
+
+        if let Some(capacity) = self.max_history_tracks {
+            writer.set_capacity(Some(capacity)).await?;
+        }
+
+        let collection = self
+            .collection_prefix
+            .as_ref()
+            .map(|prefix| format!("{}-{}", prefix, descriptor.slug));
+
+        Ok(ParadiseHistoryOptions {
+            audio_cache: self.audio_cache.clone(),
+            cover_cache: self.cover_cache.clone(),
+            playlist_id,
+            playlist_writer: writer,
+            collection,
+            replay_max_lead_seconds: self.replay_max_lead_seconds,
+        })
+    }
+}
+
+struct HistoryState {
+    playlist_id: String,
+    audio_cache: Arc<AudioCache>,
+    replay_max_lead_seconds: f64,
 }
 
 #[cfg(feature = "pmoconfig")]
@@ -94,6 +174,7 @@ pub struct ParadiseStreamChannel {
     state: Arc<ChannelState>,
     pipeline_handle: JoinHandle<()>,
     feeder_handle: JoinHandle<()>,
+    history: Option<HistoryState>,
 }
 
 impl ParadiseStreamChannel {
@@ -103,6 +184,7 @@ impl ParadiseStreamChannel {
         client: RadioParadiseClient,
         config: ParadiseStreamChannelConfig,
         cover_cache: Option<Arc<CoverCache>>,
+        history: Option<ParadiseHistoryOptions>,
     ) -> Self {
         let mut source = RadioParadiseStreamSource::new(client.clone());
         let block_handle = source.block_handle();
@@ -118,14 +200,47 @@ impl ParadiseStreamChannel {
             config.max_lead_seconds,
         );
 
+        let mut downstream_children: Vec<Box<dyn AudioPipelineNode>> = Vec::new();
+        downstream_children.push(Box::new(flac_sink));
+        downstream_children.push(Box::new(ogg_sink));
+
+        let mut history_state = None;
+
+        if let Some(history_opts) = history {
+            let ParadiseHistoryOptions {
+                audio_cache,
+                cover_cache,
+                playlist_id,
+                playlist_writer,
+                collection,
+                replay_max_lead_seconds,
+            } = history_opts;
+            let mut cache_sink = FlacCacheSink::with_config(
+                audio_cache.clone(),
+                cover_cache,
+                DEFAULT_CHANNEL_SIZE,
+                EncoderOptions::default(),
+                collection,
+            );
+            cache_sink.register_playlist(playlist_writer);
+            downstream_children.push(Box::new(cache_sink));
+            history_state = Some(HistoryState {
+                playlist_id,
+                audio_cache,
+                replay_max_lead_seconds,
+            });
+        }
+
         if let Some(cache) = cover_cache {
             let mut cover_node = TrackBoundaryCoverNode::new(cache);
-            cover_node.register(Box::new(flac_sink));
-            cover_node.register(Box::new(ogg_sink));
+            for child in downstream_children {
+                cover_node.register(child);
+            }
             source.register(Box::new(cover_node));
         } else {
-            source.register(Box::new(flac_sink));
-            source.register(Box::new(ogg_sink));
+            for child in downstream_children {
+                source.register(child);
+            }
         }
         stream_handle.set_auto_stop(false);
         ogg_handle.set_auto_stop(false);
@@ -167,6 +282,7 @@ impl ParadiseStreamChannel {
             state,
             pipeline_handle,
             feeder_handle,
+            history: history_state,
         }
     }
 
@@ -175,12 +291,19 @@ impl ParadiseStreamChannel {
         descriptor: ChannelDescriptor,
         config: ParadiseStreamChannelConfig,
         cover_cache: Option<Arc<CoverCache>>,
+        history: Option<ParadiseHistoryOptions>,
     ) -> Result<Self> {
         let client = RadioParadiseClient::builder()
             .channel(descriptor.id)
             .build()
             .await?;
-        Ok(Self::with_client(descriptor, client, config, cover_cache))
+        Ok(Self::with_client(
+            descriptor,
+            client,
+            config,
+            cover_cache,
+            history,
+        ))
     }
 
     /// S'abonne au flux FLAC pur.
@@ -216,6 +339,78 @@ impl ParadiseStreamChannel {
 
     pub fn descriptor(&self) -> ChannelDescriptor {
         self.descriptor
+    }
+
+    /// Lance un pipeline dédié pour rejouer l'historique (FLAC pur) pour un client.
+    pub async fn stream_history_flac(
+        &self,
+        client_id: &str,
+    ) -> Result<HistoryFlacStream, HistoryStreamError> {
+        let history = self
+            .history
+            .as_ref()
+            .ok_or(HistoryStreamError::HistoryDisabled)?;
+        tracing::info!(
+            "Starting historical FLAC replay for channel {} (client_id={})",
+            self.descriptor.display_name,
+            client_id
+        );
+
+        let reader = pmoplaylist::PlaylistManager()
+            .get_read_handle(&history.playlist_id)
+            .await
+            .map_err(|e| HistoryStreamError::Playlist(e.to_string()))?;
+        let mut source = PlaylistSource::new(reader, history.audio_cache.clone());
+        let (flac_sink, handle) = StreamingFlacSink::with_max_broadcast_lead(
+            EncoderOptions::default(),
+            16,
+            history.replay_max_lead_seconds,
+        );
+        source.register(Box::new(flac_sink));
+        let stop_token = CancellationToken::new();
+        let mut pipeline_source = source;
+        let stop_clone = stop_token.clone();
+        let pipeline = tokio::spawn(async move {
+            let _ = Box::new(pipeline_source).run(stop_clone).await;
+        });
+        let stream = handle.subscribe_flac();
+        Ok(HistoryFlacStream::new(stream, stop_token, pipeline))
+    }
+
+    /// Lance un pipeline dédié pour rejouer l'historique (OGG-FLAC) pour un client.
+    pub async fn stream_history_ogg(
+        &self,
+        client_id: &str,
+    ) -> Result<HistoryOggStream, HistoryStreamError> {
+        let history = self
+            .history
+            .as_ref()
+            .ok_or(HistoryStreamError::HistoryDisabled)?;
+        tracing::info!(
+            "Starting historical OGG replay for channel {} (client_id={})",
+            self.descriptor.display_name,
+            client_id
+        );
+
+        let reader = pmoplaylist::PlaylistManager()
+            .get_read_handle(&history.playlist_id)
+            .await
+            .map_err(|e| HistoryStreamError::Playlist(e.to_string()))?;
+        let mut source = PlaylistSource::new(reader, history.audio_cache.clone());
+        let (ogg_sink, handle) = StreamingOggFlacSink::with_max_broadcast_lead(
+            EncoderOptions::default(),
+            16,
+            history.replay_max_lead_seconds,
+        );
+        source.register(Box::new(ogg_sink));
+        let stop_token = CancellationToken::new();
+        let mut pipeline_source = source;
+        let stop_clone = stop_token.clone();
+        let pipeline = tokio::spawn(async move {
+            let _ = Box::new(pipeline_source).run(stop_clone).await;
+        });
+        let stream = handle.subscribe();
+        Ok(HistoryOggStream::new(stream, stop_token, pipeline))
     }
 }
 
@@ -360,6 +555,96 @@ wrap_stream!(ChannelFlacStream, FlacClientStream);
 wrap_stream!(ChannelIcyStream, IcyClientStream);
 wrap_stream!(ChannelOggStream, OggFlacClientStream);
 
+#[derive(Debug, Error)]
+pub enum HistoryStreamError {
+    #[error("history replay not enabled for this channel")]
+    HistoryDisabled,
+    #[error("playlist error: {0}")]
+    Playlist(String),
+}
+
+pub struct HistoryFlacStream {
+    inner: FlacClientStream,
+    stop_token: CancellationToken,
+    pipeline: Option<JoinHandle<()>>,
+}
+
+impl HistoryFlacStream {
+    fn new(
+        inner: FlacClientStream,
+        stop_token: CancellationToken,
+        pipeline: JoinHandle<()>,
+    ) -> Self {
+        Self {
+            inner,
+            stop_token,
+            pipeline: Some(pipeline),
+        }
+    }
+}
+
+impl AsyncRead for HistoryFlacStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl Unpin for HistoryFlacStream {}
+
+impl Drop for HistoryFlacStream {
+    fn drop(&mut self) {
+        self.stop_token.cancel();
+        if let Some(handle) = self.pipeline.take() {
+            handle.abort();
+        }
+    }
+}
+
+pub struct HistoryOggStream {
+    inner: OggFlacClientStream,
+    stop_token: CancellationToken,
+    pipeline: Option<JoinHandle<()>>,
+}
+
+impl HistoryOggStream {
+    fn new(
+        inner: OggFlacClientStream,
+        stop_token: CancellationToken,
+        pipeline: JoinHandle<()>,
+    ) -> Self {
+        Self {
+            inner,
+            stop_token,
+            pipeline: Some(pipeline),
+        }
+    }
+}
+
+impl AsyncRead for HistoryOggStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl Unpin for HistoryOggStream {}
+
+impl Drop for HistoryOggStream {
+    fn drop(&mut self) {
+        self.stop_token.cancel();
+        if let Some(handle) = self.pipeline.take() {
+            handle.abort();
+        }
+    }
+}
+
 /// Gestionnaire multi-canaux.
 pub struct ParadiseChannelManager {
     channels: HashMap<u8, Arc<ParadiseStreamChannel>>,
@@ -372,13 +657,25 @@ impl ParadiseChannelManager {
 
     pub async fn with_defaults_with_cover_cache(
         cover_cache: Option<Arc<CoverCache>>,
+        history_builder: Option<ParadiseHistoryBuilder>,
     ) -> Result<Self> {
         let mut map = HashMap::new();
         for descriptor in ALL_CHANNELS.iter().copied() {
+            let history_opts = if let Some(builder) = &history_builder {
+                Some(
+                    builder
+                        .build_for_channel(&descriptor)
+                        .await
+                        .map_err(|e| anyhow!("Failed to init history playlist: {}", e))?,
+                )
+            } else {
+                None
+            };
             let channel = ParadiseStreamChannel::new(
                 descriptor,
                 ParadiseStreamChannelConfig::default(),
                 cover_cache.clone(),
+                history_opts,
             )
             .await?;
             map.insert(descriptor.id, Arc::new(channel));
@@ -387,7 +684,7 @@ impl ParadiseChannelManager {
     }
 
     pub async fn with_defaults() -> Result<Self> {
-        Self::with_defaults_with_cover_cache(None).await
+        Self::with_defaults_with_cover_cache(None, None).await
     }
 
     pub fn get(&self, id: u8) -> Option<Arc<ParadiseStreamChannel>> {

@@ -200,6 +200,7 @@ impl NodeLogic for FlacCacheSinkLogic {
 
             // Phase 1: Dispatcher jusqu'à ce que le prebuffer soit terminé
             let mut end_of_stream_received = false;
+            let mut early_track_boundary_received = false;
             let mut track_tx_opt = Some(track_tx);
             let pk = loop {
                 tokio::select! {
@@ -221,9 +222,9 @@ impl NodeLogic for FlacCacheSinkLogic {
                     result = rx.recv() => {
                         match result {
                             Some(segment) => {
-                                // Si EndOfStream a été reçu, ignorer tous les segments suivants
+                                // Si EndOfStream ou TrackBoundary a été reçu, ignorer tous les segments suivants
                                 // et continuer à attendre cache_future
-                                if end_of_stream_received {
+                                if end_of_stream_received || early_track_boundary_received {
                                     continue;
                                 }
 
@@ -239,10 +240,18 @@ impl NodeLogic for FlacCacheSinkLogic {
                                         }
                                     }
                                     _AudioSegment::Sync(marker) => match &**marker {
-                                        SyncMarker::TrackBoundary { .. } => {
-                                            // TrackBoundary avant fin du prebuffer - track trop courte
-                                            tracing::error!("FlacCacheSink: TrackBoundary received before prebuffer complete - track too short");
-                                            return Err(AudioError::ProcessingError("Track too short for prebuffer".to_string()));
+                                        SyncMarker::TrackBoundary { metadata } => {
+                                            // TrackBoundary pendant le prebuffer - track courte (< 512KB)
+                                            tracing::warn!(
+                                                "FlacCacheSink: TrackBoundary received before prebuffer complete - track shorter than 512KB, closing pump and waiting for ingestion"
+                                            );
+                                            // Stocker les métadonnées pour la prochaine track
+                                            next_track_metadata = Some(metadata.clone());
+                                            // Fermer le track_tx pour que le pump se termine proprement
+                                            track_tx_opt = None;
+                                            // Marquer qu'on a reçu un TrackBoundary précoce
+                                            early_track_boundary_received = true;
+                                            // Continuer à attendre cache_future
                                         }
                                         SyncMarker::EndOfStream => {
                                             tracing::debug!("FlacCacheSink: EndOfStream during prebuffer - closing pump and waiting for ingestion to complete");
@@ -262,7 +271,7 @@ impl NodeLogic for FlacCacheSinkLogic {
                             }
                             None => {
                                 // EOF sur rx pendant le prebuffer - attendre que cache_future se termine
-                                if !end_of_stream_received {
+                                if !end_of_stream_received && !early_track_boundary_received {
                                     tracing::debug!("FlacCacheSink: EOF on rx during prebuffer, waiting for ingestion to complete");
                                     track_tx_opt = None;
                                     end_of_stream_received = true;
@@ -296,26 +305,62 @@ impl NodeLogic for FlacCacheSinkLogic {
                         ))
                     })?;
 
-                let url = match dest_metadata.read().await.get_cover_url().await {
-                    Ok(url) => {
-                        tracing::debug!("FlacCacheSink: Got cover URL for pk {}: {:?}", pk, url);
-                        url
+                let cover_pk_present = match dest_metadata.read().await.get_cover_pk().await {
+                    Ok(Some(existing_pk)) => {
+                        tracing::debug!(
+                            "FlacCacheSink: cover_pk already set for audio asset {} ({})",
+                            pk,
+                            existing_pk
+                        );
+                        true
                     }
+                    Ok(None) => false,
                     Err(e) if e.is_transient() => {
                         tracing::debug!(
-                            "FlacCacheSink: Transient error getting cover URL for pk {}: {}",
+                            "FlacCacheSink: Transient error getting cover_pk for pk {}: {}",
                             pk,
                             e
                         );
-                        None
+                        false
                     }
                     Err(e) => {
                         tracing::warn!(
-                            "FlacCacheSink: Cannot obtain cover URL for audio asset {}: {}",
+                            "FlacCacheSink: Cannot obtain cover_pk for audio asset {}: {}",
                             pk,
                             e
                         );
-                        None
+                        false
+                    }
+                };
+
+                let url = if cover_pk_present {
+                    None
+                } else {
+                    match dest_metadata.read().await.get_cover_url().await {
+                        Ok(url) => {
+                            tracing::debug!(
+                                "FlacCacheSink: Got cover URL for pk {}: {:?}",
+                                pk,
+                                url
+                            );
+                            url
+                        }
+                        Err(e) if e.is_transient() => {
+                            tracing::debug!(
+                                "FlacCacheSink: Transient error getting cover URL for pk {}: {}",
+                                pk,
+                                e
+                            );
+                            None
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "FlacCacheSink: Cannot obtain cover URL for audio asset {}: {}",
+                                pk,
+                                e
+                            );
+                            None
+                        }
                     }
                 };
 
@@ -376,6 +421,16 @@ impl NodeLogic for FlacCacheSinkLogic {
                 drop(pump_handle);
                 track_number += 1;
                 continue; // Passer à la track suivante (qui n'arrivera pas car EndOfStream)
+            }
+
+            // Si TrackBoundary précoce a été reçu pendant le prebuffer, passer à la track suivante
+            if early_track_boundary_received {
+                tracing::debug!(
+                    "FlacCacheSink: TrackBoundary was received during prebuffer, track complete, moving to next track"
+                );
+                drop(pump_handle);
+                track_number += 1;
+                continue; // Passer à la track suivante (métadonnées déjà stockées dans next_track_metadata)
             }
 
             // Phase 3: Continuer à dispatcher jusqu'au TrackBoundary

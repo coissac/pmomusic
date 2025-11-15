@@ -1,6 +1,6 @@
 use pmoapp::{WebAppExt, Webapp};
 use pmomediarenderer::MEDIA_RENDERER;
-use pmomediaserver::{MEDIA_SERVER, sources::SourcesExt};
+use pmomediaserver::{MEDIA_SERVER, sources::SourcesExt, ParadiseStreamingExt};
 use pmoserver::Server;
 use pmosource::MusicSourceExt;
 use pmoupnp::UpnpServerExt;
@@ -36,13 +36,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("🎵 Registering music sources...");
 
     // // Enregistrer Qobuz
-    // if let Err(e) = server.register_qobuz().await {
+    // if let Err(e) = server.write().await.register_qobuz().await {
     //     tracing::warn!("⚠️ Failed to register Qobuz: {}", e);
     // }
 
-    // Enregistrer Radio Paradise (inclut l'initialisation de l'API)
-    if let Err(e) = server.write().await.register_paradise().await {
-        tracing::warn!("⚠️ Failed to register Radio Paradise: {}", e);
+    // Initialiser les canaux de streaming Radio Paradise (pipelines + routes HTTP)
+    info!("📻 Initializing Radio Paradise streaming channels...");
+    if let Err(e) = server.write().await.init_paradise_streaming().await {
+        tracing::warn!("⚠️ Failed to initialize Paradise streaming: {}", e);
+    } else {
+        // Enregistrer la source Radio Paradise UPnP (inclut l'initialisation de l'API)
+        if let Err(e) = server.write().await.register_paradise().await {
+            tracing::warn!("⚠️ Failed to register Radio Paradise source: {}", e);
+        }
     }
 
     // Lister toutes les sources enregistrées

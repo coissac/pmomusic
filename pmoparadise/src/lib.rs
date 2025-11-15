@@ -203,7 +203,7 @@
 //! - `pmoserver`: Enable REST API extension for pmoserver integration (adds `utoipa`, `axum`)
 //! - `pmoaudio`: Enable RadioParadiseStreamSource for pmoaudio integration
 //! - `pmoconfig`: Enable configuration integration with pmoconfig
-//! - `server`: Enable RadioParadiseSource stub for backward compatibility (deprecated)
+//! - `server`: Enable RadioParadiseSource for UPnP ContentDirectory integration
 //!
 //! ## See Also
 //!
@@ -242,7 +242,9 @@ pub use radio_paradise_stream_source::{RadioParadiseStreamSource, END_OF_BLOCKS_
 
 #[cfg(feature = "pmoaudio")]
 pub use stream_channel::{
-    ParadiseChannelManager, ParadiseStreamChannel, ParadiseStreamChannelConfig,
+    HistoryFlacStream, HistoryOggStream, HistoryStreamError, ParadiseChannelManager,
+    ParadiseHistoryBuilder, ParadiseHistoryOptions, ParadiseStreamChannel,
+    ParadiseStreamChannelConfig,
 };
 
 #[cfg(feature = "pmoserver")]
