@@ -19,7 +19,7 @@
 //!        ↓
 //! [Broadcaster Task]
 //!        ↓
-//! broadcast::channel<Bytes> (FLAC bytes)
+//! timed_broadcast::channel<Bytes> (FLAC bytes)
 //!        ↓
 //! Multiple clients via StreamHandle::subscribe()
 //!   ├─ FLAC pure (for standard renderers)
@@ -62,7 +62,11 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use super::{broadcast_pacing::BroadcastPacer, flac_frame_utils};
+use super::{
+    broadcast_pacing::BroadcastPacer,
+    flac_frame_utils,
+    timed_broadcast::{self, TimedPacket, TryRecvError},
+};
 use async_trait::async_trait;
 use bytes::Bytes;
 use pmoaudio::{
@@ -73,7 +77,7 @@ use pmoaudio::{
 use pmoflac::{encode_flac_stream, EncoderOptions, FlacEncodedStream, PcmFormat};
 use pmometadata::TrackMetadata;
 use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
-use tokio::sync::{broadcast, mpsc, RwLock};
+use tokio::sync::{mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, trace, warn};
 
@@ -160,7 +164,7 @@ pub struct MetadataSnapshot {
 #[derive(Clone)]
 pub struct StreamHandle {
     /// Broadcast sender for FLAC bytes (pure mode)
-    flac_broadcast: broadcast::Sender<Bytes>,
+    flac_broadcast: timed_broadcast::Sender<Bytes>,
 
     /// Current track metadata (read-only for consumers)
     metadata: Arc<RwLock<MetadataSnapshot>>,
@@ -189,6 +193,7 @@ impl StreamHandle {
             finished: false,
             handle: self.clone(),
             state: FlacStreamState::SendingHeader,
+            current_epoch: 0,
         }
     }
 
@@ -220,6 +225,7 @@ impl StreamHandle {
             finished: false,
             handle: self.clone(),
             state: FlacStreamState::SendingHeader,
+            current_epoch: 0,
         }
     }
 
@@ -247,11 +253,18 @@ enum FlacStreamState {
 
 /// Pure FLAC client stream (implements AsyncRead).
 pub struct FlacClientStream {
-    rx: broadcast::Receiver<Bytes>,
+    rx: timed_broadcast::Receiver<Bytes>,
     buffer: VecDeque<u8>,
     finished: bool,
     handle: StreamHandle,
     state: FlacStreamState,
+    current_epoch: u64,
+}
+
+impl FlacClientStream {
+    pub fn current_epoch(&self) -> u64 {
+        self.current_epoch
+    }
 }
 
 impl AsyncRead for FlacClientStream {
@@ -302,10 +315,11 @@ impl AsyncRead for FlacClientStream {
 
             // Try to receive more data
             match self.rx.try_recv() {
-                Ok(bytes) => {
-                    self.buffer.extend(bytes.iter());
+                Ok(packet) => {
+                    self.current_epoch = packet.epoch;
+                    self.buffer.extend(packet.payload.iter());
                 }
-                Err(broadcast::error::TryRecvError::Empty) => {
+                Err(TryRecvError::Empty) => {
                     // No data available right now.
                     // Schedule a wakeup after a small delay to avoid busy-loop polling.
                     let waker = cx.waker().clone();
@@ -315,11 +329,11 @@ impl AsyncRead for FlacClientStream {
                     });
                     return Poll::Pending;
                 }
-                Err(broadcast::error::TryRecvError::Lagged(skipped)) => {
+                Err(TryRecvError::Lagged(skipped)) => {
                     warn!("FLAC client lagged, skipped {} messages", skipped);
                     // Continue to try receiving again
                 }
-                Err(broadcast::error::TryRecvError::Closed) => {
+                Err(TryRecvError::Closed) => {
                     self.finished = true;
                     return Poll::Ready(Ok(()));
                 }
@@ -345,7 +359,7 @@ impl Drop for FlacClientStream {
 /// This stream injects ICY metadata blocks at regular intervals,
 /// allowing clients to display "Now Playing" information.
 pub struct IcyClientStream {
-    rx: broadcast::Receiver<Bytes>,
+    rx: timed_broadcast::Receiver<Bytes>,
     metadata: Arc<RwLock<MetadataSnapshot>>,
     metaint: usize,
     byte_count: usize,
@@ -355,6 +369,13 @@ pub struct IcyClientStream {
     finished: bool,
     handle: StreamHandle,
     state: FlacStreamState,
+    current_epoch: u64,
+}
+
+impl IcyClientStream {
+    pub fn current_epoch(&self) -> u64 {
+        self.current_epoch
+    }
 }
 
 impl IcyClientStream {
@@ -491,22 +512,23 @@ impl AsyncRead for IcyClientStream {
 
             // Try to receive audio data
             match self.rx.try_recv() {
-                Ok(bytes) => {
+                Ok(packet) => {
+                    self.current_epoch = packet.epoch;
                     // Calculate how many bytes until next metadata block
                     let until_metadata = self.metaint - (self.byte_count % self.metaint);
-                    let to_buffer = bytes.len().min(until_metadata);
+                    let to_buffer = packet.payload.len().min(until_metadata);
 
-                    self.buffer.extend(bytes[..to_buffer].iter());
+                    self.buffer.extend(packet.payload[..to_buffer].iter());
                     self.byte_count += to_buffer;
 
                     // If we have more data, we'll process it in the next iteration
-                    if to_buffer < bytes.len() {
+                    if to_buffer < packet.payload.len() {
                         // Save remaining for next iteration
                         // For now, we'll just drop it and get it again
                         // TODO: Improve this
                     }
                 }
-                Err(broadcast::error::TryRecvError::Empty) => {
+                Err(TryRecvError::Empty) => {
                     // No data available right now.
                     // Schedule a wakeup after a small delay to avoid busy-loop polling.
                     let waker = cx.waker().clone();
@@ -516,10 +538,10 @@ impl AsyncRead for IcyClientStream {
                     });
                     return Poll::Pending;
                 }
-                Err(broadcast::error::TryRecvError::Lagged(skipped)) => {
+                Err(TryRecvError::Lagged(skipped)) => {
                     warn!("ICY client lagged, skipped {} messages", skipped);
                 }
-                Err(broadcast::error::TryRecvError::Closed) => {
+                Err(TryRecvError::Closed) => {
                     self.finished = true;
                     return Poll::Ready(Ok(()));
                 }
@@ -552,7 +574,7 @@ struct StreamingFlacSinkLogic {
     pcm_tx: mpsc::Sender<PcmChunk>,
     pcm_rx: Option<mpsc::Receiver<PcmChunk>>,
     metadata: Arc<RwLock<MetadataSnapshot>>,
-    flac_broadcast: broadcast::Sender<Bytes>,
+    flac_broadcast: timed_broadcast::Sender<Bytes>,
     flac_header: Arc<RwLock<Option<Bytes>>>,
     encoder_state: Option<EncoderState>,
     sample_rate: Option<u32>,
@@ -749,6 +771,11 @@ impl NodeLogic for StreamingFlacSinkLogic {
                                             break;
                                         }
 
+                                        SyncMarker::TopZeroSync => {
+                                            self.flac_broadcast.mark_top_zero();
+                                            trace!("TopZeroSync propagated to FLAC broadcast");
+                                        }
+
                                         _ => {
                                             trace!("Received other sync marker");
                                         }
@@ -781,7 +808,7 @@ impl NodeLogic for StreamingFlacSinkLogic {
 /// Ensures data is sent at FLAC frame boundaries to prevent sync errors in strict decoders like FFPlay.
 async fn broadcast_flac_stream(
     mut flac_stream: FlacEncodedStream,
-    broadcast_tx: broadcast::Sender<Bytes>,
+    broadcast_tx: timed_broadcast::Sender<Bytes>,
     header_cache: Arc<RwLock<Option<Bytes>>>,
     current_timestamp: Arc<RwLock<f64>>,
     broadcast_max_lead_time: f64,
@@ -813,7 +840,11 @@ async fn broadcast_flac_stream(
                 // EOF - send any remaining data
                 if !accumulator.is_empty() {
                     let bytes = Bytes::from(std::mem::take(&mut accumulator));
-                    let _ = broadcast_tx.send(bytes);
+                    let audio_ts = *current_timestamp.read().await;
+                    if broadcast_tx.send(bytes.clone(), audio_ts).await.is_err() {
+                        trace!("Broadcast closed before sending final FLAC data");
+                        break;
+                    }
                 }
                 info!("FLAC encoder stream ended, total bytes: {}", total_bytes);
                 break;
@@ -931,15 +962,20 @@ async fn broadcast_flac_stream(
                     }
 
                     let num_receivers = broadcast_tx.receiver_count();
-                    if let Err(e) = broadcast_tx.send(bytes.clone()) {
-                        // No receivers, but that's okay - clients may not be connected yet
-                        trace!("No active receivers for FLAC broadcast: {}", e);
-                    } else if num_receivers > 0 {
-                        trace!(
-                            "Broadcasted {} bytes to {} receivers",
-                            bytes.len(),
-                            num_receivers
-                        );
+                    match broadcast_tx.send(bytes.clone(), audio_timestamp).await {
+                        Ok(_) => {
+                            if num_receivers > 0 {
+                                trace!(
+                                    "Broadcasted {} bytes to {} receivers",
+                                    bytes.len(),
+                                    num_receivers
+                                );
+                            }
+                        }
+                        Err(_) => {
+                            trace!("No active receivers for FLAC broadcast, terminating");
+                            return Ok(());
+                        }
                     }
                 }
             }
@@ -1017,7 +1053,7 @@ impl StreamingFlacSink {
         );
 
         // Broadcast channel for FLAC bytes
-        let (flac_broadcast, _) = broadcast::channel(broadcast_capacity);
+        let (flac_broadcast, _) = timed_broadcast::channel(broadcast_capacity);
 
         // FLAC header cache
         let flac_header = Arc::new(RwLock::new(None));

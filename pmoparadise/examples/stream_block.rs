@@ -204,21 +204,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Pipeline 1: FLAC streaming
+    // Unique pipeline feeding both FLAC and OGG sinks
     // ─────────────────────────────────────────────────────────────────────────
 
-    let mut source_flac = RadioParadiseStreamSource::new(client.clone());
-    source_flac.push_block_id(block.event);
-    source_flac.push_block_id(END_OF_BLOCKS_SIGNAL); // Signal: no more blocks after this one
+    let mut source = RadioParadiseStreamSource::new(client);
+    source.push_block_id(block.event);
+    source.push_block_id(END_OF_BLOCKS_SIGNAL); // Signal: no more blocks after this one
     tracing::debug!(
-        "RadioParadiseStreamSource (FLAC) created with block {} + END signal",
+        "RadioParadiseStreamSource created with block {} + END signal",
         block.event
     );
 
-    // Use SMALL channel size to make backpressure more reactive
-    // Instead of trying to buffer 3s of audio (60 chunks), use a much smaller buffer
-    // This forces tighter backpressure control
-    let buffer_sec = 10.0;
+    // Use SMALL channel size to make backpressure plus fan-out manageable.
+    let buffer_sec = 0.1;
     let max_lead_time = buffer_sec;
     let channel_size = 512;
     tracing::debug!(
@@ -227,53 +225,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         channel_size as f64 * 0.05
     );
 
-    let mut timer_flac = TimerBufferNode::with_channel_size(buffer_sec, channel_size);
+    let mut timer_node = TimerBufferNode::with_channel_size(buffer_sec, channel_size);
     tracing::debug!(
-        "TimerBufferNode (FLAC) created with {:.1}s buffer, {} chunk queue",
+        "TimerBufferNode created with {:.1}s buffer, {} chunk queue",
         buffer_sec,
         channel_size
     );
 
-    // StreamingFlacSink doesn't take channel_size - it uses bits_per_sample (16, 24, or 32)
+    // Streaming sinks
     let (streaming_sink, stream_handle) =
         StreamingFlacSink::with_max_broadcast_lead(encoder_options.clone(), 16, max_lead_time);
     tracing::debug!("StreamingFlacSink created");
 
-    timer_flac.register(Box::new(streaming_sink));
-    source_flac.register(Box::new(timer_flac));
-    tracing::info!(
-        "Pipeline 1 connected: RadioParadiseStreamSource → TimerBufferNode → StreamingFlacSink"
-    );
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Pipeline 2: OGG-FLAC streaming
-    // ─────────────────────────────────────────────────────────────────────────
-
-    let mut source_ogg = RadioParadiseStreamSource::new(client);
-    source_ogg.push_block_id(block.event);
-    source_ogg.push_block_id(END_OF_BLOCKS_SIGNAL); // Signal: no more blocks after this one
-    tracing::debug!(
-        "RadioParadiseStreamSource (OGG) created with block {} + END signal",
-        block.event
-    );
-
-    let mut timer_ogg = TimerBufferNode::with_channel_size(buffer_sec, channel_size);
-    tracing::debug!(
-        "TimerBufferNode (OGG) created with {:.1}s buffer, {} chunk queue",
-        buffer_sec,
-        channel_size
-    );
-
-    // StreamingOggFlacSink doesn't take channel_size - it uses bits_per_sample (16, 24, or 32)
     let (ogg_sink, ogg_handle) =
         StreamingOggFlacSink::with_max_broadcast_lead(encoder_options, 16, max_lead_time);
     tracing::debug!("StreamingOggFlacSink created");
 
-    timer_ogg.register(Box::new(ogg_sink));
-    source_ogg.register(Box::new(timer_ogg));
+    // timer_node.register(Box::new(streaming_sink));
+    // timer_node.register(Box::new(ogg_sink));
+    // source.register(Box::new(timer_node));
+
+    source.register(Box::new(streaming_sink));
+    source.register(Box::new(ogg_sink));
 
     tracing::info!(
-        "Pipeline 2 connected: RadioParadiseStreamSource → TimerBufferNode → StreamingOggFlacSink"
+        "Pipeline connected: StreamSource → TimerBufferNode → {{FLAC, OGG}} sinks"
     );
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -332,27 +308,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ═══════════════════════════════════════════════════════════════════════════
 
     let stop_token = CancellationToken::new();
-    let stop_token_flac = stop_token.clone();
-    let stop_token_ogg = stop_token.clone();
+    let pipeline_stop = stop_token.clone();
 
-    // Start FLAC pipeline in background
-    let pipeline_flac_handle = tokio::spawn(async move {
-        tracing::info!("[PIPELINE-FLAC] Starting...");
-        let result = Box::new(source_flac).run(stop_token_flac).await;
+    // Start shared pipeline in background
+    let pipeline_handle = tokio::spawn(async move {
+        tracing::info!("[PIPELINE] Starting...");
+        let result = Box::new(source).run(pipeline_stop).await;
         match &result {
-            Ok(()) => tracing::info!("[PIPELINE-FLAC] Completed successfully"),
-            Err(e) => tracing::error!("[PIPELINE-FLAC] Error: {}", e),
-        }
-        result
-    });
-
-    // Start OGG-FLAC pipeline in background
-    let pipeline_ogg_handle = tokio::spawn(async move {
-        tracing::info!("[PIPELINE-OGG] Starting...");
-        let result = Box::new(source_ogg).run(stop_token_ogg).await;
-        match &result {
-            Ok(()) => tracing::info!("[PIPELINE-OGG] Completed successfully"),
-            Err(e) => tracing::error!("[PIPELINE-OGG] Error: {}", e),
+            Ok(()) => tracing::info!("[PIPELINE] Completed successfully"),
+            Err(e) => tracing::error!("[PIPELINE] Error: {}", e),
         }
         result
     });
@@ -366,17 +330,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Server stopped, canceling pipelines...");
     stop_token.cancel();
 
-    // Wait for both pipelines to finish
-    match pipeline_flac_handle.await {
-        Ok(Ok(())) => tracing::info!("FLAC pipeline completed successfully"),
-        Ok(Err(e)) => tracing::error!("FLAC pipeline error: {}", e),
-        Err(e) => tracing::error!("FLAC pipeline task error: {}", e),
-    }
-
-    match pipeline_ogg_handle.await {
-        Ok(Ok(())) => tracing::info!("OGG-FLAC pipeline completed successfully"),
-        Ok(Err(e)) => tracing::error!("OGG-FLAC pipeline error: {}", e),
-        Err(e) => tracing::error!("OGG-FLAC pipeline task error: {}", e),
+    // Wait for pipeline to finish
+    match pipeline_handle.await {
+        Ok(Ok(())) => tracing::info!("Pipeline completed successfully"),
+        Ok(Err(e)) => tracing::error!("Pipeline error: {}", e),
+        Err(e) => tracing::error!("Pipeline task error: {}", e),
     }
 
     tracing::info!("Shutdown complete");

@@ -21,7 +21,7 @@
 //!        ↓
 //! [OGG Wrapper Task] - wraps FLAC frames in OGG pages
 //!        ↓
-//! broadcast::channel<Bytes> (OGG-FLAC bytes)
+//! timed_broadcast::channel<Bytes> (OGG-FLAC bytes)
 //!        ↓
 //! Multiple HTTP clients
 //! ```
@@ -53,7 +53,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::{broadcast_pacing::BroadcastPacer, flac_frame_utils};
+use super::{
+    broadcast_pacing::BroadcastPacer,
+    flac_frame_utils,
+    timed_broadcast::{self, TimedPacket, TryRecvError},
+};
 use async_trait::async_trait;
 use bytes::Bytes;
 use pmoaudio::{
@@ -64,7 +68,7 @@ use pmoaudio::{
 use pmoflac::{encode_flac_stream, EncoderOptions, FlacEncodedStream, PcmFormat};
 use pmometadata::TrackMetadata;
 use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
-use tokio::sync::{broadcast, mpsc, RwLock};
+use tokio::sync::{mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, trace, warn};
 
@@ -97,7 +101,7 @@ pub use super::streaming_flac_sink::MetadataSnapshot;
 #[derive(Clone)]
 pub struct OggFlacStreamHandle {
     /// Broadcast sender for OGG-FLAC bytes
-    ogg_broadcast: broadcast::Sender<Bytes>,
+    ogg_broadcast: timed_broadcast::Sender<Bytes>,
 
     /// Current track metadata
     metadata: Arc<RwLock<MetadataSnapshot>>,
@@ -126,6 +130,7 @@ impl OggFlacStreamHandle {
             finished: false,
             handle: self.clone(),
             state: OggFlacStreamState::SendingHeader,
+            current_epoch: 0,
         }
     }
 
@@ -148,11 +153,19 @@ enum OggFlacStreamState {
 
 /// OGG-FLAC client stream (implements AsyncRead).
 pub struct OggFlacClientStream {
-    rx: broadcast::Receiver<Bytes>,
+    rx: timed_broadcast::Receiver<Bytes>,
     buffer: VecDeque<u8>,
     finished: bool,
     handle: OggFlacStreamHandle,
     state: OggFlacStreamState,
+    current_epoch: u64,
+}
+
+impl OggFlacClientStream {
+    /// Dernier epoch observé (incrémenté à chaque TopZeroSync).
+    pub fn current_epoch(&self) -> u64 {
+        self.current_epoch
+    }
 }
 
 impl AsyncRead for OggFlacClientStream {
@@ -203,10 +216,11 @@ impl AsyncRead for OggFlacClientStream {
 
             // Try to receive more data
             match self.rx.try_recv() {
-                Ok(bytes) => {
-                    self.buffer.extend(bytes.iter());
+                Ok(packet) => {
+                    self.current_epoch = packet.epoch;
+                    self.buffer.extend(packet.payload.iter());
                 }
-                Err(broadcast::error::TryRecvError::Empty) => {
+                Err(TryRecvError::Empty) => {
                     // No data available right now.
                     // Schedule a wakeup after a small delay to avoid busy-loop polling.
                     let waker = cx.waker().clone();
@@ -216,10 +230,10 @@ impl AsyncRead for OggFlacClientStream {
                     });
                     return Poll::Pending;
                 }
-                Err(broadcast::error::TryRecvError::Lagged(skipped)) => {
+                Err(TryRecvError::Lagged(skipped)) => {
                     warn!("OGG-FLAC client lagged, skipped {} messages", skipped);
                 }
-                Err(broadcast::error::TryRecvError::Closed) => {
+                Err(TryRecvError::Closed) => {
                     self.finished = true;
                     return Poll::Ready(Ok(()));
                 }
@@ -252,7 +266,7 @@ struct StreamingOggFlacSinkLogic {
     pcm_tx: mpsc::Sender<PcmChunk>,
     pcm_rx: Option<mpsc::Receiver<PcmChunk>>,
     metadata: Arc<RwLock<MetadataSnapshot>>,
-    ogg_broadcast: broadcast::Sender<Bytes>,
+    ogg_broadcast: timed_broadcast::Sender<Bytes>,
     ogg_header: Arc<RwLock<Option<Bytes>>>,
     encoder_state: Option<EncoderState>,
     sample_rate: Option<u32>,
@@ -440,6 +454,11 @@ impl NodeLogic for StreamingOggFlacSinkLogic {
                                             break;
                                         }
 
+                                        SyncMarker::TopZeroSync => {
+                                            self.ogg_broadcast.mark_top_zero();
+                                            trace!("TopZeroSync propagated to timed broadcast");
+                                        }
+
                                         _ => {
                                             trace!("Received other sync marker");
                                         }
@@ -521,7 +540,7 @@ impl StreamingOggFlacSink {
             broadcast_capacity,
             broadcast_max_lead_time
         );
-        let (ogg_broadcast, _) = broadcast::channel(broadcast_capacity);
+        let (ogg_broadcast, _) = timed_broadcast::channel(broadcast_capacity);
 
         // OGG-FLAC header cache
         let ogg_header = Arc::new(RwLock::new(None));
@@ -751,7 +770,7 @@ fn chunk_to_pcm_bytes(chunk: &AudioChunk, bits_per_sample: u8) -> Result<Vec<u8>
 /// Ensures FLAC frames are only sent at frame boundaries to prevent sync errors in strict decoders like FFPlay.
 async fn broadcast_ogg_flac_stream(
     mut flac_stream: FlacEncodedStream,
-    broadcast_tx: broadcast::Sender<Bytes>,
+    broadcast_tx: timed_broadcast::Sender<Bytes>,
     header_cache: Arc<RwLock<Option<Bytes>>>,
     current_timestamp: Arc<RwLock<f64>>,
     broadcast_max_lead_time: f64,
@@ -811,9 +830,15 @@ async fn broadcast_ogg_flac_stream(
     );
 
     // Broadcast header
-    let _ = broadcast_tx.send(bos_bytes);
+    if broadcast_tx.send(bos_bytes.clone(), 0.0).await.is_err() {
+        trace!("No receivers for BOS page, terminating broadcast");
+        return Ok(());
+    }
     total_ogg_bytes += comment_bytes.len() as u64;
-    let _ = broadcast_tx.send(comment_bytes);
+    if broadcast_tx.send(comment_bytes.clone(), 0.0).await.is_err() {
+        trace!("No receivers for comment page, terminating broadcast");
+        return Ok(());
+    }
 
     // Step 4: Read FLAC stream and create OGG packets
     // Use larger read buffer (16KB) to reduce syscalls and accumulator for frame boundary detection
@@ -830,7 +855,11 @@ async fn broadcast_ogg_flac_stream(
                     let eos_page = ogg_writer.create_page(&flac_accumulator, false, true, false);
                     let eos_bytes = Bytes::from(eos_page);
                     total_ogg_bytes += eos_bytes.len() as u64;
-                    let _ = broadcast_tx.send(eos_bytes);
+                    let eos_ts = *current_timestamp.read().await;
+                    if broadcast_tx.send(eos_bytes.clone(), eos_ts).await.is_err() {
+                        trace!("Broadcast closed before sending final EOS page");
+                        break;
+                    }
                     info!(
                         "Sent final EOS page with {} bytes of data",
                         flac_accumulator.len()
@@ -840,7 +869,11 @@ async fn broadcast_ogg_flac_stream(
                     let eos_page = ogg_writer.create_page(&[], false, true, false);
                     let eos_bytes = Bytes::from(eos_page);
                     total_ogg_bytes += eos_bytes.len() as u64;
-                    let _ = broadcast_tx.send(eos_bytes);
+                    let eos_ts = *current_timestamp.read().await;
+                    if broadcast_tx.send(eos_bytes.clone(), eos_ts).await.is_err() {
+                        trace!("Broadcast closed before sending empty EOS page");
+                        break;
+                    }
                     info!("Sent empty EOS page");
                 }
 
@@ -979,12 +1012,13 @@ async fn broadcast_ogg_flac_stream(
                     }
 
                     // Envoyer au broadcast
-                    match broadcast_tx.send(ogg_bytes.clone()) {
+                    match broadcast_tx.send(ogg_bytes.clone(), audio_timestamp).await {
                         Ok(n) => {
                             trace!("Broadcasted OGG page with 1 FLAC frame ({} bytes), {} samples ({} bytes total with OGG overhead) to {} receivers", first_frame.len(), first_frame_samples, ogg_bytes.len(), n);
                         }
-                        Err(e) => {
-                            trace!("No active receivers for OGG-FLAC broadcast: {}", e);
+                        Err(_) => {
+                            trace!("No active receivers for OGG-FLAC broadcast, terminating loop");
+                            return Ok(());
                         }
                     }
                 }

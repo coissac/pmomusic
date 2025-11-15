@@ -17,6 +17,9 @@ mod broadcast_pacing;
 mod flac_frame_utils;
 
 #[cfg(feature = "http-stream")]
+mod timed_broadcast;
+
+#[cfg(feature = "http-stream")]
 mod streaming_flac_sink;
 
 #[cfg(feature = "http-stream")]
