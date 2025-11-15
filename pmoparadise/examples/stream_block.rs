@@ -248,9 +248,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     source.register(Box::new(streaming_sink));
     source.register(Box::new(ogg_sink));
 
-    tracing::info!(
-        "Pipeline connected: StreamSource → TimerBufferNode → {{FLAC, OGG}} sinks"
-    );
+    tracing::info!("Pipeline connected: StreamSource → TimerBufferNode → {{FLAC, OGG}} sinks");
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Setup pmoserver with streaming routes
@@ -267,19 +265,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Add streaming routes
+    let base = "/radioparadise/test";
     server
-        .add_handler_with_state("/test/stream", stream_handler, app_state.clone())
+        .add_handler_with_state(
+            &format!("{}/stream", base),
+            stream_handler,
+            app_state.clone(),
+        )
         .await;
     server
-        .add_handler_with_state("/test/stream-icy", stream_icy_handler, app_state.clone())
+        .add_handler_with_state(
+            &format!("{}/stream-icy", base),
+            stream_icy_handler,
+            app_state.clone(),
+        )
         .await;
     server
-        .add_handler_with_state("/test/stream-ogg", stream_ogg_handler, app_state.clone())
+        .add_handler_with_state(
+            &format!("{}/stream-ogg", base),
+            stream_ogg_handler,
+            app_state.clone(),
+        )
         .await;
 
     // Add metadata route
     server
-        .add_handler_with_state("/test/metadata", metadata_handler, app_state.clone())
+        .add_handler_with_state(
+            &format!("{}/metadata", base),
+            metadata_handler,
+            app_state.clone(),
+        )
         .await;
 
     // Add health check
@@ -290,16 +305,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Ready to stream!");
     tracing::info!("");
     tracing::info!("Pure FLAC stream (for VLC, standard players):");
-    tracing::info!("  vlc http://localhost:8080/test/stream");
+    tracing::info!("  vlc http://localhost:8080{}/stream", base);
     tracing::info!("");
     tracing::info!("OGG-FLAC stream (streaming container with metadata support):");
-    tracing::info!("  vlc http://localhost:8080/test/stream-ogg");
+    tracing::info!("  vlc http://localhost:8080{}/stream-ogg", base);
     tracing::info!("");
     tracing::info!("FLAC + ICY metadata stream (for ICY-aware clients):");
-    tracing::info!("  http://localhost:8080/test/stream-icy");
+    tracing::info!("  http://localhost:8080{}/stream-icy", base);
     tracing::info!("");
     tracing::info!("Metadata endpoint (JSON):");
-    tracing::info!("  curl http://localhost:8080/test/metadata");
+    tracing::info!("  curl http://localhost:8080{}/metadata", base);
     tracing::info!("========================================");
     tracing::info!("");
 

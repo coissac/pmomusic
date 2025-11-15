@@ -99,7 +99,7 @@ impl<T> State<T> {
             }
         }
         if purged > 0 {
-            warn!(
+            tracing::debug!(
                 "TimedBroadcast: purged {} expired packet(s) (head_seq={})",
                 purged,
                 self.head_seq
@@ -167,10 +167,7 @@ impl<T> Inner<T> {
     }
 
     fn close(&self) {
-        if !self
-            .is_closed
-            .swap(true, Ordering::SeqCst)
-        {
+        if !self.is_closed.swap(true, Ordering::SeqCst) {
             if let Ok(mut state) = self.state.lock() {
                 state.closed = true;
             }
@@ -185,10 +182,7 @@ pub fn channel<T>(capacity: usize) -> (Sender<T>, Receiver<T>) {
     assert!(capacity > 0, "capacity must be > 0");
     let inner = Arc::new(Inner::new(capacity));
     let next_seq = {
-        let state = inner
-            .state
-            .lock()
-            .expect("timed broadcast mutex poisoned");
+        let state = inner.state.lock().expect("timed broadcast mutex poisoned");
         state.next_seq
     };
     let sender = Sender {
@@ -198,10 +192,7 @@ pub fn channel<T>(capacity: usize) -> (Sender<T>, Receiver<T>) {
         next_seq: AtomicU64::new(next_seq),
     });
     {
-        let mut state = inner
-            .state
-            .lock()
-            .expect("timed broadcast mutex poisoned");
+        let mut state = inner.state.lock().expect("timed broadcast mutex poisoned");
         state.cursors.push(Arc::downgrade(&cursor));
     }
     inner.receiver_count.store(1, Ordering::SeqCst);
@@ -257,15 +248,12 @@ impl<T> Sender<T> {
                 }
 
                 if state.buffer.len() < self.inner.capacity {
-                    let audio_offset =
-                        Duration::from_secs_f64(audio_timestamp.max(0.0));
+                    let audio_offset = Duration::from_secs_f64(audio_timestamp.max(0.0));
                     let expires_at = state.epoch_start + audio_offset;
                     let entry = Entry {
                         seq: state.next_seq,
                         expires_at,
-                        payload: payload
-                            .take()
-                            .expect("payload already consumed"),
+                        payload: payload.take().expect("payload already consumed"),
                         audio_timestamp,
                         epoch: state.epoch,
                     };
@@ -390,19 +378,14 @@ where
 
         let offset = (self.next_seq - state.head_seq) as usize;
         if offset < state.buffer.len() {
-            let entry = state
-                .buffer
-                .get(offset)
-                .expect("invalid buffer offset");
+            let entry = state.buffer.get(offset).expect("invalid buffer offset");
             let packet = TimedPacket {
                 payload: entry.payload.clone(),
                 audio_timestamp: entry.audio_timestamp,
                 epoch: entry.epoch,
             };
             self.next_seq += 1;
-            self.cursor
-                .next_seq
-                .store(self.next_seq, Ordering::SeqCst);
+            self.cursor.next_seq.store(self.next_seq, Ordering::SeqCst);
             if state.prune_consumed() {
                 self.inner.space_notify.notify_waiters();
             }
@@ -460,9 +443,7 @@ impl<T> Clone for Receiver<T> {
 
 impl<T> Drop for Receiver<T> {
     fn drop(&mut self) {
-        self.cursor
-            .next_seq
-            .store(self.next_seq, Ordering::SeqCst);
+        self.cursor.next_seq.store(self.next_seq, Ordering::SeqCst);
         if let Ok(mut state) = self.inner.state.lock() {
             if state.prune_consumed() {
                 self.inner.space_notify.notify_waiters();

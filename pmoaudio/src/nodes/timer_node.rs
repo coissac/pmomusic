@@ -340,4 +340,3 @@ impl TypedAudioNode for TimerNode {
         Some(TypeRequirement::any())
     }
 }
-

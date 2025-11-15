@@ -49,7 +49,7 @@
 use std::collections::VecDeque;
 use std::io;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
@@ -114,6 +114,8 @@ pub struct OggFlacStreamHandle {
 
     /// Cached OGG-FLAC header (sent to new subscribers first)
     ogg_header: Arc<RwLock<Option<Bytes>>>,
+
+    auto_stop: Arc<AtomicBool>,
 }
 
 impl OggFlacStreamHandle {
@@ -142,6 +144,10 @@ impl OggFlacStreamHandle {
     /// Get the number of active clients.
     pub fn active_client_count(&self) -> usize {
         self.active_clients.load(Ordering::SeqCst)
+    }
+
+    pub fn set_auto_stop(&self, enabled: bool) {
+        self.auto_stop.store(enabled, Ordering::SeqCst);
     }
 }
 
@@ -248,8 +254,12 @@ impl Drop for OggFlacClientStream {
         debug!("OGG-FLAC client disconnected (remaining: {})", count - 1);
 
         if count == 1 {
-            info!("Last OGG-FLAC client disconnected, signaling pipeline stop");
-            self.handle.stop_token.cancel();
+            if self.handle.auto_stop.load(Ordering::SeqCst) {
+                info!("Last OGG-FLAC client disconnected, signaling pipeline stop");
+                self.handle.stop_token.cancel();
+            } else {
+                info!("Last OGG-FLAC client disconnected, keeping pipeline alive");
+            }
         }
     }
 }
@@ -555,6 +565,7 @@ impl StreamingOggFlacSink {
             active_clients,
             stop_token: stop_token.clone(),
             ogg_header: ogg_header.clone(),
+            auto_stop: Arc::new(AtomicBool::new(true)),
         };
 
         let logic = StreamingOggFlacSinkLogic {

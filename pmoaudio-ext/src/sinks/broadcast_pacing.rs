@@ -76,10 +76,7 @@ impl BroadcastPacer {
         if lead_time < 0.0 {
             warn!(
                 "{}: Dropping late frame: audio_ts={:.3}s, elapsed={:.3}s, lag={:.3}s",
-                self.label,
-                audio_timestamp,
-                elapsed,
-                -lead_time
+                self.label, audio_timestamp, elapsed, -lead_time
             );
             return Err(SkipFrame);
         }

@@ -19,11 +19,11 @@ use pmoflac::decode_audio_stream;
 use pmometadata::{MemoryTrackMetadata, TrackMetadata};
 use std::{
     collections::VecDeque,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 use tokio::io::AsyncReadExt;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, Notify, RwLock};
 use tokio_util::{io::StreamReader, sync::CancellationToken};
 
 /// Signal spécial pour indiquer qu'il n'y aura plus de blocs
@@ -34,6 +34,58 @@ pub const END_OF_BLOCKS_SIGNAL: EventId = EventId::MAX;
 /// Nombre de blocs récents à mémoriser pour éviter les re-téléchargements
 const RECENT_BLOCKS_CACHE_SIZE: usize = 10;
 
+/// Handle pour alimenter la queue de blocs pendant que la source tourne.
+#[derive(Clone, Default)]
+pub struct BlockQueueHandle {
+    queue: Arc<Mutex<VecDeque<EventId>>>,
+    notify: Arc<Notify>,
+}
+
+impl BlockQueueHandle {
+    fn new() -> Self {
+        Self {
+            queue: Arc::new(Mutex::new(VecDeque::new())),
+            notify: Arc::new(Notify::new()),
+        }
+    }
+
+    /// Enfile un block pour traitement.
+    pub fn enqueue(&self, event_id: EventId) {
+        {
+            let mut queue = self.queue.lock().expect("block queue poisoned");
+            queue.push_back(event_id);
+        }
+        self.notify.notify_one();
+    }
+
+    /// Retire le prochain block s'il existe.
+    fn pop(&self) -> Option<EventId> {
+        let mut queue = self.queue.lock().expect("block queue poisoned");
+        queue.pop_front()
+    }
+
+    /// Nombre d'éléments en attente.
+    pub fn len(&self) -> usize {
+        let queue = self.queue.lock().expect("block queue poisoned");
+        queue.len()
+    }
+
+    fn snapshot(&self) -> Vec<EventId> {
+        let queue = self.queue.lock().expect("block queue poisoned");
+        queue.iter().copied().collect()
+    }
+
+    fn front(&self) -> Option<EventId> {
+        let queue = self.queue.lock().expect("block queue poisoned");
+        queue.front().copied()
+    }
+
+    fn back(&self) -> Option<EventId> {
+        let queue = self.queue.lock().expect("block queue poisoned");
+        queue.back().copied()
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // RadioParadiseStreamSourceLogic - Logique métier pure
 // ═══════════════════════════════════════════════════════════════════════════
@@ -43,12 +95,21 @@ pub struct RadioParadiseStreamSourceLogic {
     client: RadioParadiseClient,
     chunk_frames: usize,
     recent_blocks: VecDeque<EventId>,
-    block_queue: VecDeque<EventId>,
+    block_queue: BlockQueueHandle,
     stats: Arc<NodeStats>,
 }
 
 impl RadioParadiseStreamSourceLogic {
     pub fn new(client: RadioParadiseClient, chunk_duration_ms: u32) -> Self {
+        let handle = BlockQueueHandle::new();
+        Self::with_queue(client, chunk_duration_ms, handle)
+    }
+
+    fn with_queue(
+        client: RadioParadiseClient,
+        chunk_duration_ms: u32,
+        block_queue: BlockQueueHandle,
+    ) -> Self {
         // Calculer chunk_frames pour la durée cible (on suppose 44.1kHz)
         let chunk_frames = ((chunk_duration_ms as f64 / 1000.0) * 44100.0) as usize;
 
@@ -56,14 +117,14 @@ impl RadioParadiseStreamSourceLogic {
             client,
             chunk_frames,
             recent_blocks: VecDeque::with_capacity(RECENT_BLOCKS_CACHE_SIZE),
-            block_queue: VecDeque::new(),
+            block_queue,
             stats: NodeStats::new("RadioParadiseStreamSource"),
         }
     }
 
     /// Ajoute un block ID à la file d'attente
-    pub fn push_block_id(&mut self, event_id: EventId) {
-        self.block_queue.push_back(event_id);
+    pub fn push_block_id(&self, event_id: EventId) {
+        self.block_queue.enqueue(event_id);
     }
 
     /// Vérifie si un bloc a été téléchargé récemment
@@ -556,7 +617,7 @@ impl NodeLogic for RadioParadiseStreamSourceLogic {
             "RadioParadiseStreamSource::process() started, block_queue has {} items",
             self.block_queue.len()
         );
-        for (i, event_id) in self.block_queue.iter().enumerate() {
+        for (i, event_id) in self.block_queue.snapshot().iter().enumerate() {
             tracing::debug!("  block_queue[{}] = {}", i, event_id);
         }
 
@@ -575,7 +636,7 @@ impl NodeLogic for RadioParadiseStreamSourceLogic {
                 }
 
                 // Essayer de pop un event_id
-                if let Some(id) = self.block_queue.pop_front() {
+                if let Some(id) = self.block_queue.pop() {
                     tracing::debug!("Got event_id {} from queue", id);
 
                     // Vérifier si c'est le signal de fin
@@ -589,9 +650,12 @@ impl NodeLogic for RadioParadiseStreamSourceLogic {
                     break Some(id);
                 }
 
-                // Queue vide, attendre un peu et réessayer
-                tracing::trace!("block_queue is empty, sleeping 100ms...");
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                tracing::trace!("block_queue is empty, waiting for new events...");
+                tokio::select! {
+                    _ = stop_token.cancelled() => break None,
+                    _ = self.block_queue.notify.notified() => {},
+                    _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+                };
             };
 
             // Si on n'a pas d'event_id, on termine
@@ -679,6 +743,7 @@ impl NodeLogic for RadioParadiseStreamSourceLogic {
 
 pub struct RadioParadiseStreamSource {
     inner: Node<RadioParadiseStreamSourceLogic>,
+    block_handle: BlockQueueHandle,
 }
 
 impl RadioParadiseStreamSource {
@@ -689,15 +754,23 @@ impl RadioParadiseStreamSource {
 
     /// Crée une nouvelle source avec durée de chunk personnalisée
     pub fn with_chunk_duration(client: RadioParadiseClient, chunk_duration_ms: u32) -> Self {
-        let logic = RadioParadiseStreamSourceLogic::new(client, chunk_duration_ms);
+        let handle = BlockQueueHandle::new();
+        let logic =
+            RadioParadiseStreamSourceLogic::with_queue(client, chunk_duration_ms, handle.clone());
         Self {
             inner: Node::new_source(logic),
+            block_handle: handle,
         }
     }
 
     /// Ajoute un block ID à la file d'attente de téléchargement
-    pub fn push_block_id(&mut self, event_id: EventId) {
-        self.inner.logic_mut().push_block_id(event_id);
+    pub fn push_block_id(&self, event_id: EventId) {
+        self.block_handle.enqueue(event_id);
+    }
+
+    /// Retourne un handle permettant d'enfiler des blocks dynamiquement.
+    pub fn block_handle(&self) -> BlockQueueHandle {
+        self.block_handle.clone()
     }
 }
 
@@ -907,7 +980,7 @@ mod tests {
         logic.push_block_id(300);
 
         assert_eq!(logic.block_queue.len(), 3);
-        assert_eq!(logic.block_queue.front(), Some(&100));
-        assert_eq!(logic.block_queue.back(), Some(&300));
+        assert_eq!(logic.block_queue.front(), Some(100));
+        assert_eq!(logic.block_queue.back(), Some(300));
     }
 }

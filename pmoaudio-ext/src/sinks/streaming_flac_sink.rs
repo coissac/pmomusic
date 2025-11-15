@@ -57,7 +57,7 @@
 use std::collections::VecDeque;
 use std::io;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -177,6 +177,8 @@ pub struct StreamHandle {
 
     /// Cached FLAC header (sent to new subscribers first)
     flac_header: Arc<RwLock<Option<Bytes>>>,
+
+    auto_stop: Arc<AtomicBool>,
 }
 
 impl StreamHandle {
@@ -242,6 +244,11 @@ impl StreamHandle {
     /// Check if the stream should be stopped (no more clients).
     pub fn should_stop(&self) -> bool {
         self.active_clients.load(Ordering::SeqCst) == 0
+    }
+
+    /// Enable or disable automatic pipeline shutdown when the last client disconnects.
+    pub fn set_auto_stop(&self, enabled: bool) {
+        self.auto_stop.store(enabled, Ordering::SeqCst);
     }
 }
 
@@ -348,8 +355,12 @@ impl Drop for FlacClientStream {
         debug!("FLAC client disconnected (remaining: {})", count - 1);
 
         if count == 1 {
-            info!("Last client disconnected, signaling pipeline stop");
-            self.handle.stop_token.cancel();
+            if self.handle.auto_stop.load(Ordering::SeqCst) {
+                info!("Last client disconnected, signaling pipeline stop");
+                self.handle.stop_token.cancel();
+            } else {
+                info!("Last client disconnected, keeping pipeline alive");
+            }
         }
     }
 }
@@ -556,8 +567,12 @@ impl Drop for IcyClientStream {
         debug!("ICY client disconnected (remaining: {})", count - 1);
 
         if count == 1 {
-            info!("Last client disconnected, signaling pipeline stop");
-            self.handle.stop_token.cancel();
+            if self.handle.auto_stop.load(Ordering::SeqCst) {
+                info!("Last client disconnected, signaling pipeline stop");
+                self.handle.stop_token.cancel();
+            } else {
+                info!("Last client disconnected, keeping pipeline alive");
+            }
         }
     }
 }
@@ -1068,6 +1083,7 @@ impl StreamingFlacSink {
             active_clients,
             stop_token: stop_token.clone(),
             flac_header: flac_header.clone(),
+            auto_stop: Arc::new(AtomicBool::new(true)),
         };
 
         let logic = StreamingFlacSinkLogic {
