@@ -92,6 +92,8 @@ struct PcmChunk {
     bytes: Vec<u8>,
     /// Timestamp in seconds (from AudioSegment)
     timestamp_sec: f64,
+    /// Duration in seconds of this PCM chunk (samples / sample_rate)
+    duration_sec: f64,
 }
 
 /// Snapshot of track metadata (reuse from streaming_flac_sink)
@@ -301,11 +303,13 @@ impl StreamingOggFlacSinkLogic {
             .take()
             .ok_or_else(|| AudioError::ProcessingError("PCM receiver already consumed".into()))?;
 
-        // Create shared timestamp for pacing
+        // Create shared timestamp and duration for pacing
         let current_timestamp = Arc::new(RwLock::new(0.0f64));
+        let current_duration = Arc::new(RwLock::new(0.0f64));
 
         // Create ByteStreamReader for the encoder
-        let pcm_reader = ByteStreamReader::new(pcm_rx, current_timestamp.clone());
+        let pcm_reader =
+            ByteStreamReader::new(pcm_rx, current_timestamp.clone(), current_duration.clone());
 
         // Create PCM format
         let pcm_format = PcmFormat {
@@ -323,7 +327,7 @@ impl StreamingOggFlacSinkLogic {
 
         debug!("OGG-FLAC encoder initialized successfully");
 
-        // Spawn OGG wrapper + broadcaster task with timestamp for pacing
+        // Spawn OGG wrapper + broadcaster task with timestamp and duration for pacing
         let ogg_broadcast = self.ogg_broadcast.clone();
         let ogg_header = self.ogg_header.clone();
         let max_lead = self.broadcast_max_lead_time;
@@ -333,6 +337,7 @@ impl StreamingOggFlacSinkLogic {
                 ogg_broadcast,
                 ogg_header,
                 current_timestamp,
+                current_duration,
                 max_lead,
             )
             .await
@@ -432,17 +437,23 @@ impl NodeLogic for StreamingOggFlacSinkLogic {
                                     // Convert chunk to PCM bytes
                                     let pcm_bytes = chunk_to_pcm_bytes(&chunk, self.bits_per_sample)?;
 
+                                    // Calculate exact duration from samples and sample rate
+                                    let sample_rate = self.sample_rate.expect("sample_rate should be initialized");
+                                    let duration_sec = chunk.len() as f64 / sample_rate as f64;
+
                                     trace!(
-                                        "Sending PCM chunk: {} bytes, {} samples @ {:.2}s",
+                                        "Sending PCM chunk: {} bytes, {} samples @ {:.2}s (duration={:.3}s)",
                                         pcm_bytes.len(),
                                         chunk.len(),
-                                        seg.timestamp_sec
+                                        seg.timestamp_sec,
+                                        duration_sec
                                     );
 
-                                    // Send to FLAC encoder with timestamp
+                                    // Send to FLAC encoder with timestamp and duration
                                     let pcm_chunk = PcmChunk {
                                         bytes: pcm_bytes,
                                         timestamp_sec: seg.timestamp_sec,
+                                        duration_sec,
                                     };
                                     if let Err(e) = self.pcm_tx.send(pcm_chunk).await {
                                         warn!("Failed to send PCM data to encoder: {}", e);
@@ -626,15 +637,22 @@ struct ByteStreamReader {
     finished: bool,
     /// Shared timestamp for broadcaster pacing
     current_timestamp: Arc<RwLock<f64>>,
+    /// Shared duration for broadcaster pacing
+    current_duration: Arc<RwLock<f64>>,
 }
 
 impl ByteStreamReader {
-    fn new(rx: mpsc::Receiver<PcmChunk>, current_timestamp: Arc<RwLock<f64>>) -> Self {
+    fn new(
+        rx: mpsc::Receiver<PcmChunk>,
+        current_timestamp: Arc<RwLock<f64>>,
+        current_duration: Arc<RwLock<f64>>,
+    ) -> Self {
         Self {
             rx,
             buffer: VecDeque::new(),
             finished: false,
             current_timestamp,
+            current_duration,
         }
     }
 }
@@ -667,9 +685,12 @@ impl AsyncRead for ByteStreamReader {
                     if chunk.bytes.is_empty() {
                         continue;
                     }
-                    // Update shared timestamp for broadcaster pacing
+                    // Update shared timestamp and duration for broadcaster pacing
                     if let Ok(mut ts) = self.current_timestamp.try_write() {
                         *ts = chunk.timestamp_sec;
+                    }
+                    if let Ok(mut dur) = self.current_duration.try_write() {
+                        *dur = chunk.duration_sec;
                     }
                     self.buffer.extend(chunk.bytes);
                 }
@@ -784,6 +805,7 @@ async fn broadcast_ogg_flac_stream(
     broadcast_tx: timed_broadcast::Sender<Bytes>,
     header_cache: Arc<RwLock<Option<Bytes>>>,
     current_timestamp: Arc<RwLock<f64>>,
+    current_duration: Arc<RwLock<f64>>,
     broadcast_max_lead_time: f64,
 ) -> Result<(), AudioError> {
     trace!(
@@ -840,13 +862,21 @@ async fn broadcast_ogg_flac_stream(
         bos_bytes.len() + comment_bytes.len()
     );
 
-    // Broadcast header
-    if broadcast_tx.send(bos_bytes.clone(), 0.0).await.is_err() {
+    // Broadcast header (BOS and comment are metadata, not audio, so duration=0.0)
+    if broadcast_tx
+        .send(bos_bytes.clone(), 0.0, 0.0)
+        .await
+        .is_err()
+    {
         trace!("No receivers for BOS page, terminating broadcast");
         return Ok(());
     }
     total_ogg_bytes += comment_bytes.len() as u64;
-    if broadcast_tx.send(comment_bytes.clone(), 0.0).await.is_err() {
+    if broadcast_tx
+        .send(comment_bytes.clone(), 0.0, 0.0)
+        .await
+        .is_err()
+    {
         trace!("No receivers for comment page, terminating broadcast");
         return Ok(());
     }
@@ -867,7 +897,12 @@ async fn broadcast_ogg_flac_stream(
                     let eos_bytes = Bytes::from(eos_page);
                     total_ogg_bytes += eos_bytes.len() as u64;
                     let eos_ts = *current_timestamp.read().await;
-                    if broadcast_tx.send(eos_bytes.clone(), eos_ts).await.is_err() {
+                    let eos_dur = *current_duration.read().await;
+                    if broadcast_tx
+                        .send(eos_bytes.clone(), eos_ts, eos_dur)
+                        .await
+                        .is_err()
+                    {
                         trace!("Broadcast closed before sending final EOS page");
                         break;
                     }
@@ -876,12 +911,16 @@ async fn broadcast_ogg_flac_stream(
                         flac_accumulator.len()
                     );
                 } else {
-                    // Send empty EOS page
+                    // Send empty EOS page (metadata page, duration=0.0)
                     let eos_page = ogg_writer.create_page(&[], false, true, false);
                     let eos_bytes = Bytes::from(eos_page);
                     total_ogg_bytes += eos_bytes.len() as u64;
                     let eos_ts = *current_timestamp.read().await;
-                    if broadcast_tx.send(eos_bytes.clone(), eos_ts).await.is_err() {
+                    if broadcast_tx
+                        .send(eos_bytes.clone(), eos_ts, 0.0)
+                        .await
+                        .is_err()
+                    {
                         trace!("Broadcast closed before sending empty EOS page");
                         break;
                     }
@@ -1023,9 +1062,13 @@ async fn broadcast_ogg_flac_stream(
                     }
 
                     // Envoyer au broadcast
-                    match broadcast_tx.send(ogg_bytes.clone(), audio_timestamp).await {
+                    let segment_duration = *current_duration.read().await;
+                    match broadcast_tx
+                        .send(ogg_bytes.clone(), audio_timestamp, segment_duration)
+                        .await
+                    {
                         Ok(n) => {
-                            trace!("Broadcasted OGG page with 1 FLAC frame ({} bytes), {} samples ({} bytes total with OGG overhead) to {} receivers", first_frame.len(), first_frame_samples, ogg_bytes.len(), n);
+                            trace!("Broadcasted OGG page with 1 FLAC frame ({} bytes), {} samples ({} bytes total with OGG overhead) to {} receivers (ts={:.3}s, dur={:.3}s)", first_frame.len(), first_frame_samples, ogg_bytes.len(), n, audio_timestamp, segment_duration);
                         }
                         Err(_) => {
                             trace!("No active receivers for OGG-FLAC broadcast, terminating loop");

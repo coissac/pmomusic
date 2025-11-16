@@ -15,7 +15,7 @@ use std::{
 };
 
 use tokio::sync::Notify;
-use tracing::{trace, warn};
+use tracing::{trace, info, warn};
 
 /// Paquet diffusé contenant la charge utile + méta timing.
 #[derive(Clone)]
@@ -40,8 +40,17 @@ impl<T> fmt::Debug for TimedPacket<T> {
 /// Erreur remontée par `Receiver::try_recv`.
 #[derive(Debug)]
 pub enum TryRecvError {
+    /// Aucun paquet n'est disponible pour le moment.
     Empty,
+    /// Le receiver est en retard : le champ contient combien de paquets ont expiré
+    /// ou ont déjà été consommés par les autres abonnés.
+    ///
+    /// Ce cas survient lorsque `purge_expired()` avance `head_seq` et que ce
+    /// `Receiver` réclamait encore l'un des numéros supprimés. Le client doit
+    /// donc ignorer les données perdues et se resynchroniser sur les paquets
+    /// courants.
     Lagged(u64),
+    /// Le channel est fermé et plus aucun paquet n'est disponible.
     Closed,
 }
 
@@ -71,7 +80,10 @@ struct State<T> {
     closed: bool,
     epoch: u64,
     epoch_start: Instant,
+    last_segment_end: Option<Instant>,
     cursors: Vec<Weak<ReceiverCursor>>,
+    initialized: bool,
+    saw_positive_timestamp: bool,
 }
 
 impl<T> State<T> {
@@ -83,14 +95,19 @@ impl<T> State<T> {
             closed: false,
             epoch: 0,
             epoch_start,
+            last_segment_end: None,
             cursors: Vec::new(),
+            initialized: false,
+            saw_positive_timestamp: false,
         }
     }
 
-    fn purge_expired(&mut self, now: Instant) -> bool {
+    fn purge_expired(&mut self) -> bool {
         let mut purged = 0u64;
         while let Some(entry) = self.buffer.front() {
-            if entry.expires_at <= now {
+            if entry.expires_at <= Instant::now() {
+                let delta=Instant::now()-entry.expires_at;
+                info!("TimedBroadcast: purging expired packet (epoch={},delta={})",entry.epoch,delta.as_millis());
                 self.buffer.pop_front();
                 self.head_seq += 1;
                 purged += 1;
@@ -220,7 +237,11 @@ impl<T> Clone for Sender<T> {
 
 impl<T> Sender<T> {
     /// Diffuse un paquet. Bloque si la capacité est atteinte avec des paquets non périmés.
-    pub async fn send(&self, payload: T, audio_timestamp: f64) -> Result<usize, SendError<T>>
+    ///
+    /// Le TTL de chaque paquet est calculé à partir du `epoch_start` courant et du
+    /// `audio_timestamp` fournis, ce qui signifie qu’un receiver en retard finira
+    /// par recevoir un [`TryRecvError::Lagged`] lorsque `expires_at` est dépassé.
+    pub async fn send(&self, payload: T, audio_timestamp: f64, segment_duration: f64) -> Result<usize, SendError<T>>
     where
         T: Clone,
     {
@@ -228,7 +249,6 @@ impl<T> Sender<T> {
         loop {
             let mut wait_deadline = None;
             {
-                let now = Instant::now();
                 let mut state = self
                     .inner
                     .state
@@ -239,17 +259,64 @@ impl<T> Sender<T> {
                     return Err(SendError(payload.expect("payload already consumed")));
                 }
 
-                if state.purge_expired(now) {
-                    self.inner.space_notify.notify_waiters();
+                // Détecter si c'est un TopZero
+                let is_top_zero = audio_timestamp == 0.0;
+
+                // Gérer l'initialisation ET le TopZero ensemble
+                if !state.initialized {
+                    let now = Instant::now();
+                    if is_top_zero {
+                        // Premier paquet = TopZero → epoch commence à 0
+                        state.epoch_start = now;
+                        state.epoch = 0;
+                        info!("TimedBroadcast: initialized with TopZero (epoch=0)");
+                    } else {
+                        // Premier paquet avec ts > 0 → calculer epoch_start rétroactif
+                        let offset = Duration::from_secs_f64(audio_timestamp);
+                        state.epoch_start = now.checked_sub(offset).unwrap_or(now);
+                        state.epoch = 0;
+                        info!(
+                            "TimedBroadcast: initialized with ts={:.3}s (epoch=0)",
+                            audio_timestamp
+                        );
+                    }
+                    state.initialized = true;
+                    state.saw_positive_timestamp = !is_top_zero;
+                } else if is_top_zero {
+                    // TopZero sur un channel déjà initialisé
+                    let allow_reset = state.saw_positive_timestamp;
+                    if allow_reset {
+                        let now = Instant::now();
+                        state.epoch_start = state
+                            .last_segment_end
+                            .map(|end| end.max(now))
+                            .unwrap_or(now);
+                        state.epoch = state.epoch.wrapping_add(1);
+                        state.saw_positive_timestamp = false; // Reset pour le prochain cycle
+                        info!(
+                            "TimedBroadcast: TopZero detected, new epoch={} (had_last_segment={})",
+                            state.epoch,
+                            state.last_segment_end.is_some()
+                        );
+                    } else {
+                        warn!(
+                            "TimedBroadcast: Ignoring duplicate TopZero (epoch={})",
+                            state.epoch
+                        );
+                    }
+                } else if audio_timestamp > 0.0 {
+                    state.saw_positive_timestamp = true;
                 }
 
-                if state.prune_consumed() {
+                let consumed = state.prune_consumed();
+                let expired = state.purge_expired();
+                if consumed || expired  {
                     self.inner.space_notify.notify_waiters();
                 }
 
                 if state.buffer.len() < self.inner.capacity {
-                    let audio_offset = Duration::from_secs_f64(audio_timestamp.max(0.0));
-                    let expires_at = state.epoch_start + audio_offset;
+                    // Le paquet expire à la fin de son segment audio
+                    let expires_at = state.epoch_start + Duration::from_secs_f64(audio_timestamp + segment_duration);
                     let entry = Entry {
                         seq: state.next_seq,
                         expires_at,
@@ -259,6 +326,10 @@ impl<T> Sender<T> {
                     };
                     state.next_seq += 1;
                     state.buffer.push_back(entry);
+
+                    // Stocker la fin de ce segment pour la continuité temporelle
+                    state.last_segment_end = Some(expires_at);
+
                     let receivers = self.inner.receiver_count.load(Ordering::SeqCst);
                     drop(state);
                     self.inner.data_notify.notify_waiters();
@@ -304,21 +375,15 @@ impl<T> Sender<T> {
         }
     }
 
-    /// Marque un TopZero : incrémente l'epoch pour les paquets suivants.
+    /// Marque un TopZero : DEPRECATED - no-op pour compatibilité.
     ///
-    /// Reset le timer epoch_start sans effacer le buffer. Les paquets
-    /// du morceau précédent continueront à être distribués naturellement.
-    /// Cela évite de perdre les dernières frames FLAC à la transition entre morceaux.
+    /// Le vrai TopZero est maintenant détecté automatiquement dans send()
+    /// quand audio_timestamp == 0.0. Cette méthode est conservée pour
+    /// compatibilité avec le code existant mais ne fait rien.
     pub fn mark_top_zero(&self) {
-        let mut state = self
-            .inner
-            .state
-            .lock()
-            .expect("timed broadcast mutex poisoned");
-        state.epoch = state.epoch.wrapping_add(1);
-        state.epoch_start = Instant::now();
-        // Ne PAS effacer le buffer - laisser les paquets du morceau précédent
-        // se vider naturellement pour éviter de perdre les dernières frames
+        trace!("TimedBroadcast: mark_top_zero() called but ignored (auto-detection active)");
+        // No-op - TopZero est maintenant détecté automatiquement dans send()
+        // quand audio_timestamp == 0.0
     }
 
     /// Nombre actuel de receivers abonnés.
@@ -341,6 +406,10 @@ impl<T> Drop for Sender<T> {
 }
 
 /// Receiver côté consommateur.
+///
+/// Chaque receiver garde son propre curseur `next_seq`. Si le producteur
+/// recycle un paquet via `purge_expired()` avant que ce curseur ne l’ait lu,
+/// la prochaine tentative de lecture retournera [`TryRecvError::Lagged`].
 pub struct Receiver<T> {
     inner: Arc<Inner<T>>,
     next_seq: u64,
@@ -366,8 +435,7 @@ where
             return Err(TryRecvError::Closed);
         }
 
-        let now = Instant::now();
-        if state.purge_expired(now) {
+        if state.purge_expired() {
             self.inner.space_notify.notify_waiters();
         }
 
@@ -401,6 +469,12 @@ where
     }
 
     /// Version synchrone utilisée dans `poll_read`.
+    ///
+    /// # Erreurs
+    ///
+    /// * [`TryRecvError::Lagged`] — des paquets ont expiré avant d'être consommés.
+    /// * [`TryRecvError::Empty`] — la file est vide pour l'instant.
+    /// * [`TryRecvError::Closed`] — plus aucun paquet n'arrivera.
     pub fn try_recv(&mut self) -> Result<TimedPacket<T>, TryRecvError> {
         self.poll_entry()
     }

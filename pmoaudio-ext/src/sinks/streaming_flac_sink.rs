@@ -116,6 +116,8 @@ struct PcmChunk {
     bytes: Vec<u8>,
     /// Timestamp in seconds (from AudioSegment)
     timestamp_sec: f64,
+    /// Duration in seconds of this PCM chunk (samples / sample_rate)
+    duration_sec: f64,
 }
 
 /// Snapshot of track metadata at a point in time.
@@ -259,6 +261,12 @@ enum FlacStreamState {
 }
 
 /// Pure FLAC client stream (implements AsyncRead).
+///
+/// Each read pulls bytes out of a [`timed_broadcast`] receiver.
+/// If the receiver reports [`TryRecvError::Lagged`] it means the underlying
+/// queue expired packets before the client consumed them; we log the skip
+/// and immediately keep draining so that a late client can resynchronise
+/// with the latest epoch instead of stalling forever.
 pub struct FlacClientStream {
     rx: timed_broadcast::Receiver<Bytes>,
     buffer: VecDeque<u8>,
@@ -369,6 +377,9 @@ impl Drop for FlacClientStream {
 ///
 /// This stream injects ICY metadata blocks at regular intervals,
 /// allowing clients to display "Now Playing" information.
+/// As with [`FlacClientStream`], hitting [`TryRecvError::Lagged`]
+/// simply indicates that the timed broadcast discarded a stale chunk;
+/// the client resumes with fresh data to avoid wedging the HTTP response.
 pub struct IcyClientStream {
     rx: timed_broadcast::Receiver<Bytes>,
     metadata: Arc<RwLock<MetadataSnapshot>>,
@@ -614,11 +625,13 @@ impl StreamingFlacSinkLogic {
             .take()
             .ok_or_else(|| AudioError::ProcessingError("PCM receiver already consumed".into()))?;
 
-        // Create shared timestamp for pacing
+        // Create shared timestamp and duration for pacing
         let current_timestamp = Arc::new(RwLock::new(0.0f64));
+        let current_duration = Arc::new(RwLock::new(0.0f64));
 
         // Create ByteStreamReader for the encoder
-        let pcm_reader = ByteStreamReader::new(pcm_rx, current_timestamp.clone());
+        let pcm_reader =
+            ByteStreamReader::new(pcm_rx, current_timestamp.clone(), current_duration.clone());
 
         // Create PCM format
         let pcm_format = PcmFormat {
@@ -636,7 +649,7 @@ impl StreamingFlacSinkLogic {
 
         debug!("FLAC encoder initialized successfully");
 
-        // Spawn broadcaster task with timestamp for pacing
+        // Spawn broadcaster task with timestamp and duration for pacing
         let flac_broadcast = self.flac_broadcast.clone();
         let flac_header = self.flac_header.clone();
         let max_lead = self.broadcast_max_lead_time;
@@ -646,7 +659,9 @@ impl StreamingFlacSinkLogic {
                 flac_broadcast,
                 flac_header,
                 current_timestamp,
+                current_duration,
                 max_lead,
+                sample_rate,
             )
             .await
             {
@@ -746,17 +761,25 @@ impl NodeLogic for StreamingFlacSinkLogic {
                                     // Convert chunk to PCM bytes
                                     let pcm_bytes = chunk_to_pcm_bytes(&chunk, self.bits_per_sample)?;
 
+                                    // Calculate exact duration from samples and sample rate
+                                    let sample_rate = self
+                                        .sample_rate
+                                        .expect("sample_rate should be initialized");
+                                    let duration_sec = chunk.len() as f64 / sample_rate as f64;
+
                                     trace!(
-                                        "Sending PCM chunk: {} bytes, {} samples @ {:.2}s",
+                                        "Sending PCM chunk: {} bytes, {} samples @ {:.2}s (duration={:.3}s)",
                                         pcm_bytes.len(),
                                         chunk.len(),
-                                        seg.timestamp_sec
+                                        seg.timestamp_sec,
+                                        duration_sec
                                     );
 
-                                    // Send to FLAC encoder with timestamp
+                                    // Send to FLAC encoder with timestamp and duration
                                     let pcm_chunk = PcmChunk {
                                         bytes: pcm_bytes,
                                         timestamp_sec: seg.timestamp_sec,
+                                        duration_sec,
                                     };
                                     let send_start = std::time::Instant::now();
                                     if let Err(e) = self.pcm_tx.send(pcm_chunk).await {
@@ -784,11 +807,6 @@ impl NodeLogic for StreamingFlacSinkLogic {
                                         SyncMarker::EndOfStream => {
                                             debug!("End of stream marker received");
                                             break;
-                                        }
-
-                                        SyncMarker::TopZeroSync => {
-                                            self.flac_broadcast.mark_top_zero();
-                                            trace!("TopZeroSync propagated to FLAC broadcast");
                                         }
 
                                         _ => {
@@ -826,7 +844,9 @@ async fn broadcast_flac_stream(
     broadcast_tx: timed_broadcast::Sender<Bytes>,
     header_cache: Arc<RwLock<Option<Bytes>>>,
     current_timestamp: Arc<RwLock<f64>>,
+    current_duration: Arc<RwLock<f64>>,
     broadcast_max_lead_time: f64,
+    sample_rate: u32,
 ) -> Result<(), AudioError> {
     trace!(
         "Broadcaster task started with FLAC frame boundary detection (max_lead={:.3}s)",
@@ -847,6 +867,8 @@ async fn broadcast_flac_stream(
     let mut broadcast_count = 0u64;
     let mut total_read_time = 0.0f64;
     let mut read_count = 0u64;
+    let mut encoded_samples = 0u64;
+    let sample_rate_f64 = sample_rate as f64;
 
     loop {
         let read_start = std::time::Instant::now();
@@ -856,7 +878,12 @@ async fn broadcast_flac_stream(
                 if !accumulator.is_empty() {
                     let bytes = Bytes::from(std::mem::take(&mut accumulator));
                     let audio_ts = *current_timestamp.read().await;
-                    if broadcast_tx.send(bytes.clone(), audio_ts).await.is_err() {
+                    let segment_dur = *current_duration.read().await;
+                    if broadcast_tx
+                        .send(bytes.clone(), audio_ts, segment_dur)
+                        .await
+                        .is_err()
+                    {
                         trace!("Broadcast closed before sending final FLAC data");
                         break;
                     }
@@ -897,19 +924,20 @@ async fn broadcast_flac_stream(
                     n
                 );
 
-                // Find where to split: position of last sync code (start of last incomplete frame)
-                // Everything before this position contains only complete frames
-                let boundary = flac_frame_utils::find_complete_frames_boundary(&accumulator);
+                // Locate complete frames and total samples they represent
+                let (boundary, total_samples) =
+                    flac_frame_utils::find_complete_frames_with_samples(&accumulator);
 
                 trace!(
-                    "Buffer state: accumulator={} bytes, boundary={} bytes, will_send={}",
+                    "Buffer state: accumulator={} bytes, boundary={} bytes, total_samples={}, will_send={}",
                     accumulator.len(),
                     boundary,
-                    boundary >= 1024
+                    total_samples,
+                    boundary >= 1024 && total_samples > 0
                 );
 
-                // Only broadcast if we have at least one complete frame (1KB minimum to avoid excessive small sends)
-                if boundary >= 1024 {
+                // Only broadcast if we have at least one complete frame (keep 1KB minimum to avoid tiny sends)
+                if boundary >= 1024 && total_samples > 0 {
                     // ╔═══════════════════════════════════════════════════════════════╗
                     // ║ BACKPRESSURE INTELLIGENTE BASÉE SUR LE TIMING                 ║
                     // ║                                                               ║
@@ -921,13 +949,17 @@ async fn broadcast_flac_stream(
                     // ║ Cela crée la backpressure vers TimerBufferNode tout en       ║
                     // ║ permettant de dropper les chunks vraiment périmés.           ║
                     // ╚═══════════════════════════════════════════════════════════════╝
-                    let audio_timestamp = *current_timestamp.read().await;
+                    let frame_start_samples = encoded_samples;
+                    encoded_samples = encoded_samples.saturating_add(total_samples);
+                    let audio_timestamp = frame_start_samples as f64 / sample_rate_f64;
+                    let segment_duration = total_samples as f64 / sample_rate_f64;
 
                     if stats_last_log.elapsed() >= Duration::from_secs(1) {
                         trace!(
-                            "Broadcaster pacing snapshot: audio_ts={:.3}s buffer_bytes={}",
+                            "Broadcaster pacing snapshot: audio_ts={:.3}s buffer_bytes={} samples={} ",
                             audio_timestamp,
-                            accumulator.len()
+                            accumulator.len(),
+                            total_samples
                         );
                         stats_last_log = std::time::Instant::now();
                     }
@@ -937,6 +969,13 @@ async fn broadcast_flac_stream(
                         // Chunk en retard : vider l'accumulator et continuer
                         accumulator.clear();
                         continue;
+                    }
+
+                    if let Ok(mut ts) = current_timestamp.try_write() {
+                        *ts = audio_timestamp;
+                    }
+                    if let Ok(mut dur) = current_duration.try_write() {
+                        *dur = segment_duration;
                     }
 
                     // Split at boundary to avoid copying - extract prefix, keep suffix
@@ -973,17 +1012,24 @@ async fn broadcast_flac_stream(
                     if !header_captured && bytes.len() >= 4 && &bytes[0..4] == b"fLaC" {
                         *header_cache.write().await = Some(bytes.clone());
                         header_captured = true;
-                        trace!("FLAC header captured ({} bytes)", bytes.len());
+                        trace!("FLAC header captured ({} bytes), not broadcasting", bytes.len());
+                        // Skip broadcasting the header: clients prepend it locally on subscribe
+                        continue;
                     }
 
                     let num_receivers = broadcast_tx.receiver_count();
-                    match broadcast_tx.send(bytes.clone(), audio_timestamp).await {
+                    match broadcast_tx
+                        .send(bytes.clone(), audio_timestamp, segment_duration)
+                        .await
+                    {
                         Ok(_) => {
                             if num_receivers > 0 {
                                 trace!(
-                                    "Broadcasted {} bytes to {} receivers",
+                                    "Broadcasted {} bytes to {} receivers (ts={:.3}s, dur={:.3}s)",
                                     bytes.len(),
-                                    num_receivers
+                                    num_receivers,
+                                    audio_timestamp,
+                                    segment_duration
                                 );
                             }
                         }
@@ -1237,15 +1283,22 @@ struct ByteStreamReader {
     finished: bool,
     /// Shared timestamp for broadcaster pacing
     current_timestamp: Arc<RwLock<f64>>,
+    /// Shared duration for broadcaster pacing
+    current_duration: Arc<RwLock<f64>>,
 }
 
 impl ByteStreamReader {
-    fn new(rx: mpsc::Receiver<PcmChunk>, current_timestamp: Arc<RwLock<f64>>) -> Self {
+    fn new(
+        rx: mpsc::Receiver<PcmChunk>,
+        current_timestamp: Arc<RwLock<f64>>,
+        current_duration: Arc<RwLock<f64>>,
+    ) -> Self {
         Self {
             rx,
             buffer: VecDeque::new(),
             finished: false,
             current_timestamp,
+            current_duration,
         }
     }
 }
@@ -1278,9 +1331,12 @@ impl AsyncRead for ByteStreamReader {
                     if chunk.bytes.is_empty() {
                         continue;
                     }
-                    // Update shared timestamp for broadcaster pacing
+                    // Update shared timestamp and duration for broadcaster pacing
                     if let Ok(mut ts) = self.current_timestamp.try_write() {
                         *ts = chunk.timestamp_sec;
+                    }
+                    if let Ok(mut dur) = self.current_duration.try_write() {
+                        *dur = chunk.duration_sec;
                     }
                     self.buffer.extend(chunk.bytes);
                 }
