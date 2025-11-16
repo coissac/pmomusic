@@ -305,6 +305,10 @@ impl<T> Sender<T> {
     }
 
     /// Marque un TopZero : incrémente l'epoch pour les paquets suivants.
+    ///
+    /// Reset le timer epoch_start sans effacer le buffer. Les paquets
+    /// du morceau précédent continueront à être distribués naturellement.
+    /// Cela évite de perdre les dernières frames FLAC à la transition entre morceaux.
     pub fn mark_top_zero(&self) {
         let mut state = self
             .inner
@@ -313,11 +317,8 @@ impl<T> Sender<T> {
             .expect("timed broadcast mutex poisoned");
         state.epoch = state.epoch.wrapping_add(1);
         state.epoch_start = Instant::now();
-        if !state.buffer.is_empty() {
-            state.head_seq = state.next_seq;
-            state.buffer.clear();
-            self.inner.space_notify.notify_waiters();
-        }
+        // Ne PAS effacer le buffer - laisser les paquets du morceau précédent
+        // se vider naturellement pour éviter de perdre les dernières frames
     }
 
     /// Nombre actuel de receivers abonnés.

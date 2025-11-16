@@ -247,6 +247,10 @@ pub struct Block {
     #[serde(default)]
     pub image_base: Option<String>,
 
+    /// Scheduled start time for this block (Unix timestamp in milliseconds, UTC)
+    #[serde(default)]
+    pub sched_time_millis: Option<u64>,
+
     /// Map of song index (as string) to Song metadata
     /// Keys are "0", "1", "2", etc.
     #[serde(default)]
@@ -258,6 +262,16 @@ pub struct Block {
 }
 
 impl Block {
+    /// Scheduled start time in milliseconds if available.
+    pub fn start_time_millis(&self) -> Option<u64> {
+        if let Some(ts) = self.sched_time_millis {
+            return Some(ts);
+        }
+        self.songs_ordered()
+            .into_iter()
+            .find_map(|(_, song)| song.sched_time_millis)
+    }
+
     /// Get songs in order by index
     pub fn songs_ordered(&self) -> Vec<(usize, &Song)> {
         let mut songs: Vec<_> = self

@@ -12,23 +12,23 @@ use std::{
         Arc,
     },
     task::{Context, Poll},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use crate::{
     channels::{ChannelDescriptor, ParadiseChannelKind, ALL_CHANNELS},
     client::RadioParadiseClient,
+    models::Block,
     playlist_feeder::RadioParadisePlaylistFeeder,
 };
 use anyhow::{anyhow, Result};
 use pmoaudio::AudioPipelineNode;
 use pmoaudio_ext::{
     FlacClientStream, IcyClientStream, MetadataSnapshot, OggFlacClientStream, OggFlacStreamHandle,
-    PlaylistSource, StreamHandle, StreamingFlacSink, StreamingOggFlacSink,
-    TrackBoundaryCoverNode,
+    PlaylistSource, StreamHandle, StreamingFlacSink, StreamingOggFlacSink, TrackBoundaryCoverNode,
 };
-use pmoaudiocache::Cache as AudioCache;
-use pmocovers::Cache as CoverCache;
+use pmoaudiocache::{get_audio_cache, Cache as AudioCache};
+use pmocovers::{get_cover_cache, Cache as CoverCache};
 use pmoflac::EncoderOptions;
 use pmoplaylist::PlaylistManager;
 use thiserror::Error;
@@ -110,6 +110,16 @@ impl ParadiseHistoryBuilder {
     }
 }
 
+impl Default for ParadiseHistoryBuilder {
+    fn default() -> Self {
+        let audio_cache = get_audio_cache()
+            .expect("pmoaudiocache::register_audio_cache must be called before using ParadiseHistoryBuilder::default()");
+        let cover_cache = get_cover_cache()
+            .expect("pmocovers::register_cover_cache must be called before using ParadiseHistoryBuilder::default()");
+        Self::new(audio_cache, cover_cache)
+    }
+}
+
 #[cfg(feature = "pmoconfig")]
 impl ParadiseStreamChannelConfig {
     pub fn from_config(cfg: &pmoconfig::Config, channel: ParadiseChannelKind) -> Self {
@@ -174,6 +184,9 @@ impl ParadiseStreamChannel {
         cover_cache: Option<Arc<CoverCache>>,
         history: Option<ParadiseHistoryOptions>,
     ) -> Result<Self> {
+        let cover_cache = cover_cache
+            .or_else(|| history.as_ref().map(|opts| opts.cover_cache.clone()))
+            .or_else(|| get_cover_cache());
         let manager = PlaylistManager::get();
 
         // 1. Créer la playlist live pour ce canal
@@ -189,7 +202,9 @@ impl ParadiseStreamChannel {
             .await?
         } else {
             // Pas d'historique, on a besoin quand même d'un cache audio basique
-            return Err(anyhow!("History options required for now (audio cache needed)"));
+            return Err(anyhow!(
+                "History options required for now (audio cache needed)"
+            ));
         };
 
         let feeder = Arc::new(feeder);
@@ -317,13 +332,7 @@ impl ParadiseStreamChannel {
             .channel(descriptor.id)
             .build()
             .await?;
-        Self::with_client(
-            descriptor,
-            client,
-            config,
-            cover_cache,
-            history,
-        ).await
+        Self::with_client(descriptor, client, config, cover_cache, history).await
     }
 
     /// S'abonne au flux FLAC pur.
@@ -458,6 +467,9 @@ impl Drop for ParadiseStreamChannel {
     }
 }
 
+const MAX_BLOCK_LEAD: Duration = Duration::from_secs(3600);
+const BLOCK_LEAD_CHECK_CHUNK: Duration = Duration::from_secs(300);
+
 struct ChannelState {
     descriptor: ChannelDescriptor,
     config: ParadiseStreamChannelConfig,
@@ -473,6 +485,24 @@ struct ChannelState {
 }
 
 impl ChannelState {
+    fn current_unix_millis() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
+    }
+
+    fn block_lead_delay(&self, block: &Block) -> Option<Duration> {
+        let start = block.start_time_millis()?;
+        let now = Self::current_unix_millis();
+        let max_lead_ms = MAX_BLOCK_LEAD.as_millis() as u64;
+        if start <= now + max_lead_ms {
+            None
+        } else {
+            Some(Duration::from_millis(start - now - max_lead_ms))
+        }
+    }
+
     fn on_client_added(&self) {
         if self.active_clients.fetch_add(1, Ordering::SeqCst) == 0 {
             self.activity_notify.notify_one();
@@ -493,9 +523,38 @@ impl ChannelState {
         true
     }
 
+    async fn wait_until_block_ready(&self, block: &Block) -> BlockReadiness {
+        loop {
+            if self.stop_token.is_cancelled() {
+                return BlockReadiness::Stopped;
+            }
+            if self.active_clients.load(Ordering::SeqCst) == 0 {
+                return BlockReadiness::NoClients;
+            }
+
+            if let Some(delay) = self.block_lead_delay(block) {
+                let sleep_for = delay.min(BLOCK_LEAD_CHECK_CHUNK);
+                let lead_secs = delay.as_secs_f64();
+                info!(
+                    "Block {} scheduled too far in the future ({:.1} min). Sleeping {:?} before retrying.",
+                    block.event,
+                    lead_secs / 60.0,
+                    sleep_for
+                );
+                tokio::select! {
+                    _ = self.stop_token.cancelled() => return BlockReadiness::Stopped,
+                    _ = tokio::time::sleep(sleep_for) => {},
+                }
+                continue;
+            }
+
+            return BlockReadiness::Ready;
+        }
+    }
+
     async fn run_scheduler(self: Arc<Self>) {
         let mut backoff = Duration::from_secs(5);
-        loop {
+        'scheduler: loop {
             if self.stop_token.is_cancelled() {
                 break;
             }
@@ -506,6 +565,11 @@ impl ChannelState {
 
             match self.client.get_block(None).await {
                 Ok(block) => {
+                    match self.wait_until_block_ready(&block).await {
+                        BlockReadiness::Ready => {}
+                        BlockReadiness::NoClients => continue,
+                        BlockReadiness::Stopped => break,
+                    }
                     info!(
                         "Channel {} streaming block {}",
                         self.descriptor.display_name, block.event
@@ -524,6 +588,11 @@ impl ChannelState {
 
                         match self.client.get_block(Some(next_event)).await {
                             Ok(next_block) => {
+                                match self.wait_until_block_ready(&next_block).await {
+                                    BlockReadiness::Ready => {}
+                                    BlockReadiness::NoClients => break,
+                                    BlockReadiness::Stopped => break 'scheduler,
+                                }
                                 self.feeder.push_block_id(next_block.event).await;
                                 next_event = next_block.end_event;
                                 backoff = Duration::from_secs(5);
@@ -556,6 +625,12 @@ impl ChannelState {
             }
         }
     }
+}
+
+enum BlockReadiness {
+    Ready,
+    NoClients,
+    Stopped,
 }
 
 macro_rules! wrap_stream {

@@ -111,3 +111,8 @@ path = "examples/now_playing.rs"
 name = "stream_block"
 path = "examples/stream_block.rs"
 required-features = ["full"]
+
+[[example]]
+name = "single_channel_server"
+path = "examples/single_channel_server.rs"
+required-features = ["full"]

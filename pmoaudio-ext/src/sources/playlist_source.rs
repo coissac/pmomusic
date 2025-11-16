@@ -212,7 +212,13 @@ impl NodeLogic for PlaylistSourceLogic {
                             t
                         },
                         Ok(None) => {
-                            // Playlist vide, attendre avant retry
+                            // Playlist vide, attendre avant retry et réinitialiser la synchro
+                            if !first_track {
+                                tracing::debug!(
+                                    "PlaylistSourceLogic: playlist drained, resetting top-zero sync"
+                                );
+                            }
+                            first_track = true;
                             tracing::trace!(
                                 "PlaylistSourceLogic: playlist empty, waiting {}ms",
                                 self.poll_interval_ms
@@ -237,14 +243,6 @@ impl NodeLogic for PlaylistSourceLogic {
                 }
             };
 
-            // Émettre TopZeroSync pour la première piste seulement
-            if first_track {
-                tracing::debug!("PlaylistSourceLogic: emitting TopZeroSync");
-                let top_zero = AudioSegment::new_top_zero_sync();
-                send_to_children!(top_zero);
-                first_track = false;
-            }
-
             // Émettre TrackBoundary avec metadata du cache
             let metadata = match track.track_metadata() {
                 Ok(m) => m,
@@ -256,6 +254,28 @@ impl NodeLogic for PlaylistSourceLogic {
                     continue;
                 }
             };
+
+            let metadata_guard = metadata.read().await;
+            let artist = metadata_guard
+                .get_artist()
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "Unknown artist".to_string());
+            let title = metadata_guard
+                .get_title()
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "Untitled".to_string());
+            drop(metadata_guard);
+            let remaining = self.playlist_handle.remaining().await.unwrap_or(0);
+            tracing::info!(
+                "PlaylistSource: starting track {} - {} ({} remaining)",
+                artist,
+                title,
+                remaining
+            );
 
             tracing::debug!("PlaylistSourceLogic: emitting TrackBoundary");
             let boundary = AudioSegment::new_track_boundary(0, 0.0, metadata);
@@ -278,6 +298,10 @@ impl NodeLogic for PlaylistSourceLogic {
             // Décoder et émettre les chunks PCM
             // Passer le cache et pk pour gérer le cache progressif
             let cache_pk = track.cache_pk();
+            // Réinitialiser la synchro au début de chaque piste
+            let emit_top_zero = true;
+            first_track = false;
+
             match decode_and_emit_track(
                 &file_path,
                 self.chunk_frames,
@@ -285,10 +309,12 @@ impl NodeLogic for PlaylistSourceLogic {
                 &stop_token,
                 &self.cache,
                 cache_pk,
+                emit_top_zero,
             )
             .await
             {
                 Ok(()) => {
+                    tracing::info!("PlaylistSource: finished track {} - {}", artist, title);
                     // Piste décodée avec succès, transférer vers l'historique si configuré
                     if let Some(ref history) = self.history_playlist {
                         if let Err(e) = history.push(cache_pk.to_string()).await {
@@ -306,7 +332,8 @@ impl NodeLogic for PlaylistSourceLogic {
                 }
                 Err(e) => {
                     tracing::error!("PlaylistSourceLogic: error decoding track: {}", e);
-                    let error_marker = AudioSegment::new_error(0, 0.0, format!("Decode error: {}", e));
+                    let error_marker =
+                        AudioSegment::new_error(0, 0.0, format!("Decode error: {}", e));
                     send_to_children!(error_marker);
                     // Continue vers la piste suivante
                 }
@@ -335,6 +362,7 @@ async fn decode_and_emit_track(
     stop_token: &CancellationToken,
     cache: &Arc<AudioCache>,
     cache_pk: &str,
+    emit_top_zero: bool,
 ) -> Result<(), AudioError> {
     // Attendre que le fichier soit suffisamment gros pour le sniffing
     // Le cache progressif permet de commencer la lecture après le prebuffer (512 KB)
@@ -460,6 +488,16 @@ async fn decode_and_emit_track(
                     timestamp_sec,
                 )?;
 
+                if emit_top_zero && total_frames == 0 {
+                    tracing::debug!("decode_and_emit_track: emitting TopZeroSync (first chunk)");
+                    let top_zero = AudioSegment::new_top_zero_sync();
+                    for tx in output {
+                        tx.send(top_zero.clone())
+                            .await
+                            .map_err(|_| AudioError::ChildDied)?;
+                    }
+                }
+
                 for tx in output {
                     tx.send(segment.clone())
                         .await
@@ -492,6 +530,13 @@ async fn decode_and_emit_track(
         .wait()
         .await
         .map_err(|e| AudioError::ProcessingError(format!("Decode task failed: {}", e)))?;
+
+    if !cache.is_download_complete(cache_pk) {
+        tracing::warn!(
+            "PlaylistSource: finished reading cache entry {} but download is not complete",
+            cache_pk
+        );
+    }
 
     Ok(())
 }

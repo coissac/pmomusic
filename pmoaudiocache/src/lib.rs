@@ -89,7 +89,10 @@ pub mod openapi;
 pub mod config_ext;
 
 // Re-exports principaux
-pub use cache::{add_with_metadata_extraction, get_metadata, new_cache, AudioConfig, Cache};
+pub use cache::{
+    add_with_metadata_extraction, get_metadata, new_cache, new_cache_with_consolidation,
+    AudioConfig, Cache,
+};
 pub use metadata::AudioMetadata;
 pub use metadata_ext::{AudioMetadataExt, AudioTrackMetadataExt};
 pub use track_metadata::AudioCacheTrackMetadata;

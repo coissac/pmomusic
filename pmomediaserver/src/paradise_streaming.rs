@@ -6,16 +6,16 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use axum::{
+    Json, Router,
     body::Body,
     extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::get,
-    Json, Router,
 };
-use pmoaudiocache::{get_audio_cache, register_audio_cache, AudioCacheExt, Cache as AudioCache};
-use pmocovers::{get_cover_cache, register_cover_cache, Cache as CoverCache, CoverCacheExt};
-use pmoparadise::{channels::ALL_CHANNELS, ParadiseChannelManager, ParadiseHistoryBuilder};
+use pmoaudiocache::{AudioCacheExt, Cache as AudioCache, get_audio_cache, register_audio_cache};
+use pmocovers::{Cache as CoverCache, CoverCacheExt, get_cover_cache, register_cover_cache};
+use pmoparadise::{ParadiseChannelManager, ParadiseHistoryBuilder, channels::ALL_CHANNELS};
 use pmoplaylist::register_audio_cache as register_playlist_audio_cache;
 use std::sync::Arc;
 use tokio_util::io::ReaderStream;
@@ -99,15 +99,12 @@ impl ParadiseStreamingExt for pmoserver::Server {
         };
 
         // Créer le builder d'historique
-        let history_builder = ParadiseHistoryBuilder {
-            audio_cache: audio_cache.clone(),
-            cover_cache: cover_cache.clone(),
-            playlist_prefix: "radioparadise-history".into(),
-            playlist_title_prefix: Some("Radio Paradise History".into()),
-            max_history_tracks: Some(500),
-            collection_prefix: Some("radioparadise".into()),
-            replay_max_lead_seconds: 1.0,
-        };
+        let mut history_builder = ParadiseHistoryBuilder::default();
+        history_builder.playlist_prefix = "radioparadise-history".into();
+        history_builder.playlist_title_prefix = Some("Radio Paradise History".into());
+        history_builder.max_history_tracks = Some(500);
+        history_builder.collection_prefix = Some("radioparadise".into());
+        history_builder.replay_max_lead_seconds = 1.0;
 
         // Créer le manager de canaux
         info!("📡 Creating ParadiseChannelManager...");

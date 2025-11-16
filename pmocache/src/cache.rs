@@ -96,8 +96,11 @@ impl<C: CacheConfig> Cache<C> {
                         "File with pk {} in cache has no completion marker, will re-download/re-ingest",
                         pk
                     );
-                    // Supprimer le fichier incomplet
+                    // Supprimer le fichier incomplet ET l'entrée DB
                     let _ = std::fs::remove_file(&file_path);
+                    if let Err(e) = self.db.delete(pk) {
+                        tracing::warn!("Failed to delete DB entry for incomplete file {}: {}", pk, e);
+                    }
                     return Ok(false);
                 }
             }
@@ -141,7 +144,13 @@ impl<C: CacheConfig> Cache<C> {
     /// Finalise l'ajout d'un fichier au cache
     ///
     /// Cette fonction helper gère le prébuffering et le nettoyage en background
-    async fn finalize_download(&self, pk: &str, download: Arc<Download>) -> Result<String> {
+    async fn finalize_download(
+        &self,
+        pk: &str,
+        download: Arc<Download>,
+        collection: Option<&str>,
+        origin_url: Option<&str>,
+    ) -> Result<String> {
         // Attendre le prébuffering (pour le cache progressif)
         if self.min_prebuffer_size > 0 {
             download
@@ -153,6 +162,16 @@ impl<C: CacheConfig> Cache<C> {
                 pk,
                 self.min_prebuffer_size
             );
+        }
+
+        // Ajouter à la DB une fois le prébuffer terminé
+        self.db.add(pk, None, collection)?;
+        if let Some(url) = origin_url {
+            self.db.set_origin_url(pk, url)?;
+        }
+
+        if let Err(e) = self.enforce_limit().await {
+            tracing::warn!("Error enforcing cache limit: {}", e);
         }
 
         // Lancer une tâche de nettoyage et marquage de complétion en background
@@ -337,17 +356,9 @@ impl<C: CacheConfig> Cache<C> {
             downloads.insert(pk.clone(), download.clone());
         }
 
-        // Ajouter immédiatement à la DB
-        self.db.add(&pk, None, collection)?;
-        self.db.set_origin_url(&pk, url)?;
-
-        // Appliquer la politique d'éviction LRU si nécessaire
-        if let Err(e) = self.enforce_limit().await {
-            tracing::warn!("Error enforcing cache limit: {}", e);
-        }
-
         // Finaliser avec prébuffering et nettoyage
-        self.finalize_download(&pk, download).await
+        self.finalize_download(&pk, download, collection, Some(url))
+            .await
     }
 
     /// Ajoute un fichier à partir d'un flux asynchrone.
@@ -459,17 +470,9 @@ impl<C: CacheConfig> Cache<C> {
             downloads.insert(pk.clone(), download.clone());
         }
 
-        self.db.add(&pk, None, collection)?;
-        if let Some(uri) = source_uri {
-            self.db.set_origin_url(&pk, uri)?;
-        }
-
-        if let Err(e) = self.enforce_limit().await {
-            tracing::warn!("Error enforcing cache limit: {}", e);
-        }
-
         // Finaliser avec prébuffering et nettoyage
-        self.finalize_download(&pk, download).await
+        self.finalize_download(&pk, download, collection, source_uri)
+            .await
     }
 
     /// Ajoute un fichier local au cache

@@ -1,6 +1,6 @@
 use pmoapp::{WebAppExt, Webapp};
 use pmomediarenderer::MEDIA_RENDERER;
-use pmomediaserver::{MEDIA_SERVER, sources::SourcesExt, ParadiseStreamingExt};
+use pmomediaserver::{MEDIA_SERVER, ParadiseStreamingExt, sources::SourcesExt};
 use pmoserver::Server;
 use pmosource::MusicSourceExt;
 use pmoupnp::UpnpServerExt;

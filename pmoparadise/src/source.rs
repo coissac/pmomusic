@@ -170,15 +170,9 @@ impl RadioParadiseSource {
 
         // Get read handle for the playlist from the singleton
         let manager = pmoplaylist::PlaylistManager();
-        let reader = manager
-            .get_read_handle(&playlist_id)
-            .await
-            .map_err(|e| {
-                MusicSourceError::BrowseError(format!(
-                    "Failed to get playlist {}: {}",
-                    playlist_id, e
-                ))
-            })?;
+        let reader = manager.get_read_handle(&playlist_id).await.map_err(|e| {
+            MusicSourceError::BrowseError(format!("Failed to get playlist {}: {}", playlist_id, e))
+        })?;
 
         // Get entries from playlist
         let entries = reader.get_entries(offset, count).await.map_err(|e| {
@@ -206,18 +200,17 @@ impl RadioParadiseSource {
         let metadata = &entry.metadata;
 
         // Build audio URL from cache
-        let audio_url = format!(
-            "{}/cache/audio/{}",
-            self.base_url,
-            entry.pk
-        );
+        let audio_url = format!("{}/cache/audio/{}", self.base_url, entry.pk);
 
         // Build item
         Ok(Item {
             id: format!("radio-paradise:channel:{}:history:track:{}", slug, entry.pk),
             parent_id: format!("radio-paradise:channel:{}:history", slug),
             restricted: Some("1".to_string()),
-            title: metadata.title.clone().unwrap_or_else(|| "Unknown Title".to_string()),
+            title: metadata
+                .title
+                .clone()
+                .unwrap_or_else(|| "Unknown Title".to_string()),
             creator: metadata.artist.clone(),
             class: "object.item.audioItem.musicTrack".to_string(),
             artist: metadata.artist.clone(),
@@ -232,7 +225,9 @@ impl RadioParadiseSource {
                 bits_per_sample: metadata.bits_per_sample.map(|b| b.to_string()),
                 sample_frequency: metadata.sample_rate.map(|s| s.to_string()),
                 nr_audio_channels: Some("2".to_string()),
-                duration: metadata.duration.map(|d| format!("{}:{:02}:{:02}", d / 3600, (d % 3600) / 60, d % 60)),
+                duration: metadata
+                    .duration
+                    .map(|d| format!("{}:{:02}:{:02}", d / 3600, (d % 3600) / 60, d % 60)),
                 url: audio_url,
             }],
             descriptions: vec![],

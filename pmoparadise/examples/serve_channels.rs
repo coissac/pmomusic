@@ -18,10 +18,13 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use pmoaudiocache::new_cache as new_audio_cache;
-use pmocovers::new_cache as new_cover_cache;
+use pmoaudiocache::{
+    new_cache_with_consolidation as new_audio_cache,
+    register_audio_cache as register_global_audio_cache,
+};
+use pmocovers::{new_cache_with_consolidation as new_cover_cache, register_cover_cache};
 use pmoparadise::{channels::ALL_CHANNELS, ParadiseChannelManager, ParadiseHistoryBuilder};
-use pmoplaylist::register_audio_cache;
+use pmoplaylist::register_audio_cache as register_playlist_audio_cache;
 use pmoserver::{init_logging, ServerBuilder};
 use tokio_util::io::ReaderStream;
 use tracing::{error, info};
@@ -41,9 +44,11 @@ async fn main() -> anyhow::Result<()> {
     fs::create_dir_all(cover_cache_dir)?;
     fs::create_dir_all(audio_cache_dir)?;
 
-    let cover_cache = Arc::new(new_cover_cache(cover_cache_dir, 500)?);
-    let audio_cache = Arc::new(new_audio_cache(audio_cache_dir, 1000)?);
-    register_audio_cache(audio_cache.clone());
+    let cover_cache = new_cover_cache(cover_cache_dir, 500).await?;
+    let audio_cache = new_audio_cache(audio_cache_dir, 1000).await?;
+    register_global_audio_cache(audio_cache.clone());
+    register_playlist_audio_cache(audio_cache.clone());
+    register_cover_cache(cover_cache.clone());
     let _playlist_manager = pmoplaylist::PlaylistManager();
 
     let history_builder = ParadiseHistoryBuilder {

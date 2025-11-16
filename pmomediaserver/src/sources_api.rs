@@ -141,7 +141,9 @@ async fn register_paradise(Json(params): Json<ParadiseParams>) -> impl IntoRespo
     use pmosource::api::register_source;
 
     // Utiliser l'URL de base depuis les params ou une valeur par défaut
-    let base_url = params.base_url.unwrap_or_else(|| "http://localhost:8080".to_string());
+    let base_url = params
+        .base_url
+        .unwrap_or_else(|| "http://localhost:8080".to_string());
 
     // Créer la source Radio Paradise (utilise le singleton PlaylistManager)
     let source = Arc::new(RadioParadiseSource::new(base_url));

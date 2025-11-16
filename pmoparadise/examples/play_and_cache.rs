@@ -28,9 +28,13 @@
 
 use pmoaudio::{AudioPipelineNode, AudioSink, TimerNode};
 use pmoaudio_ext::{FlacCacheSink, PlaylistSource};
-use pmoaudiocache::Cache as AudioCache;
-use pmocovers::Cache as CoverCache;
+use pmoaudiocache::{
+    new_cache_with_consolidation as new_audio_cache,
+    register_audio_cache as register_global_audio_cache,
+};
+use pmocovers::{new_cache_with_consolidation as new_cover_cache, register_cover_cache};
 use pmoparadise::{RadioParadiseClient, RadioParadiseStreamSource};
+use pmoplaylist::register_audio_cache as register_playlist_audio_cache;
 use std::env;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -98,24 +102,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Créer le cache audio
     let audio_cache_dir = format!("{}/audio_cache", base_dir);
     std::fs::create_dir_all(&audio_cache_dir)?;
-    let audio_cache = Arc::new(AudioCache::new(
-        &audio_cache_dir,
-        1000, // 1000 MB limit
-    )?);
+    let audio_cache = new_audio_cache(&audio_cache_dir, 1000).await?;
     tracing::debug!("Audio cache initialized at: {}", audio_cache_dir);
 
     // Créer le cache de covers
     let cover_cache_dir = format!("{}/cover_cache", base_dir);
     std::fs::create_dir_all(&cover_cache_dir)?;
-    let cover_cache = Arc::new(CoverCache::new(
-        &cover_cache_dir,
-        100, // 100 MB limit
-    )?);
+    let cover_cache = new_cover_cache(&cover_cache_dir, 100).await?;
     tracing::debug!("Cover cache initialized at: {}", cover_cache_dir);
 
     // Enregistrer le cache audio dans pmoplaylist
     // (requis par pmoplaylist pour valider les pks)
-    pmoplaylist::register_audio_cache(audio_cache.clone());
+    register_global_audio_cache(audio_cache.clone());
+    register_playlist_audio_cache(audio_cache.clone());
+    register_cover_cache(cover_cache.clone());
     tracing::debug!("Audio cache registered in pmoplaylist");
 
     // Utiliser le gestionnaire de playlist singleton

@@ -77,3 +77,17 @@ pub fn new_cache(dir: &str, limit: usize) -> Result<Cache> {
     let transformer_factory = Arc::new(|| create_webp_transformer());
     Cache::with_transformer(dir, limit, Some(transformer_factory))
 }
+
+/// Crée un cache de couvertures et lance une consolidation en arrière-plan.
+pub async fn new_cache_with_consolidation(dir: &str, limit: usize) -> Result<Arc<Cache>> {
+    let cache = Arc::new(new_cache(dir, limit)?);
+    let cache_clone = cache.clone();
+    tokio::spawn(async move {
+        if let Err(e) = cache_clone.consolidate().await {
+            tracing::warn!("Failed to consolidate cover cache on startup: {}", e);
+        } else {
+            tracing::info!("Cover cache consolidated successfully on startup");
+        }
+    });
+    Ok(cache)
+}

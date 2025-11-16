@@ -60,7 +60,7 @@ pub mod openapi;
 #[cfg(feature = "pmoconfig")]
 pub mod config_ext;
 
-pub use cache::{new_cache, Cache, CoversConfig};
+pub use cache::{new_cache, new_cache_with_consolidation, Cache, CoversConfig};
 
 #[cfg(feature = "pmoserver")]
 pub use openapi::ApiDoc;
