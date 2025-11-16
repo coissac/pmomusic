@@ -57,12 +57,50 @@
 //! # }
 //! ```
 //!
+//! # Historique des morceaux joués
+//!
+//! Utilisez `PlaylistSource::with_history()` pour créer une source qui transfère
+//! automatiquement les morceaux joués vers une playlist historique :
+//!
+//! ```rust,no_run
+//! use pmoaudio_ext::PlaylistSource;
+//! use pmoplaylist::PlaylistManager;
+//! use pmoaudiocache::cache::new_cache;
+//! use std::sync::Arc;
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let manager = PlaylistManager::get();
+//! let cache = Arc::new(new_cache("./cache", 500)?);
+//!
+//! // Playlist live (consommée par la source)
+//! let live_read = manager.get_read_handle("radio-live").await?;
+//!
+//! // Playlist historique (capacité 200 morceaux)
+//! let history_write = manager.create_persistent_playlist("radio-history".into()).await?;
+//! history_write.set_capacity(Some(200)).await?;
+//!
+//! // Créer la source avec historique
+//! let source = PlaylistSource::with_history(
+//!     live_read,
+//!     cache,
+//!     Arc::new(history_write)
+//! );
+//!
+//! // Les morceaux joués seront automatiquement ajoutés à "radio-history"
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! **Note** : L'historique utilise `push()` sans TTL. Les morceaux restent dans l'historique
+//! jusqu'à ce que la capacité maximale soit atteinte (FIFO).
+//!
 //! # Comportement
 //!
 //! - **Polling** : Si la playlist est vide, attend `poll_interval_ms` avant de réessayer
 //! - **TrackBoundary** : Émet un marqueur avec metadata entre chaque piste
 //! - **Erreurs** : Si un fichier est inaccessible, émet un `Error` marker et continue
 //! - **Arrêt** : Via `CancellationToken`, émet `EndOfStream` avant de terminer
+//! - **Historique** : Si configuré, ajoute chaque piste jouée à la playlist historique
 //!
 //! # Synchronisation
 //!
@@ -98,6 +136,7 @@ pub struct PlaylistSourceLogic {
     cache: Arc<AudioCache>,
     chunk_frames: usize,
     poll_interval_ms: u64,
+    history_playlist: Option<Arc<pmoplaylist::WriteHandle>>,
 }
 
 impl PlaylistSourceLogic {
@@ -112,7 +151,13 @@ impl PlaylistSourceLogic {
             cache,
             chunk_frames,
             poll_interval_ms,
+            history_playlist: None,
         }
+    }
+
+    /// Enregistre une playlist historique pour sauvegarder les morceaux joués
+    pub fn set_history_playlist(&mut self, history: Arc<pmoplaylist::WriteHandle>) {
+        self.history_playlist = Some(history);
     }
 }
 
@@ -233,7 +278,7 @@ impl NodeLogic for PlaylistSourceLogic {
             // Décoder et émettre les chunks PCM
             // Passer le cache et pk pour gérer le cache progressif
             let cache_pk = track.cache_pk();
-            if let Err(e) = decode_and_emit_track(
+            match decode_and_emit_track(
                 &file_path,
                 self.chunk_frames,
                 &output,
@@ -243,10 +288,28 @@ impl NodeLogic for PlaylistSourceLogic {
             )
             .await
             {
-                tracing::error!("PlaylistSourceLogic: error decoding track: {}", e);
-                let error_marker = AudioSegment::new_error(0, 0.0, format!("Decode error: {}", e));
-                send_to_children!(error_marker);
-                // Continue vers la piste suivante
+                Ok(()) => {
+                    // Piste décodée avec succès, transférer vers l'historique si configuré
+                    if let Some(ref history) = self.history_playlist {
+                        if let Err(e) = history.push(cache_pk.to_string()).await {
+                            tracing::warn!(
+                                "PlaylistSourceLogic: failed to add track to history: {}",
+                                e
+                            );
+                        } else {
+                            tracing::debug!(
+                                "PlaylistSourceLogic: added track {} to history",
+                                cache_pk
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("PlaylistSourceLogic: error decoding track: {}", e);
+                    let error_marker = AudioSegment::new_error(0, 0.0, format!("Decode error: {}", e));
+                    send_to_children!(error_marker);
+                    // Continue vers la piste suivante
+                }
             }
 
             // Boucler pour la piste suivante (pas d'EndOfStream entre pistes !)
@@ -609,6 +672,27 @@ impl PlaylistSource {
     ) -> Self {
         let logic =
             PlaylistSourceLogic::new(playlist_handle, cache, chunk_frames, poll_interval_ms);
+        Self {
+            inner: Node::new_source(logic),
+        }
+    }
+
+    /// Crée une nouvelle source avec playlist historique
+    ///
+    /// * `playlist_handle` - Handle de lecture sur la playlist live
+    /// * `cache` - Cache audio contenant les fichiers
+    /// * `history_playlist` - Handle d'écriture pour l'historique des morceaux joués
+    ///
+    /// Après avoir joué chaque morceau, il sera automatiquement ajouté à la playlist historique.
+    /// La playlist historique utilise push() sans TTL, donc les morceaux y restent jusqu'à
+    /// ce que la capacité maximale soit atteinte (FIFO).
+    pub fn with_history(
+        playlist_handle: ReadHandle,
+        cache: Arc<AudioCache>,
+        history_playlist: Arc<pmoplaylist::WriteHandle>,
+    ) -> Self {
+        let mut logic = PlaylistSourceLogic::new(playlist_handle, cache, 0, 100);
+        logic.set_history_playlist(history_playlist);
         Self {
             inner: Node::new_source(logic),
         }

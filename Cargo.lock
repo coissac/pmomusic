@@ -3221,6 +3221,7 @@ dependencies = [
  "pmocovers",
  "pmodidl",
  "pmoparadise",
+ "pmoplaylist",
  "pmoqobuz",
  "pmoserver",
  "pmosource",

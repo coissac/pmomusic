@@ -1,9 +1,3 @@
-//! Version simplifiée de stream_channel.rs utilisant RadioParadisePlaylistFeeder + PlaylistSource
-//!
-//! Cette version remplace l'architecture complexe RadioParadiseStreamSource par :
-//! - RadioParadisePlaylistFeeder : télécharge les URLs gapless et alimente une playlist
-//! - PlaylistSource::with_history() : lit la playlist et gère l'historique automatiquement
-
 use std::{
     collections::HashMap,
     pin::Pin,
@@ -18,19 +12,19 @@ use std::{
 use crate::{
     channels::{ChannelDescriptor, ParadiseChannelKind, ALL_CHANNELS},
     client::RadioParadiseClient,
-    playlist_feeder::RadioParadisePlaylistFeeder,
+    radio_paradise_stream_source::RadioParadiseStreamSource,
 };
 use anyhow::{anyhow, Result};
-use pmoaudio::AudioPipelineNode;
+use pmoaudio::{nodes::DEFAULT_CHANNEL_SIZE, AudioPipelineNode};
 use pmoaudio_ext::{
-    FlacClientStream, IcyClientStream, MetadataSnapshot, OggFlacClientStream, OggFlacStreamHandle,
-    PlaylistSource, StreamHandle, StreamingFlacSink, StreamingOggFlacSink,
+    FlacCacheSink, FlacClientStream, IcyClientStream, MetadataSnapshot, OggFlacClientStream,
+    OggFlacStreamHandle, PlaylistSource, StreamHandle, StreamingFlacSink, StreamingOggFlacSink,
     TrackBoundaryCoverNode,
 };
 use pmoaudiocache::Cache as AudioCache;
 use pmocovers::Cache as CoverCache;
 use pmoflac::EncoderOptions;
-use pmoplaylist::PlaylistManager;
+use pmoplaylist::WriteHandle;
 use thiserror::Error;
 use tokio::io::{AsyncRead, ReadBuf};
 use tokio::sync::Notify;
@@ -58,9 +52,9 @@ pub struct ParadiseHistoryOptions {
     pub audio_cache: Arc<AudioCache>,
     pub cover_cache: Arc<CoverCache>,
     pub playlist_id: String,
+    pub playlist_writer: WriteHandle,
     pub collection: Option<String>,
     pub replay_max_lead_seconds: f64,
-    pub max_history_tracks: Option<usize>,
 }
 
 /// Builder pratique pour configurer automatiquement les playlists historiques.
@@ -93,6 +87,19 @@ impl ParadiseHistoryBuilder {
         descriptor: &ChannelDescriptor,
     ) -> Result<ParadiseHistoryOptions, pmoplaylist::Error> {
         let playlist_id = format!("{}-{}", self.playlist_prefix, descriptor.slug);
+        let manager = pmoplaylist::PlaylistManager();
+        let writer = manager
+            .get_persistent_write_handle(playlist_id.clone())
+            .await?;
+
+        if let Some(prefix) = &self.playlist_title_prefix {
+            let title = format!("{} - {}", prefix, descriptor.display_name);
+            writer.set_title(title).await?;
+        }
+
+        if let Some(capacity) = self.max_history_tracks {
+            writer.set_capacity(Some(capacity)).await?;
+        }
 
         let collection = self
             .collection_prefix
@@ -103,11 +110,17 @@ impl ParadiseHistoryBuilder {
             audio_cache: self.audio_cache.clone(),
             cover_cache: self.cover_cache.clone(),
             playlist_id,
+            playlist_writer: writer,
             collection,
             replay_max_lead_seconds: self.replay_max_lead_seconds,
-            max_history_tracks: self.max_history_tracks,
         })
     }
+}
+
+struct HistoryState {
+    playlist_id: String,
+    audio_cache: Arc<AudioCache>,
+    replay_max_lead_seconds: f64,
 }
 
 #[cfg(feature = "pmoconfig")]
@@ -156,73 +169,26 @@ impl ParadiseStreamChannelConfig {
 }
 
 /// Stream complet (FLAC pur + OGG-FLAC) pour un canal Radio Paradise.
-///
-/// Version simplifiée utilisant RadioParadisePlaylistFeeder + PlaylistSource
 pub struct ParadiseStreamChannel {
     descriptor: ChannelDescriptor,
     state: Arc<ChannelState>,
     pipeline_handle: JoinHandle<()>,
     feeder_handle: JoinHandle<()>,
+    history: Option<HistoryState>,
 }
 
 impl ParadiseStreamChannel {
     /// Crée un canal avec client déjà configuré.
-    pub async fn with_client(
+    pub fn with_client(
         descriptor: ChannelDescriptor,
         client: RadioParadiseClient,
         config: ParadiseStreamChannelConfig,
         cover_cache: Option<Arc<CoverCache>>,
         history: Option<ParadiseHistoryOptions>,
-    ) -> Result<Self> {
-        let manager = PlaylistManager::get();
+    ) -> Self {
+        let mut source = RadioParadiseStreamSource::new(client.clone());
+        let block_handle = source.block_handle();
 
-        // 1. Créer la playlist live pour ce canal
-        let live_playlist_id = format!("radio-paradise-live-{}", descriptor.slug);
-        let (feeder, live_read) = if let Some(ref history_opts) = history {
-            RadioParadisePlaylistFeeder::new(
-                client.clone(),
-                history_opts.audio_cache.clone(),
-                history_opts.cover_cache.clone(),
-                live_playlist_id.clone(),
-                history_opts.collection.clone(),
-            )
-            .await?
-        } else {
-            // Pas d'historique, on a besoin quand même d'un cache audio basique
-            return Err(anyhow!("History options required for now (audio cache needed)"));
-        };
-
-        let feeder = Arc::new(feeder);
-
-        // 2. Créer/récupérer la playlist historique si activée
-        let history_write = if let Some(ref history_opts) = history {
-            let write = manager
-                .get_persistent_write_handle(history_opts.playlist_id.clone())
-                .await?;
-
-            // Configurer la capacité
-            if let Some(capacity) = history_opts.max_history_tracks {
-                write.set_capacity(Some(capacity)).await?;
-            }
-
-            // Configurer le titre
-            let title = format!("Radio Paradise History - {}", descriptor.display_name);
-            write.set_title(title).await?;
-
-            Some(Arc::new(write))
-        } else {
-            None
-        };
-
-        // 3. Créer la source playlist avec historique
-        let audio_cache = history.as_ref().unwrap().audio_cache.clone();
-        let mut source = if let Some(history_write) = history_write.clone() {
-            PlaylistSource::with_history(live_read, audio_cache.clone(), history_write)
-        } else {
-            PlaylistSource::new(live_read, audio_cache.clone())
-        };
-
-        // 4. Créer les sinks de broadcast (FLAC + OGG)
         let (flac_sink, stream_handle) = StreamingFlacSink::with_max_broadcast_lead(
             EncoderOptions::default(),
             16,
@@ -238,7 +204,33 @@ impl ParadiseStreamChannel {
         downstream_children.push(Box::new(flac_sink));
         downstream_children.push(Box::new(ogg_sink));
 
-        // 5. Optionnel : ajouter le nœud de cache de covers
+        let mut history_state = None;
+
+        if let Some(history_opts) = history {
+            let ParadiseHistoryOptions {
+                audio_cache,
+                cover_cache,
+                playlist_id,
+                playlist_writer,
+                collection,
+                replay_max_lead_seconds,
+            } = history_opts;
+            let mut cache_sink = FlacCacheSink::with_config(
+                audio_cache.clone(),
+                cover_cache,
+                DEFAULT_CHANNEL_SIZE,
+                EncoderOptions::default(),
+                collection,
+            );
+            cache_sink.register_playlist(playlist_writer);
+            downstream_children.push(Box::new(cache_sink));
+            history_state = Some(HistoryState {
+                playlist_id,
+                audio_cache,
+                replay_max_lead_seconds,
+            });
+        }
+
         if let Some(cache) = cover_cache {
             let mut cover_node = TrackBoundaryCoverNode::new(cache);
             for child in downstream_children {
@@ -250,11 +242,9 @@ impl ParadiseStreamChannel {
                 source.register(child);
             }
         }
-
         stream_handle.set_auto_stop(false);
         ogg_handle.set_auto_stop(false);
 
-        // 6. Lancer le pipeline audio
         let stop_token = CancellationToken::new();
         let pipeline_stop = stop_token.clone();
         let pipeline_handle = tokio::spawn(async move {
@@ -274,36 +264,26 @@ impl ParadiseStreamChannel {
             descriptor,
             config,
             client,
-            feeder: feeder.clone(),
+            block_handle,
             stream_handle,
             ogg_handle,
-            history_playlist_id: history.map(|h| h.playlist_id),
-            history_audio_cache: history_write.map(|_| audio_cache),
             active_clients: AtomicUsize::new(0),
             activity_notify: Notify::new(),
             stop_token,
         });
 
-        // 7. Lancer le feeder qui traite les blocs
-        let feeder_runner = feeder.clone();
-        tokio::spawn(async move {
-            if let Err(e) = feeder_runner.run().await {
-                error!("RadioParadisePlaylistFeeder error: {}", e);
-            }
-        });
-
-        // 8. Lancer le scheduler qui enqueue les blocs
         let feeder_state = state.clone();
         let feeder_handle = tokio::spawn(async move {
             feeder_state.run_scheduler().await;
         });
 
-        Ok(Self {
+        Self {
             descriptor,
             state,
             pipeline_handle,
             feeder_handle,
-        })
+            history: history_state,
+        }
     }
 
     /// Crée un canal en construisant automatiquement le client pour ce descriptor.
@@ -317,13 +297,13 @@ impl ParadiseStreamChannel {
             .channel(descriptor.id)
             .build()
             .await?;
-        Self::with_client(
+        Ok(Self::with_client(
             descriptor,
             client,
             config,
             cover_cache,
             history,
-        ).await
+        ))
     }
 
     /// S'abonne au flux FLAC pur.
@@ -366,40 +346,32 @@ impl ParadiseStreamChannel {
         &self,
         client_id: &str,
     ) -> Result<HistoryFlacStream, HistoryStreamError> {
-        let history_id = self
-            .state
-            .history_playlist_id
+        let history = self
+            .history
             .as_ref()
             .ok_or(HistoryStreamError::HistoryDisabled)?;
-
-        let audio_cache = self
-            .state
-            .history_audio_cache
-            .as_ref()
-            .ok_or(HistoryStreamError::HistoryDisabled)?;
-
         tracing::info!(
             "Starting historical FLAC replay for channel {} (client_id={})",
             self.descriptor.display_name,
             client_id
         );
 
-        let reader = pmoplaylist::PlaylistManager::get()
-            .get_read_handle(history_id)
+        let reader = pmoplaylist::PlaylistManager()
+            .get_read_handle(&history.playlist_id)
             .await
             .map_err(|e| HistoryStreamError::Playlist(e.to_string()))?;
-
-        let mut source = PlaylistSource::new(reader, audio_cache.clone());
+        let mut source = PlaylistSource::new(reader, history.audio_cache.clone());
         let (flac_sink, handle) = StreamingFlacSink::with_max_broadcast_lead(
             EncoderOptions::default(),
             16,
-            self.state.config.max_lead_seconds,
+            history.replay_max_lead_seconds,
         );
         source.register(Box::new(flac_sink));
         let stop_token = CancellationToken::new();
+        let mut pipeline_source = source;
         let stop_clone = stop_token.clone();
         let pipeline = tokio::spawn(async move {
-            let _ = Box::new(source).run(stop_clone).await;
+            let _ = Box::new(pipeline_source).run(stop_clone).await;
         });
         let stream = handle.subscribe_flac();
         Ok(HistoryFlacStream::new(stream, stop_token, pipeline))
@@ -410,40 +382,32 @@ impl ParadiseStreamChannel {
         &self,
         client_id: &str,
     ) -> Result<HistoryOggStream, HistoryStreamError> {
-        let history_id = self
-            .state
-            .history_playlist_id
+        let history = self
+            .history
             .as_ref()
             .ok_or(HistoryStreamError::HistoryDisabled)?;
-
-        let audio_cache = self
-            .state
-            .history_audio_cache
-            .as_ref()
-            .ok_or(HistoryStreamError::HistoryDisabled)?;
-
         tracing::info!(
             "Starting historical OGG replay for channel {} (client_id={})",
             self.descriptor.display_name,
             client_id
         );
 
-        let reader = pmoplaylist::PlaylistManager::get()
-            .get_read_handle(history_id)
+        let reader = pmoplaylist::PlaylistManager()
+            .get_read_handle(&history.playlist_id)
             .await
             .map_err(|e| HistoryStreamError::Playlist(e.to_string()))?;
-
-        let mut source = PlaylistSource::new(reader, audio_cache.clone());
+        let mut source = PlaylistSource::new(reader, history.audio_cache.clone());
         let (ogg_sink, handle) = StreamingOggFlacSink::with_max_broadcast_lead(
             EncoderOptions::default(),
             16,
-            self.state.config.max_lead_seconds,
+            history.replay_max_lead_seconds,
         );
         source.register(Box::new(ogg_sink));
         let stop_token = CancellationToken::new();
+        let mut pipeline_source = source;
         let stop_clone = stop_token.clone();
         let pipeline = tokio::spawn(async move {
-            let _ = Box::new(source).run(stop_clone).await;
+            let _ = Box::new(pipeline_source).run(stop_clone).await;
         });
         let stream = handle.subscribe();
         Ok(HistoryOggStream::new(stream, stop_token, pipeline))
@@ -462,11 +426,9 @@ struct ChannelState {
     descriptor: ChannelDescriptor,
     config: ParadiseStreamChannelConfig,
     client: RadioParadiseClient,
-    feeder: Arc<RadioParadisePlaylistFeeder>,
+    block_handle: crate::radio_paradise_stream_source::BlockQueueHandle,
     stream_handle: StreamHandle,
     ogg_handle: OggFlacStreamHandle,
-    history_playlist_id: Option<String>,
-    history_audio_cache: Option<Arc<AudioCache>>,
     active_clients: AtomicUsize,
     activity_notify: Notify,
     stop_token: CancellationToken,
@@ -510,7 +472,7 @@ impl ChannelState {
                         "Channel {} streaming block {}",
                         self.descriptor.display_name, block.event
                     );
-                    self.feeder.push_block_id(block.event).await;
+                    self.block_handle.enqueue(block.event);
                     let mut next_event = block.end_event;
 
                     loop {
@@ -524,7 +486,7 @@ impl ChannelState {
 
                         match self.client.get_block(Some(next_event)).await {
                             Ok(next_block) => {
-                                self.feeder.push_block_id(next_block.event).await;
+                                self.block_handle.enqueue(next_block.event);
                                 next_event = next_block.end_event;
                                 backoff = Duration::from_secs(5);
                             }

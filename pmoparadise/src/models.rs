@@ -197,6 +197,18 @@ impl Song {
     pub fn contains_timestamp(&self, timestamp_ms: DurationMs) -> bool {
         timestamp_ms >= self.elapsed && timestamp_ms < self.end_time_ms()
     }
+
+    /// Calcule le timestamp de fin de diffusion (sched_time + duration)
+    pub fn sched_end_time_ms(&self) -> Option<u64> {
+        self.sched_time_millis.map(|start| start + self.duration)
+    }
+
+    /// Vérifie si la chanson est encore en lecture ou à venir
+    pub fn is_still_playing(&self, now_ms: u64) -> bool {
+        self.sched_end_time_ms()
+            .map(|end| end >= now_ms)
+            .unwrap_or(false)
+    }
 }
 
 /// Image information

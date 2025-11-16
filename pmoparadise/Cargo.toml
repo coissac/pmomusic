@@ -89,7 +89,7 @@ pmoconfig = ["dep:pmoconfig"]
 # Feature cache (deprecated - toujours actif maintenant)
 cache = []
 # Active le support pmoaudio node (RadioParadiseStreamSource)
-pmoaudio = ["dep:pmoaudio", "dep:pmoflac", "dep:pmometadata", "dep:futures-util"]
+pmoaudio = ["dep:pmoaudio", "dep:pmoflac", "dep:pmometadata", "dep:futures-util", "dep:pmoaudio-ext"]
 # Active le support complet avec playlist (pour les exemples avancés)
 full = ["pmoaudio", "dep:pmoaudio-ext", "pmoconfig", "pmoserver"]
 

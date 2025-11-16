@@ -16,6 +16,7 @@ use axum::{
 use pmoaudiocache::{get_audio_cache, register_audio_cache, AudioCacheExt, Cache as AudioCache};
 use pmocovers::{get_cover_cache, register_cover_cache, Cache as CoverCache, CoverCacheExt};
 use pmoparadise::{channels::ALL_CHANNELS, ParadiseChannelManager, ParadiseHistoryBuilder};
+use pmoplaylist::register_audio_cache as register_playlist_audio_cache;
 use std::sync::Arc;
 use tokio_util::io::ReaderStream;
 use tracing::{error, info};
@@ -81,6 +82,8 @@ impl ParadiseStreamingExt for pmoserver::Server {
         let audio_cache = match get_audio_cache() {
             Some(cache) => {
                 info!("  ✅ Using existing audio cache singleton");
+                // S'assurer qu'il est aussi enregistré dans le playlist manager
+                register_playlist_audio_cache(cache.clone());
                 cache
             }
             None => {
@@ -90,6 +93,7 @@ impl ParadiseStreamingExt for pmoserver::Server {
                     .await
                     .context("Failed to initialize audio cache")?;
                 register_audio_cache(cache.clone());
+                register_playlist_audio_cache(cache.clone());
                 cache
             }
         };

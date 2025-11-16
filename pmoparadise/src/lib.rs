@@ -231,6 +231,9 @@ pub mod radio_paradise_stream_source;
 #[cfg(feature = "pmoaudio")]
 pub mod stream_channel;
 
+#[cfg(feature = "pmoaudio")]
+pub mod playlist_feeder;
+
 // Re-exports for convenience
 pub use client::{ClientBuilder, RadioParadiseClient};
 pub use error::{Error, Result};
@@ -238,7 +241,10 @@ pub use models::{Block, DurationMs, EventId, NowPlaying, Song};
 pub use source::RadioParadiseSource;
 
 #[cfg(feature = "pmoaudio")]
-pub use radio_paradise_stream_source::{RadioParadiseStreamSource, END_OF_BLOCKS_SIGNAL};
+pub use radio_paradise_stream_source::RadioParadiseStreamSource;
+
+#[cfg(feature = "pmoaudio")]
+pub use playlist_feeder::{RadioParadisePlaylistFeeder, END_OF_BLOCKS_SIGNAL};
 
 #[cfg(feature = "pmoaudio")]
 pub use stream_channel::{

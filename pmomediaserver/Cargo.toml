@@ -28,6 +28,7 @@ pmoconfig = { path = "../pmoconfig", optional = true }
 anyhow = { version = "1.0", optional = true }
 pmoaudiocache = { path = "../pmoaudiocache", optional = true }
 pmocovers = { path = "../pmocovers", optional = true }
+pmoplaylist = { path = "../pmoplaylist", optional = true }
 tokio-util = { version = "0.7", features = ["io"], optional = true }
 
 [features]
@@ -44,6 +45,7 @@ paradise = [
     "dep:anyhow",
     "dep:pmoaudiocache",
     "dep:pmocovers",
+    "dep:pmoplaylist",
     "dep:tokio-util"
 ]
 # Feature pour activer l'API REST de Radio Paradise (en plus de la source UPnP)

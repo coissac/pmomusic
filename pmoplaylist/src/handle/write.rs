@@ -50,6 +50,34 @@ impl WriteHandle {
         Ok(())
     }
 
+    /// Ajoute un morceau avec un TTL personnalisé
+    pub async fn push_with_ttl(&self, cache_pk: String, ttl: Duration) -> Result<()> {
+        if !self.playlist.is_alive() {
+            return Err(crate::Error::PlaylistDeleted(self.playlist.id.clone()));
+        }
+
+        // Vérifier que le pk existe dans le cache
+        let cache = crate::manager::audio_cache()?;
+        if !cache.is_valid_pk(&cache_pk).await {
+            return Err(crate::Error::CacheEntryNotFound(cache_pk));
+        }
+
+        // Ajouter à la playlist avec TTL
+        let record = Record::with_ttl(cache_pk, ttl);
+        let mut core = self.playlist.core.write().await;
+        core.push(record);
+        drop(core);
+
+        self.playlist.touch().await;
+
+        // Sauvegarder si persistante
+        if self.playlist.persistent {
+            self.save_to_db().await?;
+        }
+
+        Ok(())
+    }
+
     /// Ajoute plusieurs morceaux de manière atomique
     pub async fn push_set(&self, cache_pks: Vec<String>) -> Result<()> {
         if !self.playlist.is_alive() {
