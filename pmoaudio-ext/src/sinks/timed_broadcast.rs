@@ -83,7 +83,7 @@ struct State<T> {
     last_segment_end: Option<Instant>,
     cursors: Vec<Weak<ReceiverCursor>>,
     initialized: bool,
-    saw_positive_timestamp: bool,
+    last_purge: Instant,
 }
 
 impl<T> State<T> {
@@ -98,16 +98,24 @@ impl<T> State<T> {
             last_segment_end: None,
             cursors: Vec::new(),
             initialized: false,
-            saw_positive_timestamp: false,
+            last_purge: epoch_start,
         }
     }
 
     fn purge_expired(&mut self) -> bool {
+        let now = Instant::now();
+
+        // Throttling : purger au maximum toutes les 100ms
+        if now.duration_since(self.last_purge) < Duration::from_millis(100) {
+            return false;
+        }
+        self.last_purge = now;
+
         let mut purged = 0u64;
         while let Some(entry) = self.buffer.front() {
-            if entry.expires_at <= Instant::now() {
-                let delta=Instant::now()-entry.expires_at;
-                info!("TimedBroadcast: purging expired packet (epoch={},delta={})",entry.epoch,delta.as_millis());
+            if entry.expires_at <= now {
+                let delta = now - entry.expires_at;
+                // info!("TimedBroadcast: purging expired packet (epoch={},delta={})", entry.epoch, delta.as_millis());
                 self.buffer.pop_front();
                 self.head_seq += 1;
                 purged += 1;
@@ -262,61 +270,56 @@ impl<T> Sender<T> {
                 // Détecter si c'est un TopZero
                 let is_top_zero = audio_timestamp == 0.0;
 
-                // Gérer l'initialisation ET le TopZero ensemble
+                // Gérer l'initialisation
                 if !state.initialized {
-                    let now = Instant::now();
-                    if is_top_zero {
-                        // Premier paquet = TopZero → epoch commence à 0
-                        state.epoch_start = now;
-                        state.epoch = 0;
-                        info!("TimedBroadcast: initialized with TopZero (epoch=0)");
-                    } else {
-                        // Premier paquet avec ts > 0 → calculer epoch_start rétroactif
-                        let offset = Duration::from_secs_f64(audio_timestamp);
-                        state.epoch_start = now.checked_sub(offset).unwrap_or(now);
-                        state.epoch = 0;
-                        info!(
-                            "TimedBroadcast: initialized with ts={:.3}s (epoch=0)",
+                    if !is_top_zero {
+                        warn!(
+                            "TimedBroadcast: First packet should have timestamp=0.0, got {:.3}s",
                             audio_timestamp
                         );
                     }
+                    let now = Instant::now();
+                    state.epoch_start = now;
+                    state.epoch = 0;
                     state.initialized = true;
-                    state.saw_positive_timestamp = !is_top_zero;
+                    info!("TimedBroadcast: initialized (epoch=0)");
                 } else if is_top_zero {
-                    // TopZero sur un channel déjà initialisé
-                    let allow_reset = state.saw_positive_timestamp;
-                    if allow_reset {
-                        let now = Instant::now();
-                        state.epoch_start = state
-                            .last_segment_end
-                            .map(|end| end.max(now))
-                            .unwrap_or(now);
-                        state.epoch = state.epoch.wrapping_add(1);
-                        state.saw_positive_timestamp = false; // Reset pour le prochain cycle
-                        info!(
-                            "TimedBroadcast: TopZero detected, new epoch={} (had_last_segment={})",
-                            state.epoch,
-                            state.last_segment_end.is_some()
-                        );
-                    } else {
-                        warn!(
-                            "TimedBroadcast: Ignoring duplicate TopZero (epoch={})",
-                            state.epoch
-                        );
-                    }
-                } else if audio_timestamp > 0.0 {
-                    state.saw_positive_timestamp = true;
+                    // TopZero = nouveau segment, toujours valide après l'initialisation
+                    let now = Instant::now();
+                    // Continuité temporelle : nouveau segment commence après le précédent
+                    state.epoch_start = state.last_segment_end.unwrap_or(now);
+                    state.epoch = state.epoch.wrapping_add(1);
+                    info!(
+                        "TimedBroadcast: new epoch={} (continuous={})",
+                        state.epoch,
+                        state.last_segment_end.is_some()
+                    );
                 }
 
+                // 1. Calculer l'expiration du paquet actuel
+                let expires_at = state.epoch_start + Duration::from_secs_f64(audio_timestamp + segment_duration);
+
+                // 2. Vérifier que le paquet n'est pas déjà expiré
+                let now = Instant::now();
+                if expires_at <= now {
+                    warn!(
+                        "TimedBroadcast: packet already expired (ts={:.3}s, delta={}ms)",
+                        audio_timestamp,
+                        now.duration_since(expires_at).as_millis()
+                    );
+                    // On peut décider de l'ignorer ou de continuer
+                    // Pour l'instant on continue pour ne pas bloquer le flux
+                }
+
+                // 3. Purger les paquets expirés et consommés
                 let consumed = state.prune_consumed();
                 let expired = state.purge_expired();
-                if consumed || expired  {
+                if consumed || expired {
                     self.inner.space_notify.notify_waiters();
                 }
 
+                // 4. Vérifier la capacité et insérer
                 if state.buffer.len() < self.inner.capacity {
-                    // Le paquet expire à la fin de son segment audio
-                    let expires_at = state.epoch_start + Duration::from_secs_f64(audio_timestamp + segment_duration);
                     let entry = Entry {
                         seq: state.next_seq,
                         expires_at,
@@ -327,8 +330,10 @@ impl<T> Sender<T> {
                     state.next_seq += 1;
                     state.buffer.push_back(entry);
 
-                    // Stocker la fin de ce segment pour la continuité temporelle
-                    state.last_segment_end = Some(expires_at);
+                    // 5. Stocker la fin du segment SEULEMENT pour les paquets non-TopZero
+                    if !is_top_zero {
+                        state.last_segment_end = Some(expires_at);
+                    }
 
                     let receivers = self.inner.receiver_count.load(Ordering::SeqCst);
                     drop(state);
@@ -373,17 +378,6 @@ impl<T> Sender<T> {
             next_seq,
             cursor,
         }
-    }
-
-    /// Marque un TopZero : DEPRECATED - no-op pour compatibilité.
-    ///
-    /// Le vrai TopZero est maintenant détecté automatiquement dans send()
-    /// quand audio_timestamp == 0.0. Cette méthode est conservée pour
-    /// compatibilité avec le code existant mais ne fait rien.
-    pub fn mark_top_zero(&self) {
-        trace!("TimedBroadcast: mark_top_zero() called but ignored (auto-detection active)");
-        // No-op - TopZero est maintenant détecté automatiquement dans send()
-        // quand audio_timestamp == 0.0
     }
 
     /// Nombre actuel de receivers abonnés.

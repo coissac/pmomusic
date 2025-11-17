@@ -475,11 +475,6 @@ impl NodeLogic for StreamingOggFlacSinkLogic {
                                             break;
                                         }
 
-                                        SyncMarker::TopZeroSync => {
-                                            self.ogg_broadcast.mark_top_zero();
-                                            trace!("TopZeroSync propagated to timed broadcast");
-                                        }
-
                                         _ => {
                                             trace!("Received other sync marker");
                                         }
