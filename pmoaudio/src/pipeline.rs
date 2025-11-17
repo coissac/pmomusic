@@ -42,7 +42,7 @@
 
 use crate::{nodes::AudioError, AudioSegment};
 use once_cell::sync::Lazy;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -311,8 +311,11 @@ pub trait NodeLogic: Send + 'static {
 ///
 /// Cette fonction gère la logique de clonage d'`Arc<AudioSegment>` et la
 /// conversion de l'erreur `mpsc::error::SendError` en `AudioError::ChildDied`.
-static FIRST_AUDIO_CHUNK_TRACKER: Lazy<Mutex<HashSet<usize>>> =
-    Lazy::new(|| Mutex::new(HashSet::new()));
+
+/// Tracker pour vérifier que les chunks audio après TopZeroSync ont timestamp=0
+/// HashMap<key, waiting_for_chunk>: true = attente du prochain chunk après TopZeroSync
+static FIRST_AUDIO_CHUNK_TRACKER: Lazy<Mutex<HashMap<usize, bool>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 const FIRST_CHUNK_EPSILON: f64 = 1e-6;
 
@@ -321,28 +324,40 @@ fn record_first_audio_chunk_timestamp(
     outputs: &[mpsc::Sender<Arc<AudioSegment>>],
     segment: &Arc<AudioSegment>,
 ) {
-    if outputs.is_empty() || !segment.is_audio_chunk() {
+    if outputs.is_empty() {
         return;
     }
 
+    let key = outputs.as_ptr() as usize;
     let mut tracker = FIRST_AUDIO_CHUNK_TRACKER
         .lock()
         .expect("invariant tracker mutex poisoned");
-    let key = outputs.as_ptr() as usize;
-    if tracker.contains(&key) {
+
+    // Détecter TopZeroSync: marquer qu'on attend le prochain chunk audio
+    if segment.is_top_zero_sync() {
+        tracker.insert(key, true);
         return;
     }
 
-    if segment.timestamp_sec.abs() > FIRST_CHUNK_EPSILON {
-        tracing::warn!(
-            "First audio chunk emitted by {node_name} started at {:.6}s (order={}), expected 0s",
-            segment.timestamp_sec,
-            segment.order,
-            node_name = node_name,
-        );
-    }
+    // Vérifier les audio chunks
+    if segment.is_audio_chunk() {
+        let waiting = tracker.get(&key).copied();
 
-    tracker.insert(key);
+        // Vérifier ts=0 si c'est le premier chunk absolu (None) ou après TopZeroSync (Some(true))
+        if waiting.is_none() || waiting == Some(true) {
+            if segment.timestamp_sec.abs() > FIRST_CHUNK_EPSILON {
+                tracing::warn!(
+                    "First audio chunk emitted by {node_name} {} started at {:.6}s (order={}), expected 0s",
+                    if waiting == Some(true) { "after TopZeroSync" } else { "" },
+                    segment.timestamp_sec,
+                    segment.order,
+                    node_name = node_name,
+                );
+            }
+            // Marquer comme "ne plus attendre" pour ce node
+            tracker.insert(key, false);
+        }
+    }
 }
 
 pub async fn send_to_children(

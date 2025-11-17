@@ -169,6 +169,11 @@ impl RadioParadisePlaylistFeeder {
         recent.purge(event_id);
     }
 
+    pub(crate) async fn retry_block(&self, event_id: EventId) {
+        self.purge_block_state(event_id).await;
+        self.push_block_id(event_id).await;
+    }
+
     /// Boucle principale de traitement (à exécuter dans une tâche tokio)
     pub async fn run(self: Arc<Self>) -> Result<()> {
         loop {

@@ -56,7 +56,7 @@ use std::task::{Context, Poll};
 use super::{
     broadcast_pacing::BroadcastPacer,
     flac_frame_utils,
-    timed_broadcast::{self, TimedPacket, TryRecvError},
+    timed_broadcast::{self, SendError, TimedPacket, TryRecvError},
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -828,6 +828,10 @@ async fn broadcast_ogg_flac_stream(
 
     // Extract sample rate from STREAMINFO for granule position calculation
     let sample_rate = extract_sample_rate_from_streaminfo(&flac_header)?;
+    let sample_rate_f64 = sample_rate as f64;
+
+    // Sample counter for calculating accurate timestamps (reset on new headers)
+    let mut encoded_samples = 0u64;
     trace!("Extracted sample rate from STREAMINFO: {} Hz", sample_rate);
 
     // Step 2: Create OGG-FLAC identification packet (BOS)
@@ -858,22 +862,28 @@ async fn broadcast_ogg_flac_stream(
     );
 
     // Broadcast header (BOS and comment are metadata, not audio, so duration=0.0)
-    if broadcast_tx
-        .send(bos_bytes.clone(), 0.0, 0.0)
-        .await
-        .is_err()
-    {
-        trace!("No receivers for BOS page, terminating broadcast");
-        return Ok(());
+    match broadcast_tx.send(bos_bytes.clone(), 0.0, 0.0).await {
+        Ok(_) => {}
+        Err(SendError::Expired(_)) => {
+            trace!("Broadcast closed before sending BOS page (expired)");
+            return Ok(());
+        }
+        Err(SendError::Closed(_)) => {
+            trace!("No receivers for BOS page, terminating broadcast");
+            return Ok(());
+        }
     }
     total_ogg_bytes += comment_bytes.len() as u64;
-    if broadcast_tx
-        .send(comment_bytes.clone(), 0.0, 0.0)
-        .await
-        .is_err()
-    {
-        trace!("No receivers for comment page, terminating broadcast");
-        return Ok(());
+    match broadcast_tx.send(comment_bytes.clone(), 0.0, 0.0).await {
+        Ok(_) => {}
+        Err(SendError::Expired(_)) => {
+            trace!("Broadcast closed before sending comment page (expired)");
+            return Ok(());
+        }
+        Err(SendError::Closed(_)) => {
+            trace!("No receivers for comment page, terminating broadcast");
+            return Ok(());
+        }
     }
 
     // Step 4: Read FLAC stream and create OGG packets
@@ -893,13 +903,14 @@ async fn broadcast_ogg_flac_stream(
                     total_ogg_bytes += eos_bytes.len() as u64;
                     let eos_ts = *current_timestamp.read().await;
                     let eos_dur = *current_duration.read().await;
-                    if broadcast_tx
-                        .send(eos_bytes.clone(), eos_ts, eos_dur)
-                        .await
-                        .is_err()
-                    {
-                        trace!("Broadcast closed before sending final EOS page");
-                        break;
+                    match broadcast_tx.send(eos_bytes.clone(), eos_ts, eos_dur).await {
+                        Ok(_) => {}
+                        Err(SendError::Expired(_)) => {
+                            trace!("Broadcast closed before sending final EOS page (expired)");
+                        }
+                        Err(SendError::Closed(_)) => {
+                            trace!("Broadcast closed before sending final EOS page");
+                        }
                     }
                     trace!(
                         "Sent final EOS page with {} bytes of data",
@@ -911,13 +922,14 @@ async fn broadcast_ogg_flac_stream(
                     let eos_bytes = Bytes::from(eos_page);
                     total_ogg_bytes += eos_bytes.len() as u64;
                     let eos_ts = *current_timestamp.read().await;
-                    if broadcast_tx
-                        .send(eos_bytes.clone(), eos_ts, 0.0)
-                        .await
-                        .is_err()
-                    {
-                        trace!("Broadcast closed before sending empty EOS page");
-                        break;
+                    match broadcast_tx.send(eos_bytes.clone(), eos_ts, 0.0).await {
+                        Ok(_) => {}
+                        Err(SendError::Expired(_)) => {
+                            trace!("Broadcast closed before sending empty EOS page (expired)");
+                        }
+                        Err(SendError::Closed(_)) => {
+                            trace!("Broadcast closed before sending empty EOS page");
+                        }
                     }
                     trace!("Sent empty EOS page");
                 }
@@ -1014,7 +1026,22 @@ async fn broadcast_ogg_flac_stream(
                     // ║ Cela crée la backpressure vers TimerBufferNode tout en       ║
                     // ║ permettant de dropper les chunks vraiment périmés.           ║
                     // ╚═══════════════════════════════════════════════════════════════╝
-                    let audio_timestamp = *current_timestamp.read().await;
+
+                    // Detect FLAC header "fLaC" in frame - indicates new track
+                    if first_frame.len() >= 4 && &first_frame[0..4] == b"fLaC" {
+                        // New track detected: reset sample counter
+                        encoded_samples = 0;
+                        trace!(
+                            "New FLAC header detected in OGG stream ({} bytes), sample counter reset for new track",
+                            first_frame.len()
+                        );
+                    }
+
+                    // Calculer le timestamp de cette FLAC frame
+                    let frame_start_samples = encoded_samples;
+                    encoded_samples = encoded_samples.saturating_add(first_frame_samples as u64);
+                    let audio_timestamp = frame_start_samples as f64 / sample_rate_f64;
+                    let segment_duration = first_frame_samples as f64 / sample_rate_f64;
 
                     // Check timing et apply pacing (skip si en retard)
                     if pacer.check_and_pace(audio_timestamp).await.is_err() {
@@ -1057,7 +1084,6 @@ async fn broadcast_ogg_flac_stream(
                     }
 
                     // Envoyer au broadcast
-                    let segment_duration = *current_duration.read().await;
                     match broadcast_tx
                         .send(ogg_bytes.clone(), audio_timestamp, segment_duration)
                         .await
@@ -1065,7 +1091,15 @@ async fn broadcast_ogg_flac_stream(
                         Ok(n) => {
                             trace!("Broadcasted OGG page with 1 FLAC frame ({} bytes), {} samples ({} bytes total with OGG overhead) to {} receivers (ts={:.3}s, dur={:.3}s)", first_frame.len(), first_frame_samples, ogg_bytes.len(), n, audio_timestamp, segment_duration);
                         }
-                        Err(_) => {
+                        Err(SendError::Expired(_)) => {
+                            trace!(
+                                "OGG-FLAC broadcast dropped expired page (ts={:.3}s, dur={:.3}s)",
+                                audio_timestamp,
+                                segment_duration
+                            );
+                            continue;
+                        }
+                        Err(SendError::Closed(_)) => {
                             trace!("No active receivers for OGG-FLAC broadcast, terminating loop");
                             return Ok(());
                         }

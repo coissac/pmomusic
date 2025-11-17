@@ -224,12 +224,8 @@ impl NodeLogic for TimerBufferNodeLogic {
                     }
 
                     // Propager le marker immédiatement
-                    send_to_children(
-                        std::any::type_name::<Self>(),
-                        &output,
-                        segment.clone(),
-                    )
-                    .await?;
+                    send_to_children(std::any::type_name::<Self>(), &output, segment.clone())
+                        .await?;
                 }
 
                 _AudioSegment::Chunk(chunk) => {

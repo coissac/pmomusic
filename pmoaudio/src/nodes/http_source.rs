@@ -237,7 +237,7 @@ impl NodeLogic for HttpSourceLogic {
                 timestamp_sec,
             )?;
 
-                    send_to_children(std::any::type_name::<Self>(), &output, segment).await?;
+            send_to_children(std::any::type_name::<Self>(), &output, segment).await?;
 
             chunk_index += 1;
             total_frames += frames_to_emit as u64;

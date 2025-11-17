@@ -65,7 +65,7 @@ use std::time::Duration;
 use super::{
     broadcast_pacing::BroadcastPacer,
     flac_frame_utils,
-    timed_broadcast::{self, TimedPacket, TryRecvError},
+    timed_broadcast::{self, SendError, TimedPacket, TryRecvError},
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -487,7 +487,9 @@ impl AsyncRead for IcyClientStream {
                 } else {
                     // Header not yet captured - client will receive it via broadcast
                     // Skip directly to streaming to avoid blocking
-                    debug!("FLAC header not yet available, ICY client will receive it via broadcast");
+                    debug!(
+                        "FLAC header not yet available, ICY client will receive it via broadcast"
+                    );
                     self.state = FlacStreamState::Streaming;
                 }
             }
@@ -896,13 +898,17 @@ async fn broadcast_flac_stream(
                     let bytes = Bytes::from(std::mem::take(&mut accumulator));
                     let audio_ts = *current_timestamp.read().await;
                     let segment_dur = *current_duration.read().await;
-                    if broadcast_tx
+                    match broadcast_tx
                         .send(bytes.clone(), audio_ts, segment_dur)
                         .await
-                        .is_err()
                     {
-                        trace!("Broadcast closed before sending final FLAC data");
-                        break;
+                        Ok(_) => {}
+                        Err(SendError::Expired(_)) => {
+                            trace!("Broadcast expired before sending final FLAC data");
+                        }
+                        Err(SendError::Closed(_)) => {
+                            trace!("Broadcast closed before sending final FLAC data");
+                        }
                     }
                 }
                 trace!("FLAC encoder stream ended, total bytes: {}", total_bytes);
@@ -1027,11 +1033,23 @@ async fn broadcast_flac_stream(
                         );
                     }
 
-                    // Capture first chunk as header if it contains "fLaC"
-                    if !header_captured && bytes.len() >= 4 && &bytes[0..4] == b"fLaC" {
+                    // Detect FLAC header "fLaC" - indicates new track
+                    if bytes.len() >= 4 && &bytes[0..4] == b"fLaC" {
+                        // New track detected: reset sample counter
+                        encoded_samples = 0;
                         *header_cache.write().await = Some(bytes.clone());
-                        header_captured = true;
-                        trace!("FLAC header captured ({} bytes), will also broadcast it", bytes.len());
+                        if !header_captured {
+                            header_captured = true;
+                            trace!(
+                                "FLAC header captured ({} bytes), sample counter reset",
+                                bytes.len()
+                            );
+                        } else {
+                            trace!(
+                                "New FLAC header detected ({} bytes), sample counter reset for new track",
+                                bytes.len()
+                            );
+                        }
                         // Also broadcast the header so early-connecting clients receive it
                         // Later-connecting clients will get it from the cache
                     }
@@ -1052,7 +1070,15 @@ async fn broadcast_flac_stream(
                                 );
                             }
                         }
-                        Err(_) => {
+                        Err(SendError::Expired(_)) => {
+                            trace!(
+                                "FLAC broadcast dropped expired packet (ts={:.3}s, dur={:.3}s)",
+                                audio_timestamp,
+                                segment_duration
+                            );
+                            continue;
+                        }
+                        Err(SendError::Closed(_)) => {
                             trace!("No active receivers for FLAC broadcast, terminating");
                             return Ok(());
                         }

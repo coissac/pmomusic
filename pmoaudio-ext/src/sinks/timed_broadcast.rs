@@ -15,7 +15,7 @@ use std::{
 };
 
 use tokio::sync::Notify;
-use tracing::{trace, info, warn};
+use tracing::{info, trace, warn};
 
 /// Tolérance pour détecter un timestamp à zéro (TopZero).
 const TOP_ZERO_EPSILON: f64 = 1e-9;
@@ -66,7 +66,11 @@ pub enum RecvError {
 
 /// Erreur remontée par `Sender::send`.
 #[derive(Debug)]
-pub struct SendError<T>(pub T);
+/// Erreur de diffusion détaillant la raison pour laquelle un paquet n'a pas été accepté.
+pub enum SendError<T> {
+    Closed(T),
+    Expired(T),
+}
 
 struct Entry<T> {
     seq: u64,
@@ -250,7 +254,12 @@ impl<T> Sender<T> {
     /// Le TTL de chaque paquet est calculé à partir du `epoch_start` courant et du
     /// `audio_timestamp` fournis, ce qui signifie qu’un receiver en retard finira
     /// par recevoir un [`TryRecvError::Lagged`] lorsque `expires_at` est dépassé.
-    pub async fn send(&self, payload: T, audio_timestamp: f64, segment_duration: f64) -> Result<usize, SendError<T>>
+    pub async fn send(
+        &self,
+        payload: T,
+        audio_timestamp: f64,
+        segment_duration: f64,
+    ) -> Result<usize, SendError<T>>
     where
         T: Clone,
     {
@@ -265,7 +274,9 @@ impl<T> Sender<T> {
                     .expect("timed broadcast mutex poisoned");
 
                 if state.closed {
-                    return Err(SendError(payload.expect("payload already consumed")));
+                    return Err(SendError::Closed(
+                        payload.expect("payload already consumed"),
+                    ));
                 }
 
                 // Capturer le temps UNE SEULE FOIS pour cohérence temporelle
@@ -286,7 +297,10 @@ impl<T> Sender<T> {
                     state.epoch_start = now;
                     state.epoch = 0;
                     state.initialized = true;
-                    info!("TimedBroadcast: initialized (epoch=0, ts={:.3}s)", audio_timestamp);
+                    info!(
+                        "TimedBroadcast: initialized (epoch=0, ts={:.3}s)",
+                        audio_timestamp
+                    );
                 } else if is_top_zero {
                     // TopZero = nouveau segment, toujours valide après l'initialisation
                     // Continuité temporelle : nouveau segment commence après le précédent
@@ -310,7 +324,8 @@ impl<T> Sender<T> {
                 }
 
                 // 2. Calculer l'expiration du paquet actuel
-                let expires_at = state.epoch_start + Duration::from_secs_f64(audio_timestamp + segment_duration);
+                let expires_at =
+                    state.epoch_start + Duration::from_secs_f64(audio_timestamp + segment_duration);
 
                 // 3. Rejeter le paquet s'il est déjà expiré
                 // SAUF pour le premier paquet (initialisation) ou les paquets TopZero (nouveaux segments)
@@ -325,7 +340,9 @@ impl<T> Sender<T> {
                             state.epoch,
                             now.duration_since(expires_at).as_millis()
                         );
-                        return Err(SendError(payload.expect("payload already consumed")));
+                        return Err(SendError::Expired(
+                            payload.expect("payload already consumed"),
+                        ));
                     }
                 }
 

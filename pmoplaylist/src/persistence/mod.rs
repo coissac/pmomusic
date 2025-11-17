@@ -256,26 +256,18 @@ impl PersistenceManager {
         let conn = self.conn.lock().unwrap();
 
         // Activer les contraintes de clés étrangères (désactivées par défaut dans SQLite)
-        conn.execute("PRAGMA foreign_keys = ON", [])
-            .map_err(|e| {
-                crate::Error::PersistenceError(format!("Failed to enable foreign keys: {}", e))
-            })?;
+        conn.execute("PRAGMA foreign_keys = ON", []).map_err(|e| {
+            crate::Error::PersistenceError(format!("Failed to enable foreign keys: {}", e))
+        })?;
 
         // Vérifier l'intégrité des clés étrangères
-        let mut stmt = conn
-            .prepare("PRAGMA foreign_key_check")
-            .map_err(|e| {
-                crate::Error::PersistenceError(format!("Failed to prepare FK check: {}", e))
-            })?;
+        let mut stmt = conn.prepare("PRAGMA foreign_key_check").map_err(|e| {
+            crate::Error::PersistenceError(format!("Failed to prepare FK check: {}", e))
+        })?;
 
         let violations: Vec<(String, i64, String, i64)> = stmt
             .query_map([], |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                ))
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
             })
             .map_err(|e| {
                 crate::Error::PersistenceError(format!("Failed to check foreign keys: {}", e))
@@ -298,7 +290,10 @@ impl PersistenceManager {
                     [],
                 )
                 .map_err(|e| {
-                    crate::Error::PersistenceError(format!("Failed to delete orphaned tracks: {}", e))
+                    crate::Error::PersistenceError(format!(
+                        "Failed to delete orphaned tracks: {}",
+                        e
+                    ))
                 })?;
 
             if deleted > 0 {

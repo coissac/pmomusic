@@ -18,11 +18,11 @@ use std::{
 use crate::{
     channels::{ChannelDescriptor, ParadiseChannelKind, ALL_CHANNELS},
     client::RadioParadiseClient,
-    models::Block,
+    models::{Block, EventId},
     playlist_feeder::RadioParadisePlaylistFeeder,
 };
 use anyhow::{anyhow, Result};
-use pmoaudio::AudioPipelineNode;
+use pmoaudio::{AudioError, AudioPipelineNode};
 use pmoaudio_ext::{
     FlacClientStream, IcyClientStream, MetadataSnapshot, OggFlacClientStream, OggFlacStreamHandle,
     PlaylistSource, StreamHandle, StreamingFlacSink, StreamingOggFlacSink, TrackBoundaryCoverNode,
@@ -33,7 +33,7 @@ use pmoflac::EncoderOptions;
 use pmoplaylist::PlaylistManager;
 use thiserror::Error;
 use tokio::io::{AsyncRead, ReadBuf};
-use tokio::sync::Notify;
+use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -272,18 +272,7 @@ impl ParadiseStreamChannel {
         // 6. Lancer le pipeline audio
         let stop_token = CancellationToken::new();
         let pipeline_stop = stop_token.clone();
-        let pipeline_handle = tokio::spawn(async move {
-            info!(
-                "RadioParadise stream pipeline started for channel {}",
-                descriptor.display_name
-            );
-            if let Err(e) = Box::new(source).run(pipeline_stop).await {
-                error!(
-                    "Pipeline error for channel {}: {}",
-                    descriptor.display_name, e
-                );
-            }
-        });
+        let channel_display_name = descriptor.display_name;
 
         let state = Arc::new(ChannelState {
             descriptor,
@@ -297,6 +286,19 @@ impl ParadiseStreamChannel {
             active_clients: AtomicUsize::new(0),
             activity_notify: Notify::new(),
             stop_token,
+            current_block: Mutex::new(None),
+        });
+
+        let pipeline_state = state.clone();
+        let pipeline_handle = tokio::spawn(async move {
+            info!(
+                "RadioParadise stream pipeline started for channel {}",
+                channel_display_name
+            );
+            if let Err(e) = Box::new(source).run(pipeline_stop).await {
+                error!("Pipeline error for channel {}: {}", channel_display_name, e);
+                pipeline_state.handle_pipeline_error(&e).await;
+            }
         });
 
         // 7. Lancer le feeder qui traite les blocs
@@ -482,6 +484,7 @@ struct ChannelState {
     active_clients: AtomicUsize,
     activity_notify: Notify,
     stop_token: CancellationToken,
+    current_block: Mutex<Option<EventId>>,
 }
 
 impl ChannelState {
@@ -552,6 +555,30 @@ impl ChannelState {
         }
     }
 
+    async fn set_current_block(&self, event_id: EventId) {
+        let mut guard = self.current_block.lock().await;
+        *guard = Some(event_id);
+    }
+
+    async fn take_current_block(&self) -> Option<EventId> {
+        self.current_block.lock().await.take()
+    }
+
+    async fn handle_pipeline_error(&self, err: &AudioError) {
+        if let Some(event_id) = self.take_current_block().await {
+            warn!(
+                "Pipeline error while streaming block {} on channel {}: {}. Rescheduling block.",
+                event_id, self.descriptor.display_name, err
+            );
+            self.feeder.retry_block(event_id).await;
+        } else {
+            warn!(
+                "Pipeline error for channel {} but no tracked block: {}",
+                self.descriptor.display_name, err
+            );
+        }
+    }
+
     async fn run_scheduler(self: Arc<Self>) {
         let mut backoff = Duration::from_secs(5);
         'scheduler: loop {
@@ -574,6 +601,7 @@ impl ChannelState {
                         "Channel {} streaming block {}",
                         self.descriptor.display_name, block.event
                     );
+                    self.set_current_block(block.event).await;
                     self.feeder.push_block_id(block.event).await;
                     let mut next_event = block.end_event;
 
@@ -593,6 +621,7 @@ impl ChannelState {
                                     BlockReadiness::NoClients => break,
                                     BlockReadiness::Stopped => break 'scheduler,
                                 }
+                                self.set_current_block(next_block.event).await;
                                 self.feeder.push_block_id(next_block.event).await;
                                 next_event = next_block.end_event;
                                 backoff = Duration::from_secs(5);

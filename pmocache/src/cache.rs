@@ -79,7 +79,7 @@ impl<C: CacheConfig> Cache<C> {
     /// # Returns
     ///
     /// - `Ok(true)` si le fichier est en cache et complet (fichier .complete existe)
-    /// - `Ok(false)` si le fichier n'est pas en cache ou incomplet (et supprime les fichiers incomplets)
+    /// - `Ok(false)` si le fichier n'est pas en cache ou incomplet (et supprime les fichiers incomplets SI aucun download en cours)
     /// - `Err` en cas d'erreur
     async fn check_cached_and_complete(&self, pk: &str) -> Result<bool> {
         if self.db.get(pk, false).is_ok() {
@@ -92,14 +92,33 @@ impl<C: CacheConfig> Cache<C> {
                     tracing::debug!("File with pk {} is complete (marker exists)", pk);
                     return Ok(true);
                 } else {
+                    // Vérifier si un download est en cours avant de supprimer
+                    let is_downloading = {
+                        let downloads = self.downloads.read().await;
+                        downloads.contains_key(pk)
+                    };
+
+                    if is_downloading {
+                        tracing::debug!(
+                            "File with pk {} has no completion marker but download is in progress, waiting",
+                            pk
+                        );
+                        return Ok(false);
+                    }
+
                     tracing::warn!(
-                        "File with pk {} in cache has no completion marker, will re-download/re-ingest",
+                        "File with pk {} in cache has no completion marker and no download in progress, will re-download/re-ingest",
                         pk
                     );
-                    // Supprimer le fichier incomplet ET l'entrée DB
+                    // Supprimer le fichier incomplet ET l'entrée DB seulement si pas de download en cours
                     let _ = std::fs::remove_file(&file_path);
+                    let _ = std::fs::remove_file(&completion_marker); // Nettoyer aussi le marker s'il existe
                     if let Err(e) = self.db.delete(pk) {
-                        tracing::warn!("Failed to delete DB entry for incomplete file {}: {}", pk, e);
+                        tracing::warn!(
+                            "Failed to delete DB entry for incomplete file {}: {}",
+                            pk,
+                            e
+                        );
                     }
                     return Ok(false);
                 }
