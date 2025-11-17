@@ -39,4 +39,4 @@ upmpdcli/
 test_upnp*.cargo/
 .cargo/
 setup-env.sh
-/cache
+cache

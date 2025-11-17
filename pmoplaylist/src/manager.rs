@@ -35,6 +35,14 @@ impl PlaylistManager {
         // Initialiser la persistance
         let persistence = Arc::new(PersistenceManager::new(&db_path)?);
 
+        // Lancer la consolidation en arrière-plan
+        let persistence_clone = persistence.clone();
+        tokio::spawn(async move {
+            if let Err(e) = persistence_clone.consolidate().await {
+                tracing::warn!("Failed to consolidate playlist database on startup: {}", e);
+            }
+        });
+
         let manager = Self {
             inner: Arc::new(ManagerInner {
                 playlists: RwLock::new(HashMap::new()),

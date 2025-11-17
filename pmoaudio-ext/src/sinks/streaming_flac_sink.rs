@@ -79,7 +79,7 @@ use pmometadata::TrackMetadata;
 use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
 use tokio::sync::{mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 /// Default ICY metadata interval (bytes of audio between metadata blocks).
 /// Standard value used by most streaming servers.
@@ -306,7 +306,9 @@ impl AsyncRead for FlacClientStream {
                     self.state = FlacStreamState::Streaming;
                     continue; // Now copy header to output buffer
                 } else {
-                    // Header not yet captured or can't acquire lock, skip to streaming
+                    // Header not yet captured - client will receive it via broadcast
+                    // Skip directly to streaming to avoid blocking
+                    debug!("FLAC header not yet available, client will receive it via broadcast");
                     self.state = FlacStreamState::Streaming;
                 }
             }
@@ -483,7 +485,9 @@ impl AsyncRead for IcyClientStream {
                     self.state = FlacStreamState::Streaming;
                     continue; // Now copy header to output buffer
                 } else {
-                    // Header not yet captured or can't acquire lock, skip to streaming
+                    // Header not yet captured - client will receive it via broadcast
+                    // Skip directly to streaming to avoid blocking
+                    debug!("FLAC header not yet available, ICY client will receive it via broadcast");
                     self.state = FlacStreamState::Streaming;
                 }
             }
@@ -605,6 +609,7 @@ struct StreamingFlacSinkLogic {
     encoder_state: Option<EncoderState>,
     sample_rate: Option<u32>,
     broadcast_max_lead_time: f64,
+    first_chunk_timestamp_checked: bool,
 }
 
 impl StreamingFlacSinkLogic {
@@ -748,6 +753,18 @@ impl NodeLogic for StreamingFlacSinkLogic {
                         Some(seg) => {
                             match &seg.segment {
                                 _AudioSegment::Chunk(chunk) => {
+                                    if !self.first_chunk_timestamp_checked {
+                                        self.first_chunk_timestamp_checked = true;
+                                        if seg.timestamp_sec.abs() > 1e-6 {
+                                            warn!(
+                                                "StreamingFlacSink: first chunk timestamp is {:.6}s (expected 0.0)",
+                                                seg.timestamp_sec
+                                            );
+                                        } else {
+                                            trace!("StreamingFlacSink: first chunk timestamp verified at 0.0s");
+                                        }
+                                    }
+
                                     // Detect sample rate from first chunk and initialize encoder
                                     if self.sample_rate.is_none() {
                                         let sample_rate = chunk.sample_rate();
@@ -949,6 +966,8 @@ async fn broadcast_flac_stream(
                     // ║ Cela crée la backpressure vers TimerBufferNode tout en       ║
                     // ║ permettant de dropper les chunks vraiment périmés.           ║
                     // ╚═══════════════════════════════════════════════════════════════╝
+
+                    // Calculer le timestamp de cette FLAC frame
                     let frame_start_samples = encoded_samples;
                     encoded_samples = encoded_samples.saturating_add(total_samples);
                     let audio_timestamp = frame_start_samples as f64 / sample_rate_f64;
@@ -1012,9 +1031,9 @@ async fn broadcast_flac_stream(
                     if !header_captured && bytes.len() >= 4 && &bytes[0..4] == b"fLaC" {
                         *header_cache.write().await = Some(bytes.clone());
                         header_captured = true;
-                        trace!("FLAC header captured ({} bytes), not broadcasting", bytes.len());
-                        // Skip broadcasting the header: clients prepend it locally on subscribe
-                        continue;
+                        trace!("FLAC header captured ({} bytes), will also broadcast it", bytes.len());
+                        // Also broadcast the header so early-connecting clients receive it
+                        // Later-connecting clients will get it from the cache
                     }
 
                     let num_receivers = broadcast_tx.receiver_count();
@@ -1143,6 +1162,7 @@ impl StreamingFlacSink {
             encoder_state: None,
             sample_rate: None,
             broadcast_max_lead_time: broadcast_max_lead_time.max(0.0),
+            first_chunk_timestamp_checked: false,
         };
 
         let sink = Self {

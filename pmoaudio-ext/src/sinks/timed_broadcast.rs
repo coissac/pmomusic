@@ -17,6 +17,9 @@ use std::{
 use tokio::sync::Notify;
 use tracing::{trace, info, warn};
 
+/// Tolérance pour détecter un timestamp à zéro (TopZero).
+const TOP_ZERO_EPSILON: f64 = 1e-9;
+
 /// Paquet diffusé contenant la charge utile + méta timing.
 #[derive(Clone)]
 pub struct TimedPacket<T> {
@@ -102,9 +105,7 @@ impl<T> State<T> {
         }
     }
 
-    fn purge_expired(&mut self) -> bool {
-        let now = Instant::now();
-
+    fn purge_expired(&mut self, now: Instant) -> bool {
         // Throttling : purger au maximum toutes les 100ms
         if now.duration_since(self.last_purge) < Duration::from_millis(100) {
             return false;
@@ -267,25 +268,27 @@ impl<T> Sender<T> {
                     return Err(SendError(payload.expect("payload already consumed")));
                 }
 
-                // Détecter si c'est un TopZero
-                let is_top_zero = audio_timestamp == 0.0;
+                // Capturer le temps UNE SEULE FOIS pour cohérence temporelle
+                let now = Instant::now();
+
+                // Détecter si c'est un TopZero (avec tolérance pour éviter erreurs d'arrondi)
+                let is_top_zero = audio_timestamp.abs() < TOP_ZERO_EPSILON;
 
                 // Gérer l'initialisation
                 if !state.initialized {
                     if !is_top_zero {
                         warn!(
-                            "TimedBroadcast: First packet should have timestamp=0.0, got {:.3}s",
+                            "TimedBroadcast: First packet has non-zero timestamp {:.3}s, treating as epoch start anyway",
                             audio_timestamp
                         );
                     }
-                    let now = Instant::now();
+                    // Initialiser TOUJOURS, quel que soit le timestamp du premier paquet
                     state.epoch_start = now;
                     state.epoch = 0;
                     state.initialized = true;
-                    info!("TimedBroadcast: initialized (epoch=0)");
+                    info!("TimedBroadcast: initialized (epoch=0, ts={:.3}s)", audio_timestamp);
                 } else if is_top_zero {
                     // TopZero = nouveau segment, toujours valide après l'initialisation
-                    let now = Instant::now();
                     // Continuité temporelle : nouveau segment commence après le précédent
                     state.epoch_start = state.last_segment_end.unwrap_or(now);
                     state.epoch = state.epoch.wrapping_add(1);
@@ -296,26 +299,34 @@ impl<T> Sender<T> {
                     );
                 }
 
-                // 1. Calculer l'expiration du paquet actuel
-                let expires_at = state.epoch_start + Duration::from_secs_f64(audio_timestamp + segment_duration);
-
-                // 2. Vérifier que le paquet n'est pas déjà expiré
-                let now = Instant::now();
-                if expires_at <= now {
-                    warn!(
-                        "TimedBroadcast: packet already expired (ts={:.3}s, delta={}ms)",
-                        audio_timestamp,
-                        now.duration_since(expires_at).as_millis()
-                    );
-                    // On peut décider de l'ignorer ou de continuer
-                    // Pour l'instant on continue pour ne pas bloquer le flux
+                // 1. Purger d'abord les paquets expirés et consommés pour libérer l'espace
+                // (skip pour le tout premier paquet)
+                if state.buffer.len() > 0 {
+                    let consumed = state.prune_consumed();
+                    let expired = state.purge_expired(now);
+                    if consumed || expired {
+                        self.inner.space_notify.notify_waiters();
+                    }
                 }
 
-                // 3. Purger les paquets expirés et consommés
-                let consumed = state.prune_consumed();
-                let expired = state.purge_expired();
-                if consumed || expired {
-                    self.inner.space_notify.notify_waiters();
+                // 2. Calculer l'expiration du paquet actuel
+                let expires_at = state.epoch_start + Duration::from_secs_f64(audio_timestamp + segment_duration);
+
+                // 3. Rejeter le paquet s'il est déjà expiré
+                // SAUF pour le premier paquet (initialisation) ou les paquets TopZero (nouveaux segments)
+                let is_first_packet = state.next_seq == 0;
+                if !is_first_packet && !is_top_zero && expires_at <= now {
+                    // Tolérer une petite marge pour les latences d'initialisation
+                    let grace_period = Duration::from_millis(50);
+                    if now > expires_at + grace_period {
+                        warn!(
+                            "TimedBroadcast: rejecting already expired packet (ts={:.3}s, epoch={}, delta={}ms)",
+                            audio_timestamp,
+                            state.epoch,
+                            now.duration_since(expires_at).as_millis()
+                        );
+                        return Err(SendError(payload.expect("payload already consumed")));
+                    }
                 }
 
                 // 4. Vérifier la capacité et insérer
@@ -330,7 +341,8 @@ impl<T> Sender<T> {
                     state.next_seq += 1;
                     state.buffer.push_back(entry);
 
-                    // 5. Stocker la fin du segment SEULEMENT pour les paquets non-TopZero
+                    // 5. Mettre à jour la fin du segment SEULEMENT pour les paquets non-TopZero
+                    // (pour que le prochain segment commence à la fin du dernier paquet de données)
                     if !is_top_zero {
                         state.last_segment_end = Some(expires_at);
                     }
@@ -429,7 +441,8 @@ where
             return Err(TryRecvError::Closed);
         }
 
-        if state.purge_expired() {
+        let now = Instant::now();
+        if state.purge_expired(now) {
             self.inner.space_notify.notify_waiters();
         }
 
