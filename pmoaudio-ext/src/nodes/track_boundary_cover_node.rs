@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use pmoaudio::{
     nodes::{AudioError, DEFAULT_CHANNEL_SIZE},
-    pipeline::{AudioPipelineNode, Node, NodeLogic, PipelineHandle},
+    pipeline::{send_to_children, AudioPipelineNode, Node, NodeLogic, PipelineHandle},
     AudioSegment, TypeRequirement, TypedAudioNode,
 };
 use pmocovers::Cache as CoverCache;
@@ -140,6 +140,7 @@ impl NodeLogic for TrackBoundaryCoverLogic {
                 "TrackBoundaryCoverNode requires an upstream input channel".into(),
             )
         })?;
+        let node_name = std::any::type_name::<Self>();
 
         loop {
             let segment = select! {
@@ -159,11 +160,7 @@ impl NodeLogic for TrackBoundaryCoverLogic {
                 self.ensure_cover_pk(Arc::clone(metadata)).await;
             }
 
-            for tx in &output {
-                if tx.send(segment.clone()).await.is_err() {
-                    return Err(AudioError::ChildDied);
-                }
-            }
+            send_to_children(node_name, &output, segment).await?;
         }
 
         Ok(())

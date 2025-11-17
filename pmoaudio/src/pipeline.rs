@@ -41,7 +41,10 @@
 //! ```
 
 use crate::{nodes::AudioError, AudioSegment};
-use std::sync::Arc;
+use once_cell::sync::Lazy;
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -302,6 +305,83 @@ pub trait NodeLogic: Send + 'static {
     async fn cleanup(&mut self, _reason: StopReason) -> Result<(), AudioError> {
         Ok(())
     }
+}
+
+/// Envoie un segment à l'ensemble des enfants d'un nœud.
+///
+/// Cette fonction gère la logique de clonage d'`Arc<AudioSegment>` et la
+/// conversion de l'erreur `mpsc::error::SendError` en `AudioError::ChildDied`.
+static FIRST_AUDIO_CHUNK_TRACKER: Lazy<Mutex<HashSet<usize>>> =
+    Lazy::new(|| Mutex::new(HashSet::new()));
+
+const FIRST_CHUNK_EPSILON: f64 = 1e-6;
+
+fn record_first_audio_chunk_timestamp(
+    node_name: &'static str,
+    outputs: &[mpsc::Sender<Arc<AudioSegment>>],
+    segment: &Arc<AudioSegment>,
+) {
+    if outputs.is_empty() || !segment.is_audio_chunk() {
+        return;
+    }
+
+    let mut tracker = FIRST_AUDIO_CHUNK_TRACKER
+        .lock()
+        .expect("invariant tracker mutex poisoned");
+    let key = outputs.as_ptr() as usize;
+    if tracker.contains(&key) {
+        return;
+    }
+
+    if segment.timestamp_sec.abs() > FIRST_CHUNK_EPSILON {
+        tracing::warn!(
+            "First audio chunk emitted by {node_name} started at {:.6}s (order={}), expected 0s",
+            segment.timestamp_sec,
+            segment.order,
+            node_name = node_name,
+        );
+    }
+
+    tracker.insert(key);
+}
+
+pub async fn send_to_children(
+    node_name: &'static str,
+    outputs: &[mpsc::Sender<Arc<AudioSegment>>],
+    segment: Arc<AudioSegment>,
+) -> Result<(), AudioError> {
+    record_first_audio_chunk_timestamp(node_name, outputs, &segment);
+    for tx in outputs {
+        tx.send(segment.clone())
+            .await
+            .map_err(|_| AudioError::ChildDied)?;
+    }
+    Ok(())
+}
+
+/// Variante de [`send_to_children`] qui expose le temps passé à envoyer à chaque enfant.
+///
+/// Utile pour les nœuds qui souhaitent instrumenter les blocages éventuels lors
+/// de l'envoi (ex: TimerNode).
+pub async fn send_to_children_with_timing<F>(
+    node_name: &'static str,
+    outputs: &[mpsc::Sender<Arc<AudioSegment>>],
+    segment: Arc<AudioSegment>,
+    mut inspector: F,
+) -> Result<(), AudioError>
+where
+    F: FnMut(usize, Duration, usize),
+{
+    record_first_audio_chunk_timestamp(node_name, outputs, &segment);
+    for (idx, tx) in outputs.iter().enumerate() {
+        let capacity_before = tx.capacity();
+        let send_start = Instant::now();
+        tx.send(segment.clone())
+            .await
+            .map_err(|_| AudioError::ChildDied)?;
+        inspector(idx, send_start.elapsed(), capacity_before);
+    }
+    Ok(())
 }
 
 /// Handle pour contrôler un pipeline en cours d'exécution

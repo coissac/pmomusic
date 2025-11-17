@@ -11,7 +11,7 @@ use crate::{
 use futures_util::StreamExt;
 use pmoaudio::{
     nodes::{AudioError, TypedAudioNode, DEFAULT_CHUNK_DURATION_MS},
-    pipeline::{Node, NodeLogic},
+    pipeline::{send_to_children, send_to_children_with_timing, Node, NodeLogic},
     type_constraints::TypeRequirement,
     AudioPipelineNode, AudioSegment, SyncMarker, I24,
 };
@@ -395,45 +395,42 @@ impl RadioParadiseStreamSourceLogic {
         output: &[mpsc::Sender<Arc<AudioSegment>>],
         segment: Arc<AudioSegment>,
     ) -> Result<(), AudioError> {
-        self.stats.record_segment_received(segment.timestamp_sec);
+        let segment_ts = segment.timestamp_sec;
+        self.stats.record_segment_received(segment_ts);
 
-        for (i, tx) in output.iter().enumerate() {
-            let capacity_before = tx.capacity();
-            tracing::trace!(
-                "send_to_children: Sending to child {} (channel capacity={}, timestamp={:.3}s)",
-                i,
-                capacity_before,
-                segment.timestamp_sec
-            );
+        let segment_bytes = match &segment.segment {
+            pmoaudio::_AudioSegment::Chunk(chunk) => chunk.len() * 2 * 4,
+            _ => 0,
+        };
 
-            let send_start = std::time::Instant::now();
-            tx.send(segment.clone())
-                .await
-                .map_err(|_| AudioError::ChildDied)?;
-            let send_duration = send_start.elapsed();
-
-            if send_duration.as_millis() > 10 {
-                let duration_ms = send_duration.as_millis() as u64;
-                self.stats.record_backpressure(duration_ms);
+        send_to_children_with_timing(
+            std::any::type_name::<Self>(),
+            output,
+            segment,
+            |i, send_duration, capacity_before| {
                 tracing::trace!(
-                    "send_to_children: Send to child {} BLOCKED for {:.3}s (channel capacity before send={}, timestamp={:.3}s)",
+                    "send_to_children: Sending to child {} (channel capacity={}, timestamp={:.3}s)",
                     i,
-                    send_duration.as_secs_f64(),
                     capacity_before,
-                    segment.timestamp_sec
+                    segment_ts
                 );
-            }
 
-            // Estimer la taille du segment pour les stats (frames * 2 channels * bytes_per_sample)
-            let segment_bytes = match &segment.segment {
-                pmoaudio::_AudioSegment::Chunk(chunk) => {
-                    // Approximation: frames * 2 (stereo) * 4 bytes (i32/f32)
-                    chunk.len() * 2 * 4
+                if send_duration.as_millis() > 10 {
+                    let duration_ms = send_duration.as_millis() as u64;
+                    self.stats.record_backpressure(duration_ms);
+                    tracing::trace!(
+                        "send_to_children: Send to child {} BLOCKED for {:.3}s (channel capacity before send={}, timestamp={:.3}s)",
+                        i,
+                        send_duration.as_secs_f64(),
+                        capacity_before,
+                        segment_ts
+                    );
                 }
-                _ => 0,
-            };
-            self.stats.record_segment_sent(segment_bytes);
-        }
+
+                self.stats.record_segment_sent(segment_bytes);
+            },
+        )
+        .await?;
         Ok(())
     }
 }
@@ -705,11 +702,7 @@ impl NodeLogic for RadioParadiseStreamSourceLogic {
             output.len()
         );
         let eos = AudioSegment::new_end_of_stream(order, last_timestamp);
-        for tx in &output {
-            tx.send(eos.clone())
-                .await
-                .map_err(|_| AudioError::ChildDied)?;
-        }
+        send_to_children(std::any::type_name::<Self>(), &output, eos).await?;
 
         // IMPORTANT: Attendre que tous les channels soient fermés par les enfants
         // Cela garantit que tous les chunks (y compris ceux en attente dans les buffers MPSC)

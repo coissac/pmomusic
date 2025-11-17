@@ -111,7 +111,7 @@
 
 use pmoaudio::{
     nodes::{AudioError, TypedAudioNode, DEFAULT_CHUNK_DURATION_MS},
-    pipeline::{AudioPipelineNode, Node, NodeLogic},
+    pipeline::{send_to_children, AudioPipelineNode, Node, NodeLogic},
     type_constraints::TypeRequirement,
     AudioChunk, AudioChunkData, AudioSegment, I24,
 };
@@ -175,16 +175,7 @@ impl NodeLogic for PlaylistSourceLogic {
             output.len()
         );
 
-        // Macro helper pour envoyer à tous les enfants
-        macro_rules! send_to_children {
-            ($segment:expr) => {
-                for tx in &output {
-                    tx.send($segment.clone())
-                        .await
-                        .map_err(|_| AudioError::ChildDied)?;
-                }
-            };
-        }
+        let node_name = std::any::type_name::<Self>();
 
         let mut first_track = true;
 
@@ -193,7 +184,7 @@ impl NodeLogic for PlaylistSourceLogic {
             if stop_token.is_cancelled() {
                 tracing::info!("PlaylistSourceLogic: stop requested, emitting EndOfStream");
                 let eos = AudioSegment::new_end_of_stream(0, 0.0);
-                send_to_children!(eos);
+                send_to_children(node_name, &output, eos).await?;
                 break;
             }
 
@@ -202,7 +193,7 @@ impl NodeLogic for PlaylistSourceLogic {
                 _ = stop_token.cancelled() => {
                     tracing::info!("PlaylistSourceLogic: stop cancelled during pop");
                     let eos = AudioSegment::new_end_of_stream(0, 0.0);
-                    send_to_children!(eos);
+                    send_to_children(node_name, &output, eos).await?;
                     break;
                 }
                 result = self.playlist_handle.pop() => {
@@ -236,7 +227,7 @@ impl NodeLogic for PlaylistSourceLogic {
                                 0.0,
                                 format!("Playlist error: {}", e)
                             );
-                            send_to_children!(error_marker);
+                            send_to_children(node_name, &output, error_marker).await?;
                             continue;
                         }
                     }
@@ -250,7 +241,7 @@ impl NodeLogic for PlaylistSourceLogic {
                     tracing::warn!("PlaylistSourceLogic: failed to get metadata: {}", e);
                     let error_marker =
                         AudioSegment::new_error(0, 0.0, format!("Failed to get metadata: {}", e));
-                    send_to_children!(error_marker);
+                    send_to_children(node_name, &output, error_marker).await?;
                     continue;
                 }
             };
@@ -279,7 +270,7 @@ impl NodeLogic for PlaylistSourceLogic {
 
             tracing::debug!("PlaylistSourceLogic: emitting TrackBoundary");
             let boundary = AudioSegment::new_track_boundary(0, 0.0, metadata);
-            send_to_children!(boundary);
+            send_to_children(node_name, &output, boundary).await?;
 
             // Obtenir le chemin du fichier
             let file_path = match track.file_path() {
@@ -288,7 +279,7 @@ impl NodeLogic for PlaylistSourceLogic {
                     tracing::warn!("PlaylistSourceLogic: failed to get file path: {}", e);
                     let error_marker =
                         AudioSegment::new_error(0, 0.0, format!("Failed to get file path: {}", e));
-                    send_to_children!(error_marker);
+                    send_to_children(node_name, &output, error_marker).await?;
                     continue;
                 }
             };
@@ -303,6 +294,7 @@ impl NodeLogic for PlaylistSourceLogic {
             first_track = false;
 
             match decode_and_emit_track(
+                node_name,
                 &file_path,
                 self.chunk_frames,
                 &output,
@@ -334,7 +326,7 @@ impl NodeLogic for PlaylistSourceLogic {
                     tracing::error!("PlaylistSourceLogic: error decoding track: {}", e);
                     let error_marker =
                         AudioSegment::new_error(0, 0.0, format!("Decode error: {}", e));
-                    send_to_children!(error_marker);
+                    send_to_children(node_name, &output, error_marker).await?;
                     // Continue vers la piste suivante
                 }
             }
@@ -356,6 +348,7 @@ impl NodeLogic for PlaylistSourceLogic {
 /// Gère le cache progressif : si EOF est atteint et que le download est toujours en cours,
 /// attend et réessaie au lieu de terminer immédiatement.
 async fn decode_and_emit_track(
+    node_name: &'static str,
     path: &PathBuf,
     chunk_frames: usize,
     output: &[mpsc::Sender<Arc<AudioSegment>>],
@@ -491,18 +484,10 @@ async fn decode_and_emit_track(
                 if emit_top_zero && total_frames == 0 {
                     tracing::debug!("decode_and_emit_track: emitting TopZeroSync (first chunk)");
                     let top_zero = AudioSegment::new_top_zero_sync();
-                    for tx in output {
-                        tx.send(top_zero.clone())
-                            .await
-                            .map_err(|_| AudioError::ChildDied)?;
-                    }
+                    send_to_children(node_name, output, top_zero).await?;
                 }
 
-                for tx in output {
-                    tx.send(segment.clone())
-                        .await
-                        .map_err(|_| AudioError::ChildDied)?;
-                }
+                send_to_children(node_name, output, segment).await?;
 
                 chunk_index += 1;
                 total_frames += frames_to_emit as u64;
@@ -517,11 +502,7 @@ async fn decode_and_emit_track(
             let timestamp_sec = total_frames as f64 / stream_info.sample_rate as f64;
             let segment =
                 bytes_to_segment(&pending, &stream_info, frames, chunk_index, timestamp_sec)?;
-            for tx in output {
-                tx.send(segment.clone())
-                    .await
-                    .map_err(|_| AudioError::ChildDied)?;
-            }
+            send_to_children(node_name, output, segment).await?;
         }
     }
 

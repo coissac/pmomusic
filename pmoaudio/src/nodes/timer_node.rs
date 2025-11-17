@@ -53,7 +53,7 @@
 
 use crate::{
     nodes::{AudioError, TypedAudioNode, DEFAULT_CHANNEL_SIZE},
-    pipeline::{AudioPipelineNode, Node, NodeLogic},
+    pipeline::{send_to_children_with_timing, AudioPipelineNode, Node, NodeLogic},
     type_constraints::TypeRequirement,
     AudioSegment, SyncMarker, _AudioSegment,
 };
@@ -132,27 +132,6 @@ impl NodeLogic for TimerNodeLogic {
             output.len()
         );
 
-        // Macro helper pour envoyer à tous les enfants
-        macro_rules! send_to_children {
-            ($segment:expr) => {
-                for (idx, tx) in output.iter().enumerate() {
-                    let send_start = Instant::now();
-                    tx.send($segment.clone())
-                        .await
-                        .map_err(|_| AudioError::ChildDied)?;
-                    let send_duration = send_start.elapsed();
-                    if send_duration.as_millis() >= 50 {
-                        tracing::debug!(
-                            "TimerNode: send to child {} blocked for {:.3}s (segment ts={:.3}s)",
-                            idx,
-                            send_duration.as_secs_f64(),
-                            $segment.timestamp_sec
-                        );
-                    }
-                }
-            };
-        }
-
         loop {
             let segment = tokio::select! {
                 _ = stop_token.cancelled() => {
@@ -184,7 +163,23 @@ impl NodeLogic for TimerNodeLogic {
                             // Autres markers: passthrough transparent
                         }
                     }
-                    send_to_children!(segment);
+                    let segment_ts = segment.timestamp_sec;
+                    send_to_children_with_timing(
+                        std::any::type_name::<Self>(),
+                        &output,
+                        segment.clone(),
+                        |idx, send_duration, _capacity_before| {
+                            if send_duration.as_millis() >= 50 {
+                                tracing::debug!(
+                                    "TimerNode: send to child {} blocked for {:.3}s (segment ts={:.3}s)",
+                                    idx,
+                                    send_duration.as_secs_f64(),
+                                    segment_ts
+                                );
+                            }
+                        },
+                    )
+                    .await?;
                 }
 
                 _AudioSegment::Chunk(_) => {
@@ -263,7 +258,23 @@ impl NodeLogic for TimerNodeLogic {
                         tracing::warn!("TimerNodeLogic: NO TIMER SET - passthrough without pacing! (ts={:.3}s)", segment.timestamp_sec);
                     }
 
-                    send_to_children!(segment);
+                    let segment_ts = segment.timestamp_sec;
+                    send_to_children_with_timing(
+                        std::any::type_name::<Self>(),
+                        &output,
+                        segment.clone(),
+                        |idx, send_duration, _capacity_before| {
+                            if send_duration.as_millis() >= 50 {
+                                tracing::debug!(
+                                    "TimerNode: send to child {} blocked for {:.3}s (segment ts={:.3}s)",
+                                    idx,
+                                    send_duration.as_secs_f64(),
+                                    segment_ts
+                                );
+                            }
+                        },
+                    )
+                    .await?;
                 }
             }
         }

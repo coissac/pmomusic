@@ -31,7 +31,7 @@
 use crate::{
     dsp::resampling::{build_resampler, resampling, Resampler},
     nodes::{AudioError, TypedAudioNode},
-    pipeline::{AudioPipelineNode, Node, NodeLogic},
+    pipeline::{send_to_children, AudioPipelineNode, Node, NodeLogic},
     type_constraints::TypeRequirement,
     AudioChunk, AudioChunkData, AudioSegment, BitDepth, I24,
 };
@@ -172,12 +172,7 @@ impl NodeLogic for ResamplingLogic {
                 segment
             };
 
-            // Envoyer à tous les enfants
-            for tx in &output {
-                tx.send(output_segment.clone())
-                    .await
-                    .map_err(|_| AudioError::ChildDied)?;
-            }
+            send_to_children(std::any::type_name::<Self>(), &output, output_segment).await?;
         }
 
         Ok(())

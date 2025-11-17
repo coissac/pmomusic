@@ -52,7 +52,7 @@
 
 use crate::{
     nodes::{AudioError, TypedAudioNode, DEFAULT_CHANNEL_SIZE, DEFAULT_CHUNK_DURATION_MS},
-    pipeline::{AudioPipelineNode, Node, NodeLogic},
+    pipeline::{send_to_children, AudioPipelineNode, Node, NodeLogic},
     type_constraints::TypeRequirement,
     AudioSegment, SyncMarker, _AudioSegment,
 };
@@ -135,11 +135,7 @@ impl TimerBufferNodeLogic {
                 self.buffer.len()
             );
 
-            for tx in output {
-                tx.send(segment.clone())
-                    .await
-                    .map_err(|_| AudioError::ChildDied)?;
-            }
+            send_to_children(std::any::type_name::<Self>(), output, segment).await?;
         }
         Ok(())
     }
@@ -228,11 +224,12 @@ impl NodeLogic for TimerBufferNodeLogic {
                     }
 
                     // Propager le marker immédiatement
-                    for tx in &output {
-                        tx.send(segment.clone())
-                            .await
-                            .map_err(|_| AudioError::ChildDied)?;
-                    }
+                    send_to_children(
+                        std::any::type_name::<Self>(),
+                        &output,
+                        segment.clone(),
+                    )
+                    .await?;
                 }
 
                 _AudioSegment::Chunk(chunk) => {

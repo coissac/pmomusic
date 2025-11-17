@@ -3035,6 +3035,7 @@ dependencies = [
  "bytemuck",
  "cpal",
  "futures-util",
+ "once_cell",
  "paste",
  "pmoflac",
  "pmometadata",
