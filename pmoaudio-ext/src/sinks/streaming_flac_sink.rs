@@ -947,9 +947,41 @@ async fn broadcast_flac_stream(
                     n
                 );
 
-                // Locate complete frames and total samples they represent
-                let (boundary, total_samples) =
-                    flac_frame_utils::find_complete_frames_with_samples(&accumulator);
+                // Detect FLAC stream header "fLaC" in accumulator
+                // If found, we need to:
+                // 1. Process only frames BEFORE the header (end of previous track)
+                // 2. After broadcasting those frames, reset sample counter
+                // 3. Keep header + following data for next iteration
+                let header_pos = if accumulator.len() >= 4 {
+                    accumulator.windows(4).position(|w| w == b"fLaC")
+                } else {
+                    None
+                };
+
+                // Locate complete audio frames and total samples
+                // Note: find_complete_frames_with_samples() searches for AUDIO frames (0xFF 0xF8...),
+                // not the stream header "fLaC". Audio frames come AFTER the header.
+                let (boundary, total_samples) = if let Some(pos) = header_pos {
+                    if pos > 0 {
+                        // Header in the middle: process only frames BEFORE header (end of previous track)
+                        trace!(
+                            "New FLAC header detected at position {} in accumulator (size={}), searching frames before header",
+                            pos,
+                            accumulator.len()
+                        );
+                        flac_frame_utils::find_complete_frames_with_samples(&accumulator[..pos])
+                    } else {
+                        // Header at start: this is normal for new tracks, search all (audio frames come AFTER header)
+                        trace!(
+                            "FLAC header at start of accumulator (size={}), searching all frames",
+                            accumulator.len()
+                        );
+                        flac_frame_utils::find_complete_frames_with_samples(&accumulator)
+                    }
+                } else {
+                    // No header: normal streaming, search all frames
+                    flac_frame_utils::find_complete_frames_with_samples(&accumulator)
+                };
 
                 trace!(
                     "Buffer state: accumulator={} bytes, boundary={} bytes, total_samples={}, will_send={}",
@@ -1007,6 +1039,15 @@ async fn broadcast_flac_stream(
                     let remaining = accumulator.split_off(boundary);
                     let to_send = std::mem::replace(&mut accumulator, remaining);
                     let bytes = Bytes::from(to_send);
+
+                    // After splitting, check if accumulator now starts with FLAC header
+                    // If so, we just finished the previous track and need to reset sample counter
+                    if accumulator.len() >= 4 && &accumulator[0..4] == b"fLaC" {
+                        trace!(
+                            "FLAC header now at start of accumulator after split, resetting sample counter for new track"
+                        );
+                        encoded_samples = 0;
+                    }
 
                     // Measure broadcast interval for burst detection
                     let broadcast_interval = last_broadcast_time.elapsed().as_secs_f64();
