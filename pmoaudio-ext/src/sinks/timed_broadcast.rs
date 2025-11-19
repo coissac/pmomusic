@@ -282,37 +282,6 @@ impl<T> Sender<T> {
                 // Capturer le temps UNE SEULE FOIS pour cohérence temporelle
                 let now = Instant::now();
 
-                // Détecter si c'est un TopZero (avec tolérance pour éviter erreurs d'arrondi)
-                let is_top_zero = audio_timestamp.abs() < TOP_ZERO_EPSILON;
-
-                // Gérer l'initialisation
-                if !state.initialized {
-                    if !is_top_zero {
-                        warn!(
-                            "TimedBroadcast: First packet has non-zero timestamp {:.3}s, treating as epoch start anyway",
-                            audio_timestamp
-                        );
-                    }
-                    // Initialiser TOUJOURS, quel que soit le timestamp du premier paquet
-                    state.epoch_start = now;
-                    state.epoch = 0;
-                    state.initialized = true;
-                    info!(
-                        "TimedBroadcast: initialized (epoch=0, ts={:.3}s)",
-                        audio_timestamp
-                    );
-                } else if is_top_zero {
-                    // TopZero = nouveau segment, toujours valide après l'initialisation
-                    // Continuité temporelle : nouveau segment commence après le précédent
-                    state.epoch_start = state.last_segment_end.unwrap_or(now);
-                    state.epoch = state.epoch.wrapping_add(1);
-                    info!(
-                        "TimedBroadcast: new epoch={} (continuous={})",
-                        state.epoch,
-                        state.last_segment_end.is_some()
-                    );
-                }
-
                 // 1. Purger d'abord les paquets expirés et consommés pour libérer l'espace
                 // (skip pour le tout premier paquet)
                 if state.buffer.len() > 0 {
@@ -323,31 +292,52 @@ impl<T> Sender<T> {
                     }
                 }
 
-                // 2. Calculer l'expiration du paquet actuel
-                let expires_at =
-                    state.epoch_start + Duration::from_secs_f64(audio_timestamp + segment_duration);
-
-                // 3. Rejeter le paquet s'il est déjà expiré
-                // SAUF pour le premier paquet (initialisation) ou les paquets TopZero (nouveaux segments)
-                let is_first_packet = state.next_seq == 0;
-                if !is_first_packet && !is_top_zero && expires_at <= now {
-                    // Tolérer une petite marge pour les latences d'initialisation
-                    let grace_period = Duration::from_millis(50);
-                    if now > expires_at + grace_period {
-                        warn!(
-                            "TimedBroadcast: rejecting already expired packet (ts={:.3}s, epoch={}, delta={}ms)",
-                            audio_timestamp,
-                            state.epoch,
-                            now.duration_since(expires_at).as_millis()
-                        );
-                        return Err(SendError::Expired(
-                            payload.expect("payload already consumed"),
-                        ));
-                    }
-                }
-
-                // 4. Vérifier la capacité et insérer
+                // 2. Vérifier si un slot est disponible et insérer
+                let is_top_zero = audio_timestamp.abs() < TOP_ZERO_EPSILON;
                 if state.buffer.len() < self.inner.capacity {
+                    if !state.initialized {
+                        if !is_top_zero {
+                            warn!(
+                                "TimedBroadcast: First packet has non-zero timestamp {:.3}s, treating as epoch start anyway",
+                                audio_timestamp
+                            );
+                        }
+                        state.epoch_start = now;
+                        state.epoch = 0;
+                        state.initialized = true;
+                        info!(
+                            "TimedBroadcast: initialized (epoch=0, ts={:.3}s)",
+                            audio_timestamp
+                        );
+                    } else if is_top_zero {
+                        state.epoch_start = state.last_segment_end.unwrap_or(now);
+                        state.epoch = state.epoch.wrapping_add(1);
+                        info!(
+                            "TimedBroadcast: new epoch={} (continuous={})",
+                            state.epoch,
+                            state.last_segment_end.is_some()
+                        );
+                    }
+
+                    let expires_at =
+                        state.epoch_start + Duration::from_secs_f64(audio_timestamp + segment_duration);
+
+                    let is_first_packet = state.next_seq == 0;
+                    if !is_first_packet && !is_top_zero && expires_at <= now {
+                        let grace_period = Duration::from_millis(50);
+                        if now > expires_at + grace_period {
+                            warn!(
+                                "TimedBroadcast: rejecting already expired packet (ts={:.3}s, epoch={}, delta={}ms)",
+                                audio_timestamp,
+                                state.epoch,
+                                now.duration_since(expires_at).as_millis()
+                            );
+                            return Err(SendError::Expired(
+                                payload.expect("payload already consumed"),
+                            ));
+                        }
+                    }
+
                     let entry = Entry {
                         seq: state.next_seq,
                         expires_at,
