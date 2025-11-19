@@ -603,7 +603,7 @@ struct EncoderState {
 struct StreamingFlacSinkLogic {
     encoder_options: EncoderOptions,
     bits_per_sample: u8,
-    pcm_tx: mpsc::Sender<PcmChunk>,
+    pcm_tx: Option<mpsc::Sender<PcmChunk>>,
     pcm_rx: Option<mpsc::Receiver<PcmChunk>>,
     metadata: Arc<RwLock<MetadataSnapshot>>,
     flac_broadcast: timed_broadcast::Sender<Bytes>,
@@ -612,11 +612,15 @@ struct StreamingFlacSinkLogic {
     sample_rate: Option<u32>,
     broadcast_max_lead_time: f64,
     first_chunk_timestamp_checked: bool,
+    /// Accumulated timestamp offset for maintaining continuity across encoder restarts
+    timestamp_offset_sec: f64,
+    /// Shared timestamp reference to read the last broadcast timestamp
+    current_timestamp: Arc<RwLock<f64>>,
 }
 
 impl StreamingFlacSinkLogic {
     /// Initialize the FLAC encoder once we know the sample rate.
-    async fn initialize_encoder(&mut self, sample_rate: u32) -> Result<(), AudioError> {
+    async fn initialize_encoder(&mut self, sample_rate: u32, timestamp_offset_sec: f64) -> Result<(), AudioError> {
         if self.encoder_state.is_some() {
             return Ok(()); // Already initialized
         }
@@ -633,7 +637,8 @@ impl StreamingFlacSinkLogic {
             .ok_or_else(|| AudioError::ProcessingError("PCM receiver already consumed".into()))?;
 
         // Create shared timestamp and duration for pacing
-        let current_timestamp = Arc::new(RwLock::new(0.0f64));
+        // Reuse existing current_timestamp Arc to maintain reference for reading later
+        let current_timestamp = self.current_timestamp.clone();
         let current_duration = Arc::new(RwLock::new(0.0f64));
 
         // Create ByteStreamReader for the encoder
@@ -669,6 +674,7 @@ impl StreamingFlacSinkLogic {
                 current_duration,
                 max_lead,
                 sample_rate,
+                timestamp_offset_sec,
             )
             .await
             {
@@ -724,6 +730,54 @@ impl StreamingFlacSinkLogic {
 
         Ok(())
     }
+
+    /// Restart the FLAC encoder for a new track.
+    /// This causes a new "fLaC" header to be emitted and timestamps to reset to 0.
+    async fn restart_encoder_for_new_track(&mut self) -> Result<(), AudioError> {
+        let sample_rate = self
+            .sample_rate
+            .ok_or_else(|| AudioError::ProcessingError("Sample rate not initialized".into()))?;
+
+        debug!("Restarting FLAC encoder for new track");
+
+        // 1. Read current timestamp to maintain continuity
+        let last_timestamp = *self.current_timestamp.read().await;
+        debug!("Last timestamp before restart: {:.3}s", last_timestamp);
+
+        // 2. Close current PCM sender to signal encoder to finish
+        if let Some(tx) = self.pcm_tx.take() {
+            drop(tx);
+            trace!("Dropped PCM sender to signal encoder finish");
+        }
+
+        // 3. Wait for current broadcaster task to complete
+        if let Some(state) = self.encoder_state.take() {
+            trace!("Waiting for broadcaster task to finish...");
+            match state.broadcaster_task.await {
+                Ok(_) => {
+                    trace!("Broadcaster task finished successfully");
+                }
+                Err(e) => {
+                    warn!("Broadcaster task error during restart: {:?}", e);
+                }
+            }
+        }
+
+        // 4. Update timestamp offset to maintain continuity across encoder restart
+        self.timestamp_offset_sec += last_timestamp;
+        debug!("New timestamp offset: {:.3}s", self.timestamp_offset_sec);
+
+        // 5. Create new PCM channel
+        let (pcm_tx, pcm_rx) = mpsc::channel::<PcmChunk>(16);
+        self.pcm_tx = Some(pcm_tx);
+        self.pcm_rx = Some(pcm_rx);
+
+        // 6. Initialize new encoder with timestamp offset (will naturally emit new "fLaC" header)
+        self.initialize_encoder(sample_rate, self.timestamp_offset_sec).await?;
+
+        debug!("FLAC encoder restarted successfully for new track");
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -773,8 +827,8 @@ impl NodeLogic for StreamingFlacSinkLogic {
                                         self.sample_rate = Some(sample_rate);
                                         debug!("Detected sample rate: {} Hz", sample_rate);
 
-                                        // Initialize the FLAC encoder now
-                                        self.initialize_encoder(sample_rate).await?;
+                                        // Initialize the FLAC encoder now (first track starts at 0.0)
+                                        self.initialize_encoder(sample_rate, 0.0).await?;
                                     }
 
                                     // Convert chunk to PCM bytes
@@ -801,7 +855,17 @@ impl NodeLogic for StreamingFlacSinkLogic {
                                         duration_sec,
                                     };
                                     let send_start = std::time::Instant::now();
-                                    if let Err(e) = self.pcm_tx.send(pcm_chunk).await {
+
+                                    // Get the sender (it should always be Some after initialization)
+                                    let pcm_tx = match &self.pcm_tx {
+                                        Some(tx) => tx,
+                                        None => {
+                                            error!("PCM sender not initialized");
+                                            break;
+                                        }
+                                    };
+
+                                    if let Err(e) = pcm_tx.send(pcm_chunk).await {
                                         warn!("Failed to send PCM data to encoder: {}", e);
                                         break;
                                     }
@@ -818,6 +882,18 @@ impl NodeLogic for StreamingFlacSinkLogic {
                                 _AudioSegment::Sync(marker) => {
                                     match marker.as_ref() {
                                         SyncMarker::TrackBoundary { metadata } => {
+                                            // Only restart encoder if it's already initialized (not the first track)
+                                            if self.sample_rate.is_some() && self.encoder_state.is_some() {
+                                                // Restart encoder to emit new header and reset timestamps
+                                                if let Err(e) = self.restart_encoder_for_new_track().await {
+                                                    error!("Failed to restart encoder for new track: {}", e);
+                                                    break;
+                                                }
+                                            } else {
+                                                trace!("Skipping encoder restart for first track (encoder not yet initialized)");
+                                            }
+
+                                            // Update metadata for the new track
                                             if let Err(e) = self.update_metadata(metadata, seg.timestamp_sec).await {
                                                 error!("Failed to update metadata: {}", e);
                                             }
@@ -866,6 +942,7 @@ async fn broadcast_flac_stream(
     current_duration: Arc<RwLock<f64>>,
     broadcast_max_lead_time: f64,
     sample_rate: u32,
+    timestamp_offset_sec: f64,
 ) -> Result<(), AudioError> {
     trace!(
         "Broadcaster task started with FLAC frame boundary detection (max_lead={:.3}s)",
@@ -947,41 +1024,10 @@ async fn broadcast_flac_stream(
                     n
                 );
 
-                // Detect FLAC stream header "fLaC" in accumulator
-                // If found, we need to:
-                // 1. Process only frames BEFORE the header (end of previous track)
-                // 2. After broadcasting those frames, reset sample counter
-                // 3. Keep header + following data for next iteration
-                let header_pos = if accumulator.len() >= 4 {
-                    accumulator.windows(4).position(|w| w == b"fLaC")
-                } else {
-                    None
-                };
-
                 // Locate complete audio frames and total samples
-                // Note: find_complete_frames_with_samples() searches for AUDIO frames (0xFF 0xF8...),
-                // not the stream header "fLaC". Audio frames come AFTER the header.
-                let (boundary, total_samples) = if let Some(pos) = header_pos {
-                    if pos > 0 {
-                        // Header in the middle: process only frames BEFORE header (end of previous track)
-                        trace!(
-                            "New FLAC header detected at position {} in accumulator (size={}), searching frames before header",
-                            pos,
-                            accumulator.len()
-                        );
-                        flac_frame_utils::find_complete_frames_with_samples(&accumulator[..pos])
-                    } else {
-                        // Header at start: this is normal for new tracks, search all (audio frames come AFTER header)
-                        trace!(
-                            "FLAC header at start of accumulator (size={}), searching all frames",
-                            accumulator.len()
-                        );
-                        flac_frame_utils::find_complete_frames_with_samples(&accumulator)
-                    }
-                } else {
-                    // No header: normal streaming, search all frames
-                    flac_frame_utils::find_complete_frames_with_samples(&accumulator)
-                };
+                // Since encoder restarts on TrackBoundary, we only see one header per encoder instance
+                let (boundary, total_samples) =
+                    flac_frame_utils::find_complete_frames_with_samples(&accumulator);
 
                 trace!(
                     "Buffer state: accumulator={} bytes, boundary={} bytes, total_samples={}, will_send={}",
@@ -1005,10 +1051,10 @@ async fn broadcast_flac_stream(
                     // ║ permettant de dropper les chunks vraiment périmés.           ║
                     // ╚═══════════════════════════════════════════════════════════════╝
 
-                    // Calculer le timestamp de cette FLAC frame
+                    // Calculer le timestamp de cette FLAC frame (avec offset pour continuité entre tracks)
                     let frame_start_samples = encoded_samples;
                     encoded_samples = encoded_samples.saturating_add(total_samples);
-                    let audio_timestamp = frame_start_samples as f64 / sample_rate_f64;
+                    let audio_timestamp = timestamp_offset_sec + (frame_start_samples as f64 / sample_rate_f64);
                     let segment_duration = total_samples as f64 / sample_rate_f64;
 
                     if stats_last_log.elapsed() >= Duration::from_secs(1) {
@@ -1040,15 +1086,6 @@ async fn broadcast_flac_stream(
                     let to_send = std::mem::replace(&mut accumulator, remaining);
                     let bytes = Bytes::from(to_send);
 
-                    // After splitting, check if accumulator now starts with FLAC header
-                    // If so, we just finished the previous track and need to reset sample counter
-                    if accumulator.len() >= 4 && &accumulator[0..4] == b"fLaC" {
-                        trace!(
-                            "FLAC header now at start of accumulator after split, resetting sample counter for new track"
-                        );
-                        encoded_samples = 0;
-                    }
-
                     // Measure broadcast interval for burst detection
                     let broadcast_interval = last_broadcast_time.elapsed().as_secs_f64();
                     last_broadcast_time = std::time::Instant::now();
@@ -1074,25 +1111,15 @@ async fn broadcast_flac_stream(
                         );
                     }
 
-                    // Detect FLAC header "fLaC" - indicates new track
-                    if bytes.len() >= 4 && &bytes[0..4] == b"fLaC" {
-                        // New track detected: reset sample counter
-                        encoded_samples = 0;
+                    // Cache FLAC header "fLaC" for late-joining clients
+                    // Each encoder instance emits exactly one header at the start
+                    if !header_captured && bytes.len() >= 4 && &bytes[0..4] == b"fLaC" {
+                        header_captured = true;
                         *header_cache.write().await = Some(bytes.clone());
-                        if !header_captured {
-                            header_captured = true;
-                            trace!(
-                                "FLAC header captured ({} bytes), sample counter reset",
-                                bytes.len()
-                            );
-                        } else {
-                            trace!(
-                                "New FLAC header detected ({} bytes), sample counter reset for new track",
-                                bytes.len()
-                            );
-                        }
-                        // Also broadcast the header so early-connecting clients receive it
-                        // Later-connecting clients will get it from the cache
+                        trace!(
+                            "FLAC header captured and cached ({} bytes) for late-joining clients",
+                            bytes.len()
+                        );
                     }
 
                     let num_receivers = broadcast_tx.receiver_count();
@@ -1221,7 +1248,7 @@ impl StreamingFlacSink {
         let logic = StreamingFlacSinkLogic {
             encoder_options,
             bits_per_sample,
-            pcm_tx,
+            pcm_tx: Some(pcm_tx),
             pcm_rx: Some(pcm_rx),
             metadata,
             flac_broadcast,
@@ -1230,6 +1257,8 @@ impl StreamingFlacSink {
             sample_rate: None,
             broadcast_max_lead_time: broadcast_max_lead_time.max(0.0),
             first_chunk_timestamp_checked: false,
+            timestamp_offset_sec: 0.0,
+            current_timestamp: Arc::new(RwLock::new(0.0)),
         };
 
         let sink = Self {

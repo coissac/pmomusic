@@ -275,7 +275,7 @@ struct EncoderState {
 struct StreamingOggFlacSinkLogic {
     encoder_options: EncoderOptions,
     bits_per_sample: u8,
-    pcm_tx: mpsc::Sender<PcmChunk>,
+    pcm_tx: Option<mpsc::Sender<PcmChunk>>,
     pcm_rx: Option<mpsc::Receiver<PcmChunk>>,
     metadata: Arc<RwLock<MetadataSnapshot>>,
     ogg_broadcast: timed_broadcast::Sender<Bytes>,
@@ -283,11 +283,15 @@ struct StreamingOggFlacSinkLogic {
     encoder_state: Option<EncoderState>,
     sample_rate: Option<u32>,
     broadcast_max_lead_time: f64,
+    /// Accumulated timestamp offset for maintaining continuity across encoder restarts
+    timestamp_offset_sec: f64,
+    /// Shared timestamp reference to read the last broadcast timestamp
+    current_timestamp: Arc<RwLock<f64>>,
 }
 
 impl StreamingOggFlacSinkLogic {
     /// Initialize the FLAC encoder once we know the sample rate.
-    async fn initialize_encoder(&mut self, sample_rate: u32) -> Result<(), AudioError> {
+    async fn initialize_encoder(&mut self, sample_rate: u32, timestamp_offset_sec: f64) -> Result<(), AudioError> {
         if self.encoder_state.is_some() {
             return Ok(()); // Already initialized
         }
@@ -304,7 +308,8 @@ impl StreamingOggFlacSinkLogic {
             .ok_or_else(|| AudioError::ProcessingError("PCM receiver already consumed".into()))?;
 
         // Create shared timestamp and duration for pacing
-        let current_timestamp = Arc::new(RwLock::new(0.0f64));
+        // Reuse existing current_timestamp Arc to maintain reference for reading later
+        let current_timestamp = self.current_timestamp.clone();
         let current_duration = Arc::new(RwLock::new(0.0f64));
 
         // Create ByteStreamReader for the encoder
@@ -339,6 +344,7 @@ impl StreamingOggFlacSinkLogic {
                 current_timestamp,
                 current_duration,
                 max_lead,
+                timestamp_offset_sec,
             )
             .await
             {
@@ -393,6 +399,54 @@ impl StreamingOggFlacSinkLogic {
 
         Ok(())
     }
+
+    /// Restart the FLAC encoder for a new track.
+    /// This causes a new OGG stream header to be emitted and timestamps to reset to 0.
+    async fn restart_encoder_for_new_track(&mut self) -> Result<(), AudioError> {
+        let sample_rate = self
+            .sample_rate
+            .ok_or_else(|| AudioError::ProcessingError("Sample rate not initialized".into()))?;
+
+        debug!("Restarting OGG-FLAC encoder for new track");
+
+        // 1. Read current timestamp to maintain continuity
+        let last_timestamp = *self.current_timestamp.read().await;
+        debug!("Last timestamp before restart: {:.3}s", last_timestamp);
+
+        // 2. Close current PCM sender to signal encoder to finish
+        if let Some(tx) = self.pcm_tx.take() {
+            drop(tx);
+            trace!("Dropped PCM sender to signal encoder finish");
+        }
+
+        // 3. Wait for current broadcaster task to complete
+        if let Some(state) = self.encoder_state.take() {
+            trace!("Waiting for OGG broadcaster task to finish...");
+            match state.broadcaster_task.await {
+                Ok(_) => {
+                    trace!("OGG broadcaster task finished successfully");
+                }
+                Err(e) => {
+                    warn!("OGG broadcaster task error during restart: {:?}", e);
+                }
+            }
+        }
+
+        // 4. Update timestamp offset to maintain continuity across encoder restart
+        self.timestamp_offset_sec += last_timestamp;
+        debug!("New timestamp offset: {:.3}s", self.timestamp_offset_sec);
+
+        // 5. Create new PCM channel
+        let (pcm_tx, pcm_rx) = mpsc::channel::<PcmChunk>(16);
+        self.pcm_tx = Some(pcm_tx);
+        self.pcm_rx = Some(pcm_rx);
+
+        // 6. Initialize new encoder with timestamp offset (will naturally emit new OGG stream header)
+        self.initialize_encoder(sample_rate, self.timestamp_offset_sec).await?;
+
+        debug!("OGG-FLAC encoder restarted successfully for new track");
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -430,8 +484,8 @@ impl NodeLogic for StreamingOggFlacSinkLogic {
                                         self.sample_rate = Some(sample_rate);
                                         debug!("Detected sample rate: {} Hz", sample_rate);
 
-                                        // Initialize the FLAC encoder now
-                                        self.initialize_encoder(sample_rate).await?;
+                                        // Initialize the FLAC encoder now (first track starts at 0.0)
+                                        self.initialize_encoder(sample_rate, 0.0).await?;
                                     }
 
                                     // Convert chunk to PCM bytes
@@ -455,8 +509,18 @@ impl NodeLogic for StreamingOggFlacSinkLogic {
                                         timestamp_sec: seg.timestamp_sec,
                                         duration_sec,
                                     };
-                                    if let Err(e) = self.pcm_tx.send(pcm_chunk).await {
-                                        warn!("Failed to send PCM data to encoder: {}", e);
+
+                                    // Get the sender (it should always be Some after initialization)
+                                    let pcm_tx = match &self.pcm_tx {
+                                        Some(tx) => tx,
+                                        None => {
+                                            error!("OGG PCM sender not initialized");
+                                            break;
+                                        }
+                                    };
+
+                                    if let Err(e) = pcm_tx.send(pcm_chunk).await {
+                                        warn!("Failed to send PCM data to OGG encoder: {}", e);
                                         break;
                                     }
                                 }
@@ -464,10 +528,21 @@ impl NodeLogic for StreamingOggFlacSinkLogic {
                                 _AudioSegment::Sync(marker) => {
                                     match marker.as_ref() {
                                         SyncMarker::TrackBoundary { metadata } => {
+                                            // Only restart encoder if it's already initialized (not the first track)
+                                            if self.sample_rate.is_some() && self.encoder_state.is_some() {
+                                                // Restart encoder to emit new OGG stream header and reset timestamps
+                                                if let Err(e) = self.restart_encoder_for_new_track().await {
+                                                    error!("Failed to restart OGG encoder for new track: {}", e);
+                                                    break;
+                                                }
+                                            } else {
+                                                trace!("Skipping OGG encoder restart for first track (encoder not yet initialized)");
+                                            }
+
+                                            // Update metadata for the new track
                                             if let Err(e) = self.update_metadata(metadata, seg.timestamp_sec).await {
                                                 error!("Failed to update metadata: {}", e);
                                             }
-                                            // TODO: Implement OGG chaining (EOS → new BOS)
                                         }
 
                                         SyncMarker::EndOfStream => {
@@ -577,7 +652,7 @@ impl StreamingOggFlacSink {
         let logic = StreamingOggFlacSinkLogic {
             encoder_options,
             bits_per_sample,
-            pcm_tx,
+            pcm_tx: Some(pcm_tx),
             pcm_rx: Some(pcm_rx),
             metadata,
             ogg_broadcast,
@@ -585,6 +660,8 @@ impl StreamingOggFlacSink {
             encoder_state: None,
             sample_rate: None,
             broadcast_max_lead_time: broadcast_max_lead_time.max(0.0),
+            timestamp_offset_sec: 0.0,
+            current_timestamp: Arc::new(RwLock::new(0.0)),
         };
 
         let sink = Self {
@@ -802,6 +879,7 @@ async fn broadcast_ogg_flac_stream(
     current_timestamp: Arc<RwLock<f64>>,
     current_duration: Arc<RwLock<f64>>,
     broadcast_max_lead_time: f64,
+    timestamp_offset_sec: f64,
 ) -> Result<(), AudioError> {
     trace!(
         "OGG-FLAC broadcaster task started with FLAC frame boundary detection (max_lead={:.3}s)",
@@ -1037,10 +1115,10 @@ async fn broadcast_ogg_flac_stream(
                         );
                     }
 
-                    // Calculer le timestamp de cette FLAC frame
+                    // Calculer le timestamp de cette FLAC frame (avec offset pour continuité entre tracks)
                     let frame_start_samples = encoded_samples;
                     encoded_samples = encoded_samples.saturating_add(first_frame_samples as u64);
-                    let audio_timestamp = frame_start_samples as f64 / sample_rate_f64;
+                    let audio_timestamp = timestamp_offset_sec + (frame_start_samples as f64 / sample_rate_f64);
                     let segment_duration = first_frame_samples as f64 / sample_rate_f64;
 
                     // Check timing et apply pacing (skip si en retard)
