@@ -65,7 +65,7 @@ use std::time::Duration;
 use super::{
     broadcast_pacing::BroadcastPacer,
     flac_frame_utils,
-    timed_broadcast::{self, SendError, TimedPacket, TryRecvError},
+    timed_broadcast::{self, SendError, TryRecvError},
 };
 use async_trait::async_trait;
 use bytes::Bytes;
