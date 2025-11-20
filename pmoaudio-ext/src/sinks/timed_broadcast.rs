@@ -5,17 +5,13 @@
 //! - Propagation d’un compteur `epoch` incrémenté sur chaque TopZeroSync.
 
 use std::{
-    collections::VecDeque,
-    fmt,
-    sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-        Arc, Mutex, Weak,
-    },
-    time::{Duration, Instant},
+    collections::VecDeque, fmt, string, sync::{
+        Arc, Mutex, Weak, atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering}
+    }, time::{Duration, Instant}
 };
 
 use tokio::sync::Notify;
-use tracing::{info, trace, warn};
+use tracing::{info, debug, trace, warn};
 
 /// Tolérance pour détecter un timestamp à zéro (TopZero).
 const TOP_ZERO_EPSILON: f64 = 1e-9;
@@ -83,6 +79,7 @@ struct Entry<T> {
 }
 
 struct State<T> {
+    name: String,
     buffer: VecDeque<Entry<T>>,
     head_seq: u64,
     next_seq: u64,
@@ -96,8 +93,9 @@ struct State<T> {
 }
 
 impl<T> State<T> {
-    fn new(capacity: usize, epoch_start: Instant) -> Self {
+    fn new(name: &str,capacity: usize, epoch_start: Instant) -> Self {
         Self {
+            name: name.to_string() ,
             buffer: VecDeque::with_capacity(capacity),
             head_seq: 0,
             next_seq: 0,
@@ -112,8 +110,8 @@ impl<T> State<T> {
     }
 
     fn purge_expired(&mut self, now: Instant) -> bool {
-        // Throttling : purger au maximum toutes les 100ms
-        if now.duration_since(self.last_purge) < Duration::from_millis(100) {
+        // Throttling : purger au maximum toutes les 20ms
+        if now.duration_since(self.last_purge) < Duration::from_millis(20) {
             return false;
         }
         self.last_purge = now;
@@ -122,7 +120,7 @@ impl<T> State<T> {
         while let Some(entry) = self.buffer.front() {
             if entry.expires_at <= now {
                 let delta = now - entry.expires_at;
-                // info!("TimedBroadcast: purging expired packet (epoch={},delta={})", entry.epoch, delta.as_millis());
+                debug!("TimedBroadcast[{}]: purging expired packet (@{} epoch={},delta={})", self.name,entry.seq, entry.epoch, delta.as_millis());
                 self.buffer.pop_front();
                 self.head_seq += 1;
                 purged += 1;
@@ -167,7 +165,11 @@ impl<T> State<T> {
         }
 
         for _ in 0..removable {
-            if self.buffer.pop_front().is_some() {
+            let oentry = self.buffer.pop_front();
+            if oentry.is_some() {
+                let entry= oentry.unwrap(); 
+                debug!("TimedBroadcast[{}]: pruning played packet (@{} epoch={})", self.name,entry.seq, entry.epoch);
+
                 self.head_seq += 1;
             }
         }
@@ -186,9 +188,9 @@ struct Inner<T> {
 }
 
 impl<T> Inner<T> {
-    fn new(capacity: usize) -> Self {
+    fn new(name: &str,capacity: usize) -> Self {
         Self {
-            state: Mutex::new(State::new(capacity, Instant::now())),
+            state: Mutex::new(State::new(name,capacity, Instant::now())),
             data_notify: Notify::new(),
             space_notify: Notify::new(),
             capacity,
@@ -210,9 +212,9 @@ impl<T> Inner<T> {
 }
 
 /// Créé un channel broadcast temporisé.
-pub fn channel<T>(capacity: usize) -> (Sender<T>, Receiver<T>) {
+pub fn channel<T>(name: &str, capacity: usize) -> (Sender<T>, Receiver<T>) {
     assert!(capacity > 0, "capacity must be > 0");
-    let inner = Arc::new(Inner::new(capacity));
+    let inner = Arc::new(Inner::new(name,capacity));
     let next_seq = {
         let state = inner.state.lock().expect("timed broadcast mutex poisoned");
         state.next_seq
@@ -312,7 +314,10 @@ impl<T> Sender<T> {
                             audio_timestamp
                         );
                     } else if is_top_zero {
+                        // Restart epoch on TopZero relative to current wall-clock time to avoid
+                        // expired packets when there's a long gap between tracks.
                         state.epoch_start = state.last_segment_end.unwrap_or(now);
+                        // state.epoch_start = now;
                         state.epoch = state.epoch.wrapping_add(1);
                         info!(
                             "TimedBroadcast: new epoch={} (continuous={})",

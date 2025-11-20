@@ -79,11 +79,13 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/stream/flac", get(stream_flac))
+        .route("/stream/ogg", get(stream_ogg))
         .with_state(state);
 
     let addr: SocketAddr = ([0, 0, 0, 0], 8080).into();
-    info!("HTTP server listening on http://{addr}/stream/flac");
+    info!("HTTP server listening on http://{addr}/stream/flac and /stream/ogg");
     info!("Connect with a FLAC player (e.g. ffplay http://localhost:8080/stream/flac)");
+    info!("Connect with an OGG/OGG-FLAC player (e.g. ffplay http://localhost:8080/stream/ogg)");
 
     let listener = TcpListener::bind(addr).await?;
     axum::serve(listener, app.into_make_service()).await?;
@@ -97,6 +99,23 @@ async fn stream_flac(State(state): State<AppState>) -> Result<Response, StatusCo
     Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "audio/flac")
+        .header(
+            "X-PMO-Channel",
+            format!(
+                "{} ({})",
+                state.descriptor.display_name, state.descriptor.slug
+            ),
+        )
+        .body(body)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn stream_ogg(State(state): State<AppState>) -> Result<Response, StatusCode> {
+    let stream = state.channel.subscribe_ogg();
+    let body = Body::from_stream(ReaderStream::new(stream));
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "audio/ogg")
         .header(
             "X-PMO-Channel",
             format!(

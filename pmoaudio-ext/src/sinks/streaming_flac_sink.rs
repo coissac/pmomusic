@@ -430,7 +430,7 @@ impl StreamingFlacSink {
         );
 
         // Broadcast channel for FLAC bytes
-        let (broadcast, _) = timed_broadcast::channel(broadcast_capacity);
+        let (broadcast, _) = timed_broadcast::channel("Flac", broadcast_capacity);
 
         // FLAC header cache
         let header = Arc::new(RwLock::new(None));

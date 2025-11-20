@@ -178,6 +178,18 @@ impl NodeLogic for StreamingOggFlacSinkLogic {
                         Some(seg) => {
                             match &seg.segment {
                                 _AudioSegment::Chunk(chunk) => {
+                                    if !self.ctx.first_chunk_timestamp_checked {
+                                        self.ctx.first_chunk_timestamp_checked = true;
+                                        if seg.timestamp_sec.abs() > 1e-6 {
+                                            warn!(
+                                                "StreamingFlacSink: first chunk timestamp is {:.6}s (expected 0.0)",
+                                                seg.timestamp_sec
+                                            );
+                                        } else {
+                                            trace!("StreamingFlacSink: first chunk timestamp verified at 0.0s");
+                                        }
+                                    }
+
                                     // Detect sample rate from first chunk and initialize encoder
                                     if self.ctx.sample_rate.is_none() {
                                         let sample_rate = chunk.sample_rate();
@@ -375,7 +387,7 @@ impl StreamingOggFlacSink {
             "Streaming Sink: using broadcast capacity of {} items (max_lead_time={:.1}s)",
             broadcast_capacity, broadcast_max_lead_time
         );
-        let (broadcast, _) = timed_broadcast::channel(broadcast_capacity);
+        let (broadcast, _) = timed_broadcast::channel("Ogg-Flac",broadcast_capacity);
 
         // OGG-FLAC header cache
         let header = Arc::new(RwLock::new(None));

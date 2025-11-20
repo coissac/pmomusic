@@ -347,7 +347,10 @@ impl SharedSinkContext {
         self.pcm_tx = Some(pcm_tx);
         self.pcm_rx = Some(pcm_rx);
 
-        self.initialize_encoder(sample_rate, self.timestamp_offset_sec, broadcaster)
+        // self.initialize_encoder(sample_rate, self.timestamp_offset_sec, broadcaster)
+        //    .await?;
+
+        self.initialize_encoder(sample_rate, 0.0, broadcaster)
             .await?;
 
         debug!("FLAC encoder restarted successfully for new track");

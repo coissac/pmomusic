@@ -376,6 +376,11 @@ mod tests {
             cover: None,
             rating: None,
             extra: HashMap::new(),
+            gapless_url: todo!(),
+            sched_time_millis: todo!(),
+            song_id: todo!(),
+            artist_id: todo!(),
+            cover_large: todo!(),
         };
 
         assert_eq!(song.end_time_ms(), 6000);
