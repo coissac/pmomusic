@@ -20,6 +20,8 @@ use tracing::{info, trace, warn};
 /// Tolérance pour détecter un timestamp à zéro (TopZero).
 const TOP_ZERO_EPSILON: f64 = 1e-9;
 
+pub const DEFAULT_BROADCAST_MAX_LEAD_TIME: f64 = 0.5;
+
 /// Paquet diffusé contenant la charge utile + méta timing.
 #[derive(Clone)]
 pub struct TimedPacket<T> {
@@ -542,4 +544,24 @@ impl<T> Drop for Receiver<T> {
             self.inner.space_notify.notify_waiters();
         }
     }
+}
+
+/// Calculate broadcast channel capacity based on max_lead_time.
+///
+/// Estimates the number of items needed to buffer max_lead_time seconds of audio.
+/// Assumes ~20 items per second (50ms per chunk).
+///
+/// # Arguments
+///
+/// * `max_lead_time` - Maximum lead time in seconds
+///
+/// # Returns
+///
+/// Broadcast channel capacity (minimum 100 items)
+pub(crate) fn calculate_broadcast_capacity(max_lead_time: f64) -> usize {
+    // Estimation: ~20 items/second (chunks de 50ms en moyenne)
+    // Pour 10s: 200 items
+    let estimated_items_per_second = 20.0;
+    let capacity = (max_lead_time * estimated_items_per_second) as usize;
+    capacity.max(100) // Minimum 100 items
 }

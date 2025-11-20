@@ -62,7 +62,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use pmoaudio::{
     pipeline::{AudioPipelineNode, Node, NodeLogic, PipelineHandle, StopReason},
-    AudioChunk, AudioError, AudioSegment, SyncMarker, TypeRequirement, TypedAudioNode,
+    AudioError, AudioSegment, SyncMarker, TypeRequirement, TypedAudioNode,
     _AudioSegment,
 };
 use pmoflac::{encode_flac_stream, EncoderOptions, FlacEncodedStream, PcmFormat};
@@ -72,29 +72,10 @@ use tokio::sync::{mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, trace, warn};
 
-/// Default maximum lead time for HTTP broadcast pacing (in seconds).
-const DEFAULT_BROADCAST_MAX_LEAD_TIME: f64 = 0.0;
-
-/// Calculate broadcast channel capacity based on max lead time.
-///
-/// Estimate: ~20 OGG pages per second (assuming 50ms chunks).
-/// Minimum capacity: 100 items for buffering even with 0 lead time.
-fn calculate_broadcast_capacity(max_lead_time: f64) -> usize {
-    let estimated_items_per_second = 20.0;
-    let capacity = (max_lead_time * estimated_items_per_second) as usize;
-    capacity.max(100) // Minimum 100 items
-}
-
-/// PCM chunk with audio data and timestamp for precise pacing.
-#[derive(Debug)]
-struct PcmChunk {
-    /// Raw PCM audio bytes
-    bytes: Vec<u8>,
-    /// Timestamp in seconds (from AudioSegment)
-    timestamp_sec: f64,
-    /// Duration in seconds of this PCM chunk (samples / sample_rate)
-    duration_sec: f64,
-}
+use crate::byte_stream_reader::{PcmChunk,ByteStreamReader};
+use crate::chunk_to_pcm::chunk_to_pcm_bytes;
+use crate::sinks::flac_frame_utils::{extract_sample_rate_from_streaminfo, read_flac_header};
+use crate::sinks::timed_broadcast::{DEFAULT_BROADCAST_MAX_LEAD_TIME, calculate_broadcast_capacity};
 
 /// Snapshot of track metadata (reuse from streaming_flac_sink)
 pub use super::streaming_flac_sink::MetadataSnapshot;
@@ -103,9 +84,10 @@ pub use super::streaming_flac_sink::MetadataSnapshot;
 #[derive(Clone)]
 pub struct OggFlacStreamHandle {
     /// Broadcast sender for OGG-FLAC bytes
-    ogg_broadcast: timed_broadcast::Sender<Bytes>,
+    
+    broadcast: timed_broadcast::Sender<Bytes>,
 
-    /// Current track metadata
+    /// Current track metadata (read-only for consumers)
     metadata: Arc<RwLock<MetadataSnapshot>>,
 
     /// Active client counter
@@ -115,7 +97,7 @@ pub struct OggFlacStreamHandle {
     stop_token: CancellationToken,
 
     /// Cached OGG-FLAC header (sent to new subscribers first)
-    ogg_header: Arc<RwLock<Option<Bytes>>>,
+    header: Arc<RwLock<Option<Bytes>>>,
 
     auto_stop: Arc<AtomicBool>,
 }
@@ -129,7 +111,7 @@ impl OggFlacStreamHandle {
         debug!("New OGG-FLAC client subscribed (total: {})", count + 1);
 
         OggFlacClientStream {
-            rx: self.ogg_broadcast.subscribe(),
+            rx: self.broadcast.subscribe(),
             buffer: VecDeque::new(),
             finished: false,
             handle: self.clone(),
@@ -185,7 +167,7 @@ impl AsyncRead for OggFlacClientStream {
         loop {
             // If in header state, send the header first
             if matches!(self.state, OggFlacStreamState::SendingHeader) {
-                let header_opt = if let Ok(guard) = self.handle.ogg_header.try_read() {
+                let header_opt = if let Ok(guard) = self.handle.header.try_read() {
                     guard.clone()
                 } else {
                     None
@@ -278,8 +260,8 @@ struct StreamingOggFlacSinkLogic {
     pcm_tx: Option<mpsc::Sender<PcmChunk>>,
     pcm_rx: Option<mpsc::Receiver<PcmChunk>>,
     metadata: Arc<RwLock<MetadataSnapshot>>,
-    ogg_broadcast: timed_broadcast::Sender<Bytes>,
-    ogg_header: Arc<RwLock<Option<Bytes>>>,
+    broadcast: timed_broadcast::Sender<Bytes>,
+    header: Arc<RwLock<Option<Bytes>>>,
     encoder_state: Option<EncoderState>,
     sample_rate: Option<u32>,
     broadcast_max_lead_time: f64,
@@ -333,14 +315,14 @@ impl StreamingOggFlacSinkLogic {
         debug!("OGG-FLAC encoder initialized successfully");
 
         // Spawn OGG wrapper + broadcaster task with timestamp and duration for pacing
-        let ogg_broadcast = self.ogg_broadcast.clone();
-        let ogg_header = self.ogg_header.clone();
+        let broadcast = self.broadcast.clone();
+        let header = self.header.clone();
         let max_lead = self.broadcast_max_lead_time;
         let broadcaster_task = tokio::spawn(async move {
             if let Err(e) = broadcast_ogg_flac_stream(
                 flac_stream,
-                ogg_broadcast,
-                ogg_header,
+                broadcast,
+                header,
                 current_timestamp,
                 current_duration,
                 max_lead,
@@ -390,11 +372,12 @@ impl StreamingOggFlacSinkLogic {
         snapshot.version += 1;
 
         debug!(
-            "OGG-FLAC metadata updated: v{} @ {:.2}s - {} - {}",
+            "Metadata updated: v{} @ {:.2}s - {} - {} (cover_pk: {:?})",
             snapshot.version,
             timestamp_sec,
             snapshot.artist.as_deref().unwrap_or("?"),
-            snapshot.title.as_deref().unwrap_or("?")
+            snapshot.title.as_deref().unwrap_or("?"),
+            snapshot.cover_pk
         );
 
         Ok(())
@@ -623,29 +606,28 @@ impl StreamingOggFlacSink {
         // Shared metadata
         let metadata = Arc::new(RwLock::new(MetadataSnapshot::default()));
 
-        // Broadcast channel for OGG-FLAC bytes
         // Capacity calculated from max_lead_time to ensure enough buffering
         let broadcast_capacity = calculate_broadcast_capacity(broadcast_max_lead_time);
-        tracing::trace!(
-            "OGG-FLAC broadcast capacity: {} items (for {:.1}s max lead time)",
+        debug!(
+            "Streaming Sink: using broadcast capacity of {} items (max_lead_time={:.1}s)",
             broadcast_capacity,
             broadcast_max_lead_time
         );
-        let (ogg_broadcast, _) = timed_broadcast::channel(broadcast_capacity);
+        let (broadcast, _) = timed_broadcast::channel(broadcast_capacity);
 
         // OGG-FLAC header cache
-        let ogg_header = Arc::new(RwLock::new(None));
+        let header = Arc::new(RwLock::new(None));
 
         // Stop token and client counter
         let stop_token = CancellationToken::new();
         let active_clients = Arc::new(AtomicUsize::new(0));
 
         let handle = OggFlacStreamHandle {
-            ogg_broadcast: ogg_broadcast.clone(),
+            broadcast: broadcast.clone(),
             metadata: metadata.clone(),
             active_clients,
             stop_token: stop_token.clone(),
-            ogg_header: ogg_header.clone(),
+            header: header.clone(),
             auto_stop: Arc::new(AtomicBool::new(true)),
         };
 
@@ -655,8 +637,8 @@ impl StreamingOggFlacSink {
             pcm_tx: Some(pcm_tx),
             pcm_rx: Some(pcm_rx),
             metadata,
-            ogg_broadcast,
-            ogg_header,
+            broadcast,
+            header,
             encoder_state: None,
             sample_rate: None,
             broadcast_max_lead_time: broadcast_max_lead_time.max(0.0),
@@ -701,173 +683,7 @@ impl TypedAudioNode for StreamingOggFlacSink {
     }
 }
 
-/// AsyncRead adapter for mpsc::Receiver<PcmChunk>.
-/// Extracts bytes from PcmChunk and provides them to the FLAC encoder.
-struct ByteStreamReader {
-    rx: mpsc::Receiver<PcmChunk>,
-    buffer: VecDeque<u8>,
-    finished: bool,
-    /// Shared timestamp for broadcaster pacing
-    current_timestamp: Arc<RwLock<f64>>,
-    /// Shared duration for broadcaster pacing
-    current_duration: Arc<RwLock<f64>>,
-}
 
-impl ByteStreamReader {
-    fn new(
-        rx: mpsc::Receiver<PcmChunk>,
-        current_timestamp: Arc<RwLock<f64>>,
-        current_duration: Arc<RwLock<f64>>,
-    ) -> Self {
-        Self {
-            rx,
-            buffer: VecDeque::new(),
-            finished: false,
-            current_timestamp,
-            current_duration,
-        }
-    }
-}
-
-impl AsyncRead for ByteStreamReader {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        loop {
-            if !self.buffer.is_empty() {
-                let to_copy = self.buffer.len().min(buf.remaining());
-                if to_copy == 0 {
-                    return Poll::Ready(Ok(()));
-                }
-
-                let slice = self.buffer.make_contiguous();
-                buf.put_slice(&slice[..to_copy]);
-                self.buffer.drain(..to_copy);
-                return Poll::Ready(Ok(()));
-            }
-
-            if self.finished {
-                return Poll::Ready(Ok(()));
-            }
-
-            match Pin::new(&mut self.rx).poll_recv(cx) {
-                Poll::Ready(Some(chunk)) => {
-                    if chunk.bytes.is_empty() {
-                        continue;
-                    }
-                    // Update shared timestamp and duration for broadcaster pacing
-                    if let Ok(mut ts) = self.current_timestamp.try_write() {
-                        *ts = chunk.timestamp_sec;
-                    }
-                    if let Ok(mut dur) = self.current_duration.try_write() {
-                        *dur = chunk.duration_sec;
-                    }
-                    self.buffer.extend(chunk.bytes);
-                }
-                Poll::Ready(None) => {
-                    self.finished = true;
-                    return Poll::Ready(Ok(()));
-                }
-                Poll::Pending => return Poll::Pending,
-            }
-        }
-    }
-}
-
-/// Convert an AudioChunk to PCM bytes with specified bit depth.
-fn chunk_to_pcm_bytes(chunk: &AudioChunk, bits_per_sample: u8) -> Result<Vec<u8>, AudioError> {
-    match chunk {
-        AudioChunk::F32(_) | AudioChunk::F64(_) => {
-            return Err(AudioError::ProcessingError(
-                "StreamingOggFlacSink only supports integer audio chunks".into(),
-            ));
-        }
-        _ => {}
-    }
-
-    let len = chunk.len();
-    let bytes_per_frame = (bits_per_sample / 8) as usize * 2;
-    let mut bytes = Vec::with_capacity(len * bytes_per_frame);
-
-    match (chunk, bits_per_sample) {
-        (AudioChunk::I16(data), 16) => {
-            for frame in data.get_frames() {
-                bytes.extend_from_slice(&frame[0].to_le_bytes());
-                bytes.extend_from_slice(&frame[1].to_le_bytes());
-            }
-        }
-        (AudioChunk::I16(data), 24) => {
-            for frame in data.get_frames() {
-                let left = (frame[0] as i32) << 8;
-                let right = (frame[1] as i32) << 8;
-                bytes.extend_from_slice(&left.to_le_bytes()[..3]);
-                bytes.extend_from_slice(&right.to_le_bytes()[..3]);
-            }
-        }
-        (AudioChunk::I16(data), 32) => {
-            for frame in data.get_frames() {
-                let left = (frame[0] as i32) << 16;
-                let right = (frame[1] as i32) << 16;
-                bytes.extend_from_slice(&left.to_le_bytes());
-                bytes.extend_from_slice(&right.to_le_bytes());
-            }
-        }
-        (AudioChunk::I24(data), 16) => {
-            for frame in data.get_frames() {
-                let left = (frame[0].as_i32() >> 8) as i16;
-                let right = (frame[1].as_i32() >> 8) as i16;
-                bytes.extend_from_slice(&left.to_le_bytes());
-                bytes.extend_from_slice(&right.to_le_bytes());
-            }
-        }
-        (AudioChunk::I24(data), 24) => {
-            for frame in data.get_frames() {
-                bytes.extend_from_slice(&frame[0].as_i32().to_le_bytes()[..3]);
-                bytes.extend_from_slice(&frame[1].as_i32().to_le_bytes()[..3]);
-            }
-        }
-        (AudioChunk::I24(data), 32) => {
-            for frame in data.get_frames() {
-                let left = frame[0].as_i32() << 8;
-                let right = frame[1].as_i32() << 8;
-                bytes.extend_from_slice(&left.to_le_bytes());
-                bytes.extend_from_slice(&right.to_le_bytes());
-            }
-        }
-        (AudioChunk::I32(data), 16) => {
-            for frame in data.get_frames() {
-                let left = (frame[0] >> 16) as i16;
-                let right = (frame[1] >> 16) as i16;
-                bytes.extend_from_slice(&left.to_le_bytes());
-                bytes.extend_from_slice(&right.to_le_bytes());
-            }
-        }
-        (AudioChunk::I32(data), 24) => {
-            for frame in data.get_frames() {
-                let left = frame[0] >> 8;
-                let right = frame[1] >> 8;
-                bytes.extend_from_slice(&left.to_le_bytes()[..3]);
-                bytes.extend_from_slice(&right.to_le_bytes()[..3]);
-            }
-        }
-        (AudioChunk::I32(data), 32) => {
-            for frame in data.get_frames() {
-                bytes.extend_from_slice(&frame[0].to_le_bytes());
-                bytes.extend_from_slice(&frame[1].to_le_bytes());
-            }
-        }
-        _ => {
-            return Err(AudioError::ProcessingError(format!(
-                "Unsupported bits_per_sample: {}",
-                bits_per_sample
-            )));
-        }
-    }
-
-    Ok(bytes)
-}
 
 /// OGG wrapper + broadcaster task: reads FLAC bytes from encoder, wraps in OGG pages, and broadcasts.
 /// Implements precise real-time pacing based on audio timestamps.
@@ -882,14 +698,14 @@ async fn broadcast_ogg_flac_stream(
     timestamp_offset_sec: f64,
 ) -> Result<(), AudioError> {
     trace!(
-        "OGG-FLAC broadcaster task started with FLAC frame boundary detection (max_lead={:.3}s)",
+        "Broadcaster task started with FLAC frame boundary detection (max_lead={:.3}s)",
         broadcast_max_lead_time
     );
 
     let stream_serial = rand::random::<u32>();
     let mut ogg_writer = OggPageWriter::new(stream_serial);
 
-    let mut total_ogg_bytes = 0u64;
+    let mut total_bytes = 0u64;
     let mut header_captured = false;
     let mut pacer = BroadcastPacer::new(broadcast_max_lead_time, "OGG");
     let mut last_granule_update_time = 0.0f64;
@@ -951,7 +767,7 @@ async fn broadcast_ogg_flac_stream(
             return Ok(());
         }
     }
-    total_ogg_bytes += comment_bytes.len() as u64;
+    total_bytes += comment_bytes.len() as u64;
     match broadcast_tx.send(comment_bytes.clone(), 0.0, 0.0).await {
         Ok(_) => {}
         Err(SendError::Expired(_)) => {
@@ -968,17 +784,17 @@ async fn broadcast_ogg_flac_stream(
     // Use larger read buffer (16KB) to reduce syscalls and accumulator for frame boundary detection
     // The accumulator is necessary to ensure we only send complete FLAC frames
     let mut read_buffer = vec![0u8; 16384];
-    let mut flac_accumulator = Vec::with_capacity(32768);
+    let mut accumulator = Vec::with_capacity(32768);
 
     loop {
         let read_start = std::time::Instant::now();
         match flac_stream.read(&mut read_buffer).await {
             Ok(0) => {
                 // EOF - create final page with EOS flag and any remaining data
-                if !flac_accumulator.is_empty() {
-                    let eos_page = ogg_writer.create_page(&flac_accumulator, false, true, false);
+                if !accumulator.is_empty() {
+                    let eos_page = ogg_writer.create_page(&accumulator, false, true, false);
                     let eos_bytes = Bytes::from(eos_page);
-                    total_ogg_bytes += eos_bytes.len() as u64;
+                    total_bytes += eos_bytes.len() as u64;
                     let eos_ts = *current_timestamp.read().await;
                     let eos_dur = *current_duration.read().await;
                     match broadcast_tx.send(eos_bytes.clone(), eos_ts, eos_dur).await {
@@ -992,13 +808,13 @@ async fn broadcast_ogg_flac_stream(
                     }
                     trace!(
                         "Sent final EOS page with {} bytes of data",
-                        flac_accumulator.len()
+                        accumulator.len()
                     );
                 } else {
                     // Send empty EOS page (metadata page, duration=0.0)
                     let eos_page = ogg_writer.create_page(&[], false, true, false);
                     let eos_bytes = Bytes::from(eos_page);
-                    total_ogg_bytes += eos_bytes.len() as u64;
+                    total_bytes += eos_bytes.len() as u64;
                     let eos_ts = *current_timestamp.read().await;
                     match broadcast_tx.send(eos_bytes.clone(), eos_ts, 0.0).await {
                         Ok(_) => {}
@@ -1014,7 +830,7 @@ async fn broadcast_ogg_flac_stream(
 
                 trace!(
                     "OGG-FLAC stream ended, total OGG bytes: {}",
-                    total_ogg_bytes
+                    total_bytes
                 );
                 break;
             }
@@ -1034,11 +850,11 @@ async fn broadcast_ogg_flac_stream(
                 }
 
                 // Append to accumulator
-                flac_accumulator.extend_from_slice(&read_buffer[..n]);
+                accumulator.extend_from_slice(&read_buffer[..n]);
 
                 trace!(
                     "OGG: accumulator now {} bytes after reading {} bytes",
-                    flac_accumulator.len(),
+                    accumulator.len(),
                     n
                 );
 
@@ -1046,22 +862,22 @@ async fn broadcast_ogg_flac_stream(
                 // OGG-FLAC spec requires: "Each audio data packet contains one complete FLAC frame"
                 loop {
                     // Find all complete frames in the accumulator
-                    if flac_accumulator.len() < 4 {
+                    if accumulator.len() < 4 {
                         break; // Need at least 4 bytes for sync code check
                     }
 
                     // Find all sync positions with their sample counts
                     // Use CRC-8 validation to eliminate false positives
                     let mut sync_data = Vec::new();
-                    for i in 0..flac_accumulator.len() - 1 {
-                        let byte1 = flac_accumulator[i];
-                        let byte2 = flac_accumulator[i + 1];
+                    for i in 0..accumulator.len() - 1 {
+                        let byte1 = accumulator[i];
+                        let byte2 = accumulator[i + 1];
 
                         if byte1 == 0xFF && byte2 >= 0xF8 && byte2 <= 0xFE {
                             // Validate frame header with CRC-8 to avoid false positives
-                            if flac_frame_utils::validate_frame_header_crc(&flac_accumulator, i) {
+                            if flac_frame_utils::validate_frame_header_crc(&accumulator, i) {
                                 if let Some(samples) =
-                                    flac_frame_utils::parse_flac_block_size(&flac_accumulator, i)
+                                    flac_frame_utils::parse_flac_block_size(&accumulator, i)
                                 {
                                     sync_data.push((i, samples));
                                 }
@@ -1085,13 +901,13 @@ async fn broadcast_ogg_flac_stream(
                             "OGG-FLAC: Skipping {} bytes of garbage data before first frame",
                             first_frame_start
                         );
-                        flac_accumulator.drain(0..first_frame_start);
+                        accumulator.drain(0..first_frame_start);
                         continue;
                     }
 
                     // Extract just the first frame
                     let first_frame: Vec<u8> =
-                        flac_accumulator.drain(0..second_frame_start).collect();
+                        accumulator.drain(0..second_frame_start).collect();
 
                     // ╔═══════════════════════════════════════════════════════════════╗
                     // ║ BACKPRESSURE INTELLIGENTE BASÉE SUR LE TIMING                 ║
@@ -1131,8 +947,8 @@ async fn broadcast_ogg_flac_stream(
 
                     // Wrap this single FLAC frame in ONE OGG page (per OGG-FLAC spec)
                     let ogg_page = ogg_writer.create_page(&first_frame, false, false, false);
-                    let ogg_bytes = Bytes::from(ogg_page);
-                    total_ogg_bytes += ogg_bytes.len() as u64;
+                    let bytes = Bytes::from(ogg_page);
+                    total_bytes += bytes.len() as u64;
 
                     // Measure broadcast interval for burst detection
                     let broadcast_interval = last_broadcast_time.elapsed().as_secs_f64();
@@ -1157,17 +973,17 @@ async fn broadcast_ogg_flac_stream(
                             "OGG: {} broadcasts sent, avg_interval={:.3}s, accumulator={} bytes",
                             broadcast_count,
                             last_broadcast_time.elapsed().as_secs_f64() / broadcast_count as f64,
-                            flac_accumulator.len()
+                            accumulator.len()
                         );
                     }
 
                     // Envoyer au broadcast
                     match broadcast_tx
-                        .send(ogg_bytes.clone(), audio_timestamp, segment_duration)
+                        .send(bytes.clone(), audio_timestamp, segment_duration)
                         .await
                     {
                         Ok(n) => {
-                            trace!("Broadcasted OGG page with 1 FLAC frame ({} bytes), {} samples ({} bytes total with OGG overhead) to {} receivers (ts={:.3}s, dur={:.3}s)", first_frame.len(), first_frame_samples, ogg_bytes.len(), n, audio_timestamp, segment_duration);
+                            trace!("Broadcasted OGG page with 1 FLAC frame ({} bytes), {} samples ({} bytes total with OGG overhead) to {} receivers (ts={:.3}s, dur={:.3}s)", first_frame.len(), first_frame_samples, bytes.len(), n, audio_timestamp, segment_duration);
                         }
                         Err(SendError::Expired(_)) => {
                             trace!(
@@ -1203,104 +1019,10 @@ async fn broadcast_ogg_flac_stream(
         )));
     }
 
-    trace!("OGG-FLAC broadcaster task completed successfully");
+    trace!("Broadcaster task completed successfully");
     Ok(())
 }
 
-/// Extract sample rate from STREAMINFO block in FLAC header
-fn extract_sample_rate_from_streaminfo(flac_header: &[u8]) -> Result<u32, AudioError> {
-    // Verify we have at least "fLaC" magic + STREAMINFO block header
-    if flac_header.len() < 8 {
-        return Err(AudioError::ProcessingError("FLAC header too short".into()));
-    }
-
-    if &flac_header[0..4] != b"fLaC" {
-        return Err(AudioError::ProcessingError("Invalid FLAC magic".into()));
-    }
-
-    // First metadata block should be STREAMINFO (type 0)
-    let block_type = flac_header[4] & 0x7F;
-    if block_type != 0 {
-        return Err(AudioError::ProcessingError(
-            "First block is not STREAMINFO".into(),
-        ));
-    }
-
-    // STREAMINFO data starts at offset 8 (after magic + block header)
-    // Sample rate is at offset 10-12 of STREAMINFO data (bytes 18-20 of header)
-    if flac_header.len() < 21 {
-        return Err(AudioError::ProcessingError(
-            "STREAMINFO block truncated".into(),
-        ));
-    }
-
-    // Sample rate: 20 bits starting at byte 10 of STREAMINFO
-    // Format: [byte10: SSSSSSSS] [byte11: SSSSSSSS] [byte12: SSSSCCCC]
-    // S = sample rate bits, C = channels bits
-    let byte10 = flac_header[18] as u32;
-    let byte11 = flac_header[19] as u32;
-    let byte12 = flac_header[20] as u32;
-
-    // Extract 20 bits for sample rate (top 20 bits of 3 bytes)
-    let sample_rate = (byte10 << 12) | (byte11 << 4) | (byte12 >> 4);
-
-    if sample_rate == 0 {
-        return Err(AudioError::ProcessingError(
-            "Invalid sample rate (0)".into(),
-        ));
-    }
-
-    Ok(sample_rate)
-}
-
-/// Read FLAC header (fLaC + all metadata blocks until first frame)
-async fn read_flac_header(stream: &mut FlacEncodedStream) -> Result<Vec<u8>, AudioError> {
-    let mut header = Vec::new();
-    let mut buffer = [0u8; 4];
-
-    // Read "fLaC" magic
-    stream
-        .read_exact(&mut buffer)
-        .await
-        .map_err(|e| AudioError::ProcessingError(format!("Failed to read FLAC magic: {}", e)))?;
-
-    if &buffer != b"fLaC" {
-        return Err(AudioError::ProcessingError(
-            "Invalid FLAC stream: missing fLaC magic".into(),
-        ));
-    }
-
-    header.extend_from_slice(&buffer);
-
-    // Read metadata blocks
-    loop {
-        // Read metadata block header (1 byte type + 3 bytes length)
-        let mut block_header = [0u8; 4];
-        stream.read_exact(&mut block_header).await.map_err(|e| {
-            AudioError::ProcessingError(format!("Failed to read metadata block header: {}", e))
-        })?;
-
-        let is_last = (block_header[0] & 0x80) != 0;
-        let block_length =
-            u32::from_be_bytes([0, block_header[1], block_header[2], block_header[3]]) as usize;
-
-        header.extend_from_slice(&block_header);
-
-        // Read metadata block data
-        let mut block_data = vec![0u8; block_length];
-        stream.read_exact(&mut block_data).await.map_err(|e| {
-            AudioError::ProcessingError(format!("Failed to read metadata block data: {}", e))
-        })?;
-
-        header.extend_from_slice(&block_data);
-
-        if is_last {
-            break;
-        }
-    }
-
-    Ok(header)
-}
 
 /// Create OGG-FLAC identification packet (first packet in BOS page)
 /// Format: https://xiph.org/flac/ogg_mapping.html

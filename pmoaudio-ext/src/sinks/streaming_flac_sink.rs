@@ -71,7 +71,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use pmoaudio::{
     pipeline::{AudioPipelineNode, Node, NodeLogic, PipelineHandle, StopReason},
-    AudioChunk, AudioError, AudioSegment, SyncMarker, TypeRequirement, TypedAudioNode,
+    AudioError, AudioSegment, SyncMarker, TypeRequirement, TypedAudioNode,
     _AudioSegment,
 };
 use pmoflac::{encode_flac_stream, EncoderOptions, FlacEncodedStream, PcmFormat};
@@ -81,44 +81,16 @@ use tokio::sync::{mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, trace, warn};
 
+use crate::byte_stream_reader::{PcmChunk,ByteStreamReader};
+use crate::chunk_to_pcm::chunk_to_pcm_bytes;
+use crate::sinks::timed_broadcast::{DEFAULT_BROADCAST_MAX_LEAD_TIME, calculate_broadcast_capacity};
+
 /// Default ICY metadata interval (bytes of audio between metadata blocks).
 /// Standard value used by most streaming servers.
 const DEFAULT_ICY_METAINT: usize = 16000;
 
-/// Default maximum lead time for HTTP broadcast pacing (in seconds).
-/// The broadcaster will sleep if it's ahead of real-time by more than this amount.
-const DEFAULT_BROADCAST_MAX_LEAD_TIME: f64 = 0.5;
 
-/// Calculate broadcast channel capacity based on max_lead_time.
-///
-/// Estimates the number of items needed to buffer max_lead_time seconds of audio.
-/// Assumes ~20 items per second (50ms per chunk).
-///
-/// # Arguments
-///
-/// * `max_lead_time` - Maximum lead time in seconds
-///
-/// # Returns
-///
-/// Broadcast channel capacity (minimum 100 items)
-fn calculate_broadcast_capacity(max_lead_time: f64) -> usize {
-    // Estimation: ~20 items/second (chunks de 50ms en moyenne)
-    // Pour 10s: 200 items
-    let estimated_items_per_second = 20.0;
-    let capacity = (max_lead_time * estimated_items_per_second) as usize;
-    capacity.max(100) // Minimum 100 items
-}
 
-/// PCM chunk with audio data and timestamp for precise pacing.
-#[derive(Debug)]
-struct PcmChunk {
-    /// Raw PCM audio bytes
-    bytes: Vec<u8>,
-    /// Timestamp in seconds (from AudioSegment)
-    timestamp_sec: f64,
-    /// Duration in seconds of this PCM chunk (samples / sample_rate)
-    duration_sec: f64,
-}
 
 /// Snapshot of track metadata at a point in time.
 ///
@@ -166,7 +138,7 @@ pub struct MetadataSnapshot {
 #[derive(Clone)]
 pub struct StreamHandle {
     /// Broadcast sender for FLAC bytes (pure mode)
-    flac_broadcast: timed_broadcast::Sender<Bytes>,
+    broadcast: timed_broadcast::Sender<Bytes>,
 
     /// Current track metadata (read-only for consumers)
     metadata: Arc<RwLock<MetadataSnapshot>>,
@@ -178,7 +150,7 @@ pub struct StreamHandle {
     stop_token: CancellationToken,
 
     /// Cached FLAC header (sent to new subscribers first)
-    flac_header: Arc<RwLock<Option<Bytes>>>,
+    header: Arc<RwLock<Option<Bytes>>>,
 
     auto_stop: Arc<AtomicBool>,
 }
@@ -192,7 +164,7 @@ impl StreamHandle {
         debug!("New FLAC client subscribed (total: {})", count + 1);
 
         FlacClientStream {
-            rx: self.flac_broadcast.subscribe(),
+            rx: self.broadcast.subscribe(),
             buffer: VecDeque::new(),
             finished: false,
             handle: self.clone(),
@@ -219,7 +191,7 @@ impl StreamHandle {
         );
 
         IcyClientStream {
-            rx: self.flac_broadcast.subscribe(),
+            rx: self.broadcast.subscribe(),
             metadata: self.metadata.clone(),
             metaint,
             byte_count: 0,
@@ -291,7 +263,7 @@ impl AsyncRead for FlacClientStream {
         loop {
             // If in header state, send the header first
             if matches!(self.state, FlacStreamState::SendingHeader) {
-                let header_opt = if let Ok(guard) = self.handle.flac_header.try_read() {
+                let header_opt = if let Ok(guard) = self.handle.header.try_read() {
                     guard.clone()
                 } else {
                     None
@@ -470,7 +442,7 @@ impl AsyncRead for IcyClientStream {
         loop {
             // If in header state, send the header first
             if matches!(self.state, FlacStreamState::SendingHeader) {
-                let header_opt = if let Ok(guard) = self.handle.flac_header.try_read() {
+                let header_opt = if let Ok(guard) = self.handle.header.try_read() {
                     guard.clone()
                 } else {
                     None
@@ -606,8 +578,8 @@ struct StreamingFlacSinkLogic {
     pcm_tx: Option<mpsc::Sender<PcmChunk>>,
     pcm_rx: Option<mpsc::Receiver<PcmChunk>>,
     metadata: Arc<RwLock<MetadataSnapshot>>,
-    flac_broadcast: timed_broadcast::Sender<Bytes>,
-    flac_header: Arc<RwLock<Option<Bytes>>>,
+    broadcast: timed_broadcast::Sender<Bytes>,
+    header: Arc<RwLock<Option<Bytes>>>,
     encoder_state: Option<EncoderState>,
     sample_rate: Option<u32>,
     broadcast_max_lead_time: f64,
@@ -662,14 +634,14 @@ impl StreamingFlacSinkLogic {
         debug!("FLAC encoder initialized successfully");
 
         // Spawn broadcaster task with timestamp and duration for pacing
-        let flac_broadcast = self.flac_broadcast.clone();
-        let flac_header = self.flac_header.clone();
+        let broadcast = self.broadcast.clone();
+        let header = self.header.clone();
         let max_lead = self.broadcast_max_lead_time;
         let broadcaster_task = tokio::spawn(async move {
             if let Err(e) = broadcast_flac_stream(
                 flac_stream,
-                flac_broadcast,
-                flac_header,
+                broadcast,
+                header,
                 current_timestamp,
                 current_duration,
                 max_lead,
@@ -931,6 +903,134 @@ impl NodeLogic for StreamingFlacSinkLogic {
     }
 }
 
+
+/// Streaming FLAC sink for multi-client HTTP streaming.
+pub struct StreamingFlacSink {
+    inner: Node<StreamingFlacSinkLogic>,
+}
+
+impl StreamingFlacSink {
+    /// Create a new streaming FLAC sink.
+    ///
+    /// # Arguments
+    ///
+    /// * `encoder_options` - FLAC encoder configuration
+    /// * `bits_per_sample` - Target bit depth (16, 24, or 32)
+    ///
+    /// # Returns
+    ///
+    /// A tuple of `(sink, handle)` where:
+    /// - `sink` is added to the audio pipeline
+    /// - `handle` is used by HTTP handlers to serve streams
+    pub fn new(
+        encoder_options: EncoderOptions, 
+        bits_per_sample: u8,
+    ) -> (Self, StreamHandle) {
+        Self::with_max_broadcast_lead(
+            encoder_options,
+            bits_per_sample,
+            DEFAULT_BROADCAST_MAX_LEAD_TIME,
+        )
+    }
+
+    /// Create a sink with a custom broadcast pacing limit.
+    pub fn with_max_broadcast_lead(
+        encoder_options: EncoderOptions,
+        bits_per_sample: u8,
+        broadcast_max_lead_time: f64,
+    ) -> (Self, StreamHandle) {
+        // Validate bit depth
+        if ![16, 24, 32].contains(&bits_per_sample) {
+            panic!("bits_per_sample must be 16, 24, or 32");
+        }
+
+        // Create PCM channel (bounded for backpressure)
+        let (pcm_tx, pcm_rx) = mpsc::channel::<PcmChunk>(16);
+
+        // Shared metadata
+        let metadata = Arc::new(RwLock::new(MetadataSnapshot::default()));
+
+        // Capacity calculated from max_lead_time to ensure enough buffering
+        let broadcast_capacity = calculate_broadcast_capacity(broadcast_max_lead_time);
+        debug!(
+            "Streaming Sink: using broadcast capacity of {} items (max_lead_time={:.1}s)",
+            broadcast_capacity, 
+            broadcast_max_lead_time
+        );
+
+        // Broadcast channel for FLAC bytes
+        let (broadcast, _) = timed_broadcast::channel(broadcast_capacity);
+
+        // FLAC header cache
+        let header = Arc::new(RwLock::new(None));
+
+        // Stop token and client counter
+        let stop_token = CancellationToken::new();
+        let active_clients = Arc::new(AtomicUsize::new(0));
+
+        let handle = StreamHandle {
+            broadcast: broadcast.clone(),
+            metadata: metadata.clone(),
+            active_clients,
+            stop_token: stop_token.clone(),
+            header: header.clone(),
+            auto_stop: Arc::new(AtomicBool::new(true)),
+        };
+
+        let logic = StreamingFlacSinkLogic {
+            encoder_options,
+            bits_per_sample,
+            pcm_tx: Some(pcm_tx),
+            pcm_rx: Some(pcm_rx),
+            metadata,
+            broadcast,
+            header,
+            encoder_state: None,
+            sample_rate: None,
+            broadcast_max_lead_time: broadcast_max_lead_time.max(0.0),
+            first_chunk_timestamp_checked: false,
+            timestamp_offset_sec: 0.0,
+            current_timestamp: Arc::new(RwLock::new(0.0)),
+        };
+
+        let sink = Self {
+            inner: Node::new_with_input(logic, 16),
+        };
+
+        (sink, handle)
+    }
+}
+
+#[async_trait]
+impl AudioPipelineNode for StreamingFlacSink {
+    fn get_tx(&self) -> Option<mpsc::Sender<Arc<AudioSegment>>> {
+        self.inner.get_tx()
+    }
+
+    fn register(&mut self, _child: Box<dyn AudioPipelineNode>) {
+        panic!("StreamingFlacSink is a terminal sink and cannot have children");
+    }
+
+    async fn run(self: Box<Self>, stop_token: CancellationToken) -> Result<(), AudioError> {
+        Box::new(self.inner).run(stop_token).await
+    }
+
+    fn start(self: Box<Self>) -> PipelineHandle {
+        Box::new(self.inner).start()
+    }
+}
+
+impl TypedAudioNode for StreamingFlacSink {
+    fn input_type(&self) -> Option<TypeRequirement> {
+        Some(TypeRequirement::any_integer())
+    }
+
+    fn output_type(&self) -> Option<TypeRequirement> {
+        None
+    }
+}
+
+
 /// Broadcaster task: reads FLAC bytes from encoder and broadcasts to all clients.
 /// Implements precise real-time pacing based on audio timestamps.
 /// Ensures data is sent at FLAC frame boundaries to prevent sync errors in strict decoders like FFPlay.
@@ -963,8 +1063,11 @@ async fn broadcast_flac_stream(
     let mut broadcast_count = 0u64;
     let mut total_read_time = 0.0f64;
     let mut read_count = 0u64;
-    let mut encoded_samples = 0u64;
     let sample_rate_f64 = sample_rate as f64;
+
+        // Sample counter for calculating accurate timestamps (reset on new headers)
+        let mut encoded_samples = 0u64;
+
 
     loop {
         let read_start = std::time::Instant::now();
@@ -1176,292 +1279,3 @@ async fn broadcast_flac_stream(
     Ok(())
 }
 
-/// Streaming FLAC sink for multi-client HTTP streaming.
-pub struct StreamingFlacSink {
-    inner: Node<StreamingFlacSinkLogic>,
-}
-
-impl StreamingFlacSink {
-    /// Create a new streaming FLAC sink.
-    ///
-    /// # Arguments
-    ///
-    /// * `encoder_options` - FLAC encoder configuration
-    /// * `bits_per_sample` - Target bit depth (16, 24, or 32)
-    ///
-    /// # Returns
-    ///
-    /// A tuple of `(sink, handle)` where:
-    /// - `sink` is added to the audio pipeline
-    /// - `handle` is used by HTTP handlers to serve streams
-    pub fn new(encoder_options: EncoderOptions, bits_per_sample: u8) -> (Self, StreamHandle) {
-        Self::with_max_broadcast_lead(
-            encoder_options,
-            bits_per_sample,
-            DEFAULT_BROADCAST_MAX_LEAD_TIME,
-        )
-    }
-
-    /// Create a sink with a custom broadcast pacing limit.
-    pub fn with_max_broadcast_lead(
-        encoder_options: EncoderOptions,
-        bits_per_sample: u8,
-        broadcast_max_lead_time: f64,
-    ) -> (Self, StreamHandle) {
-        // Validate bit depth
-        if ![16, 24, 32].contains(&bits_per_sample) {
-            panic!("bits_per_sample must be 16, 24, or 32");
-        }
-
-        // Create PCM channel (bounded for backpressure)
-        let (pcm_tx, pcm_rx) = mpsc::channel::<PcmChunk>(16);
-
-        // Shared metadata
-        let metadata = Arc::new(RwLock::new(MetadataSnapshot::default()));
-
-        // Calculate broadcast capacity based on max_lead_time
-        let broadcast_capacity = calculate_broadcast_capacity(broadcast_max_lead_time);
-        debug!(
-            "StreamingFlacSink: using broadcast capacity of {} items (max_lead_time={:.1}s)",
-            broadcast_capacity, broadcast_max_lead_time
-        );
-
-        // Broadcast channel for FLAC bytes
-        let (flac_broadcast, _) = timed_broadcast::channel(broadcast_capacity);
-
-        // FLAC header cache
-        let flac_header = Arc::new(RwLock::new(None));
-
-        // Stop token and client counter
-        let stop_token = CancellationToken::new();
-        let active_clients = Arc::new(AtomicUsize::new(0));
-
-        let handle = StreamHandle {
-            flac_broadcast: flac_broadcast.clone(),
-            metadata: metadata.clone(),
-            active_clients,
-            stop_token: stop_token.clone(),
-            flac_header: flac_header.clone(),
-            auto_stop: Arc::new(AtomicBool::new(true)),
-        };
-
-        let logic = StreamingFlacSinkLogic {
-            encoder_options,
-            bits_per_sample,
-            pcm_tx: Some(pcm_tx),
-            pcm_rx: Some(pcm_rx),
-            metadata,
-            flac_broadcast,
-            flac_header,
-            encoder_state: None,
-            sample_rate: None,
-            broadcast_max_lead_time: broadcast_max_lead_time.max(0.0),
-            first_chunk_timestamp_checked: false,
-            timestamp_offset_sec: 0.0,
-            current_timestamp: Arc::new(RwLock::new(0.0)),
-        };
-
-        let sink = Self {
-            inner: Node::new_with_input(logic, 16),
-        };
-
-        (sink, handle)
-    }
-}
-
-#[async_trait]
-impl AudioPipelineNode for StreamingFlacSink {
-    fn get_tx(&self) -> Option<mpsc::Sender<Arc<AudioSegment>>> {
-        self.inner.get_tx()
-    }
-
-    fn register(&mut self, _child: Box<dyn AudioPipelineNode>) {
-        panic!("StreamingFlacSink is a terminal sink and cannot have children");
-    }
-
-    async fn run(self: Box<Self>, stop_token: CancellationToken) -> Result<(), AudioError> {
-        Box::new(self.inner).run(stop_token).await
-    }
-
-    fn start(self: Box<Self>) -> PipelineHandle {
-        Box::new(self.inner).start()
-    }
-}
-
-impl TypedAudioNode for StreamingFlacSink {
-    fn input_type(&self) -> Option<TypeRequirement> {
-        Some(TypeRequirement::any_integer())
-    }
-
-    fn output_type(&self) -> Option<TypeRequirement> {
-        None
-    }
-}
-
-/// Convert an AudioChunk to PCM bytes with specified bit depth.
-fn chunk_to_pcm_bytes(chunk: &AudioChunk, bits_per_sample: u8) -> Result<Vec<u8>, AudioError> {
-    match chunk {
-        AudioChunk::F32(_) | AudioChunk::F64(_) => {
-            return Err(AudioError::ProcessingError(
-                "StreamingFlacSink only supports integer audio chunks".into(),
-            ));
-        }
-        _ => {}
-    }
-
-    let len = chunk.len();
-    let bytes_per_frame = (bits_per_sample / 8) as usize * 2;
-    let mut bytes = Vec::with_capacity(len * bytes_per_frame);
-
-    match (chunk, bits_per_sample) {
-        (AudioChunk::I16(data), 16) => {
-            for frame in data.get_frames() {
-                bytes.extend_from_slice(&frame[0].to_le_bytes());
-                bytes.extend_from_slice(&frame[1].to_le_bytes());
-            }
-        }
-        (AudioChunk::I16(data), 24) => {
-            for frame in data.get_frames() {
-                let left = (frame[0] as i32) << 8;
-                let right = (frame[1] as i32) << 8;
-                bytes.extend_from_slice(&left.to_le_bytes()[..3]);
-                bytes.extend_from_slice(&right.to_le_bytes()[..3]);
-            }
-        }
-        (AudioChunk::I16(data), 32) => {
-            for frame in data.get_frames() {
-                let left = (frame[0] as i32) << 16;
-                let right = (frame[1] as i32) << 16;
-                bytes.extend_from_slice(&left.to_le_bytes());
-                bytes.extend_from_slice(&right.to_le_bytes());
-            }
-        }
-        (AudioChunk::I24(data), 16) => {
-            for frame in data.get_frames() {
-                let left = (frame[0].as_i32() >> 8) as i16;
-                let right = (frame[1].as_i32() >> 8) as i16;
-                bytes.extend_from_slice(&left.to_le_bytes());
-                bytes.extend_from_slice(&right.to_le_bytes());
-            }
-        }
-        (AudioChunk::I24(data), 24) => {
-            for frame in data.get_frames() {
-                bytes.extend_from_slice(&frame[0].as_i32().to_le_bytes()[..3]);
-                bytes.extend_from_slice(&frame[1].as_i32().to_le_bytes()[..3]);
-            }
-        }
-        (AudioChunk::I24(data), 32) => {
-            for frame in data.get_frames() {
-                let left = frame[0].as_i32() << 8;
-                let right = frame[1].as_i32() << 8;
-                bytes.extend_from_slice(&left.to_le_bytes());
-                bytes.extend_from_slice(&right.to_le_bytes());
-            }
-        }
-        (AudioChunk::I32(data), 16) => {
-            for frame in data.get_frames() {
-                let left = (frame[0] >> 16) as i16;
-                let right = (frame[1] >> 16) as i16;
-                bytes.extend_from_slice(&left.to_le_bytes());
-                bytes.extend_from_slice(&right.to_le_bytes());
-            }
-        }
-        (AudioChunk::I32(data), 24) => {
-            for frame in data.get_frames() {
-                let left = frame[0] >> 8;
-                let right = frame[1] >> 8;
-                bytes.extend_from_slice(&left.to_le_bytes()[..3]);
-                bytes.extend_from_slice(&right.to_le_bytes()[..3]);
-            }
-        }
-        (AudioChunk::I32(data), 32) => {
-            for frame in data.get_frames() {
-                bytes.extend_from_slice(&frame[0].to_le_bytes());
-                bytes.extend_from_slice(&frame[1].to_le_bytes());
-            }
-        }
-        _ => {
-            return Err(AudioError::ProcessingError(format!(
-                "Unsupported bits_per_sample: {}",
-                bits_per_sample
-            )));
-        }
-    }
-
-    Ok(bytes)
-}
-
-/// AsyncRead adapter for mpsc::Receiver<PcmChunk>.
-/// Extracts bytes from PcmChunk and provides them to the FLAC encoder.
-struct ByteStreamReader {
-    rx: mpsc::Receiver<PcmChunk>,
-    buffer: VecDeque<u8>,
-    finished: bool,
-    /// Shared timestamp for broadcaster pacing
-    current_timestamp: Arc<RwLock<f64>>,
-    /// Shared duration for broadcaster pacing
-    current_duration: Arc<RwLock<f64>>,
-}
-
-impl ByteStreamReader {
-    fn new(
-        rx: mpsc::Receiver<PcmChunk>,
-        current_timestamp: Arc<RwLock<f64>>,
-        current_duration: Arc<RwLock<f64>>,
-    ) -> Self {
-        Self {
-            rx,
-            buffer: VecDeque::new(),
-            finished: false,
-            current_timestamp,
-            current_duration,
-        }
-    }
-}
-
-impl AsyncRead for ByteStreamReader {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        loop {
-            if !self.buffer.is_empty() {
-                let to_copy = self.buffer.len().min(buf.remaining());
-                if to_copy == 0 {
-                    return Poll::Ready(Ok(()));
-                }
-
-                let slice = self.buffer.make_contiguous();
-                buf.put_slice(&slice[..to_copy]);
-                self.buffer.drain(..to_copy);
-                return Poll::Ready(Ok(()));
-            }
-
-            if self.finished {
-                return Poll::Ready(Ok(()));
-            }
-
-            match Pin::new(&mut self.rx).poll_recv(cx) {
-                Poll::Ready(Some(chunk)) => {
-                    if chunk.bytes.is_empty() {
-                        continue;
-                    }
-                    // Update shared timestamp and duration for broadcaster pacing
-                    if let Ok(mut ts) = self.current_timestamp.try_write() {
-                        *ts = chunk.timestamp_sec;
-                    }
-                    if let Ok(mut dur) = self.current_duration.try_write() {
-                        *dur = chunk.duration_sec;
-                    }
-                    self.buffer.extend(chunk.bytes);
-                }
-                Poll::Ready(None) => {
-                    self.finished = true;
-                    return Poll::Ready(Ok(()));
-                }
-                Poll::Pending => return Poll::Pending,
-            }
-        }
-    }
-}

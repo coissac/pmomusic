@@ -4,6 +4,9 @@
 //! et ne peuvent pas être placés directement dans pmoaudio sans créer
 //! de dépendances cycliques.
 
+pub mod byte_stream_reader;
+pub mod chunk_to_pcm;
+
 #[cfg(feature = "cache-sink")]
 mod flac_cache_sink;
 
