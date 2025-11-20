@@ -49,7 +49,7 @@
 use std::collections::VecDeque;
 use std::io;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
@@ -62,99 +62,69 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use pmoaudio::{
     pipeline::{AudioPipelineNode, Node, NodeLogic, PipelineHandle, StopReason},
-    AudioError, AudioSegment, SyncMarker, TypeRequirement, TypedAudioNode,
-    _AudioSegment,
+    AudioError, AudioSegment, SyncMarker, TypeRequirement, TypedAudioNode, _AudioSegment,
 };
-use pmoflac::{encode_flac_stream, EncoderOptions, FlacEncodedStream, PcmFormat};
-use pmometadata::TrackMetadata;
+use pmoflac::{EncoderOptions, FlacEncodedStream};
 use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
 use tokio::sync::{mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, trace, warn};
 
-use crate::byte_stream_reader::{PcmChunk,ByteStreamReader};
+use crate::byte_stream_reader::{PcmChunk};
 use crate::chunk_to_pcm::chunk_to_pcm_bytes;
 use crate::sinks::flac_frame_utils::{extract_sample_rate_from_streaminfo, read_flac_header};
-use crate::sinks::timed_broadcast::{DEFAULT_BROADCAST_MAX_LEAD_TIME, calculate_broadcast_capacity};
-
-/// Snapshot of track metadata (reuse from streaming_flac_sink)
-pub use super::streaming_flac_sink::MetadataSnapshot;
+use crate::sinks::streaming_sink_common::{
+    MetadataSnapshot, SharedClientStream, SharedSinkContext, SharedStreamHandleInner,
+};
+use crate::sinks::timed_broadcast::{
+    calculate_broadcast_capacity, DEFAULT_BROADCAST_MAX_LEAD_TIME,
+};
 
 /// Handle for accessing the OGG-FLAC stream and metadata from HTTP handlers.
 #[derive(Clone)]
 pub struct OggFlacStreamHandle {
-    /// Broadcast sender for OGG-FLAC bytes
-    
-    broadcast: timed_broadcast::Sender<Bytes>,
-
-    /// Current track metadata (read-only for consumers)
-    metadata: Arc<RwLock<MetadataSnapshot>>,
-
-    /// Active client counter
-    active_clients: Arc<AtomicUsize>,
-
-    /// Stop token to signal pipeline shutdown
-    stop_token: CancellationToken,
-
-    /// Cached OGG-FLAC header (sent to new subscribers first)
-    header: Arc<RwLock<Option<Bytes>>>,
-
-    auto_stop: Arc<AtomicBool>,
+    inner: Arc<SharedStreamHandleInner>,
 }
 
 impl OggFlacStreamHandle {
-    /// Subscribe to the OGG-FLAC stream.
-    ///
-    /// Returns an `AsyncRead` stream suitable for use with `tokio_util::io::ReaderStream`.
+    pub fn new(inner: Arc<SharedStreamHandleInner>) -> Self {
+        Self { inner }
+    }
+
     pub fn subscribe(&self) -> OggFlacClientStream {
-        let count = self.active_clients.fetch_add(1, Ordering::SeqCst);
-        debug!("New OGG-FLAC client subscribed (total: {})", count + 1);
-
-        OggFlacClientStream {
-            rx: self.broadcast.subscribe(),
-            buffer: VecDeque::new(),
-            finished: false,
-            handle: self.clone(),
-            state: OggFlacStreamState::SendingHeader,
-            current_epoch: 0,
-        }
+        let total = self.inner.client_connected();
+        let rx = self.inner.register_client();
+        debug!("New OGG-FLAC client subscribed (total: {})", total);
+        OggFlacClientStream::new(rx, self.inner.clone())
     }
 
-    /// Get the current metadata snapshot.
     pub async fn get_metadata(&self) -> MetadataSnapshot {
-        self.metadata.read().await.clone()
+        self.inner.metadata.read().await.clone()
     }
 
-    /// Get the number of active clients.
     pub fn active_client_count(&self) -> usize {
-        self.active_clients.load(Ordering::SeqCst)
+        self.inner.active_clients.load(Ordering::SeqCst)
     }
 
     pub fn set_auto_stop(&self, enabled: bool) {
-        self.auto_stop.store(enabled, Ordering::SeqCst);
+        self.inner.auto_stop.store(enabled, Ordering::SeqCst);
     }
-}
-
-/// State for OGG-FLAC stream subscription.
-enum OggFlacStreamState {
-    SendingHeader,
-    Streaming,
 }
 
 /// OGG-FLAC client stream (implements AsyncRead).
 pub struct OggFlacClientStream {
-    rx: timed_broadcast::Receiver<Bytes>,
-    buffer: VecDeque<u8>,
-    finished: bool,
-    handle: OggFlacStreamHandle,
-    state: OggFlacStreamState,
-    current_epoch: u64,
+    inner: SharedClientStream,
 }
 
 impl OggFlacClientStream {
-    /// Dernier epoch observé (incrémenté à chaque TopZeroSync).
+    fn new(rx: timed_broadcast::Receiver<Bytes>, handle: Arc<SharedStreamHandleInner>) -> Self {
+        Self {
+            inner: SharedClientStream::new(rx, handle),
+        }
+    }
+
     pub fn current_epoch(&self) -> u64 {
-        self.current_epoch
+        self.inner.current_epoch()
     }
 }
 
@@ -164,272 +134,19 @@ impl AsyncRead for OggFlacClientStream {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        loop {
-            // If in header state, send the header first
-            if matches!(self.state, OggFlacStreamState::SendingHeader) {
-                let header_opt = if let Ok(guard) = self.handle.header.try_read() {
-                    guard.clone()
-                } else {
-                    None
-                };
-
-                if let Some(header) = header_opt {
-                    self.buffer.extend(header.iter());
-                    debug!(
-                        "Sending cached OGG-FLAC header to new client ({} bytes)",
-                        header.len()
-                    );
-                    self.state = OggFlacStreamState::Streaming;
-                    continue; // Now copy header to output buffer
-                } else {
-                    // Header not yet captured, skip to streaming
-                    self.state = OggFlacStreamState::Streaming;
-                }
-            }
-
-            // If we have buffered data, copy it
-            if !self.buffer.is_empty() {
-                let to_copy = self.buffer.len().min(buf.remaining());
-                if to_copy == 0 {
-                    return Poll::Ready(Ok(()));
-                }
-
-                let slice = self.buffer.make_contiguous();
-                buf.put_slice(&slice[..to_copy]);
-                self.buffer.drain(..to_copy);
-                return Poll::Ready(Ok(()));
-            }
-
-            if self.finished {
-                return Poll::Ready(Ok(()));
-            }
-
-            // Try to receive more data
-            match self.rx.try_recv() {
-                Ok(packet) => {
-                    self.current_epoch = packet.epoch;
-                    self.buffer.extend(packet.payload.iter());
-                }
-                Err(TryRecvError::Empty) => {
-                    // No data available right now.
-                    // Schedule a wakeup after a small delay to avoid busy-loop polling.
-                    let waker = cx.waker().clone();
-                    tokio::spawn(async move {
-                        tokio::time::sleep(tokio::time::Duration::from_micros(100)).await;
-                        waker.wake();
-                    });
-                    return Poll::Pending;
-                }
-                Err(TryRecvError::Lagged(skipped)) => {
-                    warn!("OGG-FLAC client lagged, skipped {} messages", skipped);
-                }
-                Err(TryRecvError::Closed) => {
-                    self.finished = true;
-                    return Poll::Ready(Ok(()));
-                }
-            }
-        }
+        Pin::new(&mut self.inner).poll_read(cx, buf)
     }
 }
 
 impl Drop for OggFlacClientStream {
     fn drop(&mut self) {
-        let count = self.handle.active_clients.fetch_sub(1, Ordering::SeqCst);
-        debug!("OGG-FLAC client disconnected (remaining: {})", count - 1);
-
-        if count == 1 {
-            if self.handle.auto_stop.load(Ordering::SeqCst) {
-                debug!("Last OGG-FLAC client disconnected, signaling pipeline stop");
-                self.handle.stop_token.cancel();
-            } else {
-                debug!("Last OGG-FLAC client disconnected, keeping pipeline alive");
-            }
-        }
+        let remaining = self.inner.handle().client_disconnected();
+        debug!("OGG-FLAC client disconnected (remaining: {})", remaining);
     }
 }
-
-/// Internal state for encoder initialization.
-struct EncoderState {
-    broadcaster_task: tokio::task::JoinHandle<()>,
-}
-
 /// Logic for the streaming OGG-FLAC sink.
 struct StreamingOggFlacSinkLogic {
-    encoder_options: EncoderOptions,
-    bits_per_sample: u8,
-    pcm_tx: Option<mpsc::Sender<PcmChunk>>,
-    pcm_rx: Option<mpsc::Receiver<PcmChunk>>,
-    metadata: Arc<RwLock<MetadataSnapshot>>,
-    broadcast: timed_broadcast::Sender<Bytes>,
-    header: Arc<RwLock<Option<Bytes>>>,
-    encoder_state: Option<EncoderState>,
-    sample_rate: Option<u32>,
-    broadcast_max_lead_time: f64,
-    /// Accumulated timestamp offset for maintaining continuity across encoder restarts
-    timestamp_offset_sec: f64,
-    /// Shared timestamp reference to read the last broadcast timestamp
-    current_timestamp: Arc<RwLock<f64>>,
-}
-
-impl StreamingOggFlacSinkLogic {
-    /// Initialize the FLAC encoder once we know the sample rate.
-    async fn initialize_encoder(&mut self, sample_rate: u32, timestamp_offset_sec: f64) -> Result<(), AudioError> {
-        if self.encoder_state.is_some() {
-            return Ok(()); // Already initialized
-        }
-
-        debug!(
-            "Initializing OGG-FLAC encoder with sample rate: {} Hz",
-            sample_rate
-        );
-
-        // Take the PCM receiver (we only initialize once)
-        let pcm_rx = self
-            .pcm_rx
-            .take()
-            .ok_or_else(|| AudioError::ProcessingError("PCM receiver already consumed".into()))?;
-
-        // Create shared timestamp and duration for pacing
-        // Reuse existing current_timestamp Arc to maintain reference for reading later
-        let current_timestamp = self.current_timestamp.clone();
-        let current_duration = Arc::new(RwLock::new(0.0f64));
-
-        // Create ByteStreamReader for the encoder
-        let pcm_reader =
-            ByteStreamReader::new(pcm_rx, current_timestamp.clone(), current_duration.clone());
-
-        // Create PCM format
-        let pcm_format = PcmFormat {
-            sample_rate,
-            channels: 2,
-            bits_per_sample: self.bits_per_sample,
-        };
-
-        // Start the FLAC encoder
-        let flac_stream = encode_flac_stream(pcm_reader, pcm_format, self.encoder_options.clone())
-            .await
-            .map_err(|e| {
-                AudioError::ProcessingError(format!("Failed to start FLAC encoder: {}", e))
-            })?;
-
-        debug!("OGG-FLAC encoder initialized successfully");
-
-        // Spawn OGG wrapper + broadcaster task with timestamp and duration for pacing
-        let broadcast = self.broadcast.clone();
-        let header = self.header.clone();
-        let max_lead = self.broadcast_max_lead_time;
-        let broadcaster_task = tokio::spawn(async move {
-            if let Err(e) = broadcast_ogg_flac_stream(
-                flac_stream,
-                broadcast,
-                header,
-                current_timestamp,
-                current_duration,
-                max_lead,
-                timestamp_offset_sec,
-            )
-            .await
-            {
-                error!("OGG broadcaster task error: {}", e);
-            }
-        });
-
-        self.encoder_state = Some(EncoderState { broadcaster_task });
-
-        debug!("OGG broadcaster task spawned");
-
-        Ok(())
-    }
-
-    /// Update metadata from a TrackBoundary marker.
-    async fn update_metadata(
-        &mut self,
-        metadata_lock: &Arc<RwLock<dyn TrackMetadata>>,
-        timestamp_sec: f64,
-    ) -> Result<(), AudioError> {
-        let metadata = metadata_lock.read().await;
-
-        let mut snapshot = self.metadata.write().await;
-
-        // Extract all metadata fields
-        snapshot.title = metadata.get_title().await.ok().flatten();
-        snapshot.artist = metadata.get_artist().await.ok().flatten();
-        snapshot.album = metadata.get_album().await.ok().flatten();
-        snapshot.duration = metadata.get_duration().await.ok().flatten();
-        snapshot.cover_url = metadata.get_cover_url().await.ok().flatten();
-        snapshot.cover_pk = metadata.get_cover_pk().await.ok().flatten();
-        snapshot.year = metadata.get_year().await.ok().flatten();
-
-        // Extract extra fields
-        if let Ok(Some(extra)) = metadata.get_extra().await {
-            snapshot.genre = extra.get("genre").cloned();
-            snapshot.track_number = extra
-                .get("track_number")
-                .and_then(|s| s.parse::<u32>().ok());
-        }
-
-        snapshot.audio_timestamp_sec = timestamp_sec;
-        snapshot.version += 1;
-
-        debug!(
-            "Metadata updated: v{} @ {:.2}s - {} - {} (cover_pk: {:?})",
-            snapshot.version,
-            timestamp_sec,
-            snapshot.artist.as_deref().unwrap_or("?"),
-            snapshot.title.as_deref().unwrap_or("?"),
-            snapshot.cover_pk
-        );
-
-        Ok(())
-    }
-
-    /// Restart the FLAC encoder for a new track.
-    /// This causes a new OGG stream header to be emitted and timestamps to reset to 0.
-    async fn restart_encoder_for_new_track(&mut self) -> Result<(), AudioError> {
-        let sample_rate = self
-            .sample_rate
-            .ok_or_else(|| AudioError::ProcessingError("Sample rate not initialized".into()))?;
-
-        debug!("Restarting OGG-FLAC encoder for new track");
-
-        // 1. Read current timestamp to maintain continuity
-        let last_timestamp = *self.current_timestamp.read().await;
-        debug!("Last timestamp before restart: {:.3}s", last_timestamp);
-
-        // 2. Close current PCM sender to signal encoder to finish
-        if let Some(tx) = self.pcm_tx.take() {
-            drop(tx);
-            trace!("Dropped PCM sender to signal encoder finish");
-        }
-
-        // 3. Wait for current broadcaster task to complete
-        if let Some(state) = self.encoder_state.take() {
-            trace!("Waiting for OGG broadcaster task to finish...");
-            match state.broadcaster_task.await {
-                Ok(_) => {
-                    trace!("OGG broadcaster task finished successfully");
-                }
-                Err(e) => {
-                    warn!("OGG broadcaster task error during restart: {:?}", e);
-                }
-            }
-        }
-
-        // 4. Update timestamp offset to maintain continuity across encoder restart
-        self.timestamp_offset_sec += last_timestamp;
-        debug!("New timestamp offset: {:.3}s", self.timestamp_offset_sec);
-
-        // 5. Create new PCM channel
-        let (pcm_tx, pcm_rx) = mpsc::channel::<PcmChunk>(16);
-        self.pcm_tx = Some(pcm_tx);
-        self.pcm_rx = Some(pcm_rx);
-
-        // 6. Initialize new encoder with timestamp offset (will naturally emit new OGG stream header)
-        self.initialize_encoder(sample_rate, self.timestamp_offset_sec).await?;
-
-        debug!("OGG-FLAC encoder restarted successfully for new track");
-        Ok(())
-    }
+    ctx: SharedSinkContext,
 }
 
 #[async_trait]
@@ -462,20 +179,43 @@ impl NodeLogic for StreamingOggFlacSinkLogic {
                             match &seg.segment {
                                 _AudioSegment::Chunk(chunk) => {
                                     // Detect sample rate from first chunk and initialize encoder
-                                    if self.sample_rate.is_none() {
+                                    if self.ctx.sample_rate.is_none() {
                                         let sample_rate = chunk.sample_rate();
-                                        self.sample_rate = Some(sample_rate);
+                                        self.ctx.sample_rate = Some(sample_rate);
                                         debug!("Detected sample rate: {} Hz", sample_rate);
 
                                         // Initialize the FLAC encoder now (first track starts at 0.0)
-                                        self.initialize_encoder(sample_rate, 0.0).await?;
+                                        self.ctx
+                                            .initialize_encoder(
+                                                sample_rate,
+                                                0.0,
+                                                |flac_stream,
+                                                 broadcast,
+                                                 header,
+                                                 current_timestamp,
+                                                 current_duration,
+                                                 max_lead,
+                                                 sample_rate,
+                                                 timestamp_offset_sec| {
+                                                    broadcast_ogg_flac_stream(
+                                                        flac_stream,
+                                                        broadcast,
+                                                        header,
+                                                        current_timestamp,
+                                                        current_duration,
+                                                        max_lead,
+                                                        timestamp_offset_sec,
+                                                    )
+                                                },
+                                            )
+                                            .await?;
                                     }
 
                                     // Convert chunk to PCM bytes
-                                    let pcm_bytes = chunk_to_pcm_bytes(&chunk, self.bits_per_sample)?;
+                                    let pcm_bytes = chunk_to_pcm_bytes(&chunk, self.ctx.bits_per_sample)?;
 
                                     // Calculate exact duration from samples and sample rate
-                                    let sample_rate = self.sample_rate.expect("sample_rate should be initialized");
+                                    let sample_rate = self.ctx.sample_rate.expect("sample_rate should be initialized");
                                     let duration_sec = chunk.len() as f64 / sample_rate as f64;
 
                                     trace!(
@@ -494,7 +234,7 @@ impl NodeLogic for StreamingOggFlacSinkLogic {
                                     };
 
                                     // Get the sender (it should always be Some after initialization)
-                                    let pcm_tx = match &self.pcm_tx {
+                                    let pcm_tx = match &self.ctx.pcm_tx {
                                         Some(tx) => tx,
                                         None => {
                                             error!("OGG PCM sender not initialized");
@@ -512,9 +252,32 @@ impl NodeLogic for StreamingOggFlacSinkLogic {
                                     match marker.as_ref() {
                                         SyncMarker::TrackBoundary { metadata } => {
                                             // Only restart encoder if it's already initialized (not the first track)
-                                            if self.sample_rate.is_some() && self.encoder_state.is_some() {
+                                            if self.ctx.sample_rate.is_some() && self.ctx.encoder_state.is_some() {
                                                 // Restart encoder to emit new OGG stream header and reset timestamps
-                                                if let Err(e) = self.restart_encoder_for_new_track().await {
+                                                if let Err(e) = self
+                                                    .ctx
+                                                    .restart_encoder_for_new_track(
+                                                        |flac_stream,
+                                                         broadcast,
+                                                         header,
+                                                         current_timestamp,
+                                                         current_duration,
+                                                         max_lead,
+                                                         sample_rate,
+                                                         timestamp_offset_sec| {
+                                                            broadcast_ogg_flac_stream(
+                                                                flac_stream,
+                                                                broadcast,
+                                                                header,
+                                                                current_timestamp,
+                                                                current_duration,
+                                                                max_lead,
+                                                                timestamp_offset_sec,
+                                                            )
+                                                        },
+                                                    )
+                                                    .await
+                                                {
                                                     error!("Failed to restart OGG encoder for new track: {}", e);
                                                     break;
                                                 }
@@ -523,7 +286,7 @@ impl NodeLogic for StreamingOggFlacSinkLogic {
                                             }
 
                                             // Update metadata for the new track
-                                            if let Err(e) = self.update_metadata(metadata, seg.timestamp_sec).await {
+                                            if let Err(e) = self.ctx.update_metadata(metadata, seg.timestamp_sec).await {
                                                 error!("Failed to update metadata: {}", e);
                                             }
                                         }
@@ -610,40 +373,43 @@ impl StreamingOggFlacSink {
         let broadcast_capacity = calculate_broadcast_capacity(broadcast_max_lead_time);
         debug!(
             "Streaming Sink: using broadcast capacity of {} items (max_lead_time={:.1}s)",
-            broadcast_capacity,
-            broadcast_max_lead_time
+            broadcast_capacity, broadcast_max_lead_time
         );
         let (broadcast, _) = timed_broadcast::channel(broadcast_capacity);
 
         // OGG-FLAC header cache
         let header = Arc::new(RwLock::new(None));
 
-        // Stop token and client counter
+        // Stop token and client control
         let stop_token = CancellationToken::new();
-        let active_clients = Arc::new(AtomicUsize::new(0));
+        let auto_stop = Arc::new(AtomicBool::new(true));
 
-        let handle = OggFlacStreamHandle {
-            broadcast: broadcast.clone(),
-            metadata: metadata.clone(),
-            active_clients,
-            stop_token: stop_token.clone(),
-            header: header.clone(),
-            auto_stop: Arc::new(AtomicBool::new(true)),
-        };
+        let shared_handle = Arc::new(SharedStreamHandleInner::new(
+            broadcast.clone(),
+            metadata.clone(),
+            stop_token.clone(),
+            header.clone(),
+            auto_stop.clone(),
+        ));
+
+        let handle = OggFlacStreamHandle::new(shared_handle.clone());
 
         let logic = StreamingOggFlacSinkLogic {
-            encoder_options,
-            bits_per_sample,
-            pcm_tx: Some(pcm_tx),
-            pcm_rx: Some(pcm_rx),
-            metadata,
-            broadcast,
-            header,
-            encoder_state: None,
-            sample_rate: None,
-            broadcast_max_lead_time: broadcast_max_lead_time.max(0.0),
-            timestamp_offset_sec: 0.0,
-            current_timestamp: Arc::new(RwLock::new(0.0)),
+            ctx: SharedSinkContext {
+                encoder_options,
+                bits_per_sample,
+                pcm_tx: Some(pcm_tx),
+                pcm_rx: Some(pcm_rx),
+                metadata,
+                broadcast,
+                header,
+                encoder_state: None,
+                sample_rate: None,
+                broadcast_max_lead_time: broadcast_max_lead_time.max(0.0),
+                first_chunk_timestamp_checked: false,
+                timestamp_offset_sec: 0.0,
+                current_timestamp: Arc::new(RwLock::new(0.0)),
+            },
         };
 
         let sink = Self {
@@ -682,8 +448,6 @@ impl TypedAudioNode for StreamingOggFlacSink {
         None
     }
 }
-
-
 
 /// OGG wrapper + broadcaster task: reads FLAC bytes from encoder, wraps in OGG pages, and broadcasts.
 /// Implements precise real-time pacing based on audio timestamps.
@@ -828,10 +592,7 @@ async fn broadcast_ogg_flac_stream(
                     trace!("Sent empty EOS page");
                 }
 
-                trace!(
-                    "OGG-FLAC stream ended, total OGG bytes: {}",
-                    total_bytes
-                );
+                trace!("OGG-FLAC stream ended, total OGG bytes: {}", total_bytes);
                 break;
             }
             Ok(n) => {
@@ -906,8 +667,7 @@ async fn broadcast_ogg_flac_stream(
                     }
 
                     // Extract just the first frame
-                    let first_frame: Vec<u8> =
-                        accumulator.drain(0..second_frame_start).collect();
+                    let first_frame: Vec<u8> = accumulator.drain(0..second_frame_start).collect();
 
                     // ╔═══════════════════════════════════════════════════════════════╗
                     // ║ BACKPRESSURE INTELLIGENTE BASÉE SUR LE TIMING                 ║
@@ -934,7 +694,8 @@ async fn broadcast_ogg_flac_stream(
                     // Calculer le timestamp de cette FLAC frame (avec offset pour continuité entre tracks)
                     let frame_start_samples = encoded_samples;
                     encoded_samples = encoded_samples.saturating_add(first_frame_samples as u64);
-                    let audio_timestamp = timestamp_offset_sec + (frame_start_samples as f64 / sample_rate_f64);
+                    let audio_timestamp =
+                        timestamp_offset_sec + (frame_start_samples as f64 / sample_rate_f64);
                     let segment_duration = first_frame_samples as f64 / sample_rate_f64;
 
                     // Check timing et apply pacing (skip si en retard)
@@ -1022,7 +783,6 @@ async fn broadcast_ogg_flac_stream(
     trace!("Broadcaster task completed successfully");
     Ok(())
 }
-
 
 /// Create OGG-FLAC identification packet (first packet in BOS page)
 /// Format: https://xiph.org/flac/ogg_mapping.html

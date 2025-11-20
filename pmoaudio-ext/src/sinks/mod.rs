@@ -6,6 +6,7 @@
 
 pub mod byte_stream_reader;
 pub mod chunk_to_pcm;
+pub mod streaming_icyflac_sink;
 
 #[cfg(feature = "cache-sink")]
 mod flac_cache_sink;
@@ -26,12 +27,19 @@ mod timed_broadcast;
 mod streaming_flac_sink;
 
 #[cfg(feature = "http-stream")]
-pub use streaming_flac_sink::{
-    FlacClientStream, IcyClientStream, MetadataSnapshot, StreamHandle, StreamingFlacSink,
-};
+mod streaming_sink_common;
+
+#[cfg(feature = "http-stream")]
+pub use streaming_flac_sink::{FlacClientStream, StreamHandle, StreamingFlacSink};
+
+#[cfg(feature = "http-stream")]
+pub use streaming_icyflac_sink::IcyClientStream;
 
 #[cfg(feature = "http-stream")]
 mod streaming_ogg_flac_sink;
 
 #[cfg(feature = "http-stream")]
 pub use streaming_ogg_flac_sink::{OggFlacClientStream, OggFlacStreamHandle, StreamingOggFlacSink};
+
+#[cfg(feature = "http-stream")]
+pub use streaming_sink_common::MetadataSnapshot;

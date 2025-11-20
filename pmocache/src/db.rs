@@ -81,12 +81,12 @@ impl<'a> std::ops::DerefMut for ConnGuard<'a> {
 
 impl DB {
     fn lock_conn(&self, ctx: &'static str) -> ConnGuard<'_> {
-        trace!("DB mutex → acquiring ({ctx})");
+        // trace!("DB mutex → acquiring ({ctx})");
         let start = Instant::now();
         let guard = self.conn.lock().unwrap();
         let waited = start.elapsed();
 
-        trace!("DB mutex → acquired ({ctx}) in {:?}", waited);
+        // trace!("DB mutex → acquired ({ctx}) in {:?}", waited);
         if waited > std::time::Duration::from_millis(50) {
             warn!("DB mutex wait >50 ms ({}): {:?}", ctx, waited);
         }

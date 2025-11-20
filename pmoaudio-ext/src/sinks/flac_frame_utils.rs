@@ -11,6 +11,13 @@ use pmoaudio::AudioError;
 use pmoflac::FlacEncodedStream;
 use tokio::io::AsyncReadExt;
 
+/// State for FLAC stream subscription.
+pub(crate) enum FlacStreamState {
+    SendingHeader,
+    Streaming,
+}
+
+
 /// Validate and parse FLAC block size from frame header
 ///
 /// Returns the number of samples in the frame if the header is valid, or None if:
