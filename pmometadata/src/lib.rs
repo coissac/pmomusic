@@ -281,15 +281,6 @@ pub trait TrackMetadata: Send + Sync {
     async fn touch(&mut self) -> MetadataResult<()> {
         Err(MetadataError::NotImplemented)
     }
-
-    async fn set_sample_rate(&mut self, _value: Option<i32>) -> MetadataResult<()> {
-         Err(MetadataError::NotImplemented)       
-    }
-
-    async fn get_sample_rate(self) -> MetadataResult<i32> {
-         Err(MetadataError::NotImplemented)       
-    }
-
 }
 
 /// Copies all available metadata from one implementation to another.

@@ -16,7 +16,7 @@ use tokio::io::{AsyncRead, ReadBuf};
 use tokio::sync::{mpsc, RwLock};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::byte_stream_reader::{ByteStreamReader, PcmChunk};
 use crate::sinks::timed_broadcast::{self, TryRecvError};
@@ -214,6 +214,7 @@ pub struct SharedSinkContext {
     pub timestamp_offset_sec: f64,
     pub current_timestamp: Arc<RwLock<f64>>,
     pub pending_track_duration: Option<Duration>,
+    pub pending_total_samples: Option<u64>,
 }
 
 impl SharedSinkContext {
@@ -316,31 +317,50 @@ impl SharedSinkContext {
             metadata.get_duration().await.ok().flatten()
         };
         self.pending_track_duration = duration_opt;
- 
+        self.pending_total_samples = {
+            let metadata = metadata_lock.read().await;
+            metadata.get_total_samples().await.ok().flatten()
+        };
+
         // Compute total_samples only when we know the sample rate.
-        if let (Some(duration), Some(sr)) = (self.pending_track_duration, self.sample_rate) {
-            debug!("Encoder metadata: duration: {:3}s - rate: {}Hz", Duration::as_secs_f64(&duration),sr);
-            let samples = (duration.as_secs_f64() * sr as f64).round() as u64;
-            self.encoder_options.total_samples = Some(samples);
-        } else {
-            if self.pending_track_duration.is_none() {
-            debug!("Encoder metadata: duration: None");
-            }
-             if self.sample_rate.is_none() {
-            debug!("Encoder metadata: sample rate: None");
-            }
-            // Avoid leaking the previous track's length.
-            self.encoder_options.total_samples = None;
-        }
+        self.refresh_total_samples_with_sample_rate();
 
         Ok(())
     }
 
     /// Refresh total_samples when the sample rate is learned after metadata was already set.
     pub fn refresh_total_samples_with_sample_rate(&mut self) {
+        info!(
+            "Encoder metadata: refresh_total_samples (pending_total_samples={:?}, pending_duration={:?}, sample_rate={:?})",
+            self.pending_total_samples,
+            self.pending_track_duration
+                .as_ref()
+                .map(Duration::as_secs_f64),
+            self.sample_rate
+        );
+
+        if let Some(total) = self.pending_total_samples {
+            self.encoder_options.total_samples = Some(total);
+            info!(
+                "Encoder metadata: using provided total_samples={} from TrackBoundary",
+                total
+            );
+            return;
+        }
+
         if let (Some(duration), Some(sr)) = (self.pending_track_duration, self.sample_rate) {
             let samples = (duration.as_secs_f64() * sr as f64).round() as u64;
             self.encoder_options.total_samples = Some(samples);
+            info!(
+                "Encoder metadata: computed total_samples={} (duration {:.3}s @ {} Hz)",
+                samples,
+                duration.as_secs_f64(),
+                sr
+            );
+        } else {
+            // Avoid leaking the previous track's length.
+            self.encoder_options.total_samples = None;
+            info!("Encoder metadata: no duration/total_samples available; clearing total_samples in encoder options");
         }
     }
 

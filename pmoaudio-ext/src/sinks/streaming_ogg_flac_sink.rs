@@ -432,6 +432,7 @@ impl StreamingOggFlacSink {
                 timestamp_offset_sec: 0.0,
                 current_timestamp: Arc::new(RwLock::new(0.0)),
                 pending_track_duration: None,
+                pending_total_samples: None,
             },
         };
 
