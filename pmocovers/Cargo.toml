@@ -27,6 +27,7 @@ once_cell = "1.20"
 # Serveur HTTP (optionnel pour l'extension)
 pmoserver = { path = "../pmoserver", optional = true }
 pmoconfig = { path = "../pmoconfig", optional = true }
+async-trait = { version = "0.1", optional = true }
 axum = { version = "0.8", optional = true }
 utoipa = { version = "5.3", features = ["axum_extras"], optional = true }
 
@@ -38,4 +39,12 @@ tempfile = "3"
 [features]
 default = ["pmoserver"]
 pmoconfig = ["dep:pmoconfig", "pmocache/pmoconfig"]
-pmoserver = ["pmoconfig", "dep:pmoserver", "dep:axum", "dep:utoipa", "pmocache/openapi", "pmocache/pmoserver"]
+pmoserver = [
+    "pmoconfig",
+    "dep:pmoserver",
+    "dep:axum",
+    "dep:utoipa",
+    "pmocache/openapi",
+    "pmocache/pmoserver",
+    "dep:async-trait",
+]

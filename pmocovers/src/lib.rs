@@ -54,6 +54,7 @@
 pub mod cache;
 pub mod webp;
 
+
 #[cfg(feature = "pmoserver")]
 pub mod openapi;
 
@@ -170,6 +171,7 @@ fn create_variant_generator() -> pmocache::pmoserver_ext::ParamGenerator<CoversC
 
 /// Trait d'extension pour ajouter le cache de couvertures à pmoserver
 #[cfg(feature = "pmoserver")]
+#[async_trait::async_trait]
 pub trait CoverCacheExt {
     /// Initialise le cache d'images et enregistre les routes HTTP
     ///
@@ -204,6 +206,7 @@ pub trait CoverCacheExt {
 }
 
 #[cfg(feature = "pmoserver")]
+#[async_trait::async_trait]
 impl CoverCacheExt for pmoserver::Server {
     async fn init_cover_cache(
         &mut self,
