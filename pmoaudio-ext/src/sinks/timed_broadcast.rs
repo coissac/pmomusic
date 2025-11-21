@@ -5,13 +5,17 @@
 //! - Propagation d’un compteur `epoch` incrémenté sur chaque TopZeroSync.
 
 use std::{
-    collections::VecDeque, fmt, string, sync::{
-        Arc, Mutex, Weak, atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering}
-    }, time::{Duration, Instant}
+    collections::VecDeque,
+    fmt, string,
+    sync::{
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        Arc, Mutex, Weak,
+    },
+    time::{Duration, Instant},
 };
 
 use tokio::sync::Notify;
-use tracing::{info, debug, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 /// Tolérance pour détecter un timestamp à zéro (TopZero).
 const TOP_ZERO_EPSILON: f64 = 1e-9;
@@ -93,9 +97,9 @@ struct State<T> {
 }
 
 impl<T> State<T> {
-    fn new(name: &str,capacity: usize, epoch_start: Instant) -> Self {
+    fn new(name: &str, capacity: usize, epoch_start: Instant) -> Self {
         Self {
-            name: name.to_string() ,
+            name: name.to_string(),
             buffer: VecDeque::with_capacity(capacity),
             head_seq: 0,
             next_seq: 0,
@@ -120,7 +124,13 @@ impl<T> State<T> {
         while let Some(entry) = self.buffer.front() {
             if entry.expires_at <= now {
                 let delta = now - entry.expires_at;
-                debug!("TimedBroadcast[{}]: purging expired packet (@{} epoch={},delta={})", self.name,entry.seq, entry.epoch, delta.as_millis());
+                trace!(
+                    "TimedBroadcast[{}]: purging expired packet (@{} epoch={},delta={})",
+                    self.name,
+                    entry.seq,
+                    entry.epoch,
+                    delta.as_millis()
+                );
                 self.buffer.pop_front();
                 self.head_seq += 1;
                 purged += 1;
@@ -130,7 +140,8 @@ impl<T> State<T> {
         }
         if purged > 0 {
             trace!(
-                "TimedBroadcast: purged {} expired packet(s) (head_seq={})",
+                "TimedBroadcast[{}]: purged {} expired packet(s) (head_seq={})",
+                self.name,
                 purged,
                 self.head_seq
             );
@@ -167,8 +178,11 @@ impl<T> State<T> {
         for _ in 0..removable {
             let oentry = self.buffer.pop_front();
             if oentry.is_some() {
-                let entry= oentry.unwrap(); 
-                debug!("TimedBroadcast[{}]: pruning played packet (@{} epoch={})", self.name,entry.seq, entry.epoch);
+                let entry = oentry.unwrap();
+                trace!(
+                    "TimedBroadcast[{}]: pruning played packet (@{} epoch={})",
+                    self.name, entry.seq, entry.epoch
+                );
 
                 self.head_seq += 1;
             }
@@ -188,9 +202,9 @@ struct Inner<T> {
 }
 
 impl<T> Inner<T> {
-    fn new(name: &str,capacity: usize) -> Self {
+    fn new(name: &str, capacity: usize) -> Self {
         Self {
-            state: Mutex::new(State::new(name,capacity, Instant::now())),
+            state: Mutex::new(State::new(name, capacity, Instant::now())),
             data_notify: Notify::new(),
             space_notify: Notify::new(),
             capacity,
@@ -214,7 +228,7 @@ impl<T> Inner<T> {
 /// Créé un channel broadcast temporisé.
 pub fn channel<T>(name: &str, capacity: usize) -> (Sender<T>, Receiver<T>) {
     assert!(capacity > 0, "capacity must be > 0");
-    let inner = Arc::new(Inner::new(name,capacity));
+    let inner = Arc::new(Inner::new(name, capacity));
     let next_seq = {
         let state = inner.state.lock().expect("timed broadcast mutex poisoned");
         state.next_seq
@@ -297,44 +311,62 @@ impl<T> Sender<T> {
                 }
 
                 // 2. Vérifier si un slot est disponible et insérer
-                let is_top_zero = audio_timestamp.abs() < TOP_ZERO_EPSILON;
+                let is_top_zero =
+                    audio_timestamp.abs() < TOP_ZERO_EPSILON 
+                    && segment_duration >= TOP_ZERO_EPSILON;
+                let is_zero_header =
+                    audio_timestamp.abs() < TOP_ZERO_EPSILON 
+                    && segment_duration < TOP_ZERO_EPSILON;
                 if state.buffer.len() < self.inner.capacity {
-                    if !state.initialized {
-                        if !is_top_zero {
+                    if !state.initialized  {
+                        if !is_top_zero  && segment_duration >= TOP_ZERO_EPSILON {
                             warn!(
-                                "TimedBroadcast: First packet has non-zero timestamp {:.3}s, treating as epoch start anyway",
-                                audio_timestamp
+                                "TimedBroadcast[{}]: First packet has non-zero timestamp {:.1}ms - Duration={:.1}ms, treating as epoch start anyway",
+                                state.name,
+                                audio_timestamp*1000.0,
+                            segment_duration*1000.0
                             );
                         }
                         state.epoch_start = now;
                         state.epoch = 0;
                         state.initialized = true;
                         info!(
-                            "TimedBroadcast: initialized (epoch=0, ts={:.3}s)",
-                            audio_timestamp
+                            "TimedBroadcast[{}]: initialized (epoch=0, ts={:.1}ms - Duration={:.1}ms)",
+                            state.name, 
+                            audio_timestamp*1000.0,
+                            segment_duration*1000.0
                         );
-                    } else if is_top_zero {
+                    } else if is_top_zero || is_zero_header {
                         // Restart epoch on TopZero relative to current wall-clock time to avoid
-                        // expired packets when there's a long gap between tracks.
-                        state.epoch_start = state.last_segment_end.unwrap_or(now);
+                        // expired packets when there's a long gap between tracks. Also trigger
+                        // on zero-duration headers (OGG BOS/comment) so the epoch is reset
+                        // before testing expiration.
+                        state.epoch_start = state
+                            .last_segment_end
+                            .map(|end| end.max(now))
+                            .unwrap_or(now);
                         // state.epoch_start = now;
                         state.epoch = state.epoch.wrapping_add(1);
                         info!(
-                            "TimedBroadcast: new epoch={} (continuous={})",
+                            "TimedBroadcast[{}]: new epoch={} (continuous={} - Duration={}ms)",
+                            state.name,
                             state.epoch,
-                            state.last_segment_end.is_some()
+                            state.last_segment_end.is_some(),
+                            segment_duration*1000.0
                         );
                     }
 
-                    let expires_at =
-                        state.epoch_start + Duration::from_secs_f64(audio_timestamp + segment_duration);
+                    let expires_at = state.epoch_start
+                        + Duration::from_secs_f64(audio_timestamp 
+                        + segment_duration);
 
                     let is_first_packet = state.next_seq == 0;
-                    if !is_first_packet && !is_top_zero && expires_at <= now {
+                    if !is_first_packet && !is_top_zero && !is_zero_header && expires_at <= now {
                         let grace_period = Duration::from_millis(50);
                         if now > expires_at + grace_period {
                             warn!(
-                                "TimedBroadcast: rejecting already expired packet (ts={:.3}s, epoch={}, delta={}ms)",
+                                "TimedBroadcast[{}]: rejecting already expired packet (ts={:.3}s, epoch={}, delta={}ms)",
+                                state.name,
                                 audio_timestamp,
                                 state.epoch,
                                 now.duration_since(expires_at).as_millis()
@@ -355,10 +387,13 @@ impl<T> Sender<T> {
                     state.next_seq += 1;
                     state.buffer.push_back(entry);
 
-                    // 5. Mettre à jour la fin du segment SEULEMENT pour les paquets non-TopZero
-                    // (pour que le prochain segment commence à la fin du dernier paquet de données)
-                    if !is_top_zero {
-                        state.last_segment_end = Some(expires_at);
+                    // 5. Only advance segment end for real audio (skip 0-duration metadata)
+                    if segment_duration >= TOP_ZERO_EPSILON {
+                        let new_end = expires_at;
+                        state.last_segment_end = Some(match state.last_segment_end.take() {
+                            Some(prev) => prev.max(new_end),
+                            None => new_end,
+                        });
                     }
 
                     let receivers = self.inner.receiver_count.load(Ordering::SeqCst);

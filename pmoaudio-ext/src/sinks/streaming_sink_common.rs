@@ -213,6 +213,7 @@ pub struct SharedSinkContext {
     pub first_chunk_timestamp_checked: bool,
     pub timestamp_offset_sec: f64,
     pub current_timestamp: Arc<RwLock<f64>>,
+    pub pending_track_duration: Option<Duration>,
 }
 
 impl SharedSinkContext {
@@ -297,6 +298,50 @@ impl SharedSinkContext {
         self.encoder_state = Some(EncoderState { broadcaster_task });
 
         Ok(())
+    }
+
+    /// Prepare encoder options for a new track so the next FLAC header embeds up-to-date metadata
+    /// and duration (total_samples) when available.
+    pub async fn prepare_encoder_options_for_track(
+        &mut self,
+        metadata_lock: &Arc<RwLock<dyn TrackMetadata>>,
+    ) -> Result<(), AudioError> {
+        debug!("Encoder metadata: preparing metadata");
+        // Always pass the metadata handle to the encoder so Vorbis comments are emitted.
+        self.encoder_options.metadata = Some(metadata_lock.clone());
+
+        // Capture duration (if any) to set total_samples.
+        let duration_opt = {
+            let metadata = metadata_lock.read().await;
+            metadata.get_duration().await.ok().flatten()
+        };
+        self.pending_track_duration = duration_opt;
+ 
+        // Compute total_samples only when we know the sample rate.
+        if let (Some(duration), Some(sr)) = (self.pending_track_duration, self.sample_rate) {
+            debug!("Encoder metadata: duration: {:3}s - rate: {}Hz", Duration::as_secs_f64(&duration),sr);
+            let samples = (duration.as_secs_f64() * sr as f64).round() as u64;
+            self.encoder_options.total_samples = Some(samples);
+        } else {
+            if self.pending_track_duration.is_none() {
+            debug!("Encoder metadata: duration: None");
+            }
+             if self.sample_rate.is_none() {
+            debug!("Encoder metadata: sample rate: None");
+            }
+            // Avoid leaking the previous track's length.
+            self.encoder_options.total_samples = None;
+        }
+
+        Ok(())
+    }
+
+    /// Refresh total_samples when the sample rate is learned after metadata was already set.
+    pub fn refresh_total_samples_with_sample_rate(&mut self) {
+        if let (Some(duration), Some(sr)) = (self.pending_track_duration, self.sample_rate) {
+            let samples = (duration.as_secs_f64() * sr as f64).round() as u64;
+            self.encoder_options.total_samples = Some(samples);
+        }
     }
 
     pub async fn restart_encoder_for_new_track<Fut, F>(

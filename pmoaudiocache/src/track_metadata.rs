@@ -186,6 +186,45 @@ impl TrackMetadata for AudioCacheTrackMetadata {
         Ok(Some(()))
     }
 
+    async fn get_sample_rate(&self) -> MetadataResult<u32> {
+        Ok(match self.read_number("sample_rate")? {
+            Some(n) => n.as_i64().and_then(|v| u32::try_from(v).ok()),
+            None => None,
+        })
+    }
+
+    async fn set_sample_rate(&mut self, value: Option<u32>) -> MetadataResult<()> {
+        self.write_number("sample_rate", value.map(|v| v as i64))?;
+        let _ = self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_total_samples(&self) -> MetadataResult<u64> {
+        Ok(match self.read_number("total_samples")? {
+            Some(n) => n.as_i64().and_then(|v| u64::try_from(v).ok()),
+            None => None,
+        })
+    }
+
+    async fn set_total_samples(&mut self, value: Option<u64>) -> MetadataResult<()> {
+        self.write_u64("total_samples", value)?;
+        let _ = self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_bits_per_sample(&self) -> MetadataResult<u8> {
+        Ok(match self.read_number("bits_per_sample")? {
+            Some(n) => n.as_i64().and_then(|v| u8::try_from(v).ok()),
+            None => None,
+        })
+    }
+
+    async fn set_bits_per_sample(&mut self, value: Option<u8>) -> MetadataResult<()> {
+        self.write_number("bits_per_sample", value.map(|v| v as i64))?;
+        let _ = self.touch().await?;
+        Ok(Some(()))
+    }
+
     async fn get_track_id(&self) -> MetadataResult<String> {
         Ok(self.read_string("track_id")?)
     }
@@ -286,6 +325,9 @@ mod tests {
             meta.set_duration(Some(Duration::from_secs(90)))
                 .await
                 .unwrap();
+            meta.set_sample_rate(Some(44100)).await.unwrap();
+            meta.set_total_samples(Some(9_999_999)).await.unwrap();
+            meta.set_bits_per_sample(Some(16)).await.unwrap();
             meta.set_track_id(Some("trk".into())).await.unwrap();
             meta.set_channel_id(Some("chn".into())).await.unwrap();
             meta.set_event(Some("event".into())).await.unwrap();
@@ -306,6 +348,9 @@ mod tests {
                 meta.get_duration().await.unwrap(),
                 Some(Duration::from_secs(90))
             );
+            assert_eq!(meta.get_sample_rate().await.unwrap(), Some(44100));
+            assert_eq!(meta.get_total_samples().await.unwrap(), Some(9_999_999));
+            assert_eq!(meta.get_bits_per_sample().await.unwrap(), Some(16));
             assert_eq!(meta.get_track_id().await.unwrap(), Some("trk".into()));
             assert_eq!(meta.get_channel_id().await.unwrap(), Some("chn".into()));
             assert_eq!(meta.get_event().await.unwrap(), Some("event".into()));

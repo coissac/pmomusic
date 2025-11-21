@@ -228,6 +228,9 @@ impl NodeLogic for StreamingFlacSinkLogic {
                                         self.ctx.sample_rate = Some(sample_rate);
                                         debug!("Detected sample rate: {} Hz", sample_rate);
 
+                                        // If a duration is already known for this track, fill total_samples now.
+                                        self.ctx.refresh_total_samples_with_sample_rate();
+
                                         // Initialize the FLAC encoder now (first track starts at 0.0)
                                         self.ctx
                                             .initialize_encoder(
@@ -306,6 +309,15 @@ impl NodeLogic for StreamingFlacSinkLogic {
                                 _AudioSegment::Sync(marker) => {
                                     match marker.as_ref() {
                                         SyncMarker::TrackBoundary { metadata } => {
+                                            // Prepare encoder options (metadata + duration) for the upcoming track.
+                                            if let Err(e) =
+                                                self.ctx.prepare_encoder_options_for_track(metadata).await
+                                            {
+                                                error!("Failed to prepare encoder options for new track: {}", e);
+                                            }
+
+                                            debug!("StreamingFlacSink: SyncMarker::TrackBoundary {:?}",metadata.read().await.get_duration().await);
+
                                             // Only restart encoder if it's already initialized (not the first track)
                                             if self.ctx.sample_rate.is_some() && self.ctx.encoder_state.is_some() {
                                                 // Restart encoder to emit new header and reset timestamps
@@ -464,6 +476,7 @@ impl StreamingFlacSink {
                 first_chunk_timestamp_checked: false,
                 timestamp_offset_sec: 0.0,
                 current_timestamp: Arc::new(RwLock::new(0.0)),
+                pending_track_duration: None,
             },
         };
 

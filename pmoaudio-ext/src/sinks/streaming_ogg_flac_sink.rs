@@ -196,6 +196,9 @@ impl NodeLogic for StreamingOggFlacSinkLogic {
                                         self.ctx.sample_rate = Some(sample_rate);
                                         debug!("Detected sample rate: {} Hz", sample_rate);
 
+                                        // Populate total_samples if we already know the track duration.
+                                        self.ctx.refresh_total_samples_with_sample_rate();
+
                                         // Initialize the FLAC encoder now (first track starts at 0.0)
                                         self.ctx
                                             .initialize_encoder(
@@ -263,6 +266,13 @@ impl NodeLogic for StreamingOggFlacSinkLogic {
                                 _AudioSegment::Sync(marker) => {
                                     match marker.as_ref() {
                                         SyncMarker::TrackBoundary { metadata } => {
+                                            // Inject per-track metadata and duration into the next FLAC header.
+                                            if let Err(e) =
+                                                self.ctx.prepare_encoder_options_for_track(metadata).await
+                                            {
+                                                error!("Failed to prepare encoder options for new track: {}", e);
+                                            }
+
                                             // Only restart encoder if it's already initialized (not the first track)
                                             if self.ctx.sample_rate.is_some() && self.ctx.encoder_state.is_some() {
                                                 // Restart encoder to emit new OGG stream header and reset timestamps
@@ -421,6 +431,7 @@ impl StreamingOggFlacSink {
                 first_chunk_timestamp_checked: false,
                 timestamp_offset_sec: 0.0,
                 current_timestamp: Arc::new(RwLock::new(0.0)),
+                pending_track_duration: None,
             },
         };
 
@@ -515,8 +526,9 @@ async fn broadcast_ogg_flac_stream(
     let bos_page = ogg_writer.create_page(&ogg_flac_id, true, false, false);
     let bos_bytes = Bytes::from(bos_page);
 
-    // Step 3: Create Vorbis Comment page (empty for now, metadata comes from /metadata endpoint)
-    let vorbis_comment = create_empty_vorbis_comment();
+    // Step 3: Create Vorbis Comment page (reuse FLAC metadata blocks when available)
+    let vorbis_comment = extract_comment_packet_from_flac_header(&flac_header)
+        .unwrap_or_else(create_empty_vorbis_comment);
     let comment_page = ogg_writer.create_page(&vorbis_comment, false, false, false);
     let comment_bytes = Bytes::from(comment_page);
 
@@ -855,6 +867,27 @@ fn create_ogg_flac_identification(flac_header: &[u8]) -> Result<Vec<u8>, AudioEr
     packet.extend_from_slice(streaminfo); // Bytes 13+: STREAMINFO block only
 
     Ok(packet)
+}
+
+/// Extract the concatenated FLAC metadata blocks after STREAMINFO to use as the OGG comment packet.
+/// Returns `None` if the FLAC header only contains STREAMINFO.
+fn extract_comment_packet_from_flac_header(flac_header: &[u8]) -> Option<Vec<u8>> {
+    if flac_header.len() < 8 {
+        return None;
+    }
+
+    // STREAMINFO block length is stored in bytes 5-7 (after type byte at 4)
+    let block_length =
+        u32::from_be_bytes([0, flac_header[5], flac_header[6], flac_header[7]]) as usize;
+    let streaminfo_total = 4 + block_length; // block header + data
+
+    // Skip "fLaC" + STREAMINFO block.
+    let offset = 4 + streaminfo_total;
+    if flac_header.len() <= offset {
+        return None;
+    }
+
+    Some(flac_header[offset..].to_vec())
 }
 
 /// Create empty Vorbis Comment block as a proper FLAC metadata block

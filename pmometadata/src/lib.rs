@@ -194,6 +194,30 @@ pub trait TrackMetadata: Send + Sync {
         Err(MetadataError::NotImplemented)
     }
 
+    async fn get_sample_rate(&self) -> MetadataResult<u32> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn set_sample_rate(&mut self, _value: Option<u32>) -> MetadataResult<()> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn get_total_samples(&self) -> MetadataResult<u64> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn set_total_samples(&mut self, _value: Option<u64>) -> MetadataResult<()> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn get_bits_per_sample(&self) -> MetadataResult<u8> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn set_bits_per_sample(&mut self, _value: Option<u8>) -> MetadataResult<()> {
+        Err(MetadataError::NotImplemented)
+    }
+
     async fn get_track_id(&self) -> MetadataResult<String> {
         Err(MetadataError::NotImplemented)
     }
@@ -257,6 +281,15 @@ pub trait TrackMetadata: Send + Sync {
     async fn touch(&mut self) -> MetadataResult<()> {
         Err(MetadataError::NotImplemented)
     }
+
+    async fn set_sample_rate(&mut self, _value: Option<i32>) -> MetadataResult<()> {
+         Err(MetadataError::NotImplemented)       
+    }
+
+    async fn get_sample_rate(self) -> MetadataResult<i32> {
+         Err(MetadataError::NotImplemented)       
+    }
+
 }
 
 /// Copies all available metadata from one implementation to another.
@@ -318,8 +351,8 @@ where
     let src_guard = src.read().await;
 
     copy_metadata!(
-        src_guard, dest, title, artist, album, year, duration, track_id, channel_id, event, rating,
-        cover_url, cover_pk, extra
+        src_guard, dest, title, artist, album, year, duration, sample_rate, total_samples,
+        bits_per_sample, track_id, channel_id, event, rating, cover_url, cover_pk, extra
     );
 
     // Try to update the timestamp, but ignore transient errors
@@ -338,6 +371,9 @@ pub struct MemoryTrackMetadata {
     album: Option<String>,
     year: Option<u32>,
     duration: Option<Duration>,
+    sample_rate: Option<u32>,
+    total_samples: Option<u64>,
+    bits_per_sample: Option<u8>,
     track_id: Option<String>,
     channel_id: Option<String>,
     event: Option<String>,
@@ -402,6 +438,36 @@ impl TrackMetadata for MemoryTrackMetadata {
 
     async fn set_duration(&mut self, value: Option<Duration>) -> MetadataResult<()> {
         self.duration = value;
+        self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_sample_rate(&self) -> MetadataResult<u32> {
+        Ok(self.sample_rate)
+    }
+
+    async fn set_sample_rate(&mut self, value: Option<u32>) -> MetadataResult<()> {
+        self.sample_rate = value;
+        self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_total_samples(&self) -> MetadataResult<u64> {
+        Ok(self.total_samples)
+    }
+
+    async fn set_total_samples(&mut self, value: Option<u64>) -> MetadataResult<()> {
+        self.total_samples = value;
+        self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_bits_per_sample(&self) -> MetadataResult<u8> {
+        Ok(self.bits_per_sample)
+    }
+
+    async fn set_bits_per_sample(&mut self, value: Option<u8>) -> MetadataResult<()> {
+        self.bits_per_sample = value;
         self.touch().await?;
         Ok(Some(()))
     }
@@ -484,6 +550,8 @@ impl TrackMetadata for MemoryTrackMetadata {
         self.updated_at = Some(SystemTime::now());
         Ok(Some(()))
     }
+
+
 }
 
 #[cfg(test)]
@@ -499,6 +567,9 @@ mod tests {
         assert_eq!(metadata.get_album().await.unwrap(), None);
         assert_eq!(metadata.get_year().await.unwrap(), None);
         assert_eq!(metadata.get_duration().await.unwrap(), None);
+        assert_eq!(metadata.get_sample_rate().await.unwrap(), None);
+        assert_eq!(metadata.get_total_samples().await.unwrap(), None);
+        assert_eq!(metadata.get_bits_per_sample().await.unwrap(), None);
         assert_eq!(metadata.get_updated_at().await.unwrap(), None);
     }
 
