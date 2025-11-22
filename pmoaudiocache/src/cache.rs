@@ -178,15 +178,17 @@ pub async fn add_with_metadata_extraction(
     let file_path = cache.get_file_path(&pk);
     let flac_bytes = tokio::fs::read(&file_path).await?;
 
-    // Extraire les métadonnées
+    // Extraire les métadonnées et persister champ par champ dans la DB (source unique)
     let mut metadata = crate::metadata::AudioMetadata::from_bytes(&flac_bytes)?;
-    // Propager les métadonnées techniques dans la DB (sans passer par le JSON)
+
+    // Informations techniques issues du flux FLAC
+    let streaminfo = parse_flac_streaminfo(&flac_bytes);
     if let Some(d) = metadata.duration_secs {
         let _ = cache
             .db
             .set_a_metadata(&pk, "duration_secs", Value::Number(Number::from(d)));
     }
-    if let Some((sr, bps, total_samples)) = parse_flac_streaminfo(&flac_bytes) {
+    if let Some((sr, bps, total_samples)) = streaminfo {
         let _ = cache
             .db
             .set_a_metadata(&pk, "sample_rate", Value::Number(Number::from(sr)));
@@ -208,45 +210,76 @@ pub async fn add_with_metadata_extraction(
         if metadata.sample_rate.is_none() {
             metadata.sample_rate = Some(sr);
         }
-    }
-
-    // Extraire aussi les informations FLAC de base (STREAMINFO) pour peupler TrackMetadata
-    if let Some((sr, bps, total_samples)) = parse_flac_streaminfo(&flac_bytes) {
-        if let Err(e) = cache
-            .db
-            .set_a_metadata(&pk, "sample_rate", Value::Number(Number::from(sr)))
-        {
-            tracing::warn!("Failed to persist sample_rate for {}: {}", pk, e);
-        }
-        if let Err(e) = cache
-            .db
-            .set_a_metadata(&pk, "bits_per_sample", Value::Number(Number::from(bps)))
-        {
-            tracing::warn!("Failed to persist bits_per_sample for {}: {}", pk, e);
-        }
-        if let Err(e) = cache
-            .db
-            .set_a_metadata(&pk, "total_samples", Value::Number(Number::from(total_samples)))
-        {
-            tracing::warn!("Failed to persist total_samples for {}: {}", pk, e);
+        if metadata.bitrate.is_none() {
+            // Approximate bitrate: sample_rate * bits_per_sample * channels / 1000
+            if let Some(ch) = metadata.channels {
+                let br = (sr as u64 * bps as u64 * ch as u64) / 1000;
+                metadata.bitrate = Some(br as u32);
+            }
         }
     }
 
-    if let Some(transform) = cache.transform_metadata(&pk).await {
-        if let Some(mode) = transform.mode {
-            metadata.conversion = Some(crate::metadata::AudioConversionInfo {
-                mode,
-                source_codec: transform.input_codec,
-            });
-        }
+    // Métadonnées descriptives (tags)
+    if let Some(title) = metadata.title.clone() {
+        let _ = cache
+            .db
+            .set_a_metadata(&pk, "title", Value::String(title));
     }
-    let metadata_json: Value = serde_json::to_value(&metadata)
-        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-    // Stocker dans la DB
-    cache
-        .db
-        .set_metadata(&pk, &metadata_json)
-        .map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
+    if let Some(artist) = metadata.artist.clone() {
+        let _ = cache
+            .db
+            .set_a_metadata(&pk, "artist", Value::String(artist));
+    }
+    if let Some(album) = metadata.album.clone() {
+        let _ = cache
+            .db
+            .set_a_metadata(&pk, "album", Value::String(album));
+    }
+    if let Some(year) = metadata.year {
+        let _ = cache
+            .db
+            .set_a_metadata(&pk, "year", Value::Number(Number::from(year)));
+    }
+    if let Some(track_number) = metadata.track_number {
+        let _ = cache
+            .db
+            .set_a_metadata(&pk, "track_number", Value::Number(Number::from(track_number)));
+    }
+    if let Some(track_total) = metadata.track_total {
+        let _ = cache
+            .db
+            .set_a_metadata(&pk, "track_total", Value::Number(Number::from(track_total)));
+    }
+    if let Some(disc_number) = metadata.disc_number {
+        let _ = cache
+            .db
+            .set_a_metadata(&pk, "disc_number", Value::Number(Number::from(disc_number)));
+    }
+    if let Some(disc_total) = metadata.disc_total {
+        let _ = cache
+            .db
+            .set_a_metadata(&pk, "disc_total", Value::Number(Number::from(disc_total)));
+    }
+    if let Some(genre) = metadata.genre.clone() {
+        let _ = cache
+            .db
+            .set_a_metadata(&pk, "genre", Value::String(genre));
+    }
+    if let Some(sr) = metadata.sample_rate {
+        let _ = cache
+            .db
+            .set_a_metadata(&pk, "sample_rate", Value::Number(Number::from(sr)));
+    }
+    if let Some(ch) = metadata.channels {
+        let _ = cache
+            .db
+            .set_a_metadata(&pk, "channels", Value::Number(Number::from(ch)));
+    }
+    if let Some(br) = metadata.bitrate {
+        let _ = cache
+            .db
+            .set_a_metadata(&pk, "bitrate", Value::Number(Number::from(br)));
+    }
 
     // Mettre à jour la collection si les métadonnées en fournissent une
     if collection.is_none() {
@@ -286,14 +319,45 @@ pub async fn add_with_metadata_extraction(
 /// # }
 /// ```
 pub fn get_metadata(cache: &Cache, pk: &str) -> Result<crate::metadata::AudioMetadata> {
-    let metadata_json = cache
-        .db
-        .get_metadata_json(pk)
-        .map_err(|e| anyhow::anyhow!("Database error: {}", e))?
-        .ok_or_else(|| anyhow::anyhow!("No metadata found for pk: {}", pk))?;
+    let read_value = |key: &str| -> Result<Option<Value>> {
+        cache
+            .db
+            .get_a_metadata(pk, key)
+            .map_err(|e| anyhow::anyhow!("Database error: {}", e))
+    };
 
-    let metadata: crate::metadata::AudioMetadata = serde_json::from_str(&metadata_json)
-        .map_err(|e| anyhow::anyhow!("Metadata deserialization error: {}", e))?;
+    let read_string = |key: &str| -> Result<Option<String>> {
+        Ok(read_value(key)?.and_then(|v| v.as_str().map(|s| s.to_string())))
+    };
+
+    let read_u64 = |key: &str| -> Result<Option<u64>> {
+        Ok(read_value(key)?.and_then(|v| v.as_u64()))
+    };
+
+    let read_u32 = |key: &str| -> Result<Option<u32>> {
+        Ok(read_value(key)?.and_then(|v| v.as_u64()).and_then(|n| n.try_into().ok()))
+    };
+
+    let read_u8 = |key: &str| -> Result<Option<u8>> {
+        Ok(read_value(key)?.and_then(|v| v.as_u64()).and_then(|n| n.try_into().ok()))
+    };
+
+    let metadata = crate::metadata::AudioMetadata {
+        title: read_string("title")?,
+        artist: read_string("artist")?,
+        album: read_string("album")?,
+        year: read_u32("year")?,
+        track_number: read_u32("track_number")?,
+        track_total: read_u32("track_total")?,
+        disc_number: read_u32("disc_number")?,
+        disc_total: read_u32("disc_total")?,
+        genre: read_string("genre")?,
+        duration_secs: read_u64("duration_secs")?,
+        sample_rate: read_u32("sample_rate")?,
+        channels: read_u8("channels")?,
+        bitrate: read_u32("bitrate")?,
+        conversion: None,
+    };
 
     Ok(metadata)
 }
