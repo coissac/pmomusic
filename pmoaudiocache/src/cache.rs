@@ -8,6 +8,7 @@ use anyhow::Result;
 use pmocache::CacheConfig;
 use serde_json::{Number, Value};
 use std::sync::Arc;
+use pmocache::download::TransformMetadata;
 
 /// Configuration pour le cache audio
 pub struct AudioConfig;
@@ -54,6 +55,37 @@ pub type Cache = pmocache::Cache<AudioConfig>;
 pub fn new_cache(dir: &str, limit: usize) -> Result<Cache> {
     let transformer_factory = Arc::new(|| crate::streaming::create_streaming_flac_transformer());
     Cache::with_transformer(dir, limit, Some(transformer_factory))
+}
+
+fn persist_transform_streaminfo(cache: &Cache, pk: &str, tmeta: &TransformMetadata) {
+    if let Some(sr) = tmeta.sample_rate {
+        let _ = cache
+            .db
+            .set_a_metadata(pk, "sample_rate", Value::Number(Number::from(sr)));
+    }
+    if let Some(bps) = tmeta.bits_per_sample {
+        let _ = cache
+            .db
+            .set_a_metadata(pk, "bits_per_sample", Value::Number(Number::from(bps)));
+    }
+    if let Some(ch) = tmeta.channels {
+        let _ = cache
+            .db
+            .set_a_metadata(pk, "channels", Value::Number(Number::from(ch)));
+    }
+    if let Some(ts) = tmeta.total_samples {
+        let _ = cache
+            .db
+            .set_a_metadata(pk, "total_samples", Value::Number(Number::from(ts)));
+        if let Some(sr) = tmeta.sample_rate {
+            if sr > 0 {
+                let secs = (ts as f64 / sr as f64).round() as u64;
+                let _ = cache
+                    .db
+                    .set_a_metadata(pk, "duration_secs", Value::Number(Number::from(secs)));
+            }
+        }
+    }
 }
 
 /// Crée un cache audio et lance la consolidation en arrière-plan
@@ -137,6 +169,10 @@ pub async fn add_with_metadata_extraction(
 
     // Attendre que le fichier soit téléchargé et converti
     cache.wait_until_finished(&pk).await?;
+
+    if let Some(transform) = cache.transform_metadata(&pk).await {
+        persist_transform_streaminfo(cache, &pk, &transform);
+    }
 
     // Lire le fichier FLAC pour extraire les métadonnées
     let file_path = cache.get_file_path(&pk);

@@ -3065,6 +3065,7 @@ dependencies = [
  "pmoplaylist",
  "rand 0.8.5",
  "serde",
+ "serde_json",
  "tokio",
  "tokio-util",
  "tracing",

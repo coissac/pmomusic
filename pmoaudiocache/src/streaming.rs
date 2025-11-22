@@ -9,6 +9,7 @@ use bytes::Bytes;
 use pmocache::download::TransformMetadata;
 use pmocache::StreamTransformer;
 use pmoflac::{transcode_to_flac_stream, AudioCodec, TranscodeOptions};
+use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Creates the transformer consumed by the audio cache.
@@ -36,7 +37,19 @@ pub fn create_streaming_flac_transformer() -> StreamTransformer {
                 .set_metadata(TransformMetadata {
                     mode: Some(mode.to_string()),
                     input_codec: Some(codec_to_string(codec)),
-                    details: None,
+                    details: Some(
+                        json!({
+                            "sample_rate": info.sample_rate,
+                            "bits_per_sample": info.bits_per_sample,
+                            "channels": info.channels,
+                            "total_samples": info.total_samples,
+                        })
+                        .to_string(),
+                    ),
+                    sample_rate: Some(info.sample_rate),
+                    bits_per_sample: Some(info.bits_per_sample),
+                    channels: Some(info.channels),
+                    total_samples: info.total_samples,
                 })
                 .await;
 

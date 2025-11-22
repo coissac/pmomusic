@@ -8,6 +8,7 @@ use pmoaudio::{
 };
 use pmoaudiocache::AudioTrackMetadataExt;
 use pmoflac::{encode_flac_stream, EncoderOptions, PcmFormat};
+use serde_json::{Number, Value};
 use std::{
     collections::VecDeque,
     pin::Pin,
@@ -288,6 +289,10 @@ impl NodeLogic for FlacCacheSinkLogic {
                     }
                 }
             };
+
+            if let Some(transform) = self.cache.transform_metadata(&pk).await {
+                persist_transform_streaminfo(&self.cache, &pk, &transform);
+            }
 
             // Phase 2: Prebuffer terminé! Copier les métadonnées et pusher à la playlist
             // Copier les métadonnées du TrackBoundary dans le cache
@@ -905,6 +910,41 @@ async fn pump_track_segments_from_channel(
             _AudioSegment::Sync(_marker) => {
                 // Ignorer les syncmarkers - le TrackBoundary est géré en amont
                 // Le channel sera fermé quand le TrackBoundary est détecté
+            }
+        }
+    }
+}
+
+fn persist_transform_streaminfo(
+    cache: &pmoaudiocache::Cache,
+    pk: &str,
+    tmeta: &pmocache::download::TransformMetadata,
+) {
+    if let Some(sr) = tmeta.sample_rate {
+        let _ = cache
+            .db
+            .set_a_metadata(pk, "sample_rate", Value::Number(Number::from(sr)));
+    }
+    if let Some(bps) = tmeta.bits_per_sample {
+        let _ = cache
+            .db
+            .set_a_metadata(pk, "bits_per_sample", Value::Number(Number::from(bps)));
+    }
+    if let Some(ch) = tmeta.channels {
+        let _ = cache
+            .db
+            .set_a_metadata(pk, "channels", Value::Number(Number::from(ch)));
+    }
+    if let Some(ts) = tmeta.total_samples {
+        let _ = cache
+            .db
+            .set_a_metadata(pk, "total_samples", Value::Number(Number::from(ts)));
+        if let Some(sr) = tmeta.sample_rate {
+            if sr > 0 {
+                let secs = (ts as f64 / sr as f64).round() as u64;
+                let _ = cache
+                    .db
+                    .set_a_metadata(pk, "duration_secs", Value::Number(Number::from(secs)));
             }
         }
     }

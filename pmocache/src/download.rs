@@ -290,6 +290,10 @@ pub struct TransformMetadata {
     pub mode: Option<String>,
     pub input_codec: Option<String>,
     pub details: Option<String>,
+    pub sample_rate: Option<u32>,
+    pub bits_per_sample: Option<u8>,
+    pub channels: Option<u8>,
+    pub total_samples: Option<u64>,
 }
 
 pub struct TransformContext {
