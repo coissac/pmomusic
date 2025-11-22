@@ -6,7 +6,7 @@ use crate::{MetadataSnapshot, sinks::{flac_frame_utils::FlacStreamState, streami
 use bytes::Bytes;
 use std::io;
 
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, warn};
 
 /// ICY-wrapped FLAC client stream (implements AsyncRead).
 ///
@@ -97,6 +97,7 @@ impl IcyClientStream {
     }
 
     /// Get metadata block if it needs to be inserted.
+    #[allow(dead_code)]
     async fn get_metadata_if_changed(&mut self) -> Option<Bytes> {
         let meta = self.metadata.read().await;
         if meta.version > self.current_metadata_version {

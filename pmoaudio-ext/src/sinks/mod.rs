@@ -42,4 +42,4 @@ mod streaming_ogg_flac_sink;
 pub use streaming_ogg_flac_sink::{OggFlacClientStream, OggFlacStreamHandle, StreamingOggFlacSink};
 
 #[cfg(feature = "http-stream")]
-pub use streaming_sink_common::MetadataSnapshot;
+pub use streaming_sink_common::{MetadataSnapshot, StreamingSinkOptions};

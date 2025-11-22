@@ -45,6 +45,63 @@ pub struct MetadataSnapshot {
     pub version: u64,
 }
 
+/// Configuration options shared by streaming sinks.
+#[derive(Clone, Debug)]
+pub struct StreamingSinkOptions {
+    pub restart_encoder_on_track_boundary: bool,
+    pub enable_total_samples: bool,
+    pub default_title: Option<String>,
+    pub default_artist: Option<String>,
+    pub use_only_default_metadata: bool,
+}
+
+impl StreamingSinkOptions {
+    pub fn flac_defaults() -> Self {
+        Self {
+            restart_encoder_on_track_boundary: false,
+            enable_total_samples: false,
+            default_title: None,
+            default_artist: None,
+            use_only_default_metadata: false,
+        }
+    }
+
+    pub fn ogg_defaults() -> Self {
+        Self {
+            restart_encoder_on_track_boundary: true,
+            enable_total_samples: true,
+            default_title: None,
+            default_artist: None,
+            use_only_default_metadata: false,
+        }
+    }
+
+    pub fn with_restart(mut self, restart: bool) -> Self {
+        self.restart_encoder_on_track_boundary = restart;
+        self
+    }
+
+    pub fn with_total_samples(mut self, enable: bool) -> Self {
+        self.enable_total_samples = enable;
+        self
+    }
+
+    pub fn with_default_title(mut self, title: impl Into<Option<String>>) -> Self {
+        self.default_title = title.into();
+        self
+    }
+
+    pub fn with_default_artist(mut self, artist: impl Into<Option<String>>) -> Self {
+        self.default_artist = artist.into();
+        self
+    }
+
+    pub fn with_only_default_metadata(mut self, only_default: bool) -> Self {
+        self.use_only_default_metadata = only_default;
+        self
+    }
+}
+
 /// Shared handle state for streaming sinks.
 pub struct SharedStreamHandleInner {
     pub broadcast: timed_broadcast::Sender<Bytes>,
@@ -202,6 +259,14 @@ pub struct EncoderState {
 pub struct SharedSinkContext {
     pub encoder_options: EncoderOptions,
     pub bits_per_sample: u8,
+    /// Whether to propagate total_samples into STREAMINFO.
+    /// For unbounded live streams (raw FLAC), this must stay false to avoid
+    /// players stopping after they reach the advertised length.
+    pub enable_total_samples: bool,
+    pub restart_encoder_on_track_boundary: bool,
+    pub default_title: Option<String>,
+    pub default_artist: Option<String>,
+    pub use_only_default_metadata: bool,
     pub pcm_tx: Option<mpsc::Sender<PcmChunk>>,
     pub pcm_rx: Option<mpsc::Receiver<PcmChunk>>,
     pub metadata: Arc<RwLock<MetadataSnapshot>>,
@@ -311,6 +376,15 @@ impl SharedSinkContext {
         // Always pass the metadata handle to the encoder so Vorbis comments are emitted.
         self.encoder_options.metadata = Some(metadata_lock.clone());
 
+        // In raw FLAC live streaming we must NOT advertise a total_samples value,
+        // otherwise players think the stream ends after the first track.
+        if !self.enable_total_samples {
+            self.pending_track_duration = None;
+            self.pending_total_samples = None;
+            self.encoder_options.total_samples = None;
+            return Ok(());
+        }
+
         // Capture duration (if any) to set total_samples.
         let duration_opt = {
             let metadata = metadata_lock.read().await;
@@ -338,6 +412,12 @@ impl SharedSinkContext {
                 .map(Duration::as_secs_f64),
             self.sample_rate
         );
+
+        if !self.enable_total_samples {
+            self.encoder_options.total_samples = None;
+            info!("Encoder metadata: total_samples disabled for live streaming");
+            return;
+        }
 
         if let Some(total) = self.pending_total_samples {
             self.encoder_options.total_samples = Some(total);
@@ -430,8 +510,24 @@ impl SharedSinkContext {
         let metadata = metadata_lock.read().await;
         let mut snapshot = self.metadata.write().await;
 
-        snapshot.title = metadata.get_title().await.ok().flatten();
-        snapshot.artist = metadata.get_artist().await.ok().flatten();
+        // Title / artist with default fallback or forced default.
+        if self.use_only_default_metadata {
+            snapshot.title = self.default_title.clone();
+            snapshot.artist = self.default_artist.clone();
+        } else {
+            snapshot.title = metadata
+                .get_title()
+                .await
+                .ok()
+                .flatten()
+                .or_else(|| self.default_title.clone());
+            snapshot.artist = metadata
+                .get_artist()
+                .await
+                .ok()
+                .flatten()
+                .or_else(|| self.default_artist.clone());
+        }
         snapshot.album = metadata.get_album().await.ok().flatten();
         snapshot.duration = metadata.get_duration().await.ok().flatten();
         snapshot.cover_url = metadata.get_cover_url().await.ok().flatten();
@@ -443,6 +539,9 @@ impl SharedSinkContext {
             snapshot.track_number = extra
                 .get("track_number")
                 .and_then(|s| s.parse::<u32>().ok());
+        } else {
+            snapshot.genre = None;
+            snapshot.track_number = None;
         }
 
         snapshot.audio_timestamp_sec = timestamp_sec;

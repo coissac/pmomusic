@@ -19,7 +19,7 @@ use pmoaudio::{nodes::DEFAULT_CHANNEL_SIZE, AudioPipelineNode};
 use pmoaudio_ext::{
     FlacCacheSink, FlacClientStream, IcyClientStream, MetadataSnapshot, OggFlacClientStream,
     OggFlacStreamHandle, PlaylistSource, StreamHandle, StreamingFlacSink, StreamingOggFlacSink,
-    TrackBoundaryCoverNode,
+    TrackBoundaryCoverNode, StreamingSinkOptions,
 };
 use pmoaudiocache::Cache as AudioCache;
 use pmocovers::Cache as CoverCache;
@@ -37,12 +37,16 @@ use tracing::{error, info, warn};
 pub struct ParadiseStreamChannelConfig {
     /// Durée maximale (en secondes) d'avance acceptée par le broadcast.
     pub max_lead_seconds: f64,
+    pub flac_options: StreamingSinkOptions,
+    pub ogg_options: StreamingSinkOptions,
 }
 
 impl Default for ParadiseStreamChannelConfig {
     fn default() -> Self {
         Self {
             max_lead_seconds: 1.0,
+            flac_options: StreamingSinkOptions::flac_defaults(),
+            ogg_options: StreamingSinkOptions::ogg_defaults(),
         }
     }
 }
@@ -189,15 +193,17 @@ impl ParadiseStreamChannel {
         let mut source = RadioParadiseStreamSource::new(client.clone());
         let block_handle = source.block_handle();
 
-        let (flac_sink, stream_handle) = StreamingFlacSink::with_max_broadcast_lead(
+        let (flac_sink, stream_handle) = StreamingFlacSink::with_options(
             EncoderOptions::default(),
             16,
             config.max_lead_seconds,
+            config.flac_options.clone(),
         );
-        let (ogg_sink, ogg_handle) = StreamingOggFlacSink::with_max_broadcast_lead(
+        let (ogg_sink, ogg_handle) = StreamingOggFlacSink::with_options(
             EncoderOptions::default(),
             16,
             config.max_lead_seconds,
+            config.ogg_options.clone(),
         );
 
         let mut downstream_children: Vec<Box<dyn AudioPipelineNode>> = Vec::new();
@@ -361,10 +367,11 @@ impl ParadiseStreamChannel {
             .await
             .map_err(|e| HistoryStreamError::Playlist(e.to_string()))?;
         let mut source = PlaylistSource::new(reader, history.audio_cache.clone());
-        let (flac_sink, handle) = StreamingFlacSink::with_max_broadcast_lead(
+        let (flac_sink, handle) = StreamingFlacSink::with_options(
             EncoderOptions::default(),
             16,
             history.replay_max_lead_seconds,
+            self.state.config.flac_options.clone(),
         );
         source.register(Box::new(flac_sink));
         let stop_token = CancellationToken::new();
@@ -397,10 +404,11 @@ impl ParadiseStreamChannel {
             .await
             .map_err(|e| HistoryStreamError::Playlist(e.to_string()))?;
         let mut source = PlaylistSource::new(reader, history.audio_cache.clone());
-        let (ogg_sink, handle) = StreamingOggFlacSink::with_max_broadcast_lead(
+        let (ogg_sink, handle) = StreamingOggFlacSink::with_options(
             EncoderOptions::default(),
             16,
             history.replay_max_lead_seconds,
+            self.state.config.ogg_options.clone(),
         );
         source.register(Box::new(ogg_sink));
         let stop_token = CancellationToken::new();

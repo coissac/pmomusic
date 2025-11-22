@@ -20,6 +20,7 @@ use pmoparadise::{
     channels::{ChannelDescriptor, ALL_CHANNELS},
     ParadiseHistoryBuilder, ParadiseStreamChannel, ParadiseStreamChannelConfig,
 };
+use pmoaudio_ext::StreamingSinkOptions;
 use pmoplaylist::register_audio_cache as register_playlist_audio_cache;
 use std::{fs, net::SocketAddr, sync::Arc};
 use tokio::net::TcpListener;
@@ -62,10 +63,16 @@ async fn main() -> anyhow::Result<()> {
     history_builder.collection_prefix = Some(format!("single-channel-{}", descriptor.slug));
     let history_opts = history_builder.build_for_channel(&descriptor).await?;
 
+    let mut channel_config = ParadiseStreamChannelConfig::default();
+    channel_config.flac_options = StreamingSinkOptions::flac_defaults()
+        .with_default_artist(Some("Radio Paradise".to_string()))
+        .with_default_title(descriptor.display_name.to_string())
+        .with_only_default_metadata(true);
+
     let channel = Arc::new(
         ParadiseStreamChannel::new(
             descriptor,
-            ParadiseStreamChannelConfig::default(),
+            channel_config,
             Some(cover_cache),
             Some(history_opts),
         )

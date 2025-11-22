@@ -6,7 +6,7 @@
 
 use std::{
     collections::VecDeque,
-    fmt, string,
+    fmt,
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex, Weak,
@@ -15,7 +15,7 @@ use std::{
 };
 
 use tokio::sync::Notify;
-use tracing::{debug, info, trace, warn};
+use tracing::{info, trace, warn};
 
 /// Tolérance pour détecter un timestamp à zéro (TopZero).
 const TOP_ZERO_EPSILON: f64 = 1e-9;

@@ -26,6 +26,7 @@ use pmoaudio::{AudioError, AudioPipelineNode};
 use pmoaudio_ext::{
     FlacClientStream, IcyClientStream, MetadataSnapshot, OggFlacClientStream, OggFlacStreamHandle,
     PlaylistSource, StreamHandle, StreamingFlacSink, StreamingOggFlacSink, TrackBoundaryCoverNode,
+    StreamingSinkOptions,
 };
 use pmoaudiocache::{get_audio_cache, Cache as AudioCache};
 use pmocovers::{get_cover_cache, Cache as CoverCache};
@@ -43,12 +44,18 @@ use tracing::{error, info, warn};
 pub struct ParadiseStreamChannelConfig {
     /// Durée maximale (en secondes) d'avance acceptée par le broadcast.
     pub max_lead_seconds: f64,
+    /// Options pour le flux FLAC pur.
+    pub flac_options: StreamingSinkOptions,
+    /// Options pour le flux OGG-FLAC.
+    pub ogg_options: StreamingSinkOptions,
 }
 
 impl Default for ParadiseStreamChannelConfig {
     fn default() -> Self {
         Self {
             max_lead_seconds: 1.0,
+            flac_options: StreamingSinkOptions::flac_defaults(),
+            ogg_options: StreamingSinkOptions::ogg_defaults(),
         }
     }
 }
@@ -136,6 +143,8 @@ impl ParadiseStreamChannelConfig {
                 if let Some(v) = num.as_f64() {
                     Self {
                         max_lead_seconds: v.max(0.1),
+                        flac_options: StreamingSinkOptions::flac_defaults(),
+                        ogg_options: StreamingSinkOptions::ogg_defaults(),
                     }
                 } else {
                     let default = Self::default();
@@ -148,6 +157,8 @@ impl ParadiseStreamChannelConfig {
                 if let Ok(v) = s.parse::<f64>() {
                     Self {
                         max_lead_seconds: v.max(0.1),
+                        flac_options: StreamingSinkOptions::flac_defaults(),
+                        ogg_options: StreamingSinkOptions::ogg_defaults(),
                     }
                 } else {
                     let default = Self::default();
@@ -238,15 +249,17 @@ impl ParadiseStreamChannel {
         };
 
         // 4. Créer les sinks de broadcast (FLAC + OGG)
-        let (flac_sink, stream_handle) = StreamingFlacSink::with_max_broadcast_lead(
+        let (flac_sink, stream_handle) = StreamingFlacSink::with_options(
             EncoderOptions::default(),
             16,
             config.max_lead_seconds,
+            config.flac_options.clone(),
         );
-        let (ogg_sink, ogg_handle) = StreamingOggFlacSink::with_max_broadcast_lead(
+        let (ogg_sink, ogg_handle) = StreamingOggFlacSink::with_options(
             EncoderOptions::default(),
             16,
             config.max_lead_seconds,
+            config.ogg_options.clone(),
         );
 
         let mut downstream_children: Vec<Box<dyn AudioPipelineNode>> = Vec::new();

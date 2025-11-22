@@ -46,7 +46,6 @@
 //! - Pages are broadcast immediately to connected clients
 //! - TrackBoundary only triggers encoder flush (no data accumulation)
 
-use std::collections::VecDeque;
 use std::io;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -56,7 +55,7 @@ use std::task::{Context, Poll};
 use super::{
     broadcast_pacing::BroadcastPacer,
     flac_frame_utils,
-    timed_broadcast::{self, SendError, TryRecvError},
+    timed_broadcast::{self, SendError},
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -68,13 +67,14 @@ use pmoflac::{EncoderOptions, FlacEncodedStream};
 use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
 use tokio::sync::{mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, trace, warn};
 
 use crate::byte_stream_reader::{PcmChunk};
 use crate::chunk_to_pcm::chunk_to_pcm_bytes;
 use crate::sinks::flac_frame_utils::{extract_sample_rate_from_streaminfo, read_flac_header};
 use crate::sinks::streaming_sink_common::{
     MetadataSnapshot, SharedClientStream, SharedSinkContext, SharedStreamHandleInner,
+    StreamingSinkOptions,
 };
 use crate::sinks::timed_broadcast::{
     calculate_broadcast_capacity, DEFAULT_BROADCAST_MAX_LEAD_TIME,
@@ -210,7 +210,7 @@ impl NodeLogic for StreamingOggFlacSinkLogic {
                                                  current_timestamp,
                                                  current_duration,
                                                  max_lead,
-                                                 sample_rate,
+                                                 _sample_rate,
                                                  timestamp_offset_sec| {
                                                     broadcast_ogg_flac_stream(
                                                         flac_stream,
@@ -273,38 +273,44 @@ impl NodeLogic for StreamingOggFlacSinkLogic {
                                                 error!("Failed to prepare encoder options for new track: {}", e);
                                             }
 
-                                            // Only restart encoder if it's already initialized (not the first track)
-                                            if self.ctx.sample_rate.is_some() && self.ctx.encoder_state.is_some() {
-                                                // Restart encoder to emit new OGG stream header and reset timestamps
-                                                if let Err(e) = self
-                                                    .ctx
-                                                    .restart_encoder_for_new_track(
-                                                        |flac_stream,
-                                                         broadcast,
-                                                         header,
-                                                         current_timestamp,
-                                                         current_duration,
-                                                         max_lead,
-                                                         sample_rate,
-                                                         timestamp_offset_sec| {
-                                                            broadcast_ogg_flac_stream(
-                                                                flac_stream,
-                                                                broadcast,
-                                                                header,
-                                                                current_timestamp,
-                                                                current_duration,
-                                                                max_lead,
-                                                                timestamp_offset_sec,
-                                                            )
-                                                        },
-                                                    )
-                                                    .await
+                                            if self.ctx.restart_encoder_on_track_boundary {
+                                                // Only restart encoder if it's already initialized (not the first track)
+                                                if self.ctx.sample_rate.is_some()
+                                                    && self.ctx.encoder_state.is_some()
                                                 {
-                                                    error!("Failed to restart OGG encoder for new track: {}", e);
-                                                    break;
+                                                    // Restart encoder to emit new OGG stream header and reset timestamps
+                                                    if let Err(e) = self
+                                                        .ctx
+                                                        .restart_encoder_for_new_track(
+                                                            |flac_stream,
+                                                             broadcast,
+                                                             header,
+                                                             current_timestamp,
+                                                             current_duration,
+                                                             max_lead,
+                                                             _sample_rate,
+                                                             timestamp_offset_sec| {
+                                                                broadcast_ogg_flac_stream(
+                                                                    flac_stream,
+                                                                    broadcast,
+                                                                    header,
+                                                                    current_timestamp,
+                                                                    current_duration,
+                                                                    max_lead,
+                                                                    timestamp_offset_sec,
+                                                                )
+                                                            },
+                                                        )
+                                                        .await
+                                                    {
+                                                        error!("Failed to restart OGG encoder for new track: {}", e);
+                                                        break;
+                                                    }
+                                                } else {
+                                                    trace!("Skipping OGG encoder restart for first track (encoder not yet initialized)");
                                                 }
                                             } else {
-                                                trace!("Skipping OGG encoder restart for first track (encoder not yet initialized)");
+                                                trace!("StreamingOggFlacSink: restart disabled; continuing encoder across track boundary");
                                             }
 
                                             // Update metadata for the new track
@@ -380,6 +386,21 @@ impl StreamingOggFlacSink {
         bits_per_sample: u8,
         broadcast_max_lead_time: f64,
     ) -> (Self, OggFlacStreamHandle) {
+        Self::with_options(
+            encoder_options,
+            bits_per_sample,
+            broadcast_max_lead_time,
+            StreamingSinkOptions::ogg_defaults(),
+        )
+    }
+
+    /// Create a sink with a custom broadcast pacing limit and options.
+    pub fn with_options(
+        encoder_options: EncoderOptions,
+        bits_per_sample: u8,
+        broadcast_max_lead_time: f64,
+        options: StreamingSinkOptions,
+    ) -> (Self, OggFlacStreamHandle) {
         // Validate bit depth
         if ![16, 24, 32].contains(&bits_per_sample) {
             panic!("bits_per_sample must be 16, 24, or 32");
@@ -420,6 +441,11 @@ impl StreamingOggFlacSink {
             ctx: SharedSinkContext {
                 encoder_options,
                 bits_per_sample,
+                enable_total_samples: options.enable_total_samples,
+                restart_encoder_on_track_boundary: options.restart_encoder_on_track_boundary,
+                default_title: options.default_title.clone(),
+                default_artist: options.default_artist.clone(),
+                use_only_default_metadata: options.use_only_default_metadata,
                 pcm_tx: Some(pcm_tx),
                 pcm_rx: Some(pcm_rx),
                 metadata,
@@ -494,9 +520,7 @@ async fn broadcast_ogg_flac_stream(
     let mut ogg_writer = OggPageWriter::new(stream_serial);
 
     let mut total_bytes = 0u64;
-    let mut header_captured = false;
     let mut pacer = BroadcastPacer::new(broadcast_max_lead_time, "OGG");
-    let mut last_granule_update_time = 0.0f64;
 
     // Timing instrumentation for burst detection
     let mut last_broadcast_time = std::time::Instant::now();
@@ -538,7 +562,6 @@ async fn broadcast_ogg_flac_stream(
     cached_header.extend_from_slice(&bos_bytes);
     cached_header.extend_from_slice(&comment_bytes);
     *header_cache.write().await = Some(Bytes::from(cached_header));
-    header_captured = true;
     trace!(
         "OGG-FLAC header cached ({} bytes: BOS + Vorbis Comment)",
         bos_bytes.len() + comment_bytes.len()

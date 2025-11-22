@@ -6,13 +6,14 @@
 //! - Paces broadcast to match audio playback rate
 
 use std::time::Instant;
-use tracing::{trace, warn};
+use tracing::trace;
 
 /// Error returned when a frame should be skipped (too late)
 #[derive(Debug)]
 pub struct SkipFrame;
 
 /// Manages broadcast pacing with TopZeroSync detection
+#[allow(dead_code)]
 pub struct BroadcastPacer {
     /// Start time (reset on TopZeroSync)
     start_time: Instant,

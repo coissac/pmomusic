@@ -54,7 +54,6 @@
 //! }
 //! ```
 
-use std::collections::VecDeque;
 use std::io;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -65,7 +64,7 @@ use std::time::Duration;
 use super::{
     broadcast_pacing::BroadcastPacer,
     flac_frame_utils,
-    timed_broadcast::{self, SendError, TryRecvError},
+    timed_broadcast::{self, SendError},
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -77,12 +76,13 @@ use pmoflac::{EncoderOptions, FlacEncodedStream};
 use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
 use tokio::sync::{mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, trace, warn};
 
 use crate::byte_stream_reader::{PcmChunk};
 use crate::chunk_to_pcm::chunk_to_pcm_bytes;
 use crate::sinks::streaming_sink_common::{
     MetadataSnapshot, SharedClientStream, SharedSinkContext, SharedStreamHandleInner,
+    StreamingSinkOptions,
 };
 use crate::sinks::timed_broadcast::{
     calculate_broadcast_capacity, DEFAULT_BROADCAST_MAX_LEAD_TIME,
@@ -214,8 +214,8 @@ impl NodeLogic for StreamingFlacSinkLogic {
                                         self.ctx.first_chunk_timestamp_checked = true;
                                         if seg.timestamp_sec.abs() > 1e-6 {
                                             warn!(
-                                                "StreamingFlacSink: first chunk timestamp is {:.6}s (expected 0.0)",
-                                                seg.timestamp_sec
+                                                "StreamingFlacSink: first chunk timestamp is {:.3}ms (expected 0.0)",
+                                                seg.timestamp_sec * 1000.0
                                             );
                                         } else {
                                             trace!("StreamingFlacSink: first chunk timestamp verified at 0.0s");
@@ -318,39 +318,53 @@ impl NodeLogic for StreamingFlacSinkLogic {
 
                                             debug!("StreamingFlacSink: SyncMarker::TrackBoundary {:?}",metadata.read().await.get_duration().await);
 
-                                            // Only restart encoder if it's already initialized (not the first track)
-                                            if self.ctx.sample_rate.is_some() && self.ctx.encoder_state.is_some() {
-                                                // Restart encoder to emit new header and reset timestamps
-                                                if let Err(e) = self
-                                                    .ctx
-                                                    .restart_encoder_for_new_track(
-                                                        |flac_stream,
-                                                         broadcast,
-                                                         header,
-                                                         current_timestamp,
-                                                         current_duration,
-                                                         max_lead,
-                                                         sample_rate,
-                                                         timestamp_offset_sec| {
-                                                            broadcast_flac_stream(
-                                                                flac_stream,
-                                                                broadcast,
-                                                                header,
-                                                                current_timestamp,
-                                                                current_duration,
-                                                                max_lead,
-                                                                sample_rate,
-                                                                timestamp_offset_sec,
-                                                            )
-                                                        },
-                                                    )
-                                                    .await
+                                            if self.ctx.restart_encoder_on_track_boundary {
+                                                // Only restart encoder if it's already initialized (not the first track)
+                                                if self.ctx.sample_rate.is_some()
+                                                    && self.ctx.encoder_state.is_some()
                                                 {
-                                                    error!("Failed to restart encoder for new track: {}", e);
-                                                    break;
+                                                    // Restart encoder to emit new header and reset timestamps
+                                                    if let Err(e) = self
+                                                        .ctx
+                                                        .restart_encoder_for_new_track(
+                                                            |flac_stream,
+                                                             broadcast,
+                                                             header,
+                                                             current_timestamp,
+                                                             current_duration,
+                                                             max_lead,
+                                                             sample_rate,
+                                                             timestamp_offset_sec| {
+                                                                broadcast_flac_stream(
+                                                                    flac_stream,
+                                                                    broadcast,
+                                                                    header,
+                                                                    current_timestamp,
+                                                                    current_duration,
+                                                                    max_lead,
+                                                                    sample_rate,
+                                                                    timestamp_offset_sec,
+                                                                )
+                                                            },
+                                                        )
+                                                        .await
+                                                    {
+                                                        error!(
+                                                            "Failed to restart encoder for new track: {}",
+                                                            e
+                                                        );
+                                                        break;
+                                                    }
+                                                } else {
+                                                    trace!("Skipping encoder restart for first track (encoder not yet initialized)");
                                                 }
                                             } else {
-                                                trace!("Skipping encoder restart for first track (encoder not yet initialized)");
+                                                // For raw FLAC streaming we keep a single continuous encoder.
+                                                // Restarting would insert a new STREAMINFO header mid-stream and many
+                                                // clients treat that as end-of-file.
+                                                trace!(
+                                                    "StreamingFlacSink: keeping encoder alive across track boundary"
+                                                );
                                             }
 
                                             // Update metadata for the new track
@@ -423,6 +437,21 @@ impl StreamingFlacSink {
         bits_per_sample: u8,
         broadcast_max_lead_time: f64,
     ) -> (Self, StreamHandle) {
+        Self::with_options(
+            encoder_options,
+            bits_per_sample,
+            broadcast_max_lead_time,
+            StreamingSinkOptions::flac_defaults(),
+        )
+    }
+
+    /// Create a sink with a custom broadcast pacing limit and options.
+    pub fn with_options(
+        encoder_options: EncoderOptions,
+        bits_per_sample: u8,
+        broadcast_max_lead_time: f64,
+        options: StreamingSinkOptions,
+    ) -> (Self, StreamHandle) {
         // Validate bit depth
         if ![16, 24, 32].contains(&bits_per_sample) {
             panic!("bits_per_sample must be 16, 24, or 32");
@@ -465,6 +494,11 @@ impl StreamingFlacSink {
             ctx: SharedSinkContext {
                 encoder_options,
                 bits_per_sample,
+                enable_total_samples: options.enable_total_samples,
+                restart_encoder_on_track_boundary: options.restart_encoder_on_track_boundary,
+                default_title: options.default_title.clone(),
+                default_artist: options.default_artist.clone(),
+                use_only_default_metadata: options.use_only_default_metadata,
                 pcm_tx: Some(pcm_tx),
                 pcm_rx: Some(pcm_rx),
                 metadata,
