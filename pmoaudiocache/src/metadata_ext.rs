@@ -83,3 +83,46 @@ fn map_err(field: &str, pk: &str, err: MetadataError) -> anyhow::Error {
         }
     }
 }
+
+/// Extension pour convertir TrackMetadata en Resource DIDL-Lite (UPnP)
+#[async_trait::async_trait]
+pub trait TrackMetadataDidlExt {
+    /// Convertit les métadonnées en Resource DIDL-Lite
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - URL de la ressource audio
+    ///
+    /// # Exemple
+    ///
+    /// ```rust,ignore
+    /// use pmoaudiocache::metadata_ext::{AudioTrackMetadataExt, TrackMetadataDidlExt};
+    ///
+    /// let track_meta = cache.track_metadata(&pk);
+    /// let resource = track_meta.read().await.to_didl_resource("http://example.com/track.flac".to_string()).await;
+    /// ```
+    async fn to_didl_resource(&self, url: String) -> pmodidl::Resource;
+}
+
+#[async_trait::async_trait]
+impl TrackMetadataDidlExt for dyn TrackMetadata {
+    async fn to_didl_resource(&self, url: String) -> pmodidl::Resource {
+        // Récupérer la durée et la formater pour DIDL-Lite (H:MM:SS)
+        let duration = self.get_duration().await.ok().flatten().map(|d| {
+            let secs = d.as_secs();
+            let hours = secs / 3600;
+            let minutes = (secs % 3600) / 60;
+            let seconds = secs % 60;
+            format!("{}:{:02}:{:02}", hours, minutes, seconds)
+        });
+
+        pmodidl::Resource {
+            protocol_info: "http-get:*:audio/flac:*".to_string(),
+            bits_per_sample: self.get_bits_per_sample().await.ok().flatten().map(|b| b.to_string()),
+            sample_frequency: self.get_sample_rate().await.ok().flatten().map(|sr| sr.to_string()),
+            nr_audio_channels: self.get_channels().await.ok().flatten().map(|ch| ch.to_string()),
+            duration,
+            url,
+        }
+    }
+}

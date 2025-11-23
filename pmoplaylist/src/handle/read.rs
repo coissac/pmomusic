@@ -204,33 +204,40 @@ impl ReadHandle {
                 continue;
             }
 
-            // Charger métadonnées
-            let metadata = match pmoaudiocache::get_metadata(&*cache, &record.cache_pk) {
-                Ok(m) => m,
-                Err(_) => continue,
-            };
+            // Charger métadonnées via TrackMetadata
+            use pmoaudiocache::metadata_ext::{AudioTrackMetadataExt, TrackMetadataDidlExt};
+            let track_meta = cache.track_metadata(&record.cache_pk);
+            let meta = track_meta.read().await;
 
             // Construire l'URL via route_for
             let url = cache.route_for(&record.cache_pk, None);
 
-            // Créer le Resource DIDL
-            let resource = metadata.to_didl_resource(url);
+            // Créer le Resource DIDL via l'extension trait
+            let resource = meta.to_didl_resource(url).await;
+
+            // Récupérer les métadonnées pour construire l'Item DIDL
+            let title = meta.get_title().await.ok().flatten().unwrap_or_else(|| "Unknown".to_string());
+            let artist = meta.get_artist().await.ok().flatten();
+            let album = meta.get_album().await.ok().flatten();
+            let genre = meta.get_genre().await.ok().flatten();
+            let year = meta.get_year().await.ok().flatten();
+            let track_number = meta.get_track_number().await.ok().flatten();
 
             // Créer l'Item
             let item = Item {
                 id: format!("{}:{}", self.playlist.id, pos + idx),
                 parent_id: self.playlist.id.clone(),
                 restricted: Some("1".to_string()),
-                title: metadata.title.unwrap_or_else(|| "Unknown".to_string()),
-                creator: metadata.artist.clone(),
+                title: title.clone(),
+                creator: artist.clone(),
                 class: "object.item.audioItem.musicTrack".to_string(),
-                artist: metadata.artist,
-                album: metadata.album,
-                genre: metadata.genre,
+                artist,
+                album,
+                genre,
                 album_art: None, // TODO: intégrer pmocovers
                 album_art_pk: None,
-                date: metadata.year.map(|y| y.to_string()),
-                original_track_number: metadata.track_number.map(|n| n.to_string()),
+                date: year.map(|y| y.to_string()),
+                original_track_number: track_number.map(|n| n.to_string()),
                 resources: vec![resource],
                 descriptions: vec![],
             };

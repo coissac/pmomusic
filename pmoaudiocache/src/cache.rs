@@ -5,10 +5,11 @@
 //! des métadonnées en JSON dans la base de données.
 
 use anyhow::Result;
+use crate::metadata_ext::AudioTrackMetadataExt;
 use pmocache::CacheConfig;
-use serde_json::{Number, Value};
-use std::sync::Arc;
 use pmocache::download::TransformMetadata;
+use serde_json::Value;
+use std::sync::Arc;
 
 /// Configuration pour le cache audio
 pub struct AudioConfig;
@@ -57,32 +58,26 @@ pub fn new_cache(dir: &str, limit: usize) -> Result<Cache> {
     Cache::with_transformer(dir, limit, Some(transformer_factory))
 }
 
-fn persist_transform_streaminfo(cache: &Cache, pk: &str, tmeta: &TransformMetadata) {
+async fn persist_transform_streaminfo(cache: Arc<Cache>, pk: &str, tmeta: &TransformMetadata) {
+    use std::time::Duration;
+
+    let track_meta = cache.track_metadata(pk);
+    let mut meta = track_meta.write().await;
+
     if let Some(sr) = tmeta.sample_rate {
-        let _ = cache
-            .db
-            .set_a_metadata(pk, "sample_rate", Value::Number(Number::from(sr)));
+        let _ = meta.set_sample_rate(Some(sr)).await;
     }
     if let Some(bps) = tmeta.bits_per_sample {
-        let _ = cache
-            .db
-            .set_a_metadata(pk, "bits_per_sample", Value::Number(Number::from(bps)));
-    }
-    if let Some(ch) = tmeta.channels {
-        let _ = cache
-            .db
-            .set_a_metadata(pk, "channels", Value::Number(Number::from(ch)));
+        let _ = meta.set_bits_per_sample(Some(bps)).await;
     }
     if let Some(ts) = tmeta.total_samples {
-        let _ = cache
-            .db
-            .set_a_metadata(pk, "total_samples", Value::Number(Number::from(ts)));
+        let _ = meta.set_total_samples(Some(ts)).await;
+
+        // Calculer la durée à partir de total_samples et sample_rate
         if let Some(sr) = tmeta.sample_rate {
             if sr > 0 {
                 let secs = (ts as f64 / sr as f64).round() as u64;
-                let _ = cache
-                    .db
-                    .set_a_metadata(pk, "duration_secs", Value::Number(Number::from(secs)));
+                let _ = meta.set_duration(Some(Duration::from_secs(secs))).await;
             }
         }
     }
@@ -160,206 +155,106 @@ pub async fn new_cache_with_consolidation(dir: &str, limit: usize) -> Result<Arc
 /// # }
 /// ```
 pub async fn add_with_metadata_extraction(
-    cache: &Cache,
+    cache: Arc<Cache>,
     url: &str,
     collection: Option<&str>,
 ) -> Result<String> {
+    use std::time::Duration;
+
     // Ajouter au cache (déclenche le download et la conversion)
     let pk = cache.add_from_url(url, collection).await?;
 
     // Attendre que le fichier soit téléchargé et converti
     cache.wait_until_finished(&pk).await?;
 
+    // Persister les métadonnées de transformation (taux d'échantillonnage, bits par échantillon, etc.)
     if let Some(transform) = cache.transform_metadata(&pk).await {
-        persist_transform_streaminfo(cache, &pk, &transform);
+        persist_transform_streaminfo(cache.clone(), &pk, &transform).await;
     }
 
     // Lire le fichier FLAC pour extraire les métadonnées
     let file_path = cache.get_file_path(&pk);
     let flac_bytes = tokio::fs::read(&file_path).await?;
 
-    // Extraire les métadonnées et persister champ par champ dans la DB (source unique)
-    let mut metadata = crate::metadata::AudioMetadata::from_bytes(&flac_bytes)?;
+    // Extraire les métadonnées depuis le fichier audio
+    let metadata = crate::metadata::AudioMetadata::from_bytes(&flac_bytes)?;
 
-    // Informations techniques issues du flux FLAC
+    // Créer une instance TrackMetadata pour persister via l'interface unifiée
+    let track_meta = cache.clone().track_metadata(&pk);
+    let mut meta = track_meta.write().await;
+
+    // Informations techniques issues du flux FLAC (streaminfo)
     let streaminfo = parse_flac_streaminfo(&flac_bytes);
-    if let Some(d) = metadata.duration_secs {
-        let _ = cache
-            .db
-            .set_a_metadata(&pk, "duration_secs", Value::Number(Number::from(d)));
-    }
     if let Some((sr, bps, total_samples)) = streaminfo {
-        let _ = cache
-            .db
-            .set_a_metadata(&pk, "sample_rate", Value::Number(Number::from(sr)));
-        let _ = cache
-            .db
-            .set_a_metadata(&pk, "bits_per_sample", Value::Number(Number::from(bps)));
-        let _ = cache.db.set_a_metadata(
-            &pk,
-            "total_samples",
-            Value::Number(Number::from(total_samples)),
-        );
+        let _ = meta.set_sample_rate(Some(sr)).await;
+        let _ = meta.set_bits_per_sample(Some(bps)).await;
+        let _ = meta.set_total_samples(Some(total_samples)).await;
+
+        // Calculer la durée si elle n'est pas disponible depuis les tags
         if metadata.duration_secs.is_none() && sr > 0 {
             let secs = (total_samples as f64 / sr as f64).round() as u64;
-            let _ = cache
-                .db
-                .set_a_metadata(&pk, "duration_secs", Value::Number(Number::from(secs)));
-            metadata.duration_secs = Some(secs);
-        }
-        if metadata.sample_rate.is_none() {
-            metadata.sample_rate = Some(sr);
-        }
-        if metadata.bitrate.is_none() {
-            // Approximate bitrate: sample_rate * bits_per_sample * channels / 1000
-            if let Some(ch) = metadata.channels {
-                let br = (sr as u64 * bps as u64 * ch as u64) / 1000;
-                metadata.bitrate = Some(br as u32);
-            }
+            let _ = meta.set_duration(Some(Duration::from_secs(secs))).await;
         }
     }
 
-    // Métadonnées descriptives (tags)
-    if let Some(title) = metadata.title.clone() {
-        let _ = cache
-            .db
-            .set_a_metadata(&pk, "title", Value::String(title));
+    // Déterminer la collection automatique avant de move les valeurs
+    let auto_collection = if collection.is_none() {
+        metadata.collection_key()
+    } else {
+        None
+    };
+
+    // Métadonnées descriptives (tags) - en écrasant éventuellement celles du streaminfo
+    if let Some(d) = metadata.duration_secs {
+        let _ = meta.set_duration(Some(Duration::from_secs(d))).await;
     }
-    if let Some(artist) = metadata.artist.clone() {
-        let _ = cache
-            .db
-            .set_a_metadata(&pk, "artist", Value::String(artist));
+    if let Some(title) = metadata.title {
+        let _ = meta.set_title(Some(title)).await;
     }
-    if let Some(album) = metadata.album.clone() {
-        let _ = cache
-            .db
-            .set_a_metadata(&pk, "album", Value::String(album));
+    if let Some(artist) = metadata.artist {
+        let _ = meta.set_artist(Some(artist)).await;
+    }
+    if let Some(album) = metadata.album {
+        let _ = meta.set_album(Some(album)).await;
     }
     if let Some(year) = metadata.year {
-        let _ = cache
-            .db
-            .set_a_metadata(&pk, "year", Value::Number(Number::from(year)));
+        let _ = meta.set_year(Some(year)).await;
+    }
+    if let Some(genre) = metadata.genre {
+        let _ = meta.set_genre(Some(genre)).await;
     }
     if let Some(track_number) = metadata.track_number {
-        let _ = cache
-            .db
-            .set_a_metadata(&pk, "track_number", Value::Number(Number::from(track_number)));
+        let _ = meta.set_track_number(Some(track_number)).await;
     }
     if let Some(track_total) = metadata.track_total {
-        let _ = cache
-            .db
-            .set_a_metadata(&pk, "track_total", Value::Number(Number::from(track_total)));
+        let _ = meta.set_track_total(Some(track_total)).await;
     }
     if let Some(disc_number) = metadata.disc_number {
-        let _ = cache
-            .db
-            .set_a_metadata(&pk, "disc_number", Value::Number(Number::from(disc_number)));
+        let _ = meta.set_disc_number(Some(disc_number)).await;
     }
     if let Some(disc_total) = metadata.disc_total {
-        let _ = cache
-            .db
-            .set_a_metadata(&pk, "disc_total", Value::Number(Number::from(disc_total)));
+        let _ = meta.set_disc_total(Some(disc_total)).await;
     }
-    if let Some(genre) = metadata.genre.clone() {
-        let _ = cache
-            .db
-            .set_a_metadata(&pk, "genre", Value::String(genre));
+    if let Some(channels) = metadata.channels {
+        let _ = meta.set_channels(Some(channels)).await;
     }
-    if let Some(sr) = metadata.sample_rate {
-        let _ = cache
-            .db
-            .set_a_metadata(&pk, "sample_rate", Value::Number(Number::from(sr)));
-    }
-    if let Some(ch) = metadata.channels {
-        let _ = cache
-            .db
-            .set_a_metadata(&pk, "channels", Value::Number(Number::from(ch)));
-    }
-    if let Some(br) = metadata.bitrate {
-        let _ = cache
-            .db
-            .set_a_metadata(&pk, "bitrate", Value::Number(Number::from(br)));
+    if let Some(bitrate) = metadata.bitrate {
+        let _ = meta.set_bitrate(Some(bitrate)).await;
     }
 
+    // Libérer le lock explicitement avant les opérations de collection
+    drop(meta);
+
     // Mettre à jour la collection si les métadonnées en fournissent une
-    if collection.is_none() {
-        if let Some(auto_collection) = metadata.collection_key() {
-            cache
-                .db
-                .add(&pk, None, Some(&auto_collection))
-                .map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
-            cache.db.set_origin_url(&pk, url)?;
-        }
+    if let Some(auto_collection) = auto_collection {
+        cache
+            .db
+            .add(&pk, None, Some(&auto_collection))
+            .map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
+        cache.db.set_origin_url(&pk, url)?;
     }
 
     Ok(pk)
-}
-
-/// Récupère les métadonnées audio d'un fichier en cache
-///
-/// # Arguments
-///
-/// * `cache` - Instance du cache
-/// * `pk` - Clé primaire du fichier
-///
-/// # Returns
-///
-/// Les métadonnées audio désérialisées depuis le JSON stocké en DB
-///
-/// # Exemple
-///
-/// ```rust,no_run
-/// use pmoaudiocache::cache;
-///
-/// # async fn example(cache: &pmoaudiocache::cache::Cache, pk: &str) -> anyhow::Result<()> {
-/// let metadata = cache::get_metadata(cache, pk)?;
-/// println!("Title: {:?}", metadata.title);
-/// println!("Artist: {:?}", metadata.artist);
-/// # Ok(())
-/// # }
-/// ```
-pub fn get_metadata(cache: &Cache, pk: &str) -> Result<crate::metadata::AudioMetadata> {
-    let read_value = |key: &str| -> Result<Option<Value>> {
-        cache
-            .db
-            .get_a_metadata(pk, key)
-            .map_err(|e| anyhow::anyhow!("Database error: {}", e))
-    };
-
-    let read_string = |key: &str| -> Result<Option<String>> {
-        Ok(read_value(key)?.and_then(|v| v.as_str().map(|s| s.to_string())))
-    };
-
-    let read_u64 = |key: &str| -> Result<Option<u64>> {
-        Ok(read_value(key)?.and_then(|v| v.as_u64()))
-    };
-
-    let read_u32 = |key: &str| -> Result<Option<u32>> {
-        Ok(read_value(key)?.and_then(|v| v.as_u64()).and_then(|n| n.try_into().ok()))
-    };
-
-    let read_u8 = |key: &str| -> Result<Option<u8>> {
-        Ok(read_value(key)?.and_then(|v| v.as_u64()).and_then(|n| n.try_into().ok()))
-    };
-
-    let metadata = crate::metadata::AudioMetadata {
-        title: read_string("title")?,
-        artist: read_string("artist")?,
-        album: read_string("album")?,
-        year: read_u32("year")?,
-        track_number: read_u32("track_number")?,
-        track_total: read_u32("track_total")?,
-        disc_number: read_u32("disc_number")?,
-        disc_total: read_u32("disc_total")?,
-        genre: read_string("genre")?,
-        duration_secs: read_u64("duration_secs")?,
-        sample_rate: read_u32("sample_rate")?,
-        channels: read_u8("channels")?,
-        bitrate: read_u32("bitrate")?,
-        conversion: None,
-    };
-
-    Ok(metadata)
 }
 
 /// Parse minimal FLAC STREAMINFO (first metadata block) to retrieve sample rate,

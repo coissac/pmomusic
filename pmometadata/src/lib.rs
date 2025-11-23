@@ -186,6 +186,46 @@ pub trait TrackMetadata: Send + Sync {
         Err(MetadataError::NotImplemented)
     }
 
+    async fn get_genre(&self) -> MetadataResult<String> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn set_genre(&mut self, _value: Option<String>) -> MetadataResult<()> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn get_track_number(&self) -> MetadataResult<u32> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn set_track_number(&mut self, _value: Option<u32>) -> MetadataResult<()> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn get_track_total(&self) -> MetadataResult<u32> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn set_track_total(&mut self, _value: Option<u32>) -> MetadataResult<()> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn get_disc_number(&self) -> MetadataResult<u32> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn set_disc_number(&mut self, _value: Option<u32>) -> MetadataResult<()> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn get_disc_total(&self) -> MetadataResult<u32> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn set_disc_total(&mut self, _value: Option<u32>) -> MetadataResult<()> {
+        Err(MetadataError::NotImplemented)
+    }
+
     async fn get_duration(&self) -> MetadataResult<Duration> {
         Err(MetadataError::NotImplemented)
     }
@@ -215,6 +255,22 @@ pub trait TrackMetadata: Send + Sync {
     }
 
     async fn set_bits_per_sample(&mut self, _value: Option<u8>) -> MetadataResult<()> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn get_channels(&self) -> MetadataResult<u8> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn set_channels(&mut self, _value: Option<u8>) -> MetadataResult<()> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn get_bitrate(&self) -> MetadataResult<u32> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn set_bitrate(&mut self, _value: Option<u32>) -> MetadataResult<()> {
         Err(MetadataError::NotImplemented)
     }
 
@@ -361,10 +417,17 @@ pub struct MemoryTrackMetadata {
     artist: Option<String>,
     album: Option<String>,
     year: Option<u32>,
+    genre: Option<String>,
+    track_number: Option<u32>,
+    track_total: Option<u32>,
+    disc_number: Option<u32>,
+    disc_total: Option<u32>,
     duration: Option<Duration>,
     sample_rate: Option<u32>,
     total_samples: Option<u64>,
     bits_per_sample: Option<u8>,
+    channels: Option<u8>,
+    bitrate: Option<u32>,
     track_id: Option<String>,
     channel_id: Option<String>,
     event: Option<String>,
@@ -423,6 +486,56 @@ impl TrackMetadata for MemoryTrackMetadata {
         Ok(Some(()))
     }
 
+    async fn get_genre(&self) -> MetadataResult<String> {
+        Ok(self.genre.clone())
+    }
+
+    async fn set_genre(&mut self, value: Option<String>) -> MetadataResult<()> {
+        self.genre = value;
+        self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_track_number(&self) -> MetadataResult<u32> {
+        Ok(self.track_number)
+    }
+
+    async fn set_track_number(&mut self, value: Option<u32>) -> MetadataResult<()> {
+        self.track_number = value;
+        self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_track_total(&self) -> MetadataResult<u32> {
+        Ok(self.track_total)
+    }
+
+    async fn set_track_total(&mut self, value: Option<u32>) -> MetadataResult<()> {
+        self.track_total = value;
+        self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_disc_number(&self) -> MetadataResult<u32> {
+        Ok(self.disc_number)
+    }
+
+    async fn set_disc_number(&mut self, value: Option<u32>) -> MetadataResult<()> {
+        self.disc_number = value;
+        self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_disc_total(&self) -> MetadataResult<u32> {
+        Ok(self.disc_total)
+    }
+
+    async fn set_disc_total(&mut self, value: Option<u32>) -> MetadataResult<()> {
+        self.disc_total = value;
+        self.touch().await?;
+        Ok(Some(()))
+    }
+
     async fn get_duration(&self) -> MetadataResult<Duration> {
         Ok(self.duration)
     }
@@ -459,6 +572,26 @@ impl TrackMetadata for MemoryTrackMetadata {
 
     async fn set_bits_per_sample(&mut self, value: Option<u8>) -> MetadataResult<()> {
         self.bits_per_sample = value;
+        self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_channels(&self) -> MetadataResult<u8> {
+        Ok(self.channels)
+    }
+
+    async fn set_channels(&mut self, value: Option<u8>) -> MetadataResult<()> {
+        self.channels = value;
+        self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_bitrate(&self) -> MetadataResult<u32> {
+        Ok(self.bitrate)
+    }
+
+    async fn set_bitrate(&mut self, value: Option<u32>) -> MetadataResult<()> {
+        self.bitrate = value;
         self.touch().await?;
         Ok(Some(()))
     }

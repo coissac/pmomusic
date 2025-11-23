@@ -176,6 +176,68 @@ impl TrackMetadata for AudioCacheTrackMetadata {
         Ok(Some(()))
     }
 
+    async fn get_genre(&self) -> MetadataResult<String> {
+        Ok(self.read_string("genre")?)
+    }
+
+    async fn set_genre(&mut self, value: Option<String>) -> MetadataResult<()> {
+        self.write_string("genre", value)?;
+        let _ = self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_track_number(&self) -> MetadataResult<u32> {
+        Ok(match self.read_number("track_number")? {
+            Some(n) => n.as_i64().and_then(|v| u32::try_from(v).ok()),
+            None => None,
+        })
+    }
+
+    async fn set_track_number(&mut self, value: Option<u32>) -> MetadataResult<()> {
+        self.write_number("track_number", value.map(|v| v as i64))?;
+        let _ = self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_track_total(&self) -> MetadataResult<u32> {
+        Ok(match self.read_number("track_total")? {
+            Some(n) => n.as_i64().and_then(|v| u32::try_from(v).ok()),
+            None => None,
+        })
+    }
+
+    async fn set_track_total(&mut self, value: Option<u32>) -> MetadataResult<()> {
+        self.write_number("track_total", value.map(|v| v as i64))?;
+        let _ = self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_disc_number(&self) -> MetadataResult<u32> {
+        Ok(match self.read_number("disc_number")? {
+            Some(n) => n.as_i64().and_then(|v| u32::try_from(v).ok()),
+            None => None,
+        })
+    }
+
+    async fn set_disc_number(&mut self, value: Option<u32>) -> MetadataResult<()> {
+        self.write_number("disc_number", value.map(|v| v as i64))?;
+        let _ = self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_disc_total(&self) -> MetadataResult<u32> {
+        Ok(match self.read_number("disc_total")? {
+            Some(n) => n.as_i64().and_then(|v| u32::try_from(v).ok()),
+            None => None,
+        })
+    }
+
+    async fn set_disc_total(&mut self, value: Option<u32>) -> MetadataResult<()> {
+        self.write_number("disc_total", value.map(|v| v as i64))?;
+        let _ = self.touch().await?;
+        Ok(Some(()))
+    }
+
     async fn get_duration(&self) -> MetadataResult<Duration> {
         Ok(self.read_duration()?)
     }
@@ -221,6 +283,32 @@ impl TrackMetadata for AudioCacheTrackMetadata {
 
     async fn set_bits_per_sample(&mut self, value: Option<u8>) -> MetadataResult<()> {
         self.write_number("bits_per_sample", value.map(|v| v as i64))?;
+        let _ = self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_channels(&self) -> MetadataResult<u8> {
+        Ok(match self.read_number("channels")? {
+            Some(n) => n.as_i64().and_then(|v| u8::try_from(v).ok()),
+            None => None,
+        })
+    }
+
+    async fn set_channels(&mut self, value: Option<u8>) -> MetadataResult<()> {
+        self.write_number("channels", value.map(|v| v as i64))?;
+        let _ = self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_bitrate(&self) -> MetadataResult<u32> {
+        Ok(match self.read_number("bitrate")? {
+            Some(n) => n.as_i64().and_then(|v| u32::try_from(v).ok()),
+            None => None,
+        })
+    }
+
+    async fn set_bitrate(&mut self, value: Option<u32>) -> MetadataResult<()> {
+        self.write_number("bitrate", value.map(|v| v as i64))?;
         let _ = self.touch().await?;
         Ok(Some(()))
     }

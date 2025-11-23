@@ -28,12 +28,11 @@
 //!         None,
 //!     ).await?;
 //!
-//!     // Lecture des métadonnées extraites
-//!     let metadata = cache::get_metadata(&cache, &pk)?;
-//!     println!(
-//!         "Titre: {}",
-//!         metadata.title.as_deref().unwrap_or("Inconnu")
-//!     );
+//!     // Lecture des métadonnées extraites via TrackMetadata
+//!     use pmoaudiocache::metadata_ext::AudioTrackMetadataExt;
+//!     let track_meta = cache.track_metadata(&pk);
+//!     let title = track_meta.read().await.get_title().await?;
+//!     println!("Titre: {}", title.unwrap_or_else(|| "Inconnu".to_string()));
 //!
 //!     // Accès au fichier FLAC converti
 //!     let flac_path = cache.get(&pk).await?;
@@ -90,11 +89,10 @@ pub mod config_ext;
 
 // Re-exports principaux
 pub use cache::{
-    add_with_metadata_extraction, get_metadata, new_cache, new_cache_with_consolidation,
-    AudioConfig, Cache,
+    add_with_metadata_extraction, new_cache, new_cache_with_consolidation, AudioConfig, Cache,
 };
 pub use metadata::AudioMetadata;
-pub use metadata_ext::{AudioMetadataExt, AudioTrackMetadataExt};
+pub use metadata_ext::{AudioMetadataExt, AudioTrackMetadataExt, TrackMetadataDidlExt};
 pub use track_metadata::AudioCacheTrackMetadata;
 
 #[cfg(feature = "pmoconfig")]
