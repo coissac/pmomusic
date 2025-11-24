@@ -189,6 +189,41 @@ impl<C: CacheConfig> Cache<C> {
             self.db.set_origin_url(pk, url)?;
         }
 
+        // Sauvegarder les métadonnées techniques du transformer
+        if let Some(transform) = download.transform_metadata().await {
+            tracing::debug!(
+                "Cache: Got transform metadata for pk {}: sr={:?}, bps={:?}, ch={:?}, ts={:?}",
+                pk,
+                transform.sample_rate,
+                transform.bits_per_sample,
+                transform.channels,
+                transform.total_samples
+            );
+
+            if let Some(sr) = transform.sample_rate {
+                self.db.set_a_metadata(pk, "sample_rate", serde_json::json!(sr))?;
+            }
+            if let Some(bps) = transform.bits_per_sample {
+                self.db.set_a_metadata(pk, "bits_per_sample", serde_json::json!(bps))?;
+            }
+            if let Some(ch) = transform.channels {
+                self.db.set_a_metadata(pk, "channels", serde_json::json!(ch))?;
+            }
+            if let Some(ts) = transform.total_samples {
+                self.db.set_a_metadata(pk, "total_samples", serde_json::json!(ts))?;
+
+                // Calculer la durée à partir de total_samples et sample_rate
+                if let Some(sr) = transform.sample_rate {
+                    if sr > 0 {
+                        let secs = (ts as f64 / sr as f64).round() as u64;
+                        self.db.set_a_metadata(pk, "duration_secs", serde_json::json!(secs))?;
+                    }
+                }
+            }
+        } else {
+            tracing::debug!("Cache: No transform metadata available for pk {}", pk);
+        }
+
         if let Err(e) = self.enforce_limit().await {
             tracing::warn!("Error enforcing cache limit: {}", e);
         }

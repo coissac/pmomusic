@@ -64,10 +64,15 @@ async fn main() -> anyhow::Result<()> {
     let history_opts = history_builder.build_for_channel(&descriptor).await?;
 
     let mut channel_config = ParadiseStreamChannelConfig::default();
-    channel_config.flac_options = StreamingSinkOptions::flac_defaults()
+    // Configuration commune pour FLAC et OGG
+    let common_options = StreamingSinkOptions::flac_defaults()
         .with_default_artist(Some("Radio Paradise".to_string()))
-        .with_default_title(descriptor.display_name.to_string())
-        .with_only_default_metadata(true);
+        .with_default_title(descriptor.display_name.to_string());
+
+    channel_config.flac_options = common_options.clone();
+    channel_config.ogg_options = StreamingSinkOptions::ogg_defaults()
+        .with_default_artist(Some("Radio Paradise".to_string()))
+        .with_default_title(descriptor.display_name.to_string());
 
     let channel = Arc::new(
         ParadiseStreamChannel::new(

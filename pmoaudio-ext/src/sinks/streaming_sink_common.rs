@@ -376,15 +376,6 @@ impl SharedSinkContext {
         // Always pass the metadata handle to the encoder so Vorbis comments are emitted.
         self.encoder_options.metadata = Some(metadata_lock.clone());
 
-        // In raw FLAC live streaming we must NOT advertise a total_samples value,
-        // otherwise players think the stream ends after the first track.
-        if !self.enable_total_samples {
-            self.pending_track_duration = None;
-            self.pending_total_samples = None;
-            self.encoder_options.total_samples = None;
-            return Ok(());
-        }
-
         // Capture duration (if any) to set total_samples.
         let duration_opt = {
             let metadata = metadata_lock.read().await;
@@ -395,6 +386,20 @@ impl SharedSinkContext {
             let metadata = metadata_lock.read().await;
             metadata.get_total_samples().await.ok().flatten()
         };
+
+        debug!(
+            "Encoder metadata: from TrackBoundary - duration={:?}s, total_samples={:?}",
+            self.pending_track_duration.as_ref().map(|d| d.as_secs_f64()),
+            self.pending_total_samples
+        );
+
+        // In raw FLAC live streaming we must NOT advertise a total_samples value,
+        // otherwise players think the stream ends after the first track.
+        if !self.enable_total_samples {
+            self.encoder_options.total_samples = None;
+            debug!("Encoder metadata: total_samples disabled for this sink (enable_total_samples=false)");
+            return Ok(());
+        }
 
         // Compute total_samples only when we know the sample rate.
         self.refresh_total_samples_with_sample_rate();

@@ -525,10 +525,16 @@ fn run_encoder(
             "set_verify failed",
         )?;
         if let Some(total) = options.total_samples {
+            tracing::debug!(
+                "FLAC encoder: setting total_samples_estimate = {} before init",
+                total
+            );
             ensure(
                 FLAC__stream_encoder_set_total_samples_estimate(encoder, total),
                 "set_total_samples_estimate failed",
             )?;
+        } else {
+            tracing::warn!("FLAC encoder: total_samples is None, STREAMINFO will have total_samples=0");
         }
         if let Some(block_size) = options.block_size {
             ensure(

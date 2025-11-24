@@ -8,7 +8,6 @@ use pmoaudio::{
 };
 use pmoaudiocache::AudioTrackMetadataExt;
 use pmoflac::{encode_flac_stream, EncoderOptions, PcmFormat};
-use serde_json::{Number, Value};
 use std::{
     collections::VecDeque,
     pin::Pin,
@@ -34,13 +33,6 @@ use tokio_util::sync::CancellationToken;
 // ═══════════════════════════════════════════════════════════════════════════
 // FlacCacheSinkLogic - Logique métier pure
 // ═══════════════════════════════════════════════════════════════════════════
-
-/// Signal retourné par pump_segments indiquant pourquoi l'encodage s'est arrêté.
-enum StopReason {
-    TrackBoundary(Arc<RwLock<dyn pmometadata::TrackMetadata>>),
-    EndOfStream,
-    ChannelClosed,
-}
 
 /// Logique pure d'encodage FLAC vers le cache
 pub struct FlacCacheSinkLogic {
@@ -291,7 +283,64 @@ impl NodeLogic for FlacCacheSinkLogic {
             };
 
             if let Some(transform) = self.cache.transform_metadata(&pk).await {
-                persist_transform_streaminfo(&self.cache, &pk, &transform);
+                tracing::debug!(
+                    "FlacCacheSink: Got transform metadata for pk {}: sr={:?}, bps={:?}, ch={:?}, ts={:?}",
+                    pk,
+                    transform.sample_rate,
+                    transform.bits_per_sample,
+                    transform.channels,
+                    transform.total_samples
+                );
+
+                // Persister les métadonnées techniques via l'interface TrackMetadata
+                let track_meta = self.cache.track_metadata(&pk);
+                let mut meta = track_meta.write().await;
+
+                if let Some(sr) = transform.sample_rate {
+                    if let Err(e) = meta.set_sample_rate(Some(sr)).await {
+                        tracing::error!("FlacCacheSink: Failed to set sample_rate for pk {}: {:?}", pk, e);
+                    } else {
+                        tracing::debug!("FlacCacheSink: Set sample_rate={} for pk {}", sr, pk);
+                    }
+                }
+                if let Some(bps) = transform.bits_per_sample {
+                    if let Err(e) = meta.set_bits_per_sample(Some(bps)).await {
+                        tracing::error!("FlacCacheSink: Failed to set bits_per_sample for pk {}: {:?}", pk, e);
+                    } else {
+                        tracing::debug!("FlacCacheSink: Set bits_per_sample={} for pk {}", bps, pk);
+                    }
+                }
+                if let Some(ch) = transform.channels {
+                    if let Err(e) = meta.set_channels(Some(ch)).await {
+                        tracing::error!("FlacCacheSink: Failed to set channels for pk {}: {:?}", pk, e);
+                    } else {
+                        tracing::debug!("FlacCacheSink: Set channels={} for pk {}", ch, pk);
+                    }
+                }
+                if let Some(ts) = transform.total_samples {
+                    if let Err(e) = meta.set_total_samples(Some(ts)).await {
+                        tracing::error!("FlacCacheSink: Failed to set total_samples for pk {}: {:?}", pk, e);
+                    } else {
+                        tracing::debug!("FlacCacheSink: Set total_samples={} for pk {}", ts, pk);
+                    }
+
+                    // Calculer la durée à partir de total_samples et sample_rate
+                    if let Some(sr) = transform.sample_rate {
+                        if sr > 0 {
+                            use std::time::Duration;
+                            let secs = (ts as f64 / sr as f64).round() as u64;
+                            if let Err(e) = meta.set_duration(Some(Duration::from_secs(secs))).await {
+                                tracing::error!("FlacCacheSink: Failed to set duration for pk {}: {:?}", pk, e);
+                            } else {
+                                tracing::debug!("FlacCacheSink: Set duration={} secs for pk {}", secs, pk);
+                            }
+                        }
+                    }
+                }
+
+                drop(meta); // Libérer le lock explicitement
+            } else {
+                tracing::warn!("FlacCacheSink: No transform metadata available for pk {}", pk);
             }
 
             // Phase 2: Prebuffer terminé! Copier les métadonnées et pusher à la playlist
@@ -701,144 +750,6 @@ async fn wait_for_first_audio_chunk_with_metadata(
     }
 }
 
-/// Draine tous les segments jusqu'au prochain TrackBoundary ou EndOfStream
-///
-/// Cette fonction est utilisée quand le fichier était déjà en cache et que
-/// nous devons ignorer les segments restants pour rester synchronisé avec la source.
-async fn drain_until_track_boundary(
-    rx: &mut mpsc::Receiver<Arc<AudioSegment>>,
-    stop_token: &CancellationToken,
-) -> Result<StopReason, AudioError> {
-    loop {
-        let segment = tokio::select! {
-            result = rx.recv() => {
-                match result {
-                    Some(seg) => seg,
-                    None => {
-                        return Ok(StopReason::ChannelClosed);
-                    }
-                }
-            }
-            _ = stop_token.cancelled() => {
-                return Ok(StopReason::ChannelClosed);
-            }
-        };
-
-        match &segment.segment {
-            _AudioSegment::Chunk(_) => {
-                // Ignorer les chunks audio
-                continue;
-            }
-            _AudioSegment::Sync(marker) => match &**marker {
-                SyncMarker::TrackBoundary { metadata, .. } => {
-                    return Ok(StopReason::TrackBoundary(metadata.clone()));
-                }
-                SyncMarker::EndOfStream => {
-                    return Ok(StopReason::EndOfStream);
-                }
-                _ => {
-                    // Ignorer les autres syncmarkers
-                    continue;
-                }
-            },
-        }
-    }
-}
-
-/// Pompe les segments pour une seule track (s'arrête au TrackBoundary).
-async fn pump_track_segments(
-    first_segment: Arc<AudioSegment>,
-    rx: &mut mpsc::Receiver<Arc<AudioSegment>>,
-    pcm_tx: mpsc::Sender<Vec<u8>>,
-    bits_per_sample: u8,
-    expected_rate: u32,
-    stop_token: &CancellationToken,
-) -> Result<(u64, u64, f64, StopReason), AudioError> {
-    let mut chunks = 0u64;
-    let mut samples = 0u64;
-    let mut duration_sec = 0.0f64;
-
-    // Traiter le premier segment
-    if let Some(chunk) = first_segment.as_chunk() {
-        let pcm_bytes = chunk_to_pcm_bytes(chunk, bits_per_sample)?;
-        if !pcm_bytes.is_empty() {
-            // Si le send échoue, c'est que le receiver est fermé
-            // (par exemple, le fichier était déjà en cache et add_from_reader a retourné immédiatement)
-            if pcm_tx.send(pcm_bytes).await.is_err() {
-                drop(pcm_tx);
-                return Ok((chunks, samples, duration_sec, StopReason::ChannelClosed));
-            }
-            chunks += 1;
-            samples += chunk.len() as u64;
-            duration_sec += chunk.len() as f64 / expected_rate as f64;
-        }
-    }
-
-    // Boucle sur les segments suivants
-    loop {
-        let segment = tokio::select! {
-            result = rx.recv() => {
-                match result {
-                    Some(seg) => seg,
-                    None => {
-                        drop(pcm_tx); // Fermer le channel PCM
-                        return Ok((chunks, samples, duration_sec, StopReason::ChannelClosed));
-                    }
-                }
-            }
-            _ = stop_token.cancelled() => {
-                drop(pcm_tx); // Fermer le channel PCM
-                return Ok((chunks, samples, duration_sec, StopReason::ChannelClosed));
-            }
-        };
-
-        match &segment.segment {
-            _AudioSegment::Chunk(chunk) => {
-                // Vérifier la cohérence du sample rate
-                if chunk.sample_rate() != expected_rate {
-                    return Err(AudioError::ProcessingError(format!(
-                        "FlacCacheSink: inconsistent sample rate ({} vs {})",
-                        chunk.sample_rate(),
-                        expected_rate
-                    )));
-                }
-
-                let pcm_bytes = chunk_to_pcm_bytes(&chunk, bits_per_sample)?;
-                if pcm_bytes.is_empty() {
-                    continue;
-                }
-
-                // Si le send échoue, c'est que le receiver est fermé
-                // (par exemple, le fichier était déjà en cache et add_from_reader a retourné immédiatement)
-                if pcm_tx.send(pcm_bytes).await.is_err() {
-                    drop(pcm_tx);
-                    return Ok((chunks, samples, duration_sec, StopReason::ChannelClosed));
-                }
-
-                chunks += 1;
-                samples += chunk.len() as u64;
-                duration_sec += chunk.len() as f64 / expected_rate as f64;
-            }
-            _AudioSegment::Sync(marker) => match &**marker {
-                SyncMarker::TrackBoundary { metadata, .. } => {
-                    drop(pcm_tx); // Fermer le channel PCM
-                    return Ok((
-                        chunks,
-                        samples,
-                        duration_sec,
-                        StopReason::TrackBoundary(metadata.clone()),
-                    ));
-                }
-                SyncMarker::EndOfStream => {
-                    drop(pcm_tx); // Fermer le channel PCM
-                    return Ok((chunks, samples, duration_sec, StopReason::EndOfStream));
-                }
-                _ => {} // Ignorer les autres syncmarkers
-            },
-        }
-    }
-}
-
 /// Pompe les segments pour une seule track depuis un channel dédié.
 ///
 /// Cette version permet d'avoir plusieurs pumps en parallèle (pour cache progressif),
@@ -910,41 +821,6 @@ async fn pump_track_segments_from_channel(
             _AudioSegment::Sync(_marker) => {
                 // Ignorer les syncmarkers - le TrackBoundary est géré en amont
                 // Le channel sera fermé quand le TrackBoundary est détecté
-            }
-        }
-    }
-}
-
-fn persist_transform_streaminfo(
-    cache: &pmoaudiocache::Cache,
-    pk: &str,
-    tmeta: &pmocache::download::TransformMetadata,
-) {
-    if let Some(sr) = tmeta.sample_rate {
-        let _ = cache
-            .db
-            .set_a_metadata(pk, "sample_rate", Value::Number(Number::from(sr)));
-    }
-    if let Some(bps) = tmeta.bits_per_sample {
-        let _ = cache
-            .db
-            .set_a_metadata(pk, "bits_per_sample", Value::Number(Number::from(bps)));
-    }
-    if let Some(ch) = tmeta.channels {
-        let _ = cache
-            .db
-            .set_a_metadata(pk, "channels", Value::Number(Number::from(ch)));
-    }
-    if let Some(ts) = tmeta.total_samples {
-        let _ = cache
-            .db
-            .set_a_metadata(pk, "total_samples", Value::Number(Number::from(ts)));
-        if let Some(sr) = tmeta.sample_rate {
-            if sr > 0 {
-                let secs = (ts as f64 / sr as f64).round() as u64;
-                let _ = cache
-                    .db
-                    .set_a_metadata(pk, "duration_secs", Value::Number(Number::from(secs)));
             }
         }
     }
