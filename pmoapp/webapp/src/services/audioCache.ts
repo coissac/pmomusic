@@ -19,6 +19,8 @@ export interface AudioCacheMetadata {
   bitrate?: number;
   channels?: number;
   conversion?: ConversionInfo;
+  cover_pk?: string;
+  cover_url?: string;
   [key: string]: unknown;
 }
 
@@ -227,4 +229,27 @@ export function formatBitrate(bitrate?: number): string {
 export function formatSampleRate(sampleRate?: number): string {
   if (!sampleRate) return "Unknown";
   return `${(sampleRate / 1000).toFixed(1)} kHz`;
+}
+
+/**
+ * Génère l'URL de la cover d'une piste
+ * Priorité : cover_pk (cache) > cover_url (externe) > undefined
+ */
+export function getCoverUrl(metadata?: AudioCacheMetadata | null, size?: number): string | undefined {
+  if (!metadata) return undefined;
+
+  // Priorité 1 : cover en cache via cover_pk
+  if (metadata.cover_pk) {
+    if (size) {
+      return `/covers/image/${metadata.cover_pk}/${size}`;
+    }
+    return `/covers/image/${metadata.cover_pk}`;
+  }
+
+  // Priorité 2 : cover externe via cover_url
+  if (metadata.cover_url) {
+    return metadata.cover_url;
+  }
+
+  return undefined;
 }

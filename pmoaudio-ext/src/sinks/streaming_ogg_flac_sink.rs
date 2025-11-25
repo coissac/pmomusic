@@ -396,7 +396,7 @@ impl StreamingOggFlacSink {
 
     /// Create a sink with a custom broadcast pacing limit and options.
     pub fn with_options(
-        encoder_options: EncoderOptions,
+        mut encoder_options: EncoderOptions,
         bits_per_sample: u8,
         broadcast_max_lead_time: f64,
         options: StreamingSinkOptions,
@@ -405,6 +405,9 @@ impl StreamingOggFlacSink {
         if ![16, 24, 32].contains(&bits_per_sample) {
             panic!("bits_per_sample must be 16, 24, or 32");
         }
+
+        // Transfer server_base_url from StreamingSinkOptions to EncoderOptions
+        encoder_options.server_base_url = options.server_base_url.clone();
 
         // Create PCM channel (bounded for backpressure)
         let (pcm_tx, pcm_rx) = mpsc::channel::<PcmChunk>(16);

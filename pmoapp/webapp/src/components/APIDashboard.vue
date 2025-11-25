@@ -44,9 +44,7 @@
           </div>
 
           <div class="api-body">
-            <p v-if="api.description" class="api-description">
-              {{ api.description }}
-            </p>
+            <div v-if="api.description" class="api-description" v-html="renderMarkdown(api.description)"></div>
             <p v-else class="api-description empty">Aucune description disponible</p>
 
             <div class="api-stats">
@@ -86,6 +84,14 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
+
+// Configurer marked pour un rendu simple
+marked.setOptions({
+  breaks: true,
+  gfm: true,
+});
 
 interface ApiRegistryEntry {
   name: string;
@@ -140,6 +146,14 @@ function getApiIcon(name: string): string {
   };
 
   return icons[name.toLowerCase()] || '🔧';
+}
+
+function renderMarkdown(markdown: string): string {
+  const rawHtml = marked.parse(markdown, { async: false }) as string;
+  return DOMPurify.sanitize(rawHtml, {
+    ALLOWED_TAGS: ['strong', 'em', 'code', 'pre', 'a', 'ul', 'ol', 'li', 'p', 'br', 'span', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
+    ALLOWED_ATTR: ['href', 'target', 'class']
+  });
 }
 
 onMounted(() => {
@@ -330,6 +344,66 @@ onMounted(() => {
 .api-description.empty {
   color: #a0aec0;
   font-style: italic;
+}
+
+/* Styles pour le contenu markdown rendu */
+.api-description :deep(p) {
+  margin: 0 0 0.5rem 0;
+}
+
+.api-description :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.api-description :deep(strong) {
+  font-weight: 600;
+  color: #2d3748;
+}
+
+.api-description :deep(em) {
+  font-style: italic;
+}
+
+.api-description :deep(code) {
+  background: #f7fafc;
+  padding: 0.125rem 0.375rem;
+  border-radius: 3px;
+  font-family: 'Courier New', monospace;
+  font-size: 0.875em;
+  color: #d63384;
+}
+
+.api-description :deep(pre) {
+  background: #f7fafc;
+  padding: 0.75rem;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 0.5rem 0;
+}
+
+.api-description :deep(pre code) {
+  background: none;
+  padding: 0;
+  color: inherit;
+}
+
+.api-description :deep(ul),
+.api-description :deep(ol) {
+  margin: 0.5rem 0;
+  padding-left: 1.5rem;
+}
+
+.api-description :deep(li) {
+  margin: 0.25rem 0;
+}
+
+.api-description :deep(a) {
+  color: #667eea;
+  text-decoration: none;
+}
+
+.api-description :deep(a:hover) {
+  text-decoration: underline;
 }
 
 .api-stats {

@@ -76,7 +76,14 @@
         @click="selectedTrack = track"
       >
         <div class="track-icon">
-          <div class="music-icon">🎵</div>
+          <img
+            v-if="getTrackCoverUrl(track, 400)"
+            :src="getTrackCoverUrl(track, 400)"
+            :alt="`Cover for ${track.metadata?.title || 'Unknown'}`"
+            class="cover-image"
+            @error="handleCoverError(track.pk)"
+          />
+          <div v-else class="music-icon">🎵</div>
           <div class="track-overlay">
             <span class="hits">{{ track.hits }} plays</span>
           </div>
@@ -138,7 +145,14 @@
       <div class="modal-content" @click.stop>
         <button class="modal-close" @click="selectedTrack = null">✕</button>
         <div class="modal-header">
-          <div class="modal-icon">🎵</div>
+          <img
+            v-if="getTrackCoverUrl(selectedTrack, 200)"
+            :src="getTrackCoverUrl(selectedTrack, 200)"
+            :alt="`Cover for ${selectedTrack.metadata?.title || 'Unknown'}`"
+            class="modal-cover-image"
+            @error="handleCoverError(selectedTrack.pk)"
+          />
+          <div v-else class="modal-icon">🎵</div>
           <h3>Track Details</h3>
         </div>
         <div class="modal-info">
@@ -221,6 +235,7 @@ import {
   formatDuration,
   formatBitrate,
   formatSampleRate,
+  getCoverUrl,
 } from "../services/audioCache";
 
 // --- États ---
@@ -245,6 +260,9 @@ const deletingTracks = ref(new Set<string>());
 // Lecteur audio
 const isPlaying = ref(false);
 const audioError = ref("");
+
+// Gestion des erreurs de chargement des covers
+const failedCovers = ref(new Set<string>());
 
 // --- Computed ---
 const totalHits = computed(() => tracks.value.reduce((sum, t) => sum + t.hits, 0));
@@ -447,6 +465,15 @@ function formatConversion(
 
 function conversionLabel(track: AudioCacheEntry | null): string | undefined {
   return formatConversion(track?.metadata?.conversion ?? undefined);
+}
+
+function getTrackCoverUrl(track: AudioCacheEntry | null, size?: number): string | undefined {
+  if (!track || failedCovers.value.has(track.pk)) return undefined;
+  return getCoverUrl(track.metadata, size);
+}
+
+function handleCoverError(pk: string) {
+  failedCovers.value.add(pk);
 }
 
 onMounted(() => {
@@ -692,6 +719,15 @@ button:disabled {
   overflow: hidden;
 }
 
+.cover-image {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 .music-icon {
   position: absolute;
   top: 50%;
@@ -836,6 +872,14 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 1rem;
+}
+
+.modal-cover-image {
+  width: 80px;
+  height: 80px;
+  object-fit: cover;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 .modal-icon {

@@ -53,6 +53,7 @@ pub struct StreamingSinkOptions {
     pub default_title: Option<String>,
     pub default_artist: Option<String>,
     pub use_only_default_metadata: bool,
+    pub server_base_url: Option<String>,
 }
 
 impl StreamingSinkOptions {
@@ -63,6 +64,7 @@ impl StreamingSinkOptions {
             default_title: None,
             default_artist: None,
             use_only_default_metadata: false,
+            server_base_url: None,
         }
     }
 
@@ -73,6 +75,7 @@ impl StreamingSinkOptions {
             default_title: None,
             default_artist: None,
             use_only_default_metadata: false,
+            server_base_url: None,
         }
     }
 
@@ -98,6 +101,11 @@ impl StreamingSinkOptions {
 
     pub fn with_only_default_metadata(mut self, only_default: bool) -> Self {
         self.use_only_default_metadata = only_default;
+        self
+    }
+
+    pub fn with_server_base_url(mut self, url: impl Into<Option<String>>) -> Self {
+        self.server_base_url = url.into();
         self
     }
 }

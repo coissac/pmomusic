@@ -70,10 +70,10 @@
       >
         <div class="image-wrapper">
           <img
-            :src="getImageUrl(image.pk, 256)"
+            :src="getImageUrlWithFallback(image.pk, 256)"
             :alt="resolveOrigin(image) || image.pk"
             loading="lazy"
-            @error="handleImageError"
+            @error="(e) => handleImageError(image.pk, e)"
           />
           <div class="image-overlay">
             <span class="hits">👁️ {{ image.hits }}</span>
@@ -107,9 +107,10 @@
       <div class="modal-content" @click.stop>
         <button class="modal-close" @click="selectedImage = null">✕</button>
         <img
-          :src="getImageUrl(selectedImage.pk)"
+          :src="getImageUrlWithFallback(selectedImage.pk)"
           :alt="resolveOrigin(selectedImage) || selectedImage.pk"
           class="modal-image"
+          @error="(e) => selectedImage && handleImageError(selectedImage.pk, e)"
         />
         <div class="modal-info">
           <h3>Image Details</h3>
@@ -147,6 +148,7 @@ import {
   getImageUrl,
   getOriginUrl,
   waitForDownload,
+  getDefaultImageUrl,
 } from "../services/coverCache";
 
 // --- États ---
@@ -165,6 +167,9 @@ const addSuccess = ref("");
 const isConsolidating = ref(false);
 const isPurging = ref(false);
 const deletingImages = ref(new Set<string>());
+
+// Gestion des erreurs de chargement d'images
+const failedImages = ref(new Set<string>());
 
 // --- Computed ---
 const totalHits = computed(() => images.value.reduce((sum, i) => sum + i.hits, 0));
@@ -246,7 +251,18 @@ function formatDate(dateString:string){
   const d=new Date(dateString), diff=Date.now()-d.getTime(), days=Math.floor(diff/(1000*60*60*24));
   if(days===0)return"Today"; if(days===1)return"Yesterday"; if(days<7)return`${days} days ago`; return d.toLocaleDateString();
 }
-function handleImageError(e:Event){(e.target as HTMLImageElement).src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='256' height='256'%3E%3Crect fill='%23333' width='256' height='256'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' fill='%23999' font-size='20'%3EError%3C/text%3E%3C/svg%3E";}
+
+function getImageUrlWithFallback(pk: string, size?: number): string {
+  if (failedImages.value.has(pk)) {
+    return getDefaultImageUrl();
+  }
+  return getImageUrl(pk, size);
+}
+
+function handleImageError(pk: string, event: Event) {
+  failedImages.value.add(pk);
+  (event.target as HTMLImageElement).src = getDefaultImageUrl();
+}
 
 onMounted(()=>refreshImages());
 </script>

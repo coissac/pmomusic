@@ -192,3 +192,35 @@ export function getImageUrl(pk: string, size?: number): string {
   }
   return `/covers/image/${pk}`;
 }
+
+/**
+ * SVG par défaut pour les images qui ne se chargent pas
+ */
+const DEFAULT_COVER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#667eea;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#764ba2;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <rect width="400" height="400" fill="url(#bgGrad)"/>
+  <g transform="translate(200, 200)">
+    <rect x="-60" y="-80" width="120" height="100" rx="8" fill="white" opacity="0.9"/>
+    <circle cx="0" cy="-30" r="18" fill="rgba(102, 126, 234, 0.3)"/>
+    <rect x="-40" y="10" width="80" height="8" rx="4" fill="rgba(102, 126, 234, 0.3)"/>
+    <rect x="-30" y="30" width="60" height="6" rx="3" fill="rgba(102, 126, 234, 0.2)"/>
+    <rect x="-35" y="50" width="70" height="6" rx="3" fill="rgba(102, 126, 234, 0.2)"/>
+  </g>
+  <text x="200" y="360" text-anchor="middle"
+        font-family="system-ui, -apple-system, sans-serif"
+        font-size="20" fill="white" opacity="0.6">
+    No Image Available
+  </text>
+</svg>`;
+
+/**
+ * Retourne l'URL de l'image par défaut comme data URL
+ */
+export function getDefaultImageUrl(): string {
+  return `data:image/svg+xml;utf8,${encodeURIComponent(DEFAULT_COVER_SVG)}`;
+}

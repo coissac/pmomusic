@@ -194,11 +194,11 @@
       <div v-else class="player-content">
         <!-- Cover Art & Metadata -->
         <div class="player-info">
-          <div v-if="playerMetadata?.image_url" class="player-cover">
-            <img :src="playerMetadata.image_url" :alt="playerMetadata.title || 'Album cover'">
-          </div>
-          <div v-else class="player-cover-placeholder">
-            🎵
+          <div class="player-cover">
+            <img
+              :src="playerMetadata?.cover_url || nowPlaying?.current_song?.cover_url || 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgZmlsbD0iIzFhMWEyZSIvPjxwYXRoIGQ9Ik0xMDAgNDAgTDEwMCAxMjAgTTcwIDkwIEwxMzAgOTAiIHN0cm9rZT0iIzAwZDRmZiIgc3Ryb2tlLXdpZHRoPSI4IiBzdHJva2UtbGluZWNhcD0icm91bmQiLz48Y2lyY2xlIGN4PSI4NSIgY3k9IjE0MCIgcj0iMTUiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzAwZDRmZiIgc3Ryb2tlLXdpZHRoPSI0Ii8+PGNpcmNsZSBjeD0iMTE1IiBjeT0iMTQwIiByPSIxNSIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMDBkNGZmIiBzdHJva2Utd2lkdGg9IjQiLz48L3N2Zz4='"
+              :alt="playerMetadata?.title || nowPlaying?.current_song?.title || 'Album cover'"
+            >
           </div>
 
           <div class="player-metadata">
@@ -439,6 +439,144 @@
       </div>
     </div>
 
+    <!-- Test New Endpoints -->
+    <div class="test-endpoints-section">
+      <h3>🧪 Test Nouveaux Endpoints</h3>
+      <div class="test-grid">
+        <!-- Test getCoverUrl -->
+        <div class="test-card">
+          <h4>Test: Cover URL avec Fallback</h4>
+          <div class="test-controls">
+            <input
+              v-model.number="testCoverEventId"
+              type="number"
+              placeholder="Event ID"
+              class="test-input"
+            />
+            <input
+              v-model.number="testCoverSongIndex"
+              type="number"
+              placeholder="Song Index"
+              class="test-input"
+            />
+            <button
+              @click="testGetCoverUrl"
+              :disabled="testCoverLoading || !testCoverEventId"
+              class="btn-secondary"
+            >
+              <span v-if="testCoverLoading">⏳ Test...</span>
+              <span v-else>Test Cover URL</span>
+            </button>
+          </div>
+          <div v-if="testCoverResult" class="test-result">
+            <div class="result-item">
+              <strong>Source:</strong> {{ testCoverResult.cover_type }}
+            </div>
+            <div v-if="testCoverResult.cover_url" class="result-item">
+              <strong>URL:</strong>
+              <a :href="testCoverResult.cover_url" target="_blank" class="stream-link">
+                {{ testCoverResult.cover_url }}
+              </a>
+            </div>
+            <div v-else class="result-item">
+              <strong>URL:</strong> <span class="text-muted">None (fallback manquant)</span>
+            </div>
+            <div v-if="testCoverResult.cover_url" class="cover-preview">
+              <img :src="testCoverResult.cover_url" alt="Cover preview" />
+            </div>
+          </div>
+          <div v-if="testCoverError" class="error-message">
+            ❌ {{ testCoverError }}
+          </div>
+        </div>
+
+        <!-- Test getStreamUrl -->
+        <div class="test-card">
+          <h4>Test: Stream URL Direct</h4>
+          <div class="test-controls">
+            <input
+              v-model.number="testStreamEventId"
+              type="number"
+              placeholder="Event ID"
+              class="test-input"
+            />
+            <button
+              @click="testGetStreamUrl"
+              :disabled="testStreamLoading || !testStreamEventId"
+              class="btn-secondary"
+            >
+              <span v-if="testStreamLoading">⏳ Test...</span>
+              <span v-else>Test Stream URL</span>
+            </button>
+          </div>
+          <div v-if="testStreamResult" class="test-result">
+            <div class="result-item">
+              <strong>Event:</strong> {{ testStreamResult.event }}
+            </div>
+            <div class="result-item">
+              <strong>Duration:</strong> {{ formatDuration(testStreamResult.length_ms) }}
+            </div>
+            <div class="result-item">
+              <strong>URL:</strong>
+              <a :href="testStreamResult.stream_url" target="_blank" class="stream-link">
+                {{ testStreamResult.stream_url }}
+              </a>
+            </div>
+          </div>
+          <div v-if="testStreamError" class="error-message">
+            ❌ {{ testStreamError }}
+          </div>
+        </div>
+
+        <!-- Test getSongByIndex -->
+        <div class="test-card">
+          <h4>Test: Morceau par Index</h4>
+          <div class="test-controls">
+            <input
+              v-model.number="testSongEventId"
+              type="number"
+              placeholder="Event ID"
+              class="test-input"
+            />
+            <input
+              v-model.number="testSongIndex"
+              type="number"
+              placeholder="Song Index"
+              class="test-input"
+            />
+            <button
+              @click="testGetSongByIndex"
+              :disabled="testSongLoading || !testSongEventId"
+              class="btn-secondary"
+            >
+              <span v-if="testSongLoading">⏳ Test...</span>
+              <span v-else>Test Get Song</span>
+            </button>
+          </div>
+          <div v-if="testSongResult" class="test-result">
+            <div class="result-item">
+              <strong>Title:</strong> {{ testSongResult.title }}
+            </div>
+            <div class="result-item">
+              <strong>Artist:</strong> {{ testSongResult.artist }}
+            </div>
+            <div class="result-item">
+              <strong>Album:</strong> {{ testSongResult.album }}
+            </div>
+            <div class="result-item">
+              <strong>Duration:</strong> {{ formatDuration(testSongResult.duration_ms) }}
+            </div>
+            <div v-if="testSongResult.cover_url" class="cover-preview-small">
+              <img :src="testSongResult.cover_url" alt="Song cover" />
+            </div>
+          </div>
+          <div v-if="testSongError" class="error-message">
+            ❌ {{ testSongError }}
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Available Channels -->
     <div v-if="channelsError" class="error-message inline-error">
       ❌ {{ channelsError }}
@@ -463,6 +601,16 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import {
+  listChannels,
+  getNowPlaying,
+  getCurrentBlock,
+  getBlockById,
+  getSongByIndex,
+  getCoverUrl,
+  getStreamUrl,
+  formatDuration as formatDurationUtil,
+} from '../services/radioParadise'
 
 const API_BASE = '/api/radioparadise'
 const SOURCE_API_BASE = '/api/sources'
@@ -564,6 +712,24 @@ const blockSearchLoading = ref(false)
 const blockSearchError = ref('')
 const channelsError = ref('')
 
+// Test new endpoints state
+const testCoverEventId = ref(null)
+const testCoverSongIndex = ref(0)
+const testCoverResult = ref(null)
+const testCoverLoading = ref(false)
+const testCoverError = ref('')
+
+const testStreamEventId = ref(null)
+const testStreamResult = ref(null)
+const testStreamLoading = ref(false)
+const testStreamError = ref('')
+
+const testSongEventId = ref(null)
+const testSongIndex = ref(0)
+const testSongResult = ref(null)
+const testSongLoading = ref(false)
+const testSongError = ref('')
+
 // Stream metadata state
 const streamMetadata = ref(null)
 const streamMetadataLoading = ref(false)
@@ -594,29 +760,8 @@ function formatTimestamp(date) {
   return date.toLocaleTimeString()
 }
 
-function buildQuery(extra = {}) {
-  const params = new URLSearchParams()
-  if (selectedChannel.value != null) {
-    params.set('channel', selectedChannel.value.toString())
-  }
-
-  Object.entries(extra).forEach(([key, value]) => {
-    if (value !== undefined && value !== null && value !== '') {
-      params.set(key, String(value))
-    }
-  })
-
-  const query = params.toString()
-  return query ? `?${query}` : ''
-}
-
 async function fetchBlockByEvent(eventId) {
-  const query = buildQuery()
-  const response = await fetch(`${API_BASE}/block/${eventId}${query}`)
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-  }
-  return await response.json()
+  return await getBlockById(eventId, selectedChannel.value)
 }
 
 function playAudio(url) {
@@ -649,12 +794,7 @@ async function refreshNowPlaying() {
   error.value = null
 
   try {
-    const query = buildQuery()
-    const response = await fetch(`${API_BASE}/now-playing${query}`)
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-    }
-    nowPlaying.value = await response.json()
+    nowPlaying.value = await getNowPlaying(selectedChannel.value)
     lastUpdated.value = new Date()
     upcomingBlock.value = null
     upcomingError.value = ''
@@ -715,8 +855,8 @@ function updateMediaSession(metadata) {
       title: metadata.title || 'Unknown Title',
       artist: metadata.artist || 'Unknown Artist',
       album: metadata.album || 'Radio Paradise',
-      artwork: metadata.image_url ? [
-        { src: metadata.image_url, sizes: '512x512', type: 'image/jpeg' }
+      artwork: metadata.cover_url ? [
+        { src: metadata.cover_url, sizes: '512x512', type: 'image/jpeg' }
       ] : []
     })
 
@@ -762,11 +902,7 @@ function stopPlayerMetadataRefresh() {
 // Fetch available channels
 async function fetchChannels() {
   try {
-    const response = await fetch(`${API_BASE}/channels`)
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-    }
-    const data = await response.json()
+    const data = await listChannels()
     channels.value = data
     channelsError.value = ''
 
@@ -912,6 +1048,69 @@ function clearBlockSearch() {
   blockSearchId.value = ''
   blockSearchResult.value = null
   blockSearchError.value = ''
+}
+
+// Test new endpoints functions
+async function testGetCoverUrl() {
+  if (!testCoverEventId.value) return
+
+  testCoverLoading.value = true
+  testCoverError.value = ''
+  testCoverResult.value = null
+
+  try {
+    testCoverResult.value = await getCoverUrl(
+      testCoverEventId.value,
+      testCoverSongIndex.value,
+      selectedChannel.value
+    )
+  } catch (e) {
+    console.error('Failed to test cover URL:', e)
+    testCoverError.value = `Failed: ${e.message}`
+  } finally {
+    testCoverLoading.value = false
+  }
+}
+
+async function testGetStreamUrl() {
+  if (!testStreamEventId.value) return
+
+  testStreamLoading.value = true
+  testStreamError.value = ''
+  testStreamResult.value = null
+
+  try {
+    testStreamResult.value = await getStreamUrl(
+      testStreamEventId.value,
+      selectedChannel.value
+    )
+  } catch (e) {
+    console.error('Failed to test stream URL:', e)
+    testStreamError.value = `Failed: ${e.message}`
+  } finally {
+    testStreamLoading.value = false
+  }
+}
+
+async function testGetSongByIndex() {
+  if (!testSongEventId.value) return
+
+  testSongLoading.value = true
+  testSongError.value = ''
+  testSongResult.value = null
+
+  try {
+    testSongResult.value = await getSongByIndex(
+      testSongEventId.value,
+      testSongIndex.value,
+      selectedChannel.value
+    )
+  } catch (e) {
+    console.error('Failed to test get song:', e)
+    testSongError.value = `Failed: ${e.message}`
+  } finally {
+    testSongLoading.value = false
+  }
 }
 
 // Initialize on mount
@@ -1802,19 +2001,6 @@ onUnmounted(() => {
   border: 2px solid rgba(0, 212, 255, 0.2);
 }
 
-.player-cover-placeholder {
-  width: 180px;
-  height: 180px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(135deg, #2a2a3e 0%, #1a1a2e 100%);
-  border-radius: 12px;
-  border: 2px dashed rgba(0, 212, 255, 0.3);
-  font-size: 4rem;
-  color: rgba(0, 212, 255, 0.3);
-}
-
 .player-metadata {
   flex: 1;
   display: flex;
@@ -2231,6 +2417,123 @@ onUnmounted(() => {
   min-width: 120px;
 }
 
+/* Test Endpoints Section */
+.test-endpoints-section {
+  background: linear-gradient(135deg, #1a2a1a 0%, #1a1a1a 100%);
+  border-radius: 8px;
+  padding: 20px;
+  margin: 30px 0;
+  border: 1px solid rgba(46, 204, 113, 0.3);
+}
+
+.test-endpoints-section h3 {
+  margin-top: 0;
+  color: #2ecc71;
+  margin-bottom: 16px;
+}
+
+.test-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 20px;
+}
+
+.test-card {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(46, 204, 113, 0.2);
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.test-card h4 {
+  margin: 0 0 8px 0;
+  color: #2ecc71;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.test-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.test-input {
+  padding: 8px 12px;
+  border-radius: 4px;
+  border: 1px solid #333;
+  background: #111;
+  color: #fff;
+  font-size: 0.9rem;
+}
+
+.test-input:focus {
+  outline: none;
+  border-color: #2ecc71;
+  box-shadow: 0 0 6px rgba(46, 204, 113, 0.2);
+}
+
+.test-result {
+  background: rgba(46, 204, 113, 0.05);
+  border: 1px solid rgba(46, 204, 113, 0.15);
+  border-radius: 6px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.result-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.9rem;
+}
+
+.result-item strong {
+  color: #2ecc71;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.text-muted {
+  color: #666;
+  font-style: italic;
+}
+
+.cover-preview {
+  margin-top: 8px;
+  display: flex;
+  justify-content: center;
+}
+
+.cover-preview img {
+  max-width: 100%;
+  max-height: 300px;
+  border-radius: 8px;
+  border: 2px solid rgba(46, 204, 113, 0.3);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+.cover-preview-small {
+  margin-top: 8px;
+  display: flex;
+  justify-content: center;
+}
+
+.cover-preview-small img {
+  max-width: 150px;
+  max-height: 150px;
+  border-radius: 6px;
+  border: 2px solid rgba(46, 204, 113, 0.3);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
 @media (max-width: 768px) {
   .header {
     flex-direction: column;
@@ -2285,8 +2588,7 @@ onUnmounted(() => {
     text-align: center;
   }
 
-  .player-cover img,
-  .player-cover-placeholder {
+  .player-cover img {
     width: 150px;
     height: 150px;
   }
@@ -2305,6 +2607,15 @@ onUnmounted(() => {
 
   .player-stream-info {
     grid-template-columns: 1fr;
+  }
+
+  /* Test Section Responsive */
+  .test-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .cover-preview img {
+    max-height: 200px;
   }
 }
 </style>

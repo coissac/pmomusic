@@ -82,6 +82,9 @@ pub mod streaming;
 pub mod track_metadata;
 
 #[cfg(feature = "pmoserver")]
+pub mod api;
+
+#[cfg(feature = "pmoserver")]
 pub mod openapi;
 
 #[cfg(feature = "pmoconfig")]
@@ -218,7 +221,19 @@ impl AudioCacheExt for pmoserver::Server {
 
         // API REST générique (pmocache)
         // Routes: GET/POST/DELETE /api/audio, etc.
-        let api_router = create_api_router(cache.clone());
+        let mut api_router = create_api_router(cache.clone());
+
+        // Ajouter les endpoints audio spécifiques
+        // Route: GET /api/audio/{pk}/cover-url
+        api_router = api_router.merge(
+            axum::Router::new()
+                .route(
+                    "/{pk}/cover-url",
+                    axum::routing::get(crate::api::get_cover_url),
+                )
+                .with_state(cache.clone())
+        );
+
         let openapi = crate::ApiDoc::openapi();
         self.add_openapi(api_router, openapi, "audio").await;
 
