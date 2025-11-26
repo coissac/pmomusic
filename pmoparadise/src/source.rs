@@ -5,7 +5,10 @@
 
 use crate::channels::{ChannelDescriptor, ALL_CHANNELS};
 use pmosource::pmodidl::{Container, Item, Resource};
-use pmosource::{async_trait, BrowseResult, MusicSource, MusicSourceError, Result};
+use pmosource::{
+    async_trait, AudioFormat, BrowseResult, MusicSource, MusicSourceError, Result,
+    SourceCapabilities,
+};
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::RwLock;
@@ -19,7 +22,7 @@ const DEFAULT_IMAGE: &[u8] = include_bytes!("../assets/default.webp");
 /// RadioParadiseSource - UPnP ContentDirectory source for Radio Paradise
 ///
 /// Provides access to:
-/// - Live OGG streams for all 4 channels (Main, Mellow, Rock, Eclectic)
+/// - Live FLAC streams for all 4 channels (Main, Mellow, Rock, Eclectic)
 /// - Historical playlists (FIFO) for each channel
 ///
 /// # Object ID Schema
@@ -60,7 +63,17 @@ impl RadioParadiseSource {
 
     /// Build a live stream URL for a channel
     fn build_live_url(&self, slug: &str) -> String {
+        format!("{}/radioparadise/stream/{}/flac", self.base_url, slug)
+    }
+
+    /// Build an OGG-FLAC live stream URL for clients that support it
+    fn build_live_ogg_url(&self, slug: &str) -> String {
         format!("{}/radioparadise/stream/{}/ogg", self.base_url, slug)
+    }
+
+    /// URL de fallback pour l'image par défaut de la source
+    fn default_cover_url(&self) -> String {
+        format!("{}/api/sources/{}/image", self.base_url, self.id())
     }
 
     /// Fetch current metadata from the live stream
@@ -77,7 +90,13 @@ impl RadioParadiseSource {
                         let artist = json["artist"].as_str().map(|s| s.to_string());
                         let album = json["album"].as_str().map(|s| s.to_string());
                         let year = json["year"].as_u64().map(|y| y as u32);
-                        let cover_url = json["cover_url"].as_str().map(|s| s.to_string());
+                        // Préférer l'URL de cache si cover_pk est fourni par le pipeline
+                        let cover_pk = json["cover_pk"].as_str().map(|s| s.to_string());
+                        let cover_url = cover_pk
+                            .as_ref()
+                            .map(|pk| format!("{}/covers/image/{}", self.base_url, pk))
+                            .or_else(|| json["cover_url"].as_str().map(|s| s.to_string()))
+                            .or_else(|| Some(self.default_cover_url()));
 
                         // Parse duration from JSON (in seconds as a float)
                         let duration = json["duration"]
@@ -105,11 +124,11 @@ impl RadioParadiseSource {
                             album,
                             genre: Some("Radio".to_string()),
                             album_art: cover_url,
-                            album_art_pk: None,
+                            album_art_pk: cover_pk,
                             date: year.map(|y| y.to_string()),
                             original_track_number: None,
                             resources: vec![Resource {
-                                protocol_info: "http-get:*:audio/ogg:*".to_string(),
+                                protocol_info: "http-get:*:audio/flac:*".to_string(),
                                 bits_per_sample: None,
                                 sample_frequency: None,
                                 nr_audio_channels: Some("2".to_string()),
@@ -192,18 +211,28 @@ impl RadioParadiseSource {
             artist: Some("Radio Paradise".to_string()),
             album: Some(descriptor.display_name.to_string()),
             genre: Some("Radio".to_string()),
-            album_art: None,
+            album_art: Some(self.default_cover_url()),
             album_art_pk: None,
             date: None,
             original_track_number: None,
-            resources: vec![Resource {
-                protocol_info: "http-get:*:audio/ogg:*".to_string(),
-                bits_per_sample: None,
-                sample_frequency: None,
-                nr_audio_channels: Some("2".to_string()),
-                duration: None,
-                url: stream_url,
-            }],
+            resources: vec![
+                Resource {
+                    protocol_info: "http-get:*:audio/flac:*".to_string(),
+                    bits_per_sample: Some("16".to_string()),
+                    sample_frequency: Some("44100".to_string()),
+                    nr_audio_channels: Some("2".to_string()),
+                    duration: None,
+                    url: stream_url.clone(),
+                },
+                Resource {
+                    protocol_info: "http-get:*:audio/ogg:*".to_string(),
+                    bits_per_sample: Some("16".to_string()),
+                    sample_frequency: Some("44100".to_string()),
+                    nr_audio_channels: Some("2".to_string()),
+                    duration: None,
+                    url: self.build_live_ogg_url(descriptor.slug),
+                },
+            ],
             descriptions: vec![],
         }
     }
@@ -410,6 +439,56 @@ impl MusicSource for RadioParadiseSource {
 
             _ => Err(MusicSourceError::ObjectNotFound(format!(
                 "Cannot resolve URI for object: {}",
+                object_id
+            ))),
+        }
+    }
+
+    fn capabilities(&self) -> SourceCapabilities {
+        SourceCapabilities {
+            supports_fifo: self.supports_fifo(),
+            supports_search: false,
+            supports_favorites: false,
+            supports_playlists: false,
+            supports_user_content: false,
+            supports_high_res_audio: true,
+            max_sample_rate: Some(44100),
+            supports_multiple_formats: true,
+            supports_advanced_search: false,
+            supports_pagination: false,
+        }
+    }
+
+    async fn get_available_formats(&self, object_id: &str) -> Result<Vec<AudioFormat>> {
+        match Self::parse_object_id(object_id) {
+            ObjectIdType::LiveStream { .. } => Ok(vec![
+                AudioFormat {
+                    format_id: "flac".to_string(),
+                    mime_type: "audio/flac".to_string(),
+                    sample_rate: Some(44100),
+                    bit_depth: Some(16),
+                    bitrate: None,
+                    channels: Some(2),
+                },
+                AudioFormat {
+                    format_id: "ogg-flac".to_string(),
+                    mime_type: "audio/ogg".to_string(),
+                    sample_rate: Some(44100),
+                    bit_depth: Some(16),
+                    bitrate: None,
+                    channels: Some(2),
+                },
+            ]),
+            ObjectIdType::HistoryTrack { .. } => Ok(vec![AudioFormat {
+                format_id: "flac".to_string(),
+                mime_type: "audio/flac".to_string(),
+                sample_rate: Some(44100),
+                bit_depth: Some(16),
+                bitrate: None,
+                channels: Some(2),
+            }]),
+            _ => Err(MusicSourceError::ObjectNotFound(format!(
+                "Cannot list formats for object: {}",
                 object_id
             ))),
         }

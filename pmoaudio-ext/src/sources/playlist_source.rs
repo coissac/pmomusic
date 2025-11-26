@@ -268,6 +268,7 @@ impl NodeLogic for PlaylistSourceLogic {
                 remaining
             );
 
+            let track_start = std::time::Instant::now();
             tracing::debug!("PlaylistSourceLogic: emitting TrackBoundary");
             let boundary = AudioSegment::new_track_boundary(0, 0.0, metadata);
             send_to_children(node_name, &output, boundary).await?;
@@ -284,7 +285,12 @@ impl NodeLogic for PlaylistSourceLogic {
                 }
             };
 
-            tracing::debug!("PlaylistSourceLogic: decoding track: {:?}", file_path);
+            let elapsed = track_start.elapsed();
+            tracing::info!(
+                "PlaylistSourceLogic: gap after TrackBoundary = {:.3}s, decoding: {:?}",
+                elapsed.as_secs_f64(),
+                file_path
+            );
 
             // Décoder et émettre les chunks PCM
             // Passer le cache et pk pour gérer le cache progressif

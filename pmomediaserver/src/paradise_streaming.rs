@@ -60,6 +60,8 @@ pub trait ParadiseStreamingExt {
 impl ParadiseStreamingExt for pmoserver::Server {
     async fn init_paradise_streaming(&mut self) -> Result<Arc<ParadiseChannelManager>> {
         info!("🎵 Initializing Radio Paradise streaming channels...");
+        // Sentinel log pour vérifier qu'on exécute bien cette version du binaire
+        tracing::warn!("🔍 Rien de neuf: entering init_paradise_streaming with caches+history setup");
 
         // Récupérer ou initialiser les caches singletons
         info!("📦 Getting cache singletons...");
@@ -107,15 +109,36 @@ impl ParadiseStreamingExt for pmoserver::Server {
         history_builder.replay_max_lead_seconds = 1.0;
 
         // Créer le manager de canaux
-        info!("📡 Creating ParadiseChannelManager...");
-        let manager = Arc::new(
+        let base_url = Some(self.base_url());
+        info!(
+            "📡 Creating ParadiseChannelManager (base_url={:?})...",
+            base_url
+        );
+        // Si la création bloque (réseau RP lent), on coupe après 30s pour ne pas empêcher le serveur de démarrer.
+        let manager = match tokio::time::timeout(
+            std::time::Duration::from_secs(30),
             ParadiseChannelManager::with_defaults_with_cover_cache(
                 Some(cover_cache.clone()),
                 Some(history_builder),
-            )
-            .await
-            .context("Failed to create ParadiseChannelManager")?,
-        );
+                base_url,
+            ),
+        )
+        .await
+        {
+            Ok(Ok(mgr)) => {
+                info!("✅ ParadiseChannelManager created");
+                Arc::new(mgr)
+            }
+            Ok(Err(e)) => {
+                tracing::warn!("⚠️ Failed to create ParadiseChannelManager: {}", e);
+                return Err(e).context("Failed to create ParadiseChannelManager");
+            }
+            Err(_) => {
+                let msg = "Timeout creating ParadiseChannelManager after 30s";
+                tracing::warn!("⚠️ {}", msg);
+                return Err(anyhow::anyhow!(msg));
+            }
+        };
 
         let state = Arc::new(ParadiseStreamingState {
             manager: manager.clone(),

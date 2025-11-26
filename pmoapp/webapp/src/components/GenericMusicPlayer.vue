@@ -185,7 +185,7 @@
       <div class="audio-player-container">
         <audio
           ref="audioPlayer"
-          controls
+          preload="auto"
           @ended="handleAudioEnded"
           @error="handleAudioError"
           @play="handleAudioPlay"
@@ -193,6 +193,7 @@
           @timeupdate="handleTimeUpdate"
           @loadedmetadata="handleLoadedMetadata"
           @durationchange="handleDurationChange"
+          @canplay="handleCanPlay"
         ></audio>
       </div>
     </div>
@@ -251,6 +252,12 @@ const audioPlayer = ref<HTMLAudioElement | null>(null)
 const currentTime = ref(0)
 const duration = ref(0)
 
+// Retry logic for fragile browser decoders
+const MAX_AUDIO_RETRIES = 3
+const RETRY_DELAY_MS = 800 // Réduit pour des transitions plus rapides
+const retryCount = ref(0)
+let retryTimer: ReturnType<typeof setTimeout> | null = null
+
 // Metadata refresh via SSE
 let metadataEventSource: EventSource | null = null
 
@@ -262,6 +269,7 @@ onMounted(async () => {
 // Cleanup on unmount
 onUnmounted(() => {
   stopMetadataRefresh()
+  clearRetryTimer()
 })
 
 /**
@@ -374,10 +382,18 @@ function startMetadataRefresh() {
 
   metadataEventSource.onmessage = (event) => {
     try {
+      const previous = currentTrack.value
       const metadata = JSON.parse(event.data)
       if (currentTrack.value && metadata.id === currentTrack.value.id) {
         currentTrack.value = metadata
         console.log('Metadata updated via SSE:', metadata.title)
+
+        // Si le morceau change (live stream), remettre la progression à zéro
+        // IMPORTANT: Ne pas recharger l'URI car c'est un flux continu !
+        if (hasTrackChanged(previous, metadata)) {
+          console.log('Nouveau morceau dans le flux:', metadata.title)
+          resetProgressForNewTrack(metadata)
+        }
 
         // Mettre à jour la durée si elle a changé
         const newDuration = metadata.resources?.[0]?.duration
@@ -422,8 +438,10 @@ async function playTrack(item: BrowseItem) {
     return
   }
 
+  resetAudioRetries()
   audioError.value = null
   currentTrack.value = item
+  const preferredUri = pickPreferredResourceUri(item)
 
   // Initialise la durée depuis les métadonnées du morceau si disponible
   currentTime.value = 0
@@ -435,22 +453,35 @@ async function playTrack(item: BrowseItem) {
   }
 
   try {
-    // Résout l'URI du morceau
+    // Résout l'URI du morceau via l'API
     const result = await resolveUri(selectedSource.value.id, item.id)
-    currentUri.value = result.uri
+    let uri = result.uri
 
-    // Attendre que le DOM soit mis à jour (création de l'élément audio)
-    await nextTick()
-
-    // Joue l'audio
-    if (audioPlayer.value) {
-      audioPlayer.value.src = result.uri
-      await audioPlayer.value.play()
-      isPlaying.value = true
-
-      // Start metadata refresh
-      startMetadataRefresh()
+    // Si resolveUri n'a pas retourné d'URI, utiliser notre URI préférée (basée sur le support navigateur)
+    if (!uri && preferredUri) {
+      uri = preferredUri
+      console.log('Utilisation de l\'URI préférée (auto-détectée):', uri)
     }
+
+    // Si les deux sont disponibles, privilégier l'URI la mieux supportée
+    if (uri && preferredUri && uri !== preferredUri) {
+      // Vérifier si l'URI préférée est mieux supportée
+      const resolvedFormat = getAudioFormat(uri)
+      const preferredFormat = getAudioFormat(preferredUri)
+
+      if (preferredFormat && canPlayAudioType(preferredFormat)) {
+        if (!resolvedFormat || !canPlayAudioType(resolvedFormat)) {
+          console.log(`Remplacement de ${uri} par ${preferredUri} (meilleur support navigateur)`)
+          uri = preferredUri
+        }
+      }
+    }
+
+    if (!uri) {
+      throw new Error('Aucune URI audio disponible')
+    }
+
+    await startPlaybackFromUri(uri, true)
   } catch (e: any) {
     audioError.value = `Erreur lors de la lecture: ${e.message}`
     console.error('Failed to play track:', e)
@@ -474,6 +505,7 @@ function stopPlayback() {
   audioError.value = null
   currentTime.value = 0
   duration.value = 0
+  resetAudioRetries()
 }
 
 /**
@@ -481,6 +513,7 @@ function stopPlayback() {
  */
 function handleAudioEnded() {
   isPlaying.value = false
+  currentTime.value = 0
   stopMetadataRefresh()
   // On peut implémenter ici une logique de lecture automatique du prochain morceau
 }
@@ -492,11 +525,20 @@ function handleAudioError() {
   stopMetadataRefresh()
 
   const audio = audioPlayer.value
-  if (audio?.error) {
-    audioError.value = `Erreur de lecture audio (code ${audio.error.code})`
-  } else {
-    audioError.value = 'Erreur de lecture audio inconnue'
+  const errorCode = audio?.error?.code
+  const baseMessage = errorCode
+    ? `Erreur de lecture audio (code ${errorCode})`
+    : 'Erreur de lecture audio inconnue'
+
+  if (selectedSource.value && currentTrack.value && retryCount.value < MAX_AUDIO_RETRIES) {
+    isPlaying.value = false
+    retryCount.value += 1
+    audioError.value = `${baseMessage} - tentative de reprise (${retryCount.value}/${MAX_AUDIO_RETRIES})`
+    scheduleRetryPlayback()
+    return
   }
+
+  audioError.value = baseMessage
   isPlaying.value = false
 }
 
@@ -505,6 +547,7 @@ function handleAudioError() {
  */
 function handleAudioPlay() {
   isPlaying.value = true
+  audioError.value = null
   startMetadataRefresh()
 }
 
@@ -544,6 +587,13 @@ function handleDurationChange() {
 }
 
 /**
+ * Gère l'événement canplay (audio prêt à être joué)
+ */
+function handleCanPlay() {
+  console.log('Audio ready to play (canplay event)')
+}
+
+/**
  * Formatte le temps en MM:SS
  */
 function formatTime(seconds: number): string {
@@ -574,6 +624,247 @@ function parseDuration(durationStr: string | null | undefined): number {
 function handleImageError(event: Event) {
   const img = event.target as HTMLImageElement
   img.style.display = 'none'
+}
+
+/**
+ * Détecte un changement de morceau (utile pour les streams live)
+ */
+function hasTrackChanged(
+  previous: BrowseItem | null,
+  next: BrowseItem | null
+): boolean {
+  if (!previous || !next) return false
+  return (
+    previous.title !== next.title ||
+    previous.album !== next.album ||
+    (previous.artist || previous.creator) !== (next.artist || next.creator) ||
+    previous.album_art !== next.album_art
+  )
+}
+
+/**
+ * Remet la progression à zéro pour un nouveau morceau
+ */
+function resetProgressForNewTrack(track: BrowseItem | null) {
+  currentTime.value = 0
+  if (audioPlayer.value) {
+    audioPlayer.value.currentTime = 0
+  }
+  const d = track?.resources?.[0]?.duration
+  duration.value = d ? parseDuration(d) : 0
+}
+
+/**
+ * Détecte si un type MIME audio est supporté par le navigateur
+ */
+function canPlayAudioType(mimeType: string): boolean {
+  const audio = document.createElement('audio')
+  const support = audio.canPlayType(mimeType)
+  return support === 'probably' || support === 'maybe'
+}
+
+/**
+ * Extrait le type MIME audio depuis une URL
+ */
+function getAudioFormat(url: string): string | null {
+  const urlLower = url.toLowerCase()
+
+  // Détection par extension ou contenu de l'URL
+  if (urlLower.includes('flac') || urlLower.endsWith('.flac')) {
+    return 'audio/flac'
+  }
+  if (urlLower.includes('ogg') || urlLower.endsWith('.ogg') || urlLower.includes('vorbis')) {
+    return 'audio/ogg'
+  }
+  if (urlLower.includes('mp3') || urlLower.endsWith('.mp3') || urlLower.includes('mpeg')) {
+    return 'audio/mpeg'
+  }
+  if (urlLower.includes('wav') || urlLower.endsWith('.wav')) {
+    return 'audio/wav'
+  }
+  if (urlLower.includes('opus')) {
+    return 'audio/ogg' // Opus est généralement dans un container OGG
+  }
+
+  return null
+}
+
+/**
+ * Sélectionne l'URI préférée en tenant compte du support navigateur
+ */
+function pickPreferredResourceUri(item: BrowseItem): string | null {
+  const resources = item.resources || []
+  if (resources.length === 0) return null
+
+  // Ordre de préférence des formats (du meilleur au plus compatible)
+  const preferredFormats = [
+    { mime: 'audio/flac', keywords: ['flac'] },
+    { mime: 'audio/ogg', keywords: ['ogg', 'vorbis', 'opus'] },
+    { mime: 'audio/mpeg', keywords: ['mp3', 'mpeg'] },
+    { mime: 'audio/wav', keywords: ['wav'] },
+    { mime: 'audio/x-wav', keywords: ['wav'] },
+  ]
+
+  // Tester chaque format dans l'ordre de préférence
+  for (const format of preferredFormats) {
+    // Vérifier d'abord si le navigateur supporte ce format
+    if (!canPlayAudioType(format.mime)) {
+      console.log(`Format ${format.mime} non supporté par ce navigateur`)
+      continue
+    }
+
+    // Chercher une ressource correspondant à ce format
+    const matchingRes = resources.find((res) => {
+      if (!res.url || !res.protocol_info) return false
+      const protocolLower = res.protocol_info.toLowerCase()
+      return format.keywords.some((keyword) => protocolLower.includes(keyword))
+    })
+
+    if (matchingRes?.url) {
+      console.log(`Format sélectionné: ${format.mime}`, matchingRes.url)
+      return matchingRes.url
+    }
+  }
+
+  // Fallback: prendre n'importe quelle URL disponible
+  const anyRes = resources.find((res) => !!res.url)
+  if (anyRes?.url) {
+    console.log('Fallback: utilisation de la première URL disponible', anyRes.url)
+  }
+  return anyRes?.url || null
+}
+
+/**
+ * Ajoute un cache-buster pour forcer un nouveau stream côté navigateur
+ */
+function addCacheBuster(uri: string): string {
+  const separator = uri.includes('?') ? '&' : '?'
+  return `${uri}${separator}ts=${Date.now()}`
+}
+
+/**
+ * Nettoie le timer de retry
+ */
+function clearRetryTimer() {
+  if (retryTimer) {
+    clearTimeout(retryTimer)
+    retryTimer = null
+  }
+}
+
+/**
+ * Réinitialise les compteurs de retry
+ */
+function resetAudioRetries() {
+  retryCount.value = 0
+  clearRetryTimer()
+}
+
+/**
+ * Lance un retry différé pour laisser le temps au backend de reproposer le flux
+ */
+function scheduleRetryPlayback() {
+  clearRetryTimer()
+  retryTimer = setTimeout(() => {
+    retryTimer = null
+    void retryPlayback()
+  }, RETRY_DELAY_MS)
+}
+
+/**
+ * (Ré)initialise la source audio et démarre la lecture
+ */
+async function startPlaybackFromUri(uri: string, waitForDom = false) {
+  if (waitForDom) {
+    await nextTick()
+  }
+
+  const player = audioPlayer.value
+  if (!player) {
+    throw new Error('Audio player not ready')
+  }
+
+  const finalUri = addCacheBuster(uri)
+  currentUri.value = finalUri
+
+  player.pause()
+  player.src = finalUri
+  player.load()
+
+  // Attendre que le navigateur ait bufferisé suffisamment de données
+  // pour éviter les gaps audio entre les morceaux
+  await waitForSufficientBuffer(player)
+
+  await player.play()
+
+  isPlaying.value = true
+  audioError.value = null
+  resetAudioRetries()
+  startMetadataRefresh()
+}
+
+/**
+ * Attend que le player ait suffisamment bufferisé avant de lancer la lecture
+ */
+async function waitForSufficientBuffer(player: HTMLAudioElement): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup()
+      console.warn('Buffer timeout - starting playback anyway')
+      resolve()
+    }, 5000) // Timeout de 5 secondes max
+
+    const cleanup = () => {
+      clearTimeout(timeout)
+      player.removeEventListener('canplay', onCanPlay)
+      player.removeEventListener('error', onError)
+    }
+
+    const onCanPlay = () => {
+      // Vérifier si on a au moins 1-2 secondes de buffer
+      if (player.buffered.length > 0) {
+        const bufferedEnd = player.buffered.end(0)
+        const currentTime = player.currentTime
+        const bufferedSeconds = bufferedEnd - currentTime
+
+        console.log(`Buffer disponible: ${bufferedSeconds.toFixed(2)}s`)
+
+        // Attendre au moins 0.5 secondes de buffer pour réduire les gaps
+        if (bufferedSeconds >= 0.5) {
+          cleanup()
+          resolve()
+        }
+      }
+    }
+
+    const onError = () => {
+      cleanup()
+      reject(new Error('Buffer error'))
+    }
+
+    player.addEventListener('canplay', onCanPlay)
+    player.addEventListener('error', onError)
+
+    // Check immédiatement au cas où c'est déjà prêt
+    if (player.readyState >= 3) {
+      onCanPlay()
+    }
+  })
+}
+
+/**
+ * Tente de relancer la lecture après une erreur (nouvelle résolution d'URI)
+ */
+async function retryPlayback() {
+  if (!selectedSource.value || !currentTrack.value) return
+
+  try {
+    const result = await resolveUri(selectedSource.value.id, currentTrack.value.id)
+    await startPlaybackFromUri(result.uri)
+  } catch (e: any) {
+    audioError.value = `Erreur lors de la reprise: ${e.message}`
+    isPlaying.value = false
+  }
 }
 </script>
 
@@ -1096,13 +1387,7 @@ function handleImageError(event: Event) {
 }
 
 .audio-player-container {
-  width: 100%;
-}
-
-.audio-player-container audio {
-  width: 100%;
-  border-radius: 8px;
-  background: #0a0a0a;
+  display: none;
 }
 
 /* Debug Info */

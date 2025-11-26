@@ -23,7 +23,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use tracing::Level;
 use tracing_subscriber::{
-    Registry, filter::LevelFilter, layer::SubscriberExt, reload, util::SubscriberInitExt,
+    filter::EnvFilter, filter::LevelFilter, layer::SubscriberExt, reload, util::SubscriberInitExt,
+    Registry,
 };
 
 /// Représente une entrée de log
@@ -41,11 +42,11 @@ pub struct LogState {
     buffer: Arc<RwLock<VecDeque<LogEntry>>>,
     tx: broadcast::Sender<LogEntry>,
     max_level: Arc<RwLock<Level>>,
-    reload_handle: Arc<RwLock<reload::Handle<LevelFilter, Registry>>>,
+    reload_handle: Arc<RwLock<reload::Handle<EnvFilter, Registry>>>,
 }
 
 impl LogState {
-    pub fn new(capacity: usize, reload_handle: reload::Handle<LevelFilter, Registry>) -> Self {
+    pub fn new(capacity: usize, reload_handle: reload::Handle<EnvFilter, Registry>) -> Self {
         Self {
             buffer: Arc::new(RwLock::new(VecDeque::with_capacity(capacity))),
             tx: broadcast::channel(1000).0,
@@ -57,16 +58,17 @@ impl LogState {
     pub fn set_max_level(&self, level: Level) {
         *self.max_level.write().unwrap() = level;
 
-        // Convertir Level en LevelFilter
-        let level_filter = level_to_levelfilter(level);
+        // Construire un filtre simple à partir du niveau global
+        let filter =
+            EnvFilter::try_new(level_to_string(level)).unwrap_or_else(|_| EnvFilter::new("trace"));
 
         // Recharger le filtre dynamiquement
-        if let Err(e) = self.reload_handle.write().unwrap().reload(level_filter) {
+        if let Err(e) = self.reload_handle.write().unwrap().reload(filter) {
             eprintln!("❌ Failed to reload log level filter: {}", e);
         } else {
             eprintln!(
                 "✅ Log level filter reloaded successfully to: {:?}",
-                level_filter
+                level
             );
         }
     }
@@ -270,40 +272,52 @@ pub fn init_logging() -> LogState {
     // Créer un filtre rechargeable qui commence au niveau déterminé par
     // RUST_LOG (prioritaire) ou la configuration.
 
-    let (initial_level, level_source) = match std::env::var("RUST_LOG") {
+    let (env_filter, initial_level, level_source) = match std::env::var("RUST_LOG") {
         Ok(value) => {
             let trimmed = value.trim();
             if let Some(level) = string_to_level(trimmed) {
-                (level, format!("RUST_LOG ({})", trimmed))
+                let filter =
+                    EnvFilter::try_new(trimmed).unwrap_or_else(|_| EnvFilter::new("trace"));
+                (filter, level, format!("RUST_LOG ({})", trimmed))
             } else {
-                eprintln!(
-                    "⚠️ Invalid RUST_LOG value '{}', falling back to configuration",
-                    value
-                );
-                let fallback = config
-                    .get_log_min_level()
-                    .ok()
-                    .and_then(|cfg| string_to_level(cfg.trim()))
-                    .unwrap_or(Level::TRACE);
-                (fallback, "config".to_string())
+                match EnvFilter::try_new(trimmed) {
+                    Ok(filter) => {
+                        let level_hint =
+                            filter.max_level_hint().and_then(levelfilter_to_level).unwrap_or(Level::TRACE);
+                        (filter, level_hint, format!("RUST_LOG ({})", trimmed))
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "⚠️ Invalid RUST_LOG value '{}': {}, falling back to configuration",
+                            value, e
+                        );
+                        let cfg_level = config
+                            .get_log_min_level()
+                            .ok()
+                            .and_then(|cfg| string_to_level(cfg.trim()))
+                            .unwrap_or(Level::TRACE);
+                        let filter = EnvFilter::new(level_to_string(cfg_level));
+                        (filter, cfg_level, "config".to_string())
+                    }
+                }
             }
         }
         Err(_) => {
-            let level = config
+            let cfg_level = config
                 .get_log_min_level()
                 .ok()
                 .and_then(|cfg| string_to_level(cfg.trim()))
                 .unwrap_or(Level::TRACE);
-            (level, "config".to_string())
+            let filter = EnvFilter::new(level_to_string(cfg_level));
+            (filter, cfg_level, "config".to_string())
         }
     };
-    let log_level = level_to_levelfilter(initial_level);
     eprintln!(
         "ℹ️ Initial log level set to {:?} (source: {})",
         initial_level, level_source
     );
 
-    let (filter, reload_handle) = reload::Layer::new(log_level);
+    let (filter_layer, reload_handle) = reload::Layer::new(env_filter);
 
     let buffer_capacity = match config.get_log_cache_size() {
         Ok(c) => c,
@@ -317,7 +331,7 @@ pub fn init_logging() -> LogState {
     // Construire le subscriber avec le filtre rechargeable AVANT le SseLayer
     // L'ordre est important : le filtre doit être appliqué en premier
     let subscriber = Registry::default()
-        .with(filter)
+        .with(filter_layer)
         .with(SseLayer::new(log_state.clone()));
 
     let enable_console = match config.get_log_enable_console() {
@@ -455,13 +469,14 @@ fn level_to_string(level: Level) -> String {
     .to_string()
 }
 
-fn level_to_levelfilter(level: Level) -> LevelFilter {
-    match level {
-        Level::ERROR => LevelFilter::ERROR,
-        Level::WARN => LevelFilter::WARN,
-        Level::INFO => LevelFilter::INFO,
-        Level::DEBUG => LevelFilter::DEBUG,
-        Level::TRACE => LevelFilter::TRACE,
+fn levelfilter_to_level(filter: LevelFilter) -> Option<Level> {
+    match filter {
+        LevelFilter::ERROR => Some(Level::ERROR),
+        LevelFilter::WARN => Some(Level::WARN),
+        LevelFilter::INFO => Some(Level::INFO),
+        LevelFilter::DEBUG => Some(Level::DEBUG),
+        LevelFilter::TRACE => Some(Level::TRACE),
+        _ => None,
     }
 }
 

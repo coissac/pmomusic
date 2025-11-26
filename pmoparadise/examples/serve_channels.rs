@@ -62,10 +62,12 @@ async fn main() -> anyhow::Result<()> {
     };
 
     info!("Initializing Radio Paradise channels...");
+    let server_base_url = format!("http://localhost:{}", 8080);
     let manager = Arc::new(
         ParadiseChannelManager::with_defaults_with_cover_cache(
             Some(cover_cache),
             Some(history_builder),
+            Some(server_base_url),
         )
         .await?,
     );

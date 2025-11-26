@@ -39,6 +39,7 @@ pub struct ParadiseStreamChannelConfig {
     pub max_lead_seconds: f64,
     pub flac_options: StreamingSinkOptions,
     pub ogg_options: StreamingSinkOptions,
+    pub server_base_url: Option<String>,
 }
 
 impl Default for ParadiseStreamChannelConfig {
@@ -47,6 +48,7 @@ impl Default for ParadiseStreamChannelConfig {
             max_lead_seconds: 1.0,
             flac_options: StreamingSinkOptions::flac_defaults(),
             ogg_options: StreamingSinkOptions::ogg_defaults(),
+            server_base_url: None,
         }
     }
 }
@@ -143,6 +145,9 @@ impl ParadiseStreamChannelConfig {
                 if let Some(v) = num.as_f64() {
                     Self {
                         max_lead_seconds: v.max(0.1),
+                        flac_options: StreamingSinkOptions::flac_defaults(),
+                        ogg_options: StreamingSinkOptions::ogg_defaults(),
+                        server_base_url: None,
                     }
                 } else {
                     let default = Self::default();
@@ -155,6 +160,9 @@ impl ParadiseStreamChannelConfig {
                 if let Ok(v) = s.parse::<f64>() {
                     Self {
                         max_lead_seconds: v.max(0.1),
+                        flac_options: StreamingSinkOptions::flac_defaults(),
+                        ogg_options: StreamingSinkOptions::ogg_defaults(),
+                        server_base_url: None,
                     }
                 } else {
                     let default = Self::default();
@@ -666,9 +674,13 @@ impl ParadiseChannelManager {
     pub async fn with_defaults_with_cover_cache(
         cover_cache: Option<Arc<CoverCache>>,
         history_builder: Option<ParadiseHistoryBuilder>,
+        server_base_url: Option<String>,
     ) -> Result<Self> {
         let mut map = HashMap::new();
         for descriptor in ALL_CHANNELS.iter().copied() {
+            let mut config = ParadiseStreamChannelConfig::default();
+            config.server_base_url = server_base_url.clone();
+
             let history_opts = if let Some(builder) = &history_builder {
                 Some(
                     builder
@@ -681,7 +693,7 @@ impl ParadiseChannelManager {
             };
             let channel = ParadiseStreamChannel::new(
                 descriptor,
-                ParadiseStreamChannelConfig::default(),
+                config,
                 cover_cache.clone(),
                 history_opts,
             )
@@ -692,7 +704,7 @@ impl ParadiseChannelManager {
     }
 
     pub async fn with_defaults() -> Result<Self> {
-        Self::with_defaults_with_cover_cache(None, None).await
+        Self::with_defaults_with_cover_cache(None, None, None).await
     }
 
     pub fn get(&self, id: u8) -> Option<Arc<ParadiseStreamChannel>> {

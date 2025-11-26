@@ -12,7 +12,7 @@ use std::{
         Arc,
     },
     task::{Context, Poll},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use crate::{
@@ -48,14 +48,17 @@ pub struct ParadiseStreamChannelConfig {
     pub flac_options: StreamingSinkOptions,
     /// Options pour le flux OGG-FLAC.
     pub ogg_options: StreamingSinkOptions,
+    /// URL de base du serveur (pour les métadonnées, covers...)
+    pub server_base_url: Option<String>,
 }
 
 impl Default for ParadiseStreamChannelConfig {
     fn default() -> Self {
         Self {
-            max_lead_seconds: 1.0,
+            max_lead_seconds: 3.0, // Compromis live/fluidité : assez pour absorber les transitions
             flac_options: StreamingSinkOptions::flac_defaults(),
             ogg_options: StreamingSinkOptions::ogg_defaults(),
+            server_base_url: None,
         }
     }
 }
@@ -91,7 +94,7 @@ impl ParadiseHistoryBuilder {
             playlist_title_prefix: Some("Radio Paradise History".into()),
             max_history_tracks: Some(500),
             collection_prefix: Some("radio-paradise".into()),
-            replay_max_lead_seconds: 1.0,
+            replay_max_lead_seconds: 3.0, // Aligné avec le live
         }
     }
 
@@ -145,6 +148,7 @@ impl ParadiseStreamChannelConfig {
                         max_lead_seconds: v.max(0.1),
                         flac_options: StreamingSinkOptions::flac_defaults(),
                         ogg_options: StreamingSinkOptions::ogg_defaults(),
+                        server_base_url: None,
                     }
                 } else {
                     let default = Self::default();
@@ -159,6 +163,7 @@ impl ParadiseStreamChannelConfig {
                         max_lead_seconds: v.max(0.1),
                         flac_options: StreamingSinkOptions::flac_defaults(),
                         ogg_options: StreamingSinkOptions::ogg_defaults(),
+                        server_base_url: None,
                     }
                 } else {
                     let default = Self::default();
@@ -195,6 +200,13 @@ impl ParadiseStreamChannel {
         cover_cache: Option<Arc<CoverCache>>,
         history: Option<ParadiseHistoryOptions>,
     ) -> Result<Self> {
+        // Propager server_base_url dans les options pour que les encoders injectent les covers du cache
+        let mut config = config;
+        if let Some(ref base) = config.server_base_url {
+            config.flac_options =
+                config.flac_options.clone().with_server_base_url(Some(base.clone()));
+            config.ogg_options = config.ogg_options.clone().with_server_base_url(Some(base.clone()));
+        }
         let cover_cache = cover_cache
             .or_else(|| history.as_ref().map(|opts| opts.cover_cache.clone()))
             .or_else(|| get_cover_cache());
@@ -813,10 +825,31 @@ impl ParadiseChannelManager {
     pub async fn with_defaults_with_cover_cache(
         cover_cache: Option<Arc<CoverCache>>,
         history_builder: Option<ParadiseHistoryBuilder>,
+        server_base_url: Option<String>,
     ) -> Result<Self> {
+        tracing::warn!(
+            "➡️ Entering with_defaults_with_cover_cache ({} channels, base_url={:?})",
+            ALL_CHANNELS.len(),
+            server_base_url
+        );
         let mut map = HashMap::new();
         for descriptor in ALL_CHANNELS.iter().copied() {
+            let mut config = ParadiseStreamChannelConfig::default();
+            config.server_base_url = server_base_url.clone();
+
+            let start = Instant::now();
+            tracing::warn!(
+                "⏳ Initializing Radio Paradise channel {} ({})...",
+                descriptor.display_name,
+                descriptor.slug
+            );
+
             let history_opts = if let Some(builder) = &history_builder {
+                tracing::warn!(
+                    "  ⏳ Building history options for channel {} ({})",
+                    descriptor.display_name,
+                    descriptor.slug
+                );
                 Some(
                     builder
                         .build_for_channel(&descriptor)
@@ -826,20 +859,56 @@ impl ParadiseChannelManager {
             } else {
                 None
             };
-            let channel = ParadiseStreamChannel::new(
-                descriptor,
-                ParadiseStreamChannelConfig::default(),
-                cover_cache.clone(),
-                history_opts,
+            tracing::warn!(
+                "  ⏩ History options ready for channel {} ({})",
+                descriptor.display_name,
+                descriptor.slug
+            );
+            let channel = match tokio::time::timeout(
+                Duration::from_secs(20),
+                ParadiseStreamChannel::new(
+                    descriptor,
+                    config,
+                    cover_cache.clone(),
+                    history_opts,
+                ),
             )
-            .await?;
+            .await
+            {
+                Ok(Ok(ch)) => {
+                    tracing::warn!(
+                        "✅ Channel {} ({}) initialized in {:?}",
+                        descriptor.display_name,
+                        descriptor.slug,
+                        start.elapsed()
+                    );
+                    ch
+                }
+                Ok(Err(e)) => {
+                    tracing::error!(
+                        "⚠️ Failed to initialize channel {} ({}): {}",
+                        descriptor.display_name,
+                        descriptor.slug,
+                        e
+                    );
+                    continue;
+                }
+                Err(_) => {
+                    tracing::error!(
+                        "⚠️ Timeout initializing channel {} ({}) after 20s, skipping",
+                        descriptor.display_name,
+                        descriptor.slug
+                    );
+                    continue;
+                }
+            };
             map.insert(descriptor.id, Arc::new(channel));
         }
         Ok(Self { channels: map })
     }
 
     pub async fn with_defaults() -> Result<Self> {
-        Self::with_defaults_with_cover_cache(None, None).await
+        Self::with_defaults_with_cover_cache(None, None, None).await
     }
 
     pub fn get(&self, id: u8) -> Option<Arc<ParadiseStreamChannel>> {

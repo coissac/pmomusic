@@ -928,7 +928,7 @@ async fn stream_source_item_metadata(
         Some(source) => {
             let object_id = params.object_id.clone();
 
-            // Create a stream that fetches metadata every 3 seconds
+            // Create a stream that fetches metadata frequently for near-realtime updates
             let stream = stream::repeat_with(move || {
                 let source = source.clone();
                 let object_id = object_id.clone();
@@ -946,7 +946,7 @@ async fn stream_source_item_metadata(
                 }
             })
             .then(|fut| fut)
-            .throttle(Duration::from_secs(3))
+            .throttle(Duration::from_millis(500))
             .filter_map(|result| match result {
                 Ok(event) => Some(Ok::<_, Infallible>(event)),
                 Err(e) => {

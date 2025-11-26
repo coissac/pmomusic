@@ -9,6 +9,6 @@ host:
   logger:
     buffer_capacity: 200
     enable_console: true
-    min_level: INFO
+    min_level: trace
 playlists:
   directory: playlists
