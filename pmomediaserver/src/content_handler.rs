@@ -117,7 +117,24 @@ impl ContentHandler {
                 return Ok((didl, 1, 1, update_id));
             }
 
-            // Sinon, chercher dans les sources
+            // Try to get item metadata first (for leaf items)
+            for source in list_all_sources().await {
+                match source.get_item(object_id).await {
+                    Ok(item) => {
+                        let didl = to_didl_lite(&[], &[item])?;
+                        let update_id = source.update_id().await;
+                        return Ok((didl, 1, 1, update_id));
+                    }
+                    Err(MusicSourceError::ObjectNotFound(_))
+                    | Err(MusicSourceError::NotSupported(_)) => continue,
+                    Err(e) => {
+                        tracing::debug!("get_item failed for {}: {}", object_id, e);
+                        continue;
+                    }
+                }
+            }
+
+            // Fallback to browse for containers
             let mut non_not_found_error: Option<String> = None;
             for source in list_all_sources().await {
                 match source.browse(object_id).await {
@@ -192,7 +209,7 @@ impl ContentHandler {
             match source.browse(object_id).await {
                 Ok(result) => {
                     return self
-                        .browse_result_to_didl(result, source, starting_index, requested_count)
+                        .browse_result_to_didl(object_id, result, source, starting_index, requested_count)
                         .await;
                 }
                 Err(MusicSourceError::ObjectNotFound(_)) => continue,
@@ -260,28 +277,38 @@ impl ContentHandler {
         starting_index: u32,
         requested_count: u32,
     ) -> Result<(String, u32, u32, u32), String> {
+        let source_id = source.id().to_string();
         let result = source
-            .browse(source.id())
+            .browse(&source_id)
             .await
             .map_err(|e| format!("Browse failed: {}", e))?;
 
-        self.browse_result_to_didl(result, source, starting_index, requested_count)
+        self.browse_result_to_didl(&source_id, result, source, starting_index, requested_count)
             .await
     }
 
     /// Convertit un BrowseResult en DIDL-Lite XML avec pagination
     async fn browse_result_to_didl(
         &self,
+        object_id: &str,
         result: BrowseResult,
         source: Arc<dyn MusicSource>,
         starting_index: u32,
         requested_count: u32,
     ) -> Result<(String, u32, u32, u32), String> {
-        let (mut containers, mut items) = match result {
+        let (containers, items) = match result {
             BrowseResult::Containers(c) => (c, vec![]),
             BrowseResult::Items(i) => (vec![], i),
             BrowseResult::Mixed { containers, items } => (containers, items),
         };
+
+        // Filter out any container that matches the object_id being browsed
+        // (to avoid containers appearing as children of themselves)
+        let mut containers: Vec<Container> = containers
+            .into_iter()
+            .filter(|c| c.id != object_id)
+            .collect();
+        let mut items = items;
 
         // Calculer le total avant pagination
         let total = (containers.len() + items.len()) as u32;

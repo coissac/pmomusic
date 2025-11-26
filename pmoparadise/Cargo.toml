@@ -77,7 +77,7 @@ pmometadata = { path = "../pmometadata", optional = true }
 futures-util = { version = "0.3", optional = true }
 
 [features]
-default = ["metadata-only", "pmoconfig"]
+default = ["metadata-only", "pmoconfig", "playlist"]
 # Mode métadonnées seules (pas de décodage FLAC)
 metadata-only = []
 # Active l'API REST pmoserver
@@ -86,12 +86,14 @@ pmoserver = ["dep:pmoserver", "dep:utoipa", "dep:axum", "server"]
 server = ["pmosource/server", "pmoconfig"]
 # Feature pour activer le support de pmoconfig
 pmoconfig = ["dep:pmoconfig"]
+# Feature pour activer le support des playlists d'historique
+playlist = []
 # Feature cache (deprecated - toujours actif maintenant)
 cache = []
 # Active le support pmoaudio node (RadioParadiseStreamSource)
 pmoaudio = ["dep:pmoaudio", "dep:pmoflac", "dep:pmometadata", "dep:futures-util", "dep:pmoaudio-ext"]
 # Active le support complet avec playlist (pour les exemples avancés)
-full = ["pmoaudio", "dep:pmoaudio-ext", "pmoconfig", "pmoserver"]
+full = ["pmoaudio", "dep:pmoaudio-ext", "pmoconfig", "pmoserver", "playlist"]
 
 [dev-dependencies]
 # Tests

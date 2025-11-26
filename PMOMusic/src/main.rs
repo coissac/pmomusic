@@ -1,6 +1,6 @@
 use pmoapp::{WebAppExt, Webapp};
 use pmomediarenderer::MEDIA_RENDERER;
-use pmomediaserver::{MEDIA_SERVER, ParadiseStreamingExt, sources::SourcesExt};
+use pmomediaserver::{MEDIA_SERVER, MediaServerDeviceExt, ParadiseStreamingExt, sources::SourcesExt};
 use pmoserver::Server;
 use pmosource::MusicSourceExt;
 use pmoupnp::UpnpServerExt;
@@ -80,6 +80,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .register_device(MEDIA_SERVER.clone())
         .await
         .expect("Failed to register MediaServer");
+
+    // Initialiser les ProtocolInfo du MediaServer
+    server_instance.init_protocol_info();
 
     info!(
         "✅ MediaServer ready at {}{}",

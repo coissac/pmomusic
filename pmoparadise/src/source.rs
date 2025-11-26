@@ -13,8 +13,6 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::RwLock;
 
-#[cfg(feature = "playlist")]
-use pmoplaylist::PlaylistManager;
 
 /// Default Radio Paradise image (embedded in binary)
 const DEFAULT_IMAGE: &[u8] = include_bytes!("../assets/default.webp");
@@ -257,7 +255,7 @@ impl RadioParadiseSource {
     async fn get_history_items(
         &self,
         slug: &str,
-        offset: usize,
+        _offset: usize,
         count: usize,
     ) -> Result<Vec<Item>> {
         let playlist_id = Self::history_playlist_id(slug);
@@ -268,65 +266,14 @@ impl RadioParadiseSource {
             MusicSourceError::BrowseError(format!("Failed to get playlist {}: {}", playlist_id, e))
         })?;
 
-        // Get entries from playlist
-        let entries = reader.get_entries(offset, count).await.map_err(|e| {
+        // Get items from playlist (to_items starts from cursor position)
+        let items = reader.to_items(count).await.map_err(|e| {
             MusicSourceError::BrowseError(format!("Failed to read playlist entries: {}", e))
         })?;
-
-        // Convert entries to Items
-        let mut items = Vec::new();
-        for entry in entries {
-            if let Ok(item) = self.playlist_entry_to_item(slug, &entry).await {
-                items.push(item);
-            }
-        }
 
         Ok(items)
     }
 
-    /// Convert a playlist entry to a DIDL Item
-    #[cfg(feature = "playlist")]
-    async fn playlist_entry_to_item(
-        &self,
-        slug: &str,
-        entry: &pmoplaylist::PlaylistEntry,
-    ) -> Result<Item> {
-        let metadata = &entry.metadata;
-
-        // Build audio URL from cache
-        let audio_url = format!("{}/cache/audio/{}", self.base_url, entry.pk);
-
-        // Build item
-        Ok(Item {
-            id: format!("radio-paradise:channel:{}:history:track:{}", slug, entry.pk),
-            parent_id: format!("radio-paradise:channel:{}:history", slug),
-            restricted: Some("1".to_string()),
-            title: metadata
-                .title
-                .clone()
-                .unwrap_or_else(|| "Unknown Title".to_string()),
-            creator: metadata.artist.clone(),
-            class: "object.item.audioItem.musicTrack".to_string(),
-            artist: metadata.artist.clone(),
-            album: metadata.album.clone(),
-            genre: metadata.genre.clone(),
-            album_art: None,
-            album_art_pk: metadata.cover_pk.clone(),
-            date: metadata.year.map(|y| y.to_string()),
-            original_track_number: metadata.track_number.map(|n| n.to_string()),
-            resources: vec![Resource {
-                protocol_info: "http-get:*:audio/flac:*".to_string(),
-                bits_per_sample: metadata.bits_per_sample.map(|b| b.to_string()),
-                sample_frequency: metadata.sample_rate.map(|s| s.to_string()),
-                nr_audio_channels: Some("2".to_string()),
-                duration: metadata
-                    .duration
-                    .map(|d| format!("{}:{:02}:{:02}", d / 3600, (d % 3600) / 60, d % 60)),
-                url: audio_url,
-            }],
-            descriptions: vec![],
-        })
-    }
 }
 
 /// Types of object IDs in the Radio Paradise source
@@ -396,26 +343,41 @@ impl MusicSource for RadioParadiseSource {
             }
 
             ObjectIdType::History { slug } => {
-                // Return items from history playlist
+                // Return history container as first element (for BrowseMetadata)
+                // followed by history items (for BrowseDirectChildren)
+                let descriptor = Self::get_channel_by_slug(&slug).ok_or_else(|| {
+                    MusicSourceError::ObjectNotFound(format!("Unknown channel: {}", slug))
+                })?;
+                let history_container = self.build_history_container(descriptor);
+
                 #[cfg(feature = "playlist")]
                 {
                     let items = self.get_history_items(&slug, 0, 100).await?;
-                    Ok(BrowseResult::Items(items))
+                    Ok(BrowseResult::Mixed {
+                        containers: vec![history_container],
+                        items,
+                    })
                 }
 
                 #[cfg(not(feature = "playlist"))]
                 {
-                    let _ = slug;
-                    Ok(BrowseResult::Items(vec![]))
+                    Ok(BrowseResult::Containers(vec![history_container]))
                 }
             }
 
-            ObjectIdType::LiveStream { .. } | ObjectIdType::HistoryTrack { .. } => {
-                // These are leaf nodes, cannot be browsed
-                Err(MusicSourceError::ObjectNotFound(format!(
-                    "Object {} is not a container",
-                    object_id
-                )))
+            ObjectIdType::LiveStream { slug } => {
+                // Return metadata for the live stream item
+                let descriptor = Self::get_channel_by_slug(&slug).ok_or_else(|| {
+                    MusicSourceError::ObjectNotFound(format!("Unknown channel: {}", slug))
+                })?;
+                let item = self.build_live_stream_item(descriptor);
+                Ok(BrowseResult::Items(vec![item]))
+            }
+
+            ObjectIdType::HistoryTrack { slug, pk } => {
+                // Return metadata for the history track item
+                let item = self.get_item(object_id).await?;
+                Ok(BrowseResult::Items(vec![item]))
             }
 
             ObjectIdType::Unknown => Err(MusicSourceError::ObjectNotFound(format!(
@@ -522,17 +484,19 @@ impl MusicSource for RadioParadiseSource {
                         ))
                     })?;
 
-                    // Try to find the entry with this pk
-                    let entries = reader.get_entries(0, 1000).await.map_err(|e| {
+                    // Try to find the item with this pk
+                    let items = reader.to_items(1000).await.map_err(|e| {
                         MusicSourceError::BrowseError(format!(
                             "Failed to read playlist entries: {}",
                             e
                         ))
                     })?;
 
-                    for entry in entries {
-                        if entry.pk == pk {
-                            return self.playlist_entry_to_item(&slug, &entry).await;
+                    // Find the item matching this pk in the item ID
+                    let expected_id = format!("radio-paradise:channel:{}:history:track:{}", slug, pk);
+                    for item in items {
+                        if item.id == expected_id {
+                            return Ok(item);
                         }
                     }
 
