@@ -377,8 +377,28 @@ impl<C: CacheConfig> Cache<C> {
     /// Deux URLs différentes pointant vers le même contenu auront le même pk,
     /// permettant une déduplication automatique.
     pub async fn add_from_url(&self, url: &str, collection: Option<&str>) -> Result<String> {
-        // 1. Télécharger les 512 premiers octets pour calculer le pk
-        let header = crate::download::peek_header(url, 512)
+        // 0. Vérifier d'abord si cette URL est déjà en cache (optimisation réseau)
+        if let Ok(Some(existing_pk)) = self.db.get_pk_by_origin_url(url) {
+            // Vérifier que le fichier est toujours complet et valide
+            if self.check_cached_and_complete(&existing_pk).await? {
+                tracing::debug!(
+                    "URL {} already in cache with pk {}, skipping download",
+                    url,
+                    existing_pk
+                );
+                self.db.update_hit(&existing_pk)?;
+                return Ok(existing_pk);
+            } else {
+                tracing::debug!(
+                    "URL {} found in DB with pk {} but file is incomplete, re-downloading",
+                    url,
+                    existing_pk
+                );
+            }
+        }
+
+        // 1. Télécharger les 2048 premiers octets pour calculer le pk
+        let header = crate::download::peek_header(url, 2048)
             .await
             .map_err(|e| anyhow!("Failed to peek header: {}", e))?;
 
