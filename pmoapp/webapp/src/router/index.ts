@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from "vue-router";
-import HelloWorld from "../components/HelloWorld.vue";
+import GenericMusicPlayer from "../components/GenericMusicPlayer.vue";
 import LogView from "../components/LogView.vue";
 import CoverCacheManager from "../components/CoverCacheManager.vue";
 import AudioCacheManager from "../components/AudioCacheManager.vue";
@@ -8,7 +8,7 @@ import APIDashboard from "../components/APIDashboard.vue";
 import RadioParadiseExplorer from "../components/RadioParadiseExplorer.vue";
 
 const routes = [
-  { path: "/", name: "home", component: HelloWorld },
+  { path: "/", name: "home", component: GenericMusicPlayer },
   { path: "/logs", name: "logs", component: LogView },
   { path: "/covers-cache", name: "covers-cache", component: CoverCacheManager },
   { path: "/audio-cache", name: "audio-cache", component: AudioCacheManager },

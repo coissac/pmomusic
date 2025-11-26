@@ -63,6 +63,71 @@ impl RadioParadiseSource {
         format!("{}/radioparadise/stream/{}/ogg", self.base_url, slug)
     }
 
+    /// Fetch current metadata from the live stream
+    async fn fetch_live_metadata(&self, slug: &str) -> Result<Option<Item>> {
+        let metadata_url = format!("{}/radioparadise/metadata/{}", self.base_url, slug);
+
+        // Try to fetch metadata via HTTP
+        match reqwest::get(&metadata_url).await {
+            Ok(response) if response.status().is_success() => {
+                match response.json::<serde_json::Value>().await {
+                    Ok(json) => {
+                        // Parse metadata from JSON and create an Item
+                        let title = json["title"].as_str().unwrap_or("Unknown Title").to_string();
+                        let artist = json["artist"].as_str().map(|s| s.to_string());
+                        let album = json["album"].as_str().map(|s| s.to_string());
+                        let year = json["year"].as_u64().map(|y| y as u32);
+                        let cover_url = json["cover_url"].as_str().map(|s| s.to_string());
+
+                        // Parse duration from JSON (in seconds as a float)
+                        let duration = json["duration"]
+                            .as_object()
+                            .and_then(|d| d.get("secs"))
+                            .and_then(|s| s.as_f64())
+                            .or_else(|| json["duration"].as_f64())
+                            .map(|secs| {
+                                let total_secs = secs as u64;
+                                format!("{}:{:02}:{:02}",
+                                    total_secs / 3600,
+                                    (total_secs % 3600) / 60,
+                                    total_secs % 60)
+                            });
+
+                        // Create the item with current metadata
+                        let item = Item {
+                            id: format!("radio-paradise:channel:{}:live", slug),
+                            parent_id: format!("radio-paradise:channel:{}", slug),
+                            restricted: Some("1".to_string()),
+                            title,
+                            creator: artist.clone(),
+                            class: "object.item.audioItem.audioBroadcast".to_string(),
+                            artist,
+                            album,
+                            genre: Some("Radio".to_string()),
+                            album_art: cover_url,
+                            album_art_pk: None,
+                            date: year.map(|y| y.to_string()),
+                            original_track_number: None,
+                            resources: vec![Resource {
+                                protocol_info: "http-get:*:audio/ogg:*".to_string(),
+                                bits_per_sample: None,
+                                sample_frequency: None,
+                                nr_audio_channels: Some("2".to_string()),
+                                duration,
+                                url: self.build_live_url(slug),
+                            }],
+                            descriptions: vec![],
+                        };
+
+                        Ok(Some(item))
+                    }
+                    Err(_) => Ok(None),
+                }
+            }
+            _ => Ok(None),
+        }
+    }
+
     /// Get the playlist ID for a channel's history
     #[cfg(feature = "playlist")]
     fn history_playlist_id(slug: &str) -> String {
@@ -345,6 +410,70 @@ impl MusicSource for RadioParadiseSource {
 
             _ => Err(MusicSourceError::ObjectNotFound(format!(
                 "Cannot resolve URI for object: {}",
+                object_id
+            ))),
+        }
+    }
+
+    async fn get_item(&self, object_id: &str) -> Result<Item> {
+        match Self::parse_object_id(object_id) {
+            ObjectIdType::LiveStream { slug } => {
+                // Try to fetch current metadata from live stream
+                if let Ok(Some(item)) = self.fetch_live_metadata(&slug).await {
+                    return Ok(item);
+                }
+
+                // Fallback to static item if metadata fetch fails
+                let descriptor = Self::get_channel_by_slug(&slug).ok_or_else(|| {
+                    MusicSourceError::ObjectNotFound(format!("Unknown channel: {}", slug))
+                })?;
+                Ok(self.build_live_stream_item(descriptor))
+            }
+
+            ObjectIdType::HistoryTrack { slug, pk } => {
+                // Get from history playlist
+                #[cfg(feature = "playlist")]
+                {
+                    let playlist_id = Self::history_playlist_id(&slug);
+                    let manager = pmoplaylist::PlaylistManager();
+                    let reader = manager.get_read_handle(&playlist_id).await.map_err(|e| {
+                        MusicSourceError::BrowseError(format!(
+                            "Failed to get playlist {}: {}",
+                            playlist_id, e
+                        ))
+                    })?;
+
+                    // Try to find the entry with this pk
+                    let entries = reader.get_entries(0, 1000).await.map_err(|e| {
+                        MusicSourceError::BrowseError(format!(
+                            "Failed to read playlist entries: {}",
+                            e
+                        ))
+                    })?;
+
+                    for entry in entries {
+                        if entry.pk == pk {
+                            return self.playlist_entry_to_item(&slug, &entry).await;
+                        }
+                    }
+
+                    Err(MusicSourceError::ObjectNotFound(format!(
+                        "Track with pk {} not found in history",
+                        pk
+                    )))
+                }
+
+                #[cfg(not(feature = "playlist"))]
+                {
+                    let _ = (slug, pk);
+                    Err(MusicSourceError::NotSupported(
+                        "Playlist feature not enabled".to_string(),
+                    ))
+                }
+            }
+
+            _ => Err(MusicSourceError::ObjectNotFound(format!(
+                "Cannot get item for object: {}",
                 object_id
             ))),
         }

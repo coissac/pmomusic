@@ -419,6 +419,38 @@ pub trait MusicSource: Debug + Send + Sync {
     /// ```
     async fn browse(&self, object_id: &str) -> Result<BrowseResult>;
 
+    /// Get detailed metadata for a specific item
+    ///
+    /// Returns the full metadata of an item by its object_id.
+    /// This is useful for refreshing metadata during playback or
+    /// getting details of a specific track without browsing its parent.
+    ///
+    /// # Arguments
+    ///
+    /// * `object_id` - The ID of the item to retrieve
+    ///
+    /// # Returns
+    ///
+    /// The complete `Item` with all metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MusicSourceError::ObjectNotFound` if the item doesn't exist.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let item = source.get_item("track-123").await?;
+    /// println!("Now playing: {} by {}", item.title, item.artist.unwrap_or_default());
+    /// ```
+    async fn get_item(&self, object_id: &str) -> Result<Item> {
+        // Default implementation: try to find it in parent's browse result
+        // This is inefficient and should be overridden by implementations
+        Err(MusicSourceError::NotSupported(
+            "get_item not implemented, override this method".to_string(),
+        ))
+    }
+
     /// Resolve the actual URI for a track
     ///
     /// This method should return the URI that can be used to stream/download
