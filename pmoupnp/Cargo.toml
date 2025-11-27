@@ -33,3 +33,7 @@ bevy_reflect = "0.17.1"
 bevy_reflect_derive = "0.17.1"
 reqwest = "0.12.23"
 utoipa = { version = "5.3", features = ["axum_extras"] }
+socket2 = "0.5"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
