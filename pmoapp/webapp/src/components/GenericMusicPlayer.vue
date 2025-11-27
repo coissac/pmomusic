@@ -194,6 +194,9 @@
           @loadedmetadata="handleLoadedMetadata"
           @durationchange="handleDurationChange"
           @canplay="handleCanPlay"
+          @waiting="handleAudioWaiting"
+          @stalled="handleAudioStalled"
+          @progress="handleAudioProgress"
         ></audio>
       </div>
     </div>
@@ -251,12 +254,15 @@ const audioError = ref<string | null>(null)
 const audioPlayer = ref<HTMLAudioElement | null>(null)
 const currentTime = ref(0)
 const duration = ref(0)
+const lastTimeUpdateTs = ref<number | null>(null)
+const lastLoggedTimeupdate = ref<number>(0)
+const lastReadyState = ref<number | null>(null)
+const lastNetworkState = ref<number | null>(null)
 
-// Retry logic for fragile browser decoders
-const MAX_AUDIO_RETRIES = 3
-const RETRY_DELAY_MS = 800 // Réduit pour des transitions plus rapides
-const retryCount = ref(0)
+// Retry timer cleanup (auto-reload désactivé pour les streams live)
 let retryTimer: ReturnType<typeof setTimeout> | null = null
+let stallMonitor: ReturnType<typeof setInterval> | null = null
+let stateMonitor: ReturnType<typeof setInterval> | null = null
 
 // Metadata refresh via SSE
 let metadataEventSource: EventSource | null = null
@@ -264,12 +270,69 @@ let metadataEventSource: EventSource | null = null
 // Load sources on mount
 onMounted(async () => {
   await loadSources()
+  // Monitor pour détecter une éventuelle stagnation du currentTime
+  stallMonitor = setInterval(() => {
+    const p = audioPlayer.value
+    if (!p || !isPlaying.value) return
+    if (!lastTimeUpdateTs.value) return
+    const now = Date.now()
+    // Si aucun timeupdate depuis >5s et lecture en cours, logguer l'état du buffer
+    if (now - lastTimeUpdateTs.value > 5000) {
+      const buffered: string[] = []
+      for (let i = 0; i < p.buffered.length; i++) {
+        buffered.push(`${p.buffered.start(i).toFixed(3)}-${p.buffered.end(i).toFixed(3)}`)
+      }
+      console.debug('[PlayerDebug] stall-detected', {
+        ts: now,
+        currentTime: p.currentTime.toFixed(3),
+        duration: isFinite(p.duration) ? p.duration.toFixed(3) : 'NaN',
+        readyState: p.readyState,
+        networkState: p.networkState,
+        paused: p.paused,
+        buffered,
+      })
+      // Eviter le spam : reset le marqueur pour n'émettre qu'une fois par stagnation
+      lastTimeUpdateTs.value = null
+    }
+  }, 2000)
+
+  // Monitor périodique des changements de readyState/networkState
+  stateMonitor = setInterval(() => {
+    const p = audioPlayer.value
+    if (!p) return
+    const rs = p.readyState
+    const ns = p.networkState
+    if (rs !== lastReadyState.value || ns !== lastNetworkState.value) {
+      const buffered: string[] = []
+      for (let i = 0; i < p.buffered.length; i++) {
+        buffered.push(`${p.buffered.start(i).toFixed(3)}-${p.buffered.end(i).toFixed(3)}`)
+      }
+      console.debug('[PlayerDebug] state-change', {
+        ts: Date.now(),
+        currentTime: p.currentTime.toFixed(3),
+        readyState: rs,
+        networkState: ns,
+        paused: p.paused,
+        buffered,
+      })
+      lastReadyState.value = rs
+      lastNetworkState.value = ns
+    }
+  }, 1000)
 })
 
 // Cleanup on unmount
 onUnmounted(() => {
   stopMetadataRefresh()
   clearRetryTimer()
+  if (stallMonitor) {
+    clearInterval(stallMonitor)
+    stallMonitor = null
+  }
+  if (stateMonitor) {
+    clearInterval(stateMonitor)
+    stateMonitor = null
+  }
 })
 
 /**
@@ -516,6 +579,18 @@ function handleAudioEnded() {
   currentTime.value = 0
   stopMetadataRefresh()
   // On peut implémenter ici une logique de lecture automatique du prochain morceau
+  const p = audioPlayer.value
+  if (p) {
+    console.debug('[PlayerDebug] ended', {
+      ts: Date.now(),
+      currentTime: p.currentTime.toFixed(3),
+      duration: isFinite(p.duration) ? p.duration.toFixed(3) : 'NaN',
+      readyState: p.readyState,
+      networkState: p.networkState,
+    })
+  } else {
+    console.debug('[PlayerDebug] ended (no player)')
+  }
 }
 
 /**
@@ -530,16 +605,46 @@ function handleAudioError() {
     ? `Erreur de lecture audio (code ${errorCode})`
     : 'Erreur de lecture audio inconnue'
 
-  if (selectedSource.value && currentTrack.value && retryCount.value < MAX_AUDIO_RETRIES) {
-    isPlaying.value = false
-    retryCount.value += 1
-    audioError.value = `${baseMessage} - tentative de reprise (${retryCount.value}/${MAX_AUDIO_RETRIES})`
-    scheduleRetryPlayback()
-    return
-  }
-
+  // Pour les streams live (Radio Paradise), ne pas recharger le flux : cela remet la progression à 0
+  // et crée un lag perceptible. On se contente d'afficher l'erreur et on tente un play() direct si possible.
   audioError.value = baseMessage
   isPlaying.value = false
+
+  // Tenter une reprise douce sans reload si le player a déjà des données bufferisées
+  const player = audioPlayer.value
+  if (player && !player.paused) {
+    // Rien à faire, il lit encore ou se relancera tout seul
+    return
+  }
+  if (player && player.readyState >= 2) {
+    console.debug('[PlayerDebug] error', {
+      ts: Date.now(),
+      message: baseMessage,
+      code: audio?.error?.code,
+      currentTime: player.currentTime.toFixed(3),
+      duration: isFinite(player.duration) ? player.duration.toFixed(3) : 'NaN',
+      readyState: player.readyState,
+      networkState: player.networkState,
+      buffered: (() => {
+        const arr: string[] = []
+        for (let i = 0; i < player.buffered.length; i++) {
+          arr.push(`${player.buffered.start(i).toFixed(3)}-${player.buffered.end(i).toFixed(3)}`)
+        }
+        return arr
+      })(),
+    })
+    void player.play().catch(() => {
+      // Si play échoue (user gesture requis ou decode error), on laisse l'erreur affichée
+    })
+  } else {
+    console.debug('[PlayerDebug] error (no retry)', {
+      ts: Date.now(),
+      message: baseMessage,
+      code: audio?.error?.code,
+      readyState: player?.readyState,
+      networkState: player?.networkState,
+    })
+  }
 }
 
 /**
@@ -557,6 +662,21 @@ function handleAudioPlay() {
 function handleAudioPause() {
   isPlaying.value = false
   // Don't stop refresh on pause, user might resume
+  const p = audioPlayer.value
+  if (p) {
+    const buffered: string[] = []
+    for (let i = 0; i < p.buffered.length; i++) {
+      buffered.push(`${p.buffered.start(i).toFixed(3)}-${p.buffered.end(i).toFixed(3)}`)
+    }
+    console.debug('[PlayerDebug] pause', {
+      ts: Date.now(),
+      currentTime: p.currentTime.toFixed(3),
+      readyState: p.readyState,
+      networkState: p.networkState,
+      paused: p.paused,
+      buffered,
+    })
+  }
 }
 
 /**
@@ -565,6 +685,45 @@ function handleAudioPause() {
 function handleTimeUpdate() {
   if (audioPlayer.value) {
     currentTime.value = audioPlayer.value.currentTime
+    lastTimeUpdateTs.value = Date.now()
+
+    // Log périodiquement l'état du buffer pour diagnostiquer les coupures
+    const logEvery = 2 // secondes (plus serré pour capturer les transitions)
+    if (Math.floor(currentTime.value) % logEvery === 0 && Math.floor(currentTime.value) !== lastLoggedTimeupdate.value) {
+      const p = audioPlayer.value
+      const buffered: string[] = []
+      for (let i = 0; i < p.buffered.length; i++) {
+        buffered.push(`${p.buffered.start(i).toFixed(3)}-${p.buffered.end(i).toFixed(3)}`)
+      }
+      console.debug('[PlayerDebug] timeupdate', {
+        ts: Date.now(),
+        currentTime: p.currentTime.toFixed(3),
+        duration: isFinite(p.duration) ? p.duration.toFixed(3) : 'NaN',
+        readyState: p.readyState,
+        networkState: p.networkState,
+        paused: p.paused,
+        buffered,
+      })
+      lastLoggedTimeupdate.value = Math.floor(currentTime.value)
+    }
+
+    // Si le temps recule (changement de piste) logguer explicitement l'état
+    if (currentTime.value < lastLoggedTimeupdate.value) {
+      const p = audioPlayer.value
+      const buffered: string[] = []
+      for (let i = 0; i < p.buffered.length; i++) {
+        buffered.push(`${p.buffered.start(i).toFixed(3)}-${p.buffered.end(i).toFixed(3)}`)
+      }
+      console.debug('[PlayerDebug] time-jump', {
+        ts: Date.now(),
+        currentTime: p.currentTime.toFixed(3),
+        duration: isFinite(p.duration) ? p.duration.toFixed(3) : 'NaN',
+        readyState: p.readyState,
+        networkState: p.networkState,
+        paused: p.paused,
+        buffered,
+      })
+    }
   }
 }
 
@@ -591,6 +750,60 @@ function handleDurationChange() {
  */
 function handleCanPlay() {
   console.log('Audio ready to play (canplay event)')
+}
+
+function handleAudioWaiting() {
+  const p = audioPlayer.value
+  if (!p) return
+  const buffered: string[] = []
+  for (let i = 0; i < p.buffered.length; i++) {
+    buffered.push(`${p.buffered.start(i).toFixed(3)}-${p.buffered.end(i).toFixed(3)}`)
+  }
+  console.debug('[PlayerDebug] waiting', {
+    ts: Date.now(),
+    currentTime: p.currentTime.toFixed(3),
+    duration: isFinite(p.duration) ? p.duration.toFixed(3) : 'NaN',
+    readyState: p.readyState,
+    networkState: p.networkState,
+    paused: p.paused,
+    buffered,
+  })
+}
+
+function handleAudioStalled() {
+  const p = audioPlayer.value
+  if (!p) return
+  const buffered: string[] = []
+  for (let i = 0; i < p.buffered.length; i++) {
+    buffered.push(`${p.buffered.start(i).toFixed(3)}-${p.buffered.end(i).toFixed(3)}`)
+  }
+  console.debug('[PlayerDebug] stalled', {
+    ts: Date.now(),
+    currentTime: p.currentTime.toFixed(3),
+    duration: isFinite(p.duration) ? p.duration.toFixed(3) : 'NaN',
+    readyState: p.readyState,
+    networkState: p.networkState,
+    paused: p.paused,
+    buffered,
+  })
+}
+
+function handleAudioProgress() {
+  const p = audioPlayer.value
+  if (!p) return
+  const buffered: string[] = []
+  for (let i = 0; i < p.buffered.length; i++) {
+    buffered.push(`${p.buffered.start(i).toFixed(3)}-${p.buffered.end(i).toFixed(3)}`)
+  }
+  console.debug('[PlayerDebug] progress', {
+    ts: Date.now(),
+    currentTime: p.currentTime.toFixed(3),
+    duration: isFinite(p.duration) ? p.duration.toFixed(3) : 'NaN',
+    readyState: p.readyState,
+    networkState: p.networkState,
+    paused: p.paused,
+    buffered,
+  })
 }
 
 /**
@@ -752,23 +965,9 @@ function clearRetryTimer() {
   }
 }
 
-/**
- * Réinitialise les compteurs de retry
- */
+// Réinitialise l'état de retry (timer uniquement)
 function resetAudioRetries() {
-  retryCount.value = 0
   clearRetryTimer()
-}
-
-/**
- * Lance un retry différé pour laisser le temps au backend de reproposer le flux
- */
-function scheduleRetryPlayback() {
-  clearRetryTimer()
-  retryTimer = setTimeout(() => {
-    retryTimer = null
-    void retryPlayback()
-  }, RETRY_DELAY_MS)
 }
 
 /**
@@ -852,20 +1051,6 @@ async function waitForSufficientBuffer(player: HTMLAudioElement): Promise<void> 
   })
 }
 
-/**
- * Tente de relancer la lecture après une erreur (nouvelle résolution d'URI)
- */
-async function retryPlayback() {
-  if (!selectedSource.value || !currentTrack.value) return
-
-  try {
-    const result = await resolveUri(selectedSource.value.id, currentTrack.value.id)
-    await startPlaybackFromUri(result.uri)
-  } catch (e: any) {
-    audioError.value = `Erreur lors de la reprise: ${e.message}`
-    isPlaying.value = false
-  }
-}
 </script>
 
 <style scoped>

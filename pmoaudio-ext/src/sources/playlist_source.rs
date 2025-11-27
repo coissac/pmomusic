@@ -259,6 +259,12 @@ impl NodeLogic for PlaylistSourceLogic {
                 .ok()
                 .flatten()
                 .unwrap_or_else(|| "Untitled".to_string());
+            let expected_duration = metadata_guard
+                .get_duration()
+                .await
+                .ok()
+                .flatten()
+                .map(|d| d.as_secs_f64());
             drop(metadata_guard);
             let remaining = self.playlist_handle.remaining().await.unwrap_or(0);
             tracing::info!(
@@ -270,7 +276,8 @@ impl NodeLogic for PlaylistSourceLogic {
 
             let track_start = std::time::Instant::now();
             tracing::debug!("PlaylistSourceLogic: emitting TrackBoundary");
-            let boundary = AudioSegment::new_track_boundary(0, 0.0, metadata);
+            let metadata_for_boundary = metadata.clone();
+            let boundary = AudioSegment::new_track_boundary(0, 0.0, metadata_for_boundary);
             send_to_children(node_name, &output, boundary).await?;
 
             // Obtenir le chemin du fichier
@@ -307,6 +314,7 @@ impl NodeLogic for PlaylistSourceLogic {
                 &stop_token,
                 &self.cache,
                 cache_pk,
+                expected_duration,
                 emit_top_zero,
             )
             .await
@@ -363,6 +371,7 @@ async fn decode_and_emit_track(
     stop_token: &CancellationToken,
     cache: &Arc<AudioCache>,
     cache_pk: &str,
+    expected_duration_sec: Option<f64>,
     emit_top_zero: bool,
 ) -> Result<(), AudioError> {
     // Attendre que le fichier soit suffisamment gros pour le sniffing
@@ -526,6 +535,20 @@ async fn decode_and_emit_track(
             cache_pk
         );
     }
+
+    let actual_duration = total_frames as f64 / stream_info.sample_rate as f64;
+    let expected_str = expected_duration_sec
+        .map(|d| format!("{:.3}s", d))
+        .unwrap_or_else(|| "unknown".to_string());
+    tracing::info!(
+        "PlaylistSource: emitted pk={} frames={} sr={}Hz bit_depth={} duration={:.3}s (expected={})",
+        cache_pk,
+        total_frames,
+        stream_info.sample_rate,
+        stream_info.bits_per_sample,
+        actual_duration,
+        expected_str,
+    );
 
     Ok(())
 }

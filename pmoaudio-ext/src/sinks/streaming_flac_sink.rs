@@ -76,7 +76,7 @@ use pmoflac::{EncoderOptions, FlacEncodedStream};
 use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
 use tokio::sync::{mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::byte_stream_reader::{PcmChunk};
 use crate::chunk_to_pcm::chunk_to_pcm_bytes;
@@ -317,6 +317,25 @@ impl NodeLogic for StreamingFlacSinkLogic {
                                             }
 
                                             debug!("StreamingFlacSink: SyncMarker::TrackBoundary {:?}",metadata.read().await.get_duration().await);
+                                            let current_ts = *self.ctx.current_timestamp.read().await;
+                                            // Durée attendue du morceau qui se termine : on lit les métadonnées courantes du sink
+                        let (prev_title, prev_artist, prev_expected) = {
+                            let meta = self.ctx.metadata.read().await;
+                            let title = meta.title.clone().unwrap_or_else(|| "Unknown".into());
+                            let artist = meta.artist.clone().unwrap_or_else(|| "Unknown".into());
+                            let expected = meta
+                                .duration
+                                .map(|d| format!("{:.3}s", d.as_secs_f64()))
+                                .unwrap_or_else(|| "unknown".into());
+                            (title, artist, expected)
+                        };
+                                            info!(
+                                                "StreamingFlacSink: track complete ts={:.3}s (title=\"{}\" artist=\"{}\" expected={})",
+                                                current_ts,
+                                                prev_title,
+                                                prev_artist,
+                                                prev_expected
+                                            );
 
                                             if self.ctx.restart_encoder_on_track_boundary {
                                                 // Only restart encoder if it's already initialized (not the first track)

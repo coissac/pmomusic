@@ -9,7 +9,10 @@ use axum::{
     Json, Router,
     body::Body,
     extract::{Path, State},
-    http::StatusCode,
+    http::{
+        header::{ACCEPT_RANGES, CACHE_CONTROL, CONNECTION, CONTENT_TYPE},
+        StatusCode,
+    },
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -236,7 +239,10 @@ async fn stream_flac(
     let stream = channel.subscribe_flac();
     Ok(Response::builder()
         .status(StatusCode::OK)
-        .header("Content-Type", "audio/flac")
+        .header(CONTENT_TYPE, "audio/flac")
+        .header(CACHE_CONTROL, "no-store, no-transform")
+        .header(CONNECTION, "keep-alive")
+        .header(ACCEPT_RANGES, "none")
         .body(Body::from_stream(ReaderStream::new(stream)))
         .unwrap())
 }
@@ -249,7 +255,10 @@ async fn stream_ogg(
     let stream = channel.subscribe_ogg();
     Ok(Response::builder()
         .status(StatusCode::OK)
-        .header("Content-Type", "audio/ogg")
+        .header(CONTENT_TYPE, "application/ogg")
+        .header(CACHE_CONTROL, "no-store, no-transform")
+        .header(CONNECTION, "keep-alive")
+        .header(ACCEPT_RANGES, "none")
         .body(Body::from_stream(ReaderStream::new(stream)))
         .unwrap())
 }
@@ -278,7 +287,10 @@ async fn stream_history_flac(
     })?;
     Ok(Response::builder()
         .status(StatusCode::OK)
-        .header("Content-Type", "audio/flac")
+        .header(CONTENT_TYPE, "audio/flac")
+        .header(CACHE_CONTROL, "no-store, no-transform")
+        .header(CONNECTION, "keep-alive")
+        .header(ACCEPT_RANGES, "none")
         .body(Body::from_stream(ReaderStream::new(stream)))
         .unwrap())
 }
@@ -298,7 +310,10 @@ async fn stream_history_ogg(
     })?;
     Ok(Response::builder()
         .status(StatusCode::OK)
-        .header("Content-Type", "audio/ogg")
+        .header(CONTENT_TYPE, "application/ogg")
+        .header(CACHE_CONTROL, "no-store, no-transform")
+        .header(CONNECTION, "keep-alive")
+        .header(ACCEPT_RANGES, "none")
         .body(Body::from_stream(ReaderStream::new(stream)))
         .unwrap())
 }
