@@ -148,7 +148,8 @@ impl RadioParadiseSource {
     /// Get the playlist ID for a channel's history
     #[cfg(feature = "playlist")]
     fn history_playlist_id(slug: &str) -> String {
-        format!("radioparadise-history-{}", slug)
+        // Must match the prefix used in ParadiseHistoryBuilder
+        format!("radio-paradise-history-{}", slug)
     }
 
     /// Get channel descriptor by slug
@@ -241,13 +242,31 @@ impl RadioParadiseSource {
             id: format!("radio-paradise:channel:{}:history", descriptor.slug),
             parent_id: format!("radio-paradise:channel:{}", descriptor.slug),
             restricted: Some("1".to_string()),
-            child_count: None, // Will be determined by playlist
+            child_count: Some("0".to_string()), // Default to 0, updated below if playlist exists
             searchable: Some("1".to_string()),
             title: format!("{} - History", descriptor.display_name),
-            class: "object.container.playlistContainer".to_string(),
+            class: "object.container".to_string(),
             containers: vec![],
             items: vec![],
         }
+    }
+
+    /// Build a history container with accurate child count from playlist
+    #[cfg(feature = "playlist")]
+    async fn build_history_container_with_count(&self, descriptor: &ChannelDescriptor) -> Container {
+        let mut container = self.build_history_container(descriptor);
+
+        // Try to get actual count from playlist
+        let playlist_id = Self::history_playlist_id(descriptor.slug);
+        let manager = pmoplaylist::PlaylistManager();
+
+        if let Ok(reader) = manager.get_read_handle(&playlist_id).await {
+            if let Ok(count) = reader.remaining().await {
+                container.child_count = Some(count.to_string());
+            }
+        }
+
+        container
     }
 
     /// Get items from history playlist
@@ -267,9 +286,30 @@ impl RadioParadiseSource {
         })?;
 
         // Get items from playlist (to_items starts from cursor position)
-        let items = reader.to_items(count).await.map_err(|e| {
+        let mut items = reader.to_items(count).await.map_err(|e| {
             MusicSourceError::BrowseError(format!("Failed to read playlist entries: {}", e))
         })?;
+
+        // Transform item IDs, parent_ids, and resource URLs to match Radio Paradise schema
+        // Expected: radio-paradise:channel:{slug}:history:track:{pk}
+        // Parent: radio-paradise:channel:{slug}:history
+        for item in items.iter_mut() {
+            // Extract cache_pk from the resource URL (last segment)
+            if let Some(resource) = item.resources.first_mut() {
+                if let Some(pk) = resource.url.split('/').last() {
+                    // Update item ID and parent ID
+                    item.id = format!("radio-paradise:channel:{}:history:track:{}", slug, pk);
+                    item.parent_id = format!("radio-paradise:channel:{}:history", slug);
+
+                    // Convert relative URL to absolute URL
+                    // From: /audio/flac/pk
+                    // To: http://base_url/audio/flac/pk
+                    if resource.url.starts_with('/') {
+                        resource.url = format!("{}{}", self.base_url, resource.url);
+                    }
+                }
+            }
+        }
 
         Ok(items)
     }
@@ -334,6 +374,10 @@ impl MusicSource for RadioParadiseSource {
                 })?;
 
                 let live_item = self.build_live_stream_item(descriptor);
+
+                #[cfg(feature = "playlist")]
+                let history_container = self.build_history_container_with_count(descriptor).await;
+                #[cfg(not(feature = "playlist"))]
                 let history_container = self.build_history_container(descriptor);
 
                 Ok(BrowseResult::Mixed {
@@ -343,15 +387,15 @@ impl MusicSource for RadioParadiseSource {
             }
 
             ObjectIdType::History { slug } => {
-                // Return history container as first element (for BrowseMetadata)
-                // followed by history items (for BrowseDirectChildren)
+                // Return history container (for BrowseMetadata) and items (for BrowseDirectChildren)
+                // The content_handler will filter out the container when browsing direct children
                 let descriptor = Self::get_channel_by_slug(&slug).ok_or_else(|| {
                     MusicSourceError::ObjectNotFound(format!("Unknown channel: {}", slug))
                 })?;
-                let history_container = self.build_history_container(descriptor);
 
                 #[cfg(feature = "playlist")]
                 {
+                    let history_container = self.build_history_container_with_count(descriptor).await;
                     let items = self.get_history_items(&slug, 0, 100).await?;
                     Ok(BrowseResult::Mixed {
                         containers: vec![history_container],
@@ -361,6 +405,8 @@ impl MusicSource for RadioParadiseSource {
 
                 #[cfg(not(feature = "playlist"))]
                 {
+                    // If playlist feature is disabled, return just the container
+                    let history_container = self.build_history_container(descriptor);
                     Ok(BrowseResult::Containers(vec![history_container]))
                 }
             }

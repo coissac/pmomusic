@@ -54,7 +54,7 @@ async fn main() -> anyhow::Result<()> {
     let history_builder = ParadiseHistoryBuilder {
         audio_cache: audio_cache.clone(),
         cover_cache: cover_cache.clone(),
-        playlist_prefix: "radioparadise-history".into(),
+        playlist_prefix: "radio-paradise-history".into(),
         playlist_title_prefix: Some("Radio Paradise History".into()),
         max_history_tracks: Some(500),
         collection_prefix: Some("radioparadise".into()),

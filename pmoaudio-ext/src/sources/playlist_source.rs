@@ -314,7 +314,9 @@ impl NodeLogic for PlaylistSourceLogic {
                 Ok(()) => {
                     tracing::info!("PlaylistSource: finished track {} - {}", artist, title);
                     // Piste décodée avec succès, transférer vers l'historique si configuré
+                    tracing::warn!("🔍 HISTORY DEBUG: history_playlist is {:?}", if self.history_playlist.is_some() { "Some" } else { "None" });
                     if let Some(ref history) = self.history_playlist {
+                        tracing::warn!("🔍 HISTORY DEBUG: Attempting to push cache_pk={} to history", cache_pk);
                         if let Err(e) = history.push(cache_pk.to_string()).await {
                             tracing::warn!(
                                 "PlaylistSourceLogic: failed to add track to history: {}",

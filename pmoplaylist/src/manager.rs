@@ -161,7 +161,7 @@ impl PlaylistManager {
         let playlists = self.inner.playlists.read().await;
 
         if let Some(playlist) = playlists.get(&id) {
-            // Playlist existe
+            // Playlist existe en mémoire
             if !playlist.persistent {
                 return Err(crate::Error::PlaylistNotPersistent(id));
             }
@@ -176,7 +176,34 @@ impl PlaylistManager {
 
         drop(playlists);
 
-        // N'existe pas, cr�er persistent
+        // Pas en mémoire, essayer de charger depuis la DB
+        if let Some(persistence) = &self.inner.persistence {
+            if let Some((title, config, tracks)) = persistence.load_playlist(&id).await? {
+                // Reconstruire la playlist
+                let mut playlists = self.inner.playlists.write().await;
+
+                let playlist = Arc::new(Playlist::new(id.clone(), title.clone(), config, true));
+
+                // Restaurer les tracks
+                {
+                    let mut core = playlist.core.write().await;
+                    core.tracks = tracks;
+                }
+
+                // Acquérir le write lock
+                let write_token = playlist
+                    .acquire_write_lock()
+                    .await
+                    .map_err(|_| crate::Error::WriteLockHeld(id.clone()))?;
+
+                playlists.insert(id.clone(), playlist.clone());
+                drop(playlists);
+
+                return Ok(WriteHandle::new(playlist, write_token));
+            }
+        }
+
+        // N'existe pas en DB, créer une nouvelle playlist persistante
         self.create_persistent_playlist(id).await
     }
 

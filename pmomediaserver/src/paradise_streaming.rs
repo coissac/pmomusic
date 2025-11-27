@@ -102,7 +102,7 @@ impl ParadiseStreamingExt for pmoserver::Server {
 
         // Créer le builder d'historique
         let mut history_builder = ParadiseHistoryBuilder::default();
-        history_builder.playlist_prefix = "radioparadise-history".into();
+        history_builder.playlist_prefix = "radio-paradise-history".into();
         history_builder.playlist_title_prefix = Some("Radio Paradise History".into());
         history_builder.max_history_tracks = Some(500);
         history_builder.collection_prefix = Some("radioparadise".into());
