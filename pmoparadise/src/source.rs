@@ -309,6 +309,14 @@ impl RadioParadiseSource {
                     }
                 }
             }
+
+            // Fix: Ajouter un genre par défaut si absent
+            // Certains clients UPnP (comme gupnp-av-cp) requièrent le champ <upnp:genre>
+            // pour parser correctement les items de classe musicTrack, même si ce champ
+            // est optionnel selon la spec UPnP ContentDirectory.
+            if item.genre.is_none() {
+                item.genre = Some("Radio Paradise".to_string());
+            }
         }
 
         Ok(items)

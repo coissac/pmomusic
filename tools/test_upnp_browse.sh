@@ -15,7 +15,7 @@
 set -e
 
 # Valeurs par défaut
-CONTROL_URL="http://localhost:8080/device/88b84e76-4de0-4ee6-b794-99cc4a278cc9/service/ContentDirectory/control"
+CONTROL_URL="http://localhost:8080/device/63623ff4-ee41-4850-90aa-2d39395df981/service/ContentDirectory/control"
 OBJECT_ID="0"
 BROWSE_FLAG="BrowseDirectChildren"
 STARTING_INDEX=0
