@@ -3433,6 +3433,7 @@ dependencies = [
  "get_if_addrs",
  "netstat2",
  "os_info",
+ "quick-xml 0.38.4",
  "sysinfo",
  "users",
 ]
