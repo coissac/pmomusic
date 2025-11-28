@@ -546,9 +546,32 @@ impl MusicSource for RadioParadiseSource {
                         ))
                     })?;
 
+                    // Ajuster les IDs/parent_id/URL pour coller au schéma Radio Paradise,
+                    // comme dans get_history_items.
+                    let mut adjusted = Vec::new();
+                    for mut item in items {
+                        if let Some(resource) = item.resources.first_mut() {
+                            if let Some(pk2) = resource.url.split('/').last() {
+                                item.id =
+                                    format!("radio-paradise:channel:{}:history:track:{}", slug, pk2);
+                                item.parent_id =
+                                    format!("radio-paradise:channel:{}:history", slug);
+
+                                if resource.url.starts_with('/') {
+                                    resource.url =
+                                        format!("{}{}", self.base_url, resource.url);
+                                }
+                            }
+                        }
+                        if item.genre.is_none() {
+                            item.genre = Some("Radio Paradise".to_string());
+                        }
+                        adjusted.push(item);
+                    }
+
                     // Find the item matching this pk in the item ID
                     let expected_id = format!("radio-paradise:channel:{}:history:track:{}", slug, pk);
-                    for item in items {
+                    for item in adjusted {
                         if item.id == expected_id {
                             return Ok(item);
                         }
