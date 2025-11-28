@@ -111,7 +111,7 @@ impl ContentHandler {
                     .await
                     .map_err(|e| format!("Failed to get root container: {}", e))?;
                 let didl = to_didl_lite(&[container], &[])?;
-                let update_id = source.update_id().await;
+                let update_id = source.update_id().await.max(1);
                 return Ok((didl, 1, 1, update_id));
             }
 
@@ -120,7 +120,7 @@ impl ContentHandler {
                 match source.get_item(object_id).await {
                     Ok(item) => {
                         let didl = to_didl_lite(&[], &[item])?;
-                        let update_id = source.update_id().await;
+                        let update_id = source.update_id().await.max(1);
                         return Ok((didl, 1, 1, update_id));
                     }
                     Err(MusicSourceError::ObjectNotFound(_))
@@ -142,25 +142,25 @@ impl ContentHandler {
                             BrowseResult::Containers(containers) => {
                                 if let Some(container) = containers.first() {
                                     let didl = to_didl_lite(&[container.clone()], &[])?;
-                                    let update_id = source.update_id().await;
+                                    let update_id = source.update_id().await.max(1);
                                     return Ok((didl, 1, 1, update_id));
                                 }
                             }
                             BrowseResult::Items(items) => {
                                 if let Some(item) = items.first() {
                                     let didl = to_didl_lite(&[], &[item.clone()])?;
-                                    let update_id = source.update_id().await;
+                                    let update_id = source.update_id().await.max(1);
                                     return Ok((didl, 1, 1, update_id));
                                 }
                             }
                             BrowseResult::Mixed { containers, items } => {
                                 if let Some(container) = containers.first() {
                                     let didl = to_didl_lite(&[container.clone()], &[])?;
-                                    let update_id = source.update_id().await;
+                                    let update_id = source.update_id().await.max(1);
                                     return Ok((didl, 1, 1, update_id));
                                 } else if let Some(item) = items.first() {
                                     let didl = to_didl_lite(&[], &[item.clone()])?;
-                                    let update_id = source.update_id().await;
+                                    let update_id = source.update_id().await.max(1);
                                     return Ok((didl, 1, 1, update_id));
                                 }
                             }
@@ -341,7 +341,7 @@ impl ContentHandler {
 
         let returned = (containers.len() + items.len()) as u32;
         let didl = to_didl_lite(&containers, &items)?;
-        let update_id = source.update_id().await;
+        let update_id = source.update_id().await.max(1);
 
         Ok((didl, returned, total, update_id))
     }
@@ -355,7 +355,8 @@ impl ContentHandler {
             id: "0".to_string(),
             parent_id: "-1".to_string(),
             restricted: Some("1".to_string()),
-            child_count: Some(child_count.to_string()),
+            // Par cohérence avec la plupart des serveurs observés, on omet childCount sur la racine
+            child_count: None,
             searchable: Some("1".to_string()),
             title: "PMOMusic".to_string(),
             class: "object.container".to_string(),
