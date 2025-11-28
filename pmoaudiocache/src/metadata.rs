@@ -224,7 +224,9 @@ impl AudioMetadata {
     /// ```
     pub fn to_didl_resource(&self, url: String) -> pmodidl::Resource {
         pmodidl::Resource {
-            protocol_info: "http-get:*:audio/flac:*".to_string(),
+            // Aligne le protocolInfo sur ce que le renderer déclare dans Sink (audio/flac).
+            // PN explicite pour compatibilité DLNA, sinon fallback générique.
+            protocol_info: "http-get:*:audio/flac:DLNA.ORG_PN=FLAC".to_string(),
             bits_per_sample: None,
             sample_frequency: self.sample_rate.map(|sr| sr.to_string()),
             nr_audio_channels: self.channels.map(|ch| ch.to_string()),

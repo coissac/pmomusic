@@ -117,7 +117,8 @@ impl TrackMetadataDidlExt for dyn TrackMetadata {
         });
 
         pmodidl::Resource {
-            protocol_info: "http-get:*:audio/flac:*".to_string(),
+            // Aligne sur Sink du renderer (audio/flac) avec PN explicite.
+            protocol_info: "http-get:*:audio/flac:DLNA.ORG_PN=FLAC".to_string(),
             bits_per_sample: self.get_bits_per_sample().await.ok().flatten().map(|b| b.to_string()),
             sample_frequency: self.get_sample_rate().await.ok().flatten().map(|sr| sr.to_string()),
             nr_audio_channels: self.get_channels().await.ok().flatten().map(|ch| ch.to_string()),

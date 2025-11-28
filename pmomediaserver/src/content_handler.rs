@@ -10,6 +10,7 @@
 //! - **Search** : Recherche dans les sources qui le supportent
 //! - **Update ID** : Suivi des changements pour les notifications UPnP
 
+use pmoutils::ToXmlElement;
 use pmodidl::{Container, DIDLLite};
 use pmosource::api::{get_source as get_source_from_registry, list_all_sources};
 use pmosource::{BrowseResult, MusicSource, MusicSourceError};
@@ -28,12 +29,9 @@ fn to_didl_lite(containers: &[Container], items: &[pmodidl::Item]) -> Result<Str
         items: items.to_vec(),
     };
 
-    let body = quick_xml::se::to_string(&didl)
-        .map_err(|e| format!("Failed to serialize DIDL-Lite: {}", e))?;
-    Ok(format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>{}",
-        body
-    ))
+    // Retourne uniquement le corps DIDL, sans préfixer une seconde déclaration XML.
+    let body = didl.to_xml();
+    Ok(body)
 }
 
 /// Handler pour le service ContentDirectory

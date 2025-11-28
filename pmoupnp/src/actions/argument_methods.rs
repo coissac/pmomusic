@@ -16,31 +16,8 @@ impl UpnpTyped for Argument {
 
 impl UpnpObject for Argument {
     fn to_xml_element(&self) -> Element {
-        let mut parent = Element::new("argumentList");
-
-        if self.is_in() && self.is_out() {
-            // InOut → deux arguments
-            parent.children.push(XMLNode::Element(make_argument_elem(
-                self.get_name(),
-                "in",
-                self.state_variable().get_name(),
-            )));
-            parent.children.push(XMLNode::Element(make_argument_elem(
-                self.get_name(),
-                "out",
-                self.state_variable().get_name(),
-            )));
-        } else {
-            // Cas simple
-            let direction = if self.is_in() { "in" } else { "out" };
-            parent.children.push(XMLNode::Element(make_argument_elem(
-                self.get_name(),
-                direction,
-                self.state_variable().get_name(),
-            )));
-        }
-
-        parent
+        // Compat: retourne le premier argument (utile si consommé isolément)
+        self.to_xml_elements().into_iter().next().unwrap_or_else(|| Element::new("argument"))
     }
 }
 
@@ -90,6 +67,23 @@ impl Argument {
 
     pub fn is_out(&self) -> bool {
         self.is_out
+    }
+
+    /// Retourne les éléments XML <argument> (1 ou 2 si InOut)
+    pub fn to_xml_elements(&self) -> Vec<Element> {
+        if self.is_in() && self.is_out() {
+            vec![
+                make_argument_elem(self.get_name(), "in", self.state_variable().get_name()),
+                make_argument_elem(self.get_name(), "out", self.state_variable().get_name()),
+            ]
+        } else {
+            let direction = if self.is_in() { "in" } else { "out" };
+            vec![make_argument_elem(
+                self.get_name(),
+                direction,
+                self.state_variable().get_name(),
+            )]
+        }
     }
 }
 

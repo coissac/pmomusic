@@ -626,16 +626,16 @@ impl ServiceInstance {
 
         elem.children.push(XMLNode::Element(spec));
 
-        // actionList
-        if !self.actions.all().is_empty() {
+        // actionList (depuis le modèle)
+        if !self.model.actions.all().is_empty() {
             elem.children
-                .push(XMLNode::Element(self.actions.to_xml_element()));
+                .push(XMLNode::Element(self.model.actions.to_xml_element()));
         }
 
-        // serviceStateTable
-        if !self.statevariables.all().is_empty() {
+        // serviceStateTable (depuis le modèle)
+        if !self.model.state_table.all().is_empty() {
             elem.children
-                .push(XMLNode::Element(self.statevariables.to_xml_element()));
+                .push(XMLNode::Element(self.model.state_table.to_xml_element()));
         }
 
         elem
