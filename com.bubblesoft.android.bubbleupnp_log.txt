@@ -1,0 +1,834 @@
+[main (2)                                ] INFO     - 0:00:00.155    - enableLogToFile: opened /storage/emulated/0/Download/com.bubblesoft.android.bubbleupnp_log.txt
+[main (2)                                ] INFO     - 0:00:00.156    - enableLogToFile: logging to file is enabled in 148 ms
+[main (2)                                ] INFO     - 0:00:00.161    - system locale: fr_FR
+[main (2)                                ] INFO     - 0:00:00.161    - app locale: fr_FR
+[main (2)                                ] INFO     - 0:00:00.162    - os.arch: aarch64
+[main (2)                                ] INFO     - 0:00:00.162    - API level: 36
+[main (2)                                ] INFO     - 0:00:00.162    - manufacturer: samsung
+[main (2)                                ] INFO     - 0:00:00.162    - model: SM-A536B
+[main (2)                                ] INFO     - 0:00:00.162    - product: a53xnaeea
+[main (2)                                ] INFO     - 0:00:00.163    - fingerprint: samsung/a53xnaeea/a53x:16/BP2A.250605.031.A3/A536BXXSHGYJ3:user/release-keys
+[main (2)                                ] INFO     - 0:00:00.163    - debuggable: false
+[main (2)                                ] INFO     - 0:00:00.163    - installed on external storage: false
+[main (2)                                ] INFO     - 0:00:00.165    - touch supported: true
+[main (2)                                ] INFO     - 0:00:00.166    - gestural navigation: true
+[main (2)                                ] INFO     - 0:00:00.166    - large memory class: 512
+[main (2)                                ] INFO     - 0:00:00.167    - isSustainedPerformanceModeSupported: false
+[main (2)                                ] INFO     - 0:00:00.168    - SUPPORTED_ABIS: arm64-v8a,armeabi-v7a,armeabi
+[main (2)                                ] INFO     - 0:00:00.168    - app: version: 4.6.1, code: 3000911
+[main (2)                                ] INFO     - 0:00:00.169    - app standby bucket: EXEMPTED
+[main (2)                                ] INFO     - 0:00:00.170    - isBackgroundRestricted: false
+[main (2)                                ] INFO     - 0:00:00.170    - xposed running: false
+[main (2)                                ] INFO     - 0:00:00.171    - isDevMode: true
+[main (2)                                ] INFO     - 0:00:00.182    - app info: true false false true true true 0
+[main (2)                                ] INFO     - 0:00:00.191    - watchdog: set inactivity delay to 15 mins
+[main (2)                                ] INFO     - 0:00:00.191    - useScopedStorage: true
+[main (2)                                ] INFO     - 0:00:00.193    - created file: file:///storage/emulated/0/Android/data/com.bubblesoft.android.bubbleupnp/cache/bubbleupnpserver/.nomedia
+[main (2)                                ] INFO     - 0:00:00.193    - getLocalRendererRemoteControlVideoApp: no package name
+[main (2)                                ] INFO     - 0:00:00.221    - isReadExternalStorageGranted: true
+[main (2)                                ] INFO     - 0:00:00.222    - isWriteExternalStorageGranted: true
+[main (2)                                ] INFO     - 0:00:00.222    - dynamic theming: called AppCompatDelegate.setDefaultNightMode(-1)
+[main (2)                                ] INFO     - 0:00:00.222    - App.onCreate() took: 226 ms
+[main (2)                                ] INFO     - 0:00:00.224    - StrictMode (JB): LAX
+[main (2)                                ] INFO     - 0:00:00.235    - attachBaseContext(base)@9e5576d:-1
+[main (2)                                ] INFO     - 0:00:00.245    - onCreate(): Intent { act=android.intent.action.MAIN cat=[android.intent.category.LAUNCHER] flg=0x10200000 xflg=0x4 cmp=com.bubblesoft.android.bubbleupnp/.MainActivity bnds=[841,188][1041,472] }@9e5576d:5234
+[main (2)                                ] INFO     - 0:00:00.245    - Referrer: android-app://com.sec.android.app.launcher
+[main (2)                                ] INFO     - 0:00:00.283    - attachBaseContext(base)@2e41698:-1
+[main (2)                                ] INFO     - 0:00:00.286    - dynamic theming: isDynamicColorAvailable: true, isRuntimeColorThemeGenAvailable: true
+[main (2)                                ] INFO     - 0:00:00.286    - dynamic theming: theme mode: 0
+[main (2)                                ] INFO     - 0:00:00.287    - dynamic theming: theme overlay applied
+[main (2)                                ] INFO     - 0:00:00.288    - dynamic theming: dark theme: false
+[main (2)                                ] INFO     - 0:00:00.288    - dynamic theming: dialogs elevation overlay enabled: true
+[main (2)                                ] INFO     - 0:00:00.290    - dynamic theming: applied color harmonization
+[main (2)                                ] INFO     - 0:00:00.293    - dynamic theming: initDynamicTheming took: 8 ms
+[main (2)                                ] INFO     - 0:00:00.302    - onCreate(): Intent { act=android.intent.action.MAIN cat=[android.intent.category.LAUNCHER] flg=0x10200000 xflg=0x4 cmp=com.bubblesoft.android.bubbleupnp/.MainTabActivity bnds=[841,188][1041,472] }@2e41698:5234
+[main (2)                                ] INFO     - 0:00:00.307    - dynamic theming: colorPrimary: #ff475d92
+[main (2)                                ] INFO     - 0:00:00.307    - dynamic theming: android:windowBackground: #fffaf8ff
+[main (2)                                ] INFO     - 0:00:00.307    - dynamic theming: android:colorbackground: #fffaf8ff
+[main (2)                                ] INFO     - 0:00:00.309    - startAndBindServiceWithRetry: retryOnFailure true
+[Main #1 (179)                           ] INFO     - 0:00:00.400    - task: start: getSearchableInfo
+[Main #1 (179)                           ] INFO     - 0:00:00.401    - task: end, 2ms: getSearchableInfo
+[main (2)                                ] INFO     - 0:00:00.407    - remote config: FirebaseApp: true
+[main (2)                                ] INFO     - 0:00:00.410    - MainTabActivity.onCreate() took: 124 ms
+[main (2)                                ] INFO     - 0:00:00.411    - onStart()@2e41698:5234
+[main (2)                                ] INFO     - 0:00:00.414    - onPostCreate()@2e41698:5234
+[main (2)                                ] INFO     - 0:00:00.414    - startup page index: 0
+[main (2)                                ] INFO     - 0:00:00.415    - onResume()@2e41698:5234
+[main (2)                                ] INFO     - 0:00:00.438    - Insets: Insets{left=0, top=88, right=0, bottom=45}
+[main (2)                                ] INFO     - 0:00:00.458    - onAttach()@2af0cf8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:00.459    - onCreate()@2af0cf8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:00.459    - onCreateView()@2af0cf8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:00.475    - setSeekBarDetailsText: 
+[main (2)                                ] INFO     - 0:00:00.476    - tidal: cache folder: /data/user/0/com.bubblesoft.android.bubbleupnp/cache
+[main (2)                                ] INFO     - 0:00:00.476    - qobuz: username: set
+[main (2)                                ] INFO     - 0:00:00.477    - qobuz: cache folder: /data/user/0/com.bubblesoft.android.bubbleupnp/cache
+[main (2)                                ] INFO     - 0:00:00.477    - NowPlayingFragment.onCreateView() took: 18 ms
+[main (2)                                ] INFO     - 0:00:00.478    - onActivityCreated()@2af0cf8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:00.479    - onStart()@2af0cf8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:00.481    - onResume()@2af0cf8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:00.484    - onAttach()@5f65d35/2e41698:5234
+[main (2)                                ] INFO     - 0:00:00.484    - onCreate()@5f65d35/2e41698:5234
+[main (2)                                ] INFO     - 0:00:00.485    - onCreateView()@5f65d35/2e41698:5234
+[main (2)                                ] INFO     - 0:00:00.494    - PlaylistFragment.onCreateView() took: 9 ms
+[main (2)                                ] INFO     - 0:00:00.494    - onActivityCreated()@5f65d35/2e41698:5234
+[main (2)                                ] INFO     - 0:00:00.495    - onStart()@5f65d35/2e41698:5234
+[main (2)                                ] INFO     - 0:00:00.504    - onAttach()@ec98be8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:00.504    - onCreate()@ec98be8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:00.505    - onCreateView()@ec98be8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:00.528    - LibraryFragment.onCreateView() took: 23 ms
+[Main #1 (179)                           ] INFO     - 0:00:00.528    - task: start: getSearchableInfo
+[Main #1 (179)                           ] INFO     - 0:00:00.529    - task: end, 1ms: getSearchableInfo
+[main (2)                                ] INFO     - 0:00:00.529    - onActivityCreated()@ec98be8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:00.530    - onStart()@ec98be8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:00.533    - setSeekBarDetailsText: 
+[main (2)                                ] INFO     - 0:00:00.570    - display: screen generalized size: normal
+[main (2)                                ] INFO     - 0:00:00.571    - display: screen generalized density: 480 dpi
+[main (2)                                ] INFO     - 0:00:00.571    - display: logical density factor: 3.000000
+[main (2)                                ] INFO     - 0:00:00.571    - display: screen size (pixels, Display.getSize()): 1080x2400
+[main (2)                                ] INFO     - 0:00:00.571    - display: screen size (pixels, displayMetrics): 1080x2400
+[main (2)                                ] INFO     - 0:00:00.571    - display: screen size (dp): 360x800
+[main (2)                                ] INFO     - 0:00:00.571    - display: screen size (conf: screenWidthDp x screenHeightDp) (dp): 360x800
+[main (2)                                ] INFO     - 0:00:00.571    - display: smallest width (dp): 360
+[main (2)                                ] INFO     - 0:00:00.571    - display: screen size (inches): 2.637801x5.905512, diagonal: 6.467848
+[main (2)                                ] INFO     - 0:00:00.571    - display: screen size aspect ratio (h/w): 2.222222
+[main (2)                                ] INFO     - 0:00:00.572    - display: isTallActivity: true
+[main (2)                                ] INFO     - 0:00:00.572    - display: isInMultiWindowMode: false
+[main (2)                                ] INFO     - 0:00:00.572    - display: xdpi: 409.432007
+[main (2)                                ] INFO     - 0:00:00.572    - display: ydpi: 406.399994
+[main (2)                                ] INFO     - 0:00:00.572    - display: landscape: false
+[main (2)                                ] INFO     - 0:00:00.572    - display: isPhoneSize: true
+[main (2)                                ] INFO     - 0:00:00.572    - display: E2E35.isEnforced: true
+[main (2)                                ] INFO     - 0:00:00.572    - onCreate
+[main (2)                                ] INFO     - 0:00:00.582    - doStartForeground: calling startForeground(), fromOnStartCommand: false, serviceType: 2
+[main (2)                                ] INFO     - 0:00:00.593    - isCustomNotificationExitButtonSupported: true
+[main (2)                                ] WARNING  - 0:00:00.605    - failed to set FFmpeg executable
+[main (2)                                ] INFO     - 0:00:00.615    - ffmpeg process started, timeout: 0s: -version
+[main (2)                                ] INFO     - 0:00:01.56     - runFFMPEG: finished ffmpeg process took: 450 ms
+[main (2)                                ] INFO     - 0:00:01.56     - runFFMPEG: written 2136 bytes
+[main (2)                                ] INFO     - 0:00:01.56     - ffmpeg version N-118170-g7e778586e7-bubblesoftapps.com Copyright (c) 2000-2024 the FFmpeg developers
+built with Android (6875598, based on r399163b) clang version 11.0.5 (https://android.googlesource.com/toolchain/llvm-project 87f1315dfbea7c137aa2e6d362dbb457e388158d)
+configuration: --target-os=android --cross-prefix=/home/bobbie/ffmpeg-android/toolchain-android/bin/aarch64-linux-android- --arch=aarch64 --cpu=armv8-a --sysroot=/home/bobbie/ffmpeg-android/toolchain-android/sysroot --pkg-config=/home/bobbie/ffmpeg-android/ffmpeg-pkg-config --prefix=/home/bobbie/ffmpeg-android/build/arm64-v8a --extra-cflags='-I/home/bobbie/ffmpeg-android/toolchain-android/include -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2 -fno-strict-overflow -fstack-protector-all -fPIE -fPIC' --extra-ldflags='-Wl,-z,max-page-size=16384 -fuse-ld=gold -L/home/bobbie/ffmpeg-android/toolchain-android/lib64 -L/home/bobbie/ffmpeg-android/toolchain-android/lib -Wl,-z,relro -Wl,-z,now -pie -Wl,--fix-cortex-a8 -Wl,-z,max-page-size=16384' --extra-libs='-lhogweed -lnettle -lgmp -lvorbis -logg -lm -lz' --extra-cxxflags= --extra-version=bubblesoftapps.com --disable-shared --disable-debug --disable-programs --disable-doc --disable-avdevice --disable-postproc --disable-protocols --disable-protocol='rtp,udp' --disable-encoders --disable-filters --disable-libv4l2 --enable-gpl --enable-version3 --enable-pic --enable-static --enable-ffmpeg --enable-libxml2 --enable-gnutls --enable-protocol='fd,http,https,pipe,crypto,file' --enable-encoder='aac,libmp3lame,libopus,ac3,eac3,pcm_s16le,pcm_s16be,pcm_s24le,pcm_s24be,flac,libvorbis,mjpeg,libx264,srt,wrapped_avframe,h264_mediacodec,png,pcm_s32le,pcm_s32be' --enable-filter='aresample,volume,afir,replaygain,scale,setsar,setdar' --enable-demuxer=dash --enable-libmp3lame --enable-libopus --enable-libsoxr --enable-libvorbis --enable-libx264 --enable-jni --enable-mediacodec --enable-hwaccels
+libavutil      59. 53.100 / 59. 53.100
+libavcodec     61. 28.100 / 61. 28.100
+libavformat    61.  9.101 / 61.  9.101
+libavfilter    10.  6.101 / 10.  6.101
+libswscale      8. 13.100 /  8. 13.100
+libswresample   5.  4.100 /  5.  4.100
+
+[main (2)                                ] INFO     - 0:00:01.57     - FFmpeg executable: /data/app/~~rP3Ghg18CfximalIH4RRoQ==/com.bubblesoft.android.bubbleupnp-vax1mni2sS4Ql7kqL8ugMA==/lib/arm64/libffmpeg.so
+[main (2)                                ] INFO     - 0:00:01.59     - renderer chooser target: loaded 1 targets
+[Main #1 (179)                           ] INFO     - 0:00:01.59     - task: start: publishRendererChooserTargets
+[main (2)                                ] INFO     - 0:00:01.62     - created Apache HttpClient
+[Main #2 (195)                           ] INFO     - 0:00:01.76     - task: start: DownloadManager
+[Main #2: DownloadManager (195)          ] INFO     - 0:00:01.76     - waiting for download requests...
+[main (2)                                ] INFO     - 0:00:01.76     - .d                          : default UPnP action timeout: 30s
+[main (2)                                ] INFO     - 0:00:01.77     - StreamRequestMessage short connect timeout: 1000
+[main (2)                                ] INFO     - 0:00:01.78     - .d                          : >>> Starting UPnP service...
+[main (2)                                ] INFO     - 0:00:01.78     - .d                          : Using configuration: com.bubblesoft.android.bubbleupnp.AndroidUpnpService$u0
+[main (2)                                ] INFO     - 0:00:01.81     - .d                          : <<< UPnP service started successfully
+[main (2)                                ] INFO     - 0:00:01.85     - local renderer gapless support: false
+[Main #1 (179)                           ] INFO     - 0:00:01.86     - task: end, 26ms: publishRendererChooserTargets
+[main (2)                                ] INFO     - 0:00:01.109    - MediaPlayerRenderer.setVolume(): 14
+[main (2)                                ] INFO     - 0:00:01.115    - local renderer audio session id: 2033, send intent delay: 500
+[main (2)                                ] INFO     - 0:00:01.128    - local renderer: RenderingControl service max volume: 15
+[main (2)                                ] INFO     - 0:00:01.129    - MediaRenderer LastChange thread: initial last change running: false
+[Main #1 (179)                           ] INFO     - 0:00:01.129    - task: start: MediaRenderer-LastChange
+[Main #1: MediaRenderer-LastChange (179) ] INFO     - 0:00:01.130    - MediaRenderer LastChange thread: stopped
+[main (2)                                ] INFO     - 0:00:01.131    - created local renderer
+[main (2)                                ] INFO     - 0:00:01.132    - OpenHome local renderer is disabled
+[main (2)                                ] INFO     - 0:00:01.139    - starting Jetty...
+[main (2)                                ] INFO     - 0:00:01.139    - createConnector: type: 3
+[main (2)                                ] INFO     - 0:00:01.143    - external storage available: true, root directory: /storage/emulated/0, state: mounted, path: null
+[Main #3 (202)                           ] INFO     - 0:00:01.145    - task: start: checkAlbumArtistColumnSupport
+[Main #3: checkAlbumArtistColumnSupport (] INFO     - 0:00:01.145    - Album Artist column supported (from pref): false
+[Main #3 (202)                           ] INFO     - 0:00:01.146    - task: end, 1ms: checkAlbumArtistColumnSupport
+[main (2)                                ] INFO     - 0:00:01.146    - audio cast fifo exists: /data/data/com.bubblesoft.android.bubbleupnp/audiocast
+[main (2)                                ] INFO     - 0:00:01.149    - audio cast fifo exists: /data/data/com.bubblesoft.android.bubbleupnp/audiocast
+[main (2)                                ] INFO     - 0:00:01.150    - excluded remote directories: []
+[main (2)                                ] INFO     - 0:00:01.152    - jetty-7.x.y-SNAPSHOT
+[main (2)                                ] INFO     - 0:00:01.159    - started {}
+[main (2)                                ] INFO     - 0:00:01.159    - started {}
+[main (2)                                ] INFO     - 0:00:01.160    - started {}
+[main (2)                                ] INFO     - 0:00:01.160    - started {}
+[main (2)                                ] INFO     - 0:00:01.160    - started {}
+[main (2)                                ] INFO     - 0:00:01.161    - started {}
+[main (2)                                ] INFO     - 0:00:01.161    - started {}
+[main (2)                                ] INFO     - 0:00:01.161    - started {}
+[main (2)                                ] INFO     - 0:00:01.161    - started {}
+[main (2)                                ] INFO     - 0:00:01.165    - Started {}
+[main (2)                                ] INFO     - 0:00:01.165    - started Jetty
+[main (2)                                ] WARNING  - 0:00:01.167    - smb: failed to load: /data/user/0/com.bubblesoft.android.bubbleupnp/files/smbshares: java.io.FileNotFoundException: /data/user/0/com.bubblesoft.android.bubbleupnp/files/smbshares: open failed: ENOENT (No such file or directory)
+[main (2)                                ] INFO     - 0:00:01.168    - smb: setLocalIpAddress: null
+[main (2)                                ] INFO     - 0:00:01.168    - added local media server to registry
+[main (2)                                ] INFO     - 0:00:01.168    - created local media server
+[main (2)                                ] INFO     - 0:00:01.169    - initBatterySavingMode: false
+[main (2)                                ] WARNING  - 0:00:01.169    - discovery maintenance: executor already stopped
+[main (2)                                ] INFO     - 0:00:01.169    - .b                          : WiFi lock acquired
+[main (2)                                ] INFO     - 0:00:01.187    - wake lock acquired
+[main (2)                                ] INFO     - 0:00:01.189    - initBatterySavingMode: added MediaRouter callback
+[main (2)                                ] INFO     - 0:00:01.201    - .b                          : network type changed  => WIFI
+[main (2)                                ] WARNING  - 0:00:01.201    - .b                          : WiFi multicast lock already released
+[main (2)                                ] INFO     - 0:00:01.201    - .b                          : WiFi lock released
+[main (2)                                ] INFO     - 0:00:01.217    - .a                          : Creating Router: xr.b$a
+[main (2)                                ] WARNING  - 0:00:01.218    - .f                          : Network interface reports it is not multicast capable: dummy0
+[main (2)                                ] WARNING  - 0:00:01.219    - .f                          : Network interface reports it is not multicast capable: lo
+[main (2)                                ] INFO     - 0:00:01.219    - .f                          : Skipping unsupported non-IPv4 address: /fe80::6aba:a4eb:8bbb:193e%epdg1
+[main (2)                                ] INFO     - 0:00:01.220    - .f                          : Skipping unsupported non-IPv4 address: /fe80::24a5:caff:fecb:20a%dummy0
+[main (2)                                ] INFO     - 0:00:01.220    - .f                          : Skipping unsupported non-IPv4 address: /fe80::1c35:9cff:fe48:4f02%wlan0
+[main (2)                                ] INFO     - 0:00:01.220    - .f                          : Skipping unsupported non-IPv4 address: /2a01:e0a:db2:76f0:1c35:9cff:fe48:4f02
+[main (2)                                ] INFO     - 0:00:01.220    - .f                          : Skipping unsupported non-IPv4 address: /2a01:e0a:db2:76f0:2459:6fe5:13c0:a045
+[main (2)                                ] INFO     - 0:00:01.220    - .f                          : Skipping unsupported non-IPv4 address: /fdde:0:31df:4f52::1288:da64
+[main (2)                                ] INFO     - 0:00:01.220    - .f                          : Skipping unsupported non-IPv4 address: /::1
+[main (2)                                ] INFO     - 0:00:01.220    - .f                          : Display name: wlan0
+[main (2)                                ] INFO     - 0:00:01.220    - .f                          : Name: wlan0
+[main (2)                                ] INFO     - 0:00:01.221    - .f                          : InetAddress: /fe80::1c35:9cff:fe48:4f02%wlan0
+[main (2)                                ] INFO     - 0:00:01.221    - .f                          : InetAddress: /2a01:e0a:db2:76f0:1c35:9cff:fe48:4f02
+[main (2)                                ] INFO     - 0:00:01.221    - .f                          : InetAddress: /2a01:e0a:db2:76f0:2459:6fe5:13c0:a045
+[main (2)                                ] INFO     - 0:00:01.221    - .f                          : InetAddress: /192.168.0.98
+[main (2)                                ] INFO     - 0:00:01.221    - .f                          :  Interface Address
+[main (2)                                ] INFO     - 0:00:01.221    - .f                          :   Address: /fe80::1c35:9cff:fe48:4f02%wlan0
+[main (2)                                ] INFO     - 0:00:01.221    - .f                          :   Broadcast: null
+[main (2)                                ] INFO     - 0:00:01.221    - .f                          :   Prefix length: 64
+[main (2)                                ] INFO     - 0:00:01.221    - .f                          :  Interface Address
+[main (2)                                ] INFO     - 0:00:01.221    - .f                          :   Address: /2a01:e0a:db2:76f0:1c35:9cff:fe48:4f02
+[main (2)                                ] INFO     - 0:00:01.222    - .f                          :   Broadcast: null
+[main (2)                                ] INFO     - 0:00:01.222    - .f                          :   Prefix length: 64
+[main (2)                                ] INFO     - 0:00:01.222    - .f                          :  Interface Address
+[main (2)                                ] INFO     - 0:00:01.222    - .f                          :   Address: /2a01:e0a:db2:76f0:2459:6fe5:13c0:a045
+[main (2)                                ] INFO     - 0:00:01.222    - .f                          :   Broadcast: null
+[main (2)                                ] INFO     - 0:00:01.222    - .f                          :   Prefix length: 64
+[main (2)                                ] INFO     - 0:00:01.222    - .f                          :  Interface Address
+[main (2)                                ] INFO     - 0:00:01.222    - .f                          :   Address: /192.168.0.98
+[main (2)                                ] INFO     - 0:00:01.222    - .f                          :   Broadcast: /192.168.0.255
+[main (2)                                ] INFO     - 0:00:01.222    - .f                          :   Prefix length: 24
+[main (2)                                ] INFO     - 0:00:01.222    - .f                          : Up? true
+[main (2)                                ] INFO     - 0:00:01.223    - .f                          : Loopback? false
+[main (2)                                ] INFO     - 0:00:01.223    - .f                          : PointToPoint? false
+[main (2)                                ] INFO     - 0:00:01.223    - .f                          : Supports multicast? true
+[main (2)                                ] INFO     - 0:00:01.223    - .f                          : Virtual? false
+[main (2)                                ] INFO     - 0:00:01.224    - .f                          : Hardware address: null
+[main (2)                                ] INFO     - 0:00:01.224    - .f                          : MTU: 1500
+[main (2)                                ] INFO     - 0:00:01.224    - .f                          : Display name: lo
+[main (2)                                ] INFO     - 0:00:01.224    - .f                          : Name: lo
+[main (2)                                ] INFO     - 0:00:01.224    - .f                          : InetAddress: /::1
+[main (2)                                ] INFO     - 0:00:01.224    - .f                          : InetAddress: /127.0.0.1
+[main (2)                                ] INFO     - 0:00:01.225    - .f                          :  Interface Address
+[main (2)                                ] INFO     - 0:00:01.225    - .f                          :   Address: /::1
+[main (2)                                ] INFO     - 0:00:01.225    - .f                          :   Broadcast: null
+[main (2)                                ] INFO     - 0:00:01.225    - .f                          :   Prefix length: 128
+[main (2)                                ] INFO     - 0:00:01.225    - .f                          :  Interface Address
+[main (2)                                ] INFO     - 0:00:01.225    - .f                          :   Address: /127.0.0.1
+[main (2)                                ] INFO     - 0:00:01.225    - .f                          :   Broadcast: null
+[main (2)                                ] INFO     - 0:00:01.225    - .f                          :   Prefix length: 8
+[main (2)                                ] INFO     - 0:00:01.225    - .f                          : Up? true
+[main (2)                                ] INFO     - 0:00:01.225    - .f                          : Loopback? true
+[main (2)                                ] INFO     - 0:00:01.226    - .f                          : PointToPoint? false
+[main (2)                                ] INFO     - 0:00:01.226    - .f                          : Supports multicast? false
+[main (2)                                ] INFO     - 0:00:01.226    - .f                          : Virtual? false
+[main (2)                                ] INFO     - 0:00:01.226    - .f                          : Hardware address: null
+[main (2)                                ] INFO     - 0:00:01.227    - .f                          : MTU: 65536
+[main (2)                                ] INFO     - 0:00:01.227    - .i                          : /127.0.0.1:58645: created socket (for receiving TCP streams)
+[main (2)                                ] INFO     - 0:00:01.227    - .i                          : /192.168.0.98:58645: created socket (for receiving TCP streams)
+[main (2)                                ] INFO     - 0:00:01.228    - .e                          : wlan0: Creating wildcard socket (for receiving multicast datagrams) on port: 1900
+[main (2)                                ] INFO     - 0:00:01.228    - .e                          : wlan0: Joining multicast group: /239.255.255.250:1900
+[main (2)                                ] INFO     - 0:00:01.229    - .e                          : lo: Creating wildcard socket (for receiving multicast datagrams) on port: 1900
+[main (2)                                ] INFO     - 0:00:01.229    - .e                          : lo: Joining multicast group: /239.255.255.250:1900
+[main (2)                                ] INFO     - 0:00:01.229    - .a                          : Creating bound socket (for datagram input/output) on: /127.0.0.1
+[main (2)                                ] INFO     - 0:00:01.230    - .a                          : Creating bound socket (for datagram input/output) on: /192.168.0.98
+[main (2)                                ] INFO     - 0:00:01.231    - .b                          : WiFi multicast lock acquired
+[main (2)                                ] INFO     - 0:00:01.244    - .b                          : WiFi lock acquired
+[main (2)                                ] INFO     - 0:00:01.250    - .b                          : enabled router on network type change (new network: WIFI)
+[main (2)                                ] INFO     - 0:00:01.250    - inspecting new device: La glouglou mobile 
+[main (2)                                ] INFO     - 0:00:01.251    - La glouglou mobile : No product service found
+[main (2)                                ] INFO     - 0:00:01.251    - La glouglou mobile : volume range: 0..15
+[main (2)                                ] INFO     - 0:00:01.251    - La glouglou mobile : supports SetNextAVTransportURI: false
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.315    - codec name: c2.sec.amrnb.decoder, supported types: audio/3gpp
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.315    - codec name: c2.sec.amrwb.decoder, supported types: audio/amr-wb
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.316    - codec name: c2.sec.flac.decoder, supported types: audio/flac
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.316    - codec name: c2.sec.ima.decoder, supported types: audio/x-ima
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.316    - codec name: c2.sec.mp3.decoder.mpeg, supported types: audio/mpeg
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.316    - codec name: c2.sec.mp3.decoder, supported types: audio/mpeg
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.316    - codec name: c2.sec.mp3.decoder.mpeg-L1, supported types: audio/mpeg-L1
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.316    - codec name: c2.sec.mp3.decoder.mpeg-L2, supported types: audio/mpeg-L2
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.316    - codec name: c2.sec.vc1.decoder.wvc1, supported types: video/wvc1
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.316    - codec name: c2.sec.vc1.decoder, supported types: video/wvc1
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.316    - codec name: c2.sec.vc1.decoder.x-ms-wmv, supported types: video/x-ms-wmv
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.317    - codec name: c2.dolby.ac4.decoder, supported types: audio/ac4
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.317    - codec name: OMX.dolby.ac4.decoder, supported types: audio/ac4
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.317    - codec name: c2.dolby.eac3.decoder.ac3, supported types: audio/ac3
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.317    - codec name: c2.dolby.eac3.decoder, supported types: audio/ac3
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.317    - codec name: c2.dolby.eac3.decoder.eac3, supported types: audio/eac3
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.317    - codec name: c2.dolby.eac3.decoder.eac3-joc, supported types: audio/eac3-joc
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.317    - codec name: c2.android.aac.decoder, supported types: audio/mp4a-latm
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.317    - codec name: OMX.google.aac.decoder, supported types: audio/mp4a-latm
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.317    - codec name: c2.android.amrnb.decoder, supported types: audio/3gpp
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.317    - codec name: OMX.google.amrnb.decoder, supported types: audio/3gpp
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.318    - codec name: c2.android.amrwb.decoder, supported types: audio/amr-wb
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.318    - codec name: OMX.google.amrwb.decoder, supported types: audio/amr-wb
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.318    - codec name: c2.android.flac.decoder, supported types: audio/flac
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.318    - codec name: OMX.google.flac.decoder, supported types: audio/flac
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.318    - codec name: c2.android.g711.alaw.decoder, supported types: audio/g711-alaw
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.318    - codec name: OMX.google.g711.alaw.decoder, supported types: audio/g711-alaw
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.318    - codec name: c2.android.g711.mlaw.decoder, supported types: audio/g711-mlaw
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.319    - codec name: OMX.google.g711.mlaw.decoder, supported types: audio/g711-mlaw
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.319    - codec name: c2.android.gsm.decoder, supported types: audio/gsm
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.319    - codec name: OMX.google.gsm.decoder, supported types: audio/gsm
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.319    - codec name: c2.android.mp3.decoder, supported types: audio/mpeg
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.319    - codec name: OMX.google.mp3.decoder, supported types: audio/mpeg
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.319    - codec name: c2.android.opus.decoder, supported types: audio/opus
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.320    - codec name: OMX.google.opus.decoder, supported types: audio/opus
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.320    - codec name: c2.android.raw.decoder, supported types: audio/raw
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.320    - codec name: OMX.google.raw.decoder, supported types: audio/raw
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.320    - codec name: c2.android.vorbis.decoder, supported types: audio/vorbis
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.320    - codec name: OMX.google.vorbis.decoder, supported types: audio/vorbis
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.320    - codec name: c2.exynos.h264.decoder, supported types: video/avc
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.320    - codec name: OMX.Exynos.avc.dec, supported types: video/avc
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.320    - codec name: c2.exynos.h264.decoder.secure, supported types: video/avc
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.320    - codec name: c2.exynos.hevc.decoder, supported types: video/hevc
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.320    - codec name: OMX.Exynos.hevc.dec, supported types: video/hevc
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.321    - codec name: c2.exynos.hevc.decoder.secure, supported types: video/hevc
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.321    - codec name: c2.exynos.vp8.decoder, supported types: video/x-vnd.on2.vp8
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.321    - codec name: OMX.Exynos.vp8.dec, supported types: video/x-vnd.on2.vp8
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.321    - codec name: c2.sec.mpeg4.decoder, supported types: video/mp4v-es
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.321    - codec name: c2.android.apv.decoder, supported types: video/apv
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.321    - codec name: c2.android.av1-dav1d.decoder, supported types: video/av01
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.321    - codec name: c2.android.avc.decoder, supported types: video/avc
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.321    - codec name: OMX.google.h264.decoder, supported types: video/avc
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.322    - codec name: c2.android.h263.decoder, supported types: video/3gpp
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.322    - codec name: OMX.google.h263.decoder, supported types: video/3gpp
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.322    - codec name: c2.android.hevc.decoder, supported types: video/hevc
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.322    - codec name: OMX.google.hevc.decoder, supported types: video/hevc
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.322    - codec name: c2.android.mpeg4.decoder, supported types: video/mp4v-es
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.322    - codec name: OMX.google.mpeg4.decoder, supported types: video/mp4v-es
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.322    - codec name: c2.android.vp8.decoder, supported types: video/x-vnd.on2.vp8
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.322    - codec name: OMX.google.vp8.decoder, supported types: video/x-vnd.on2.vp8
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.322    - codec name: c2.android.vp9.decoder, supported types: video/x-vnd.on2.vp9
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.322    - codec name: OMX.google.vp9.decoder, supported types: video/x-vnd.on2.vp9
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.323    - codec name: c2.android.av1.decoder, supported types: video/av01
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.323    - stock audio codecs: OPUS, FLAC, WAV, MP3, MP2, MP1, AAC, M4A, OGG, DFF, DSF, DSD
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.324    - non-stock audio codecs: AIFF, L16, L24, Musepack, WavPack, TAK, AMR, AC3, MKA, MPEG-DASH, DTS, Monkey's Audio, WMA
+[cling-8 (GetProtocolInfo) (211)         ] INFO     - 0:00:01.324    - StockAudioSupport initialization took: 72 ms
+[main (2)                                ] INFO     - 0:00:01.325    - La glouglou mobile : protocolInfo: http-get:*:audio/opus:*,http-get:*:audio/x-flac:*,http-get:*:application/flac:*,http-get:*:audio/flac:*,http-get:*:application/x-flac:*,http-get:*:audio/wav:*,http-get:*:application/x-wave:*,http-get:*:audio/wave:*,http-get:*:application/wave:*,http-get:*:application/wav:*,http-get:*:application/x-wav:*,http-get:*:audio/x-wave:*,http-get:*:audio/x-wav:*,http-get:*:audio/mp3:*,http-get:*:application/mp3:*,http-get:*:application/x-mp3:*,http-get:*:audio/mpg:*,http-get:*:audio/mpeg3:*,http-get:*:application/mpeg:*,http-get:*:audio/x-mp3:*,http-get:*:audio/x-mpegaudio:*,http-get:*:audio/mpeg:*,http-get:*:audio/x-mpeg3:*,http-get:*:audio/x-mpg:*,http-get:*:audio/x-mpeg:*,http-get:*:application/mpeg3:*,http-get:*:audio/mp2:*,http-get:*:application/mp2:*,http-get:*:audio/mp1:*,http-get:*:application/mp1:*,http-get:*:audio/aacp:*,http-get:*:audio/aac:*,http-get:*:audio/3gpp:*,http-get:*:audio/3gpp2:*,http-get:*:audio/x-aac:*,http-get:*:audio/m4a:*,http-get:*:audio/mp4:*,http-get:*:application/x-m4b:*,http-get:*:application/x-m4a:*,http-get:*:application/x-m4p:*,http-get:*:application/x-mp4:*,http-get:*:audio/mpeg4:*,http-get:*:audio/x-m4b:*,http-get:*:audio/x-m4a:*,http-get:*:audio/x-m4p:*,http-get:*:audio/x-mp4:*,http-get:*:application/mpeg4:*,http-get:*:audio/x-ogg:*,http-get:*:application/x-ogg:*,http-get:*:audio/vorbis:*,http-get:*:application/ogg:*,http-get:*:audio/ogg:*,http-get:*:audio/dff:*,http-get:*:audio/x-dff:*,http-get:*:audio/x-dsf:*,http-get:*:audio/dsf:*,http-get:*:audio/x-dsd:*,http-get:*:audio/dsd:*,http-get:*:audio/x-scpls:*,http-get:*:application/aiff:*,http-get:*:audio/aiff:*,http-get:*:application/x-aif:*,http-get:*:application/aif:*,http-get:*:application/x-aiff:*,http-get:*:audio/x-aifc:*,http-get:*:audio/x-aiff:*,http-get:*:audio/aif:*,http-get:*:audio/aifc:*,http-get:*:audio/x-aif:*,http-get:*:audio/L16:*,http-get:*:audio/l24:*,http-get:*:audio/L24:*,http-get:*:audio/mpc:*,http-get:*:application/musepack:*,http-get:*:application/x-mpc:*,http-get:*:application/mpc:*,http-get:*:audio/musepack:*,http-get:*:application/x-musepack:*,http-get:*:audio/x-mpc:*,http-get:*:audio/x-musepack:*,http-get:*:audio/wavpack:*,http-get:*:application/x-wavpack:*,http-get:*:audio/x-wv:*,http-get:*:application/wavpack:*,http-get:*:audio/wv:*,http-get:*:audio/x-wavpack:*,http-get:*:application/wv:*,http-get:*:application/x-wv:*,http-get:*:audio/x-tak:*,http-get:*:audio/tak:*,http-get:*:audio/amr:*,http-get:*:audio/ac3:*,http-get:*:audio/x-matroska:*,http-get:*:application/dash+xml:*,http-get:*:audio/x-dts:*,http-get:*:audio/vnd-dts:*,http-get:*:application/ape:*,http-get:*:application/x-ape:*,http-get:*:audio/monkeys-audio:*,http-get:*:audio/x-monkeys-audio:*,http-get:*:audio/ape:*,http-get:*:application/monkeysaudio:*,http-get:*:audio/x-monkeysaudio:*,http-get:*:application/monkeys-audio:*,http-get:*:audio/x-ape:*,http-get:*:application/x-monkeys-audio:*,http-get:*:application/x-monkeysaudio:*,http-get:*:audio/monkeysaudio:*,http-get:*:audio/x-ms-wma:*,http-get:*:application/x-ms-wma:*,http-get:*:application/wma:*,http-get:*:audio/wma:*,http-get:*:audio/L16:*,http-get:*:audio/L16;channels=1;rate=11025:*,http-get:*:audio/L16;channels=1;rate=22050:*,http-get:*:audio/L16;channels=1;rate=44100:*,http-get:*:audio/L16;channels=1;rate=48000:*,http-get:*:audio/L16;channels=1;rate=88200:*,http-get:*:audio/L16;channels=1;rate=96000:*,http-get:*:audio/L16;channels=1;rate=176400:*,http-get:*:audio/L16;channels=1;rate=192000:*,http-get:*:audio/L16;channels=2;rate=11025:*,http-get:*:audio/L16;channels=2;rate=22050:*,http-get:*:audio/L16;channels=2;rate=44100:*,http-get:*:audio/L16;channels=2;rate=48000:*,http-get:*:audio/L16;channels=2;rate=88200:*,http-get:*:audio/L16;channels=2;rate=96000:*,http-get:*:audio/L16;channels=2;rate=176400:*,http-get:*:audio/L16;channels=2;rate=192000:*,http-get:*:audio/L16;channels=6;rate=11025:*,http-get:*:audio/L16;channels=6;rate=22050:*,http-get:*:audio/L16;channels=6;rate=44100:*,http-get:*:audio/L16;channels=6;rate=48000:*,http-get:*:audio/L16;channels=6;rate=88200:*,http-get:*:audio/L16;channels=6;rate=96000:*,http-get:*:audio/L16;channels=6;rate=176400:*,http-get:*:audio/L16;channels=6;rate=192000:*,http-get:*:audio/L16;channels=8;rate=11025:*,http-get:*:audio/L16;channels=8;rate=22050:*,http-get:*:audio/L16;channels=8;rate=44100:*,http-get:*:audio/L16;channels=8;rate=48000:*,http-get:*:audio/L16;channels=8;rate=88200:*,http-get:*:audio/L16;channels=8;rate=96000:*,http-get:*:audio/L16;channels=8;rate=176400:*,http-get:*:audio/L16;channels=8;rate=192000:*,http-get:*:video/vnd.dlna.mpeg-tts:*,http-get:*:video/mpeg2:*,http-get:*:video/mpeg:*,http-get:*:application/vnd.apple.mpegurl:*,http-get:*:application/x-mpegurl:*,http-get:*:video/x-m4v:*,http-get:*:video/mp4v-es:*,http-get:*:video/mp4:*,http-get:*:video/mp2ts:*,http-get:*:video/mp2t:*,http-get:*:video/quicktime:*,http-get:*:video/x-ms-wmv:*,http-get:*:video/x-ms-asf:*,http-get:*:video/x-ms-video:*,http-get:*:video/divx:*,http-get:*:video/vnd.divx:*,http-get:*:video/x-divx:*,http-get:*:video/x-ms-avi:*,http-get:*:video/avi:*,http-get:*:video/x-msvideo:*,http-get:*:video/x-mkv:*,http-get:*:video/mkv:*,http-get:*:video/x-matroska:*,http-get:*:video/ogg:*,http-get:*:video/3gpp:*,http-get:*:video/webm:*,http-get:*:application/flv:*,http-get:*:video/x-flv:*,http-get:*:video/flv:*,http-get:*:video/wtv:*,http-get:*:application/vnd.rn-realmedia-vbr:*,http-get:*:video/vnd.rn-realvideo:*,http-get:*:application/vnd.rn-realmedia:*,http-get:*:image/png:*,http-get:*:image/jpeg:*,http-get:*:image/bmp:*,http-get:*:image/gif:*,http-get:*:image/jpg:*,http-get:*:image/heic:*,http-get:*:image/webp:*,http-get:*:image/mpo:*
+[main (2)                                ] INFO     - 0:00:01.326    - La glouglou mobile : discarding problematic mime-type: audio/l24
+[main (2)                                ] INFO     - 0:00:01.326    - La glouglou mobile : discarding problematic mime-type: audio/l24
+[main (2)                                ] INFO     - 0:00:01.327    - La glouglou mobile : adding all DSD mime-types
+[main (2)                                ] INFO     - 0:00:01.327    - La glouglou mobile : max samplerate: -1, supports 24-bit: true, supports multichannel: true
+[main (2)                                ] INFO     - 0:00:01.328    - La glouglou mobile : supported mime-types: [audio/opus, audio/x-flac, application/flac, audio/flac, application/x-flac, audio/wav, application/x-wave, audio/wave, application/wave, application/wav, application/x-wav, audio/x-wave, audio/x-wav, audio/mp3, application/mp3, application/x-mp3, audio/mpg, audio/mpeg3, application/mpeg, audio/x-mp3, audio/x-mpegaudio, audio/mpeg, audio/x-mpeg3, audio/x-mpg, audio/x-mpeg, application/mpeg3, audio/mp2, application/mp2, audio/mp1, application/mp1, audio/aacp, audio/aac, audio/3gpp, audio/3gpp2, audio/x-aac, audio/m4a, audio/mp4, application/x-m4b, application/x-m4a, application/x-m4p, application/x-mp4, audio/mpeg4, audio/x-m4b, audio/x-m4a, audio/x-m4p, audio/x-mp4, application/mpeg4, audio/x-ogg, application/x-ogg, audio/vorbis, application/ogg, audio/ogg, audio/dff, audio/x-dff, audio/x-dsf, audio/dsf, audio/x-dsd, audio/dsd, audio/x-scpls, application/aiff, audio/aiff, application/x-aif, application/aif, application/x-aiff, audio/x-aifc, audio/x-aiff, audio/aif, audio/aifc, audio/x-aif, audio/lpcm, audio/L16, audio/l16, audio/mpc, application/musepack, application/x-mpc, application/mpc, audio/musepack, application/x-musepack, audio/x-mpc, audio/x-musepack, audio/wavpack, application/x-wavpack, audio/x-wv, application/wavpack, audio/wv, audio/x-wavpack, application/wv, application/x-wv, audio/x-tak, audio/tak, audio/amr, audio/ac3, audio/x-matroska, application/dash+xml, audio/x-dts, audio/vnd-dts, application/ape, application/x-ape, audio/monkeys-audio, audio/x-monkeys-audio, audio/ape, application/monkeysaudio, audio/x-monkeysaudio, application/monkeys-audio, audio/x-ape, application/x-monkeys-audio, application/x-monkeysaudio, audio/monkeysaudio, audio/x-ms-wma, application/x-ms-wma, application/wma, audio/wma, video/vnd.dlna.mpeg-tts, video/mpeg2, video/mpeg, application/vnd.apple.mpegurl, application/x-mpegurl, video/x-m4v, video/mp4v-es, video/mp4, video/3gpp, video/mp2ts, video/mp2t, video/quicktime, video/x-ms-wmv, video/x-ms-asf, video/x-ms-video, video/x-ms-avi, video/avi, video/x-msvideo, video/divx, video/vnd.divx, video/x-divx, video/x-mkv, video/mkv, video/x-matroska, video/ogg, video/webm, application/flv, video/x-flv, video/flv, video/wtv, application/vnd.rn-realmedia-vbr, video/vnd.rn-realvideo, application/vnd.rn-realmedia, image/png, image/jpeg, image/jpg, image/bmp, image/gif, image/heic, image/webp, image/mpo]
+[main (2)                                ] INFO     - 0:00:01.328    - La glouglou mobile : hasSetNextPlayItem: false, supportsSetNextPlayItem: false
+[main (2)                                ] INFO     - 0:00:01.329    - added renderer: La glouglou mobile  (ip: null)
+[AsyncTask #1 (188)                      ] INFO     - 0:00:01.331    - loadPlaylist: loaded /storage/emulated/0/Android/data/com.bubblesoft.android.bubbleupnp/files/playlists/playlist.dpl
+[main (2)                                ] INFO     - 0:00:01.332    - found renderer: La glouglou mobile 
+[main (2)                                ] INFO     - 0:00:01.335    - .c                          : 
+
+	Manufacturer: Bubblesoft
+	Manufacturer URL: http://forum.xda-developers.com/showthread.php?t=1118891
+	Model name: BubbleUPnP Media Renderer
+	Model description: BubbleUPnP Media Renderer
+	Model number: 4.6.1
+	UDN: 402e3e8f-f894-485e-b5e7-61a960912a16
+
+[main (2)                                ] INFO     - 0:00:01.336    - La glouglou mobile : not a Media Server: java.lang.Exception: La glouglou mobile : cannot find service ContentDirectory
+[main (2)                                ] INFO     - 0:00:01.336    - inspecting new device: BubbleUPnP Media Server (SM-A536B)
+[main (2)                                ] INFO     - 0:00:01.337    - BubbleUPnP Media Server (SM-A536B): No product service found
+[main (2)                                ] WARNING  - 0:00:01.337    - BubbleUPnP Media Server (SM-A536B): no RenderingControl service found
+[main (2)                                ] INFO     - 0:00:01.337    - BubbleUPnP Media Server (SM-A536B): constructed successfully
+[Main #3 (202)                           ] INFO     - 0:00:01.337    - task: start: MediaServer-FetchSupportedMimeType
+[main (2)                                ] INFO     - 0:00:01.338    - active media server: Local et Cloud
+[Main #3: MediaServer-FetchSupportedMimeT] INFO     - 0:00:01.340    - BubbleUPnP Media Server (SM-A536B) supported mime-types: [audio/mpeg, audio/mp4, audio/mp4, audio/wav, audio/wave, audio/x-wav, audio/mpeg, audio/x-mpeg, audio/mp1, audio/aac, audio/flac, audio/x-flac, audio/m4a, audio/mp4, audio/x-m4a, audio/x-scpls, audio/vorbis, audio/ogg, audio/x-ogg, audio/x-ms-wma, application/x-ms-wma, audio/wma, application/wma, image/png, image/png, image/jpeg, image/jpeg, image/jpeg, image/jpeg, image/png, image/jpeg, image/bmp, image/gif, image/jpg, image/heic, image/webp, image/mpo, video/vnd.dlna.mpeg-tts, video/mpeg2, video/mpeg, application/vnd.apple.mpegurl, application/x-mpegurl, video/x-m4v, video/mp4v-es, video/mp4, video/mp2ts, video/mp2t, video/quicktime, video/x-ms-wmv, video/x-ms-asf, video/x-ms-video, video/divx, video/vnd.divx, video/x-divx, video/x-ms-avi, video/avi, video/x-msvideo, video/x-mkv, video/mkv, video/x-matroska, video/ogg, video/3gpp, video/webm, application/flv, video/x-flv, video/flv, video/wtv, application/vnd.rn-realmedia-vbr, video/vnd.rn-realvideo, application/vnd.rn-realmedia]
+[main (2)                                ] INFO     - 0:00:01.340    - found Media Server: BubbleUPnP Media Server (SM-A536B)
+[main (2)                                ] INFO     - 0:00:01.341    - .c                          : 
+
+	Manufacturer: Bubblesoft
+	Manufacturer URL: http://forum.xda-developers.com/showthread.php?t=1118891
+	Model name: BubbleUPnP Media Server
+	Model description: BubbleUPnP Media Server
+	Model number: 4.6.1
+	UDN: d38a2dc7-13c1-4a39-ab36-513490cf6766
+
+[Main #3 (202)                           ] INFO     - 0:00:01.341    - task: end, 3ms: MediaServer-FetchSupportedMimeType
+[main (2)                                ] INFO     - 0:00:01.341    - createConnector: type: 3
+[main (2)                                ] INFO     - 0:00:01.344    - Started {}
+[main (2)                                ] INFO     - 0:00:01.345    - started Jetty connector on 192.168.0.98:57645
+[main (2)                                ] INFO     - 0:00:01.346    - smb: setLocalIpAddress: /192.168.0.98
+[main (2)                                ] SEVERE   - 0:00:01.346    - watchdog: device search++: 1
+[main (2)                                ] INFO     - 0:00:01.346    - performDeviceSearch: searching...
+[main (2)                                ] INFO     - 0:00:01.351    - play mode: -1
+[main (2)                                ] INFO     - 0:00:01.354    - play mode: -3.5
+[main (2)                                ] INFO     - 0:00:01.358    - set scrobbler: 0
+[main (2)                                ] INFO     - 0:00:01.358    - Trakt resume: cleared progressed entities
+[main (2)                                ] INFO     - 0:00:01.360    - registered receiver for 'mute on phone call'
+[cling-21 (226)                          ] INFO     - 0:00:01.368    - .f                          : Sending device descriptor retrieval message: (c) GET http://192.168.0.233:49152/description.xml
+[main (2)                                ] INFO     - 0:00:01.371    - setUsingBattery: true => false
+[main (2)                                ] WARNING  - 0:00:01.372    - watchdog: already disabled
+[Main #3 (202)                           ] INFO     - 0:00:01.373    - task: start: AndroidUpnpService-LoadResumePositions
+[main (2)                                ] INFO     - 0:00:01.373    - isGMSAvailable: true, hasTunInterface: false, isGoogleCastDiscoveryAlwaysStarted: false
+[main (2)                                ] INFO     - 0:00:01.375    - AndroidUpnpService.onCreate() took: 802 ms
+[Main #3: AndroidUpnpService-LoadResumePo] INFO     - 0:00:01.375    - loaded 10 resume positions
+[Main #3 (202)                           ] INFO     - 0:00:01.376    - task: end, 3ms: AndroidUpnpService-LoadResumePositions
+[main (2)                                ] INFO     - 0:00:01.376    - doStartForeground: calling startForeground(), fromOnStartCommand: true, serviceType: 2
+[Main #4 (228)                           ] INFO     - 0:00:01.376    - task: start: clearTempVLCSubFiles
+[Main #5 (229)                           ] INFO     - 0:00:01.377    - task: start: processAppExitReasons
+[Main #6 (230)                           ] INFO     - 0:00:01.378    - task: start: clear transcode tmp files
+[Main #6 (230)                           ] INFO     - 0:00:01.380    - task: end, 2ms: clear transcode tmp files
+[Main #7 (231)                           ] INFO     - 0:00:01.380    - task: start: clear older HLS remux files
+[Main #7 (231)                           ] INFO     - 0:00:01.381    - task: end, 1ms: clear older HLS remux files
+[main (2)                                ] INFO     - 0:00:01.386    - toast: AVERTISSEMENT:
+
+Le logging est activé
+
+[Main #5 (229)                           ] INFO     - 0:00:01.396    - task: end, 19ms: processAppExitReasons
+[main (2)                                ] INFO     - 0:00:01.403    - warning toast: Le logging est activé
+
+[main (2)                                ] INFO     - 0:00:01.405    - onCreateOptionsMenu()@2af0cf8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:01.406    - onPrepareOptionsMenu()@2af0cf8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:01.407    - Insets: Insets{left=0, top=88, right=0, bottom=45}
+[main (2)                                ] INFO     - 0:00:01.412    - setSeekBarDetailsText: 
+[cling-22 (232)                          ] INFO     - 0:00:01.432    - .f                          : Sending device descriptor retrieval message: (c) GET http://192.168.0.137:49152/description.xml
+[cling-20 (225)                          ] INFO     - 0:00:01.436    - .f                          : Sending device descriptor retrieval message: (c) GET http://192.168.0.138:8080/device/4b5d30eb-34cb-4bcc-806e-a075eebf9cd7/desc.xml
+[cling-24 (234)                          ] INFO     - 0:00:01.439    - .f                          : Sending device descriptor retrieval message: (c) GET http://192.168.0.138:8080/device/63623ff4-ee41-4850-90aa-2d39395df981/desc.xml
+[Main #4 (228)                           ] INFO     - 0:00:01.441    - task: end, 66ms: clearTempVLCSubFiles
+[main (2)                                ] INFO     - 0:00:01.443    - onDestroy()@9e5576d:5234
+[main (2)                                ] INFO     - 0:00:01.443    - installed security provider
+[main (2)                                ] INFO     - 0:00:01.444    - MediaPlayerRenderer: onRouteSelected: MediaRouter.RouteInfo{ uniqueId=ROUTE_2e8a299d, name=Toyota Touch, description=Audio Bluetooth, iconUri=null, enabled=true, isSystemRoute=true, connectionState=0, canDisconnect=false, playbackType=0, playbackStream=3, deviceType=3, volumeHandling=1, volume=14, volumeMax=15, presentationDisplayId=-1, extras=null, settingsIntent=null, providerPackageName=android }, BT: true
+[main (2)                                ] INFO     - 0:00:01.445    - onRouteSelected (local): route: MediaRouter.RouteInfo{ uniqueId=ROUTE_2e8a299d, name=Toyota Touch, description=Audio Bluetooth, iconUri=null, enabled=true, isSystemRoute=true, connectionState=0, canDisconnect=false, playbackType=0, playbackStream=3, deviceType=3, volumeHandling=1, volume=14, volumeMax=15, presentationDisplayId=-1, extras=null, settingsIntent=null, providerPackageName=android }, reason: 0
+[main (2)                                ] INFO     - 0:00:01.447    - .b                          : selected item: France Culture
+[main (2)                                ] INFO     - 0:00:01.448    - .b                          : selected item: France Culture
+[main (2)                                ] INFO     - 0:00:01.448    - .b                          : CONNECTIVITY_ACTION
+[main (2)                                ] INFO     - 0:00:01.448    - .b                          : EXTRA_NO_CONNECTIVITY: false
+[main (2)                                ] INFO     - 0:00:01.448    - .b                          : EXTRA_REASON: null
+[main (2)                                ] INFO     - 0:00:01.449    - .b                          : EXTRA_IS_FAILOVER: false
+[main (2)                                ] INFO     - 0:00:01.449    - .b                          : EXTRA_NETWORK_INFO: [type: WIFI[], state: CONNECTED/CONNECTED, reason: (unspecified), extra: , failover: false, available: true, roaming: false]
+[main (2)                                ] INFO     - 0:00:01.449    - .b                          : EXTRA_OTHER_NETWORK_INFO: none
+[main (2)                                ] INFO     - 0:00:01.449    - .b                          : EXTRA_EXTRA_INFO: 
+[main (2)                                ] INFO     - 0:00:01.449    - .b                          : No network change...ignoring event
+[main (2)                                ] INFO     - 0:00:01.454    - created mini-player (context: com.bubblesoft.android.bubbleupnp.MainTabActivity@2e41698)
+[main (2)                                ] INFO     - 0:00:01.455    - added listener: 1 listeners
+[main (2)                                ] WARNING  - 0:00:01.455    - refreshLocalMediaServerLibraryList: failed to find separator container (1)
+[main (2)                                ] INFO     - 0:00:01.455    - active renderer: none
+[main (2)                                ] INFO     - 0:00:01.462    - onSaveInstanceState()@ec98be8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:01.462    - saveMediaServerState: Local et Cloud
+[main (2)                                ] INFO     - 0:00:01.464    - onSaveInstanceState()@ec98be8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:01.465    - saveMediaServerState: Local et Cloud
+[main (2)                                ] INFO     - 0:00:01.465    - positionStack: []
+[main (2)                                ] INFO     - 0:00:01.465    - itemList: Bundle[{firstVisiblePosition=0}]
+[main (2)                                ] INFO     - 0:00:01.466    - containerPath: []
+[main (2)                                ] INFO     - 0:00:01.470    - added listener: 2 listeners
+[main (2)                                ] INFO     - 0:00:01.471    - added listener: 3 listeners
+[main (2)                                ] INFO     - 0:00:01.471    - active renderer: none
+[main (2)                                ] INFO     - 0:00:01.471    - onNetworkSearchStarted
+[AsyncTask #1 (188)                      ] INFO     - 0:00:01.477    - BrowseTask.doInBackground(): enter
+[AsyncTask #1 (188)                      ] INFO     - 0:00:01.477    - BrowseTask.doInBackground(): loading container 'Local et Cloud'
+[cling-23 (Browse) (233)                 ] INFO     - 0:00:01.478    - ObjectID: 0
+[cling-23 (Browse) (233)                 ] INFO     - 0:00:01.478    - BrowseFlag: BrowseDirectChildren
+[cling-23 (Browse) (233)                 ] INFO     - 0:00:01.480    - StartingIndex: 0
+[cling-23 (Browse) (233)                 ] INFO     - 0:00:01.481    - RequestedCount: 0
+[cling-23 (Browse) (233)                 ] INFO     - 0:00:01.481    - Filter: *
+[cling-23 (Browse) (233)                 ] INFO     - 0:00:01.482    - sorted 0 items took: 0 ms
+[cling-23 (Browse) (233)                 ] WARNING  - 0:00:01.483    - webdav: failed to load: /data/user/0/com.bubblesoft.android.bubbleupnp/files/webdavservers: java.io.FileNotFoundException: /data/user/0/com.bubblesoft.android.bubbleupnp/files/webdavservers: open failed: ENOENT (No such file or directory)
+[cling-27 (238)                          ] INFO     - 0:00:01.497    - .f                          : Sending device descriptor retrieval message: (c) GET http://192.168.0.254:52424/device.xml
+[cling-23 (Browse) (233)                 ] INFO     - 0:00:01.500    - browsed 10/10 items in 19ms
+[main (2)                                ] INFO     - 0:00:01.569    - added listener: 4 listeners
+[main (2)                                ] INFO     - 0:00:01.569    - remote config: fetch succeeded, activated: false
+[main (2)                                ] INFO     - 0:00:01.632    - onCreateOptionsMenu()@2af0cf8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:01.633    - onPrepareOptionsMenu()@2af0cf8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:01.706    - inspecting new device: PMOMusic Media Server
+[main (2)                                ] INFO     - 0:00:01.706    - PMOMusic Media Server: No product service found
+[main (2)                                ] WARNING  - 0:00:01.706    - PMOMusic Media Server: no RenderingControl service found
+[main (2)                                ] INFO     - 0:00:01.707    - PMOMusic Media Server: constructed successfully
+[Main #4 (228)                           ] INFO     - 0:00:01.707    - task: start: MediaServer-FetchSupportedMimeType
+[main (2)                                ] WARNING  - 0:00:01.707    - refreshLocalMediaServerLibraryList: failed to find separator container (1)
+[main (2)                                ] INFO     - 0:00:01.707    - no icon for PMOMusic Media Server
+[main (2)                                ] INFO     - 0:00:01.707    - found Media Server: PMOMusic Media Server
+[main (2)                                ] INFO     - 0:00:01.708    - .c                          : 
+
+	Manufacturer: PMOMusic
+	Model name: PMOMusic Media Server
+	UDN: 63623ff4-ee41-4850-90aa-2d39395df981
+
+[main (2)                                ] INFO     - 0:00:01.708    - inspecting new device: Chambre
+[main (2)                                ] INFO     - 0:00:01.708    - Chambre: No product service found
+[main (2)                                ] INFO     - 0:00:01.708    - Chambre: volume range: 0..100
+[main (2)                                ] INFO     - 0:00:01.708    - Chambre: supports SetNextAVTransportURI: true
+[Main #4: MediaServer-FetchSupportedMimeT] WARNING  - 0:00:01.722    - PMOMusic Media Server: cannot get ProtocolInfo: null source value
+[Main #4 (228)                           ] INFO     - 0:00:01.722    - task: end, 15ms: MediaServer-FetchSupportedMimeType
+[main (2)                                ] INFO     - 0:00:01.724    - Chambre: protocolInfo: http-get:*:audio/wav:DLNA.ORG_PN=LPCM,http-get:*:audio/x-wav:DLNA.ORG_PN=LPCM,http-get:*:audio/mpeg:DLNA.ORG_PN=MP3,http-get:*:audio/mpeg:DLNA.ORG_PN=MP3X,http-get:*:audio/x-ms-wma:DLNA.ORG_PN=WMABASE,http-get:*:audio/x-ms-wma:DLNA.ORG_PN=WMAFULL,http-get:*:audio/x-ms-wma:DLNA.ORG_PN=WMAPRO,http-get:*:audio/mpeg:DLNA.ORG_PN=MP2_MPS,http-get:*:audio/mp3:*,http-get:*:audio/wma:*,http-get:*:audio/mpeg:*,http-get:*:audio/vnd.dlna.adts:DLNA.ORG_PN=AAC_ADTS,http-get:*:audio/vnd.dlna.adts:DLNA.ORG_PN=AAC_ADTS_320,http-get:*:audio/m4a:DLNA.ORG_PN=AAC_ISO,http-get:*:audio/aac:DLNA.ORG_PN=AAC_ISO,http-get:*:audio/ac3:DLNA.ORG_PN=AC3,http-get:*:audio/ogg:*,http-get:*:audio/ape:*,http-get:*:audio/x-ape:*,http-get:*:audio/flac:*
+[main (2)                                ] INFO     - 0:00:01.724    - Chambre: max samplerate: 192000, supports 24-bit: true, supports multichannel: true
+[main (2)                                ] INFO     - 0:00:01.724    - Chambre: supported mime-types: [audio/wav, application/x-wave, audio/wave, application/wave, application/wav, application/x-wav, audio/x-wave, audio/x-wav, audio/mp3, application/mp3, application/x-mp3, audio/mpg, audio/mpeg3, application/mpeg, audio/x-mp3, audio/x-mpegaudio, audio/mpeg, audio/x-mpeg3, audio/x-mpg, audio/x-mpeg, application/mpeg3, audio/x-ms-wma, application/x-ms-wma, application/wma, audio/wma, audio/vnd.dlna.adts, audio/m4a, audio/mp4, application/x-m4b, application/x-m4a, application/x-m4p, application/x-mp4, audio/mpeg4, audio/x-m4b, audio/x-m4a, audio/x-m4p, audio/x-mp4, application/mpeg4, audio/aacp, audio/aac, audio/3gpp, audio/3gpp2, audio/x-aac, audio/ac3, audio/x-ogg, application/x-ogg, audio/vorbis, application/ogg, audio/ogg, application/ape, application/x-ape, audio/monkeys-audio, audio/x-monkeys-audio, audio/ape, application/monkeysaudio, audio/x-monkeysaudio, application/monkeys-audio, audio/x-ape, application/x-monkeys-audio, application/x-monkeysaudio, audio/monkeysaudio, audio/x-flac, application/flac, audio/flac, application/x-flac]
+[main (2)                                ] INFO     - 0:00:01.725    - Chambre: hasSetNextPlayItem: true, supportsSetNextPlayItem: true
+[main (2)                                ] INFO     - 0:00:01.725    - added renderer: Chambre (ip: 192.168.0.233)
+[main (2)                                ] INFO     - 0:00:01.731    - found renderer: Chambre
+[main (2)                                ] INFO     - 0:00:01.731    - .c                          : 
+
+	Manufacturer: Rakoit Technology(SZ) Co., Ltd.
+	Manufacturer URL: https://www.rakoit.com
+	Model name: H50
+	Model description: Arylic Wi-Fi Sound System
+	Model number: V01-Jul  4 2023
+
+	Model URL: https://www.arylic.com
+	Serial number: 00001
+	UDN: FF97F35D-934D-3F36-6EE8-4A26FF97F35D
+
+[main (2)                                ] INFO     - 0:00:01.732    - Chambre: not a Media Server: java.lang.Exception: Chambre: cannot find service ContentDirectory
+[main (2)                                ] INFO     - 0:00:01.733    - refreshLocalMediaServerLibraryList: added: PMOMusic Media Server
+[main (2)                                ] INFO     - 0:00:01.734    - sorted 0 items took: 0 ms
+[main (2)                                ] INFO     - 0:00:01.735    - sorted 0 items took: 0 ms
+[main (2)                                ] INFO     - 0:00:01.736    - loaded file d38a2dc7-13c1-4a39-ab36-513490cf6766-Bookmarks ok: 0 items, 1 ms
+[main (2)                                ] INFO     - 0:00:01.736    - sorted 0 items took: 0 ms
+[main (2)                                ] INFO     - 0:00:01.739    - sorted 2 items took: 2 ms
+[main (2)                                ] INFO     - 0:00:01.740    - sorted 2 items took: 0 ms
+[AsyncTask #1 (188)                      ] INFO     - 0:00:01.743    - finished browsing: got 10 objects
+[AsyncTask #1 (188)                      ] INFO     - 0:00:01.743    - BrowseTask.doInBackground(): no item
+[main (2)                                ] INFO     - 0:00:01.744    - inspecting new device: PMOMusic Audio Renderer
+[main (2)                                ] INFO     - 0:00:01.744    - PMOMusic Audio Renderer: No product service found
+[main (2)                                ] WARNING  - 0:00:01.744    - PMOMusic Audio Renderer: Volume state variable has no range, using default
+[main (2)                                ] INFO     - 0:00:01.745    - PMOMusic Audio Renderer: volume range: 0..100
+[main (2)                                ] INFO     - 0:00:01.745    - PMOMusic Audio Renderer: supports SetNextAVTransportURI: true
+[main (2)                                ] WARNING  - 0:00:01.753    - PMOMusic Audio Renderer: cannot get ProtocolInfo: null sink value, source value: null
+[main (2)                                ] INFO     - 0:00:01.753    - PMOMusic Audio Renderer: supported mime-types: []
+[main (2)                                ] INFO     - 0:00:01.753    - PMOMusic Audio Renderer: hasSetNextPlayItem: true, supportsSetNextPlayItem: true
+[main (2)                                ] INFO     - 0:00:01.753    - added renderer: PMOMusic Audio Renderer (ip: 192.168.0.138)
+[main (2)                                ] INFO     - 0:00:01.754    - no icon for PMOMusic Audio Renderer
+[main (2)                                ] INFO     - 0:00:01.754    - found renderer: PMOMusic Audio Renderer
+[main (2)                                ] INFO     - 0:00:01.754    - .c                          : 
+
+	Manufacturer: PMOMusic
+	Model name: PMOMusic Audio Renderer
+	UDN: 4b5d30eb-34cb-4bcc-806e-a075eebf9cd7
+
+[main (2)                                ] INFO     - 0:00:01.754    - PMOMusic Audio Renderer: not a Media Server: java.lang.Exception: PMOMusic Audio Renderer: cannot find service ContentDirectory
+[main (2)                                ] INFO     - 0:00:01.755    - inspecting new device: Freebox Server
+[main (2)                                ] INFO     - 0:00:01.755    - Freebox Server: No product service found
+[main (2)                                ] WARNING  - 0:00:01.755    - Freebox Server: no RenderingControl service found
+[main (2)                                ] INFO     - 0:00:01.755    - Freebox Server: constructed successfully
+[Main #4 (228)                           ] INFO     - 0:00:01.755    - task: start: MediaServer-FetchSupportedMimeType
+[main (2)                                ] INFO     - 0:00:01.756    - refreshLocalMediaServerLibraryList: removed: PMOMusic Media Server
+[main (2)                                ] INFO     - 0:00:01.756    - refreshLocalMediaServerLibraryList: added: Freebox Server
+[main (2)                                ] INFO     - 0:00:01.756    - refreshLocalMediaServerLibraryList: added: PMOMusic Media Server
+[main (2)                                ] INFO     - 0:00:01.757    - sorted 2 items took: 0 ms
+[main (2)                                ] INFO     - 0:00:01.758    - found Media Server: Freebox Server
+[main (2)                                ] INFO     - 0:00:01.758    - .c                          : 
+
+	Manufacturer: Freebox SAS
+	Manufacturer URL: http://www.freebox.fr
+	Model name: Freebox Media Server
+	Model description: Freebox UPnP Media Server
+	Model number: 1
+	Model URL: http://www.freebox.fr
+	Serial number: 1
+	UDN: e929a46e-d218-377d-2dde-32bd8080dfbf
+
+[main (2)                                ] INFO     - 0:00:01.758    - inspecting new device: Glouglou Box
+[main (2)                                ] INFO     - 0:00:01.759    - Glouglou Box: No product service found
+[main (2)                                ] INFO     - 0:00:01.759    - Glouglou Box: volume range: 0..100
+[main (2)                                ] INFO     - 0:00:01.759    - Glouglou Box: supports SetNextAVTransportURI: false
+[Main #4: MediaServer-FetchSupportedMimeT] INFO     - 0:00:01.766    - Freebox Server supported mime-types: [image/jpeg, image/jpeg, image/jpeg, image/jpeg, video/mpeg, video/mpeg, video/mpeg, video/mpeg, video/mpeg, video/mpeg, video/mpeg, video/mpeg, video/mpeg, video/mpeg, video/mpeg, video/mpeg, video/mpeg, video/mpeg, video/mpeg, video/mp4, video/mp4, video/mp4, video/mp4, video/mp4, video/mp4, video/mp4, video/mp4, video/mp4, video/mp4, video/mp4, video/mp4, video/vnd.dlna.mpeg-tts, video/vnd.dlna.mpeg-tts, video/vnd.dlna.mpeg-tts, video/vnd.dlna.mpeg-tts, video/vnd.dlna.mpeg-tts, video/vnd.dlna.mpeg-tts, video/vnd.dlna.mpeg-tts, video/vnd.dlna.mpeg-tts, video/vnd.dlna.mpeg-tts, video/vnd.dlna.mpeg-tts, video/vnd.dlna.mpeg-tts, video/vnd.dlna.mpeg-tts, video/vnd.dlna.mpeg-tts, video/vnd.dlna.mpeg-tts, video/vnd.dlna.mpeg-tts, video/vnd.dlna.mpeg-tts, video/vnd.dlna.mpeg-tts, video/vnd.dlna.mpeg-tts, video/vnd.dlna.mpeg-tts, video/vnd.dlna.mpeg-tts, video/vnd.dlna.mpeg-tts, video/vnd.dlna.mpeg-tts, video/vnd.dlna.mpeg-tts, video/x-ms-wmv, video/x-ms-wmv, video/x-ms-wmv, video/x-ms-wmv, video/x-ms-wmv, video/x-ms-wmv, video/x-ms-wmv, video/x-ms-wmv, video/3gpp, video/3gpp, audio/mpeg, audio/x-ms-wma, audio/x-ms-wma, audio/x-ms-wma, audio/x-ms-wma, audio/x-ms-wma, audio/mp4, audio/mp4, audio/mp4, audio/3gpp, audio/mp4, audio/mp4, audio/L16, image/jpeg, video/avi, video/divx, video/x-matroska, video/mpeg, video/mp4, video/x-ms-wmv, video/x-msvideo, video/x-flv, video/x-tivo-mpeg, video/quicktime, audio/mp4, audio/x-wav, audio/x-flac, application/ogg]
+[Main #4 (228)                           ] INFO     - 0:00:01.767    - task: end, 11ms: MediaServer-FetchSupportedMimeType
+[main (2)                                ] INFO     - 0:00:01.777    - Glouglou Box: protocolInfo: http-get:*:audio/wav:DLNA.ORG_PN=LPCM,http-get:*:audio/x-wav:DLNA.ORG_PN=LPCM,http-get:*:audio/mpeg:DLNA.ORG_PN=MP3,http-get:*:audio/mpeg:DLNA.ORG_PN=MP3X,http-get:*:audio/x-ms-wma:DLNA.ORG_PN=WMABASE,http-get:*:audio/x-ms-wma:DLNA.ORG_PN=WMAFULL,http-get:*:audio/x-ms-wma:DLNA.ORG_PN=WMAPRO,http-get:*:audio/mpeg:DLNA.ORG_PN=MP2_MPS,http-get:*:audio/mp3:*,http-get:*:audio/wma:*,http-get:*:audio/mpeg:*,http-get:*:audio/vnd.dlna.adts:DLNA.ORG_PN=AAC_ADTS,http-get:*:audio/vnd.dlna.adts:DLNA.ORG_PN=AAC_ADTS_320,http-get:*:audio/m4a:DLNA.ORG_PN=AAC_ISO,http-get:*:audio/aac:DLNA.ORG_PN=AAC_ISO,http-get:*:audio/ac3:DLNA.ORG_PN=AC3,http-get:*:audio/ogg:*,http-get:*:audio/ape:*,http-get:*:audio/x-ape:*,http-get:*:audio/flac:*
+[main (2)                                ] INFO     - 0:00:01.777    - Glouglou Box: max samplerate: 192000, supports 24-bit: true, supports multichannel: true
+[main (2)                                ] INFO     - 0:00:01.778    - Glouglou Box: supported mime-types: [audio/wav, application/x-wave, audio/wave, application/wave, application/wav, application/x-wav, audio/x-wave, audio/x-wav, audio/mp3, application/mp3, application/x-mp3, audio/mpg, audio/mpeg3, application/mpeg, audio/x-mp3, audio/x-mpegaudio, audio/mpeg, audio/x-mpeg3, audio/x-mpg, audio/x-mpeg, application/mpeg3, audio/x-ms-wma, application/x-ms-wma, application/wma, audio/wma, audio/vnd.dlna.adts, audio/m4a, audio/mp4, application/x-m4b, application/x-m4a, application/x-m4p, application/x-mp4, audio/mpeg4, audio/x-m4b, audio/x-m4a, audio/x-m4p, audio/x-mp4, application/mpeg4, audio/aacp, audio/aac, audio/3gpp, audio/3gpp2, audio/x-aac, audio/ac3, audio/x-ogg, application/x-ogg, audio/vorbis, application/ogg, audio/ogg, application/ape, application/x-ape, audio/monkeys-audio, audio/x-monkeys-audio, audio/ape, application/monkeysaudio, audio/x-monkeysaudio, application/monkeys-audio, audio/x-ape, application/x-monkeys-audio, application/x-monkeysaudio, audio/monkeysaudio, audio/x-flac, application/flac, audio/flac, application/x-flac]
+[main (2)                                ] INFO     - 0:00:01.778    - Glouglou Box: hasSetNextPlayItem: false, supportsSetNextPlayItem: false
+[main (2)                                ] INFO     - 0:00:01.779    - added renderer: Glouglou Box (ip: 192.168.0.137)
+[main (2)                                ] INFO     - 0:00:01.779    - found renderer: Glouglou Box
+[main (2)                                ] INFO     - 0:00:01.779    - .c                          : 
+
+	Manufacturer: Harman International Industries Inc
+	Manufacturer URL: https://www.harman.com
+	Model name: JBL Authentics 300
+	Model description: JBL soundbar
+	Model number: V01-May 21 2025
+
+	Model URL: https://www.jbl.com
+	Serial number: 00001
+	UDN: FFB8F005-0874-39C2-7E46-EF53FFB8F005
+
+[main (2)                                ] INFO     - 0:00:01.780    - Glouglou Box: not a Media Server: java.lang.Exception: Glouglou Box: cannot find service ContentDirectory
+[main (2)                                ] INFO     - 0:00:01.783    - onCreateOptionsMenu()@2af0cf8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:01.784    - onPrepareOptionsMenu()@2af0cf8/2e41698:5234
+[glide-disk-cache-thread-0 (243)         ] INFO     - 0:00:01.813    - Glide: registered GlideUrl loader
+[glide-disk-cache-thread-0 (243)         ] INFO     - 0:00:01.813    - created okhttp/5.3.2 client
+[cling-23 (233)                          ] INFO     - 0:00:01.814    - .f                          : Sending device descriptor retrieval message: (c) GET http://192.168.0.200:49152/uuid-2899a4df-39ae-160a-6563-dca6329ead0d/description.xml
+[main (2)                                ] INFO     - 0:00:01.965    - inspecting new device: pizzicato-Music
+[main (2)                                ] INFO     - 0:00:01.965    - pizzicato-Music: found OpenHome device
+[main (2)                                ] INFO     - 0:00:01.966    - pizzicato-Music: Found Product service
+[main (2)                                ] INFO     - 0:00:01.966    - pizzicato-Music: Found Playlist service
+[main (2)                                ] INFO     - 0:00:01.966    - pizzicato-Music: Found Time service
+[main (2)                                ] INFO     - 0:00:01.967    - pizzicato-Music: Found Volume service
+[main (2)                                ] INFO     - 0:00:01.981    - pizzicato-Music: Found Info service
+[main (2)                                ] INFO     - 0:00:01.982    - pizzicato-Music: Found Credentials service
+[main (2)                                ] INFO     - 0:00:02.33     - pizzicato-Music: adding audio/x-dsf and audio/x-dff due to audio/x-dsd presence
+[main (2)                                ] INFO     - 0:00:02.33     - pizzicato-Music: protocolInfo: http-get:*:audio/L16:DLNA.ORG_PN=LPCM,http-get:*:application/flac:*,http-get:*:application/x-flac:*,http-get:*:application/ogg:*,http-get:*:application/vnd.apple.mpegurl:*,http-get:*:application/x-mpegurl:*,http-get:*:audio/flac:*,http-get:*:audio/x-flac:*,http-get:*:audio/aac:*,http-get:*:audio/x-aiff:*,http-get:*:audio/aif:*,http-get:*:audio/aiff:*,http-get:*:audio/dff:*,http-get:*:audio/x-dff:*,http-get:*:audio/dsd:*,http-get:*:audio/x-dsd:*,http-get:*:audio/dsf:*,http-get:*:audio/x-dsf:*,http-get:*:audio/m4a:*,http-get:*:audio/x-m4a:*,http-get:*:audio/matroska:*,http-get:*:audio/x-matroska:*,http-get:*:audio/mp1:*,http-get:*:audio/mp3:*,http-get:*:audio/mp4:*,http-get:*:audio/mpeg:*,http-get:*:audio/x-mpeg:*,http-get:*:audio/ogg:*,http-get:*:audio/vorbis:*,http-get:*:audio/x-ape:*,http-get:*:audio/ape:*,http-get:*:audio/x-monkeys-audio:*,http-get:*:audio/wav:*,http-get:*:audio/x-wav:*,http-get:*:audio/wave:*,http-get:*:audio/x-ms-wma:*,http-get:*:audio/x-ogg:*,http-get:*:audio/x-scpls:*,http-get:*:audio/x-vorbis+ogg:*,http-get:*:audio/x-vorbis:*,http-get:*:audio/x-wavpack:*,http-get:*:video/mp4:*
+[main (2)                                ] INFO     - 0:00:02.33     - pizzicato-Music: supported mime-types: [audio/lpcm, audio/L16, audio/l16, audio/x-flac, application/flac, audio/flac, application/x-flac, audio/x-ogg, application/x-ogg, audio/vorbis, application/ogg, audio/ogg, application/vnd.apple.mpegurl, application/x-mpegurl, audio/aacp, audio/aac, audio/3gpp, audio/3gpp2, audio/x-aac, application/aiff, audio/aiff, application/x-aif, application/aif, application/x-aiff, audio/x-aifc, audio/x-aiff, audio/aif, audio/aifc, audio/x-aif, audio/dff, audio/x-dff, audio/x-dsd, audio/dsd, audio/x-dsf, audio/dsf, audio/m4a, audio/mp4, application/x-m4b, application/x-m4a, application/x-m4p, application/x-mp4, audio/mpeg4, audio/x-m4b, audio/x-m4a, audio/x-m4p, audio/x-mp4, application/mpeg4, audio/matroska, audio/x-matroska, audio/mp1, application/mp1, audio/mp3, application/mp3, application/x-mp3, audio/mpg, audio/mpeg3, application/mpeg, audio/x-mp3, audio/x-mpegaudio, audio/mpeg, audio/x-mpeg3, audio/x-mpg, audio/x-mpeg, application/mpeg3, application/ape, application/x-ape, audio/monkeys-audio, audio/x-monkeys-audio, audio/ape, application/monkeysaudio, audio/x-monkeysaudio, application/monkeys-audio, audio/x-ape, application/x-monkeys-audio, application/x-monkeysaudio, audio/monkeysaudio, audio/wav, application/x-wave, audio/wave, application/wave, application/wav, application/x-wav, audio/x-wave, audio/x-wav, audio/x-ms-wma, application/x-ms-wma, application/wma, audio/wma, audio/x-scpls, audio/x-vorbis+ogg, audio/x-vorbis, audio/wavpack, application/x-wavpack, audio/x-wv, application/wavpack, audio/wv, audio/x-wavpack, application/wv, application/x-wv, video/mp4v-es, video/mp4, video/3gpp]
+[main (2)                                ] INFO     - 0:00:02.34     - pizzicato-Music: volume range: 0..100
+[main (2)                                ] INFO     - 0:00:02.34     - added renderer: pizzicato-Music (ip: 192.168.0.200)
+[main (2)                                ] INFO     - 0:00:02.35     - qobuz: user auth token: unset
+[main (2)                                ] INFO     - 0:00:02.35     - qobuz: cleared credentials
+[main (2)                                ] INFO     - 0:00:02.35     - qobuz: username: set
+[main (2)                                ] INFO     - 0:00:02.36     - tidal: session: unset
+[main (2)                                ] INFO     - 0:00:02.36     - tidal: reset
+[main (2)                                ] INFO     - 0:00:02.36     - fireRootContentChanged
+[main (2)                                ] INFO     - 0:00:02.37     - onSaveInstanceState()@ec98be8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:02.38     - saveMediaServerState: Local et Cloud
+[main (2)                                ] INFO     - 0:00:02.38     - positionStack: []
+[main (2)                                ] INFO     - 0:00:02.38     - itemList: Bundle[{firstVisiblePosition=0}]
+[main (2)                                ] INFO     - 0:00:02.39     - containerPath: []
+[main (2)                                ] INFO     - 0:00:02.40     - active renderer: pizzicato-Music
+[AsyncTask #1 (188)                      ] INFO     - 0:00:02.40     - BrowseTask.doInBackground(): enter
+[main (2)                                ] INFO     - 0:00:02.41     - supports video: false
+[AsyncTask #1 (188)                      ] INFO     - 0:00:02.41     - BrowseTask.doInBackground(): loading container 'Local et Cloud'
+[main (2)                                ] INFO     - 0:00:02.41     - tidal: OH token id: null
+[main (2)                                ] INFO     - 0:00:02.41     - pizzicato-Music: control volume with pizzicato-Music
+[cling-23 (Browse) (233)                 ] INFO     - 0:00:02.41     - ObjectID: 0
+[cling-23 (Browse) (233)                 ] INFO     - 0:00:02.42     - BrowseFlag: BrowseDirectChildren
+[cling-23 (Browse) (233)                 ] INFO     - 0:00:02.42     - StartingIndex: 0
+[cling-23 (Browse) (233)                 ] INFO     - 0:00:02.42     - RequestedCount: 0
+[cling-23 (Browse) (233)                 ] INFO     - 0:00:02.42     - Filter: *
+[cling-23 (Browse) (233)                 ] INFO     - 0:00:02.43     - sorted 0 items took: 0 ms
+[cling-23 (Browse) (233)                 ] INFO     - 0:00:02.45     - browsed 10/10 items in 3ms
+[main (2)                                ] INFO     - 0:00:02.57     - pizzicato-Music: onSourceChange: Playlist
+[main (2)                                ] INFO     - 0:00:02.57     - pizzicato-Music: started subscription callback for service (n) ServiceId: urn:av-openhome-org:serviceId:Product
+[main (2)                                ] INFO     - 0:00:02.58     - pizzicato-Music: started subscription callback for service (n) ServiceId: urn:av-openhome-org:serviceId:Playlist
+[main (2)                                ] INFO     - 0:00:02.58     - pizzicato-Music: started subscription callback for service (n) ServiceId: urn:av-openhome-org:serviceId:Info
+[main (2)                                ] INFO     - 0:00:02.59     - pizzicato-Music: started subscription callback for service (n) ServiceId: urn:av-openhome-org:serviceId:Credentials
+[main (2)                                ] INFO     - 0:00:02.59     - pizzicato-Music: started subscription callback for service (n) ServiceId: urn:av-openhome-org:serviceId:Volume
+[main (2)                                ] INFO     - 0:00:02.60     - onSourceChange: Playlist
+[main (2)                                ] INFO     - 0:00:02.60     - selected item changed (service): 
+[main (2)                                ] INFO     - 0:00:02.62     - image file cache is enabled: /storage/emulated/0/Android/data/com.bubblesoft.android.bubbleupnp/cache/images
+[main (2)                                ] INFO     - 0:00:02.63     - enabled image file cache
+[cling-33 (249)                          ] INFO     - 0:00:02.71     - pizzicato-Music: Established subscription uuid:f7dc376c-5f8d-8a98-7d14-71f0fa05c524 on service (n) ServiceId: urn:av-openhome-org:serviceId:Product
+[cling-33 (249)                          ] INFO     - 0:00:02.79     - pizzicato-Music: Established subscription uuid:b8a97f58-4648-e08f-afc9-b4705c681ad0 on service (n) ServiceId: urn:av-openhome-org:serviceId:Credentials
+[main (2)                                ] INFO     - 0:00:02.91     - ignoreTransportStateChangeForTrackAdvance: false, allowTrackAdvance: true
+[main (2)                                ] INFO     - 0:00:02.92     - SETACTIVE: onTransportStateChanged: post STOP callback
+[cling-28 (244)                          ] INFO     - 0:00:02.97     - pizzicato-Music: Established subscription uuid:90204e20-0c37-40d8-bc3a-8d50647db5bb on service (n) ServiceId: urn:av-openhome-org:serviceId:Info
+[cling-29 (245)                          ] INFO     - 0:00:02.110    - pizzicato-Music: Established subscription uuid:172cf961-f52f-73b1-bfc7-8ba9f3904e95 on service (n) ServiceId: urn:av-openhome-org:serviceId:Playlist
+[main (2)                                ] INFO     - 0:00:02.124    - VolumeProvider: created for 'pizzicato-Music'
+[cling-23 (233)                          ] INFO     - 0:00:02.131    - pizzicato-Music: Established subscription uuid:05c4a4a9-fc16-b9e0-dcb9-f53368484a67 on service (n) ServiceId: urn:av-openhome-org:serviceId:Volume
+[main (2)                                ] INFO     - 0:00:02.145    - active renderer: pizzicato-Music
+[main (2)                                ] INFO     - 0:00:02.145    - addListener (context: com.bubblesoft.android.bubbleupnp.MainTabActivity@2e41698)
+[main (2)                                ] INFO     - 0:00:02.146    - active renderer: pizzicato-Music
+[main (2)                                ] INFO     - 0:00:02.146    - onNetworkSearchEnded
+[main (2)                                ] INFO     - 0:00:02.158    - active renderer: pizzicato-Music
+[main (2)                                ] INFO     - 0:00:02.158    - source changed: Playlist
+[main (2)                                ] INFO     - 0:00:02.158    - selected item changed (now playing): 
+[main (2)                                ] INFO     - 0:00:02.158    - setSeekBarDetailsText: 
+[main (2)                                ] INFO     - 0:00:02.160    - no icon for pizzicato-Music
+[main (2)                                ] INFO     - 0:00:02.160    - found renderer: pizzicato-Music
+[main (2)                                ] INFO     - 0:00:02.161    - .c                          : 
+
+	Manufacturer: JF Light Industries
+	Manufacturer URL: https://framagit.org/medoc92
+	Model name: UpMPD
+	Model description: UPnP front-end to MPD
+	Model number: 42
+	Model URL: https://framagit.org/medoc92/upmpdcli/code/
+	Serial number: upmpdcli version 1.9.5 libupnpp 1.0.2 mpd 0.23.5
+	UDN: 2899a4df-39ae-160a-6563-dca6329ead0d
+
+[main (2)                                ] INFO     - 0:00:02.161    - pizzicato-Music: not a Media Server: java.lang.Exception: pizzicato-Music: cannot find service ContentDirectory
+[main (2)                                ] INFO     - 0:00:02.162    - onCreateOptionsMenu()@2af0cf8/2e41698:5234
+[main (2)                                ] WARNING  - 0:00:02.163    - getBubbleUPnPServerFFmpegDecodeREST: not supported for OpenHome renderers
+[main (2)                                ] INFO     - 0:00:02.163    - onPrepareOptionsMenu()@2af0cf8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:02.169    - refreshLocalMediaServerLibraryList: added: Freebox Server
+[main (2)                                ] INFO     - 0:00:02.170    - refreshLocalMediaServerLibraryList: added: PMOMusic Media Server
+[main (2)                                ] INFO     - 0:00:02.170    - sorted 0 items took: 0 ms
+[main (2)                                ] INFO     - 0:00:02.170    - sorted 0 items took: 0 ms
+[main (2)                                ] INFO     - 0:00:02.171    - loaded file d38a2dc7-13c1-4a39-ab36-513490cf6766-Bookmarks ok: 0 items, 1 ms
+[main (2)                                ] INFO     - 0:00:02.171    - sorted 0 items took: 0 ms
+[main (2)                                ] INFO     - 0:00:02.172    - sorted 2 items took: 0 ms
+[main (2)                                ] INFO     - 0:00:02.172    - sorted 2 items took: 0 ms
+[main (2)                                ] INFO     - 0:00:02.173    - pizzicato-Music: Credentials: supported ids: [qobuz.com]
+[AsyncTask #1 (188)                      ] INFO     - 0:00:02.174    - finished browsing: got 10 objects
+[AsyncTask #1 (188)                      ] INFO     - 0:00:02.175    - BrowseTask.doInBackground(): no item
+[main (2)                                ] INFO     - 0:00:02.188    - pizzicato-Music: CredentialsSubscriptionCallback.getAction(qobuz.com): username: unset, password: unset, enabled: true, status: null, data: set
+[main (2)                                ] INFO     - 0:00:02.189    - onStandbyChange: standby=false, ignore=true
+[main (2)                                ] INFO     - 0:00:02.189    - onStandbyChange: standby=false, ignore=true
+[main (2)                                ] INFO     - 0:00:02.189    - onStandbyChange: standby=false, ignore=true
+[main (2)                                ] INFO     - 0:00:02.189    - setSeekBarDetailsText: 
+[main (2)                                ] WARNING  - 0:00:02.190    - .b                          : couldn't find item trackId = 22
+[main (2)                                ] INFO     - 0:00:02.191    - selected item changed (service): 
+[Main #4 (228)                           ] INFO     - 0:00:02.190    - task: start: AbstractPlaylistService-FirstIdArray
+[Main #4: AbstractPlaylistService-FirstId] INFO     - 0:00:02.191    - pizzicato-Music: reading 1 new items to insert: [22]
+[Main #4: AbstractPlaylistService-FirstId] INFO     - 0:00:02.192    - pizzicato-Music: getting [0..1[
+[main (2)                                ] INFO     - 0:00:02.207    - selected item changed (now playing): 
+[main (2)                                ] INFO     - 0:00:02.208    - setSeekBarDetailsText: 
+[main (2)                                ] INFO     - 0:00:02.209    - ignoreTransportStateChangeForTrackAdvance: false, allowTrackAdvance: true
+[Main #4 (228)                           ] INFO     - 0:00:02.209    - task: end, 20ms: AbstractPlaylistService-FirstIdArray
+[main (2)                                ] INFO     - 0:00:02.224    - setSeekBarDetailsText: 
+[main (2)                                ] INFO     - 0:00:02.225    - pizzicato-Music: AbstractRenderer.onVolumeChange: 100
+[main (2)                                ] INFO     - 0:00:02.226    - VolumeProvider: onVolumeChanged: 100
+[main (2)                                ] INFO     - 0:00:02.238    - pizzicato-Music: MainFragmentBase.onVolumeChange: 100
+[main (2)                                ] INFO     - 0:00:02.238    - pizzicato-Music: MainFragmentBase.onVolumeChange: 100
+[main (2)                                ] INFO     - 0:00:02.238    - pizzicato-Music: MainFragmentBase.onVolumeChange: 100
+[main (2)                                ] INFO     - 0:00:02.239    - setSeekBarDetailsText: 
+[main (2)                                ] INFO     - 0:00:02.239    - pizzicato-Music: AbstractRenderer.onMuteChange: false
+[main (2)                                ] INFO     - 0:00:02.252    - setSeekBarDetailsText: 
+[main (2)                                ] INFO     - 0:00:02.253    - onCreateOptionsMenu()@2af0cf8/2e41698:5234
+[main (2)                                ] WARNING  - 0:00:02.253    - getBubbleUPnPServerFFmpegDecodeREST: not supported for OpenHome renderers
+[main (2)                                ] INFO     - 0:00:02.254    - onPrepareOptionsMenu()@2af0cf8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:02.290    - qobuz: Linn status: null
+[main (2)                                ] INFO     - 0:00:02.290    - qobuz: username: unset
+[main (2)                                ] INFO     - 0:00:02.290    - qobuz: set custom app id
+[main (2)                                ] INFO     - 0:00:02.290    - qobuz: user auth token: unset
+[main (2)                                ] INFO     - 0:00:02.311    - .b                          : selected item (track id): The Curse
+[main (2)                                ] INFO     - 0:00:02.312    - selected item changed (service): The Curse
+[main (2)                                ] INFO     - 0:00:02.328    - selected item changed (now playing): The Curse
+[main (2)                                ] INFO     - 0:00:02.343    - onCreateOptionsMenu()@2af0cf8/2e41698:5234
+[main (2)                                ] WARNING  - 0:00:02.343    - getBubbleUPnPServerFFmpegDecodeREST: not supported for OpenHome renderers
+[main (2)                                ] INFO     - 0:00:02.347    - onPrepareOptionsMenu()@2af0cf8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:02.885    - onRouteAdded 3d57e3df7b480b761c03a9d89520d61b => MediaRouter.RouteInfo{ uniqueId=com.google.android.gms/.cast.media.CastMediaRoute2ProviderService_Persistent:3d57e3df7b480b761c03a9d89520d61b, name=Glouglou Box, description=JBL Authentics 300, iconUri=null, enabled=true, isSystemRoute=false, connectionState=0, canDisconnect=false, playbackType=1, playbackStream=-1, deviceType=2, volumeHandling=0, volume=0, volumeMax=50, presentationDisplayId=-1, extras=Bundle[{com.google.android.gms.cast.EXTRA_CAST_DEVICE="G10x" (3d57e3df7b480b761c03a9d89520d61b) }], settingsIntent=null, providerPackageName=com.google.android.gms }
+[main (2)                                ] INFO     - 0:00:02.887    - Glouglou Box: No product service found
+[main (2)                                ] WARNING  - 0:00:02.887    - Glouglou Box: no RenderingControl service found
+[main (2)                                ] INFO     - 0:00:02.888    - Glouglou Box: url: http://192.168.0.137:8008, device version: 5, model name: JBL Authentics 300, service port: 8009, video out: false, video in: false, audio out: true, audio in: false, multizone group: false
+[main (2)                                ] INFO     - 0:00:02.888    - Glouglou Box: no video out support
+[main (2)                                ] INFO     - 0:00:02.894    - added renderer: Glouglou Box (ip: 192.168.0.137)
+[Main #4 (228)                           ] INFO     - 0:00:02.894    - task: start: ChromecastRenderer-FetchNetworkConnectionType
+[main (2)                                ] INFO     - 0:00:02.904    - onCreateOptionsMenu()@2af0cf8/2e41698:5234
+[main (2)                                ] WARNING  - 0:00:02.904    - getBubbleUPnPServerFFmpegDecodeREST: not supported for OpenHome renderers
+[main (2)                                ] INFO     - 0:00:02.905    - onPrepareOptionsMenu()@2af0cf8/2e41698:5234
+[Main #4: ChromecastRenderer-FetchNetwork] INFO     - 0:00:02.917    - Glouglou Box: ethernet connected: false, isCCwGTV: false
+[Main #4 (228)                           ] INFO     - 0:00:02.917    - task: end, 24ms: ChromecastRenderer-FetchNetworkConnectionType
+[cling-29 (245)                          ] INFO     - 0:00:03.92     - .f                          : Sending device descriptor retrieval message: (c) GET http://192.168.0.34:8096/dlna/526dedec-fde2-4224-bac6-06f7b11711cf/description.xml
+[main (2)                                ] INFO     - 0:00:03.140    - inspecting new device: fenice
+[main (2)                                ] INFO     - 0:00:03.140    - fenice: No product service found
+[main (2)                                ] WARNING  - 0:00:03.140    - fenice: no RenderingControl service found
+[main (2)                                ] INFO     - 0:00:03.140    - fenice: constructed successfully
+[main (2)                                ] INFO     - 0:00:03.141    - refreshLocalMediaServerLibraryList: removed: Freebox Server
+[main (2)                                ] INFO     - 0:00:03.141    - refreshLocalMediaServerLibraryList: removed: PMOMusic Media Server
+[main (2)                                ] INFO     - 0:00:03.141    - refreshLocalMediaServerLibraryList: added: fenice
+[main (2)                                ] INFO     - 0:00:03.141    - refreshLocalMediaServerLibraryList: added: Freebox Server
+[main (2)                                ] INFO     - 0:00:03.141    - refreshLocalMediaServerLibraryList: added: PMOMusic Media Server
+[Main #4 (228)                           ] INFO     - 0:00:03.142    - task: start: MediaServer-FetchSupportedMimeType
+[main (2)                                ] INFO     - 0:00:03.142    - sorted 2 items took: 0 ms
+[main (2)                                ] INFO     - 0:00:03.142    - found Media Server: fenice
+[main (2)                                ] INFO     - 0:00:03.143    - .c                          : 
+
+	Manufacturer: Jellyfin
+	Manufacturer URL: https://github.com/jellyfin/jellyfin
+	Model name: Jellyfin Server
+	Model description: UPnP/AV 1.0 Compliant Media Server
+	Model number: 01
+	Model URL: https://github.com/jellyfin/jellyfin
+	Presentation URL: http://192.168.0.34:8096/web/index.html
+	Serial number: 526dedecfde24224bac606f7b11711cf
+	UDN: 526dedec-fde2-4224-bac6-06f7b11711cf
+
+[cling-29 (245)                          ] INFO     - 0:00:03.143    - .f                          : Sending device descriptor retrieval message: (c) GET http://192.168.0.200:49152/uuid-c110358f-d885-b44a-d6d3-dca6329ead0d/description.xml
+[main (2)                                ] INFO     - 0:00:03.153    - onCreateOptionsMenu()@2af0cf8/2e41698:5234
+[main (2)                                ] WARNING  - 0:00:03.154    - getBubbleUPnPServerFFmpegDecodeREST: not supported for OpenHome renderers
+[main (2)                                ] INFO     - 0:00:03.154    - onPrepareOptionsMenu()@2af0cf8/2e41698:5234
+[Main #4: MediaServer-FetchSupportedMimeT] INFO     - 0:00:03.163    - fenice supported mime-types: [video/mpeg, video/mp4, video/vnd.dlna.mpeg-tts, video/avi, video/x-matroska, video/x-ms-wmv, video/wtv, audio/mpeg, audio/mp3, audio/mp4, audio/x-ms-wma, audio/wav, audio/L16, image/jpeg, image/png, image/gif, image/tiff]
+[Main #4 (228)                           ] INFO     - 0:00:03.163    - task: end, 21ms: MediaServer-FetchSupportedMimeType
+[main (2)                                ] INFO     - 0:00:03.192    - inspecting new device: pizzicato-Music-mediaserver
+[main (2)                                ] INFO     - 0:00:03.192    - pizzicato-Music-mediaserver: No product service found
+[main (2)                                ] WARNING  - 0:00:03.193    - pizzicato-Music-mediaserver: no RenderingControl service found
+[main (2)                                ] INFO     - 0:00:03.193    - pizzicato-Music-mediaserver: constructed successfully
+[Main #4 (228)                           ] INFO     - 0:00:03.193    - task: start: MediaServer-FetchSupportedMimeType
+[main (2)                                ] INFO     - 0:00:03.193    - refreshLocalMediaServerLibraryList: removed: fenice
+[main (2)                                ] INFO     - 0:00:03.194    - refreshLocalMediaServerLibraryList: removed: Freebox Server
+[main (2)                                ] INFO     - 0:00:03.194    - refreshLocalMediaServerLibraryList: removed: PMOMusic Media Server
+[main (2)                                ] INFO     - 0:00:03.194    - refreshLocalMediaServerLibraryList: added: fenice
+[main (2)                                ] INFO     - 0:00:03.194    - refreshLocalMediaServerLibraryList: added: Freebox Server
+[main (2)                                ] INFO     - 0:00:03.194    - refreshLocalMediaServerLibraryList: added: pizzicato-Music-mediaserver
+[main (2)                                ] INFO     - 0:00:03.194    - refreshLocalMediaServerLibraryList: added: PMOMusic Media Server
+[main (2)                                ] INFO     - 0:00:03.195    - sorted 2 items took: 0 ms
+[main (2)                                ] INFO     - 0:00:03.195    - found Media Server: pizzicato-Music-mediaserver
+[main (2)                                ] INFO     - 0:00:03.195    - .c                          : 
+
+	Manufacturer: lesbonscomptes.com/upmpdcli
+	Model name: Upmpdcli Media Server
+	UDN: c110358f-d885-b44a-d6d3-dca6329ead0d
+
+[main (2)                                ] INFO     - 0:00:03.203    - onCreateOptionsMenu()@2af0cf8/2e41698:5234
+[main (2)                                ] WARNING  - 0:00:03.204    - getBubbleUPnPServerFFmpegDecodeREST: not supported for OpenHome renderers
+[main (2)                                ] INFO     - 0:00:03.204    - onPrepareOptionsMenu()@2af0cf8/2e41698:5234
+[Main #4: MediaServer-FetchSupportedMimeT] WARNING  - 0:00:03.210    - pizzicato-Music-mediaserver: cannot get ProtocolInfo: null source value
+[Main #4 (228)                           ] INFO     - 0:00:03.210    - task: end, 17ms: MediaServer-FetchSupportedMimeType
+[main (2)                                ] INFO     - 0:00:04.85     - onPause()@2af0cf8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:04.86     - removed listener: 3 listeners
+[main (2)                                ] INFO     - 0:00:04.87     - onResume()@ec98be8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:04.88     - addListener (context: com.bubblesoft.android.bubbleupnp.MainTabActivity@2e41698)
+[main (2)                                ] INFO     - 0:00:04.89     - onStandbyChange: standby=false, ignore=true
+[main (2)                                ] INFO     - 0:00:04.89     - pizzicato-Music: MainFragmentBase.onVolumeChange: 100
+[main (2)                                ] INFO     - 0:00:04.95     - onCreateOptionsMenu()@ec98be8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:04.97     - onPrepareOptionsMenu()@ec98be8/2e41698:5234
+[pool-13-thread-1 (261)                  ] INFO     - 0:00:05.492    - ProfileInstaller: Compiled with profile
+[main (2)                                ] INFO     - 0:00:08.888    - path = [server://63623ff4-ee41-4850-90aa-2d39395df981]
+[main (2)                                ] INFO     - 0:00:08.889    - active media server: PMOMusic Media Server
+[main (2)                                ] INFO     - 0:00:08.890    - onSaveInstanceState()@ec98be8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:08.891    - saveMediaServerState: PMOMusic Media Server
+[main (2)                                ] INFO     - 0:00:08.892    - onSaveInstanceState()@ec98be8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:08.893    - saveMediaServerState: PMOMusic Media Server
+[main (2)                                ] INFO     - 0:00:08.893    - positionStack: [6]
+[main (2)                                ] INFO     - 0:00:08.893    - itemList: Bundle[{firstVisiblePosition=0}]
+[main (2)                                ] INFO     - 0:00:08.894    - containerPath: []
+[main (2)                                ] INFO     - 0:00:08.897    - onCreateOptionsMenu()@ec98be8/2e41698:5234
+[AsyncTask #1 (188)                      ] INFO     - 0:00:08.897    - BrowseTask.doInBackground(): enter
+[AsyncTask #1 (188)                      ] INFO     - 0:00:08.898    - BrowseTask.doInBackground(): loading container 'PMOMusic Media Server'
+[main (2)                                ] INFO     - 0:00:08.899    - onPrepareOptionsMenu()@ec98be8/2e41698:5234
+[cling-13 (Browse) (218)                 ] WARNING  - 0:00:09.12     - .b                          : Action: Browse: didlXML=4: java.lang.IllegalArgumentException: field com.bubblesoft.upnp.mediaserver.MediaServer$BrowseResult.didlXML has type java.lang.String, got java.lang.Long, class=java.lang.Long
+[cling-13 (Browse) (218)                 ] WARNING  - 0:00:09.13     - .b                          : Action: Browse: numberReturned=<?xml version="1.0" encoding="UTF-8"?>
+<DIDL-Lite xmlns:dlna="urn:schemas-dlna-org:metadata-1-0/" xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/">
+  <container id="radio-paradise:channel:main" parentID="0" searchable="1" restricted="1">
+    <dc:title>Main Mix</dc:title>
+    <upnp:class>object.container</upnp:class>
+  </container>
+  <container searchable="1" restricted="1" id="radio-paradise:channel:mellow" parentID="0">
+    <dc:title>Mellow Mix</dc:title>
+    <upnp:class>object.container</upnp:class>
+  </container>
+  <container searchable="1" restricted="1" id="radio-paradise:channel:rock" parentID="0">
+    <dc:title>Rock Mix</dc:title>
+    <upnp:class>object.container</upnp:class>
+  </container>
+  <container restricted="1" parentID="0" id="radio-paradise:channel:eclectic" searchable="1">
+    <dc:title>Eclectic Mix</dc:title>
+    <upnp:class>object.container</upnp:class>
+  </container>
+</DIDL-Lite>: java.lang.IllegalArgumentException: field com.bubblesoft.upnp.mediaserver.MediaServer$BrowseResult.numberReturned has type long, got java.lang.String, class=java.lang.String
+[AsyncTask #1 (188)                      ] WARNING  - 0:00:09.18     - Server returned 0 items and totalMatches not 0
+[AsyncTask #1 (188)                      ] INFO     - 0:00:09.19     - finished browsing: got 4 objects
+[AsyncTask #1 (188)                      ] INFO     - 0:00:09.20     - BrowseTask.doInBackground(): no item
+[main (2)                                ] INFO     - 0:00:20.194    - onPause()@2e41698:5234
+[main (2)                                ] INFO     - 0:00:20.198    - onPause()@ec98be8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:20.198    - removed listener: 2 listeners
+[main (2)                                ] INFO     - 0:00:20.201    - removeListener (context: com.bubblesoft.android.bubbleupnp.MainTabActivity@2e41698)
+[main (2)                                ] INFO     - 0:00:20.201    - removed listener: 1 listeners
+[main (2)                                ] INFO     - 0:00:20.202    - SETACTIVE: onMainTabActivityPause: setInactive()
+[main (2)                                ] INFO     - 0:00:20.203    - pizzicato-Music: stopped subscription callback for service (n) ServiceId: urn:av-openhome-org:serviceId:Product
+[main (2)                                ] INFO     - 0:00:20.203    - pizzicato-Music: stopped subscription callback for service (n) ServiceId: urn:av-openhome-org:serviceId:Playlist
+[main (2)                                ] INFO     - 0:00:20.203    - pizzicato-Music: stopped subscription callback for service (n) ServiceId: urn:av-openhome-org:serviceId:Info
+[main (2)                                ] INFO     - 0:00:20.204    - pizzicato-Music: stopped subscription callback for service (n) ServiceId: urn:av-openhome-org:serviceId:Credentials
+[main (2)                                ] INFO     - 0:00:20.204    - pizzicato-Music: stopped subscription callback for service (n) ServiceId: urn:av-openhome-org:serviceId:Volume
+[main (2)                                ] INFO     - 0:00:20.394    - onStop()@2e41698:5234
+[main (2)                                ] INFO     - 0:00:20.395    - onStop()@2af0cf8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:20.396    - onStop()@5f65d35/2e41698:5234
+[main (2)                                ] INFO     - 0:00:20.397    - onStop()@ec98be8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:20.398    - onSaveInstanceState(outState)@2e41698:5234
+[main (2)                                ] INFO     - 0:00:20.401    - onSaveInstanceState()@ec98be8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:20.402    - onSaveInstanceState()@2af0cf8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:20.404    - onSaveInstanceState()@5f65d35/2e41698:5234
+[main (2)                                ] INFO     - 0:00:21.63     - onDestroy()@2e41698:5234
+[main (2)                                ] INFO     - 0:00:21.64     - onDestroyView()@2af0cf8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:21.65     - onDestroy()@2af0cf8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:21.66     - onDetach()@2af0cf8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:21.67     - onDestroyView()@5f65d35/2e41698:5234
+[main (2)                                ] INFO     - 0:00:21.68     - onDestroy()@5f65d35/2e41698:5234
+[main (2)                                ] INFO     - 0:00:21.68     - removed listener: 0 listeners
+[main (2)                                ] INFO     - 0:00:21.69     - onDetach()@5f65d35/2e41698:5234
+[main (2)                                ] INFO     - 0:00:21.70     - onDestroyView()@ec98be8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:21.70     - removeListener (context: com.bubblesoft.android.bubbleupnp.MainTabActivity@2e41698)
+[main (2)                                ] INFO     - 0:00:21.71     - onSaveInstanceState()@ec98be8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:21.71     - saveMediaServerState: PMOMusic Media Server
+[main (2)                                ] INFO     - 0:00:21.71     - positionStack: []
+[main (2)                                ] INFO     - 0:00:21.71     - itemList: Bundle[{firstVisiblePosition=0}]
+[main (2)                                ] INFO     - 0:00:21.72     - containerPath: []
+[main (2)                                ] INFO     - 0:00:21.72     - refreshLocalMediaServerLibraryList: removed: fenice
+[main (2)                                ] INFO     - 0:00:21.72     - refreshLocalMediaServerLibraryList: removed: Freebox Server
+[main (2)                                ] INFO     - 0:00:21.72     - refreshLocalMediaServerLibraryList: removed: pizzicato-Music-mediaserver
+[main (2)                                ] INFO     - 0:00:21.72     - refreshLocalMediaServerLibraryList: removed: PMOMusic Media Server
+[main (2)                                ] INFO     - 0:00:21.73     - onDestroy()@ec98be8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:21.74     - onDetach()@ec98be8/2e41698:5234
+[main (2)                                ] INFO     - 0:00:21.81     - onTaskRemoved: Intent { act=android.intent.action.MAIN cat=[android.intent.category.LAUNCHER] flg=0x10200000 xflg=0x4 cmp=com.bubblesoft.android.bubbleupnp/.MainActivity }, mode: 2
+[main (2)                                ] INFO     - 0:00:31.347    - performDeviceSearch: search done
+[main (2)                                ] SEVERE   - 0:00:31.348    - watchdog: device search--: 0
+[main (2)                                ] INFO     - 0:00:59.578    - ACTION_SCREEN_OFF

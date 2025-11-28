@@ -188,7 +188,7 @@ impl RadioParadiseSource {
             parent_id: "radio-paradise".to_string(),
             restricted: Some("1".to_string()),
             child_count: None,
-            searchable: Some("0".to_string()),
+            searchable: Some("1".to_string()),
             title: descriptor.display_name.to_string(),
             class: "object.container".to_string(),
             containers: vec![],
@@ -357,7 +357,7 @@ impl MusicSource for RadioParadiseSource {
             restricted: Some("1".to_string()),
             // childCount retiré pour éviter les soucis de compatibilité côté CP
             child_count: None,
-            searchable: Some("0".to_string()),
+            searchable: Some("1".to_string()),
             title: "Radio Paradise".to_string(),
             class: "object.container".to_string(),
             containers: vec![],

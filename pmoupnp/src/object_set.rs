@@ -12,6 +12,7 @@ use crate::{UpnpDeepClone, UpnpObjectSet, UpnpObjectSetError, UpnpTypedObject};
 impl<T: UpnpTypedObject> UpnpDeepClone for UpnpObjectSet<T> {
     fn deep_clone(&self) -> Self {
         let guard = self.objects.read().unwrap();
+        let order_guard = self.order.read().unwrap();
 
         let cloned_map: HashMap<String, Arc<T>> = guard
             .iter()
@@ -20,6 +21,7 @@ impl<T: UpnpTypedObject> UpnpDeepClone for UpnpObjectSet<T> {
 
         Self {
             objects: RwLock::new(cloned_map),
+            order: RwLock::new(order_guard.clone()),
         }
     }
 }
@@ -39,9 +41,11 @@ impl<T: UpnpTypedObject> UpnpDeepClone for UpnpObjectSet<T> {
 impl<T: UpnpTypedObject> Clone for UpnpObjectSet<T> {
     fn clone(&self) -> Self {
         let guard = self.objects.read().unwrap();
+        let order_guard = self.order.read().unwrap();
 
         Self {
             objects: RwLock::new(guard.clone()),
+            order: RwLock::new(order_guard.clone()),
         }
     }
 }
@@ -57,6 +61,7 @@ impl<T: UpnpTypedObject> UpnpObjectSet<T> {
     pub fn new() -> Self {
         Self {
             objects: RwLock::new(HashMap::new()),
+            order: RwLock::new(Vec::new()),
         }
     }
 
@@ -80,13 +85,15 @@ impl<T: UpnpTypedObject> UpnpObjectSet<T> {
     /// ```
     pub fn insert(&mut self, object: Arc<T>) -> Result<(), UpnpObjectSetError> {
         let mut guard = self.objects.write().unwrap();
+        let mut order_guard = self.order.write().unwrap();
         let key = object.get_name().to_string();
 
         if guard.contains_key(&key) {
             return Err(UpnpObjectSetError::AlreadyExists(key));
         }
 
-        guard.insert(key, object);
+        guard.insert(key.clone(), object);
+        order_guard.push(key);
         Ok(())
     }
 
@@ -110,7 +117,12 @@ impl<T: UpnpTypedObject> UpnpObjectSet<T> {
     /// ```
     pub fn insert_or_replace(&mut self, object: Arc<T>) {
         let mut guard = self.objects.write().unwrap();
+        let mut order_guard = self.order.write().unwrap();
         let key: String = object.get_name().to_string();
+
+        if !guard.contains_key(&key) {
+            order_guard.push(key.clone());
+        }
 
         guard.insert(key, object);
     }
@@ -192,6 +204,11 @@ impl<T: UpnpTypedObject> UpnpObjectSet<T> {
     /// appeler cette méthode simultanément sans blocage.
     pub fn all(&self) -> Vec<Arc<T>> {
         let guard = self.objects.read().unwrap();
-        guard.values().cloned().collect()
+        let order_guard = self.order.read().unwrap();
+
+        order_guard
+            .iter()
+            .filter_map(|k| guard.get(k).cloned())
+            .collect()
     }
 }

@@ -29,6 +29,7 @@ impl UpnpInstance for StateVarInstanceSet {
     fn new(_: &StateVariableSet) -> Self {
         Self {
             objects: RwLock::new(HashMap::new()),
+            order: RwLock::new(Vec::new()),
         }
     }
 }

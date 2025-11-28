@@ -123,12 +123,20 @@ impl ContentHandler {
                 container.child_count = None; // compatibilité CP
                 let didl = to_didl_lite(&[container], &[])?;
                 let update_id = source.update_id().await.max(1);
+                tracing::debug!(
+                    "BrowseMetadata root (flatten) didl_len={}B",
+                    didl.len()
+                );
                 return Ok((didl, 1, 1, update_id));
             }
 
             // Sinon retourner le container racine agrégé
             let root = self.build_root_container().await;
             let didl = to_didl_lite(&[root], &[])?;
+            tracing::debug!(
+                "BrowseMetadata root (aggregate) didl_len={}B",
+                didl.len()
+            );
             Ok((didl, 1, 1, 1))
         } else {
             // Essayer de trouver l'objet dans les sources
@@ -140,6 +148,11 @@ impl ContentHandler {
                     .map_err(|e| format!("Failed to get root container: {}", e))?;
                 let didl = to_didl_lite(&[container], &[])?;
                 let update_id = source.update_id().await.max(1);
+                tracing::debug!(
+                    "BrowseMetadata source_root id={} didl_len={}B",
+                    object_id,
+                    didl.len()
+                );
                 return Ok((didl, 1, 1, update_id));
             }
 
@@ -149,6 +162,11 @@ impl ContentHandler {
                     Ok(item) => {
                         let didl = to_didl_lite(&[], &[item])?;
                         let update_id = source.update_id().await.max(1);
+                        tracing::debug!(
+                            "BrowseMetadata item id={} didl_len={}B",
+                            object_id,
+                            didl.len()
+                        );
                         return Ok((didl, 1, 1, update_id));
                     }
                     Err(MusicSourceError::ObjectNotFound(_))
