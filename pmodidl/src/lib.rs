@@ -609,11 +609,10 @@ impl ToXmlElement for Item {
             elem.children
                 .push(XMLNode::Element(text_element("upnp:genre", genre)));
         }
-        // NOTE: albumArtURI temporarily disabled for compatibility (some CPs misbehave)
-        // if let Some(ref art) = self.album_art {
-        //     elem.children
-        //         .push(XMLNode::Element(text_element("upnp:albumArtURI", art)));
-        // }
+        if let Some(ref art) = self.album_art {
+            elem.children
+                .push(XMLNode::Element(text_element("upnp:albumArtURI", art)));
+        }
         if let Some(date) = self.normalized_date() {
             elem.children
                 .push(XMLNode::Element(text_element("dc:date", &date)));

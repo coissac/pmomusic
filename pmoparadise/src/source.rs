@@ -318,6 +318,15 @@ impl RadioParadiseSource {
             if item.genre.is_none() {
                 item.genre = Some("Radio Paradise".to_string());
             }
+
+            // Normaliser l'albumArtURI : rendre absolu si chemin relatif, sinon fallback par défaut
+            if let Some(art) = item.album_art.as_mut() {
+                if art.starts_with('/') {
+                    *art = format!("{}{}", self.base_url, art);
+                }
+            } else {
+                item.album_art = Some(self.default_cover_url());
+            }
         }
 
         Ok(items)
