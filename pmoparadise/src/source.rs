@@ -187,7 +187,7 @@ impl RadioParadiseSource {
             id: format!("radio-paradise:channel:{}", descriptor.slug),
             parent_id: "radio-paradise".to_string(),
             restricted: Some("1".to_string()),
-            child_count: Some("2".to_string()), // Live + History
+            child_count: None,
             searchable: Some("0".to_string()),
             title: descriptor.display_name.to_string(),
             class: "object.container".to_string(),
@@ -242,7 +242,7 @@ impl RadioParadiseSource {
             id: format!("radio-paradise:channel:{}:history", descriptor.slug),
             parent_id: format!("radio-paradise:channel:{}", descriptor.slug),
             restricted: Some("1".to_string()),
-            child_count: Some("0".to_string()), // Default to 0, updated below if playlist exists
+            child_count: None,
             searchable: Some("1".to_string()),
             title: format!("{} - History", descriptor.display_name),
             // Expose l'historique comme une playlist jouable
@@ -355,7 +355,8 @@ impl MusicSource for RadioParadiseSource {
             id: "radio-paradise".to_string(),
             parent_id: "0".to_string(),
             restricted: Some("1".to_string()),
-            child_count: Some("4".to_string()), // 4 channels
+            // childCount retiré pour éviter les soucis de compatibilité côté CP
+            child_count: None,
             searchable: Some("0".to_string()),
             title: "Radio Paradise".to_string(),
             class: "object.container".to_string(),

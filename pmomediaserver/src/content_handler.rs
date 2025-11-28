@@ -14,6 +14,7 @@ use pmoutils::ToXmlElement;
 use pmodidl::{Container, DIDLLite};
 use pmosource::api::{get_source as get_source_from_registry, list_all_sources};
 use pmosource::{BrowseResult, MusicSource, MusicSourceError};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 /// Convertit des containers et items en XML DIDL-Lite
@@ -85,6 +86,16 @@ impl ContentHandler {
             "ContentDirectory::Browse"
         );
 
+        // Log rapide sur la branche flatten vs agrégée
+        if object_id == "0" {
+            let sources = list_all_sources().await;
+            tracing::info!(
+                "Browse root: sources.len() = {}, flatten = {}",
+                sources.len(),
+                sources.len() == 1
+            );
+        }
+
         match browse_flag {
             "BrowseMetadata" => self.browse_metadata(object_id).await,
             "BrowseDirectChildren" => {
@@ -98,7 +109,24 @@ impl ContentHandler {
     /// Browse les métadonnées d'un objet spécifique
     async fn browse_metadata(&self, object_id: &str) -> Result<(String, u32, u32, u32), String> {
         if object_id == "0" {
-            // Retourner le container racine
+            // Si un seul enfant, publier ce fils comme racine
+            let sources = list_all_sources().await;
+            if sources.len() == 1 {
+                let source = sources.into_iter().next().unwrap();
+                let mut container = source
+                    .root_container()
+                    .await
+                    .map_err(|e| format!("Failed to get root container: {}", e))?;
+                // Le présenter comme la racine (id=0, parent=-1)
+                container.id = "0".to_string();
+                container.parent_id = "-1".to_string();
+                container.child_count = None; // compatibilité CP
+                let didl = to_didl_lite(&[container], &[])?;
+                let update_id = source.update_id().await.max(1);
+                return Ok((didl, 1, 1, update_id));
+            }
+
+            // Sinon retourner le container racine agrégé
             let root = self.build_root_container().await;
             let didl = to_didl_lite(&[root], &[])?;
             Ok((didl, 1, 1, 1))
@@ -190,6 +218,53 @@ impl ContentHandler {
         requested_count: u32,
     ) -> Result<(String, u32, u32, u32), String> {
         if object_id == "0" {
+            // Si un seul enfant, publier directement ses enfants comme racine
+            let sources = list_all_sources().await;
+            if sources.len() == 1 {
+                let source = sources.into_iter().next().unwrap();
+                let source_id = source.id().to_string();
+
+                // Récupérer les enfants du container racine de la source
+                let mut result = source
+                    .browse(&source_id)
+                    .await
+                    .map_err(|e| format!("Browse failed: {}", e))?;
+
+                // Re-mapper parentID sur "0" pour éviter des parents inexistants côté CP
+                match &mut result {
+                    BrowseResult::Containers(c) => {
+                        for cont in c.iter_mut() {
+                            if cont.parent_id == source_id {
+                                cont.parent_id = "0".to_string();
+                            }
+                        }
+                    }
+                    BrowseResult::Items(i) => {
+                        for item in i.iter_mut() {
+                            if item.parent_id == source_id {
+                                item.parent_id = "0".to_string();
+                            }
+                        }
+                    }
+                    BrowseResult::Mixed { containers, items } => {
+                        for cont in containers.iter_mut() {
+                            if cont.parent_id == source_id {
+                                cont.parent_id = "0".to_string();
+                            }
+                        }
+                        for item in items.iter_mut() {
+                            if item.parent_id == source_id {
+                                item.parent_id = "0".to_string();
+                            }
+                        }
+                    }
+                }
+
+                return self
+                    .browse_result_to_didl("0", result, source, starting_index, requested_count)
+                    .await;
+            }
+
             // Retourner toutes les sources comme enfants de la racine
             return self.browse_root(starting_index, requested_count).await;
         }
@@ -308,6 +383,27 @@ impl ContentHandler {
             .collect();
         let mut items = items;
 
+        // Log avant déduplication
+        tracing::debug!(
+            "BrowseResult before dedup: containers={}, items={}",
+            containers.len(),
+            items.len()
+        );
+
+        // Deduplicate containers/items by id to avoid doubles in the response
+        let mut seen_containers = HashSet::new();
+        containers.retain(|c| seen_containers.insert(c.id.clone()));
+
+        let mut seen_items = HashSet::new();
+        items.retain(|i| seen_items.insert(i.id.clone()));
+
+        // Log après déduplication
+        tracing::debug!(
+            "BrowseResult after dedup: containers={}, items={}",
+            containers.len(),
+            items.len()
+        );
+
         // Calculer le total avant pagination
         let total = (containers.len() + items.len()) as u32;
 
@@ -355,7 +451,7 @@ impl ContentHandler {
             id: "0".to_string(),
             parent_id: "-1".to_string(),
             restricted: Some("1".to_string()),
-            // Par cohérence avec la plupart des serveurs observés, on omet childCount sur la racine
+            // Laisser childCount absent sur la racine pour maximiser la compatibilité (BubbleUPnP)
             child_count: None,
             searchable: Some("1".to_string()),
             title: "PMOMusic".to_string(),

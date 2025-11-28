@@ -166,7 +166,7 @@ impl ReadHandle {
             id: self.playlist.id.clone(),
             parent_id: "0".to_string(),
             restricted: Some("1".to_string()),
-            child_count: Some(remaining.to_string()),
+            child_count: None,
             searchable: Some("0".to_string()),
             title,
             class: "object.container.playlistContainer".to_string(),
@@ -222,6 +222,12 @@ impl ReadHandle {
             let genre = meta.get_genre().await.ok().flatten();
             let year = meta.get_year().await.ok().flatten();
             let track_number = meta.get_track_number().await.ok().flatten();
+            let cover_pk = meta.get_cover_pk().await.ok().flatten();
+            let cover_url = if let Some(pk) = cover_pk.as_ref() {
+                Some(format!("/covers/jpeg/{}/256", pk))
+            } else {
+                meta.get_cover_url().await.ok().flatten()
+            };
 
             // Créer l'Item
             let item = Item {
@@ -234,8 +240,8 @@ impl ReadHandle {
                 artist,
                 album,
                 genre,
-                album_art: None, // TODO: intégrer pmocovers
-                album_art_pk: None,
+                album_art: cover_url,
+                album_art_pk: cover_pk,
                 date: year.map(|y| y.to_string()),
                 original_track_number: track_number.map(|n| n.to_string()),
                 resources: vec![resource],
