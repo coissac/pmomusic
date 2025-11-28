@@ -28,7 +28,7 @@ pmoparadise = { path = "../pmoparadise", optional = true }
 pmoconfig = { path = "../pmoconfig", optional = true }
 anyhow = { version = "1.0", optional = true }
 pmoaudiocache = { path = "../pmoaudiocache", optional = true }
-pmocovers = { path = "../pmocovers", optional = true }
+pmocovers = { path = "../pmocovers", optional = true, features = ["pmoserver"] }
 pmoplaylist = { path = "../pmoplaylist", optional = true }
 tokio-util = { version = "0.7", features = ["io"], optional = true }
 
@@ -46,6 +46,7 @@ paradise = [
     "dep:anyhow",
     "dep:pmoaudiocache",
     "dep:pmocovers",
+    "pmocovers/pmoserver",
     "dep:pmoplaylist",
     "dep:tokio-util"
 ]

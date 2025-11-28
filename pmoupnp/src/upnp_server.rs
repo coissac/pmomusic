@@ -289,49 +289,9 @@ impl UpnpServerExt for Server {
         cache_dir: &str,
         limit: usize,
     ) -> Result<Arc<CoverCache>, anyhow::Error> {
-        use pmocache::pmoserver_ext::{create_api_router, create_file_router_with_generator};
-        use pmocovers::new_cache;
-
-        let base_url = self.info().base_url.clone();
-        let cache = Arc::new(new_cache(cache_dir, limit)?);
-
-        // Routes de fichiers avec génération de variantes
-        // Routes: GET /covers/image/{pk} et GET /covers/image/{pk}/{size}
-        let variant_generator: pmocache::pmoserver_ext::ParamGenerator<pmocovers::CoversConfig> =
-            Arc::new(|cache, pk, param| {
-                Box::pin(async move {
-                    // Si le param est numérique, c'est une taille de variante
-                    if let Ok(size) = param.parse::<usize>() {
-                        match pmocovers::webp::generate_variant(&cache, &pk, size).await {
-                            Ok(data) => return Some(data),
-                            Err(e) => {
-                                tracing::warn!(
-                                    "Cannot generate variant {}x{} for {}: {}",
-                                    size,
-                                    size,
-                                    pk,
-                                    e
-                                );
-                                return None;
-                            }
-                        }
-                    }
-                    None
-                })
-            });
-
-        let file_router =
-            create_file_router_with_generator(cache.clone(), "image/webp", Some(variant_generator));
-        self.add_router("/", file_router).await;
-
-        // API REST générique (pmocache)
-        let api_router = create_api_router(cache.clone());
-        let openapi = pmocovers::ApiDoc::openapi();
-        self.add_openapi(api_router, openapi, "covers").await;
-
-        // Enregistrer le cache dans le registre global
-        pmocovers::register_cover_cache(cache.clone());
-
+        // Délègue à l'implémentation pmocovers (qui enregistre WebP + JPEG + API)
+        use pmocovers::CoverCacheExt;
+        let cache = pmocovers::CoverCacheExt::init_cover_cache(self, cache_dir, limit).await?;
         Ok(cache)
     }
 

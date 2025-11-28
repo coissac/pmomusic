@@ -193,6 +193,13 @@ export function getImageUrl(pk: string, size?: number): string {
   return `/covers/image/${pk}`;
 }
 
+export function getJpegUrl(pk: string, size?: number): string {
+  if (size) {
+    return `/covers/jpeg/${pk}/${size}`;
+  }
+  return `/covers/jpeg/${pk}`;
+}
+
 /**
  * SVG par défaut pour les images qui ne se chargent pas
  */

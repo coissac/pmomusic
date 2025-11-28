@@ -169,6 +169,72 @@ fn create_variant_generator() -> pmocache::pmoserver_ext::ParamGenerator<CoversC
     })
 }
 
+// ========================================================================
+// Handlers JPEG (transcodage à la volée)
+// ========================================================================
+
+#[cfg(feature = "pmoserver")]
+async fn serve_cover_jpeg(
+    axum::extract::State(cache): axum::extract::State<Arc<Cache>>,
+    axum::extract::Path(pk): axum::extract::Path<String>,
+) -> axum::response::Response {
+    serve_jpeg_internal(cache, pk, None).await
+}
+
+#[cfg(feature = "pmoserver")]
+async fn serve_cover_jpeg_with_size(
+    axum::extract::State(cache): axum::extract::State<Arc<Cache>>,
+    axum::extract::Path((pk, size)): axum::extract::Path<(String, String)>,
+) -> axum::response::Response {
+    let size = size.parse::<u32>().ok();
+    serve_jpeg_internal(cache, pk, size).await
+}
+
+#[cfg(feature = "pmoserver")]
+async fn serve_jpeg_internal(
+    cache: Arc<Cache>,
+    pk: String,
+    size: Option<u32>,
+) -> axum::response::Response {
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    use image::ImageFormat;
+    use std::io::Cursor;
+
+    let path = cache.get_file_path_with_qualifier(&pk, <CoversConfig as pmocache::cache::CacheConfig>::default_param());
+    if !path.exists() {
+        return (StatusCode::NOT_FOUND, "File not found").into_response();
+    }
+
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<u8>> {
+        let mut img = image::open(&path)?;
+        if let Some(size) = size {
+            img = crate::webp::ensure_square(&img, size);
+        }
+        let mut buf = Cursor::new(Vec::new());
+        img.write_to(&mut buf, ImageFormat::Jpeg)?;
+        Ok(buf.into_inner())
+    })
+    .await;
+
+    match res {
+        Ok(Ok(data)) => (
+            StatusCode::OK,
+            [("content-type", "image/jpeg")],
+            data,
+        )
+            .into_response(),
+        Ok(Err(e)) => {
+            tracing::warn!("JPEG transcode error for {}: {}", pk, e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Transcode error").into_response()
+        }
+        Err(e) => {
+            tracing::warn!("JPEG transcode join error for {}: {}", pk, e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Transcode error").into_response()
+        }
+    }
+}
+
 /// Trait d'extension pour ajouter le cache de couvertures à pmoserver
 #[cfg(feature = "pmoserver")]
 #[async_trait::async_trait]
@@ -224,13 +290,32 @@ impl CoverCacheExt for pmoserver::Server {
             "image/webp",
             Some(create_variant_generator()),
         );
-        self.add_router("/", file_router).await;
+
+        // Router JPEG (transcodage à la volée depuis le WebP stocké)
+        // Routes: GET /covers/jpeg/{pk} et GET /covers/jpeg/{pk}/{size}
+        let jpeg_router = axum::Router::new()
+            .route(
+                "/covers/jpeg/{pk}",
+                axum::routing::get(serve_cover_jpeg),
+            )
+            .route(
+                "/covers/jpeg/{pk}/{size}",
+                axum::routing::get(serve_cover_jpeg_with_size),
+            )
+            .with_state(cache.clone());
+
+        // Combiner WebP et JPEG dans un seul sous-router pour éviter tout overlap
+        let combined_router = file_router.merge(jpeg_router);
+        self.add_router("/", combined_router).await;
 
         // API REST générique (pmocache)
         // Routes: GET/POST/DELETE /api/covers, etc.
         let api_router = create_api_router(cache.clone());
         let openapi = crate::ApiDoc::openapi();
         self.add_openapi(api_router, openapi, "covers").await;
+
+        // Enregistrer dans le singleton global pour éviter des initialisations multiples
+        register_cover_cache(cache.clone());
 
         Ok(cache)
     }

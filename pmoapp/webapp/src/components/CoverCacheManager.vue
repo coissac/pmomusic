@@ -122,6 +122,10 @@
           <p v-else><strong>Source URL:</strong> Unknown</p>
           <p><strong>Hits:</strong> {{ selectedImage.hits }}</p>
           <p v-if="selectedImage.last_used"><strong>Last Used:</strong> {{ formatDate(selectedImage.last_used) }}</p>
+          <div class="links">
+            <p><strong>WebP:</strong> <a :href="getImageUrl(selectedImage.pk)" target="_blank">{{ getImageUrl(selectedImage.pk) }}</a></p>
+            <p><strong>JPEG:</strong> <a :href="getJpegUrl(selectedImage.pk)" target="_blank">{{ getJpegUrl(selectedImage.pk) }}</a></p>
+          </div>
           <div class="modal-actions">
             <button @click="copyImageUrl(selectedImage.pk)" class="btn-secondary">
               📋 Copy URL
@@ -146,6 +150,7 @@ import {
   purgeCache,
   consolidateCache,
   getImageUrl,
+  getJpegUrl,
   getOriginUrl,
   waitForDownload,
   getDefaultImageUrl,
@@ -235,8 +240,10 @@ async function handleConsolidate(){
 }
 
 function copyImageUrl(pk:string){
-  navigator.clipboard.writeText(window.location.origin + getImageUrl(pk));
-  alert("✅ URL copied!");
+  const webpUrl = window.location.origin + getImageUrl(pk);
+  const jpegUrl = window.location.origin + getJpegUrl(pk);
+  navigator.clipboard.writeText(`${webpUrl}\n${jpegUrl}`);
+  alert("✅ URLs copied (WebP + JPEG)!");
 }
 
 function resolveOrigin(entry: CacheEntry | null): string | undefined {
