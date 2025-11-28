@@ -245,7 +245,8 @@ impl RadioParadiseSource {
             child_count: Some("0".to_string()), // Default to 0, updated below if playlist exists
             searchable: Some("1".to_string()),
             title: format!("{} - History", descriptor.display_name),
-            class: "object.container".to_string(),
+            // Expose l'historique comme une playlist jouable
+            class: "object.container.playlistContainer".to_string(),
             containers: vec![],
             items: vec![],
         }
