@@ -164,6 +164,14 @@ where
         max_age: u32,
         updates: &mut Vec<DeviceUpdate>,
     ) {
+        tracing::debug!(
+            "SSDP update: udn={} type={} location={} max_age={}",
+            udn,
+            device_type,
+            location,
+            max_age
+        );
+
         let endpoint = self
             .endpoints
             .entry(udn.clone())
@@ -175,18 +183,30 @@ where
             });
 
         endpoint.touch(location, server_header, max_age);
-        endpoint.types_seen.insert(device_type.clone());
+        endpoint.types_seen.insert(device_type);
 
-        if is_renderer_type(&device_type) {
-            endpoint.seen_as_renderer = true;
+        if !endpoint.seen_as_renderer {
             if let Some(info) = self.provider.build_renderer_info(endpoint) {
+                tracing::debug!(
+                    "Renderer classified: udn={} friendly_name={} model={}",
+                    info.udn,
+                    info.friendly_name,
+                    info.model_name
+                );
+                endpoint.seen_as_renderer = true;
                 updates.push(DeviceUpdate::RendererOnline(info));
             }
         }
 
-        if is_server_type(&device_type) {
-            endpoint.seen_as_server = true;
+        if !endpoint.seen_as_server {
             if let Some(info) = self.provider.build_server_info(endpoint) {
+                tracing::debug!(
+                    "Server classified: udn={} friendly_name={} model={}",
+                    info.udn,
+                    info.friendly_name,
+                    info.model_name
+                );
+                endpoint.seen_as_server = true;
                 updates.push(DeviceUpdate::ServerOnline(info));
             }
         }
@@ -205,14 +225,4 @@ fn extract_udn_from_usn(usn: &str) -> Option<String> {
     } else {
         None
     }
-}
-
-fn is_renderer_type(t: &str) -> bool {
-    let t = t.to_ascii_lowercase();
-    t.contains("urn:schemas-upnp-org:device:mediarenderer:")
-}
-
-fn is_server_type(t: &str) -> bool {
-    let t = t.to_ascii_lowercase();
-    t.contains("urn:schemas-upnp-org:device:mediaserver:")
 }

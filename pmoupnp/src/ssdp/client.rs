@@ -1,3 +1,22 @@
+/*! 
+The PMOMusic SSDP client is a *control point*.
+It must **not** bind to UDP port 1900.
+
+Reason:
+
+* The SSDP *server* (UPnP device mode) must listen on 0.0.0.0:1900 for M-SEARCH discovery.
+* The SSDP *client* only needs to send M-SEARCH and receive unicast HTTP/200 replies.
+* If both client and server bind on 1900 (even with SO_REUSEPORT) the kernel load-balances
+  incoming datagrams between sockets. As a result, NOTIFY and HTTP/200 messages are lost
+  randomly by the client.
+
+Therefore:
+
+* SSDP server → bind(0.0.0.0:1900), join multicast, answer M-SEARCH.
+* SSDP client → bind(0.0.0.0:0), use an ephemeral port, send M-SEARCH, receive replies.
+
+The client may still join the multicast group for debugging, but NOTIFY reception is optional.
+*/
 //! Client SSDP pour la découverte des devices UPnP
 
 use super::{MAX_AGE, SSDP_MULTICAST_ADDR, SSDP_PORT};
@@ -47,41 +66,35 @@ impl SsdpClient {
         let socket2 = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
         socket2.set_reuse_address(true)?;
 
-        #[cfg(unix)]
-        {
-            use std::os::unix::io::AsRawFd;
-            let fd = socket2.as_raw_fd();
-            let optval: libc::c_int = 1;
-            unsafe {
-                let result = libc::setsockopt(
-                    fd,
-                    libc::SOL_SOCKET,
-                    libc::SO_REUSEPORT,
-                    &optval as *const _ as *const libc::c_void,
-                    std::mem::size_of_val(&optval) as libc::socklen_t,
-                );
-                if result != 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-            }
-            debug!("✅ SsdpClient SO_REUSEPORT enabled (Unix)");
-        }
-
         #[cfg(windows)]
         {
             debug!("✅ SsdpClient SO_REUSEADDR enabled (Windows - SO_REUSEPORT not needed)");
         }
 
-        let bind_addr: SocketAddr = format!("0.0.0.0:{}", SSDP_PORT).parse().unwrap();
+        let bind_addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
         socket2.bind(&bind_addr.into())?;
 
         let socket: UdpSocket = socket2.into();
-        socket.join_multicast_v4(
-            &SSDP_MULTICAST_ADDR.parse().unwrap(),
-            &"0.0.0.0".parse().unwrap(),
-        )?;
         socket.set_read_timeout(Some(Duration::from_secs(1)))?;
-        socket.set_multicast_loop_v4(false)?;
+        socket.set_multicast_loop_v4(true)?; // utile en dev local
+
+        for iface in get_if_addrs::get_if_addrs()? {
+            if let std::net::IpAddr::V4(ipv4) = iface.ip() {
+                if !ipv4.is_loopback() {
+                    match socket.join_multicast_v4(&SSDP_MULTICAST_ADDR.parse().unwrap(), &ipv4) {
+                        Ok(()) => {
+                            debug!("SSDP: joined {} on {}", SSDP_MULTICAST_ADDR, ipv4);
+                        }
+                        Err(e) => {
+                            warn!(
+                                "SSDP: failed to join {} on {}: {}",
+                                SSDP_MULTICAST_ADDR, ipv4, e
+                            );
+                        }
+                    }
+                }
+            }
+        }
 
         info!("✅ SSDP client ready on {}", addr);
 
@@ -158,12 +171,16 @@ impl SsdpClient {
 fn parse_message(data: &str, from: SocketAddr) -> Option<SsdpEvent> {
     let mut lines = data.lines();
     let first_line = lines.next()?.trim();
+    let upper = first_line.to_ascii_uppercase();
     let headers = parse_headers(lines);
 
-    if first_line.to_ascii_uppercase().starts_with("NOTIFY") {
+    if upper.starts_with("NOTIFY ") {
         handle_notify(&headers, from)
-    } else if first_line.to_ascii_uppercase().starts_with("HTTP/1.1 200") {
+    } else if upper.starts_with("HTTP/") && upper.contains(" 200 ") {
         handle_search_response(&headers, from)
+    } else if upper.starts_with("M-SEARCH ") {
+        // Another control point querying us; we are not a device, so we ignore.
+        None
     } else {
         None
     }

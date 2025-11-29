@@ -5,3 +5,9 @@ edition = "2024"
 
 [dependencies]
 pmoupnp = { path = "../pmoupnp" }
+quick-xml = "0.38.4"
+thiserror = "2.0.17"
+ureq = "3.1.4"
+tracing = "0.1.41"
+tracing-subscriber = "0.3"
+anyhow = "1.0"
