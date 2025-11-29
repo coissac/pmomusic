@@ -60,6 +60,7 @@ impl ReadHandle {
                 tracing::warn!("Cache entry {} missing, removing from playlist", cache_pk);
                 let mut core = self.playlist.core.write().await;
                 core.remove_by_cache_pk(&cache_pk);
+                let snapshot = core.snapshot();
                 drop(core);
 
                 // Sauvegarder si persistante
@@ -72,6 +73,11 @@ impl ReadHandle {
                             .await;
                     }
                 }
+
+                // Mettre à jour l'index pk -> playlists
+                crate::manager::PlaylistManager()
+                    .rebuild_track_index(&self.playlist.id, &snapshot)
+                    .await;
 
                 // Ne pas avancer le curseur, continuer avec la position actuelle
                 continue;
@@ -160,7 +166,7 @@ impl ReadHandle {
         }
 
         let title = self.playlist.title().await;
-        let remaining = self.remaining().await?;
+        let _remaining = self.remaining().await?;
 
         Ok(Container {
             id: self.playlist.id.clone(),

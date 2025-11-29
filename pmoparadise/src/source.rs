@@ -126,9 +126,13 @@ impl RadioParadiseSource {
         for pid in ids {
             let weak = Arc::downgrade(self);
             let pid_clone = pid.clone();
-            let token = mgr.register_callback(move |changed_id| {
+            let token = mgr.register_callback(move |event| {
                 let pid = pid_clone.clone();
-                if changed_id == pid {
+                if event.playlist_id == pid {
+                    // On ne réagit qu'aux mises à jour structurelles (ajout/suppression)
+                    if !matches!(event.kind, pmoplaylist::PlaylistEventKind::Updated) {
+                        return;
+                    }
                     if let Some(strong) = weak.upgrade() {
                         tokio::spawn(async move {
                             strong.bump_update_counter().await;
@@ -663,7 +667,7 @@ impl MusicSource for RadioParadiseSource {
                 }
             }
 
-            ObjectIdType::HistoryTrack { slug, pk } => {
+            ObjectIdType::HistoryTrack { slug: _, pk: _ } => {
                 // Return metadata for the history track item
                 let item = self.get_item(object_id).await?;
                 Ok(BrowseResult::Items(vec![item]))

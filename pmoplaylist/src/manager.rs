@@ -5,12 +5,14 @@ use crate::persistence::PersistenceManager;
 use crate::playlist::core::PlaylistConfig;
 use crate::playlist::Playlist;
 use crate::Result;
+use pmocache::{CacheBroadcastEvent, CacheSubscription};
 use once_cell::sync::OnceCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 use std::time::Duration;
 use tokio::sync::RwLock;
+use tokio::sync::broadcast;
 use std::sync::RwLock as StdRwLock;
 
 /// Singleton PlaylistManager
@@ -23,8 +25,35 @@ static AUDIO_CACHE: OnceCell<Arc<pmoaudiocache::Cache>> = OnceCell::new();
 struct ManagerInner {
     playlists: RwLock<HashMap<String, Arc<Playlist>>>,
     persistence: Option<Arc<PersistenceManager>>,
-    callbacks: StdRwLock<HashMap<u64, Arc<dyn Fn(&str) + Send + Sync>>>,
+    callbacks: StdRwLock<HashMap<u64, Arc<dyn Fn(&PlaylistEvent) + Send + Sync>>>,
     cb_counter: AtomicU64,
+    track_index: StdRwLock<HashMap<String, Vec<String>>>, // cache_pk -> playlists
+    cache_subscriptions: StdRwLock<HashMap<String, CacheSubscription>>,
+    event_tx: broadcast::Sender<PlaylistEventEnvelope>,
+}
+
+/// Type d'évènement émis par le PlaylistManager.
+#[derive(Debug, Clone)]
+pub struct PlaylistEvent {
+    pub playlist_id: String,
+    pub kind: PlaylistEventKind,
+}
+
+/// Variantes d'évènements playlist.
+#[derive(Debug, Clone)]
+pub enum PlaylistEventKind {
+    /// La playlist a été modifiée (ajout/suppression/changement de config).
+    Updated,
+    /// Un morceau référencé par la playlist a été servi par le cache audio.
+    TrackPlayed { cache_pk: String, qualifier: String },
+}
+
+/// Evènement enrichi pour diffusion (timestamp + source client éventuel).
+#[derive(Debug, Clone)]
+pub struct PlaylistEventEnvelope {
+    pub event: PlaylistEvent,
+    pub timestamp: std::time::SystemTime,
+    pub source_client: Option<String>,
 }
 
 /// Gestionnaire central de playlists
@@ -52,6 +81,9 @@ impl PlaylistManager {
                 persistence: Some(persistence.clone()),
                 callbacks: StdRwLock::new(HashMap::new()),
                 cb_counter: AtomicU64::new(1),
+                track_index: StdRwLock::new(HashMap::new()),
+                cache_subscriptions: StdRwLock::new(HashMap::new()),
+                event_tx: broadcast::channel(256).0,
             }),
         };
 
@@ -128,12 +160,12 @@ impl PlaylistManager {
         Ok(WriteHandle::new(playlist, write_token))
     }
 
-    /// Enregistre un callback de modification de playlist.
+    /// Enregistre un callback d'évènement playlist (update, track joué).
     ///
     /// Retourne un jeton (u64) pour désenregistrer plus tard.
     pub fn register_callback<F>(&self, cb: F) -> u64
     where
-        F: Fn(&str) + Send + Sync + 'static,
+        F: Fn(&PlaylistEvent) + Send + Sync + 'static,
     {
         let token = self.inner.cb_counter.fetch_add(1, Ordering::Relaxed);
         let mut guard = self.inner.callbacks.write().unwrap();
@@ -149,9 +181,181 @@ impl PlaylistManager {
 
     /// Notifie tous les callbacks qu'une playlist a changé.
     pub(crate) fn notify_playlist_changed(&self, id: &str) {
+        self.notify_playlist_event(
+            id,
+            PlaylistEventKind::Updated,
+        );
+    }
+
+    /// Notifie les callbacks qu'un morceau a été joué pour une playlist donnée.
+    pub(crate) fn notify_playlist_track_played(&self, playlist_id: &str, cache_pk: &str, qualifier: &str) {
+        self.notify_playlist_event(
+            playlist_id,
+            PlaylistEventKind::TrackPlayed {
+                cache_pk: cache_pk.to_string(),
+                qualifier: qualifier.to_string(),
+            },
+        );
+    }
+
+    fn notify_playlist_event(&self, id: &str, kind: PlaylistEventKind) {
+        let event = PlaylistEvent {
+            playlist_id: id.to_string(),
+            kind,
+        };
+        let envelope = PlaylistEventEnvelope {
+            event: event.clone(),
+            timestamp: std::time::SystemTime::now(),
+            source_client: None,
+        };
+
         let guard = self.inner.callbacks.read().unwrap();
         for cb in guard.values() {
-            cb(id);
+            cb(&event);
+        }
+
+        // Diffusion via canal interne (ignoré si aucun abonné)
+        let _ = self.inner.event_tx.send(envelope);
+    }
+
+    /// Ré-inscrit les abonnements cache pour tous les pk connus (utilisé au boot ou après enregistrement du cache audio).
+    async fn sync_cache_subscriptions(&self) {
+        let pks: Vec<String> = {
+            let index = self.inner.track_index.read().unwrap();
+            index.keys().cloned().collect()
+        };
+
+        if pks.is_empty() {
+            return;
+        }
+
+        if let Ok(cache) = audio_cache() {
+            for pk in pks {
+                // Ne pas doubler les abonnements
+                let already = {
+                    let subs = self.inner.cache_subscriptions.read().unwrap();
+                    subs.contains_key(&pk)
+                };
+                if already {
+                    continue;
+                }
+
+                let manager = self.clone();
+                let token = cache
+                    .subscribe_broadcast(pk.clone(), move |event: &CacheBroadcastEvent| {
+                        manager.handle_cache_broadcast(event);
+                        let index = manager.inner.track_index.read().unwrap();
+                        index.contains_key(&event.pk)
+                    })
+                    .await;
+
+                self.inner
+                    .cache_subscriptions
+                    .write()
+                    .unwrap()
+                    .insert(pk, token);
+            }
+        }
+    }
+
+    /// Réconcilie l'index pk→playlists et les souscriptions cache pour une playlist donnée.
+    pub(crate) async fn rebuild_track_index(
+        &self,
+        playlist_id: &str,
+        records: &[Arc<crate::playlist::record::Record>],
+    ) {
+        // 1) Retirer la playlist de toutes les entrées
+        let mut removed_pks = Vec::new();
+        {
+            let mut index = self.inner.track_index.write().unwrap();
+            for (pk, playlists) in index.iter_mut() {
+                playlists.retain(|p| p != playlist_id);
+                if playlists.is_empty() {
+                    removed_pks.push(pk.clone());
+                }
+            }
+            for pk in &removed_pks {
+                index.remove(pk);
+            }
+            // 2) Ajouter les nouveaux records
+            for record in records {
+                let entry = index.entry(record.cache_pk.clone()).or_default();
+                if !entry.iter().any(|p| p == playlist_id) {
+                    entry.push(playlist_id.to_string());
+                }
+            }
+        }
+
+        // 3) Se désabonner des pk qui ne sont plus référencés
+        // Collecter les tokens à désinscrire sans bloquer pendant l'await
+        let removed_tokens: Vec<CacheSubscription> = {
+            if removed_pks.is_empty() {
+                Vec::new()
+            } else {
+                let mut subs = self.inner.cache_subscriptions.write().unwrap();
+                removed_pks
+                    .into_iter()
+                    .filter_map(|pk| subs.remove(&pk))
+                    .collect()
+            }
+        };
+
+        if !removed_tokens.is_empty() {
+            if let Ok(cache) = audio_cache() {
+                for token in removed_tokens {
+                    cache.unsubscribe_broadcast(&token).await;
+                }
+            }
+        }
+
+        // 4) S'abonner aux nouveaux pk sans souscription
+        let missing: Vec<String> = {
+            let index = self.inner.track_index.read().unwrap();
+            let subs = self.inner.cache_subscriptions.read().unwrap();
+            index
+                .iter()
+                .filter_map(|(pk, playlists)| {
+                    if playlists.contains(&playlist_id.to_string()) && !subs.contains_key(pk) {
+                        Some(pk.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+
+        if !missing.is_empty() {
+            if let Ok(cache) = audio_cache() {
+                for pk in missing {
+                    let manager = self.clone();
+                    let token = cache
+                        .subscribe_broadcast(pk.clone(), move |event: &CacheBroadcastEvent| {
+                            manager.handle_cache_broadcast(event);
+                            // Garder l'abonnement tant que le pk est référencé
+                            let index = manager.inner.track_index.read().unwrap();
+                            index.contains_key(&event.pk)
+                        })
+                        .await;
+                    self.inner
+                        .cache_subscriptions
+                        .write()
+                        .unwrap()
+                        .insert(pk, token);
+                }
+            }
+        }
+    }
+
+    fn handle_cache_broadcast(&self, event: &CacheBroadcastEvent) {
+        let playlists = {
+            let index = self.inner.track_index.read().unwrap();
+            index.get(&event.pk).cloned()
+        };
+
+        if let Some(playlists) = playlists {
+            for playlist_id in playlists {
+                self.notify_playlist_track_played(&playlist_id, &event.pk, &event.qualifier);
+            }
         }
     }
 
@@ -220,6 +424,9 @@ impl PlaylistManager {
                 {
                     let mut core = playlist.core.write().await;
                     core.tracks = tracks;
+                    let snapshot = core.snapshot();
+                    drop(core);
+                    self.rebuild_track_index(&id, &snapshot).await;
                 }
 
                 // Acquérir le write lock
@@ -264,6 +471,9 @@ impl PlaylistManager {
                 {
                     let mut core = playlist.core.write().await;
                     core.tracks = tracks;
+                    let snapshot = core.snapshot();
+                    drop(core);
+                    self.rebuild_track_index(id, &snapshot).await;
                 }
 
                 playlists.insert(id.to_string(), playlist.clone());
@@ -285,6 +495,9 @@ impl PlaylistManager {
         }
 
         drop(playlists);
+
+        // Nettoyer l'index et les souscriptions
+        self.rebuild_track_index(id, &[]).await;
 
         // Supprimer de la DB
         if let Some(persistence) = &self.inner.persistence {
@@ -349,6 +562,11 @@ impl PlaylistManager {
     }
 }
 
+/// Souscrit au flux d'évènements playlist (Updated / TrackPlayed) avec timestamp.
+pub fn subscribe_events() -> broadcast::Receiver<PlaylistEventEnvelope> {
+    PlaylistManager::get().inner.event_tx.subscribe()
+}
+
 /// Helper pour supprimer une playlist (appel� depuis WriteHandle)
 pub(crate) async fn delete_playlist_internal(id: &str) -> Result<()> {
     PlaylistManager::get().delete_playlist(id).await
@@ -371,6 +589,14 @@ pub(crate) async fn delete_playlist_internal(id: &str) -> Result<()> {
 /// ```
 pub fn register_audio_cache(cache: Arc<pmoaudiocache::Cache>) {
     let _ = AUDIO_CACHE.set(cache);
+
+    // Si le PlaylistManager est déjà initialisé, synchroniser les abonnements
+    if let Some(manager) = PLAYLIST_MANAGER.get() {
+        let manager = manager.clone();
+        tokio::spawn(async move {
+            manager.sync_cache_subscriptions().await;
+        });
+    }
 }
 
 /// Helper pour acc�der au cache audio

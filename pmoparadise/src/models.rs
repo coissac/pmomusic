@@ -376,11 +376,11 @@ mod tests {
             cover: None,
             rating: None,
             extra: HashMap::new(),
-            gapless_url: todo!(),
-            sched_time_millis: todo!(),
-            song_id: todo!(),
-            artist_id: todo!(),
-            cover_large: todo!(),
+            gapless_url: Some("http://example.com/song.flac".into()),
+            sched_time_millis: Some(1_700_000_000_000),
+            song_id: Some("song-id".into()),
+            artist_id: Some("artist-id".into()),
+            cover_large: Some("cover-large.jpg".into()),
         };
 
         assert_eq!(song.end_time_ms(), 6000);

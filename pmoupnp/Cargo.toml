@@ -10,6 +10,7 @@ pmoutils = { path = "../pmoutils" }
 pmoserver = { path = "../pmoserver" }
 pmocovers = { path = "../pmocovers", features = ["pmoserver"] }
 pmoaudiocache = { path = "../pmoaudiocache", features = ["pmoserver"] }
+pmoplaylist = { path = "../pmoplaylist", optional = true, features = ["pmoserver"] }
 pmocache = { path = "../pmocache" }
 
 url = "2.5.7"
@@ -34,6 +35,12 @@ bevy_reflect_derive = "0.17.1"
 reqwest = "0.12.23"
 utoipa = { version = "5.3", features = ["axum_extras"] }
 socket2 = "0.5"
+
+[features]
+default = ["server"]
+server = ["pmoplaylist"]
+paradise = []
+qobuz = []
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

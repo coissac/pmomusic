@@ -14,9 +14,6 @@ pmometadata = { path = "../pmometadata" }
 # DIDL-Lite pour UPnP
 pmodidl = { path = "../pmodidl" }
 
-# UPnP (pour accéder au cache audio global)
-pmoupnp = { path = "../pmoupnp" }
-
 # Configuration (optionnelle)
 pmoconfig = { path = "../pmoconfig", optional = true }
 
@@ -37,7 +34,13 @@ once_cell = "1.20"
 
 # Logging
 tracing = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+axum = { version = "0.8", optional = true, features = ["macros", "json"] }
+tokio-stream = { version = "0.1", optional = true, features = ["sync"] }
+utoipa = { version = "5.4", optional = true, features = ["axum_extras", "chrono"] }
+async-stream = { version = "0.3", optional = true }
 
 [features]
 default = ["pmoconfig"]
 pmoconfig = ["dep:pmoconfig"]
+pmoserver = ["dep:axum", "dep:tokio-stream", "dep:utoipa", "dep:async-stream"]

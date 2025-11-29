@@ -10,15 +10,6 @@ use utoipa::OpenApi;
 /// L'API réutilise les handlers génériques de pmocache.
 #[derive(OpenApi)]
 #[openapi(
-    paths(
-        pmocache::api::list_items::<crate::cache::CoversConfig>,
-        pmocache::api::get_item_info::<crate::cache::CoversConfig>,
-        pmocache::api::get_download_status::<crate::cache::CoversConfig>,
-        pmocache::api::add_item::<crate::cache::CoversConfig>,
-        pmocache::api::delete_item::<crate::cache::CoversConfig>,
-        pmocache::api::purge_cache::<crate::cache::CoversConfig>,
-        pmocache::api::consolidate_cache::<crate::cache::CoversConfig>,
-    ),
     components(
         schemas(
             pmocache::CacheEntry,

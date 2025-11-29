@@ -38,6 +38,7 @@ impl WriteHandle {
         let record = Record::new(cache_pk);
         let mut core = self.playlist.core.write().await;
         core.push(record);
+        let snapshot = core.snapshot();
         drop(core);
 
         self.playlist.touch().await;
@@ -48,7 +49,11 @@ impl WriteHandle {
         }
 
         // Notifier le manager
-        crate::manager::PlaylistManager().notify_playlist_changed(&self.playlist.id);
+        let manager = crate::manager::PlaylistManager();
+        manager
+            .rebuild_track_index(&self.playlist.id, &snapshot)
+            .await;
+        manager.notify_playlist_changed(&self.playlist.id);
 
         Ok(())
     }
@@ -69,6 +74,7 @@ impl WriteHandle {
         let record = Record::with_ttl(cache_pk, ttl);
         let mut core = self.playlist.core.write().await;
         core.push(record);
+        let snapshot = core.snapshot();
         drop(core);
 
         self.playlist.touch().await;
@@ -78,7 +84,11 @@ impl WriteHandle {
             self.save_to_db().await?;
         }
 
-        crate::manager::PlaylistManager().notify_playlist_changed(&self.playlist.id);
+        let manager = crate::manager::PlaylistManager();
+        manager
+            .rebuild_track_index(&self.playlist.id, &snapshot)
+            .await;
+        manager.notify_playlist_changed(&self.playlist.id);
 
         Ok(())
     }
@@ -103,6 +113,7 @@ impl WriteHandle {
         // Ajouter atomiquement
         let mut core = self.playlist.core.write().await;
         core.push_all(records);
+        let snapshot = core.snapshot();
         drop(core);
 
         self.playlist.touch().await;
@@ -112,7 +123,11 @@ impl WriteHandle {
             self.save_to_db().await?;
         }
 
-        crate::manager::PlaylistManager().notify_playlist_changed(&self.playlist.id);
+        let manager = crate::manager::PlaylistManager();
+        manager
+            .rebuild_track_index(&self.playlist.id, &snapshot)
+            .await;
+        manager.notify_playlist_changed(&self.playlist.id);
 
         Ok(())
     }
@@ -125,6 +140,7 @@ impl WriteHandle {
 
         let mut core = self.playlist.core.write().await;
         core.clear();
+        let snapshot = core.snapshot();
         drop(core);
 
         self.playlist.touch().await;
@@ -133,7 +149,11 @@ impl WriteHandle {
             self.save_to_db().await?;
         }
 
-        crate::manager::PlaylistManager().notify_playlist_changed(&self.playlist.id);
+        let manager = crate::manager::PlaylistManager();
+        manager
+            .rebuild_track_index(&self.playlist.id, &snapshot)
+            .await;
+        manager.notify_playlist_changed(&self.playlist.id);
 
         Ok(())
     }
@@ -148,10 +168,13 @@ impl WriteHandle {
         self.playlist.mark_deleted();
 
         // Supprimer du manager
+        // Nettoyer les index puis supprimer du manager
+        let manager = crate::manager::PlaylistManager();
+        manager.rebuild_track_index(&self.playlist.id, &[]).await;
         crate::manager::delete_playlist_internal(&self.playlist.id).await?;
 
         // Notifier la suppression
-        crate::manager::PlaylistManager().notify_playlist_changed(&self.playlist.id);
+        manager.notify_playlist_changed(&self.playlist.id);
 
         Ok(())
     }
@@ -181,6 +204,7 @@ impl WriteHandle {
 
         let mut core = self.playlist.core.write().await;
         core.set_capacity(max_size);
+        let snapshot = core.snapshot();
         drop(core);
 
         self.playlist.touch().await;
@@ -189,7 +213,11 @@ impl WriteHandle {
             self.save_to_db().await?;
         }
 
-        crate::manager::PlaylistManager().notify_playlist_changed(&self.playlist.id);
+        let manager = crate::manager::PlaylistManager();
+        manager
+            .rebuild_track_index(&self.playlist.id, &snapshot)
+            .await;
+        manager.notify_playlist_changed(&self.playlist.id);
 
         Ok(())
     }
@@ -202,6 +230,7 @@ impl WriteHandle {
 
         let mut core = self.playlist.core.write().await;
         core.set_default_ttl(ttl);
+        let snapshot = core.snapshot();
         drop(core);
 
         self.playlist.touch().await;
@@ -210,7 +239,11 @@ impl WriteHandle {
             self.save_to_db().await?;
         }
 
-        crate::manager::PlaylistManager().notify_playlist_changed(&self.playlist.id);
+        let manager = crate::manager::PlaylistManager();
+        manager
+            .rebuild_track_index(&self.playlist.id, &snapshot)
+            .await;
+        manager.notify_playlist_changed(&self.playlist.id);
 
         Ok(())
     }

@@ -315,6 +315,17 @@ impl UpnpServerExt for Server {
         let openapi = pmoaudiocache::ApiDoc::openapi();
         self.add_openapi(api_router, openapi, "audio").await;
 
+        // API playlists (SSE + OpenAPI)
+        #[cfg(feature = "server")]
+        {
+            use pmoplaylist::{playlist_events_router, openapi::ApiDoc};
+            // SSE /api/playlists/events
+            self.add_router("/api/playlists", playlist_events_router()).await;
+            // OpenAPI pour playlists
+            let openapi = ApiDoc::openapi();
+            self.add_openapi(axum::Router::new(), openapi, "playlists").await;
+        }
+
         // Enregistrer le cache dans le registre global
         pmoaudiocache::register_audio_cache(cache.clone());
 

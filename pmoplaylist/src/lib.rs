@@ -50,6 +50,10 @@ mod manager;
 mod persistence;
 mod playlist;
 mod track;
+#[cfg(feature = "pmoserver")]
+mod sse;
+#[cfg(feature = "pmoserver")]
+pub mod openapi;
 
 #[cfg(feature = "pmoconfig")]
 mod config_ext;
@@ -58,7 +62,10 @@ mod config_ext;
 pub use error::{Error, Result};
 pub use handle::{ReadHandle, WriteHandle};
 pub use manager::{register_audio_cache, PlaylistManager, PlaylistManager as Manager};
+pub use manager::{PlaylistEvent, PlaylistEventEnvelope, PlaylistEventKind, subscribe_events};
 pub use track::PlaylistTrack;
+#[cfg(feature = "pmoserver")]
+pub use sse::playlist_events_router;
 
 #[cfg(feature = "pmoconfig")]
 pub use config_ext::PlaylistConfigExt;

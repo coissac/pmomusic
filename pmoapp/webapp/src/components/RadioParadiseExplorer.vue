@@ -113,6 +113,58 @@
       </div>
     </div>
 
+    <!-- Playlist SSE Events -->
+    <div class="playlist-events-section">
+      <div class="section-header">
+        <h3>📡 Playlist SSE (Radio Paradise)</h3>
+        <div class="section-actions">
+          <span class="status-chip" :class="{ connected: playlistSseConnected }">
+            {{ playlistSseConnected ? 'Connected' : 'Disconnected' }}
+          </span>
+          <button class="btn-tertiary" @click="restartPlaylistSse" :disabled="playlistSseConnecting">
+            {{ playlistSseConnecting ? 'Connecting…' : 'Restart' }}
+          </button>
+        </div>
+      </div>
+      <div class="section-meta">
+        <span>Watching playlists:</span>
+        <code v-for="pid in watchedPlaylistIds" :key="pid">{{ pid }}</code>
+      </div>
+      <div v-if="playlistSseError" class="error-message inline-error">
+        ❌ {{ playlistSseError }}
+      </div>
+      <div v-if="!playlistEvents.length" class="empty-placeholder">
+        Waiting for playlist events…
+      </div>
+      <div v-else class="events-list">
+        <div v-for="(event, idx) in playlistEvents" :key="idx" class="event-item">
+          <div class="event-header">
+            <span class="event-kind">{{ event.kind }}</span>
+            <span class="event-time">{{ event.timestamp ? formatTimestamp(new Date(event.timestamp)) : '—' }}</span>
+            <span class="event-source" v-if="event.source_client">from {{ event.source_client }}</span>
+          </div>
+          <div class="event-body">
+            <div class="event-row">
+              <span class="label">Playlist</span>
+              <code>{{ event.playlist_id }}</code>
+            </div>
+            <div class="event-row" v-if="event.cache_pk">
+              <span class="label">Cache PK</span>
+              <code>{{ event.cache_pk }}</code>
+            </div>
+            <div class="event-row" v-if="event.qualifier">
+              <span class="label">Qualifier</span>
+              <code>{{ event.qualifier }}</code>
+            </div>
+            <div class="event-row">
+              <span class="label">Received</span>
+              <span class="value">{{ formatTimestamp(event.received_at) }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Live Stream Metadata -->
     <div v-if="playbackMode === 'live'" class="stream-metadata-section">
       <div class="section-header">
@@ -600,7 +652,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import {
   listChannels,
   getNowPlaying,
@@ -652,6 +704,14 @@ const currentFormatDescription = computed(() => {
 
 const currentStreamUrl = computed(() => {
   return getStreamUrlFor(selectedFormat.value)
+})
+
+const watchedPlaylistIds = computed(() => {
+  const slug = currentChannelSlug.value
+  return [
+    `radio-paradise-live-${slug}`,
+    `radio-paradise-history-${slug}`
+  ]
 })
 
 // Test commands computed properties
@@ -740,6 +800,13 @@ const streamMetadataLastUpdated = ref(null)
 const playerMetadata = ref(null)
 const playerMetadataLoading = ref(false)
 const playerMetadataLastUpdated = ref(null)
+
+// Playlist SSE state
+const playlistEventSource = ref(null)
+const playlistEvents = ref([])
+const playlistSseConnected = ref(false)
+const playlistSseConnecting = ref(false)
+const playlistSseError = ref('')
 
 let refreshTimerId = null
 let playerMetadataTimerId = null
@@ -1113,10 +1180,65 @@ async function testGetSongByIndex() {
   }
 }
 
+function stopPlaylistSse() {
+  if (playlistEventSource.value) {
+    playlistEventSource.value.close()
+    playlistEventSource.value = null
+  }
+  playlistSseConnected.value = false
+  playlistSseConnecting.value = false
+}
+
+function startPlaylistSse() {
+  stopPlaylistSse()
+  playlistSseError.value = ''
+  playlistSseConnecting.value = true
+
+  const url = `${window.location.origin}/api/playlists/events`
+
+  const source = new EventSource(url)
+  source.onopen = () => {
+    playlistSseConnected.value = true
+    playlistSseConnecting.value = false
+  }
+  source.onerror = () => {
+    playlistSseConnected.value = false
+    playlistSseConnecting.value = false
+    playlistSseError.value = 'Erreur SSE playlist'
+  }
+
+  const handlePlaylistEvent = (ev) => {
+    try {
+      const data = JSON.parse(ev.data)
+      playlistEvents.value.unshift({
+        ...data,
+        received_at: new Date()
+      })
+      if (playlistEvents.value.length > 30) {
+        playlistEvents.value = playlistEvents.value.slice(0, 30)
+      }
+      playlistSseError.value = ''
+    } catch (e) {
+      playlistSseError.value = `Parse error: ${e.message}`
+    }
+  }
+
+  source.addEventListener('playlist', handlePlaylistEvent)
+  // Some browsers also deliver named events through the generic channel
+  source.onmessage = handlePlaylistEvent
+
+  playlistEventSource.value = source
+}
+
+function restartPlaylistSse() {
+  startPlaylistSse()
+}
+
 // Initialize on mount
 onMounted(async () => {
   await fetchChannels()
   await refreshNowPlaying()
+  startPlaylistSse()
 
   // Auto-refresh every 30 seconds
   refreshTimerId = window.setInterval(() => {
@@ -1133,6 +1255,15 @@ onUnmounted(() => {
   if (playerMetadataTimerId) {
     clearInterval(playerMetadataTimerId)
   }
+  stopPlaylistSse()
+})
+
+watch(currentChannelSlug, () => {
+  restartPlaylistSse()
+})
+
+watch(playbackMode, () => {
+  restartPlaylistSse()
 })
 </script>
 
@@ -2215,6 +2346,86 @@ onUnmounted(() => {
 .stream-metadata-section h3 {
   margin-top: 0;
   color: #00d4ff;
+}
+
+.playlist-events-section {
+  background: #141414;
+  border-radius: 8px;
+  padding: 20px;
+  margin: 20px 0;
+  border: 1px solid #333;
+}
+
+.status-chip {
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid #555;
+  color: #bbb;
+  font-size: 0.8rem;
+}
+
+.status-chip.connected {
+  border-color: rgba(46, 204, 113, 0.6);
+  color: #2ecc71;
+  background: rgba(46, 204, 113, 0.1);
+}
+
+.events-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.event-item {
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.event-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.event-kind {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #00d4ff;
+  font-weight: 700;
+}
+
+.event-time {
+  color: #9aa0a6;
+  font-size: 0.9rem;
+}
+
+.event-source {
+  color: #9aa0a6;
+  font-style: italic;
+  font-size: 0.85rem;
+}
+
+.event-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.event-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.event-row .label {
+  min-width: 80px;
 }
 
 .metadata-content {
