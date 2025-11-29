@@ -172,15 +172,12 @@ where
             max_age
         );
 
-        let endpoint = self
-            .endpoints
-            .entry(udn.clone())
-            .or_insert_with({
-                let udn = udn.clone();
-                let location = location.clone();
-                let server_header = server_header.clone();
-                move || DiscoveredEndpoint::new(udn, location, server_header, max_age)
-            });
+        let endpoint = self.endpoints.entry(udn.clone()).or_insert_with({
+            let udn = udn.clone();
+            let location = location.clone();
+            let server_header = server_header.clone();
+            move || DiscoveredEndpoint::new(udn, location, server_header, max_age)
+        });
 
         endpoint.touch(location, server_header, max_age);
         endpoint.types_seen.insert(device_type);

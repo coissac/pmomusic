@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::time::SystemTime;
 
+use crate::avtransport_client::AvTransportClient;
 use crate::model::{MediaServerId, MediaServerInfo, RendererId, RendererInfo};
 
 #[derive(Clone, Debug)]
@@ -16,6 +17,10 @@ pub struct DeviceRegistry {
     udn_index: HashMap<String, DeviceKey>,
 }
 
+/// Read-only view / trait for registry access.
+///
+/// Pour l’instant, on ne rajoute pas AVTransport ici, on se contente
+/// d’ajouter les helpers dans `impl DeviceRegistry`.
 pub trait DeviceRegistryRead {
     fn list_renderers(&self) -> Vec<RendererInfo>;
     fn list_servers(&self) -> Vec<MediaServerInfo>;
@@ -113,5 +118,44 @@ impl DeviceRegistry {
                 }
             }
         }
+    }
+
+    /// Helper: get a renderer by UDN (case-insensitive, via udn_index).
+    pub fn get_renderer_by_udn(&self, udn: &str) -> Option<RendererInfo> {
+        let lookup = udn.to_ascii_lowercase();
+        match self.udn_index.get(&lookup) {
+            Some(DeviceKey::Renderer(id)) => self.renderers.get(id).cloned(),
+            _ => None,
+        }
+    }
+
+    /// Construct an AvTransportClient for a given renderer id, if possible.
+    ///
+    /// Returns:
+    /// - Some(client) if the renderer exists AND has avtransport_* fields set
+    /// - None if renderer not found or no AVTransport service.
+    pub fn avtransport_client_for_renderer(
+        &self,
+        id: &RendererId,
+    ) -> Option<AvTransportClient> {
+        let info = self.renderers.get(id)?;
+
+        let service_type = info.avtransport_service_type.as_ref()?;
+        let control_url = info.avtransport_control_url.as_ref()?;
+
+        Some(AvTransportClient::new(
+            control_url.clone(),
+            service_type.clone(),
+        ))
+    }
+
+    /// Construct an AvTransportClient for a given UDN, if possible.
+    pub fn avtransport_client_for_udn(&self, udn: &str) -> Option<AvTransportClient> {
+        let info = self.get_renderer_by_udn(udn)?;
+
+        let service_type = info.avtransport_service_type?;
+        let control_url = info.avtransport_control_url?;
+
+        Some(AvTransportClient::new(control_url, service_type))
     }
 }

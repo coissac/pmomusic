@@ -1,11 +1,12 @@
 use std::io::BufReader;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use quick_xml::{Error as XmlError, Reader, events::Event};
 use thiserror::Error;
 use tracing::{debug, warn};
 
-use crate::discovery::DiscoveredEndpoint;
+use crate::avtransport_client::AvTransportClient;
+use crate::discovery::{DeviceDescriptionProvider, DiscoveredEndpoint};
 use crate::model::{
     MediaServerCapabilities, MediaServerId, MediaServerInfo, RendererCapabilities, RendererId,
     RendererInfo, RendererProtocol,
@@ -28,6 +29,7 @@ pub enum DescriptionError {
     MissingField(&'static str),
 }
 
+/// Parsed device description, plus (optionally) AVTransport endpoint.
 #[derive(Debug, Default)]
 struct ParsedDeviceDescription {
     udn: Option<String>,
@@ -36,6 +38,10 @@ struct ParsedDeviceDescription {
     manufacturer: Option<String>,
     model_name: Option<String>,
     service_types: Vec<String>,
+
+    // New: AVTransport endpoint (if present in serviceList)
+    avtransport_service_type: Option<String>,
+    avtransport_control_url: Option<String>,
 }
 
 impl ParsedDeviceDescription {
@@ -53,6 +59,7 @@ impl ParsedDeviceDescription {
     }
 }
 
+/// HTTP-based XML description provider (UPnP device description.xml)
 pub struct HttpXmlDescriptionProvider {
     timeout_secs: u64,
 }
@@ -62,6 +69,7 @@ impl HttpXmlDescriptionProvider {
         Self { timeout_secs }
     }
 
+    /// Fetch and parse the device description.xml at endpoint.location.
     fn fetch_and_parse(
         &self,
         endpoint: &DiscoveredEndpoint,
@@ -72,7 +80,7 @@ impl HttpXmlDescriptionProvider {
         );
 
         let config = Agent::config_builder()
-            .timeout_global(Some(Duration::from_secs(self.timeout_secs)))
+            .timeout_global(Some(std::time::Duration::from_secs(self.timeout_secs)))
             .build();
 
         let agent: Agent = config.into();
@@ -99,6 +107,10 @@ impl HttpXmlDescriptionProvider {
         let mut in_service = false;
         let mut current_tag: Option<String> = None;
 
+        // New: track current serviceType + controlURL while inside <service>...</service>
+        let mut current_service_type: Option<String> = None;
+        let mut current_control_url: Option<String> = None;
+
         loop {
             match reader.read_event_into(&mut buf)? {
                 Event::Start(e) => {
@@ -112,6 +124,8 @@ impl HttpXmlDescriptionProvider {
                             if in_device {
                                 in_service = true;
                                 current_tag = None;
+                                current_service_type = None;
+                                current_control_url = None;
                             }
                         }
                         _ => {
@@ -128,7 +142,31 @@ impl HttpXmlDescriptionProvider {
                             in_device = false;
                         }
                         "service" => {
-                            in_service = false;
+                            if in_device && in_service {
+                                // We just finished a <service> block: if this is AVTransport,
+                                // store its endpoint in parsed.*
+                                if let (Some(st), Some(ctrl)) =
+                                    (&current_service_type, &current_control_url)
+                                {
+                                    let lower = st.to_ascii_lowercase();
+                                    if lower.contains("urn:schemas-upnp-org:service:avtransport:") {
+                                        // Only set once; if multiple AVTransport services exist,
+                                        // we keep the first one.
+                                        if parsed.avtransport_service_type.is_none() {
+                                            parsed.avtransport_service_type = Some(st.clone());
+                                            parsed.avtransport_control_url = Some(ctrl.clone());
+                                            debug!(
+                                                "Found AVTransport service for {}: type={} controlURL={}",
+                                                endpoint.udn, st, ctrl
+                                            );
+                                        }
+                                    }
+                                }
+
+                                in_service = false;
+                                current_service_type = None;
+                                current_control_url = None;
+                            }
                         }
                         _ => {}
                     }
@@ -138,10 +176,7 @@ impl HttpXmlDescriptionProvider {
                     if in_device {
                         if let Some(tag) = &current_tag {
                             // quick-xml ≥ 0.37 : unescape() → decode()
-                            let text = e
-                                .decode() // Result<Cow<'_, str>, EncodingError>
-                                .map_err(XmlError::Encoding)? // -> quick_xml::Error, donc DescriptionError::Xml via #[from]
-                                .into_owned(); // String
+                            let text = e.decode().map_err(XmlError::Encoding)?.into_owned();
 
                             match tag.as_str() {
                                 "UDN" => {
@@ -160,7 +195,11 @@ impl HttpXmlDescriptionProvider {
                                     parsed.model_name = Some(text);
                                 }
                                 "serviceType" if in_service => {
-                                    parsed.service_types.push(text);
+                                    parsed.service_types.push(text.clone());
+                                    current_service_type = Some(text);
+                                }
+                                "controlURL" if in_service => {
+                                    current_control_url = Some(text);
                                 }
                                 _ => {}
                             }
@@ -216,6 +255,11 @@ impl HttpXmlDescriptionProvider {
             online: true,
             last_seen: now,
             max_age: endpoint.max_age,
+            avtransport_service_type: parsed.avtransport_service_type.clone(),
+            avtransport_control_url: parsed
+                .avtransport_control_url
+                .as_ref()
+                .map(|ctrl| resolve_control_url(&endpoint.location, ctrl)),
         })
     }
 
@@ -251,7 +295,38 @@ impl HttpXmlDescriptionProvider {
             max_age: endpoint.max_age,
         })
     }
+
+    /// New helper: build an AvTransportClient directly from a discovered endpoint.
+    ///
+    /// Returns Ok(Some(client)) if an AVTransport service with a controlURL is present,
+    /// Ok(None) if no AVTransport service was found.
+    pub fn build_avtransport_client(
+        &self,
+        endpoint: &DiscoveredEndpoint,
+    ) -> Result<Option<AvTransportClient>, DescriptionError> {
+        let parsed = self.fetch_and_parse(endpoint)?;
+
+        let service_type = match &parsed.avtransport_service_type {
+            Some(st) => st.clone(),
+            None => return Ok(None),
+        };
+
+        let raw_control = match &parsed.avtransport_control_url {
+            Some(ctrl) => ctrl.clone(),
+            None => return Ok(None),
+        };
+
+        let control_url = resolve_control_url(&endpoint.location, &raw_control);
+        debug!(
+            "AVTransport client for {}: service_type={} control_url={}",
+            endpoint.udn, service_type, control_url
+        );
+
+        Ok(Some(AvTransportClient::new(control_url, service_type)))
+    }
 }
+
+// --- capabilities detection unchanged ---
 
 fn detect_renderer_capabilities(service_types: &[String]) -> RendererCapabilities {
     let mut caps = RendererCapabilities::default();
@@ -321,7 +396,32 @@ fn detect_server_capabilities(service_types: &[String]) -> MediaServerCapabiliti
     caps
 }
 
-use crate::discovery::DeviceDescriptionProvider;
+/// Resolve a possibly relative controlURL against the description URL.
+///
+/// - If `control_url` is already absolute (starts with http:// or https://), it is returned as-is.
+/// - Otherwise, it is resolved against the scheme://host:port of `description_url`.
+fn resolve_control_url(description_url: &str, control_url: &str) -> String {
+    if control_url.starts_with("http://") || control_url.starts_with("https://") {
+        return control_url.to_string();
+    }
+
+    // Extract "scheme://host[:port]" from description_url
+    if let Some((scheme, rest)) = description_url.split_once("://") {
+        if let Some(pos) = rest.find('/') {
+            let authority = &rest[..pos];
+            let base = format!("{}://{}", scheme, authority);
+
+            if control_url.starts_with('/') {
+                return format!("{}{}", base, control_url);
+            } else {
+                return format!("{}/{}", base, control_url);
+            }
+        }
+    }
+
+    // Fallback: just return the raw control_url if we cannot parse
+    control_url.to_string()
+}
 
 impl DeviceDescriptionProvider for HttpXmlDescriptionProvider {
     fn build_renderer_info(&self, endpoint: &DiscoveredEndpoint) -> Option<RendererInfo> {

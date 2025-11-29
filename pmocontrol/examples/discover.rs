@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use pmocontrol::{ControlPoint, DeviceRegistryRead, MediaServerInfo, RendererInfo};
 use pmocontrol::RendererProtocol;
+use pmocontrol::{ControlPoint, DeviceRegistryRead, MediaServerInfo, RendererInfo};
 
 fn main() -> std::io::Result<()> {
     // Un tout petit logging optionnel

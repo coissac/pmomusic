@@ -40,6 +40,9 @@ pub struct RendererInfo {
     pub online: bool,
     pub last_seen: std::time::SystemTime,
     pub max_age: u32,
+
+    pub avtransport_service_type: Option<String>,
+    pub avtransport_control_url: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
