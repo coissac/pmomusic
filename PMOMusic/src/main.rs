@@ -81,6 +81,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .expect("Failed to register MediaServer");
 
+    // Enregistrer l'instance ContentDirectory pour les notifications GENA
+    if let Some(cd_service) = server_instance.get_service("ContentDirectory") {
+        pmomediaserver::contentdirectory::state::register_instance(&cd_service);
+    }
+
     // Initialiser les ProtocolInfo du MediaServer
     server_instance.init_protocol_info();
 

@@ -4,6 +4,7 @@
 //! exposing live streams and historical playlists for all 4 channels.
 
 use crate::channels::{ChannelDescriptor, ALL_CHANNELS};
+use std::fmt;
 use pmosource::pmodidl::{Container, Item, Resource};
 use pmosource::{
     async_trait, AudioFormat, BrowseResult, MusicSource, MusicSourceError, Result,
@@ -32,7 +33,7 @@ const DEFAULT_IMAGE: &[u8] = include_bytes!("../assets/default.webp");
 /// - Live playlist track: `radio-paradise:channel:{slug}:liveplaylist:track:{pk}`
 /// - History container: `radio-paradise:channel:{slug}:history`
 /// - History track: `radio-paradise:channel:{slug}:history:track:{pk}`
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RadioParadiseSource {
     /// Base URL for streaming server (e.g., "http://localhost:8080")
     base_url: String,
@@ -42,6 +43,16 @@ pub struct RadioParadiseSource {
     last_change: Arc<RwLock<SystemTime>>,
     /// Tokens des callbacks enregistrés auprès du PlaylistManager
     callback_tokens: Arc<std::sync::Mutex<Vec<u64>>>,
+    /// Notifier optionnel pour signaler les mises à jour de conteneurs au ContentDirectory
+    container_notifier: Option<Arc<dyn Fn(&[String]) + Send + Sync + 'static>>,
+}
+
+impl fmt::Debug for RadioParadiseSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RadioParadiseSource")
+            .field("base_url", &self.base_url)
+            .finish_non_exhaustive()
+    }
 }
 
 impl RadioParadiseSource {
@@ -61,7 +72,17 @@ impl RadioParadiseSource {
             update_counter: Arc::new(RwLock::new(0)),
             last_change: Arc::new(RwLock::new(SystemTime::now())),
             callback_tokens: Arc::new(std::sync::Mutex::new(Vec::new())),
+            container_notifier: None,
         }
+    }
+
+    /// Injecte un notifier pour propager les changements de playlists vers le ContentDirectory
+    pub fn with_container_notifier(
+        mut self,
+        notifier: Arc<dyn Fn(&[String]) + Send + Sync + 'static>,
+    ) -> Self {
+        self.container_notifier = Some(notifier);
+        self
     }
 
     /// Build a live stream URL for a channel
@@ -104,11 +125,35 @@ impl RadioParadiseSource {
 
         for pid in ids {
             let weak = Arc::downgrade(self);
+            let pid_clone = pid.clone();
             let token = mgr.register_callback(move |changed_id| {
+                let pid = pid_clone.clone();
                 if changed_id == pid {
                     if let Some(strong) = weak.upgrade() {
                         tokio::spawn(async move {
                             strong.bump_update_counter().await;
+                            // Notifier ContentDirectory des conteneurs concernés
+                            let containers: Vec<String> = if pid.contains("history") {
+                                // history playlist -> container history
+                                ALL_CHANNELS
+                                    .iter()
+                                    .find(|ch| pid.ends_with(ch.slug))
+                                    .map(|ch| vec![format!("radio-paradise:channel:{}:history", ch.slug)])
+                                    .unwrap_or_default()
+                            } else {
+                                // live playlist -> container liveplaylist
+                                ALL_CHANNELS
+                                    .iter()
+                                    .find(|ch| pid.ends_with(ch.slug))
+                                    .map(|ch| vec![format!("radio-paradise:channel:{}:liveplaylist", ch.slug)])
+                                    .unwrap_or_default()
+                            };
+
+                            if !containers.is_empty() {
+                                if let Some(notifier) = strong.container_notifier.as_ref() {
+                                    notifier(&containers);
+                                }
+                            }
                         });
                     }
                 }

@@ -173,7 +173,8 @@ impl SourcesExt for Server {
 
     #[cfg(feature = "paradise")]
     async fn register_paradise(&mut self) -> Result<()> {
-        use pmoparadise::{RadioParadiseClient, RadioParadiseExt, RadioParadiseSource};
+        use pmoparadise::{RadioParadiseExt, RadioParadiseSource};
+        use crate::contentdirectory::state;
 
         tracing::info!("Initializing Radio Paradise source...");
 
@@ -181,7 +182,13 @@ impl SourcesExt for Server {
         let base_url = self.base_url();
 
         // Créer la source Radio Paradise (utilise le singleton PlaylistManager)
-        let source = Arc::new(RadioParadiseSource::new(base_url.to_string()));
+        let notifier = Arc::new(|containers: &[String]| {
+            let refs: Vec<&str> = containers.iter().map(|s| s.as_str()).collect();
+            state::notify_containers_updated(&refs);
+        });
+        let source = Arc::new(
+            RadioParadiseSource::new(base_url.to_string()).with_container_notifier(notifier),
+        );
 
         // Brancher les callbacks de playlists (live/history) pour signaler les updates
         source.attach_playlist_callbacks();

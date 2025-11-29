@@ -579,10 +579,10 @@ impl ServiceInstance {
             .add_post_handler_with_state(&self.control_route(), control_handler, instance_control)
             .await;
 
-        // Handler événements
+        // Handler événements (SUBSCRIBE/UNSUBSCRIBE sont des verbes spécifiques, pas GET)
         let instance_event = self.clone();
         server
-            .add_handler_with_state(&self.event_route(), event_sub_handler, instance_event)
+            .add_any_handler_with_state(&self.event_route(), event_sub_handler, instance_event)
             .await;
 
         Ok(())

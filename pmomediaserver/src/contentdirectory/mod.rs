@@ -77,12 +77,13 @@ use pmoupnp::define_service;
 pub mod actions;
 pub mod handlers;
 pub mod variables;
+pub mod state;
 
 use actions::{BROWSE, GETSEARCHCAPABILITIES, GETSORTCAPABILITIES, GETSYSTEMUPDATEID, SEARCH};
 use variables::{
     A_ARG_TYPE_BROWSEFLAG, A_ARG_TYPE_COUNT, A_ARG_TYPE_FILTER, A_ARG_TYPE_INDEX,
     A_ARG_TYPE_OBJECTID, A_ARG_TYPE_RESULT, A_ARG_TYPE_SEARCHCRITERIA, A_ARG_TYPE_SORTCRITERIA,
-    A_ARG_TYPE_UPDATEID, SEARCHCAPABILITIES, SORTCAPABILITIES, SYSTEMUPDATEID,
+    A_ARG_TYPE_UPDATEID, SEARCHCAPABILITIES, SORTCAPABILITIES, SYSTEMUPDATEID, CONTAINERUPDATEIDS,
 };
 
 // Service ContentDirectory:1 conforme à la spécification UPnP AV pour MediaServer
@@ -102,6 +103,7 @@ define_service! {
             SEARCHCAPABILITIES,
             SORTCAPABILITIES,
             SYSTEMUPDATEID,
+            CONTAINERUPDATEIDS,
         ],
         actions: [
             BROWSE,

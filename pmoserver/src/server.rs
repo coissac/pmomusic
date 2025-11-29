@@ -17,7 +17,7 @@ use crate::logs::{LogState, init_logging, log_dump, log_sse};
 use axum::extract::State;
 use axum::handler::Handler;
 use axum::response::Redirect;
-use axum::routing::{get, post};
+use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use axum_embed::ServeEmbed;
 use pmoconfig::get_config;
@@ -230,6 +230,29 @@ impl Server {
     {
         let route = Router::new()
             .route("/", get(handler.clone()))
+            .with_state(state.clone());
+
+        let mut r = self.router.write().await;
+        *r = if path == "/" {
+            std::mem::take(&mut *r).merge(route)
+        } else {
+            std::mem::take(&mut *r).nest(path, route)
+        };
+    }
+
+    /// Ajoute un handler qui accepte tous les verbes HTTP (ANY) avec état
+    pub async fn add_any_handler_with_state<H, T, S>(
+        &mut self,
+        path: &str,
+        handler: H,
+        state: S,
+    ) where
+        H: Handler<T, S> + Clone + 'static,
+        T: 'static,
+        S: Clone + Send + Sync + 'static,
+    {
+        let route = Router::new()
+            .route("/", any(handler.clone()))
             .with_state(state.clone());
 
         let mut r = self.router.write().await;
