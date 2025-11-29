@@ -19,5 +19,5 @@ members = [
     "pmosource",
     "pmoplaylist",
     "pmoflac",
-    "pmometadata",
+    "pmometadata", "pmocontrol",
 ]
