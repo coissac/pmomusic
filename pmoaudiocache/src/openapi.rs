@@ -8,6 +8,13 @@ use utoipa::OpenApi;
 #[derive(OpenApi)]
 #[openapi(
     paths(
+        pmocache::api::list_items::<crate::cache::AudioConfig>,
+        pmocache::api::get_item_info::<crate::cache::AudioConfig>,
+        pmocache::api::get_download_status::<crate::cache::AudioConfig>,
+        pmocache::api::add_item::<crate::cache::AudioConfig>,
+        pmocache::api::delete_item::<crate::cache::AudioConfig>,
+        pmocache::api::purge_cache::<crate::cache::AudioConfig>,
+        pmocache::api::consolidate_cache::<crate::cache::AudioConfig>,
         crate::api::get_cover_url,
     ),
     components(

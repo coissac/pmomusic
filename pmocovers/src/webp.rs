@@ -2,7 +2,10 @@ use anyhow::Result;
 use image::{imageops::FilterType, DynamicImage};
 use webp::{Encoder, WebPMemory};
 
-/// Encode une image en format WebP avec un niveau de qualité de 85%
+/// Encode une image en format WebP avec un niveau de qualité de 85%.
+///
+/// Utilise l'encodeur `webp` et retourne les octets encodés prêts à être
+/// écrits sur disque ou envoyés sur le réseau.
 ///
 /// # Arguments
 ///
@@ -28,7 +31,7 @@ pub fn encode_webp(img: &DynamicImage) -> Result<Vec<u8>> {
     Ok(webp_data.to_vec())
 }
 
-/// Redimensionne une image pour l'inscrire dans un carré de taille donnée
+/// Redimensionne une image pour l'inscrire dans un carré de taille donnée.
 ///
 /// Cette fonction préserve le ratio d'aspect de l'image originale en la redimensionnant
 /// pour qu'elle tienne dans un carré, puis la centre sur un fond transparent.
@@ -82,7 +85,11 @@ pub fn ensure_square(img: &DynamicImage, size: u32) -> DynamicImage {
     square
 }
 
-/// Génère une variante redimensionnée d'une image en cache
+/// Génère une variante redimensionnée d'une image en cache.
+///
+/// Repose sur le fichier original (`orig`) du cache, applique `ensure_square`,
+/// encode en WebP et persiste la variante `{pk}.{size}.webp` pour éviter les
+/// recalculs sur les requêtes suivantes.
 ///
 /// Cette fonction crée (ou récupère si déjà existante) une variante redimensionnée
 /// d'une image. La variante est mise en cache sur disque pour éviter les

@@ -11,6 +11,9 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// Fournit un accès direct à une implémentation `TrackMetadata` basée sur le cache.
+///
+/// Utilise `AudioCacheTrackMetadata` comme backend, ce qui garantit que toutes
+/// les lectures/écritures passent par la DB `pmocache` sans recharger le FLAC.
 pub trait AudioTrackMetadataExt {
     fn track_metadata(&self, pk: impl Into<String>) -> Arc<RwLock<dyn TrackMetadata>>;
 }
@@ -27,6 +30,8 @@ impl AudioTrackMetadataExt for Arc<pmocache::Cache<AudioConfig>> {
 /// Cette version remplace l'ancienne macro `define_metadata_properties!` qui
 /// accédait directement aux clés de la DB. Les méthodes restent asynchrones et
 /// retournent `Option` ; en cas d'erreur backend, elles lèvent `anyhow::Error`.
+/// Utile dans les handlers HTTP ou les services qui n'ont besoin que de quelques
+/// champs sans manipuler explicitement un `TrackMetadata`.
 pub trait AudioMetadataExt {
     async fn get_title(&self, pk: &str) -> anyhow::Result<Option<String>>;
     async fn get_artist(&self, pk: &str) -> anyhow::Result<Option<String>>;

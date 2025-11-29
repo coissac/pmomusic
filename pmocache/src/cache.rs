@@ -12,10 +12,42 @@ use anyhow::{anyhow, bail, Result};
 use serde_json::{Number, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::RwLock;
 use tracing;
+
+/// Informations transmises lors de la diffusion d'un élément du cache via HTTP.
+///
+/// - Emis uniquement quand une réponse 2xx est renvoyée par les routes HTTP générées
+///   (fichier complet, stream progressif ou variante générée).
+/// - Inclut le qualifier utilisé pour la requête afin de distinguer `orig`, `stream`, etc.
+/// - Peut être utilisé pour synchroniser des clients (ex: WebSocket) ou tracer les hits.
+#[derive(Debug, Clone)]
+pub struct CacheBroadcastEvent {
+    /// Identifiant unique du fichier servi.
+    pub pk: String,
+    /// Qualifier (paramètre de route) utilisé pour cette diffusion.
+    pub qualifier: String,
+    /// Nom logique du cache (`CacheConfig::cache_name`).
+    pub cache_name: &'static str,
+    /// Type du cache (`CacheConfig::cache_type`).
+    pub cache_type: &'static str,
+}
+
+/// Handle retourné lors de l'abonnement à un évènement de diffusion.
+///
+/// Conservez-le pour pouvoir vous désabonner explicitement via
+/// [`Cache::unsubscribe_broadcast`]. Le couple `(pk, id)` identifie de manière
+/// unique la callback enregistrée.
+#[derive(Debug, Clone)]
+pub struct CacheSubscription {
+    pub pk: String,
+    pub id: u64,
+}
+
+type CacheServeCallback = Arc<dyn Fn(&CacheBroadcastEvent) -> bool + Send + Sync>;
 
 /// Taille minimale de prébuffering par défaut (512 KB = ~5 secondes de FLAC)
 pub const DEFAULT_PREBUFFER_SIZE: u64 = 512 * 1024;
@@ -59,6 +91,10 @@ pub struct Cache<C: CacheConfig> {
     pub db: Arc<DB>,
     /// Map des downloads en cours (pk -> Download)
     downloads: Arc<RwLock<HashMap<String, Arc<Download>>>>,
+    /// Callback(s) à déclencher lorsqu'un élément est servi via HTTP (pk -> callbacks)
+    serve_subscribers: Arc<RwLock<HashMap<String, Vec<(u64, CacheServeCallback)>>>>,
+    /// Générateur d'identifiants uniques pour les abonnements
+    subscriber_counter: AtomicU64,
     /// Factory pour créer des transformers (optionnel)
     transformer_factory: Option<Arc<dyn Fn() -> StreamTransformer + Send + Sync>>,
     /// Taille minimale de prébuffering en octets (0 = désactivé)
@@ -314,6 +350,8 @@ impl<C: CacheConfig> Cache<C> {
             limit,
             db: Arc::new(db),
             downloads: Arc::new(RwLock::new(HashMap::new())),
+            serve_subscribers: Arc::new(RwLock::new(HashMap::new())),
+            subscriber_counter: AtomicU64::new(1),
             transformer_factory,
             min_prebuffer_size: DEFAULT_PREBUFFER_SIZE,
             _phantom: std::marker::PhantomData,
@@ -346,6 +384,102 @@ impl<C: CacheConfig> Cache<C> {
     /// Retourne la taille minimale de prébuffering configurée
     pub fn get_prebuffer_size(&self) -> u64 {
         self.min_prebuffer_size
+    }
+
+    /// S'abonne aux diffusions HTTP pour un `pk` donné.
+    ///
+    /// La callback est appelée à chaque fois qu'un élément est servi avec succès via les routes
+    /// HTTP du cache. Si la callback retourne `false`, elle est automatiquement désinscrite ;
+    /// retourner `true` permet de rester abonné aux diffusions suivantes.
+    ///
+    /// Retourne un [`CacheSubscription`] à conserver pour se désabonner explicitement via
+    /// [`Cache::unsubscribe_broadcast`].
+    ///
+    /// # Exemple
+    ///
+    /// ```rust,no_run
+    /// use pmocache::{Cache, CacheConfig, CacheSubscription};
+    /// use std::sync::Arc;
+    ///
+    /// struct MyConfig;
+    /// impl CacheConfig for MyConfig {
+    ///     fn file_extension() -> &'static str { "dat" }
+    /// }
+    ///
+    /// # async fn demo() -> anyhow::Result<()> {
+    /// let cache = Arc::new(Cache::<MyConfig>::new("/tmp/cache", 100)?);
+    /// let token: CacheSubscription = cache
+    ///     .subscribe_broadcast("abc123", |event| {
+    ///         println!("{} served with param {}", event.pk, event.qualifier);
+    ///         // Retourner true pour rester abonné
+    ///         true
+    ///     })
+    ///     .await;
+    ///
+    /// // ... plus tard, pour se désabonner explicitement :
+    /// cache.unsubscribe_broadcast(&token).await;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn subscribe_broadcast<F>(
+        &self,
+        pk: impl Into<String>,
+        callback: F,
+    ) -> CacheSubscription
+    where
+        F: Fn(&CacheBroadcastEvent) -> bool + Send + Sync + 'static,
+    {
+        let pk = pk.into();
+        let id = self.subscriber_counter.fetch_add(1, Ordering::Relaxed);
+        let mut subscribers = self.serve_subscribers.write().await;
+        subscribers
+            .entry(pk.clone())
+            .or_default()
+            .push((id, Arc::new(callback)));
+
+        CacheSubscription { pk, id }
+    }
+
+    /// Désabonne une callback précédemment enregistrée via [`Cache::subscribe_broadcast`].
+    ///
+    /// N'a aucun effet si le token est inconnu ou déjà désinscrit.
+    pub async fn unsubscribe_broadcast(&self, token: &CacheSubscription) {
+        let mut subscribers = self.serve_subscribers.write().await;
+        if let Some(list) = subscribers.get_mut(&token.pk) {
+            list.retain(|(id, _)| *id != token.id);
+            if list.is_empty() {
+                subscribers.remove(&token.pk);
+            }
+        }
+    }
+
+    /// Notifie les abonnés qu'un élément du cache a été diffusé via HTTP.
+    ///
+    /// Interne au crate : les routes Axum appellent cette méthode lorsqu'une réponse 2xx est
+    /// renvoyée. Les callbacks qui retournent `false` sont retirées.
+    pub(crate) async fn notify_broadcast(&self, pk: &str, qualifier: &str) {
+        let mut subscribers = self.serve_subscribers.write().await;
+        if let Some(callbacks) = subscribers.get_mut(pk) {
+            let event = CacheBroadcastEvent {
+                pk: pk.to_string(),
+                qualifier: qualifier.to_string(),
+                cache_name: C::cache_name(),
+                cache_type: C::cache_type(),
+            };
+
+            let mut to_keep = Vec::new();
+            for (id, callback) in callbacks.drain(..) {
+                if callback(&event) {
+                    to_keep.push((id, callback));
+                }
+            }
+
+            if to_keep.is_empty() {
+                subscribers.remove(pk);
+            } else {
+                callbacks.extend(to_keep);
+            }
+        }
     }
 
     /// Télécharge un fichier depuis une URL et l'ajoute au cache

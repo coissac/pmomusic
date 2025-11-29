@@ -8,12 +8,25 @@ fn map_db_err(err: rusqlite::Error) -> MetadataError {
     MetadataError::Backend(err.to_string())
 }
 
+/// Implémentation `TrackMetadata` adossée au cache audio.
+///
+/// Cette couche lit/écrit directement dans la table `metadata` de `pmocache`
+/// pour un `pk` donné. Elle se comporte comme une façade `TrackMetadata`
+/// classique mais repose sur la DB du cache plutôt que sur un fichier taggé,
+/// ce qui permet :
+/// - d'exposer les métadonnées immédiatement après ingestion/transform ;
+/// - de servir des lecteurs UPnP/DLNA sans relire le FLAC sur disque ;
+/// - de persister les mises à jour d'un client (ex: renommer un titre).
 pub struct AudioCacheTrackMetadata {
     cache: Arc<crate::Cache>,
     pk: String,
 }
 
 impl AudioCacheTrackMetadata {
+    /// Construit un adaptateur `TrackMetadata` pour un `pk` du cache audio.
+    ///
+    /// Le type implémente ensuite toutes les méthodes du trait `pmometadata::TrackMetadata`
+    /// en stockant les données dans la base SQLite de `pmocache`.
     pub fn new(cache: Arc<crate::Cache>, pk: impl Into<String>) -> Self {
         Self {
             cache,

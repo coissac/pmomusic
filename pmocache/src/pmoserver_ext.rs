@@ -124,13 +124,21 @@ async fn serve_file_with_streaming<C: CacheConfig>(
     param_generator: Option<ParamGenerator<C>>,
 ) -> Response {
     let file_path = cache.get_file_path_with_qualifier(pk, param);
+    let qualifier = param.to_string();
 
     // Si le fichier n'existe pas et qu'on a un générateur, l'utiliser
     if !file_path.exists() {
         if let Some(generator) = param_generator {
             if let Some(data) = generator(cache.clone(), pk.to_string(), param.to_string()).await {
                 // Le générateur a créé les données, les servir directement
-                return (StatusCode::OK, [("content-type", content_type)], data).into_response();
+                let response =
+                    (StatusCode::OK, [("content-type", content_type)], data).into_response();
+
+                if response.status().is_success() {
+                    cache.notify_broadcast(pk, &qualifier).await;
+                }
+
+                return response;
             }
         }
     }
@@ -145,12 +153,24 @@ async fn serve_file_with_streaming<C: CacheConfig>(
         // Le fichier est en cours de téléchargement
         if !download.finished().await {
             // Streaming progressif
-            return stream_file_progressive(file_path, download, content_type).await;
+            let response = stream_file_progressive(file_path, download, content_type).await;
+
+            if response.status().is_success() {
+                cache.notify_broadcast(pk, &qualifier).await;
+            }
+
+            return response;
         }
     }
 
     // Fichier terminé ou pas de download en cours, servir normalement
-    serve_complete_file(file_path, content_type).await
+    let response = serve_complete_file(file_path, content_type).await;
+
+    if response.status().is_success() {
+        cache.notify_broadcast(pk, &qualifier).await;
+    }
+
+    response
 }
 
 /// Stream un fichier en cours de téléchargement de manière progressive
