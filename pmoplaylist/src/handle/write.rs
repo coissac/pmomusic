@@ -47,6 +47,9 @@ impl WriteHandle {
             self.save_to_db().await?;
         }
 
+        // Notifier le manager
+        crate::manager::PlaylistManager().notify_playlist_changed(&self.playlist.id);
+
         Ok(())
     }
 
@@ -74,6 +77,8 @@ impl WriteHandle {
         if self.playlist.persistent {
             self.save_to_db().await?;
         }
+
+        crate::manager::PlaylistManager().notify_playlist_changed(&self.playlist.id);
 
         Ok(())
     }
@@ -107,6 +112,8 @@ impl WriteHandle {
             self.save_to_db().await?;
         }
 
+        crate::manager::PlaylistManager().notify_playlist_changed(&self.playlist.id);
+
         Ok(())
     }
 
@@ -126,6 +133,8 @@ impl WriteHandle {
             self.save_to_db().await?;
         }
 
+        crate::manager::PlaylistManager().notify_playlist_changed(&self.playlist.id);
+
         Ok(())
     }
 
@@ -141,6 +150,9 @@ impl WriteHandle {
         // Supprimer du manager
         crate::manager::delete_playlist_internal(&self.playlist.id).await?;
 
+        // Notifier la suppression
+        crate::manager::PlaylistManager().notify_playlist_changed(&self.playlist.id);
+
         Ok(())
     }
 
@@ -155,6 +167,8 @@ impl WriteHandle {
         if self.playlist.persistent {
             self.save_to_db().await?;
         }
+
+        crate::manager::PlaylistManager().notify_playlist_changed(&self.playlist.id);
 
         Ok(())
     }
@@ -175,6 +189,8 @@ impl WriteHandle {
             self.save_to_db().await?;
         }
 
+        crate::manager::PlaylistManager().notify_playlist_changed(&self.playlist.id);
+
         Ok(())
     }
 
@@ -193,6 +209,8 @@ impl WriteHandle {
         if self.playlist.persistent {
             self.save_to_db().await?;
         }
+
+        crate::manager::PlaylistManager().notify_playlist_changed(&self.playlist.id);
 
         Ok(())
     }

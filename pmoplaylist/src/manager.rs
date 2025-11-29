@@ -8,9 +8,10 @@ use crate::Result;
 use once_cell::sync::OnceCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 use std::time::Duration;
 use tokio::sync::RwLock;
+use std::sync::RwLock as StdRwLock;
 
 /// Singleton PlaylistManager
 static PLAYLIST_MANAGER: OnceCell<PlaylistManager> = OnceCell::new();
@@ -22,6 +23,8 @@ static AUDIO_CACHE: OnceCell<Arc<pmoaudiocache::Cache>> = OnceCell::new();
 struct ManagerInner {
     playlists: RwLock<HashMap<String, Arc<Playlist>>>,
     persistence: Option<Arc<PersistenceManager>>,
+    callbacks: StdRwLock<HashMap<u64, Arc<dyn Fn(&str) + Send + Sync>>>,
+    cb_counter: AtomicU64,
 }
 
 /// Gestionnaire central de playlists
@@ -47,6 +50,8 @@ impl PlaylistManager {
             inner: Arc::new(ManagerInner {
                 playlists: RwLock::new(HashMap::new()),
                 persistence: Some(persistence.clone()),
+                callbacks: StdRwLock::new(HashMap::new()),
+                cb_counter: AtomicU64::new(1),
             }),
         };
 
@@ -121,6 +126,33 @@ impl PlaylistManager {
         }
 
         Ok(WriteHandle::new(playlist, write_token))
+    }
+
+    /// Enregistre un callback de modification de playlist.
+    ///
+    /// Retourne un jeton (u64) pour désenregistrer plus tard.
+    pub fn register_callback<F>(&self, cb: F) -> u64
+    where
+        F: Fn(&str) + Send + Sync + 'static,
+    {
+        let token = self.inner.cb_counter.fetch_add(1, Ordering::Relaxed);
+        let mut guard = self.inner.callbacks.write().unwrap();
+        guard.insert(token, Arc::new(cb));
+        token
+    }
+
+    /// Désenregistre un callback via son jeton.
+    pub fn unregister_callback(&self, token: u64) {
+        let mut guard = self.inner.callbacks.write().unwrap();
+        guard.remove(&token);
+    }
+
+    /// Notifie tous les callbacks qu'une playlist a changé.
+    pub(crate) fn notify_playlist_changed(&self, id: &str) {
+        let guard = self.inner.callbacks.read().unwrap();
+        for cb in guard.values() {
+            cb(id);
+        }
     }
 
     /// R�cup�re un write handle (cr�e �ph�m�re si n'existe pas)

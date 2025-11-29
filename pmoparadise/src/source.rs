@@ -28,6 +28,8 @@ const DEFAULT_IMAGE: &[u8] = include_bytes!("../assets/default.webp");
 /// - Root: `radio-paradise`
 /// - Channel container: `radio-paradise:channel:{slug}`
 /// - Live stream item: `radio-paradise:channel:{slug}:live`
+/// - Live playlist container: `radio-paradise:channel:{slug}:liveplaylist`
+/// - Live playlist track: `radio-paradise:channel:{slug}:liveplaylist:track:{pk}`
 /// - History container: `radio-paradise:channel:{slug}:history`
 /// - History track: `radio-paradise:channel:{slug}:history:track:{pk}`
 #[derive(Debug, Clone)]
@@ -38,6 +40,8 @@ pub struct RadioParadiseSource {
     update_counter: Arc<RwLock<u32>>,
     /// Last change timestamp
     last_change: Arc<RwLock<SystemTime>>,
+    /// Tokens des callbacks enregistrés auprès du PlaylistManager
+    callback_tokens: Arc<std::sync::Mutex<Vec<u64>>>,
 }
 
 impl RadioParadiseSource {
@@ -56,6 +60,7 @@ impl RadioParadiseSource {
             base_url: base_url.into(),
             update_counter: Arc::new(RwLock::new(0)),
             last_change: Arc::new(RwLock::new(SystemTime::now())),
+            callback_tokens: Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 
@@ -67,6 +72,49 @@ impl RadioParadiseSource {
     /// Build an OGG-FLAC live stream URL for clients that support it
     fn build_live_ogg_url(&self, slug: &str) -> String {
         format!("{}/radioparadise/stream/{}/ogg", self.base_url, slug)
+    }
+
+    /// Incrémente l'update_counter et met à jour last_change
+    async fn bump_update_counter(&self) {
+        {
+            let mut c = self.update_counter.write().await;
+            *c = c.wrapping_add(1).max(1);
+        }
+        let mut lc = self.last_change.write().await;
+        *lc = SystemTime::now();
+    }
+
+    /// Enregistre des callbacks sur les playlists live/historique pour notifier les changements
+    pub fn attach_playlist_callbacks(self: &Arc<Self>) {
+        use pmoplaylist::PlaylistManager;
+
+        // Préparer les IDs de playlists à surveiller (live + history pour chaque canal)
+        let ids: Vec<String> = ALL_CHANNELS
+            .iter()
+            .flat_map(|ch| {
+                vec![
+                    Self::live_playlist_id(ch.slug),
+                    Self::history_playlist_id(ch.slug),
+                ]
+            })
+            .collect();
+
+        let mgr = PlaylistManager();
+        let mut tokens = self.callback_tokens.lock().unwrap();
+
+        for pid in ids {
+            let weak = Arc::downgrade(self);
+            let token = mgr.register_callback(move |changed_id| {
+                if changed_id == pid {
+                    if let Some(strong) = weak.upgrade() {
+                        tokio::spawn(async move {
+                            strong.bump_update_counter().await;
+                        });
+                    }
+                }
+            });
+            tokens.push(token);
+        }
     }
 
     /// URL de fallback pour l'image par défaut de la source
@@ -152,6 +200,11 @@ impl RadioParadiseSource {
         format!("radio-paradise-history-{}", slug)
     }
 
+    /// Live playlist id for a channel
+    fn live_playlist_id(slug: &str) -> String {
+        format!("radio-paradise-live-{}", slug)
+    }
+
     /// Get channel descriptor by slug
     fn get_channel_by_slug(slug: &str) -> Option<&'static ChannelDescriptor> {
         ALL_CHANNELS.iter().find(|ch| ch.slug == slug)
@@ -168,6 +221,15 @@ impl RadioParadiseSource {
             ["radio-paradise", "channel", slug, "live"] => ObjectIdType::LiveStream {
                 slug: (*slug).to_string(),
             },
+            ["radio-paradise", "channel", slug, "liveplaylist"] => ObjectIdType::LivePlaylist {
+                slug: (*slug).to_string(),
+            },
+            ["radio-paradise", "channel", slug, "liveplaylist", "track", pk] => {
+                ObjectIdType::LivePlaylistTrack {
+                    slug: (*slug).to_string(),
+                    pk: (*pk).to_string(),
+                }
+            }
             ["radio-paradise", "channel", slug, "history"] => ObjectIdType::History {
                 slug: (*slug).to_string(),
             },
@@ -191,6 +253,21 @@ impl RadioParadiseSource {
             searchable: Some("1".to_string()),
             title: descriptor.display_name.to_string(),
             class: "object.container".to_string(),
+            containers: vec![],
+            items: vec![],
+        }
+    }
+
+    /// Build the live playlist container for a channel
+    fn build_live_playlist_container(&self, descriptor: &ChannelDescriptor) -> Container {
+        Container {
+            id: format!("radio-paradise:channel:{}:liveplaylist", descriptor.slug),
+            parent_id: format!("radio-paradise:channel:{}", descriptor.slug),
+            restricted: Some("1".to_string()),
+            child_count: None,
+            searchable: Some("0".to_string()),
+            title: format!("{} - Live Playlist", descriptor.display_name),
+            class: "object.container.playlistContainer".to_string(),
             containers: vec![],
             items: vec![],
         }
@@ -332,6 +409,82 @@ impl RadioParadiseSource {
         Ok(items)
     }
 
+    /// Get items from live playlist (current stream queue)
+    #[cfg(feature = "playlist")]
+    async fn get_live_playlist_items(
+        &self,
+        slug: &str,
+        _offset: usize,
+        count: usize,
+    ) -> Result<Vec<Item>> {
+        let playlist_id = Self::live_playlist_id(slug);
+
+        let manager = pmoplaylist::PlaylistManager();
+        let reader = manager.get_read_handle(&playlist_id).await.map_err(|e| {
+            MusicSourceError::BrowseError(format!("Failed to get live playlist {}: {}", playlist_id, e))
+        })?;
+
+        let mut items = reader.to_items(count).await.map_err(|e| {
+            MusicSourceError::BrowseError(format!(
+                "Failed to read live playlist entries: {}",
+                e
+            ))
+        })?;
+
+        for item in items.iter_mut() {
+            // Ajuster id/parent/url pour coller au schéma Radio Paradise
+            if let Some(resource) = item.resources.first_mut() {
+                if let Some(pk) = resource.url.split('/').last() {
+                    item.id = format!(
+                        "radio-paradise:channel:{}:liveplaylist:track:{}",
+                        slug, pk
+                    );
+                    item.parent_id = format!(
+                        "radio-paradise:channel:{}:liveplaylist",
+                        slug
+                    );
+
+                    if resource.url.starts_with('/') {
+                        resource.url = format!("{}{}", self.base_url, resource.url);
+                    }
+                }
+            }
+
+            if item.genre.is_none() {
+                item.genre = Some("Radio Paradise".to_string());
+            }
+
+            if let Some(art) = item.album_art.as_mut() {
+                if art.starts_with('/') {
+                    *art = format!("{}{}", self.base_url, art);
+                }
+            } else {
+                item.album_art = Some(self.default_cover_url());
+            }
+        }
+
+        Ok(items)
+    }
+
+    /// Get a single item from the live playlist by pk
+    #[cfg(feature = "playlist")]
+    async fn get_live_playlist_item(&self, slug: &str, pk: &str) -> Result<Item> {
+        let items = self.get_live_playlist_items(slug, 0, 1000).await?;
+        let expected_id = format!(
+            "radio-paradise:channel:{}:liveplaylist:track:{}",
+            slug, pk
+        );
+        for item in items {
+            if item.id == expected_id {
+                return Ok(item);
+            }
+        }
+        Err(MusicSourceError::ObjectNotFound(format!(
+            "Track with pk {} not found in live playlist",
+            pk
+        )))
+    }
+
 }
 
 /// Types of object IDs in the Radio Paradise source
@@ -340,6 +493,8 @@ enum ObjectIdType {
     Root,
     Channel { slug: String },
     LiveStream { slug: String },
+    LivePlaylist { slug: String },
+    LivePlaylistTrack { slug: String, pk: String },
     History { slug: String },
     HistoryTrack { slug: String, pk: String },
     Unknown,
@@ -393,6 +548,7 @@ impl MusicSource for RadioParadiseSource {
                 })?;
 
                 let live_item = self.build_live_stream_item(descriptor);
+                let live_playlist_container = self.build_live_playlist_container(descriptor);
 
                 #[cfg(feature = "playlist")]
                 let history_container = self.build_history_container_with_count(descriptor).await;
@@ -400,7 +556,7 @@ impl MusicSource for RadioParadiseSource {
                 let history_container = self.build_history_container(descriptor);
 
                 Ok(BrowseResult::Mixed {
-                    containers: vec![history_container],
+                    containers: vec![live_playlist_container, history_container],
                     items: vec![live_item],
                 })
             }
@@ -439,10 +595,50 @@ impl MusicSource for RadioParadiseSource {
                 Ok(BrowseResult::Items(vec![item]))
             }
 
+            ObjectIdType::LivePlaylist { slug } => {
+                // Playlist du live : container + items
+                let descriptor = Self::get_channel_by_slug(&slug).ok_or_else(|| {
+                    MusicSourceError::ObjectNotFound(format!("Unknown channel: {}", slug))
+                })?;
+
+                #[cfg(feature = "playlist")]
+                {
+                    let container = self.build_live_playlist_container(descriptor);
+                    let items = self.get_live_playlist_items(&slug, 0, 100).await?;
+                    Ok(BrowseResult::Mixed {
+                        containers: vec![container],
+                        items,
+                    })
+                }
+
+                #[cfg(not(feature = "playlist"))]
+                {
+                    let container = self.build_live_playlist_container(descriptor);
+                    Ok(BrowseResult::Containers(vec![container]))
+                }
+            }
+
             ObjectIdType::HistoryTrack { slug, pk } => {
                 // Return metadata for the history track item
                 let item = self.get_item(object_id).await?;
                 Ok(BrowseResult::Items(vec![item]))
+            }
+
+            ObjectIdType::LivePlaylistTrack { slug, pk } => {
+                // Détails d'un titre du live (playlist live)
+                #[cfg(feature = "playlist")]
+                {
+                    let item = self.get_live_playlist_item(&slug, &pk).await?;
+                    Ok(BrowseResult::Items(vec![item]))
+                }
+
+                #[cfg(not(feature = "playlist"))]
+                {
+                    let _ = (slug, pk);
+                    Err(MusicSourceError::NotSupported(
+                        "Playlist feature not enabled".to_string(),
+                    ))
+                }
             }
 
             ObjectIdType::Unknown => Err(MusicSourceError::ObjectNotFound(format!(
@@ -460,6 +656,11 @@ impl MusicSource for RadioParadiseSource {
             }
 
             ObjectIdType::HistoryTrack { pk, .. } => {
+                // Return cached audio URL
+                Ok(format!("{}/cache/audio/{}", self.base_url, pk))
+            }
+
+            ObjectIdType::LivePlaylistTrack { pk, .. } => {
                 // Return cached audio URL
                 Ok(format!("{}/cache/audio/{}", self.base_url, pk))
             }
@@ -507,6 +708,14 @@ impl MusicSource for RadioParadiseSource {
                 },
             ]),
             ObjectIdType::HistoryTrack { .. } => Ok(vec![AudioFormat {
+                format_id: "flac".to_string(),
+                mime_type: "audio/flac".to_string(),
+                sample_rate: Some(44100),
+                bit_depth: Some(16),
+                bitrate: None,
+                channels: Some(2),
+            }]),
+            ObjectIdType::LivePlaylistTrack { .. } => Ok(vec![AudioFormat {
                 format_id: "flac".to_string(),
                 mime_type: "audio/flac".to_string(),
                 sample_rate: Some(44100),
@@ -590,6 +799,79 @@ impl MusicSource for RadioParadiseSource {
 
                     Err(MusicSourceError::ObjectNotFound(format!(
                         "Track with pk {} not found in history",
+                        pk
+                    )))
+                }
+
+                #[cfg(not(feature = "playlist"))]
+                {
+                    let _ = (slug, pk);
+                    Err(MusicSourceError::NotSupported(
+                        "Playlist feature not enabled".to_string(),
+                    ))
+                }
+            }
+
+            ObjectIdType::LivePlaylistTrack { slug, pk } => {
+                #[cfg(feature = "playlist")]
+                {
+                    let playlist_id = Self::live_playlist_id(&slug);
+                    let manager = pmoplaylist::PlaylistManager();
+                    let reader = manager.get_read_handle(&playlist_id).await.map_err(|e| {
+                        MusicSourceError::BrowseError(format!(
+                            "Failed to get live playlist {}: {}",
+                            playlist_id, e
+                        ))
+                    })?;
+
+                    let items = reader.to_items(1000).await.map_err(|e| {
+                        MusicSourceError::BrowseError(format!(
+                            "Failed to read live playlist entries: {}",
+                            e
+                        ))
+                    })?;
+
+                    for mut item in items {
+                        if let Some(resource) = item.resources.first_mut() {
+                            if let Some(pk2) = resource.url.split('/').last() {
+                                item.id = format!(
+                                    "radio-paradise:channel:{}:liveplaylist:track:{}",
+                                    slug, pk2
+                                );
+                                item.parent_id = format!(
+                                    "radio-paradise:channel:{}:liveplaylist",
+                                    slug
+                                );
+
+                                if resource.url.starts_with('/') {
+                                    resource.url = format!("{}{}", self.base_url, resource.url);
+                                }
+                            }
+                        }
+
+                        if item.genre.is_none() {
+                            item.genre = Some("Radio Paradise".to_string());
+                        }
+
+                        if let Some(art) = item.album_art.as_mut() {
+                            if art.starts_with('/') {
+                                *art = format!("{}{}", self.base_url, art);
+                            }
+                        } else {
+                            item.album_art = Some(self.default_cover_url());
+                        }
+
+                        let expected_id = format!(
+                            "radio-paradise:channel:{}:liveplaylist:track:{}",
+                            slug, pk
+                        );
+                        if item.id == expected_id {
+                            return Ok(item);
+                        }
+                    }
+
+                    Err(MusicSourceError::ObjectNotFound(format!(
+                        "Track with pk {} not found in live playlist",
                         pk
                     )))
                 }

@@ -181,10 +181,13 @@ impl SourcesExt for Server {
         let base_url = self.base_url();
 
         // Créer la source Radio Paradise (utilise le singleton PlaylistManager)
-        let source = RadioParadiseSource::new(base_url.to_string());
+        let source = Arc::new(RadioParadiseSource::new(base_url.to_string()));
+
+        // Brancher les callbacks de playlists (live/history) pour signaler les updates
+        source.attach_playlist_callbacks();
 
         // Enregistrer la source
-        self.register_music_source(Arc::new(source)).await;
+        self.register_music_source(source.clone()).await;
 
         tracing::info!("✅ Radio Paradise source registered successfully");
 
