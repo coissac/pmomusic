@@ -9,9 +9,9 @@ fn main() {
         creator: Some("Test Artist".to_string()),
         class: "object.item.audioItem.musicTrack".to_string(),
         artist: Some("Test Artist".to_string()),
-        album: None,  // Pas d'album
+        album: None, // Pas d'album
         genre: None,
-        album_art: None,  // Pas d'albumArtURI
+        album_art: None, // Pas d'albumArtURI
         album_art_pk: None,
         date: None,
         original_track_number: None,
@@ -42,7 +42,10 @@ fn main() {
     println!("=== Output from quick_xml::se::to_string() ===");
     println!("{}", xml);
     println!("\n=== Length: {} bytes ===", xml.len());
-    println!("\n=== Starts with '<?xml' ? {} ===", xml.starts_with("<?xml"));
+    println!(
+        "\n=== Starts with '<?xml' ? {} ===",
+        xml.starts_with("<?xml")
+    );
     println!("\n=== With manual XML declaration ===");
     let with_decl = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>{}", xml);
     println!("{}", with_decl);

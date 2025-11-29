@@ -21,12 +21,13 @@ use crate::{
     models::{Block, EventId},
     playlist_feeder::RadioParadisePlaylistFeeder,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context as AnyhowContext, Result};
+use once_cell::sync::OnceCell;
 use pmoaudio::{AudioError, AudioPipelineNode};
 use pmoaudio_ext::{
     FlacClientStream, IcyClientStream, MetadataSnapshot, OggFlacClientStream, OggFlacStreamHandle,
-    PlaylistSource, StreamHandle, StreamingFlacSink, StreamingOggFlacSink, TrackBoundaryCoverNode,
-    StreamingSinkOptions,
+    PlaylistSource, StreamHandle, StreamingFlacSink, StreamingOggFlacSink, StreamingSinkOptions,
+    TrackBoundaryCoverNode,
 };
 use pmoaudiocache::{get_audio_cache, Cache as AudioCache};
 use pmocovers::{get_cover_cache, Cache as CoverCache};
@@ -203,9 +204,14 @@ impl ParadiseStreamChannel {
         // Propager server_base_url dans les options pour que les encoders injectent les covers du cache
         let mut config = config;
         if let Some(ref base) = config.server_base_url {
-            config.flac_options =
-                config.flac_options.clone().with_server_base_url(Some(base.clone()));
-            config.ogg_options = config.ogg_options.clone().with_server_base_url(Some(base.clone()));
+            config.flac_options = config
+                .flac_options
+                .clone()
+                .with_server_base_url(Some(base.clone()));
+            config.ogg_options = config
+                .ogg_options
+                .clone()
+                .with_server_base_url(Some(base.clone()));
         }
         let cover_cache = cover_cache
             .or_else(|| history.as_ref().map(|opts| opts.cover_cache.clone()))
@@ -312,6 +318,7 @@ impl ParadiseStreamChannel {
             activity_notify: Notify::new(),
             stop_token,
             current_block: Mutex::new(None),
+            prefetch_lock: Mutex::new(()),
         });
 
         let pipeline_state = state.clone();
@@ -496,6 +503,12 @@ impl Drop for ParadiseStreamChannel {
 
 const MAX_BLOCK_LEAD: Duration = Duration::from_secs(3600);
 const BLOCK_LEAD_CHECK_CHUNK: Duration = Duration::from_secs(300);
+const LIVE_PREFETCH_MIN_TRACKS: usize = 5;
+const LIVE_PREFETCH_TIMEOUT: Duration = Duration::from_secs(10);
+const LIVE_PREFETCH_POLL_INTERVAL: Duration = Duration::from_millis(200);
+const LIVE_PREFETCH_MAX_BLOCKS: usize = 4;
+
+static GLOBAL_CHANNEL_MANAGER: OnceCell<std::sync::Weak<ParadiseChannelManager>> = OnceCell::new();
 
 struct ChannelState {
     descriptor: ChannelDescriptor,
@@ -510,6 +523,7 @@ struct ChannelState {
     activity_notify: Notify,
     stop_token: CancellationToken,
     current_block: Mutex<Option<EventId>>,
+    prefetch_lock: Mutex<()>,
 }
 
 impl ChannelState {
@@ -577,6 +591,66 @@ impl ChannelState {
             }
 
             return BlockReadiness::Ready;
+        }
+    }
+
+    fn live_playlist_id(&self) -> String {
+        format!("radio-paradise-live-{}", self.descriptor.slug)
+    }
+
+    async fn prefetch_until_horizon(&self) -> Result<()> {
+        let _guard = self.prefetch_lock.lock().await;
+        let playlist_id = self.live_playlist_id();
+        let manager = PlaylistManager::get();
+        let reader = manager
+            .get_read_handle(&playlist_id)
+            .await
+            .with_context(|| format!("Failed to get live playlist {}", playlist_id))?;
+        let start = Instant::now();
+        let mut next_event: Option<EventId> = None;
+        let mut attempts = 0usize;
+
+        loop {
+            let available = reader
+                .remaining()
+                .await
+                .with_context(|| format!("Failed to inspect playlist {}", playlist_id))?;
+            if available >= LIVE_PREFETCH_MIN_TRACKS {
+                return Ok(());
+            }
+
+            if start.elapsed() >= LIVE_PREFETCH_TIMEOUT {
+                warn!(
+                    "Prefetch timeout for channel {} ({} tracks available)",
+                    self.descriptor.display_name, available
+                );
+                return Ok(());
+            }
+
+            if attempts >= LIVE_PREFETCH_MAX_BLOCKS {
+                warn!(
+                    "Prefetch block limit reached for channel {} ({} tracks available)",
+                    self.descriptor.display_name, available
+                );
+                return Ok(());
+            }
+
+            match self.client.get_block(next_event).await {
+                Ok(block) => {
+                    attempts += 1;
+                    next_event = Some(block.end_event);
+                    self.feeder.push_block_id(block.event).await;
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to fetch block during prefetch for channel {}: {}",
+                        self.descriptor.display_name, e
+                    );
+                    return Ok(());
+                }
+            }
+
+            tokio::time::sleep(LIVE_PREFETCH_POLL_INTERVAL).await;
         }
     }
 
@@ -866,12 +940,7 @@ impl ParadiseChannelManager {
             );
             let channel = match tokio::time::timeout(
                 Duration::from_secs(20),
-                ParadiseStreamChannel::new(
-                    descriptor,
-                    config,
-                    cover_cache.clone(),
-                    history_opts,
-                ),
+                ParadiseStreamChannel::new(descriptor, config, cover_cache.clone(), history_opts),
             )
             .await
             {
@@ -917,5 +986,26 @@ impl ParadiseChannelManager {
 
     pub fn iter(&self) -> impl Iterator<Item = &Arc<ParadiseStreamChannel>> {
         self.channels.values()
+    }
+
+    pub async fn prefetch_until_horizon(&self, channel_id: u8) -> Result<()> {
+        let channel = self
+            .get(channel_id)
+            .ok_or_else(|| anyhow!("Unknown channel id {}", channel_id))?;
+        channel.prefetch_until_horizon().await
+    }
+}
+
+pub fn register_global_channel_manager(manager: Arc<ParadiseChannelManager>) {
+    let _ = GLOBAL_CHANNEL_MANAGER.set(Arc::downgrade(&manager));
+}
+
+pub fn get_global_channel_manager() -> Option<Arc<ParadiseChannelManager>> {
+    GLOBAL_CHANNEL_MANAGER.get().and_then(|weak| weak.upgrade())
+}
+
+impl ParadiseStreamChannel {
+    pub async fn prefetch_until_horizon(&self) -> Result<()> {
+        self.state.prefetch_until_horizon().await
     }
 }

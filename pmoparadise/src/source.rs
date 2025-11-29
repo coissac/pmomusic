@@ -4,19 +4,25 @@
 //! exposing live streams and historical playlists for all 4 channels.
 
 use crate::channels::{ChannelDescriptor, ALL_CHANNELS};
-use std::fmt;
 use pmosource::pmodidl::{Container, Item, Resource};
 use pmosource::{
     async_trait, AudioFormat, BrowseResult, MusicSource, MusicSourceError, Result,
     SourceCapabilities,
 };
+use std::fmt;
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::RwLock;
-
 
 /// Default Radio Paradise image (embedded in binary)
 const DEFAULT_IMAGE: &[u8] = include_bytes!("../assets/default.webp");
+
+#[cfg(feature = "playlist")]
+const LIVE_PLAYLIST_MIN_READY_ITEMS: usize = 5;
+#[cfg(feature = "playlist")]
+const LIVE_PLAYLIST_READY_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(feature = "playlist")]
+const LIVE_PLAYLIST_READY_POLL: Duration = Duration::from_millis(200);
 
 /// RadioParadiseSource - UPnP ContentDirectory source for Radio Paradise
 ///
@@ -142,14 +148,21 @@ impl RadioParadiseSource {
                                 ALL_CHANNELS
                                     .iter()
                                     .find(|ch| pid.ends_with(ch.slug))
-                                    .map(|ch| vec![format!("radio-paradise:channel:{}:history", ch.slug)])
+                                    .map(|ch| {
+                                        vec![format!("radio-paradise:channel:{}:history", ch.slug)]
+                                    })
                                     .unwrap_or_default()
                             } else {
                                 // live playlist -> container liveplaylist
                                 ALL_CHANNELS
                                     .iter()
                                     .find(|ch| pid.ends_with(ch.slug))
-                                    .map(|ch| vec![format!("radio-paradise:channel:{}:liveplaylist", ch.slug)])
+                                    .map(|ch| {
+                                        vec![format!(
+                                            "radio-paradise:channel:{}:liveplaylist",
+                                            ch.slug
+                                        )]
+                                    })
                                     .unwrap_or_default()
                             };
 
@@ -181,7 +194,10 @@ impl RadioParadiseSource {
                 match response.json::<serde_json::Value>().await {
                     Ok(json) => {
                         // Parse metadata from JSON and create an Item
-                        let title = json["title"].as_str().unwrap_or("Unknown Title").to_string();
+                        let title = json["title"]
+                            .as_str()
+                            .unwrap_or("Unknown Title")
+                            .to_string();
                         let artist = json["artist"].as_str().map(|s| s.to_string());
                         let album = json["album"].as_str().map(|s| s.to_string());
                         let year = json["year"].as_u64().map(|y| y as u32);
@@ -201,10 +217,12 @@ impl RadioParadiseSource {
                             .or_else(|| json["duration"].as_f64())
                             .map(|secs| {
                                 let total_secs = secs as u64;
-                                format!("{}:{:02}:{:02}",
+                                format!(
+                                    "{}:{:02}:{:02}",
                                     total_secs / 3600,
                                     (total_secs % 3600) / 60,
-                                    total_secs % 60)
+                                    total_secs % 60
+                                )
                             });
 
                         // Create the item with current metadata
@@ -252,6 +270,42 @@ impl RadioParadiseSource {
     /// Live playlist id for a channel
     fn live_playlist_id(slug: &str) -> String {
         format!("radio-paradise-live-{}", slug)
+    }
+
+    #[cfg(feature = "playlist")]
+    async fn wait_for_live_playlist_ready(&self, slug: &str) -> Result<()> {
+        let playlist_id = Self::live_playlist_id(slug);
+        let manager = pmoplaylist::PlaylistManager();
+        let reader = manager.get_read_handle(&playlist_id).await.map_err(|e| {
+            MusicSourceError::BrowseError(format!(
+                "Failed to get live playlist {}: {}",
+                playlist_id, e
+            ))
+        })?;
+        let start = Instant::now();
+        loop {
+            match reader.remaining().await {
+                Ok(count) if count >= LIVE_PLAYLIST_MIN_READY_ITEMS => return Ok(()),
+                Ok(_) => {}
+                Err(e) => {
+                    return Err(MusicSourceError::BrowseError(format!(
+                        "Failed to inspect live playlist {}: {}",
+                        playlist_id, e
+                    )));
+                }
+            }
+
+            if start.elapsed() >= LIVE_PLAYLIST_READY_TIMEOUT {
+                tracing::warn!(
+                    "Timeout waiting for live playlist {} to reach {} items",
+                    playlist_id,
+                    LIVE_PLAYLIST_MIN_READY_ITEMS
+                );
+                return Ok(());
+            }
+
+            tokio::time::sleep(LIVE_PLAYLIST_READY_POLL).await;
+        }
     }
 
     /// Get channel descriptor by slug
@@ -380,7 +434,10 @@ impl RadioParadiseSource {
 
     /// Build a history container with accurate child count from playlist
     #[cfg(feature = "playlist")]
-    async fn build_history_container_with_count(&self, descriptor: &ChannelDescriptor) -> Container {
+    async fn build_history_container_with_count(
+        &self,
+        descriptor: &ChannelDescriptor,
+    ) -> Container {
         let mut container = self.build_history_container(descriptor);
 
         // Try to get actual count from playlist
@@ -466,32 +523,48 @@ impl RadioParadiseSource {
         _offset: usize,
         count: usize,
     ) -> Result<Vec<Item>> {
+        #[cfg(all(feature = "playlist", feature = "pmoaudio"))]
+        if let Some(descriptor) = Self::get_channel_by_slug(slug) {
+            if let Some(manager) = crate::stream_channel::get_global_channel_manager() {
+                if let Err(e) = manager.prefetch_until_horizon(descriptor.id).await {
+                    tracing::warn!(
+                        "Failed to prefetch live playlist for {}: {}",
+                        descriptor.slug,
+                        e
+                    );
+                }
+            }
+        }
+
+        #[cfg(feature = "playlist")]
+        if let Err(e) = self.wait_for_live_playlist_ready(slug).await {
+            tracing::warn!(
+                "Failed to wait for live playlist readiness on {}: {}",
+                slug,
+                e
+            );
+        }
+
         let playlist_id = Self::live_playlist_id(slug);
 
         let manager = pmoplaylist::PlaylistManager();
         let reader = manager.get_read_handle(&playlist_id).await.map_err(|e| {
-            MusicSourceError::BrowseError(format!("Failed to get live playlist {}: {}", playlist_id, e))
+            MusicSourceError::BrowseError(format!(
+                "Failed to get live playlist {}: {}",
+                playlist_id, e
+            ))
         })?;
 
         let mut items = reader.to_items(count).await.map_err(|e| {
-            MusicSourceError::BrowseError(format!(
-                "Failed to read live playlist entries: {}",
-                e
-            ))
+            MusicSourceError::BrowseError(format!("Failed to read live playlist entries: {}", e))
         })?;
 
         for item in items.iter_mut() {
             // Ajuster id/parent/url pour coller au schéma Radio Paradise
             if let Some(resource) = item.resources.first_mut() {
                 if let Some(pk) = resource.url.split('/').last() {
-                    item.id = format!(
-                        "radio-paradise:channel:{}:liveplaylist:track:{}",
-                        slug, pk
-                    );
-                    item.parent_id = format!(
-                        "radio-paradise:channel:{}:liveplaylist",
-                        slug
-                    );
+                    item.id = format!("radio-paradise:channel:{}:liveplaylist:track:{}", slug, pk);
+                    item.parent_id = format!("radio-paradise:channel:{}:liveplaylist", slug);
 
                     if resource.url.starts_with('/') {
                         resource.url = format!("{}{}", self.base_url, resource.url);
@@ -519,10 +592,7 @@ impl RadioParadiseSource {
     #[cfg(feature = "playlist")]
     async fn get_live_playlist_item(&self, slug: &str, pk: &str) -> Result<Item> {
         let items = self.get_live_playlist_items(slug, 0, 1000).await?;
-        let expected_id = format!(
-            "radio-paradise:channel:{}:liveplaylist:track:{}",
-            slug, pk
-        );
+        let expected_id = format!("radio-paradise:channel:{}:liveplaylist:track:{}", slug, pk);
         for item in items {
             if item.id == expected_id {
                 return Ok(item);
@@ -533,7 +603,6 @@ impl RadioParadiseSource {
             pk
         )))
     }
-
 }
 
 /// Types of object IDs in the Radio Paradise source
@@ -619,7 +688,8 @@ impl MusicSource for RadioParadiseSource {
 
                 #[cfg(feature = "playlist")]
                 {
-                    let history_container = self.build_history_container_with_count(descriptor).await;
+                    let history_container =
+                        self.build_history_container_with_count(descriptor).await;
                     let items = self.get_history_items(&slug, 0, 100).await?;
                     Ok(BrowseResult::Mixed {
                         containers: vec![history_container],
@@ -821,14 +891,14 @@ impl MusicSource for RadioParadiseSource {
                     for mut item in items {
                         if let Some(resource) = item.resources.first_mut() {
                             if let Some(pk2) = resource.url.split('/').last() {
-                                item.id =
-                                    format!("radio-paradise:channel:{}:history:track:{}", slug, pk2);
-                                item.parent_id =
-                                    format!("radio-paradise:channel:{}:history", slug);
+                                item.id = format!(
+                                    "radio-paradise:channel:{}:history:track:{}",
+                                    slug, pk2
+                                );
+                                item.parent_id = format!("radio-paradise:channel:{}:history", slug);
 
                                 if resource.url.starts_with('/') {
-                                    resource.url =
-                                        format!("{}{}", self.base_url, resource.url);
+                                    resource.url = format!("{}{}", self.base_url, resource.url);
                                 }
                             }
                         }
@@ -839,7 +909,8 @@ impl MusicSource for RadioParadiseSource {
                     }
 
                     // Find the item matching this pk in the item ID
-                    let expected_id = format!("radio-paradise:channel:{}:history:track:{}", slug, pk);
+                    let expected_id =
+                        format!("radio-paradise:channel:{}:history:track:{}", slug, pk);
                     for item in adjusted {
                         if item.id == expected_id {
                             return Ok(item);
@@ -887,10 +958,8 @@ impl MusicSource for RadioParadiseSource {
                                     "radio-paradise:channel:{}:liveplaylist:track:{}",
                                     slug, pk2
                                 );
-                                item.parent_id = format!(
-                                    "radio-paradise:channel:{}:liveplaylist",
-                                    slug
-                                );
+                                item.parent_id =
+                                    format!("radio-paradise:channel:{}:liveplaylist", slug);
 
                                 if resource.url.starts_with('/') {
                                     resource.url = format!("{}{}", self.base_url, resource.url);
@@ -910,10 +979,8 @@ impl MusicSource for RadioParadiseSource {
                             item.album_art = Some(self.default_cover_url());
                         }
 
-                        let expected_id = format!(
-                            "radio-paradise:channel:{}:liveplaylist:track:{}",
-                            slug, pk
-                        );
+                        let expected_id =
+                            format!("radio-paradise:channel:{}:liveplaylist:track:{}", slug, pk);
                         if item.id == expected_id {
                             return Ok(item);
                         }

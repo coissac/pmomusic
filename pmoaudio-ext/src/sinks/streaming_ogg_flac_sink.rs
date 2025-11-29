@@ -69,7 +69,7 @@ use tokio::sync::{mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, trace, warn};
 
-use crate::byte_stream_reader::{PcmChunk};
+use crate::byte_stream_reader::PcmChunk;
 use crate::chunk_to_pcm::chunk_to_pcm_bytes;
 use crate::sinks::flac_frame_utils::{extract_sample_rate_from_streaminfo, read_flac_header};
 use crate::sinks::streaming_sink_common::{
@@ -421,7 +421,7 @@ impl StreamingOggFlacSink {
             "Streaming Sink: using broadcast capacity of {} items (max_lead_time={:.1}s)",
             broadcast_capacity, broadcast_max_lead_time
         );
-        let (broadcast, _) = timed_broadcast::channel("Ogg-Flac",broadcast_capacity);
+        let (broadcast, _) = timed_broadcast::channel("Ogg-Flac", broadcast_capacity);
 
         // OGG-FLAC header cache
         let header = Arc::new(RwLock::new(None));

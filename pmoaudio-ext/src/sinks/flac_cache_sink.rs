@@ -298,28 +298,44 @@ impl NodeLogic for FlacCacheSinkLogic {
 
                 if let Some(sr) = transform.sample_rate {
                     if let Err(e) = meta.set_sample_rate(Some(sr)).await {
-                        tracing::error!("FlacCacheSink: Failed to set sample_rate for pk {}: {:?}", pk, e);
+                        tracing::error!(
+                            "FlacCacheSink: Failed to set sample_rate for pk {}: {:?}",
+                            pk,
+                            e
+                        );
                     } else {
                         tracing::debug!("FlacCacheSink: Set sample_rate={} for pk {}", sr, pk);
                     }
                 }
                 if let Some(bps) = transform.bits_per_sample {
                     if let Err(e) = meta.set_bits_per_sample(Some(bps)).await {
-                        tracing::error!("FlacCacheSink: Failed to set bits_per_sample for pk {}: {:?}", pk, e);
+                        tracing::error!(
+                            "FlacCacheSink: Failed to set bits_per_sample for pk {}: {:?}",
+                            pk,
+                            e
+                        );
                     } else {
                         tracing::debug!("FlacCacheSink: Set bits_per_sample={} for pk {}", bps, pk);
                     }
                 }
                 if let Some(ch) = transform.channels {
                     if let Err(e) = meta.set_channels(Some(ch)).await {
-                        tracing::error!("FlacCacheSink: Failed to set channels for pk {}: {:?}", pk, e);
+                        tracing::error!(
+                            "FlacCacheSink: Failed to set channels for pk {}: {:?}",
+                            pk,
+                            e
+                        );
                     } else {
                         tracing::debug!("FlacCacheSink: Set channels={} for pk {}", ch, pk);
                     }
                 }
                 if let Some(ts) = transform.total_samples {
                     if let Err(e) = meta.set_total_samples(Some(ts)).await {
-                        tracing::error!("FlacCacheSink: Failed to set total_samples for pk {}: {:?}", pk, e);
+                        tracing::error!(
+                            "FlacCacheSink: Failed to set total_samples for pk {}: {:?}",
+                            pk,
+                            e
+                        );
                     } else {
                         tracing::debug!("FlacCacheSink: Set total_samples={} for pk {}", ts, pk);
                     }
@@ -329,10 +345,19 @@ impl NodeLogic for FlacCacheSinkLogic {
                         if sr > 0 {
                             use std::time::Duration;
                             let secs = (ts as f64 / sr as f64).round() as u64;
-                            if let Err(e) = meta.set_duration(Some(Duration::from_secs(secs))).await {
-                                tracing::error!("FlacCacheSink: Failed to set duration for pk {}: {:?}", pk, e);
+                            if let Err(e) = meta.set_duration(Some(Duration::from_secs(secs))).await
+                            {
+                                tracing::error!(
+                                    "FlacCacheSink: Failed to set duration for pk {}: {:?}",
+                                    pk,
+                                    e
+                                );
                             } else {
-                                tracing::debug!("FlacCacheSink: Set duration={} secs for pk {}", secs, pk);
+                                tracing::debug!(
+                                    "FlacCacheSink: Set duration={} secs for pk {}",
+                                    secs,
+                                    pk
+                                );
                             }
                         }
                     }
@@ -340,7 +365,10 @@ impl NodeLogic for FlacCacheSinkLogic {
 
                 drop(meta); // Libérer le lock explicitement
             } else {
-                tracing::warn!("FlacCacheSink: No transform metadata available for pk {}", pk);
+                tracing::warn!(
+                    "FlacCacheSink: No transform metadata available for pk {}",
+                    pk
+                );
             }
 
             // Phase 2: Prebuffer terminé! Copier les métadonnées et pusher à la playlist

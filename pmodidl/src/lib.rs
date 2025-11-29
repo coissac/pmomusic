@@ -554,7 +554,8 @@ impl ToXmlElement for Container {
     fn to_xml_element(&self) -> Element {
         let mut elem = Element::new("container");
         elem.attributes.insert("id".into(), self.id.clone());
-        elem.attributes.insert("parentID".into(), self.parent_id.clone());
+        elem.attributes
+            .insert("parentID".into(), self.parent_id.clone());
         if let Some(ref r) = self.restricted {
             elem.attributes.insert("restricted".into(), r.clone());
         }
@@ -562,11 +563,14 @@ impl ToXmlElement for Container {
             elem.attributes.insert("childCount".into(), cc.clone());
         }
         if let Some(ref searchable) = self.searchable {
-            elem.attributes.insert("searchable".into(), searchable.clone());
+            elem.attributes
+                .insert("searchable".into(), searchable.clone());
         }
 
-        elem.children.push(XMLNode::Element(text_element("dc:title", &self.title)));
-        elem.children.push(XMLNode::Element(text_element("upnp:class", &self.class)));
+        elem.children
+            .push(XMLNode::Element(text_element("dc:title", &self.title)));
+        elem.children
+            .push(XMLNode::Element(text_element("upnp:class", &self.class)));
 
         for c in &self.containers {
             elem.children.push(XMLNode::Element(c.to_xml_element()));
@@ -583,15 +587,18 @@ impl ToXmlElement for Item {
     fn to_xml_element(&self) -> Element {
         let mut elem = Element::new("item");
         elem.attributes.insert("id".into(), self.id.clone());
-        elem.attributes.insert("parentID".into(), self.parent_id.clone());
+        elem.attributes
+            .insert("parentID".into(), self.parent_id.clone());
         if let Some(ref r) = self.restricted {
             elem.attributes.insert("restricted".into(), r.clone());
         }
 
-        elem.children.push(XMLNode::Element(text_element("dc:title", &self.title)));
+        elem.children
+            .push(XMLNode::Element(text_element("dc:title", &self.title)));
 
         if let Some(ref c) = self.creator {
-            elem.children.push(XMLNode::Element(text_element("dc:creator", c)));
+            elem.children
+                .push(XMLNode::Element(text_element("dc:creator", c)));
         }
 
         elem.children
@@ -644,7 +651,8 @@ impl ToXmlElement for Resource {
             elem.attributes.insert("bitsPerSample".into(), bps.clone());
         }
         if let Some(ref freq) = self.sample_frequency {
-            elem.attributes.insert("sampleFrequency".into(), freq.clone());
+            elem.attributes
+                .insert("sampleFrequency".into(), freq.clone());
         }
         if let Some(ref ch) = self.nr_audio_channels {
             elem.attributes.insert("nrAudioChannels".into(), ch.clone());
@@ -677,7 +685,6 @@ impl ToXmlElement for Description {
         elem
     }
 }
-
 
 // ============= Itérateurs personnalisés =============
 

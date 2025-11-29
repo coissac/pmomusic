@@ -237,22 +237,27 @@ impl<C: CacheConfig> Cache<C> {
             );
 
             if let Some(sr) = transform.sample_rate {
-                self.db.set_a_metadata(pk, "sample_rate", serde_json::json!(sr))?;
+                self.db
+                    .set_a_metadata(pk, "sample_rate", serde_json::json!(sr))?;
             }
             if let Some(bps) = transform.bits_per_sample {
-                self.db.set_a_metadata(pk, "bits_per_sample", serde_json::json!(bps))?;
+                self.db
+                    .set_a_metadata(pk, "bits_per_sample", serde_json::json!(bps))?;
             }
             if let Some(ch) = transform.channels {
-                self.db.set_a_metadata(pk, "channels", serde_json::json!(ch))?;
+                self.db
+                    .set_a_metadata(pk, "channels", serde_json::json!(ch))?;
             }
             if let Some(ts) = transform.total_samples {
-                self.db.set_a_metadata(pk, "total_samples", serde_json::json!(ts))?;
+                self.db
+                    .set_a_metadata(pk, "total_samples", serde_json::json!(ts))?;
 
                 // Calculer la durée à partir de total_samples et sample_rate
                 if let Some(sr) = transform.sample_rate {
                     if sr > 0 {
                         let secs = (ts as f64 / sr as f64).round() as u64;
-                        self.db.set_a_metadata(pk, "duration_secs", serde_json::json!(secs))?;
+                        self.db
+                            .set_a_metadata(pk, "duration_secs", serde_json::json!(secs))?;
                     }
                 }
             }

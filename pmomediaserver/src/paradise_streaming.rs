@@ -6,7 +6,6 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use axum::{
-    Json, Router,
     body::Body,
     extract::{Path, State},
     http::{
@@ -15,11 +14,17 @@ use axum::{
     },
     response::{IntoResponse, Response},
     routing::get,
+    Json, Router,
 };
-use pmoaudiocache::{AudioCacheExt, Cache as AudioCache, get_audio_cache, register_audio_cache};
-use pmocovers::{Cache as CoverCache, CoverCacheExt, get_cover_cache, register_cover_cache};
-use pmoparadise::{ParadiseChannelManager, ParadiseHistoryBuilder, channels::ALL_CHANNELS};
+use pmoaudiocache::{get_audio_cache, register_audio_cache, AudioCacheExt, Cache as AudioCache};
+use pmocovers::{get_cover_cache, register_cover_cache, Cache as CoverCache, CoverCacheExt};
+use pmoparadise::{
+    channels::{ChannelDescriptor, ALL_CHANNELS},
+    stream_channel::register_global_channel_manager,
+    ParadiseChannelManager, ParadiseHistoryBuilder,
+};
 use pmoplaylist::register_audio_cache as register_playlist_audio_cache;
+use pmoplaylist::{self, PlaylistEventKind};
 use std::sync::Arc;
 use tokio_util::io::ReaderStream;
 use tracing::{error, info};
@@ -64,7 +69,9 @@ impl ParadiseStreamingExt for pmoserver::Server {
     async fn init_paradise_streaming(&mut self) -> Result<Arc<ParadiseChannelManager>> {
         info!("🎵 Initializing Radio Paradise streaming channels...");
         // Sentinel log pour vérifier qu'on exécute bien cette version du binaire
-        tracing::warn!("🔍 Rien de neuf: entering init_paradise_streaming with caches+history setup");
+        tracing::warn!(
+            "🔍 Rien de neuf: entering init_paradise_streaming with caches+history setup"
+        );
 
         // Récupérer ou initialiser les caches singletons
         info!("📦 Getting cache singletons...");
@@ -142,6 +149,9 @@ impl ParadiseStreamingExt for pmoserver::Server {
                 return Err(anyhow::anyhow!(msg));
             }
         };
+
+        register_global_channel_manager(manager.clone());
+        spawn_playlist_event_handler(manager.clone());
 
         let state = Arc::new(ParadiseStreamingState {
             manager: manager.clone(),
@@ -316,4 +326,57 @@ async fn stream_history_ogg(
         .header(ACCEPT_RANGES, "none")
         .body(Body::from_stream(ReaderStream::new(stream)))
         .unwrap())
+}
+
+fn spawn_playlist_event_handler(manager: Arc<ParadiseChannelManager>) {
+    tokio::spawn(async move {
+        let mut rx = pmoplaylist::subscribe_events();
+        while let Ok(envelope) = rx.recv().await {
+            if let PlaylistEventKind::TrackPlayed { cache_pk, .. } = envelope.event.kind {
+                if let Some(descriptor) = channel_from_live_playlist(&envelope.event.playlist_id) {
+                    if let Err(e) = manager.prefetch_until_horizon(descriptor.id).await {
+                        tracing::warn!(
+                            "Failed to prefetch for channel {}: {}",
+                            descriptor.display_name,
+                            e
+                        );
+                    }
+                    if let Err(e) = append_track_to_history(descriptor, &cache_pk).await {
+                        tracing::warn!(
+                            "Failed to update history for channel {}: {}",
+                            descriptor.display_name,
+                            e
+                        );
+                    }
+                }
+            }
+        }
+    });
+}
+
+fn channel_from_live_playlist(playlist_id: &str) -> Option<&'static ChannelDescriptor> {
+    const PREFIX: &str = "radio-paradise-live-";
+    let slug = playlist_id.strip_prefix(PREFIX)?;
+    ALL_CHANNELS
+        .iter()
+        .find(|descriptor| descriptor.slug == slug)
+}
+
+async fn append_track_to_history(descriptor: &ChannelDescriptor, cache_pk: &str) -> Result<()> {
+    let playlist_id = format!("radio-paradise-history-{}", descriptor.slug);
+    let manager = pmoplaylist::PlaylistManager();
+    let handle = manager
+        .get_persistent_write_handle(playlist_id.clone())
+        .await
+        .with_context(|| format!("Failed to get history playlist {}", playlist_id))?;
+
+    if handle.contains_pk(cache_pk).await? {
+        return Ok(());
+    }
+
+    handle
+        .push(cache_pk.to_string())
+        .await
+        .with_context(|| format!("Failed to append {} to {}", cache_pk, playlist_id))?;
+    Ok(())
 }

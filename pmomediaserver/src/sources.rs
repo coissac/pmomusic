@@ -173,8 +173,8 @@ impl SourcesExt for Server {
 
     #[cfg(feature = "paradise")]
     async fn register_paradise(&mut self) -> Result<()> {
-        use pmoparadise::{RadioParadiseExt, RadioParadiseSource};
         use crate::contentdirectory::state;
+        use pmoparadise::{RadioParadiseExt, RadioParadiseSource};
 
         tracing::info!("Initializing Radio Paradise source...");
 

@@ -4,10 +4,10 @@
 //! spécifiques aux fichiers audio : conversion FLAC automatique et stockage
 //! des métadonnées en JSON dans la base de données.
 
-use anyhow::Result;
 use crate::metadata_ext::AudioTrackMetadataExt;
-use pmocache::CacheConfig;
+use anyhow::Result;
 use pmocache::download::TransformMetadata;
+use pmocache::CacheConfig;
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -277,8 +277,7 @@ fn parse_flac_streaminfo(data: &[u8]) -> Option<(u32, u8, u64)> {
     let s = &data[8..8 + 34];
 
     // sample_rate: 20 bits: bytes 10..12
-    let sample_rate =
-        ((s[10] as u32) << 12) | ((s[11] as u32) << 4) | ((s[12] as u32 & 0xF0) >> 4);
+    let sample_rate = ((s[10] as u32) << 12) | ((s[11] as u32) << 4) | ((s[12] as u32 & 0xF0) >> 4);
 
     // bits_per_sample: 5 bits spanning byte 12 (lsb) and byte 13 (msb)
     let bps_raw = (((s[12] & 0x01) as u8) << 4) | ((s[13] & 0xF0) >> 4);

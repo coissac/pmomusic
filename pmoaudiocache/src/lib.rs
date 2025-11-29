@@ -231,7 +231,7 @@ impl AudioCacheExt for pmoserver::Server {
                     "/{pk}/cover-url",
                     axum::routing::get(crate::api::get_cover_url),
                 )
-                .with_state(cache.clone())
+                .with_state(cache.clone()),
         );
 
         let openapi = crate::ApiDoc::openapi();

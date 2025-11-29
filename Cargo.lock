@@ -3280,6 +3280,7 @@ dependencies = [
  "futures",
  "futures-util",
  "hex",
+ "once_cell",
  "pmoaudio",
  "pmoaudio-ext",
  "pmoaudiocache",

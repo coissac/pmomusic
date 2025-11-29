@@ -5,15 +5,18 @@ use crate::persistence::PersistenceManager;
 use crate::playlist::core::PlaylistConfig;
 use crate::playlist::Playlist;
 use crate::Result;
-use pmocache::{CacheBroadcastEvent, CacheSubscription};
 use once_cell::sync::OnceCell;
+use pmocache::{CacheBroadcastEvent, CacheSubscription};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
-use std::time::Duration;
-use tokio::sync::RwLock;
-use tokio::sync::broadcast;
 use std::sync::RwLock as StdRwLock;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
+use std::time::Duration;
+use tokio::sync::broadcast;
+use tokio::sync::RwLock;
 
 /// Singleton PlaylistManager
 static PLAYLIST_MANAGER: OnceCell<PlaylistManager> = OnceCell::new();
@@ -181,14 +184,16 @@ impl PlaylistManager {
 
     /// Notifie tous les callbacks qu'une playlist a changé.
     pub(crate) fn notify_playlist_changed(&self, id: &str) {
-        self.notify_playlist_event(
-            id,
-            PlaylistEventKind::Updated,
-        );
+        self.notify_playlist_event(id, PlaylistEventKind::Updated);
     }
 
     /// Notifie les callbacks qu'un morceau a été joué pour une playlist donnée.
-    pub(crate) fn notify_playlist_track_played(&self, playlist_id: &str, cache_pk: &str, qualifier: &str) {
+    pub(crate) fn notify_playlist_track_played(
+        &self,
+        playlist_id: &str,
+        cache_pk: &str,
+        qualifier: &str,
+    ) {
         self.notify_playlist_event(
             playlist_id,
             PlaylistEventKind::TrackPlayed {

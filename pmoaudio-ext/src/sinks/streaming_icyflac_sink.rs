@@ -1,8 +1,23 @@
-use std::{collections::VecDeque, pin::Pin, sync::Arc, task::{Context, Poll}};
+use std::{
+    collections::VecDeque,
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+};
 
-use tokio::{io::{AsyncRead, ReadBuf}, sync::RwLock};
+use tokio::{
+    io::{AsyncRead, ReadBuf},
+    sync::RwLock,
+};
 
-use crate::{MetadataSnapshot, sinks::{flac_frame_utils::FlacStreamState, streaming_sink_common::SharedStreamHandleInner, timed_broadcast::{self, TryRecvError}}};
+use crate::{
+    sinks::{
+        flac_frame_utils::FlacStreamState,
+        streaming_sink_common::SharedStreamHandleInner,
+        timed_broadcast::{self, TryRecvError},
+    },
+    MetadataSnapshot,
+};
 use bytes::Bytes;
 use std::io;
 

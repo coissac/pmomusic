@@ -554,7 +554,9 @@ fn run_encoder(
                 "set_total_samples_estimate failed",
             )?;
         } else {
-            tracing::warn!("FLAC encoder: total_samples is None, STREAMINFO will have total_samples=0");
+            tracing::warn!(
+                "FLAC encoder: total_samples is None, STREAMINFO will have total_samples=0"
+            );
         }
         if let Some(block_size) = options.block_size {
             ensure(

@@ -222,7 +222,12 @@ impl ReadHandle {
             let resource = meta.to_didl_resource(url).await;
 
             // Récupérer les métadonnées pour construire l'Item DIDL
-            let title = meta.get_title().await.ok().flatten().unwrap_or_else(|| "Unknown".to_string());
+            let title = meta
+                .get_title()
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "Unknown".to_string());
             let artist = meta.get_artist().await.ok().flatten();
             let album = meta.get_album().await.ok().flatten();
             let genre = meta.get_genre().await.ok().flatten();

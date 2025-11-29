@@ -23,8 +23,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use tracing::Level;
 use tracing_subscriber::{
-    filter::EnvFilter, filter::LevelFilter, layer::SubscriberExt, reload, util::SubscriberInitExt,
-    Registry,
+    Registry, filter::EnvFilter, filter::LevelFilter, layer::SubscriberExt, reload,
+    util::SubscriberInitExt,
 };
 
 /// Représente une entrée de log
@@ -66,10 +66,7 @@ impl LogState {
         if let Err(e) = self.reload_handle.write().unwrap().reload(filter) {
             eprintln!("❌ Failed to reload log level filter: {}", e);
         } else {
-            eprintln!(
-                "✅ Log level filter reloaded successfully to: {:?}",
-                level
-            );
+            eprintln!("✅ Log level filter reloaded successfully to: {:?}", level);
         }
     }
 
@@ -282,8 +279,10 @@ pub fn init_logging() -> LogState {
             } else {
                 match EnvFilter::try_new(trimmed) {
                     Ok(filter) => {
-                        let level_hint =
-                            filter.max_level_hint().and_then(levelfilter_to_level).unwrap_or(Level::TRACE);
+                        let level_hint = filter
+                            .max_level_hint()
+                            .and_then(levelfilter_to_level)
+                            .unwrap_or(Level::TRACE);
                         (filter, level_hint, format!("RUST_LOG ({})", trimmed))
                     }
                     Err(e) => {

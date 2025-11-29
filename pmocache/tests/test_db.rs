@@ -269,7 +269,9 @@ fn test_get_pk_by_origin_url() {
     assert_eq!(found_pk, Some(pk.to_string()));
 
     // Rechercher une URL qui n'existe pas
-    let not_found = db.get_pk_by_origin_url("https://example.com/notfound.jpg").unwrap();
+    let not_found = db
+        .get_pk_by_origin_url("https://example.com/notfound.jpg")
+        .unwrap();
     assert_eq!(not_found, None);
 }
 

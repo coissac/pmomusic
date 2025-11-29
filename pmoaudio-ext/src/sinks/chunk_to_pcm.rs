@@ -1,7 +1,10 @@
 use pmoaudio::{AudioChunk, AudioError};
 
 /// Convert an AudioChunk to PCM bytes with specified bit depth.
-pub(crate) fn chunk_to_pcm_bytes(chunk: &AudioChunk, bits_per_sample: u8) -> Result<Vec<u8>, AudioError> {
+pub(crate) fn chunk_to_pcm_bytes(
+    chunk: &AudioChunk,
+    bits_per_sample: u8,
+) -> Result<Vec<u8>, AudioError> {
     match chunk {
         AudioChunk::F32(_) | AudioChunk::F64(_) => {
             return Err(AudioError::ProcessingError(

@@ -318,12 +318,14 @@ impl UpnpServerExt for Server {
         // API playlists (SSE + OpenAPI)
         #[cfg(feature = "server")]
         {
-            use pmoplaylist::{playlist_events_router, openapi::ApiDoc};
+            use pmoplaylist::{openapi::ApiDoc, playlist_events_router};
             // SSE /api/playlists/events
-            self.add_router("/api/playlists", playlist_events_router()).await;
+            self.add_router("/api/playlists", playlist_events_router())
+                .await;
             // OpenAPI pour playlists
             let openapi = ApiDoc::openapi();
-            self.add_openapi(axum::Router::new(), openapi, "playlists").await;
+            self.add_openapi(axum::Router::new(), openapi, "playlists")
+                .await;
         }
 
         // Enregistrer le cache dans le registre global

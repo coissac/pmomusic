@@ -16,16 +16,18 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use pmoaudio_ext::StreamingSinkOptions;
 use pmoaudiocache::{
     new_cache_with_consolidation as new_audio_cache,
     register_audio_cache as register_global_audio_cache,
 };
-use pmocovers::{new_cache_with_consolidation as new_cover_cache, register_cover_cache, Cache as CoverCache};
+use pmocovers::{
+    new_cache_with_consolidation as new_cover_cache, register_cover_cache, Cache as CoverCache,
+};
 use pmoparadise::{
     channels::{ChannelDescriptor, ALL_CHANNELS},
     ParadiseHistoryBuilder, ParadiseStreamChannel, ParadiseStreamChannelConfig,
 };
-use pmoaudio_ext::StreamingSinkOptions;
 use pmoplaylist::register_audio_cache as register_playlist_audio_cache;
 use std::{fs, net::SocketAddr, sync::Arc};
 use tokio::net::TcpListener;
@@ -44,9 +46,7 @@ async fn main() -> anyhow::Result<()> {
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
 
-    tracing_subscriber::fmt()
-        .with_env_filter(env_filter)
-        .init();
+    tracing_subscriber::fmt().with_env_filter(env_filter).init();
 
     let descriptor = pick_descriptor(std::env::args().nth(1))?;
     info!(
@@ -206,22 +206,16 @@ async fn get_cover(
 ) -> Result<Response, StatusCode> {
     // Récupérer le chemin de la cover depuis le cache
     // Le cache retourne un PathBuf pointant vers le fichier .webp
-    let cover_path = state
-        .cover_cache
-        .get(&pk)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to get cover path for {}: {}", pk, e);
-            StatusCode::NOT_FOUND
-        })?;
+    let cover_path = state.cover_cache.get(&pk).await.map_err(|e| {
+        tracing::error!("Failed to get cover path for {}: {}", pk, e);
+        StatusCode::NOT_FOUND
+    })?;
 
     // Lire le fichier
-    let cover_data = tokio::fs::read(&cover_path)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to read cover file {:?}: {}", cover_path, e);
-            StatusCode::NOT_FOUND
-        })?;
+    let cover_data = tokio::fs::read(&cover_path).await.map_err(|e| {
+        tracing::error!("Failed to read cover file {:?}: {}", cover_path, e);
+        StatusCode::NOT_FOUND
+    })?;
 
     Response::builder()
         .status(StatusCode::OK)

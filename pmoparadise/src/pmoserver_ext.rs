@@ -429,11 +429,7 @@ async fn get_cover_url(
     })?;
 
     let song = block.get_song(song_index).ok_or_else(|| {
-        tracing::warn!(
-            "Song index {} not found in block {}",
-            song_index,
-            event_id
-        );
+        tracing::warn!("Song index {} not found in block {}", song_index, event_id);
         StatusCode::NOT_FOUND
     })?;
 

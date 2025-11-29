@@ -17,7 +17,6 @@ pub(crate) enum FlacStreamState {
     Streaming,
 }
 
-
 /// Validate and parse FLAC block size from frame header
 ///
 /// Returns the number of samples in the frame if the header is valid, or None if:
@@ -376,7 +375,6 @@ pub(crate) fn find_complete_frames_with_samples(data: &[u8]) -> (usize, u64) {
     }
 }
 
-
 /// Extract sample rate from STREAMINFO block in FLAC header
 pub(crate) fn extract_sample_rate_from_streaminfo(flac_header: &[u8]) -> Result<u32, AudioError> {
     // Verify we have at least "fLaC" magic + STREAMINFO block header
@@ -424,7 +422,9 @@ pub(crate) fn extract_sample_rate_from_streaminfo(flac_header: &[u8]) -> Result<
 }
 
 /// Read FLAC header (fLaC + all metadata blocks until first frame)
-pub(crate) async fn read_flac_header(stream: &mut FlacEncodedStream) -> Result<Vec<u8>, AudioError> {
+pub(crate) async fn read_flac_header(
+    stream: &mut FlacEncodedStream,
+) -> Result<Vec<u8>, AudioError> {
     let mut header = Vec::new();
     let mut buffer = [0u8; 4];
 
@@ -471,8 +471,6 @@ pub(crate) async fn read_flac_header(stream: &mut FlacEncodedStream) -> Result<V
 
     Ok(header)
 }
-
-
 
 #[cfg(test)]
 mod tests {

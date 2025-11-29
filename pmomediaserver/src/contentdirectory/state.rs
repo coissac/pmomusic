@@ -1,6 +1,9 @@
 use once_cell::sync::OnceCell;
 use pmoupnp::{services::ServiceInstance, variable_types::StateValue};
-use std::sync::{atomic::{AtomicU32, Ordering}, Arc, Weak, Mutex};
+use std::sync::{
+    Arc, Mutex, Weak,
+    atomic::{AtomicU32, Ordering},
+};
 
 static CONTENTDIR_INSTANCE: OnceCell<Weak<ServiceInstance>> = OnceCell::new();
 static SYSTEM_UPDATE_ID: AtomicU32 = AtomicU32::new(1);
@@ -17,7 +20,9 @@ pub fn register_instance(instance: &Arc<ServiceInstance>) {
 /// Notifie une mise à jour en incrémentant SystemUpdateID et ContainerUpdateIDs.
 /// `container_ids` doit contenir les IDs des conteneurs impactés.
 pub fn notify_containers_updated(container_ids: &[&str]) {
-    let new_id = SYSTEM_UPDATE_ID.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+    let new_id = SYSTEM_UPDATE_ID
+        .fetch_add(1, Ordering::Relaxed)
+        .saturating_add(1);
     set_system_update_id(new_id);
 
     if !container_ids.is_empty() {

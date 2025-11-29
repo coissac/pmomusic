@@ -1,7 +1,15 @@
 use std::io;
-use std::{collections::VecDeque, pin::Pin, sync::Arc, task::{Context, Poll}};
+use std::{
+    collections::VecDeque,
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+};
 
-use tokio::{io::{AsyncRead, ReadBuf}, sync::{RwLock, mpsc}};
+use tokio::{
+    io::{AsyncRead, ReadBuf},
+    sync::{mpsc, RwLock},
+};
 
 /// PCM chunk with audio data and timestamp for precise pacing.
 #[derive(Debug)]

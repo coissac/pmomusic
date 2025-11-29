@@ -3,14 +3,14 @@
 //! Route type : `GET /api/playlists/events?playlist_id=foo`
 
 use crate::{subscribe_events, PlaylistEventKind};
+#[cfg(feature = "pmoserver")]
+use async_stream::stream;
 use axum::{
     extract::Query,
     response::sse::{Event, KeepAlive, Sse},
     response::IntoResponse,
     Router,
 };
-#[cfg(feature = "pmoserver")]
-use async_stream::stream;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "pmoserver")]
 use tokio_stream::StreamExt;

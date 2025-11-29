@@ -10,10 +10,10 @@
 //! - **Search** : Recherche dans les sources qui le supportent
 //! - **Update ID** : Suivi des changements pour les notifications UPnP
 
-use pmoutils::ToXmlElement;
 use pmodidl::{Container, DIDLLite};
 use pmosource::api::{get_source as get_source_from_registry, list_all_sources};
 use pmosource::{BrowseResult, MusicSource, MusicSourceError};
+use pmoutils::ToXmlElement;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -123,20 +123,14 @@ impl ContentHandler {
                 container.child_count = None; // compatibilité CP
                 let didl = to_didl_lite(&[container], &[])?;
                 let update_id = source.update_id().await.max(1);
-                tracing::debug!(
-                    "BrowseMetadata root (flatten) didl_len={}B",
-                    didl.len()
-                );
+                tracing::debug!("BrowseMetadata root (flatten) didl_len={}B", didl.len());
                 return Ok((didl, 1, 1, update_id));
             }
 
             // Sinon retourner le container racine agrégé
             let root = self.build_root_container().await;
             let didl = to_didl_lite(&[root], &[])?;
-            tracing::debug!(
-                "BrowseMetadata root (aggregate) didl_len={}B",
-                didl.len()
-            );
+            tracing::debug!("BrowseMetadata root (aggregate) didl_len={}B", didl.len());
             Ok((didl, 1, 1, 1))
         } else {
             // Essayer de trouver l'objet dans les sources
@@ -300,7 +294,13 @@ impl ContentHandler {
             match source.browse(object_id).await {
                 Ok(result) => {
                     return self
-                        .browse_result_to_didl(object_id, result, source, starting_index, requested_count)
+                        .browse_result_to_didl(
+                            object_id,
+                            result,
+                            source,
+                            starting_index,
+                            requested_count,
+                        )
                         .await;
                 }
                 Err(MusicSourceError::ObjectNotFound(_)) => continue,

@@ -17,7 +17,10 @@ impl UpnpTyped for Argument {
 impl UpnpObject for Argument {
     fn to_xml_element(&self) -> Element {
         // Compat: retourne le premier argument (utile si consommé isolément)
-        self.to_xml_elements().into_iter().next().unwrap_or_else(|| Element::new("argument"))
+        self.to_xml_elements()
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| Element::new("argument"))
     }
 }
 

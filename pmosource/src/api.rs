@@ -955,7 +955,9 @@ async fn stream_source_item_metadata(
                 }
             });
 
-            Sse::new(stream).keep_alive(KeepAlive::default()).into_response()
+            Sse::new(stream)
+                .keep_alive(KeepAlive::default())
+                .into_response()
         }
         None => (
             StatusCode::NOT_FOUND,

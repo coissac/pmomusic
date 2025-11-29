@@ -397,7 +397,9 @@ impl SharedSinkContext {
 
         debug!(
             "Encoder metadata: from TrackBoundary - duration={:?}s, total_samples={:?}",
-            self.pending_track_duration.as_ref().map(|d| d.as_secs_f64()),
+            self.pending_track_duration
+                .as_ref()
+                .map(|d| d.as_secs_f64()),
             self.pending_total_samples
         );
 

@@ -222,6 +222,16 @@ impl WriteHandle {
         Ok(())
     }
 
+    /// Vérifie si la playlist contient déjà un pk
+    pub async fn contains_pk(&self, cache_pk: &str) -> Result<bool> {
+        if !self.playlist.is_alive() {
+            return Err(crate::Error::PlaylistDeleted(self.playlist.id.clone()));
+        }
+
+        let core = self.playlist.core.read().await;
+        Ok(core.tracks.iter().any(|record| record.cache_pk == cache_pk))
+    }
+
     /// Change le TTL par défaut
     pub async fn set_default_ttl(&self, ttl: Option<Duration>) -> Result<()> {
         if !self.playlist.is_alive() {

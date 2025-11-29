@@ -54,7 +54,6 @@
 pub mod cache;
 pub mod webp;
 
-
 #[cfg(feature = "pmoserver")]
 pub mod openapi;
 
@@ -201,7 +200,10 @@ async fn serve_jpeg_internal(
     use image::ImageFormat;
     use std::io::Cursor;
 
-    let path = cache.get_file_path_with_qualifier(&pk, <CoversConfig as pmocache::cache::CacheConfig>::default_param());
+    let path = cache.get_file_path_with_qualifier(
+        &pk,
+        <CoversConfig as pmocache::cache::CacheConfig>::default_param(),
+    );
     if !path.exists() {
         return (StatusCode::NOT_FOUND, "File not found").into_response();
     }
@@ -218,12 +220,7 @@ async fn serve_jpeg_internal(
     .await;
 
     match res {
-        Ok(Ok(data)) => (
-            StatusCode::OK,
-            [("content-type", "image/jpeg")],
-            data,
-        )
-            .into_response(),
+        Ok(Ok(data)) => (StatusCode::OK, [("content-type", "image/jpeg")], data).into_response(),
         Ok(Err(e)) => {
             tracing::warn!("JPEG transcode error for {}: {}", pk, e);
             (StatusCode::INTERNAL_SERVER_ERROR, "Transcode error").into_response()
@@ -294,10 +291,7 @@ impl CoverCacheExt for pmoserver::Server {
         // Router JPEG (transcodage à la volée depuis le WebP stocké)
         // Routes: GET /covers/jpeg/{pk} et GET /covers/jpeg/{pk}/{size}
         let jpeg_router = axum::Router::new()
-            .route(
-                "/covers/jpeg/{pk}",
-                axum::routing::get(serve_cover_jpeg),
-            )
+            .route("/covers/jpeg/{pk}", axum::routing::get(serve_cover_jpeg))
             .route(
                 "/covers/jpeg/{pk}/{size}",
                 axum::routing::get(serve_cover_jpeg_with_size),

@@ -82,10 +82,7 @@ pub async fn get_cover_url(
         Ok(Some(cover_pk)) if !cover_pk.is_empty() => (cover_pk, "cover_pk".to_string()),
         _ => match metadata_guard.get_cover_url().await {
             Ok(Some(url)) if !url.is_empty() => (url, "cover_url".to_string()),
-            _ => (
-                pmometadata::get_default_cover_url(),
-                "default".to_string(),
-            ),
+            _ => (pmometadata::get_default_cover_url(), "default".to_string()),
         },
     };
 

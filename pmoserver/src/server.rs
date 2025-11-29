@@ -241,12 +241,8 @@ impl Server {
     }
 
     /// Ajoute un handler qui accepte tous les verbes HTTP (ANY) avec état
-    pub async fn add_any_handler_with_state<H, T, S>(
-        &mut self,
-        path: &str,
-        handler: H,
-        state: S,
-    ) where
+    pub async fn add_any_handler_with_state<H, T, S>(&mut self, path: &str, handler: H, state: S)
+    where
         H: Handler<T, S> + Clone + 'static,
         T: 'static,
         S: Clone + Send + Sync + 'static,

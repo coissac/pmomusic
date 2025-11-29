@@ -181,7 +181,9 @@ impl<T> State<T> {
                 let entry = oentry.unwrap();
                 trace!(
                     "TimedBroadcast[{}]: pruning played packet (@{} epoch={})",
-                    self.name, entry.seq, entry.epoch
+                    self.name,
+                    entry.seq,
+                    entry.epoch
                 );
 
                 self.head_seq += 1;
@@ -311,15 +313,13 @@ impl<T> Sender<T> {
                 }
 
                 // 2. Vérifier si un slot est disponible et insérer
-                let is_top_zero =
-                    audio_timestamp.abs() < TOP_ZERO_EPSILON 
+                let is_top_zero = audio_timestamp.abs() < TOP_ZERO_EPSILON
                     && segment_duration >= TOP_ZERO_EPSILON;
                 let is_zero_header =
-                    audio_timestamp.abs() < TOP_ZERO_EPSILON 
-                    && segment_duration < TOP_ZERO_EPSILON;
+                    audio_timestamp.abs() < TOP_ZERO_EPSILON && segment_duration < TOP_ZERO_EPSILON;
                 if state.buffer.len() < self.inner.capacity {
-                    if !state.initialized  {
-                        if !is_top_zero  && segment_duration >= TOP_ZERO_EPSILON {
+                    if !state.initialized {
+                        if !is_top_zero && segment_duration >= TOP_ZERO_EPSILON {
                             warn!(
                                 "TimedBroadcast[{}]: First packet has non-zero timestamp {:.1}ms - Duration={:.1}ms, treating as epoch start anyway",
                                 state.name,
@@ -352,13 +352,12 @@ impl<T> Sender<T> {
                             state.name,
                             state.epoch,
                             state.last_segment_end.is_some(),
-                            segment_duration*1000.0
+                            segment_duration * 1000.0
                         );
                     }
 
                     let expires_at = state.epoch_start
-                        + Duration::from_secs_f64(audio_timestamp 
-                        + segment_duration);
+                        + Duration::from_secs_f64(audio_timestamp + segment_duration);
 
                     let is_first_packet = state.next_seq == 0;
                     if !is_first_packet && !is_top_zero && !is_zero_header && expires_at <= now {

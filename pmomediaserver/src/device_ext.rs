@@ -1,5 +1,4 @@
 ///! Extension trait pour initialiser le PMO Music MediaServer UPnP
-
 use pmoupnp::devices::DeviceInstance;
 use pmoupnp::variable_types::StateValue;
 use std::sync::Arc;

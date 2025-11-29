@@ -552,8 +552,23 @@ where
     let src_guard = src.read().await;
 
     copy_metadata!(
-        src_guard, dest, title, artist, album, year, duration, sample_rate, total_samples,
-        bits_per_sample, track_id, channel_id, event, rating, cover_url, cover_pk, extra
+        src_guard,
+        dest,
+        title,
+        artist,
+        album,
+        year,
+        duration,
+        sample_rate,
+        total_samples,
+        bits_per_sample,
+        track_id,
+        channel_id,
+        event,
+        rating,
+        cover_url,
+        cover_pk,
+        extra
     );
 
     // Try to update the timestamp, but ignore transient errors
@@ -828,8 +843,6 @@ impl TrackMetadata for MemoryTrackMetadata {
         self.updated_at = Some(SystemTime::now());
         Ok(Some(()))
     }
-
-
 }
 
 #[cfg(test)]
@@ -1248,10 +1261,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_cover_url_with_fallback_none() {
         let metadata = MemoryTrackMetadata::new();
-        assert_eq!(
-            metadata.get_cover_url_with_fallback().await.unwrap(),
-            None
-        );
+        assert_eq!(metadata.get_cover_url_with_fallback().await.unwrap(), None);
     }
 
     #[tokio::test]
@@ -1278,10 +1288,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(
-            metadata.get_cover_url_or_default().await.unwrap(),
-            "abc123"
-        );
+        assert_eq!(metadata.get_cover_url_or_default().await.unwrap(), "abc123");
     }
 
     #[tokio::test]

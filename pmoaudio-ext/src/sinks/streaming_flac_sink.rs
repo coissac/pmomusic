@@ -78,7 +78,7 @@ use tokio::sync::{mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, trace, warn};
 
-use crate::byte_stream_reader::{PcmChunk};
+use crate::byte_stream_reader::PcmChunk;
 use crate::chunk_to_pcm::chunk_to_pcm_bytes;
 use crate::sinks::streaming_sink_common::{
     MetadataSnapshot, SharedClientStream, SharedSinkContext, SharedStreamHandleInner,
@@ -142,7 +142,6 @@ impl StreamHandle {
         self.inner.auto_stop.store(enabled, Ordering::SeqCst);
     }
 }
-
 
 pub struct FlacClientStream {
     inner: SharedClientStream,
