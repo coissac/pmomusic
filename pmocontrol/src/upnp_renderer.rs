@@ -1,20 +1,22 @@
 use anyhow::{anyhow, Result};
 
+use crate::capabilities::{PlaybackPositionInfo, PlaybackStatus};
 use crate::connection_manager_client::{
     ConnectionInfo, ConnectionManagerClient, ProtocolInfo,
 };
 use crate::rendering_control_client::RenderingControlClient;
-use crate::{AvTransportClient, DeviceRegistry, RendererId, RendererInfo};
+use crate::{AvTransportClient, DeviceRegistry, PlaybackPosition, PlaybackState, PositionInfo, RendererId, RendererInfo, TransportControl, VolumeControl};
 
 /// High-level handle representing a renderer and its optional AVTransport client.
-pub struct Renderer {
+#[derive(Clone, Debug)]
+pub struct UpnpRenderer {
     pub info: RendererInfo,
     avtransport: Option<AvTransportClient>,
     rendering_control: Option<RenderingControlClient>,
     connection_manager: Option<ConnectionManagerClient>,
 }
 
-impl Renderer {
+impl UpnpRenderer {
     pub fn id(&self) -> &RendererId {
         &self.info.id
     }
@@ -167,7 +169,7 @@ mod tests {
     fn renderer_without_avtransport() {
         let info = renderer_info("no-avt", false);
         let registry = registry_with_renderer(info.clone());
-        let renderer = Renderer::from_registry(info, &registry);
+        let renderer = UpnpRenderer::from_registry(info, &registry);
 
         assert_eq!(renderer.has_avtransport(), false);
         assert_eq!(renderer.id().0, "renderer-no-avt");
@@ -177,9 +179,84 @@ mod tests {
     fn renderer_with_avtransport() {
         let info = renderer_info("with-avt", true);
         let registry = registry_with_renderer(info.clone());
-        let renderer = Renderer::from_registry(info, &registry);
+        let renderer = UpnpRenderer::from_registry(info, &registry);
 
         assert!(renderer.has_avtransport());
         assert_eq!(renderer.friendly_name(), "Renderer with-avt");
+    }
+}
+
+
+/// Implémentation UPnP AV de `TransportControl` pour [`UpnpRenderer`].
+///
+/// Cette impl se base sur AVTransport (InstanceID = 0).
+impl TransportControl for UpnpRenderer {
+    fn play_uri(&self, uri: &str, meta: &str) -> Result<()> {
+        self.play_uri(uri, meta)
+    }
+
+    fn play(&self) -> Result<()> {
+        let avt = self.avtransport()?;
+        avt.play(0, "1")
+    }
+
+    fn pause(&self) -> Result<()> {
+        self.pause()
+    }
+
+    fn stop(&self) -> Result<()> {
+        self.stop()
+    }
+
+    fn seek_rel_time(&self, hhmmss: &str) -> Result<()> {
+        self.seek_rel_time(hhmmss)
+    }
+}
+
+/// Implémentation UPnP RenderingControl de `VolumeControl` pour [`UpnpRenderer`].
+///
+/// Cette impl se base sur le channel "Master" (InstanceID = 0).
+impl VolumeControl for UpnpRenderer {
+    fn volume(&self) -> Result<u16> {
+        self.get_master_volume()
+    }
+
+    fn set_volume(&self, v: u16) -> Result<()> {
+        self.set_master_volume(v)
+    }
+
+    fn mute(&self) -> Result<bool> {
+        self.get_master_mute()
+    }
+
+    fn set_mute(&self, m: bool) -> Result<()> {
+        self.set_master_mute(m)
+    }
+}
+
+/// Implémentation UPnP AV de `PlaybackStatus` pour [`UpnpRenderer`].
+///
+/// Utilise AVTransport::GetTransportInfo(InstanceID=0).
+impl PlaybackStatus for UpnpRenderer {
+    fn playback_state(&self) -> Result<PlaybackState> {
+        let avt = self.avtransport()?;
+        let info = avt.get_transport_info(0)?;
+        Ok(PlaybackState::from_upnp_state(
+            &info.current_transport_state,
+        ))
+    }
+}
+
+impl PlaybackPosition for UpnpRenderer {
+    fn playback_position(&self) -> Result<PlaybackPositionInfo> {
+        let avt = self.avtransport()?;
+        let raw: PositionInfo = avt.get_position_info(0)?;
+
+        Ok(PlaybackPositionInfo {
+            track: Some(raw.track),
+            rel_time: raw.rel_time,
+            abs_time: raw.abs_time,
+            track_duration: raw.track_duration,
+        })
     }
 }

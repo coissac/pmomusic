@@ -1,229 +1,345 @@
-// pmocontrol/examples/renderer_demo.rs
+// examples/music_renderer_demo.rs
+//
+// End-to-end demo using the `MusicRenderer` façade:
+//  - SSDP discovery via `ControlPoint`
+//  - selection of a renderer
+//  - generic `TransportControl` + `VolumeControl` + `PlaybackStatus` + `PlaybackPosition`
+//  - optional UPnP-specific inspection (TransportInfo, ConnectionManager)
+//
+// Build and run (from pmocontrol crate root):
+//   cargo run --example music_renderer_demo -- [index] [uri]
+//
+//   index: optional 0-based renderer index (default: 0)
+//   uri  : optional URI to play (default: Radio Paradise FLAC)
 
-use anyhow::{anyhow, Result};
-use pmocontrol::{ControlPoint, Renderer};
+use anyhow::Result;
+use pmocontrol::PlaybackPosition;
+use pmocontrol::{
+    ControlPoint, MusicRenderer, PlaybackState, PlaybackStatus, RendererCapabilities,
+    RendererProtocol, TransportControl, VolumeControl,
+};
 use std::env;
-use std::io::{self, Write};
 use std::thread;
 use std::time::Duration;
 
+// Default URI if none is provided on the CLI.
+const DEFAULT_TEST_URI: &str =
+    "https://audio-fb.radioparadise.com/chan/1/x/1117/4/g/1117-3.flac";
+
+// Extra wait after play_uri() so slow renderers (e.g. Arylic H50) have time
+// to prefetch and actually start playback.
+const AFTER_PLAY_WAIT_SECS: u64 = 15;
+
 fn main() -> Result<()> {
-    // -------------------------------------------------------------------------
-    // CLI arguments
-    //
-    // Usage:
-    //   renderer_demo
-    //     -> URI par défaut, renderer index 0
-    //
-    //   renderer_demo 1
-    //     -> URI par défaut, renderer index 1
-    //
-    //   renderer_demo https://.../track.flac
-    //     -> cette URI, renderer index 0
-    //
-    //   renderer_demo https://.../track.flac 1
-    //     -> cette URI, renderer index 1
-    // -------------------------------------------------------------------------
-    let default_uri =
-        "https://audio-fb.radioparadise.com/chan/1/x/1117/4/g/1117-3.flac".to_string();
-    let mut uri = default_uri.clone();
-    let mut renderer_index: usize = 0;
-
-    let args: Vec<String> = env::args().collect();
-    if args.len() >= 2 {
-        let first = &args[1];
-        if let Ok(idx) = first.parse::<usize>() {
-            // cas: renderer_demo 1 [URI]
-            renderer_index = idx;
-            if args.len() >= 3 {
-                uri = args[2].clone();
-            }
-        } else {
-            // cas: renderer_demo URI [INDEX]
-            uri = first.clone();
-            if args.len() >= 3 {
-                if let Ok(idx) = args[2].parse::<usize>() {
-                    renderer_index = idx;
-                }
-            }
-        }
-    }
-
-    println!("Using URI                  : {}", uri);
-    println!("Requested renderer index   : {}", renderer_index);
-
-    // -------------------------------------------------------------------------
-    // 1. Démarrer le control point et laisser la découverte tourner un peu
-    // -------------------------------------------------------------------------
+    // 1. Start control point and let discovery run a bit
     let cp = ControlPoint::spawn(5)?;
     thread::sleep(Duration::from_secs(5));
 
-    // -------------------------------------------------------------------------
-    // 2. Récupérer la liste des renderers (handles haut niveau)
-    // -------------------------------------------------------------------------
-    let mut renderers: Vec<Renderer> = cp.list_renderer_handles();
+    // 2. Snapshot of logical music renderers
+    let mut renderers: Vec<MusicRenderer> = cp.list_music_renderers();
 
-    // Filtre : on ignore le renderer PMOMusic interne en développement
+    // Filter out the in-dev PMOMusic renderer (if present)
     renderers.retain(|r| {
-        !r.friendly_name()
-            .to_ascii_lowercase()
-            .contains("pmomusic audio renderer")
+        let name = r.friendly_name().to_ascii_lowercase();
+        !name.contains("pmomusic audio renderer")
     });
 
     if renderers.is_empty() {
-        println!("No valid UPnP MediaRenderer discovered.");
+        println!("No valid music renderer discovered.");
         return Ok(());
     }
 
-    println!("\nDiscovered MediaRenderers:");
-    for (idx, r) in renderers.iter().enumerate() {
+    // 3. CLI args: [index] [uri]
+    let args: Vec<String> = env::args().skip(1).collect();
+
+    let selected_index: usize = if !args.is_empty() {
+        args[0].parse().unwrap_or(0)
+    } else {
+        0
+    };
+
+    let maybe_uri: Option<String> = if args.len() >= 2 {
+        Some(args[1].clone())
+    } else {
+        None
+    };
+
+    // Bounds check
+    if selected_index >= renderers.len() {
         println!(
-            "  [{}] {} | model={} | manufacturer={} | has_avt={} | has_rc={}",
-            idx,
-            r.friendly_name(),
-            r.info.model_name,
-            r.info.manufacturer,
-            r.has_avtransport(),
-            r.has_rendering_control(),
+            "Renderer index {} out of range ({} available).",
+            selected_index,
+            renderers.len()
+        );
+        return Ok(());
+    }
+
+    // 4. List renderers with basic info
+    println!("Discovered MusicRenderers:");
+    for (idx, r) in renderers.iter().enumerate() {
+        let info = r.info();
+        println!(
+            "  [{}] {} | model={} | udn={} | location={}",
+            idx, info.friendly_name, info.model_name, info.udn, info.location
+        );
+        print_capabilities("      ", &info.capabilities, &info.protocol);
+    }
+
+    // 5. Select renderer
+    let renderer = &renderers[selected_index];
+    let info = renderer.info();
+
+    println!("\nSelected renderer (index {}):", selected_index);
+    println!("  Name        : {}", info.friendly_name);
+    println!("  Model       : {}", info.model_name);
+    println!("  Manufacturer: {}", info.manufacturer);
+    println!("  UDN         : {}", info.udn);
+    println!("  Location    : {}", info.location);
+    println!("  Protocol    : {:?}", info.protocol);
+    print_capabilities("  ", &info.capabilities, &info.protocol);
+
+    if let Some(upnp) = renderer.as_upnp() {
+        println!(
+            "  [UPnP] AVTransport control URL : {}",
+            upnp
+                .info
+                .avtransport_control_url
+                .as_deref()
+                .unwrap_or("<none>")
+        );
+        println!(
+            "  [UPnP] AVTransport service type: {}",
+            upnp
+                .info
+                .avtransport_service_type
+                .as_deref()
+                .unwrap_or("<none>")
+        );
+        println!(
+            "  [UPnP] RenderingControl control URL : {}",
+            upnp
+                .info
+                .rendering_control_control_url
+                .as_deref()
+                .unwrap_or("<none>")
+        );
+        println!(
+            "  [UPnP] RenderingControl service type: {}",
+            upnp
+                .info
+                .rendering_control_service_type
+                .as_deref()
+                .unwrap_or("<none>")
+        );
+        println!(
+            "  [UPnP] ConnectionManager control URL : {}",
+            upnp
+                .info
+                .connection_manager_control_url
+                .as_deref()
+                .unwrap_or("<none>")
+        );
+        println!(
+            "  [UPnP] ConnectionManager service type: {}",
+            upnp
+                .info
+                .connection_manager_service_type
+                .as_deref()
+                .unwrap_or("<none>")
         );
     }
 
-    if renderer_index >= renderers.len() {
-        return Err(anyhow!(
-            "Renderer index {} out of range (0..={})",
-            renderer_index,
-            renderers.len().saturating_sub(1)
-        ));
-    }
+    // 6. Initial state dump (generic + UPnP-specific)
+    dump_renderer_state(renderer, "Initial state")?;
 
-    // -------------------------------------------------------------------------
-    // 3. Sélection du renderer
-    // -------------------------------------------------------------------------
-    let renderer = &renderers[renderer_index];
+    // 7. Play URI via logical façade
+    let uri = maybe_uri.unwrap_or_else(|| DEFAULT_TEST_URI.to_string());
+    let meta = ""; // or full DIDL-Lite
 
-    println!("\nSelected renderer (index {}):", renderer_index);
-    println!("  Name        : {}", renderer.friendly_name());
-    println!("  Model       : {}", renderer.info.model_name);
-    println!("  Manufacturer: {}", renderer.info.manufacturer);
-    println!("  UDN         : {}", renderer.info.udn);
-    println!("  Location    : {}", renderer.info.location);
-    println!("  has_avt     : {}", renderer.has_avtransport());
-    println!("  has_rc      : {}", renderer.has_rendering_control());
-
-    // -------------------------------------------------------------------------
-    // 4. Si RenderingControl dispo : tester get/set volume + mute
-    //    (set_* remet juste la même valeur pour ne rien changer en pratique)
-    // -------------------------------------------------------------------------
-    if renderer.has_rendering_control() {
-        println!("\n[RenderingControl]");
-        match renderer.get_master_volume() {
-            Ok(vol) => {
-                println!("  Current master volume: {}", vol);
-                if let Err(e) = renderer.set_master_volume(vol) {
-                    println!("  set_master_volume({}) failed: {}", vol, e);
-                } else {
-                    println!("  set_master_volume({}) OK (no-op)", vol);
-                }
-            }
-            Err(e) => {
-                println!("  get_master_volume() failed: {}", e);
-            }
-        }
-
-        match renderer.get_master_mute() {
-            Ok(muted) => {
-                println!("  Current master mute   : {}", muted);
-                if let Err(e) = renderer.set_master_mute(muted) {
-                    println!("  set_master_mute({}) failed: {}", muted, e);
-                } else {
-                    println!("  set_master_mute({}) OK (no-op)", muted);
-                }
-            }
-            Err(e) => {
-                println!("  get_master_mute() failed: {}", e);
-            }
-        }
+    println!("\nCalling play_uri on music renderer...");
+    if let Err(e) = renderer.play_uri(&uri, meta) {
+        println!("  play_uri failed: {e}");
     } else {
-        println!("\n[RenderingControl]");
-        println!("  Renderer has no RenderingControl service.");
+        println!("  play_uri: OK");
     }
 
-    // -------------------------------------------------------------------------
-    // 5. Si AVTransport dispo : tester play_uri / seek / pause / stop
-    // -------------------------------------------------------------------------
-    if !renderer.has_avtransport() {
-        println!("\n[AVTransport]");
-        println!("  Renderer has no AVTransport service, skipping playback tests.");
-        return Ok(());
+    println!(
+        "Waiting {}s to let the renderer prefetch and start playback...",
+        AFTER_PLAY_WAIT_SECS
+    );
+    thread::sleep(Duration::from_secs(AFTER_PLAY_WAIT_SECS));
+    dump_renderer_state(renderer, "After play_uri")?;
+
+    // 8. Short progress polling using the PlaybackPosition façade
+    progress_monitor(renderer, "Progress while playing", 8, 3);
+
+    // 9. Seek (if supported)
+    println!("\nCalling seek_rel_time(\"00:01:00\")...");
+    if let Err(e) = renderer.seek_rel_time("00:01:00") {
+        println!("  seek_rel_time failed: {e}");
+    } else {
+        println!("  seek_rel_time: OK");
+        thread::sleep(Duration::from_secs(2));
+        dump_renderer_state(renderer, "After seek_rel_time")?;
+
+        // 9b. Second progress loop after seek: verify RelTime advances
+        progress_monitor(renderer, "Progress after seek", 8, 3);
     }
 
-    println!("\n[AVTransport]");
-
-    // Helper pour afficher l'état courant
-    let dump_info = |label: &str| -> Result<()> {
-        let info = renderer
-            .avtransport()
-            .and_then(|_| renderer.avtransport().unwrap().get_transport_info(0))?;
-        println!("\n  [{}]", label);
-        println!("    State  : {}", info.current_transport_state);
-        println!("    Status : {}", info.current_transport_status);
-        println!("    Speed  : {}", info.current_speed);
-        Ok(())
-    };
-
-    // Set + Play
-    println!("\n  Calling play_uri(...)");
-    renderer.play_uri(&uri, "")?;
-    println!("  play_uri: OK");
-    thread::sleep(Duration::from_secs(8));
-    let _ = dump_info("After play_uri");
-
-    // Seek (si supporté)
-    println!("\n  Calling seek_rel_time(\"00:01:00\")...");
-    match renderer.seek_rel_time("00:01:00") {
-        Ok(()) => {
-            println!("  seek_rel_time: OK");
-            thread::sleep(Duration::from_secs(3));
-            let _ = dump_info("After seek_rel_time");
-        }
-        Err(e) => {
-            println!("  seek_rel_time failed: {}", e);
-        }
+    // 10. Volume dance (if supported)
+    println!("\nProbing volume control via music façade...");
+    if let Err(e) = volume_demo(renderer) {
+        println!("  Volume control not fully usable: {e}");
     }
 
-    // Pause (ENTER pour laisser jouer)
-    print!("\nPress ENTER to Pause...");
-    io::stdout().flush().ok();
-    let _ = io::stdin().read_line(&mut String::new());
-
-    println!("\n  Calling pause()...");
-    match renderer.pause() {
-        Ok(()) => {
-            println!("  pause: OK");
-            thread::sleep(Duration::from_secs(2));
-            let _ = dump_info("After pause");
-        }
-        Err(e) => {
-            println!("  pause failed: {}", e);
-        }
+    // 11. Pause then Stop
+    println!("\nCalling pause() via music façade...");
+    if let Err(e) = renderer.pause() {
+        println!("  pause failed: {e}");
+    } else {
+        println!("  pause: OK");
+        thread::sleep(Duration::from_secs(2));
+        dump_renderer_state(renderer, "After pause")?;
     }
 
-    // Stop
-    print!("\nPress ENTER to Stop...");
-    io::stdout().flush().ok();
-    let _ = io::stdin().read_line(&mut String::new());
-
-    println!("\n  Calling stop()...");
-    match renderer.stop() {
-        Ok(()) => {
-            println!("  stop: OK");
-            let _ = dump_info("After stop");
-        }
-        Err(e) => {
-            println!("  stop failed: {}", e);
-        }
+    println!("\nCalling stop() via music façade...");
+    if let Err(e) = renderer.stop() {
+        println!("  stop failed: {e}");
+    } else {
+        println!("  stop: OK");
+        dump_renderer_state(renderer, "After stop")?;
     }
 
     println!("\nDone.");
+    Ok(())
+}
+
+fn print_capabilities(prefix: &str, caps: &RendererCapabilities, proto: &RendererProtocol) {
+    println!("{prefix}Capabilities:");
+    println!("{prefix}  Protocol     : {:?}", proto);
+    println!("{prefix}  AVTransport  : {}", caps.has_avtransport);
+    println!("{prefix}  RendControl  : {}", caps.has_rendering_control);
+    println!("{prefix}  ConnManager  : {}", caps.has_connection_manager);
+    println!("{prefix}  OH Playlist  : {}", caps.has_oh_playlist);
+    println!("{prefix}  OH Volume    : {}", caps.has_oh_volume);
+    println!("{prefix}  OH Info      : {}", caps.has_oh_info);
+    println!("{prefix}  OH Time      : {}", caps.has_oh_time);
+    println!("{prefix}  OH Radio     : {}", caps.has_oh_radio);
+}
+
+fn dump_renderer_state(renderer: &MusicRenderer, label: &str) -> Result<()> {
+    println!("\n[{label}]");
+
+    if let Ok(state) = renderer.playback_state() {
+        println!("  Playback state (music): {:?}", state);
+    } else {
+        println!("  Playback state (music): <unavailable>");
+    }
+
+    // Generic volume façade
+    match renderer.volume() {
+        Ok(v) => println!("  Volume (music)   : {}", v),
+        Err(e) => println!("  Volume not available: {e}"),
+    }
+
+    match renderer.mute() {
+        Ok(m) => println!("  Mute               : {}", m),
+        Err(e) => println!("  Mute state unknown : {e}"),
+    }
+
+    if let Ok(pos) = renderer.playback_position() {
+        println!("  Position info:");
+        println!("    Track       : {:?}", pos.track);
+        println!("    Duration    : {:?}", pos.track_duration);
+        println!("    RelTime     : {:?}", pos.rel_time);
+        println!("    AbsTime     : {:?}", pos.abs_time);
+    } else {
+        println!("  Position info: <unavailable>");
+    }
+
+    // Optional UPnP-specific TransportInfo
+    if let Some(upnp) = renderer.as_upnp() {
+        if upnp.has_avtransport() {
+            match upnp.avtransport() {
+                Ok(avt) => match avt.get_transport_info(0) {
+                    Ok(info) => {
+                        println!("  [UPnP] TransportInfo:");
+                        println!("    State  : {}", info.current_transport_state);
+                        println!("    Status : {}", info.current_transport_status);
+                        println!("    Speed  : {}", info.current_speed);
+                    }
+                    Err(e) => {
+                        println!("  [UPnP] TransportInfo unavailable: {e}");
+                    }
+                },
+                Err(e) => println!("  [UPnP] No AVTransport client: {e}"),
+            }
+        } else {
+            println!("  [UPnP] AVTransport not present on this renderer.");
+        }
+    }
+
+    Ok(())
+}
+
+fn progress_monitor(
+    renderer: &MusicRenderer,
+    label: &str,
+    iterations: usize,
+    interval_secs: u64,
+) {
+    println!(
+        "\n[{label}] polling playback state/position {} times (every {} s)...",
+        iterations, interval_secs
+    );
+
+    for i in 0..iterations {
+        if let Ok(state) = renderer.playback_state() {
+            print!("  Sample {:02}: state={:?}", i + 1, state);
+        } else {
+            print!("  Sample {:02}: state=<unavailable>", i + 1);
+        }
+
+        if let Ok(pos) = renderer.playback_position() {
+            println!(
+                " | track={:?}, rel={:?}, dur={:?}",
+                pos.track, pos.rel_time, pos.track_duration
+            );
+        } else {
+            println!(" | position=<unavailable>");
+        }
+
+        thread::sleep(Duration::from_secs(interval_secs));
+    }
+}
+
+fn volume_demo(renderer: &MusicRenderer) -> Result<()> {
+    // Try to get current volume
+    let original = renderer.volume()?;
+    println!("  Current music volume  : {}", original);
+
+    // Try mute toggle
+    let muted = renderer.mute()?;
+    println!("  Current mute state     : {}", muted);
+
+    println!("  Setting mute = true...");
+    renderer.set_mute(true)?;
+    thread::sleep(Duration::from_secs(1));
+    println!("  Mute now: {}", renderer.mute()?);
+
+    println!("  Restoring mute = {}", muted);
+    renderer.set_mute(muted)?;
+    thread::sleep(Duration::from_millis(500));
+
+    // Small volume bump if possible
+    let new_volume = original.saturating_add(5).min(u16::MAX);
+    println!("  Bumping volume to      : {}", new_volume);
+    renderer.set_volume(new_volume)?;
+    thread::sleep(Duration::from_secs(1));
+    println!("  Volume after bump      : {}", renderer.volume()?);
+
+    println!("  Restoring original volume: {}", original);
+    renderer.set_volume(original)?;
+
     Ok(())
 }

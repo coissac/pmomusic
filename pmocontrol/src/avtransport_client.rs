@@ -356,3 +356,70 @@ mod upnp_error_tests {
         assert_eq!(err.error_description, "Invalid Action");
     }
 }
+
+#[derive(Debug, Clone)]
+pub struct PositionInfo {
+    pub track: u32,
+    pub track_duration: Option<String>, // HH:MM:SS or None
+    pub rel_time: Option<String>,       // HH:MM:SS or None
+    pub abs_time: Option<String>,       // HH:MM:SS or None
+}
+
+impl AvTransportClient {
+    /// AVTransport:1 — GetPositionInfo
+    pub fn get_position_info(&self, instance_id: u32) -> Result<PositionInfo> {
+        let instance_id_str = instance_id.to_string();
+        let args = [("InstanceID", instance_id_str.as_str())];
+
+        let call_result = invoke_upnp_action(
+            &self.control_url,
+            &self.service_type,
+            "GetPositionInfo",
+            &args,
+        )?;
+
+        if !call_result.status.is_success() {
+            return Err(anyhow!(
+                "GetPositionInfo failed with HTTP status {}",
+                call_result.status
+            ));
+        }
+
+        let envelope = call_result
+            .envelope
+            .as_ref()
+            .ok_or_else(|| anyhow!("Missing SOAP envelope in GetPositionInfo response"))?;
+
+        parse_position_info(envelope)
+    }
+}
+
+fn parse_position_info(envelope: &SoapEnvelope) -> Result<PositionInfo> {
+    let response =
+        find_child_with_suffix(&envelope.body.content, "GetPositionInfoResponse")
+            .ok_or_else(|| anyhow!("Missing GetPositionInfoResponse element"))?;
+
+    // Helpers allow missing text (AVTransport allows empty durations)
+    fn opt(parent: &Element, name: &str) -> Option<String> {
+        find_child_with_suffix(parent, name)
+            .and_then(|e| e.get_text())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    }
+
+    let track = opt(response, "Track")
+        .unwrap_or_else(|| "0".into())
+        .parse::<u32>()
+        .unwrap_or(0);
+
+    let track_duration = opt(response, "TrackDuration");
+    let rel_time = opt(response, "RelTime");
+    let abs_time = opt(response, "AbsTime");
+
+    Ok(PositionInfo {
+        track,
+        track_duration,
+        rel_time,
+        abs_time,
+    })
+}

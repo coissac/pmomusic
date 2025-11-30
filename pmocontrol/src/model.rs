@@ -1,3 +1,5 @@
+use crate::capabilities::{PlaybackPositionInfo, PlaybackState};
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RendererId(pub String);
 
@@ -70,4 +72,24 @@ pub struct MediaServerInfo {
     pub online: bool,
     pub last_seen: std::time::SystemTime,
     pub max_age: u32,
+}
+
+#[derive(Clone, Debug)]
+pub enum RendererEvent {
+    StateChanged {
+        id: RendererId,
+        state: PlaybackState,
+    },
+    PositionChanged {
+        id: RendererId,
+        position: PlaybackPositionInfo,
+    },
+    VolumeChanged {
+        id: RendererId,
+        volume: u16,
+    },
+    MuteChanged {
+        id: RendererId,
+        mute: bool,
+    },
 }
