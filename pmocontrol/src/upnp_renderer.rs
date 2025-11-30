@@ -1,11 +1,12 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 use crate::capabilities::{PlaybackPositionInfo, PlaybackStatus};
-use crate::connection_manager_client::{
-    ConnectionInfo, ConnectionManagerClient, ProtocolInfo,
-};
+use crate::connection_manager_client::{ConnectionInfo, ConnectionManagerClient, ProtocolInfo};
 use crate::rendering_control_client::RenderingControlClient;
-use crate::{AvTransportClient, DeviceRegistry, PlaybackPosition, PlaybackState, PositionInfo, RendererId, RendererInfo, TransportControl, VolumeControl};
+use crate::{
+    AvTransportClient, DeviceRegistry, PlaybackPosition, PlaybackState, PositionInfo, RendererId,
+    RendererInfo, TransportControl, VolumeControl,
+};
 
 /// High-level handle representing a renderer and its optional AVTransport client.
 #[derive(Clone, Debug)]
@@ -185,7 +186,6 @@ mod tests {
         assert_eq!(renderer.friendly_name(), "Renderer with-avt");
     }
 }
-
 
 /// Implémentation UPnP AV de `TransportControl` pour [`UpnpRenderer`].
 ///

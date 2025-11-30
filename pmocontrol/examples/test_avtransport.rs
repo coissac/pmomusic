@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use pmocontrol::{ControlPoint, DeviceRegistryRead, RendererInfo};
 use std::env;
 use std::io::{self, Write};
@@ -66,11 +66,7 @@ fn main() -> Result<()> {
     for (idx, r) in renderers.iter().enumerate() {
         println!(
             "  [{}] {} | model={} | udn={} | location={}",
-            idx,
-            r.friendly_name,
-            r.model_name,
-            r.udn,
-            r.location,
+            idx, r.friendly_name, r.model_name, r.udn, r.location,
         );
     }
 

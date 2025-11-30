@@ -23,8 +23,7 @@ use std::thread;
 use std::time::Duration;
 
 // Default URI if none is provided on the CLI.
-const DEFAULT_TEST_URI: &str =
-    "https://audio-fb.radioparadise.com/chan/1/x/1117/4/g/1117-3.flac";
+const DEFAULT_TEST_URI: &str = "https://audio-fb.radioparadise.com/chan/1/x/1117/4/g/1117-3.flac";
 
 // Extra wait after play_uri() so slow renderers (e.g. Arylic H50) have time
 // to prefetch and actually start playback.
@@ -103,48 +102,42 @@ fn main() -> Result<()> {
     if let Some(upnp) = renderer.as_upnp() {
         println!(
             "  [UPnP] AVTransport control URL : {}",
-            upnp
-                .info
+            upnp.info
                 .avtransport_control_url
                 .as_deref()
                 .unwrap_or("<none>")
         );
         println!(
             "  [UPnP] AVTransport service type: {}",
-            upnp
-                .info
+            upnp.info
                 .avtransport_service_type
                 .as_deref()
                 .unwrap_or("<none>")
         );
         println!(
             "  [UPnP] RenderingControl control URL : {}",
-            upnp
-                .info
+            upnp.info
                 .rendering_control_control_url
                 .as_deref()
                 .unwrap_or("<none>")
         );
         println!(
             "  [UPnP] RenderingControl service type: {}",
-            upnp
-                .info
+            upnp.info
                 .rendering_control_service_type
                 .as_deref()
                 .unwrap_or("<none>")
         );
         println!(
             "  [UPnP] ConnectionManager control URL : {}",
-            upnp
-                .info
+            upnp.info
                 .connection_manager_control_url
                 .as_deref()
                 .unwrap_or("<none>")
         );
         println!(
             "  [UPnP] ConnectionManager service type: {}",
-            upnp
-                .info
+            upnp.info
                 .connection_manager_service_type
                 .as_deref()
                 .unwrap_or("<none>")
@@ -223,6 +216,7 @@ fn print_capabilities(prefix: &str, caps: &RendererCapabilities, proto: &Rendere
     println!("{prefix}  RendControl   : {}", caps.has_rendering_control);
     println!("{prefix}  ConnManager   : {}", caps.has_connection_manager);
     println!("{prefix}  LinkPlay HTTP : {}", caps.has_linkplay_http);
+    println!("{prefix}  Arylic TCP    : {}", caps.has_arylic_tcp);
     println!("{prefix}  OH Playlist   : {}", caps.has_oh_playlist);
     println!("{prefix}  OH Volume     : {}", caps.has_oh_volume);
     println!("{prefix}  OH Info       : {}", caps.has_oh_info);
@@ -234,6 +228,8 @@ fn print_backend(prefix: &str, renderer: &MusicRenderer) {
     let backend = match renderer {
         MusicRenderer::Upnp(_) => "UpnpRenderer (UPnP AV / DLNA)",
         MusicRenderer::LinkPlay(_) => "LinkPlayRenderer (LinkPlay HTTP)",
+        MusicRenderer::ArylicTcp(_) => "ArylicTcpRenderer  (ARylic TCP Protocol)",
+        MusicRenderer::HybridUpnpArylic{..} => "Hybrid UpnpArylicRenderer (UPnP AV / DLNA + ARylic TCP Protocol)",
     };
     println!("{prefix}Backend       : {backend}");
 }
@@ -293,12 +289,7 @@ fn dump_renderer_state(renderer: &MusicRenderer, label: &str) -> Result<()> {
     Ok(())
 }
 
-fn progress_monitor(
-    renderer: &MusicRenderer,
-    label: &str,
-    iterations: usize,
-    interval_secs: u64,
-) {
+fn progress_monitor(renderer: &MusicRenderer, label: &str, iterations: usize, interval_secs: u64) {
     println!(
         "\n[{label}] polling playback state/position {} times (every {} s)...",
         iterations, interval_secs
@@ -343,14 +334,16 @@ fn volume_demo(renderer: &MusicRenderer) -> Result<()> {
     thread::sleep(Duration::from_millis(500));
 
     // Small volume bump if possible
-    let new_volume = original.saturating_add(5).min(u16::MAX);
+    let new_volume = original.saturating_add(10).min(u16::MAX);
     println!("  Bumping volume to      : {}", new_volume);
     renderer.set_volume(new_volume)?;
-    thread::sleep(Duration::from_secs(1));
     println!("  Volume after bump      : {}", renderer.volume()?);
+    thread::sleep(Duration::from_secs(5));
 
     println!("  Restoring original volume: {}", original);
+    println!("  Volume after reset      : {}", renderer.volume()?);
     renderer.set_volume(original)?;
+    thread::sleep(Duration::from_secs(5));
 
     Ok(())
 }

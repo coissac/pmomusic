@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use tracing::debug;
 use ureq::Agent;
 
@@ -283,7 +283,7 @@ fn parse_u16_field(map: &HashMap<String, String>, key: &str) -> Result<u16> {
     Ok(value.min(100))
 }
 
-fn parse_flat_json(input: &str) -> Result<HashMap<String, String>> {
+pub(crate) fn parse_flat_json(input: &str) -> Result<HashMap<String, String>> {
     let mut chars = input.chars().peekable();
     skip_ws(&mut chars);
     if chars.next() != Some('{') {
@@ -348,9 +348,7 @@ fn parse_json_value(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Res
     }
 }
 
-fn parse_json_string(
-    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
-) -> Result<String> {
+fn parse_json_string(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Result<String> {
     if chars.next() != Some('"') {
         return Err(anyhow!("Expected string"));
     }
@@ -394,9 +392,7 @@ fn parse_json_string(
     Err(anyhow!("Unterminated JSON string"))
 }
 
-fn parse_json_number(
-    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
-) -> Result<String> {
+fn parse_json_number(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Result<String> {
     let mut out = String::new();
 
     if matches!(chars.peek(), Some('-')) {

@@ -19,6 +19,7 @@ pub struct RendererCapabilities {
     pub has_rendering_control: bool,
     pub has_connection_manager: bool,
     pub has_linkplay_http: bool,
+    pub has_arylic_tcp: bool,
 
     pub has_oh_playlist: bool,
     pub has_oh_volume: bool,

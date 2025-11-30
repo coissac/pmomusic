@@ -1,5 +1,5 @@
-use anyhow::{anyhow, Result};
-use crate::soap_client::{invoke_upnp_action, SoapCallResult};
+use crate::soap_client::{SoapCallResult, invoke_upnp_action};
+use anyhow::{Result, anyhow};
 use pmoupnp::soap::SoapEnvelope;
 use xmltree::{Element, XMLNode};
 
@@ -25,12 +25,8 @@ impl RenderingControlClient {
             ("Channel", channel),
         ];
 
-        let call_result = invoke_upnp_action(
-            &self.control_url,
-            &self.service_type,
-            "GetVolume",
-            &args,
-        )?;
+        let call_result =
+            invoke_upnp_action(&self.control_url, &self.service_type, "GetVolume", &args)?;
 
         ensure_success("GetVolume", &call_result)?;
 
@@ -48,9 +44,8 @@ impl RenderingControlClient {
             ));
         }
 
-        let response =
-            find_child_with_suffix(&envelope.body.content, "GetVolumeResponse")
-                .ok_or_else(|| anyhow!("Missing GetVolumeResponse element in SOAP body"))?;
+        let response = find_child_with_suffix(&envelope.body.content, "GetVolumeResponse")
+            .ok_or_else(|| anyhow!("Missing GetVolumeResponse element in SOAP body"))?;
 
         let text = extract_child_text(response, "CurrentVolume")?;
         let volume = text
@@ -70,12 +65,8 @@ impl RenderingControlClient {
             ("DesiredVolume", volume_str.as_str()),
         ];
 
-        let call_result = invoke_upnp_action(
-            &self.control_url,
-            &self.service_type,
-            "SetVolume",
-            &args,
-        )?;
+        let call_result =
+            invoke_upnp_action(&self.control_url, &self.service_type, "SetVolume", &args)?;
 
         handle_action_response("SetVolume", &call_result)
     }
@@ -88,12 +79,8 @@ impl RenderingControlClient {
             ("Channel", channel),
         ];
 
-        let call_result = invoke_upnp_action(
-            &self.control_url,
-            &self.service_type,
-            "GetMute",
-            &args,
-        )?;
+        let call_result =
+            invoke_upnp_action(&self.control_url, &self.service_type, "GetMute", &args)?;
 
         ensure_success("GetMute", &call_result)?;
 
@@ -122,7 +109,7 @@ impl RenderingControlClient {
                 return Err(anyhow!(
                     "Invalid CurrentMute value: {} (expected 0 or 1)",
                     text
-                ))
+                ));
             }
         };
 
@@ -139,12 +126,8 @@ impl RenderingControlClient {
             ("DesiredMute", mute_str),
         ];
 
-        let call_result = invoke_upnp_action(
-            &self.control_url,
-            &self.service_type,
-            "SetMute",
-            &args,
-        )?;
+        let call_result =
+            invoke_upnp_action(&self.control_url, &self.service_type, "SetMute", &args)?;
 
         handle_action_response("SetMute", &call_result)
     }

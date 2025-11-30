@@ -152,17 +152,12 @@ fn format_playback_state(state: &PlaybackState) -> String {
 
 /// Affichage lisible d'un PlaybackPositionInfo.
 fn format_position(pos: &PlaybackPositionInfo) -> String {
-    let track = pos.track.map(|t| t.to_string()).unwrap_or_else(|| "-".to_string());
-    let rel = pos
-        .rel_time
-        .as_deref()
-        .unwrap_or("-")
-        .to_string();
-    let dur = pos
-        .track_duration
-        .as_deref()
-        .unwrap_or("-")
-        .to_string();
+    let track = pos
+        .track
+        .map(|t| t.to_string())
+        .unwrap_or_else(|| "-".to_string());
+    let rel = pos.rel_time.as_deref().unwrap_or("-").to_string();
+    let dur = pos.track_duration.as_deref().unwrap_or("-").to_string();
 
     format!("track={} rel_time={} duration={}", track, rel, dur)
 }

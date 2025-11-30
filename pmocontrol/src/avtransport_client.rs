@@ -1,7 +1,7 @@
 // pmocontrol/src/avtransport_client.rs
 
-use anyhow::{anyhow, Result};
-use crate::soap_client::{invoke_upnp_action, SoapCallResult};
+use crate::soap_client::{SoapCallResult, invoke_upnp_action};
+use anyhow::{Result, anyhow};
 use pmoupnp::soap::SoapEnvelope;
 use xmltree::{Element, XMLNode};
 
@@ -80,17 +80,9 @@ impl AvTransportClient {
     /// AVTransport:1 — Play
     pub fn play(&self, instance_id: u32, speed: &str) -> Result<()> {
         let instance_id_str = instance_id.to_string();
-        let args = [
-            ("InstanceID", instance_id_str.as_str()),
-            ("Speed", speed),
-        ];
+        let args = [("InstanceID", instance_id_str.as_str()), ("Speed", speed)];
 
-        let call_result = invoke_upnp_action(
-            &self.control_url,
-            &self.service_type,
-            "Play",
-            &args,
-        )?;
+        let call_result = invoke_upnp_action(&self.control_url, &self.service_type, "Play", &args)?;
 
         handle_action_response("Play", &call_result)
     }
@@ -100,12 +92,8 @@ impl AvTransportClient {
         let instance_id_str = instance_id.to_string();
         let args = [("InstanceID", instance_id_str.as_str())];
 
-        let call_result = invoke_upnp_action(
-            &self.control_url,
-            &self.service_type,
-            "Pause",
-            &args,
-        )?;
+        let call_result =
+            invoke_upnp_action(&self.control_url, &self.service_type, "Pause", &args)?;
 
         handle_action_response("Pause", &call_result)
     }
@@ -115,12 +103,7 @@ impl AvTransportClient {
         let instance_id_str = instance_id.to_string();
         let args = [("InstanceID", instance_id_str.as_str())];
 
-        let call_result = invoke_upnp_action(
-            &self.control_url,
-            &self.service_type,
-            "Stop",
-            &args,
-        )?;
+        let call_result = invoke_upnp_action(&self.control_url, &self.service_type, "Stop", &args)?;
 
         handle_action_response("Stop", &call_result)
     }
@@ -134,12 +117,7 @@ impl AvTransportClient {
             ("Target", target),
         ];
 
-        let call_result = invoke_upnp_action(
-            &self.control_url,
-            &self.service_type,
-            "Seek",
-            &args,
-        )?;
+        let call_result = invoke_upnp_action(&self.control_url, &self.service_type, "Seek", &args)?;
 
         handle_action_response("Seek", &call_result)
     }
@@ -183,10 +161,8 @@ fn parse_transport_info(envelope: &SoapEnvelope) -> Result<TransportInfo> {
     let response = find_child_with_suffix(&envelope.body.content, "GetTransportInfoResponse")
         .ok_or_else(|| anyhow!("Missing GetTransportInfoResponse element in SOAP body"))?;
 
-    let current_transport_state =
-        extract_child_text(response, "CurrentTransportState")?;
-    let current_transport_status =
-        extract_child_text(response, "CurrentTransportStatus")?;
+    let current_transport_state = extract_child_text(response, "CurrentTransportState")?;
+    let current_transport_status = extract_child_text(response, "CurrentTransportStatus")?;
     let current_speed = extract_child_text(response, "CurrentSpeed")?;
 
     Ok(TransportInfo {
@@ -395,9 +371,8 @@ impl AvTransportClient {
 }
 
 fn parse_position_info(envelope: &SoapEnvelope) -> Result<PositionInfo> {
-    let response =
-        find_child_with_suffix(&envelope.body.content, "GetPositionInfoResponse")
-            .ok_or_else(|| anyhow!("Missing GetPositionInfoResponse element"))?;
+    let response = find_child_with_suffix(&envelope.body.content, "GetPositionInfoResponse")
+        .ok_or_else(|| anyhow!("Missing GetPositionInfoResponse element"))?;
 
     // Helpers allow missing text (AVTransport allows empty durations)
     fn opt(parent: &Element, name: &str) -> Option<String> {

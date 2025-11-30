@@ -29,7 +29,6 @@ pub enum PlaybackState {
     Unknown(String),
 }
 
-
 impl PlaybackState {
     /// Map a raw UPnP AVTransport CurrentTransportState string
     /// to a logical PlaybackState.
@@ -50,7 +49,6 @@ impl PlaybackState {
         }
     }
 }
-
 
 /// Generic abstraction for playback status (transport state).
 ///

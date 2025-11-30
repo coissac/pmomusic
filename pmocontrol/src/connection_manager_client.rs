@@ -1,6 +1,6 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
-use crate::soap_client::{invoke_upnp_action, SoapCallResult};
+use crate::soap_client::{SoapCallResult, invoke_upnp_action};
 use pmoupnp::soap::SoapEnvelope;
 use xmltree::{Element, XMLNode};
 

@@ -5,6 +5,7 @@ use quick_xml::{Error as XmlError, Reader, events::Event};
 use thiserror::Error;
 use tracing::{debug, warn};
 
+use crate::arylic_tcp::detect_arylic_tcp;
 use crate::avtransport_client::AvTransportClient;
 use crate::discovery::{DeviceDescriptionProvider, DiscoveredEndpoint};
 use crate::linkplay::detect_linkplay_http;
@@ -175,8 +176,10 @@ impl HttpXmlDescriptionProvider {
                                         .contains("urn:schemas-upnp-org:service:renderingcontrol:")
                                     {
                                         if parsed.rendering_control_service_type.is_none() {
-                                            parsed.rendering_control_service_type = Some(st.clone());
-                                            parsed.rendering_control_control_url = Some(ctrl.clone());
+                                            parsed.rendering_control_service_type =
+                                                Some(st.clone());
+                                            parsed.rendering_control_control_url =
+                                                Some(ctrl.clone());
                                             debug!(
                                                 "Found RenderingControl service for {}: type={} controlURL={}",
                                                 endpoint.udn, st, ctrl
@@ -188,7 +191,8 @@ impl HttpXmlDescriptionProvider {
                                         .contains("urn:schemas-upnp-org:service:connectionmanager:")
                                     {
                                         if parsed.connection_manager_service_type.is_none() {
-                                            parsed.connection_manager_service_type = Some(st.clone());
+                                            parsed.connection_manager_service_type =
+                                                Some(st.clone());
                                             parsed.connection_manager_control_url =
                                                 Some(ctrl.clone());
                                             debug!(
@@ -280,6 +284,12 @@ impl HttpXmlDescriptionProvider {
             Duration::from_secs(self.timeout_secs.max(1)),
         ) {
             caps.has_linkplay_http = true;
+        }
+        if detect_arylic_tcp(
+            &endpoint.location,
+            Duration::from_secs(self.timeout_secs.max(1)),
+        ) {
+            caps.has_arylic_tcp = true;
         }
         let protocol = detect_renderer_protocol(&caps);
         let now = SystemTime::now();

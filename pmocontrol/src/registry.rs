@@ -3,8 +3,8 @@ use std::time::SystemTime;
 
 use crate::avtransport_client::AvTransportClient;
 use crate::connection_manager_client::ConnectionManagerClient;
-use crate::rendering_control_client::RenderingControlClient;
 use crate::model::{MediaServerId, MediaServerInfo, RendererId, RendererInfo};
+use crate::rendering_control_client::RenderingControlClient;
 
 #[derive(Clone, Debug)]
 enum DeviceKey {
@@ -136,10 +136,7 @@ impl DeviceRegistry {
     /// Returns:
     /// - Some(client) if the renderer exists AND has avtransport_* fields set
     /// - None if renderer not found or no AVTransport service.
-    pub fn avtransport_client_for_renderer(
-        &self,
-        id: &RendererId,
-    ) -> Option<AvTransportClient> {
+    pub fn avtransport_client_for_renderer(&self, id: &RendererId) -> Option<AvTransportClient> {
         let info = self.renderers.get(id)?;
 
         let service_type = info.avtransport_service_type.as_ref()?;

@@ -24,15 +24,12 @@ pub fn invoke_upnp_action(
     action: &str,
     args: &[(&str, &str)],
 ) -> Result<SoapCallResult> {
-
     // 1. Build SOAP request XML using pmoupnp
     let body_xml = build_soap_request(service_type, action, args)
         .context("Failed to build SOAP request body")?;
 
     // 2. Build agent that does NOT treat 4xx/5xx as errors
-    let config = Agent::config_builder()
-        .http_status_as_error(false)
-        .build();
+    let config = Agent::config_builder().http_status_as_error(false).build();
 
     let agent: Agent = config.into();
 
