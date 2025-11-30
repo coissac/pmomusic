@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::time::SystemTime;
 
 use crate::avtransport_client::AvTransportClient;
+use crate::rendering_control_client::RenderingControlClient;
 use crate::model::{MediaServerId, MediaServerInfo, RendererId, RendererInfo};
 
 #[derive(Clone, Debug)]
@@ -157,5 +158,21 @@ impl DeviceRegistry {
         let control_url = info.avtransport_control_url?;
 
         Some(AvTransportClient::new(control_url, service_type))
+    }
+
+    /// Construct a RenderingControlClient for a given renderer id, if possible.
+    pub fn rendering_control_client_for_renderer(
+        &self,
+        id: &RendererId,
+    ) -> Option<RenderingControlClient> {
+        let info = self.renderers.get(id)?;
+
+        let service_type = info.rendering_control_service_type.as_ref()?;
+        let control_url = info.rendering_control_control_url.as_ref()?;
+
+        Some(RenderingControlClient::new(
+            control_url.clone(),
+            service_type.clone(),
+        ))
     }
 }

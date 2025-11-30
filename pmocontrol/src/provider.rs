@@ -42,6 +42,10 @@ struct ParsedDeviceDescription {
     // New: AVTransport endpoint (if present in serviceList)
     avtransport_service_type: Option<String>,
     avtransport_control_url: Option<String>,
+
+    // RenderingControl endpoint (if present in serviceList)
+    rendering_control_service_type: Option<String>,
+    rendering_control_control_url: Option<String>,
 }
 
 impl ParsedDeviceDescription {
@@ -161,6 +165,19 @@ impl HttpXmlDescriptionProvider {
                                             );
                                         }
                                     }
+
+                                    if lower
+                                        .contains("urn:schemas-upnp-org:service:renderingcontrol:")
+                                    {
+                                        if parsed.rendering_control_service_type.is_none() {
+                                            parsed.rendering_control_service_type = Some(st.clone());
+                                            parsed.rendering_control_control_url = Some(ctrl.clone());
+                                            debug!(
+                                                "Found RenderingControl service for {}: type={} controlURL={}",
+                                                endpoint.udn, st, ctrl
+                                            );
+                                        }
+                                    }
                                 }
 
                                 in_service = false;
@@ -258,6 +275,11 @@ impl HttpXmlDescriptionProvider {
             avtransport_service_type: parsed.avtransport_service_type.clone(),
             avtransport_control_url: parsed
                 .avtransport_control_url
+                .as_ref()
+                .map(|ctrl| resolve_control_url(&endpoint.location, ctrl)),
+            rendering_control_service_type: parsed.rendering_control_service_type.clone(),
+            rendering_control_control_url: parsed
+                .rendering_control_control_url
                 .as_ref()
                 .map(|ctrl| resolve_control_url(&endpoint.location, ctrl)),
         })

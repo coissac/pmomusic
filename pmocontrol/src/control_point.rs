@@ -6,8 +6,10 @@ use std::time::Duration;
 use pmoupnp::ssdp::SsdpClient;
 
 use crate::discovery::DiscoveryManager;
+use crate::model::RendererId;
 use crate::provider::HttpXmlDescriptionProvider;
-use crate::registry::{DeviceRegistry, DeviceUpdate};
+use crate::registry::{DeviceRegistry, DeviceRegistryRead, DeviceUpdate};
+use crate::renderer::Renderer;
 
 /// Control point minimal :
 /// - lance un SsdpClient dans un thread,
@@ -75,5 +77,30 @@ impl ControlPoint {
     /// Accès au DeviceRegistry partagé.
     pub fn registry(&self) -> Arc<RwLock<DeviceRegistry>> {
         Arc::clone(&self.registry)
+    }
+
+    /// Snapshot list of renderers currently known by the registry.
+    pub fn list_renderer_handles(&self) -> Vec<Renderer> {
+        let reg = self.registry.read().unwrap();
+        reg.list_renderers()
+            .into_iter()
+            .map(|info| Renderer::from_registry(info, &reg))
+            .collect()
+    }
+
+    /// Return the first renderer in the registry, if any.
+    pub fn default_renderer(&self) -> Option<Renderer> {
+        let reg = self.registry.read().unwrap();
+        reg.list_renderers()
+            .into_iter()
+            .next()
+            .map(|info| Renderer::from_registry(info, &reg))
+    }
+
+    /// Lookup a renderer by id.
+    pub fn renderer_by_id(&self, id: &RendererId) -> Option<Renderer> {
+        let reg = self.registry.read().unwrap();
+        reg.get_renderer(id)
+            .map(|info| Renderer::from_registry(info, &reg))
     }
 }

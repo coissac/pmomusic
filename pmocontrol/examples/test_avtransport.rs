@@ -1,101 +1,158 @@
+use anyhow::{anyhow, Result};
+use pmocontrol::{ControlPoint, DeviceRegistryRead, RendererInfo};
+use std::env;
+use std::io::{self, Write};
 use std::thread;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
-use pmocontrol::{
-    ControlPoint,
-    DeviceRegistryRead,
-    DiscoveredEndpoint,
-    HttpXmlDescriptionProvider,
-};
-
 fn main() -> Result<()> {
-    // Optionnel mais pratique si tu as déjà tracing dans la stack
-    tracing_subscriber::fmt::init();
+    // Default values
+    let default_uri =
+        "https://audio-fb.radioparadise.com/chan/1/x/1117/4/g/1117-3.flac".to_string();
+    let mut uri = default_uri.clone();
+    let mut renderer_index: usize = 0;
 
-    // 1. Créer le control point et lancer la découverte SSDP
-    //
-    //    timeout_secs = 5 pour les HTTP GET des description.xml
-    println!("Starting control point (HTTP timeout = 5s)...");
-    let cp = ControlPoint::spawn(5).context("Failed to spawn ControlPoint")?;
+    // Args:
+    //   - si args[1] est un entier : index, args[2] éventuel = uri
+    //   - sinon : args[1] = uri, args[2] éventuel = index
+    let args: Vec<String> = env::args().collect();
+    if args.len() >= 2 {
+        let first = &args[1];
+        if let Ok(idx) = first.parse::<usize>() {
+            // cas: avtransport_demo 1 [URI]
+            renderer_index = idx;
+            if args.len() >= 3 {
+                uri = args[2].clone();
+            }
+        } else {
+            // cas: avtransport_demo URI [INDEX]
+            uri = first.clone();
+            if args.len() >= 3 {
+                if let Ok(idx) = args[2].parse::<usize>() {
+                    renderer_index = idx;
+                }
+            }
+        }
+    }
 
-    let registry = cp.registry();
+    println!("Using URI: {}", uri);
+    println!("Requested renderer index: {}", renderer_index);
 
-    // 2. Laisser un peu de temps à la découverte
-    println!("Waiting 5 seconds for UPnP discovery...");
+    // 1. Start control point and let discovery run a bit
+    let cp = ControlPoint::spawn(5)?;
     thread::sleep(Duration::from_secs(5));
 
-    // 3. Lister les renderers connus
-    let renderers = {
-        let reg = registry.read().expect("DeviceRegistry RwLock poisoned");
-        reg.list_renderers()
-    };
+    // 2. Get registry snapshot
+    let registry = cp.registry();
+    let reg = registry.read().unwrap();
+    let all_renderers = reg.list_renderers();
+
+    // Filter out the in-dev PMOMusic renderer
+    let renderers: Vec<RendererInfo> = all_renderers
+        .into_iter()
+        .filter(|r| {
+            !r.friendly_name
+                .to_ascii_lowercase()
+                .contains("pmomusic audio renderer")
+        })
+        .collect();
 
     if renderers.is_empty() {
-        println!("No UPnP renderers discovered.");
+        println!("No valid UPnP MediaRenderer discovered.");
         return Ok(());
     }
 
-    println!("Discovered renderers:");
+    println!("Discovered MediaRenderers:");
     for (idx, r) in renderers.iter().enumerate() {
         println!(
-            "  [{}] {} (model: {}, UDN: {})",
-            idx, r.friendly_name, r.model_name, r.udn
+            "  [{}] {} | model={} | udn={} | location={}",
+            idx,
+            r.friendly_name,
+            r.model_name,
+            r.udn,
+            r.location,
         );
     }
 
-    // 4. Choisir un renderer (ici: le premier)
-    let renderer = renderers[0].clone();
-    println!(
-        "\nUsing renderer [0]: {} (model: {}, UDN: {})",
-        renderer.friendly_name, renderer.model_name, renderer.udn
-    );
-    println!("Location: {}", renderer.location);
+    if renderer_index >= renderers.len() {
+        return Err(anyhow!(
+            "Renderer index {} out of range (0..={})",
+            renderer_index,
+            renderers.len().saturating_sub(1)
+        ));
+    }
 
-    // 5. Construire un DiscoveredEndpoint minimal pour ce renderer
-    //
-    //    On reconstruit un endpoint à partir des infos du registry.
-    //    Ça permet de réutiliser HttpXmlDescriptionProvider::build_avtransport_client
-    //    qui sait parser description.xml et trouver le service AVTransport.
-    let endpoint = DiscoveredEndpoint::new(
-        renderer.udn.clone(),
-        renderer.location.clone(),
-        renderer.server_header.clone(),
-        renderer.max_age,
-    );
+    // 3. Selection by index
+    let renderer: &RendererInfo = &renderers[renderer_index];
 
-    // 6. Construire un client AVTransport à partir de cet endpoint
-    let provider = HttpXmlDescriptionProvider::new(5);
-    let client_opt = provider
-        .build_avtransport_client(&endpoint)
-        .context("Failed to build AVTransport client from device description")?;
+    println!("\nSelected renderer (index {}):", renderer_index);
+    println!("  Name        : {}", renderer.friendly_name);
+    println!("  Model       : {}", renderer.model_name);
+    println!("  Manufacturer: {}", renderer.manufacturer);
+    println!("  UDN         : {}", renderer.udn);
+    println!("  Location    : {}", renderer.location);
 
-    let client = match client_opt {
-        Some(c) => c,
-        None => {
-            println!(
-                "Renderer {} has no AVTransport service (or no controlURL).",
-                renderer.friendly_name
-            );
-            return Ok(());
-        }
+    // 4. Get AVTransport client
+    let avtransport = reg
+        .avtransport_client_for_renderer(&renderer.id)
+        .expect("Selected renderer has no AVTransport service");
+
+    println!("  AVTransport control URL : {}", avtransport.control_url);
+    println!("  AVTransport service type: {}", avtransport.service_type);
+
+    // We are done with the registry lock
+    drop(reg);
+
+    // 5. Configure the URI
+    let meta = ""; // or a full DIDL-Lite string
+
+    println!("\nCalling SetAVTransportURI...");
+    avtransport.set_av_transport_uri(&uri, meta)?;
+    println!("  SetAVTransportURI: OK");
+
+    // Helper closure to dump current TransportInfo
+    let dump_info = |label: &str| -> Result<()> {
+        let info = avtransport.get_transport_info(0)?;
+        println!("\n[{}]", label);
+        println!("  State  : {}", info.current_transport_state);
+        println!("  Status : {}", info.current_transport_status);
+        println!("  Speed  : {}", info.current_speed);
+        Ok(())
     };
 
-    println!(
-        "AVTransport endpoint:\n  service_type = {}\n  control_url  = {}",
-        client.service_type, client.control_url
-    );
+    dump_info("After SetAVTransportURI")?;
 
-    // 7. Appeler GetTransportInfo(InstanceID=0)
-    println!("\nCalling GetTransportInfo (InstanceID = 0)...");
-    let info = client
-        .get_transport_info(0)
-        .context("GetTransportInfo SOAP call failed")?;
+    // 6. Play
+    println!("\nCalling Play (Speed=\"1\")...");
+    avtransport.play(0, "1")?;
+    println!("  Play: OK");
+    thread::sleep(Duration::from_secs(20));
+    dump_info("After Play")?;
 
-    println!("GetTransportInfo result:");
-    println!("  CurrentTransportState  = {}", info.current_transport_state);
-    println!("  CurrentTransportStatus = {}", info.current_transport_status);
-    println!("  CurrentSpeed           = {}", info.current_speed);
+    // 7. Optional: wait before Pause/Stop
+    print!("\nPress ENTER to Pause...");
+    io::stdout().flush().ok();
+    let _ = io::stdin().read_line(&mut String::new());
 
+    // 8. Pause
+    println!("\nCalling Pause...");
+    if let Err(e) = avtransport.pause(0) {
+        println!("  Pause failed: {e}");
+    } else {
+        println!("  Pause: OK");
+        thread::sleep(Duration::from_secs(2));
+        dump_info("After Pause")?;
+    }
+
+    // 9. Stop
+    println!("\nCalling Stop...");
+    if let Err(e) = avtransport.stop(0) {
+        println!("  Stop failed: {e}");
+    } else {
+        println!("  Stop: OK");
+        dump_info("After Stop")?;
+    }
+
+    println!("\nDone.");
     Ok(())
 }
