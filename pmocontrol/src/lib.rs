@@ -1,4 +1,5 @@
 pub mod avtransport_client;
+pub mod connection_manager_client;
 pub mod control_point;
 pub mod discovery;
 pub mod model;
@@ -9,6 +10,7 @@ pub mod registry;
 pub mod soap_client;
 
 pub use avtransport_client::{AvTransportClient, TransportInfo};
+pub use connection_manager_client::{ConnectionInfo, ConnectionManagerClient, ProtocolInfo};
 pub use control_point::ControlPoint;
 pub use rendering_control_client::RenderingControlClient;
 pub use renderer::Renderer;

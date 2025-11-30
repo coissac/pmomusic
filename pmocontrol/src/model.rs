@@ -45,6 +45,8 @@ pub struct RendererInfo {
     pub avtransport_control_url: Option<String>,
     pub rendering_control_service_type: Option<String>,
     pub rendering_control_control_url: Option<String>,
+    pub connection_manager_service_type: Option<String>,
+    pub connection_manager_control_url: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]

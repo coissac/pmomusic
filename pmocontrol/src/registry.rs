@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::time::SystemTime;
 
 use crate::avtransport_client::AvTransportClient;
+use crate::connection_manager_client::ConnectionManagerClient;
 use crate::rendering_control_client::RenderingControlClient;
 use crate::model::{MediaServerId, MediaServerInfo, RendererId, RendererInfo};
 
@@ -171,6 +172,22 @@ impl DeviceRegistry {
         let control_url = info.rendering_control_control_url.as_ref()?;
 
         Some(RenderingControlClient::new(
+            control_url.clone(),
+            service_type.clone(),
+        ))
+    }
+
+    /// Construct a ConnectionManagerClient for a given renderer id, if possible.
+    pub fn connection_manager_client_for_renderer(
+        &self,
+        id: &RendererId,
+    ) -> Option<ConnectionManagerClient> {
+        let info = self.renderers.get(id)?;
+
+        let service_type = info.connection_manager_service_type.as_ref()?;
+        let control_url = info.connection_manager_control_url.as_ref()?;
+
+        Some(ConnectionManagerClient::new(
             control_url.clone(),
             service_type.clone(),
         ))

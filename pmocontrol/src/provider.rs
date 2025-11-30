@@ -46,6 +46,10 @@ struct ParsedDeviceDescription {
     // RenderingControl endpoint (if present in serviceList)
     rendering_control_service_type: Option<String>,
     rendering_control_control_url: Option<String>,
+
+    // ConnectionManager endpoint (if present in serviceList)
+    connection_manager_service_type: Option<String>,
+    connection_manager_control_url: Option<String>,
 }
 
 impl ParsedDeviceDescription {
@@ -178,6 +182,20 @@ impl HttpXmlDescriptionProvider {
                                             );
                                         }
                                     }
+
+                                    if lower
+                                        .contains("urn:schemas-upnp-org:service:connectionmanager:")
+                                    {
+                                        if parsed.connection_manager_service_type.is_none() {
+                                            parsed.connection_manager_service_type = Some(st.clone());
+                                            parsed.connection_manager_control_url =
+                                                Some(ctrl.clone());
+                                            debug!(
+                                                "Found ConnectionManager service for {}: type={} controlURL={}",
+                                                endpoint.udn, st, ctrl
+                                            );
+                                        }
+                                    }
                                 }
 
                                 in_service = false;
@@ -280,6 +298,11 @@ impl HttpXmlDescriptionProvider {
             rendering_control_service_type: parsed.rendering_control_service_type.clone(),
             rendering_control_control_url: parsed
                 .rendering_control_control_url
+                .as_ref()
+                .map(|ctrl| resolve_control_url(&endpoint.location, ctrl)),
+            connection_manager_service_type: parsed.connection_manager_service_type.clone(),
+            connection_manager_control_url: parsed
+                .connection_manager_control_url
                 .as_ref()
                 .map(|ctrl| resolve_control_url(&endpoint.location, ctrl)),
         })

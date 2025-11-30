@@ -1,5 +1,8 @@
 use anyhow::{anyhow, Result};
 
+use crate::connection_manager_client::{
+    ConnectionInfo, ConnectionManagerClient, ProtocolInfo,
+};
 use crate::rendering_control_client::RenderingControlClient;
 use crate::{AvTransportClient, DeviceRegistry, RendererId, RendererInfo};
 
@@ -8,6 +11,7 @@ pub struct Renderer {
     pub info: RendererInfo,
     avtransport: Option<AvTransportClient>,
     rendering_control: Option<RenderingControlClient>,
+    connection_manager: Option<ConnectionManagerClient>,
 }
 
 impl Renderer {
@@ -27,6 +31,10 @@ impl Renderer {
         self.rendering_control.is_some()
     }
 
+    pub fn has_connection_manager(&self) -> bool {
+        self.connection_manager.is_some()
+    }
+
     pub fn avtransport(&self) -> Result<&AvTransportClient> {
         self.avtransport
             .as_ref()
@@ -37,6 +45,12 @@ impl Renderer {
         self.rendering_control
             .as_ref()
             .ok_or_else(|| anyhow!("Renderer has no RenderingControl service"))
+    }
+
+    pub fn connection_manager(&self) -> Result<&ConnectionManagerClient> {
+        self.connection_manager
+            .as_ref()
+            .ok_or_else(|| anyhow!("Renderer has no ConnectionManager service"))
     }
 
     pub fn play_uri(&self, uri: &str, meta: &str) -> Result<()> {
@@ -80,13 +94,30 @@ impl Renderer {
         rc.set_mute(0, "Master", mute)
     }
 
+    pub fn protocol_info(&self) -> Result<ProtocolInfo> {
+        let cm = self.connection_manager()?;
+        cm.get_protocol_info()
+    }
+
+    pub fn connection_ids(&self) -> Result<Vec<i32>> {
+        let cm = self.connection_manager()?;
+        cm.get_current_connection_ids()
+    }
+
+    pub fn connection_info(&self, connection_id: i32) -> Result<ConnectionInfo> {
+        let cm = self.connection_manager()?;
+        cm.get_current_connection_info(connection_id)
+    }
+
     pub fn from_registry(info: RendererInfo, registry: &DeviceRegistry) -> Self {
         let avtransport = registry.avtransport_client_for_renderer(&info.id);
         let rendering_control = registry.rendering_control_client_for_renderer(&info.id);
+        let connection_manager = registry.connection_manager_client_for_renderer(&info.id);
         Self {
             info,
             avtransport,
             rendering_control,
+            connection_manager,
         }
     }
 }
@@ -121,6 +152,8 @@ mod tests {
                 .then(|| "http://127.0.0.1/avtransport".into()),
             rendering_control_service_type: None,
             rendering_control_control_url: None,
+            connection_manager_service_type: None,
+            connection_manager_control_url: None,
         }
     }
 
