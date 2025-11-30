@@ -5,6 +5,7 @@ pub mod capabilities;
 pub mod connection_manager_client;
 pub mod control_point;
 pub mod discovery;
+pub mod linkplay;
 pub mod model;
 pub mod provider;
 pub mod upnp_renderer;
@@ -18,6 +19,7 @@ pub use capabilities::{TransportControl, VolumeControl, PlaybackState, PlaybackS
 pub use connection_manager_client::{ConnectionInfo, ConnectionManagerClient, ProtocolInfo};
 pub use control_point::ControlPoint;
 pub use rendering_control_client::RenderingControlClient;
+pub use linkplay::LinkPlayRenderer;
 pub use upnp_renderer::UpnpRenderer;
 pub use music_renderer::MusicRenderer;
 

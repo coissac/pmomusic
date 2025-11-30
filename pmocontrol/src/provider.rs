@@ -1,5 +1,5 @@
 use std::io::BufReader;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use quick_xml::{Error as XmlError, Reader, events::Event};
 use thiserror::Error;
@@ -7,6 +7,7 @@ use tracing::{debug, warn};
 
 use crate::avtransport_client::AvTransportClient;
 use crate::discovery::{DeviceDescriptionProvider, DiscoveredEndpoint};
+use crate::linkplay::detect_linkplay_http;
 use crate::model::{
     MediaServerCapabilities, MediaServerId, MediaServerInfo, RendererCapabilities, RendererId,
     RendererInfo, RendererProtocol,
@@ -273,7 +274,13 @@ impl HttpXmlDescriptionProvider {
             .as_deref()
             .unwrap_or_else(|| endpoint.udn.as_str());
         let udn = raw_udn.to_ascii_lowercase();
-        let caps = detect_renderer_capabilities(&parsed.service_types);
+        let mut caps = detect_renderer_capabilities(&parsed.service_types);
+        if detect_linkplay_http(
+            &endpoint.location,
+            Duration::from_secs(self.timeout_secs.max(1)),
+        ) {
+            caps.has_linkplay_http = true;
+        }
         let protocol = detect_renderer_protocol(&caps);
         let now = SystemTime::now();
 

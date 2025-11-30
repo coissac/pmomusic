@@ -91,14 +91,14 @@ impl ControlPoint {
                     let reg = runtime_cp.registry.read().unwrap();
                     reg.list_renderers()
                         .into_iter()
-                        .map(|info| UpnpRenderer::from_registry(info, &reg))
+                        .filter_map(|info| MusicRenderer::from_registry_info(info, &reg))
                         .collect::<Vec<_>>()
                 };
 
                 let mut seen_ids = HashSet::new();
 
                 for renderer in renderers {
-                    let info = &renderer.info;
+                    let info = renderer.info();
 
                     // Ne pas poller les renderers offline
                     if !info.online {

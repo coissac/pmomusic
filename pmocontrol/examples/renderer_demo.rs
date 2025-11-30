@@ -82,6 +82,7 @@ fn main() -> Result<()> {
             "  [{}] {} | model={} | udn={} | location={}",
             idx, info.friendly_name, info.model_name, info.udn, info.location
         );
+        print_backend("      ", r);
         print_capabilities("      ", &info.capabilities, &info.protocol);
     }
 
@@ -96,6 +97,7 @@ fn main() -> Result<()> {
     println!("  UDN         : {}", info.udn);
     println!("  Location    : {}", info.location);
     println!("  Protocol    : {:?}", info.protocol);
+    print_backend("  ", renderer);
     print_capabilities("  ", &info.capabilities, &info.protocol);
 
     if let Some(upnp) = renderer.as_upnp() {
@@ -216,15 +218,24 @@ fn main() -> Result<()> {
 
 fn print_capabilities(prefix: &str, caps: &RendererCapabilities, proto: &RendererProtocol) {
     println!("{prefix}Capabilities:");
-    println!("{prefix}  Protocol     : {:?}", proto);
-    println!("{prefix}  AVTransport  : {}", caps.has_avtransport);
-    println!("{prefix}  RendControl  : {}", caps.has_rendering_control);
-    println!("{prefix}  ConnManager  : {}", caps.has_connection_manager);
-    println!("{prefix}  OH Playlist  : {}", caps.has_oh_playlist);
-    println!("{prefix}  OH Volume    : {}", caps.has_oh_volume);
-    println!("{prefix}  OH Info      : {}", caps.has_oh_info);
-    println!("{prefix}  OH Time      : {}", caps.has_oh_time);
-    println!("{prefix}  OH Radio     : {}", caps.has_oh_radio);
+    println!("{prefix}  Protocol      : {:?}", proto);
+    println!("{prefix}  AVTransport   : {}", caps.has_avtransport);
+    println!("{prefix}  RendControl   : {}", caps.has_rendering_control);
+    println!("{prefix}  ConnManager   : {}", caps.has_connection_manager);
+    println!("{prefix}  LinkPlay HTTP : {}", caps.has_linkplay_http);
+    println!("{prefix}  OH Playlist   : {}", caps.has_oh_playlist);
+    println!("{prefix}  OH Volume     : {}", caps.has_oh_volume);
+    println!("{prefix}  OH Info       : {}", caps.has_oh_info);
+    println!("{prefix}  OH Time       : {}", caps.has_oh_time);
+    println!("{prefix}  OH Radio      : {}", caps.has_oh_radio);
+}
+
+fn print_backend(prefix: &str, renderer: &MusicRenderer) {
+    let backend = match renderer {
+        MusicRenderer::Upnp(_) => "UpnpRenderer (UPnP AV / DLNA)",
+        MusicRenderer::LinkPlay(_) => "LinkPlayRenderer (LinkPlay HTTP)",
+    };
+    println!("{prefix}Backend       : {backend}");
 }
 
 fn dump_renderer_state(renderer: &MusicRenderer, label: &str) -> Result<()> {

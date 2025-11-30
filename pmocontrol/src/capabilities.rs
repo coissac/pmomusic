@@ -1,8 +1,6 @@
 // pmocontrol/src/capabilities.rs
 use anyhow::Result;
 
-use crate::avtransport_client::PositionInfo;
-
 /// Logical playback position across backends.
 ///
 /// Times peuvent être soit en secondes, soit en "HH:MM:SS" selon ce que
