@@ -24,7 +24,6 @@ fn last_command_time() -> &'static Mutex<Instant> {
     LAST_COMMAND_TIME.get_or_init(|| Mutex::new(Instant::now()))
 }
 
-
 const ARYLIC_TCP_PORT: u16 = 8899;
 const PACKET_HEADER: [u8; 4] = [0x18, 0x96, 0x18, 0x20];
 const RESERVED_BYTES: [u8; 8] = [0; 8];
@@ -387,7 +386,10 @@ fn connect(host: &str, port: u16, timeout: Duration) -> Result<TcpStream> {
         let elapsed = last_time.elapsed();
         if elapsed < Duration::from_millis(200) {
             let wait = Duration::from_millis(200) - elapsed;
-            debug!("Waiting {:?} before sending command to respect 200ms interval", wait);
+            debug!(
+                "Waiting {:?} before sending command to respect 200ms interval",
+                wait
+            );
             thread::sleep(wait);
         }
         *last_time = Instant::now();
@@ -521,9 +523,12 @@ fn send_command_with_mode(
     let mut stream = connect(host, port, timeout)?;
     let packet = encode_packet(payload);
 
-    stream
-        .write_all(&packet)
-        .with_context(|| format!("Failed to write Arylic TCP packet for {}: {}", host, payload))?;
+    stream.write_all(&packet).with_context(|| {
+        format!(
+            "Failed to write Arylic TCP packet for {}: {}",
+            host, payload
+        )
+    })?;
     stream.flush().with_context(|| {
         format!(
             "Failed to flush Arylic TCP stream for {} (command {})",
@@ -540,8 +545,9 @@ fn send_command_with_mode(
             let _ = stream.shutdown(Shutdown::Write);
             Ok(None)
         }
-        ResponseMode::Required(expected) => read_expected_response(&mut stream, host, payload, expected)
-            .map(Some),
+        ResponseMode::Required(expected) => {
+            read_expected_response(&mut stream, host, payload, expected).map(Some)
+        }
         ResponseMode::Optional(expected) => {
             for _ in 0..MAX_RESPONSE_ATTEMPTS {
                 match read_packet(&mut stream) {
@@ -615,7 +621,13 @@ fn send_command_required(
     payload: &str,
     expected: &[&str],
 ) -> Result<String> {
-    match send_command_with_mode(host, port, timeout, payload, ResponseMode::Required(expected))? {
+    match send_command_with_mode(
+        host,
+        port,
+        timeout,
+        payload,
+        ResponseMode::Required(expected),
+    )? {
         Some(s) => Ok(s),
         None => Err(anyhow!(
             "Arylic TCP: no response payload for required command {}",
@@ -631,14 +643,15 @@ fn send_command_optional(
     payload: &str,
     expected: &[&str],
 ) -> Result<Option<String>> {
-    send_command_with_mode(host, port, timeout, payload, ResponseMode::Optional(expected))
+    send_command_with_mode(
+        host,
+        port,
+        timeout,
+        payload,
+        ResponseMode::Optional(expected),
+    )
 }
 
-fn send_command_no_response(
-    host: &str,
-    port: u16,
-    timeout: Duration,
-    payload: &str,
-) -> Result<()> {
+fn send_command_no_response(host: &str, port: u16, timeout: Duration, payload: &str) -> Result<()> {
     send_command_with_mode(host, port, timeout, payload, ResponseMode::None).map(|_| ())
 }

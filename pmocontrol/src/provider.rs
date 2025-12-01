@@ -9,10 +9,8 @@ use crate::arylic_tcp::detect_arylic_tcp;
 use crate::avtransport_client::AvTransportClient;
 use crate::discovery::{DeviceDescriptionProvider, DiscoveredEndpoint};
 use crate::linkplay::detect_linkplay_http;
-use crate::model::{
-    MediaServerCapabilities, MediaServerId, MediaServerInfo, RendererCapabilities, RendererId,
-    RendererInfo, RendererProtocol,
-};
+use crate::media_server::{MediaServerInfo, ServerId};
+use crate::model::{RendererCapabilities, RendererId, RendererInfo, RendererProtocol};
 
 use ureq::Agent;
 
@@ -52,6 +50,10 @@ struct ParsedDeviceDescription {
     // ConnectionManager endpoint (if present in serviceList)
     connection_manager_service_type: Option<String>,
     connection_manager_control_url: Option<String>,
+
+    // ContentDirectory endpoint (if present in serviceList)
+    content_directory_service_type: Option<String>,
+    content_directory_control_url: Option<String>,
 }
 
 impl ParsedDeviceDescription {
@@ -201,6 +203,21 @@ impl HttpXmlDescriptionProvider {
                                             );
                                         }
                                     }
+
+                                    if lower
+                                        .contains("urn:schemas-upnp-org:service:contentdirectory:")
+                                    {
+                                        if parsed.content_directory_service_type.is_none() {
+                                            parsed.content_directory_service_type =
+                                                Some(st.clone());
+                                            parsed.content_directory_control_url =
+                                                Some(ctrl.clone());
+                                            debug!(
+                                                "Found ContentDirectory service for {}: type={} controlURL={}",
+                                                endpoint.udn, st, ctrl
+                                            );
+                                        }
+                                    }
                                 }
 
                                 in_service = false;
@@ -340,21 +357,31 @@ impl HttpXmlDescriptionProvider {
             .as_deref()
             .unwrap_or_else(|| endpoint.udn.as_str());
         let udn = raw_udn.to_ascii_lowercase();
-        let caps = detect_server_capabilities(&parsed.service_types);
+        let has_content_directory = parsed.service_types.iter().any(|st| {
+            st.to_ascii_lowercase()
+                .contains("urn:schemas-upnp-org:service:contentdirectory:")
+        });
         let now = SystemTime::now();
 
+        let content_directory_control_url = parsed
+            .content_directory_control_url
+            .as_ref()
+            .map(|ctrl| resolve_control_url(&endpoint.location, ctrl));
+
         Some(MediaServerInfo {
-            id: MediaServerId(udn.clone()),
+            id: ServerId(udn.clone()),
             udn,
             friendly_name: parsed.friendly_name.clone().unwrap_or_default(),
             model_name: parsed.model_name.clone().unwrap_or_default(),
             manufacturer: parsed.manufacturer.clone().unwrap_or_default(),
-            capabilities: caps,
             location: endpoint.location.clone(),
             server_header: endpoint.server_header.clone(),
             online: true,
             last_seen: now,
             max_age: endpoint.max_age,
+            has_content_directory,
+            content_directory_service_type: parsed.content_directory_service_type.clone(),
+            content_directory_control_url,
         })
     }
 
@@ -440,22 +467,6 @@ fn detect_renderer_protocol(caps: &RendererCapabilities) -> RendererProtocol {
         (false, true) => RendererProtocol::OpenHomeOnly,
         (false, false) => RendererProtocol::UpnpAvOnly,
     }
-}
-
-fn detect_server_capabilities(service_types: &[String]) -> MediaServerCapabilities {
-    let mut caps = MediaServerCapabilities::default();
-
-    for st in service_types {
-        let lower = st.to_ascii_lowercase();
-        if lower.contains("urn:schemas-upnp-org:service:contentdirectory:") {
-            caps.has_content_directory = true;
-        }
-        if lower.contains("urn:schemas-upnp-org:service:connectionmanager:") {
-            caps.has_connection_manager = true;
-        }
-    }
-
-    caps
 }
 
 /// Resolve a possibly relative controlURL against the description URL.

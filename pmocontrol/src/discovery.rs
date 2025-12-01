@@ -3,7 +3,8 @@ use std::time::SystemTime;
 
 use pmoupnp::ssdp::SsdpEvent;
 
-use crate::model::{MediaServerInfo, RendererInfo};
+use crate::media_server::MediaServerInfo;
+use crate::model::RendererInfo;
 use crate::registry::DeviceUpdate;
 
 /// État connu pour un endpoint UPnP identifié par son UDN.

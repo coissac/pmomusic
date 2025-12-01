@@ -3164,6 +3164,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
+ "pmodidl",
  "pmoupnp",
  "quick-xml 0.38.4",
  "thiserror 2.0.17",

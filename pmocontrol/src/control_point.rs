@@ -1,19 +1,25 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::Duration;
 
+use anyhow::anyhow;
 use crossbeam_channel::Receiver;
 use pmoupnp::ssdp::SsdpClient;
+use tracing::{debug, error, warn};
 
 use crate::MusicRenderer;
 use crate::capabilities::{
-    PlaybackPosition, PlaybackPositionInfo, PlaybackState, PlaybackStatus, VolumeControl,
+    PlaybackPosition, PlaybackPositionInfo, PlaybackState, PlaybackStatus, TransportControl,
+    VolumeControl,
 };
 use crate::discovery::DiscoveryManager;
 use crate::events::RendererEventBus;
+use crate::media_server::{MediaServerInfo, ServerId};
 use crate::model::{RendererEvent, RendererId, RendererProtocol};
+use crate::music_renderer::op_not_supported;
+use crate::playback_queue::{PlaybackItem, PlaybackQueue};
 use crate::provider::HttpXmlDescriptionProvider;
 use crate::registry::{DeviceRegistry, DeviceRegistryRead, DeviceUpdate};
 use crate::upnp_renderer::UpnpRenderer;
@@ -25,6 +31,7 @@ use crate::upnp_renderer::UpnpRenderer;
 pub struct ControlPoint {
     registry: Arc<RwLock<DeviceRegistry>>,
     event_bus: RendererEventBus,
+    runtime: Arc<RuntimeState>,
 }
 
 impl ControlPoint {
@@ -34,6 +41,7 @@ impl ControlPoint {
     pub fn spawn(timeout_secs: u64) -> io::Result<Self> {
         let registry = Arc::new(RwLock::new(DeviceRegistry::new()));
         let event_bus = RendererEventBus::new();
+        let runtime = Arc::new(RuntimeState::new());
 
         // SsdpClient
         let client = SsdpClient::new()?; // pmoupnp::ssdp::SsdpClient
@@ -83,11 +91,10 @@ impl ControlPoint {
         let runtime_cp = ControlPoint {
             registry: Arc::clone(&registry),
             event_bus: event_bus.clone(),
+            runtime: Arc::clone(&runtime),
         };
 
         thread::spawn(move || {
-            let mut cache: HashMap<RendererId, RendererRuntimeSnapshot> = HashMap::new();
-
             loop {
                 let renderers = {
                     let reg = runtime_cp.registry.read().unwrap();
@@ -97,12 +104,9 @@ impl ControlPoint {
                         .collect::<Vec<_>>()
                 };
 
-                let mut seen_ids = HashSet::new();
-
                 for renderer in renderers {
                     let info = renderer.info();
 
-                    // Ne pas poller les renderers offline
                     if !info.online {
                         continue;
                     }
@@ -113,20 +117,12 @@ impl ControlPoint {
                     }
 
                     let renderer_id = info.id.clone();
-                    seen_ids.insert(renderer_id.clone());
+                    let prev_snapshot = runtime_cp.runtime.snapshot_for(&renderer_id);
+                    let mut new_snapshot = prev_snapshot.clone();
+                    let prev_position = prev_snapshot.position.clone();
 
-                    let entry = cache
-                        .entry(renderer_id.clone())
-                        .or_insert_with(RendererRuntimeSnapshot::default);
-
-                    // Keep a snapshot of the previous position to compute logical
-                    // state transitions based on time deltas.
-                    let prev_position = entry.position.clone();
-
-                    // 1) Poll position first, so that the state logic can use the
-                    //    freshly updated position when available.
                     if let Ok(position) = renderer.playback_position() {
-                        let has_changed = match entry.position.as_ref() {
+                        let has_changed = match prev_snapshot.position.as_ref() {
                             Some(prev) => !playback_position_equal(prev, &position),
                             None => true,
                         };
@@ -138,19 +134,17 @@ impl ControlPoint {
                             });
                         }
 
-                        entry.position = Some(position);
+                        new_snapshot.position = Some(position);
                     }
 
-                    // 2) Poll raw playback state and compute a logical state that
-                    //    compensates for buggy devices (Arylic / LinkPlay).
                     if let Ok(raw_state) = renderer.playback_state() {
                         let logical_state = compute_logical_playback_state(
                             &raw_state,
                             prev_position.as_ref(),
-                            entry.position.as_ref(),
+                            new_snapshot.position.as_ref(),
                         );
 
-                        let has_changed = match entry.state.as_ref() {
+                        let has_changed = match prev_snapshot.state.as_ref() {
                             Some(prev) => !playback_state_equal(prev, &logical_state),
                             None => true,
                         };
@@ -160,32 +154,38 @@ impl ControlPoint {
                                 id: renderer_id.clone(),
                                 state: logical_state.clone(),
                             });
-                            entry.state = Some(logical_state);
                         }
+
+                        new_snapshot.state = Some(logical_state);
                     }
 
                     if let Ok(volume) = renderer.volume() {
-                        if entry.last_volume != Some(volume) {
+                        if prev_snapshot.last_volume != Some(volume) {
                             runtime_cp.emit_renderer_event(RendererEvent::VolumeChanged {
                                 id: renderer_id.clone(),
                                 volume,
                             });
-                            entry.last_volume = Some(volume);
                         }
+
+                        new_snapshot.last_volume = Some(volume);
                     }
 
                     if let Ok(mute) = renderer.mute() {
-                        if entry.last_mute != Some(mute) {
+                        if prev_snapshot.last_mute != Some(mute) {
                             runtime_cp.emit_renderer_event(RendererEvent::MuteChanged {
                                 id: renderer_id.clone(),
                                 mute,
                             });
-                            entry.last_mute = Some(mute);
                         }
+
+                        new_snapshot.last_mute = Some(mute);
                     }
+
+                    runtime_cp
+                        .runtime
+                        .update_snapshot(&renderer_id, new_snapshot);
                 }
 
-                cache.retain(|id, _| seen_ids.contains(id));
                 thread::sleep(Duration::from_secs(1));
             }
         });
@@ -193,6 +193,7 @@ impl ControlPoint {
         Ok(Self {
             registry,
             event_bus,
+            runtime,
         })
     }
 
@@ -254,6 +255,184 @@ impl ControlPoint {
             .and_then(|info| MusicRenderer::from_registry_info(info, &reg))
     }
 
+    /// Snapshot list of media servers currently known by the registry.
+    pub fn list_media_servers(&self) -> Vec<MediaServerInfo> {
+        let reg = self.registry.read().unwrap();
+        reg.list_servers()
+    }
+
+    /// Lookup a media server by id.
+    pub fn media_server(&self, id: &ServerId) -> Option<MediaServerInfo> {
+        let reg = self.registry.read().unwrap();
+        reg.get_server(id)
+    }
+
+    pub fn clear_queue(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
+        if !self.runtime.has_entry(renderer_id) {
+            let err = Self::runtime_entry_missing(renderer_id);
+            warn!(
+                renderer = renderer_id.0.as_str(),
+                "Cannot clear queue: renderer not registered in runtime"
+            );
+            return Err(err);
+        }
+
+        let removed = self
+            .runtime
+            .with_queue_mut(renderer_id, |queue| {
+                let removed = queue.len();
+                queue.clear();
+                removed
+            })
+            .ok_or_else(|| Self::runtime_entry_missing(renderer_id))?;
+
+        debug!(
+            renderer = renderer_id.0.as_str(),
+            items_removed = removed,
+            queue_len = 0,
+            "Cleared playback queue"
+        );
+        Ok(())
+    }
+
+    pub fn enqueue_items(
+        &self,
+        renderer_id: &RendererId,
+        items: Vec<PlaybackItem>,
+    ) -> anyhow::Result<()> {
+        if !self.runtime.has_entry(renderer_id) {
+            let err = Self::runtime_entry_missing(renderer_id);
+            warn!(
+                renderer = renderer_id.0.as_str(),
+                "Cannot enqueue items: renderer not registered in runtime"
+            );
+            return Err(err);
+        }
+
+        let item_count = items.len();
+        let new_len = self
+            .runtime
+            .with_queue_mut(renderer_id, |queue| {
+                queue.enqueue_many(items);
+                queue.len()
+            })
+            .ok_or_else(|| Self::runtime_entry_missing(renderer_id))?;
+
+        debug!(
+            renderer = renderer_id.0.as_str(),
+            added = item_count,
+            queue_len = new_len,
+            "Enqueued playback items"
+        );
+        Ok(())
+    }
+
+    pub fn get_queue_snapshot(
+        &self,
+        renderer_id: &RendererId,
+    ) -> anyhow::Result<Vec<PlaybackItem>> {
+        if !self.runtime.has_entry(renderer_id) {
+            let err = Self::runtime_entry_missing(renderer_id);
+            warn!(
+                renderer = renderer_id.0.as_str(),
+                "Cannot snapshot queue: renderer not registered in runtime"
+            );
+            return Err(err);
+        }
+
+        self.runtime
+            .queue_snapshot(renderer_id)
+            .ok_or_else(|| Self::runtime_entry_missing(renderer_id))
+    }
+
+    pub fn play_next_from_queue(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
+        if !self.runtime.has_entry(renderer_id) {
+            let err = Self::runtime_entry_missing(renderer_id);
+            warn!(
+                renderer = renderer_id.0.as_str(),
+                "Cannot advance queue: renderer not registered in runtime"
+            );
+            return Err(err);
+        }
+
+        let Some((item, remaining_after)) = self.runtime.dequeue_next(renderer_id) else {
+            debug!(
+                renderer = renderer_id.0.as_str(),
+                "play_next_from_queue: queue is empty"
+            );
+            self.runtime
+                .set_playback_source(renderer_id, PlaybackSource::None);
+            return Ok(());
+        };
+
+        let queue_before = remaining_after + 1;
+        debug!(
+            renderer = renderer_id.0.as_str(),
+            queue_before,
+            queue_after = remaining_after,
+            uri = item.uri.as_str(),
+            "Dequeued next playback item"
+        );
+
+        let renderer = self
+            .music_renderer_by_id(renderer_id)
+            .ok_or_else(|| {
+                warn!(
+                    renderer = renderer_id.0.as_str(),
+                    "Renderer disappeared before queue playback could start"
+                );
+                anyhow!("Renderer {} not found", renderer_id.0)
+            })?;
+
+        if matches!(renderer.info().protocol, RendererProtocol::OpenHomeOnly) {
+            self.runtime
+                .with_queue_mut(renderer_id, |queue| queue.enqueue_front(item))
+                .ok_or_else(|| Self::runtime_entry_missing(renderer_id))?;
+            self.runtime
+                .set_playback_source(renderer_id, PlaybackSource::None);
+            return Err(op_not_supported(
+                "play_next_from_queue",
+                "OpenHomeOnly renderer",
+            ));
+        }
+
+        let playback = (|| -> anyhow::Result<()> {
+            renderer.play_uri(&item.uri, "")?;
+            renderer.play()?;
+            Ok(())
+        })();
+
+        if let Err(err) = playback {
+            error!(
+                renderer = renderer_id.0.as_str(),
+                error = %err,
+                "Failed to start playback for queued item"
+            );
+            if self
+                .runtime
+                .with_queue_mut(renderer_id, |queue| queue.enqueue_front(item))
+                .is_none()
+            {
+                warn!(
+                    renderer = renderer_id.0.as_str(),
+                    "Failed to requeue item after playback error"
+                );
+            }
+            self.runtime
+                .set_playback_source(renderer_id, PlaybackSource::None);
+            return Err(err);
+        }
+
+        self.runtime
+            .set_playback_source(renderer_id, PlaybackSource::FromQueue);
+        debug!(
+            renderer = renderer_id.0.as_str(),
+            queue_len = remaining_after,
+            "Started playback from queue"
+        );
+        Ok(())
+    }
+
     /// Subscribe to renderer events emitted by the control point runtime.
     ///
     /// Each subscriber receives all future events independently.
@@ -261,18 +440,167 @@ impl ControlPoint {
         self.event_bus.subscribe()
     }
 
-    #[allow(dead_code)]
     pub(crate) fn emit_renderer_event(&self, event: RendererEvent) {
+        self.handle_renderer_event(&event);
         self.event_bus.broadcast(event);
+    }
+
+    fn handle_renderer_event(&self, event: &RendererEvent) {
+        if let RendererEvent::StateChanged { id, state } = event {
+            match state {
+                PlaybackState::Stopped => {
+                    if self.runtime.is_playing_from_queue(id) {
+                        debug!(
+                            renderer = id.0.as_str(),
+                            "Renderer stopped after queue-driven playback; advancing"
+                        );
+                        if let Err(err) = self.play_next_from_queue(id) {
+                            error!(
+                                renderer = id.0.as_str(),
+                                error = %err,
+                                "Auto-advance failed; clearing queue playback state"
+                            );
+                            self.runtime
+                                .set_playback_source(id, PlaybackSource::None);
+                        }
+                    } else {
+                        self.runtime
+                            .set_playback_source(id, PlaybackSource::None);
+                    }
+                }
+                PlaybackState::Playing => {
+                    self.runtime.mark_external_if_idle(id);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn runtime_entry_missing(renderer_id: &RendererId) -> anyhow::Error {
+        anyhow!(
+            "Renderer {} not registered in control point runtime",
+            renderer_id.0
+        )
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct RendererRuntimeSnapshot {
     state: Option<PlaybackState>,
     position: Option<PlaybackPositionInfo>,
     last_volume: Option<u16>,
     last_mute: Option<bool>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum PlaybackSource {
+    #[default]
+    None,
+    FromQueue,
+    External,
+}
+
+#[derive(Default)]
+struct RendererRuntimeEntry {
+    snapshot: RendererRuntimeSnapshot,
+    queue: PlaybackQueue,
+    playback_source: PlaybackSource,
+}
+
+struct RuntimeState {
+    entries: Mutex<HashMap<RendererId, RendererRuntimeEntry>>,
+}
+
+impl RuntimeState {
+    fn new() -> Self {
+        Self {
+            entries: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn snapshot_for(&self, id: &RendererId) -> RendererRuntimeSnapshot {
+        let entries = self.entries.lock().unwrap();
+        entries
+            .get(id)
+            .map(|entry| entry.snapshot.clone())
+            .unwrap_or_default()
+    }
+
+    fn update_snapshot(&self, id: &RendererId, snapshot: RendererRuntimeSnapshot) {
+        self.with_entry(id, |entry| {
+            entry.snapshot = snapshot;
+        });
+    }
+
+    fn has_entry(&self, id: &RendererId) -> bool {
+        let entries = self.entries.lock().unwrap();
+        entries.contains_key(id)
+    }
+
+    fn with_queue_mut<F, R>(&self, id: &RendererId, f: F) -> Option<R>
+    where
+        F: FnOnce(&mut PlaybackQueue) -> R,
+    {
+        let mut entries = self.entries.lock().unwrap();
+        entries
+            .get_mut(id)
+            .map(|entry| f(&mut entry.queue))
+    }
+
+    fn queue_snapshot(&self, id: &RendererId) -> Option<Vec<PlaybackItem>> {
+        let entries = self.entries.lock().unwrap();
+        entries.get(id).map(|entry| entry.queue.snapshot())
+    }
+
+    fn dequeue_next(&self, id: &RendererId) -> Option<(PlaybackItem, usize)> {
+        let mut entries = self.entries.lock().unwrap();
+        let entry = entries.get_mut(id)?;
+        let item = entry.queue.dequeue()?;
+        let remaining = entry.queue.len();
+        Some((item, remaining))
+    }
+
+    fn set_playback_source(&self, id: &RendererId, source: PlaybackSource) {
+        let mut entries = self.entries.lock().unwrap();
+        if let Some(entry) = entries.get_mut(id) {
+            entry.playback_source = source;
+        }
+    }
+
+    fn playback_source(&self, id: &RendererId) -> PlaybackSource {
+        let entries = self.entries.lock().unwrap();
+        entries
+            .get(id)
+            .map(|entry| entry.playback_source)
+            .unwrap_or(PlaybackSource::None)
+    }
+
+    fn is_playing_from_queue(&self, id: &RendererId) -> bool {
+        matches!(
+            self.playback_source(id),
+            PlaybackSource::FromQueue
+        )
+    }
+
+    fn mark_external_if_idle(&self, id: &RendererId) {
+        let mut entries = self.entries.lock().unwrap();
+        if let Some(entry) = entries.get_mut(id) {
+            if matches!(entry.playback_source, PlaybackSource::None) {
+                entry.playback_source = PlaybackSource::External;
+            }
+        }
+    }
+
+    fn with_entry<F, R>(&self, id: &RendererId, f: F) -> R
+    where
+        F: FnOnce(&mut RendererRuntimeEntry) -> R,
+    {
+        let mut entries = self.entries.lock().unwrap();
+        let entry = entries
+            .entry(id.clone())
+            .or_insert_with(RendererRuntimeEntry::default);
+        f(entry)
+    }
 }
 
 /// Parse "HH:MM:SS" style time strings to seconds.

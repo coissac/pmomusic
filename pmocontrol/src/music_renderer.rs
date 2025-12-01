@@ -12,7 +12,7 @@ use crate::{
     ArylicTcpRenderer, DeviceRegistry, LinkPlayRenderer, PlaybackPosition, PlaybackState,
     TransportControl, UpnpRenderer, VolumeControl,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use tracing::warn;
 
 /// Backend-agnostic façade exposing transport, volume, and status contracts.
@@ -33,7 +33,7 @@ pub enum MusicRenderer {
 }
 
 /// Build a standardized error when an operation is not supported by a backend.
-fn op_not_supported(op: &str, backend: &str) -> anyhow::Error {
+pub(crate) fn op_not_supported(op: &str, backend: &str) -> anyhow::Error {
     anyhow!(
         "MusicRenderer operation '{}' is not supported by backend '{}'",
         op,

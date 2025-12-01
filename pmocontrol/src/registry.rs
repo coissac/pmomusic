@@ -3,19 +3,20 @@ use std::time::SystemTime;
 
 use crate::avtransport_client::AvTransportClient;
 use crate::connection_manager_client::ConnectionManagerClient;
-use crate::model::{MediaServerId, MediaServerInfo, RendererId, RendererInfo};
+use crate::media_server::{MediaServerInfo, ServerId};
+use crate::model::{RendererId, RendererInfo};
 use crate::rendering_control_client::RenderingControlClient;
 
 #[derive(Clone, Debug)]
 enum DeviceKey {
     Renderer(RendererId),
-    Server(MediaServerId),
+    Server(ServerId),
 }
 
 #[derive(Debug, Default)]
 pub struct DeviceRegistry {
     renderers: HashMap<RendererId, RendererInfo>,
-    servers: HashMap<MediaServerId, MediaServerInfo>,
+    servers: HashMap<ServerId, MediaServerInfo>,
     udn_index: HashMap<String, DeviceKey>,
 }
 
@@ -28,7 +29,7 @@ pub trait DeviceRegistryRead {
     fn list_servers(&self) -> Vec<MediaServerInfo>;
 
     fn get_renderer(&self, id: &RendererId) -> Option<RendererInfo>;
-    fn get_server(&self, id: &MediaServerId) -> Option<MediaServerInfo>;
+    fn get_server(&self, id: &ServerId) -> Option<MediaServerInfo>;
 }
 
 impl DeviceRegistryRead for DeviceRegistry {
@@ -44,7 +45,7 @@ impl DeviceRegistryRead for DeviceRegistry {
         self.renderers.get(id).cloned()
     }
 
-    fn get_server(&self, id: &MediaServerId) -> Option<MediaServerInfo> {
+    fn get_server(&self, id: &ServerId) -> Option<MediaServerInfo> {
         self.servers.get(id).cloned()
     }
 }
@@ -56,7 +57,7 @@ pub enum DeviceUpdate {
     RendererOfflineByUdn(String),
 
     ServerOnline(MediaServerInfo),
-    ServerOfflineById(MediaServerId),
+    ServerOfflineById(ServerId),
     ServerOfflineByUdn(String),
 }
 

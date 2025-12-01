@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use anyhow::{Context, Result};
 use pmoupnp::soap::{SoapEnvelope, build_soap_request, parse_soap_envelope};
 use ureq::Agent;
@@ -24,13 +26,26 @@ pub fn invoke_upnp_action(
     action: &str,
     args: &[(&str, &str)],
 ) -> Result<SoapCallResult> {
-    // 1. Build SOAP request XML using pmoupnp
+    invoke_upnp_action_with_timeout(control_url, service_type, action, args, None)
+}
+
+pub fn invoke_upnp_action_with_timeout(
+    control_url: &str,
+    service_type: &str,
+    action: &str,
+    args: &[(&str, &str)],
+    timeout: Option<Duration>,
+) -> Result<SoapCallResult> {
     let body_xml = build_soap_request(service_type, action, args)
         .context("Failed to build SOAP request body")?;
 
-    // 2. Build agent that does NOT treat 4xx/5xx as errors
-    let config = Agent::config_builder().http_status_as_error(false).build();
+    let mut builder = Agent::config_builder();
+    builder = builder.http_status_as_error(false);
+    if let Some(duration) = timeout {
+        builder = builder.timeout_global(Some(duration));
+    }
 
+    let config = builder.build();
     let agent: Agent = config.into();
 
     // 3. SOAPAction header

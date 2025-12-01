@@ -3,9 +3,6 @@ use crate::capabilities::{PlaybackPositionInfo, PlaybackState};
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RendererId(pub String);
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct MediaServerId(pub String);
-
 #[derive(Clone, Debug)]
 pub enum RendererProtocol {
     UpnpAvOnly,
@@ -51,29 +48,6 @@ pub struct RendererInfo {
     pub rendering_control_control_url: Option<String>,
     pub connection_manager_service_type: Option<String>,
     pub connection_manager_control_url: Option<String>,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct MediaServerCapabilities {
-    pub has_content_directory: bool,
-    pub has_connection_manager: bool,
-}
-
-#[derive(Clone, Debug)]
-pub struct MediaServerInfo {
-    pub id: MediaServerId,
-    pub udn: String,
-    pub friendly_name: String,
-    pub model_name: String,
-    pub manufacturer: String,
-
-    pub capabilities: MediaServerCapabilities,
-
-    pub location: String,
-    pub server_header: String,
-    pub online: bool,
-    pub last_seen: std::time::SystemTime,
-    pub max_age: u32,
 }
 
 #[derive(Clone, Debug)]

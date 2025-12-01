@@ -229,7 +229,9 @@ fn print_backend(prefix: &str, renderer: &MusicRenderer) {
         MusicRenderer::Upnp(_) => "UpnpRenderer (UPnP AV / DLNA)",
         MusicRenderer::LinkPlay(_) => "LinkPlayRenderer (LinkPlay HTTP)",
         MusicRenderer::ArylicTcp(_) => "ArylicTcpRenderer  (ARylic TCP Protocol)",
-        MusicRenderer::HybridUpnpArylic{..} => "Hybrid UpnpArylicRenderer (UPnP AV / DLNA + ARylic TCP Protocol)",
+        MusicRenderer::HybridUpnpArylic { .. } => {
+            "Hybrid UpnpArylicRenderer (UPnP AV / DLNA + ARylic TCP Protocol)"
+        }
     };
     println!("{prefix}Backend       : {backend}");
 }
