@@ -1,4 +1,10 @@
-// pmocontrol/src/music_renderer.rs
+//! Backend-agnostic music renderer façade for PMOMusic.
+//!
+//! `MusicRenderer` wraps every supported backend (UPnP AV/DLNA, LinkPlay HTTP,
+//! Arylic TCP, and the hybrid UPnP + Arylic pairing) behind a single control
+//! surface. Higher layers in PMOMusic must only interact with renderers through
+//! this type so that transport, volume, and state queries stay backend-neutral.
+//! OpenHome-only renderers are intentionally unsupported for now.
 
 use crate::capabilities::{PlaybackPositionInfo, PlaybackStatus};
 use crate::model::{RendererId, RendererInfo, RendererProtocol};
@@ -6,25 +12,33 @@ use crate::{
     ArylicTcpRenderer, DeviceRegistry, LinkPlayRenderer, PlaybackPosition, PlaybackState,
     TransportControl, UpnpRenderer, VolumeControl,
 };
-use anyhow::Result;
-use tracing::{debug, warn};
+use anyhow::{anyhow, Result};
+use tracing::warn;
 
-/// Music view of a renderer, independent of the underlying protocol/backend.
-///
-/// Currently supported backends:
-/// - [`UpnpRenderer`] (AVTransport + RenderingControl)
-/// - [`LinkPlayRenderer`] (LinkPlay HTTP API)
-/// - [`ArylicTcpRenderer`] (Arylic TCP control port 8899)
-/// Additional backends (e.g. OpenHome) can be integrated later.
+/// Backend-agnostic façade exposing transport, volume, and status contracts.
 #[derive(Clone, Debug)]
 pub enum MusicRenderer {
+    /// Classic UPnP AV / DLNA renderer (AVTransport + RenderingControl).
     Upnp(UpnpRenderer),
+    /// Renderer controlled via the LinkPlay HTTP API.
     LinkPlay(LinkPlayRenderer),
+    /// Renderer reachable through the Arylic TCP control protocol (port 8899).
     ArylicTcp(ArylicTcpRenderer),
+    /// Combined backend using UPnP for transport + volume writes and Arylic TCP
+    /// to read detailed playback information as well as live volume/mute state.
     HybridUpnpArylic {
         upnp: UpnpRenderer,
         arylic: ArylicTcpRenderer,
     },
+}
+
+/// Build a standardized error when an operation is not supported by a backend.
+fn op_not_supported(op: &str, backend: &str) -> anyhow::Error {
+    anyhow!(
+        "MusicRenderer operation '{}' is not supported by backend '{}'",
+        op,
+        backend
+    )
 }
 
 impl MusicRenderer {
@@ -120,15 +134,14 @@ impl MusicRenderer {
     }
 }
 
-/// Implémentation générique de `TransportControl` pour [`MusicRenderer`].
-///
-/// Les variantes UPnP et LinkPlay délèguent aux backends correspondants.
+/// Transport control façade that dispatches to whichever backend can fulfill
+/// the request, returning a standardized error if the backend lacks support.
 impl TransportControl for MusicRenderer {
     fn play_uri(&self, uri: &str, meta: &str) -> Result<()> {
         match self {
             MusicRenderer::Upnp(upnp) => upnp.play_uri(uri, meta),
             MusicRenderer::LinkPlay(lp) => lp.play_uri(uri, meta),
-            MusicRenderer::ArylicTcp(ary) => ary.play_uri(uri, meta),
+            MusicRenderer::ArylicTcp(_) => Err(op_not_supported("play_uri", "ArylicTcp")),
             MusicRenderer::HybridUpnpArylic { upnp, .. } => upnp.play_uri(uri, meta),
         }
     }
@@ -164,15 +177,16 @@ impl TransportControl for MusicRenderer {
         match self {
             MusicRenderer::Upnp(upnp) => upnp.seek_rel_time(hhmmss),
             MusicRenderer::LinkPlay(lp) => lp.seek_rel_time(hhmmss),
-            MusicRenderer::ArylicTcp(ary) => ary.seek_rel_time(hhmmss),
+            MusicRenderer::ArylicTcp(_) => Err(op_not_supported("seek_rel_time", "ArylicTcp")),
             MusicRenderer::HybridUpnpArylic { upnp, .. } => upnp.seek_rel_time(hhmmss),
         }
     }
 }
 
-/// Implémentation générique de `VolumeControl` pour [`MusicRenderer`].
+/// Volume and mute controls exposed via the façade.
 ///
-/// Les variantes UPnP et LinkPlay délèguent aux backends correspondants.
+/// Hybrid backends may read via Arylic TCP and write via UPnP, but callers
+/// always depend on a single [`VolumeControl`] entry point.
 impl VolumeControl for MusicRenderer {
     fn volume(&self) -> Result<u16> {
         match self {
@@ -211,9 +225,10 @@ impl VolumeControl for MusicRenderer {
     }
 }
 
-/// Implémentation générique de `PlaybackStatus` pour [`MusicRenderer`].
+/// Playback-state queries sourced from the backend best suited for the job.
 ///
-/// Chaque backend fournit sa propre source d'état (UPnP AVTransport ou LinkPlay HTTP).
+/// Each backend reports into [`PlaybackState`], ensuring consumers never have
+/// to reason about protocol-specific state machines.
 impl PlaybackStatus for MusicRenderer {
     fn playback_state(&self) -> Result<PlaybackState> {
         match self {
@@ -225,6 +240,8 @@ impl PlaybackStatus for MusicRenderer {
     }
 }
 
+/// Playback-position queries that always yield a [`PlaybackPositionInfo`]
+/// regardless of the backend providing the raw transport data.
 impl PlaybackPosition for MusicRenderer {
     fn playback_position(&self) -> Result<PlaybackPositionInfo> {
         match self {

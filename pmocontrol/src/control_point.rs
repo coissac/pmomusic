@@ -8,7 +8,9 @@ use crossbeam_channel::Receiver;
 use pmoupnp::ssdp::SsdpClient;
 
 use crate::MusicRenderer;
-use crate::capabilities::{PlaybackPosition, PlaybackPositionInfo, PlaybackState, PlaybackStatus};
+use crate::capabilities::{
+    PlaybackPosition, PlaybackPositionInfo, PlaybackState, PlaybackStatus, VolumeControl,
+};
 use crate::discovery::DiscoveryManager;
 use crate::events::RendererEventBus;
 use crate::model::{RendererEvent, RendererId, RendererProtocol};
@@ -161,6 +163,26 @@ impl ControlPoint {
                             entry.state = Some(logical_state);
                         }
                     }
+
+                    if let Ok(volume) = renderer.volume() {
+                        if entry.last_volume != Some(volume) {
+                            runtime_cp.emit_renderer_event(RendererEvent::VolumeChanged {
+                                id: renderer_id.clone(),
+                                volume,
+                            });
+                            entry.last_volume = Some(volume);
+                        }
+                    }
+
+                    if let Ok(mute) = renderer.mute() {
+                        if entry.last_mute != Some(mute) {
+                            runtime_cp.emit_renderer_event(RendererEvent::MuteChanged {
+                                id: renderer_id.clone(),
+                                mute,
+                            });
+                            entry.last_mute = Some(mute);
+                        }
+                    }
                 }
 
                 cache.retain(|id, _| seen_ids.contains(id));
@@ -249,6 +271,8 @@ impl ControlPoint {
 struct RendererRuntimeSnapshot {
     state: Option<PlaybackState>,
     position: Option<PlaybackPositionInfo>,
+    last_volume: Option<u16>,
+    last_mute: Option<bool>,
 }
 
 /// Parse "HH:MM:SS" style time strings to seconds.
