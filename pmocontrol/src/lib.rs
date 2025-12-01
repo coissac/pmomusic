@@ -1,4 +1,5 @@
 mod events;
+mod media_server_events;
 
 pub mod arylic_tcp;
 pub mod avtransport_client;
@@ -36,7 +37,9 @@ pub use rendering_control_client::RenderingControlClient;
 pub use upnp_renderer::UpnpRenderer;
 
 pub use discovery::{DeviceDescriptionProvider, DiscoveredEndpoint, DiscoveryManager};
-pub use model::{RendererCapabilities, RendererEvent, RendererId, RendererInfo, RendererProtocol};
+pub use model::{
+    MediaServerEvent, RendererCapabilities, RendererEvent, RendererId, RendererInfo, RendererProtocol,
+};
 pub use provider::HttpXmlDescriptionProvider;
 pub use registry::{DeviceRegistry, DeviceRegistryRead, DeviceUpdate};
 

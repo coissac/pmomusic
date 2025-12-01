@@ -125,6 +125,7 @@ pub struct ServiceInstance {
     seqid: Arc<Mutex<HashMap<String, u32>>>,
 }
 
+
 impl std::fmt::Debug for ServiceInstance {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ServiceInstance")

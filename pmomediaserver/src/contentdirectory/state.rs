@@ -1,9 +1,10 @@
 use once_cell::sync::OnceCell;
-use pmoupnp::{services::ServiceInstance, variable_types::StateValue};
+use pmoupnp::{services::ServiceInstance, state_variables::StateVarInstance, variable_types::StateValue};
 use std::sync::{
     Arc, Mutex, Weak,
     atomic::{AtomicU32, Ordering},
 };
+use tokio::task;
 
 static CONTENTDIR_INSTANCE: OnceCell<Weak<ServiceInstance>> = OnceCell::new();
 static SYSTEM_UPDATE_ID: AtomicU32 = AtomicU32::new(1);
@@ -43,7 +44,7 @@ fn set_system_update_id(id: u32) {
     tracing::info!("ContentDirectory: SystemUpdateID -> {}", id);
     if let Some(service) = CONTENTDIR_INSTANCE.get().and_then(|w| w.upgrade()) {
         if let Some(var) = service.get_variable("SystemUpdateID") {
-            let _ = var.set_value(StateValue::UI4(id));
+            spawn_set_value(var, StateValue::UI4(id), "SystemUpdateID");
         }
     }
 }
@@ -57,7 +58,24 @@ fn set_container_update_ids(value: &str) {
 
     if let Some(service) = CONTENTDIR_INSTANCE.get().and_then(|w| w.upgrade()) {
         if let Some(var) = service.get_variable("ContainerUpdateIDs") {
-            let _ = var.set_value(StateValue::String(value.to_string()));
+            spawn_set_value(
+                var,
+                StateValue::String(value.to_string()),
+                "ContainerUpdateIDs",
+            );
         }
     }
+}
+
+fn spawn_set_value(var: Arc<StateVarInstance>, value: StateValue, name: &str) {
+    let name = name.to_string();
+    task::spawn(async move {
+        if let Err(err) = var.set_value(value).await {
+            tracing::warn!(
+                variable = name.as_str(),
+                error = %err,
+                "Failed to update ContentDirectory state variable"
+            );
+        }
+    });
 }

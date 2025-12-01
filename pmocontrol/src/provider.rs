@@ -473,7 +473,7 @@ fn detect_renderer_protocol(caps: &RendererCapabilities) -> RendererProtocol {
 ///
 /// - If `control_url` is already absolute (starts with http:// or https://), it is returned as-is.
 /// - Otherwise, it is resolved against the scheme://host:port of `description_url`.
-fn resolve_control_url(description_url: &str, control_url: &str) -> String {
+pub(crate) fn resolve_control_url(description_url: &str, control_url: &str) -> String {
     if control_url.starts_with("http://") || control_url.starts_with("https://") {
         return control_url.to_string();
     }

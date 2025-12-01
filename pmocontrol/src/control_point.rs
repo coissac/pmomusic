@@ -15,9 +15,10 @@ use crate::capabilities::{
     VolumeControl,
 };
 use crate::discovery::DiscoveryManager;
-use crate::events::RendererEventBus;
+use crate::events::{MediaServerEventBus, RendererEventBus};
 use crate::media_server::{MediaServerInfo, ServerId};
-use crate::model::{RendererEvent, RendererId, RendererProtocol};
+use crate::media_server_events::spawn_media_server_event_runtime;
+use crate::model::{MediaServerEvent, RendererEvent, RendererId, RendererProtocol};
 use crate::music_renderer::op_not_supported;
 use crate::playback_queue::{PlaybackItem, PlaybackQueue};
 use crate::provider::HttpXmlDescriptionProvider;
@@ -31,6 +32,7 @@ use crate::upnp_renderer::UpnpRenderer;
 pub struct ControlPoint {
     registry: Arc<RwLock<DeviceRegistry>>,
     event_bus: RendererEventBus,
+    media_event_bus: MediaServerEventBus,
     runtime: Arc<RuntimeState>,
 }
 
@@ -41,6 +43,7 @@ impl ControlPoint {
     pub fn spawn(timeout_secs: u64) -> io::Result<Self> {
         let registry = Arc::new(RwLock::new(DeviceRegistry::new()));
         let event_bus = RendererEventBus::new();
+        let media_event_bus = MediaServerEventBus::new();
         let runtime = Arc::new(RuntimeState::new());
 
         // SsdpClient
@@ -91,6 +94,7 @@ impl ControlPoint {
         let runtime_cp = ControlPoint {
             registry: Arc::clone(&registry),
             event_bus: event_bus.clone(),
+            media_event_bus: media_event_bus.clone(),
             runtime: Arc::clone(&runtime),
         };
 
@@ -191,9 +195,16 @@ impl ControlPoint {
             }
         });
 
+        spawn_media_server_event_runtime(
+            Arc::clone(&registry),
+            media_event_bus.clone(),
+            timeout_secs,
+        )?;
+
         Ok(Self {
             registry,
             event_bus,
+            media_event_bus,
             runtime,
         })
     }
@@ -478,6 +489,16 @@ impl ControlPoint {
     /// Each subscriber receives all future events independently.
     pub fn subscribe_events(&self) -> Receiver<RendererEvent> {
         self.event_bus.subscribe()
+    }
+
+    /// Access the media server event bus for ContentDirectory notifications.
+    pub fn media_server_events(&self) -> MediaServerEventBus {
+        self.media_event_bus.clone()
+    }
+
+    /// Subscribe directly to media server events emitted by the control point.
+    pub fn subscribe_media_server_events(&self) -> Receiver<MediaServerEvent> {
+        self.media_event_bus.subscribe()
     }
 
     pub(crate) fn emit_renderer_event(&self, event: RendererEvent) {

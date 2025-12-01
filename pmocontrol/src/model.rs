@@ -1,4 +1,5 @@
 use crate::capabilities::{PlaybackPositionInfo, PlaybackState};
+use crate::media_server::ServerId;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RendererId(pub String);
@@ -77,5 +78,17 @@ pub enum RendererEvent {
     MuteChanged {
         id: RendererId,
         mute: bool,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub enum MediaServerEvent {
+    GlobalUpdated {
+        server_id: ServerId,
+        system_update_id: Option<u32>,
+    },
+    ContainersUpdated {
+        server_id: ServerId,
+        container_ids: Vec<String>,
     },
 }

@@ -1,0 +1,431 @@
+warning: use of `async fn` in public traits is discouraged as auto trait bounds cannot be specified
+  --> pmoserver/src/config_ext.rs:35:5
+   |
+35 |     async fn init_config_api(&mut self) -> Result<()>;
+   |     ^^^^^
+   |
+   = note: you can suppress this lint if you plan to use the trait only in your own code, or do not care about auto traits like `Send` on the `Future`
+   = note: `#[warn(async_fn_in_trait)]` on by default
+help: you can alternatively desugar to a normal `fn` that returns `impl Future` and add any desired bounds such as `Send`, but these cannot be relaxed without a breaking API change
+   |
+35 -     async fn init_config_api(&mut self) -> Result<()>;
+35 +     fn init_config_api(&mut self) -> impl std::future::Future<Output = Result<()>> + Send;
+   |
+
+warning: `pmoserver` (lib) generated 1 warning
+warning: variable does not need to be mutable
+   --> pmocache/src/cache.rs:604:9
+    |
+604 |         mut reader: R,
+    |         ----^^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: use of `async fn` in public traits is discouraged as auto trait bounds cannot be specified
+  --> pmocache/src/cache_trait.rs:97:5
+   |
+97 |     async fn add_from_url(&self, url: &str, collection: Option<&str>) -> Result<String>;
+   |     ^^^^^
+   |
+   = note: you can suppress this lint if you plan to use the trait only in your own code, or do not care about auto traits like `Send` on the `Future`
+   = note: `#[warn(async_fn_in_trait)]` on by default
+help: you can alternatively desugar to a normal `fn` that returns `impl Future` and add any desired bounds such as `Send`, but these cannot be relaxed without a breaking API change
+   |
+97 -     async fn add_from_url(&self, url: &str, collection: Option<&str>) -> Result<String>;
+97 +     fn add_from_url(&self, url: &str, collection: Option<&str>) -> impl std::future::Future<Output = Result<String>> + Send;
+   |
+
+warning: use of `async fn` in public traits is discouraged as auto trait bounds cannot be specified
+   --> pmocache/src/cache_trait.rs:111:5
+    |
+111 |     async fn add_from_file(&self, path: &str, collection: Option<&str>) -> Result<String>;
+    |     ^^^^^
+    |
+    = note: you can suppress this lint if you plan to use the trait only in your own code, or do not care about auto traits like `Send` on the `Future`
+help: you can alternatively desugar to a normal `fn` that returns `impl Future` and add any desired bounds such as `Send`, but these cannot be relaxed without a breaking API change
+    |
+111 -     async fn add_from_file(&self, path: &str, collection: Option<&str>) -> Result<String>;
+111 +     fn add_from_file(&self, path: &str, collection: Option<&str>) -> impl std::future::Future<Output = Result<String>> + Send;
+    |
+
+warning: use of `async fn` in public traits is discouraged as auto trait bounds cannot be specified
+   --> pmocache/src/cache_trait.rs:118:5
+    |
+118 |     async fn get(&self, pk: &str) -> Result<PathBuf>;
+    |     ^^^^^
+    |
+    = note: you can suppress this lint if you plan to use the trait only in your own code, or do not care about auto traits like `Send` on the `Future`
+help: you can alternatively desugar to a normal `fn` that returns `impl Future` and add any desired bounds such as `Send`, but these cannot be relaxed without a breaking API change
+    |
+118 -     async fn get(&self, pk: &str) -> Result<PathBuf>;
+118 +     fn get(&self, pk: &str) -> impl std::future::Future<Output = Result<PathBuf>> + Send;
+    |
+
+warning: use of `async fn` in public traits is discouraged as auto trait bounds cannot be specified
+   --> pmocache/src/cache_trait.rs:125:5
+    |
+125 |     async fn get_collection(&self, collection: &str) -> Result<Vec<PathBuf>>;
+    |     ^^^^^
+    |
+    = note: you can suppress this lint if you plan to use the trait only in your own code, or do not care about auto traits like `Send` on the `Future`
+help: you can alternatively desugar to a normal `fn` that returns `impl Future` and add any desired bounds such as `Send`, but these cannot be relaxed without a breaking API change
+    |
+125 -     async fn get_collection(&self, collection: &str) -> Result<Vec<PathBuf>>;
+125 +     fn get_collection(&self, collection: &str) -> impl std::future::Future<Output = Result<Vec<PathBuf>>> + Send;
+    |
+
+warning: use of `async fn` in public traits is discouraged as auto trait bounds cannot be specified
+   --> pmocache/src/cache_trait.rs:128:5
+    |
+128 |     async fn purge(&self) -> Result<()>;
+    |     ^^^^^
+    |
+    = note: you can suppress this lint if you plan to use the trait only in your own code, or do not care about auto traits like `Send` on the `Future`
+help: you can alternatively desugar to a normal `fn` that returns `impl Future` and add any desired bounds such as `Send`, but these cannot be relaxed without a breaking API change
+    |
+128 -     async fn purge(&self) -> Result<()>;
+128 +     fn purge(&self) -> impl std::future::Future<Output = Result<()>> + Send;
+    |
+
+warning: use of `async fn` in public traits is discouraged as auto trait bounds cannot be specified
+   --> pmocache/src/cache_trait.rs:131:5
+    |
+131 |     async fn consolidate(&self) -> Result<()>;
+    |     ^^^^^
+    |
+    = note: you can suppress this lint if you plan to use the trait only in your own code, or do not care about auto traits like `Send` on the `Future`
+help: you can alternatively desugar to a normal `fn` that returns `impl Future` and add any desired bounds such as `Send`, but these cannot be relaxed without a breaking API change
+    |
+131 -     async fn consolidate(&self) -> Result<()>;
+131 +     fn consolidate(&self) -> impl std::future::Future<Output = Result<()>> + Send;
+    |
+
+warning: use of `async fn` in public traits is discouraged as auto trait bounds cannot be specified
+   --> pmocache/src/cache_trait.rs:147:5
+    |
+147 |     async fn is_valid_pk(&self, pk: &str) -> bool {
+    |     ^^^^^
+    |
+    = note: you can suppress this lint if you plan to use the trait only in your own code, or do not care about auto traits like `Send` on the `Future`
+help: you can alternatively desugar to a normal `fn` that returns `impl Future` and add any desired bounds such as `Send`, but these cannot be relaxed without a breaking API change
+    |
+147 ~     fn is_valid_pk(&self, pk: &str) -> impl std::future::Future<Output = bool> + Send {async {
+148 |         if self.get_database().get(pk, false).is_err() {
+...
+218 |         false
+219 ~     } }
+    |
+
+warning: use of `async fn` in public traits is discouraged as auto trait bounds cannot be specified
+   --> pmocache/src/pmoserver_ext.rs:391:5
+    |
+391 |     async fn init_generic_cache<C: CacheConfig + 'static>(
+    |     ^^^^^
+    |
+    = note: you can suppress this lint if you plan to use the trait only in your own code, or do not care about auto traits like `Send` on the `Future`
+help: you can alternatively desugar to a normal `fn` that returns `impl Future` and add any desired bounds such as `Send`, but these cannot be relaxed without a breaking API change
+    |
+391 ~     fn init_generic_cache<C: CacheConfig + 'static>(
+392 |         &mut self,
+...
+395 |         content_type: &'static str,
+396 ~     ) -> impl std::future::Future<Output = anyhow::Result<Arc<Cache<C>>>> + Send;
+    |
+
+warning: `pmocache` (lib) generated 9 warnings (run `cargo fix --lib -p pmocache` to apply 1 suggestion)
+warning: unused import: `serde_json::Value`
+  --> pmoaudiocache/src/cache.rs:11:5
+   |
+11 | use serde_json::Value;
+   |     ^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `pmometadata::TrackMetadata`
+  --> pmoaudiocache/src/api.rs:11:5
+   |
+11 | use pmometadata::TrackMetadata;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of `async fn` in public traits is discouraged as auto trait bounds cannot be specified
+   --> pmoaudiocache/src/lib.rs:188:5
+    |
+188 |     async fn init_audio_cache(
+    |     ^^^^^
+    |
+    = note: you can suppress this lint if you plan to use the trait only in your own code, or do not care about auto traits like `Send` on the `Future`
+    = note: `#[warn(async_fn_in_trait)]` on by default
+help: you can alternatively desugar to a normal `fn` that returns `impl Future` and add any desired bounds such as `Send`, but these cannot be relaxed without a breaking API change
+    |
+188 ~     fn init_audio_cache(
+189 |         &mut self,
+190 |         cache_dir: &str,
+191 |         limit: usize,
+192 ~     ) -> impl std::future::Future<Output = anyhow::Result<std::sync::Arc<Cache>>> + Send;
+    |
+
+warning: use of `async fn` in public traits is discouraged as auto trait bounds cannot be specified
+   --> pmoaudiocache/src/lib.rs:197:5
+    |
+197 |     async fn init_audio_cache_configured(&mut self) -> anyhow::Result<std::sync::Arc<Cache>>;
+    |     ^^^^^
+    |
+    = note: you can suppress this lint if you plan to use the trait only in your own code, or do not care about auto traits like `Send` on the `Future`
+help: you can alternatively desugar to a normal `fn` that returns `impl Future` and add any desired bounds such as `Send`, but these cannot be relaxed without a breaking API change
+    |
+197 -     async fn init_audio_cache_configured(&mut self) -> anyhow::Result<std::sync::Arc<Cache>>;
+197 +     fn init_audio_cache_configured(&mut self) -> impl std::future::Future<Output = anyhow::Result<std::sync::Arc<Cache>>> + Send;
+    |
+
+warning: use of `async fn` in public traits is discouraged as auto trait bounds cannot be specified
+  --> pmoaudiocache/src/metadata_ext.rs:36:5
+   |
+36 |     async fn get_title(&self, pk: &str) -> anyhow::Result<Option<String>>;
+   |     ^^^^^
+   |
+   = note: you can suppress this lint if you plan to use the trait only in your own code, or do not care about auto traits like `Send` on the `Future`
+help: you can alternatively desugar to a normal `fn` that returns `impl Future` and add any desired bounds such as `Send`, but these cannot be relaxed without a breaking API change
+   |
+36 -     async fn get_title(&self, pk: &str) -> anyhow::Result<Option<String>>;
+36 +     fn get_title(&self, pk: &str) -> impl std::future::Future<Output = anyhow::Result<Option<String>>> + Send;
+   |
+
+warning: use of `async fn` in public traits is discouraged as auto trait bounds cannot be specified
+  --> pmoaudiocache/src/metadata_ext.rs:37:5
+   |
+37 |     async fn get_artist(&self, pk: &str) -> anyhow::Result<Option<String>>;
+   |     ^^^^^
+   |
+   = note: you can suppress this lint if you plan to use the trait only in your own code, or do not care about auto traits like `Send` on the `Future`
+help: you can alternatively desugar to a normal `fn` that returns `impl Future` and add any desired bounds such as `Send`, but these cannot be relaxed without a breaking API change
+   |
+37 -     async fn get_artist(&self, pk: &str) -> anyhow::Result<Option<String>>;
+37 +     fn get_artist(&self, pk: &str) -> impl std::future::Future<Output = anyhow::Result<Option<String>>> + Send;
+   |
+
+warning: use of `async fn` in public traits is discouraged as auto trait bounds cannot be specified
+  --> pmoaudiocache/src/metadata_ext.rs:38:5
+   |
+38 |     async fn get_album(&self, pk: &str) -> anyhow::Result<Option<String>>;
+   |     ^^^^^
+   |
+   = note: you can suppress this lint if you plan to use the trait only in your own code, or do not care about auto traits like `Send` on the `Future`
+help: you can alternatively desugar to a normal `fn` that returns `impl Future` and add any desired bounds such as `Send`, but these cannot be relaxed without a breaking API change
+   |
+38 -     async fn get_album(&self, pk: &str) -> anyhow::Result<Option<String>>;
+38 +     fn get_album(&self, pk: &str) -> impl std::future::Future<Output = anyhow::Result<Option<String>>> + Send;
+   |
+
+warning: use of `async fn` in public traits is discouraged as auto trait bounds cannot be specified
+  --> pmoaudiocache/src/metadata_ext.rs:39:5
+   |
+39 |     async fn get_duration_secs(&self, pk: &str) -> anyhow::Result<Option<i64>>;
+   |     ^^^^^
+   |
+   = note: you can suppress this lint if you plan to use the trait only in your own code, or do not care about auto traits like `Send` on the `Future`
+help: you can alternatively desugar to a normal `fn` that returns `impl Future` and add any desired bounds such as `Send`, but these cannot be relaxed without a breaking API change
+   |
+39 -     async fn get_duration_secs(&self, pk: &str) -> anyhow::Result<Option<i64>>;
+39 +     fn get_duration_secs(&self, pk: &str) -> impl std::future::Future<Output = anyhow::Result<Option<i64>>> + Send;
+   |
+
+warning: `pmoaudiocache` (lib) generated 8 warnings (run `cargo fix --lib -p pmoaudiocache` to apply 1 suggestion)
+warning: unused import: `tokio_stream::StreamExt`
+  --> pmoplaylist/src/sse.rs:16:5
+   |
+16 | use tokio_stream::StreamExt;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: methods `list_playlist_ids` and `remove_by_cache_pk` are never used
+   --> pmoplaylist/src/persistence/mod.rs:219:18
+    |
+ 17 | impl PersistenceManager {
+    | ----------------------- methods in this implementation
+...
+219 |     pub async fn list_playlist_ids(&self) -> Result<Vec<String>> {
+    |                  ^^^^^^^^^^^^^^^^^
+...
+240 |     pub async fn remove_by_cache_pk(&self, cache_pk: &str) -> Result<()> {
+    |                  ^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `PlaylistManager` should have a snake case name
+   --> pmoplaylist/src/manager.rs:620:8
+    |
+620 | pub fn PlaylistManager() -> &'static PlaylistManager {
+    |        ^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `playlist_manager`
+    |
+    = note: `#[warn(non_snake_case)]` (part of `#[warn(nonstandard_style)]`) on by default
+
+warning: `pmoplaylist` (lib) generated 3 warnings
+warning: unused variable: `base_url`
+   --> pmoupnp/src/upnp_server.rs:306:13
+    |
+306 |         let base_url = self.info().base_url.clone();
+    |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_base_url`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: use of `async fn` in public traits is discouraged as auto trait bounds cannot be specified
+   --> pmoupnp/src/upnp_api.rs:229:5
+    |
+229 |     async fn register_upnp_api(&mut self);
+    |     ^^^^^
+    |
+    = note: you can suppress this lint if you plan to use the trait only in your own code, or do not care about auto traits like `Send` on the `Future`
+    = note: `#[warn(async_fn_in_trait)]` on by default
+help: you can alternatively desugar to a normal `fn` that returns `impl Future` and add any desired bounds such as `Send`, but these cannot be relaxed without a breaking API change
+    |
+229 -     async fn register_upnp_api(&mut self);
+229 +     fn register_upnp_api(&mut self) -> impl std::future::Future<Output = ()> + Send;
+    |
+
+warning: use of `async fn` in public traits is discouraged as auto trait bounds cannot be specified
+  --> pmoupnp/src/upnp_server.rs:96:5
+   |
+96 |     async fn register_device(
+   |     ^^^^^
+   |
+   = note: you can suppress this lint if you plan to use the trait only in your own code, or do not care about auto traits like `Send` on the `Future`
+help: you can alternatively desugar to a normal `fn` that returns `impl Future` and add any desired bounds such as `Send`, but these cannot be relaxed without a breaking API change
+   |
+96 ~     fn register_device(
+97 |         &mut self,
+98 |         device: Arc<Device>,
+99 ~     ) -> impl std::future::Future<Output = Result<Arc<DeviceInstance>, DeviceError>> + Send;
+   |
+
+warning: use of `async fn` in public traits is discouraged as auto trait bounds cannot be specified
+   --> pmoupnp/src/upnp_server.rs:125:5
+    |
+125 |     async fn init_cover_cache(
+    |     ^^^^^
+    |
+    = note: you can suppress this lint if you plan to use the trait only in your own code, or do not care about auto traits like `Send` on the `Future`
+help: you can alternatively desugar to a normal `fn` that returns `impl Future` and add any desired bounds such as `Send`, but these cannot be relaxed without a breaking API change
+    |
+125 ~     fn init_cover_cache(
+126 |         &mut self,
+127 |         cache_dir: &str,
+128 |         limit: usize,
+129 ~     ) -> impl std::future::Future<Output = Result<Arc<CoverCache>, anyhow::Error>> + Send;
+    |
+
+warning: use of `async fn` in public traits is discouraged as auto trait bounds cannot be specified
+   --> pmoupnp/src/upnp_server.rs:144:5
+    |
+144 |     async fn init_audio_cache(
+    |     ^^^^^
+    |
+    = note: you can suppress this lint if you plan to use the trait only in your own code, or do not care about auto traits like `Send` on the `Future`
+help: you can alternatively desugar to a normal `fn` that returns `impl Future` and add any desired bounds such as `Send`, but these cannot be relaxed without a breaking API change
+    |
+144 ~     fn init_audio_cache(
+145 |         &mut self,
+146 |         cache_dir: &str,
+147 |         limit: usize,
+148 ~     ) -> impl std::future::Future<Output = Result<Arc<AudioCache>, anyhow::Error>> + Send;
+    |
+
+warning: use of `async fn` in public traits is discouraged as auto trait bounds cannot be specified
+   --> pmoupnp/src/upnp_server.rs:158:5
+    |
+158 |     async fn init_caches(&mut self) -> Result<(Arc<CoverCache>, Arc<AudioCache>), anyhow::Error>;
+    |     ^^^^^
+    |
+    = note: you can suppress this lint if you plan to use the trait only in your own code, or do not care about auto traits like `Send` on the `Future`
+help: you can alternatively desugar to a normal `fn` that returns `impl Future` and add any desired bounds such as `Send`, but these cannot be relaxed without a breaking API change
+    |
+158 -     async fn init_caches(&mut self) -> Result<(Arc<CoverCache>, Arc<AudioCache>), anyhow::Error>;
+158 +     fn init_caches(&mut self) -> impl std::future::Future<Output = Result<(Arc<CoverCache>, Arc<AudioCache>), anyhow::Error>> + Send;
+    |
+
+warning: use of `async fn` in public traits is discouraged as auto trait bounds cannot be specified
+   --> pmoupnp/src/upnp_server.rs:225:5
+    |
+225 |     async fn create_upnp_server() -> Result<Arc<tokio::sync::RwLock<Server>>, anyhow::Error>;
+    |     ^^^^^
+    |
+    = note: you can suppress this lint if you plan to use the trait only in your own code, or do not care about auto traits like `Send` on the `Future`
+help: you can alternatively desugar to a normal `fn` that returns `impl Future` and add any desired bounds such as `Send`, but these cannot be relaxed without a breaking API change
+    |
+225 -     async fn create_upnp_server() -> Result<Arc<tokio::sync::RwLock<Server>>, anyhow::Error>;
+225 +     fn create_upnp_server() -> impl std::future::Future<Output = Result<Arc<tokio::sync::RwLock<Server>>, anyhow::Error>> + Send;
+    |
+
+warning: `pmoupnp` (lib) generated 7 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running `target/debug/examples/media_server_events_demo`
+ControlPoint started; waiting 5s for discovery...
+Discovered media servers:
+  - BubbleUPnP Media Server (SM-A536B) | model=BubbleUPnP Media Server | udn=uuid:d38a2dc7-13c1-4a39-ab36-513490cf6766 | location=http://192.168.0.98:58645/dev/d38a2dc7-13c1-4a39-ab36-513490cf6766/desc.xml
+  - fenice | model=Jellyfin Server | udn=uuid:526dedec-fde2-4224-bac6-06f7b11711cf | location=http://192.168.0.34:8096/dlna/526dedec-fde2-4224-bac6-06f7b11711cf/description.xml
+  - PMOMusic Media Server | model=PMOMusic Media Server | udn=uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4 | location=http://192.168.0.138:8080/device/17fe2ea6-8908-4e30-bc52-b28ea4cab3e4/desc.xml
+  - Freebox Server | model=Freebox Media Server | udn=uuid:e929a46e-d218-377d-2dde-32bd8080dfbf | location=http://192.168.0.254:52424/device.xml
+Listening for ContentDirectory events for 90 seconds...
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Global content update (SystemUpdateID=27)
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Containers updated: radio-paradise:channel:main:history
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Global content update (SystemUpdateID=28)
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Containers updated: radio-paradise:channel:main:liveplaylist
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Global content update (SystemUpdateID=30)
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Containers updated: radio-paradise:channel:main:liveplaylist
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Global content update (SystemUpdateID=31)
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Containers updated: radio-paradise:channel:main:liveplaylist
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Global content update (SystemUpdateID=32)
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Containers updated: radio-paradise:channel:main:liveplaylist
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Global content update (SystemUpdateID=33)
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Containers updated: radio-paradise:channel:main:liveplaylist
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Global content update (SystemUpdateID=37)
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Containers updated: radio-paradise:channel:main:liveplaylist
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Global content update (SystemUpdateID=40)
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Containers updated: radio-paradise:channel:main:liveplaylist
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Global content update (SystemUpdateID=41)
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Containers updated: radio-paradise:channel:main:liveplaylist
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Global content update (SystemUpdateID=42)
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Containers updated: radio-paradise:channel:main:liveplaylist
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Global content update (SystemUpdateID=44)
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Containers updated: radio-paradise:channel:main:liveplaylist
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Global content update (SystemUpdateID=45)
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Containers updated: radio-paradise:channel:main:liveplaylist
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Global content update (SystemUpdateID=46)
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Containers updated: radio-paradise:channel:main:liveplaylist
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Global content update (SystemUpdateID=49)
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Containers updated: radio-paradise:channel:rock:liveplaylist
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Global content update (SystemUpdateID=50)
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Containers updated: radio-paradise:channel:rock:liveplaylist
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Global content update (SystemUpdateID=51)
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Containers updated: radio-paradise:channel:rock:liveplaylist
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Global content update (SystemUpdateID=52)
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Containers updated: radio-paradise:channel:rock:liveplaylist
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Global content update (SystemUpdateID=53)
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Containers updated: radio-paradise:channel:rock:liveplaylist
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Global content update (SystemUpdateID=54)
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Containers updated: radio-paradise:channel:rock:liveplaylist
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Global content update (SystemUpdateID=55)
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Containers updated: radio-paradise:channel:rock:liveplaylist
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Global content update (SystemUpdateID=56)
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Containers updated: radio-paradise:channel:rock:liveplaylist
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Global content update (SystemUpdateID=57)
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Containers updated: radio-paradise:channel:rock:liveplaylist
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Global content update (SystemUpdateID=59)
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Containers updated: radio-paradise:channel:rock:liveplaylist
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Global content update (SystemUpdateID=63)
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Containers updated: radio-paradise:channel:rock:liveplaylist
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Global content update (SystemUpdateID=64)
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Containers updated: radio-paradise:channel:rock:liveplaylist
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Global content update (SystemUpdateID=65)
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Containers updated: radio-paradise:channel:rock:liveplaylist
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Global content update (SystemUpdateID=66)
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Containers updated: radio-paradise:channel:rock:liveplaylist
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Global content update (SystemUpdateID=67)
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Containers updated: radio-paradise:channel:rock:liveplaylist
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Global content update (SystemUpdateID=68)
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Containers updated: radio-paradise:channel:rock:liveplaylist
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Global content update (SystemUpdateID=69)
+[PMOMusic Media Server (uuid:17fe2ea6-8908-4e30-bc52-b28ea4cab3e4)] Containers updated: radio-paradise:channel:rock:liveplaylist
+Monitoring finished.
