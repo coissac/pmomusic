@@ -96,13 +96,14 @@ impl ControlPoint {
 
         thread::spawn(move || {
             loop {
-                let renderers = {
+                let infos = {
                     let reg = runtime_cp.registry.read().unwrap();
                     reg.list_renderers()
-                        .into_iter()
-                        .filter_map(|info| MusicRenderer::from_registry_info(info, &reg))
-                        .collect::<Vec<_>>()
                 };
+                let renderers = infos
+                    .into_iter()
+                    .filter_map(|info| MusicRenderer::from_registry_info(info, &runtime_cp.registry))
+                    .collect::<Vec<_>>();
 
                 for renderer in renderers {
                     let info = renderer.info();
@@ -204,27 +205,35 @@ impl ControlPoint {
 
     /// Snapshot list of renderers currently known by the registry.
     pub fn list_upnp_renderers(&self) -> Vec<UpnpRenderer> {
-        let reg = self.registry.read().unwrap();
-        reg.list_renderers()
+        let infos = {
+            let reg = self.registry.read().unwrap();
+            reg.list_renderers()
+        };
+
+        infos
             .into_iter()
-            .map(|info| UpnpRenderer::from_registry(info, &reg))
+            .map(|info| UpnpRenderer::from_registry(info, &self.registry))
             .collect()
     }
 
     /// Return the first renderer in the registry, if any.
     pub fn default_upnp_renderer(&self) -> Option<UpnpRenderer> {
-        let reg = self.registry.read().unwrap();
-        reg.list_renderers()
-            .into_iter()
-            .next()
-            .map(|info| UpnpRenderer::from_registry(info, &reg))
+        let info = {
+            let reg = self.registry.read().unwrap();
+            reg.list_renderers().into_iter().next()
+        }?;
+
+        Some(UpnpRenderer::from_registry(info, &self.registry))
     }
 
     /// Lookup a renderer by id.
     pub fn upnp_renderer_by_id(&self, id: &RendererId) -> Option<UpnpRenderer> {
-        let reg = self.registry.read().unwrap();
-        reg.get_renderer(id)
-            .map(|info| UpnpRenderer::from_registry(info, &reg))
+        let info = {
+            let reg = self.registry.read().unwrap();
+            reg.get_renderer(id)
+        }?;
+
+        Some(UpnpRenderer::from_registry(info, &self.registry))
     }
 
     /// Snapshot list of music renderers (protocol-agnostic view).
@@ -233,26 +242,37 @@ impl ControlPoint {
     /// [`MusicRenderer::Upnp`]. OpenHome-only devices will be
     /// ignored until an OpenHome backend is implemented.
     pub fn list_music_renderers(&self) -> Vec<MusicRenderer> {
-        let reg = self.registry.read().unwrap();
-        reg.list_renderers()
+        let infos = {
+            let reg = self.registry.read().unwrap();
+            reg.list_renderers()
+        };
+
+        infos
             .into_iter()
-            .filter_map(|info| MusicRenderer::from_registry_info(info, &reg))
+            .filter_map(|info| MusicRenderer::from_registry_info(info, &self.registry))
             .collect()
     }
 
     /// Return the first music renderer in the registry, if any.
     pub fn default_music_renderer(&self) -> Option<MusicRenderer> {
-        let reg = self.registry.read().unwrap();
-        reg.list_renderers()
+        let infos = {
+            let reg = self.registry.read().unwrap();
+            reg.list_renderers()
+        };
+
+        infos
             .into_iter()
-            .find_map(|info| MusicRenderer::from_registry_info(info, &reg))
+            .find_map(|info| MusicRenderer::from_registry_info(info, &self.registry))
     }
 
     /// Lookup a music renderer by id.
     pub fn music_renderer_by_id(&self, id: &RendererId) -> Option<MusicRenderer> {
-        let reg = self.registry.read().unwrap();
-        reg.get_renderer(id)
-            .and_then(|info| MusicRenderer::from_registry_info(info, &reg))
+        let info = {
+            let reg = self.registry.read().unwrap();
+            reg.get_renderer(id)
+        }?;
+
+        MusicRenderer::from_registry_info(info, &self.registry)
     }
 
     /// Snapshot list of media servers currently known by the registry.
@@ -374,15 +394,13 @@ impl ControlPoint {
             "Dequeued next playback item"
         );
 
-        let renderer = self
-            .music_renderer_by_id(renderer_id)
-            .ok_or_else(|| {
-                warn!(
-                    renderer = renderer_id.0.as_str(),
-                    "Renderer disappeared before queue playback could start"
-                );
-                anyhow!("Renderer {} not found", renderer_id.0)
-            })?;
+        let renderer = self.music_renderer_by_id(renderer_id).ok_or_else(|| {
+            warn!(
+                renderer = renderer_id.0.as_str(),
+                "Renderer disappeared before queue playback could start"
+            );
+            anyhow!("Renderer {} not found", renderer_id.0)
+        })?;
 
         if matches!(renderer.info().protocol, RendererProtocol::OpenHomeOnly) {
             self.runtime
@@ -430,6 +448,28 @@ impl ControlPoint {
             queue_len = remaining_after,
             "Started playback from queue"
         );
+
+        if let Some(snapshot) = self.runtime.queue_snapshot(renderer_id) {
+            if let Some(next_item) = snapshot.first() {
+                if let Some(upnp) = renderer.as_upnp() {
+                    let known_supported = upnp.supports_set_next();
+                    if known_supported || upnp.has_avtransport() {
+                        match upnp.set_next_uri(&next_item.uri, "") {
+                            Ok(_) => debug!(
+                                renderer = renderer_id.0.as_str(),
+                                "Prefetched next track via SetNextAVTransportURI"
+                            ),
+                            Err(err) => debug!(
+                                renderer = renderer_id.0.as_str(),
+                                error = %err,
+                                "SetNextAVTransportURI failed for next queue item; continuing without prefetch"
+                            ),
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -460,12 +500,10 @@ impl ControlPoint {
                                 error = %err,
                                 "Auto-advance failed; clearing queue playback state"
                             );
-                            self.runtime
-                                .set_playback_source(id, PlaybackSource::None);
+                            self.runtime.set_playback_source(id, PlaybackSource::None);
                         }
                     } else {
-                        self.runtime
-                            .set_playback_source(id, PlaybackSource::None);
+                        self.runtime.set_playback_source(id, PlaybackSource::None);
                     }
                 }
                 PlaybackState::Playing => {
@@ -542,9 +580,7 @@ impl RuntimeState {
         F: FnOnce(&mut PlaybackQueue) -> R,
     {
         let mut entries = self.entries.lock().unwrap();
-        entries
-            .get_mut(id)
-            .map(|entry| f(&mut entry.queue))
+        entries.get_mut(id).map(|entry| f(&mut entry.queue))
     }
 
     fn queue_snapshot(&self, id: &RendererId) -> Option<Vec<PlaybackItem>> {
@@ -576,10 +612,7 @@ impl RuntimeState {
     }
 
     fn is_playing_from_queue(&self, id: &RendererId) -> bool {
-        matches!(
-            self.playback_source(id),
-            PlaybackSource::FromQueue
-        )
+        matches!(self.playback_source(id), PlaybackSource::FromQueue)
     }
 
     fn mark_external_if_idle(&self, id: &RendererId) {

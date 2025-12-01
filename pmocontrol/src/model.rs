@@ -13,6 +13,10 @@ pub enum RendererProtocol {
 #[derive(Clone, Debug, Default)]
 pub struct RendererCapabilities {
     pub has_avtransport: bool,
+    /// True if the renderer is known to support AVTransport.SetNextAVTransportURI.
+    ///
+    /// This is discovered lazily at runtime; default is false.
+    pub has_avtransport_set_next: bool,
     pub has_rendering_control: bool,
     pub has_connection_manager: bool,
     pub has_linkplay_http: bool,
@@ -23,6 +27,12 @@ pub struct RendererCapabilities {
     pub has_oh_info: bool,
     pub has_oh_time: bool,
     pub has_oh_radio: bool,
+}
+
+impl RendererCapabilities {
+    pub fn supports_set_next(&self) -> bool {
+        self.has_avtransport && self.has_avtransport_set_next
+    }
 }
 
 #[derive(Clone, Debug)]

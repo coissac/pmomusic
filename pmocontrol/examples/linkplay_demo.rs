@@ -34,14 +34,11 @@ fn main() -> io::Result<()> {
         );
     }
 
-    let linkplay_renderers: Vec<MusicRenderer> = {
-        let reg = registry.read().unwrap();
-        renderers
-            .iter()
-            .filter(|info| info.capabilities.has_linkplay_http)
-            .filter_map(|info| MusicRenderer::from_registry_info(info.clone(), &reg))
-            .collect()
-    };
+    let linkplay_renderers: Vec<MusicRenderer> = renderers
+        .iter()
+        .filter(|info| info.capabilities.has_linkplay_http)
+        .filter_map(|info| MusicRenderer::from_registry_info(info.clone(), &registry))
+        .collect();
 
     if linkplay_renderers.is_empty() {
         println!("\nNo LinkPlay-capable renderers detected.");

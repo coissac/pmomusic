@@ -6,6 +6,8 @@
 //! this type so that transport, volume, and state queries stay backend-neutral.
 //! OpenHome-only renderers are intentionally unsupported for now.
 
+use std::sync::{Arc, RwLock};
+
 use crate::capabilities::{PlaybackPositionInfo, PlaybackStatus};
 use crate::model::{RendererId, RendererInfo, RendererProtocol};
 use crate::{
@@ -90,7 +92,10 @@ impl MusicRenderer {
     /// Returns `None` when no supported backend can be built for this renderer.
     /// UPnP AV / hybrid renderers map either to [`MusicRenderer::LinkPlay`] (when supported)
     /// or [`MusicRenderer::Upnp`].
-    pub fn from_registry_info(info: RendererInfo, registry: &DeviceRegistry) -> Option<Self> {
+    pub fn from_registry_info(
+        info: RendererInfo,
+        registry: &Arc<RwLock<DeviceRegistry>>,
+    ) -> Option<Self> {
         match info.protocol {
             RendererProtocol::UpnpAvOnly | RendererProtocol::Hybrid => {
                 let has_arylic = info.capabilities.has_arylic_tcp;

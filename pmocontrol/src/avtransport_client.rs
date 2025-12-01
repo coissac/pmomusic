@@ -1,9 +1,13 @@
 // pmocontrol/src/avtransport_client.rs
 
-use crate::soap_client::{SoapCallResult, invoke_upnp_action};
+use std::time::Duration;
+
+use crate::soap_client::{SoapCallResult, invoke_upnp_action, invoke_upnp_action_with_timeout};
 use anyhow::{Result, anyhow};
 use pmoupnp::soap::SoapEnvelope;
 use xmltree::{Element, XMLNode};
+
+const AVTRANSPORT_ACTION_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone)]
 pub struct AvTransportClient {
@@ -121,6 +125,45 @@ impl AvTransportClient {
 
         handle_action_response("Seek", &call_result)
     }
+
+    /// Optional AVTransport:1 action SetNextAVTransportURI.
+    ///
+    /// This should configure the *next* track to be played after the current one.
+    /// Many renderers do NOT implement this action; in that case the method
+    /// returns an error derived from the UPnP error code.
+    pub fn set_next_av_transport_uri(&self, next_uri: &str, next_meta: &str) -> Result<()> {
+        let args = [
+            ("InstanceID", "0"),
+            ("NextURI", next_uri),
+            ("NextURIMetaData", next_meta),
+        ];
+
+        let call_result = invoke_upnp_action_with_timeout(
+            &self.control_url,
+            &self.service_type,
+            "SetNextAVTransportURI",
+            &args,
+            Some(AVTRANSPORT_ACTION_TIMEOUT),
+        )?;
+
+        if let Err(err) = handle_action_response("SetNextAVTransportURI", &call_result) {
+            if let Some(env) = &call_result.envelope {
+                if let Some(upnp_error) = parse_upnp_error(env) {
+                    if is_set_next_not_supported_error(&upnp_error) {
+                        return Err(anyhow!(
+                            "Renderer does not support AVTransport.SetNextAVTransportURI (UPnP error {}: {})",
+                            upnp_error.error_code,
+                            upnp_error.error_description
+                        ));
+                    }
+                }
+            }
+
+            return Err(err);
+        }
+
+        Ok(())
+    }
 }
 
 fn handle_action_response(action: &str, call_result: &SoapCallResult) -> Result<()> {
@@ -228,6 +271,15 @@ fn parse_upnp_error(envelope: &SoapEnvelope) -> Option<UpnpError> {
         error_code,
         error_description,
     })
+}
+
+fn is_set_next_not_supported_error(err: &UpnpError) -> bool {
+    if err.error_code == 401 {
+        return true;
+    }
+
+    let desc = err.error_description.to_ascii_lowercase();
+    desc.contains("invalid action") || desc.contains("not implemented")
 }
 
 fn find_child_with_suffix<'a>(parent: &'a Element, suffix: &str) -> Option<&'a Element> {

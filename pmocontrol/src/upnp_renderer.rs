@@ -1,7 +1,10 @@
+use std::sync::{Arc, RwLock};
+
 use anyhow::{Result, anyhow};
 
 use crate::capabilities::{PlaybackPositionInfo, PlaybackStatus};
 use crate::connection_manager_client::{ConnectionInfo, ConnectionManagerClient, ProtocolInfo};
+use crate::music_renderer::op_not_supported;
 use crate::rendering_control_client::RenderingControlClient;
 use crate::{
     AvTransportClient, DeviceRegistry, PlaybackPosition, PlaybackState, PositionInfo, RendererId,
@@ -12,6 +15,7 @@ use crate::{
 #[derive(Clone, Debug)]
 pub struct UpnpRenderer {
     pub info: RendererInfo,
+    registry: Arc<RwLock<DeviceRegistry>>,
     avtransport: Option<AvTransportClient>,
     rendering_control: Option<RenderingControlClient>,
     connection_manager: Option<ConnectionManagerClient>,
@@ -38,6 +42,11 @@ impl UpnpRenderer {
         self.connection_manager.is_some()
     }
 
+    /// Returns true if this renderer is known to support SetNextAVTransportURI.
+    pub fn supports_set_next(&self) -> bool {
+        self.info.capabilities.supports_set_next()
+    }
+
     pub fn avtransport(&self) -> Result<&AvTransportClient> {
         self.avtransport
             .as_ref()
@@ -60,6 +69,23 @@ impl UpnpRenderer {
         let avt = self.avtransport()?;
         avt.set_av_transport_uri(uri, meta)?;
         avt.play(0, "1")
+    }
+
+    /// Best-effort attempt to configure the next URI via AVTransport SetNextAVTransportURI.
+    pub fn set_next_uri(&self, next_uri: &str, next_meta: &str) -> Result<()> {
+        if !self.info.capabilities.has_avtransport {
+            return Err(op_not_supported("SetNextAVTransportURI", "AVTransport"));
+        }
+
+        let client = self.avtransport()?;
+        let result = client.set_next_av_transport_uri(next_uri, next_meta);
+
+        if result.is_ok() {
+            let mut reg = self.registry.write().unwrap();
+            reg.mark_renderer_supports_set_next(&self.info.id);
+        }
+
+        result
     }
 
     pub fn pause(&self) -> Result<()> {
@@ -112,12 +138,18 @@ impl UpnpRenderer {
         cm.get_current_connection_info(connection_id)
     }
 
-    pub fn from_registry(info: RendererInfo, registry: &DeviceRegistry) -> Self {
-        let avtransport = registry.avtransport_client_for_renderer(&info.id);
-        let rendering_control = registry.rendering_control_client_for_renderer(&info.id);
-        let connection_manager = registry.connection_manager_client_for_renderer(&info.id);
+    pub fn from_registry(info: RendererInfo, registry: &Arc<RwLock<DeviceRegistry>>) -> Self {
+        let (avtransport, rendering_control, connection_manager) = {
+            let reg = registry.read().unwrap();
+            (
+                reg.avtransport_client_for_renderer(&info.id),
+                reg.rendering_control_client_for_renderer(&info.id),
+                reg.connection_manager_client_for_renderer(&info.id),
+            )
+        };
         Self {
             info,
+            registry: Arc::clone(registry),
             avtransport,
             rendering_control,
             connection_manager,
@@ -130,6 +162,7 @@ mod tests {
     use super::*;
     use crate::model::{RendererCapabilities, RendererProtocol};
     use crate::registry::{DeviceRegistry, DeviceUpdate};
+    use std::sync::{Arc, RwLock};
     use std::time::SystemTime;
 
     fn renderer_info(id_suffix: &str, with_avtransport: bool) -> RendererInfo {
@@ -160,10 +193,10 @@ mod tests {
         }
     }
 
-    fn registry_with_renderer(info: RendererInfo) -> DeviceRegistry {
+    fn registry_with_renderer(info: RendererInfo) -> Arc<RwLock<DeviceRegistry>> {
         let mut registry = DeviceRegistry::new();
         registry.apply_update(DeviceUpdate::RendererOnline(info));
-        registry
+        Arc::new(RwLock::new(registry))
     }
 
     #[test]

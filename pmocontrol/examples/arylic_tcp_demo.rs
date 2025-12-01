@@ -38,14 +38,11 @@ fn main() -> io::Result<()> {
         );
     }
 
-    let arylic_renderers: Vec<MusicRenderer> = {
-        let reg = registry.read().unwrap();
-        renderers
-            .iter()
-            .filter(|info| info.capabilities.has_arylic_tcp)
-            .filter_map(|info| MusicRenderer::from_registry_info(info.clone(), &reg))
-            .collect()
-    };
+    let arylic_renderers: Vec<MusicRenderer> = renderers
+        .iter()
+        .filter(|info| info.capabilities.has_arylic_tcp)
+        .filter_map(|info| MusicRenderer::from_registry_info(info.clone(), &registry))
+        .collect();
 
     if arylic_renderers.is_empty() {
         println!("\nNo Arylic TCP-capable renderers detected.");

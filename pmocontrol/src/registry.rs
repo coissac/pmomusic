@@ -6,6 +6,7 @@ use crate::connection_manager_client::ConnectionManagerClient;
 use crate::media_server::{MediaServerInfo, ServerId};
 use crate::model::{RendererId, RendererInfo};
 use crate::rendering_control_client::RenderingControlClient;
+use tracing::debug;
 
 #[derive(Clone, Debug)]
 enum DeviceKey {
@@ -189,5 +190,17 @@ impl DeviceRegistry {
             control_url.clone(),
             service_type.clone(),
         ))
+    }
+
+    pub fn mark_renderer_supports_set_next(&mut self, id: &RendererId) {
+        if let Some(info) = self.renderers.get_mut(id) {
+            if !info.capabilities.has_avtransport_set_next {
+                info.capabilities.has_avtransport_set_next = true;
+                debug!(
+                    renderer = id.0.as_str(),
+                    "Renderer now marked as supporting AVTransport.SetNextAVTransportURI"
+                );
+            }
+        }
     }
 }
