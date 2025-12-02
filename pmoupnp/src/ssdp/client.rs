@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 
 /// Événements SSDP intéressants pour un control point
 #[derive(Debug, Clone)]
@@ -149,10 +149,7 @@ impl SsdpClient {
                 Ok((n, from)) => {
                     let data = String::from_utf8_lossy(&buf[..n]);
                     if let Some(event) = parse_message(&data, from) {
-                        debug!(
-                            "📥 SSDP datagram from {}\n<details>\n\n```\n{}\n```\n</details>\n",
-                            from, data
-                        );
+                        debug!("📥 SSDP event from {}: {:?}", from, event);
                         on_event(event);
                     }
                 }
@@ -174,7 +171,7 @@ fn parse_message(data: &str, from: SocketAddr) -> Option<SsdpEvent> {
     let upper = first_line.to_ascii_uppercase();
     let headers = parse_headers(lines);
 
-    if upper.starts_with("NOTIFY ") {
+    let result = if upper.starts_with("NOTIFY ") {
         handle_notify(&headers, from)
     } else if upper.starts_with("HTTP/") && upper.contains(" 200 ") {
         handle_search_response(&headers, from)
@@ -182,19 +179,50 @@ fn parse_message(data: &str, from: SocketAddr) -> Option<SsdpEvent> {
         // Another control point querying us; we are not a device, so we ignore.
         None
     } else {
+        trace!("Unknown SSDP message type from {}: {}", from, first_line);
         None
+    };
+
+    if result.is_none() {
+        trace!(
+            "SSDP message from {} could not be parsed:\n{}",
+            from,
+            data
+        );
     }
+
+    result
 }
 
 fn handle_notify(headers: &HashMap<String, String>, from: SocketAddr) -> Option<SsdpEvent> {
+    // Critical headers: NTS, NT, USN (required by UPnP spec)
     let nts = headers.get("NTS")?.to_ascii_lowercase();
     let nt = headers.get("NT")?.to_string();
     let usn = headers.get("USN")?.to_string();
 
     if nts == "ssdp:alive" {
-        let location = headers.get("LOCATION")?.to_string();
-        let server = headers.get("SERVER")?.to_string();
+        // LOCATION is required for alive notifications
+        let location = match headers.get("LOCATION") {
+            Some(loc) => loc.to_string(),
+            None => {
+                trace!(
+                    "NOTIFY ssdp:alive from {} missing LOCATION header, ignoring",
+                    from
+                );
+                return None;
+            }
+        };
+
+        // Non-critical headers: SERVER, CACHE-CONTROL
+        let server = headers
+            .get("SERVER")
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| {
+                trace!("NOTIFY from {} has no SERVER header, using 'Unknown'", from);
+                "Unknown".to_string()
+            });
         let max_age = parse_max_age(headers.get("CACHE-CONTROL"));
+
         Some(SsdpEvent::Alive {
             usn,
             nt,
@@ -206,6 +234,7 @@ fn handle_notify(headers: &HashMap<String, String>, from: SocketAddr) -> Option<
     } else if nts == "ssdp:byebye" {
         Some(SsdpEvent::ByeBye { usn, nt, from })
     } else {
+        trace!("Unknown NTS value from {}: {}", from, nts);
         None
     }
 }
@@ -214,10 +243,46 @@ fn handle_search_response(
     headers: &HashMap<String, String>,
     from: SocketAddr,
 ) -> Option<SsdpEvent> {
-    let st = headers.get("ST")?.to_string();
-    let usn = headers.get("USN")?.to_string();
-    let location = headers.get("LOCATION")?.to_string();
-    let server = headers.get("SERVER")?.to_string();
+    // Critical headers: ST, USN, LOCATION (required by UPnP spec)
+    let st = match headers.get("ST") {
+        Some(s) => s.to_string(),
+        None => {
+            trace!("M-SEARCH response from {} missing ST header, ignoring", from);
+            return None;
+        }
+    };
+    let usn = match headers.get("USN") {
+        Some(u) => u.to_string(),
+        None => {
+            trace!(
+                "M-SEARCH response from {} missing USN header, ignoring",
+                from
+            );
+            return None;
+        }
+    };
+    let location = match headers.get("LOCATION") {
+        Some(loc) => loc.to_string(),
+        None => {
+            trace!(
+                "M-SEARCH response from {} missing LOCATION header, ignoring",
+                from
+            );
+            return None;
+        }
+    };
+
+    // Non-critical headers: SERVER, CACHE-CONTROL
+    let server = headers
+        .get("SERVER")
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| {
+            trace!(
+                "M-SEARCH response from {} has no SERVER header, using 'Unknown'",
+                from
+            );
+            "Unknown".to_string()
+        });
     let max_age = parse_max_age(headers.get("CACHE-CONTROL"));
 
     Some(SsdpEvent::SearchResponse {
@@ -237,11 +302,29 @@ where
     let mut headers = HashMap::new();
     for line in lines {
         let line = line.trim();
+
+        // Empty line marks end of headers
         if line.is_empty() {
             break;
         }
-        if let Some((name, value)) = line.split_once(':') {
-            headers.insert(name.trim().to_ascii_uppercase(), value.trim().to_string());
+
+        // Split on first ':' only (values may contain ':')
+        if let Some(colon_pos) = line.find(':') {
+            let (name, value_with_colon) = line.split_at(colon_pos);
+            let value = &value_with_colon[1..]; // Skip the ':'
+
+            let name = name.trim().to_ascii_uppercase();
+            let value = value.trim().to_string();
+
+            // Skip empty header names or values
+            if !name.is_empty() && !value.is_empty() {
+                headers.insert(name, value);
+            } else {
+                trace!("Skipping malformed header: '{}'", line);
+            }
+        } else {
+            // Line without ':' is invalid, skip it
+            trace!("Skipping line without colon: '{}'", line);
         }
     }
     headers
@@ -249,22 +332,27 @@ where
 
 fn parse_max_age(value: Option<&String>) -> u32 {
     if let Some(v) = value {
-        for part in v.split(',') {
-            let part = part.trim();
-            if let Some(rest) = part.strip_prefix("max-age=") {
-                if let Ok(age) = rest.trim().parse::<u32>() {
-                    return age;
-                }
-            } else {
-                let lower = part.to_ascii_lowercase();
-                if let Some(idx) = lower.find("max-age=") {
-                    let raw = &part[idx + 8..];
-                    if let Ok(age) = raw.trim().parse::<u32>() {
-                        return age;
-                    }
-                }
+        // Try case-insensitive search for "max-age=<number>"
+        let lower = v.to_ascii_lowercase();
+        if let Some(idx) = lower.find("max-age") {
+            // Extract everything after "max-age"
+            let after_key = &v[idx + 7..];
+            // Skip any whitespace and '=' characters
+            let after_eq = after_key.trim_start().trim_start_matches('=').trim_start();
+            // Try to parse the first sequence of digits
+            let digits: String = after_eq
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            if let Ok(age) = digits.parse::<u32>() {
+                return age;
             }
         }
+        trace!(
+            "Could not parse max-age from CACHE-CONTROL: '{}', using default {}",
+            v,
+            MAX_AGE
+        );
     }
     MAX_AGE
 }

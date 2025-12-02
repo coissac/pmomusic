@@ -1,7 +1,7 @@
-//! End-to-end queue demo that prefers the PMOMusic media server and exercises
-//! the ControlPoint playback queue API.
+//! Live PMOMusic demo: binds a renderer queue to a dynamic "Live Playlist" container
+//! and monitors ContentDirectory updates over an extended period (~30 minutes).
 
-use std::collections::VecDeque;
+use std::collections::{VecDeque, HashSet};
 use std::env;
 use std::process;
 use std::thread;
@@ -16,10 +16,12 @@ use pmocontrol::{
 
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
 const DEFAULT_DISCOVERY_SECS: u64 = 5;
-const DEFAULT_MAX_TRACKS: usize = 3;
-const MONITOR_DURATION_SECS: u64 = 600;
+const DEFAULT_MAX_INITIAL_TRACKS: usize = 15;
+const MONITOR_DURATION_SECS: u64 = 1800; // ~30 minutes
 const MONITOR_POLL_SECS: u64 = 5;
-const MAX_BROWSE_DEPTH: usize = 2;
+const MAX_BROWSE_DEPTH: usize = 4;
+const MAX_CONTAINERS_TO_EXPLORE: usize = 100;
+const FALLBACK_MIN_TRACKS: usize = 5;
 
 fn main() -> Result<()> {
     let _ = tracing_subscriber::fmt::try_init();
@@ -28,14 +30,9 @@ fn main() -> Result<()> {
         print_usage_and_exit();
     });
 
-    if config.max_tracks == 0 {
-        eprintln!("--max-tracks must be >= 1");
-        process::exit(1);
-    }
-
     println!(
-        "Starting queue_pmomusic_demo with timeout={}s discovery={}s max_tracks={}",
-        config.timeout_secs, config.discovery_secs, config.max_tracks
+        "Starting live_pmomusic_demo with timeout={}s discovery={}s max_initial_tracks={}",
+        config.timeout_secs, config.discovery_secs, config.max_initial_tracks
     );
 
     // ControlPoint::spawn starts the HttpXmlDescriptionProvider + DiscoveryManager combo.
@@ -58,8 +55,8 @@ fn main() -> Result<()> {
             .collect();
         let renderer = pick_renderer(renderer_candidates)
             .unwrap_or_else(|| no_renderer_and_exit("No suitable renderer found after discovery."));
-        let server = pick_media_server(reg.list_servers())
-            .unwrap_or_else(|| no_server_and_exit("No media server with ContentDirectory."));
+        let server = pick_pmomusic_server(reg.list_servers())
+            .unwrap_or_else(|| no_server_and_exit("No PMOMusic media server found."));
         (renderer, server)
     };
 
@@ -89,36 +86,41 @@ fn main() -> Result<()> {
     let server =
         MusicServer::from_info(&server_info, timeout).context("Failed to init MusicServer")?;
 
-    let root_entries = server
-        .browse_root()
-        .context("Failed to browse ContentDirectory root")?;
-    println!("Root returned {} entries", root_entries.len());
+    println!("Searching for a Live Playlist container in ContentDirectory...");
+    let live_playlist_container = find_live_playlist_container(&server)
+        .context("Failed to search for Live Playlist container")?;
 
-    // Try to find a playlist container first
-    let (playback_items, bound_container_id) =
-        collect_playable_items_with_binding(&server, &root_entries, config.max_tracks)
-            .context("Failed to derive playable items from ContentDirectory root/children")?;
+    let live_playlist_container = match live_playlist_container {
+        Some(container) => container,
+        None => {
+            println!("No Live Playlist container found on server \"{}\". Exiting.", server_info.friendly_name);
+            process::exit(1);
+        }
+    };
+
+    println!(
+        "✓ Found Live Playlist: '{}' (id: {}, class: {})",
+        live_playlist_container.title, live_playlist_container.id, live_playlist_container.class
+    );
+
+    // Build initial queue from the live playlist container
+    let playback_items = collect_playable_items_from_container(
+        &server,
+        &live_playlist_container.id,
+        config.max_initial_tracks,
+    )
+    .context("Failed to collect playable items from Live Playlist container")?;
 
     if playback_items.is_empty() {
-        println!("No playable tracks were found on the selected server.");
+        println!("Live Playlist container '{}' contains no playable tracks.", live_playlist_container.title);
         process::exit(1);
     }
 
     println!(
-        "Discovered {} playable items; enqueuing…",
+        "Discovered {} playable items from Live Playlist; enqueuing…",
         playback_items.len()
     );
 
-    if let Some(ref container_id) = bound_container_id {
-        println!(
-            "Found playlist container '{}' to bind queue to",
-            container_id
-        );
-    } else {
-        println!("No playlist container found; queue will not be bound to server");
-    }
-
-    let mut planned_queue: VecDeque<PlaybackItem>;
     let renderer_id = renderer.id.clone();
     control_point
         .clear_queue(&renderer_id)
@@ -127,24 +129,22 @@ fn main() -> Result<()> {
         .enqueue_items(&renderer_id, playback_items)
         .context("Failed to enqueue playback items")?;
 
-    // Attach queue to playlist container if we found one
-    if let Some(container_id) = bound_container_id {
-        control_point.attach_queue_to_playlist(
-            &renderer_id,
-            server_info.id.clone(),
-            container_id.clone(),
-        );
-        println!(
-            "✓ Queue attached to playlist container {} on server {}",
-            container_id, server_info.friendly_name
-        );
-    }
+    // Attach queue to live playlist container
+    control_point.attach_queue_to_playlist(
+        &renderer_id,
+        server_info.id.clone(),
+        live_playlist_container.id.clone(),
+    );
+    println!(
+        "✓ Queue attached to Live Playlist container '{}' (id: {}) on server '{}'",
+        live_playlist_container.title, live_playlist_container.id, server_info.friendly_name
+    );
 
     let snapshot = control_point
         .get_queue_snapshot(&renderer_id)
         .context("Failed to snapshot queue after enqueue")?;
     print_queue_snapshot(&snapshot);
-    planned_queue = snapshot.clone().into();
+    let mut planned_queue: VecDeque<PlaybackItem> = snapshot.clone().into();
 
     control_point
         .play_next_from_queue(&renderer_id)
@@ -161,9 +161,10 @@ fn main() -> Result<()> {
     );
 
     println!(
-        "Monitoring queue auto-advance for {} seconds (poll every {}s)…",
+        "Monitoring Live Playlist queue for {} seconds (poll every {}s)…",
         MONITOR_DURATION_SECS, MONITOR_POLL_SECS
     );
+    println!("This will observe ContentDirectory updates and auto-advance behavior.");
 
     // Subscribe to media server events to observe playlist updates
     let media_event_rx = control_point.subscribe_media_server_events();
@@ -199,9 +200,21 @@ fn main() -> Result<()> {
                     {
                         if bound_server == server_id && container_ids.contains(&bound_container) {
                             println!(
-                                "  🔄 Bound playlist container '{}' was updated, queue will refresh automatically",
+                                "  🔄 Bound Live Playlist container '{}' was updated, queue refresh triggered automatically",
                                 bound_container
                             );
+                            // Take a fresh snapshot to observe changes
+                            if let Ok(fresh_snapshot) = control_point.get_queue_snapshot(&renderer_id) {
+                                println!(
+                                    "  → Queue length after refresh: {} items",
+                                    fresh_snapshot.len()
+                                );
+                                if !fresh_snapshot.is_empty() {
+                                    println!("  → First item: {}",
+                                        fresh_snapshot[0].title.as_deref().unwrap_or("<no title>")
+                                    );
+                                }
+                            }
                         }
                     }
                 }
@@ -213,6 +226,8 @@ fn main() -> Result<()> {
             .get_queue_snapshot(&renderer_id)
             .context("Queue snapshot failed during monitoring loop")?;
         let new_plan: VecDeque<PlaybackItem> = snapshot.clone().into();
+
+        // Detect queue changes (auto-advance)
         if planned_queue.len() > new_plan.len() {
             let removed = planned_queue.len() - new_plan.len();
             for _ in 0..removed {
@@ -242,7 +257,7 @@ fn main() -> Result<()> {
         }
     }
 
-    println!("Monitoring finished, exiting.");
+    println!("Monitoring finished ({}s elapsed), exiting.", MONITOR_DURATION_SECS);
     Ok(())
 }
 
@@ -250,14 +265,14 @@ fn main() -> Result<()> {
 struct CliConfig {
     timeout_secs: u64,
     discovery_secs: u64,
-    max_tracks: usize,
+    max_initial_tracks: usize,
 }
 
 impl CliConfig {
     fn parse_from_env() -> Result<Self, String> {
         let mut timeout_secs = DEFAULT_TIMEOUT_SECS;
         let mut discovery_secs = DEFAULT_DISCOVERY_SECS;
-        let mut max_tracks = DEFAULT_MAX_TRACKS;
+        let mut max_initial_tracks = DEFAULT_MAX_INITIAL_TRACKS;
 
         let mut args = env::args().skip(1);
         while let Some(arg) = args.next() {
@@ -278,12 +293,12 @@ impl CliConfig {
                         format!("Invalid value for --discovery-secs ({value}): {err}")
                     })?;
                 }
-                "--max-tracks" => {
+                "--max-initial-tracks" => {
                     let value = args
                         .next()
-                        .ok_or_else(|| "--max-tracks requires a value".to_string())?;
-                    max_tracks = value.parse().map_err(|err| {
-                        format!("Invalid value for --max-tracks ({value}): {err}")
+                        .ok_or_else(|| "--max-initial-tracks requires a value".to_string())?;
+                    max_initial_tracks = value.parse().map_err(|err| {
+                        format!("Invalid value for --max-initial-tracks ({value}): {err}")
                     })?;
                 }
                 "--help" | "-h" => {
@@ -298,7 +313,7 @@ impl CliConfig {
         Ok(Self {
             timeout_secs,
             discovery_secs,
-            max_tracks,
+            max_initial_tracks,
         })
     }
 }
@@ -332,7 +347,7 @@ fn pick_renderer(renderers: Vec<RendererInfo>) -> Option<RendererInfo> {
     Some(selected)
 }
 
-fn pick_media_server(servers: Vec<MediaServerInfo>) -> Option<MediaServerInfo> {
+fn pick_pmomusic_server(servers: Vec<MediaServerInfo>) -> Option<MediaServerInfo> {
     let mut candidates: Vec<MediaServerInfo> = servers
         .into_iter()
         .filter(|info| info.has_content_directory)
@@ -343,23 +358,26 @@ fn pick_media_server(servers: Vec<MediaServerInfo>) -> Option<MediaServerInfo> {
         return None;
     }
 
+    // Prioritize PMOMusic servers
     if let Some(idx) = candidates.iter().position(is_pmomusic_server) {
         let server = candidates.remove(idx);
         println!(
-            "Preferring PMOMusic server \"{}\" (server header: {}).",
-            server.friendly_name, server.server_header
+            "✓ Selected PMOMusic server \"{}\" (model: {}, manufacturer: {}).",
+            server.friendly_name, server.model_name, server.manufacturer
         );
-        Some(server)
-    } else {
-        println!("No PMOMusic server discovered; falling back to first ContentDirectory server.");
-        Some(candidates.remove(0))
+        return Some(server);
     }
+
+    // Fallback to first ContentDirectory server if no PMOMusic found
+    println!("No PMOMusic server discovered; falling back to first ContentDirectory server.");
+    Some(candidates.remove(0))
 }
 
 fn is_pmomusic_server(info: &MediaServerInfo) -> bool {
     let name = info.friendly_name.to_ascii_lowercase();
-    let header = info.server_header.to_ascii_lowercase();
-    name.contains("pmomusic") || header.contains("pmomusic")
+    let model = info.model_name.to_ascii_lowercase();
+    let manufacturer = info.manufacturer.to_ascii_lowercase();
+    name.contains("pmomusic") || model.contains("pmomusic") || manufacturer.contains("pmomusic")
 }
 
 fn is_pmomusic_renderer(info: &RendererInfo) -> bool {
@@ -368,113 +386,129 @@ fn is_pmomusic_renderer(info: &RendererInfo) -> bool {
         .contains("pmomusic audio renderer")
 }
 
-fn collect_playable_items_with_binding(
-    server: &MusicServer,
-    entries: &[MediaEntry],
-    max_tracks: usize,
-) -> Result<(Vec<PlaybackItem>, Option<String>)> {
-    // First, try to find a playlist container
-    let playlist_container = entries.iter().find(|entry| {
-        entry.is_container
-            && entry
-                .class
-                .to_ascii_lowercase()
-                .contains("object.container.playlistcontainer")
-    });
+/// Search for a container whose title contains "Live Playlist" using BFS.
+fn find_live_playlist_container(server: &MusicServer) -> Result<Option<MediaEntry>> {
+    let root_entries = server
+        .browse_root()
+        .context("Failed to browse ContentDirectory root")?;
 
-    if let Some(playlist) = playlist_container {
-        println!(
-            "Found playlist container: '{}' (id: {}, class: {})",
-            playlist.title, playlist.id, playlist.class
-        );
+    println!("Root returned {} entries, starting BFS search for Live Playlist...", root_entries.len());
 
-        // Browse the playlist container
-        match server.browse_children(&playlist.id, 0, max_tracks as u32) {
-            Ok(children) => {
-                let mut items = Vec::new();
-                for entry in &children {
-                    if let Some(item) = playback_item_from_entry(server, entry) {
-                        items.push(item);
-                        if items.len() >= max_tracks {
-                            break;
-                        }
-                    }
-                }
+    // BFS queue: (entry, depth)
+    let mut queue: VecDeque<(MediaEntry, usize)> = VecDeque::new();
+    let mut visited: HashSet<String> = HashSet::new();
+    let mut containers_explored = 0;
 
-                if !items.is_empty() {
-                    return Ok((items, Some(playlist.id.clone())));
-                }
-
-                println!(
-                    "Playlist container '{}' is empty, falling back to general browse",
-                    playlist.title
-                );
-            }
-            Err(err) => {
-                println!(
-                    "Failed to browse playlist container '{}': {}, falling back",
-                    playlist.title, err
-                );
-            }
+    // Initialize with root entries
+    for entry in root_entries {
+        if entry.is_container {
+            queue.push_back((entry, 0));
         }
-    } else {
-        println!("No playlist container found in root entries, using fallback");
     }
 
-    // Fallback: collect from any container/item
-    let mut items = Vec::new();
-    for entry in entries {
-        gather_items_from_entry(server, entry, max_tracks, 0, &mut items)?;
-        if items.len() >= max_tracks {
+    while let Some((container, depth)) = queue.pop_front() {
+        // Check exploration limits
+        if depth > MAX_BROWSE_DEPTH {
+            continue;
+        }
+        if containers_explored >= MAX_CONTAINERS_TO_EXPLORE {
+            println!("Reached max containers to explore ({}), stopping search.", MAX_CONTAINERS_TO_EXPLORE);
             break;
         }
-    }
-    Ok((items, None))
-}
 
-fn gather_items_from_entry(
-    server: &MusicServer,
-    entry: &MediaEntry,
-    max_tracks: usize,
-    depth: usize,
-    out: &mut Vec<PlaybackItem>,
-) -> Result<()> {
-    if out.len() >= max_tracks {
-        return Ok(());
-    }
+        // Skip already visited
+        if visited.contains(&container.id) {
+            continue;
+        }
+        visited.insert(container.id.clone());
+        containers_explored += 1;
 
-    if entry.is_container {
-        if depth >= MAX_BROWSE_DEPTH {
-            return Ok(());
+        let title_lower = container.title.to_ascii_lowercase();
+
+        // Check if this container is a Live Playlist
+        if title_lower.contains("live playlist") {
+            println!(
+                "✓ Found Live Playlist at depth {}: '{}' (id: {})",
+                depth, container.title, container.id
+            );
+            return Ok(Some(container));
         }
 
-        match server.browse_children(&entry.id, 0, 50) {
+        // Browse children and add containers to queue
+        match server.browse_children(&container.id, 0, 100) {
             Ok(children) => {
                 for child in children {
-                    gather_items_from_entry(server, &child, max_tracks, depth + 1, out)?;
-                    if out.len() >= max_tracks {
-                        break;
+                    if child.is_container && !visited.contains(&child.id) {
+                        queue.push_back((child, depth + 1));
                     }
                 }
             }
             Err(err) => {
                 tracing::warn!(
-                    container_id = entry.id.as_str(),
+                    container_id = container.id.as_str(),
                     error = %err,
-                    "Failed to browse child container"
+                    "Failed to browse container during Live Playlist search"
                 );
             }
         }
-        return Ok(());
     }
 
-    if let Some(item) = playback_item_from_entry(server, entry) {
-        out.push(item);
+    println!("No Live Playlist container found after exploring {} containers.", containers_explored);
+    Ok(None)
+}
+
+/// Collect playable items from a specific container.
+/// Retries with fewer items if the initial browse times out.
+fn collect_playable_items_from_container(
+    server: &MusicServer,
+    container_id: &str,
+    max_tracks: usize,
+) -> Result<Vec<PlaybackItem>> {
+    println!(
+        "Attempting to browse Live Playlist container (requesting {} items)...",
+        max_tracks
+    );
+
+    // First attempt with requested count
+    let children = match server.browse_children(container_id, 0, max_tracks as u32) {
+        Ok(children) => children,
+        Err(err) => {
+            let err_str = err.to_string().to_lowercase();
+            if err_str.contains("timeout") && max_tracks > FALLBACK_MIN_TRACKS {
+                println!(
+                    "Browse timed out, retrying with fewer items ({})...",
+                    FALLBACK_MIN_TRACKS
+                );
+                // Fallback: try with minimal number of items
+                server
+                    .browse_children(container_id, 0, FALLBACK_MIN_TRACKS as u32)
+                    .context("Failed to browse Live Playlist container even with minimal item count")?
+            } else {
+                return Err(err).context("Failed to browse Live Playlist container children");
+            }
+        }
+    };
+
+    println!("Browse returned {} entries from Live Playlist", children.len());
+
+    let mut items = Vec::new();
+    for entry in &children {
+        if !entry.is_container {
+            if let Some(item) = playback_item_from_entry(server, entry) {
+                items.push(item);
+                if items.len() >= max_tracks {
+                    break;
+                }
+            }
+        }
     }
-    Ok(())
+
+    println!("Extracted {} playable items from Live Playlist", items.len());
+    Ok(items)
 }
 
 fn playback_item_from_entry(server: &MusicServer, entry: &MediaEntry) -> Option<PlaybackItem> {
+    // Skip live streams (we're looking for regular tracks in a live playlist)
     if entry.title.to_ascii_lowercase().contains("live stream") {
         return None;
     }
@@ -500,9 +534,12 @@ fn is_audio_resource(res: &MediaResource) -> bool {
 
 fn print_queue_snapshot(items: &[PlaybackItem]) {
     println!("Current queue snapshot ({} items):", items.len());
-    for (idx, item) in items.iter().enumerate() {
+    for (idx, item) in items.iter().take(10).enumerate() {
         let label = item.title.as_deref().unwrap_or_else(|| item.uri.as_str());
-        println!("  [{}] {} -> {}", idx, label, item.uri);
+        println!("  [{}] {}", idx, label);
+    }
+    if items.len() > 10 {
+        println!("  ... and {} more items", items.len() - 10);
     }
     if items.is_empty() {
         println!("  <queue is empty>");
@@ -538,7 +575,7 @@ fn no_server_and_exit(message: &str) -> ! {
 
 fn print_usage_and_exit() -> ! {
     println!(
-        "Usage: cargo run -p pmocontrol --example queue_pmomusic_demo -- [--timeout-secs N] [--discovery-secs N] [--max-tracks N]"
+        "Usage: cargo run -p pmocontrol --example live_pmomusic_demo -- [--timeout-secs N] [--discovery-secs N] [--max-initial-tracks N]"
     );
     process::exit(1);
 }

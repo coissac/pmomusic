@@ -15,6 +15,7 @@ fn main() -> std::io::Result<()> {
         "urn:schemas-upnp-org:device:MediaRenderer:1",
         "urn:av-openhome-org:device:MediaRenderer:1",
         "urn:schemas-upnp-org:device:MediaServer:1",
+        "urn:schemas-wiimu-com:service:PlayQueue:1",
     ];
     for st in &search_targets {
         if let Err(err) = client.send_msearch(st, 3) {
