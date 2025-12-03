@@ -1,209 +1,1113 @@
-//! Full interactive control point CLI demo.
+//! Full interactive control point demo with Ratatui-powered UI.
 //!
-//! This example demonstrates all capabilities of the ControlPoint:
-//! - Interactive device selection (renderer + media server)
-//! - ContentDirectory navigation with back/forward support
-//! - Queue construction and playlist binding
-//! - Full playback control (play/pause/stop/next/volume/mute)
-//! - Real-time event monitoring (renderer and media server events)
-//! - Live playlist observation and auto-refresh
+//! This version replaces the legacy println!-driven interface with a
+//! Crossterm + Ratatui dashboard featuring menus, overlays and live updates.
 
-use std::io::{self, BufRead, Write};
+use std::collections::HashMap;
+use std::io::{self, Stdout};
 use std::process;
+use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
+use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent};
+use crossterm::execute;
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
+use pmocontrol::model::TrackMetadata;
 use pmocontrol::{
     ControlPoint, DeviceRegistryRead, MediaBrowser, MediaEntry, MediaResource, MediaServerEvent,
-    MediaServerInfo, MusicServer, PlaybackItem, PlaybackPosition, PlaybackStatus, RendererEvent,
-    RendererInfo, TransportControl, VolumeControl,
+    MediaServerInfo, MusicServer, PlaybackItem, PlaybackPositionInfo, RendererEvent, RendererInfo,
+    TransportControl, VolumeControl,
 };
+use ratatui::backend::CrosstermBackend;
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph};
+use ratatui::Terminal;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
 const DEFAULT_DISCOVERY_SECS: u64 = 15;
+const PROGRESS_BAR_WIDTH: usize = 32;
+const TICK_RATE: Duration = Duration::from_millis(200);
+
+#[derive(Clone)]
+struct UiState {
+    renderer_name: String,
+    server_name: Option<String>,
+    playback_state: Option<pmocontrol::capabilities::PlaybackState>,
+    position: Option<PlaybackPositionInfo>,
+    volume: Option<u16>,
+    mute: Option<bool>,
+    metadata: Option<TrackMetadata>,
+    last_status: Option<String>,
+    current_track_uri: Option<String>,
+}
+
+impl UiState {
+    fn new(renderer_name: String) -> Self {
+        Self {
+            renderer_name,
+            server_name: None,
+            playback_state: None,
+            position: None,
+            volume: None,
+            mute: None,
+            metadata: None,
+            last_status: Some("Interface initialisée.".to_string()),
+            current_track_uri: None,
+        }
+    }
+
+    fn placeholder() -> Self {
+        Self::new("<renderer non sélectionné>".to_string())
+    }
+
+    fn set_status<S: Into<String>>(&mut self, status: S) {
+        self.last_status = Some(status.into());
+    }
+}
 
 fn main() -> Result<()> {
     let _ = tracing_subscriber::fmt::try_init();
 
-    println!("=== Full Control Point Interactive Demo ===");
-    println!("Starting control point with timeout={}s", DEFAULT_TIMEOUT_SECS);
+    println!("=== Full Control Point Ratatui Demo ===");
+    println!(
+        "Starting control point with timeout={}s",
+        DEFAULT_TIMEOUT_SECS
+    );
 
-    let control_point = ControlPoint::spawn(DEFAULT_TIMEOUT_SECS)
-        .context("Failed to start control point")?;
+    let control_point =
+        ControlPoint::spawn(DEFAULT_TIMEOUT_SECS).context("Failed to start control point")?;
 
-    println!("Discovery running for {} seconds...", DEFAULT_DISCOVERY_SECS);
-    thread::sleep(Duration::from_secs(DEFAULT_DISCOVERY_SECS));
+    println!(
+        "Discovery running for {} seconds...",
+        DEFAULT_DISCOVERY_SECS
+    );
+    std::thread::sleep(Duration::from_secs(DEFAULT_DISCOVERY_SECS));
 
-    // Step 1: List and select renderer
     let registry = control_point.registry();
-    let renderer_info = {
+    let renderers = {
         let reg = registry.read().expect("registry poisoned");
-        let renderers = reg.list_renderers();
-
-        println!("\n=== Available Media Renderers ===");
-        if renderers.is_empty() {
+        let list = reg.list_renderers();
+        if list.is_empty() {
             eprintln!("No renderers discovered. Exiting.");
             process::exit(1);
         }
-
-        print_renderers(&renderers);
-        select_renderer(&renderers)?
+        list
     };
 
-    println!("\n✓ Selected renderer: {} (id={})",
-        renderer_info.friendly_name, renderer_info.id.0);
-
-    // Step 2: List and select media server
-    let server_info = {
+    let servers = {
         let reg = registry.read().expect("registry poisoned");
-        let servers: Vec<MediaServerInfo> = reg.list_servers()
+        let list: Vec<MediaServerInfo> = reg
+            .list_servers()
             .into_iter()
             .filter(|s| s.has_content_directory && s.content_directory_control_url.is_some())
             .collect();
-
-        println!("\n=== Available Media Servers ===");
-        if servers.is_empty() {
+        if list.is_empty() {
             eprintln!("No media servers with ContentDirectory discovered. Exiting.");
             process::exit(1);
         }
-
-        print_servers(&servers);
-        select_server(&servers)?
+        list
     };
 
-    println!("\n✓ Selected server: {} (id={})",
-        server_info.friendly_name, server_info.id.0);
-
-    let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-    let server = MusicServer::from_info(&server_info, timeout)
-        .context("Failed to initialize MusicServer")?;
-
-    // Step 3: Navigate ContentDirectory and select a container for queue
-    println!("\n=== ContentDirectory Navigation ===");
-    println!("Commands: [number]=enter container, 'b'=back, 's'=select current as queue source, 'q'=quit navigation");
-
-    let (selected_items, selected_container_id) = navigate_and_select(&server)?;
-
-    if selected_items.is_empty() {
-        println!("No playable items selected. Exiting.");
-        process::exit(1);
+    let control_point = Arc::new(control_point);
+    let app = App::new(control_point, renderers, servers);
+    if let Err(err) = run_app(app) {
+        eprintln!("Application exited with error: {err}");
     }
-
-    println!("\n✓ Selected {} items for playback queue", selected_items.len());
-
-    // Step 4: Build queue
-    let renderer_id = renderer_info.id.clone();
-
-    println!("\n=== Building Playback Queue ===");
-    control_point.clear_queue(&renderer_id)
-        .context("Failed to clear queue")?;
-    control_point.enqueue_items(&renderer_id, selected_items)
-        .context("Failed to enqueue items")?;
-
-    println!("✓ Queue built with {} items",
-        control_point.get_queue_snapshot(&renderer_id)?.len());
-
-    // Step 5: Ask about playlist binding
-    if let Some(container_id) = selected_container_id {
-        println!("\nAttach this queue to playlist container '{}' for auto-refresh? (y/n)", container_id);
-        if read_yes_no()? {
-            control_point.attach_queue_to_playlist(
-                &renderer_id,
-                server_info.id.clone(),
-                container_id.clone(),
-            );
-            println!("✓ Queue attached to playlist container '{}'", container_id);
-        } else {
-            println!("Queue will not be bound to playlist (no auto-refresh)");
-        }
-    }
-
-    // Step 6: Start playback
-    println!("\n=== Starting Playback ===");
-    control_point.play_next_from_queue(&renderer_id)
-        .context("Failed to start playback")?;
-    println!("✓ Playback started");
-
-    // Step 7: Spawn event monitoring threads
-    let control_point_arc = Arc::new(control_point);
-    spawn_renderer_event_thread(Arc::clone(&control_point_arc), renderer_id.clone());
-    spawn_media_server_event_thread(Arc::clone(&control_point_arc), renderer_id.clone());
-
-    // Step 8: Interactive control loop
-    println!("\n=== Interactive Control ===");
-    print_help();
-
-    run_control_loop(Arc::clone(&control_point_arc), renderer_id)?;
 
     println!("\nExiting. Goodbye!");
     Ok(())
 }
 
-/// Print list of renderers with index.
-fn print_renderers(renderers: &[RendererInfo]) {
-    for (idx, info) in renderers.iter().enumerate() {
-        println!("  [{}] {} | model={} | protocol={:?} | online={} | id={}",
-            idx, info.friendly_name, info.model_name, info.protocol, info.online, info.id.0);
-    }
+struct App {
+    control_point: Arc<ControlPoint>,
+    renderers: Vec<RendererInfo>,
+    renderer_index: usize,
+    renderer_info: Option<RendererInfo>,
+    servers: Vec<MediaServerInfo>,
+    server_index: usize,
+    server_info: Option<MediaServerInfo>,
+    music_server: Option<MusicServer>,
+    browser: Option<BrowserState>,
+    mode: Mode,
+    ui_state: UiState,
+    queue_snapshot: Vec<PlaybackItem>,
+    show_queue_overlay: bool,
+    pending_binding_container: Option<String>,
+    status_line: String,
+    known_tracks: std::collections::HashMap<String, TrackMetadata>,
 }
 
-/// Print list of servers with index.
-fn print_servers(servers: &[MediaServerInfo]) {
-    for (idx, info) in servers.iter().enumerate() {
-        println!("  [{}] {} | model={} | manufacturer={} | online={} | id={}",
-            idx, info.friendly_name, info.model_name, info.manufacturer, info.online, info.id.0);
-    }
+enum Mode {
+    SelectRenderer,
+    SelectServer,
+    Browse,
+    BindingPrompt,
+    Control,
 }
 
-/// Interactive renderer selection.
-fn select_renderer(renderers: &[RendererInfo]) -> Result<RendererInfo> {
-    loop {
-        print!("\nSelect renderer (index 0-{}): ", renderers.len() - 1);
-        io::stdout().flush()?;
+struct BrowserState {
+    nav_state: NavigationState,
+    entries: Vec<MediaEntry>,
+    selected_index: usize,
+}
 
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
+enum AppEvent {
+    Renderer(RendererEvent),
+    Media(MediaServerEvent),
+}
 
-        match input.trim().parse::<usize>() {
-            Ok(idx) if idx < renderers.len() => {
-                return Ok(renderers[idx].clone());
+impl App {
+    fn new(
+        control_point: Arc<ControlPoint>,
+        renderers: Vec<RendererInfo>,
+        servers: Vec<MediaServerInfo>,
+    ) -> Self {
+        Self {
+            control_point,
+            renderers,
+            renderer_index: 0,
+            renderer_info: None,
+            servers,
+            server_index: 0,
+            server_info: None,
+            music_server: None,
+            browser: None,
+            mode: Mode::SelectRenderer,
+            ui_state: UiState::placeholder(),
+            queue_snapshot: Vec::new(),
+            show_queue_overlay: false,
+            pending_binding_container: None,
+            status_line: "Sélectionne un renderer avec ↑/↓ et Entrée".to_string(),
+            known_tracks: HashMap::new(),
+        }
+    }
+
+    fn renderer_id(&self) -> Option<pmocontrol::model::RendererId> {
+        self.renderer_info.as_ref().map(|info| info.id.clone())
+    }
+
+    fn draw(&self, terminal: &mut ratatui::Frame<'_>) {
+        match self.mode {
+            Mode::SelectRenderer => self.draw_renderer_selection(terminal),
+            Mode::SelectServer => self.draw_server_selection(terminal),
+            Mode::Browse => self.draw_browser(terminal),
+            _ => self.draw_control_screen(terminal),
+        }
+
+        if self.show_queue_overlay {
+            self.draw_queue_overlay(terminal);
+        }
+
+        if matches!(self.mode, Mode::BindingPrompt) {
+            self.draw_binding_prompt(terminal);
+        }
+    }
+
+    fn draw_renderer_selection(&self, f: &mut ratatui::Frame<'_>) {
+        let area = f.size();
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title("Sélection du renderer");
+        let items: Vec<ListItem> = self
+            .renderers
+            .iter()
+            .map(|info| {
+                let text = format!("{} | {}", info.friendly_name, info.model_name);
+                ListItem::new(text)
+            })
+            .collect();
+        let list = List::new(items)
+            .block(block)
+            .highlight_style(
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("▶ ");
+        let mut state = ListState::default();
+        state.select(Some(self.renderer_index));
+        f.render_stateful_widget(list, area, &mut state);
+        self.draw_status_line(f);
+    }
+
+    fn draw_server_selection(&self, f: &mut ratatui::Frame<'_>) {
+        let area = f.size();
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title("Sélection du serveur");
+        let items: Vec<ListItem> = self
+            .servers
+            .iter()
+            .map(|info| {
+                let text = format!("{} | {}", info.friendly_name, info.model_name);
+                ListItem::new(text)
+            })
+            .collect();
+        let list = List::new(items)
+            .block(block)
+            .highlight_style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("▶ ");
+        let mut state = ListState::default();
+        state.select(Some(self.server_index));
+        f.render_stateful_widget(list, area, &mut state);
+        self.draw_status_line(f);
+    }
+
+    fn draw_browser(&self, f: &mut ratatui::Frame<'_>) {
+        let area = f.size();
+        let Some(browser) = &self.browser else {
+            self.draw_status_line(f);
+            return;
+        };
+
+        let block = Block::default().borders(Borders::ALL).title(Span::styled(
+            format!(
+                "Navigation: {} (id: {})",
+                browser.nav_state.current_container_title, browser.nav_state.current_container_id
+            ),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ));
+
+        let items: Vec<ListItem> = browser
+            .entries
+            .iter()
+            .map(|entry| {
+                let icon = if entry.is_container { "📁" } else { "♪" };
+                let label = format!("{} {}", icon, entry.title);
+                ListItem::new(label)
+            })
+            .collect();
+
+        let list = List::new(items)
+            .block(block)
+            .highlight_style(
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("▶ ");
+        let mut state = ListState::default();
+        state.select(Some(browser.selected_index));
+        f.render_stateful_widget(list, area, &mut state);
+        self.draw_status_line(f);
+    }
+
+    fn draw_control_screen(&self, f: &mut ratatui::Frame<'_>) {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(5),
+                Constraint::Min(8),
+                Constraint::Length(3),
+            ])
+            .split(f.size());
+
+        self.draw_header(f, chunks[0]);
+        self.draw_playback_panel(f, chunks[1]);
+        self.draw_help(f, chunks[2]);
+
+        self.draw_status_line(f);
+    }
+
+    fn draw_header(&self, f: &mut ratatui::Frame<'_>, area: Rect) {
+        let ui = &self.ui_state;
+        let renderer = &ui.renderer_name;
+        let server = ui.server_name.as_deref().unwrap_or("<serveur?>");
+        let state = ui
+            .playback_state
+            .as_ref()
+            .map(|s| format!("{:?}", s))
+            .unwrap_or_else(|| "Inconnu".to_string());
+        let volume = ui
+            .volume
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "--".to_string());
+        let mute = match ui.mute {
+            Some(true) => "ON",
+            Some(false) => "OFF",
+            None => "??",
+        };
+
+        let text = vec![
+            Line::from(vec![Span::styled(
+                format!("Renderer : {renderer}"),
+                Style::default().fg(Color::Yellow),
+            )]),
+            Line::from(vec![Span::raw(format!("Serveur  : {server}"))]),
+            Line::from(vec![Span::raw(format!(
+                "État     : {state}  Volume {volume} | Mute {mute}"
+            ))]),
+        ];
+
+        let paragraph = Paragraph::new(text)
+            .block(Block::default().borders(Borders::ALL).title("Statut"))
+            .alignment(Alignment::Left);
+        f.render_widget(paragraph, area);
+    }
+
+    fn draw_playback_panel(&self, f: &mut ratatui::Frame<'_>, area: Rect) {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(6), Constraint::Length(3)])
+            .split(area);
+
+        let meta_lines = render_metadata_block(self.ui_state.metadata.as_ref());
+        let paragraph = Paragraph::new(meta_lines)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Lecture en cours"),
+            )
+            .wrap(ratatui::widgets::Wrap { trim: true });
+        f.render_widget(paragraph, chunks[0]);
+
+        let gauge_area = chunks[1];
+        let gauge = match self.ui_state.position.as_ref() {
+            Some(pos) => build_progress_gauge(pos),
+            None => Gauge::default()
+                .block(Block::default().borders(Borders::ALL).title("Progression"))
+                .label("en attente...")
+                .ratio(0.0),
+        };
+        f.render_widget(gauge, gauge_area);
+    }
+
+    fn draw_help(&self, f: &mut ratatui::Frame<'_>, area: Rect) {
+        let lines = vec![
+            Line::from("Commandes: r=Play p=Pause s=Stop n=Next +/- Volume m=Mute"),
+            Line::from("           i=Infos k=Queue b=Binding h=Aide q=Quit"),
+            Line::from("Switch   : R=Renderer menu | S=Serveur menu"),
+        ];
+        let paragraph =
+            Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("Aide"));
+        f.render_widget(paragraph, area);
+    }
+
+    fn draw_queue_overlay(&self, f: &mut ratatui::Frame<'_>) {
+        let area = centered_rect(80, 70, f.size());
+        let mut lines = Vec::new();
+        lines.push(Line::from("Queue actuelle:"));
+        if self.queue_snapshot.is_empty() {
+            lines.push(Line::from("  <vide>"));
+        } else {
+            for (idx, item) in self.queue_snapshot.iter().enumerate() {
+                let title = item.title.as_deref().unwrap_or("<titre>");
+                let artist = item.artist.as_deref().unwrap_or("");
+                let line = if artist.is_empty() {
+                    format!("[{idx}] {title}")
+                } else {
+                    format!("[{idx}] {artist} - {title}")
+                };
+                lines.push(Line::from(line));
             }
-            _ => {
-                println!("Invalid selection. Please enter a number between 0 and {}", renderers.len() - 1);
+        }
+        let block = Block::default()
+            .title("Queue (fermer avec k ou Esc)")
+            .borders(Borders::ALL)
+            .style(Style::default().bg(Color::Black));
+        f.render_widget(Clear, area);
+        f.render_widget(Paragraph::new(lines).block(block), area);
+    }
+
+    fn draw_binding_prompt(&self, f: &mut ratatui::Frame<'_>) {
+        let area = centered_rect(60, 40, f.size());
+        let lines = vec![
+            Line::from("Attacher la file au conteneur pour auto-refresh ?"),
+            Line::from("y = oui | n = non"),
+        ];
+        let block = Block::default()
+            .title("Binding playlist")
+            .borders(Borders::ALL)
+            .style(Style::default().bg(Color::Black));
+        f.render_widget(Clear, area);
+        f.render_widget(Paragraph::new(lines).block(block), area);
+    }
+
+    fn draw_status_line(&self, f: &mut ratatui::Frame<'_>) {
+        let area = Rect {
+            x: 0,
+            y: f.size().height.saturating_sub(1),
+            width: f.size().width,
+            height: 1,
+        };
+        let status = self
+            .ui_state
+            .last_status
+            .clone()
+            .unwrap_or_else(|| self.status_line.clone());
+        let paragraph = Paragraph::new(status).style(Style::default().fg(Color::Gray));
+        f.render_widget(paragraph, area);
+    }
+
+    fn handle_key(&mut self, key: KeyEvent) -> Result<bool> {
+        match self.mode {
+            Mode::SelectRenderer => self.handle_renderer_key(key),
+            Mode::SelectServer => self.handle_server_key(key),
+            Mode::Browse => self.handle_browse_key(key),
+            Mode::BindingPrompt => self.handle_binding_key(key),
+            Mode::Control => self.handle_control_key(key),
+        }
+    }
+
+    fn handle_renderer_key(&mut self, key: KeyEvent) -> Result<bool> {
+        match key.code {
+            KeyCode::Char('q') => return Ok(true),
+            KeyCode::Up => {
+                if self.renderer_index > 0 {
+                    self.renderer_index -= 1;
+                }
+            }
+            KeyCode::Down => {
+                if self.renderer_index + 1 < self.renderers.len() {
+                    self.renderer_index += 1;
+                }
+            }
+            KeyCode::Enter => {
+                let info = self.renderers[self.renderer_index].clone();
+                if let Some(current) = &self.renderer_info {
+                    if current.id != info.id {
+                        let _ = self.stop_current_renderer_playback();
+                    }
+                }
+                self.ui_state = UiState::new(info.friendly_name.clone());
+                self.renderer_info = Some(info);
+                self.server_info = None;
+                self.music_server = None;
+                self.browser = None;
+                self.queue_snapshot.clear();
+                self.known_tracks.clear();
+                self.pending_binding_container = None;
+                self.ui_state.current_track_uri = None;
+                self.ui_state.server_name = None;
+                self.show_queue_overlay = false;
+                self.mode = Mode::SelectServer;
+                self.status_line = "Sélectionne un serveur avec ↑/↓ et Entrée".to_string();
+            }
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    fn handle_server_key(&mut self, key: KeyEvent) -> Result<bool> {
+        match key.code {
+            KeyCode::Char('q') => return Ok(true),
+            KeyCode::Up => {
+                if self.server_index > 0 {
+                    self.server_index -= 1;
+                }
+            }
+            KeyCode::Down => {
+                if self.server_index + 1 < self.servers.len() {
+                    self.server_index += 1;
+                }
+            }
+            KeyCode::Enter => {
+                let info = self.servers[self.server_index].clone();
+                match MusicServer::from_info(&info, Duration::from_secs(DEFAULT_TIMEOUT_SECS)) {
+                    Ok(server) => {
+                        let entries = server.browse_root()?;
+                        let browser = BrowserState::new(entries);
+                        self.music_server = Some(server);
+                        self.server_info = Some(info.clone());
+                        self.browser = Some(browser);
+                        self.mode = Mode::Browse;
+                        self.ui_state.server_name = Some(info.friendly_name.clone());
+                        self.status_line =
+                            "Navigue avec ↑/↓, Entrée pour ouvrir, s pour sélectionner".to_string();
+                    }
+                    Err(err) => {
+                        self.ui_state
+                            .set_status(format!("MusicServer init failed: {err}"));
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    fn handle_browse_key(&mut self, key: KeyEvent) -> Result<bool> {
+        if key.code == KeyCode::Char('q') {
+            return Ok(true);
+        }
+        let Some(browser) = self.browser.as_mut() else {
+            return Ok(false);
+        };
+        let Some(server) = self.music_server.as_mut() else {
+            return Ok(false);
+        };
+
+        match key.code {
+            KeyCode::Up => {
+                if browser.selected_index > 0 {
+                    browser.selected_index -= 1;
+                }
+            }
+            KeyCode::Down => {
+                if browser.selected_index + 1 < browser.entries.len() {
+                    browser.selected_index += 1;
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(entry) = browser.current_entry() {
+                    if entry.is_container {
+                        match server.browse_children(&entry.id, 0, 100) {
+                            Ok(children) => {
+                                browser
+                                    .nav_state
+                                    .enter_container(entry.id.clone(), entry.title.clone());
+                                browser.entries = children;
+                                browser.selected_index = 0;
+                            }
+                            Err(err) => {
+                                self.ui_state
+                                    .set_status(format!("Impossible d'ouvrir: {err}"));
+                            }
+                        }
+                    }
+                }
+            }
+            KeyCode::Char('b') => {
+                if browser.nav_state.go_back() {
+                    let entries = if browser.nav_state.current_container_id == "0" {
+                        server.browse_root()?
+                    } else {
+                        server.browse_children(&browser.nav_state.current_container_id, 0, 100)?
+                    };
+                    browser.entries = entries;
+                    browser.selected_index = 0;
+                }
+            }
+            KeyCode::Char('s') => {
+                self.enqueue_current_container()?;
+            }
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    fn handle_binding_key(&mut self, key: KeyEvent) -> Result<bool> {
+        match key.code {
+            KeyCode::Char('y') => {
+                self.attach_binding(true)?;
+            }
+            KeyCode::Char('n') | KeyCode::Esc => {
+                self.attach_binding(false)?;
+            }
+            KeyCode::Char('q') => return Ok(true),
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    fn handle_control_key(&mut self, key: KeyEvent) -> Result<bool> {
+        match key.code {
+            KeyCode::Char('q') => return Ok(true),
+            KeyCode::Char('R') => {
+                self.open_renderer_menu();
+            }
+            KeyCode::Char('S') => {
+                self.open_server_menu();
+            }
+            KeyCode::Char('h') => {
+                self.ui_state.set_status("Aide affichée");
+            }
+            KeyCode::Char('p') => {
+                self.pause_renderer()?;
+            }
+            KeyCode::Char('r') => {
+                self.resume_renderer()?;
+            }
+            KeyCode::Char('s') => {
+                self.stop_renderer()?;
+            }
+            KeyCode::Char('n') => {
+                self.play_next()?;
+            }
+            KeyCode::Char('+') | KeyCode::Char('=') => {
+                self.adjust_volume(5)?;
+            }
+            KeyCode::Char('-') => {
+                self.adjust_volume(-5)?;
+            }
+            KeyCode::Char('m') => {
+                self.toggle_mute()?;
+            }
+            KeyCode::Char('i') => {
+                self.show_renderer_info()?;
+            }
+            KeyCode::Char('k') => {
+                self.show_queue_overlay = !self.show_queue_overlay;
+            }
+            KeyCode::Char('b') => {
+                self.show_binding();
+            }
+            KeyCode::Esc => {
+                self.show_queue_overlay = false;
+            }
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    fn enqueue_current_container(&mut self) -> Result<()> {
+        let Some(browser) = self.browser.as_ref() else {
+            return Ok(());
+        };
+        let current_container_id = browser.nav_state.current_container_id.clone();
+        let entries = browser.entries.clone();
+        let Some(server) = self.music_server.as_ref() else {
+            return Ok(());
+        };
+        let renderer_id = self
+            .renderer_id()
+            .ok_or_else(|| anyhow!("Renderer not selected"))?;
+
+        let items = collect_playable_items(server, &entries)?;
+        if items.is_empty() {
+            self.ui_state.set_status("Aucun média dans ce conteneur");
+            return Ok(());
+        }
+
+        self.control_point.clear_queue(&renderer_id)?;
+        self.control_point.enqueue_items(&renderer_id, items)?;
+        self.queue_snapshot = self.control_point.get_queue_snapshot(&renderer_id)?;
+        self.record_queue_metadata();
+        self.pending_binding_container = Some(current_container_id);
+        self.status_line = format!("File prête ({})", self.queue_snapshot.len());
+        self.ui_state.set_status(&self.status_line);
+        self.mode = Mode::BindingPrompt;
+        Ok(())
+    }
+
+    fn attach_binding(&mut self, attach: bool) -> Result<()> {
+        if attach {
+            if let (Some(server), Some(container), Some(renderer_id)) = (
+                &self.server_info,
+                self.pending_binding_container.clone(),
+                self.renderer_id(),
+            ) {
+                self.control_point.attach_queue_to_playlist(
+                    &renderer_id,
+                    server.id.clone(),
+                    container.clone(),
+                );
+                self.ui_state
+                    .set_status(format!("File liée à '{}'", container));
+            }
+        } else {
+            self.ui_state.set_status("File locale uniquement");
+        }
+
+        self.pending_binding_container = None;
+        self.mode = Mode::Control;
+        self.start_playback()?;
+        Ok(())
+    }
+
+    fn start_playback(&mut self) -> Result<()> {
+        let renderer_id = self
+            .renderer_id()
+            .ok_or_else(|| anyhow!("Renderer not selected"))?;
+        let next_item = self.peek_next_queue_item(&renderer_id);
+        self.control_point.play_next_from_queue(&renderer_id)?;
+        if let Some(item) = next_item {
+            self.apply_item_as_current(&item);
+        } else {
+            self.ui_state.set_status("File vide");
+        }
+        self.refresh_queue_snapshot(&renderer_id);
+        Ok(())
+    }
+
+    fn pause_renderer(&mut self) -> Result<()> {
+        let renderer = self.get_renderer()?;
+        renderer.pause()?;
+        self.ui_state.set_status("Lecture en pause");
+        Ok(())
+    }
+
+    fn resume_renderer(&mut self) -> Result<()> {
+        let renderer = self.get_renderer()?;
+        renderer.play()?;
+        self.ui_state.set_status("Lecture reprise");
+        Ok(())
+    }
+
+    fn stop_renderer(&mut self) -> Result<()> {
+        let renderer = self.get_renderer()?;
+        renderer.stop()?;
+        self.ui_state.set_status("Lecture arrêtée");
+        Ok(())
+    }
+
+    fn play_next(&mut self) -> Result<()> {
+        let renderer_id = self
+            .renderer_id()
+            .ok_or_else(|| anyhow!("Renderer not selected"))?;
+        let next_item = self.peek_next_queue_item(&renderer_id);
+        self.control_point.play_next_from_queue(&renderer_id)?;
+        if let Some(item) = next_item {
+            self.apply_item_as_current(&item);
+        } else {
+            self.ui_state.set_status("Piste suivante (file vide)");
+        }
+        self.refresh_queue_snapshot(&renderer_id);
+        Ok(())
+    }
+
+    fn adjust_volume(&mut self, delta: i32) -> Result<()> {
+        let renderer = self.get_renderer()?;
+        let current = renderer.volume()?;
+        let new_volume = (current as i32 + delta).clamp(0, 100) as u16;
+        renderer.set_volume(new_volume)?;
+        self.ui_state.set_status(format!("Volume → {new_volume}"));
+        self.ui_state.volume = Some(new_volume);
+        Ok(())
+    }
+
+    fn toggle_mute(&mut self) -> Result<()> {
+        let renderer = self.get_renderer()?;
+        let current = renderer.mute()?;
+        renderer.set_mute(!current)?;
+        self.ui_state.mute = Some(!current);
+        self.ui_state.set_status(if !current {
+            "Mute activé"
+        } else {
+            "Mute désactivé"
+        });
+        Ok(())
+    }
+
+    fn show_renderer_info(&mut self) -> Result<()> {
+        let renderer = self.get_renderer()?;
+        let info = renderer.info();
+        self.ui_state.set_status(format!(
+            "Renderer: {} ({})",
+            info.friendly_name, info.model_name
+        ));
+        Ok(())
+    }
+
+    fn show_binding(&mut self) {
+        if let Some(renderer_id) = self.renderer_id() {
+            if let Some((server_id, container_id, has_seen_update)) = self
+                .control_point
+                .current_queue_playlist_binding(&renderer_id)
+            {
+                self.ui_state.set_status(format!(
+                    "Binding: {} -> {} (maj vue: {})",
+                    server_id.0, container_id, has_seen_update
+                ));
+            } else {
+                self.ui_state.set_status("Pas de binding actif");
+            }
+        }
+    }
+
+    fn stop_current_renderer_playback(&self) -> Result<()> {
+        if let Some(renderer_id) = self.renderer_id() {
+            if let Some(renderer) = self.control_point.music_renderer_by_id(&renderer_id) {
+                renderer.stop()?;
+            }
+        }
+        Ok(())
+    }
+
+    fn open_renderer_menu(&mut self) {
+        self.mode = Mode::SelectRenderer;
+        self.status_line = "Sélectionne un renderer avec ↑/↓ et Entrée".to_string();
+        self.ui_state.set_status("Menu renderer ouvert");
+        self.show_queue_overlay = false;
+    }
+
+    fn open_server_menu(&mut self) {
+        if self.renderer_info.is_some() {
+            self.mode = Mode::SelectServer;
+            self.status_line = "Sélectionne un serveur avec ↑/↓ et Entrée".to_string();
+            self.ui_state.set_status("Menu serveur ouvert");
+            self.show_queue_overlay = false;
+        } else {
+            self.ui_state.set_status("Sélectionne d'abord un renderer");
+        }
+    }
+
+    fn record_queue_metadata(&mut self) {
+        for item in &self.queue_snapshot {
+            if let Some(meta) = playback_metadata_from_item(item) {
+                self.known_tracks.insert(item.uri.clone(), meta);
+            }
+        }
+    }
+
+    fn apply_item_as_current(&mut self, item: &PlaybackItem) {
+        if let Some(meta) = playback_metadata_from_item(item) {
+            self.known_tracks.insert(item.uri.clone(), meta.clone());
+            self.ui_state.metadata = Some(meta.clone());
+            self.ui_state.set_status(format_track_status(&meta));
+        } else {
+            let label = item
+                .title
+                .as_deref()
+                .map(|t| t.to_string())
+                .unwrap_or_else(|| item.uri.clone());
+            self.ui_state.metadata = None;
+            self.ui_state.set_status(format!("Lecture: {label}"));
+        }
+        self.ui_state.current_track_uri = Some(item.uri.clone());
+    }
+
+    fn update_metadata_from_uri(&mut self, uri: &str) {
+        self.ui_state.current_track_uri = Some(uri.to_string());
+        if let Some(meta) = self.known_tracks.get(uri).cloned() {
+            self.ui_state.metadata = Some(meta.clone());
+            self.ui_state.set_status(format_track_status(&meta));
+        } else {
+            self.ui_state.metadata = None;
+            self.ui_state.set_status(format!("Lecture: {uri}"));
+        }
+    }
+
+    fn refresh_queue_snapshot(&mut self, renderer_id: &pmocontrol::model::RendererId) {
+        if let Ok(queue) = self.control_point.get_queue_snapshot(renderer_id) {
+            self.queue_snapshot = queue;
+            self.record_queue_metadata();
+        }
+    }
+
+    fn peek_next_queue_item(
+        &self,
+        renderer_id: &pmocontrol::model::RendererId,
+    ) -> Option<PlaybackItem> {
+        self.control_point
+            .get_queue_snapshot(renderer_id)
+            .ok()
+            .and_then(|queue| queue.into_iter().next())
+    }
+
+    fn get_renderer(&self) -> Result<pmocontrol::MusicRenderer> {
+        let renderer_id = self
+            .renderer_id()
+            .ok_or_else(|| anyhow!("Renderer not selected"))?;
+        self.control_point
+            .music_renderer_by_id(&renderer_id)
+            .ok_or_else(|| anyhow!("Renderer not found"))
+    }
+
+    fn handle_app_event(&mut self, event: AppEvent) {
+        match event {
+            AppEvent::Renderer(ev) => self.handle_renderer_event(ev),
+            AppEvent::Media(ev) => self.handle_media_event(ev),
+        }
+    }
+
+    fn handle_renderer_event(&mut self, event: RendererEvent) {
+        let Some(renderer_id) = self.renderer_id() else {
+            return;
+        };
+        match event {
+            RendererEvent::StateChanged { id, state } => {
+                if id == renderer_id {
+                    self.ui_state.playback_state = Some(state.clone());
+                    self.ui_state.set_status(format!("État: {:?}", state));
+                }
+            }
+            RendererEvent::PositionChanged { id, position } => {
+                if id == renderer_id {
+                    let track_changed =
+                        position.track_uri.as_ref() != self.ui_state.current_track_uri.as_ref();
+                    self.ui_state.position = Some(position.clone());
+                    if track_changed {
+                        if let Some(uri) = position.track_uri.as_deref() {
+                            self.update_metadata_from_uri(uri);
+                            self.refresh_queue_snapshot(&renderer_id);
+                        } else {
+                            self.ui_state.current_track_uri = None;
+                        }
+                    }
+                }
+            }
+            RendererEvent::VolumeChanged { id, volume } => {
+                if id == renderer_id {
+                    self.ui_state.volume = Some(volume);
+                    self.ui_state.set_status(format!("Volume → {volume}"));
+                }
+            }
+            RendererEvent::MuteChanged { id, mute } => {
+                if id == renderer_id {
+                    self.ui_state.mute = Some(mute);
+                    self.ui_state.set_status(if mute {
+                        "Mute activé"
+                    } else {
+                        "Mute désactivé"
+                    });
+                }
+            }
+            RendererEvent::MetadataChanged { id, metadata } => {
+                if id == renderer_id {
+                    self.ui_state.metadata = Some(metadata.clone());
+                    self.ui_state.set_status(format_track_status(&metadata));
+                    if let Some(uri) = self.ui_state.current_track_uri.clone() {
+                        self.known_tracks.insert(uri, metadata);
+                    }
+                }
+            }
+        }
+    }
+
+    fn handle_media_event(&mut self, event: MediaServerEvent) {
+        match event {
+            MediaServerEvent::GlobalUpdated {
+                server_id,
+                system_update_id,
+            } => {
+                self.ui_state.set_status(format!(
+                    "MAJ serveur {} (SystemUpdateID={})",
+                    server_id.0,
+                    system_update_id.unwrap_or(0)
+                ));
+            }
+            MediaServerEvent::ContainersUpdated {
+                server_id,
+                container_ids,
+            } => {
+                let mut status = format!(
+                    "Conteneurs mis à jour sur {}: {:?}",
+                    server_id.0, container_ids
+                );
+                if let Some(renderer_id) = self.renderer_id() {
+                    if let Some((bound_server, bound_container, _)) = self
+                        .control_point
+                        .current_queue_playlist_binding(&renderer_id)
+                    {
+                        if bound_server == server_id && container_ids.contains(&bound_container) {
+                            status
+                                .push_str(&format!(" | Playlist '{}' rafraîchie", bound_container));
+                            self.refresh_queue_snapshot(&renderer_id);
+                        }
+                    }
+                }
+                self.ui_state.set_status(status);
             }
         }
     }
 }
 
-/// Interactive server selection.
-fn select_server(servers: &[MediaServerInfo]) -> Result<MediaServerInfo> {
-    loop {
-        print!("\nSelect media server (index 0-{}): ", servers.len() - 1);
-        io::stdout().flush()?;
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-
-        match input.trim().parse::<usize>() {
-            Ok(idx) if idx < servers.len() => {
-                return Ok(servers[idx].clone());
-            }
-            _ => {
-                println!("Invalid selection. Please enter a number between 0 and {}", servers.len() - 1);
-            }
+impl BrowserState {
+    fn new(entries: Vec<MediaEntry>) -> Self {
+        Self {
+            nav_state: NavigationState::new("0".to_string(), "Root".to_string()),
+            entries,
+            selected_index: 0,
         }
     }
+
+    fn current_entry(&self) -> Option<&MediaEntry> {
+        self.entries.get(self.selected_index)
+    }
+}
+
+fn run_app(mut app: App) -> Result<()> {
+    let mut terminal = setup_terminal()?;
+    let (event_tx, event_rx) = mpsc::channel();
+    let mut renderer_events_started = false;
+    let mut last_tick = Instant::now();
+
+    loop {
+        terminal.draw(|f| app.draw(f))?;
+
+        while let Ok(event) = event_rx.try_recv() {
+            app.handle_app_event(event);
+        }
+
+        if !renderer_events_started {
+            if let Some(renderer_id) = app.renderer_id() {
+                start_event_threads(Arc::clone(&app.control_point), event_tx.clone());
+                renderer_events_started = true;
+            }
+        }
+
+        let timeout = TICK_RATE
+            .checked_sub(last_tick.elapsed())
+            .unwrap_or_else(|| Duration::from_secs(0));
+
+        if event::poll(timeout)? {
+            if let Event::Key(key) = event::read()? {
+                if app.handle_key(key)? {
+                    let _ = app.stop_current_renderer_playback();
+                    break;
+                }
+            }
+        }
+
+        if last_tick.elapsed() >= TICK_RATE {
+            last_tick = Instant::now();
+        }
+    }
+
+    restore_terminal(&mut terminal)?;
+    Ok(())
+}
+
+fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    let backend = CrosstermBackend::new(stdout);
+    let terminal = Terminal::new(backend)?;
+    Ok(terminal)
+}
+
+fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
+    terminal.show_cursor()?;
+    Ok(())
+}
+
+fn start_event_threads(control_point: Arc<ControlPoint>, tx: Sender<AppEvent>) {
+    let renderer_cp = Arc::clone(&control_point);
+    let renderer_tx = tx.clone();
+    thread::spawn(move || {
+        let event_rx = renderer_cp.subscribe_events();
+        for event in event_rx {
+            if renderer_tx.send(AppEvent::Renderer(event)).is_err() {
+                break;
+            }
+        }
+    });
+
+    thread::spawn(move || {
+        let media_rx = control_point.subscribe_media_server_events();
+        for event in media_rx {
+            if tx.send(AppEvent::Media(event)).is_err() {
+                break;
+            }
+        }
+    });
 }
 
 /// Navigation state for ContentDirectory browsing.
 struct NavigationState {
-    /// Stack of (container_id, container_title) for back navigation.
     path_stack: Vec<(String, String)>,
-    /// Current container ID being browsed.
     current_container_id: String,
-    /// Current container title.
     current_container_title: String,
 }
 
@@ -236,116 +1140,29 @@ impl NavigationState {
     }
 }
 
-/// Navigate ContentDirectory and let user select a container for queue.
-fn navigate_and_select(server: &MusicServer) -> Result<(Vec<PlaybackItem>, Option<String>)> {
-    let root_entries = server.browse_root()
-        .context("Failed to browse root")?;
-
-    let mut nav_state = NavigationState::new("0".to_string(), "Root".to_string());
-
-    loop {
-        println!("\n--- Browsing: {} (id: {}) ---",
-            nav_state.current_container_title, nav_state.current_container_id);
-
-        let entries = if nav_state.current_container_id == "0" {
-            root_entries.clone()
-        } else {
-            server.browse_children(&nav_state.current_container_id, 0, 100)
-                .context("Failed to browse container")?
-        };
-
-        if entries.is_empty() {
-            println!("(empty container)");
-        } else {
-            print_entries(&entries);
-        }
-
-        print!("\nCommand [0-{} to enter container / b=back / s=select / q=quit]: ",
-            entries.len().saturating_sub(1));
-        io::stdout().flush()?;
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        let input = input.trim();
-
-        match input {
-            "q" => {
-                println!("Navigation cancelled.");
-                return Ok((Vec::new(), None));
-            }
-            "b" => {
-                if !nav_state.go_back() {
-                    println!("Already at root.");
-                }
-            }
-            "s" => {
-                // Select current container
-                println!("Collecting items from '{}'...", nav_state.current_container_title);
-                let items = collect_playable_items(server, &entries)?;
-                if items.is_empty() {
-                    println!("No playable items found in this container.");
-                    continue;
-                }
-                return Ok((items, Some(nav_state.current_container_id.clone())));
-            }
-            _ => {
-                // Try to parse as index
-                match input.parse::<usize>() {
-                    Ok(idx) if idx < entries.len() => {
-                        let entry = &entries[idx];
-                        if entry.is_container {
-                            nav_state.enter_container(entry.id.clone(), entry.title.clone());
-                        } else {
-                            println!("Entry {} is an audio item, not a container. Use 's' to select the current container for playback.", idx);
-                        }
-                    }
-                    _ => {
-                        println!("Invalid command. Enter a number (0-{}), 'b' to go back, 's' to select, or 'q' to quit.",
-                            entries.len().saturating_sub(1));
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Print MediaEntry list.
-fn print_entries(entries: &[MediaEntry]) {
-    for (idx, entry) in entries.iter().enumerate() {
-        if entry.is_container {
-            println!("  [{}] \u{1F4C1} {} (id: {}, class: {})",
-                idx, entry.title, entry.id, entry.class);
-        } else {
-            let has_audio = entry.resources.iter().any(is_audio_resource);
-            let icon = if has_audio { "\u{266B}" } else { "\u{1F4C4}" };
-            println!("  [{}] {} {} (id: {}, class: {})",
-                idx, icon, entry.title, entry.id, entry.class);
-        }
-    }
-}
-
 /// Collect playable items from MediaEntry list (including nested containers).
-fn collect_playable_items(server: &MusicServer, entries: &[MediaEntry]) -> Result<Vec<PlaybackItem>> {
+fn collect_playable_items(
+    server: &MusicServer,
+    entries: &[MediaEntry],
+) -> Result<Vec<PlaybackItem>> {
     let mut items = Vec::new();
-
     for entry in entries {
         if entry.is_container {
-            // Recursively collect from container
             match server.browse_children(&entry.id, 0, 100) {
                 Ok(children) => {
                     items.extend(collect_playable_items(server, &children)?);
                 }
                 Err(err) => {
-                    eprintln!("Warning: failed to browse container '{}': {}", entry.title, err);
+                    eprintln!(
+                        "Warning: failed to browse container '{}': {err}",
+                        entry.title
+                    );
                 }
             }
-        } else {
-            if let Some(item) = playback_item_from_entry(server, entry) {
-                items.push(item);
-            }
+        } else if let Some(item) = playback_item_from_entry(server, entry) {
+            items.push(item);
         }
     }
-
     Ok(items)
 }
 
@@ -366,6 +1183,33 @@ fn playback_item_from_entry(server: &MusicServer, entry: &MediaEntry) -> Option<
     Some(item)
 }
 
+fn playback_metadata_from_item(item: &PlaybackItem) -> Option<TrackMetadata> {
+    let metadata = TrackMetadata {
+        title: item.title.clone(),
+        artist: item.artist.clone(),
+        album: item.album.clone(),
+        genre: item.genre.clone(),
+        album_art_uri: item.album_art_uri.clone(),
+        date: item.date.clone(),
+        track_number: item.track_number.clone(),
+        creator: item.creator.clone(),
+    };
+
+    if metadata.title.is_none()
+        && metadata.artist.is_none()
+        && metadata.album.is_none()
+        && metadata.genre.is_none()
+        && metadata.album_art_uri.is_none()
+        && metadata.date.is_none()
+        && metadata.track_number.is_none()
+        && metadata.creator.is_none()
+    {
+        return None;
+    }
+
+    Some(metadata)
+}
+
 /// Check if MediaResource is audio.
 fn is_audio_resource(res: &MediaResource) -> bool {
     let lower = res.protocol_info.to_ascii_lowercase();
@@ -379,415 +1223,130 @@ fn is_audio_resource(res: &MediaResource) -> bool {
         .unwrap_or(false)
 }
 
-/// Read yes/no from stdin.
-fn read_yes_no() -> Result<bool> {
-    loop {
-        print!("> ");
-        io::stdout().flush()?;
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-
-        match input.trim().to_lowercase().as_str() {
-            "y" | "yes" => return Ok(true),
-            "n" | "no" => return Ok(false),
-            _ => println!("Please enter 'y' or 'n'"),
+fn render_metadata_block(metadata: Option<&TrackMetadata>) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    if let Some(meta) = metadata {
+        let title = meta
+            .title
+            .clone()
+            .unwrap_or_else(|| "<Titre inconnu>".to_string());
+        lines.push(Line::from(format!("Titre  : {title}")));
+        if let Some(artist) = meta.artist.as_deref() {
+            lines.push(Line::from(format!("Artiste: {artist}")));
         }
-    }
-}
-
-/// Spawn thread to display renderer events in real-time.
-fn spawn_renderer_event_thread(
-    control_point: Arc<ControlPoint>,
-    renderer_id: pmocontrol::model::RendererId,
-) {
-    let event_rx = control_point.subscribe_events();
-
-    thread::spawn(move || {
-        loop {
-            match event_rx.recv() {
-                Ok(event) => {
-                    match event {
-                        RendererEvent::StateChanged { id, state } => {
-                            if id == renderer_id {
-                                println!("\n[EVENT] Renderer state changed: {:?}", state);
-                                print!("> ");
-                                io::stdout().flush().ok();
-                            }
-                        }
-                        RendererEvent::PositionChanged { id, position } => {
-                            if id == renderer_id {
-                                let rel = position.rel_time.as_deref().unwrap_or("-");
-                                let dur = position.track_duration.as_deref().unwrap_or("-");
-                                println!("\n[EVENT] Position: {} / {}", rel, dur);
-                                print!("> ");
-                                io::stdout().flush().ok();
-                            }
-                        }
-                        RendererEvent::VolumeChanged { id, volume } => {
-                            if id == renderer_id {
-                                println!("\n[EVENT] Volume changed: {}", volume);
-                                print!("> ");
-                                io::stdout().flush().ok();
-                            }
-                        }
-                        RendererEvent::MuteChanged { id, mute } => {
-                            if id == renderer_id {
-                                println!("\n[EVENT] Mute changed: {}", mute);
-                                print!("> ");
-                                io::stdout().flush().ok();
-                            }
-                        }
-                        RendererEvent::MetadataChanged { id, metadata } => {
-                            if id == renderer_id {
-                                println!("\n[EVENT] Metadata changed:");
-                                if let Some(title) = &metadata.title {
-                                    println!("  Title: {}", title);
-                                }
-                                if let Some(artist) = &metadata.artist {
-                                    println!("  Artist: {}", artist);
-                                }
-                                if let Some(album) = &metadata.album {
-                                    println!("  Album: {}", album);
-                                }
-                                if let Some(genre) = &metadata.genre {
-                                    println!("  Genre: {}", genre);
-                                }
-                                if let Some(date) = &metadata.date {
-                                    println!("  Date: {}", date);
-                                }
-                                if let Some(track_number) = &metadata.track_number {
-                                    println!("  Track: {}", track_number);
-                                }
-                                if let Some(album_art_uri) = &metadata.album_art_uri {
-                                    println!("  Album Art: {}", album_art_uri);
-                                }
-                                print!("> ");
-                                io::stdout().flush().ok();
-                            }
-                        }
-                    }
-                }
-                Err(_) => {
-                    eprintln!("\n[EVENT] Renderer event channel closed");
-                    break;
-                }
-            }
+        if let Some(album) = meta.album.as_deref() {
+            lines.push(Line::from(format!("Album  : {album}")));
         }
-    });
-}
-
-/// Spawn thread to display media server events in real-time.
-fn spawn_media_server_event_thread(
-    control_point: Arc<ControlPoint>,
-    renderer_id: pmocontrol::model::RendererId,
-) {
-    let media_event_rx = control_point.subscribe_media_server_events();
-
-    thread::spawn(move || {
-        loop {
-            match media_event_rx.recv() {
-                Ok(event) => {
-                    match event {
-                        MediaServerEvent::GlobalUpdated { server_id, system_update_id } => {
-                            println!("\n[MEDIA EVENT] Server {} global update (SystemUpdateID={})",
-                                server_id.0, system_update_id.unwrap_or(0));
-                            print!("> ");
-                            io::stdout().flush().ok();
-                        }
-                        MediaServerEvent::ContainersUpdated { server_id, container_ids } => {
-                            println!("\n[MEDIA EVENT] Server {} containers updated: {:?}",
-                                server_id.0, container_ids);
-
-                            // Check if bound container was updated
-                            if let Some((bound_server, bound_container, _)) =
-                                control_point.current_queue_playlist_binding(&renderer_id)
-                            {
-                                if bound_server == server_id && container_ids.contains(&bound_container) {
-                                    println!("[MEDIA EVENT] → Bound playlist '{}' was updated!", bound_container);
-                                }
-                            }
-
-                            print!("> ");
-                            io::stdout().flush().ok();
-                        }
-                    }
-                }
-                Err(_) => {
-                    eprintln!("\n[MEDIA EVENT] Media server event channel closed");
-                    break;
-                }
-            }
+        if let Some(genre) = meta.genre.as_deref() {
+            lines.push(Line::from(format!("Genre  : {genre}")));
         }
-    });
-}
-
-/// Print help message for control commands.
-fn print_help() {
-    println!("Available commands:");
-    println!("  p       - Pause");
-    println!("  r       - Resume/Play");
-    println!("  s       - Stop");
-    println!("  n       - Next track");
-    println!("  +       - Volume +5");
-    println!("  -       - Volume -5");
-    println!("  m       - Toggle mute");
-    println!("  i       - Show renderer info (state, position, volume)");
-    println!("  k       - Show current queue");
-    println!("  b       - Show playlist binding");
-    println!("  h       - Show this help");
-    println!("  q       - Quit gracefully");
-    println!("  Q       - Quit immediately");
-}
-
-/// Main interactive control loop.
-fn run_control_loop(
-    control_point: Arc<ControlPoint>,
-    renderer_id: pmocontrol::model::RendererId,
-) -> Result<()> {
-    let stdin = io::stdin();
-    let mut reader = stdin.lock();
-
-    loop {
-        print!("> ");
-        io::stdout().flush()?;
-
-        let mut line = String::new();
-        reader.read_line(&mut line)?;
-        let cmd = line.trim();
-
-        if cmd.is_empty() {
-            continue;
+        if let Some(date) = meta.date.as_deref() {
+            lines.push(Line::from(format!("Date   : {date}")));
         }
-
-        match cmd {
-            "q" => {
-                println!("Quitting...");
-                break;
-            }
-            "Q" => {
-                println!("Quitting immediately!");
-                process::exit(0);
-            }
-            "h" => {
-                print_help();
-            }
-            "p" => {
-                if let Err(err) = pause_renderer(&control_point, &renderer_id) {
-                    eprintln!("Pause failed: {}", err);
-                } else {
-                    println!("✓ Paused");
-                }
-            }
-            "r" => {
-                if let Err(err) = resume_renderer(&control_point, &renderer_id) {
-                    eprintln!("Resume failed: {}", err);
-                } else {
-                    println!("✓ Resumed");
-                }
-            }
-            "s" => {
-                if let Err(err) = stop_renderer(&control_point, &renderer_id) {
-                    eprintln!("Stop failed: {}", err);
-                } else {
-                    println!("✓ Stopped");
-                }
-            }
-            "n" => {
-                if let Err(err) = control_point.play_next_from_queue(&renderer_id) {
-                    eprintln!("Next track failed: {}", err);
-                } else {
-                    println!("✓ Playing next track");
-                }
-            }
-            "+" => {
-                if let Err(err) = adjust_volume(&control_point, &renderer_id, 5) {
-                    eprintln!("Volume adjustment failed: {}", err);
-                } else {
-                    println!("✓ Volume +5");
-                }
-            }
-            "-" => {
-                if let Err(err) = adjust_volume(&control_point, &renderer_id, -5) {
-                    eprintln!("Volume adjustment failed: {}", err);
-                } else {
-                    println!("✓ Volume -5");
-                }
-            }
-            "m" => {
-                if let Err(err) = toggle_mute(&control_point, &renderer_id) {
-                    eprintln!("Mute toggle failed: {}", err);
-                } else {
-                    println!("✓ Mute toggled");
-                }
-            }
-            "i" => {
-                if let Err(err) = show_renderer_info(&control_point, &renderer_id) {
-                    eprintln!("Failed to get renderer info: {}", err);
-                }
-            }
-            "k" => {
-                if let Err(err) = show_queue(&control_point, &renderer_id) {
-                    eprintln!("Failed to get queue: {}", err);
-                }
-            }
-            "b" => {
-                show_binding(&control_point, &renderer_id);
-            }
-            _ => {
-                println!("Unknown command '{}'. Type 'h' for help.", cmd);
-            }
+        if let Some(track) = meta.track_number.as_deref() {
+            lines.push(Line::from(format!("Piste  : {track}")));
         }
-    }
-
-    Ok(())
-}
-
-/// Pause the renderer.
-fn pause_renderer(
-    control_point: &ControlPoint,
-    renderer_id: &pmocontrol::model::RendererId,
-) -> Result<()> {
-    let renderer = control_point.music_renderer_by_id(renderer_id)
-        .ok_or_else(|| anyhow!("Renderer not found"))?;
-    renderer.pause()?;
-    Ok(())
-}
-
-/// Resume/play the renderer.
-fn resume_renderer(
-    control_point: &ControlPoint,
-    renderer_id: &pmocontrol::model::RendererId,
-) -> Result<()> {
-    let renderer = control_point.music_renderer_by_id(renderer_id)
-        .ok_or_else(|| anyhow!("Renderer not found"))?;
-    renderer.play()?;
-    Ok(())
-}
-
-/// Stop the renderer.
-fn stop_renderer(
-    control_point: &ControlPoint,
-    renderer_id: &pmocontrol::model::RendererId,
-) -> Result<()> {
-    let renderer = control_point.music_renderer_by_id(renderer_id)
-        .ok_or_else(|| anyhow!("Renderer not found"))?;
-    renderer.stop()?;
-    Ok(())
-}
-
-/// Adjust volume by delta (-100 to +100).
-fn adjust_volume(
-    control_point: &ControlPoint,
-    renderer_id: &pmocontrol::model::RendererId,
-    delta: i32,
-) -> Result<()> {
-    let renderer = control_point.music_renderer_by_id(renderer_id)
-        .ok_or_else(|| anyhow!("Renderer not found"))?;
-
-    let current = renderer.volume()?;
-    let new_volume = (current as i32 + delta).clamp(0, 100) as u16;
-    renderer.set_volume(new_volume)?;
-
-    Ok(())
-}
-
-/// Toggle mute.
-fn toggle_mute(
-    control_point: &ControlPoint,
-    renderer_id: &pmocontrol::model::RendererId,
-) -> Result<()> {
-    let renderer = control_point.music_renderer_by_id(renderer_id)
-        .ok_or_else(|| anyhow!("Renderer not found"))?;
-
-    let current_mute = renderer.mute()?;
-    renderer.set_mute(!current_mute)?;
-
-    Ok(())
-}
-
-/// Show renderer info (state, position, volume, mute).
-fn show_renderer_info(
-    control_point: &ControlPoint,
-    renderer_id: &pmocontrol::model::RendererId,
-) -> Result<()> {
-    let renderer = control_point.music_renderer_by_id(renderer_id)
-        .ok_or_else(|| anyhow!("Renderer not found"))?;
-
-    println!("\n=== Renderer Info ===");
-    println!("Name: {}", renderer.info().friendly_name);
-
-    match renderer.playback_state() {
-        Ok(state) => println!("State: {:?}", state),
-        Err(err) => println!("State: <error: {}>", err),
-    }
-
-    match renderer.playback_position() {
-        Ok(pos) => {
-            let rel = pos.rel_time.as_deref().unwrap_or("-");
-            let dur = pos.track_duration.as_deref().unwrap_or("-");
-            println!("Position: {} / {}", rel, dur);
-        }
-        Err(err) => println!("Position: <error: {}>", err),
-    }
-
-    match renderer.volume() {
-        Ok(vol) => println!("Volume: {}", vol),
-        Err(err) => println!("Volume: <error: {}>", err),
-    }
-
-    match renderer.mute() {
-        Ok(mute) => println!("Mute: {}", mute),
-        Err(err) => println!("Mute: <error: {}>", err),
-    }
-
-    Ok(())
-}
-
-/// Show current queue.
-fn show_queue(
-    control_point: &ControlPoint,
-    renderer_id: &pmocontrol::model::RendererId,
-) -> Result<()> {
-    let queue = control_point.get_queue_snapshot(renderer_id)?;
-
-    println!("\n=== Queue ({} items) ===", queue.len());
-    if queue.is_empty() {
-        println!("  <empty>");
     } else {
-        for (idx, item) in queue.iter().enumerate() {
-            let title = item.title.as_deref().unwrap_or("<no title>");
-            let artist = item.artist.as_deref().unwrap_or("");
-            let album = item.album.as_deref().unwrap_or("");
-
-            if !artist.is_empty() && !album.is_empty() {
-                println!("  [{}] {} - {} ({})", idx, artist, title, album);
-            } else if !artist.is_empty() {
-                println!("  [{}] {} - {}", idx, artist, title);
-            } else {
-                println!("  [{}] {}", idx, title);
-            }
-        }
+        lines.push(Line::from("(En attente des métadonnées...)"));
     }
-
-    Ok(())
+    lines
 }
 
-/// Show playlist binding info.
-fn show_binding(
-    control_point: &ControlPoint,
-    renderer_id: &pmocontrol::model::RendererId,
-) {
-    match control_point.current_queue_playlist_binding(renderer_id) {
-        Some((server_id, container_id, has_seen_update)) => {
-            println!("\n=== Playlist Binding ===");
-            println!("Server ID: {}", server_id.0);
-            println!("Container ID: {}", container_id);
-            println!("Has seen update: {}", has_seen_update);
-        }
-        None => {
-            println!("\n=== Playlist Binding ===");
-            println!("  <no binding>");
-        }
+fn build_progress_gauge(position: &PlaybackPositionInfo) -> Gauge<'static> {
+    let rel_secs = position.rel_time.as_deref().and_then(parse_time_to_seconds);
+    let dur_secs = position
+        .track_duration
+        .as_deref()
+        .and_then(parse_time_to_seconds);
+
+    let ratio = match (rel_secs, dur_secs) {
+        (Some(rel), Some(dur)) if dur > 0 => rel as f64 / dur as f64,
+        _ => 0.0,
+    };
+    let ratio = ratio.clamp(0.0, 1.0);
+
+    let rel_label = position
+        .rel_time
+        .clone()
+        .unwrap_or_else(|| "--:--".to_string());
+    let dur_label = position
+        .track_duration
+        .clone()
+        .unwrap_or_else(|| "--:--".to_string());
+
+    let label = format!("{} / {}", rel_label, dur_label);
+    Gauge::default()
+        .block(Block::default().borders(Borders::ALL).title("Progression"))
+        .gauge_style(Style::default().fg(Color::Magenta))
+        .ratio(ratio)
+        .label(label)
+}
+
+fn format_track_status(meta: &TrackMetadata) -> String {
+    let title = meta.title.as_deref().unwrap_or("<Titre inconnu>");
+    let artist = meta.artist.as_deref().unwrap_or("");
+    if artist.is_empty() {
+        format!("Lecture: {title}")
+    } else {
+        format!("Lecture: {artist} - {title}")
     }
+}
+
+fn parse_time_to_seconds(raw: &str) -> Option<u64> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed == "-" {
+        return None;
+    }
+    if let Ok(seconds) = trimmed.parse::<u64>() {
+        return Some(seconds);
+    }
+
+    let parts: Vec<&str> = trimmed.split(':').collect();
+    match parts.len() {
+        3 => {
+            let hours = parts[0].parse::<u64>().ok()?;
+            let minutes = parts[1].parse::<u64>().ok()?;
+            let seconds = parse_seconds(parts[2])?;
+            Some(hours * 3600 + minutes * 60 + seconds)
+        }
+        2 => {
+            let minutes = parts[0].parse::<u64>().ok()?;
+            let seconds = parse_seconds(parts[1])?;
+            Some(minutes * 60 + seconds)
+        }
+        _ => None,
+    }
+}
+
+fn parse_seconds(fragment: &str) -> Option<u64> {
+    fragment
+        .split('.')
+        .next()
+        .and_then(|s| s.parse::<u64>().ok())
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(
+            [
+                Constraint::Percentage((100 - percent_y) / 2),
+                Constraint::Percentage(percent_y),
+                Constraint::Percentage((100 - percent_y) / 2),
+            ]
+            .as_ref(),
+        )
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(
+            [
+                Constraint::Percentage((100 - percent_x) / 2),
+                Constraint::Percentage(percent_x),
+                Constraint::Percentage((100 - percent_x) / 2),
+            ]
+            .as_ref(),
+        )
+        .split(popup_layout[1])[1]
 }

@@ -14,13 +14,13 @@ use crate::capabilities::{
     PlaybackPosition, PlaybackPositionInfo, PlaybackState, PlaybackStatus, TransportControl,
     VolumeControl,
 };
-use crate::model::TrackMetadata;
 use crate::discovery::DiscoveryManager;
 use crate::events::{MediaServerEventBus, RendererEventBus};
 use crate::media_server::{
     MediaBrowser, MediaEntry, MediaResource, MediaServerInfo, MusicServer, ServerId,
 };
 use crate::media_server_events::spawn_media_server_event_runtime;
+use crate::model::TrackMetadata;
 use crate::model::{MediaServerEvent, RendererEvent, RendererId, RendererProtocol};
 use crate::music_renderer::op_not_supported;
 use crate::playback_queue::{PlaybackItem, PlaybackQueue};
@@ -90,11 +90,11 @@ impl ControlPoint {
             // ACTIVE DISCOVERY : envoyer quelques M-SEARCH au démarrage
             // pour forcer les devices à répondre rapidement.
             let search_targets = [
-    "ssdp:all",
-    "urn:schemas-upnp-org:device:MediaRenderer:1",
-    "urn:av-openhome-org:device:MediaRenderer:1",
-    "urn:schemas-upnp-org:device:MediaServer:1",
-    "urn:schemas-wiimu-com:service:PlayQueue:1",  // <-- AJOUTER
+                "ssdp:all",
+                "urn:schemas-upnp-org:device:MediaRenderer:1",
+                "urn:av-openhome-org:device:MediaRenderer:1",
+                "urn:schemas-upnp-org:device:MediaServer:1",
+                "urn:schemas-wiimu-com:service:PlayQueue:1", // <-- AJOUTER
             ];
 
             for st in &search_targets {
@@ -138,7 +138,9 @@ impl ControlPoint {
                 };
                 let renderers = infos
                     .into_iter()
-                    .filter_map(|info| MusicRenderer::from_registry_info(info, &runtime_cp.registry))
+                    .filter_map(|info| {
+                        MusicRenderer::from_registry_info(info, &runtime_cp.registry)
+                    })
                     .collect::<Vec<_>>();
 
                 for renderer in renderers {
@@ -264,6 +266,7 @@ impl ControlPoint {
         let registry_for_media_worker = Arc::clone(&registry);
         let runtime_for_media_worker = Arc::clone(&runtime);
         let bindings_for_media_worker = Arc::clone(&playlist_bindings);
+        let event_bus_for_media_worker = event_bus.clone();
         let media_rx = media_event_bus.subscribe();
 
         thread::Builder::new()
@@ -322,6 +325,7 @@ impl ControlPoint {
                                     &runtime_for_media_worker,
                                     &bindings_for_media_worker,
                                     &renderer_id,
+                                    &event_bus_for_media_worker,
                                 ) {
                                     warn!(
                                         renderer = renderer_id.0.as_str(),
@@ -341,6 +345,7 @@ impl ControlPoint {
         let registry_for_periodic = Arc::clone(&registry);
         let runtime_for_periodic = Arc::clone(&runtime);
         let bindings_for_periodic = Arc::clone(&playlist_bindings);
+        let event_bus_for_periodic = event_bus.clone();
 
         thread::Builder::new()
             .name("cp-playlist-periodic-refresh".into())
@@ -374,6 +379,7 @@ impl ControlPoint {
                             &runtime_for_periodic,
                             &bindings_for_periodic,
                             &renderer_id,
+                            &event_bus_for_periodic,
                         ) {
                             warn!(
                                 renderer = renderer_id.0.as_str(),
@@ -511,6 +517,13 @@ impl ControlPoint {
             queue_len = 0,
             "Cleared playback queue"
         );
+
+        // Emit QueueUpdated event
+        self.emit_renderer_event(RendererEvent::QueueUpdated {
+            id: renderer_id.clone(),
+            queue_length: 0,
+        });
+
         Ok(())
     }
 
@@ -546,6 +559,13 @@ impl ControlPoint {
             queue_len = new_len,
             "Enqueued playback items"
         );
+
+        // Emit QueueUpdated event
+        self.emit_renderer_event(RendererEvent::QueueUpdated {
+            id: renderer_id.clone(),
+            queue_length: new_len,
+        });
+
         Ok(())
     }
 
@@ -670,6 +690,12 @@ impl ControlPoint {
                 }
             }
         }
+
+        // Emit QueueUpdated event
+        self.emit_renderer_event(RendererEvent::QueueUpdated {
+            id: renderer_id.clone(),
+            queue_length: remaining_after,
+        });
 
         Ok(())
     }
@@ -945,6 +971,7 @@ fn refresh_attached_queue_for(
     runtime: &Arc<RuntimeState>,
     bindings: &Arc<Mutex<HashMap<RendererId, PlaylistBinding>>>,
     renderer_id: &RendererId,
+    event_bus: &RendererEventBus,
 ) -> anyhow::Result<()> {
     // Step 1: Check binding and mark refresh as in-progress
     let (server_id, container_id) = {
@@ -1040,17 +1067,25 @@ fn refresh_attached_queue_for(
             "Refreshed playlist is empty, clearing queue"
         );
         runtime.with_queue_mut(renderer_id, |queue| queue.clear());
+
+        // Emit QueueUpdated event
+        event_bus.broadcast(RendererEvent::QueueUpdated {
+            id: renderer_id.clone(),
+            queue_length: 0,
+        });
+
         return Ok(());
     }
 
     // Step 5: Intelligent refresh: try to keep current item if it's still in the new list
-    let current_item = runtime.queue_snapshot(renderer_id).and_then(|q| q.first().cloned());
+    let current_item = runtime
+        .queue_snapshot(renderer_id)
+        .and_then(|q| q.first().cloned());
 
     let item_found_at = current_item.as_ref().and_then(|current| {
         new_items.iter().position(|new_item| {
             // Match by object_id if both have it
-            if let (Some(current_obj), Some(new_obj)) = (&current.object_id, &new_item.object_id)
-            {
+            if let (Some(current_obj), Some(new_obj)) = (&current.object_id, &new_item.object_id) {
                 return current_obj == new_obj;
             }
             // Fallback: match by URI
@@ -1058,7 +1093,7 @@ fn refresh_attached_queue_for(
         })
     });
 
-    runtime.with_queue_mut(renderer_id, |queue| {
+    let final_queue_len = runtime.with_queue_mut(renderer_id, |queue| {
         queue.clear();
 
         if let Some(idx) = item_found_at {
@@ -1074,6 +1109,7 @@ fn refresh_attached_queue_for(
                 current_preserved = true,
                 "Refreshed queue from playlist container"
             );
+            new_items.len() - idx
         } else {
             // Current item not found: replace with full new list
             for item in new_items.iter() {
@@ -1087,7 +1123,14 @@ fn refresh_attached_queue_for(
                 current_preserved = false,
                 "Refreshed queue from playlist container (current item not found)"
             );
+            new_items.len()
         }
+    }).unwrap_or(0);
+
+    // Emit QueueUpdated event
+    event_bus.broadcast(RendererEvent::QueueUpdated {
+        id: renderer_id.clone(),
+        queue_length: final_queue_len,
     });
 
     Ok(())

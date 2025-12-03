@@ -95,6 +95,10 @@ pub enum RendererEvent {
         id: RendererId,
         metadata: TrackMetadata,
     },
+    QueueUpdated {
+        id: RendererId,
+        queue_length: usize,
+    },
 }
 
 #[derive(Clone, Debug)]

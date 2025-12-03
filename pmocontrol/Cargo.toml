@@ -14,3 +14,22 @@ tracing-subscriber = "0.3"
 anyhow = "1.0"
 xmltree = "0.11.0"
 crossbeam-channel = "0.5"
+ratatui = { version = "0.26", default-features = false, features = ["crossterm"] }
+crossterm = "0.27"
+
+# pmoserver extension support (optional)
+pmoserver = { path = "../pmoserver", optional = true }
+utoipa = { version = "5.4.0", optional = true }
+axum = { version = "0.8.4", optional = true }
+serde = { version = "1.0", features = ["derive"], optional = true }
+serde_json = { version = "1.0", optional = true }
+tokio = { version = "1", features = ["sync", "rt"], optional = true }
+async-trait = { version = "0.1", optional = true }
+tokio-stream = { version = "0.1", features = ["sync"], optional = true }
+async-stream = { version = "0.3", optional = true }
+chrono = { version = "0.4", features = ["serde"], optional = true }
+
+[features]
+default = []
+# Active l'API REST pmoserver
+pmoserver = ["dep:pmoserver", "dep:utoipa", "dep:axum", "dep:serde", "dep:serde_json", "dep:tokio", "dep:async-trait", "dep:tokio-stream", "dep:async-stream", "dep:chrono"]

@@ -80,9 +80,7 @@ fn main() -> Result<()> {
         .unwrap_or(false);
     println!(
         "Renderer \"{}\": AVTransport present = {}, SetNextAVTransportURI supported = {}",
-        renderer.friendly_name,
-        renderer.capabilities.has_avtransport,
-        supports_set_next
+        renderer.friendly_name, renderer.capabilities.has_avtransport, supports_set_next
     );
 
     let timeout = Duration::from_secs(config.timeout_secs);

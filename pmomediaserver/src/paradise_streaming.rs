@@ -6,22 +6,22 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use axum::{
+    Json, Router,
     body::Body,
     extract::{Path, State},
     http::{
-        header::{ACCEPT_RANGES, CACHE_CONTROL, CONNECTION, CONTENT_TYPE},
         StatusCode,
+        header::{ACCEPT_RANGES, CACHE_CONTROL, CONNECTION, CONTENT_TYPE},
     },
     response::{IntoResponse, Response},
     routing::get,
-    Json, Router,
 };
-use pmoaudiocache::{get_audio_cache, register_audio_cache, AudioCacheExt, Cache as AudioCache};
-use pmocovers::{get_cover_cache, register_cover_cache, Cache as CoverCache, CoverCacheExt};
+use pmoaudiocache::{AudioCacheExt, Cache as AudioCache, get_audio_cache, register_audio_cache};
+use pmocovers::{Cache as CoverCache, CoverCacheExt, get_cover_cache, register_cover_cache};
 use pmoparadise::{
-    channels::{ChannelDescriptor, ALL_CHANNELS},
-    stream_channel::register_global_channel_manager,
     ParadiseChannelManager, ParadiseHistoryBuilder,
+    channels::{ALL_CHANNELS, ChannelDescriptor},
+    stream_channel::register_global_channel_manager,
 };
 use pmoplaylist::register_audio_cache as register_playlist_audio_cache;
 use pmoplaylist::{self, PlaylistEventKind};

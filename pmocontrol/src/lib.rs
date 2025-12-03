@@ -18,6 +18,14 @@ pub mod rendering_control_client;
 pub mod soap_client;
 pub mod upnp_renderer;
 
+// pmoserver extension (optional)
+#[cfg(feature = "pmoserver")]
+pub mod openapi;
+#[cfg(feature = "pmoserver")]
+pub mod pmoserver_ext;
+#[cfg(feature = "pmoserver")]
+pub mod sse;
+
 pub use arylic_tcp::ArylicTcpRenderer;
 pub use avtransport_client::{AvTransportClient, PositionInfo, TransportInfo};
 pub use capabilities::{
@@ -38,7 +46,8 @@ pub use upnp_renderer::UpnpRenderer;
 
 pub use discovery::{DeviceDescriptionProvider, DiscoveredEndpoint, DiscoveryManager};
 pub use model::{
-    MediaServerEvent, RendererCapabilities, RendererEvent, RendererId, RendererInfo, RendererProtocol,
+    MediaServerEvent, RendererCapabilities, RendererEvent, RendererId, RendererInfo,
+    RendererProtocol,
 };
 pub use provider::HttpXmlDescriptionProvider;
 pub use registry::{DeviceRegistry, DeviceRegistryRead, DeviceUpdate};

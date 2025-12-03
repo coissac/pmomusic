@@ -6,7 +6,8 @@ use axum::{
 };
 use std::{
     collections::HashMap,
-    sync::{Arc, RwLock}, time::Duration,
+    sync::{Arc, RwLock},
+    time::Duration,
 };
 use tracing::info;
 use xmltree::{Element, EmitterConfig, XMLNode};

@@ -34,10 +34,7 @@ pub(crate) fn spawn_media_server_event_runtime(
         .context("Failed to read listener address")
         .map_err(io_from_anyhow)?;
 
-    info!(
-        "MediaServer event listener bound on {}",
-        listener_addr
-    );
+    info!("MediaServer event listener bound on {}", listener_addr);
 
     let (notify_tx, notify_rx) = unbounded::<IncomingNotify>();
     thread::Builder::new()
@@ -85,10 +82,7 @@ fn run_http_listener(listener: TcpListener, notify_tx: Sender<IncomingNotify>) {
 
                         let notify = IncomingNotify {
                             path: request.path,
-                            sid: request
-                                .headers
-                                .get("sid")
-                                .cloned(),
+                            sid: request.headers.get("sid").cloned(),
                             body: request.body,
                         };
 
@@ -151,10 +145,7 @@ fn read_http_request(stream: &mut TcpStream) -> io::Result<HttpRequest> {
             break;
         }
         if let Some((name, value)) = trimmed.split_once(':') {
-            headers.insert(
-                name.trim().to_ascii_lowercase(),
-                value.trim().to_string(),
-            );
+            headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_string());
         }
     }
 
@@ -352,8 +343,12 @@ impl MediaServerEventWorker {
         let local_ip = determine_local_ip(&remote_host, remote_port)
             .context("Cannot determine local IP for callback")?;
 
-        let callback_url =
-            format!("http://{}:{}{}", format_ip(&local_ip), listener_port, entry.callback_path);
+        let callback_url = format!(
+            "http://{}:{}{}",
+            format_ip(&local_ip),
+            listener_port,
+            entry.callback_path
+        );
 
         debug!(
             server = entry.info.friendly_name.as_str(),
@@ -392,7 +387,7 @@ impl MediaServerEventWorker {
                 .get("TIMEOUT")
                 .and_then(|value| value.to_str().ok()),
         )
-            .unwrap_or(Duration::from_secs(SUBSCRIPTION_TIMEOUT_SECS));
+        .unwrap_or(Duration::from_secs(SUBSCRIPTION_TIMEOUT_SECS));
 
         entry.sid = Some(sid);
         entry.expires_at = Some(Instant::now() + timeout);
@@ -441,7 +436,7 @@ impl MediaServerEventWorker {
                 .get("TIMEOUT")
                 .and_then(|value| value.to_str().ok()),
         )
-            .unwrap_or(Duration::from_secs(SUBSCRIPTION_TIMEOUT_SECS));
+        .unwrap_or(Duration::from_secs(SUBSCRIPTION_TIMEOUT_SECS));
         entry.expires_at = Some(Instant::now() + timeout);
         debug!(
             server = entry.info.friendly_name.as_str(),
@@ -629,22 +624,14 @@ fn parse_notify_payload(server_id: &ServerId, body: &[u8]) -> Vec<MediaServerEve
     let mut system_update_id: Option<u32> = None;
     let mut container_ids: Vec<String> = Vec::new();
 
-    for property in root
-        .children
-        .iter()
-        .filter_map(|node| match node {
+    for property in root.children.iter().filter_map(|node| match node {
+        XMLNode::Element(elem) => Some(elem),
+        _ => None,
+    }) {
+        for child in property.children.iter().filter_map(|node| match node {
             XMLNode::Element(elem) => Some(elem),
             _ => None,
-        })
-    {
-        for child in property
-            .children
-            .iter()
-            .filter_map(|node| match node {
-                XMLNode::Element(elem) => Some(elem),
-                _ => None,
-            })
-        {
+        }) {
             if child.name == "SystemUpdateID" {
                 if let Some(text) = child.get_text() {
                     let trimmed = text.trim();
@@ -694,9 +681,14 @@ fn parse_container_update_ids(raw: &str) -> Vec<String> {
             .collect()
     } else {
         let mut ids = Vec::new();
-        let mut tokens = trimmed.split(',').map(|t| t.trim()).filter(|t| !t.is_empty());
+        let mut tokens = trimmed
+            .split(',')
+            .map(|t| t.trim())
+            .filter(|t| !t.is_empty());
         loop {
-            let Some(id) = tokens.next() else { break; };
+            let Some(id) = tokens.next() else {
+                break;
+            };
             ids.push(id.to_string());
             tokens.next(); // Skip the accompanying UpdateID
         }
@@ -801,7 +793,11 @@ fn parse_host_port(url: &str) -> Option<(String, u16)> {
 fn determine_local_ip(remote_host: &str, remote_port: u16) -> io::Result<IpAddr> {
     let is_ipv6 = remote_host.contains(':') && !remote_host.contains('.');
     let target = if is_ipv6 {
-        format!("[{}]:{}", remote_host.trim_matches(|c| c == '[' || c == ']'), remote_port)
+        format!(
+            "[{}]:{}",
+            remote_host.trim_matches(|c| c == '[' || c == ']'),
+            remote_port
+        )
     } else {
         format!("{}:{}", remote_host, remote_port)
     };

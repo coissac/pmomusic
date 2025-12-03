@@ -53,7 +53,7 @@ mod envelope;
 mod fault;
 mod parser;
 
-pub use builder::{build_soap_response,build_soap_request};
+pub use builder::{build_soap_request, build_soap_response};
 pub use envelope::{SoapBody, SoapEnvelope, SoapHeader};
 pub use fault::{SoapFault, build_soap_fault};
 pub use parser::{SoapAction, parse_soap_action, parse_soap_envelope};

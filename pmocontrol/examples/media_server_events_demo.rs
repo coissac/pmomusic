@@ -62,7 +62,11 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn print_event(cp: &ControlPoint, cache: &mut HashMap<ServerId, MediaServerInfo>, event: &MediaServerEvent) {
+fn print_event(
+    cp: &ControlPoint,
+    cache: &mut HashMap<ServerId, MediaServerInfo>,
+    event: &MediaServerEvent,
+) {
     match event {
         MediaServerEvent::GlobalUpdated {
             server_id,

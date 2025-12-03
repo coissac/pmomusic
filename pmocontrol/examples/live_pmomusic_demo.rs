@@ -1,7 +1,7 @@
 //! Live PMOMusic demo: binds a renderer queue to a dynamic "Live Playlist" container
 //! and monitors ContentDirectory updates over an extended period (~30 minutes).
 
-use std::collections::{VecDeque, HashSet};
+use std::collections::{HashSet, VecDeque};
 use std::env;
 use std::process;
 use std::thread;
@@ -77,9 +77,7 @@ fn main() -> Result<()> {
         .unwrap_or(false);
     println!(
         "Renderer \"{}\": AVTransport present = {}, SetNextAVTransportURI supported = {}",
-        renderer.friendly_name,
-        renderer.capabilities.has_avtransport,
-        supports_set_next
+        renderer.friendly_name, renderer.capabilities.has_avtransport, supports_set_next
     );
 
     let timeout = Duration::from_secs(config.timeout_secs);
@@ -93,7 +91,10 @@ fn main() -> Result<()> {
     let live_playlist_container = match live_playlist_container {
         Some(container) => container,
         None => {
-            println!("No Live Playlist container found on server \"{}\". Exiting.", server_info.friendly_name);
+            println!(
+                "No Live Playlist container found on server \"{}\". Exiting.",
+                server_info.friendly_name
+            );
             process::exit(1);
         }
     };
@@ -112,7 +113,10 @@ fn main() -> Result<()> {
     .context("Failed to collect playable items from Live Playlist container")?;
 
     if playback_items.is_empty() {
-        println!("Live Playlist container '{}' contains no playable tracks.", live_playlist_container.title);
+        println!(
+            "Live Playlist container '{}' contains no playable tracks.",
+            live_playlist_container.title
+        );
         process::exit(1);
     }
 
@@ -204,13 +208,16 @@ fn main() -> Result<()> {
                                 bound_container
                             );
                             // Take a fresh snapshot to observe changes
-                            if let Ok(fresh_snapshot) = control_point.get_queue_snapshot(&renderer_id) {
+                            if let Ok(fresh_snapshot) =
+                                control_point.get_queue_snapshot(&renderer_id)
+                            {
                                 println!(
                                     "  → Queue length after refresh: {} items",
                                     fresh_snapshot.len()
                                 );
                                 if !fresh_snapshot.is_empty() {
-                                    println!("  → First item: {}",
+                                    println!(
+                                        "  → First item: {}",
                                         fresh_snapshot[0].title.as_deref().unwrap_or("<no title>")
                                     );
                                 }
@@ -257,7 +264,10 @@ fn main() -> Result<()> {
         }
     }
 
-    println!("Monitoring finished ({}s elapsed), exiting.", MONITOR_DURATION_SECS);
+    println!(
+        "Monitoring finished ({}s elapsed), exiting.",
+        MONITOR_DURATION_SECS
+    );
     Ok(())
 }
 
@@ -392,7 +402,10 @@ fn find_live_playlist_container(server: &MusicServer) -> Result<Option<MediaEntr
         .browse_root()
         .context("Failed to browse ContentDirectory root")?;
 
-    println!("Root returned {} entries, starting BFS search for Live Playlist...", root_entries.len());
+    println!(
+        "Root returned {} entries, starting BFS search for Live Playlist...",
+        root_entries.len()
+    );
 
     // BFS queue: (entry, depth)
     let mut queue: VecDeque<(MediaEntry, usize)> = VecDeque::new();
@@ -412,7 +425,10 @@ fn find_live_playlist_container(server: &MusicServer) -> Result<Option<MediaEntr
             continue;
         }
         if containers_explored >= MAX_CONTAINERS_TO_EXPLORE {
-            println!("Reached max containers to explore ({}), stopping search.", MAX_CONTAINERS_TO_EXPLORE);
+            println!(
+                "Reached max containers to explore ({}), stopping search.",
+                MAX_CONTAINERS_TO_EXPLORE
+            );
             break;
         }
 
@@ -453,7 +469,10 @@ fn find_live_playlist_container(server: &MusicServer) -> Result<Option<MediaEntr
         }
     }
 
-    println!("No Live Playlist container found after exploring {} containers.", containers_explored);
+    println!(
+        "No Live Playlist container found after exploring {} containers.",
+        containers_explored
+    );
     Ok(None)
 }
 
@@ -482,14 +501,19 @@ fn collect_playable_items_from_container(
                 // Fallback: try with minimal number of items
                 server
                     .browse_children(container_id, 0, FALLBACK_MIN_TRACKS as u32)
-                    .context("Failed to browse Live Playlist container even with minimal item count")?
+                    .context(
+                        "Failed to browse Live Playlist container even with minimal item count",
+                    )?
             } else {
                 return Err(err).context("Failed to browse Live Playlist container children");
             }
         }
     };
 
-    println!("Browse returned {} entries from Live Playlist", children.len());
+    println!(
+        "Browse returned {} entries from Live Playlist",
+        children.len()
+    );
 
     let mut items = Vec::new();
     for entry in &children {
@@ -503,7 +527,10 @@ fn collect_playable_items_from_container(
         }
     }
 
-    println!("Extracted {} playable items from Live Playlist", items.len());
+    println!(
+        "Extracted {} playable items from Live Playlist",
+        items.len()
+    );
     Ok(items)
 }
 

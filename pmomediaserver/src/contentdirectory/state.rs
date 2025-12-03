@@ -1,5 +1,7 @@
 use once_cell::sync::OnceCell;
-use pmoupnp::{services::ServiceInstance, state_variables::StateVarInstance, variable_types::StateValue};
+use pmoupnp::{
+    services::ServiceInstance, state_variables::StateVarInstance, variable_types::StateValue,
+};
 use std::sync::{
     Arc, Mutex, Weak,
     atomic::{AtomicU32, Ordering},

@@ -1,4 +1,4 @@
-/*! 
+/*!
 The PMOMusic SSDP client is a *control point*.
 It must **not** bind to UDP port 1900.
 
@@ -184,11 +184,7 @@ fn parse_message(data: &str, from: SocketAddr) -> Option<SsdpEvent> {
     };
 
     if result.is_none() {
-        trace!(
-            "SSDP message from {} could not be parsed:\n{}",
-            from,
-            data
-        );
+        trace!("SSDP message from {} could not be parsed:\n{}", from, data);
     }
 
     result
@@ -247,7 +243,10 @@ fn handle_search_response(
     let st = match headers.get("ST") {
         Some(s) => s.to_string(),
         None => {
-            trace!("M-SEARCH response from {} missing ST header, ignoring", from);
+            trace!(
+                "M-SEARCH response from {} missing ST header, ignoring",
+                from
+            );
             return None;
         }
     };
@@ -350,8 +349,7 @@ fn parse_max_age(value: Option<&String>) -> u32 {
         }
         trace!(
             "Could not parse max-age from CACHE-CONTROL: '{}', using default {}",
-            v,
-            MAX_AGE
+            v, MAX_AGE
         );
     }
     MAX_AGE

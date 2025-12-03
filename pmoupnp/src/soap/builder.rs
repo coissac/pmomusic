@@ -29,7 +29,6 @@ fn build_soap_envelope_with_body(body_child: Element) -> Result<String, xmltree:
     Ok(String::from_utf8(buf).unwrap())
 }
 
-
 /// Construit une réponse SOAP UPnP
 ///
 /// # Arguments

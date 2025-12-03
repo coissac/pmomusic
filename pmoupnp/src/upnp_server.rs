@@ -290,7 +290,7 @@ impl UpnpServerExt for Server {
         limit: usize,
     ) -> Result<Arc<CoverCache>, anyhow::Error> {
         // Délègue à l'implémentation pmocovers (qui enregistre WebP + JPEG + API)
-        
+
         let cache = pmocovers::CoverCacheExt::init_cover_cache(self, cache_dir, limit).await?;
         Ok(cache)
     }
