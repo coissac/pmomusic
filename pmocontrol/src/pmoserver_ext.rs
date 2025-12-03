@@ -182,7 +182,11 @@ async fn get_renderer_state(
         ("renderer_id" = String, Path, description = "ID unique du renderer")
     ),
     responses(
-        (status = 200, description = "Queue du renderer", body = QueueSnapshot),
+        (
+            status = 200,
+            description = "Playlist complète du renderer (avec index courant)",
+            body = QueueSnapshot
+        ),
         (status = 404, description = "Renderer non trouvé", body = ErrorResponse)
     ),
     tag = "control"
@@ -193,9 +197,9 @@ async fn get_renderer_queue(
 ) -> Result<Json<QueueSnapshot>, (StatusCode, Json<ErrorResponse>)> {
     let rid = RendererId(renderer_id.clone());
 
-    let items = state
+    let (items, current_index) = state
         .control_point
-        .get_queue_snapshot(&rid)
+        .get_full_queue_snapshot(&rid)
         .map_err(|e| {
             (
                 StatusCode::NOT_FOUND,
@@ -222,6 +226,7 @@ async fn get_renderer_queue(
     Ok(Json(QueueSnapshot {
         renderer_id,
         items: queue_items,
+        current_index,
     }))
 }
 

@@ -3,10 +3,21 @@
 //! Cet exemple montre comment enregistrer le Control Point dans une application
 //! PMOMusic complète, en suivant le même pattern que les autres composants.
 
+#[cfg(not(feature = "pmoserver"))]
+fn main() {
+    eprintln!(
+        "This example requires the 'pmoserver' feature. Re-run with `--features pmoserver`."
+    );
+}
+
+#[cfg(feature = "pmoserver")]
 use pmocontrol::ControlPointExt;
+#[cfg(feature = "pmoserver")]
 use pmoserver::Server;
+#[cfg(feature = "pmoserver")]
 use tracing::info;
 
+#[cfg(feature = "pmoserver")]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialiser le logging

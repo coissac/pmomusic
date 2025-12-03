@@ -20,8 +20,8 @@ use crossterm::terminal::{
 use pmocontrol::model::TrackMetadata;
 use pmocontrol::{
     ControlPoint, DeviceRegistryRead, MediaBrowser, MediaEntry, MediaResource, MediaServerEvent,
-    MediaServerInfo, MusicServer, PlaybackItem, PlaybackPositionInfo, RendererEvent, RendererInfo,
-    TransportControl, VolumeControl,
+    MediaServerInfo, MusicServer, PlaybackItem, PlaybackPosition, PlaybackStatus,
+    PlaybackPositionInfo, RendererEvent, RendererInfo, TransportControl, VolumeControl,
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
@@ -32,7 +32,6 @@ use ratatui::Terminal;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
 const DEFAULT_DISCOVERY_SECS: u64 = 15;
-const PROGRESS_BAR_WIDTH: usize = 32;
 const TICK_RATE: Duration = Duration::from_millis(200);
 
 #[derive(Clone)]
@@ -138,7 +137,9 @@ struct App {
     mode: Mode,
     ui_state: UiState,
     queue_snapshot: Vec<PlaybackItem>,
+    queue_current_index: Option<usize>,
     show_queue_overlay: bool,
+    show_help_overlay: bool,
     pending_binding_container: Option<String>,
     status_line: String,
     known_tracks: std::collections::HashMap<String, TrackMetadata>,
@@ -182,7 +183,9 @@ impl App {
             mode: Mode::SelectRenderer,
             ui_state: UiState::placeholder(),
             queue_snapshot: Vec::new(),
+            queue_current_index: None,
             show_queue_overlay: false,
+            show_help_overlay: false,
             pending_binding_container: None,
             status_line: "Sélectionne un renderer avec ↑/↓ et Entrée".to_string(),
             known_tracks: HashMap::new(),
@@ -203,6 +206,10 @@ impl App {
 
         if self.show_queue_overlay {
             self.draw_queue_overlay(terminal);
+        }
+
+        if self.show_help_overlay {
+            self.draw_help_overlay(terminal);
         }
 
         if matches!(self.mode, Mode::BindingPrompt) {
@@ -387,35 +394,60 @@ impl App {
 
     fn draw_help(&self, f: &mut ratatui::Frame<'_>, area: Rect) {
         let lines = vec![
-            Line::from("Commandes: r=Play p=Pause s=Stop n=Next +/- Volume m=Mute"),
-            Line::from("           i=Infos k=Queue b=Binding h=Aide q=Quit"),
-            Line::from("Switch   : R=Renderer menu | S=Serveur menu"),
+            Line::from("Commandes: h=Aide détaillée | R=Renderer | S=Serveur"),
+            Line::from("           r=Play p=Pause s=Stop n=Next"),
+            Line::from("           +=Vol+ -=Vol- m=Mute i=Infos k=Queue b=Binding"),
+            Line::from("           q=Quit | ESC ferme les overlays"),
         ];
         let paragraph =
-            Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("Aide"));
+            Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("Raccourcis"));
         f.render_widget(paragraph, area);
+    }
+
+    fn draw_help_overlay(&self, f: &mut ratatui::Frame<'_>) {
+        let area = centered_rect(70, 60, f.size());
+        let lines = vec![
+            Line::from("Raccourcis disponibles:"),
+            Line::from("  R / S   : re-sélection du renderer / serveur"),
+            Line::from("  n / p   : navigation dans la file"),
+            Line::from("  +/-/m   : volume et mute"),
+            Line::from("  k       : afficher la queue actuelle"),
+            Line::from("  b       : afficher le binding playlist"),
+            Line::from("  h       : fermer cette aide"),
+            Line::from("  ESC     : fermer les overlays"),
+        ];
+        let block = Block::default()
+            .title("Aide détaillée (h pour fermer)")
+            .borders(Borders::ALL)
+            .style(Style::default().bg(Color::Black));
+        f.render_widget(Clear, area);
+        f.render_widget(Paragraph::new(lines).block(block), area);
     }
 
     fn draw_queue_overlay(&self, f: &mut ratatui::Frame<'_>) {
         let area = centered_rect(80, 70, f.size());
         let mut lines = Vec::new();
-        lines.push(Line::from("Queue actuelle:"));
+        lines.push(Line::from("Playlist actuelle (▶ = en cours):"));
         if self.queue_snapshot.is_empty() {
             lines.push(Line::from("  <vide>"));
         } else {
             for (idx, item) in self.queue_snapshot.iter().enumerate() {
                 let title = item.title.as_deref().unwrap_or("<titre>");
                 let artist = item.artist.as_deref().unwrap_or("");
+                let prefix = match self.queue_current_index {
+                    Some(current) if current == idx => "▶",
+                    _ => " ",
+                };
                 let line = if artist.is_empty() {
-                    format!("[{idx}] {title}")
+                    format!("{prefix} [{idx}] {title}")
                 } else {
-                    format!("[{idx}] {artist} - {title}")
+                    format!("{prefix} [{idx}] {artist} - {title}")
                 };
                 lines.push(Line::from(line));
             }
         }
         let block = Block::default()
-            .title("Queue (fermer avec k ou Esc)")
+            .title("Playlist (fermer avec k ou Esc)")
             .borders(Borders::ALL)
             .style(Style::default().bg(Color::Black));
         f.render_widget(Clear, area);
@@ -488,12 +520,15 @@ impl App {
                 self.music_server = None;
                 self.browser = None;
                 self.queue_snapshot.clear();
+                self.queue_current_index = None;
                 self.known_tracks.clear();
                 self.pending_binding_container = None;
                 self.ui_state.current_track_uri = None;
                 self.ui_state.server_name = None;
                 self.show_queue_overlay = false;
+                self.show_help_overlay = false;
                 self.mode = Mode::SelectServer;
+                self.update_renderer_status_from_device();
                 self.status_line = "Sélectionne un serveur avec ↑/↓ et Entrée".to_string();
             }
             _ => {}
@@ -623,7 +658,12 @@ impl App {
                 self.open_server_menu();
             }
             KeyCode::Char('h') => {
-                self.ui_state.set_status("Aide affichée");
+                self.show_help_overlay = !self.show_help_overlay;
+                if self.show_help_overlay {
+                    self.ui_state.set_status("Aide ouverte");
+                } else {
+                    self.ui_state.set_status("Aide fermée");
+                }
             }
             KeyCode::Char('p') => {
                 self.pause_renderer()?;
@@ -657,6 +697,7 @@ impl App {
             }
             KeyCode::Esc => {
                 self.show_queue_overlay = false;
+                self.show_help_overlay = false;
             }
             _ => {}
         }
@@ -684,7 +725,12 @@ impl App {
 
         self.control_point.clear_queue(&renderer_id)?;
         self.control_point.enqueue_items(&renderer_id, items)?;
-        self.queue_snapshot = self.control_point.get_queue_snapshot(&renderer_id)?;
+        let (full_queue, current_index) =
+            self.control_point
+                .get_full_queue_snapshot(&renderer_id)
+                .context("failed to snapshot queue after enqueue")?;
+        self.queue_snapshot = full_queue;
+        self.queue_current_index = current_index;
         self.record_queue_metadata();
         self.pending_binding_container = Some(current_container_id);
         self.status_line = format!("File prête ({})", self.queue_snapshot.len());
@@ -715,6 +761,7 @@ impl App {
         self.pending_binding_container = None;
         self.mode = Mode::Control;
         self.start_playback()?;
+        self.update_renderer_status_from_device();
         Ok(())
     }
 
@@ -827,11 +874,29 @@ impl App {
         Ok(())
     }
 
+    fn update_renderer_status_from_device(&mut self) {
+        if let Ok(renderer) = self.get_renderer() {
+            if let Ok(volume) = renderer.volume() {
+                self.ui_state.volume = Some(volume);
+            }
+            if let Ok(mute) = renderer.mute() {
+                self.ui_state.mute = Some(mute);
+            }
+            if let Ok(state) = renderer.playback_state() {
+                self.ui_state.playback_state = Some(state);
+            }
+            if let Ok(position) = renderer.playback_position() {
+                self.ui_state.position = Some(position);
+            }
+        }
+    }
+
     fn open_renderer_menu(&mut self) {
         self.mode = Mode::SelectRenderer;
         self.status_line = "Sélectionne un renderer avec ↑/↓ et Entrée".to_string();
         self.ui_state.set_status("Menu renderer ouvert");
         self.show_queue_overlay = false;
+        self.show_help_overlay = false;
     }
 
     fn open_server_menu(&mut self) {
@@ -840,6 +905,7 @@ impl App {
             self.status_line = "Sélectionne un serveur avec ↑/↓ et Entrée".to_string();
             self.ui_state.set_status("Menu serveur ouvert");
             self.show_queue_overlay = false;
+            self.show_help_overlay = false;
         } else {
             self.ui_state.set_status("Sélectionne d'abord un renderer");
         }
@@ -882,9 +948,24 @@ impl App {
     }
 
     fn refresh_queue_snapshot(&mut self, renderer_id: &pmocontrol::model::RendererId) {
-        if let Ok(queue) = self.control_point.get_queue_snapshot(renderer_id) {
+        if let Ok((queue, current_index)) =
+            self.control_point.get_full_queue_snapshot(renderer_id)
+        {
             self.queue_snapshot = queue;
+            self.queue_current_index = current_index;
             self.record_queue_metadata();
+            if let Some(idx) = self.queue_current_index {
+                if let Some(item) = self.queue_snapshot.get(idx).cloned() {
+                    let needs_update = self
+                        .ui_state
+                        .current_track_uri
+                        .as_deref()
+                        != Some(item.uri.as_str());
+                    if needs_update {
+                        self.apply_item_as_current(&item);
+                    }
+                }
+            }
         }
     }
 
@@ -965,6 +1046,13 @@ impl App {
                     }
                 }
             }
+            RendererEvent::QueueUpdated { id, queue_length } => {
+                if id == renderer_id {
+                    self.refresh_queue_snapshot(&renderer_id);
+                    self.ui_state
+                        .set_status(format!("File mise à jour ({queue_length})"));
+                }
+            }
         }
     }
 
@@ -1034,7 +1122,7 @@ fn run_app(mut app: App) -> Result<()> {
         }
 
         if !renderer_events_started {
-            if let Some(renderer_id) = app.renderer_id() {
+            if app.renderer_id().is_some() {
                 start_event_threads(Arc::clone(&app.control_point), event_tx.clone());
                 renderer_events_started = true;
             }
@@ -1241,15 +1329,26 @@ fn render_metadata_block(metadata: Option<&TrackMetadata>) -> Vec<Line<'static>>
             lines.push(Line::from(format!("Genre  : {genre}")));
         }
         if let Some(date) = meta.date.as_deref() {
-            lines.push(Line::from(format!("Date   : {date}")));
+            lines.push(Line::from(format!("Date   : {}", format_date(date))));
         }
         if let Some(track) = meta.track_number.as_deref() {
             lines.push(Line::from(format!("Piste  : {track}")));
+        }
+        if let Some(art) = meta.album_art_uri.as_deref() {
+            lines.push(Line::from(format!("Cover  : {art}")));
         }
     } else {
         lines.push(Line::from("(En attente des métadonnées...)"));
     }
     lines
+}
+
+fn format_date(raw: &str) -> String {
+    let parts: Vec<&str> = raw.split('-').collect();
+    if parts.len() == 3 && parts[1] == "01" && parts[2] == "01" {
+        return parts[0].to_string();
+    }
+    raw.to_string()
 }
 
 fn build_progress_gauge(position: &PlaybackPositionInfo) -> Gauge<'static> {

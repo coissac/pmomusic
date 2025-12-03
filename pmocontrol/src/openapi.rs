@@ -94,8 +94,10 @@ pub struct QueueItem {
 pub struct QueueSnapshot {
     /// ID du renderer
     pub renderer_id: String,
-    /// Items de la queue
+    /// Items de la queue (playlist complète)
     pub items: Vec<QueueItem>,
+    /// Index courant dans la playlist (None si rien n'est en cours)
+    pub current_index: Option<usize>,
 }
 
 // ============================================================================

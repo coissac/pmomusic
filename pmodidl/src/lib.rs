@@ -223,7 +223,7 @@ pub struct Item {
 /// Ressource média (fichier audio)
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema, Reflect)]
 pub struct Resource {
-    #[serde(rename = "@protocolInfo")]
+    #[serde(rename = "@protocolInfo", default)]
     pub protocol_info: String,
 
     #[serde(rename = "@bitsPerSample", skip_serializing_if = "Option::is_none")]

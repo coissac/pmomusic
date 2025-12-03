@@ -18,6 +18,7 @@ use std::io;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use pmocontrol::model::TrackMetadata;
 use pmocontrol::{
     ControlPoint, DeviceRegistryRead, PlaybackPositionInfo, PlaybackState, RendererEvent,
     RendererId, RendererInfo,
@@ -123,6 +124,8 @@ fn event_matches_id(event: &RendererEvent, id: &RendererId) -> bool {
         RendererEvent::PositionChanged { id: eid, .. } => eid == id,
         RendererEvent::VolumeChanged { id: eid, .. } => eid == id,
         RendererEvent::MuteChanged { id: eid, .. } => eid == id,
+        RendererEvent::MetadataChanged { id: eid, .. } => eid == id,
+        RendererEvent::QueueUpdated { id: eid, .. } => eid == id,
     }
 }
 
@@ -188,5 +191,32 @@ fn print_event(event: &RendererEvent) {
         RendererEvent::MuteChanged { id, mute } => {
             println!("[{}] [{}] MuteChanged: {}", ts, id.0, mute);
         }
+        RendererEvent::MetadataChanged { id, metadata } => {
+            println!(
+                "[{}] [{}] MetadataChanged: {}",
+                ts,
+                id.0,
+                format_metadata(metadata)
+            );
+        }
+        RendererEvent::QueueUpdated { id, queue_length } => {
+            println!(
+                "[{}] [{}] QueueUpdated: queue_length={}",
+                ts, id.0, queue_length
+            );
+        }
+    }
+}
+
+fn format_metadata(meta: &TrackMetadata) -> String {
+    let title = meta.title.as_deref().unwrap_or("<no title>");
+    let artist = meta.artist.as_deref().unwrap_or("");
+    let album = meta.album.as_deref().unwrap_or("");
+    if !artist.is_empty() && !album.is_empty() {
+        format!("{} - {} ({})", artist, title, album)
+    } else if !artist.is_empty() {
+        format!("{} - {}", artist, title)
+    } else {
+        title.to_string()
     }
 }

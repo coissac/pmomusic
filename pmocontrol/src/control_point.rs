@@ -505,7 +505,7 @@ impl ControlPoint {
         let removed = self
             .runtime
             .with_queue_mut(renderer_id, |queue| {
-                let removed = queue.len();
+                let removed = queue.upcoming_len();
                 queue.clear();
                 removed
             })
@@ -549,7 +549,7 @@ impl ControlPoint {
             .runtime
             .with_queue_mut(renderer_id, |queue| {
                 queue.enqueue_many(items);
-                queue.len()
+                queue.upcoming_len()
             })
             .ok_or_else(|| Self::runtime_entry_missing(renderer_id))?;
 
@@ -584,6 +584,24 @@ impl ControlPoint {
 
         self.runtime
             .queue_snapshot(renderer_id)
+            .ok_or_else(|| Self::runtime_entry_missing(renderer_id))
+    }
+
+    pub fn get_full_queue_snapshot(
+        &self,
+        renderer_id: &RendererId,
+    ) -> anyhow::Result<(Vec<PlaybackItem>, Option<usize>)> {
+        if !self.runtime.has_entry(renderer_id) {
+            let err = Self::runtime_entry_missing(renderer_id);
+            warn!(
+                renderer = renderer_id.0.as_str(),
+                "Cannot snapshot full queue: renderer not registered in runtime"
+            );
+            return Err(err);
+        }
+
+        self.runtime
+            .queue_full_snapshot(renderer_id)
             .ok_or_else(|| Self::runtime_entry_missing(renderer_id))
     }
 
@@ -912,11 +930,16 @@ impl RuntimeState {
         entries.get(id).map(|entry| entry.queue.snapshot())
     }
 
+    fn queue_full_snapshot(&self, id: &RendererId) -> Option<(Vec<PlaybackItem>, Option<usize>)> {
+        let entries = self.entries.lock().unwrap();
+        entries.get(id).map(|entry| entry.queue.full_snapshot())
+    }
+
     fn dequeue_next(&self, id: &RendererId) -> Option<(PlaybackItem, usize)> {
         let mut entries = self.entries.lock().unwrap();
         let entry = entries.get_mut(id)?;
         let item = entry.queue.dequeue()?;
-        let remaining = entry.queue.len();
+        let remaining = entry.queue.upcoming_len();
         Some((item, remaining))
     }
 

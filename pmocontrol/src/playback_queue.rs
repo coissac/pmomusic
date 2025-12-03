@@ -1,5 +1,3 @@
-use std::collections::VecDeque;
-
 use crate::media_server::ServerId;
 
 #[derive(Clone, Debug)]
@@ -37,13 +35,15 @@ impl PlaybackItem {
 
 #[derive(Clone, Debug, Default)]
 pub struct PlaybackQueue {
-    items: VecDeque<PlaybackItem>,
+    items: Vec<PlaybackItem>,
+    current_index: Option<usize>,
 }
 
 impl PlaybackQueue {
     pub fn new() -> Self {
         Self {
-            items: VecDeque::new(),
+            items: Vec::new(),
+            current_index: None,
         }
     }
 
@@ -57,31 +57,76 @@ impl PlaybackQueue {
 
     pub fn clear(&mut self) {
         self.items.clear();
+        self.current_index = None;
     }
 
     pub fn enqueue(&mut self, item: PlaybackItem) {
-        self.items.push_back(item);
+        self.items.push(item);
     }
 
     pub fn enqueue_many<I: IntoIterator<Item = PlaybackItem>>(&mut self, items: I) {
         for item in items {
-            self.items.push_back(item);
+            self.items.push(item);
         }
     }
 
     pub fn enqueue_front(&mut self, item: PlaybackItem) {
-        self.items.push_front(item);
+        let insert_at = match self.current_index {
+            Some(idx) => {
+                let next = idx.saturating_add(1);
+                next.min(self.items.len())
+            }
+            None => 0,
+        };
+        self.items.insert(insert_at, item);
+        // current_index remains unchanged; insertion happens after the cursor.
     }
 
     pub fn dequeue(&mut self) -> Option<PlaybackItem> {
-        self.items.pop_front()
+        if self.items.is_empty() {
+            return None;
+        }
+
+        match self.current_index {
+            None => {
+                self.current_index = Some(0);
+                self.items.get(0).cloned()
+            }
+            Some(idx) => {
+                let next_idx = idx + 1;
+                if next_idx >= self.items.len() {
+                    None
+                } else {
+                    self.current_index = Some(next_idx);
+                    self.items.get(next_idx).cloned()
+                }
+            }
+        }
     }
 
     pub fn peek(&self) -> Option<&PlaybackItem> {
-        self.items.front()
+        if let Some(idx) = self.current_index {
+            self.items.get(idx)
+        } else {
+            self.items.first()
+        }
     }
 
     pub fn snapshot(&self) -> Vec<PlaybackItem> {
-        self.items.iter().cloned().collect()
+        match self.current_index {
+            None => self.items.clone(),
+            Some(idx) => self.items.iter().skip(idx + 1).cloned().collect(),
+        }
+    }
+
+    pub fn upcoming_len(&self) -> usize {
+        match self.current_index {
+            None => self.items.len(),
+            Some(idx) => self.items.len().saturating_sub(idx + 1),
+        }
+    }
+
+    pub fn full_snapshot(&self) -> (Vec<PlaybackItem>, Option<usize>) {
+        (self.items.clone(), self.current_index)
     }
 }
