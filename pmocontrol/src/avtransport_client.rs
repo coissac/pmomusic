@@ -391,6 +391,8 @@ pub struct PositionInfo {
     pub track_duration: Option<String>, // HH:MM:SS or None
     pub rel_time: Option<String>,       // HH:MM:SS or None
     pub abs_time: Option<String>,       // HH:MM:SS or None
+    pub track_metadata: Option<String>, // DIDL-Lite XML or None
+    pub track_uri: Option<String>,      // Current track URI
 }
 
 impl AvTransportClient {
@@ -442,11 +444,15 @@ fn parse_position_info(envelope: &SoapEnvelope) -> Result<PositionInfo> {
     let track_duration = opt(response, "TrackDuration");
     let rel_time = opt(response, "RelTime");
     let abs_time = opt(response, "AbsTime");
+    let track_metadata = opt(response, "TrackMetaData");
+    let track_uri = opt(response, "TrackURI");
 
     Ok(PositionInfo {
         track,
         track_duration,
         rel_time,
         abs_time,
+        track_metadata,
+        track_uri,
     })
 }

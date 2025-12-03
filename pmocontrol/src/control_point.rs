@@ -14,6 +14,7 @@ use crate::capabilities::{
     PlaybackPosition, PlaybackPositionInfo, PlaybackState, PlaybackStatus, TransportControl,
     VolumeControl,
 };
+use crate::model::TrackMetadata;
 use crate::discovery::DiscoveryManager;
 use crate::events::{MediaServerEventBus, RendererEventBus};
 use crate::media_server::{
@@ -169,6 +170,22 @@ impl ControlPoint {
                                 id: renderer_id.clone(),
                                 position: position.clone(),
                             });
+                        }
+
+                        // Extract and emit metadata changes
+                        if let Some(metadata) = extract_track_metadata(&position) {
+                            let metadata_changed = match prev_snapshot.last_metadata.as_ref() {
+                                Some(prev) => prev != &metadata,
+                                None => true,
+                            };
+
+                            if metadata_changed {
+                                runtime_cp.emit_renderer_event(RendererEvent::MetadataChanged {
+                                    id: renderer_id.clone(),
+                                    metadata: metadata.clone(),
+                                });
+                                new_snapshot.last_metadata = Some(metadata);
+                            }
                         }
 
                         new_snapshot.position = Some(position);
@@ -601,7 +618,6 @@ impl ControlPoint {
 
         let playback = (|| -> anyhow::Result<()> {
             renderer.play_uri(&item.uri, "")?;
-            renderer.play()?;
             Ok(())
         })();
 
@@ -809,6 +825,7 @@ struct RendererRuntimeSnapshot {
     position: Option<PlaybackPositionInfo>,
     last_volume: Option<u16>,
     last_mute: Option<bool>,
+    last_metadata: Option<TrackMetadata>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1109,6 +1126,13 @@ fn playback_item_from_entry(server: &MusicServer, entry: &MediaEntry) -> Option<
     item.title = Some(entry.title.clone());
     item.server_id = Some(server.id().clone());
     item.object_id = Some(entry.id.clone());
+    item.artist = entry.artist.clone();
+    item.album = entry.album.clone();
+    item.genre = entry.genre.clone();
+    item.album_art_uri = entry.album_art_uri.clone();
+    item.date = entry.date.clone();
+    item.track_number = entry.track_number.clone();
+    item.creator = entry.creator.clone();
 
     Some(item)
 }
@@ -1206,4 +1230,34 @@ fn playback_position_equal(a: &PlaybackPositionInfo, b: &PlaybackPositionInfo) -
         && a.rel_time == b.rel_time
         && a.abs_time == b.abs_time
         && a.track_duration == b.track_duration
+        && a.track_metadata == b.track_metadata
+        && a.track_uri == b.track_uri
+}
+
+/// Extract TrackMetadata from DIDL-Lite XML in PlaybackPositionInfo.
+fn extract_track_metadata(position: &PlaybackPositionInfo) -> Option<TrackMetadata> {
+    let didl_xml = position.track_metadata.as_ref()?;
+
+    // Parse DIDL-Lite XML
+    let didl = match pmodidl::parse_metadata::<pmodidl::DIDLLite>(didl_xml) {
+        Ok(parsed) => parsed.data,
+        Err(err) => {
+            debug!(error = %err, "Failed to parse DIDL-Lite metadata from GetPositionInfo");
+            return None;
+        }
+    };
+
+    // Extract first item metadata
+    let item = didl.items.first()?;
+
+    Some(TrackMetadata {
+        title: Some(item.title.clone()),
+        artist: item.artist.clone(),
+        album: item.album.clone(),
+        genre: item.genre.clone(),
+        album_art_uri: item.album_art.clone(),
+        date: item.date.clone(),
+        track_number: item.original_track_number.clone(),
+        creator: item.creator.clone(),
+    })
 }

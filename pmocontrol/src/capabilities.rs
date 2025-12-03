@@ -12,6 +12,8 @@ pub struct PlaybackPositionInfo {
     pub rel_time: Option<String>,       // position courante
     pub abs_time: Option<String>,       // si pertinent
     pub track_duration: Option<String>, // durée totale
+    pub track_metadata: Option<String>, // DIDL-Lite XML from GetPositionInfo
+    pub track_uri: Option<String>,      // Current track URI
 }
 pub trait PlaybackPosition {
     fn playback_position(&self) -> Result<PlaybackPositionInfo>;

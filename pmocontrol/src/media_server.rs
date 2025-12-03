@@ -47,6 +47,13 @@ pub struct MediaEntry {
     pub is_container: bool,
     pub class: String,
     pub resources: Vec<MediaResource>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub genre: Option<String>,
+    pub album_art_uri: Option<String>,
+    pub date: Option<String>,
+    pub track_number: Option<String>,
+    pub creator: Option<String>,
 }
 
 /// Backend-agnostic media browsing contract.
@@ -323,6 +330,13 @@ fn map_didl_entries(xml: &str) -> Result<Vec<MediaEntry>> {
             is_container: true,
             class: container.class,
             resources: Vec::new(),
+            artist: None,
+            album: None,
+            genre: None,
+            album_art_uri: None,
+            date: None,
+            track_number: None,
+            creator: None,
         });
     }
 
@@ -344,6 +358,13 @@ fn map_didl_entries(xml: &str) -> Result<Vec<MediaEntry>> {
             is_container: false,
             class: item.class,
             resources,
+            artist: item.artist,
+            album: item.album,
+            genre: item.genre,
+            album_art_uri: item.album_art,
+            date: item.date,
+            track_number: item.original_track_number,
+            creator: item.creator,
         });
     }
 

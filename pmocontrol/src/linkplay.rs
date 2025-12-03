@@ -227,6 +227,8 @@ impl LinkPlayStatus {
             } else {
                 None
             },
+            track_metadata: None,
+            track_uri: None,
         }
     }
 }

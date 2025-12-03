@@ -356,6 +356,13 @@ fn playback_item_from_entry(server: &MusicServer, entry: &MediaEntry) -> Option<
     item.title = Some(entry.title.clone());
     item.server_id = Some(server.id().clone());
     item.object_id = Some(entry.id.clone());
+    item.artist = entry.artist.clone();
+    item.album = entry.album.clone();
+    item.genre = entry.genre.clone();
+    item.album_art_uri = entry.album_art_uri.clone();
+    item.date = entry.date.clone();
+    item.track_number = entry.track_number.clone();
+    item.creator = entry.creator.clone();
     Some(item)
 }
 
@@ -427,6 +434,34 @@ fn spawn_renderer_event_thread(
                         RendererEvent::MuteChanged { id, mute } => {
                             if id == renderer_id {
                                 println!("\n[EVENT] Mute changed: {}", mute);
+                                print!("> ");
+                                io::stdout().flush().ok();
+                            }
+                        }
+                        RendererEvent::MetadataChanged { id, metadata } => {
+                            if id == renderer_id {
+                                println!("\n[EVENT] Metadata changed:");
+                                if let Some(title) = &metadata.title {
+                                    println!("  Title: {}", title);
+                                }
+                                if let Some(artist) = &metadata.artist {
+                                    println!("  Artist: {}", artist);
+                                }
+                                if let Some(album) = &metadata.album {
+                                    println!("  Album: {}", album);
+                                }
+                                if let Some(genre) = &metadata.genre {
+                                    println!("  Genre: {}", genre);
+                                }
+                                if let Some(date) = &metadata.date {
+                                    println!("  Date: {}", date);
+                                }
+                                if let Some(track_number) = &metadata.track_number {
+                                    println!("  Track: {}", track_number);
+                                }
+                                if let Some(album_art_uri) = &metadata.album_art_uri {
+                                    println!("  Album Art: {}", album_art_uri);
+                                }
                                 print!("> ");
                                 io::stdout().flush().ok();
                             }
@@ -722,7 +757,16 @@ fn show_queue(
     } else {
         for (idx, item) in queue.iter().enumerate() {
             let title = item.title.as_deref().unwrap_or("<no title>");
-            println!("  [{}] {}", idx, title);
+            let artist = item.artist.as_deref().unwrap_or("");
+            let album = item.album.as_deref().unwrap_or("");
+
+            if !artist.is_empty() && !album.is_empty() {
+                println!("  [{}] {} - {} ({})", idx, artist, title, album);
+            } else if !artist.is_empty() {
+                println!("  [{}] {} - {}", idx, artist, title);
+            } else {
+                println!("  [{}] {}", idx, title);
+            }
         }
     }
 

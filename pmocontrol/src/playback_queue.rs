@@ -8,6 +8,13 @@ pub struct PlaybackItem {
     pub title: Option<String>,
     pub server_id: Option<ServerId>,
     pub object_id: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub genre: Option<String>,
+    pub album_art_uri: Option<String>,
+    pub date: Option<String>,
+    pub track_number: Option<String>,
+    pub creator: Option<String>,
 }
 
 impl PlaybackItem {
@@ -17,6 +24,13 @@ impl PlaybackItem {
             title: None,
             server_id: None,
             object_id: None,
+            artist: None,
+            album: None,
+            genre: None,
+            album_art_uri: None,
+            date: None,
+            track_number: None,
+            creator: None,
         }
     }
 }

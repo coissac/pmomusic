@@ -301,6 +301,8 @@ impl ArylicPlaybackInfo {
             } else {
                 None
             },
+            track_metadata: None,
+            track_uri: None,
         }
     }
 }

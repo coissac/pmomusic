@@ -4,6 +4,18 @@ use crate::media_server::ServerId;
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RendererId(pub String);
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct TrackMetadata {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub genre: Option<String>,
+    pub album_art_uri: Option<String>,
+    pub date: Option<String>,
+    pub track_number: Option<String>,
+    pub creator: Option<String>,
+}
+
 #[derive(Clone, Debug)]
 pub enum RendererProtocol {
     UpnpAvOnly,
@@ -78,6 +90,10 @@ pub enum RendererEvent {
     MuteChanged {
         id: RendererId,
         mute: bool,
+    },
+    MetadataChanged {
+        id: RendererId,
+        metadata: TrackMetadata,
     },
 }
 

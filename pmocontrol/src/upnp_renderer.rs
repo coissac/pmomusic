@@ -290,6 +290,8 @@ impl PlaybackPosition for UpnpRenderer {
             rel_time: raw.rel_time,
             abs_time: raw.abs_time,
             track_duration: raw.track_duration,
+            track_metadata: raw.track_metadata,
+            track_uri: raw.track_uri,
         })
     }
 }
