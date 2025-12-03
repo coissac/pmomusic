@@ -5,9 +5,7 @@
 
 #[cfg(not(feature = "pmoserver"))]
 fn main() {
-    eprintln!(
-        "This example requires the 'pmoserver' feature. Re-run with `--features pmoserver`."
-    );
+    eprintln!("This example requires the 'pmoserver' feature. Re-run with `--features pmoserver`.");
 }
 
 #[cfg(feature = "pmoserver")]

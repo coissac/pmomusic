@@ -129,4 +129,16 @@ impl PlaybackQueue {
     pub fn full_snapshot(&self) -> (Vec<PlaybackItem>, Option<usize>) {
         (self.items.clone(), self.current_index)
     }
+
+    pub fn set_current_index(&mut self, index: Option<usize>) {
+        if let Some(idx) = index {
+            if idx < self.items.len() {
+                self.current_index = Some(idx);
+            } else {
+                self.current_index = None;
+            }
+        } else {
+            self.current_index = None;
+        }
+    }
 }

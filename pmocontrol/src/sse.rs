@@ -11,19 +11,19 @@
 //! - GET /api/control/events - Tous les événements (agrégés)
 
 #[cfg(feature = "pmoserver")]
+use crate::PlaybackState;
+#[cfg(feature = "pmoserver")]
 use crate::control_point::ControlPoint;
 #[cfg(feature = "pmoserver")]
 use crate::model::{MediaServerEvent, RendererEvent};
 #[cfg(feature = "pmoserver")]
-use crate::PlaybackState;
-#[cfg(feature = "pmoserver")]
 use async_stream::stream;
 #[cfg(feature = "pmoserver")]
 use axum::{
-    extract::State,
-    response::sse::{Event, KeepAlive, Sse},
-    response::IntoResponse,
     Router,
+    extract::State,
+    response::IntoResponse,
+    response::sse::{Event, KeepAlive, Sse},
 };
 #[cfg(feature = "pmoserver")]
 use serde::Serialize;
@@ -276,9 +276,7 @@ pub async fn media_server_events_sse(
     ),
     tag = "control"
 )]
-pub async fn all_events_sse(
-    State(control_point): State<Arc<ControlPoint>>,
-) -> impl IntoResponse {
+pub async fn all_events_sse(State(control_point): State<Arc<ControlPoint>>) -> impl IntoResponse {
     // Convert crossbeam channels to tokio channels for async compatibility
     let (renderer_tx, mut renderer_rx_tokio) = tokio::sync::mpsc::unbounded_channel();
     let (server_tx, mut server_rx_tokio) = tokio::sync::mpsc::unbounded_channel();

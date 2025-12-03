@@ -118,7 +118,7 @@ pub struct Container {
     #[serde(rename = "@id")]
     pub id: String,
 
-    #[serde(rename = "@parentID")]
+    #[serde(rename = "@parentID", default)]
     pub parent_id: String,
 
     #[serde(rename = "@restricted", skip_serializing_if = "Option::is_none")]
@@ -133,7 +133,7 @@ pub struct Container {
     #[serde(rename = "dc:title", alias = "title")]
     pub title: String,
 
-    #[serde(rename = "upnp:class", alias = "class")]
+    #[serde(rename = "upnp:class", alias = "class", default)]
     pub class: String,
 
     #[serde(rename = "container", default)]
@@ -149,7 +149,7 @@ pub struct Item {
     #[serde(rename = "@id")]
     pub id: String,
 
-    #[serde(rename = "@parentID")]
+    #[serde(rename = "@parentID", default)]
     pub parent_id: String,
 
     #[serde(rename = "@restricted", skip_serializing_if = "Option::is_none")]
@@ -165,7 +165,7 @@ pub struct Item {
     )]
     pub creator: Option<String>,
 
-    #[serde(rename = "upnp:class", alias = "class")]
+    #[serde(rename = "upnp:class", alias = "class", default)]
     pub class: String,
 
     #[serde(
@@ -238,7 +238,7 @@ pub struct Resource {
     #[serde(rename = "@duration", skip_serializing_if = "Option::is_none")]
     pub duration: Option<String>,
 
-    #[serde(rename = "$text")]
+    #[serde(rename = "$text", default)]
     pub url: String,
 }
 

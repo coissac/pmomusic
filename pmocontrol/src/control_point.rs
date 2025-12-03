@@ -45,6 +45,8 @@ struct PlaylistBinding {
     /// Flag used internally to signal that the queue should be refreshed
     /// from the server container.
     pending_refresh: bool,
+    /// Whether the next refresh should auto-start playback if the renderer is idle.
+    auto_play_on_refresh: bool,
 }
 
 /// Control point minimal :
@@ -326,6 +328,7 @@ impl ControlPoint {
                                     &bindings_for_media_worker,
                                     &renderer_id,
                                     &event_bus_for_media_worker,
+                                    None,
                                 ) {
                                     warn!(
                                         renderer = renderer_id.0.as_str(),
@@ -380,6 +383,7 @@ impl ControlPoint {
                             &bindings_for_periodic,
                             &renderer_id,
                             &event_bus_for_periodic,
+                            None,
                         ) {
                             warn!(
                                 renderer = renderer_id.0.as_str(),
@@ -718,6 +722,29 @@ impl ControlPoint {
         Ok(())
     }
 
+    fn start_queue_playback_if_idle(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
+        let snapshot = self.runtime.snapshot_for(renderer_id);
+        let renderer_playing = matches!(snapshot.state, Some(PlaybackState::Playing));
+        if renderer_playing || self.runtime.is_playing_from_queue(renderer_id) {
+            return Ok(());
+        }
+
+        let has_items = self
+            .runtime
+            .queue_snapshot(renderer_id)
+            .map(|items| !items.is_empty())
+            .unwrap_or(false);
+        if !has_items {
+            debug!(
+                renderer = renderer_id.0.as_str(),
+                "start_queue_playback_if_idle: queue is empty"
+            );
+            return Ok(());
+        }
+
+        self.play_next_from_queue(renderer_id)
+    }
+
     /// Subscribe to renderer events emitted by the control point runtime.
     ///
     /// Each subscriber receives all future events independently.
@@ -747,22 +774,43 @@ impl ControlPoint {
         server_id: ServerId,
         container_id: String,
     ) {
-        let mut bindings = self.playlist_bindings.lock().unwrap();
-        bindings.insert(
-            renderer_id.clone(),
-            PlaylistBinding {
-                server_id: server_id.clone(),
-                container_id: container_id.clone(),
-                has_seen_update: false,
-                pending_refresh: false,
-            },
-        );
-        info!(
-            renderer = renderer_id.0.as_str(),
-            server = server_id.0.as_str(),
-            container = container_id.as_str(),
-            "Queue attached to playlist container"
-        );
+        {
+            let mut bindings = self.playlist_bindings.lock().unwrap();
+            bindings.insert(
+                renderer_id.clone(),
+                PlaylistBinding {
+                    server_id: server_id.clone(),
+                    container_id: container_id.clone(),
+                    has_seen_update: false,
+                    pending_refresh: true,
+                    auto_play_on_refresh: true,
+                },
+            );
+            info!(
+                renderer = renderer_id.0.as_str(),
+                server = server_id.0.as_str(),
+                container = container_id.as_str(),
+                "Queue attached to playlist container"
+            );
+        } // Drop bindings lock here before calling refresh_attached_queue_for
+
+        let mut auto_start_cb = |rid: &RendererId| self.start_queue_playback_if_idle(rid);
+        if let Err(err) = refresh_attached_queue_for(
+            &self.registry,
+            &self.runtime,
+            &self.playlist_bindings,
+            renderer_id,
+            &self.event_bus,
+            Some(&mut auto_start_cb),
+        ) {
+            warn!(
+                renderer = renderer_id.0.as_str(),
+                server = server_id.0.as_str(),
+                container = container_id.as_str(),
+                error = %err,
+                "Initial playlist refresh after attachment failed"
+            );
+        }
     }
 
     /// Detach a renderer's queue from its associated playlist container.
@@ -995,9 +1043,10 @@ fn refresh_attached_queue_for(
     bindings: &Arc<Mutex<HashMap<RendererId, PlaylistBinding>>>,
     renderer_id: &RendererId,
     event_bus: &RendererEventBus,
+    mut after_refresh: Option<&mut dyn FnMut(&RendererId) -> anyhow::Result<()>>,
 ) -> anyhow::Result<()> {
     // Step 1: Check binding and mark refresh as in-progress
-    let (server_id, container_id) = {
+    let (server_id, container_id, auto_play) = {
         let mut bindings_lock = bindings.lock().unwrap();
         let binding = match bindings_lock.get_mut(renderer_id) {
             Some(b) => b,
@@ -1020,7 +1069,13 @@ fn refresh_attached_queue_for(
 
         // Mark as processed
         binding.pending_refresh = false;
-        (binding.server_id.clone(), binding.container_id.clone())
+        let auto_play = binding.auto_play_on_refresh;
+        binding.auto_play_on_refresh = false;
+        (
+            binding.server_id.clone(),
+            binding.container_id.clone(),
+            auto_play,
+        )
     };
 
     // Step 2: Fetch MediaServerInfo from registry
@@ -1101,9 +1156,13 @@ fn refresh_attached_queue_for(
     }
 
     // Step 5: Intelligent refresh: try to keep current item if it's still in the new list
-    let current_item = runtime
-        .queue_snapshot(renderer_id)
-        .and_then(|q| q.first().cloned());
+    // Get the full queue snapshot to access the item currently being played
+    let (full_queue, current_idx) = runtime
+        .queue_full_snapshot(renderer_id)
+        .unwrap_or((vec![], None));
+
+    // Get the item currently being played (at current_index), not the next one in queue
+    let current_item = current_idx.and_then(|idx| full_queue.get(idx).cloned());
 
     let item_found_at = current_item.as_ref().and_then(|current| {
         new_items.iter().position(|new_item| {
@@ -1116,45 +1175,86 @@ fn refresh_attached_queue_for(
         })
     });
 
-    let final_queue_len = runtime.with_queue_mut(renderer_id, |queue| {
-        queue.clear();
+    let final_queue_len = runtime
+        .with_queue_mut(renderer_id, |queue| {
+            queue.clear();
 
-        if let Some(idx) = item_found_at {
-            // Current item found: reconstruct queue starting from that item
-            for i in idx..new_items.len() {
-                queue.enqueue(new_items[i].clone());
+            if let Some(idx) = item_found_at {
+                // Current item found: load the ENTIRE new playlist and position at that item
+                // This preserves items before the current track (as "already played")
+                for item in new_items.iter() {
+                    queue.enqueue(item.clone());
+                }
+                queue.set_current_index(Some(idx));
+                info!(
+                    renderer = renderer_id.0.as_str(),
+                    server = server_id.0.as_str(),
+                    container = container_id.as_str(),
+                    total_items = new_items.len(),
+                    current_index = idx,
+                    upcoming = new_items.len().saturating_sub(idx + 1),
+                    current_preserved = true,
+                    "Refreshed queue from playlist container"
+                );
+                new_items.len()
+            } else if let Some(ref current) = current_item {
+                // Current item NOT found: insert it at the beginning, then add new items
+                // This preserves the currently playing track and prevents it from being lost
+                queue.enqueue(current.clone());
+                for item in new_items.iter() {
+                    queue.enqueue(item.clone());
+                }
+                queue.set_current_index(Some(0));
+                info!(
+                    renderer = renderer_id.0.as_str(),
+                    server = server_id.0.as_str(),
+                    container = container_id.as_str(),
+                    total_items = new_items.len() + 1,
+                    current_index = 0,
+                    upcoming = new_items.len(),
+                    current_preserved = true,
+                    current_reinserted = true,
+                    "Refreshed queue from playlist container (current item reinserted at start)"
+                );
+                new_items.len() + 1
+            } else {
+                // No current item: replace with full new list
+                for item in new_items.iter() {
+                    queue.enqueue(item.clone());
+                }
+                queue.set_current_index(None);
+                info!(
+                    renderer = renderer_id.0.as_str(),
+                    server = server_id.0.as_str(),
+                    container = container_id.as_str(),
+                    total_items = new_items.len(),
+                    current_preserved = false,
+                    "Refreshed queue from playlist container (no current item)"
+                );
+                new_items.len()
             }
-            info!(
-                renderer = renderer_id.0.as_str(),
-                server = server_id.0.as_str(),
-                container = container_id.as_str(),
-                queue_len = new_items.len() - idx,
-                current_preserved = true,
-                "Refreshed queue from playlist container"
-            );
-            new_items.len() - idx
-        } else {
-            // Current item not found: replace with full new list
-            for item in new_items.iter() {
-                queue.enqueue(item.clone());
-            }
-            info!(
-                renderer = renderer_id.0.as_str(),
-                server = server_id.0.as_str(),
-                container = container_id.as_str(),
-                queue_len = new_items.len(),
-                current_preserved = false,
-                "Refreshed queue from playlist container (current item not found)"
-            );
-            new_items.len()
-        }
-    }).unwrap_or(0);
+        })
+        .unwrap_or(0);
 
     // Emit QueueUpdated event
     event_bus.broadcast(RendererEvent::QueueUpdated {
         id: renderer_id.clone(),
         queue_length: final_queue_len,
     });
+
+    if auto_play {
+        if let Some(callback) = after_refresh.as_deref_mut() {
+            if let Err(err) = callback(renderer_id) {
+                warn!(
+                    renderer = renderer_id.0.as_str(),
+                    server = server_id.0.as_str(),
+                    container = container_id.as_str(),
+                    error = %err,
+                    "Failed to auto-start playback after playlist refresh"
+                );
+            }
+        }
+    }
 
     Ok(())
 }

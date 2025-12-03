@@ -6,29 +6,29 @@
 use std::collections::HashMap;
 use std::io::{self, Stdout};
 use std::process;
-use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
+use std::sync::mpsc::{self, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent};
 use crossterm::execute;
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use pmocontrol::model::TrackMetadata;
 use pmocontrol::{
     ControlPoint, DeviceRegistryRead, MediaBrowser, MediaEntry, MediaResource, MediaServerEvent,
-    MediaServerInfo, MusicServer, PlaybackItem, PlaybackPosition, PlaybackStatus,
-    PlaybackPositionInfo, RendererEvent, RendererInfo, TransportControl, VolumeControl,
+    MediaServerInfo, MusicServer, PlaybackItem, PlaybackPosition, PlaybackPositionInfo,
+    PlaybackStatus, RendererEvent, RendererInfo, TransportControl, VolumeControl,
 };
+use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph};
-use ratatui::Terminal;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
 const DEFAULT_DISCOVERY_SECS: u64 = 15;
@@ -725,10 +725,10 @@ impl App {
 
         self.control_point.clear_queue(&renderer_id)?;
         self.control_point.enqueue_items(&renderer_id, items)?;
-        let (full_queue, current_index) =
-            self.control_point
-                .get_full_queue_snapshot(&renderer_id)
-                .context("failed to snapshot queue after enqueue")?;
+        let (full_queue, current_index) = self
+            .control_point
+            .get_full_queue_snapshot(&renderer_id)
+            .context("failed to snapshot queue after enqueue")?;
         self.queue_snapshot = full_queue;
         self.queue_current_index = current_index;
         self.record_queue_metadata();
@@ -948,19 +948,15 @@ impl App {
     }
 
     fn refresh_queue_snapshot(&mut self, renderer_id: &pmocontrol::model::RendererId) {
-        if let Ok((queue, current_index)) =
-            self.control_point.get_full_queue_snapshot(renderer_id)
+        if let Ok((queue, current_index)) = self.control_point.get_full_queue_snapshot(renderer_id)
         {
             self.queue_snapshot = queue;
             self.queue_current_index = current_index;
             self.record_queue_metadata();
             if let Some(idx) = self.queue_current_index {
                 if let Some(item) = self.queue_snapshot.get(idx).cloned() {
-                    let needs_update = self
-                        .ui_state
-                        .current_track_uri
-                        .as_deref()
-                        != Some(item.uri.as_str());
+                    let needs_update =
+                        self.ui_state.current_track_uri.as_deref() != Some(item.uri.as_str());
                     if needs_update {
                         self.apply_item_as_current(&item);
                     }

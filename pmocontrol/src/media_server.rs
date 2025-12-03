@@ -344,10 +344,15 @@ fn map_didl_entries(xml: &str) -> Result<Vec<MediaEntry>> {
         let resources = item
             .resources
             .into_iter()
-            .map(|res| MediaResource {
-                uri: res.url,
-                protocol_info: res.protocol_info,
-                duration: res.duration,
+            .filter_map(|res| {
+                if res.url.trim().is_empty() {
+                    return None;
+                }
+                Some(MediaResource {
+                    uri: res.url,
+                    protocol_info: res.protocol_info,
+                    duration: res.duration,
+                })
             })
             .collect();
 

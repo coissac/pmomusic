@@ -11,7 +11,7 @@ use crate::media_server::{MediaBrowser, MusicServer, ServerId};
 use crate::model::{RendererId, RendererProtocol};
 #[cfg(feature = "pmoserver")]
 use crate::openapi::{
-    AttachedPlaylistInfo, AttachPlaylistRequest, BrowseResponse, ContainerEntry, ErrorResponse,
+    AttachPlaylistRequest, AttachedPlaylistInfo, BrowseResponse, ContainerEntry, ErrorResponse,
     MediaServerSummary, QueueItem, QueueSnapshot, RendererState, RendererSummary, SuccessResponse,
     VolumeSetRequest,
 };
@@ -22,19 +22,48 @@ use crate::{PlaybackPosition, PlaybackStatus, TransportControl, VolumeControl};
 use async_trait::async_trait;
 #[cfg(feature = "pmoserver")]
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::StatusCode,
     routing::{get, post},
-    Json, Router,
 };
 #[cfg(feature = "pmoserver")]
 use std::sync::Arc;
 #[cfg(feature = "pmoserver")]
 use std::time::Duration;
 #[cfg(feature = "pmoserver")]
+use tokio::time;
+#[cfg(feature = "pmoserver")]
 use tracing::{debug, warn};
 #[cfg(feature = "pmoserver")]
 use utoipa::OpenApi;
+
+#[cfg(feature = "pmoserver")]
+const BROWSE_PAGE_SIZE: u32 = 100;
+#[cfg(feature = "pmoserver")]
+const MEDIA_SERVER_SOAP_TIMEOUT: Duration = Duration::from_secs(15);
+#[cfg(feature = "pmoserver")]
+const BROWSE_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+
+// Timeouts for simple commands (play/pause/stop)
+#[cfg(feature = "pmoserver")]
+const TRANSPORT_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
+
+// Timeouts for volume/mute commands (faster than transport)
+#[cfg(feature = "pmoserver")]
+const VOLUME_COMMAND_TIMEOUT: Duration = Duration::from_secs(3);
+
+// Timeout for queue operations
+#[cfg(feature = "pmoserver")]
+const QUEUE_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
+
+// Timeout for attach playlist (includes browse + cache + queue update)
+#[cfg(feature = "pmoserver")]
+const ATTACH_PLAYLIST_TIMEOUT: Duration = Duration::from_secs(60);
+
+// Timeout for renderer state queries (multiple SOAP calls)
+#[cfg(feature = "pmoserver")]
+const STATE_QUERY_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// État partagé pour l'API ControlPoint
 #[cfg(feature = "pmoserver")]
@@ -64,9 +93,7 @@ impl ControlPointState {
     ),
     tag = "control"
 )]
-async fn list_renderers(
-    State(state): State<ControlPointState>,
-) -> Json<Vec<RendererSummary>> {
+async fn list_renderers(State(state): State<ControlPointState>) -> Json<Vec<RendererSummary>> {
     let renderers = state.control_point.list_music_renderers();
 
     let summaries: Vec<RendererSummary> = renderers
@@ -119,30 +146,64 @@ async fn get_renderer_state(
         })?;
 
     let info = renderer.info();
+    let renderer_clone = renderer.clone();
 
-    // État de transport
-    let transport_state = renderer
-        .playback_state()
-        .ok()
-        .map(state_to_string)
-        .unwrap_or_else(|| "UNKNOWN".to_string());
+    // Spawn blocking task for all SOAP calls to avoid blocking Tokio runtime
+    let state_task = tokio::task::spawn_blocking(move || {
+        // État de transport
+        let transport_state = renderer_clone
+            .playback_state()
+            .ok()
+            .map(state_to_string)
+            .unwrap_or_else(|| "UNKNOWN".to_string());
 
-    // Position et durée
-    let (position_ms, duration_ms) = renderer
-        .playback_position()
-        .ok()
-        .and_then(|pos| {
-            let position = parse_hms_to_ms(pos.rel_time.as_deref());
-            let duration = parse_hms_to_ms(pos.track_duration.as_deref());
-            Some((position, duration))
-        })
-        .unwrap_or((None, None));
+        // Position et durée
+        let (position_ms, duration_ms) = renderer_clone
+            .playback_position()
+            .ok()
+            .and_then(|pos| {
+                let position = parse_hms_to_ms(pos.rel_time.as_deref());
+                let duration = parse_hms_to_ms(pos.track_duration.as_deref());
+                Some((position, duration))
+            })
+            .unwrap_or((None, None));
 
-    // Volume et mute
-    let volume = renderer.volume().ok().and_then(|v| u8::try_from(v).ok());
-    let mute = renderer.mute().ok();
+        // Volume et mute
+        let volume = renderer_clone.volume().ok().and_then(|v| u8::try_from(v).ok());
+        let mute = renderer_clone.mute().ok();
 
-    // Queue
+        (transport_state, position_ms, duration_ms, volume, mute)
+    });
+
+    let (transport_state, position_ms, duration_ms, volume, mute) =
+        time::timeout(STATE_QUERY_TIMEOUT, state_task)
+            .await
+            .map_err(|_| {
+                warn!(
+                    "State query for renderer {} exceeded {:?}",
+                    renderer_id, STATE_QUERY_TIMEOUT
+                );
+                (
+                    StatusCode::GATEWAY_TIMEOUT,
+                    Json(ErrorResponse {
+                        error: format!(
+                            "State query timed out after {}s",
+                            STATE_QUERY_TIMEOUT.as_secs()
+                        ),
+                    }),
+                )
+            })?
+            .map_err(|e| {
+                warn!("Task join error during state query: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: format!("Internal task error: {}", e),
+                    }),
+                )
+            })?;
+
+    // Queue (non-blocking, local data)
     let queue_len = state
         .control_point
         .get_queue_snapshot(&rid)
@@ -150,15 +211,17 @@ async fn get_renderer_state(
         .map(|q| q.len())
         .unwrap_or(0);
 
-    // Playlist binding
+    // Playlist binding (non-blocking, local data)
     let attached_playlist = state
         .control_point
         .current_queue_playlist_binding(&rid)
-        .map(|(server_id, container_id, has_seen_update)| AttachedPlaylistInfo {
-            server_id: server_id.0,
-            container_id,
-            has_seen_update,
-        });
+        .map(
+            |(server_id, container_id, has_seen_update)| AttachedPlaylistInfo {
+                server_id: server_id.0,
+                container_id,
+                has_seen_update,
+            },
+        );
 
     Ok(Json(RendererState {
         id: info.id.0.clone(),
@@ -197,17 +260,18 @@ async fn get_renderer_queue(
 ) -> Result<Json<QueueSnapshot>, (StatusCode, Json<ErrorResponse>)> {
     let rid = RendererId(renderer_id.clone());
 
-    let (items, current_index) = state
-        .control_point
-        .get_full_queue_snapshot(&rid)
-        .map_err(|e| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("Failed to get queue: {}", e),
-                }),
-            )
-        })?;
+    let (items, current_index) =
+        state
+            .control_point
+            .get_full_queue_snapshot(&rid)
+            .map_err(|e| {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(ErrorResponse {
+                        error: format!("Failed to get queue: {}", e),
+                    }),
+                )
+            })?;
 
     let queue_items: Vec<QueueItem> = items
         .into_iter()
@@ -253,11 +317,13 @@ async fn get_renderer_binding(
     let binding = state
         .control_point
         .current_queue_playlist_binding(&rid)
-        .map(|(server_id, container_id, has_seen_update)| AttachedPlaylistInfo {
-            server_id: server_id.0,
-            container_id,
-            has_seen_update,
-        });
+        .map(
+            |(server_id, container_id, has_seen_update)| AttachedPlaylistInfo {
+                server_id: server_id.0,
+                container_id,
+                has_seen_update,
+            },
+        );
 
     Ok(Json(binding))
 }
@@ -299,15 +365,44 @@ async fn play_renderer(
             )
         })?;
 
-    renderer.play().map_err(|e| {
-        warn!("Failed to play renderer {}: {}", renderer_id, e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to play: {}", e),
-            }),
-        )
-    })?;
+    let renderer_clone = renderer.clone();
+    let play_task = tokio::task::spawn_blocking(move || renderer_clone.play());
+
+    time::timeout(TRANSPORT_COMMAND_TIMEOUT, play_task)
+        .await
+        .map_err(|_| {
+            warn!(
+                "Play command for renderer {} exceeded {:?}",
+                renderer_id, TRANSPORT_COMMAND_TIMEOUT
+            );
+            (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Play command timed out after {}s",
+                        TRANSPORT_COMMAND_TIMEOUT.as_secs()
+                    ),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!("Task join error during play: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Internal task error: {}", e),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!("Failed to play renderer {}: {}", renderer_id, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to play: {}", e),
+                }),
+            )
+        })?;
 
     Ok(Json(SuccessResponse {
         message: "Playback started".to_string(),
@@ -347,15 +442,44 @@ async fn pause_renderer(
             )
         })?;
 
-    renderer.pause().map_err(|e| {
-        warn!("Failed to pause renderer {}: {}", renderer_id, e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to pause: {}", e),
-            }),
-        )
-    })?;
+    let renderer_clone = renderer.clone();
+    let pause_task = tokio::task::spawn_blocking(move || renderer_clone.pause());
+
+    time::timeout(TRANSPORT_COMMAND_TIMEOUT, pause_task)
+        .await
+        .map_err(|_| {
+            warn!(
+                "Pause command for renderer {} exceeded {:?}",
+                renderer_id, TRANSPORT_COMMAND_TIMEOUT
+            );
+            (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Pause command timed out after {}s",
+                        TRANSPORT_COMMAND_TIMEOUT.as_secs()
+                    ),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!("Task join error during pause: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Internal task error: {}", e),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!("Failed to pause renderer {}: {}", renderer_id, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to pause: {}", e),
+                }),
+            )
+        })?;
 
     Ok(Json(SuccessResponse {
         message: "Playback paused".to_string(),
@@ -395,15 +519,44 @@ async fn stop_renderer(
             )
         })?;
 
-    renderer.stop().map_err(|e| {
-        warn!("Failed to stop renderer {}: {}", renderer_id, e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to stop: {}", e),
-            }),
-        )
-    })?;
+    let renderer_clone = renderer.clone();
+    let stop_task = tokio::task::spawn_blocking(move || renderer_clone.stop());
+
+    time::timeout(TRANSPORT_COMMAND_TIMEOUT, stop_task)
+        .await
+        .map_err(|_| {
+            warn!(
+                "Stop command for renderer {} exceeded {:?}",
+                renderer_id, TRANSPORT_COMMAND_TIMEOUT
+            );
+            (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Stop command timed out after {}s",
+                        TRANSPORT_COMMAND_TIMEOUT.as_secs()
+                    ),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!("Task join error during stop: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Internal task error: {}", e),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!("Failed to stop renderer {}: {}", renderer_id, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to stop: {}", e),
+                }),
+            )
+        })?;
 
     Ok(Json(SuccessResponse {
         message: "Playback stopped".to_string(),
@@ -430,12 +583,44 @@ async fn next_renderer(
     Path(renderer_id): Path<String>,
 ) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
     let rid = RendererId(renderer_id.clone());
+    let control_point = state.control_point.clone();
+    let rid_clone = rid.clone();
 
-    state
-        .control_point
-        .play_next_from_queue(&rid)
+    let next_task = tokio::task::spawn_blocking(move || {
+        control_point.play_next_from_queue(&rid_clone)
+    });
+
+    time::timeout(QUEUE_COMMAND_TIMEOUT, next_task)
+        .await
+        .map_err(|_| {
+            warn!(
+                "Next command for renderer {} exceeded {:?}",
+                renderer_id, QUEUE_COMMAND_TIMEOUT
+            );
+            (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Next command timed out after {}s",
+                        QUEUE_COMMAND_TIMEOUT.as_secs()
+                    ),
+                }),
+            )
+        })?
         .map_err(|e| {
-            warn!("Failed to advance queue for renderer {}: {}", renderer_id, e);
+            warn!("Task join error during next: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Internal task error: {}", e),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!(
+                "Failed to advance queue for renderer {}: {}",
+                renderer_id, e
+            );
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
@@ -489,18 +674,50 @@ async fn set_renderer_volume(
             )
         })?;
 
-    renderer.set_volume(req.volume as u16).map_err(|e| {
-        warn!("Failed to set volume for renderer {}: {}", renderer_id, e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to set volume: {}", e),
-            }),
-        )
-    })?;
+    let renderer_clone = renderer.clone();
+    let volume = req.volume;
+    let volume_task = tokio::task::spawn_blocking(move || {
+        renderer_clone.set_volume(volume as u16)
+    });
+
+    time::timeout(VOLUME_COMMAND_TIMEOUT, volume_task)
+        .await
+        .map_err(|_| {
+            warn!(
+                "Set volume command for renderer {} exceeded {:?}",
+                renderer_id, VOLUME_COMMAND_TIMEOUT
+            );
+            (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Set volume command timed out after {}s",
+                        VOLUME_COMMAND_TIMEOUT.as_secs()
+                    ),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!("Task join error during set volume: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Internal task error: {}", e),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!("Failed to set volume for renderer {}: {}", renderer_id, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to set volume: {}", e),
+                }),
+            )
+        })?;
 
     Ok(Json(SuccessResponse {
-        message: format!("Volume set to {}", req.volume),
+        message: format!("Volume set to {}", volume),
     }))
 }
 
@@ -537,25 +754,52 @@ async fn volume_up_renderer(
             )
         })?;
 
-    let current = renderer.volume().map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to get current volume: {}", e),
-            }),
-        )
-    })?;
+    let renderer_clone = renderer.clone();
+    let volume_task = tokio::task::spawn_blocking(move || {
+        let current = renderer_clone.volume()?;
+        let new_volume = (current + 5).min(100);
+        renderer_clone.set_volume(new_volume)?;
+        Ok::<u16, anyhow::Error>(new_volume)
+    });
 
-    let new_volume = (current + 5).min(100);
-    renderer.set_volume(new_volume).map_err(|e| {
-        warn!("Failed to increase volume for renderer {}: {}", renderer_id, e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to increase volume: {}", e),
-            }),
-        )
-    })?;
+    let new_volume = time::timeout(VOLUME_COMMAND_TIMEOUT, volume_task)
+        .await
+        .map_err(|_| {
+            warn!(
+                "Volume up command for renderer {} exceeded {:?}",
+                renderer_id, VOLUME_COMMAND_TIMEOUT
+            );
+            (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Volume up command timed out after {}s",
+                        VOLUME_COMMAND_TIMEOUT.as_secs()
+                    ),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!("Task join error during volume up: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Internal task error: {}", e),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!(
+                "Failed to increase volume for renderer {}: {}",
+                renderer_id, e
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to increase volume: {}", e),
+                }),
+            )
+        })?;
 
     Ok(Json(SuccessResponse {
         message: format!("Volume increased to {}", new_volume),
@@ -595,25 +839,52 @@ async fn volume_down_renderer(
             )
         })?;
 
-    let current = renderer.volume().map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to get current volume: {}", e),
-            }),
-        )
-    })?;
+    let renderer_clone = renderer.clone();
+    let volume_task = tokio::task::spawn_blocking(move || {
+        let current = renderer_clone.volume()?;
+        let new_volume = current.saturating_sub(5);
+        renderer_clone.set_volume(new_volume)?;
+        Ok::<u16, anyhow::Error>(new_volume)
+    });
 
-    let new_volume = current.saturating_sub(5);
-    renderer.set_volume(new_volume).map_err(|e| {
-        warn!("Failed to decrease volume for renderer {}: {}", renderer_id, e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to decrease volume: {}", e),
-            }),
-        )
-    })?;
+    let new_volume = time::timeout(VOLUME_COMMAND_TIMEOUT, volume_task)
+        .await
+        .map_err(|_| {
+            warn!(
+                "Volume down command for renderer {} exceeded {:?}",
+                renderer_id, VOLUME_COMMAND_TIMEOUT
+            );
+            (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Volume down command timed out after {}s",
+                        VOLUME_COMMAND_TIMEOUT.as_secs()
+                    ),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!("Task join error during volume down: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Internal task error: {}", e),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!(
+                "Failed to decrease volume for renderer {}: {}",
+                renderer_id, e
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to decrease volume: {}", e),
+                }),
+            )
+        })?;
 
     Ok(Json(SuccessResponse {
         message: format!("Volume decreased to {}", new_volume),
@@ -653,25 +924,49 @@ async fn toggle_mute_renderer(
             )
         })?;
 
-    let current_mute = renderer.mute().map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to get current mute state: {}", e),
-            }),
-        )
-    })?;
+    let renderer_clone = renderer.clone();
+    let mute_task = tokio::task::spawn_blocking(move || {
+        let current_mute = renderer_clone.mute()?;
+        let new_mute = !current_mute;
+        renderer_clone.set_mute(new_mute)?;
+        Ok::<bool, anyhow::Error>(new_mute)
+    });
 
-    let new_mute = !current_mute;
-    renderer.set_mute(new_mute).map_err(|e| {
-        warn!("Failed to toggle mute for renderer {}: {}", renderer_id, e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to toggle mute: {}", e),
-            }),
-        )
-    })?;
+    let new_mute = time::timeout(VOLUME_COMMAND_TIMEOUT, mute_task)
+        .await
+        .map_err(|_| {
+            warn!(
+                "Toggle mute command for renderer {} exceeded {:?}",
+                renderer_id, VOLUME_COMMAND_TIMEOUT
+            );
+            (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Toggle mute command timed out after {}s",
+                        VOLUME_COMMAND_TIMEOUT.as_secs()
+                    ),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!("Task join error during toggle mute: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Internal task error: {}", e),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!("Failed to toggle mute for renderer {}: {}", renderer_id, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to toggle mute: {}", e),
+                }),
+            )
+        })?;
 
     Ok(Json(SuccessResponse {
         message: format!("Mute {}", if new_mute { "enabled" } else { "disabled" }),
@@ -704,10 +999,40 @@ async fn attach_playlist_binding(
 ) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
     let rid = RendererId(renderer_id.clone());
     let sid = ServerId(req.server_id.clone());
+    let container_id = req.container_id.clone();
+    let control_point = Arc::clone(&state.control_point);
 
-    state
-        .control_point
-        .attach_queue_to_playlist(&rid, sid, req.container_id.clone());
+    // Spawn blocking task and wait for completion with timeout
+    let attach_task = tokio::task::spawn_blocking(move || {
+        control_point.attach_queue_to_playlist(&rid, sid, container_id);
+    });
+
+    time::timeout(ATTACH_PLAYLIST_TIMEOUT, attach_task)
+        .await
+        .map_err(|_| {
+            warn!(
+                "Attach playlist for renderer {} exceeded {:?}",
+                renderer_id, ATTACH_PLAYLIST_TIMEOUT
+            );
+            (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Attach playlist timed out after {}s",
+                        ATTACH_PLAYLIST_TIMEOUT.as_secs()
+                    ),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!("Task join error during attach playlist: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Internal task error: {}", e),
+                }),
+            )
+        })?;
 
     debug!(
         renderer = renderer_id.as_str(),
@@ -717,10 +1042,7 @@ async fn attach_playlist_binding(
     );
 
     Ok(Json(SuccessResponse {
-        message: format!(
-            "Playlist {} attached to renderer",
-            req.container_id
-        ),
+        message: format!("Playlist {} attached to renderer", req.container_id),
     }))
 }
 
@@ -769,9 +1091,7 @@ async fn detach_playlist_binding(
     ),
     tag = "control"
 )]
-async fn list_servers(
-    State(state): State<ControlPointState>,
-) -> Json<Vec<MediaServerSummary>> {
+async fn list_servers(State(state): State<ControlPointState>) -> Json<Vec<MediaServerSummary>> {
     let servers = state.control_point.list_media_servers();
 
     let summaries: Vec<MediaServerSummary> = servers
@@ -809,17 +1129,14 @@ async fn browse_container(
 ) -> Result<Json<BrowseResponse>, (StatusCode, Json<ErrorResponse>)> {
     let sid = ServerId(server_id.clone());
 
-    let server_info = state
-        .control_point
-        .media_server(&sid)
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("Server {} not found", server_id),
-                }),
-            )
-        })?;
+    let server_info = state.control_point.media_server(&sid).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Server {} not found", server_id),
+            }),
+        )
+    })?;
 
     if !server_info.online {
         return Err((
@@ -839,8 +1156,8 @@ async fn browse_container(
         ));
     }
 
-    let music_server = MusicServer::from_info(&server_info, Duration::from_secs(10)).map_err(
-        |e| {
+    let music_server =
+        MusicServer::from_info(&server_info, MEDIA_SERVER_SOAP_TIMEOUT).map_err(|e| {
             warn!("Failed to create MusicServer for {}: {}", server_id, e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -848,11 +1165,40 @@ async fn browse_container(
                     error: format!("Failed to initialize server: {}", e),
                 }),
             )
-        },
-    )?;
+        })?;
 
-    let entries = music_server
-        .browse_children(&container_id, 0, 100)
+    // Use spawn_blocking to avoid blocking the async runtime with synchronous SOAP calls
+    let container_id_clone = container_id.clone();
+    let browse_task = tokio::task::spawn_blocking(move || {
+        music_server.browse_children(&container_id_clone, 0, BROWSE_PAGE_SIZE)
+    });
+
+    let entries = time::timeout(BROWSE_REQUEST_TIMEOUT, browse_task)
+        .await
+        .map_err(|_| {
+            warn!(
+                "Browse request for container {} on server {} exceeded {:?}",
+                container_id, server_id, BROWSE_REQUEST_TIMEOUT
+            );
+            (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Browse request timed out after {}s",
+                        BROWSE_REQUEST_TIMEOUT.as_secs()
+                    ),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!("Task join error during browse: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Internal task error: {}", e),
+                }),
+            )
+        })?
         .map_err(|e| {
             warn!(
                 "Failed to browse container {} on server {}: {}",
@@ -939,23 +1285,47 @@ pub fn create_api_router(state: ControlPointState, control_point: Arc<ControlPoi
         .route("/renderers", get(list_renderers))
         .route("/renderers/{renderer_id}", get(get_renderer_state))
         .route("/renderers/{renderer_id}/queue", get(get_renderer_queue))
-        .route("/renderers/{renderer_id}/binding", get(get_renderer_binding))
+        .route(
+            "/renderers/{renderer_id}/binding",
+            get(get_renderer_binding),
+        )
         // Transport control
         .route("/renderers/{renderer_id}/play", post(play_renderer))
         .route("/renderers/{renderer_id}/pause", post(pause_renderer))
         .route("/renderers/{renderer_id}/stop", post(stop_renderer))
         .route("/renderers/{renderer_id}/next", post(next_renderer))
         // Volume control
-        .route("/renderers/{renderer_id}/volume/set", post(set_renderer_volume))
-        .route("/renderers/{renderer_id}/volume/up", post(volume_up_renderer))
-        .route("/renderers/{renderer_id}/volume/down", post(volume_down_renderer))
-        .route("/renderers/{renderer_id}/mute/toggle", post(toggle_mute_renderer))
+        .route(
+            "/renderers/{renderer_id}/volume/set",
+            post(set_renderer_volume),
+        )
+        .route(
+            "/renderers/{renderer_id}/volume/up",
+            post(volume_up_renderer),
+        )
+        .route(
+            "/renderers/{renderer_id}/volume/down",
+            post(volume_down_renderer),
+        )
+        .route(
+            "/renderers/{renderer_id}/mute/toggle",
+            post(toggle_mute_renderer),
+        )
         // Playlist binding
-        .route("/renderers/{renderer_id}/binding/attach", post(attach_playlist_binding))
-        .route("/renderers/{renderer_id}/binding/detach", post(detach_playlist_binding))
+        .route(
+            "/renderers/{renderer_id}/binding/attach",
+            post(attach_playlist_binding),
+        )
+        .route(
+            "/renderers/{renderer_id}/binding/detach",
+            post(detach_playlist_binding),
+        )
         // Servers
         .route("/servers", get(list_servers))
-        .route("/servers/{server_id}/containers/{container_id}", get(browse_container))
+        .route(
+            "/servers/{server_id}/containers/{container_id}",
+            get(browse_container),
+        )
         .with_state(state)
         // SSE events - merge the SSE router
         .merge(crate::sse::create_sse_router(control_point))
@@ -1019,7 +1389,10 @@ pub trait ControlPointExt {
     /// // On peut l'utiliser directement si besoin
     /// let renderers = control_point.list_music_renderers();
     /// ```
-    async fn register_control_point(&mut self, timeout_secs: u64) -> std::io::Result<Arc<ControlPoint>>;
+    async fn register_control_point(
+        &mut self,
+        timeout_secs: u64,
+    ) -> std::io::Result<Arc<ControlPoint>>;
 
     /// Initialise l'API Control Point (bas niveau)
     ///
@@ -1041,7 +1414,10 @@ pub trait ControlPointExt {
 #[cfg(feature = "pmoserver")]
 #[async_trait]
 impl ControlPointExt for pmoserver::Server {
-    async fn register_control_point(&mut self, timeout_secs: u64) -> std::io::Result<Arc<ControlPoint>> {
+    async fn register_control_point(
+        &mut self,
+        timeout_secs: u64,
+    ) -> std::io::Result<Arc<ControlPoint>> {
         use tracing::info;
 
         info!("🎛️  Initializing Control Point...");
