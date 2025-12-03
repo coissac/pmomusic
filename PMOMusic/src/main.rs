@@ -1,4 +1,5 @@
 use pmoapp::{WebAppExt, Webapp};
+use pmocontrol::ControlPointExt;
 use pmomediarenderer::MEDIA_RENDERER;
 use pmomediaserver::{
     MEDIA_SERVER, MediaServerDeviceExt, ParadiseStreamingExt, sources::SourcesExt,
@@ -96,6 +97,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         server_instance.base_url(),
         server_instance.description_route()
     );
+
+    // Enregistrer le Control Point (découverte renderers/serveurs + API REST + SSE)
+    info!("🎛️  Registering Control Point...");
+    let _control_point = server
+        .write()
+        .await
+        .register_control_point(5)
+        .await
+        .expect("Failed to register Control Point");
 
     // Ajouter la webapp via le trait WebAppExt
     info!("📡 Registering Web application...");

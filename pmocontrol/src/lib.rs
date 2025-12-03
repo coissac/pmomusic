@@ -26,6 +26,9 @@ pub mod pmoserver_ext;
 #[cfg(feature = "pmoserver")]
 pub mod sse;
 
+#[cfg(feature = "pmoserver")]
+pub use pmoserver_ext::ControlPointExt;
+
 pub use arylic_tcp::ArylicTcpRenderer;
 pub use avtransport_client::{AvTransportClient, PositionInfo, TransportInfo};
 pub use capabilities::{

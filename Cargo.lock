@@ -12,6 +12,7 @@ dependencies = [
  "pmoaudio-ext",
  "pmoaudiocache",
  "pmoconfig",
+ "pmocontrol",
  "pmocovers",
  "pmomediarenderer",
  "pmomediaserver",

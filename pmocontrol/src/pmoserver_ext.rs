@@ -962,7 +962,13 @@ pub fn create_api_router(state: ControlPointState, control_point: Arc<ControlPoi
 #[cfg(feature = "pmoserver")]
 #[async_trait]
 pub trait ControlPointExt {
-    /// Initialise l'API Control Point
+    /// Enregistre et initialise le Control Point avec son API complète
+    ///
+    /// Cette fonction de haut niveau :
+    /// 1. Lance le runtime du ControlPoint (découverte SSDP, polling renderers, etc.)
+    /// 2. Enregistre toutes les routes HTTP REST
+    /// 3. Enregistre tous les endpoints SSE pour les événements
+    /// 4. Génère la documentation OpenAPI
     ///
     /// # Routes créées
     ///
@@ -978,13 +984,83 @@ pub trait ControlPointExt {
     ///
     /// # Arguments
     ///
-    /// * `control_point` - Instance du ControlPoint
+    /// * `timeout_secs` - Timeout HTTP pour les requêtes UPnP (recommandé: 5 secondes)
+    ///
+    /// # Returns
+    ///
+    /// Retourne l'instance du ControlPoint dans un Arc pour permettre
+    /// d'interagir avec depuis l'application.
+    ///
+    /// # Errors
+    ///
+    /// Retourne une erreur si le runtime SSDP ne peut pas être démarré.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use pmocontrol::ControlPointExt;
+    /// use pmoserver::Server;
+    ///
+    /// let server = Server::create_upnp_server().await?;
+    ///
+    /// // Enregistrer le Control Point avec timeout de 5 secondes
+    /// let control_point = server
+    ///     .write()
+    ///     .await
+    ///     .register_control_point(5)
+    ///     .await?;
+    ///
+    /// // Le Control Point est maintenant actif et ses routes HTTP/SSE sont enregistrées
+    /// // On peut l'utiliser directement si besoin
+    /// let renderers = control_point.list_music_renderers();
+    /// ```
+    async fn register_control_point(&mut self, timeout_secs: u64) -> std::io::Result<Arc<ControlPoint>>;
+
+    /// Initialise l'API Control Point (bas niveau)
+    ///
+    /// Cette méthode est appelée automatiquement par `register_control_point()`.
+    /// Utilisez `register_control_point()` pour la plupart des cas d'usage.
+    ///
+    /// # Routes créées
+    ///
+    /// - API REST: `/api/control/*`
+    /// - SSE Events: `/api/control/events/*`
+    /// - Swagger: `/swagger-ui/control`
+    ///
+    /// # Arguments
+    ///
+    /// * `control_point` - Instance du ControlPoint déjà créée
     async fn init_control_point(&mut self, control_point: Arc<ControlPoint>);
 }
 
 #[cfg(feature = "pmoserver")]
 #[async_trait]
 impl ControlPointExt for pmoserver::Server {
+    async fn register_control_point(&mut self, timeout_secs: u64) -> std::io::Result<Arc<ControlPoint>> {
+        use tracing::info;
+
+        info!("🎛️  Initializing Control Point...");
+
+        // 1. Lancer le runtime du ControlPoint
+        let control_point = ControlPoint::spawn(timeout_secs)?;
+        let control_point = Arc::new(control_point);
+
+        info!("✅ Control Point runtime started");
+        info!("   - SSDP discovery active");
+        info!("   - Renderer polling active (1s interval)");
+        info!("   - MediaServer event subscriptions active");
+
+        // 2. Enregistrer les routes HTTP REST et SSE
+        self.init_control_point(control_point.clone()).await;
+
+        info!("✅ Control Point API registered:");
+        info!("   - REST API: /api/control/*");
+        info!("   - SSE Events: /api/control/events/*");
+        info!("   - OpenAPI docs: /swagger-ui/control");
+
+        Ok(control_point)
+    }
+
     async fn init_control_point(&mut self, control_point: Arc<ControlPoint>) {
         let state = ControlPointState::new(control_point.clone());
 
