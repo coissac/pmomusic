@@ -1,7 +1,7 @@
 <template>
   <div class="app-container">
     <nav class="main-nav">
-      <router-link to="/">🏠 Accueil</router-link>
+      <router-link to="/" class="nav-logo">PMOControl</router-link>
 
       <!-- Menu déroulant Debug -->
       <div class="dropdown" @mouseenter="showDebugMenu = true" @mouseleave="showDebugMenu = false">
@@ -10,14 +10,15 @@
           <span class="arrow">{{ showDebugMenu ? '▼' : '▶' }}</span>
         </button>
         <div v-show="showDebugMenu" class="dropdown-menu">
-          <router-link to="/logs" @click="showDebugMenu = false">📋 Logs</router-link>
-          <router-link to="/upnp" @click="showDebugMenu = false">🎵 UPnP Explorer</router-link>
-          <router-link to="/covers-cache" @click="showDebugMenu = false">🎨 Cover Cache</router-link>
-          <router-link to="/audio-cache" @click="showDebugMenu = false">🎵 Audio Cache</router-link>
-          <router-link to="/api-dashboard" @click="showDebugMenu = false">🚀 API Dashboard</router-link>
+          <router-link to="/debug/generic-player" @click="showDebugMenu = false">🎵 Generic Player</router-link>
+          <router-link to="/debug/logs" @click="showDebugMenu = false">📋 Logs</router-link>
+          <router-link to="/debug/upnp" @click="showDebugMenu = false">🎵 UPnP Explorer</router-link>
+          <router-link to="/debug/covers-cache" @click="showDebugMenu = false">🎨 Cover Cache</router-link>
+          <router-link to="/debug/audio-cache" @click="showDebugMenu = false">🎵 Audio Cache</router-link>
+          <router-link to="/debug/api-dashboard" @click="showDebugMenu = false">🚀 API Dashboard</router-link>
 
           <div class="submenu-divider">Sources</div>
-          <router-link to="/radio-paradise" @click="showDebugMenu = false">📻 Radio Paradise</router-link>
+          <router-link to="/debug/radio-paradise" @click="showDebugMenu = false">📻 Radio Paradise</router-link>
         </div>
       </div>
     </nav>
@@ -35,7 +36,7 @@ const showDebugMenu = ref(false)
 const route = useRoute()
 
 const isDebugRoute = computed(() => {
-  return ['/logs', '/upnp', '/covers-cache', '/audio-cache', '/api-dashboard', '/radio-paradise'].includes(route.path)
+  return route.path.startsWith('/debug/')
 })
 </script>
 
@@ -63,6 +64,25 @@ const isDebugRoute = computed(() => {
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
 }
 
+.nav-logo {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #fff !important;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  padding: 0.5rem 1rem !important;
+  border-radius: 6px;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: all 0.2s;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.nav-logo:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+  background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
+}
+
 .main-nav a {
   color: #eee;
   padding: 0.5rem 1rem;
@@ -77,7 +97,7 @@ const isDebugRoute = computed(() => {
   color: #fff;
 }
 
-.main-nav a.router-link-active {
+.main-nav a.router-link-active:not(.nav-logo) {
   background: #569cd6;
   color: #fff;
   font-weight: bold;

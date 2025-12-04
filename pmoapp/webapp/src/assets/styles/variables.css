@@ -1,0 +1,113 @@
+/* Variables CSS globales pour PMOControl */
+
+:root {
+  /* ========================================
+     Status Colors
+     ======================================== */
+  --status-playing: #22c55e;         /* Vert pour en lecture */
+  --status-playing-bg: #22c55e15;    /* Background playing */
+  --status-paused: #f59e0b;          /* Orange pour en pause */
+  --status-paused-bg: #f59e0b15;     /* Background paused */
+  --status-stopped: #6b7280;         /* Gris pour arrêté */
+  --status-stopped-bg: #6b728015;    /* Background stopped */
+  --status-offline: #ef4444;         /* Rouge pour offline */
+  --status-offline-bg: #ef444415;    /* Background offline */
+  --status-transitioning: #3b82f6;   /* Bleu pour transition */
+  --status-transitioning-bg: #3b82f615; /* Background transitioning */
+
+  /* ========================================
+     Breakpoints (pour media queries)
+     ======================================== */
+  --breakpoint-mobile: 768px;
+  --breakpoint-tablet: 1024px;
+
+  /* ========================================
+     Spacing Scale
+     ======================================== */
+  --spacing-xs: 0.25rem;   /* 4px */
+  --spacing-sm: 0.5rem;    /* 8px */
+  --spacing-md: 1rem;      /* 16px */
+  --spacing-lg: 1.5rem;    /* 24px */
+  --spacing-xl: 2rem;      /* 32px */
+  --spacing-2xl: 3rem;     /* 48px */
+
+  /* ========================================
+     Border Radius
+     ======================================== */
+  --radius-sm: 0.25rem;    /* 4px */
+  --radius-md: 0.5rem;     /* 8px */
+  --radius-lg: 1rem;       /* 16px */
+  --radius-full: 9999px;   /* Pill shape */
+
+  /* ========================================
+     Shadows
+     ======================================== */
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1);
+  --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1);
+
+  /* ========================================
+     Typography
+     ======================================== */
+  --font-sans: system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, monospace;
+
+  --text-xs: 0.75rem;      /* 12px */
+  --text-sm: 0.875rem;     /* 14px */
+  --text-base: 1rem;       /* 16px */
+  --text-lg: 1.125rem;     /* 18px */
+  --text-xl: 1.25rem;      /* 20px */
+  --text-2xl: 1.5rem;      /* 24px */
+  --text-3xl: 1.875rem;    /* 30px */
+
+  /* ========================================
+     Colors (neutral palette)
+     ======================================== */
+  --color-bg: #ffffff;
+  --color-bg-secondary: #f3f4f6;
+  --color-bg-tertiary: #e5e7eb;
+
+  --color-text: #111827;
+  --color-text-secondary: #6b7280;
+  --color-text-tertiary: #9ca3af;
+
+  --color-border: #d1d5db;
+  --color-border-light: #e5e7eb;
+
+  /* Primary color (brand) */
+  --color-primary: #667eea;
+  --color-primary-hover: #5568d3;
+
+  /* ========================================
+     Transitions
+     ======================================== */
+  --transition-fast: 150ms ease-in-out;
+  --transition-normal: 250ms ease-in-out;
+  --transition-base: 300ms ease-in-out;
+  --transition-slow: 500ms ease-in-out;
+
+  /* ========================================
+     Z-index layers
+     ======================================== */
+  --z-dropdown: 100;
+  --z-modal: 200;
+  --z-toast: 300;
+  --z-tooltip: 400;
+}
+
+/* Dark mode support (optionnel pour l'avenir) */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #111827;
+    --color-bg-secondary: #1f2937;
+    --color-bg-tertiary: #374151;
+
+    --color-text: #f9fafb;
+    --color-text-secondary: #d1d5db;
+    --color-text-tertiary: #9ca3af;
+
+    --color-border: #4b5563;
+    --color-border-light: #374151;
+  }
+}
