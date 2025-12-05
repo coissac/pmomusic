@@ -108,6 +108,21 @@ impl OpenHomeRenderer {
         })
     }
 
+    /// Retourne la longueur de la playlist OpenHome sans récupérer toutes les métadonnées.
+    /// Plus rapide que snapshot_openhome_playlist() pour juste connaître le nombre de pistes.
+    pub(crate) fn openhome_playlist_len(&self) -> Result<usize> {
+        let playlist = self.playlist_client_for("openhome_playlist_len")?;
+        let ids = playlist.id_array()?;
+        Ok(ids.len())
+    }
+
+    /// Retourne les IDs des pistes de la playlist OpenHome.
+    /// Plus rapide que snapshot_openhome_playlist() car ne récupère pas les métadonnées.
+    pub(crate) fn openhome_playlist_ids(&self) -> Result<Vec<u32>> {
+        let playlist = self.playlist_client_for("openhome_playlist_ids")?;
+        playlist.id_array()
+    }
+
     pub(crate) fn clear_openhome_playlist(&self) -> Result<()> {
         let playlist = self.playlist_client_for("clear_openhome_playlist")?;
         playlist.delete_all()

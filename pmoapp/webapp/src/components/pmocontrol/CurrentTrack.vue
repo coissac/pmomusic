@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRenderersStore } from '@/stores/renderers'
-import { usePlaybackStore } from '@/stores/playback'
 import { Music } from 'lucide-vue-next'
 
 const props = defineProps<{
@@ -9,10 +8,9 @@ const props = defineProps<{
 }>()
 
 const renderersStore = useRenderersStore()
-const playbackStore = usePlaybackStore()
 
 const state = computed(() => renderersStore.getStateById(props.rendererId))
-const metadata = computed(() => playbackStore.getTrackMetadata(props.rendererId))
+const metadata = computed(() => state.value?.current_track)
 
 // Calcul du pourcentage de progression
 const progressPercent = computed(() => {

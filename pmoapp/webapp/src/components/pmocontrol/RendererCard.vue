@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { usePlaybackStore } from '@/stores/playback'
 import type {
   RendererCapabilitiesSummary,
   RendererSummary,
@@ -16,9 +15,9 @@ const props = defineProps<{
 }>()
 
 const router = useRouter()
-const playbackStore = usePlaybackStore()
 
-const metadata = computed(() => playbackStore.getTrackMetadata(props.renderer.id))
+// Métadonnées proviennent directement de l'état du renderer (API + SSE)
+const metadata = computed(() => props.state?.current_track)
 
 const protocolLabel = computed(() => {
   switch (props.renderer.protocol) {

@@ -40,6 +40,14 @@ export interface RendererState {
   mute: boolean | null
   queue_len: number
   attached_playlist: AttachedPlaylistInfo | null
+  current_track: CurrentTrackMetadata | null
+}
+
+export interface CurrentTrackMetadata {
+  title: string | null
+  artist: string | null
+  album: string | null
+  album_art_uri: string | null
 }
 
 export interface AttachedPlaylistInfo {
@@ -58,6 +66,7 @@ export interface QueueItem {
   title: string | null
   artist: string | null
   album: string | null
+  album_art_uri: string | null
   server_id: string | null
   object_id: string | null
 }

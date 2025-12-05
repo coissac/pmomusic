@@ -18,9 +18,17 @@ defineProps<{
     <!-- Index (1-based pour l'affichage) -->
     <span class="item-index">{{ item.index + 1 }}</span>
 
-    <!-- Cover miniature (placeholder pour l'instant, on ajoutera la cover plus tard) -->
+    <!-- Cover miniature -->
     <div class="item-cover">
-      <Music :size="20" />
+      <img
+        v-if="item.album_art_uri"
+        :src="item.album_art_uri"
+        :alt="item.album || 'Album cover'"
+        class="cover-image"
+        loading="lazy"
+        @error="(e: Event) => (e.target as HTMLImageElement).style.display = 'none'"
+      />
+      <Music v-else :size="20" />
     </div>
 
     <!-- Métadonnées -->
@@ -85,6 +93,13 @@ defineProps<{
   justify-content: center;
   color: var(--color-text-tertiary);
   flex-shrink: 0;
+  overflow: hidden;
+}
+
+.cover-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .item-metadata {

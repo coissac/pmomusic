@@ -13,6 +13,7 @@ pub struct PlaybackItem {
     pub date: Option<String>,
     pub track_number: Option<String>,
     pub creator: Option<String>,
+    pub protocol_info: Option<String>,
 }
 
 impl PlaybackItem {
@@ -29,12 +30,14 @@ impl PlaybackItem {
             date: None,
             track_number: None,
             creator: None,
+            protocol_info: None,
         }
     }
 
     /// Convert PlaybackItem to DIDL-Lite XML metadata for SetAVTransportURI
     pub fn to_didl_metadata(&self) -> String {
         use quick_xml::escape::escape;
+        use tracing::debug;
 
         let title = self.title.as_deref().unwrap_or("Unknown");
         let escaped_uri = escape(&self.uri);
@@ -43,7 +46,13 @@ impl PlaybackItem {
         let mut didl = String::from(
             r#"<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/">"#,
         );
-        didl.push_str(r#"<item id="0" parentID="-1" restricted="1">"#);
+        // Use proper ID from object_id if available, otherwise use "0"
+        let item_id = self.object_id.as_deref().unwrap_or("0");
+        let escaped_item_id = escape(item_id);
+        didl.push_str(&format!(
+            r#"<item id="{}" parentID="-1" restricted="1">"#,
+            escaped_item_id
+        ));
         didl.push_str(&format!("<dc:title>{}</dc:title>", escaped_title));
 
         if let Some(artist) = &self.artist {
@@ -64,10 +73,20 @@ impl PlaybackItem {
 
         if let Some(album_art) = &self.album_art_uri {
             let escaped_art = escape(album_art);
+            debug!(
+                title = title,
+                album_art_uri = album_art.as_str(),
+                "Including albumArtURI in DIDL metadata"
+            );
             didl.push_str(&format!(
                 "<upnp:albumArtURI>{}</upnp:albumArtURI>",
                 escaped_art
             ));
+        } else {
+            debug!(
+                title = title,
+                "No album_art_uri in PlaybackItem - skipping albumArtURI in DIDL"
+            );
         }
 
         if let Some(date) = &self.date {
@@ -84,9 +103,23 @@ impl PlaybackItem {
         }
 
         // Add resource with URI
+        // Use the original protocolInfo if available, otherwise use a generic one
+        let protocol_info = self
+            .protocol_info
+            .as_deref()
+            .unwrap_or("http-get:*:audio/*:*");
+
+        // For protocolInfo, we only need to escape XML special chars, not ':'
+        // We manually escape only the necessary characters to preserve the protocolInfo format
+        let safe_protocol_info = protocol_info
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;");
+
         didl.push_str(&format!(
-            r#"<res protocolInfo="http-get:*:audio/*:*">{}</res>"#,
-            escaped_uri
+            r#"<res protocolInfo="{}">{}</res>"#,
+            safe_protocol_info, escaped_uri
         ));
 
         didl.push_str(r#"<upnp:class>object.item.audioItem.musicTrack</upnp:class>"#);

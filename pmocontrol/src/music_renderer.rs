@@ -171,6 +171,26 @@ impl MusicRenderer {
         }
     }
 
+    pub fn openhome_playlist_len(&self) -> Result<usize> {
+        match self {
+            MusicRenderer::OpenHome(renderer) => renderer.openhome_playlist_len(),
+            _ => Err(op_not_supported(
+                "openhome_playlist_len",
+                self.unsupported_backend_name(),
+            )),
+        }
+    }
+
+    pub fn openhome_playlist_ids(&self) -> Result<Vec<u32>> {
+        match self {
+            MusicRenderer::OpenHome(renderer) => renderer.openhome_playlist_ids(),
+            _ => Err(op_not_supported(
+                "openhome_playlist_ids",
+                self.unsupported_backend_name(),
+            )),
+        }
+    }
+
     pub fn openhome_playlist_clear(&self) -> Result<()> {
         match self {
             MusicRenderer::OpenHome(renderer) => renderer.clear_openhome_playlist(),

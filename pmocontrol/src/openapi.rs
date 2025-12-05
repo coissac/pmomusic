@@ -79,6 +79,22 @@ pub struct RendererState {
     pub queue_len: usize,
     /// Playlist attachée (si applicable)
     pub attached_playlist: Option<AttachedPlaylistInfo>,
+    /// Métadonnées du morceau courant (si en lecture)
+    pub current_track: Option<CurrentTrackMetadata>,
+}
+
+/// Métadonnées du morceau en cours de lecture
+#[cfg(feature = "pmoserver")]
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct CurrentTrackMetadata {
+    /// Titre du morceau
+    pub title: Option<String>,
+    /// Artiste
+    pub artist: Option<String>,
+    /// Album
+    pub album: Option<String>,
+    /// URI de la pochette d'album
+    pub album_art_uri: Option<String>,
 }
 
 /// Information sur la playlist attachée
@@ -111,6 +127,8 @@ pub struct QueueItem {
     pub artist: Option<String>,
     /// Album
     pub album: Option<String>,
+    /// URI de la pochette d'album
+    pub album_art_uri: Option<String>,
     /// ID du serveur source
     pub server_id: Option<String>,
     /// ID de l'objet DIDL-Lite
@@ -358,6 +376,7 @@ GET /control/servers/{server_id}/containers/{container_id}
         RendererProtocolSummary,
         RendererCapabilitiesSummary,
         RendererState,
+        CurrentTrackMetadata,
         AttachedPlaylistInfo,
         QueueItem,
         QueueSnapshot,

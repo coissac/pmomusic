@@ -697,6 +697,14 @@ impl ControlPoint {
             .ok_or_else(|| Self::runtime_entry_missing(renderer_id))
     }
 
+    /// Retourne les métadonnées courantes depuis le snapshot en mémoire
+    pub fn get_current_track_metadata(
+        &self,
+        renderer_id: &RendererId,
+    ) -> Option<TrackMetadata> {
+        self.runtime.current_track_metadata(renderer_id)
+    }
+
     /// Force a resynchronization of the OpenHome playlist cache for a renderer.
     ///
     /// This is used by external APIs after mutating the native playlist so that
@@ -711,6 +719,11 @@ impl ControlPoint {
     ) -> anyhow::Result<OpenHomePlaylistSnapshot> {
         let renderer = self.openhome_renderer(renderer_id)?;
         renderer.openhome_playlist_snapshot()
+    }
+
+    pub fn get_openhome_playlist_len(&self, renderer_id: &RendererId) -> anyhow::Result<usize> {
+        let renderer = self.openhome_renderer(renderer_id)?;
+        renderer.openhome_playlist_len()
     }
 
     pub fn clear_openhome_playlist(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
@@ -1211,10 +1224,13 @@ impl ControlPoint {
         }
 
         let renderer = self.openhome_renderer(renderer_id)?;
-        let mut after_id = self
-            .runtime
-            .queue_full_snapshot(renderer_id)
-            .and_then(|(queue, _)| queue.last().and_then(openhome_track_id_from_item));
+
+        // Get the last track ID from the OpenHome native playlist
+        // This ensures we append to the end of the actual playlist, not just our local queue
+        let mut after_id = renderer
+            .openhome_playlist_ids()
+            .ok()
+            .and_then(|ids| ids.last().copied());
 
         for item in items.iter() {
             let metadata = item.to_didl_metadata();
@@ -1227,10 +1243,33 @@ impl ControlPoint {
     }
 
     fn play_current_openhome(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
+        let renderer = self.openhome_renderer(renderer_id)?;
+
+        // Pour les renderers OpenHome, vérifier d'abord si la playlist native a des pistes
+        // Cela couvre le cas où l'utilisateur a ajouté des morceaux directement via l'interface OpenHome
+        let native_playlist_len = renderer.openhome_playlist_len().unwrap_or(0);
+
+        if native_playlist_len > 0 {
+            // La playlist native a des pistes, on peut simplement appeler play()
+            // Cela reprendra la lecture à partir du morceau actuel (ou du premier si rien n'est en cours)
+            renderer.play()?;
+            self.runtime
+                .set_playback_source(renderer_id, PlaybackSource::FromQueue);
+            self.sync_openhome_playlist_for(renderer_id)?;
+            info!(
+                renderer = renderer_id.0.as_str(),
+                playlist_len = native_playlist_len,
+                "Started OpenHome native playlist playback"
+            );
+            return Ok(());
+        }
+
+        // Fallback: utiliser la PlaybackQueue locale si la playlist native est vide
+        // (ce cas se produit quand on a enqueue des items via le control point)
         let Some((item, _)) = self.runtime.peek_current(renderer_id) else {
             debug!(
                 renderer = renderer_id.0.as_str(),
-                "OpenHome playlist is empty or no current item"
+                "OpenHome playlist is empty or no current item (both native and queue)"
             );
             self.runtime
                 .set_playback_source(renderer_id, PlaybackSource::None);
@@ -1239,14 +1278,13 @@ impl ControlPoint {
 
         let track_id = openhome_track_id_from_item(&item)
             .ok_or_else(|| anyhow!("Current OpenHome item has no track id"))?;
-        let renderer = self.openhome_renderer(renderer_id)?;
         renderer.openhome_playlist_play_id(track_id)?;
         self.runtime
             .set_playback_source(renderer_id, PlaybackSource::FromQueue);
         self.sync_openhome_playlist_for(renderer_id)?;
         info!(
             renderer = renderer_id.0.as_str(),
-            track_id, "Started OpenHome playlist playback (current item)"
+            track_id, "Started OpenHome playlist playback (current item from queue)"
         );
         Ok(())
     }
@@ -1385,6 +1423,13 @@ impl RuntimeState {
     fn queue_full_snapshot(&self, id: &RendererId) -> Option<(Vec<PlaybackItem>, Option<usize>)> {
         let entries = self.entries.lock().unwrap();
         entries.get(id).map(|entry| entry.queue.full_snapshot())
+    }
+
+    fn current_track_metadata(&self, id: &RendererId) -> Option<TrackMetadata> {
+        let entries = self.entries.lock().unwrap();
+        entries
+            .get(id)
+            .and_then(|entry| entry.snapshot.last_metadata.clone())
     }
 
     fn dequeue_next(&self, id: &RendererId) -> Option<(PlaybackItem, usize)> {
@@ -1747,6 +1792,7 @@ fn playback_item_from_entry(server: &MusicServer, entry: &MediaEntry) -> Option<
     item.date = entry.date.clone();
     item.track_number = entry.track_number.clone();
     item.creator = entry.creator.clone();
+    item.protocol_info = Some(resource.protocol_info.clone());
 
     Some(item)
 }
@@ -2787,6 +2833,13 @@ fn extract_track_metadata(position: &PlaybackPositionInfo) -> Option<TrackMetada
             return None;
         }
     };
+
+    debug!(
+        title = item.title.as_str(),
+        has_album_art = item.album_art.is_some(),
+        album_art_uri = item.album_art.as_deref(),
+        "Extracted metadata from position info"
+    );
 
     Some(TrackMetadata {
         title: Some(item.title.clone()),

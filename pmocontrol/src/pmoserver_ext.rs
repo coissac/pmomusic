@@ -11,10 +11,11 @@ use crate::media_server::{MediaBrowser, MediaEntry, MediaResource, MusicServer, 
 use crate::model::{RendererCapabilities, RendererId, RendererProtocol};
 #[cfg(feature = "pmoserver")]
 use crate::openapi::{
-    AttachPlaylistRequest, AttachedPlaylistInfo, BrowseResponse, ContainerEntry, ErrorResponse,
-    MediaServerSummary, OpenHomePlaylistAddRequest, OpenHomePlaylistSnapshot, PlayContentRequest,
-    QueueItem, QueueSnapshot, RendererCapabilitiesSummary, RendererProtocolSummary, RendererState,
-    RendererSummary, SuccessResponse, VolumeSetRequest,
+    AttachPlaylistRequest, AttachedPlaylistInfo, BrowseResponse, ContainerEntry,
+    CurrentTrackMetadata, ErrorResponse, MediaServerSummary, OpenHomePlaylistAddRequest,
+    OpenHomePlaylistSnapshot, PlayContentRequest, QueueItem, QueueSnapshot,
+    RendererCapabilitiesSummary, RendererProtocolSummary, RendererState, RendererSummary,
+    SuccessResponse, VolumeSetRequest,
 };
 #[cfg(feature = "pmoserver")]
 use crate::playback_queue::PlaybackItem;
@@ -150,19 +151,19 @@ async fn get_renderer_state(
         })?;
 
     let info = renderer.info();
-    let renderer_clone = renderer.clone();
+    let renderer = renderer.clone();
 
     // Spawn blocking task for all SOAP calls to avoid blocking Tokio runtime
     let state_task = tokio::task::spawn_blocking(move || {
         // État de transport
-        let transport_state = renderer_clone
+        let transport_state = renderer
             .playback_state()
             .ok()
             .map(state_to_string)
             .unwrap_or_else(|| "UNKNOWN".to_string());
 
         // Position et durée
-        let (position_ms, duration_ms) = renderer_clone
+        let (position_ms, duration_ms) = renderer
             .playback_position()
             .ok()
             .and_then(|pos| {
@@ -173,11 +174,11 @@ async fn get_renderer_state(
             .unwrap_or((None, None));
 
         // Volume et mute
-        let volume = renderer_clone
+        let volume = renderer
             .volume()
             .ok()
             .and_then(|v| u8::try_from(v).ok());
-        let mute = renderer_clone.mute().ok();
+        let mute = renderer.mute().ok();
 
         (transport_state, position_ms, duration_ms, volume, mute)
     });
@@ -211,11 +212,18 @@ async fn get_renderer_state(
             })?;
 
     // Queue (non-blocking, local data)
+    // Pour les renderers OpenHome, on utilise la playlist native au lieu de la PlaybackQueue
     let queue_len = state
         .control_point
-        .get_queue_snapshot(&rid)
+        .get_openhome_playlist_len(&rid)
         .ok()
-        .map(|q| q.len())
+        .or_else(|| {
+            state
+                .control_point
+                .get_queue_snapshot(&rid)
+                .ok()
+                .map(|q| q.len())
+        })
         .unwrap_or(0);
 
     // Playlist binding (non-blocking, local data)
@@ -230,6 +238,17 @@ async fn get_renderer_state(
             },
         );
 
+    // Current track metadata from in-memory snapshot (non-blocking, fast)
+    let current_track = state
+        .control_point
+        .get_current_track_metadata(&rid)
+        .map(|metadata| CurrentTrackMetadata {
+            title: metadata.title,
+            artist: metadata.artist,
+            album: metadata.album,
+            album_art_uri: metadata.album_art_uri,
+        });
+
     Ok(Json(RendererState {
         id: info.id.0.clone(),
         friendly_name: info.friendly_name.clone(),
@@ -240,6 +259,7 @@ async fn get_renderer_state(
         mute,
         queue_len,
         attached_playlist,
+        current_track,
     }))
 }
 
@@ -302,6 +322,7 @@ async fn get_renderer_queue(
             title: item.title,
             artist: item.artist,
             album: item.album,
+            album_art_uri: item.album_art_uri,
             server_id: item.server_id.map(|s| s.0),
             object_id: item.object_id,
         })
@@ -1512,7 +1533,9 @@ async fn play_content(
         control_point.enqueue_items(&rid, items.clone())?;
 
         // Start playback
-        renderer.play()?;
+        // Pour les renderers OpenHome, play_current_from_queue() va gérer automatiquement
+        // la lecture depuis la playlist native si elle existe
+        control_point.play_current_from_queue(&rid)?;
 
         // Auto-bind if playing a container (playlist/album)
         // Rule: if multiple items, it's a container that should be bound
@@ -1943,6 +1966,7 @@ fn playback_item_from_entry(server: &MusicServer, entry: &MediaEntry) -> Option<
     item.date = entry.date.clone();
     item.track_number = entry.track_number.clone();
     item.creator = entry.creator.clone();
+    item.protocol_info = Some(resource.protocol_info.clone());
 
     Some(item)
 }

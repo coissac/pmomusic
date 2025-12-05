@@ -6,7 +6,6 @@ import router from "./router";
 // Stores
 import { useRenderersStore } from "./stores/renderers";
 import { useMediaServersStore } from "./stores/mediaServers";
-import { usePlaybackStore } from "./stores/playback";
 import { useUIStore } from "./stores/ui";
 
 // Service SSE
@@ -31,13 +30,13 @@ app.mount("#app");
 // Après montage, initialiser SSE et connecter aux stores
 const renderersStore = useRenderersStore();
 const mediaServersStore = useMediaServersStore();
-const playbackStore = usePlaybackStore();
 const uiStore = useUIStore();
 
 // Connecter SSE aux stores
+// Note: Les métadonnées proviennent de l'API (current_track dans RendererState)
+// Les événements SSE ne servent qu'à notifier les changements
 sse.onRendererEvent((event) => {
   renderersStore.updateFromSSE(event);
-  playbackStore.updateFromSSE(event);
 });
 
 sse.onMediaServerEvent((event) => {

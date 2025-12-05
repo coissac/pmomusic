@@ -298,6 +298,10 @@ export const useRenderersStore = defineStore('renderers', () => {
         const state = states.value.get(rendererId)
         if (state) {
           state.transport_state = event.state as any
+          // Effacer les métadonnées si stopped/no_media
+          if (event.state === 'STOPPED' || event.state === 'NO_MEDIA') {
+            state.current_track = null
+          }
         }
         break
       }
@@ -339,7 +343,15 @@ export const useRenderersStore = defineStore('renderers', () => {
       }
 
       case 'metadata_changed': {
-        // Les métadonnées sont gérées par le store playback
+        const state = states.value.get(rendererId)
+        if (state) {
+          state.current_track = {
+            title: event.title,
+            artist: event.artist,
+            album: event.album,
+            album_art_uri: event.album_art_uri
+          }
+        }
         break
       }
 

@@ -184,7 +184,20 @@ impl OhPlaylistClient {
         let response = find_child_with_suffix(&envelope.body.content, "IdArrayResponse")
             .ok_or_else(|| anyhow!("Missing IdArrayResponse element in SOAP body"))?;
 
-        let array_text = extract_child_text_any(response, &["aArray", "aIdArray"])?;
+        // Try to extract the array element. If missing, assume empty playlist.
+        let array_text = match extract_child_text_any(response, &["aArray", "aIdArray"]) {
+            Ok(text) => text,
+            Err(_) => {
+                // Element not found - playlist is likely empty
+                return Ok(Vec::new());
+            }
+        };
+
+        // Handle empty string (another way renderers indicate empty playlist)
+        if array_text.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+
         let bytes = decode_base64(&array_text)?;
         if bytes.len() % 4 != 0 {
             return Err(anyhow!(
@@ -231,6 +244,8 @@ impl OhInfoClient {
     }
 
     pub fn track(&self) -> Result<OhInfoTrack> {
+        use tracing::debug;
+
         let call_result = invoke_upnp_action(&self.control_url, &self.service_type, "Track", &[])?;
 
         let envelope = ensure_success("Track", &call_result)?;
@@ -241,6 +256,20 @@ impl OhInfoClient {
         let metadata_xml = extract_child_text_optional(response, "aMetadata")
             .unwrap_or(None)
             .filter(|s| !s.is_empty());
+
+        debug!(
+            uri = uri.as_str(),
+            has_metadata = metadata_xml.is_some(),
+            metadata_length = metadata_xml.as_ref().map(|s| s.len()),
+            "OpenHome Info.Track() returned"
+        );
+
+        if let Some(ref xml) = metadata_xml {
+            debug!(
+                metadata_xml = xml.as_str(),
+                "OpenHome metadata XML content"
+            );
+        }
 
         Ok(OhInfoTrack { uri, metadata_xml })
     }
@@ -423,12 +452,21 @@ impl OhRadioClient {
 }
 
 pub fn parse_track_metadata_from_didl(xml: &str) -> Option<TrackMetadata> {
+    use tracing::debug;
+
     if xml.trim().is_empty() {
         return None;
     }
 
     let parsed = pmodidl::parse_metadata::<pmodidl::DIDLLite>(xml).ok()?;
     let item = parsed.data.items.first()?;
+
+    debug!(
+        title = item.title.as_str(),
+        has_album_art = item.album_art.is_some(),
+        album_art_uri = item.album_art.as_deref(),
+        "Parsed DIDL metadata for track"
+    );
 
     Some(TrackMetadata {
         title: Some(item.title.clone()),
