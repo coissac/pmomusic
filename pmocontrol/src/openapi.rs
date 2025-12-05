@@ -133,35 +133,8 @@ pub struct QueueSnapshot {
 // OPENHOME PLAYLIST
 // ============================================================================
 
-/// Snapshot de la playlist native OpenHome
 #[cfg(feature = "pmoserver")]
-#[derive(Debug, Clone, Serialize, ToSchema)]
-pub struct OpenHomePlaylistSnapshot {
-    /// ID du renderer concerné
-    pub renderer_id: String,
-    /// ID courant dans la playlist (si connu)
-    pub current_id: Option<u32>,
-    /// Tracks présents dans la playlist native
-    pub tracks: Vec<OpenHomePlaylistTrack>,
-}
-
-/// Track issue de la playlist native OpenHome
-#[cfg(feature = "pmoserver")]
-#[derive(Debug, Clone, Serialize, ToSchema)]
-pub struct OpenHomePlaylistTrack {
-    /// ID interne OpenHome
-    pub id: u32,
-    /// URI du flux
-    pub uri: String,
-    /// Titre
-    pub title: Option<String>,
-    /// Artiste
-    pub artist: Option<String>,
-    /// Album
-    pub album: Option<String>,
-    /// Pochette (si disponible)
-    pub album_art_uri: Option<String>,
-}
+pub use crate::openhome_playlist::{OpenHomePlaylistSnapshot, OpenHomePlaylistTrack};
 
 /// Requête pour ajouter un track à la playlist OpenHome
 #[cfg(feature = "pmoserver")]

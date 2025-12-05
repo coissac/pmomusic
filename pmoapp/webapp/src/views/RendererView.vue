@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useRenderersStore } from '@/stores/renderers'
 import { useUIStore } from '@/stores/ui'
@@ -10,6 +10,13 @@ import QueueViewer from '@/components/pmocontrol/QueueViewer.vue'
 import PlaylistBindingPanel from '@/components/pmocontrol/PlaylistBindingPanel.vue'
 import StatusBadge from '@/components/pmocontrol/StatusBadge.vue'
 import { ArrowLeft, Radio } from 'lucide-vue-next'
+import {
+  addOpenHomeTrack,
+  clearOpenHomePlaylist,
+  getOpenHomePlaylist,
+  playOpenHomeTrack,
+} from '@/services/openhomePlaylist'
+import type { OpenHomePlaylistSnapshot } from '@/services/pmocontrol/types'
 
 const route = useRoute()
 const router = useRouter()
@@ -19,6 +26,22 @@ const uiStore = useUIStore()
 const rendererId = computed(() => route.params.id as string)
 const renderer = computed(() => renderersStore.getRendererById(rendererId.value))
 const state = computed(() => renderersStore.getStateById(rendererId.value))
+const openHomeSupported = computed(() => {
+  const current = renderer.value
+  if (!current) return false
+  const caps = current.capabilities
+  return (
+    current.protocol === 'openhome' ||
+    current.protocol === 'hybrid' ||
+    caps?.has_oh_playlist === true
+  )
+})
+const ohPlaylist = ref<OpenHomePlaylistSnapshot | null>(null)
+const ohLoading = ref(false)
+const ohError = ref<string | null>(null)
+const newOhUri = ref('')
+const newOhMeta = ref('')
+const canAddOhTrack = computed(() => newOhUri.value.trim().length > 0)
 
 // Charger les données au montage si nécessaire
 onMounted(async () => {
@@ -34,6 +57,25 @@ onMounted(async () => {
   await renderersStore.fetchQueue(rendererId.value)
 })
 
+watch(
+  openHomeSupported,
+  async supported => {
+    if (supported) {
+      await refreshOhPlaylist()
+    } else {
+      ohPlaylist.value = null
+    }
+  },
+  { immediate: true },
+)
+
+watch(rendererId, () => {
+  ohPlaylist.value = null
+  ohError.value = null
+  newOhUri.value = ''
+  newOhMeta.value = ''
+})
+
 // Nettoyer la sélection au démontage
 onUnmounted(() => {
   uiStore.selectRenderer(null)
@@ -46,16 +88,69 @@ function goBack() {
 const protocolLabel = computed(() => {
   if (!renderer.value) return ''
   switch (renderer.value.protocol) {
-    case 'UpnpAvOnly':
+    case 'upnp':
       return 'UPnP AV'
-    case 'OpenHomeOnly':
+    case 'openhome':
       return 'OpenHome'
-    case 'Hybrid':
-      return 'Hybrid'
+    case 'hybrid':
+      return 'Hybrid (UPnP + OpenHome)'
     default:
-      return 'Unknown'
+      return 'Inconnu'
   }
 })
+
+async function refreshOhPlaylist() {
+  if (!renderer.value || !openHomeSupported.value) return
+  ohLoading.value = true
+  ohError.value = null
+  try {
+    ohPlaylist.value = await getOpenHomePlaylist(renderer.value.id)
+  } catch (e) {
+    ohError.value =
+      e instanceof Error ? e.message : 'Failed to load OpenHome playlist'
+  } finally {
+    ohLoading.value = false
+  }
+}
+
+async function handleOhClear() {
+  if (!renderer.value) return
+  try {
+    await clearOpenHomePlaylist(renderer.value.id)
+    await refreshOhPlaylist()
+  } catch (e) {
+    ohError.value =
+      e instanceof Error ? e.message : 'Failed to clear OpenHome playlist'
+  }
+}
+
+async function handleOhPlay(trackId: number) {
+  if (!renderer.value) return
+  try {
+    await playOpenHomeTrack(renderer.value.id, trackId)
+    await refreshOhPlaylist()
+  } catch (e) {
+    ohError.value =
+      e instanceof Error ? e.message : `Failed to play OpenHome track ${trackId}`
+  }
+}
+
+async function handleOhAdd() {
+  if (!renderer.value || !canAddOhTrack.value) return
+  try {
+    await addOpenHomeTrack(renderer.value.id, {
+      uri: newOhUri.value.trim(),
+      metadata: newOhMeta.value,
+      play: false,
+    })
+    newOhUri.value = ''
+    newOhMeta.value = ''
+    await refreshOhPlaylist()
+  } catch (e) {
+    ohError.value =
+      e instanceof Error ? e.message : 'Failed to add track to OpenHome playlist'
+  }
+}
 </script>
 
 <template>
@@ -105,6 +200,65 @@ const protocolLabel = computed(() => {
         <!-- Playlist Binding -->
         <section class="content-section">
           <PlaylistBindingPanel :rendererId="rendererId" />
+        </section>
+
+        <section v-if="openHomeSupported" class="content-section openhome-playlist">
+          <h2>OpenHome Playlist</h2>
+
+          <div v-if="ohLoading">Chargement de la playlist…</div>
+          <div v-else-if="ohError" class="error">{{ ohError }}</div>
+
+          <div v-else-if="ohPlaylist && ohPlaylist.tracks.length === 0">
+            Playlist vide.
+          </div>
+
+          <div v-else-if="ohPlaylist">
+            <table class="oh-playlist-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Titre</th>
+                  <th>Artiste</th>
+                  <th>Album</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="track in ohPlaylist.tracks"
+                  :key="track.id"
+                  :class="{ current: ohPlaylist.current_id === track.id }"
+                >
+                  <td>{{ track.id }}</td>
+                  <td>{{ track.title || '—' }}</td>
+                  <td>{{ track.artist || '—' }}</td>
+                  <td>{{ track.album || '—' }}</td>
+                  <td class="actions-cell">
+                    <button class="btn btn-secondary btn-icon" @click="handleOhPlay(track.id)" title="Lire ce morceau">
+                      ▶
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+
+            <div class="oh-controls">
+              <button class="btn btn-secondary" @click="refreshOhPlaylist">
+                🔁 Rafraîchir
+              </button>
+              <button class="btn btn-danger" @click="handleOhClear">
+                🗑 Effacer la playlist
+              </button>
+            </div>
+
+            <div class="oh-add-form">
+              <input v-model="newOhUri" placeholder="URI à ajouter" />
+              <textarea v-model="newOhMeta" placeholder="DIDL-Lite (optionnel)" rows="2"></textarea>
+              <button class="btn btn-primary" @click="handleOhAdd" :disabled="!canAddOhTrack">
+                ➕ Ajouter
+              </button>
+            </div>
+          </div>
         </section>
       </div>
 
@@ -242,6 +396,77 @@ const protocolLabel = computed(() => {
   font-weight: 600;
   color: var(--color-text);
   margin: 0 0 var(--spacing-md);
+}
+
+.openhome-playlist h2 {
+  margin: 0 0 var(--spacing-md);
+  font-size: var(--text-lg);
+}
+
+.oh-playlist-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: var(--spacing-md);
+}
+
+.oh-playlist-table th,
+.oh-playlist-table td {
+  padding: var(--spacing-xs);
+  border-bottom: 1px solid var(--color-border);
+  font-size: var(--text-sm);
+}
+
+.oh-playlist-table tbody tr:hover {
+  background-color: var(--color-bg-tertiary);
+}
+
+.oh-playlist-table tr.current {
+  background-color: rgba(16, 185, 129, 0.15);
+}
+
+.actions-cell {
+  text-align: center;
+}
+
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+}
+
+.oh-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-md);
+}
+
+.oh-add-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.oh-add-form input,
+.oh-add-form textarea {
+  width: 100%;
+  padding: var(--spacing-sm);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background-color: var(--color-bg-tertiary);
+  color: var(--color-text);
+}
+
+.oh-add-form button {
+  align-self: flex-start;
+}
+
+.error {
+  color: var(--status-error, #dc2626);
+  font-weight: 600;
 }
 
 /* Responsive - Desktop */

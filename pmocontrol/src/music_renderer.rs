@@ -10,6 +10,7 @@ use std::sync::{Arc, RwLock};
 
 use crate::capabilities::{PlaybackPositionInfo, PlaybackStatus};
 use crate::model::{RendererId, RendererInfo, RendererProtocol};
+use crate::openhome_playlist::OpenHomePlaylistSnapshot;
 use crate::{
     ArylicTcpRenderer, DeviceRegistry, LinkPlayRenderer, OpenHomeRenderer, PlaybackPosition,
     PlaybackState, TransportControl, UpnpRenderer, VolumeControl,
@@ -101,10 +102,12 @@ impl MusicRenderer {
         info: RendererInfo,
         registry: &Arc<RwLock<DeviceRegistry>>,
     ) -> Option<Self> {
-        if matches!(info.protocol, RendererProtocol::OpenHomeOnly | RendererProtocol::Hybrid) {
+        if matches!(
+            info.protocol,
+            RendererProtocol::OpenHomeOnly | RendererProtocol::Hybrid
+        ) {
             if let Some(renderer) = {
-                let reg = registry.read().unwrap();
-                let renderer = OpenHomeRenderer::new(info.clone(), &*reg);
+                let renderer = OpenHomeRenderer::new(info.clone());
                 renderer.has_any_openhome_service().then_some(renderer)
             } {
                 return Some(MusicRenderer::OpenHome(renderer));
@@ -155,6 +158,64 @@ impl MusicRenderer {
                 )))
             }
             RendererProtocol::OpenHomeOnly => None,
+        }
+    }
+
+    pub fn openhome_playlist_snapshot(&self) -> Result<OpenHomePlaylistSnapshot> {
+        match self {
+            MusicRenderer::OpenHome(renderer) => renderer.snapshot_openhome_playlist(),
+            _ => Err(op_not_supported(
+                "openhome_playlist_snapshot",
+                self.unsupported_backend_name(),
+            )),
+        }
+    }
+
+    pub fn openhome_playlist_clear(&self) -> Result<()> {
+        match self {
+            MusicRenderer::OpenHome(renderer) => renderer.clear_openhome_playlist(),
+            _ => Err(op_not_supported(
+                "openhome_playlist_clear",
+                self.unsupported_backend_name(),
+            )),
+        }
+    }
+
+    pub fn openhome_playlist_add_track(
+        &self,
+        uri: &str,
+        metadata: &str,
+        after_id: Option<u32>,
+        play: bool,
+    ) -> Result<u32> {
+        match self {
+            MusicRenderer::OpenHome(renderer) => {
+                renderer.add_track_openhome(uri, metadata, after_id, play)
+            }
+            _ => Err(op_not_supported(
+                "openhome_playlist_add_track",
+                self.unsupported_backend_name(),
+            )),
+        }
+    }
+
+    pub fn openhome_playlist_play_id(&self, id: u32) -> Result<()> {
+        match self {
+            MusicRenderer::OpenHome(renderer) => renderer.play_openhome_track_id(id),
+            _ => Err(op_not_supported(
+                "openhome_playlist_play_id",
+                self.unsupported_backend_name(),
+            )),
+        }
+    }
+
+    fn unsupported_backend_name(&self) -> &'static str {
+        match self {
+            MusicRenderer::Upnp(_) => "UPnP",
+            MusicRenderer::OpenHome(_) => "OpenHome",
+            MusicRenderer::LinkPlay(_) => "LinkPlay",
+            MusicRenderer::ArylicTcp(_) => "ArylicTcp",
+            MusicRenderer::HybridUpnpArylic { .. } => "HybridUpnpArylic",
         }
     }
 }

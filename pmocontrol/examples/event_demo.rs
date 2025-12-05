@@ -19,11 +19,11 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use pmocontrol::model::TrackMetadata;
+use pmocontrol::openhome_renderer::{format_seconds, map_openhome_state};
 use pmocontrol::{
     ControlPoint, DeviceRegistryRead, PlaybackPositionInfo, PlaybackState, RendererEvent,
     RendererId, RendererInfo,
 };
-use pmocontrol::openhome_renderer::{format_seconds, map_openhome_state};
 
 fn main() -> io::Result<()> {
     // Logging simple (tracing_subscriber est déjà utilisé dans les autres exemples)
@@ -200,10 +200,7 @@ fn print_openhome_summary(prefix: &str, info: &RendererInfo, cp: &ControlPoint) 
         match client.transport_state() {
             Ok(state) => {
                 let logical = map_openhome_state(&state);
-                println!(
-                    "{prefix}  Transport state : {} ({:?})",
-                    state, logical
-                );
+                println!("{prefix}  Transport state : {} ({:?})", state, logical);
             }
             Err(err) => println!("{prefix}  Transport state : <error {err}>"),
         }

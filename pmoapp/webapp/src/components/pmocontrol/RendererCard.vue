@@ -2,7 +2,11 @@
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { usePlaybackStore } from '@/stores/playback'
-import type { RendererSummary, RendererState } from '@/services/pmocontrol/types'
+import type {
+  RendererCapabilitiesSummary,
+  RendererSummary,
+  RendererState,
+} from '@/services/pmocontrol/types'
 import StatusBadge from './StatusBadge.vue'
 import { Music, Volume2, VolumeX } from 'lucide-vue-next'
 
@@ -18,28 +22,42 @@ const metadata = computed(() => playbackStore.getTrackMetadata(props.renderer.id
 
 const protocolLabel = computed(() => {
   switch (props.renderer.protocol) {
-    case 'UpnpAvOnly':
+    case 'upnp':
       return 'UPnP AV'
-    case 'OpenHomeOnly':
+    case 'openhome':
       return 'OpenHome'
-    case 'Hybrid':
-      return 'Hybrid'
+    case 'hybrid':
+      return 'Hybrid (UPnP + OpenHome)'
     default:
-      return 'Unknown'
+      return 'Inconnu'
   }
 })
 
 const protocolClass = computed(() => {
   switch (props.renderer.protocol) {
-    case 'UpnpAvOnly':
+    case 'upnp':
       return 'protocol-upnp'
-    case 'OpenHomeOnly':
+    case 'openhome':
       return 'protocol-openhome'
-    case 'Hybrid':
+    case 'hybrid':
       return 'protocol-hybrid'
     default:
       return 'protocol-unknown'
   }
+})
+
+const capabilityBadges = computed(() => {
+  const caps = props.renderer.capabilities
+  if (!caps) return []
+  const mapping: Array<{ key: keyof RendererCapabilitiesSummary; label: string }> = [
+    { key: 'has_avtransport', label: 'AVTransport' },
+    { key: 'has_oh_playlist', label: 'OpenHome' },
+    { key: 'has_linkplay_http', label: 'Hybrid' },
+    { key: 'has_oh_volume', label: 'Vol' },
+    { key: 'has_oh_time', label: 'Time' },
+    { key: 'has_oh_info', label: 'Info' },
+  ]
+  return mapping.filter(({ key }) => caps[key]).map(({ key, label }) => ({ key, label }))
 })
 
 const hasCover = computed(() => !!metadata.value?.album_art_uri)
@@ -66,6 +84,12 @@ function goToRenderer() {
     </div>
 
     <!-- Cover Art -->
+    <div v-if="capabilityBadges.length" class="capabilities">
+      <span v-for="badge in capabilityBadges" :key="badge.key" class="capability-badge">
+        {{ badge.label }}
+      </span>
+    </div>
+
     <div class="card-cover">
       <img
         v-if="hasCover"
@@ -164,6 +188,21 @@ function goToRenderer() {
   display: flex;
   gap: var(--spacing-xs);
   flex-wrap: wrap;
+}
+
+.capabilities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-xs);
+}
+
+.capability-badge {
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  background-color: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border);
 }
 
 .protocol-badge {

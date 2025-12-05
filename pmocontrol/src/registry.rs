@@ -5,9 +5,6 @@ use crate::avtransport_client::AvTransportClient;
 use crate::connection_manager_client::ConnectionManagerClient;
 use crate::media_server::{MediaServerInfo, ServerId};
 use crate::model::{RendererId, RendererInfo};
-use crate::openhome_client::{
-    OhInfoClient, OhPlaylistClient, OhRadioClient, OhTimeClient, OhVolumeClient,
-};
 use crate::rendering_control_client::RenderingControlClient;
 use tracing::debug;
 
@@ -205,55 +202,5 @@ impl DeviceRegistry {
                 );
             }
         }
-    }
-
-    pub fn oh_playlist_client_for_renderer(&self, id: &RendererId) -> Option<OhPlaylistClient> {
-        let info = self.renderers.get(id)?;
-        let service_type = info.oh_playlist_service_type.as_ref()?;
-        let control_url = info.oh_playlist_control_url.as_ref()?;
-        Some(OhPlaylistClient::new(
-            control_url.clone(),
-            service_type.clone(),
-        ))
-    }
-
-    pub fn oh_info_client_for_renderer(&self, id: &RendererId) -> Option<OhInfoClient> {
-        let info = self.renderers.get(id)?;
-        let service_type = info.oh_info_service_type.as_ref()?;
-        let control_url = info.oh_info_control_url.as_ref()?;
-        Some(OhInfoClient::new(
-            control_url.clone(),
-            service_type.clone(),
-        ))
-    }
-
-    pub fn oh_time_client_for_renderer(&self, id: &RendererId) -> Option<OhTimeClient> {
-        let info = self.renderers.get(id)?;
-        let service_type = info.oh_time_service_type.as_ref()?;
-        let control_url = info.oh_time_control_url.as_ref()?;
-        Some(OhTimeClient::new(
-            control_url.clone(),
-            service_type.clone(),
-        ))
-    }
-
-    pub fn oh_volume_client_for_renderer(&self, id: &RendererId) -> Option<OhVolumeClient> {
-        let info = self.renderers.get(id)?;
-        let service_type = info.oh_volume_service_type.as_ref()?;
-        let control_url = info.oh_volume_control_url.as_ref()?;
-        Some(OhVolumeClient::new(
-            control_url.clone(),
-            service_type.clone(),
-        ))
-    }
-
-    pub fn oh_radio_client_for_renderer(&self, id: &RendererId) -> Option<OhRadioClient> {
-        let info = self.renderers.get(id)?;
-        let service_type = info.oh_radio_service_type.as_ref()?;
-        let control_url = info.oh_radio_control_url.as_ref()?;
-        Some(OhRadioClient::new(
-            control_url.clone(),
-            service_type.clone(),
-        ))
     }
 }

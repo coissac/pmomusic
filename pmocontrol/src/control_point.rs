@@ -6,9 +6,10 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use pmoupnp::ssdp::SsdpClient;
+use thiserror::Error;
 use tracing::{debug, error, info, warn};
 use ureq::{Agent, http};
 use xmltree::{Element, XMLNode};
@@ -26,7 +27,8 @@ use crate::media_server::{
 use crate::media_server_events::spawn_media_server_event_runtime;
 use crate::model::TrackMetadata;
 use crate::model::{MediaServerEvent, RendererEvent, RendererId, RendererInfo};
-use crate::openhome_client::{OhPlaylistClient, OhTrackEntry, parse_track_metadata_from_didl};
+use crate::openhome_client::parse_track_metadata_from_didl;
+use crate::openhome_playlist::{OpenHomePlaylistSnapshot, OpenHomePlaylistTrack};
 use crate::openhome_renderer::{format_seconds, map_openhome_state};
 use crate::playback_queue::{PlaybackItem, PlaybackQueue};
 use crate::provider::HttpXmlDescriptionProvider;
@@ -52,6 +54,14 @@ pub struct PlaylistBinding {
     pub(crate) pending_refresh: bool,
     /// Whether the next refresh should auto-start playback if the renderer is idle.
     pub(crate) auto_play_on_refresh: bool,
+}
+
+#[derive(Debug, Error)]
+pub enum OpenHomeAccessError {
+    #[error("Renderer {0} not found")]
+    RendererNotFound(String),
+    #[error("Renderer {0} has no OpenHome playlist service")]
+    PlaylistNotSupported(String),
 }
 
 /// Control point minimal :
@@ -164,9 +174,7 @@ impl ControlPoint {
                     };
                     let previous_backend = runtime_cp.runtime.playlist_backend(&info.id);
                     if previous_backend != backend {
-                        runtime_cp
-                            .runtime
-                            .set_playlist_backend(&info.id, backend);
+                        runtime_cp.runtime.set_playlist_backend(&info.id, backend);
                         if matches!(backend, PlaylistBackend::OpenHome) {
                             if let Err(err) = sync_openhome_playlist(
                                 &runtime_cp.registry,
@@ -217,10 +225,12 @@ impl ControlPoint {
                                         artist = metadata.artist.as_deref(),
                                         "Emitting metadata changed event"
                                     );
-                                    runtime_cp.emit_renderer_event(RendererEvent::MetadataChanged {
-                                        id: renderer_id.clone(),
-                                        metadata: metadata.clone(),
-                                    });
+                                    runtime_cp.emit_renderer_event(
+                                        RendererEvent::MetadataChanged {
+                                            id: renderer_id.clone(),
+                                            metadata: metadata.clone(),
+                                        },
+                                    );
                                     new_snapshot.last_metadata = Some(metadata);
                                 }
                             }
@@ -568,8 +578,8 @@ impl ControlPoint {
         self.detach_binding_on_user_mutation(renderer_id, "clear_queue");
 
         if self.runtime.uses_openhome_playlist(renderer_id) {
-            let client = self.openhome_playlist_client(renderer_id)?;
-            client.delete_all()?;
+            let renderer = self.openhome_renderer(renderer_id)?;
+            renderer.openhome_playlist_clear()?;
             self.sync_openhome_playlist_for(renderer_id)?;
             debug!(
                 renderer = renderer_id.0.as_str(),
@@ -692,6 +702,45 @@ impl ControlPoint {
     /// This is used by external APIs after mutating the native playlist so that
     /// the local queue mirrors the renderer state.
     pub fn refresh_openhome_playlist(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
+        self.sync_openhome_playlist_for(renderer_id)
+    }
+
+    pub fn get_openhome_playlist_snapshot(
+        &self,
+        renderer_id: &RendererId,
+    ) -> anyhow::Result<OpenHomePlaylistSnapshot> {
+        let renderer = self.openhome_renderer(renderer_id)?;
+        renderer.openhome_playlist_snapshot()
+    }
+
+    pub fn clear_openhome_playlist(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
+        let renderer = self.openhome_renderer(renderer_id)?;
+        renderer.openhome_playlist_clear()?;
+        self.sync_openhome_playlist_for(renderer_id)
+    }
+
+    pub fn add_openhome_track(
+        &self,
+        renderer_id: &RendererId,
+        uri: &str,
+        metadata: &str,
+        after_id: Option<u32>,
+        play: bool,
+    ) -> anyhow::Result<()> {
+        let renderer = self.openhome_renderer(renderer_id)?;
+        renderer.openhome_playlist_add_track(uri, metadata, after_id, play)?;
+        self.sync_openhome_playlist_for(renderer_id)
+    }
+
+    pub fn play_openhome_track_id(
+        &self,
+        renderer_id: &RendererId,
+        track_id: u32,
+    ) -> anyhow::Result<()> {
+        let renderer = self.openhome_renderer(renderer_id)?;
+        renderer.openhome_playlist_play_id(track_id)?;
+        self.runtime
+            .set_playback_source(renderer_id, PlaybackSource::FromQueue);
         self.sync_openhome_playlist_for(renderer_id)
     }
 
@@ -917,10 +966,7 @@ impl ControlPoint {
             anyhow!("Renderer {} not found", renderer_id.0)
         })?;
 
-        debug!(
-            renderer = renderer_id.0.as_str(),
-            "User-requested stop"
-        );
+        debug!(renderer = renderer_id.0.as_str(), "User-requested stop");
 
         renderer.stop()
     }
@@ -1141,17 +1187,18 @@ impl ControlPoint {
         )
     }
 
-    fn sync_openhome_playlist_for(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
-        sync_openhome_playlist(&self.registry, &self.runtime, &self.event_bus, renderer_id)
+    fn openhome_renderer(&self, renderer_id: &RendererId) -> anyhow::Result<MusicRenderer> {
+        let renderer = self
+            .music_renderer_by_id(renderer_id)
+            .ok_or_else(|| OpenHomeAccessError::RendererNotFound(renderer_id.0.clone()))?;
+        if !renderer.info().capabilities.has_oh_playlist {
+            return Err(OpenHomeAccessError::PlaylistNotSupported(renderer_id.0.clone()).into());
+        }
+        Ok(renderer)
     }
 
-    fn openhome_playlist_client(
-        &self,
-        renderer_id: &RendererId,
-    ) -> anyhow::Result<OhPlaylistClient> {
-        let reg = self.registry.read().unwrap();
-        reg.oh_playlist_client_for_renderer(renderer_id)
-            .ok_or_else(|| anyhow!("Renderer {} has no OpenHome playlist", renderer_id.0))
+    fn sync_openhome_playlist_for(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
+        sync_openhome_playlist(&self.registry, &self.runtime, &self.event_bus, renderer_id)
     }
 
     fn enqueue_items_openhome(
@@ -1163,16 +1210,16 @@ impl ControlPoint {
             return Ok(());
         }
 
-        let client = self.openhome_playlist_client(renderer_id)?;
+        let renderer = self.openhome_renderer(renderer_id)?;
         let mut after_id = self
             .runtime
             .queue_full_snapshot(renderer_id)
-            .and_then(|(queue, _)| queue.last().and_then(openhome_track_id_from_item))
-            .unwrap_or(0);
+            .and_then(|(queue, _)| queue.last().and_then(openhome_track_id_from_item));
 
         for item in items.iter() {
             let metadata = item.to_didl_metadata();
-            after_id = client.insert(after_id, &item.uri, &metadata)?;
+            after_id =
+                Some(renderer.openhome_playlist_add_track(&item.uri, &metadata, after_id, false)?);
         }
 
         self.sync_openhome_playlist_for(renderer_id)?;
@@ -1192,28 +1239,49 @@ impl ControlPoint {
 
         let track_id = openhome_track_id_from_item(&item)
             .ok_or_else(|| anyhow!("Current OpenHome item has no track id"))?;
-        let client = self.openhome_playlist_client(renderer_id)?;
-        client.play_id(track_id)?;
+        let renderer = self.openhome_renderer(renderer_id)?;
+        renderer.openhome_playlist_play_id(track_id)?;
         self.runtime
             .set_playback_source(renderer_id, PlaybackSource::FromQueue);
         self.sync_openhome_playlist_for(renderer_id)?;
         info!(
             renderer = renderer_id.0.as_str(),
-            track_id,
-            "Started OpenHome playlist playback (current item)"
+            track_id, "Started OpenHome playlist playback (current item)"
         );
         Ok(())
     }
 
     fn play_next_openhome(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
-        let client = self.openhome_playlist_client(renderer_id)?;
-        client.next()?;
+        let renderer = self.openhome_renderer(renderer_id)?;
+        let (queue, current_index) = self
+            .runtime
+            .queue_full_snapshot(renderer_id)
+            .ok_or_else(|| Self::runtime_entry_missing(renderer_id))?;
+
+        let next_item = match current_index {
+            Some(idx) => queue.get(idx + 1),
+            None => queue.first(),
+        };
+
+        let Some(item) = next_item else {
+            debug!(
+                renderer = renderer_id.0.as_str(),
+                "No OpenHome track available to advance to"
+            );
+            self.runtime
+                .set_playback_source(renderer_id, PlaybackSource::None);
+            return Ok(());
+        };
+
+        let track_id = openhome_track_id_from_item(item)
+            .ok_or_else(|| anyhow!("Next OpenHome item has no track id"))?;
+        renderer.openhome_playlist_play_id(track_id)?;
         self.runtime
             .set_playback_source(renderer_id, PlaybackSource::FromQueue);
         self.sync_openhome_playlist_for(renderer_id)?;
         info!(
             renderer = renderer_id.0.as_str(),
-            "Advanced OpenHome playlist to next track"
+            track_id, "Advanced OpenHome playlist to next track"
         );
         Ok(())
     }
@@ -1389,10 +1457,7 @@ impl RuntimeState {
     }
 
     fn uses_openhome_playlist(&self, id: &RendererId) -> bool {
-        matches!(
-            self.playlist_backend(id),
-            PlaylistBackend::OpenHome
-        )
+        matches!(self.playlist_backend(id), PlaylistBackend::OpenHome)
     }
 
     fn mark_user_stop_requested(&self, id: &RendererId) {
@@ -1688,21 +1753,13 @@ fn playback_item_from_entry(server: &MusicServer, entry: &MediaEntry) -> Option<
 
 const OPENHOME_TRACK_PREFIX: &str = "openhome:";
 
-fn playback_item_from_openhome_entry(entry: &OhTrackEntry) -> PlaybackItem {
-    let mut item = PlaybackItem::new(entry.uri.clone());
-    item.object_id = Some(format!("{}{}", OPENHOME_TRACK_PREFIX, entry.id));
-
-    if let Some(metadata) = parse_track_metadata_from_didl(&entry.metadata_xml) {
-        item.title = metadata.title;
-        item.artist = metadata.artist;
-        item.album = metadata.album;
-        item.genre = metadata.genre;
-        item.album_art_uri = metadata.album_art_uri;
-        item.date = metadata.date;
-        item.track_number = metadata.track_number;
-        item.creator = metadata.creator;
-    }
-
+fn playback_item_from_openhome_track(track: &OpenHomePlaylistTrack) -> PlaybackItem {
+    let mut item = PlaybackItem::new(track.uri.clone());
+    item.object_id = Some(format!("{}{}", OPENHOME_TRACK_PREFIX, track.id));
+    item.title = track.title.clone();
+    item.artist = track.artist.clone();
+    item.album = track.album.clone();
+    item.album_art_uri = track.album_art_uri.clone();
     item
 }
 
@@ -1718,23 +1775,28 @@ fn sync_openhome_playlist(
     event_bus: &RendererEventBus,
     renderer_id: &RendererId,
 ) -> anyhow::Result<()> {
-    let (playlist_client, info_client) = {
-        let reg = registry.read().unwrap();
-        let playlist = reg
-            .oh_playlist_client_for_renderer(renderer_id)
-            .ok_or_else(|| anyhow!("Renderer has no OpenHome playlist service"))?;
-        let info = reg.oh_info_client_for_renderer(renderer_id);
-        (playlist, info)
+    let renderer = {
+        let info = {
+            let reg = registry.read().unwrap();
+            reg.get_renderer(renderer_id)
+                .ok_or_else(|| OpenHomeAccessError::RendererNotFound(renderer_id.0.clone()))?
+        };
+        MusicRenderer::from_registry_info(info, registry)
+            .and_then(|r| match r {
+                MusicRenderer::OpenHome(_) => Some(r),
+                _ => None,
+            })
+            .ok_or_else(|| OpenHomeAccessError::PlaylistNotSupported(renderer_id.0.clone()))?
     };
 
-    let track_entries = playlist_client.read_all_tracks()?;
-    let playback_items: Vec<PlaybackItem> = track_entries
+    let snapshot = renderer.openhome_playlist_snapshot()?;
+    let playback_items: Vec<PlaybackItem> = snapshot
+        .tracks
         .iter()
-        .map(playback_item_from_openhome_entry)
+        .map(playback_item_from_openhome_track)
         .collect();
 
-    let current_id = info_client
-        .and_then(|client| client.id().ok());
+    let current_id = snapshot.current_id;
 
     let current_index = current_id.and_then(|id| {
         playback_items
@@ -1904,19 +1966,16 @@ impl OpenHomeEventRuntime {
         info: RendererInfo,
         event_url: String,
     ) {
-        let entry = self
-            .subscriptions
-            .entry(key.clone())
-            .or_insert_with(|| OpenHomeSubscriptionState::new(info.clone(), key.service, event_url.clone()));
+        let entry = self.subscriptions.entry(key.clone()).or_insert_with(|| {
+            OpenHomeSubscriptionState::new(info.clone(), key.service, event_url.clone())
+        });
 
         entry.update(info, event_url);
         self.path_index
             .insert(entry.callback_path.clone(), key.clone());
 
         if entry.sid.is_none() && entry.should_retry() {
-            if let Err(err) =
-                Self::subscribe_entry(self.listener_port, self.http_timeout, entry)
-            {
+            if let Err(err) = Self::subscribe_entry(self.listener_port, self.http_timeout, entry) {
                 warn!(
                     renderer = entry.renderer.friendly_name.as_str(),
                     service = entry.service.as_str(),
@@ -1977,18 +2036,19 @@ impl OpenHomeEventRuntime {
             }
         }
 
-        let properties = parse_openhome_propertyset(&entry.renderer.id, &entry.service, &notify.body);
+        let properties =
+            parse_openhome_propertyset(&entry.renderer.id, &entry.service, &notify.body);
         if properties.is_empty() {
             return;
         }
 
         match entry.service {
             OpenHomeServiceKind::Playlist => {
-                if properties.iter().any(|(name, _)| is_id_array_property(name)) {
-                    if self
-                        .runtime
-                        .uses_openhome_playlist(&entry.renderer.id)
-                    {
+                if properties
+                    .iter()
+                    .any(|(name, _)| is_id_array_property(name))
+                {
+                    if self.runtime.uses_openhome_playlist(&entry.renderer.id) {
                         if let Err(err) = sync_openhome_playlist(
                             &self.registry,
                             &self.runtime,
@@ -2013,11 +2073,7 @@ impl OpenHomeEventRuntime {
         }
     }
 
-    fn handle_info_properties(
-        &self,
-        renderer_id: &RendererId,
-        properties: Vec<(String, String)>,
-    ) {
+    fn handle_info_properties(&self, renderer_id: &RendererId, properties: Vec<(String, String)>) {
         let mut metadata_xml: Option<String> = None;
         let mut transport_state: Option<String> = None;
         let mut track_id: Option<u32> = None;
@@ -2090,11 +2146,7 @@ impl OpenHomeEventRuntime {
         }
     }
 
-    fn handle_time_properties(
-        &self,
-        renderer_id: &RendererId,
-        properties: Vec<(String, String)>,
-    ) {
+    fn handle_time_properties(&self, renderer_id: &RendererId, properties: Vec<(String, String)>) {
         let mut duration: Option<u32> = None;
         let mut seconds: Option<u32> = None;
 
@@ -2123,10 +2175,9 @@ impl OpenHomeEventRuntime {
             new_position.rel_time = Some(format_seconds(s));
         }
 
-        self.runtime
-            .update_snapshot_with(renderer_id, |snapshot| {
-                snapshot.position = Some(new_position.clone());
-            });
+        self.runtime.update_snapshot_with(renderer_id, |snapshot| {
+            snapshot.position = Some(new_position.clone());
+        });
 
         let _ = self.event_tx.send(RendererEvent::PositionChanged {
             id: renderer_id.clone(),
@@ -2175,10 +2226,7 @@ impl OpenHomeEventRuntime {
 
         let response = build_agent(http_timeout).run(request)?;
         if !response.status().is_success() {
-            anyhow::bail!(
-                "SUBSCRIBE returned HTTP {}",
-                response.status()
-            );
+            anyhow::bail!("SUBSCRIBE returned HTTP {}", response.status());
         }
 
         let sid = response
@@ -2226,10 +2274,7 @@ impl OpenHomeEventRuntime {
             .map_err(anyhow::Error::new)?;
         let response = build_agent(http_timeout).run(request)?;
         if !response.status().is_success() {
-            anyhow::bail!(
-                "SUBSCRIBE renewal failed with {}",
-                response.status()
-            );
+            anyhow::bail!("SUBSCRIBE renewal failed with {}", response.status());
         }
         let timeout = parse_timeout(
             response
@@ -2332,9 +2377,7 @@ impl OpenHomeSubscriptionState {
     }
 
     fn update(&mut self, renderer: RendererInfo, event_url: String) {
-        if self.renderer.location != renderer.location
-            || self.event_sub_url != event_url
-        {
+        if self.renderer.location != renderer.location || self.event_sub_url != event_url {
             self.event_sub_url = event_url;
             self.sid = None;
             self.expires_at = None;
@@ -2364,15 +2407,15 @@ struct OpenHomeIncomingNotify {
     body: Vec<u8>,
 }
 
-fn run_openhome_http_listener(
-    listener: TcpListener,
-    notify_tx: Sender<OpenHomeIncomingNotify>,
-) {
+fn run_openhome_http_listener(listener: TcpListener, notify_tx: Sender<OpenHomeIncomingNotify>) {
     for stream in listener.incoming() {
         match stream {
             Ok(mut stream) => {
                 if let Err(err) = stream.set_read_timeout(Some(Duration::from_secs(5))) {
-                    warn!("Failed to set read timeout on OpenHome notify connection: {}", err);
+                    warn!(
+                        "Failed to set read timeout on OpenHome notify connection: {}",
+                        err
+                    );
                 }
 
                 match read_openhome_http_request(&mut stream) {
@@ -2495,11 +2538,7 @@ fn build_openhome_callback_path(id: &RendererId, service: OpenHomeServiceKind) -
     id.hash(&mut hasher);
     service.hash(&mut hasher);
     let suffix = hasher.finish();
-    format!(
-        "/openhome-events/{}/{:x}",
-        service.as_str(),
-        suffix
-    )
+    format!("/openhome-events/{}/{:x}", service.as_str(), suffix)
 }
 
 fn parse_openhome_propertyset(
@@ -2536,9 +2575,7 @@ fn parse_openhome_propertyset(
 }
 
 fn is_id_array_property(name: &str) -> bool {
-    name.trim()
-        .to_ascii_lowercase()
-        .ends_with("idarray")
+    name.trim().to_ascii_lowercase().ends_with("idarray")
 }
 
 fn empty_playback_position() -> PlaybackPositionInfo {

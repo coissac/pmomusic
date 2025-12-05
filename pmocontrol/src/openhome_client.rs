@@ -1,6 +1,6 @@
-use anyhow::{Result, anyhow};
 use crate::model::TrackMetadata;
 use crate::soap_client::{SoapCallResult, invoke_upnp_action};
+use anyhow::{Result, anyhow};
 use pmoupnp::soap::SoapEnvelope;
 use xmltree::{Element, XMLNode};
 
@@ -64,12 +64,8 @@ impl OhPlaylistClient {
             .join(",");
         let args = [("aIdList", id_list_csv.as_str())];
 
-        let call_result = invoke_upnp_action(
-            &self.control_url,
-            &self.service_type,
-            "ReadList",
-            &args,
-        )?;
+        let call_result =
+            invoke_upnp_action(&self.control_url, &self.service_type, "ReadList", &args)?;
 
         let envelope = ensure_success("ReadList", &call_result)?;
         let response = find_child_with_suffix(&envelope.body.content, "ReadListResponse")
@@ -87,12 +83,8 @@ impl OhPlaylistClient {
             ("aMetadata", metadata),
         ];
 
-        let call_result = invoke_upnp_action(
-            &self.control_url,
-            &self.service_type,
-            "Insert",
-            &args,
-        )?;
+        let call_result =
+            invoke_upnp_action(&self.control_url, &self.service_type, "Insert", &args)?;
 
         let envelope = ensure_success("Insert", &call_result)?;
         let response = find_child_with_suffix(&envelope.body.content, "InsertResponse")
@@ -109,37 +101,29 @@ impl OhPlaylistClient {
         let id_str = id.to_string();
         let args = [("aId", id_str.as_str())];
 
-        let call_result = invoke_upnp_action(
-            &self.control_url,
-            &self.service_type,
-            "PlayId",
-            &args,
-        )?;
+        let call_result =
+            invoke_upnp_action(&self.control_url, &self.service_type, "PlayId", &args)?;
 
         handle_action_response("PlayId", &call_result)
     }
 
     pub fn play(&self) -> Result<()> {
-        let call_result =
-            invoke_upnp_action(&self.control_url, &self.service_type, "Play", &[])?;
+        let call_result = invoke_upnp_action(&self.control_url, &self.service_type, "Play", &[])?;
         handle_action_response("Play", &call_result)
     }
 
     pub fn pause(&self) -> Result<()> {
-        let call_result =
-            invoke_upnp_action(&self.control_url, &self.service_type, "Pause", &[])?;
+        let call_result = invoke_upnp_action(&self.control_url, &self.service_type, "Pause", &[])?;
         handle_action_response("Pause", &call_result)
     }
 
     pub fn stop(&self) -> Result<()> {
-        let call_result =
-            invoke_upnp_action(&self.control_url, &self.service_type, "Stop", &[])?;
+        let call_result = invoke_upnp_action(&self.control_url, &self.service_type, "Stop", &[])?;
         handle_action_response("Stop", &call_result)
     }
 
     pub fn next(&self) -> Result<()> {
-        let call_result =
-            invoke_upnp_action(&self.control_url, &self.service_type, "Next", &[])?;
+        let call_result = invoke_upnp_action(&self.control_url, &self.service_type, "Next", &[])?;
         handle_action_response("Next", &call_result)
     }
 
@@ -166,12 +150,8 @@ impl OhPlaylistClient {
         let id_str = id.to_string();
         let args = [("aId", id_str.as_str())];
 
-        let call_result = invoke_upnp_action(
-            &self.control_url,
-            &self.service_type,
-            "DeleteId",
-            &args,
-        )?;
+        let call_result =
+            invoke_upnp_action(&self.control_url, &self.service_type, "DeleteId", &args)?;
 
         handle_action_response("DeleteId", &call_result)
     }
@@ -183,12 +163,8 @@ impl OhPlaylistClient {
     }
 
     pub fn tracks_max(&self) -> Result<u32> {
-        let call_result = invoke_upnp_action(
-            &self.control_url,
-            &self.service_type,
-            "TracksMax",
-            &[],
-        )?;
+        let call_result =
+            invoke_upnp_action(&self.control_url, &self.service_type, "TracksMax", &[])?;
 
         let envelope = ensure_success("TracksMax", &call_result)?;
         let response = find_child_with_suffix(&envelope.body.content, "TracksMaxResponse")
@@ -202,12 +178,8 @@ impl OhPlaylistClient {
     }
 
     pub fn id_array(&self) -> Result<Vec<u32>> {
-        let call_result = invoke_upnp_action(
-            &self.control_url,
-            &self.service_type,
-            "IdArray",
-            &[],
-        )?;
+        let call_result =
+            invoke_upnp_action(&self.control_url, &self.service_type, "IdArray", &[])?;
         let envelope = ensure_success("IdArray", &call_result)?;
         let response = find_child_with_suffix(&envelope.body.content, "IdArrayResponse")
             .ok_or_else(|| anyhow!("Missing IdArrayResponse element in SOAP body"))?;
@@ -259,8 +231,7 @@ impl OhInfoClient {
     }
 
     pub fn track(&self) -> Result<OhInfoTrack> {
-        let call_result =
-            invoke_upnp_action(&self.control_url, &self.service_type, "Track", &[])?;
+        let call_result = invoke_upnp_action(&self.control_url, &self.service_type, "Track", &[])?;
 
         let envelope = ensure_success("Track", &call_result)?;
         let response = find_child_with_suffix(&envelope.body.content, "TrackResponse")
@@ -275,8 +246,7 @@ impl OhInfoClient {
     }
 
     pub fn next(&self) -> Result<OhInfoTrack> {
-        let call_result =
-            invoke_upnp_action(&self.control_url, &self.service_type, "Next", &[])?;
+        let call_result = invoke_upnp_action(&self.control_url, &self.service_type, "Next", &[])?;
 
         let envelope = ensure_success("Next", &call_result)?;
         let response = find_child_with_suffix(&envelope.body.content, "NextResponse")
@@ -291,8 +261,7 @@ impl OhInfoClient {
     }
 
     pub fn id(&self) -> Result<u32> {
-        let call_result =
-            invoke_upnp_action(&self.control_url, &self.service_type, "Id", &[])?;
+        let call_result = invoke_upnp_action(&self.control_url, &self.service_type, "Id", &[])?;
 
         let envelope = ensure_success("Id", &call_result)?;
         let response = find_child_with_suffix(&envelope.body.content, "IdResponse")
@@ -305,17 +274,12 @@ impl OhInfoClient {
     }
 
     pub fn transport_state(&self) -> Result<String> {
-        let call_result = invoke_upnp_action(
-            &self.control_url,
-            &self.service_type,
-            "TransportState",
-            &[],
-        )?;
+        let call_result =
+            invoke_upnp_action(&self.control_url, &self.service_type, "TransportState", &[])?;
 
         let envelope = ensure_success("TransportState", &call_result)?;
-        let response =
-            find_child_with_suffix(&envelope.body.content, "TransportStateResponse")
-                .ok_or_else(|| anyhow!("Missing TransportStateResponse element in SOAP body"))?;
+        let response = find_child_with_suffix(&envelope.body.content, "TransportStateResponse")
+            .ok_or_else(|| anyhow!("Missing TransportStateResponse element in SOAP body"))?;
         let state = extract_child_text(response, "aState")?;
         Ok(state)
     }
@@ -341,8 +305,7 @@ impl OhTimeClient {
     }
 
     pub fn position(&self) -> Result<OhTimePosition> {
-        let call_result =
-            invoke_upnp_action(&self.control_url, &self.service_type, "Time", &[])?;
+        let call_result = invoke_upnp_action(&self.control_url, &self.service_type, "Time", &[])?;
 
         let envelope = ensure_success("Time", &call_result)?;
         let response = find_child_with_suffix(&envelope.body.content, "TimeResponse")
@@ -381,8 +344,7 @@ impl OhVolumeClient {
     }
 
     pub fn volume(&self) -> Result<u16> {
-        let call_result =
-            invoke_upnp_action(&self.control_url, &self.service_type, "Volume", &[])?;
+        let call_result = invoke_upnp_action(&self.control_url, &self.service_type, "Volume", &[])?;
         let envelope = ensure_success("Volume", &call_result)?;
         let response = find_child_with_suffix(&envelope.body.content, "VolumeResponse")
             .ok_or_else(|| anyhow!("Missing VolumeResponse element in SOAP body"))?;
@@ -396,18 +358,13 @@ impl OhVolumeClient {
     pub fn set_volume(&self, vol: u16) -> Result<()> {
         let vol_str = vol.to_string();
         let args = [("aVolume", vol_str.as_str())];
-        let call_result = invoke_upnp_action(
-            &self.control_url,
-            &self.service_type,
-            "SetVolume",
-            &args,
-        )?;
+        let call_result =
+            invoke_upnp_action(&self.control_url, &self.service_type, "SetVolume", &args)?;
         handle_action_response("SetVolume", &call_result)
     }
 
     pub fn mute(&self) -> Result<bool> {
-        let call_result =
-            invoke_upnp_action(&self.control_url, &self.service_type, "Mute", &[])?;
+        let call_result = invoke_upnp_action(&self.control_url, &self.service_type, "Mute", &[])?;
         let envelope = ensure_success("Mute", &call_result)?;
         let response = find_child_with_suffix(&envelope.body.content, "MuteResponse")
             .ok_or_else(|| anyhow!("Missing MuteResponse element in SOAP body"))?;
@@ -418,12 +375,8 @@ impl OhVolumeClient {
     pub fn set_mute(&self, mute: bool) -> Result<()> {
         let mute_str = if mute { "1" } else { "0" };
         let args = [("aMute", mute_str)];
-        let call_result = invoke_upnp_action(
-            &self.control_url,
-            &self.service_type,
-            "SetMute",
-            &args,
-        )?;
+        let call_result =
+            invoke_upnp_action(&self.control_url, &self.service_type, "SetMute", &args)?;
         handle_action_response("SetMute", &call_result)
     }
 }
@@ -445,12 +398,8 @@ impl OhRadioClient {
     pub fn play_channel(&self, id: u32) -> Result<()> {
         let id_str = id.to_string();
         let args = [("aId", id_str.as_str())];
-        let call_result = invoke_upnp_action(
-            &self.control_url,
-            &self.service_type,
-            "PlayChannel",
-            &args,
-        )?;
+        let call_result =
+            invoke_upnp_action(&self.control_url, &self.service_type, "PlayChannel", &args)?;
         handle_action_response("PlayChannel", &call_result)
     }
 
@@ -529,10 +478,7 @@ fn parse_track_entry(elem: &Element) -> Result<OhTrackEntry> {
     })
 }
 
-fn ensure_success<'a>(
-    action: &str,
-    call_result: &'a SoapCallResult,
-) -> Result<&'a SoapEnvelope> {
+fn ensure_success<'a>(action: &str, call_result: &'a SoapCallResult) -> Result<&'a SoapEnvelope> {
     if !call_result.status.is_success() {
         if let Some(env) = &call_result.envelope {
             if let Some(err) = parse_upnp_error(env) {
@@ -631,7 +577,10 @@ fn extract_child_text(parent: &Element, suffix: &str) -> Result<String> {
 
 fn extract_child_text_optional(parent: &Element, suffix: &str) -> Result<Option<String>> {
     if let Some(child) = find_child_with_suffix(parent, suffix) {
-        let text = child.get_text().map(|t| t.trim().to_string()).unwrap_or_default();
+        let text = child
+            .get_text()
+            .map(|t| t.trim().to_string())
+            .unwrap_or_default();
         Ok(Some(text))
     } else {
         Ok(None)
@@ -644,7 +593,10 @@ fn extract_child_text_any(parent: &Element, suffixes: &[&str]) -> Result<String>
             return Ok(text);
         }
     }
-    Err(anyhow!("Missing {} element in response", suffixes.join(" or ")))
+    Err(anyhow!(
+        "Missing {} element in response",
+        suffixes.join(" or ")
+    ))
 }
 
 fn parse_bool(value: &str) -> Result<bool> {
@@ -678,8 +630,8 @@ pub(crate) fn decode_base64(input: &str) -> Result<Vec<u8>> {
         if byte == b'\r' || byte == b'\n' || byte == b' ' || byte == b'\t' {
             continue;
         }
-        let val = value(byte)
-            .ok_or_else(|| anyhow!("Invalid base64 character '{}'", byte as char))?;
+        let val =
+            value(byte).ok_or_else(|| anyhow!("Invalid base64 character '{}'", byte as char))?;
         buffer = (buffer << 6) | (val as u32);
         bits_collected += 6;
         if bits_collected >= 8 {

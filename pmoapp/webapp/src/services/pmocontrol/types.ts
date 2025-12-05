@@ -5,11 +5,28 @@
 // RENDERERS
 // ============================================================================
 
+export type RendererProtocolSummary = 'upnp' | 'openhome' | 'hybrid'
+
+export interface RendererCapabilitiesSummary {
+  has_avtransport: boolean
+  has_avtransport_set_next: boolean
+  has_rendering_control: boolean
+  has_connection_manager: boolean
+  has_linkplay_http: boolean
+  has_arylic_tcp: boolean
+  has_oh_playlist: boolean
+  has_oh_volume: boolean
+  has_oh_info: boolean
+  has_oh_time: boolean
+  has_oh_radio: boolean
+}
+
 export interface RendererSummary {
   id: string
   friendly_name: string
   model_name: string
-  protocol: 'UpnpAvOnly' | 'OpenHomeOnly' | 'Hybrid'
+  protocol: RendererProtocolSummary
+  capabilities: RendererCapabilitiesSummary
   online: boolean
 }
 
@@ -49,6 +66,32 @@ export interface QueueSnapshot {
   renderer_id: string
   items: QueueItem[]
   current_index: number | null  // Index de la piste en cours (null si rien en lecture)
+}
+
+// ============================================================================
+// OPENHOME PLAYLIST
+// ============================================================================
+
+export interface OpenHomePlaylistTrack {
+  id: number
+  uri: string
+  title: string | null
+  artist: string | null
+  album: string | null
+  album_art_uri: string | null
+}
+
+export interface OpenHomePlaylistSnapshot {
+  renderer_id: string
+  current_id: number | null
+  tracks: OpenHomePlaylistTrack[]
+}
+
+export interface OpenHomePlaylistAddRequest {
+  uri: string
+  metadata: string
+  after_id?: number | null
+  play?: boolean
 }
 
 // ============================================================================

@@ -64,7 +64,10 @@ impl PlaybackItem {
 
         if let Some(album_art) = &self.album_art_uri {
             let escaped_art = escape(album_art);
-            didl.push_str(&format!("<upnp:albumArtURI>{}</upnp:albumArtURI>", escaped_art));
+            didl.push_str(&format!(
+                "<upnp:albumArtURI>{}</upnp:albumArtURI>",
+                escaped_art
+            ));
         }
 
         if let Some(date) = &self.date {

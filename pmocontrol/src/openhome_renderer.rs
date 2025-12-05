@@ -1,4 +1,3 @@
-use anyhow::{Result, anyhow};
 use crate::capabilities::{
     PlaybackPosition, PlaybackPositionInfo, PlaybackState, PlaybackStatus, TransportControl,
     VolumeControl,
@@ -6,9 +5,11 @@ use crate::capabilities::{
 use crate::model::{RendererId, RendererInfo, RendererProtocol};
 use crate::music_renderer::op_not_supported;
 use crate::openhome_client::{
-    OhInfoClient, OhPlaylistClient, OhRadioClient, OhTimeClient, OhVolumeClient,
+    OhInfoClient, OhPlaylistClient, OhRadioClient, OhTimeClient, OhTrackEntry, OhVolumeClient,
+    parse_track_metadata_from_didl,
 };
-use crate::registry::DeviceRegistry;
+use crate::openhome_playlist::{OpenHomePlaylistSnapshot, OpenHomePlaylistTrack};
+use anyhow::{Result, anyhow};
 use tracing::debug;
 
 #[derive(Clone, Debug)]
@@ -23,14 +24,13 @@ pub struct OpenHomeRenderer {
 }
 
 impl OpenHomeRenderer {
-    pub fn new(info: RendererInfo, registry: &DeviceRegistry) -> Self {
-        let id = info.id.clone();
+    pub fn new(info: RendererInfo) -> Self {
         Self {
-            playlist: registry.oh_playlist_client_for_renderer(&id),
-            info_client: registry.oh_info_client_for_renderer(&id),
-            time_client: registry.oh_time_client_for_renderer(&id),
-            volume_client: registry.oh_volume_client_for_renderer(&id),
-            radio_client: registry.oh_radio_client_for_renderer(&id),
+            playlist: build_playlist_client(&info),
+            info_client: build_info_client(&info),
+            time_client: build_time_client(&info),
+            volume_client: build_volume_client(&info),
+            radio_client: build_radio_client(&info),
             info,
         }
     }
@@ -89,6 +89,53 @@ impl OpenHomeRenderer {
         self.volume_client
             .as_ref()
             .ok_or_else(|| op_not_supported(op, "OpenHome Volume"))
+    }
+
+    pub(crate) fn snapshot_openhome_playlist(&self) -> Result<OpenHomePlaylistSnapshot> {
+        let playlist = self.playlist_client_for("snapshot_openhome_playlist")?;
+        let entries = playlist.read_all_tracks()?;
+        let current_id = self
+            .info_client
+            .as_ref()
+            .and_then(|client| client.id().ok());
+
+        let tracks = entries.iter().map(convert_oh_track_entry).collect();
+
+        Ok(OpenHomePlaylistSnapshot {
+            renderer_id: self.info.id.0.clone(),
+            current_id,
+            tracks,
+        })
+    }
+
+    pub(crate) fn clear_openhome_playlist(&self) -> Result<()> {
+        let playlist = self.playlist_client_for("clear_openhome_playlist")?;
+        playlist.delete_all()
+    }
+
+    pub(crate) fn add_track_openhome(
+        &self,
+        uri: &str,
+        metadata: &str,
+        after_id: Option<u32>,
+        play: bool,
+    ) -> Result<u32> {
+        let playlist = self.playlist_client_for("add_track_openhome")?;
+        let insert_after = match after_id {
+            Some(id) => id,
+            None => playlist.id_array()?.last().copied().unwrap_or(0),
+        };
+
+        let new_id = playlist.insert(insert_after, uri, metadata)?;
+        if play {
+            playlist.play_id(new_id)?;
+        }
+        Ok(new_id)
+    }
+
+    pub(crate) fn play_openhome_track_id(&self, id: u32) -> Result<()> {
+        let playlist = self.playlist_client_for("play_openhome_track_id")?;
+        playlist.play_id(id)
     }
 }
 
@@ -236,4 +283,55 @@ pub(crate) fn format_seconds(seconds: u32) -> String {
     let minutes = (seconds % 3600) / 60;
     let secs = seconds % 60;
     format!("{hours:02}:{minutes:02}:{secs:02}")
+}
+
+fn convert_oh_track_entry(entry: &OhTrackEntry) -> OpenHomePlaylistTrack {
+    let metadata = parse_track_metadata_from_didl(&entry.metadata_xml);
+    OpenHomePlaylistTrack {
+        id: entry.id,
+        uri: entry.uri.clone(),
+        title: metadata.as_ref().and_then(|m| m.title.clone()),
+        artist: metadata.as_ref().and_then(|m| m.artist.clone()),
+        album: metadata.as_ref().and_then(|m| m.album.clone()),
+        album_art_uri: metadata.and_then(|m| m.album_art_uri),
+    }
+}
+
+fn build_playlist_client(info: &RendererInfo) -> Option<OhPlaylistClient> {
+    let control_url = info.oh_playlist_control_url.as_ref()?;
+    let service_type = info.oh_playlist_service_type.as_ref()?;
+    Some(OhPlaylistClient::new(
+        control_url.clone(),
+        service_type.clone(),
+    ))
+}
+
+fn build_info_client(info: &RendererInfo) -> Option<OhInfoClient> {
+    let control_url = info.oh_info_control_url.as_ref()?;
+    let service_type = info.oh_info_service_type.as_ref()?;
+    Some(OhInfoClient::new(control_url.clone(), service_type.clone()))
+}
+
+fn build_time_client(info: &RendererInfo) -> Option<OhTimeClient> {
+    let control_url = info.oh_time_control_url.as_ref()?;
+    let service_type = info.oh_time_service_type.as_ref()?;
+    Some(OhTimeClient::new(control_url.clone(), service_type.clone()))
+}
+
+fn build_volume_client(info: &RendererInfo) -> Option<OhVolumeClient> {
+    let control_url = info.oh_volume_control_url.as_ref()?;
+    let service_type = info.oh_volume_service_type.as_ref()?;
+    Some(OhVolumeClient::new(
+        control_url.clone(),
+        service_type.clone(),
+    ))
+}
+
+fn build_radio_client(info: &RendererInfo) -> Option<OhRadioClient> {
+    let control_url = info.oh_radio_control_url.as_ref()?;
+    let service_type = info.oh_radio_service_type.as_ref()?;
+    Some(OhRadioClient::new(
+        control_url.clone(),
+        service_type.clone(),
+    ))
 }

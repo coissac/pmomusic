@@ -14,12 +14,12 @@
 
 use anyhow::Result;
 use pmocontrol::PlaybackPosition;
+use pmocontrol::model::RendererInfo;
+use pmocontrol::openhome_client::{OhInfoClient, OhPlaylistClient, OhTimeClient};
 use pmocontrol::{
     ControlPoint, MusicRenderer, PlaybackState, PlaybackStatus, RendererCapabilities,
     RendererProtocol, TransportControl, VolumeControl,
 };
-use pmocontrol::model::RendererInfo;
-use pmocontrol::openhome_renderer::{format_seconds, map_openhome_state};
 use std::env;
 use std::thread;
 use std::time::Duration;
@@ -85,7 +85,7 @@ fn main() -> Result<()> {
         );
         print_backend("      ", r);
         print_capabilities("      ", &info.capabilities, &info.protocol);
-        print_openhome_details("      ", info, &cp);
+        print_openhome_details("      ", info);
     }
 
     // 5. Select renderer
@@ -101,7 +101,7 @@ fn main() -> Result<()> {
     println!("  Protocol    : {:?}", info.protocol);
     print_backend("  ", renderer);
     print_capabilities("  ", &info.capabilities, &info.protocol);
-    print_openhome_details("  ", info, &cp);
+    print_openhome_details("  ", info);
 
     if let Some(upnp) = renderer.as_upnp() {
         println!(
@@ -228,7 +228,7 @@ fn print_capabilities(prefix: &str, caps: &RendererCapabilities, proto: &Rendere
     println!("{prefix}  OH Radio      : {}", caps.has_oh_radio);
 }
 
-fn print_openhome_details(prefix: &str, info: &RendererInfo, cp: &ControlPoint) {
+fn print_openhome_details(prefix: &str, info: &RendererInfo) {
     if !info.capabilities.has_oh_playlist
         && !info.capabilities.has_oh_info
         && !info.capabilities.has_oh_time
@@ -236,12 +236,9 @@ fn print_openhome_details(prefix: &str, info: &RendererInfo, cp: &ControlPoint) 
         return;
     }
 
-    let registry = cp.registry();
-    let reg = registry.read().unwrap();
-    let playlist_client = reg.oh_playlist_client_for_renderer(&info.id);
-    let info_client = reg.oh_info_client_for_renderer(&info.id);
-    let time_client = reg.oh_time_client_for_renderer(&info.id);
-    drop(reg);
+    let playlist_client = build_playlist_client(info);
+    let info_client = build_info_client(info);
+    let time_client = build_time_client(info);
 
     if playlist_client.is_none() && info_client.is_none() && time_client.is_none() {
         return;
@@ -260,10 +257,7 @@ fn print_openhome_details(prefix: &str, info: &RendererInfo, cp: &ControlPoint) 
         match client.transport_state() {
             Ok(state) => {
                 let logical = map_openhome_state(&state);
-                println!(
-                    "{prefix}  Transport state : {} ({:?})",
-                    state, logical
-                );
+                println!("{prefix}  Transport state : {} ({:?})", state, logical);
             }
             Err(err) => println!("{prefix}  Transport state : <error {err}>"),
         }
@@ -290,6 +284,7 @@ fn print_backend(prefix: &str, renderer: &MusicRenderer) {
         MusicRenderer::HybridUpnpArylic { .. } => {
             "Hybrid UpnpArylicRenderer (UPnP AV / DLNA + ARylic TCP Protocol)"
         }
+        MusicRenderer::OpenHome(_) => "OpenHomeRenderer (native OpenHome stack)",
     };
     println!("{prefix}Backend       : {backend}");
 }
@@ -406,4 +401,42 @@ fn volume_demo(renderer: &MusicRenderer) -> Result<()> {
     thread::sleep(Duration::from_secs(5));
 
     Ok(())
+}
+
+fn build_playlist_client(info: &RendererInfo) -> Option<OhPlaylistClient> {
+    let control_url = info.oh_playlist_control_url.as_ref()?;
+    let service_type = info.oh_playlist_service_type.as_ref()?;
+    Some(OhPlaylistClient::new(
+        control_url.clone(),
+        service_type.clone(),
+    ))
+}
+
+fn build_info_client(info: &RendererInfo) -> Option<OhInfoClient> {
+    let control_url = info.oh_info_control_url.as_ref()?;
+    let service_type = info.oh_info_service_type.as_ref()?;
+    Some(OhInfoClient::new(control_url.clone(), service_type.clone()))
+}
+
+fn build_time_client(info: &RendererInfo) -> Option<OhTimeClient> {
+    let control_url = info.oh_time_control_url.as_ref()?;
+    let service_type = info.oh_time_service_type.as_ref()?;
+    Some(OhTimeClient::new(control_url.clone(), service_type.clone()))
+}
+
+fn map_openhome_state(raw: &str) -> PlaybackState {
+    match raw.trim().to_ascii_uppercase().as_str() {
+        "PLAYING" => PlaybackState::Playing,
+        "PAUSED" | "PAUSED_PLAYBACK" => PlaybackState::Paused,
+        "STOPPED" => PlaybackState::Stopped,
+        "BUFFERING" | "TRANSITIONING" => PlaybackState::Transitioning,
+        other => PlaybackState::Unknown(other.to_string()),
+    }
+}
+
+fn format_seconds(seconds: u32) -> String {
+    let hours = seconds / 3600;
+    let minutes = (seconds % 3600) / 60;
+    let secs = seconds % 60;
+    format!("{hours:02}:{minutes:02}:{secs:02}")
 }

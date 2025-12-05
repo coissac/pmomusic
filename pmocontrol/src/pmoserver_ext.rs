@@ -4,25 +4,20 @@
 //! et naviguer dans les serveurs de médias.
 
 #[cfg(feature = "pmoserver")]
-use crate::control_point::ControlPoint;
+use crate::control_point::{ControlPoint, OpenHomeAccessError};
 #[cfg(feature = "pmoserver")]
 use crate::media_server::{MediaBrowser, MediaEntry, MediaResource, MusicServer, ServerId};
 #[cfg(feature = "pmoserver")]
 use crate::model::{RendererCapabilities, RendererId, RendererProtocol};
 #[cfg(feature = "pmoserver")]
-use crate::playback_queue::PlaybackItem;
-#[cfg(feature = "pmoserver")]
 use crate::openapi::{
     AttachPlaylistRequest, AttachedPlaylistInfo, BrowseResponse, ContainerEntry, ErrorResponse,
-    MediaServerSummary, OpenHomePlaylistAddRequest, OpenHomePlaylistSnapshot,
-    OpenHomePlaylistTrack, PlayContentRequest, QueueItem, QueueSnapshot,
-    RendererCapabilitiesSummary, RendererProtocolSummary, RendererState, RendererSummary,
-    SuccessResponse, VolumeSetRequest,
+    MediaServerSummary, OpenHomePlaylistAddRequest, OpenHomePlaylistSnapshot, PlayContentRequest,
+    QueueItem, QueueSnapshot, RendererCapabilitiesSummary, RendererProtocolSummary, RendererState,
+    RendererSummary, SuccessResponse, VolumeSetRequest,
 };
 #[cfg(feature = "pmoserver")]
-use crate::openhome_client::{
-    OhInfoClient, OhPlaylistClient, OhTrackEntry, parse_track_metadata_from_didl,
-};
+use crate::playback_queue::PlaybackItem;
 #[cfg(feature = "pmoserver")]
 use crate::{PlaybackPosition, PlaybackStatus, TransportControl, VolumeControl};
 
@@ -178,7 +173,10 @@ async fn get_renderer_state(
             .unwrap_or((None, None));
 
         // Volume et mute
-        let volume = renderer_clone.volume().ok().and_then(|v| u8::try_from(v).ok());
+        let volume = renderer_clone
+            .volume()
+            .ok()
+            .and_then(|v| u8::try_from(v).ok());
         let mute = renderer_clone.mute().ok();
 
         (transport_state, position_ms, duration_ms, volume, mute)
@@ -610,9 +608,8 @@ async fn resume_renderer(
     let control_point = state.control_point.clone();
     let rid_clone = rid.clone();
 
-    let resume_task = tokio::task::spawn_blocking(move || {
-        control_point.play_current_from_queue(&rid_clone)
-    });
+    let resume_task =
+        tokio::task::spawn_blocking(move || control_point.play_current_from_queue(&rid_clone));
 
     time::timeout(QUEUE_COMMAND_TIMEOUT, resume_task)
         .await
@@ -641,10 +638,7 @@ async fn resume_renderer(
             )
         })?
         .map_err(|e| {
-            warn!(
-                "Failed to resume renderer {}: {}",
-                renderer_id, e
-            );
+            warn!("Failed to resume renderer {}: {}", renderer_id, e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
@@ -681,9 +675,8 @@ async fn next_renderer(
     let control_point = state.control_point.clone();
     let rid_clone = rid.clone();
 
-    let next_task = tokio::task::spawn_blocking(move || {
-        control_point.play_next_from_queue(&rid_clone)
-    });
+    let next_task =
+        tokio::task::spawn_blocking(move || control_point.play_next_from_queue(&rid_clone));
 
     time::timeout(QUEUE_COMMAND_TIMEOUT, next_task)
         .await
@@ -771,9 +764,7 @@ async fn set_renderer_volume(
 
     let renderer_clone = renderer.clone();
     let volume = req.volume;
-    let volume_task = tokio::task::spawn_blocking(move || {
-        renderer_clone.set_volume(volume as u16)
-    });
+    let volume_task = tokio::task::spawn_blocking(move || renderer_clone.set_volume(volume as u16));
 
     time::timeout(VOLUME_COMMAND_TIMEOUT, volume_task)
         .await
@@ -1195,20 +1186,11 @@ async fn get_openhome_playlist(
     Path(renderer_id): Path<String>,
 ) -> Result<Json<OpenHomePlaylistSnapshot>, (StatusCode, Json<ErrorResponse>)> {
     let rid = RendererId(renderer_id.clone());
-    let (playlist_client, info_client) =
-        openhome_clients_for_renderer(&state.control_point, &rid)?;
+    let control_point = Arc::clone(&state.control_point);
+    let rid_for_task = rid.clone();
 
-    let fetch_task = tokio::task::spawn_blocking(move || -> anyhow::Result<OpenHomePlaylistSnapshot> {
-        let entries = playlist_client.read_all_tracks()?;
-        let current_id = info_client
-            .and_then(|client| client.id().ok());
-        let tracks: Vec<OpenHomePlaylistTrack> =
-            entries.iter().map(convert_openhome_track).collect();
-        Ok(OpenHomePlaylistSnapshot {
-            renderer_id: rid.0,
-            current_id,
-            tracks,
-        })
+    let fetch_task = tokio::task::spawn_blocking(move || {
+        control_point.get_openhome_playlist_snapshot(&rid_for_task)
     });
 
     let snapshot = fetch_task
@@ -1232,12 +1214,7 @@ async fn get_openhome_playlist(
                 error = %e,
                 "Failed to read OpenHome playlist"
             );
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(ErrorResponse {
-                    error: format!("Failed to read OpenHome playlist: {}", e),
-                }),
-            )
+            map_openhome_error(&rid, e, "read OpenHome playlist")
         })?;
 
     Ok(Json(snapshot))
@@ -1262,11 +1239,11 @@ async fn clear_openhome_playlist(
     Path(renderer_id): Path<String>,
 ) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
     let rid = RendererId(renderer_id.clone());
-    let (playlist_client, _) =
-        openhome_clients_for_renderer(&state.control_point, &rid)?;
+    let control_point = Arc::clone(&state.control_point);
+    let rid_for_task = rid.clone();
 
     let clear_task =
-        tokio::task::spawn_blocking(move || playlist_client.delete_all());
+        tokio::task::spawn_blocking(move || control_point.clear_openhome_playlist(&rid_for_task));
 
     time::timeout(QUEUE_COMMAND_TIMEOUT, clear_task)
         .await
@@ -1305,21 +1282,8 @@ async fn clear_openhome_playlist(
                 error = %e,
                 "Failed to clear OpenHome playlist"
             );
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(ErrorResponse {
-                    error: format!("Failed to clear OpenHome playlist: {}", e),
-                }),
-            )
+            map_openhome_error(&rid, e, "clear OpenHome playlist")
         })?;
-
-    if let Err(err) = state.control_point.refresh_openhome_playlist(&rid) {
-        warn!(
-            renderer = renderer_id.as_str(),
-            error = %err,
-            "Failed to refresh queue after OpenHome clear"
-        );
-    }
 
     Ok(Json(SuccessResponse {
         message: "OpenHome playlist cleared".to_string(),
@@ -1347,26 +1311,17 @@ async fn add_openhome_playlist_item(
     Json(req): Json<OpenHomePlaylistAddRequest>,
 ) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
     let rid = RendererId(renderer_id.clone());
-    let (playlist_client, _) =
-        openhome_clients_for_renderer(&state.control_point, &rid)?;
+    let control_point = Arc::clone(&state.control_point);
+    let rid_for_task = rid.clone();
 
-    let add_task = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-        let mut after_id = if let Some(id) = req.after_id {
-            id
-        } else {
-            playlist_client
-                .id_array()?
-                .last()
-                .copied()
-                .unwrap_or(0)
-        };
-        let new_id =
-            playlist_client.insert(after_id, &req.uri, &req.metadata)?;
-        after_id = new_id;
-        if req.play {
-            playlist_client.play_id(after_id)?;
-        }
-        Ok(())
+    let add_task = tokio::task::spawn_blocking(move || {
+        control_point.add_openhome_track(
+            &rid_for_task,
+            &req.uri,
+            &req.metadata,
+            req.after_id,
+            req.play,
+        )
     });
 
     time::timeout(QUEUE_COMMAND_TIMEOUT, add_task)
@@ -1406,21 +1361,8 @@ async fn add_openhome_playlist_item(
                 error = %e,
                 "Failed to add OpenHome track"
             );
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(ErrorResponse {
-                    error: format!("Failed to add OpenHome track: {}", e),
-                }),
-            )
+            map_openhome_error(&rid, e, "add OpenHome track")
         })?;
-
-    if let Err(err) = state.control_point.refresh_openhome_playlist(&rid) {
-        warn!(
-            renderer = renderer_id.as_str(),
-            error = %err,
-            "Failed to refresh queue after OpenHome add"
-        );
-    }
 
     Ok(Json(SuccessResponse {
         message: "Track added to OpenHome playlist".to_string(),
@@ -1447,9 +1389,6 @@ async fn play_openhome_track(
     Path((renderer_id, track_id)): Path<(String, String)>,
 ) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
     let rid = RendererId(renderer_id.clone());
-    let (playlist_client, _) =
-        openhome_clients_for_renderer(&state.control_point, &rid)?;
-
     let parsed_id = track_id.parse::<u32>().map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
@@ -1459,8 +1398,12 @@ async fn play_openhome_track(
         )
     })?;
 
-    let play_task =
-        tokio::task::spawn_blocking(move || playlist_client.play_id(parsed_id));
+    let control_point = Arc::clone(&state.control_point);
+    let rid_for_task = rid.clone();
+
+    let play_task = tokio::task::spawn_blocking(move || {
+        control_point.play_openhome_track_id(&rid_for_task, parsed_id)
+    });
 
     time::timeout(QUEUE_COMMAND_TIMEOUT, play_task)
         .await
@@ -1500,12 +1443,7 @@ async fn play_openhome_track(
                 track_id = parsed_id,
                 "Failed to start OpenHome track"
             );
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(ErrorResponse {
-                    error: format!("Failed to play OpenHome track: {}", e),
-                }),
-            )
+            map_openhome_error(&rid, e, "play OpenHome track")
         })?;
 
     Ok(Json(SuccessResponse {
@@ -1587,7 +1525,11 @@ async fn play_content(
                 item_count = items.len(),
                 "Auto-binding playlist to renderer queue (without initial refresh)"
             );
-            control_point.attach_queue_to_playlist_without_refresh(&rid, sid.clone(), object_id.clone());
+            control_point.attach_queue_to_playlist_without_refresh(
+                &rid,
+                sid.clone(),
+                object_id.clone(),
+            );
         }
 
         Ok::<(), anyhow::Error>(())
@@ -1724,7 +1666,10 @@ async fn add_to_queue(
             )
         })?
         .map_err(|e| {
-            warn!("Failed to add content to queue for renderer {}: {}", renderer_id, e);
+            warn!(
+                "Failed to add content to queue for renderer {}: {}",
+                renderer_id, e
+            );
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
@@ -1904,6 +1849,32 @@ async fn browse_container(
 // HELPERS
 // ============================================================================
 
+#[cfg(feature = "pmoserver")]
+fn map_openhome_error(
+    renderer_id: &RendererId,
+    err: anyhow::Error,
+    context: &str,
+) -> (StatusCode, Json<ErrorResponse>) {
+    if err.downcast_ref::<OpenHomeAccessError>().is_some() {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: err.to_string(),
+            }),
+        )
+    } else {
+        (
+            StatusCode::BAD_GATEWAY,
+            Json(ErrorResponse {
+                error: format!(
+                    "Failed to {context} for renderer {}: {}",
+                    renderer_id.0, err
+                ),
+            }),
+        )
+    }
+}
+
 /// Helper to fetch playback items from a media server object (container or item).
 ///
 /// This function browses the server to get the entries and converts them to PlaybackItem.
@@ -2018,42 +1989,6 @@ fn capability_summary(caps: &RendererCapabilities) -> RendererCapabilitiesSummar
 }
 
 #[cfg(feature = "pmoserver")]
-fn openhome_clients_for_renderer(
-    control_point: &ControlPoint,
-    renderer_id: &RendererId,
-) -> Result<(OhPlaylistClient, Option<OhInfoClient>), (StatusCode, Json<ErrorResponse>)> {
-    let registry = control_point.registry();
-    let reg = registry.read().unwrap();
-    let Some(client) = reg.oh_playlist_client_for_renderer(renderer_id) else {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: format!(
-                    "Renderer {} has no OpenHome playlist service",
-                    renderer_id.0
-                ),
-            }),
-        ));
-    };
-    let info_client = reg.oh_info_client_for_renderer(renderer_id);
-    Ok((client, info_client))
-}
-
-#[cfg(feature = "pmoserver")]
-fn convert_openhome_track(entry: &OhTrackEntry) -> OpenHomePlaylistTrack {
-    let metadata = parse_track_metadata_from_didl(&entry.metadata_xml);
-    OpenHomePlaylistTrack {
-        id: entry.id,
-        uri: entry.uri.clone(),
-        title: metadata.as_ref().and_then(|m| m.title.clone()),
-        artist: metadata.as_ref().and_then(|m| m.artist.clone()),
-        album: metadata.as_ref().and_then(|m| m.album.clone()),
-        album_art_uri: metadata
-            .and_then(|m| m.album_art_uri),
-    }
-}
-
-#[cfg(feature = "pmoserver")]
 fn state_to_string(state: crate::PlaybackState) -> String {
     use crate::PlaybackState;
     match state {
@@ -2147,14 +2082,8 @@ pub fn create_api_router(state: ControlPointState, control_point: Arc<ControlPoi
             post(play_openhome_track),
         )
         // Queue content
-        .route(
-            "/renderers/{renderer_id}/queue/play",
-            post(play_content),
-        )
-        .route(
-            "/renderers/{renderer_id}/queue/add",
-            post(add_to_queue),
-        )
+        .route("/renderers/{renderer_id}/queue/play", post(play_content))
+        .route("/renderers/{renderer_id}/queue/add", post(add_to_queue))
         // Servers
         .route("/servers", get(list_servers))
         .route(
