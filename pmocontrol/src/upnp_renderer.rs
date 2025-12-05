@@ -190,6 +190,19 @@ mod tests {
             rendering_control_control_url: None,
             connection_manager_service_type: None,
             connection_manager_control_url: None,
+            oh_playlist_service_type: None,
+            oh_playlist_control_url: None,
+            oh_playlist_event_sub_url: None,
+            oh_info_service_type: None,
+            oh_info_control_url: None,
+            oh_info_event_sub_url: None,
+            oh_time_service_type: None,
+            oh_time_control_url: None,
+            oh_time_event_sub_url: None,
+            oh_volume_service_type: None,
+            oh_volume_control_url: None,
+            oh_radio_service_type: None,
+            oh_radio_control_url: None,
         }
     }
 

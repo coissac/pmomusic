@@ -18,6 +18,8 @@ use pmocontrol::{
     ControlPoint, MusicRenderer, PlaybackState, PlaybackStatus, RendererCapabilities,
     RendererProtocol, TransportControl, VolumeControl,
 };
+use pmocontrol::model::RendererInfo;
+use pmocontrol::openhome_renderer::{format_seconds, map_openhome_state};
 use std::env;
 use std::thread;
 use std::time::Duration;
@@ -83,6 +85,7 @@ fn main() -> Result<()> {
         );
         print_backend("      ", r);
         print_capabilities("      ", &info.capabilities, &info.protocol);
+        print_openhome_details("      ", info, &cp);
     }
 
     // 5. Select renderer
@@ -98,6 +101,7 @@ fn main() -> Result<()> {
     println!("  Protocol    : {:?}", info.protocol);
     print_backend("  ", renderer);
     print_capabilities("  ", &info.capabilities, &info.protocol);
+    print_openhome_details("  ", info, &cp);
 
     if let Some(upnp) = renderer.as_upnp() {
         println!(
@@ -222,6 +226,60 @@ fn print_capabilities(prefix: &str, caps: &RendererCapabilities, proto: &Rendere
     println!("{prefix}  OH Info       : {}", caps.has_oh_info);
     println!("{prefix}  OH Time       : {}", caps.has_oh_time);
     println!("{prefix}  OH Radio      : {}", caps.has_oh_radio);
+}
+
+fn print_openhome_details(prefix: &str, info: &RendererInfo, cp: &ControlPoint) {
+    if !info.capabilities.has_oh_playlist
+        && !info.capabilities.has_oh_info
+        && !info.capabilities.has_oh_time
+    {
+        return;
+    }
+
+    let registry = cp.registry();
+    let reg = registry.read().unwrap();
+    let playlist_client = reg.oh_playlist_client_for_renderer(&info.id);
+    let info_client = reg.oh_info_client_for_renderer(&info.id);
+    let time_client = reg.oh_time_client_for_renderer(&info.id);
+    drop(reg);
+
+    if playlist_client.is_none() && info_client.is_none() && time_client.is_none() {
+        return;
+    }
+
+    println!("{prefix}OpenHome:");
+
+    if let Some(client) = playlist_client {
+        match client.id_array() {
+            Ok(ids) => println!("{prefix}  Playlist tracks : {}", ids.len()),
+            Err(err) => println!("{prefix}  Playlist tracks : <error {err}>"),
+        }
+    }
+
+    if let Some(client) = info_client {
+        match client.transport_state() {
+            Ok(state) => {
+                let logical = map_openhome_state(&state);
+                println!(
+                    "{prefix}  Transport state : {} ({:?})",
+                    state, logical
+                );
+            }
+            Err(err) => println!("{prefix}  Transport state : <error {err}>"),
+        }
+    }
+
+    if let Some(client) = time_client {
+        match client.position() {
+            Ok(pos) => println!(
+                "{prefix}  Position         : {}/{} (tracks={})",
+                format_seconds(pos.elapsed_secs),
+                format_seconds(pos.duration_secs),
+                pos.track_count
+            ),
+            Err(err) => println!("{prefix}  Position         : <error {err}>"),
+        }
+    }
 }
 
 fn print_backend(prefix: &str, renderer: &MusicRenderer) {

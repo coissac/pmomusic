@@ -22,10 +22,39 @@ pub struct RendererSummary {
     pub friendly_name: String,
     /// Modèle du renderer
     pub model_name: String,
-    /// Protocole (Upnp, Hybrid, etc.)
-    pub protocol: String,
+    /// Protocole (UPnP pur, OpenHome pur, hybride)
+    pub protocol: RendererProtocolSummary,
+    /// Capacités détectées
+    pub capabilities: RendererCapabilitiesSummary,
     /// Renderer en ligne
     pub online: bool,
+}
+
+/// Protocole exposé par le renderer
+#[cfg(feature = "pmoserver")]
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RendererProtocolSummary {
+    Upnp,
+    Openhome,
+    Hybrid,
+}
+
+/// Drapeaux de capacités renderer (transport, volume, services OpenHome, etc.)
+#[cfg(feature = "pmoserver")]
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct RendererCapabilitiesSummary {
+    pub has_avtransport: bool,
+    pub has_avtransport_set_next: bool,
+    pub has_rendering_control: bool,
+    pub has_connection_manager: bool,
+    pub has_linkplay_http: bool,
+    pub has_arylic_tcp: bool,
+    pub has_oh_playlist: bool,
+    pub has_oh_volume: bool,
+    pub has_oh_info: bool,
+    pub has_oh_time: bool,
+    pub has_oh_radio: bool,
 }
 
 /// État détaillé d'un renderer
@@ -98,6 +127,55 @@ pub struct QueueSnapshot {
     pub items: Vec<QueueItem>,
     /// Index courant dans la playlist (None si rien n'est en cours)
     pub current_index: Option<usize>,
+}
+
+// ============================================================================
+// OPENHOME PLAYLIST
+// ============================================================================
+
+/// Snapshot de la playlist native OpenHome
+#[cfg(feature = "pmoserver")]
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct OpenHomePlaylistSnapshot {
+    /// ID du renderer concerné
+    pub renderer_id: String,
+    /// ID courant dans la playlist (si connu)
+    pub current_id: Option<u32>,
+    /// Tracks présents dans la playlist native
+    pub tracks: Vec<OpenHomePlaylistTrack>,
+}
+
+/// Track issue de la playlist native OpenHome
+#[cfg(feature = "pmoserver")]
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct OpenHomePlaylistTrack {
+    /// ID interne OpenHome
+    pub id: u32,
+    /// URI du flux
+    pub uri: String,
+    /// Titre
+    pub title: Option<String>,
+    /// Artiste
+    pub artist: Option<String>,
+    /// Album
+    pub album: Option<String>,
+    /// Pochette (si disponible)
+    pub album_art_uri: Option<String>,
+}
+
+/// Requête pour ajouter un track à la playlist OpenHome
+#[cfg(feature = "pmoserver")]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct OpenHomePlaylistAddRequest {
+    /// URI du flux à insérer
+    pub uri: String,
+    /// Métadonnées DIDL-Lite complètes
+    pub metadata: String,
+    /// ID devant lequel insérer (None => fin de playlist)
+    pub after_id: Option<u32>,
+    /// Si true, démarre immédiatement la lecture du track inséré
+    #[serde(default)]
+    pub play: bool,
 }
 
 // ============================================================================
@@ -280,6 +358,10 @@ GET /control/servers/{server_id}/containers/{container_id}
         crate::pmoserver_ext::get_renderer_state,
         crate::pmoserver_ext::get_renderer_queue,
         crate::pmoserver_ext::get_renderer_binding,
+        crate::pmoserver_ext::get_openhome_playlist,
+        crate::pmoserver_ext::clear_openhome_playlist,
+        crate::pmoserver_ext::add_openhome_playlist_item,
+        crate::pmoserver_ext::play_openhome_track,
         crate::pmoserver_ext::play_renderer,
         crate::pmoserver_ext::pause_renderer,
         crate::pmoserver_ext::stop_renderer,
@@ -300,10 +382,15 @@ GET /control/servers/{server_id}/containers/{container_id}
     ),
     components(schemas(
         RendererSummary,
+        RendererProtocolSummary,
+        RendererCapabilitiesSummary,
         RendererState,
         AttachedPlaylistInfo,
         QueueItem,
         QueueSnapshot,
+        OpenHomePlaylistSnapshot,
+        OpenHomePlaylistTrack,
+        OpenHomePlaylistAddRequest,
         MediaServerSummary,
         ContainerEntry,
         BrowseResponse,

@@ -11,6 +11,8 @@ pub mod linkplay;
 pub mod media_server;
 pub mod model;
 pub mod music_renderer;
+pub mod openhome_client;
+pub mod openhome_renderer;
 pub mod playback_queue;
 pub mod provider;
 pub mod registry;
@@ -43,6 +45,7 @@ pub use media_server::{
     UpnpMediaServer,
 };
 pub use music_renderer::MusicRenderer;
+pub use openhome_renderer::OpenHomeRenderer;
 pub use playback_queue::{PlaybackItem, PlaybackQueue};
 pub use rendering_control_client::RenderingControlClient;
 pub use upnp_renderer::UpnpRenderer;

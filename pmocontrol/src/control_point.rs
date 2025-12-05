@@ -1,13 +1,17 @@
-use std::collections::HashMap;
-use std::io;
+use std::collections::{HashMap, HashSet};
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::io::{self, BufRead, BufReader, Read, Write};
+use std::net::{IpAddr, TcpListener, TcpStream, UdpSocket};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use anyhow::anyhow;
-use crossbeam_channel::Receiver;
+use anyhow::{anyhow, Context};
+use crossbeam_channel::{Receiver, Sender, unbounded};
 use pmoupnp::ssdp::SsdpClient;
 use tracing::{debug, error, info, warn};
+use ureq::{Agent, http};
+use xmltree::{Element, XMLNode};
 
 use crate::MusicRenderer;
 use crate::capabilities::{
@@ -21,8 +25,9 @@ use crate::media_server::{
 };
 use crate::media_server_events::spawn_media_server_event_runtime;
 use crate::model::TrackMetadata;
-use crate::model::{MediaServerEvent, RendererEvent, RendererId, RendererProtocol};
-use crate::music_renderer::op_not_supported;
+use crate::model::{MediaServerEvent, RendererEvent, RendererId, RendererInfo};
+use crate::openhome_client::{OhPlaylistClient, OhTrackEntry, parse_track_metadata_from_didl};
+use crate::openhome_renderer::{format_seconds, map_openhome_state};
 use crate::playback_queue::{PlaybackItem, PlaybackQueue};
 use crate::provider::HttpXmlDescriptionProvider;
 use crate::registry::{DeviceRegistry, DeviceRegistryRead, DeviceUpdate};
@@ -152,9 +157,30 @@ impl ControlPoint {
                         continue;
                     }
 
-                    match info.protocol {
-                        RendererProtocol::UpnpAvOnly | RendererProtocol::Hybrid => {}
-                        RendererProtocol::OpenHomeOnly => continue,
+                    let backend = if info.capabilities.has_oh_playlist {
+                        PlaylistBackend::OpenHome
+                    } else {
+                        PlaylistBackend::PMOQueue
+                    };
+                    let previous_backend = runtime_cp.runtime.playlist_backend(&info.id);
+                    if previous_backend != backend {
+                        runtime_cp
+                            .runtime
+                            .set_playlist_backend(&info.id, backend);
+                        if matches!(backend, PlaylistBackend::OpenHome) {
+                            if let Err(err) = sync_openhome_playlist(
+                                &runtime_cp.registry,
+                                &runtime_cp.runtime,
+                                &runtime_cp.event_bus,
+                                &info.id,
+                            ) {
+                                debug!(
+                                    renderer = info.id.0.as_str(),
+                                    error = %err,
+                                    "Initial OpenHome playlist sync failed"
+                                );
+                            }
+                        }
                     }
 
                     let renderer_id = info.id.clone();
@@ -276,6 +302,30 @@ impl ControlPoint {
             Arc::clone(&registry),
             media_event_bus.clone(),
             timeout_secs,
+        )?;
+
+        let (oh_event_tx, oh_event_rx) = unbounded::<RendererEvent>();
+        let event_forwarder_cp = ControlPoint {
+            registry: Arc::clone(&registry),
+            event_bus: event_bus.clone(),
+            media_event_bus: media_event_bus.clone(),
+            runtime: Arc::clone(&runtime),
+            playlist_bindings: Arc::clone(&playlist_bindings),
+        };
+
+        thread::Builder::new()
+            .name("cp-openhome-event-forwarder".into())
+            .spawn(move || {
+                while let Ok(event) = oh_event_rx.recv() {
+                    event_forwarder_cp.emit_renderer_event(event);
+                }
+            })?;
+
+        spawn_openhome_event_runtime(
+            Arc::clone(&registry),
+            Arc::clone(&runtime),
+            event_bus.clone(),
+            oh_event_tx,
         )?;
 
         // Worker thread to process MediaServerEvent and trigger queue refreshes
@@ -458,10 +508,6 @@ impl ControlPoint {
     }
 
     /// Snapshot list of music renderers (protocol-agnostic view).
-    ///
-    /// For now, only UPnP AV / hybrid renderers are wrapped as
-    /// [`MusicRenderer::Upnp`]. OpenHome-only devices will be
-    /// ignored until an OpenHome backend is implemented.
     pub fn list_music_renderers(&self) -> Vec<MusicRenderer> {
         let infos = {
             let reg = self.registry.read().unwrap();
@@ -521,6 +567,17 @@ impl ControlPoint {
         // User-driven mutation: detach any playlist binding
         self.detach_binding_on_user_mutation(renderer_id, "clear_queue");
 
+        if self.runtime.uses_openhome_playlist(renderer_id) {
+            let client = self.openhome_playlist_client(renderer_id)?;
+            client.delete_all()?;
+            self.sync_openhome_playlist_for(renderer_id)?;
+            debug!(
+                renderer = renderer_id.0.as_str(),
+                "Cleared OpenHome playlist"
+            );
+            return Ok(());
+        }
+
         let removed = self
             .runtime
             .with_queue_mut(renderer_id, |queue| {
@@ -562,6 +619,11 @@ impl ControlPoint {
 
         // User-driven mutation: detach any playlist binding
         self.detach_binding_on_user_mutation(renderer_id, "enqueue_items");
+
+        if self.runtime.uses_openhome_playlist(renderer_id) {
+            self.enqueue_items_openhome(renderer_id, items)?;
+            return Ok(());
+        }
 
         let item_count = items.len();
         let new_len = self
@@ -625,6 +687,14 @@ impl ControlPoint {
             .ok_or_else(|| Self::runtime_entry_missing(renderer_id))
     }
 
+    /// Force a resynchronization of the OpenHome playlist cache for a renderer.
+    ///
+    /// This is used by external APIs after mutating the native playlist so that
+    /// the local queue mirrors the renderer state.
+    pub fn refresh_openhome_playlist(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
+        self.sync_openhome_playlist_for(renderer_id)
+    }
+
     /// Play the current item from the queue without advancing the index.
     ///
     /// This is useful after a Stop operation to resume playback from the current
@@ -637,6 +707,10 @@ impl ControlPoint {
                 "Cannot play current: renderer not registered in runtime"
             );
             return Err(err);
+        }
+
+        if self.runtime.uses_openhome_playlist(renderer_id) {
+            return self.play_current_openhome(renderer_id);
         }
 
         let Some((item, remaining)) = self.runtime.peek_current(renderer_id) else {
@@ -663,15 +737,6 @@ impl ControlPoint {
             );
             anyhow!("Renderer {} not found", renderer_id.0)
         })?;
-
-        if matches!(renderer.info().protocol, RendererProtocol::OpenHomeOnly) {
-            self.runtime
-                .set_playback_source(renderer_id, PlaybackSource::None);
-            return Err(op_not_supported(
-                "play_current_from_queue",
-                "OpenHomeOnly renderer",
-            ));
-        }
 
         let playback = (|| -> anyhow::Result<()> {
             let didl_metadata = item.to_didl_metadata();
@@ -713,6 +778,11 @@ impl ControlPoint {
             return Err(err);
         }
 
+        if self.runtime.uses_openhome_playlist(renderer_id) {
+            self.play_next_openhome(renderer_id)?;
+            return Ok(());
+        }
+
         let Some((item, remaining_after)) = self.runtime.dequeue_next(renderer_id) else {
             debug!(
                 renderer = renderer_id.0.as_str(),
@@ -739,18 +809,6 @@ impl ControlPoint {
             );
             anyhow!("Renderer {} not found", renderer_id.0)
         })?;
-
-        if matches!(renderer.info().protocol, RendererProtocol::OpenHomeOnly) {
-            self.runtime
-                .with_queue_mut(renderer_id, |queue| queue.enqueue_front(item))
-                .ok_or_else(|| Self::runtime_entry_missing(renderer_id))?;
-            self.runtime
-                .set_playback_source(renderer_id, PlaybackSource::None);
-            return Err(op_not_supported(
-                "play_next_from_queue",
-                "OpenHomeOnly renderer",
-            ));
-        }
 
         let playback = (|| -> anyhow::Result<()> {
             let didl_metadata = item.to_didl_metadata();
@@ -1082,6 +1140,83 @@ impl ControlPoint {
             renderer_id.0
         )
     }
+
+    fn sync_openhome_playlist_for(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
+        sync_openhome_playlist(&self.registry, &self.runtime, &self.event_bus, renderer_id)
+    }
+
+    fn openhome_playlist_client(
+        &self,
+        renderer_id: &RendererId,
+    ) -> anyhow::Result<OhPlaylistClient> {
+        let reg = self.registry.read().unwrap();
+        reg.oh_playlist_client_for_renderer(renderer_id)
+            .ok_or_else(|| anyhow!("Renderer {} has no OpenHome playlist", renderer_id.0))
+    }
+
+    fn enqueue_items_openhome(
+        &self,
+        renderer_id: &RendererId,
+        items: Vec<PlaybackItem>,
+    ) -> anyhow::Result<()> {
+        if items.is_empty() {
+            return Ok(());
+        }
+
+        let client = self.openhome_playlist_client(renderer_id)?;
+        let mut after_id = self
+            .runtime
+            .queue_full_snapshot(renderer_id)
+            .and_then(|(queue, _)| queue.last().and_then(openhome_track_id_from_item))
+            .unwrap_or(0);
+
+        for item in items.iter() {
+            let metadata = item.to_didl_metadata();
+            after_id = client.insert(after_id, &item.uri, &metadata)?;
+        }
+
+        self.sync_openhome_playlist_for(renderer_id)?;
+        Ok(())
+    }
+
+    fn play_current_openhome(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
+        let Some((item, _)) = self.runtime.peek_current(renderer_id) else {
+            debug!(
+                renderer = renderer_id.0.as_str(),
+                "OpenHome playlist is empty or no current item"
+            );
+            self.runtime
+                .set_playback_source(renderer_id, PlaybackSource::None);
+            return Ok(());
+        };
+
+        let track_id = openhome_track_id_from_item(&item)
+            .ok_or_else(|| anyhow!("Current OpenHome item has no track id"))?;
+        let client = self.openhome_playlist_client(renderer_id)?;
+        client.play_id(track_id)?;
+        self.runtime
+            .set_playback_source(renderer_id, PlaybackSource::FromQueue);
+        self.sync_openhome_playlist_for(renderer_id)?;
+        info!(
+            renderer = renderer_id.0.as_str(),
+            track_id,
+            "Started OpenHome playlist playback (current item)"
+        );
+        Ok(())
+    }
+
+    fn play_next_openhome(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
+        let client = self.openhome_playlist_client(renderer_id)?;
+        client.next()?;
+        self.runtime
+            .set_playback_source(renderer_id, PlaybackSource::FromQueue);
+        self.sync_openhome_playlist_for(renderer_id)?;
+        info!(
+            renderer = renderer_id.0.as_str(),
+            "Advanced OpenHome playlist to next track"
+        );
+        Ok(())
+    }
 }
 
 #[derive(Clone, Default)]
@@ -1101,12 +1236,30 @@ enum PlaybackSource {
     External,
 }
 
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PlaylistBackend {
+    PMOQueue,
+    OpenHome,
+}
+
 struct RendererRuntimeEntry {
     snapshot: RendererRuntimeSnapshot,
     queue: PlaybackQueue,
     playback_source: PlaybackSource,
     user_stop_requested: bool,
+    playlist_backend: PlaylistBackend,
+}
+
+impl Default for RendererRuntimeEntry {
+    fn default() -> Self {
+        Self {
+            snapshot: RendererRuntimeSnapshot::default(),
+            queue: PlaybackQueue::default(),
+            playback_source: PlaybackSource::None,
+            user_stop_requested: false,
+            playlist_backend: PlaylistBackend::PMOQueue,
+        }
+    }
 }
 
 struct RuntimeState {
@@ -1131,6 +1284,15 @@ impl RuntimeState {
     fn update_snapshot(&self, id: &RendererId, snapshot: RendererRuntimeSnapshot) {
         self.with_entry(id, |entry| {
             entry.snapshot = snapshot;
+        });
+    }
+
+    fn update_snapshot_with<F>(&self, id: &RendererId, f: F)
+    where
+        F: FnOnce(&mut RendererRuntimeSnapshot),
+    {
+        self.with_entry(id, |entry| {
+            f(&mut entry.snapshot);
         });
     }
 
@@ -1210,6 +1372,27 @@ impl RuntimeState {
             .entry(id.clone())
             .or_insert_with(RendererRuntimeEntry::default);
         f(entry)
+    }
+
+    fn set_playlist_backend(&self, id: &RendererId, backend: PlaylistBackend) {
+        self.with_entry(id, |entry| {
+            entry.playlist_backend = backend;
+        });
+    }
+
+    fn playlist_backend(&self, id: &RendererId) -> PlaylistBackend {
+        let entries = self.entries.lock().unwrap();
+        entries
+            .get(id)
+            .map(|entry| entry.playlist_backend)
+            .unwrap_or(PlaylistBackend::PMOQueue)
+    }
+
+    fn uses_openhome_playlist(&self, id: &RendererId) -> bool {
+        matches!(
+            self.playlist_backend(id),
+            PlaylistBackend::OpenHome
+        )
     }
 
     fn mark_user_stop_requested(&self, id: &RendererId) {
@@ -1501,6 +1684,946 @@ fn playback_item_from_entry(server: &MusicServer, entry: &MediaEntry) -> Option<
     item.creator = entry.creator.clone();
 
     Some(item)
+}
+
+const OPENHOME_TRACK_PREFIX: &str = "openhome:";
+
+fn playback_item_from_openhome_entry(entry: &OhTrackEntry) -> PlaybackItem {
+    let mut item = PlaybackItem::new(entry.uri.clone());
+    item.object_id = Some(format!("{}{}", OPENHOME_TRACK_PREFIX, entry.id));
+
+    if let Some(metadata) = parse_track_metadata_from_didl(&entry.metadata_xml) {
+        item.title = metadata.title;
+        item.artist = metadata.artist;
+        item.album = metadata.album;
+        item.genre = metadata.genre;
+        item.album_art_uri = metadata.album_art_uri;
+        item.date = metadata.date;
+        item.track_number = metadata.track_number;
+        item.creator = metadata.creator;
+    }
+
+    item
+}
+
+fn openhome_track_id_from_item(item: &PlaybackItem) -> Option<u32> {
+    let object_id = item.object_id.as_ref()?;
+    let raw = object_id.strip_prefix(OPENHOME_TRACK_PREFIX)?;
+    raw.parse::<u32>().ok()
+}
+
+fn sync_openhome_playlist(
+    registry: &Arc<RwLock<DeviceRegistry>>,
+    runtime: &Arc<RuntimeState>,
+    event_bus: &RendererEventBus,
+    renderer_id: &RendererId,
+) -> anyhow::Result<()> {
+    let (playlist_client, info_client) = {
+        let reg = registry.read().unwrap();
+        let playlist = reg
+            .oh_playlist_client_for_renderer(renderer_id)
+            .ok_or_else(|| anyhow!("Renderer has no OpenHome playlist service"))?;
+        let info = reg.oh_info_client_for_renderer(renderer_id);
+        (playlist, info)
+    };
+
+    let track_entries = playlist_client.read_all_tracks()?;
+    let playback_items: Vec<PlaybackItem> = track_entries
+        .iter()
+        .map(playback_item_from_openhome_entry)
+        .collect();
+
+    let current_id = info_client
+        .and_then(|client| client.id().ok());
+
+    let current_index = current_id.and_then(|id| {
+        playback_items
+            .iter()
+            .position(|item| openhome_track_id_from_item(item) == Some(id))
+    });
+
+    let queue_len = runtime
+        .with_queue_mut(renderer_id, |queue| {
+            queue.clear();
+            queue.enqueue_many(playback_items.iter().cloned());
+            queue.set_current_index(current_index);
+            queue.len()
+        })
+        .unwrap_or(0);
+
+    event_bus.broadcast(RendererEvent::QueueUpdated {
+        id: renderer_id.clone(),
+        queue_length: queue_len,
+    });
+
+    Ok(())
+}
+
+const OPENHOME_SUBSCRIPTION_TIMEOUT_SECS: u64 = 300;
+const OPENHOME_RENEWAL_MARGIN_SECS: u64 = 60;
+
+fn spawn_openhome_event_runtime(
+    registry: Arc<RwLock<DeviceRegistry>>,
+    runtime: Arc<RuntimeState>,
+    event_bus: RendererEventBus,
+    event_tx: Sender<RendererEvent>,
+) -> io::Result<()> {
+    let listener = TcpListener::bind("0.0.0.0:0")?;
+    let listener_addr = listener
+        .local_addr()
+        .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+
+    info!("OpenHome event listener bound on {}", listener_addr);
+
+    let (notify_tx, notify_rx) = unbounded::<OpenHomeIncomingNotify>();
+    thread::Builder::new()
+        .name("openhome-event-http".into())
+        .spawn(move || run_openhome_http_listener(listener, notify_tx))?;
+
+    let worker = OpenHomeEventRuntime::new(
+        registry,
+        runtime,
+        event_bus,
+        notify_rx,
+        event_tx,
+        listener_addr.port(),
+    );
+
+    thread::Builder::new()
+        .name("openhome-event-worker".into())
+        .spawn(move || worker.run())
+        .map(|_| ())
+}
+
+struct OpenHomeEventRuntime {
+    registry: Arc<RwLock<DeviceRegistry>>,
+    runtime: Arc<RuntimeState>,
+    event_bus: RendererEventBus,
+    notify_rx: Receiver<OpenHomeIncomingNotify>,
+    event_tx: Sender<RendererEvent>,
+    listener_port: u16,
+    http_timeout: Duration,
+    subscriptions: HashMap<OpenHomeSubscriptionKey, OpenHomeSubscriptionState>,
+    path_index: HashMap<String, OpenHomeSubscriptionKey>,
+}
+
+impl OpenHomeEventRuntime {
+    fn new(
+        registry: Arc<RwLock<DeviceRegistry>>,
+        runtime: Arc<RuntimeState>,
+        event_bus: RendererEventBus,
+        notify_rx: Receiver<OpenHomeIncomingNotify>,
+        event_tx: Sender<RendererEvent>,
+        listener_port: u16,
+    ) -> Self {
+        Self {
+            registry,
+            runtime,
+            event_bus,
+            notify_rx,
+            event_tx,
+            listener_port,
+            http_timeout: Duration::from_secs(5),
+            subscriptions: HashMap::new(),
+            path_index: HashMap::new(),
+        }
+    }
+
+    fn run(mut self) {
+        loop {
+            self.drain_notifications();
+            self.refresh_renderers();
+            self.renew_expiring();
+            thread::sleep(Duration::from_millis(250));
+        }
+    }
+
+    fn drain_notifications(&mut self) {
+        while let Ok(notify) = self.notify_rx.try_recv() {
+            self.handle_notification(notify);
+        }
+    }
+
+    fn refresh_renderers(&mut self) {
+        let renderer_infos = {
+            let reg = self.registry.read().unwrap();
+            reg.list_renderers()
+        };
+
+        let mut active: HashSet<OpenHomeSubscriptionKey> = HashSet::new();
+
+        for info in renderer_infos {
+            if !info.online {
+                continue;
+            }
+
+            if let Some(url) = info.oh_playlist_event_sub_url.clone() {
+                let key = OpenHomeSubscriptionKey::new(&info.id, OpenHomeServiceKind::Playlist);
+                active.insert(key.clone());
+                self.ensure_subscription(key, info.clone(), url);
+            }
+
+            if let Some(url) = info.oh_info_event_sub_url.clone() {
+                let key = OpenHomeSubscriptionKey::new(&info.id, OpenHomeServiceKind::Info);
+                active.insert(key.clone());
+                self.ensure_subscription(key, info.clone(), url);
+            }
+
+            if let Some(url) = info.oh_time_event_sub_url.clone() {
+                let key = OpenHomeSubscriptionKey::new(&info.id, OpenHomeServiceKind::Time);
+                active.insert(key.clone());
+                self.ensure_subscription(key, info.clone(), url);
+            }
+        }
+
+        let stale: Vec<OpenHomeSubscriptionKey> = self
+            .subscriptions
+            .keys()
+            .filter(|key| !active.contains(*key))
+            .cloned()
+            .collect();
+
+        for key in stale {
+            if let Some(mut entry) = self.subscriptions.remove(&key) {
+                self.path_index.remove(&entry.callback_path);
+                if let Err(err) = Self::unsubscribe_entry(self.http_timeout, &mut entry) {
+                    warn!(
+                        renderer = entry.renderer.friendly_name.as_str(),
+                        service = entry.service.as_str(),
+                        error = %err,
+                        "Failed to unsubscribe from OpenHome events"
+                    );
+                }
+            }
+        }
+    }
+
+    fn ensure_subscription(
+        &mut self,
+        key: OpenHomeSubscriptionKey,
+        info: RendererInfo,
+        event_url: String,
+    ) {
+        let entry = self
+            .subscriptions
+            .entry(key.clone())
+            .or_insert_with(|| OpenHomeSubscriptionState::new(info.clone(), key.service, event_url.clone()));
+
+        entry.update(info, event_url);
+        self.path_index
+            .insert(entry.callback_path.clone(), key.clone());
+
+        if entry.sid.is_none() && entry.should_retry() {
+            if let Err(err) =
+                Self::subscribe_entry(self.listener_port, self.http_timeout, entry)
+            {
+                warn!(
+                    renderer = entry.renderer.friendly_name.as_str(),
+                    service = entry.service.as_str(),
+                    error = %err,
+                    "OpenHome SUBSCRIBE failed"
+                );
+                entry.defer_retry();
+            }
+        }
+    }
+
+    fn renew_expiring(&mut self) {
+        let now = Instant::now();
+        let mut to_renew = Vec::new();
+        for (key, entry) in self.subscriptions.iter() {
+            if let Some(exp) = entry.expires_at {
+                if exp <= now + Duration::from_secs(OPENHOME_RENEWAL_MARGIN_SECS) {
+                    to_renew.push(key.clone());
+                }
+            }
+        }
+
+        for key in to_renew {
+            if let Some(entry) = self.subscriptions.get_mut(&key) {
+                if let Err(err) = Self::renew_entry(self.http_timeout, entry) {
+                    warn!(
+                        renderer = entry.renderer.friendly_name.as_str(),
+                        service = entry.service.as_str(),
+                        error = %err,
+                        "Failed to renew OpenHome subscription"
+                    );
+                    entry.reset_subscription();
+                }
+            }
+        }
+    }
+
+    fn handle_notification(&mut self, notify: OpenHomeIncomingNotify) {
+        let Some(key) = self.path_index.get(&notify.path).cloned() else {
+            debug!("Dropping OpenHome notify for unknown path {}", notify.path);
+            return;
+        };
+
+        let Some(entry) = self.subscriptions.get(&key) else {
+            return;
+        };
+
+        if let (Some(expected), Some(received)) = (&entry.sid, &notify.sid) {
+            if !expected.eq_ignore_ascii_case(received) {
+                debug!(
+                    renderer = entry.renderer.friendly_name.as_str(),
+                    service = entry.service.as_str(),
+                    expected_sid = expected.as_str(),
+                    received_sid = received.as_str(),
+                    "Ignoring OpenHome notify with mismatched SID"
+                );
+                return;
+            }
+        }
+
+        let properties = parse_openhome_propertyset(&entry.renderer.id, &entry.service, &notify.body);
+        if properties.is_empty() {
+            return;
+        }
+
+        match entry.service {
+            OpenHomeServiceKind::Playlist => {
+                if properties.iter().any(|(name, _)| is_id_array_property(name)) {
+                    if self
+                        .runtime
+                        .uses_openhome_playlist(&entry.renderer.id)
+                    {
+                        if let Err(err) = sync_openhome_playlist(
+                            &self.registry,
+                            &self.runtime,
+                            &self.event_bus,
+                            &entry.renderer.id,
+                        ) {
+                            warn!(
+                                renderer = entry.renderer.friendly_name.as_str(),
+                                error = %err,
+                                "Failed to sync OpenHome playlist after IdArray event"
+                            );
+                        }
+                    }
+                }
+            }
+            OpenHomeServiceKind::Info => {
+                self.handle_info_properties(&entry.renderer.id, properties);
+            }
+            OpenHomeServiceKind::Time => {
+                self.handle_time_properties(&entry.renderer.id, properties);
+            }
+        }
+    }
+
+    fn handle_info_properties(
+        &self,
+        renderer_id: &RendererId,
+        properties: Vec<(String, String)>,
+    ) {
+        let mut metadata_xml: Option<String> = None;
+        let mut transport_state: Option<String> = None;
+        let mut track_id: Option<u32> = None;
+        let mut track_uri: Option<String> = None;
+
+        for (name, value) in properties {
+            match name.as_str() {
+                "Metadata" | "TrackMetadata" => {
+                    if !value.trim().is_empty() {
+                        metadata_xml = Some(value);
+                    }
+                }
+                "TransportState" => {
+                    transport_state = Some(value);
+                }
+                "Id" | "TrackId" => {
+                    if let Ok(id) = value.trim().parse::<u32>() {
+                        track_id = Some(id);
+                    }
+                }
+                "Uri" | "TrackUri" => {
+                    if !value.trim().is_empty() {
+                        track_uri = Some(value);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(xml) = metadata_xml {
+            if let Some(metadata) = parse_track_metadata_from_didl(&xml) {
+                self.runtime.update_snapshot_with(renderer_id, |snapshot| {
+                    snapshot.last_metadata = Some(metadata.clone());
+                    let mut position = snapshot
+                        .position
+                        .clone()
+                        .unwrap_or_else(|| empty_playback_position());
+                    position.track_metadata = Some(xml.clone());
+                    snapshot.position = Some(position);
+                });
+                let _ = self.event_tx.send(RendererEvent::MetadataChanged {
+                    id: renderer_id.clone(),
+                    metadata,
+                });
+            }
+        }
+
+        if track_id.is_some() || track_uri.is_some() {
+            self.runtime.update_snapshot_with(renderer_id, |snapshot| {
+                let mut position = snapshot
+                    .position
+                    .clone()
+                    .unwrap_or_else(|| empty_playback_position());
+                if let Some(id) = track_id {
+                    position.track = Some(id);
+                }
+                if let Some(uri) = track_uri.clone() {
+                    position.track_uri = Some(uri);
+                }
+                snapshot.position = Some(position);
+            });
+        }
+
+        if let Some(state_str) = transport_state {
+            let playback_state = map_openhome_state(&state_str);
+            let _ = self.event_tx.send(RendererEvent::StateChanged {
+                id: renderer_id.clone(),
+                state: playback_state,
+            });
+        }
+    }
+
+    fn handle_time_properties(
+        &self,
+        renderer_id: &RendererId,
+        properties: Vec<(String, String)>,
+    ) {
+        let mut duration: Option<u32> = None;
+        let mut seconds: Option<u32> = None;
+
+        for (name, value) in properties {
+            match name.as_str() {
+                "Duration" => {
+                    duration = value.trim().parse::<u32>().ok();
+                }
+                "Seconds" => {
+                    seconds = value.trim().parse::<u32>().ok();
+                }
+                _ => {}
+            }
+        }
+
+        if duration.is_none() && seconds.is_none() {
+            return;
+        }
+
+        let position = self.runtime.snapshot_for(renderer_id).position;
+        let mut new_position = position.unwrap_or_else(|| empty_playback_position());
+        if let Some(d) = duration {
+            new_position.track_duration = Some(format_seconds(d));
+        }
+        if let Some(s) = seconds {
+            new_position.rel_time = Some(format_seconds(s));
+        }
+
+        self.runtime
+            .update_snapshot_with(renderer_id, |snapshot| {
+                snapshot.position = Some(new_position.clone());
+            });
+
+        let _ = self.event_tx.send(RendererEvent::PositionChanged {
+            id: renderer_id.clone(),
+            position: new_position,
+        });
+    }
+
+    fn subscribe_entry(
+        listener_port: u16,
+        http_timeout: Duration,
+        entry: &mut OpenHomeSubscriptionState,
+    ) -> anyhow::Result<()> {
+        let event_url = entry.event_sub_url.clone();
+        let (remote_host, remote_port) =
+            parse_host_port(&event_url).context("Cannot extract host for SUBSCRIBE")?;
+        let local_ip = determine_local_ip(&remote_host, remote_port)
+            .context("Cannot determine local IP for callback")?;
+
+        let callback_url = format!(
+            "http://{}:{}{}",
+            format_ip(&local_ip),
+            listener_port,
+            entry.callback_path
+        );
+
+        debug!(
+            renderer = entry.renderer.friendly_name.as_str(),
+            service = entry.service.as_str(),
+            callback = callback_url.as_str(),
+            "Subscribing to OpenHome events"
+        );
+
+        let host_header = format!("{}:{}", remote_host, remote_port);
+        let timeout_header = format!("Second-{}", OPENHOME_SUBSCRIPTION_TIMEOUT_SECS);
+        let callback_header = format!("<{}>", callback_url);
+
+        let request = http::Request::builder()
+            .method("SUBSCRIBE")
+            .uri(&event_url)
+            .header("HOST", host_header)
+            .header("CALLBACK", callback_header)
+            .header("NT", "upnp:event")
+            .header("TIMEOUT", timeout_header)
+            .body(())
+            .map_err(anyhow::Error::new)?;
+
+        let response = build_agent(http_timeout).run(request)?;
+        if !response.status().is_success() {
+            anyhow::bail!(
+                "SUBSCRIBE returned HTTP {}",
+                response.status()
+            );
+        }
+
+        let sid = response
+            .headers()
+            .get("SID")
+            .and_then(|value| value.to_str().ok())
+            .map(|s| s.to_string())
+            .ok_or_else(|| anyhow::anyhow!("SUBSCRIBE response missing SID"))?;
+        let timeout = parse_timeout(
+            response
+                .headers()
+                .get("TIMEOUT")
+                .and_then(|value| value.to_str().ok()),
+        )
+        .unwrap_or(Duration::from_secs(OPENHOME_SUBSCRIPTION_TIMEOUT_SECS));
+
+        entry.sid = Some(sid);
+        entry.expires_at = Some(Instant::now() + timeout);
+        entry.retry_after = Instant::now() + Duration::from_secs(5);
+
+        info!(
+            renderer = entry.renderer.friendly_name.as_str(),
+            service = entry.service.as_str(),
+            "Subscribed to OpenHome events (timeout {}s)",
+            timeout.as_secs()
+        );
+
+        Ok(())
+    }
+
+    fn renew_entry(
+        http_timeout: Duration,
+        entry: &mut OpenHomeSubscriptionState,
+    ) -> anyhow::Result<()> {
+        let sid = entry.sid.clone().context("Cannot renew without SID")?;
+        let request = http::Request::builder()
+            .method("SUBSCRIBE")
+            .uri(&entry.event_sub_url)
+            .header("SID", sid)
+            .header(
+                "TIMEOUT",
+                format!("Second-{}", OPENHOME_SUBSCRIPTION_TIMEOUT_SECS),
+            )
+            .body(())
+            .map_err(anyhow::Error::new)?;
+        let response = build_agent(http_timeout).run(request)?;
+        if !response.status().is_success() {
+            anyhow::bail!(
+                "SUBSCRIBE renewal failed with {}",
+                response.status()
+            );
+        }
+        let timeout = parse_timeout(
+            response
+                .headers()
+                .get("TIMEOUT")
+                .and_then(|value| value.to_str().ok()),
+        )
+        .unwrap_or(Duration::from_secs(OPENHOME_SUBSCRIPTION_TIMEOUT_SECS));
+        entry.expires_at = Some(Instant::now() + timeout);
+        info!(
+            renderer = entry.renderer.friendly_name.as_str(),
+            service = entry.service.as_str(),
+            "Renewed OpenHome subscription (timeout {}s)",
+            timeout.as_secs()
+        );
+        Ok(())
+    }
+
+    fn unsubscribe_entry(
+        http_timeout: Duration,
+        entry: &mut OpenHomeSubscriptionState,
+    ) -> anyhow::Result<()> {
+        let sid = match entry.sid.take() {
+            Some(sid) => sid,
+            None => return Ok(()),
+        };
+
+        let request = http::Request::builder()
+            .method("UNSUBSCRIBE")
+            .uri(&entry.event_sub_url)
+            .header("SID", sid)
+            .body(())
+            .map_err(anyhow::Error::new)?;
+        let response = build_agent(http_timeout).run(request)?;
+        if !response.status().is_success() {
+            warn!(
+                renderer = entry.renderer.friendly_name.as_str(),
+                service = entry.service.as_str(),
+                status = response.status().as_u16(),
+                "UNSUBSCRIBE returned non-success status"
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct OpenHomeSubscriptionKey {
+    renderer_id: RendererId,
+    service: OpenHomeServiceKind,
+}
+
+impl OpenHomeSubscriptionKey {
+    fn new(renderer_id: &RendererId, service: OpenHomeServiceKind) -> Self {
+        Self {
+            renderer_id: renderer_id.clone(),
+            service,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum OpenHomeServiceKind {
+    Playlist,
+    Info,
+    Time,
+}
+
+impl OpenHomeServiceKind {
+    fn as_str(&self) -> &'static str {
+        match self {
+            OpenHomeServiceKind::Playlist => "playlist",
+            OpenHomeServiceKind::Info => "info",
+            OpenHomeServiceKind::Time => "time",
+        }
+    }
+}
+
+struct OpenHomeSubscriptionState {
+    renderer: RendererInfo,
+    service: OpenHomeServiceKind,
+    event_sub_url: String,
+    callback_path: String,
+    sid: Option<String>,
+    expires_at: Option<Instant>,
+    retry_after: Instant,
+}
+
+impl OpenHomeSubscriptionState {
+    fn new(renderer: RendererInfo, service: OpenHomeServiceKind, event_sub_url: String) -> Self {
+        Self {
+            callback_path: build_openhome_callback_path(&renderer.id, service),
+            renderer,
+            service,
+            event_sub_url,
+            sid: None,
+            expires_at: None,
+            retry_after: Instant::now(),
+        }
+    }
+
+    fn update(&mut self, renderer: RendererInfo, event_url: String) {
+        if self.renderer.location != renderer.location
+            || self.event_sub_url != event_url
+        {
+            self.event_sub_url = event_url;
+            self.sid = None;
+            self.expires_at = None;
+            self.retry_after = Instant::now();
+        }
+        self.renderer = renderer;
+    }
+
+    fn should_retry(&self) -> bool {
+        Instant::now() >= self.retry_after
+    }
+
+    fn defer_retry(&mut self) {
+        self.retry_after = Instant::now() + Duration::from_secs(15);
+    }
+
+    fn reset_subscription(&mut self) {
+        self.sid = None;
+        self.expires_at = None;
+        self.retry_after = Instant::now() + Duration::from_secs(5);
+    }
+}
+
+struct OpenHomeIncomingNotify {
+    path: String,
+    sid: Option<String>,
+    body: Vec<u8>,
+}
+
+fn run_openhome_http_listener(
+    listener: TcpListener,
+    notify_tx: Sender<OpenHomeIncomingNotify>,
+) {
+    for stream in listener.incoming() {
+        match stream {
+            Ok(mut stream) => {
+                if let Err(err) = stream.set_read_timeout(Some(Duration::from_secs(5))) {
+                    warn!("Failed to set read timeout on OpenHome notify connection: {}", err);
+                }
+
+                match read_openhome_http_request(&mut stream) {
+                    Ok(request) => {
+                        if request.method != "NOTIFY" {
+                            let _ = write_openhome_http_response(
+                                &mut stream,
+                                405,
+                                "Method Not Allowed",
+                            );
+                            continue;
+                        }
+
+                        let notify = OpenHomeIncomingNotify {
+                            path: request.path,
+                            sid: request.headers.get("sid").cloned(),
+                            body: request.body,
+                        };
+
+                        if notify_tx.send(notify).is_err() {
+                            warn!("Dropping OpenHome notify because worker channel is closed");
+                        }
+                        let _ = write_openhome_http_response(&mut stream, 200, "OK");
+                    }
+                    Err(err) => {
+                        warn!("Failed to parse OpenHome notify request: {}", err);
+                        let _ = write_openhome_http_response(&mut stream, 400, "Bad Request");
+                    }
+                }
+            }
+            Err(err) => {
+                warn!("Incoming OpenHome notify connection failed: {}", err);
+            }
+        }
+    }
+}
+
+struct OpenHomeHttpRequest {
+    method: String,
+    path: String,
+    headers: HashMap<String, String>,
+    body: Vec<u8>,
+}
+
+fn read_openhome_http_request(stream: &mut TcpStream) -> io::Result<OpenHomeHttpRequest> {
+    let mut reader = BufReader::new(stream.try_clone()?);
+    let mut request_line = String::new();
+    if reader.read_line(&mut request_line)? == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "missing request line",
+        ));
+    }
+
+    let request_line = request_line.trim_end_matches(&['\r', '\n'][..]);
+    let mut parts = request_line.split_whitespace();
+    let method = parts
+        .next()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing method"))?
+        .to_ascii_uppercase();
+    let path = parts
+        .next()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing path"))?
+        .to_string();
+
+    let mut headers = HashMap::new();
+    loop {
+        let mut line = String::new();
+        let len = reader.read_line(&mut line)?;
+        if len == 0 {
+            break;
+        }
+        let trimmed = line.trim_end_matches(&['\r', '\n'][..]);
+        if trimmed.is_empty() {
+            break;
+        }
+        if let Some((name, value)) = trimmed.split_once(':') {
+            headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_string());
+        }
+    }
+
+    let content_length: usize = headers
+        .get("content-length")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+
+    let mut body = vec![0u8; content_length];
+    reader.read_exact(&mut body)?;
+
+    Ok(OpenHomeHttpRequest {
+        method,
+        path,
+        headers,
+        body,
+    })
+}
+
+fn write_openhome_http_response(
+    stream: &mut TcpStream,
+    status: u16,
+    message: &str,
+) -> io::Result<()> {
+    let response = format!(
+        "HTTP/1.1 {} {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        status, message
+    );
+    stream.write_all(response.as_bytes())
+}
+
+fn build_openhome_callback_path(id: &RendererId, service: OpenHomeServiceKind) -> String {
+    let mut sanitized = String::new();
+    for ch in id.0.chars() {
+        if ch.is_ascii_alphanumeric() {
+            sanitized.push(ch);
+        } else {
+            sanitized.push('_');
+        }
+    }
+    let mut hasher = DefaultHasher::new();
+    id.hash(&mut hasher);
+    service.hash(&mut hasher);
+    let suffix = hasher.finish();
+    format!(
+        "/openhome-events/{}/{:x}",
+        service.as_str(),
+        suffix
+    )
+}
+
+fn parse_openhome_propertyset(
+    renderer_id: &RendererId,
+    service: &OpenHomeServiceKind,
+    body: &[u8],
+) -> Vec<(String, String)> {
+    let mut properties = Vec::new();
+    let reader = std::io::Cursor::new(body);
+    let Ok(root) = Element::parse(reader) else {
+        warn!(
+            renderer = renderer_id.0.as_str(),
+            service = service.as_str(),
+            "Failed to parse OpenHome notify payload"
+        );
+        return properties;
+    };
+
+    for property in root.children.iter().filter_map(|node| match node {
+        XMLNode::Element(elem) => Some(elem),
+        _ => None,
+    }) {
+        for child in property.children.iter().filter_map(|node| match node {
+            XMLNode::Element(elem) => Some(elem),
+            _ => None,
+        }) {
+            if let Some(text) = child.get_text() {
+                properties.push((child.name.clone(), text.into_owned()));
+            }
+        }
+    }
+
+    properties
+}
+
+fn is_id_array_property(name: &str) -> bool {
+    name.trim()
+        .to_ascii_lowercase()
+        .ends_with("idarray")
+}
+
+fn empty_playback_position() -> PlaybackPositionInfo {
+    PlaybackPositionInfo {
+        track: None,
+        rel_time: None,
+        abs_time: None,
+        track_duration: None,
+        track_metadata: None,
+        track_uri: None,
+    }
+}
+
+fn parse_timeout(raw: Option<&str>) -> Option<Duration> {
+    let value = raw?;
+    let lower = value.trim().to_ascii_lowercase();
+    if lower == "second-infinite" {
+        return Some(Duration::from_secs(OPENHOME_SUBSCRIPTION_TIMEOUT_SECS));
+    }
+    if let Some(idx) = lower.find("second-") {
+        let number = &lower[idx + 7..];
+        if let Ok(seconds) = number.parse::<u64>() {
+            return Some(Duration::from_secs(seconds));
+        }
+    }
+    None
+}
+
+fn parse_host_port(url: &str) -> Option<(String, u16)> {
+    let default_port = if url.to_ascii_lowercase().starts_with("https://") {
+        443
+    } else {
+        80
+    };
+    let (_, rest) = url.split_once("://")?;
+    let mut parts = rest.splitn(2, '/');
+    let authority = parts.next()?.trim();
+    if authority.starts_with('[') {
+        let end = authority.find(']')?;
+        let host = &authority[1..end];
+        let remainder = authority.get(end + 1..).unwrap_or("");
+        let port = if let Some(stripped) = remainder.strip_prefix(':') {
+            stripped.parse().unwrap_or(default_port)
+        } else {
+            default_port
+        };
+        Some((host.to_string(), port))
+    } else if let Some((host, port)) = authority.split_once(':') {
+        Some((host.to_string(), port.parse().ok()?))
+    } else {
+        Some((authority.to_string(), default_port))
+    }
+}
+
+fn determine_local_ip(remote_host: &str, remote_port: u16) -> io::Result<IpAddr> {
+    let is_ipv6 = remote_host.contains(':') && !remote_host.contains('.');
+    let target = if is_ipv6 {
+        format!(
+            "[{}]:{}",
+            remote_host.trim_matches(|c| c == '[' || c == ']'),
+            remote_port
+        )
+    } else {
+        format!("{}:{}", remote_host, remote_port)
+    };
+    let bind_addr = if is_ipv6 { "[::]:0" } else { "0.0.0.0:0" };
+    let socket = UdpSocket::bind(bind_addr)?;
+    socket.connect(&target)?;
+    Ok(socket.local_addr()?.ip())
+}
+
+fn format_ip(ip: &IpAddr) -> String {
+    match ip {
+        IpAddr::V4(v4) => v4.to_string(),
+        IpAddr::V6(v6) => format!("[{}]", v6),
+    }
+}
+
+fn build_agent(timeout: Duration) -> Agent {
+    Agent::config_builder()
+        .timeout_global(Some(timeout))
+        .http_status_as_error(false)
+        .allow_non_standard_methods(true)
+        .build()
+        .into()
 }
 
 /// Parse "HH:MM:SS" style time strings to seconds.

@@ -329,13 +329,7 @@ impl CliConfig {
 }
 
 fn pick_renderer(renderers: Vec<RendererInfo>) -> Option<RendererInfo> {
-    let mut candidates: Vec<RendererInfo> = renderers
-        .into_iter()
-        .filter(|info| match info.protocol {
-            RendererProtocol::OpenHomeOnly => false,
-            RendererProtocol::UpnpAvOnly | RendererProtocol::Hybrid => true,
-        })
-        .collect();
+    let mut candidates: Vec<RendererInfo> = renderers;
 
     if candidates.is_empty() {
         return None;

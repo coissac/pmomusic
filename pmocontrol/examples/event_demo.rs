@@ -23,6 +23,7 @@ use pmocontrol::{
     ControlPoint, DeviceRegistryRead, PlaybackPositionInfo, PlaybackState, RendererEvent,
     RendererId, RendererInfo,
 };
+use pmocontrol::openhome_renderer::{format_seconds, map_openhome_state};
 
 fn main() -> io::Result<()> {
     // Logging simple (tracing_subscriber est déjà utilisé dans les autres exemples)
@@ -53,6 +54,7 @@ fn main() -> io::Result<()> {
             "  [{}] {} | model={} | udn={} | location={} | online={}",
             idx, info.friendly_name, info.model_name, info.udn, info.location, info.online
         );
+        print_openhome_summary("      ", info, &cp);
     }
 
     // 3. Optionnel : sélection d'un renderer par index (filtrage des événements)
@@ -126,6 +128,7 @@ fn event_matches_id(event: &RendererEvent, id: &RendererId) -> bool {
         RendererEvent::MuteChanged { id: eid, .. } => eid == id,
         RendererEvent::MetadataChanged { id: eid, .. } => eid == id,
         RendererEvent::QueueUpdated { id: eid, .. } => eid == id,
+        RendererEvent::BindingChanged { id: eid, .. } => eid == id,
     }
 }
 
@@ -163,6 +166,60 @@ fn format_position(pos: &PlaybackPositionInfo) -> String {
     let dur = pos.track_duration.as_deref().unwrap_or("-").to_string();
 
     format!("track={} rel_time={} duration={}", track, rel, dur)
+}
+
+fn print_openhome_summary(prefix: &str, info: &RendererInfo, cp: &ControlPoint) {
+    if !info.capabilities.has_oh_playlist
+        && !info.capabilities.has_oh_info
+        && !info.capabilities.has_oh_time
+    {
+        return;
+    }
+
+    let registry = cp.registry();
+    let reg = registry.read().unwrap();
+    let playlist_client = reg.oh_playlist_client_for_renderer(&info.id);
+    let info_client = reg.oh_info_client_for_renderer(&info.id);
+    let time_client = reg.oh_time_client_for_renderer(&info.id);
+    drop(reg);
+
+    if playlist_client.is_none() && info_client.is_none() && time_client.is_none() {
+        return;
+    }
+
+    println!("{prefix}OpenHome:");
+
+    if let Some(client) = playlist_client {
+        match client.id_array() {
+            Ok(ids) => println!("{prefix}  Playlist tracks : {}", ids.len()),
+            Err(err) => println!("{prefix}  Playlist tracks : <error {err}>"),
+        }
+    }
+
+    if let Some(client) = info_client {
+        match client.transport_state() {
+            Ok(state) => {
+                let logical = map_openhome_state(&state);
+                println!(
+                    "{prefix}  Transport state : {} ({:?})",
+                    state, logical
+                );
+            }
+            Err(err) => println!("{prefix}  Transport state : <error {err}>"),
+        }
+    }
+
+    if let Some(client) = time_client {
+        match client.position() {
+            Ok(pos) => println!(
+                "{prefix}  Position         : {}/{} (tracks={})",
+                format_seconds(pos.elapsed_secs),
+                format_seconds(pos.duration_secs),
+                pos.track_count
+            ),
+            Err(err) => println!("{prefix}  Position         : <error {err}>"),
+        }
+    }
 }
 
 /// Affiche un RendererEvent avec horodatage.

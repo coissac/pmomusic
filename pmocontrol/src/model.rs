@@ -72,6 +72,19 @@ pub struct RendererInfo {
     pub rendering_control_control_url: Option<String>,
     pub connection_manager_service_type: Option<String>,
     pub connection_manager_control_url: Option<String>,
+    pub oh_playlist_service_type: Option<String>,
+    pub oh_playlist_control_url: Option<String>,
+    pub oh_playlist_event_sub_url: Option<String>,
+    pub oh_info_service_type: Option<String>,
+    pub oh_info_control_url: Option<String>,
+    pub oh_info_event_sub_url: Option<String>,
+    pub oh_time_service_type: Option<String>,
+    pub oh_time_control_url: Option<String>,
+    pub oh_time_event_sub_url: Option<String>,
+    pub oh_volume_service_type: Option<String>,
+    pub oh_volume_control_url: Option<String>,
+    pub oh_radio_service_type: Option<String>,
+    pub oh_radio_control_url: Option<String>,
 }
 
 #[derive(Clone, Debug)]

@@ -54,6 +54,21 @@ struct ParsedDeviceDescription {
     // ContentDirectory endpoint (if present in serviceList)
     content_directory_service_type: Option<String>,
     content_directory_control_url: Option<String>,
+
+    // OpenHome endpoints (if present in serviceList)
+    oh_playlist_service_type: Option<String>,
+    oh_playlist_control_url: Option<String>,
+    oh_playlist_event_sub_url: Option<String>,
+    oh_info_service_type: Option<String>,
+    oh_info_control_url: Option<String>,
+    oh_info_event_sub_url: Option<String>,
+    oh_time_service_type: Option<String>,
+    oh_time_control_url: Option<String>,
+    oh_time_event_sub_url: Option<String>,
+    oh_volume_service_type: Option<String>,
+    oh_volume_control_url: Option<String>,
+    oh_radio_service_type: Option<String>,
+    oh_radio_control_url: Option<String>,
 }
 
 impl ParsedDeviceDescription {
@@ -122,6 +137,7 @@ impl HttpXmlDescriptionProvider {
         // New: track current serviceType + controlURL while inside <service>...</service>
         let mut current_service_type: Option<String> = None;
         let mut current_control_url: Option<String> = None;
+        let mut current_event_sub_url: Option<String> = None;
 
         loop {
             match reader.read_event_into(&mut buf)? {
@@ -218,11 +234,79 @@ impl HttpXmlDescriptionProvider {
                                             );
                                         }
                                     }
+
+                                    if lower.contains("urn:av-openhome-org:service:playlist:") {
+                                        if parsed.oh_playlist_service_type.is_none() {
+                                            parsed.oh_playlist_service_type = Some(st.clone());
+                                            parsed.oh_playlist_control_url = Some(ctrl.clone());
+                                            if parsed.oh_playlist_event_sub_url.is_none() {
+                                                parsed.oh_playlist_event_sub_url =
+                                                    current_event_sub_url.clone();
+                                            }
+                                            debug!(
+                                                "Found OpenHome Playlist for {}: type={} controlURL={}",
+                                                endpoint.udn, st, ctrl
+                                            );
+                                        }
+                                    }
+
+                                    if lower.contains("urn:av-openhome-org:service:info:") {
+                                        if parsed.oh_info_service_type.is_none() {
+                                            parsed.oh_info_service_type = Some(st.clone());
+                                            parsed.oh_info_control_url = Some(ctrl.clone());
+                                            if parsed.oh_info_event_sub_url.is_none() {
+                                                parsed.oh_info_event_sub_url =
+                                                    current_event_sub_url.clone();
+                                            }
+                                            debug!(
+                                                "Found OpenHome Info for {}: type={} controlURL={}",
+                                                endpoint.udn, st, ctrl
+                                            );
+                                        }
+                                    }
+
+                                    if lower.contains("urn:av-openhome-org:service:time:") {
+                                        if parsed.oh_time_service_type.is_none() {
+                                            parsed.oh_time_service_type = Some(st.clone());
+                                            parsed.oh_time_control_url = Some(ctrl.clone());
+                                            if parsed.oh_time_event_sub_url.is_none() {
+                                                parsed.oh_time_event_sub_url =
+                                                    current_event_sub_url.clone();
+                                            }
+                                            debug!(
+                                                "Found OpenHome Time for {}: type={} controlURL={}",
+                                                endpoint.udn, st, ctrl
+                                            );
+                                        }
+                                    }
+
+                                    if lower.contains("urn:av-openhome-org:service:volume:") {
+                                        if parsed.oh_volume_service_type.is_none() {
+                                            parsed.oh_volume_service_type = Some(st.clone());
+                                            parsed.oh_volume_control_url = Some(ctrl.clone());
+                                            debug!(
+                                                "Found OpenHome Volume for {}: type={} controlURL={}",
+                                                endpoint.udn, st, ctrl
+                                            );
+                                        }
+                                    }
+
+                                    if lower.contains("urn:av-openhome-org:service:radio:") {
+                                        if parsed.oh_radio_service_type.is_none() {
+                                            parsed.oh_radio_service_type = Some(st.clone());
+                                            parsed.oh_radio_control_url = Some(ctrl.clone());
+                                            debug!(
+                                                "Found OpenHome Radio for {}: type={} controlURL={}",
+                                                endpoint.udn, st, ctrl
+                                            );
+                                        }
+                                    }
                                 }
 
                                 in_service = false;
                                 current_service_type = None;
                                 current_control_url = None;
+                                current_event_sub_url = None;
                             }
                         }
                         _ => {}
@@ -257,6 +341,9 @@ impl HttpXmlDescriptionProvider {
                                 }
                                 "controlURL" if in_service => {
                                     current_control_url = Some(text);
+                                }
+                                "eventSubURL" if in_service => {
+                                    current_event_sub_url = Some(text);
                                 }
                                 _ => {}
                             }
@@ -337,6 +424,43 @@ impl HttpXmlDescriptionProvider {
             connection_manager_service_type: parsed.connection_manager_service_type.clone(),
             connection_manager_control_url: parsed
                 .connection_manager_control_url
+                .as_ref()
+                .map(|ctrl| resolve_control_url(&endpoint.location, ctrl)),
+            oh_playlist_service_type: parsed.oh_playlist_service_type.clone(),
+            oh_playlist_control_url: parsed
+                .oh_playlist_control_url
+                .as_ref()
+                .map(|ctrl| resolve_control_url(&endpoint.location, ctrl)),
+            oh_playlist_event_sub_url: parsed
+                .oh_playlist_event_sub_url
+                .as_ref()
+                .map(|url| resolve_control_url(&endpoint.location, url)),
+            oh_info_service_type: parsed.oh_info_service_type.clone(),
+            oh_info_control_url: parsed
+                .oh_info_control_url
+                .as_ref()
+                .map(|ctrl| resolve_control_url(&endpoint.location, ctrl)),
+            oh_info_event_sub_url: parsed
+                .oh_info_event_sub_url
+                .as_ref()
+                .map(|url| resolve_control_url(&endpoint.location, url)),
+            oh_time_service_type: parsed.oh_time_service_type.clone(),
+            oh_time_control_url: parsed
+                .oh_time_control_url
+                .as_ref()
+                .map(|ctrl| resolve_control_url(&endpoint.location, ctrl)),
+            oh_time_event_sub_url: parsed
+                .oh_time_event_sub_url
+                .as_ref()
+                .map(|url| resolve_control_url(&endpoint.location, url)),
+            oh_volume_service_type: parsed.oh_volume_service_type.clone(),
+            oh_volume_control_url: parsed
+                .oh_volume_control_url
+                .as_ref()
+                .map(|ctrl| resolve_control_url(&endpoint.location, ctrl)),
+            oh_radio_service_type: parsed.oh_radio_service_type.clone(),
+            oh_radio_control_url: parsed
+                .oh_radio_control_url
                 .as_ref()
                 .map(|ctrl| resolve_control_url(&endpoint.location, ctrl)),
         })

@@ -8,14 +8,20 @@ use crate::control_point::ControlPoint;
 #[cfg(feature = "pmoserver")]
 use crate::media_server::{MediaBrowser, MediaEntry, MediaResource, MusicServer, ServerId};
 #[cfg(feature = "pmoserver")]
-use crate::model::{RendererId, RendererProtocol};
+use crate::model::{RendererCapabilities, RendererId, RendererProtocol};
 #[cfg(feature = "pmoserver")]
 use crate::playback_queue::PlaybackItem;
 #[cfg(feature = "pmoserver")]
 use crate::openapi::{
     AttachPlaylistRequest, AttachedPlaylistInfo, BrowseResponse, ContainerEntry, ErrorResponse,
-    MediaServerSummary, PlayContentRequest, QueueItem, QueueSnapshot, RendererState,
-    RendererSummary, SuccessResponse, VolumeSetRequest,
+    MediaServerSummary, OpenHomePlaylistAddRequest, OpenHomePlaylistSnapshot,
+    OpenHomePlaylistTrack, PlayContentRequest, QueueItem, QueueSnapshot,
+    RendererCapabilitiesSummary, RendererProtocolSummary, RendererState, RendererSummary,
+    SuccessResponse, VolumeSetRequest,
+};
+#[cfg(feature = "pmoserver")]
+use crate::openhome_client::{
+    OhInfoClient, OhPlaylistClient, OhTrackEntry, parse_track_metadata_from_didl,
 };
 #[cfg(feature = "pmoserver")]
 use crate::{PlaybackPosition, PlaybackStatus, TransportControl, VolumeControl};
@@ -106,7 +112,8 @@ async fn list_renderers(State(state): State<ControlPointState>) -> Json<Vec<Rend
                 id: info.id.0.clone(),
                 friendly_name: info.friendly_name.clone(),
                 model_name: info.model_name.clone(),
-                protocol: protocol_to_string(&info.protocol),
+                protocol: protocol_summary(&info.protocol),
+                capabilities: capability_summary(&info.capabilities),
                 online: info.online,
             }
         })
@@ -1166,6 +1173,347 @@ async fn detach_playlist_binding(
 }
 
 // ============================================================================
+// HANDLERS - OPENHOME PLAYLIST
+// ============================================================================
+
+/// GET /control/renderers/{renderer_id}/oh/playlist - Snapshot de la playlist OH
+#[cfg(feature = "pmoserver")]
+#[utoipa::path(
+    get,
+    path = "/renderers/{renderer_id}/oh/playlist",
+    params(
+        ("renderer_id" = String, Path, description = "ID unique du renderer")
+    ),
+    responses(
+        (status = 200, description = "Playlist OpenHome", body = OpenHomePlaylistSnapshot),
+        (status = 404, description = "Renderer non trouvé ou sans service OH", body = ErrorResponse)
+    ),
+    tag = "control"
+)]
+async fn get_openhome_playlist(
+    State(state): State<ControlPointState>,
+    Path(renderer_id): Path<String>,
+) -> Result<Json<OpenHomePlaylistSnapshot>, (StatusCode, Json<ErrorResponse>)> {
+    let rid = RendererId(renderer_id.clone());
+    let (playlist_client, info_client) =
+        openhome_clients_for_renderer(&state.control_point, &rid)?;
+
+    let fetch_task = tokio::task::spawn_blocking(move || -> anyhow::Result<OpenHomePlaylistSnapshot> {
+        let entries = playlist_client.read_all_tracks()?;
+        let current_id = info_client
+            .and_then(|client| client.id().ok());
+        let tracks: Vec<OpenHomePlaylistTrack> =
+            entries.iter().map(convert_openhome_track).collect();
+        Ok(OpenHomePlaylistSnapshot {
+            renderer_id: rid.0,
+            current_id,
+            tracks,
+        })
+    });
+
+    let snapshot = fetch_task
+        .await
+        .map_err(|e| {
+            warn!(
+                renderer = renderer_id.as_str(),
+                error = %e,
+                "Join error while fetching OpenHome playlist"
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Internal task error: {}", e),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!(
+                renderer = renderer_id.as_str(),
+                error = %e,
+                "Failed to read OpenHome playlist"
+            );
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(ErrorResponse {
+                    error: format!("Failed to read OpenHome playlist: {}", e),
+                }),
+            )
+        })?;
+
+    Ok(Json(snapshot))
+}
+
+/// POST /control/renderers/{renderer_id}/oh/playlist/clear - Vide la playlist OH
+#[cfg(feature = "pmoserver")]
+#[utoipa::path(
+    post,
+    path = "/renderers/{renderer_id}/oh/playlist/clear",
+    params(
+        ("renderer_id" = String, Path, description = "ID unique du renderer")
+    ),
+    responses(
+        (status = 200, description = "Playlist vidée", body = SuccessResponse),
+        (status = 404, description = "Renderer non trouvé ou sans service OH", body = ErrorResponse)
+    ),
+    tag = "control"
+)]
+async fn clear_openhome_playlist(
+    State(state): State<ControlPointState>,
+    Path(renderer_id): Path<String>,
+) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let rid = RendererId(renderer_id.clone());
+    let (playlist_client, _) =
+        openhome_clients_for_renderer(&state.control_point, &rid)?;
+
+    let clear_task =
+        tokio::task::spawn_blocking(move || playlist_client.delete_all());
+
+    time::timeout(QUEUE_COMMAND_TIMEOUT, clear_task)
+        .await
+        .map_err(|_| {
+            warn!(
+                renderer = renderer_id.as_str(),
+                timeout = QUEUE_COMMAND_TIMEOUT.as_secs(),
+                "Clearing OpenHome playlist timed out"
+            );
+            (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Clear playlist timed out after {}s",
+                        QUEUE_COMMAND_TIMEOUT.as_secs()
+                    ),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!(
+                renderer = renderer_id.as_str(),
+                error = %e,
+                "Join error while clearing OpenHome playlist"
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Internal task error: {}", e),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!(
+                renderer = renderer_id.as_str(),
+                error = %e,
+                "Failed to clear OpenHome playlist"
+            );
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(ErrorResponse {
+                    error: format!("Failed to clear OpenHome playlist: {}", e),
+                }),
+            )
+        })?;
+
+    if let Err(err) = state.control_point.refresh_openhome_playlist(&rid) {
+        warn!(
+            renderer = renderer_id.as_str(),
+            error = %err,
+            "Failed to refresh queue after OpenHome clear"
+        );
+    }
+
+    Ok(Json(SuccessResponse {
+        message: "OpenHome playlist cleared".to_string(),
+    }))
+}
+
+/// POST /control/renderers/{renderer_id}/oh/playlist/add - Ajoute un track OH
+#[cfg(feature = "pmoserver")]
+#[utoipa::path(
+    post,
+    path = "/renderers/{renderer_id}/oh/playlist/add",
+    params(
+        ("renderer_id" = String, Path, description = "ID unique du renderer")
+    ),
+    request_body = OpenHomePlaylistAddRequest,
+    responses(
+        (status = 200, description = "Track ajouté", body = SuccessResponse),
+        (status = 404, description = "Renderer non trouvé ou sans service OH", body = ErrorResponse)
+    ),
+    tag = "control"
+)]
+async fn add_openhome_playlist_item(
+    State(state): State<ControlPointState>,
+    Path(renderer_id): Path<String>,
+    Json(req): Json<OpenHomePlaylistAddRequest>,
+) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let rid = RendererId(renderer_id.clone());
+    let (playlist_client, _) =
+        openhome_clients_for_renderer(&state.control_point, &rid)?;
+
+    let add_task = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let mut after_id = if let Some(id) = req.after_id {
+            id
+        } else {
+            playlist_client
+                .id_array()?
+                .last()
+                .copied()
+                .unwrap_or(0)
+        };
+        let new_id =
+            playlist_client.insert(after_id, &req.uri, &req.metadata)?;
+        after_id = new_id;
+        if req.play {
+            playlist_client.play_id(after_id)?;
+        }
+        Ok(())
+    });
+
+    time::timeout(QUEUE_COMMAND_TIMEOUT, add_task)
+        .await
+        .map_err(|_| {
+            warn!(
+                renderer = renderer_id.as_str(),
+                timeout = QUEUE_COMMAND_TIMEOUT.as_secs(),
+                "Adding OpenHome track timed out"
+            );
+            (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Add track timed out after {}s",
+                        QUEUE_COMMAND_TIMEOUT.as_secs()
+                    ),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!(
+                renderer = renderer_id.as_str(),
+                error = %e,
+                "Join error while adding OpenHome track"
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Internal task error: {}", e),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!(
+                renderer = renderer_id.as_str(),
+                error = %e,
+                "Failed to add OpenHome track"
+            );
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(ErrorResponse {
+                    error: format!("Failed to add OpenHome track: {}", e),
+                }),
+            )
+        })?;
+
+    if let Err(err) = state.control_point.refresh_openhome_playlist(&rid) {
+        warn!(
+            renderer = renderer_id.as_str(),
+            error = %err,
+            "Failed to refresh queue after OpenHome add"
+        );
+    }
+
+    Ok(Json(SuccessResponse {
+        message: "Track added to OpenHome playlist".to_string(),
+    }))
+}
+
+/// POST /control/renderers/{renderer_id}/oh/playlist/play/{track_id} - PlayId OH
+#[cfg(feature = "pmoserver")]
+#[utoipa::path(
+    post,
+    path = "/renderers/{renderer_id}/oh/playlist/play/{track_id}",
+    params(
+        ("renderer_id" = String, Path, description = "ID unique du renderer"),
+        ("track_id" = String, Path, description = "ID OpenHome du morceau")
+    ),
+    responses(
+        (status = 200, description = "Lecture démarrée", body = SuccessResponse),
+        (status = 404, description = "Renderer non trouvé ou sans service OH", body = ErrorResponse)
+    ),
+    tag = "control"
+)]
+async fn play_openhome_track(
+    State(state): State<ControlPointState>,
+    Path((renderer_id, track_id)): Path<(String, String)>,
+) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let rid = RendererId(renderer_id.clone());
+    let (playlist_client, _) =
+        openhome_clients_for_renderer(&state.control_point, &rid)?;
+
+    let parsed_id = track_id.parse::<u32>().map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: format!("Invalid track id '{}': {}", track_id, e),
+            }),
+        )
+    })?;
+
+    let play_task =
+        tokio::task::spawn_blocking(move || playlist_client.play_id(parsed_id));
+
+    time::timeout(QUEUE_COMMAND_TIMEOUT, play_task)
+        .await
+        .map_err(|_| {
+            warn!(
+                renderer = renderer_id.as_str(),
+                timeout = QUEUE_COMMAND_TIMEOUT.as_secs(),
+                "PlayId command timed out"
+            );
+            (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Play track timed out after {}s",
+                        QUEUE_COMMAND_TIMEOUT.as_secs()
+                    ),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!(
+                renderer = renderer_id.as_str(),
+                error = %e,
+                "Join error while playing OpenHome track"
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Internal task error: {}", e),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!(
+                renderer = renderer_id.as_str(),
+                error = %e,
+                track_id = parsed_id,
+                "Failed to start OpenHome track"
+            );
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(ErrorResponse {
+                    error: format!("Failed to play OpenHome track: {}", e),
+                }),
+            )
+        })?;
+
+    Ok(Json(SuccessResponse {
+        message: format!("Playing OpenHome track {}", parsed_id),
+    }))
+}
+
+// ============================================================================
 // HANDLERS - QUEUE CONTENT
 // ============================================================================
 
@@ -1644,11 +1992,64 @@ fn is_audio_resource(res: &MediaResource) -> bool {
 }
 
 #[cfg(feature = "pmoserver")]
-fn protocol_to_string(protocol: &RendererProtocol) -> String {
+fn protocol_summary(protocol: &RendererProtocol) -> RendererProtocolSummary {
     match protocol {
-        RendererProtocol::UpnpAvOnly => "UpnpAvOnly".to_string(),
-        RendererProtocol::OpenHomeOnly => "OpenHomeOnly".to_string(),
-        RendererProtocol::Hybrid => "Hybrid".to_string(),
+        RendererProtocol::UpnpAvOnly => RendererProtocolSummary::Upnp,
+        RendererProtocol::OpenHomeOnly => RendererProtocolSummary::Openhome,
+        RendererProtocol::Hybrid => RendererProtocolSummary::Hybrid,
+    }
+}
+
+#[cfg(feature = "pmoserver")]
+fn capability_summary(caps: &RendererCapabilities) -> RendererCapabilitiesSummary {
+    RendererCapabilitiesSummary {
+        has_avtransport: caps.has_avtransport,
+        has_avtransport_set_next: caps.has_avtransport_set_next,
+        has_rendering_control: caps.has_rendering_control,
+        has_connection_manager: caps.has_connection_manager,
+        has_linkplay_http: caps.has_linkplay_http,
+        has_arylic_tcp: caps.has_arylic_tcp,
+        has_oh_playlist: caps.has_oh_playlist,
+        has_oh_volume: caps.has_oh_volume,
+        has_oh_info: caps.has_oh_info,
+        has_oh_time: caps.has_oh_time,
+        has_oh_radio: caps.has_oh_radio,
+    }
+}
+
+#[cfg(feature = "pmoserver")]
+fn openhome_clients_for_renderer(
+    control_point: &ControlPoint,
+    renderer_id: &RendererId,
+) -> Result<(OhPlaylistClient, Option<OhInfoClient>), (StatusCode, Json<ErrorResponse>)> {
+    let registry = control_point.registry();
+    let reg = registry.read().unwrap();
+    let Some(client) = reg.oh_playlist_client_for_renderer(renderer_id) else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!(
+                    "Renderer {} has no OpenHome playlist service",
+                    renderer_id.0
+                ),
+            }),
+        ));
+    };
+    let info_client = reg.oh_info_client_for_renderer(renderer_id);
+    Ok((client, info_client))
+}
+
+#[cfg(feature = "pmoserver")]
+fn convert_openhome_track(entry: &OhTrackEntry) -> OpenHomePlaylistTrack {
+    let metadata = parse_track_metadata_from_didl(&entry.metadata_xml);
+    OpenHomePlaylistTrack {
+        id: entry.id,
+        uri: entry.uri.clone(),
+        title: metadata.as_ref().and_then(|m| m.title.clone()),
+        artist: metadata.as_ref().and_then(|m| m.artist.clone()),
+        album: metadata.as_ref().and_then(|m| m.album.clone()),
+        album_art_uri: metadata
+            .and_then(|m| m.album_art_uri),
     }
 }
 
@@ -1727,6 +2128,23 @@ pub fn create_api_router(state: ControlPointState, control_point: Arc<ControlPoi
         .route(
             "/renderers/{renderer_id}/binding/detach",
             post(detach_playlist_binding),
+        )
+        // OpenHome playlist
+        .route(
+            "/renderers/{renderer_id}/oh/playlist",
+            get(get_openhome_playlist),
+        )
+        .route(
+            "/renderers/{renderer_id}/oh/playlist/clear",
+            post(clear_openhome_playlist),
+        )
+        .route(
+            "/renderers/{renderer_id}/oh/playlist/add",
+            post(add_openhome_playlist_item),
+        )
+        .route(
+            "/renderers/{renderer_id}/oh/playlist/play/{track_id}",
+            post(play_openhome_track),
         )
         // Queue content
         .route(
