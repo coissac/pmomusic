@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useMediaServersStore } from '@/stores/mediaServers'
-import { useRenderersStore } from '@/stores/renderers'
+import { useMediaServers } from '@/composables/useMediaServers'
+import { useRenderers } from '@/composables/useRenderers'
 import { useUIStore } from '@/stores/ui'
-import type { BreadcrumbItem } from './Breadcrumb.vue'
 import Breadcrumb from './Breadcrumb.vue'
 import ContainerItem from './ContainerItem.vue'
 import MediaItem from './MediaItem.vue'
@@ -14,8 +13,21 @@ const props = defineProps<{
   containerId: string
 }>()
 
-const mediaServersStore = useMediaServersStore()
-const renderersStore = useRenderersStore()
+const {
+  getBrowseCached,
+  browseContainer,
+  currentPath: breadcrumbPath,
+  loading,
+  error
+} = useMediaServers()
+
+const {
+  playContent,
+  addToQueue,
+  attachAndPlayPlaylist,
+  attachPlaylist,
+  fetchQueue
+} = useRenderers()
 const uiStore = useUIStore()
 
 // Flags pour gérer le rechargement automatique avec debounce et cooldown
@@ -25,7 +37,7 @@ const lastRefreshTime = ref<number>(0)
 const REFRESH_COOLDOWN_MS = 5000  // Ne pas recharger plus d'une fois toutes les 5 secondes
 
 const browseData = computed(() =>
-  mediaServersStore.getBrowseCached(props.serverId, props.containerId)
+  getBrowseCached(props.serverId, props.containerId)
 )
 
 const containers = computed(() =>
@@ -36,17 +48,12 @@ const items = computed(() =>
   browseData.value?.entries.filter((e) => !e.is_container) || []
 )
 
-const loading = computed(() => mediaServersStore.loading)
-const error = computed(() => mediaServersStore.error)
-
-const breadcrumbPath = computed<BreadcrumbItem[]>(() => mediaServersStore.currentPath)
-
 // Charger le container au montage et quand containerId change
 watch(
   () => props.containerId,
   async (newContainerId) => {
     if (newContainerId) {
-      await mediaServersStore.browseContainer(props.serverId, newContainerId)
+      await browseContainer(props.serverId, newContainerId)
     }
   },
   { immediate: true }
@@ -85,7 +92,7 @@ watch(
             `[MediaBrowser] Cache invalidé pour ${props.serverId}/${props.containerId}, rechargement après debounce...`
           )
           isRefreshing.value = true
-          await mediaServersStore.browseContainer(props.serverId, props.containerId)
+          await browseContainer(props.serverId, props.containerId, false)
           lastRefreshTime.value = Date.now()  // Enregistrer le moment du rechargement
           isRefreshing.value = false
           refreshTimeoutId.value = null
@@ -110,7 +117,7 @@ function handleBrowseContainer(containerId: string) {
 // Actions handlers pour les containers (playlists/albums)
 async function handlePlayContainer(containerId: string, rendererId: string) {
   try {
-    await renderersStore.attachAndPlayPlaylist(rendererId, props.serverId, containerId)
+    await attachAndPlayPlaylist(rendererId, props.serverId, containerId)
     uiStore.notifySuccess('Lecture de la playlist démarrée !')
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Erreur inconnue'
@@ -121,8 +128,8 @@ async function handlePlayContainer(containerId: string, rendererId: string) {
 async function handleQueueContainer(containerId: string, rendererId: string) {
   try {
     // Attacher la playlist (sans démarrer la lecture)
-    await renderersStore.attachPlaylist(rendererId, props.serverId, containerId)
-    await renderersStore.fetchQueue(rendererId)
+    await attachPlaylist(rendererId, props.serverId, containerId)
+    await fetchQueue(rendererId, true)
     uiStore.notifySuccess('Playlist attachée à la queue !')
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Erreur inconnue'
@@ -133,7 +140,7 @@ async function handleQueueContainer(containerId: string, rendererId: string) {
 // Actions handlers pour les items (tracks)
 async function handlePlayItem(itemId: string, rendererId: string) {
   try {
-    await renderersStore.playContent(rendererId, props.serverId, itemId)
+    await playContent(rendererId, props.serverId, itemId)
     uiStore.notifySuccess('Lecture démarrée !')
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Erreur inconnue'
@@ -143,7 +150,7 @@ async function handlePlayItem(itemId: string, rendererId: string) {
 
 async function handleQueueItem(itemId: string, rendererId: string) {
   try {
-    await renderersStore.addToQueue(rendererId, props.serverId, itemId)
+    await addToQueue(rendererId, props.serverId, itemId)
     uiStore.notifySuccess('Ajouté à la queue !')
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Erreur inconnue'
@@ -170,7 +177,7 @@ async function handleQueueItem(itemId: string, rendererId: string) {
     <!-- Error state -->
     <div v-else-if="error" class="browser-error">
       <p class="error-message">{{ error }}</p>
-      <button class="btn btn-secondary" @click="mediaServersStore.browseContainer(serverId, containerId)">
+      <button class="btn btn-secondary" @click="browseContainer(serverId, containerId, false)">
         Réessayer
       </button>
     </div>

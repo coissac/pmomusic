@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { useRenderersStore } from '@/stores/renderers'
+import { computed, toRef } from 'vue'
+import { useRenderer, useRenderers } from '@/composables/useRenderers'
 import { useUIStore } from '@/stores/ui'
 import { Link, Unlink } from 'lucide-vue-next'
 
@@ -8,15 +8,15 @@ const props = defineProps<{
   rendererId: string
 }>()
 
-const renderersStore = useRenderersStore()
+const { binding } = useRenderer(toRef(props, 'rendererId'))
+const { detachPlaylist } = useRenderers()
 const uiStore = useUIStore()
 
-const binding = computed(() => renderersStore.getBindingById(props.rendererId))
 const isAttached = computed(() => !!binding.value)
 
 async function handleDetach() {
   try {
-    await renderersStore.detachPlaylist(props.rendererId)
+    await detachPlaylist(props.rendererId)
     uiStore.notifySuccess('Playlist détachée avec succès')
   } catch (error) {
     uiStore.notifyError(`Impossible de détacher la playlist: ${error instanceof Error ? error.message : 'Erreur inconnue'}`)

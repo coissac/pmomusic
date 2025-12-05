@@ -162,16 +162,42 @@ async fn get_renderer_state(
             .map(state_to_string)
             .unwrap_or_else(|| "UNKNOWN".to_string());
 
-        // Position et durée
-        let (position_ms, duration_ms) = renderer
-            .playback_position()
-            .ok()
+        // Position, durée et métadonnées depuis GetPositionInfo
+        let position_info = renderer.playback_position().ok();
+
+        let (position_ms, duration_ms) = position_info
+            .as_ref()
             .and_then(|pos| {
                 let position = parse_hms_to_ms(pos.rel_time.as_deref());
                 let duration = parse_hms_to_ms(pos.track_duration.as_deref());
                 Some((position, duration))
             })
             .unwrap_or((None, None));
+
+        // Extraire les métadonnées depuis le XML track_metadata si disponible
+        let soap_metadata = position_info.and_then(|pos| {
+            match &pos.track_metadata {
+                Some(xml) => {
+                    debug!("GetPositionInfo returned metadata XML: {}", xml);
+                    use crate::openhome_client::parse_track_metadata_from_didl;
+                    match parse_track_metadata_from_didl(xml) {
+                        Some(metadata) => {
+                            debug!("Successfully parsed metadata: title={:?}, artist={:?}",
+                                metadata.title, metadata.artist);
+                            Some(metadata)
+                        }
+                        None => {
+                            debug!("Failed to parse metadata XML");
+                            None
+                        }
+                    }
+                }
+                None => {
+                    debug!("GetPositionInfo returned no metadata XML");
+                    None
+                }
+            }
+        });
 
         // Volume et mute
         let volume = renderer
@@ -180,10 +206,10 @@ async fn get_renderer_state(
             .and_then(|v| u8::try_from(v).ok());
         let mute = renderer.mute().ok();
 
-        (transport_state, position_ms, duration_ms, volume, mute)
+        (transport_state, position_ms, duration_ms, volume, mute, soap_metadata)
     });
 
-    let (transport_state, position_ms, duration_ms, volume, mute) =
+    let (transport_state, position_ms, duration_ms, volume, mute, soap_metadata) =
         time::timeout(STATE_QUERY_TIMEOUT, state_task)
             .await
             .map_err(|_| {
@@ -238,10 +264,22 @@ async fn get_renderer_state(
             },
         );
 
-    // Current track metadata from in-memory snapshot (non-blocking, fast)
-    let current_track = state
+    // Current track metadata:
+    // 1. Essayer d'abord le snapshot en mémoire (rapide, mis à jour par SSE)
+    // 2. Si None et qu'on a des métadonnées SOAP fraîches, les utiliser
+    let snapshot_metadata = state
         .control_point
-        .get_current_track_metadata(&rid)
+        .get_current_track_metadata(&rid);
+
+    debug!(
+        "Renderer {} - snapshot_metadata: {:?}, soap_metadata: {:?}",
+        renderer_id,
+        snapshot_metadata.as_ref().map(|m| (&m.title, &m.artist)),
+        soap_metadata.as_ref().map(|m| (&m.title, &m.artist))
+    );
+
+    let current_track = snapshot_metadata
+        .or(soap_metadata)
         .map(|metadata| CurrentTrackMetadata {
             title: metadata.title,
             artist: metadata.artist,

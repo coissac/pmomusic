@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
-import { useRenderersStore } from '@/stores/renderers'
+import { ref } from 'vue'
+import { useRenderers } from '@/composables/useRenderers'
 import { Play, ListPlus, ChevronRight } from 'lucide-vue-next'
 
 defineProps<{
@@ -14,11 +14,9 @@ const emit = defineEmits<{
   addToQueue: [rendererId: string]
 }>()
 
-const renderersStore = useRenderersStore()
+const { onlineRenderers } = useRenderers()
 const showMenu = ref(false)
 const showRendererSubmenu = ref<'play' | 'queue' | null>(null)
-
-const onlineRenderers = computed(() => renderersStore.onlineRenderers)
 
 function handleAction(action: 'play' | 'queue', rendererId: string) {
   showMenu.value = false

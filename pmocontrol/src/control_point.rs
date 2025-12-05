@@ -813,6 +813,23 @@ impl ControlPoint {
                     uri = item.uri.as_str(),
                     "Queue playback started (current item)"
                 );
+
+                // Sauvegarder les métadonnées dans le snapshot pour que current_track soit disponible
+                // même si le renderer UPnP ne retourne pas de métadonnées dans GetPositionInfo
+                let metadata = TrackMetadata {
+                    title: item.title.clone(),
+                    artist: item.artist.clone(),
+                    album: item.album.clone(),
+                    genre: item.genre.clone(),
+                    album_art_uri: item.album_art_uri.clone(),
+                    date: item.date.clone(),
+                    track_number: item.track_number.clone(),
+                    creator: item.creator.clone(),
+                };
+                self.runtime.update_snapshot_with(renderer_id, |snapshot| {
+                    snapshot.last_metadata = Some(metadata);
+                });
+
                 self.runtime
                     .set_playback_source(renderer_id, PlaybackSource::FromQueue);
                 Ok(())
@@ -898,6 +915,22 @@ impl ControlPoint {
                 .set_playback_source(renderer_id, PlaybackSource::None);
             return Err(err);
         }
+
+        // Sauvegarder les métadonnées dans le snapshot pour que current_track soit disponible
+        // même si le renderer UPnP ne retourne pas de métadonnées dans GetPositionInfo
+        let metadata = TrackMetadata {
+            title: item.title.clone(),
+            artist: item.artist.clone(),
+            album: item.album.clone(),
+            genre: item.genre.clone(),
+            album_art_uri: item.album_art_uri.clone(),
+            date: item.date.clone(),
+            track_number: item.track_number.clone(),
+            creator: item.creator.clone(),
+        };
+        self.runtime.update_snapshot_with(renderer_id, |snapshot| {
+            snapshot.last_metadata = Some(metadata);
+        });
 
         self.runtime
             .set_playback_source(renderer_id, PlaybackSource::FromQueue);

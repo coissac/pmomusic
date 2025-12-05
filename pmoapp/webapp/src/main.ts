@@ -3,13 +3,11 @@ import { createPinia } from "pinia";
 import App from "./App.vue";
 import router from "./router";
 
-// Stores
-import { useRenderersStore } from "./stores/renderers";
-import { useMediaServersStore } from "./stores/mediaServers";
-import { useUIStore } from "./stores/ui";
-
-// Service SSE
+// Service SSE (les composables se connectent automatiquement)
 import { sse } from "./services/pmocontrol/sse";
+
+// Store UI (garde UIStore pour les notifications et état UI global)
+import { useUIStore } from "./stores/ui";
 
 // Styles
 import "./style.css";
@@ -27,35 +25,16 @@ app.use(router);
 // Monter l'application
 app.mount("#app");
 
-// Après montage, initialiser SSE et connecter aux stores
-const renderersStore = useRenderersStore();
-const mediaServersStore = useMediaServersStore();
+// Après montage, initialiser SSE
 const uiStore = useUIStore();
 
-// Connecter SSE aux stores
-// Note: Les métadonnées proviennent de l'API (current_track dans RendererState)
-// Les événements SSE ne servent qu'à notifier les changements
-sse.onRendererEvent((event) => {
-  renderersStore.updateFromSSE(event);
-});
-
-sse.onMediaServerEvent((event) => {
-  mediaServersStore.updateFromSSE(event);
-});
+// Les composables se connectent automatiquement à SSE
+// Ils gèrent eux-mêmes le re-fetch lors des événements
 
 sse.onConnectionChange((connected) => {
   uiStore.setSSEConnected(connected);
   if (connected) {
-    console.log("[App] SSE connecté - Chargement des données initiales");
-    // Charger les données initiales
-    renderersStore.fetchRenderers();
-    mediaServersStore.fetchServers();
-
-    // Recharger la queue du renderer sélectionné s'il y en a un
-    if (uiStore.selectedRendererId) {
-      console.log(`[App] Rechargement de la queue du renderer ${uiStore.selectedRendererId}`);
-      renderersStore.fetchQueue(uiStore.selectedRendererId);
-    }
+    console.log("[App] SSE connecté");
   }
 });
 

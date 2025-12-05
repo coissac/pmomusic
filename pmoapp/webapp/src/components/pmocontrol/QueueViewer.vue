@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, watch, nextTick } from 'vue'
-import { useRenderersStore } from '@/stores/renderers'
+import { computed, ref, watch, nextTick, toRef } from 'vue'
+import { useRenderer } from '@/composables/useRenderers'
 import QueueItem from './QueueItem.vue'
 import { Link } from 'lucide-vue-next'
 
@@ -8,10 +8,7 @@ const props = defineProps<{
   rendererId: string
 }>()
 
-const renderersStore = useRenderersStore()
-
-const queue = computed(() => renderersStore.getQueueById(props.rendererId))
-const binding = computed(() => renderersStore.getBindingById(props.rendererId))
+const { queue, binding } = useRenderer(toRef(props, 'rendererId'))
 
 const isAttached = computed(() => !!binding.value)
 

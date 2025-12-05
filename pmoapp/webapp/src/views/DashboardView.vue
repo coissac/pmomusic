@@ -1,26 +1,33 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
-import { useRenderersStore } from '@/stores/renderers'
-import { useMediaServersStore } from '@/stores/mediaServers'
+import { onMounted } from 'vue'
+import { useRenderers } from '@/composables/useRenderers'
+import { useMediaServers } from '@/composables/useMediaServers'
 import RendererCard from '@/components/pmocontrol/RendererCard.vue'
 import MediaServerCard from '@/components/pmocontrol/MediaServerCard.vue'
 import { Radio, Server } from 'lucide-vue-next'
 
-const renderersStore = useRenderersStore()
-const mediaServersStore = useMediaServersStore()
+const {
+  allRenderers: renderers,
+  onlineRenderers,
+  getStateById,
+  fetchRenderers,
+  fetchRendererState
+} = useRenderers()
 
-const renderers = computed(() => Array.from(renderersStore.renderers.values()))
-const onlineRenderers = computed(() => renderersStore.onlineRenderers)
-const mediaServers = computed(() => Array.from(mediaServersStore.servers.values()))
-const onlineServers = computed(() => mediaServersStore.onlineServers)
+const {
+  allServers: mediaServers,
+  onlineServers,
+  fetchServers
+} = useMediaServers()
 
-// Charger les données au montage (si pas encore chargées par SSE)
+// Charger les données au montage
 onMounted(async () => {
-  if (renderers.value.length === 0) {
-    await renderersStore.fetchRenderers()
-  }
-  if (mediaServers.value.length === 0) {
-    await mediaServersStore.fetchServers()
+  await fetchRenderers()
+  await fetchServers()
+
+  // Charger les états de tous les renderers pour afficher les covers
+  for (const renderer of renderers.value) {
+    fetchRendererState(renderer.id)
   }
 })
 </script>
@@ -56,13 +63,13 @@ onMounted(async () => {
           v-for="renderer in renderers"
           :key="renderer.id"
           :renderer="renderer"
-          :state="renderersStore.getStateById(renderer.id) ?? null"
+          :state="getStateById(renderer.id) ?? null"
         />
       </div>
 
       <div v-else class="empty-state">
         <p>Aucun renderer découvert</p>
-        <button class="btn btn-secondary" @click="renderersStore.fetchRenderers()">
+        <button class="btn btn-secondary" @click="fetchRenderers(true)">
           Actualiser
         </button>
       </div>
@@ -87,7 +94,7 @@ onMounted(async () => {
 
       <div v-else class="empty-state">
         <p>Aucun serveur de médias découvert</p>
-        <button class="btn btn-secondary" @click="mediaServersStore.fetchServers()">
+        <button class="btn btn-secondary" @click="fetchServers(true)">
           Actualiser
         </button>
       </div>

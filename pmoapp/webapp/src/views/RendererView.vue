@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch, toRef } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useRenderersStore } from '@/stores/renderers'
+import { useRenderer, useRenderers } from '@/composables/useRenderers'
 import { useUIStore } from '@/stores/ui'
 import CurrentTrack from '@/components/pmocontrol/CurrentTrack.vue'
 import TransportControls from '@/components/pmocontrol/TransportControls.vue'
@@ -20,12 +20,11 @@ import type { OpenHomePlaylistSnapshot } from '@/services/pmocontrol/types'
 
 const route = useRoute()
 const router = useRouter()
-const renderersStore = useRenderersStore()
 const uiStore = useUIStore()
 
 const rendererId = computed(() => route.params.id as string)
-const renderer = computed(() => renderersStore.getRendererById(rendererId.value))
-const state = computed(() => renderersStore.getStateById(rendererId.value))
+const { renderer, state, refresh } = useRenderer(toRef(() => rendererId.value))
+const { fetchRenderers } = useRenderers()
 const openHomeSupported = computed(() => {
   const current = renderer.value
   if (!current) return false
@@ -48,13 +47,11 @@ onMounted(async () => {
   // Indiquer à uiStore quel renderer est sélectionné
   uiStore.selectRenderer(rendererId.value)
 
+  // Charger toutes les données du renderer
   if (!renderer.value) {
-    await renderersStore.fetchRenderers()
+    await fetchRenderers()
   }
-  if (!state.value) {
-    await renderersStore.fetchRendererState(rendererId.value)
-  }
-  await renderersStore.fetchQueue(rendererId.value)
+  await refresh()
 })
 
 watch(

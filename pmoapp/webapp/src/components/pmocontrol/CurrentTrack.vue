@@ -1,15 +1,13 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { useRenderersStore } from '@/stores/renderers'
+import { computed, toRef } from 'vue'
+import { useRenderer } from '@/composables/useRenderers'
 import { Music } from 'lucide-vue-next'
 
 const props = defineProps<{
   rendererId: string
 }>()
 
-const renderersStore = useRenderersStore()
-
-const state = computed(() => renderersStore.getStateById(props.rendererId))
+const { state } = useRenderer(toRef(props, 'rendererId'))
 const metadata = computed(() => state.value?.current_track)
 
 // Calcul du pourcentage de progression

@@ -1,18 +1,18 @@
 <script setup lang="ts">
 import { computed, watch, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useMediaServersStore } from '@/stores/mediaServers'
+import { useMediaServers } from '@/composables/useMediaServers'
 import MediaBrowser from '@/components/pmocontrol/MediaBrowser.vue'
 import { ArrowLeft, Server } from 'lucide-vue-next'
 
 const route = useRoute()
 const router = useRouter()
-const mediaServersStore = useMediaServersStore()
+const { getServerById } = useMediaServers()
 
 const serverId = computed(() => route.params.serverId as string)
 const containerId = ref(route.query.container as string || '0')
 
-const server = computed(() => mediaServersStore.getServerById(serverId.value))
+const server = computed(() => getServerById(serverId.value))
 
 // Watcher sur query.container pour mettre à jour containerId
 watch(
