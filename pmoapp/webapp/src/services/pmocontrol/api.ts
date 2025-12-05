@@ -10,6 +10,7 @@ import type {
   BrowseResponse,
   VolumeSetRequest,
   AttachPlaylistRequest,
+  PlayContentRequest,
   SuccessResponse,
   ErrorResponse
 } from './types'
@@ -118,6 +119,16 @@ class PMOControlAPI {
   }
 
   /**
+   * Reprend la lecture depuis le morceau actuel de la queue
+   * POST /api/control/renderers/{id}/resume
+   */
+  async resume(id: string): Promise<SuccessResponse> {
+    return this.request<SuccessResponse>(`/renderers/${encodeURIComponent(id)}/resume`, {
+      method: 'POST',
+    })
+  }
+
+  /**
    * Passe au morceau suivant dans la queue
    * POST /api/control/renderers/{id}/next
    */
@@ -200,6 +211,42 @@ class PMOControlAPI {
   async detachPlaylist(rendererId: string): Promise<SuccessResponse> {
     return this.request<SuccessResponse>(`/renderers/${encodeURIComponent(rendererId)}/binding/detach`, {
       method: 'POST',
+    })
+  }
+
+  // ============================================================================
+  // QUEUE CONTENT
+  // ============================================================================
+
+  /**
+   * Lire du contenu immédiatement (clear queue + enqueue + play)
+   * POST /api/control/renderers/{id}/queue/play
+   */
+  async playContent(
+    rendererId: string,
+    serverId: string,
+    objectId: string
+  ): Promise<SuccessResponse> {
+    const payload: PlayContentRequest = { server_id: serverId, object_id: objectId }
+    return this.request<SuccessResponse>(`/renderers/${encodeURIComponent(rendererId)}/queue/play`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    })
+  }
+
+  /**
+   * Ajouter du contenu à la queue (sans démarrer la lecture)
+   * POST /api/control/renderers/{id}/queue/add
+   */
+  async addToQueue(
+    rendererId: string,
+    serverId: string,
+    objectId: string
+  ): Promise<SuccessResponse> {
+    const payload: PlayContentRequest = { server_id: serverId, object_id: objectId }
+    return this.request<SuccessResponse>(`/renderers/${encodeURIComponent(rendererId)}/queue/add`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
     })
   }
 

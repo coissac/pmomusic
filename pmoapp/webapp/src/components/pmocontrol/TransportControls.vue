@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRenderersStore } from '@/stores/renderers'
+import { useUIStore } from '@/stores/ui'
 import { Play, Pause, Square, SkipForward } from 'lucide-vue-next'
 
 const props = defineProps<{
@@ -8,6 +9,7 @@ const props = defineProps<{
 }>()
 
 const renderersStore = useRenderersStore()
+const uiStore = useUIStore()
 
 const state = computed(() => renderersStore.getStateById(props.rendererId))
 const isPlaying = computed(() => state.value?.transport_state === 'PLAYING')
@@ -16,9 +18,12 @@ const isStopped = computed(() => state.value?.transport_state === 'STOPPED' || s
 
 async function handlePlay() {
   try {
-    await renderersStore.play(props.rendererId)
+    // Utilise resumeOrPlayFromQueue qui choisit intelligemment entre:
+    // - Resume (si PAUSED)
+    // - Play from queue (si STOPPED/NO_MEDIA avec queue non vide)
+    await renderersStore.resumeOrPlayFromQueue(props.rendererId)
   } catch (error) {
-    console.error('Erreur play:', error)
+    uiStore.notifyError(`Impossible de démarrer la lecture: ${error instanceof Error ? error.message : 'Erreur inconnue'}`)
   }
 }
 
@@ -26,7 +31,7 @@ async function handlePause() {
   try {
     await renderersStore.pause(props.rendererId)
   } catch (error) {
-    console.error('Erreur pause:', error)
+    uiStore.notifyError(`Impossible de mettre en pause: ${error instanceof Error ? error.message : 'Erreur inconnue'}`)
   }
 }
 
@@ -34,7 +39,7 @@ async function handleStop() {
   try {
     await renderersStore.stop(props.rendererId)
   } catch (error) {
-    console.error('Erreur stop:', error)
+    uiStore.notifyError(`Impossible d'arrêter la lecture: ${error instanceof Error ? error.message : 'Erreur inconnue'}`)
   }
 }
 
@@ -42,7 +47,7 @@ async function handleNext() {
   try {
     await renderersStore.next(props.rendererId)
   } catch (error) {
-    console.error('Erreur next:', error)
+    uiStore.notifyError(`Impossible de passer au morceau suivant: ${error instanceof Error ? error.message : 'Erreur inconnue'}`)
   }
 }
 </script>

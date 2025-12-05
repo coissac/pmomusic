@@ -28,7 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Lecture de: {}", file_path);
 
     // Créer la source audio (lit le fichier FLAC)
-    let mut source = FileSource::new(file_path).await?;
+    let mut source = FileSource::new(file_path);
 
     // Créer le sink audio (joue sur la sortie audio)
     let sink = AudioSink::new();

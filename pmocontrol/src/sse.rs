@@ -74,6 +74,12 @@ pub enum RendererEventPayload {
         queue_length: usize,
         timestamp: chrono::DateTime<chrono::Utc>,
     },
+    BindingChanged {
+        renderer_id: String,
+        server_id: Option<String>,
+        container_id: Option<String>,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    },
 }
 
 /// Payload SSE pour un événement serveur de médias
@@ -186,6 +192,14 @@ pub async fn renderer_events_sse(
                     RendererEventPayload::QueueUpdated {
                         renderer_id: id.0,
                         queue_length,
+                        timestamp,
+                    }
+                }
+                RendererEvent::BindingChanged { id, binding } => {
+                    RendererEventPayload::BindingChanged {
+                        renderer_id: id.0,
+                        server_id: binding.as_ref().map(|b| b.server_id.0.clone()),
+                        container_id: binding.as_ref().map(|b| b.container_id.clone()),
                         timestamp,
                     }
                 }
@@ -352,6 +366,14 @@ pub async fn all_events_sse(State(control_point): State<Arc<ControlPoint>>) -> i
                             RendererEventPayload::QueueUpdated {
                                 renderer_id: id.0,
                                 queue_length,
+                                timestamp,
+                            }
+                        }
+                        RendererEvent::BindingChanged { id, binding } => {
+                            RendererEventPayload::BindingChanged {
+                                renderer_id: id.0,
+                                server_id: binding.as_ref().map(|b| b.server_id.0.clone()),
+                                container_id: binding.as_ref().map(|b| b.container_id.clone()),
                                 timestamp,
                             }
                         }

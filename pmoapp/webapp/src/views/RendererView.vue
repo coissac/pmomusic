@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useRenderersStore } from '@/stores/renderers'
+import { useUIStore } from '@/stores/ui'
 import CurrentTrack from '@/components/pmocontrol/CurrentTrack.vue'
 import TransportControls from '@/components/pmocontrol/TransportControls.vue'
 import VolumeControl from '@/components/pmocontrol/VolumeControl.vue'
@@ -13,6 +14,7 @@ import { ArrowLeft, Radio } from 'lucide-vue-next'
 const route = useRoute()
 const router = useRouter()
 const renderersStore = useRenderersStore()
+const uiStore = useUIStore()
 
 const rendererId = computed(() => route.params.id as string)
 const renderer = computed(() => renderersStore.getRendererById(rendererId.value))
@@ -20,6 +22,9 @@ const state = computed(() => renderersStore.getStateById(rendererId.value))
 
 // Charger les données au montage si nécessaire
 onMounted(async () => {
+  // Indiquer à uiStore quel renderer est sélectionné
+  uiStore.selectRenderer(rendererId.value)
+
   if (!renderer.value) {
     await renderersStore.fetchRenderers()
   }
@@ -27,6 +32,11 @@ onMounted(async () => {
     await renderersStore.fetchRendererState(rendererId.value)
   }
   await renderersStore.fetchQueue(rendererId.value)
+})
+
+// Nettoyer la sélection au démontage
+onUnmounted(() => {
+  uiStore.selectRenderer(null)
 })
 
 function goBack() {

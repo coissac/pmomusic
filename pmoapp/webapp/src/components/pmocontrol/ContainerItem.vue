@@ -14,7 +14,6 @@ const emit = defineEmits<{
   browse: [containerId: string]
   playNow: [containerId: string, rendererId: string]
   addToQueue: [containerId: string, rendererId: string]
-  attachPlaylist: [containerId: string, rendererId: string]
 }>()
 
 const iconComponent = computed(() => {
@@ -44,10 +43,6 @@ function handlePlayNow(rendererId: string) {
 function handleAddToQueue(rendererId: string) {
   emit('addToQueue', props.entry.id, rendererId)
 }
-
-function handleAttachPlaylist(rendererId: string) {
-  emit('attachPlaylist', props.entry.id, rendererId)
-}
 </script>
 
 <template>
@@ -76,7 +71,6 @@ function handleAttachPlaylist(rendererId: string) {
         :server-id="serverId"
         @play-now="handlePlayNow"
         @add-to-queue="handleAddToQueue"
-        @attach-playlist="handleAttachPlaylist"
       />
     </div>
   </div>

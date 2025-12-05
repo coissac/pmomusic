@@ -36,7 +36,7 @@ pub use capabilities::{
     VolumeControl,
 };
 pub use connection_manager_client::{ConnectionInfo, ConnectionManagerClient, ProtocolInfo};
-pub use control_point::ControlPoint;
+pub use control_point::{ControlPoint, PlaylistBinding};
 pub use linkplay::LinkPlayRenderer;
 pub use media_server::{
     MediaBrowser, MediaEntry, MediaResource, MediaServerInfo, MusicServer, ServerId,

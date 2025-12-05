@@ -1,4 +1,5 @@
 use crate::capabilities::{PlaybackPositionInfo, PlaybackState};
+use crate::control_point::PlaylistBinding;
 use crate::media_server::ServerId;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -98,6 +99,10 @@ pub enum RendererEvent {
     QueueUpdated {
         id: RendererId,
         queue_length: usize,
+    },
+    BindingChanged {
+        id: RendererId,
+        binding: Option<PlaylistBinding>,
     },
 }
 

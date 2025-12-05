@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useRenderersStore } from '@/stores/renderers'
-import { Play, ListPlus, Link, ChevronRight } from 'lucide-vue-next'
+import { Play, ListPlus, ChevronRight } from 'lucide-vue-next'
 
 defineProps<{
   type: 'container' | 'item'
@@ -12,16 +12,15 @@ defineProps<{
 const emit = defineEmits<{
   playNow: [rendererId: string]
   addToQueue: [rendererId: string]
-  attachPlaylist: [rendererId: string]
 }>()
 
 const renderersStore = useRenderersStore()
 const showMenu = ref(false)
-const showRendererSubmenu = ref<'play' | 'queue' | 'attach' | null>(null)
+const showRendererSubmenu = ref<'play' | 'queue' | null>(null)
 
 const onlineRenderers = computed(() => renderersStore.onlineRenderers)
 
-function handleAction(action: 'play' | 'queue' | 'attach', rendererId: string) {
+function handleAction(action: 'play' | 'queue', rendererId: string) {
   showMenu.value = false
   showRendererSubmenu.value = null
 
@@ -31,9 +30,6 @@ function handleAction(action: 'play' | 'queue' | 'attach', rendererId: string) {
       break
     case 'queue':
       emit('addToQueue', rendererId)
-      break
-    case 'attach':
-      emit('attachPlaylist', rendererId)
       break
   }
 }
@@ -95,32 +91,6 @@ function toggleMenu() {
             :key="renderer.id"
             class="submenu-item"
             @click="handleAction('queue', renderer.id)"
-          >
-            {{ renderer.friendly_name }}
-          </div>
-          <div v-if="onlineRenderers.length === 0" class="submenu-empty">
-            Aucun renderer disponible
-          </div>
-        </div>
-      </div>
-
-      <!-- Attach Playlist (only for containers) -->
-      <div
-        v-if="type === 'container'"
-        class="menu-item"
-        @mouseenter="showRendererSubmenu = 'attach'"
-        @mouseleave="showRendererSubmenu = null"
-      >
-        <Link :size="16" />
-        <span>Attacher la queue de</span>
-        <ChevronRight :size="16" class="submenu-arrow" />
-
-        <div v-if="showRendererSubmenu === 'attach'" class="renderer-submenu">
-          <div
-            v-for="renderer in onlineRenderers"
-            :key="renderer.id"
-            class="submenu-item"
-            @click="handleAction('attach', renderer.id)"
           >
             {{ renderer.friendly_name }}
           </div>

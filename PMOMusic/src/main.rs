@@ -122,7 +122,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("✅ PMOMusic is ready!");
     info!("Press Ctrl+C to stop...");
+
+    // Attendre le signal Ctrl+C et l'arrêt du serveur HTTP
     server.write().await.wait().await;
 
-    Ok(())
+    // Le serveur HTTP est arrêté, mais des threads (ControlPoint, etc.) peuvent encore tourner
+    // Attendre 2 secondes pour laisser le temps aux threads de se terminer
+    info!("Waiting for background threads to finish...");
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    // Forcer l'arrêt du processus (les threads du ControlPoint tournent en boucle infinie)
+    info!("✅ PMOMusic stopped");
+    std::process::exit(0);
 }

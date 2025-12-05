@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRenderersStore } from '@/stores/renderers'
+import { useUIStore } from '@/stores/ui'
 import { Link, Unlink } from 'lucide-vue-next'
 
 const props = defineProps<{
@@ -8,6 +9,7 @@ const props = defineProps<{
 }>()
 
 const renderersStore = useRenderersStore()
+const uiStore = useUIStore()
 
 const binding = computed(() => renderersStore.getBindingById(props.rendererId))
 const isAttached = computed(() => !!binding.value)
@@ -15,8 +17,9 @@ const isAttached = computed(() => !!binding.value)
 async function handleDetach() {
   try {
     await renderersStore.detachPlaylist(props.rendererId)
+    uiStore.notifySuccess('Playlist détachée avec succès')
   } catch (error) {
-    console.error('Erreur detach:', error)
+    uiStore.notifyError(`Impossible de détacher la playlist: ${error instanceof Error ? error.message : 'Erreur inconnue'}`)
   }
 }
 </script>
@@ -63,14 +66,13 @@ async function handleDetach() {
       <div class="help-section">
         <p class="help-text">
           <strong>📌 Playlist Dynamique</strong><br>
-          Attachez cette queue à une playlist/album du serveur média.
-          La queue se synchronisera automatiquement : les pistes ajoutées ou
-          retirées sur le serveur apparaîtront ici en temps réel.
+          La queue se synchronisera automatiquement avec la playlist/album du serveur.
+          Les pistes ajoutées ou retirées sur le serveur apparaîtront ici en temps réel.
         </p>
-        <p class="help-text help-text-warning">
-          ⚠️ <em>Fonctionnalité en cours de développement</em> :
-          Les actions "Attacher" ne sont pas encore disponibles dans le navigateur de médias.
-          Pour l'instant, utilisez l'API REST directement.
+        <p class="help-text">
+          <strong>💡 Comment activer ?</strong><br>
+          Naviguez vers un serveur de médias, trouvez une playlist/album,
+          et cliquez sur ⋮ puis "Lire maintenant". Le binding se fera automatiquement !
         </p>
       </div>
     </div>

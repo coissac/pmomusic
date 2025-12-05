@@ -35,18 +35,18 @@ use crate::upnp_renderer::UpnpRenderer;
 /// refresh it whenever the server notifies us of changes to that container.
 /// User-driven mutations (clear, enqueue, etc.) break the binding automatically.
 #[derive(Clone, Debug)]
-struct PlaylistBinding {
+pub struct PlaylistBinding {
     /// MediaServer that owns the playlist container.
-    server_id: ServerId,
+    pub server_id: ServerId,
     /// DIDL-Lite object id of the playlist container.
-    container_id: String,
+    pub container_id: String,
     /// True once at least one ContainerUpdateIDs notification has been seen.
-    has_seen_update: bool,
+    pub(crate) has_seen_update: bool,
     /// Flag used internally to signal that the queue should be refreshed
     /// from the server container.
-    pending_refresh: bool,
+    pub(crate) pending_refresh: bool,
     /// Whether the next refresh should auto-start playback if the renderer is idle.
-    auto_play_on_refresh: bool,
+    pub(crate) auto_play_on_refresh: bool,
 }
 
 /// Control point minimal :
@@ -177,18 +177,33 @@ impl ControlPoint {
                         }
 
                         // Extract and emit metadata changes
-                        if let Some(metadata) = extract_track_metadata(&position) {
-                            let metadata_changed = match prev_snapshot.last_metadata.as_ref() {
-                                Some(prev) => prev != &metadata,
-                                None => true,
-                            };
+                        match extract_track_metadata(&position) {
+                            Some(metadata) => {
+                                let metadata_changed = match prev_snapshot.last_metadata.as_ref() {
+                                    Some(prev) => prev != &metadata,
+                                    None => true,
+                                };
 
-                            if metadata_changed {
-                                runtime_cp.emit_renderer_event(RendererEvent::MetadataChanged {
-                                    id: renderer_id.clone(),
-                                    metadata: metadata.clone(),
-                                });
-                                new_snapshot.last_metadata = Some(metadata);
+                                if metadata_changed {
+                                    debug!(
+                                        renderer = renderer_id.0.as_str(),
+                                        title = metadata.title.as_deref(),
+                                        artist = metadata.artist.as_deref(),
+                                        "Emitting metadata changed event"
+                                    );
+                                    runtime_cp.emit_renderer_event(RendererEvent::MetadataChanged {
+                                        id: renderer_id.clone(),
+                                        metadata: metadata.clone(),
+                                    });
+                                    new_snapshot.last_metadata = Some(metadata);
+                                }
+                            }
+                            None => {
+                                debug!(
+                                    renderer = renderer_id.0.as_str(),
+                                    has_track_metadata = position.track_metadata.is_some(),
+                                    "No metadata extracted from position info"
+                                );
                             }
                         }
 
@@ -596,17 +611,96 @@ impl ControlPoint {
         renderer_id: &RendererId,
     ) -> anyhow::Result<(Vec<PlaybackItem>, Option<usize>)> {
         if !self.runtime.has_entry(renderer_id) {
-            let err = Self::runtime_entry_missing(renderer_id);
-            warn!(
+            // Renderer not yet initialized in runtime (just discovered via SSDP)
+            // This is normal and will be fixed on first polling cycle
+            debug!(
                 renderer = renderer_id.0.as_str(),
-                "Cannot snapshot full queue: renderer not registered in runtime"
+                "Renderer not yet initialized in runtime, returning empty queue"
             );
-            return Err(err);
+            return Err(Self::runtime_entry_missing(renderer_id));
         }
 
         self.runtime
             .queue_full_snapshot(renderer_id)
             .ok_or_else(|| Self::runtime_entry_missing(renderer_id))
+    }
+
+    /// Play the current item from the queue without advancing the index.
+    ///
+    /// This is useful after a Stop operation to resume playback from the current
+    /// position rather than skipping to the next track.
+    pub fn play_current_from_queue(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
+        if !self.runtime.has_entry(renderer_id) {
+            let err = Self::runtime_entry_missing(renderer_id);
+            warn!(
+                renderer = renderer_id.0.as_str(),
+                "Cannot play current: renderer not registered in runtime"
+            );
+            return Err(err);
+        }
+
+        let Some((item, remaining)) = self.runtime.peek_current(renderer_id) else {
+            debug!(
+                renderer = renderer_id.0.as_str(),
+                "play_current_from_queue: queue is empty or no current item"
+            );
+            self.runtime
+                .set_playback_source(renderer_id, PlaybackSource::None);
+            return Ok(());
+        };
+
+        debug!(
+            renderer = renderer_id.0.as_str(),
+            queue_len = remaining + 1,
+            uri = item.uri.as_str(),
+            "Playing current playback item from queue"
+        );
+
+        let renderer = self.music_renderer_by_id(renderer_id).ok_or_else(|| {
+            warn!(
+                renderer = renderer_id.0.as_str(),
+                "Renderer disappeared before queue playback could start"
+            );
+            anyhow!("Renderer {} not found", renderer_id.0)
+        })?;
+
+        if matches!(renderer.info().protocol, RendererProtocol::OpenHomeOnly) {
+            self.runtime
+                .set_playback_source(renderer_id, PlaybackSource::None);
+            return Err(op_not_supported(
+                "play_current_from_queue",
+                "OpenHomeOnly renderer",
+            ));
+        }
+
+        let playback = (|| -> anyhow::Result<()> {
+            let didl_metadata = item.to_didl_metadata();
+            renderer.play_uri(&item.uri, &didl_metadata)?;
+            Ok(())
+        })();
+
+        match playback {
+            Ok(()) => {
+                info!(
+                    renderer = renderer_id.0.as_str(),
+                    uri = item.uri.as_str(),
+                    "Queue playback started (current item)"
+                );
+                self.runtime
+                    .set_playback_source(renderer_id, PlaybackSource::FromQueue);
+                Ok(())
+            }
+            Err(e) => {
+                error!(
+                    renderer = renderer_id.0.as_str(),
+                    error = %e,
+                    "Failed to play current item from queue"
+                );
+                self.runtime
+                    .set_playback_source(renderer_id, PlaybackSource::None);
+                Err(e)
+            }
+        }
     }
 
     pub fn play_next_from_queue(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
@@ -659,7 +753,8 @@ impl ControlPoint {
         }
 
         let playback = (|| -> anyhow::Result<()> {
-            renderer.play_uri(&item.uri, "")?;
+            let didl_metadata = item.to_didl_metadata();
+            renderer.play_uri(&item.uri, &didl_metadata)?;
             Ok(())
         })();
 
@@ -697,7 +792,8 @@ impl ControlPoint {
                 if let Some(upnp) = renderer.as_upnp() {
                     let known_supported = upnp.supports_set_next();
                     if known_supported || upnp.has_avtransport() {
-                        match upnp.set_next_uri(&next_item.uri, "") {
+                        let next_didl_metadata = next_item.to_didl_metadata();
+                        match upnp.set_next_uri(&next_item.uri, &next_didl_metadata) {
                             Ok(_) => debug!(
                                 renderer = renderer_id.0.as_str(),
                                 "Prefetched next track via SetNextAVTransportURI"
@@ -745,6 +841,32 @@ impl ControlPoint {
         self.play_next_from_queue(renderer_id)
     }
 
+    /// Stop playback in response to user action (e.g., Stop button in UI).
+    ///
+    /// This method marks the stop as user-requested to prevent automatic
+    /// advancement to the next track in the queue when the STOPPED event
+    /// is received from the renderer.
+    pub fn user_stop(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
+        // Mark that user requested stop before actually stopping
+        self.runtime.mark_user_stop_requested(renderer_id);
+
+        // Get renderer and call stop
+        let renderer = self.music_renderer_by_id(renderer_id).ok_or_else(|| {
+            warn!(
+                renderer = renderer_id.0.as_str(),
+                "Cannot stop: renderer not found in registry"
+            );
+            anyhow!("Renderer {} not found", renderer_id.0)
+        })?;
+
+        debug!(
+            renderer = renderer_id.0.as_str(),
+            "User-requested stop"
+        );
+
+        renderer.stop()
+    }
+
     /// Subscribe to renderer events emitted by the control point runtime.
     ///
     /// Each subscriber receives all future events independently.
@@ -768,48 +890,83 @@ impl ControlPoint {
     /// container whenever the server notifies us of changes via ContentDirectory
     /// events. The binding is broken if the user explicitly mutates the queue
     /// through methods like `clear_queue` or `enqueue_items`.
+    /// Attach a renderer's queue to a playlist container.
+    ///
+    /// The queue will be automatically refreshed when the playlist changes on the server.
     pub fn attach_queue_to_playlist(
         &self,
         renderer_id: &RendererId,
         server_id: ServerId,
         container_id: String,
     ) {
+        self.attach_queue_to_playlist_internal(renderer_id, server_id, container_id, false);
+    }
+
+    /// Attach a renderer's queue to a playlist container without doing the initial refresh.
+    ///
+    /// This is useful when the queue has already been manually populated and we just want
+    /// to track future changes to the playlist.
+    pub fn attach_queue_to_playlist_without_refresh(
+        &self,
+        renderer_id: &RendererId,
+        server_id: ServerId,
+        container_id: String,
+    ) {
+        self.attach_queue_to_playlist_internal(renderer_id, server_id, container_id, true);
+    }
+
+    /// Internal implementation with optional skip of initial refresh
+    fn attach_queue_to_playlist_internal(
+        &self,
+        renderer_id: &RendererId,
+        server_id: ServerId,
+        container_id: String,
+        skip_initial_refresh: bool,
+    ) {
+        let binding = PlaylistBinding {
+            server_id: server_id.clone(),
+            container_id: container_id.clone(),
+            has_seen_update: false,
+            pending_refresh: !skip_initial_refresh,
+            auto_play_on_refresh: !skip_initial_refresh,
+        };
+
         {
             let mut bindings = self.playlist_bindings.lock().unwrap();
-            bindings.insert(
-                renderer_id.clone(),
-                PlaylistBinding {
-                    server_id: server_id.clone(),
-                    container_id: container_id.clone(),
-                    has_seen_update: false,
-                    pending_refresh: true,
-                    auto_play_on_refresh: true,
-                },
-            );
+            bindings.insert(renderer_id.clone(), binding.clone());
             info!(
                 renderer = renderer_id.0.as_str(),
                 server = server_id.0.as_str(),
                 container = container_id.as_str(),
+                skip_refresh = skip_initial_refresh,
                 "Queue attached to playlist container"
             );
         } // Drop bindings lock here before calling refresh_attached_queue_for
 
-        let mut auto_start_cb = |rid: &RendererId| self.start_queue_playback_if_idle(rid);
-        if let Err(err) = refresh_attached_queue_for(
-            &self.registry,
-            &self.runtime,
-            &self.playlist_bindings,
-            renderer_id,
-            &self.event_bus,
-            Some(&mut auto_start_cb),
-        ) {
-            warn!(
-                renderer = renderer_id.0.as_str(),
-                server = server_id.0.as_str(),
-                container = container_id.as_str(),
-                error = %err,
-                "Initial playlist refresh after attachment failed"
-            );
+        // Emit binding changed event to notify frontend
+        self.emit_renderer_event(RendererEvent::BindingChanged {
+            id: renderer_id.clone(),
+            binding: Some(binding),
+        });
+
+        if !skip_initial_refresh {
+            let mut auto_start_cb = |rid: &RendererId| self.start_queue_playback_if_idle(rid);
+            if let Err(err) = refresh_attached_queue_for(
+                &self.registry,
+                &self.runtime,
+                &self.playlist_bindings,
+                renderer_id,
+                &self.event_bus,
+                Some(&mut auto_start_cb),
+            ) {
+                warn!(
+                    renderer = renderer_id.0.as_str(),
+                    server = server_id.0.as_str(),
+                    container = container_id.as_str(),
+                    error = %err,
+                    "Initial playlist refresh after attachment failed"
+                );
+            }
         }
     }
 
@@ -818,14 +975,23 @@ impl ControlPoint {
     /// After calling this, the queue will no longer be automatically refreshed
     /// from the server. If no binding existed, this is a no-op.
     pub fn detach_queue_playlist(&self, renderer_id: &RendererId) {
-        let mut bindings = self.playlist_bindings.lock().unwrap();
-        if let Some(binding) = bindings.remove(renderer_id) {
+        let removed = {
+            let mut bindings = self.playlist_bindings.lock().unwrap();
+            bindings.remove(renderer_id)
+        };
+
+        if let Some(binding) = removed {
             info!(
                 renderer = renderer_id.0.as_str(),
                 server = binding.server_id.0.as_str(),
                 container = binding.container_id.as_str(),
                 "Queue detached from playlist container"
             );
+            // Emit binding changed event to notify frontend
+            self.emit_renderer_event(RendererEvent::BindingChanged {
+                id: renderer_id.clone(),
+                binding: None,
+            });
         } else {
             debug!(
                 renderer = renderer_id.0.as_str(),
@@ -878,7 +1044,14 @@ impl ControlPoint {
         if let RendererEvent::StateChanged { id, state } = event {
             match state {
                 PlaybackState::Stopped => {
-                    if self.runtime.is_playing_from_queue(id) {
+                    // Check if user requested stop (via Stop button in UI)
+                    if self.runtime.check_and_clear_user_stop_requested(id) {
+                        debug!(
+                            renderer = id.0.as_str(),
+                            "Renderer stopped by user request; not auto-advancing"
+                        );
+                        self.runtime.set_playback_source(id, PlaybackSource::None);
+                    } else if self.runtime.is_playing_from_queue(id) {
                         debug!(
                             renderer = id.0.as_str(),
                             "Renderer stopped after queue-driven playback; advancing"
@@ -933,6 +1106,7 @@ struct RendererRuntimeEntry {
     snapshot: RendererRuntimeSnapshot,
     queue: PlaybackQueue,
     playback_source: PlaybackSource,
+    user_stop_requested: bool,
 }
 
 struct RuntimeState {
@@ -991,6 +1165,14 @@ impl RuntimeState {
         Some((item, remaining))
     }
 
+    fn peek_current(&self, id: &RendererId) -> Option<(PlaybackItem, usize)> {
+        let entries = self.entries.lock().unwrap();
+        let entry = entries.get(id)?;
+        let item = entry.queue.peek()?.clone();
+        let remaining = entry.queue.upcoming_len();
+        Some((item, remaining))
+    }
+
     fn set_playback_source(&self, id: &RendererId, source: PlaybackSource) {
         let mut entries = self.entries.lock().unwrap();
         if let Some(entry) = entries.get_mut(id) {
@@ -1028,6 +1210,24 @@ impl RuntimeState {
             .entry(id.clone())
             .or_insert_with(RendererRuntimeEntry::default);
         f(entry)
+    }
+
+    fn mark_user_stop_requested(&self, id: &RendererId) {
+        let mut entries = self.entries.lock().unwrap();
+        if let Some(entry) = entries.get_mut(id) {
+            entry.user_stop_requested = true;
+        }
+    }
+
+    fn check_and_clear_user_stop_requested(&self, id: &RendererId) -> bool {
+        let mut entries = self.entries.lock().unwrap();
+        if let Some(entry) = entries.get_mut(id) {
+            let was_requested = entry.user_stop_requested;
+            entry.user_stop_requested = false;
+            was_requested
+        } else {
+            false
+        }
     }
 }
 
@@ -1402,7 +1602,13 @@ fn playback_position_equal(a: &PlaybackPositionInfo, b: &PlaybackPositionInfo) -
 
 /// Extract TrackMetadata from DIDL-Lite XML in PlaybackPositionInfo.
 fn extract_track_metadata(position: &PlaybackPositionInfo) -> Option<TrackMetadata> {
-    let didl_xml = position.track_metadata.as_ref()?;
+    let didl_xml = match position.track_metadata.as_ref() {
+        Some(xml) => xml,
+        None => {
+            debug!("Position info has no track_metadata (DIDL-Lite XML)");
+            return None;
+        }
+    };
 
     // Parse DIDL-Lite XML
     let didl = match pmodidl::parse_metadata::<pmodidl::DIDLLite>(didl_xml) {
@@ -1414,7 +1620,13 @@ fn extract_track_metadata(position: &PlaybackPositionInfo) -> Option<TrackMetada
     };
 
     // Extract first item metadata
-    let item = didl.items.first()?;
+    let item = match didl.items.first() {
+        Some(item) => item,
+        None => {
+            debug!("DIDL-Lite has no items");
+            return None;
+        }
+    };
 
     Some(TrackMetadata {
         title: Some(item.title.clone()),

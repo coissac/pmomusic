@@ -172,6 +172,16 @@ pub struct AttachPlaylistRequest {
     pub container_id: String,
 }
 
+/// Requête pour lire ou ajouter du contenu à la queue
+#[cfg(feature = "pmoserver")]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct PlayContentRequest {
+    /// ID du serveur de médias
+    pub server_id: String,
+    /// ID de l'objet (container ou item)
+    pub object_id: String,
+}
+
 /// Réponse générique de succès
 #[cfg(feature = "pmoserver")]
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -280,6 +290,8 @@ GET /control/servers/{server_id}/containers/{container_id}
         crate::pmoserver_ext::toggle_mute_renderer,
         crate::pmoserver_ext::attach_playlist_binding,
         crate::pmoserver_ext::detach_playlist_binding,
+        crate::pmoserver_ext::play_content,
+        crate::pmoserver_ext::add_to_queue,
         crate::pmoserver_ext::list_servers,
         crate::pmoserver_ext::browse_container,
         crate::sse::all_events_sse,
@@ -297,6 +309,7 @@ GET /control/servers/{server_id}/containers/{container_id}
         BrowseResponse,
         VolumeSetRequest,
         AttachPlaylistRequest,
+        PlayContentRequest,
         SuccessResponse,
         ErrorResponse,
     )),

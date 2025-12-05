@@ -51,6 +51,12 @@ sse.onConnectionChange((connected) => {
     // Charger les données initiales
     renderersStore.fetchRenderers();
     mediaServersStore.fetchServers();
+
+    // Recharger la queue du renderer sélectionné s'il y en a un
+    if (uiStore.selectedRendererId) {
+      console.log(`[App] Rechargement de la queue du renderer ${uiStore.selectedRendererId}`);
+      renderersStore.fetchQueue(uiStore.selectedRendererId);
+    }
   }
 });
 

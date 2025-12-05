@@ -25,12 +25,16 @@
     <main class="main-content">
       <router-view />
     </main>
+
+    <!-- Notifications Toast -->
+    <NotificationToast />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useRoute } from 'vue-router'
+import NotificationToast from '@/components/NotificationToast.vue'
 
 const showDebugMenu = ref(false)
 const route = useRoute()

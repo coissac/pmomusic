@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useMediaServersStore } from '@/stores/mediaServers'
 import { useRenderersStore } from '@/stores/renderers'
 import { useUIStore } from '@/stores/ui'
@@ -17,6 +17,12 @@ const props = defineProps<{
 const mediaServersStore = useMediaServersStore()
 const renderersStore = useRenderersStore()
 const uiStore = useUIStore()
+
+// Flags pour gérer le rechargement automatique avec debounce et cooldown
+const isRefreshing = ref(false)
+const refreshTimeoutId = ref<number | null>(null)
+const lastRefreshTime = ref<number>(0)
+const REFRESH_COOLDOWN_MS = 5000  // Ne pas recharger plus d'une fois toutes les 5 secondes
 
 const browseData = computed(() =>
   mediaServersStore.getBrowseCached(props.serverId, props.containerId)
@@ -46,6 +52,49 @@ watch(
   { immediate: true }
 )
 
+// Recharger automatiquement si le cache est invalidé (ex: après un ContainersUpdated SSE)
+// Cela se produit notamment quand on clique sur "Lire maintenant" sur une playlist,
+// ce qui déclenche un événement ContainersUpdated qui invalide le cache
+// Utilise un debounce de 3 secondes pour regrouper les multiples invalidations
+// et un cooldown de 5 secondes pour éviter les rechargements successifs
+watch(
+  () => browseData.value,
+  (data) => {
+    // Si browseData devient undefined alors que containerId est présent,
+    // et qu'on n'est pas déjà en train de charger, planifier un rechargement
+    if (!data && props.containerId && !loading.value) {
+      // Vérifier le cooldown: ignorer si on a rechargé il y a moins de 5 secondes
+      const timeSinceLastRefresh = Date.now() - lastRefreshTime.value
+      if (timeSinceLastRefresh < REFRESH_COOLDOWN_MS) {
+        console.log(
+          `[MediaBrowser] Cache invalidé mais cooldown actif (${Math.round((REFRESH_COOLDOWN_MS - timeSinceLastRefresh) / 1000)}s restantes), rechargement ignoré`
+        )
+        return
+      }
+
+      // Annuler tout timeout en cours
+      if (refreshTimeoutId.value !== null) {
+        clearTimeout(refreshTimeoutId.value)
+      }
+
+      // Planifier le rechargement après 3 secondes
+      // Cela permet de regrouper plusieurs événements SSE successifs
+      refreshTimeoutId.value = window.setTimeout(async () => {
+        if (!isRefreshing.value) {
+          console.log(
+            `[MediaBrowser] Cache invalidé pour ${props.serverId}/${props.containerId}, rechargement après debounce...`
+          )
+          isRefreshing.value = true
+          await mediaServersStore.browseContainer(props.serverId, props.containerId)
+          lastRefreshTime.value = Date.now()  // Enregistrer le moment du rechargement
+          isRefreshing.value = false
+          refreshTimeoutId.value = null
+        }
+      }, 3000)
+    }
+  }
+)
+
 const emit = defineEmits<{
   navigate: [containerId: string]
 }>()
@@ -58,36 +107,47 @@ function handleBrowseContainer(containerId: string) {
   emit('navigate', containerId)
 }
 
-// Actions handlers
-async function handlePlayNow(entryId: string, rendererId: string) {
+// Actions handlers pour les containers (playlists/albums)
+async function handlePlayContainer(containerId: string, rendererId: string) {
   try {
-    // TODO: Implémenter l'action "play now" quand l'API sera disponible
-    console.log('Play now:', entryId, 'on', rendererId)
-    uiStore.addNotification('info', 'Fonctionnalité "Lire maintenant" pas encore implémentée dans l\'API')
+    await renderersStore.attachAndPlayPlaylist(rendererId, props.serverId, containerId)
+    uiStore.notifySuccess('Lecture de la playlist démarrée !')
   } catch (err) {
-    console.error('Erreur play now:', err)
-    uiStore.addNotification('error', 'Erreur lors de la lecture')
+    const message = err instanceof Error ? err.message : 'Erreur inconnue'
+    uiStore.notifyError(`Erreur lors de la lecture de la playlist: ${message}`)
   }
 }
 
-async function handleAddToQueue(entryId: string, rendererId: string) {
+async function handleQueueContainer(containerId: string, rendererId: string) {
   try {
-    // TODO: Implémenter l'action "add to queue" quand l'API sera disponible
-    console.log('Add to queue:', entryId, 'on', rendererId)
-    uiStore.addNotification('info', 'Fonctionnalité "Ajouter à la queue" pas encore implémentée dans l\'API')
-  } catch (err) {
-    console.error('Erreur add to queue:', err)
-    uiStore.addNotification('error', 'Erreur lors de l\'ajout à la queue')
-  }
-}
-
-async function handleAttachPlaylist(containerId: string, rendererId: string) {
-  try {
+    // Attacher la playlist (sans démarrer la lecture)
     await renderersStore.attachPlaylist(rendererId, props.serverId, containerId)
-    uiStore.addNotification('success', `Queue attachée à la playlist !`)
+    await renderersStore.fetchQueue(rendererId)
+    uiStore.notifySuccess('Playlist attachée à la queue !')
   } catch (err) {
-    console.error('Erreur attach playlist:', err)
-    uiStore.addNotification('error', 'Erreur lors de l\'attachement')
+    const message = err instanceof Error ? err.message : 'Erreur inconnue'
+    uiStore.notifyError(`Erreur lors de l'ajout de la playlist: ${message}`)
+  }
+}
+
+// Actions handlers pour les items (tracks)
+async function handlePlayItem(itemId: string, rendererId: string) {
+  try {
+    await renderersStore.playContent(rendererId, props.serverId, itemId)
+    uiStore.notifySuccess('Lecture démarrée !')
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Erreur inconnue'
+    uiStore.notifyError(`Erreur lors de la lecture: ${message}`)
+  }
+}
+
+async function handleQueueItem(itemId: string, rendererId: string) {
+  try {
+    await renderersStore.addToQueue(rendererId, props.serverId, itemId)
+    uiStore.notifySuccess('Ajouté à la queue !')
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Erreur inconnue'
+    uiStore.notifyError(`Erreur lors de l'ajout à la queue: ${message}`)
   }
 }
 </script>
@@ -127,9 +187,8 @@ async function handleAttachPlaylist(containerId: string, rendererId: string) {
             :entry="container"
             :server-id="serverId"
             @browse="handleBrowseContainer"
-            @play-now="handlePlayNow"
-            @add-to-queue="handleAddToQueue"
-            @attach-playlist="handleAttachPlaylist"
+            @play-now="handlePlayContainer"
+            @add-to-queue="handleQueueContainer"
           />
         </div>
       </div>
@@ -143,8 +202,8 @@ async function handleAttachPlaylist(containerId: string, rendererId: string) {
             :key="item.id"
             :entry="item"
             :server-id="serverId"
-            @play-now="handlePlayNow"
-            @add-to-queue="handleAddToQueue"
+            @play-now="handlePlayItem"
+            @add-to-queue="handleQueueItem"
           />
         </div>
       </div>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { useRenderersStore } from '@/stores/renderers'
+import { useUIStore } from '@/stores/ui'
 import { Volume2, VolumeX } from 'lucide-vue-next'
 
 const props = defineProps<{
@@ -8,6 +9,7 @@ const props = defineProps<{
 }>()
 
 const renderersStore = useRenderersStore()
+const uiStore = useUIStore()
 
 const state = computed(() => renderersStore.getStateById(props.rendererId))
 const localVolume = ref(state.value?.volume ?? 50)
@@ -34,7 +36,7 @@ function handleVolumeChange(event: Event) {
     try {
       await renderersStore.setVolume(props.rendererId, localVolume.value)
     } catch (error) {
-      console.error('Erreur set volume:', error)
+      uiStore.notifyError(`Impossible de régler le volume: ${error instanceof Error ? error.message : 'Erreur inconnue'}`)
     }
     debounceTimer = null
   }, 300)
@@ -44,7 +46,7 @@ async function handleToggleMute() {
   try {
     await renderersStore.toggleMute(props.rendererId)
   } catch (error) {
-    console.error('Erreur toggle mute:', error)
+    uiStore.notifyError(`Impossible de basculer le mode muet: ${error instanceof Error ? error.message : 'Erreur inconnue'}`)
   }
 }
 </script>

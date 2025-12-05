@@ -18,7 +18,7 @@ async fn main() -> anyhow::Result<()> {
     let test_url = "https://fr.getsamplefiles.com/download/mp3/sample-3.mp3";
 
     println!("\nDownloading: {}", test_url);
-    let pk = cache::add_with_metadata_extraction(&cache, test_url, Some("test")).await?;
+    let pk = cache::add_with_metadata_extraction(cache, test_url, Some("test")).await?;
 
     println!("\nPK: {}", pk);
     let file_path = cache.get_file_path(&pk);

@@ -91,6 +91,11 @@ export interface AttachPlaylistRequest {
   container_id: string
 }
 
+export interface PlayContentRequest {
+  server_id: string
+  object_id: string
+}
+
 export interface SuccessResponse {
   message: string
 }
@@ -110,6 +115,7 @@ export type RendererEventPayload =
   | { type: 'mute_changed'; renderer_id: string; mute: boolean; timestamp: string }
   | { type: 'metadata_changed'; renderer_id: string; title: string | null; artist: string | null; album: string | null; album_art_uri: string | null; timestamp: string }
   | { type: 'queue_updated'; renderer_id: string; queue_length: number; timestamp: string }
+  | { type: 'binding_changed'; renderer_id: string; server_id: string | null; container_id: string | null; timestamp: string }
 
 export type MediaServerEventPayload =
   | { type: 'global_updated'; server_id: string; system_update_id: number | null; timestamp: string }

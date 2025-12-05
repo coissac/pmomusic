@@ -103,6 +103,35 @@ export const useRenderersStore = defineStore('renderers', () => {
     }
   }
 
+  /**
+   * Démarre ou reprend la lecture de manière intelligente:
+   * - Si PAUSED: reprend avec AVTransport.Play (resume)
+   * - Si STOPPED/NO_MEDIA avec queue non vide: reprend depuis le morceau actuel (via /resume)
+   * - Sinon: erreur (queue vide)
+   */
+  async function resumeOrPlayFromQueue(id: string) {
+    const state = getStateById(id)
+    if (!state) {
+      throw new Error(`Renderer ${id} non trouvé`)
+    }
+
+    // Cas 1: En pause → reprendre normalement
+    if (state.transport_state === 'PAUSED') {
+      return play(id)
+    }
+
+    // Cas 2: Arrêté ou NO_MEDIA avec une queue → reprendre depuis le morceau actuel
+    if ((state.transport_state === 'STOPPED' || state.transport_state === 'NO_MEDIA') &&
+        state.queue_len && state.queue_len > 0) {
+      // Utiliser /resume qui appelle play_current_from_queue côté backend
+      // Cela reprend la lecture depuis le morceau actuel sans avancer
+      return resume(id)
+    }
+
+    // Cas 3: Queue vide → erreur explicite
+    throw new Error('La file d\'attente est vide. Ajoutez des morceaux avant de démarrer la lecture.')
+  }
+
   async function pause(id: string) {
     try {
       await api.pause(id)
@@ -119,6 +148,16 @@ export const useRenderersStore = defineStore('renderers', () => {
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Erreur stop'
       console.error(`[Store Renderers] Erreur stop ${id}:`, e)
+      throw e
+    }
+  }
+
+  async function resume(id: string) {
+    try {
+      await api.resume(id)
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : 'Erreur resume'
+      console.error(`[Store Renderers] Erreur resume ${id}:`, e)
       throw e
     }
   }
@@ -198,6 +237,58 @@ export const useRenderersStore = defineStore('renderers', () => {
     }
   }
 
+  /**
+   * Attache une playlist à un renderer et démarre la lecture
+   *
+   * Note: Le backend démarre automatiquement la lecture lors de l'attachement
+   * via start_queue_playback_if_idle, donc pas besoin d'appeler play() explicitement.
+   * On rafraîchit seulement le binding et la queue pour l'UI.
+   */
+  async function attachAndPlayPlaylist(rendererId: string, serverId: string, containerId: string) {
+    try {
+      // 1. Attacher la playlist au renderer
+      // Le backend va automatiquement démarrer la lecture via start_queue_playback_if_idle
+      await api.attachPlaylist(rendererId, serverId, containerId)
+
+      // 2. Rafraîchir le binding local
+      await fetchBinding(rendererId)
+
+      // 3. Recharger la queue pour avoir le contenu immédiatement dans l'UI
+      await fetchQueue(rendererId)
+
+      // Note: Pas besoin d'appeler play() ici - le backend le fait automatiquement!
+      // Appeler play() ici créerait une race condition entre AVTransport.Play
+      // et le play_next_from_queue du backend.
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : 'Erreur attach and play playlist'
+      console.error(`[Store Renderers] Erreur attach and play playlist ${rendererId}:`, e)
+      throw e
+    }
+  }
+
+  // Actions - Queue content
+  async function playContent(rendererId: string, serverId: string, objectId: string) {
+    try {
+      await api.playContent(rendererId, serverId, objectId)
+      // L'état et la queue seront mis à jour via SSE
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : 'Erreur play content'
+      console.error(`[Store Renderers] Erreur play content ${rendererId}:`, e)
+      throw e
+    }
+  }
+
+  async function addToQueue(rendererId: string, serverId: string, objectId: string) {
+    try {
+      await api.addToQueue(rendererId, serverId, objectId)
+      // La queue sera mise à jour via SSE
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : 'Erreur add to queue'
+      console.error(`[Store Renderers] Erreur add to queue ${rendererId}:`, e)
+      throw e
+    }
+  }
+
   // SSE event handling
   function updateFromSSE(event: RendererEventPayload) {
     const rendererId = event.renderer_id
@@ -251,6 +342,23 @@ export const useRenderersStore = defineStore('renderers', () => {
         // Les métadonnées sont gérées par le store playback
         break
       }
+
+      case 'binding_changed': {
+        if (event.server_id && event.container_id) {
+          // Binding créé ou mis à jour
+          bindings.value.set(rendererId, {
+            server_id: event.server_id,
+            container_id: event.container_id,
+            has_seen_update: false,
+          })
+          // Recharger la queue pour refléter le nouveau binding
+          fetchQueue(rendererId)
+        } else {
+          // Binding supprimé
+          bindings.value.set(rendererId, null)
+        }
+        break
+      }
     }
   }
 
@@ -287,8 +395,10 @@ export const useRenderersStore = defineStore('renderers', () => {
     fetchQueue,
     fetchBinding,
     play,
+    resumeOrPlayFromQueue,
     pause,
     stop,
+    resume,
     next,
     setVolume,
     volumeUp,
@@ -296,6 +406,9 @@ export const useRenderersStore = defineStore('renderers', () => {
     toggleMute,
     attachPlaylist,
     detachPlaylist,
+    attachAndPlayPlaylist,
+    playContent,
+    addToQueue,
     updateFromSSE,
   }
 })

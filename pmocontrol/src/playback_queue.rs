@@ -31,6 +31,67 @@ impl PlaybackItem {
             creator: None,
         }
     }
+
+    /// Convert PlaybackItem to DIDL-Lite XML metadata for SetAVTransportURI
+    pub fn to_didl_metadata(&self) -> String {
+        use quick_xml::escape::escape;
+
+        let title = self.title.as_deref().unwrap_or("Unknown");
+        let escaped_uri = escape(&self.uri);
+        let escaped_title = escape(title);
+
+        let mut didl = String::from(
+            r#"<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/">"#,
+        );
+        didl.push_str(r#"<item id="0" parentID="-1" restricted="1">"#);
+        didl.push_str(&format!("<dc:title>{}</dc:title>", escaped_title));
+
+        if let Some(artist) = &self.artist {
+            let escaped_artist = escape(artist);
+            didl.push_str(&format!("<upnp:artist>{}</upnp:artist>", escaped_artist));
+            didl.push_str(&format!("<dc:creator>{}</dc:creator>", escaped_artist));
+        }
+
+        if let Some(album) = &self.album {
+            let escaped_album = escape(album);
+            didl.push_str(&format!("<upnp:album>{}</upnp:album>", escaped_album));
+        }
+
+        if let Some(genre) = &self.genre {
+            let escaped_genre = escape(genre);
+            didl.push_str(&format!("<upnp:genre>{}</upnp:genre>", escaped_genre));
+        }
+
+        if let Some(album_art) = &self.album_art_uri {
+            let escaped_art = escape(album_art);
+            didl.push_str(&format!("<upnp:albumArtURI>{}</upnp:albumArtURI>", escaped_art));
+        }
+
+        if let Some(date) = &self.date {
+            let escaped_date = escape(date);
+            didl.push_str(&format!("<dc:date>{}</dc:date>", escaped_date));
+        }
+
+        if let Some(track_num) = &self.track_number {
+            let escaped_track = escape(track_num);
+            didl.push_str(&format!(
+                "<upnp:originalTrackNumber>{}</upnp:originalTrackNumber>",
+                escaped_track
+            ));
+        }
+
+        // Add resource with URI
+        didl.push_str(&format!(
+            r#"<res protocolInfo="http-get:*:audio/*:*">{}</res>"#,
+            escaped_uri
+        ));
+
+        didl.push_str(r#"<upnp:class>object.item.audioItem.musicTrack</upnp:class>"#);
+        didl.push_str("</item>");
+        didl.push_str("</DIDL-Lite>");
+
+        didl
+    }
 }
 
 #[derive(Clone, Debug, Default)]

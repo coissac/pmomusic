@@ -42,3 +42,4 @@ setup-env.sh
 cache
 gupnp-tools
 pmocontrol_[0_9]*.txt
+webapp_[0_9]*.txt

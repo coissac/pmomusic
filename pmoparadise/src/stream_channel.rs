@@ -901,7 +901,7 @@ impl ParadiseChannelManager {
         history_builder: Option<ParadiseHistoryBuilder>,
         server_base_url: Option<String>,
     ) -> Result<Self> {
-        tracing::warn!(
+        tracing::info!(
             "➡️ Entering with_defaults_with_cover_cache ({} channels, base_url={:?})",
             ALL_CHANNELS.len(),
             server_base_url
@@ -912,14 +912,14 @@ impl ParadiseChannelManager {
             config.server_base_url = server_base_url.clone();
 
             let start = Instant::now();
-            tracing::warn!(
+            tracing::info!(
                 "⏳ Initializing Radio Paradise channel {} ({})...",
                 descriptor.display_name,
                 descriptor.slug
             );
 
             let history_opts = if let Some(builder) = &history_builder {
-                tracing::warn!(
+                tracing::debug!(
                     "  ⏳ Building history options for channel {} ({})",
                     descriptor.display_name,
                     descriptor.slug
@@ -933,7 +933,7 @@ impl ParadiseChannelManager {
             } else {
                 None
             };
-            tracing::warn!(
+            tracing::debug!(
                 "  ⏩ History options ready for channel {} ({})",
                 descriptor.display_name,
                 descriptor.slug
@@ -945,7 +945,7 @@ impl ParadiseChannelManager {
             .await
             {
                 Ok(Ok(ch)) => {
-                    tracing::warn!(
+                    tracing::info!(
                         "✅ Channel {} ({}) initialized in {:?}",
                         descriptor.display_name,
                         descriptor.slug,
