@@ -11,7 +11,7 @@ const {
   onlineRenderers,
   getStateById,
   fetchRenderers,
-  fetchRendererState
+  fetchRendererSnapshot
 } = useRenderers()
 
 const {
@@ -25,9 +25,8 @@ onMounted(async () => {
   await fetchRenderers()
   await fetchServers()
 
-  // Charger les états de tous les renderers pour afficher les covers
   for (const renderer of renderers.value) {
-    fetchRendererState(renderer.id)
+    fetchRendererSnapshot(renderer.id, { force: true })
   }
 })
 </script>

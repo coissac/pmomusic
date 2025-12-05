@@ -134,11 +134,13 @@ fn main() -> Result<()> {
         .context("Failed to enqueue playback items")?;
 
     // Attach queue to live playlist container
-    control_point.attach_queue_to_playlist(
-        &renderer_id,
-        server_info.id.clone(),
-        live_playlist_container.id.clone(),
-    );
+    control_point
+        .attach_queue_to_playlist(
+            &renderer_id,
+            server_info.id.clone(),
+            live_playlist_container.id.clone(),
+        )
+        .context("Failed to attach queue to live playlist container")?;
     println!(
         "✓ Queue attached to Live Playlist container '{}' (id: {}) on server '{}'",
         live_playlist_container.title, live_playlist_container.id, server_info.friendly_name

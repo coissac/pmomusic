@@ -1,292 +1,256 @@
 /**
- * Composable pour gérer les renderers
- * Architecture simple : l'API est la source de vérité, SSE déclenche des re-fetch
+ * Composable pour gérer les renderers.
+ * Le ControlPoint est la seule source de vérité :
+ * - Les snapshots complets proviennent de /renderers/{id}/full
+ * - Les événements SSE ne servent qu'à déclencher un refetch.
  */
-import { ref, computed, type Ref } from 'vue'
+import { ref, reactive, computed, type Ref } from 'vue'
 import { api } from '../services/pmocontrol/api'
 import { sse } from '../services/pmocontrol/sse'
 import type {
   RendererSummary,
   RendererState,
   QueueSnapshot,
-  AttachedPlaylistInfo
+  AttachedPlaylistInfo,
+  FullRendererSnapshot,
 } from '../services/pmocontrol/types'
 
-// Cache global partagé entre toutes les instances du composable
-const renderersCache = ref<Map<string, RendererSummary>>(new Map())
-const statesCache = ref<Map<string, RendererState>>(new Map())
-const queuesCache = ref<Map<string, QueueSnapshot>>(new Map())
-const bindingsCache = ref<Map<string, AttachedPlaylistInfo | null>>(new Map())
-
-// Timestamps pour éviter les re-fetch trop fréquents
-const lastFetch = {
-  renderers: 0,
-  states: new Map<string, number>(),
-  queues: new Map<string, number>(),
-  bindings: new Map<string, number>()
+interface RendererSnapshotState {
+  snapshots: Map<string, FullRendererSnapshot>
+  lastSnapshotAt: Map<string, number>
+  lastEventAt: Map<string, number>
+  loadingIds: Set<string>
+  selectedRendererId: string | null
 }
 
-const CACHE_DURATION_MS = 2000 // 2 secondes
+const renderersCache = ref<Map<string, RendererSummary>>(new Map())
+const RENDERERS_CACHE_MS = 2000
+const lastRenderersFetch = ref(0)
 
-// Connecter SSE une seule fois au module
+const snapshotState = reactive<RendererSnapshotState>({
+  snapshots: reactive(new Map<string, FullRendererSnapshot>()),
+  lastSnapshotAt: reactive(new Map<string, number>()),
+  lastEventAt: reactive(new Map<string, number>()),
+  loadingIds: reactive(new Set<string>()),
+  selectedRendererId: null,
+})
+
+const loading = ref(false)
+const error = ref<string | null>(null)
+
 let sseConnected = false
 function ensureSSEConnected() {
   if (sseConnected) return
 
   sse.onRendererEvent((event) => {
     const rendererId = event.renderer_id
-
-    switch (event.type) {
-      case 'state_changed':
-      case 'position_changed':
-      case 'volume_changed':
-      case 'mute_changed':
-      case 'metadata_changed':
-        // Invalider le cache de l'état et re-fetch
-        lastFetch.states.delete(rendererId)
-        api.getRendererState(rendererId).then(state => {
-          statesCache.value.set(rendererId, state)
-        })
-        break
-
-      case 'queue_updated':
-        // Invalider le cache de la queue et re-fetch
-        lastFetch.queues.delete(rendererId)
-        api.getQueue(rendererId).then(queue => {
-          queuesCache.value.set(rendererId, queue)
-        })
-        // Mettre à jour queue_len dans l'état
-        api.getRendererState(rendererId).then(state => {
-          statesCache.value.set(rendererId, state)
-        })
-        break
-
-      case 'binding_changed':
-        // Re-fetch binding et queue
-        lastFetch.bindings.delete(rendererId)
-        lastFetch.queues.delete(rendererId)
-        api.getBinding(rendererId).then(binding => {
-          bindingsCache.value.set(rendererId, binding)
-        })
-        api.getQueue(rendererId).then(queue => {
-          queuesCache.value.set(rendererId, queue)
-        })
-        break
+    const timestamp = Date.parse(event.timestamp ?? '') || Date.now()
+    snapshotState.lastEventAt.set(rendererId, timestamp)
+    const lastSnapshot = snapshotState.lastSnapshotAt.get(rendererId) ?? 0
+    if (!snapshotState.snapshots.has(rendererId) || timestamp > lastSnapshot) {
+      void fetchRendererSnapshot(rendererId, { force: true })
     }
   })
 
   sseConnected = true
 }
 
-/**
- * Composable principal pour gérer les renderers
- */
+const allRenderers = computed(() => Array.from(renderersCache.value.values()))
+const onlineRenderers = computed(() => allRenderers.value.filter((r) => r.online))
+const allSnapshots = computed(() => Array.from(snapshotState.snapshots.values()))
+const playingRenderers = computed(() =>
+  allSnapshots.value
+    .filter((snapshot) => snapshot.state.transport_state === 'PLAYING')
+    .map((snapshot) => snapshot.state),
+)
+
+function getRendererById(id: string) {
+  return renderersCache.value.get(id)
+}
+
+function getSnapshotById(id: string) {
+  return snapshotState.snapshots.get(id) ?? null
+}
+
+function getStateById(id: string): RendererState | null {
+  return snapshotState.snapshots.get(id)?.state ?? null
+}
+
+function getQueueById(id: string): QueueSnapshot | null {
+  return snapshotState.snapshots.get(id)?.queue ?? null
+}
+
+function getBindingById(id: string): AttachedPlaylistInfo | null {
+  return snapshotState.snapshots.get(id)?.binding ?? null
+}
+
+function isSnapshotLoading(id: string) {
+  return snapshotState.loadingIds.has(id)
+}
+
+function selectRenderer(id: string | null) {
+  snapshotState.selectedRendererId = id
+}
+
+async function fetchRenderers(force = false) {
+  ensureSSEConnected()
+
+  const now = Date.now()
+  if (!force && now - lastRenderersFetch.value < RENDERERS_CACHE_MS) {
+    return
+  }
+
+  try {
+    loading.value = true
+    error.value = null
+    const data = await api.getRenderers()
+    renderersCache.value = new Map(data.map((renderer) => [renderer.id, renderer]))
+    lastRenderersFetch.value = now
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : 'Erreur fetch renderers'
+    console.error('[useRenderers] Erreur fetch:', err)
+  } finally {
+    loading.value = false
+  }
+}
+
+async function fetchRendererSnapshot(rendererId: string, opts?: { force?: boolean }) {
+  ensureSSEConnected()
+  const force = opts?.force ?? false
+  const hasSnapshot = snapshotState.snapshots.has(rendererId)
+
+  if (!force && hasSnapshot) {
+    const lastSnapshot = snapshotState.lastSnapshotAt.get(rendererId) ?? 0
+    const lastEvent = snapshotState.lastEventAt.get(rendererId) ?? 0
+    if (lastEvent <= lastSnapshot) {
+      return
+    }
+  }
+
+  if (snapshotState.loadingIds.has(rendererId)) {
+    return
+  }
+
+  snapshotState.loadingIds.add(rendererId)
+  try {
+    const snapshot = await api.getRendererFullSnapshot(rendererId)
+    snapshotState.snapshots.set(rendererId, snapshot)
+    snapshotState.lastSnapshotAt.set(rendererId, Date.now())
+  } catch (err) {
+    console.error(`[useRenderers] Erreur snapshot ${rendererId}:`, err)
+  } finally {
+    snapshotState.loadingIds.delete(rendererId)
+  }
+}
+
+// Transport controls
+async function play(id: string) {
+  await api.play(id)
+}
+
+async function resumeOrPlayFromQueue(id: string) {
+  const snapshot = snapshotState.snapshots.get(id)
+  if (!snapshot) {
+    throw new Error(`Renderer ${id} non trouvé`)
+  }
+
+  const state = snapshot.state
+  if (state.transport_state === 'PAUSED') {
+    return play(id)
+  }
+
+  if (
+    ['STOPPED', 'NO_MEDIA'].includes(state.transport_state) &&
+    snapshot.queue.items.length > 0
+  ) {
+    return api.resume(id)
+  }
+
+  throw new Error('La file d\'attente est vide. Ajoutez des morceaux avant de démarrer la lecture.')
+}
+
+async function pause(id: string) {
+  await api.pause(id)
+}
+
+async function stop(id: string) {
+  await api.stop(id)
+}
+
+async function next(id: string) {
+  await api.next(id)
+}
+
+// Volume controls
+async function setVolume(id: string, volume: number) {
+  await api.setVolume(id, volume)
+}
+
+async function volumeUp(id: string) {
+  await api.volumeUp(id)
+}
+
+async function volumeDown(id: string) {
+  await api.volumeDown(id)
+}
+
+async function toggleMute(id: string) {
+  await api.toggleMute(id)
+}
+
+// Playlist binding
+async function attachPlaylist(
+  rendererId: string,
+  serverId: string,
+  containerId: string,
+  options?: { autoPlay?: boolean },
+) {
+  await api.attachPlaylist(rendererId, serverId, containerId, options?.autoPlay ?? false)
+}
+
+async function detachPlaylist(rendererId: string) {
+  await api.detachPlaylist(rendererId)
+}
+
+async function attachAndPlayPlaylist(
+  rendererId: string,
+  serverId: string,
+  containerId: string,
+) {
+  await attachPlaylist(rendererId, serverId, containerId, { autoPlay: true })
+}
+
+// Queue content
+async function playContent(rendererId: string, serverId: string, objectId: string) {
+  await api.playContent(rendererId, serverId, objectId)
+}
+
+async function addToQueue(rendererId: string, serverId: string, objectId: string) {
+  await api.addToQueue(rendererId, serverId, objectId)
+}
+
 export function useRenderers() {
   ensureSSEConnected()
 
-  const loading = ref(false)
-  const error = ref<string | null>(null)
-
-  // Getters computed
-  const allRenderers = computed(() => Array.from(renderersCache.value.values()))
-  const onlineRenderers = computed(() => allRenderers.value.filter(r => r.online))
-
-  const allStates = computed(() => Array.from(statesCache.value.values()))
-  const playingRenderers = computed(() =>
-    allStates.value.filter(s => s.transport_state === 'PLAYING')
-  )
-
-  // Fetch renderers list
-  async function fetchRenderers(force = false) {
-    const now = Date.now()
-    if (!force && now - lastFetch.renderers < CACHE_DURATION_MS) {
-      return // Cache encore valide
-    }
-
-    try {
-      loading.value = true
-      error.value = null
-      const data = await api.getRenderers()
-
-      renderersCache.value.clear()
-      data.forEach(r => renderersCache.value.set(r.id, r))
-      lastFetch.renderers = now
-    } catch (e) {
-      error.value = e instanceof Error ? e.message : 'Erreur fetch renderers'
-      console.error('[useRenderers] Erreur fetch:', e)
-    } finally {
-      loading.value = false
-    }
-  }
-
-  // Fetch renderer state
-  async function fetchRendererState(id: string, force = false) {
-    const now = Date.now()
-    const last = lastFetch.states.get(id) || 0
-    if (!force && now - last < CACHE_DURATION_MS) {
-      return // Cache encore valide
-    }
-
-    try {
-      const state = await api.getRendererState(id)
-      statesCache.value.set(id, state)
-      lastFetch.states.set(id, now)
-    } catch (e) {
-      console.error(`[useRenderers] Erreur fetch state ${id}:`, e)
-    }
-  }
-
-  // Fetch queue
-  async function fetchQueue(id: string, force = false) {
-    const now = Date.now()
-    const last = lastFetch.queues.get(id) || 0
-    if (!force && now - last < CACHE_DURATION_MS) {
-      return // Cache encore valide
-    }
-
-    try {
-      const queue = await api.getQueue(id)
-      queuesCache.value.set(id, queue)
-      lastFetch.queues.set(id, now)
-    } catch (e) {
-      console.error(`[useRenderers] Erreur fetch queue ${id}:`, e)
-    }
-  }
-
-  // Fetch binding
-  async function fetchBinding(id: string, force = false) {
-    const now = Date.now()
-    const last = lastFetch.bindings.get(id) || 0
-    if (!force && now - last < CACHE_DURATION_MS) {
-      return // Cache encore valide
-    }
-
-    try {
-      const binding = await api.getBinding(id)
-      bindingsCache.value.set(id, binding)
-      lastFetch.bindings.set(id, now)
-    } catch (e) {
-      console.error(`[useRenderers] Erreur fetch binding ${id}:`, e)
-    }
-  }
-
-  // Transport controls (pas de cache, juste des commandes)
-  async function play(id: string) {
-    await api.play(id)
-    // SSE mettra à jour l'état automatiquement
-  }
-
-  async function resumeOrPlayFromQueue(id: string) {
-    const state = statesCache.value.get(id)
-    if (!state) {
-      throw new Error(`Renderer ${id} non trouvé`)
-    }
-
-    if (state.transport_state === 'PAUSED') {
-      return play(id)
-    }
-
-    if ((state.transport_state === 'STOPPED' || state.transport_state === 'NO_MEDIA') &&
-        state.queue_len && state.queue_len > 0) {
-      return api.resume(id)
-    }
-
-    throw new Error('La file d\'attente est vide. Ajoutez des morceaux avant de démarrer la lecture.')
-  }
-
-  async function pause(id: string) {
-    await api.pause(id)
-  }
-
-  async function stop(id: string) {
-    await api.stop(id)
-  }
-
-  async function next(id: string) {
-    await api.next(id)
-  }
-
-  // Volume controls
-  async function setVolume(id: string, volume: number) {
-    await api.setVolume(id, volume)
-  }
-
-  async function volumeUp(id: string) {
-    await api.volumeUp(id)
-  }
-
-  async function volumeDown(id: string) {
-    await api.volumeDown(id)
-  }
-
-  async function toggleMute(id: string) {
-    await api.toggleMute(id)
-  }
-
-  // Playlist binding
-  async function attachPlaylist(rendererId: string, serverId: string, containerId: string) {
-    await api.attachPlaylist(rendererId, serverId, containerId)
-    // Re-fetch binding et queue
-    await fetchBinding(rendererId, true)
-    await fetchQueue(rendererId, true)
-  }
-
-  async function detachPlaylist(rendererId: string) {
-    await api.detachPlaylist(rendererId)
-    bindingsCache.value.set(rendererId, null)
-  }
-
-  async function attachAndPlayPlaylist(rendererId: string, serverId: string, containerId: string) {
-    await api.attachPlaylist(rendererId, serverId, containerId)
-    await fetchBinding(rendererId, true)
-    await fetchQueue(rendererId, true)
-  }
-
-  // Queue content
-  async function playContent(rendererId: string, serverId: string, objectId: string) {
-    await api.playContent(rendererId, serverId, objectId)
-    // SSE mettra à jour la queue
-  }
-
-  async function addToQueue(rendererId: string, serverId: string, objectId: string) {
-    await api.addToQueue(rendererId, serverId, objectId)
-    // SSE mettra à jour la queue
-  }
-
-  // Getters pour un renderer spécifique
-  function getRendererById(id: string) {
-    return renderersCache.value.get(id)
-  }
-
-  function getStateById(id: string) {
-    return statesCache.value.get(id)
-  }
-
-  function getQueueById(id: string) {
-    return queuesCache.value.get(id)
-  }
-
-  function getBindingById(id: string) {
-    return bindingsCache.value.get(id)
-  }
-
   return {
-    // État
     loading,
     error,
-    // Getters
+    // Collections
     allRenderers,
     onlineRenderers,
     playingRenderers,
+    // Accessors
     getRendererById,
+    getSnapshotById,
     getStateById,
     getQueueById,
     getBindingById,
-    // Actions fetch
+    isSnapshotLoading,
+    selectRenderer,
+    snapshotState,
+    // Fetchers
     fetchRenderers,
-    fetchRendererState,
-    fetchQueue,
-    fetchBinding,
+    fetchRendererSnapshot,
     // Transport controls
     play,
     resumeOrPlayFromQueue,
@@ -304,37 +268,32 @@ export function useRenderers() {
     attachAndPlayPlaylist,
     // Queue content
     playContent,
-    addToQueue
+    addToQueue,
   }
 }
 
-/**
- * Composable pour un renderer spécifique (avec auto-refresh)
- */
 export function useRenderer(rendererId: Ref<string>) {
   ensureSSEConnected()
 
   const renderer = computed(() => renderersCache.value.get(rendererId.value))
-  const state = computed(() => statesCache.value.get(rendererId.value))
-  const queue = computed(() => queuesCache.value.get(rendererId.value))
-  const binding = computed(() => bindingsCache.value.get(rendererId.value))
+  const snapshot = computed(() => snapshotState.snapshots.get(rendererId.value) ?? null)
+  const state = computed(() => snapshot.value?.state ?? null)
+  const queue = computed(() => snapshot.value?.queue ?? null)
+  const binding = computed(() => snapshot.value?.binding ?? null)
 
-  // Auto-refresh au montage
-  const { fetchRendererState, fetchQueue, fetchBinding } = useRenderers()
-
-  async function refresh() {
+  async function refresh(force = true) {
     await Promise.all([
-      fetchRendererState(rendererId.value, true),
-      fetchQueue(rendererId.value, true),
-      fetchBinding(rendererId.value, true)
+      fetchRenderers(force),
+      fetchRendererSnapshot(rendererId.value, { force: true }),
     ])
   }
 
   return {
     renderer,
+    snapshot,
     state,
     queue,
     binding,
-    refresh
+    refresh,
   }
 }

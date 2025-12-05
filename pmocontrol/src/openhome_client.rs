@@ -265,10 +265,7 @@ impl OhInfoClient {
         );
 
         if let Some(ref xml) = metadata_xml {
-            debug!(
-                metadata_xml = xml.as_str(),
-                "OpenHome metadata XML content"
-            );
+            debug!(metadata_xml = xml.as_str(), "OpenHome metadata XML content");
         }
 
         Ok(OhInfoTrack { uri, metadata_xml })

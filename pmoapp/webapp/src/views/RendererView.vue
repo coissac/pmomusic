@@ -24,7 +24,7 @@ const uiStore = useUIStore()
 
 const rendererId = computed(() => route.params.id as string)
 const { renderer, state, refresh } = useRenderer(toRef(() => rendererId.value))
-const { fetchRenderers } = useRenderers()
+const { fetchRenderers, selectRenderer: selectRendererSnapshot } = useRenderers()
 const openHomeSupported = computed(() => {
   const current = renderer.value
   if (!current) return false
@@ -44,8 +44,8 @@ const canAddOhTrack = computed(() => newOhUri.value.trim().length > 0)
 
 // Charger les données au montage si nécessaire
 onMounted(async () => {
-  // Indiquer à uiStore quel renderer est sélectionné
   uiStore.selectRenderer(rendererId.value)
+  selectRendererSnapshot(rendererId.value)
 
   // Charger toutes les données du renderer
   if (!renderer.value) {
@@ -76,6 +76,7 @@ watch(rendererId, () => {
 // Nettoyer la sélection au démontage
 onUnmounted(() => {
   uiStore.selectRenderer(null)
+  selectRendererSnapshot(null)
 })
 
 function goBack() {

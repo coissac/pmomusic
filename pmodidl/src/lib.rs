@@ -5,7 +5,10 @@
 use bevy_reflect::Reflect;
 use pmoutils::ToXmlElement;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
+use std::collections::HashSet;
 use std::fmt::Write;
+use std::io::Cursor;
 use xmltree::{Element, XMLNode};
 
 // ============= Couche d'abstraction générique =============
@@ -70,7 +73,8 @@ impl MediaMetadataParser for DIDLLite {
     type Error = quick_xml::de::DeError;
 
     fn parse(input: &str) -> Result<Self, Self::Error> {
-        quick_xml::de::from_str(input)
+        let sanitized = sanitize_singleton_elements(input);
+        quick_xml::de::from_str(sanitized.as_ref())
     }
 
     fn format_name() -> &'static str {
@@ -534,6 +538,80 @@ fn text_element(name: &str, value: &str) -> Element {
     let mut e = Element::new(name);
     e.children.push(XMLNode::Text(value.to_string()));
     e
+}
+
+const SINGLETON_ELEMENTS: &[&str] = &[
+    "dc:title",
+    "title",
+    "dc:creator",
+    "creator",
+    "upnp:class",
+    "class",
+    "upnp:artist",
+    "artist",
+    "upnp:album",
+    "album",
+    "upnp:genre",
+    "genre",
+    "upnp:albumArtURI",
+    "albumArtURI",
+    "dc:date",
+    "date",
+    "upnp:originalTrackNumber",
+    "originalTrackNumber",
+];
+
+fn sanitize_singleton_elements(input: &str) -> Cow<'_, str> {
+    if !SINGLETON_ELEMENTS.iter().any(|tag| input.contains(tag)) {
+        return Cow::Borrowed(input);
+    }
+
+    let mut cursor = Cursor::new(input.as_bytes());
+    let mut root = match Element::parse(&mut cursor) {
+        Ok(elem) => elem,
+        Err(_) => return Cow::Borrowed(input),
+    };
+
+    if !dedup_singleton_children(&mut root) {
+        return Cow::Borrowed(input);
+    }
+
+    let mut buf = Vec::new();
+    if root.write(&mut buf).is_err() {
+        return Cow::Borrowed(input);
+    }
+
+    String::from_utf8(buf)
+        .map(Cow::Owned)
+        .unwrap_or_else(|_| Cow::Borrowed(input))
+}
+
+fn dedup_singleton_children(element: &mut Element) -> bool {
+    let mut changed = false;
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut idx = 0;
+
+    while idx < element.children.len() {
+        let mut remove_current = false;
+        if let XMLNode::Element(child_elem) = &mut element.children[idx] {
+            if SINGLETON_ELEMENTS.contains(&child_elem.name.as_str())
+                && !seen.insert(child_elem.name.clone())
+            {
+                remove_current = true;
+                changed = true;
+            } else if dedup_singleton_children(child_elem) {
+                changed = true;
+            }
+        }
+
+        if remove_current {
+            element.children.remove(idx);
+        } else {
+            idx += 1;
+        }
+    }
+
+    changed
 }
 
 impl ToXmlElement for DIDLLite {

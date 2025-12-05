@@ -4,6 +4,7 @@
 import type {
   RendererSummary,
   RendererState,
+  FullRendererSnapshot,
   QueueSnapshot,
   AttachedPlaylistInfo,
   MediaServerSummary,
@@ -66,6 +67,14 @@ class PMOControlAPI {
    */
   async getRendererState(id: string): Promise<RendererState> {
     return this.request<RendererState>(`/renderers/${encodeURIComponent(id)}`)
+  }
+
+  /**
+   * Récupère le snapshot complet d'un renderer
+   * GET /api/control/renderers/{id}/full
+   */
+  async getRendererFullSnapshot(id: string): Promise<FullRendererSnapshot> {
+    return this.request<FullRendererSnapshot>(`/renderers/${encodeURIComponent(id)}/full`)
   }
 
   /**
@@ -195,9 +204,14 @@ class PMOControlAPI {
   async attachPlaylist(
     rendererId: string,
     serverId: string,
-    containerId: string
+    containerId: string,
+    autoPlay = false
   ): Promise<SuccessResponse> {
-    const payload: AttachPlaylistRequest = { server_id: serverId, container_id: containerId }
+    const payload: AttachPlaylistRequest = {
+      server_id: serverId,
+      container_id: containerId,
+      auto_play: autoPlay,
+    }
     return this.request<SuccessResponse>(`/renderers/${encodeURIComponent(rendererId)}/binding/attach`, {
       method: 'POST',
       body: JSON.stringify(payload),

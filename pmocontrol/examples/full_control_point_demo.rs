@@ -746,11 +746,9 @@ impl App {
                 self.pending_binding_container.clone(),
                 self.renderer_id(),
             ) {
-                self.control_point.attach_queue_to_playlist(
-                    &renderer_id,
-                    server.id.clone(),
-                    container.clone(),
-                );
+                self.control_point
+                    .attach_queue_to_playlist(&renderer_id, server.id.clone(), container.clone())
+                    .context("Failed to attach queue to playlist")?;
                 self.ui_state
                     .set_status(format!("File liée à '{}'", container));
             }

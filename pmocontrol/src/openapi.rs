@@ -220,6 +220,30 @@ pub struct BrowseResponse {
 }
 
 // ============================================================================
+// SNAPSHOT AGGRÉGÉ
+// ============================================================================
+
+/// Alias de lisibilité pour les view-models déjà existants.
+#[cfg(feature = "pmoserver")]
+pub type RendererStateView = RendererState;
+#[cfg(feature = "pmoserver")]
+pub type QueueSnapshotView = QueueSnapshot;
+#[cfg(feature = "pmoserver")]
+pub type RendererBindingView = AttachedPlaylistInfo;
+
+/// Instantané complet et cohérent d'un renderer.
+///
+/// Le ControlPoint est la source de vérité : ce snapshot agrège l'état,
+/// la queue et le binding observés atomiquement côté serveur.
+#[cfg(feature = "pmoserver")]
+#[derive(Clone, Debug, Serialize, ToSchema)]
+pub struct FullRendererSnapshot {
+    pub state: RendererStateView,
+    pub queue: QueueSnapshotView,
+    pub binding: Option<RendererBindingView>,
+}
+
+// ============================================================================
 // PAYLOADS DE COMMANDES
 // ============================================================================
 
@@ -239,6 +263,9 @@ pub struct AttachPlaylistRequest {
     pub server_id: String,
     /// ID du container playlist
     pub container_id: String,
+    /// Si true, démarre la lecture automatiquement après le refresh
+    #[serde(default)]
+    pub auto_play: bool,
 }
 
 /// Requête pour lire ou ajouter du contenu à la queue

@@ -9,6 +9,10 @@
 //! - GET /api/control/events/renderers - Événements renderers uniquement
 //! - GET /api/control/events/servers - Événements serveurs uniquement
 //! - GET /api/control/events - Tous les événements (agrégés)
+//!
+//! ⚠️ Les payloads SSE servent uniquement de signaux de rafraîchissement :
+//! l'UI doit toujours refetch l'instantané complet auprès du ControlPoint,
+//! seule source de vérité de l'état renderer.
 
 #[cfg(feature = "pmoserver")]
 use crate::PlaybackState;

@@ -11,11 +11,10 @@ use crate::media_server::{MediaBrowser, MediaEntry, MediaResource, MusicServer, 
 use crate::model::{RendererCapabilities, RendererId, RendererProtocol};
 #[cfg(feature = "pmoserver")]
 use crate::openapi::{
-    AttachPlaylistRequest, AttachedPlaylistInfo, BrowseResponse, ContainerEntry,
-    CurrentTrackMetadata, ErrorResponse, MediaServerSummary, OpenHomePlaylistAddRequest,
-    OpenHomePlaylistSnapshot, PlayContentRequest, QueueItem, QueueSnapshot,
-    RendererCapabilitiesSummary, RendererProtocolSummary, RendererState, RendererSummary,
-    SuccessResponse, VolumeSetRequest,
+    AttachPlaylistRequest, AttachedPlaylistInfo, BrowseResponse, ContainerEntry, ErrorResponse,
+    FullRendererSnapshot, MediaServerSummary, OpenHomePlaylistAddRequest, OpenHomePlaylistSnapshot,
+    PlayContentRequest, QueueItem, QueueSnapshot, RendererCapabilitiesSummary,
+    RendererProtocolSummary, RendererState, RendererSummary, SuccessResponse, VolumeSetRequest,
 };
 #[cfg(feature = "pmoserver")]
 use crate::playback_queue::PlaybackItem;
@@ -64,10 +63,6 @@ const QUEUE_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 // Timeout for attach playlist (includes browse + cache + queue update)
 #[cfg(feature = "pmoserver")]
 const ATTACH_PLAYLIST_TIMEOUT: Duration = Duration::from_secs(60);
-
-// Timeout for renderer state queries (multiple SOAP calls)
-#[cfg(feature = "pmoserver")]
-const STATE_QUERY_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// État partagé pour l'API ControlPoint
 #[cfg(feature = "pmoserver")]
@@ -137,168 +132,38 @@ async fn get_renderer_state(
     Path(renderer_id): Path<String>,
 ) -> Result<Json<RendererState>, (StatusCode, Json<ErrorResponse>)> {
     let rid = RendererId(renderer_id.clone());
-
-    let renderer = state
+    let snapshot = state
         .control_point
-        .music_renderer_by_id(&rid)
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("Renderer {} not found", renderer_id),
-                }),
-            )
-        })?;
+        .renderer_full_snapshot(&rid)
+        .map_err(|err| map_snapshot_error(renderer_id, err))?;
 
-    let info = renderer.info();
-    let renderer = renderer.clone();
+    Ok(Json(snapshot.state))
+}
 
-    // Spawn blocking task for all SOAP calls to avoid blocking Tokio runtime
-    let state_task = tokio::task::spawn_blocking(move || {
-        // État de transport
-        let transport_state = renderer
-            .playback_state()
-            .ok()
-            .map(state_to_string)
-            .unwrap_or_else(|| "UNKNOWN".to_string());
-
-        // Position, durée et métadonnées depuis GetPositionInfo
-        let position_info = renderer.playback_position().ok();
-
-        let (position_ms, duration_ms) = position_info
-            .as_ref()
-            .and_then(|pos| {
-                let position = parse_hms_to_ms(pos.rel_time.as_deref());
-                let duration = parse_hms_to_ms(pos.track_duration.as_deref());
-                Some((position, duration))
-            })
-            .unwrap_or((None, None));
-
-        // Extraire les métadonnées depuis le XML track_metadata si disponible
-        let soap_metadata = position_info.and_then(|pos| {
-            match &pos.track_metadata {
-                Some(xml) => {
-                    debug!("GetPositionInfo returned metadata XML: {}", xml);
-                    use crate::openhome_client::parse_track_metadata_from_didl;
-                    match parse_track_metadata_from_didl(xml) {
-                        Some(metadata) => {
-                            debug!("Successfully parsed metadata: title={:?}, artist={:?}",
-                                metadata.title, metadata.artist);
-                            Some(metadata)
-                        }
-                        None => {
-                            debug!("Failed to parse metadata XML");
-                            None
-                        }
-                    }
-                }
-                None => {
-                    debug!("GetPositionInfo returned no metadata XML");
-                    None
-                }
-            }
-        });
-
-        // Volume et mute
-        let volume = renderer
-            .volume()
-            .ok()
-            .and_then(|v| u8::try_from(v).ok());
-        let mute = renderer.mute().ok();
-
-        (transport_state, position_ms, duration_ms, volume, mute, soap_metadata)
-    });
-
-    let (transport_state, position_ms, duration_ms, volume, mute, soap_metadata) =
-        time::timeout(STATE_QUERY_TIMEOUT, state_task)
-            .await
-            .map_err(|_| {
-                warn!(
-                    "State query for renderer {} exceeded {:?}",
-                    renderer_id, STATE_QUERY_TIMEOUT
-                );
-                (
-                    StatusCode::GATEWAY_TIMEOUT,
-                    Json(ErrorResponse {
-                        error: format!(
-                            "State query timed out after {}s",
-                            STATE_QUERY_TIMEOUT.as_secs()
-                        ),
-                    }),
-                )
-            })?
-            .map_err(|e| {
-                warn!("Task join error during state query: {}", e);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: format!("Internal task error: {}", e),
-                    }),
-                )
-            })?;
-
-    // Queue (non-blocking, local data)
-    // Pour les renderers OpenHome, on utilise la playlist native au lieu de la PlaybackQueue
-    let queue_len = state
+#[cfg(feature = "pmoserver")]
+#[utoipa::path(
+    get,
+    path = "/renderers/{renderer_id}/full",
+    params(
+        ("renderer_id" = String, Path, description = "ID unique du renderer")
+    ),
+    responses(
+        (status = 200, description = "Snapshot complet du renderer", body = FullRendererSnapshot),
+        (status = 404, description = "Renderer non trouvé", body = ErrorResponse)
+    ),
+    tag = "control"
+)]
+async fn get_renderer_full_snapshot(
+    State(state): State<ControlPointState>,
+    Path(renderer_id): Path<String>,
+) -> Result<Json<FullRendererSnapshot>, (StatusCode, Json<ErrorResponse>)> {
+    let rid = RendererId(renderer_id.clone());
+    let snapshot = state
         .control_point
-        .get_openhome_playlist_len(&rid)
-        .ok()
-        .or_else(|| {
-            state
-                .control_point
-                .get_queue_snapshot(&rid)
-                .ok()
-                .map(|q| q.len())
-        })
-        .unwrap_or(0);
+        .renderer_full_snapshot(&rid)
+        .map_err(|err| map_snapshot_error(renderer_id, err))?;
 
-    // Playlist binding (non-blocking, local data)
-    let attached_playlist = state
-        .control_point
-        .current_queue_playlist_binding(&rid)
-        .map(
-            |(server_id, container_id, has_seen_update)| AttachedPlaylistInfo {
-                server_id: server_id.0,
-                container_id,
-                has_seen_update,
-            },
-        );
-
-    // Current track metadata:
-    // 1. Essayer d'abord le snapshot en mémoire (rapide, mis à jour par SSE)
-    // 2. Si None et qu'on a des métadonnées SOAP fraîches, les utiliser
-    let snapshot_metadata = state
-        .control_point
-        .get_current_track_metadata(&rid);
-
-    debug!(
-        "Renderer {} - snapshot_metadata: {:?}, soap_metadata: {:?}",
-        renderer_id,
-        snapshot_metadata.as_ref().map(|m| (&m.title, &m.artist)),
-        soap_metadata.as_ref().map(|m| (&m.title, &m.artist))
-    );
-
-    let current_track = snapshot_metadata
-        .or(soap_metadata)
-        .map(|metadata| CurrentTrackMetadata {
-            title: metadata.title,
-            artist: metadata.artist,
-            album: metadata.album,
-            album_art_uri: metadata.album_art_uri,
-        });
-
-    Ok(Json(RendererState {
-        id: info.id.0.clone(),
-        friendly_name: info.friendly_name.clone(),
-        transport_state,
-        position_ms,
-        duration_ms,
-        volume,
-        mute,
-        queue_len,
-        attached_playlist,
-        current_track,
-    }))
+    Ok(Json(snapshot))
 }
 
 /// GET /control/renderers/{renderer_id}/queue - Récupère la queue d'un renderer
@@ -324,53 +189,12 @@ async fn get_renderer_queue(
     Path(renderer_id): Path<String>,
 ) -> Result<Json<QueueSnapshot>, (StatusCode, Json<ErrorResponse>)> {
     let rid = RendererId(renderer_id.clone());
-
-    // Verify renderer exists in registry
-    let _renderer = state
+    let snapshot = state
         .control_point
-        .music_renderer_by_id(&rid)
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("Renderer {} not found", renderer_id),
-                }),
-            )
-        })?;
+        .renderer_full_snapshot(&rid)
+        .map_err(|err| map_snapshot_error(renderer_id, err))?;
 
-    // Get queue snapshot - if renderer not yet in runtime (just discovered),
-    // return empty queue instead of error
-    let (items, current_index) = state
-        .control_point
-        .get_full_queue_snapshot(&rid)
-        .unwrap_or_else(|_| {
-            debug!(
-                renderer = renderer_id.as_str(),
-                "Renderer not yet initialized in runtime, returning empty queue"
-            );
-            (vec![], None)
-        });
-
-    let queue_items: Vec<QueueItem> = items
-        .into_iter()
-        .enumerate()
-        .map(|(index, item)| QueueItem {
-            index,
-            uri: item.uri,
-            title: item.title,
-            artist: item.artist,
-            album: item.album,
-            album_art_uri: item.album_art_uri,
-            server_id: item.server_id.map(|s| s.0),
-            object_id: item.object_id,
-        })
-        .collect();
-
-    Ok(Json(QueueSnapshot {
-        renderer_id,
-        items: queue_items,
-        current_index,
-    }))
+    Ok(Json(snapshot.queue))
 }
 
 /// GET /control/renderers/{renderer_id}/binding - Récupère le binding playlist
@@ -391,24 +215,17 @@ async fn get_renderer_binding(
     State(state): State<ControlPointState>,
     Path(renderer_id): Path<String>,
 ) -> Result<Json<Option<AttachedPlaylistInfo>>, (StatusCode, Json<ErrorResponse>)> {
-    let rid = RendererId(renderer_id);
-
-    let binding = state
+    let rid = RendererId(renderer_id.clone());
+    let snapshot = state
         .control_point
-        .current_queue_playlist_binding(&rid)
-        .map(
-            |(server_id, container_id, has_seen_update)| AttachedPlaylistInfo {
-                server_id: server_id.0,
-                container_id,
-                has_seen_update,
-            },
-        );
+        .renderer_full_snapshot(&rid)
+        .map_err(|err| map_snapshot_error(renderer_id, err))?;
 
-    Ok(Json(binding))
+    Ok(Json(snapshot.binding))
 }
 
 // ============================================================================
-// HANDLERS - CONTRÔLE TRANSPORT
+// HANDLERS - TRANSPORT CONTROLS
 // ============================================================================
 
 /// POST /control/renderers/{renderer_id}/play - Démarre la lecture
@@ -431,7 +248,6 @@ async fn play_renderer(
     Path(renderer_id): Path<String>,
 ) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
     let rid = RendererId(renderer_id.clone());
-
     let renderer = state
         .control_point
         .music_renderer_by_id(&rid)
@@ -508,7 +324,6 @@ async fn pause_renderer(
     Path(renderer_id): Path<String>,
 ) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
     let rid = RendererId(renderer_id.clone());
-
     let renderer = state
         .control_point
         .music_renderer_by_id(&rid)
@@ -585,9 +400,7 @@ async fn stop_renderer(
     Path(renderer_id): Path<String>,
 ) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
     let rid = RendererId(renderer_id.clone());
-
-    // Verify renderer exists
-    let _renderer = state
+    state
         .control_point
         .music_renderer_by_id(&rid)
         .ok_or_else(|| {
@@ -599,9 +412,9 @@ async fn stop_renderer(
             )
         })?;
 
-    let control_point = state.control_point.clone();
-    let rid_clone = rid.clone();
-    let stop_task = tokio::task::spawn_blocking(move || control_point.user_stop(&rid_clone));
+    let control_point = Arc::clone(&state.control_point);
+    let rid_for_task = rid.clone();
+    let stop_task = tokio::task::spawn_blocking(move || control_point.user_stop(&rid_for_task));
 
     time::timeout(TRANSPORT_COMMAND_TIMEOUT, stop_task)
         .await
@@ -644,7 +457,7 @@ async fn stop_renderer(
     }))
 }
 
-/// POST /control/renderers/{renderer_id}/resume - Reprend la lecture depuis le morceau actuel
+/// POST /control/renderers/{renderer_id}/resume - Reprend la lecture depuis la queue
 #[cfg(feature = "pmoserver")]
 #[utoipa::path(
     post,
@@ -664,25 +477,36 @@ async fn resume_renderer(
     Path(renderer_id): Path<String>,
 ) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
     let rid = RendererId(renderer_id.clone());
-    let control_point = state.control_point.clone();
-    let rid_clone = rid.clone();
+    state
+        .control_point
+        .music_renderer_by_id(&rid)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("Renderer {} not found", renderer_id),
+                }),
+            )
+        })?;
 
+    let control_point = Arc::clone(&state.control_point);
+    let rid_for_task = rid.clone();
     let resume_task =
-        tokio::task::spawn_blocking(move || control_point.play_current_from_queue(&rid_clone));
+        tokio::task::spawn_blocking(move || control_point.play_current_from_queue(&rid_for_task));
 
-    time::timeout(QUEUE_COMMAND_TIMEOUT, resume_task)
+    time::timeout(TRANSPORT_COMMAND_TIMEOUT, resume_task)
         .await
         .map_err(|_| {
             warn!(
                 "Resume command for renderer {} exceeded {:?}",
-                renderer_id, QUEUE_COMMAND_TIMEOUT
+                renderer_id, TRANSPORT_COMMAND_TIMEOUT
             );
             (
                 StatusCode::GATEWAY_TIMEOUT,
                 Json(ErrorResponse {
                     error: format!(
                         "Resume command timed out after {}s",
-                        QUEUE_COMMAND_TIMEOUT.as_secs()
+                        TRANSPORT_COMMAND_TIMEOUT.as_secs()
                     ),
                 }),
             )
@@ -697,21 +521,24 @@ async fn resume_renderer(
             )
         })?
         .map_err(|e| {
-            warn!("Failed to resume renderer {}: {}", renderer_id, e);
+            warn!(
+                "Failed to resume playback for renderer {}: {}",
+                renderer_id, e
+            );
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
-                    error: format!("Failed to resume: {}", e),
+                    error: format!("Failed to resume playback: {}", e),
                 }),
             )
         })?;
 
     Ok(Json(SuccessResponse {
-        message: "Playback resumed from current track".to_string(),
+        message: "Playback resumed".to_string(),
     }))
 }
 
-/// POST /control/renderers/{renderer_id}/next - Passe au morceau suivant de la queue
+/// POST /control/renderers/{renderer_id}/next - Passe au morceau suivant
 #[cfg(feature = "pmoserver")]
 #[utoipa::path(
     post,
@@ -720,7 +547,7 @@ async fn resume_renderer(
         ("renderer_id" = String, Path, description = "ID unique du renderer")
     ),
     responses(
-        (status = 200, description = "Passage au suivant", body = SuccessResponse),
+        (status = 200, description = "Piste suivante lancée", body = SuccessResponse),
         (status = 404, description = "Renderer non trouvé", body = ErrorResponse),
         (status = 500, description = "Erreur lors de l'exécution", body = ErrorResponse)
     ),
@@ -731,25 +558,36 @@ async fn next_renderer(
     Path(renderer_id): Path<String>,
 ) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
     let rid = RendererId(renderer_id.clone());
-    let control_point = state.control_point.clone();
-    let rid_clone = rid.clone();
+    state
+        .control_point
+        .music_renderer_by_id(&rid)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("Renderer {} not found", renderer_id),
+                }),
+            )
+        })?;
 
+    let control_point = Arc::clone(&state.control_point);
+    let rid_for_task = rid.clone();
     let next_task =
-        tokio::task::spawn_blocking(move || control_point.play_next_from_queue(&rid_clone));
+        tokio::task::spawn_blocking(move || control_point.play_next_from_queue(&rid_for_task));
 
-    time::timeout(QUEUE_COMMAND_TIMEOUT, next_task)
+    time::timeout(TRANSPORT_COMMAND_TIMEOUT, next_task)
         .await
         .map_err(|_| {
             warn!(
                 "Next command for renderer {} exceeded {:?}",
-                renderer_id, QUEUE_COMMAND_TIMEOUT
+                renderer_id, TRANSPORT_COMMAND_TIMEOUT
             );
             (
                 StatusCode::GATEWAY_TIMEOUT,
                 Json(ErrorResponse {
                     error: format!(
                         "Next command timed out after {}s",
-                        QUEUE_COMMAND_TIMEOUT.as_secs()
+                        TRANSPORT_COMMAND_TIMEOUT.as_secs()
                     ),
                 }),
             )
@@ -765,25 +603,21 @@ async fn next_renderer(
         })?
         .map_err(|e| {
             warn!(
-                "Failed to advance queue for renderer {}: {}",
+                "Failed to skip to next track for renderer {}: {}",
                 renderer_id, e
             );
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
-                    error: format!("Failed to advance queue: {}", e),
+                    error: format!("Failed to skip to next track: {}", e),
                 }),
             )
         })?;
 
     Ok(Json(SuccessResponse {
-        message: "Advanced to next track".to_string(),
+        message: "Skipped to next track".to_string(),
     }))
 }
-
-// ============================================================================
-// HANDLERS - VOLUME
-// ============================================================================
 
 /// POST /control/renderers/{renderer_id}/volume/set - Définit le volume
 #[cfg(feature = "pmoserver")]
@@ -1149,7 +983,7 @@ async fn attach_playlist_binding(
 
     // Spawn blocking task and wait for completion with timeout
     let attach_task = tokio::task::spawn_blocking(move || {
-        control_point.attach_queue_to_playlist(&rid, sid, container_id);
+        control_point.attach_queue_to_playlist_with_options(&rid, sid, container_id, req.auto_play)
     });
 
     time::timeout(ATTACH_PLAYLIST_TIMEOUT, attach_task)
@@ -1177,12 +1011,28 @@ async fn attach_playlist_binding(
                     error: format!("Internal task error: {}", e),
                 }),
             )
+        })?
+        .map_err(|e| {
+            warn!(
+                renderer = renderer_id.as_str(),
+                server = req.server_id.as_str(),
+                container = req.container_id.as_str(),
+                error = %e,
+                "Failed to attach playlist"
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to attach playlist: {}", e),
+                }),
+            )
         })?;
 
     debug!(
         renderer = renderer_id.as_str(),
         server = req.server_id.as_str(),
         container = req.container_id.as_str(),
+        auto_play = req.auto_play,
         "Playlist attached via HTTP API"
     );
 
@@ -1541,7 +1391,7 @@ async fn play_content(
     let object_id_for_log = object_id.clone();
 
     // Get renderer to verify it exists
-    let renderer = state
+    state
         .control_point
         .music_renderer_by_id(&rid)
         .ok_or_else(|| {
@@ -1564,34 +1414,33 @@ async fn play_content(
             return Err(anyhow::anyhow!("No playable content found"));
         }
 
-        // Clear queue
-        control_point.clear_queue(&rid)?;
-
-        // Enqueue items
-        control_point.enqueue_items(&rid, items.clone())?;
-
-        // Start playback
-        // Pour les renderers OpenHome, play_current_from_queue() va gérer automatiquement
-        // la lecture depuis la playlist native si elle existe
-        control_point.play_current_from_queue(&rid)?;
-
-        // Auto-bind if playing a container (playlist/album)
-        // Rule: if multiple items, it's a container that should be bound
-        // We use _without_refresh because the queue was already populated by enqueue_items above
         if items.len() > 1 {
             debug!(
                 renderer = rid.0.as_str(),
                 server = sid.0.as_str(),
                 object = object_id.as_str(),
                 item_count = items.len(),
-                "Auto-binding playlist to renderer queue (without initial refresh)"
+                "Auto-binding playlist to renderer queue (auto_play = true)"
             );
-            control_point.attach_queue_to_playlist_without_refresh(
+            control_point.attach_queue_to_playlist_with_options(
                 &rid,
                 sid.clone(),
                 object_id.clone(),
-            );
+                true,
+            )?;
+            return Ok(());
         }
+
+        // Clear queue
+        control_point.clear_queue(&rid)?;
+
+        // Enqueue items
+        control_point.enqueue_items(&rid, items)?;
+
+        // Start playback
+        // Pour les renderers OpenHome, play_current_from_queue() va gérer automatiquement
+        // la lecture depuis la playlist native si elle existe
+        control_point.play_current_from_queue(&rid)?;
 
         Ok::<(), anyhow::Error>(())
     });
@@ -1911,6 +1760,24 @@ async fn browse_container(
 // ============================================================================
 
 #[cfg(feature = "pmoserver")]
+fn map_snapshot_error(
+    renderer_id: String,
+    err: anyhow::Error,
+) -> (StatusCode, Json<ErrorResponse>) {
+    warn!(
+        renderer = renderer_id.as_str(),
+        error = %err,
+        "Failed to build renderer snapshot"
+    );
+    (
+        StatusCode::NOT_FOUND,
+        Json(ErrorResponse {
+            error: format!("Renderer {} not found", renderer_id),
+        }),
+    )
+}
+
+#[cfg(feature = "pmoserver")]
 fn map_openhome_error(
     renderer_id: &RendererId,
     err: anyhow::Error,
@@ -2063,21 +1930,6 @@ fn state_to_string(state: crate::PlaybackState) -> String {
     }
 }
 
-#[cfg(feature = "pmoserver")]
-fn parse_hms_to_ms(hms: Option<&str>) -> Option<u64> {
-    let hms = hms?;
-    let parts: Vec<&str> = hms.split(':').collect();
-    if parts.len() != 3 {
-        return None;
-    }
-
-    let hours: u64 = parts[0].parse().ok()?;
-    let minutes: u64 = parts[1].parse().ok()?;
-    let seconds: u64 = parts[2].parse().ok()?;
-
-    Some((hours * 3600 + minutes * 60 + seconds) * 1000)
-}
-
 // ============================================================================
 // ROUTER & TRAIT
 // ============================================================================
@@ -2089,6 +1941,10 @@ pub fn create_api_router(state: ControlPointState, control_point: Arc<ControlPoi
         // Renderers
         .route("/renderers", get(list_renderers))
         .route("/renderers/{renderer_id}", get(get_renderer_state))
+        .route(
+            "/renderers/{renderer_id}/full",
+            get(get_renderer_full_snapshot),
+        )
         .route("/renderers/{renderer_id}/queue", get(get_renderer_queue))
         .route(
             "/renderers/{renderer_id}/binding",

@@ -127,11 +127,9 @@ fn main() -> Result<()> {
 
     // Attach queue to playlist container if we found one
     if let Some(container_id) = bound_container_id {
-        control_point.attach_queue_to_playlist(
-            &renderer_id,
-            server_info.id.clone(),
-            container_id.clone(),
-        );
+        control_point
+            .attach_queue_to_playlist(&renderer_id, server_info.id.clone(), container_id.clone())
+            .context("Failed to attach queue to playlist container")?;
         println!(
             "✓ Queue attached to playlist container {} on server {}",
             container_id, server_info.friendly_name

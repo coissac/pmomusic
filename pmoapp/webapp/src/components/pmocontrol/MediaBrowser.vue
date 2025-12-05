@@ -26,7 +26,6 @@ const {
   addToQueue,
   attachAndPlayPlaylist,
   attachPlaylist,
-  fetchQueue
 } = useRenderers()
 const uiStore = useUIStore()
 
@@ -127,9 +126,7 @@ async function handlePlayContainer(containerId: string, rendererId: string) {
 
 async function handleQueueContainer(containerId: string, rendererId: string) {
   try {
-    // Attacher la playlist (sans démarrer la lecture)
     await attachPlaylist(rendererId, props.serverId, containerId)
-    await fetchQueue(rendererId, true)
     uiStore.notifySuccess('Playlist attachée à la queue !')
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Erreur inconnue'

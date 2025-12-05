@@ -77,6 +77,12 @@ export interface QueueSnapshot {
   current_index: number | null  // Index de la piste en cours (null si rien en lecture)
 }
 
+export interface FullRendererSnapshot {
+  state: RendererState
+  queue: QueueSnapshot
+  binding: AttachedPlaylistInfo | null
+}
+
 // ============================================================================
 // OPENHOME PLAYLIST
 // ============================================================================
@@ -141,6 +147,7 @@ export interface VolumeSetRequest {
 export interface AttachPlaylistRequest {
   server_id: string
   container_id: string
+  auto_play?: boolean
 }
 
 export interface PlayContentRequest {
