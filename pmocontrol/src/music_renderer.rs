@@ -6,11 +6,17 @@
 //! renderers through this type so that transport, volume, and state queries
 //! stay backend-neutral.
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use crate::capabilities::{PlaybackPositionInfo, PlaybackStatus};
+use crate::control_point::music_queue::MusicQueue;
+use crate::control_point::openhome_queue::didl_id_from_metadata;
+use crate::control_point::RendererRuntimeStateMut;
+use crate::media_server::ServerId;
 use crate::model::{RendererId, RendererInfo, RendererProtocol};
+use crate::openhome_client::parse_track_metadata_from_didl;
 use crate::openhome_playlist::OpenHomePlaylistSnapshot;
+use crate::queue_backend::PlaybackItem;
 use crate::{
     ArylicTcpRenderer, DeviceRegistry, LinkPlayRenderer, OpenHomeRenderer, PlaybackPosition,
     PlaybackState, TransportControl, UpnpRenderer, VolumeControl,
@@ -44,6 +50,27 @@ pub(crate) fn op_not_supported(op: &str, backend: &str) -> anyhow::Error {
         op,
         backend
     )
+}
+
+#[derive(Clone, Debug)]
+pub struct RendererRuntimeState {
+    pub queue: MusicQueue,
+}
+
+pub trait OpenHomeQueueProvider: Send + Sync + 'static {
+    fn renderer_state(&self, renderer_id: &RendererId) -> Result<RendererRuntimeState>;
+    fn renderer_state_mut<'a>(
+        &'a self,
+        renderer_id: &RendererId,
+    ) -> Result<RendererRuntimeStateMut<'a>>;
+}
+
+static OPENHOME_QUEUE_PROVIDER: OnceLock<Arc<dyn OpenHomeQueueProvider>> = OnceLock::new();
+
+pub fn set_openhome_queue_provider(
+    provider: Arc<dyn OpenHomeQueueProvider>,
+) {
+    let _ = OPENHOME_QUEUE_PROVIDER.set(provider);
 }
 
 impl MusicRenderer {
@@ -162,6 +189,21 @@ impl MusicRenderer {
     }
 
     pub fn openhome_playlist_snapshot(&self) -> Result<OpenHomePlaylistSnapshot> {
+        if let Some(provider) = OPENHOME_QUEUE_PROVIDER.get() {
+            let state = provider.renderer_state(self.id())?;
+            match &state.queue {
+                MusicQueue::OpenHome(queue) => queue.openhome_playlist_snapshot(),
+                _ => Err(op_not_supported(
+                    "openhome_playlist_snapshot",
+                    self.unsupported_backend_name(),
+                )),
+            }
+        } else {
+            self.fetch_openhome_playlist_snapshot()
+        }
+    }
+
+    pub(crate) fn fetch_openhome_playlist_snapshot(&self) -> Result<OpenHomePlaylistSnapshot> {
         match self {
             MusicRenderer::OpenHome(renderer) => renderer.snapshot_openhome_playlist(),
             _ => Err(op_not_supported(
@@ -172,26 +214,56 @@ impl MusicRenderer {
     }
 
     pub fn openhome_playlist_len(&self) -> Result<usize> {
-        match self {
-            MusicRenderer::OpenHome(renderer) => renderer.openhome_playlist_len(),
-            _ => Err(op_not_supported(
-                "openhome_playlist_len",
-                self.unsupported_backend_name(),
-            )),
+        if let Some(provider) = OPENHOME_QUEUE_PROVIDER.get() {
+            let state = provider.renderer_state(self.id())?;
+            match &state.queue {
+                MusicQueue::OpenHome(queue) => Ok(queue.len()),
+                _ => Err(op_not_supported(
+                    "openhome_playlist_len",
+                    self.unsupported_backend_name(),
+                )),
+            }
+        } else {
+            Ok(self.fetch_openhome_playlist_snapshot()?.tracks.len())
         }
     }
 
     pub fn openhome_playlist_ids(&self) -> Result<Vec<u32>> {
-        match self {
-            MusicRenderer::OpenHome(renderer) => renderer.openhome_playlist_ids(),
-            _ => Err(op_not_supported(
-                "openhome_playlist_ids",
-                self.unsupported_backend_name(),
-            )),
+        if let Some(provider) = OPENHOME_QUEUE_PROVIDER.get() {
+            let state = provider.renderer_state(self.id())?;
+            match &state.queue {
+                MusicQueue::OpenHome(queue) => Ok(queue.openhome_track_ids()),
+                _ => Err(op_not_supported(
+                    "openhome_playlist_ids",
+                    self.unsupported_backend_name(),
+                )),
+            }
+        } else {
+            let snapshot = self.fetch_openhome_playlist_snapshot()?;
+            Ok(snapshot
+                .tracks
+                .into_iter()
+                .map(|track| track.id)
+                .collect())
         }
     }
 
     pub fn openhome_playlist_clear(&self) -> Result<()> {
+        if let Some(provider) = OPENHOME_QUEUE_PROVIDER.get() {
+            let mut state = provider.renderer_state_mut(self.id())?;
+            match &mut *state.queue {
+                MusicQueue::OpenHome(queue) => queue.clear(),
+                _ => Err(op_not_supported(
+                    "openhome_playlist_clear",
+                    self.unsupported_backend_name(),
+                )),
+            }
+        } else {
+            self.fetch_openhome_playlist_clear()
+        }
+    }
+
+    pub(crate) fn fetch_openhome_playlist_clear(&self) -> Result<()> {
         match self {
             MusicRenderer::OpenHome(renderer) => renderer.clear_openhome_playlist(),
             _ => Err(op_not_supported(
@@ -202,6 +274,55 @@ impl MusicRenderer {
     }
 
     pub fn openhome_playlist_add_track(
+        &self,
+        uri: &str,
+        metadata: &str,
+        after_id: Option<u32>,
+        play: bool,
+    ) -> Result<u32> {
+        if let Some(provider) = OPENHOME_QUEUE_PROVIDER.get() {
+            let mut state = provider.renderer_state_mut(self.id())?;
+            match &mut *state.queue {
+                MusicQueue::OpenHome(queue) => {
+                    let playback_item = Self::playback_item_from_params(self.id(), uri, metadata)?;
+                    queue.add_playback_item(playback_item, after_id, play)
+                }
+                _ => Err(op_not_supported(
+                    "openhome_playlist_add_track",
+                    self.unsupported_backend_name(),
+                )),
+            }
+        } else {
+            self.fetch_openhome_playlist_add_track(uri, metadata, after_id, play)
+        }
+    }
+
+    pub fn openhome_playlist_play_id(&self, id: u32) -> Result<()> {
+        if let Some(provider) = OPENHOME_QUEUE_PROVIDER.get() {
+            let mut state = provider.renderer_state_mut(self.id())?;
+            match &mut *state.queue {
+                MusicQueue::OpenHome(queue) => queue.select_track_id(id),
+                _ => Err(op_not_supported(
+                    "openhome_playlist_play_id",
+                    self.unsupported_backend_name(),
+                )),
+            }
+        } else {
+            self.fetch_openhome_playlist_play_id(id)
+        }
+    }
+
+    fn unsupported_backend_name(&self) -> &'static str {
+        match self {
+            MusicRenderer::Upnp(_) => "UPnP",
+            MusicRenderer::OpenHome(_) => "OpenHome",
+            MusicRenderer::LinkPlay(_) => "LinkPlay",
+            MusicRenderer::ArylicTcp(_) => "ArylicTcp",
+            MusicRenderer::HybridUpnpArylic { .. } => "HybridUpnpArylic",
+        }
+    }
+
+    fn fetch_openhome_playlist_add_track(
         &self,
         uri: &str,
         metadata: &str,
@@ -219,7 +340,7 @@ impl MusicRenderer {
         }
     }
 
-    pub fn openhome_playlist_play_id(&self, id: u32) -> Result<()> {
+    fn fetch_openhome_playlist_play_id(&self, id: u32) -> Result<()> {
         match self {
             MusicRenderer::OpenHome(renderer) => renderer.play_openhome_track_id(id),
             _ => Err(op_not_supported(
@@ -229,14 +350,20 @@ impl MusicRenderer {
         }
     }
 
-    fn unsupported_backend_name(&self) -> &'static str {
-        match self {
-            MusicRenderer::Upnp(_) => "UPnP",
-            MusicRenderer::OpenHome(_) => "OpenHome",
-            MusicRenderer::LinkPlay(_) => "LinkPlay",
-            MusicRenderer::ArylicTcp(_) => "ArylicTcp",
-            MusicRenderer::HybridUpnpArylic { .. } => "HybridUpnpArylic",
-        }
+    fn playback_item_from_params(
+        renderer_id: &RendererId,
+        uri: &str,
+        metadata_xml: &str,
+    ) -> Result<PlaybackItem> {
+        let metadata = parse_track_metadata_from_didl(metadata_xml);
+        let didl_id = didl_id_from_metadata(metadata_xml)
+            .unwrap_or_else(|| format!("openhome:{}", renderer_id.0));
+        Ok(PlaybackItem {
+            media_server_id: ServerId(format!("openhome:{}", renderer_id.0)),
+            didl_id,
+            uri: uri.to_string(),
+            metadata,
+        })
     }
 }
 

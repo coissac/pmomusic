@@ -1,0 +1,13 @@
+#!/bin/bash
+
+TARGET=$1
+DEST=$(basename $TARGET)
+VERSION=$2
+
+find $TARGET -type f -not -name '.*' \
+  | while read filename ; do 
+      echo "=============== $filename ============"
+	  cat $filename 
+	  echo "========= End of $filename ==========="
+	  echo ""
+done > $(printf "%s_%03d.txt" $DEST $VERSION)

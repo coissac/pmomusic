@@ -8,10 +8,10 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use pmocontrol::model::TrackMetadata;
 use pmocontrol::{
-    ControlPoint, DeviceRegistryRead, MediaBrowser, MediaEntry, MediaResource, MediaServerEvent,
-    MediaServerInfo, MusicRenderer, MusicServer, PlaybackItem, PlaybackPosition,
-    PlaybackPositionInfo, RendererInfo, RendererProtocol,
+    ControlPoint, DeviceRegistryRead, MediaBrowser, MediaEntry, MediaServerEvent, MediaServerInfo,
+    MusicRenderer, MusicServer, PlaybackItem, PlaybackPosition, PlaybackPositionInfo, RendererInfo,
 };
 
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
@@ -217,11 +217,13 @@ fn main() -> Result<()> {
                                     "  → Queue length after refresh: {} items",
                                     fresh_snapshot.len()
                                 );
-                                if !fresh_snapshot.is_empty() {
-                                    println!(
-                                        "  → First item: {}",
-                                        fresh_snapshot[0].title.as_deref().unwrap_or("<no title>")
-                                    );
+                                if let Some(first) = fresh_snapshot.first() {
+                                    let label = first
+                                        .metadata
+                                        .as_ref()
+                                        .and_then(|meta| meta.title.as_deref())
+                                        .unwrap_or("<no title>");
+                                    println!("  → First item: {label}");
                                 }
                             }
                         }
@@ -535,30 +537,33 @@ fn playback_item_from_entry(server: &MusicServer, entry: &MediaEntry) -> Option<
     if entry.title.to_ascii_lowercase().contains("live stream") {
         return None;
     }
-    let resource = entry.resources.iter().find(|res| is_audio_resource(res))?;
-    let mut item = PlaybackItem::new(resource.uri.clone());
-    item.title = Some(entry.title.clone());
-    item.server_id = Some(server.id().clone());
-    item.object_id = Some(entry.id.clone());
-    Some(item)
-}
-
-fn is_audio_resource(res: &MediaResource) -> bool {
-    let lower = res.protocol_info.to_ascii_lowercase();
-    if lower.contains("audio/") {
-        return true;
-    }
-    lower
-        .split(':')
-        .nth(2)
-        .map(|mime| mime.starts_with("audio/"))
-        .unwrap_or(false)
+    let resource = entry.resources.iter().find(|res| res.is_audio())?;
+    let metadata = TrackMetadata {
+        title: Some(entry.title.clone()),
+        artist: entry.artist.clone(),
+        album: entry.album.clone(),
+        genre: entry.genre.clone(),
+        album_art_uri: entry.album_art_uri.clone(),
+        date: entry.date.clone(),
+        track_number: entry.track_number.clone(),
+        creator: entry.creator.clone(),
+    };
+    Some(PlaybackItem {
+        media_server_id: server.id().clone(),
+        didl_id: entry.id.clone(),
+        uri: resource.uri.clone(),
+        metadata: Some(metadata),
+    })
 }
 
 fn print_queue_snapshot(items: &[PlaybackItem]) {
     println!("Current queue snapshot ({} items):", items.len());
     for (idx, item) in items.iter().take(10).enumerate() {
-        let label = item.title.as_deref().unwrap_or_else(|| item.uri.as_str());
+        let label = item
+            .metadata
+            .as_ref()
+            .and_then(|meta| meta.title.as_deref())
+            .unwrap_or_else(|| item.uri.as_str());
         println!("  [{}] {}", idx, label);
     }
     if items.len() > 10 {
@@ -572,8 +577,9 @@ fn print_queue_snapshot(items: &[PlaybackItem]) {
 fn current_track_title(item: Option<&PlaybackItem>) -> String {
     match item {
         Some(track) => track
-            .title
-            .as_deref()
+            .metadata
+            .as_ref()
+            .and_then(|meta| meta.title.as_deref())
             .unwrap_or_else(|| track.uri.as_str())
             .to_string(),
         None => "<unknown>".to_string(),

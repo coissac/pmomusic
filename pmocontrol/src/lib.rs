@@ -14,7 +14,8 @@ pub mod music_renderer;
 pub mod openhome_client;
 pub mod openhome_playlist;
 pub mod openhome_renderer;
-pub mod playback_queue;
+pub mod queue_backend;
+pub mod queue_interne;
 pub mod provider;
 pub mod registry;
 pub mod rendering_control_client;
@@ -48,7 +49,7 @@ pub use media_server::{
 pub use music_renderer::MusicRenderer;
 pub use openhome_playlist::{OpenHomePlaylistSnapshot, OpenHomePlaylistTrack};
 pub use openhome_renderer::OpenHomeRenderer;
-pub use playback_queue::{PlaybackItem, PlaybackQueue};
+pub use queue_backend::{EnqueueMode, PlaybackItem, QueueSnapshot};
 pub use rendering_control_client::RenderingControlClient;
 pub use upnp_renderer::UpnpRenderer;
 
