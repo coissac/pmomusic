@@ -7,6 +7,7 @@ use axum::{
 use std::{
     collections::HashMap,
     sync::{Arc, RwLock},
+    time::Duration,
 };
 use tracing::info;
 use xmltree::{Element, EmitterConfig, XMLNode};
@@ -16,6 +17,8 @@ use crate::{
     devices::{Device, errors::DeviceError},
     services::ServiceInstance,
 };
+
+const DEFAULT_NOTIFY_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Instance d'un device UPnP.
 ///
@@ -304,6 +307,8 @@ impl DeviceInstance {
                     .register_urls(server)
                     .await
                     .map_err(|e| DeviceError::UrlRegistrationError(e.to_string()))?;
+                // Start the periodic notifier so buffered state changes are flushed to subscribers.
+                let _ = service.start_notifier(DEFAULT_NOTIFY_INTERVAL);
             }
 
             // Enregistrer les sous-devices

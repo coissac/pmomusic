@@ -163,20 +163,29 @@ pub trait FileCache<C: CacheConfig>: Send + Sync {
             }
 
             if !file_path.exists() {
-                tracing::warn!("is_valid_pk({}): File not created after 1s despite DB entry existing", pk);
+                tracing::warn!(
+                    "is_valid_pk({}): File not created after 1s despite DB entry existing",
+                    pk
+                );
                 return false;
             }
 
-            tracing::debug!("is_valid_pk({}): File created after {}ms", pk, attempts * 10);
+            tracing::debug!(
+                "is_valid_pk({}): File created after {}ms",
+                pk,
+                attempts * 10
+            );
         }
 
         // Vérifier d'abord si le marker de completion existe
-        let completion_marker = file_path.with_extension(
-            format!("{}.complete", C::file_extension())
-        );
+        let completion_marker =
+            file_path.with_extension(format!("{}.complete", C::file_extension()));
 
         if completion_marker.exists() {
-            tracing::debug!("is_valid_pk({}): Completion marker found, file is complete", pk);
+            tracing::debug!(
+                "is_valid_pk({}): Completion marker found, file is complete",
+                pk
+            );
             return true;
         }
 
@@ -190,7 +199,11 @@ pub trait FileCache<C: CacheConfig>: Send + Sync {
                         tracing::debug!("is_valid_pk({}): No marker but file is recent ({}s), download in progress", pk, age_secs);
                         return true;
                     } else {
-                        tracing::debug!("is_valid_pk({}): No marker and file is old ({}s), incomplete download", pk, age_secs);
+                        tracing::debug!(
+                            "is_valid_pk({}): No marker and file is old ({}s), incomplete download",
+                            pk,
+                            age_secs
+                        );
                         return false;
                     }
                 }
@@ -198,7 +211,10 @@ pub trait FileCache<C: CacheConfig>: Send + Sync {
         }
 
         // Ne peut pas vérifier le statut - rejeter par sécurité
-        tracing::debug!("is_valid_pk({}): Could not check file status, rejecting", pk);
+        tracing::debug!(
+            "is_valid_pk({}): Could not check file status, rejecting",
+            pk
+        );
         false
     }
 }

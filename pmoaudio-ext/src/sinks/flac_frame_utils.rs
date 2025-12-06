@@ -7,6 +7,16 @@
 //! Frame header validation includes CRC-8 verification as per FLAC specification
 //! to eliminate false positives that would cause decoder errors.
 
+use pmoaudio::AudioError;
+use pmoflac::FlacEncodedStream;
+use tokio::io::AsyncReadExt;
+
+/// State for FLAC stream subscription.
+pub(crate) enum FlacStreamState {
+    SendingHeader,
+    Streaming,
+}
+
 /// Validate and parse FLAC block size from frame header
 ///
 /// Returns the number of samples in the frame if the header is valid, or None if:
@@ -365,6 +375,103 @@ pub(crate) fn find_complete_frames_with_samples(data: &[u8]) -> (usize, u64) {
     }
 }
 
+/// Extract sample rate from STREAMINFO block in FLAC header
+pub(crate) fn extract_sample_rate_from_streaminfo(flac_header: &[u8]) -> Result<u32, AudioError> {
+    // Verify we have at least "fLaC" magic + STREAMINFO block header
+    if flac_header.len() < 8 {
+        return Err(AudioError::ProcessingError("FLAC header too short".into()));
+    }
+
+    if &flac_header[0..4] != b"fLaC" {
+        return Err(AudioError::ProcessingError("Invalid FLAC magic".into()));
+    }
+
+    // First metadata block should be STREAMINFO (type 0)
+    let block_type = flac_header[4] & 0x7F;
+    if block_type != 0 {
+        return Err(AudioError::ProcessingError(
+            "First block is not STREAMINFO".into(),
+        ));
+    }
+
+    // STREAMINFO data starts at offset 8 (after magic + block header)
+    // Sample rate is at offset 10-12 of STREAMINFO data (bytes 18-20 of header)
+    if flac_header.len() < 21 {
+        return Err(AudioError::ProcessingError(
+            "STREAMINFO block truncated".into(),
+        ));
+    }
+
+    // Sample rate: 20 bits starting at byte 10 of STREAMINFO
+    // Format: [byte10: SSSSSSSS] [byte11: SSSSSSSS] [byte12: SSSSCCCC]
+    // S = sample rate bits, C = channels bits
+    let byte10 = flac_header[18] as u32;
+    let byte11 = flac_header[19] as u32;
+    let byte12 = flac_header[20] as u32;
+
+    // Extract 20 bits for sample rate (top 20 bits of 3 bytes)
+    let sample_rate = (byte10 << 12) | (byte11 << 4) | (byte12 >> 4);
+
+    if sample_rate == 0 {
+        return Err(AudioError::ProcessingError(
+            "Invalid sample rate (0)".into(),
+        ));
+    }
+
+    Ok(sample_rate)
+}
+
+/// Read FLAC header (fLaC + all metadata blocks until first frame)
+pub(crate) async fn read_flac_header(
+    stream: &mut FlacEncodedStream,
+) -> Result<Vec<u8>, AudioError> {
+    let mut header = Vec::new();
+    let mut buffer = [0u8; 4];
+
+    // Read "fLaC" magic
+    stream
+        .read_exact(&mut buffer)
+        .await
+        .map_err(|e| AudioError::ProcessingError(format!("Failed to read FLAC magic: {}", e)))?;
+
+    if &buffer != b"fLaC" {
+        return Err(AudioError::ProcessingError(
+            "Invalid FLAC stream: missing fLaC magic".into(),
+        ));
+    }
+
+    header.extend_from_slice(&buffer);
+
+    // Read metadata blocks
+    loop {
+        // Read metadata block header (1 byte type + 3 bytes length)
+        let mut block_header = [0u8; 4];
+        stream.read_exact(&mut block_header).await.map_err(|e| {
+            AudioError::ProcessingError(format!("Failed to read metadata block header: {}", e))
+        })?;
+
+        let is_last = (block_header[0] & 0x80) != 0;
+        let block_length =
+            u32::from_be_bytes([0, block_header[1], block_header[2], block_header[3]]) as usize;
+
+        header.extend_from_slice(&block_header);
+
+        // Read metadata block data
+        let mut block_data = vec![0u8; block_length];
+        stream.read_exact(&mut block_data).await.map_err(|e| {
+            AudioError::ProcessingError(format!("Failed to read metadata block data: {}", e))
+        })?;
+
+        header.extend_from_slice(&block_data);
+
+        if is_last {
+            break;
+        }
+    }
+
+    Ok(header)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -374,8 +481,8 @@ mod tests {
         // Real-world example: first frame at 0, false positive at 7
         let data = vec![
             0xFF, 0xF8, 0xC9, 0xA8, // Valid frame header at position 0
-            0x00, 0x8D, 0x4C,
-            0xFF, 0xFE, 0x00, 0x00, // False positive at position 7 (0xFE has reserved bit set)
+            0x00, 0x8D, 0x4C, 0xFF, 0xFE, 0x00,
+            0x00, // False positive at position 7 (0xFE has reserved bit set)
         ];
 
         // Position 0 should be valid

@@ -1,6 +1,7 @@
 //! Serveur SSDP
 
 use super::{MAX_AGE, SSDP_MULTICAST_ADDR, SSDP_PORT, SsdpDevice};
+use socket2::{Domain, Protocol, Socket, Type};
 use std::collections::HashMap;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::{Arc, RwLock};
@@ -32,7 +33,49 @@ impl SsdpServer {
     /// `Ok(())` si le démarrage a réussi, `Err` sinon
     pub fn start(&mut self) -> std::io::Result<()> {
         let addr = format!("{}:{}", SSDP_MULTICAST_ADDR, SSDP_PORT);
-        let socket = UdpSocket::bind(("0.0.0.0", SSDP_PORT))?;
+
+        // Créer le socket avec socket2 pour permettre la réutilisation du port
+        // Ceci est essentiel pour que plusieurs clients/serveurs UPnP puissent coexister
+        let socket2 = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
+
+        // SO_REUSEADDR : permet à plusieurs sockets de bind sur le même port
+        // Essentiel sur toutes les plateformes pour le multicast
+        socket2.set_reuse_address(true)?;
+
+        // SO_REUSEPORT : nécessaire sur Unix (macOS/Linux/BSD) pour que plusieurs processus
+        // puissent recevoir du trafic multicast sur le même port.
+        // Windows n'a pas besoin de SO_REUSEPORT - SO_REUSEADDR suffit.
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            let fd = socket2.as_raw_fd();
+            let optval: libc::c_int = 1;
+            unsafe {
+                let result = libc::setsockopt(
+                    fd,
+                    libc::SOL_SOCKET,
+                    libc::SO_REUSEPORT,
+                    &optval as *const _ as *const libc::c_void,
+                    std::mem::size_of_val(&optval) as libc::socklen_t,
+                );
+                if result != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+            debug!("✅ SO_REUSEPORT enabled (Unix)");
+        }
+
+        #[cfg(windows)]
+        {
+            debug!("✅ SO_REUSEADDR enabled (Windows - SO_REUSEPORT not needed)");
+        }
+
+        // Bind sur 0.0.0.0:1900
+        let bind_addr: SocketAddr = format!("0.0.0.0:{}", SSDP_PORT).parse().unwrap();
+        socket2.bind(&bind_addr.into())?;
+
+        // Convertir en UdpSocket standard
+        let socket: UdpSocket = socket2.into();
 
         // Rejoindre le groupe multicast
         socket.join_multicast_v4(

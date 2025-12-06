@@ -67,6 +67,7 @@ pub mod connectionmanager;
 pub mod content_handler;
 pub mod contentdirectory;
 pub mod device;
+pub mod device_ext;
 pub mod server_ext;
 pub mod source_registry;
 pub mod sources;
@@ -75,11 +76,19 @@ pub mod sources;
 #[cfg(any(feature = "qobuz", feature = "paradise"))]
 pub mod sources_api;
 
+// Extension pour le streaming Paradise (requires feature paradise)
+#[cfg(feature = "paradise")]
+pub mod paradise_streaming;
+
 pub use content_handler::ContentHandler;
 pub use device::MEDIA_SERVER;
+pub use device_ext::MediaServerDeviceExt;
 pub use server_ext::{MediaServerExt, MusicSourceExt, get_source_registry};
 pub use source_registry::SourceRegistry;
 pub use sources::{SourceInitError, SourcesExt};
+
+#[cfg(feature = "paradise")]
+pub use paradise_streaming::ParadiseStreamingExt;
 
 // Re-export sources when features are enabled
 #[cfg(feature = "qobuz")]

@@ -70,11 +70,21 @@ Récupère l'image originale en WebP
 ### GET /covers/image/{pk}/{size}
 Récupère une variante redimensionnée (ex: /covers/image/abc123/256)
 
+### GET /covers/jpeg/{pk}
+Récupère l'image transcodée en JPEG (pour les clients qui ne supportent pas WebP)
+
+### GET /covers/jpeg/{pk}/{size}
+Récupère une variante redimensionnée transcodée en JPEG (ex: /covers/jpeg/abc123/256)
+
 ## Format des images
 
 Les images sont stockées au format WebP avec :
 - Une version originale (`{pk}.orig.webp`)
 - Des variantes de tailles générées à la demande (`{pk}.{size}.webp`)
+
+Des routes JPEG sont proposées pour compatibilité UPnP (albumArtURI) :
+- `/covers/jpeg/{pk}` (transcodage à la volée depuis le WebP)
+- `/covers/jpeg/{pk}/{size}` (transcodage après redimensionnement)
 
 ## Clés (pk)
 

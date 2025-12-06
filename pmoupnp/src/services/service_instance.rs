@@ -579,10 +579,10 @@ impl ServiceInstance {
             .add_post_handler_with_state(&self.control_route(), control_handler, instance_control)
             .await;
 
-        // Handler événements
+        // Handler événements (SUBSCRIBE/UNSUBSCRIBE sont des verbes spécifiques, pas GET)
         let instance_event = self.clone();
         server
-            .add_handler_with_state(&self.event_route(), event_sub_handler, instance_event)
+            .add_any_handler_with_state(&self.event_route(), event_sub_handler, instance_event)
             .await;
 
         Ok(())
@@ -626,16 +626,16 @@ impl ServiceInstance {
 
         elem.children.push(XMLNode::Element(spec));
 
-        // actionList
-        if !self.actions.all().is_empty() {
+        // actionList (depuis le modèle)
+        if !self.model.actions.all().is_empty() {
             elem.children
-                .push(XMLNode::Element(self.actions.to_xml_element()));
+                .push(XMLNode::Element(self.model.actions.to_xml_element()));
         }
 
-        // serviceStateTable
-        if !self.statevariables.all().is_empty() {
+        // serviceStateTable (depuis le modèle)
+        if !self.model.state_table.all().is_empty() {
             elem.children
-                .push(XMLNode::Element(self.statevariables.to_xml_element()));
+                .push(XMLNode::Element(self.model.state_table.to_xml_element()));
         }
 
         elem

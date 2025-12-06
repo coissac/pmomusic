@@ -140,7 +140,8 @@ impl RadioParadiseClient {
         url.query_pairs_mut()
             .append_pair("bitrate", "4") // FLAC lossless
             .append_pair("info", "true")
-            .append_pair("channel", &self.channel.to_string());
+            // RP API expects `chan` rather than `channel` for channel selection.
+            .append_pair("chan", &self.channel.to_string());
 
         if let Some(event_id) = event {
             url.query_pairs_mut()

@@ -17,7 +17,7 @@ use crate::logs::{LogState, init_logging, log_dump, log_sse};
 use axum::extract::State;
 use axum::handler::Handler;
 use axum::response::Redirect;
-use axum::routing::{get, post};
+use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use axum_embed::ServeEmbed;
 use pmoconfig::get_config;
@@ -27,6 +27,7 @@ use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::{signal, sync::RwLock, task::JoinHandle};
+use tokio_util::sync::CancellationToken;
 use tracing::info;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
@@ -92,6 +93,7 @@ pub struct Server {
     join_handle: Option<JoinHandle<()>>,
     log_state: Option<LogState>,
     api_registry: ApiRegistryState,
+    shutdown_token: CancellationToken,
 }
 
 impl Server {
@@ -126,6 +128,7 @@ impl Server {
             join_handle: None,
             log_state: None,
             api_registry,
+            shutdown_token: CancellationToken::new(),
         }
     }
 
@@ -134,6 +137,14 @@ impl Server {
         let url = config.get_base_url();
         let port = config.get_http_port();
         Self::new("PMO-Music-Server", url, port)
+    }
+
+    /// Retourne une copie du token d'arrêt gracieux
+    ///
+    /// Ce token peut être donné aux composants qui ont besoin de savoir
+    /// quand le serveur s'arrête (threads, tâches longues, etc.)
+    pub fn shutdown_token(&self) -> CancellationToken {
+        self.shutdown_token.clone()
     }
 
     /// Ajoute une route JSON dynamique
@@ -230,6 +241,25 @@ impl Server {
     {
         let route = Router::new()
             .route("/", get(handler.clone()))
+            .with_state(state.clone());
+
+        let mut r = self.router.write().await;
+        *r = if path == "/" {
+            std::mem::take(&mut *r).merge(route)
+        } else {
+            std::mem::take(&mut *r).nest(path, route)
+        };
+    }
+
+    /// Ajoute un handler qui accepte tous les verbes HTTP (ANY) avec état
+    pub async fn add_any_handler_with_state<H, T, S>(&mut self, path: &str, handler: H, state: S)
+    where
+        H: Handler<T, S> + Clone + 'static,
+        T: 'static,
+        S: Clone + Send + Sync + 'static,
+    {
+        let route = Router::new()
+            .route("/", any(handler.clone()))
             .with_state(state.clone());
 
         let mut r = self.router.write().await;
@@ -513,22 +543,43 @@ impl Server {
         );
 
         let router = self.router.clone();
+
+        // Créer un channel pour signaler l'arrêt gracieux
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+
+        // Tâche qui écoute Ctrl+C et signale l'arrêt
+        let shutdown_token_for_signal = self.shutdown_token.clone();
+        let shutdown_signal = tokio::spawn(async move {
+            signal::ctrl_c().await.expect("failed to listen for ctrl_c");
+            info!("Ctrl+C reçu, arrêt gracieux");
+            // Déclencher le token d'arrêt pour tous les composants
+            shutdown_token_for_signal.cancel();
+            // Envoyer le signal d'arrêt au serveur HTTP (ignorer l'erreur si le receiver a déjà été drop)
+            let _ = shutdown_tx.send(());
+        });
+
+        // Tâche serveur avec arrêt gracieux
         let server_task = tokio::spawn(async move {
             let r = router.read().await.clone();
             let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-            axum::serve(listener, r.into_make_service()).await.unwrap();
-        });
 
-        let shutdown_task = tokio::spawn(async move {
-            signal::ctrl_c().await.expect("failed to listen for ctrl_c");
-            info!("Ctrl+C reçu, arrêt gracieux");
+            // Serveur avec arrêt gracieux
+            axum::serve(listener, r.into_make_service())
+                .with_graceful_shutdown(async move {
+                    // Attendre le signal d'arrêt
+                    let _ = shutdown_rx.await;
+                })
+                .await
+                .unwrap();
+
+            info!("Serveur HTTP arrêté proprement");
         });
 
         self.join_handle = Some(tokio::spawn(async move {
-            tokio::select! {
-                _ = server_task => {},
-                _ = shutdown_task => {},
-            }
+            // Attendre que le serveur se termine (après réception du signal)
+            let _ = server_task.await;
+            // Nettoyer la tâche de signal
+            let _ = shutdown_signal.await;
         }));
     }
 

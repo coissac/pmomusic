@@ -4,8 +4,13 @@ use tokio::sync::RwLock;
 use pmometadata::TrackMetadata;
 
 pub enum SyncMarker {
-    TrackBoundary { metadata: Arc<RwLock<dyn TrackMetadata>> },
-    StreamMetadata { key: String, value: String },
+    TrackBoundary {
+        metadata: Arc<RwLock<dyn TrackMetadata>>,
+    },
+    StreamMetadata {
+        key: String,
+        value: String,
+    },
     TopZeroSync,
     Heartbeat,
     EndOfStream,

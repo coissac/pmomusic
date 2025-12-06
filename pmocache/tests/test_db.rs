@@ -228,6 +228,54 @@ fn test_origin_url() {
 }
 
 #[test]
+fn test_pk_collision_detection() {
+    let (_temp_dir, db) = create_test_db();
+
+    let pk = "collision_pk_123";
+    let url1 = "https://example.com/file1.jpg";
+    let url2 = "https://example.com/file2.jpg";
+
+    // Ajouter le premier fichier avec le pk
+    db.add(pk, None, None).unwrap();
+    db.set_origin_url(pk, url1).unwrap();
+
+    // Vérifier que l'URL est bien enregistrée
+    let retrieved_url = db.get_origin_url(pk).unwrap();
+    assert_eq!(retrieved_url, Some(url1.to_string()));
+
+    // Tenter d'enregistrer une URL différente pour le même pk
+    // Ceci devrait logger une erreur mais ne devrait pas échouer
+    let result = db.set_origin_url(pk, url2);
+    assert!(result.is_ok());
+
+    // L'URL devrait être écrasée par la nouvelle (comportement actuel)
+    let retrieved_url = db.get_origin_url(pk).unwrap();
+    assert_eq!(retrieved_url, Some(url2.to_string()));
+}
+
+#[test]
+fn test_get_pk_by_origin_url() {
+    let (_temp_dir, db) = create_test_db();
+
+    let pk = "test_pk_456";
+    let url = "https://example.com/cover.webp";
+
+    // Ajouter une entrée avec URL
+    db.add(pk, None, None).unwrap();
+    db.set_origin_url(pk, url).unwrap();
+
+    // Rechercher le pk par URL
+    let found_pk = db.get_pk_by_origin_url(url).unwrap();
+    assert_eq!(found_pk, Some(pk.to_string()));
+
+    // Rechercher une URL qui n'existe pas
+    let not_found = db
+        .get_pk_by_origin_url("https://example.com/notfound.jpg")
+        .unwrap();
+    assert_eq!(not_found, None);
+}
+
+#[test]
 fn test_get_from_id() {
     let (_temp_dir, db) = create_test_db();
 
@@ -295,14 +343,28 @@ fn test_metadata_types() {
     db.add(pk, None, None).unwrap();
 
     // Tester les différents types de métadonnées
-    db.set_a_metadata(pk, "string_val", Value::String("test".to_string())).unwrap();
+    db.set_a_metadata(pk, "string_val", Value::String("test".to_string()))
+        .unwrap();
     db.set_a_metadata(pk, "number_val", json!(42)).unwrap();
-    db.set_a_metadata(pk, "bool_val", Value::Bool(true)).unwrap();
+    db.set_a_metadata(pk, "bool_val", Value::Bool(true))
+        .unwrap();
     db.set_a_metadata(pk, "null_val", Value::Null).unwrap();
 
     // Vérifier les valeurs
-    assert_eq!(db.get_metadata_value(pk, "string_val").unwrap(), Some(Value::String("test".to_string())));
-    assert_eq!(db.get_metadata_value(pk, "number_val").unwrap(), Some(json!(42)));
-    assert_eq!(db.get_metadata_value(pk, "bool_val").unwrap(), Some(Value::Bool(true)));
-    assert_eq!(db.get_metadata_value(pk, "null_val").unwrap(), Some(Value::Null));
+    assert_eq!(
+        db.get_metadata_value(pk, "string_val").unwrap(),
+        Some(Value::String("test".to_string()))
+    );
+    assert_eq!(
+        db.get_metadata_value(pk, "number_val").unwrap(),
+        Some(json!(42))
+    );
+    assert_eq!(
+        db.get_metadata_value(pk, "bool_val").unwrap(),
+        Some(Value::Bool(true))
+    );
+    assert_eq!(
+        db.get_metadata_value(pk, "null_val").unwrap(),
+        Some(Value::Null)
+    );
 }

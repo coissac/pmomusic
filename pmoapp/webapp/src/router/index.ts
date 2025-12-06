@@ -1,5 +1,12 @@
 import { createRouter, createWebHistory } from "vue-router";
-import HelloWorld from "../components/HelloWorld.vue";
+
+// PMOControl Views (nouvelle home)
+import DashboardView from "../views/DashboardView.vue";
+import RendererView from "../views/RendererView.vue";
+import MediaServerView from "../views/MediaServerView.vue";
+
+// Debug Components (anciennes routes)
+import GenericMusicPlayer from "../components/GenericMusicPlayer.vue";
 import LogView from "../components/LogView.vue";
 import CoverCacheManager from "../components/CoverCacheManager.vue";
 import AudioCacheManager from "../components/AudioCacheManager.vue";
@@ -8,13 +15,59 @@ import APIDashboard from "../components/APIDashboard.vue";
 import RadioParadiseExplorer from "../components/RadioParadiseExplorer.vue";
 
 const routes = [
-  { path: "/", name: "home", component: HelloWorld },
-  { path: "/logs", name: "logs", component: LogView },
-  { path: "/covers-cache", name: "covers-cache", component: CoverCacheManager },
-  { path: "/audio-cache", name: "audio-cache", component: AudioCacheManager },
-  { path: "/upnp", name: "upnp", component: UpnpExplorer },
-  { path: "/api-dashboard", name: "api-dashboard", component: APIDashboard },
-  { path: "/radio-paradise", name: "radio-paradise", component: RadioParadiseExplorer },
+  // PMOControl (nouvelle home)
+  {
+    path: "/",
+    name: "Dashboard",
+    component: DashboardView,
+  },
+  {
+    path: "/renderer/:id",
+    name: "Renderer",
+    component: RendererView,
+  },
+  {
+    path: "/server/:serverId",
+    name: "MediaServer",
+    component: MediaServerView,
+  },
+
+  // Debug menu (anciennes routes déplacées sous /debug)
+  {
+    path: "/debug/generic-player",
+    name: "GenericPlayer",
+    component: GenericMusicPlayer,
+  },
+  {
+    path: "/debug/logs",
+    name: "Logs",
+    component: LogView,
+  },
+  {
+    path: "/debug/covers-cache",
+    name: "CoversCache",
+    component: CoverCacheManager,
+  },
+  {
+    path: "/debug/audio-cache",
+    name: "AudioCache",
+    component: AudioCacheManager,
+  },
+  {
+    path: "/debug/upnp",
+    name: "UpnpExplorer",
+    component: UpnpExplorer,
+  },
+  {
+    path: "/debug/api-dashboard",
+    name: "APIDashboard",
+    component: APIDashboard,
+  },
+  {
+    path: "/debug/radio-paradise",
+    name: "RadioParadise",
+    component: RadioParadiseExplorer,
+  },
 ];
 
 const router = createRouter({

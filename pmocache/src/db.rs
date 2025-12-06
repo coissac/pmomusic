@@ -81,12 +81,12 @@ impl<'a> std::ops::DerefMut for ConnGuard<'a> {
 
 impl DB {
     fn lock_conn(&self, ctx: &'static str) -> ConnGuard<'_> {
-        trace!("DB mutex → acquiring ({ctx})");
+        // trace!("DB mutex → acquiring ({ctx})");
         let start = Instant::now();
         let guard = self.conn.lock().unwrap();
         let waited = start.elapsed();
 
-        trace!("DB mutex → acquired ({ctx}) in {:?}", waited);
+        // trace!("DB mutex → acquired ({ctx}) in {:?}", waited);
         if waited > std::time::Duration::from_millis(50) {
             warn!("DB mutex wait >50 ms ({}): {:?}", ctx, waited);
         }
@@ -372,7 +372,25 @@ impl DB {
     }
 
     /// Enregistre l'URL d'origine liée à un élément du cache.
+    ///
+    /// Cette méthode détecte automatiquement les collisions de pk :
+    /// si le pk existe déjà avec une URL différente, un log d'erreur est émis.
     pub fn set_origin_url(&self, pk: &str, origin_url: &str) -> rusqlite::Result<()> {
+        // Vérifier si ce pk a déjà une URL d'origine différente (détection de collision)
+        if let Ok(Some(existing_url)) = self.get_origin_url(pk) {
+            if existing_url != origin_url {
+                tracing::error!(
+                    "🚨 COLLISION DE PK DÉTECTÉE: pk='{}' existe déjà avec origin_url='{}' mais tentative d'enregistrement avec origin_url='{}'",
+                    pk,
+                    existing_url,
+                    origin_url
+                );
+                tracing::error!(
+                    "   Cela indique que deux fichiers différents ont généré le même pk. Considérez augmenter la taille du header pour le calcul du pk."
+                );
+            }
+        }
+
         self.set_a_metadata(pk, "origin_url", Value::String(origin_url.to_owned()))
     }
 
@@ -387,6 +405,30 @@ impl DB {
                 "metadata 'origin_url' must be a string, got {other}"
             ))),
         }
+    }
+
+    /// Recherche un pk par son URL d'origine.
+    ///
+    /// Cette méthode permet de vérifier si un fichier avec une URL donnée
+    /// est déjà en cache avant de lancer un téléchargement.
+    ///
+    /// # Arguments
+    ///
+    /// * `origin_url` - L'URL d'origine à rechercher
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Some(pk))` - Le pk du fichier en cache avec cette URL
+    /// * `Ok(None)` - Aucun fichier avec cette URL n'est en cache
+    pub fn get_pk_by_origin_url(&self, origin_url: &str) -> rusqlite::Result<Option<String>> {
+        let conn = self.lock_conn("get_pk_by_origin_url");
+
+        conn.query_row(
+            "SELECT pk FROM metadata WHERE key = 'origin_url' AND value = ?",
+            [origin_url],
+            |row| row.get(0),
+        )
+        .optional()
     }
 
     /// Récupère uniquement les métadonnées JSON d'une entrée

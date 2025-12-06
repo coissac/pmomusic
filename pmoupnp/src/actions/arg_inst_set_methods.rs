@@ -29,6 +29,7 @@ impl UpnpInstance for ArgInstanceSet {
     fn new(_: &ArgumentSet) -> Self {
         Self {
             objects: RwLock::new(HashMap::new()),
+            order: RwLock::new(Vec::new()),
         }
     }
 }

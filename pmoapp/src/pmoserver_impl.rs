@@ -36,18 +36,44 @@ impl WebAppExt for Server {
     where
         W: RustEmbed + Clone + Send + Sync + 'static,
     {
-        let path = path.to_string();
-
-        self.add_spa::<W>(&path).await;
+        let mount_path = normalize_mount_path(path);
+        mount_spa_with_trailing_slash_redirect::<W>(self, &mount_path).await;
     }
 
     async fn add_webapp_with_redirect<W>(&mut self, path: &str)
     where
         W: RustEmbed + Clone + Send + Sync + 'static,
     {
-        let path = path.to_string();
+        let mount_path = normalize_mount_path(path);
 
-        self.add_spa::<W>(&path).await;
-        self.add_redirect("/", &path).await;
+        mount_spa_with_trailing_slash_redirect::<W>(self, &mount_path).await;
+        self.add_redirect("/", &mount_path).await;
+    }
+}
+
+/// S'assure que les chemins SPA sont cohérents : `"/app"` devient `"/app"`,
+/// tandis que `"/"` reste tel quel. Les espaces ou slashs multiples sont
+/// nettoyés pour éviter des routes dupliquées.
+fn normalize_mount_path(path: &str) -> String {
+    let trimmed = path.trim();
+
+    if trimmed.is_empty() || trimmed == "/" {
+        "/".to_string()
+    } else {
+        format!("/{}", trimmed.trim_matches('/'))
+    }
+}
+
+/// Monte la SPA et ajoute automatiquement une redirection `"/app/" -> "/app"`
+/// afin que les URLs avec slash final servent également l'application.
+async fn mount_spa_with_trailing_slash_redirect<W>(server: &mut Server, path: &str)
+where
+    W: RustEmbed + Clone + Send + Sync + 'static,
+{
+    server.add_spa::<W>(path).await;
+
+    if path != "/" {
+        let trailing = format!("{}/", path.trim_end_matches('/'));
+        server.add_redirect(&trailing, path).await;
     }
 }

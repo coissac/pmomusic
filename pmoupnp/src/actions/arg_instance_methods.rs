@@ -259,6 +259,7 @@ impl UpnpInstance for ActionInstanceSet {
     fn new(_: &ActionSet) -> Self {
         Self {
             objects: RwLock::new(HashMap::new()),
+            order: RwLock::new(Vec::new()),
         }
     }
 }

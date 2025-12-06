@@ -220,20 +220,18 @@ impl AudioSinkLogic {
                         chunk.sample_rate()
                     );
                 }
-                crate::_AudioSegment::Sync(marker) => {
-                    match **marker {
-                        SyncMarker::TrackBoundary { .. } => {
-                            tracing::debug!("AudioSink (null): TrackBoundary received");
-                        }
-                        SyncMarker::EndOfStream => {
-                            tracing::debug!("AudioSink (null): EndOfStream received");
-                            return Ok(());
-                        }
-                        _ => {
-                            tracing::trace!("AudioSink (null): sync marker");
-                        }
+                crate::_AudioSegment::Sync(marker) => match **marker {
+                    SyncMarker::TrackBoundary { .. } => {
+                        tracing::debug!("AudioSink (null): TrackBoundary received");
                     }
-                }
+                    SyncMarker::EndOfStream => {
+                        tracing::debug!("AudioSink (null): EndOfStream received");
+                        return Ok(());
+                    }
+                    _ => {
+                        tracing::trace!("AudioSink (null): sync marker");
+                    }
+                },
             }
         }
     }
@@ -273,12 +271,15 @@ impl NodeLogic for AudioSinkLogic {
             .default_output_device()
             .ok_or_else(|| AudioError::ProcessingError("No output device available".to_string()))?;
 
-        tracing::debug!("Using audio device: {}", device.name().unwrap_or_else(|_| "Unknown".to_string()));
+        tracing::debug!(
+            "Using audio device: {}",
+            device.name().unwrap_or_else(|_| "Unknown".to_string())
+        );
 
         // Obtenir la config par défaut
-        let config = device
-            .default_output_config()
-            .map_err(|e| AudioError::ProcessingError(format!("Failed to get output config: {}", e)))?;
+        let config = device.default_output_config().map_err(|e| {
+            AudioError::ProcessingError(format!("Failed to get output config: {}", e))
+        })?;
 
         let sample_format = config.sample_format();
         let sample_rate = config.sample_rate().0;
@@ -298,9 +299,9 @@ impl NodeLogic for AudioSinkLogic {
         let stream_thread = thread::spawn(move || {
             // Créer le stream selon le format hardware
             let stream = match sample_format {
-            cpal::SampleFormat::I16 => {
-                tracing::debug!("Using I16 output format");
-                match device.build_output_stream(
+                cpal::SampleFormat::I16 => {
+                    tracing::debug!("Using I16 output format");
+                    match device.build_output_stream(
                         &config.into(),
                         move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
                             let mut buf = buffer_clone.lock().unwrap();
@@ -323,10 +324,10 @@ impl NodeLogic for AudioSinkLogic {
                             return;
                         }
                     }
-            }
-            cpal::SampleFormat::U16 => {
-                tracing::debug!("Using U16 output format");
-                match device.build_output_stream(
+                }
+                cpal::SampleFormat::U16 => {
+                    tracing::debug!("Using U16 output format");
+                    match device.build_output_stream(
                         &config.into(),
                         move |data: &mut [u16], _: &cpal::OutputCallbackInfo| {
                             let mut buf = buffer_clone.lock().unwrap();
@@ -348,10 +349,10 @@ impl NodeLogic for AudioSinkLogic {
                             return;
                         }
                     }
-            }
-            cpal::SampleFormat::F32 => {
-                tracing::debug!("Using F32 output format");
-                match device.build_output_stream(
+                }
+                cpal::SampleFormat::F32 => {
+                    tracing::debug!("Using F32 output format");
+                    match device.build_output_stream(
                         &config.into(),
                         move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                             let mut buf = buffer_clone.lock().unwrap();
@@ -371,10 +372,10 @@ impl NodeLogic for AudioSinkLogic {
                             return;
                         }
                     }
-            }
-            _ => {
-                tracing::error!("Unsupported sample format: {:?}", sample_format);
-                return;
+                }
+                _ => {
+                    tracing::error!("Unsupported sample format: {:?}", sample_format);
+                    return;
                 }
             };
 
@@ -467,7 +468,9 @@ impl NodeLogic for AudioSinkLogic {
                             // Le buffer continue automatiquement - pas besoin d'action
                         }
                         SyncMarker::EndOfStream => {
-                            tracing::debug!("AudioSink: EndOfStream received, waiting for playback to finish");
+                            tracing::debug!(
+                                "AudioSink: EndOfStream received, waiting for playback to finish"
+                            );
                             // Marquer la fin et attendre que le buffer se vide
                             buffer.lock().unwrap().mark_end();
 
@@ -576,10 +579,7 @@ impl AudioPipelineNode for AudioSink {
         panic!("AudioSink is a terminal node and cannot have children");
     }
 
-    async fn run(
-        self: Box<Self>,
-        stop_token: CancellationToken,
-    ) -> Result<(), AudioError> {
+    async fn run(self: Box<Self>, stop_token: CancellationToken) -> Result<(), AudioError> {
         Box::new(self.inner).run(stop_token).await
     }
 }

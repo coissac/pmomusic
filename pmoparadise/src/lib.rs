@@ -203,7 +203,7 @@
 //! - `pmoserver`: Enable REST API extension for pmoserver integration (adds `utoipa`, `axum`)
 //! - `pmoaudio`: Enable RadioParadiseStreamSource for pmoaudio integration
 //! - `pmoconfig`: Enable configuration integration with pmoconfig
-//! - `server`: Enable RadioParadiseSource stub for backward compatibility (deprecated)
+//! - `server`: Enable RadioParadiseSource for UPnP ContentDirectory integration
 //!
 //! ## See Also
 //!
@@ -228,6 +228,12 @@ pub mod config_ext;
 #[cfg(feature = "pmoaudio")]
 pub mod radio_paradise_stream_source;
 
+#[cfg(feature = "pmoaudio")]
+pub mod stream_channel;
+
+#[cfg(feature = "pmoaudio")]
+pub mod playlist_feeder;
+
 // Re-exports for convenience
 pub use client::{ClientBuilder, RadioParadiseClient};
 pub use error::{Error, Result};
@@ -235,7 +241,17 @@ pub use models::{Block, DurationMs, EventId, NowPlaying, Song};
 pub use source::RadioParadiseSource;
 
 #[cfg(feature = "pmoaudio")]
-pub use radio_paradise_stream_source::{RadioParadiseStreamSource, END_OF_BLOCKS_SIGNAL};
+pub use radio_paradise_stream_source::RadioParadiseStreamSource;
+
+#[cfg(feature = "pmoaudio")]
+pub use playlist_feeder::{RadioParadisePlaylistFeeder, END_OF_BLOCKS_SIGNAL};
+
+#[cfg(feature = "pmoaudio")]
+pub use stream_channel::{
+    HistoryFlacStream, HistoryOggStream, HistoryStreamError, ParadiseChannelManager,
+    ParadiseHistoryBuilder, ParadiseHistoryOptions, ParadiseStreamChannel,
+    ParadiseStreamChannelConfig,
+};
 
 #[cfg(feature = "pmoserver")]
 pub use pmoserver_ext::{

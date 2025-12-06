@@ -1,6 +1,9 @@
 use pmoapp::{WebAppExt, Webapp};
+use pmocontrol::ControlPointExt;
 use pmomediarenderer::MEDIA_RENDERER;
-use pmomediaserver::{MEDIA_SERVER, sources::SourcesExt};
+use pmomediaserver::{
+    MEDIA_SERVER, MediaServerDeviceExt, ParadiseStreamingExt, sources::SourcesExt,
+};
 use pmoserver::Server;
 use pmosource::MusicSourceExt;
 use pmoupnp::UpnpServerExt;
@@ -36,13 +39,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("🎵 Registering music sources...");
 
     // // Enregistrer Qobuz
-    // if let Err(e) = server.register_qobuz().await {
+    // if let Err(e) = server.write().await.register_qobuz().await {
     //     tracing::warn!("⚠️ Failed to register Qobuz: {}", e);
     // }
 
-    // Enregistrer Radio Paradise (inclut l'initialisation de l'API)
-    if let Err(e) = server.write().await.register_paradise().await {
-        tracing::warn!("⚠️ Failed to register Radio Paradise: {}", e);
+    // Initialiser les canaux de streaming Radio Paradise (pipelines + routes HTTP)
+    info!("📻 Initializing Radio Paradise streaming channels...");
+    if let Err(e) = server.write().await.init_paradise_streaming().await {
+        tracing::warn!("⚠️ Failed to initialize Paradise streaming: {}", e);
+    } else {
+        // Enregistrer la source Radio Paradise UPnP (inclut l'initialisation de l'API)
+        if let Err(e) = server.write().await.register_paradise().await {
+            tracing::warn!("⚠️ Failed to register Radio Paradise source: {}", e);
+        }
     }
 
     // Lister toutes les sources enregistrées
@@ -75,11 +84,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .expect("Failed to register MediaServer");
 
+    // Enregistrer l'instance ContentDirectory pour les notifications GENA
+    if let Some(cd_service) = server_instance.get_service("ContentDirectory") {
+        pmomediaserver::contentdirectory::state::register_instance(&cd_service);
+    }
+
+    // Initialiser les ProtocolInfo du MediaServer
+    server_instance.init_protocol_info();
+
     info!(
         "✅ MediaServer ready at {}{}",
         server_instance.base_url(),
         server_instance.description_route()
     );
+
+    // Enregistrer le Control Point (découverte renderers/serveurs + API REST + SSE)
+    info!("🎛️  Registering Control Point...");
+    let _control_point = server
+        .write()
+        .await
+        .register_control_point(5)
+        .await
+        .expect("Failed to register Control Point");
 
     // Ajouter la webapp via le trait WebAppExt
     info!("📡 Registering Web application...");
@@ -96,7 +122,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("✅ PMOMusic is ready!");
     info!("Press Ctrl+C to stop...");
+
+    // Attendre le signal Ctrl+C et l'arrêt du serveur HTTP
     server.write().await.wait().await;
 
-    Ok(())
+    // Le serveur HTTP est arrêté, mais des threads (ControlPoint, etc.) peuvent encore tourner
+    // Attendre 2 secondes pour laisser le temps aux threads de se terminer
+    info!("Waiting for background threads to finish...");
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    // Forcer l'arrêt du processus (les threads du ControlPoint tournent en boucle infinie)
+    info!("✅ PMOMusic stopped");
+    std::process::exit(0);
 }

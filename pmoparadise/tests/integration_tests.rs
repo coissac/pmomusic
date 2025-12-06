@@ -48,6 +48,7 @@ async fn test_get_current_block() {
         .and(path("/api/get_block"))
         .and(query_param("bitrate", "4"))
         .and(query_param("info", "true"))
+        .and(query_param("chan", "0"))
         .respond_with(ResponseTemplate::new(200).set_body_json(mock_block_json(1234, 5678)))
         .mount(&mock_server)
         .await;
@@ -82,6 +83,7 @@ async fn test_get_specific_block() {
         .and(path("/api/get_block"))
         .and(query_param("bitrate", "4"))
         .and(query_param("info", "true"))
+        .and(query_param("chan", "0"))
         .and(query_param("event", "5678"))
         .respond_with(ResponseTemplate::new(200).set_body_json(mock_block_json(5678, 9012)))
         .mount(&mock_server)
@@ -100,11 +102,37 @@ async fn test_get_specific_block() {
 }
 
 #[tokio::test]
+async fn test_get_block_respects_channel() {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/get_block"))
+        .and(query_param("bitrate", "4"))
+        .and(query_param("info", "true"))
+        .and(query_param("chan", "2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(mock_block_json(2222, 3333)))
+        .mount(&mock_server)
+        .await;
+
+    let client = RadioParadiseClient::builder()
+        .api_base(format!("{}/api", mock_server.uri()))
+        .channel(2)
+        .build()
+        .await
+        .unwrap();
+
+    let block = client.get_block(None).await.unwrap();
+    assert_eq!(block.event, 2222);
+    assert_eq!(block.end_event, 3333);
+}
+
+#[tokio::test]
 async fn test_now_playing() {
     let mock_server = MockServer::start().await;
 
     Mock::given(method("GET"))
         .and(path("/api/get_block"))
+        .and(query_param("chan", "0"))
         .respond_with(ResponseTemplate::new(200).set_body_json(mock_block_json(1234, 5678)))
         .mount(&mock_server)
         .await;
@@ -133,6 +161,8 @@ async fn test_prefetch_next() {
 
     // First block
     Mock::given(method("GET"))
+        .and(path("/api/get_block"))
+        .and(query_param("chan", "0"))
         .and(query_param("event", "1234"))
         .respond_with(ResponseTemplate::new(200).set_body_json(mock_block_json(1234, 5678)))
         .mount(&mock_server)
@@ -140,6 +170,8 @@ async fn test_prefetch_next() {
 
     // Next block
     Mock::given(method("GET"))
+        .and(path("/api/get_block"))
+        .and(query_param("chan", "0"))
         .and(query_param("event", "5678"))
         .respond_with(ResponseTemplate::new(200).set_body_json(mock_block_json(5678, 9012)))
         .mount(&mock_server)

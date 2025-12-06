@@ -1,6 +1,6 @@
 use crate::{
     nodes::{AudioError, TypedAudioNode, DEFAULT_CHUNK_DURATION_MS},
-    pipeline::{AudioPipelineNode, Node, NodeLogic},
+    pipeline::{send_to_children, AudioPipelineNode, Node, NodeLogic},
     type_constraints::TypeRequirement,
     AudioChunk, AudioChunkData, AudioSegment, I24,
 };
@@ -41,23 +41,16 @@ impl NodeLogic for FileSourceLogic {
         output: Vec<mpsc::Sender<Arc<AudioSegment>>>,
         stop_token: CancellationToken,
     ) -> Result<(), AudioError> {
-        tracing::debug!("FileSourceLogic::process started, path={:?}, {} children", self.path, output.len());
-
-        // Macro helper pour envoyer à tous les enfants
-        macro_rules! send_to_children {
-            ($segment:expr) => {
-                for tx in &output {
-                    tx.send($segment.clone())
-                        .await
-                        .map_err(|_| AudioError::ChildDied)?;
-                }
-            };
-        }
+        tracing::debug!(
+            "FileSourceLogic::process started, path={:?}, {} children",
+            self.path,
+            output.len()
+        );
 
         // Ouvrir le fichier
-        let file = File::open(&self.path).await.map_err(|e| {
-            AudioError::IoError(format!("Failed to open {:?}: {}", self.path, e))
-        })?;
+        let file = File::open(&self.path)
+            .await
+            .map_err(|e| AudioError::IoError(format!("Failed to open {:?}: {}", self.path, e)))?;
 
         // Décoder le flux audio
         let mut stream = decode_audio_stream(file)
@@ -78,7 +71,7 @@ impl NodeLogic for FileSourceLogic {
 
         // Émettre TopZeroSync
         let top_zero = AudioSegment::new_top_zero_sync();
-        send_to_children!(top_zero);
+        send_to_children(std::any::type_name::<Self>(), &output, top_zero).await?;
 
         // Extraire et émettre les métadonnées du fichier
         if let Ok(file_metadata) = AudioFileMetadata::from_file(&self.path) {
@@ -106,7 +99,7 @@ impl NodeLogic for FileSourceLogic {
                 0.0,
                 Arc::new(tokio::sync::RwLock::new(metadata)),
             );
-            send_to_children!(track_boundary);
+            send_to_children(std::any::type_name::<Self>(), &output, track_boundary).await?;
         }
 
         // Préparer la lecture des chunks audio
@@ -164,7 +157,7 @@ impl NodeLogic for FileSourceLogic {
                         timestamp_sec,
                     )?;
 
-                    send_to_children!(segment);
+                    send_to_children(std::any::type_name::<Self>(), &output, segment).await?;
 
                     chunk_index += 1;
                     total_frames += frames_to_emit as u64;
@@ -179,7 +172,7 @@ impl NodeLogic for FileSourceLogic {
                 let timestamp_sec = total_frames as f64 / stream_info.sample_rate as f64;
                 let segment =
                     bytes_to_segment(&pending, &stream_info, frames, chunk_index, timestamp_sec)?;
-                send_to_children!(segment);
+                send_to_children(std::any::type_name::<Self>(), &output, segment).await?;
                 total_frames += frames as u64;
                 chunk_index += 1;
             }
@@ -188,7 +181,7 @@ impl NodeLogic for FileSourceLogic {
         // Émettre EndOfStream
         let final_timestamp = total_frames as f64 / stream_info.sample_rate as f64;
         let eos = AudioSegment::new_end_of_stream(chunk_index, final_timestamp);
-        send_to_children!(eos);
+        send_to_children(std::any::type_name::<Self>(), &output, eos).await?;
 
         // Attendre la fin du décodage
         stream
@@ -256,10 +249,7 @@ impl AudioPipelineNode for FileSource {
         self.inner.register(child)
     }
 
-    async fn run(
-        self: Box<Self>,
-        stop_token: CancellationToken,
-    ) -> Result<(), AudioError> {
+    async fn run(self: Box<Self>, stop_token: CancellationToken) -> Result<(), AudioError> {
         Box::new(self.inner).run(stop_token).await
     }
 }
@@ -399,7 +389,6 @@ fn bytes_to_segment(
     }))
 }
 
-
 impl TypedAudioNode for FileSource {
     fn input_type(&self) -> Option<TypeRequirement> {
         // FileSource est une source, elle ne consomme pas d'audio
@@ -464,11 +453,7 @@ mod tests {
         impl TestCollectorNode {
             fn new(test_tx: mpsc::Sender<Arc<AudioSegment>>) -> Self {
                 let (tx, rx) = mpsc::channel(16);
-                Self {
-                    tx,
-                    rx,
-                    test_tx,
-                }
+                Self { tx, rx, test_tx }
             }
         }
 

@@ -57,12 +57,50 @@
 //! # }
 //! ```
 //!
+//! # Historique des morceaux joués
+//!
+//! Utilisez `PlaylistSource::with_history()` pour créer une source qui transfère
+//! automatiquement les morceaux joués vers une playlist historique :
+//!
+//! ```rust,no_run
+//! use pmoaudio_ext::PlaylistSource;
+//! use pmoplaylist::PlaylistManager;
+//! use pmoaudiocache::cache::new_cache;
+//! use std::sync::Arc;
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let manager = PlaylistManager::get();
+//! let cache = Arc::new(new_cache("./cache", 500)?);
+//!
+//! // Playlist live (consommée par la source)
+//! let live_read = manager.get_read_handle("radio-live").await?;
+//!
+//! // Playlist historique (capacité 200 morceaux)
+//! let history_write = manager.create_persistent_playlist("radio-history".into()).await?;
+//! history_write.set_capacity(Some(200)).await?;
+//!
+//! // Créer la source avec historique
+//! let source = PlaylistSource::with_history(
+//!     live_read,
+//!     cache,
+//!     Arc::new(history_write)
+//! );
+//!
+//! // Les morceaux joués seront automatiquement ajoutés à "radio-history"
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! **Note** : L'historique utilise `push()` sans TTL. Les morceaux restent dans l'historique
+//! jusqu'à ce que la capacité maximale soit atteinte (FIFO).
+//!
 //! # Comportement
 //!
 //! - **Polling** : Si la playlist est vide, attend `poll_interval_ms` avant de réessayer
 //! - **TrackBoundary** : Émet un marqueur avec metadata entre chaque piste
 //! - **Erreurs** : Si un fichier est inaccessible, émet un `Error` marker et continue
 //! - **Arrêt** : Via `CancellationToken`, émet `EndOfStream` avant de terminer
+//! - **Historique** : Si configuré, ajoute chaque piste jouée à la playlist historique
 //!
 //! # Synchronisation
 //!
@@ -73,7 +111,7 @@
 
 use pmoaudio::{
     nodes::{AudioError, TypedAudioNode, DEFAULT_CHUNK_DURATION_MS},
-    pipeline::{AudioPipelineNode, Node, NodeLogic},
+    pipeline::{send_to_children, AudioPipelineNode, Node, NodeLogic},
     type_constraints::TypeRequirement,
     AudioChunk, AudioChunkData, AudioSegment, I24,
 };
@@ -98,6 +136,7 @@ pub struct PlaylistSourceLogic {
     cache: Arc<AudioCache>,
     chunk_frames: usize,
     poll_interval_ms: u64,
+    history_playlist: Option<Arc<pmoplaylist::WriteHandle>>,
 }
 
 impl PlaylistSourceLogic {
@@ -112,7 +151,13 @@ impl PlaylistSourceLogic {
             cache,
             chunk_frames,
             poll_interval_ms,
+            history_playlist: None,
         }
+    }
+
+    /// Enregistre une playlist historique pour sauvegarder les morceaux joués
+    pub fn set_history_playlist(&mut self, history: Arc<pmoplaylist::WriteHandle>) {
+        self.history_playlist = Some(history);
     }
 }
 
@@ -130,16 +175,7 @@ impl NodeLogic for PlaylistSourceLogic {
             output.len()
         );
 
-        // Macro helper pour envoyer à tous les enfants
-        macro_rules! send_to_children {
-            ($segment:expr) => {
-                for tx in &output {
-                    tx.send($segment.clone())
-                        .await
-                        .map_err(|_| AudioError::ChildDied)?;
-                }
-            };
-        }
+        let node_name = std::any::type_name::<Self>();
 
         let mut first_track = true;
 
@@ -148,7 +184,7 @@ impl NodeLogic for PlaylistSourceLogic {
             if stop_token.is_cancelled() {
                 tracing::info!("PlaylistSourceLogic: stop requested, emitting EndOfStream");
                 let eos = AudioSegment::new_end_of_stream(0, 0.0);
-                send_to_children!(eos);
+                send_to_children(node_name, &output, eos).await?;
                 break;
             }
 
@@ -157,7 +193,7 @@ impl NodeLogic for PlaylistSourceLogic {
                 _ = stop_token.cancelled() => {
                     tracing::info!("PlaylistSourceLogic: stop cancelled during pop");
                     let eos = AudioSegment::new_end_of_stream(0, 0.0);
-                    send_to_children!(eos);
+                    send_to_children(node_name, &output, eos).await?;
                     break;
                 }
                 result = self.playlist_handle.pop() => {
@@ -167,7 +203,13 @@ impl NodeLogic for PlaylistSourceLogic {
                             t
                         },
                         Ok(None) => {
-                            // Playlist vide, attendre avant retry
+                            // Playlist vide, attendre avant retry et réinitialiser la synchro
+                            if !first_track {
+                                tracing::debug!(
+                                    "PlaylistSourceLogic: playlist drained, resetting top-zero sync"
+                                );
+                            }
+                            first_track = true;
                             tracing::trace!(
                                 "PlaylistSourceLogic: playlist empty, waiting {}ms",
                                 self.poll_interval_ms
@@ -185,74 +227,134 @@ impl NodeLogic for PlaylistSourceLogic {
                                 0.0,
                                 format!("Playlist error: {}", e)
                             );
-                            send_to_children!(error_marker);
+                            send_to_children(node_name, &output, error_marker).await?;
                             continue;
                         }
                     }
                 }
             };
 
-            // Émettre TopZeroSync pour la première piste seulement
-            if first_track {
-                tracing::debug!("PlaylistSourceLogic: emitting TopZeroSync");
-                let top_zero = AudioSegment::new_top_zero_sync();
-                send_to_children!(top_zero);
-                first_track = false;
-            }
-
             // Émettre TrackBoundary avec metadata du cache
             let metadata = match track.track_metadata() {
                 Ok(m) => m,
                 Err(e) => {
                     tracing::warn!("PlaylistSourceLogic: failed to get metadata: {}", e);
-                    let error_marker = AudioSegment::new_error(
-                        0,
-                        0.0,
-                        format!("Failed to get metadata: {}", e),
-                    );
-                    send_to_children!(error_marker);
+                    let error_marker =
+                        AudioSegment::new_error(0, 0.0, format!("Failed to get metadata: {}", e));
+                    send_to_children(node_name, &output, error_marker).await?;
                     continue;
                 }
             };
 
+            let metadata_guard = metadata.read().await;
+            let artist = metadata_guard
+                .get_artist()
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "Unknown artist".to_string());
+            let title = metadata_guard
+                .get_title()
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "Untitled".to_string());
+            let expected_duration = metadata_guard
+                .get_duration()
+                .await
+                .ok()
+                .flatten()
+                .map(|d| d.as_secs_f64());
+            drop(metadata_guard);
+            let remaining = self.playlist_handle.remaining().await.unwrap_or(0);
+            tracing::info!(
+                "PlaylistSource: starting track {} - {} ({} remaining)",
+                artist,
+                title,
+                remaining
+            );
+
+            let track_start = std::time::Instant::now();
             tracing::debug!("PlaylistSourceLogic: emitting TrackBoundary");
-            let boundary = AudioSegment::new_track_boundary(0, 0.0, metadata);
-            send_to_children!(boundary);
+            let metadata_for_boundary = metadata.clone();
+            let boundary = AudioSegment::new_track_boundary(0, 0.0, metadata_for_boundary);
+            send_to_children(node_name, &output, boundary).await?;
 
             // Obtenir le chemin du fichier
             let file_path = match track.file_path() {
                 Ok(p) => p,
                 Err(e) => {
                     tracing::warn!("PlaylistSourceLogic: failed to get file path: {}", e);
-                    let error_marker = AudioSegment::new_error(
-                        0,
-                        0.0,
-                        format!("Failed to get file path: {}", e),
-                    );
-                    send_to_children!(error_marker);
+                    let error_marker =
+                        AudioSegment::new_error(0, 0.0, format!("Failed to get file path: {}", e));
+                    send_to_children(node_name, &output, error_marker).await?;
                     continue;
                 }
             };
 
-            tracing::debug!("PlaylistSourceLogic: decoding track: {:?}", file_path);
+            let elapsed = track_start.elapsed();
+            tracing::info!(
+                "PlaylistSourceLogic: gap after TrackBoundary = {:.3}s, decoding: {:?}",
+                elapsed.as_secs_f64(),
+                file_path
+            );
 
             // Décoder et émettre les chunks PCM
             // Passer le cache et pk pour gérer le cache progressif
             let cache_pk = track.cache_pk();
-            if let Err(e) = decode_and_emit_track(
+            // Réinitialiser la synchro au début de chaque piste
+            let emit_top_zero = true;
+            first_track = false;
+
+            match decode_and_emit_track(
+                node_name,
                 &file_path,
                 self.chunk_frames,
                 &output,
                 &stop_token,
                 &self.cache,
                 cache_pk,
+                expected_duration,
+                emit_top_zero,
             )
             .await
             {
-                tracing::error!("PlaylistSourceLogic: error decoding track: {}", e);
-                let error_marker = AudioSegment::new_error(0, 0.0, format!("Decode error: {}", e));
-                send_to_children!(error_marker);
-                // Continue vers la piste suivante
+                Ok(()) => {
+                    tracing::info!("PlaylistSource: finished track {} - {}", artist, title);
+                    // Piste décodée avec succès, transférer vers l'historique si configuré
+                    tracing::warn!(
+                        "🔍 HISTORY DEBUG: history_playlist is {:?}",
+                        if self.history_playlist.is_some() {
+                            "Some"
+                        } else {
+                            "None"
+                        }
+                    );
+                    if let Some(ref history) = self.history_playlist {
+                        tracing::warn!(
+                            "🔍 HISTORY DEBUG: Attempting to push cache_pk={} to history",
+                            cache_pk
+                        );
+                        if let Err(e) = history.push(cache_pk.to_string()).await {
+                            tracing::warn!(
+                                "PlaylistSourceLogic: failed to add track to history: {}",
+                                e
+                            );
+                        } else {
+                            tracing::debug!(
+                                "PlaylistSourceLogic: added track {} to history",
+                                cache_pk
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("PlaylistSourceLogic: error decoding track: {}", e);
+                    let error_marker =
+                        AudioSegment::new_error(0, 0.0, format!("Decode error: {}", e));
+                    send_to_children(node_name, &output, error_marker).await?;
+                    // Continue vers la piste suivante
+                }
             }
 
             // Boucler pour la piste suivante (pas d'EndOfStream entre pistes !)
@@ -272,12 +374,15 @@ impl NodeLogic for PlaylistSourceLogic {
 /// Gère le cache progressif : si EOF est atteint et que le download est toujours en cours,
 /// attend et réessaie au lieu de terminer immédiatement.
 async fn decode_and_emit_track(
+    node_name: &'static str,
     path: &PathBuf,
     chunk_frames: usize,
     output: &[mpsc::Sender<Arc<AudioSegment>>],
     stop_token: &CancellationToken,
     cache: &Arc<AudioCache>,
     cache_pk: &str,
+    expected_duration_sec: Option<f64>,
+    emit_top_zero: bool,
 ) -> Result<(), AudioError> {
     // Attendre que le fichier soit suffisamment gros pour le sniffing
     // Le cache progressif permet de commencer la lecture après le prebuffer (512 KB)
@@ -290,7 +395,10 @@ async fn decode_and_emit_track(
         const MIN_FILE_SIZE: u64 = 512 * 1024; // 512 KB (prebuffer size)
 
         if file_size >= MIN_FILE_SIZE || cache.is_download_complete(cache_pk) {
-            tracing::trace!("decode_and_emit_track: file ready ({} bytes), starting decode", file_size);
+            tracing::trace!(
+                "decode_and_emit_track: file ready ({} bytes), starting decode",
+                file_size
+            );
             break;
         }
 
@@ -400,11 +508,13 @@ async fn decode_and_emit_track(
                     timestamp_sec,
                 )?;
 
-                for tx in output {
-                    tx.send(segment.clone())
-                        .await
-                        .map_err(|_| AudioError::ChildDied)?;
+                if emit_top_zero && total_frames == 0 {
+                    tracing::debug!("decode_and_emit_track: emitting TopZeroSync (first chunk)");
+                    let top_zero = AudioSegment::new_top_zero_sync();
+                    send_to_children(node_name, output, top_zero).await?;
                 }
+
+                send_to_children(node_name, output, segment).await?;
 
                 chunk_index += 1;
                 total_frames += frames_to_emit as u64;
@@ -417,12 +527,9 @@ async fn decode_and_emit_track(
         let frames = pending.len() / frame_bytes;
         if frames > 0 {
             let timestamp_sec = total_frames as f64 / stream_info.sample_rate as f64;
-            let segment = bytes_to_segment(&pending, &stream_info, frames, chunk_index, timestamp_sec)?;
-            for tx in output {
-                tx.send(segment.clone())
-                    .await
-                    .map_err(|_| AudioError::ChildDied)?;
-            }
+            let segment =
+                bytes_to_segment(&pending, &stream_info, frames, chunk_index, timestamp_sec)?;
+            send_to_children(node_name, output, segment).await?;
         }
     }
 
@@ -431,6 +538,27 @@ async fn decode_and_emit_track(
         .wait()
         .await
         .map_err(|e| AudioError::ProcessingError(format!("Decode task failed: {}", e)))?;
+
+    if !cache.is_download_complete(cache_pk) {
+        tracing::warn!(
+            "PlaylistSource: finished reading cache entry {} but download is not complete",
+            cache_pk
+        );
+    }
+
+    let actual_duration = total_frames as f64 / stream_info.sample_rate as f64;
+    let expected_str = expected_duration_sec
+        .map(|d| format!("{:.3}s", d))
+        .unwrap_or_else(|| "unknown".to_string());
+    tracing::info!(
+        "PlaylistSource: emitted pk={} frames={} sr={}Hz bit_depth={} duration={:.3}s (expected={})",
+        cache_pk,
+        total_frames,
+        stream_info.sample_rate,
+        stream_info.bits_per_sample,
+        actual_duration,
+        expected_str,
+    );
 
     Ok(())
 }
@@ -609,7 +737,29 @@ impl PlaylistSource {
         chunk_frames: usize,
         poll_interval_ms: u64,
     ) -> Self {
-        let logic = PlaylistSourceLogic::new(playlist_handle, cache, chunk_frames, poll_interval_ms);
+        let logic =
+            PlaylistSourceLogic::new(playlist_handle, cache, chunk_frames, poll_interval_ms);
+        Self {
+            inner: Node::new_source(logic),
+        }
+    }
+
+    /// Crée une nouvelle source avec playlist historique
+    ///
+    /// * `playlist_handle` - Handle de lecture sur la playlist live
+    /// * `cache` - Cache audio contenant les fichiers
+    /// * `history_playlist` - Handle d'écriture pour l'historique des morceaux joués
+    ///
+    /// Après avoir joué chaque morceau, il sera automatiquement ajouté à la playlist historique.
+    /// La playlist historique utilise push() sans TTL, donc les morceaux y restent jusqu'à
+    /// ce que la capacité maximale soit atteinte (FIFO).
+    pub fn with_history(
+        playlist_handle: ReadHandle,
+        cache: Arc<AudioCache>,
+        history_playlist: Arc<pmoplaylist::WriteHandle>,
+    ) -> Self {
+        let mut logic = PlaylistSourceLogic::new(playlist_handle, cache, 0, 100);
+        logic.set_history_playlist(history_playlist);
         Self {
             inner: Node::new_source(logic),
         }
@@ -626,10 +776,7 @@ impl AudioPipelineNode for PlaylistSource {
         self.inner.register(child)
     }
 
-    async fn run(
-        self: Box<Self>,
-        stop_token: CancellationToken,
-    ) -> Result<(), AudioError> {
+    async fn run(self: Box<Self>, stop_token: CancellationToken) -> Result<(), AudioError> {
         Box::new(self.inner).run(stop_token).await
     }
 }
@@ -712,9 +859,9 @@ mod tests {
         // Frame 2: L=300, R=400
         let chunk_bytes = vec![
             100u8, 0, // L1
-            200, 0,   // R1
-            44, 1,    // L2 (300 = 0x012C)
-            144, 1,   // R2 (400 = 0x0190)
+            200, 0, // R1
+            44, 1, // L2 (300 = 0x012C)
+            144, 1, // R2 (400 = 0x0190)
         ];
 
         let info = StreamInfo {
@@ -732,18 +879,16 @@ mod tests {
         assert_eq!(segment.timestamp_sec, 0.0);
 
         match &segment.segment {
-            pmoaudio::_AudioSegment::Chunk(chunk) => {
-                match chunk.as_ref() {
-                    AudioChunk::I16(data) => {
-                        let frames = data.get_frames();
-                        assert_eq!(frames.len(), 2);
-                        assert_eq!(frames[0], [100, 200]);
-                        assert_eq!(frames[1], [300, 400]);
-                        assert_eq!(data.get_sample_rate(), 44100);
-                    }
-                    _ => panic!("Expected I16 chunk"),
+            pmoaudio::_AudioSegment::Chunk(chunk) => match chunk.as_ref() {
+                AudioChunk::I16(data) => {
+                    let frames = data.get_frames();
+                    assert_eq!(frames.len(), 2);
+                    assert_eq!(frames[0], [100, 200]);
+                    assert_eq!(frames[1], [300, 400]);
+                    assert_eq!(data.get_sample_rate(), 44100);
                 }
-            }
+                _ => panic!("Expected I16 chunk"),
+            },
             _ => panic!("Expected audio chunk"),
         }
     }
@@ -753,7 +898,7 @@ mod tests {
         // Create mock PCM data (2 frames, mono, 16-bit)
         let chunk_bytes = vec![
             100u8, 0, // Frame 1
-            200, 0,   // Frame 2
+            200, 0, // Frame 2
         ];
 
         let info = StreamInfo {
@@ -808,17 +953,15 @@ mod tests {
         let segment = bytes_to_segment(&chunk_bytes, &info, 1, 0, 0.0).unwrap();
 
         match &segment.segment {
-            pmoaudio::_AudioSegment::Chunk(chunk) => {
-                match chunk.as_ref() {
-                    AudioChunk::I24(data) => {
-                        let frames = data.get_frames();
-                        assert_eq!(frames.len(), 1);
-                        assert_eq!(frames[0][0].as_i32(), 1000);
-                        assert_eq!(frames[0][1].as_i32(), -1000);
-                    }
-                    _ => panic!("Expected I24 chunk"),
+            pmoaudio::_AudioSegment::Chunk(chunk) => match chunk.as_ref() {
+                AudioChunk::I24(data) => {
+                    let frames = data.get_frames();
+                    assert_eq!(frames.len(), 1);
+                    assert_eq!(frames[0][0].as_i32(), 1000);
+                    assert_eq!(frames[0][1].as_i32(), -1000);
                 }
-            }
+                _ => panic!("Expected I24 chunk"),
+            },
             _ => panic!("Expected audio chunk"),
         }
     }
@@ -843,16 +986,14 @@ mod tests {
         let segment = bytes_to_segment(&chunk_bytes, &info, 1, 0, 0.0).unwrap();
 
         match &segment.segment {
-            pmoaudio::_AudioSegment::Chunk(chunk) => {
-                match chunk.as_ref() {
-                    AudioChunk::I32(data) => {
-                        let frames = data.get_frames();
-                        assert_eq!(frames.len(), 1);
-                        assert_eq!(frames[0], [4096, 8192]);
-                    }
-                    _ => panic!("Expected I32 chunk"),
+            pmoaudio::_AudioSegment::Chunk(chunk) => match chunk.as_ref() {
+                AudioChunk::I32(data) => {
+                    let frames = data.get_frames();
+                    assert_eq!(frames.len(), 1);
+                    assert_eq!(frames[0], [4096, 8192]);
                 }
-            }
+                _ => panic!("Expected I32 chunk"),
+            },
             _ => panic!("Expected audio chunk"),
         }
     }

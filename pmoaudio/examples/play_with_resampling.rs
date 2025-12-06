@@ -52,8 +52,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     resampler.register(Box::new(converter));
     converter.register(Box::new(sink));
 
-    println!("Pipeline créé: FileSource → Resampling({} Hz) → ToI24 → AudioSink",
-             target_sample_rate);
+    println!(
+        "Pipeline créé: FileSource → Resampling({} Hz) → ToI24 → AudioSink",
+        target_sample_rate
+    );
     println!("Démarrage de la lecture...");
     println!("Appuyez sur Ctrl+C pour arrêter");
 
@@ -63,7 +65,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Gérer Ctrl+C
     tokio::spawn(async move {
-        tokio::signal::ctrl_c().await.expect("Failed to listen for Ctrl+C");
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to listen for Ctrl+C");
         println!("\nArrêt demandé...");
         stop_token_clone.cancel();
     });

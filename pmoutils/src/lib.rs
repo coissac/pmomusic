@@ -20,6 +20,7 @@ pub mod ip_utils;
 pub use ip_utils::guess_local_ip;
 pub mod process;
 pub use process::{ProcessPortInfo, TransportProtocol, find_process_using_port};
+use xmltree::{Element, EmitterConfig};
 
 /// Retourne une chaîne décrivant le système d'exploitation et sa version.
 ///
@@ -50,5 +51,26 @@ pub fn get_os_string() -> String {
         format!("{}/{}", os_type, version)
     } else {
         format!("{}/Unknown", os_type)
+    }
+}
+
+/// Trait générique pour obtenir un élément XML (xmltree::Element).
+///
+/// Aligné sur la signature utilisée dans pmoupnp (UpnpObject::to_xml_element),
+/// afin de pouvoir factoriser la sérialisation XML entre crates.
+pub trait ToXmlElement {
+    /// Convertit l'objet en élément XML.
+    fn to_xml_element(&self) -> Element;
+
+    /// Sérialise en chaîne XML formatée.
+    fn to_xml(&self) -> String {
+        let elem = self.to_xml_element();
+        let config = EmitterConfig::new()
+            .perform_indent(true)
+            .indent_string("  ");
+        let mut buf = Vec::new();
+        elem.write_with_config(&mut buf, config)
+            .expect("Failed to write XML");
+        String::from_utf8(buf).expect("Invalid UTF-8")
     }
 }

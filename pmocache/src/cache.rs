@@ -12,10 +12,42 @@ use anyhow::{anyhow, bail, Result};
 use serde_json::{Number, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::RwLock;
 use tracing;
+
+/// Informations transmises lors de la diffusion d'un élément du cache via HTTP.
+///
+/// - Emis uniquement quand une réponse 2xx est renvoyée par les routes HTTP générées
+///   (fichier complet, stream progressif ou variante générée).
+/// - Inclut le qualifier utilisé pour la requête afin de distinguer `orig`, `stream`, etc.
+/// - Peut être utilisé pour synchroniser des clients (ex: WebSocket) ou tracer les hits.
+#[derive(Debug, Clone)]
+pub struct CacheBroadcastEvent {
+    /// Identifiant unique du fichier servi.
+    pub pk: String,
+    /// Qualifier (paramètre de route) utilisé pour cette diffusion.
+    pub qualifier: String,
+    /// Nom logique du cache (`CacheConfig::cache_name`).
+    pub cache_name: &'static str,
+    /// Type du cache (`CacheConfig::cache_type`).
+    pub cache_type: &'static str,
+}
+
+/// Handle retourné lors de l'abonnement à un évènement de diffusion.
+///
+/// Conservez-le pour pouvoir vous désabonner explicitement via
+/// [`Cache::unsubscribe_broadcast`]. Le couple `(pk, id)` identifie de manière
+/// unique la callback enregistrée.
+#[derive(Debug, Clone)]
+pub struct CacheSubscription {
+    pub pk: String,
+    pub id: u64,
+}
+
+type CacheServeCallback = Arc<dyn Fn(&CacheBroadcastEvent) -> bool + Send + Sync>;
 
 /// Taille minimale de prébuffering par défaut (512 KB = ~5 secondes de FLAC)
 pub const DEFAULT_PREBUFFER_SIZE: u64 = 512 * 1024;
@@ -59,6 +91,10 @@ pub struct Cache<C: CacheConfig> {
     pub db: Arc<DB>,
     /// Map des downloads en cours (pk -> Download)
     downloads: Arc<RwLock<HashMap<String, Arc<Download>>>>,
+    /// Callback(s) à déclencher lorsqu'un élément est servi via HTTP (pk -> callbacks)
+    serve_subscribers: Arc<RwLock<HashMap<String, Vec<(u64, CacheServeCallback)>>>>,
+    /// Générateur d'identifiants uniques pour les abonnements
+    subscriber_counter: AtomicU64,
     /// Factory pour créer des transformers (optionnel)
     transformer_factory: Option<Arc<dyn Fn() -> StreamTransformer + Send + Sync>>,
     /// Taille minimale de prébuffering en octets (0 = désactivé)
@@ -70,7 +106,8 @@ pub struct Cache<C: CacheConfig> {
 impl<C: CacheConfig> Cache<C> {
     /// Retourne le chemin du fichier marker de complétion
     fn get_completion_marker_path(&self, pk: &str) -> PathBuf {
-        self.get_file_path(pk).with_extension(format!("{}.complete", C::file_extension()))
+        self.get_file_path(pk)
+            .with_extension(format!("{}.complete", C::file_extension()))
     }
 
     /// Vérifie si un fichier est en cache et complet
@@ -78,7 +115,7 @@ impl<C: CacheConfig> Cache<C> {
     /// # Returns
     ///
     /// - `Ok(true)` si le fichier est en cache et complet (fichier .complete existe)
-    /// - `Ok(false)` si le fichier n'est pas en cache ou incomplet (et supprime les fichiers incomplets)
+    /// - `Ok(false)` si le fichier n'est pas en cache ou incomplet (et supprime les fichiers incomplets SI aucun download en cours)
     /// - `Err` en cas d'erreur
     async fn check_cached_and_complete(&self, pk: &str) -> Result<bool> {
         if self.db.get(pk, false).is_ok() {
@@ -91,12 +128,34 @@ impl<C: CacheConfig> Cache<C> {
                     tracing::debug!("File with pk {} is complete (marker exists)", pk);
                     return Ok(true);
                 } else {
+                    // Vérifier si un download est en cours avant de supprimer
+                    let is_downloading = {
+                        let downloads = self.downloads.read().await;
+                        downloads.contains_key(pk)
+                    };
+
+                    if is_downloading {
+                        tracing::debug!(
+                            "File with pk {} has no completion marker but download is in progress, waiting",
+                            pk
+                        );
+                        return Ok(false);
+                    }
+
                     tracing::warn!(
-                        "File with pk {} in cache has no completion marker, will re-download/re-ingest",
+                        "File with pk {} in cache has no completion marker and no download in progress, will re-download/re-ingest",
                         pk
                     );
-                    // Supprimer le fichier incomplet
+                    // Supprimer le fichier incomplet ET l'entrée DB seulement si pas de download en cours
                     let _ = std::fs::remove_file(&file_path);
+                    let _ = std::fs::remove_file(&completion_marker); // Nettoyer aussi le marker s'il existe
+                    if let Err(e) = self.db.delete(pk) {
+                        tracing::warn!(
+                            "Failed to delete DB entry for incomplete file {}: {}",
+                            pk,
+                            e
+                        );
+                    }
                     return Ok(false);
                 }
             }
@@ -118,10 +177,15 @@ impl<C: CacheConfig> Cache<C> {
         };
 
         if let Some(download) = download_handle {
-            tracing::debug!("Download already in progress for pk {}, waiting for prebuffering", pk);
+            tracing::debug!(
+                "Download already in progress for pk {}, waiting for prebuffering",
+                pk
+            );
 
             if self.min_prebuffer_size > 0 {
-                download.wait_until_min_size(self.min_prebuffer_size).await
+                download
+                    .wait_until_min_size(self.min_prebuffer_size)
+                    .await
                     .map_err(|e| anyhow!("Prebuffering failed: {}", e))?;
                 tracing::debug!("Prebuffering complete for pk {}", pk);
             }
@@ -135,12 +199,74 @@ impl<C: CacheConfig> Cache<C> {
     /// Finalise l'ajout d'un fichier au cache
     ///
     /// Cette fonction helper gère le prébuffering et le nettoyage en background
-    async fn finalize_download(&self, pk: &str, download: Arc<Download>) -> Result<String> {
+    async fn finalize_download(
+        &self,
+        pk: &str,
+        download: Arc<Download>,
+        collection: Option<&str>,
+        origin_url: Option<&str>,
+    ) -> Result<String> {
         // Attendre le prébuffering (pour le cache progressif)
         if self.min_prebuffer_size > 0 {
-            download.wait_until_min_size(self.min_prebuffer_size).await
+            download
+                .wait_until_min_size(self.min_prebuffer_size)
+                .await
                 .map_err(|e| anyhow!("Prebuffering failed: {}", e))?;
-            tracing::debug!("Prebuffering complete for pk {} ({} bytes)", pk, self.min_prebuffer_size);
+            tracing::debug!(
+                "Prebuffering complete for pk {} ({} bytes)",
+                pk,
+                self.min_prebuffer_size
+            );
+        }
+
+        // Ajouter à la DB une fois le prébuffer terminé
+        self.db.add(pk, None, collection)?;
+        if let Some(url) = origin_url {
+            self.db.set_origin_url(pk, url)?;
+        }
+
+        // Sauvegarder les métadonnées techniques du transformer
+        if let Some(transform) = download.transform_metadata().await {
+            tracing::debug!(
+                "Cache: Got transform metadata for pk {}: sr={:?}, bps={:?}, ch={:?}, ts={:?}",
+                pk,
+                transform.sample_rate,
+                transform.bits_per_sample,
+                transform.channels,
+                transform.total_samples
+            );
+
+            if let Some(sr) = transform.sample_rate {
+                self.db
+                    .set_a_metadata(pk, "sample_rate", serde_json::json!(sr))?;
+            }
+            if let Some(bps) = transform.bits_per_sample {
+                self.db
+                    .set_a_metadata(pk, "bits_per_sample", serde_json::json!(bps))?;
+            }
+            if let Some(ch) = transform.channels {
+                self.db
+                    .set_a_metadata(pk, "channels", serde_json::json!(ch))?;
+            }
+            if let Some(ts) = transform.total_samples {
+                self.db
+                    .set_a_metadata(pk, "total_samples", serde_json::json!(ts))?;
+
+                // Calculer la durée à partir de total_samples et sample_rate
+                if let Some(sr) = transform.sample_rate {
+                    if sr > 0 {
+                        let secs = (ts as f64 / sr as f64).round() as u64;
+                        self.db
+                            .set_a_metadata(pk, "duration_secs", serde_json::json!(secs))?;
+                    }
+                }
+            }
+        } else {
+            tracing::debug!("Cache: No transform metadata available for pk {}", pk);
+        }
+
+        if let Err(e) = self.enforce_limit().await {
+            tracing::warn!("Error enforcing cache limit: {}", e);
         }
 
         // Lancer une tâche de nettoyage et marquage de complétion en background
@@ -155,7 +281,11 @@ impl<C: CacheConfig> Cache<C> {
             // Créer le fichier marker de complétion si le téléchargement a réussi
             if result.is_ok() {
                 if let Err(e) = std::fs::write(&completion_marker, "") {
-                    tracing::warn!("Failed to create completion marker for pk {}: {}", pk_clone, e);
+                    tracing::warn!(
+                        "Failed to create completion marker for pk {}: {}",
+                        pk_clone,
+                        e
+                    );
                 } else {
                     tracing::debug!("Created completion marker for pk {}", pk_clone);
                 }
@@ -225,6 +355,8 @@ impl<C: CacheConfig> Cache<C> {
             limit,
             db: Arc::new(db),
             downloads: Arc::new(RwLock::new(HashMap::new())),
+            serve_subscribers: Arc::new(RwLock::new(HashMap::new())),
+            subscriber_counter: AtomicU64::new(1),
             transformer_factory,
             min_prebuffer_size: DEFAULT_PREBUFFER_SIZE,
             _phantom: std::marker::PhantomData,
@@ -259,6 +391,102 @@ impl<C: CacheConfig> Cache<C> {
         self.min_prebuffer_size
     }
 
+    /// S'abonne aux diffusions HTTP pour un `pk` donné.
+    ///
+    /// La callback est appelée à chaque fois qu'un élément est servi avec succès via les routes
+    /// HTTP du cache. Si la callback retourne `false`, elle est automatiquement désinscrite ;
+    /// retourner `true` permet de rester abonné aux diffusions suivantes.
+    ///
+    /// Retourne un [`CacheSubscription`] à conserver pour se désabonner explicitement via
+    /// [`Cache::unsubscribe_broadcast`].
+    ///
+    /// # Exemple
+    ///
+    /// ```rust,no_run
+    /// use pmocache::{Cache, CacheConfig, CacheSubscription};
+    /// use std::sync::Arc;
+    ///
+    /// struct MyConfig;
+    /// impl CacheConfig for MyConfig {
+    ///     fn file_extension() -> &'static str { "dat" }
+    /// }
+    ///
+    /// # async fn demo() -> anyhow::Result<()> {
+    /// let cache = Arc::new(Cache::<MyConfig>::new("/tmp/cache", 100)?);
+    /// let token: CacheSubscription = cache
+    ///     .subscribe_broadcast("abc123", |event| {
+    ///         println!("{} served with param {}", event.pk, event.qualifier);
+    ///         // Retourner true pour rester abonné
+    ///         true
+    ///     })
+    ///     .await;
+    ///
+    /// // ... plus tard, pour se désabonner explicitement :
+    /// cache.unsubscribe_broadcast(&token).await;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn subscribe_broadcast<F>(
+        &self,
+        pk: impl Into<String>,
+        callback: F,
+    ) -> CacheSubscription
+    where
+        F: Fn(&CacheBroadcastEvent) -> bool + Send + Sync + 'static,
+    {
+        let pk = pk.into();
+        let id = self.subscriber_counter.fetch_add(1, Ordering::Relaxed);
+        let mut subscribers = self.serve_subscribers.write().await;
+        subscribers
+            .entry(pk.clone())
+            .or_default()
+            .push((id, Arc::new(callback)));
+
+        CacheSubscription { pk, id }
+    }
+
+    /// Désabonne une callback précédemment enregistrée via [`Cache::subscribe_broadcast`].
+    ///
+    /// N'a aucun effet si le token est inconnu ou déjà désinscrit.
+    pub async fn unsubscribe_broadcast(&self, token: &CacheSubscription) {
+        let mut subscribers = self.serve_subscribers.write().await;
+        if let Some(list) = subscribers.get_mut(&token.pk) {
+            list.retain(|(id, _)| *id != token.id);
+            if list.is_empty() {
+                subscribers.remove(&token.pk);
+            }
+        }
+    }
+
+    /// Notifie les abonnés qu'un élément du cache a été diffusé via HTTP.
+    ///
+    /// Interne au crate : les routes Axum appellent cette méthode lorsqu'une réponse 2xx est
+    /// renvoyée. Les callbacks qui retournent `false` sont retirées.
+    pub(crate) async fn notify_broadcast(&self, pk: &str, qualifier: &str) {
+        let mut subscribers = self.serve_subscribers.write().await;
+        if let Some(callbacks) = subscribers.get_mut(pk) {
+            let event = CacheBroadcastEvent {
+                pk: pk.to_string(),
+                qualifier: qualifier.to_string(),
+                cache_name: C::cache_name(),
+                cache_type: C::cache_type(),
+            };
+
+            let mut to_keep = Vec::new();
+            for (id, callback) in callbacks.drain(..) {
+                if callback(&event) {
+                    to_keep.push((id, callback));
+                }
+            }
+
+            if to_keep.is_empty() {
+                subscribers.remove(pk);
+            } else {
+                callbacks.extend(to_keep);
+            }
+        }
+    }
+
     /// Télécharge un fichier depuis une URL et l'ajoute au cache
     ///
     /// Cette méthode utilise un système d'identifiants basé sur le contenu plutôt que sur l'URL.
@@ -288,8 +516,28 @@ impl<C: CacheConfig> Cache<C> {
     /// Deux URLs différentes pointant vers le même contenu auront le même pk,
     /// permettant une déduplication automatique.
     pub async fn add_from_url(&self, url: &str, collection: Option<&str>) -> Result<String> {
-        // 1. Télécharger les 512 premiers octets pour calculer le pk
-        let header = crate::download::peek_header(url, 512)
+        // 0. Vérifier d'abord si cette URL est déjà en cache (optimisation réseau)
+        if let Ok(Some(existing_pk)) = self.db.get_pk_by_origin_url(url) {
+            // Vérifier que le fichier est toujours complet et valide
+            if self.check_cached_and_complete(&existing_pk).await? {
+                tracing::debug!(
+                    "URL {} already in cache with pk {}, skipping download",
+                    url,
+                    existing_pk
+                );
+                self.db.update_hit(&existing_pk)?;
+                return Ok(existing_pk);
+            } else {
+                tracing::debug!(
+                    "URL {} found in DB with pk {} but file is incomplete, re-downloading",
+                    url,
+                    existing_pk
+                );
+            }
+        }
+
+        // 1. Télécharger les 2048 premiers octets pour calculer le pk
+        let header = crate::download::peek_header(url, 2048)
             .await
             .map_err(|e| anyhow!("Failed to peek header: {}", e))?;
 
@@ -321,17 +569,9 @@ impl<C: CacheConfig> Cache<C> {
             downloads.insert(pk.clone(), download.clone());
         }
 
-        // Ajouter immédiatement à la DB
-        self.db.add(&pk, None, collection)?;
-        self.db.set_origin_url(&pk, url)?;
-
-        // Appliquer la politique d'éviction LRU si nécessaire
-        if let Err(e) = self.enforce_limit().await {
-            tracing::warn!("Error enforcing cache limit: {}", e);
-        }
-
         // Finaliser avec prébuffering et nettoyage
-        self.finalize_download(&pk, download).await
+        self.finalize_download(&pk, download, collection, Some(url))
+            .await
     }
 
     /// Ajoute un fichier à partir d'un flux asynchrone.
@@ -368,7 +608,8 @@ impl<C: CacheConfig> Cache<C> {
     where
         R: AsyncRead + Send + Unpin + 'static,
     {
-        self.add_from_reader_with_pk(source_uri, reader, length, collection, None).await
+        self.add_from_reader_with_pk(source_uri, reader, length, collection, None)
+            .await
     }
 
     /// Ajoute un fichier à partir d'un flux avec un pk explicite optionnel.
@@ -442,17 +683,9 @@ impl<C: CacheConfig> Cache<C> {
             downloads.insert(pk.clone(), download.clone());
         }
 
-        self.db.add(&pk, None, collection)?;
-        if let Some(uri) = source_uri {
-            self.db.set_origin_url(&pk, uri)?;
-        }
-
-        if let Err(e) = self.enforce_limit().await {
-            tracing::warn!("Error enforcing cache limit: {}", e);
-        }
-
         // Finaliser avec prébuffering et nettoyage
-        self.finalize_download(&pk, download).await
+        self.finalize_download(&pk, download, collection, source_uri)
+            .await
     }
 
     /// Ajoute un fichier local au cache

@@ -3,8 +3,13 @@
 //! Parser et utilitaires pour le format DIDL-Lite utilisé dans UPnP/DLNA.
 
 use bevy_reflect::Reflect;
+use pmoutils::ToXmlElement;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
+use std::collections::HashSet;
 use std::fmt::Write;
+use std::io::Cursor;
+use xmltree::{Element, XMLNode};
 
 // ============= Couche d'abstraction générique =============
 
@@ -68,7 +73,8 @@ impl MediaMetadataParser for DIDLLite {
     type Error = quick_xml::de::DeError;
 
     fn parse(input: &str) -> Result<Self, Self::Error> {
-        quick_xml::de::from_str(input)
+        let sanitized = sanitize_singleton_elements(input);
+        quick_xml::de::from_str(sanitized.as_ref())
     }
 
     fn format_name() -> &'static str {
@@ -116,7 +122,7 @@ pub struct Container {
     #[serde(rename = "@id")]
     pub id: String,
 
-    #[serde(rename = "@parentID")]
+    #[serde(rename = "@parentID", default)]
     pub parent_id: String,
 
     #[serde(rename = "@restricted", skip_serializing_if = "Option::is_none")]
@@ -131,7 +137,7 @@ pub struct Container {
     #[serde(rename = "dc:title", alias = "title")]
     pub title: String,
 
-    #[serde(rename = "upnp:class", alias = "class")]
+    #[serde(rename = "upnp:class", alias = "class", default)]
     pub class: String,
 
     #[serde(rename = "container", default)]
@@ -147,7 +153,7 @@ pub struct Item {
     #[serde(rename = "@id")]
     pub id: String,
 
-    #[serde(rename = "@parentID")]
+    #[serde(rename = "@parentID", default)]
     pub parent_id: String,
 
     #[serde(rename = "@restricted", skip_serializing_if = "Option::is_none")]
@@ -163,7 +169,7 @@ pub struct Item {
     )]
     pub creator: Option<String>,
 
-    #[serde(rename = "upnp:class", alias = "class")]
+    #[serde(rename = "upnp:class", alias = "class", default)]
     pub class: String,
 
     #[serde(
@@ -221,7 +227,7 @@ pub struct Item {
 /// Ressource média (fichier audio)
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema, Reflect)]
 pub struct Resource {
-    #[serde(rename = "@protocolInfo")]
+    #[serde(rename = "@protocolInfo", default)]
     pub protocol_info: String,
 
     #[serde(rename = "@bitsPerSample", skip_serializing_if = "Option::is_none")]
@@ -236,7 +242,7 @@ pub struct Resource {
     #[serde(rename = "@duration", skip_serializing_if = "Option::is_none")]
     pub duration: Option<String>,
 
-    #[serde(rename = "$text")]
+    #[serde(rename = "$text", default)]
     pub url: String,
 }
 
@@ -274,6 +280,26 @@ impl Default for DIDLLite {
 }
 
 impl DIDLLite {
+    /// Applique les namespaces sur un élément xmltree.
+    fn set_namespaces(&self, elem: &mut Element) {
+        elem.attributes.insert("xmlns".into(), self.xmlns.clone());
+        if let Some(ref upnp) = self.xmlns_upnp {
+            elem.attributes.insert("xmlns:upnp".into(), upnp.clone());
+        }
+        if let Some(ref dc) = self.xmlns_dc {
+            elem.attributes.insert("xmlns:dc".into(), dc.clone());
+        }
+        if let Some(ref dlna) = self.xmlns_dlna {
+            elem.attributes.insert("xmlns:dlna".into(), dlna.clone());
+        }
+        if let Some(ref sec) = self.xmlns_sec {
+            elem.attributes.insert("xmlns:sec".into(), sec.clone());
+        }
+        if let Some(ref pv) = self.xmlns_pv {
+            elem.attributes.insert("xmlns:pv".into(), pv.clone());
+        }
+    }
+
     /// Itère sur tous les containers de manière récursive
     pub fn all_containers(&self) -> impl Iterator<Item = &Container> {
         AllContainersIter::new(&self.containers)
@@ -378,6 +404,19 @@ impl Container {
 }
 
 impl Item {
+    /// Formate la date pour satisfaire les clients stricts (YYYY-MM-DD). Si seule
+    /// l'année est fournie, on complète avec "-01-01".
+    fn normalized_date(&self) -> Option<String> {
+        self.date.as_ref().map(|d| {
+            let trimmed = d.trim();
+            if trimmed.len() == 4 && trimmed.chars().all(|c| c.is_ascii_digit()) {
+                format!("{}-01-01", trimmed)
+            } else {
+                trimmed.to_string()
+            }
+        })
+    }
+
     /// Itère sur les ressources audio uniquement
     pub fn audio_resources(&self) -> impl Iterator<Item = &Resource> {
         self.resources
@@ -490,6 +529,238 @@ impl Item {
         }
 
         buf.push('\n');
+    }
+}
+
+// ============= Implémentation ToXmlElement =============
+
+fn text_element(name: &str, value: &str) -> Element {
+    let mut e = Element::new(name);
+    e.children.push(XMLNode::Text(value.to_string()));
+    e
+}
+
+const SINGLETON_ELEMENTS: &[&str] = &[
+    "dc:title",
+    "title",
+    "dc:creator",
+    "creator",
+    "upnp:class",
+    "class",
+    "upnp:artist",
+    "artist",
+    "upnp:album",
+    "album",
+    "upnp:genre",
+    "genre",
+    "upnp:albumArtURI",
+    "albumArtURI",
+    "dc:date",
+    "date",
+    "upnp:originalTrackNumber",
+    "originalTrackNumber",
+];
+
+fn sanitize_singleton_elements(input: &str) -> Cow<'_, str> {
+    if !SINGLETON_ELEMENTS.iter().any(|tag| input.contains(tag)) {
+        return Cow::Borrowed(input);
+    }
+
+    let mut cursor = Cursor::new(input.as_bytes());
+    let mut root = match Element::parse(&mut cursor) {
+        Ok(elem) => elem,
+        Err(_) => return Cow::Borrowed(input),
+    };
+
+    if !dedup_singleton_children(&mut root) {
+        return Cow::Borrowed(input);
+    }
+
+    let mut buf = Vec::new();
+    if root.write(&mut buf).is_err() {
+        return Cow::Borrowed(input);
+    }
+
+    String::from_utf8(buf)
+        .map(Cow::Owned)
+        .unwrap_or_else(|_| Cow::Borrowed(input))
+}
+
+fn dedup_singleton_children(element: &mut Element) -> bool {
+    let mut changed = false;
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut idx = 0;
+
+    while idx < element.children.len() {
+        let mut remove_current = false;
+        if let XMLNode::Element(child_elem) = &mut element.children[idx] {
+            if SINGLETON_ELEMENTS.contains(&child_elem.name.as_str())
+                && !seen.insert(child_elem.name.clone())
+            {
+                remove_current = true;
+                changed = true;
+            } else if dedup_singleton_children(child_elem) {
+                changed = true;
+            }
+        }
+
+        if remove_current {
+            element.children.remove(idx);
+        } else {
+            idx += 1;
+        }
+    }
+
+    changed
+}
+
+impl ToXmlElement for DIDLLite {
+    fn to_xml_element(&self) -> Element {
+        let mut root = Element::new("DIDL-Lite");
+        self.set_namespaces(&mut root);
+        for c in &self.containers {
+            root.children.push(XMLNode::Element(c.to_xml_element()));
+        }
+        for i in &self.items {
+            root.children.push(XMLNode::Element(i.to_xml_element()));
+        }
+        root
+    }
+}
+
+impl ToXmlElement for Container {
+    fn to_xml_element(&self) -> Element {
+        let mut elem = Element::new("container");
+        elem.attributes.insert("id".into(), self.id.clone());
+        elem.attributes
+            .insert("parentID".into(), self.parent_id.clone());
+        if let Some(ref r) = self.restricted {
+            elem.attributes.insert("restricted".into(), r.clone());
+        }
+        if let Some(ref cc) = self.child_count {
+            elem.attributes.insert("childCount".into(), cc.clone());
+        }
+        if let Some(ref searchable) = self.searchable {
+            elem.attributes
+                .insert("searchable".into(), searchable.clone());
+        }
+
+        elem.children
+            .push(XMLNode::Element(text_element("dc:title", &self.title)));
+        elem.children
+            .push(XMLNode::Element(text_element("upnp:class", &self.class)));
+
+        for c in &self.containers {
+            elem.children.push(XMLNode::Element(c.to_xml_element()));
+        }
+        for i in &self.items {
+            elem.children.push(XMLNode::Element(i.to_xml_element()));
+        }
+
+        elem
+    }
+}
+
+impl ToXmlElement for Item {
+    fn to_xml_element(&self) -> Element {
+        let mut elem = Element::new("item");
+        elem.attributes.insert("id".into(), self.id.clone());
+        elem.attributes
+            .insert("parentID".into(), self.parent_id.clone());
+        if let Some(ref r) = self.restricted {
+            elem.attributes.insert("restricted".into(), r.clone());
+        }
+
+        elem.children
+            .push(XMLNode::Element(text_element("dc:title", &self.title)));
+
+        if let Some(ref c) = self.creator {
+            elem.children
+                .push(XMLNode::Element(text_element("dc:creator", c)));
+        }
+
+        elem.children
+            .push(XMLNode::Element(text_element("upnp:class", &self.class)));
+
+        if let Some(ref artist) = self.artist {
+            elem.children
+                .push(XMLNode::Element(text_element("upnp:artist", artist)));
+        }
+        if let Some(ref album) = self.album {
+            elem.children
+                .push(XMLNode::Element(text_element("upnp:album", album)));
+        }
+        if let Some(ref genre) = self.genre {
+            elem.children
+                .push(XMLNode::Element(text_element("upnp:genre", genre)));
+        }
+        if let Some(ref art) = self.album_art {
+            elem.children
+                .push(XMLNode::Element(text_element("upnp:albumArtURI", art)));
+        }
+        if let Some(date) = self.normalized_date() {
+            elem.children
+                .push(XMLNode::Element(text_element("dc:date", &date)));
+        }
+        if let Some(ref track) = self.original_track_number {
+            elem.children.push(XMLNode::Element(text_element(
+                "upnp:originalTrackNumber",
+                track,
+            )));
+        }
+
+        for res in &self.resources {
+            elem.children.push(XMLNode::Element(res.to_xml_element()));
+        }
+        for desc in &self.descriptions {
+            elem.children.push(XMLNode::Element(desc.to_xml_element()));
+        }
+
+        elem
+    }
+}
+
+impl ToXmlElement for Resource {
+    fn to_xml_element(&self) -> Element {
+        let mut elem = Element::new("res");
+        elem.attributes
+            .insert("protocolInfo".into(), self.protocol_info.clone());
+        if let Some(ref bps) = self.bits_per_sample {
+            elem.attributes.insert("bitsPerSample".into(), bps.clone());
+        }
+        if let Some(ref freq) = self.sample_frequency {
+            elem.attributes
+                .insert("sampleFrequency".into(), freq.clone());
+        }
+        if let Some(ref ch) = self.nr_audio_channels {
+            elem.attributes.insert("nrAudioChannels".into(), ch.clone());
+        }
+        if let Some(ref dur) = self.duration {
+            elem.attributes.insert("duration".into(), dur.clone());
+        }
+        elem.children.push(XMLNode::Text(self.url.clone()));
+        elem
+    }
+}
+
+impl ToXmlElement for Description {
+    fn to_xml_element(&self) -> Element {
+        let mut elem = Element::new("desc");
+        if let Some(ref id) = self.id {
+            elem.attributes.insert("id".into(), id.clone());
+        }
+        if let Some(ref ns) = self.namespace {
+            elem.attributes.insert("nameSpace".into(), ns.clone());
+        }
+        if let Some(ref gain) = self.track_gain {
+            elem.children
+                .push(XMLNode::Element(text_element("track_gain", gain)));
+        }
+        if let Some(ref peak) = self.track_peak {
+            elem.children
+                .push(XMLNode::Element(text_element("track_peak", peak)));
+        }
+        elem
     }
 }
 

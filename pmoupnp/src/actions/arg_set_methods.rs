@@ -1,7 +1,7 @@
 use crate::UpnpModel;
 use crate::actions::ArgInstanceSet;
 use crate::{UpnpObject, actions::ArgumentSet};
-use xmltree::Element;
+use xmltree::{Element, XMLNode};
 
 impl UpnpObject for ArgumentSet {
     // Méthode pour convertir en XML (à implémenter avec une librairie XML)
@@ -9,11 +9,8 @@ impl UpnpObject for ArgumentSet {
         let mut elem = Element::new("argumentList");
 
         for arg in self.all() {
-            let arg_elem = arg.to_xml_element(); // toujours un <argumentList> contenant 1 ou 2 <argument>
-
-            // Pour InOut, on ajoute tous les enfants du <argumentList> généré
-            for child in arg_elem.children {
-                elem.children.push(child);
+            for arg_elem in arg.to_xml_elements() {
+                elem.children.push(XMLNode::Element(arg_elem));
             }
         }
 

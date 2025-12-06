@@ -11,7 +11,7 @@ use crate::{
 use futures_util::StreamExt;
 use pmoaudio::{
     nodes::{AudioError, TypedAudioNode, DEFAULT_CHUNK_DURATION_MS},
-    pipeline::{Node, NodeLogic},
+    pipeline::{send_to_children, send_to_children_with_timing, Node, NodeLogic},
     type_constraints::TypeRequirement,
     AudioPipelineNode, AudioSegment, SyncMarker, I24,
 };
@@ -19,11 +19,11 @@ use pmoflac::decode_audio_stream;
 use pmometadata::{MemoryTrackMetadata, TrackMetadata};
 use std::{
     collections::VecDeque,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 use tokio::io::AsyncReadExt;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, Notify, RwLock};
 use tokio_util::{io::StreamReader, sync::CancellationToken};
 
 /// Signal spécial pour indiquer qu'il n'y aura plus de blocs
@@ -34,6 +34,58 @@ pub const END_OF_BLOCKS_SIGNAL: EventId = EventId::MAX;
 /// Nombre de blocs récents à mémoriser pour éviter les re-téléchargements
 const RECENT_BLOCKS_CACHE_SIZE: usize = 10;
 
+/// Handle pour alimenter la queue de blocs pendant que la source tourne.
+#[derive(Clone, Default)]
+pub struct BlockQueueHandle {
+    queue: Arc<Mutex<VecDeque<EventId>>>,
+    notify: Arc<Notify>,
+}
+
+impl BlockQueueHandle {
+    fn new() -> Self {
+        Self {
+            queue: Arc::new(Mutex::new(VecDeque::new())),
+            notify: Arc::new(Notify::new()),
+        }
+    }
+
+    /// Enfile un block pour traitement.
+    pub fn enqueue(&self, event_id: EventId) {
+        {
+            let mut queue = self.queue.lock().expect("block queue poisoned");
+            queue.push_back(event_id);
+        }
+        self.notify.notify_one();
+    }
+
+    /// Retire le prochain block s'il existe.
+    fn pop(&self) -> Option<EventId> {
+        let mut queue = self.queue.lock().expect("block queue poisoned");
+        queue.pop_front()
+    }
+
+    /// Nombre d'éléments en attente.
+    pub fn len(&self) -> usize {
+        let queue = self.queue.lock().expect("block queue poisoned");
+        queue.len()
+    }
+
+    fn snapshot(&self) -> Vec<EventId> {
+        let queue = self.queue.lock().expect("block queue poisoned");
+        queue.iter().copied().collect()
+    }
+
+    fn front(&self) -> Option<EventId> {
+        let queue = self.queue.lock().expect("block queue poisoned");
+        queue.front().copied()
+    }
+
+    fn back(&self) -> Option<EventId> {
+        let queue = self.queue.lock().expect("block queue poisoned");
+        queue.back().copied()
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // RadioParadiseStreamSourceLogic - Logique métier pure
 // ═══════════════════════════════════════════════════════════════════════════
@@ -43,12 +95,21 @@ pub struct RadioParadiseStreamSourceLogic {
     client: RadioParadiseClient,
     chunk_frames: usize,
     recent_blocks: VecDeque<EventId>,
-    block_queue: VecDeque<EventId>,
+    block_queue: BlockQueueHandle,
     stats: Arc<NodeStats>,
 }
 
 impl RadioParadiseStreamSourceLogic {
     pub fn new(client: RadioParadiseClient, chunk_duration_ms: u32) -> Self {
+        let handle = BlockQueueHandle::new();
+        Self::with_queue(client, chunk_duration_ms, handle)
+    }
+
+    fn with_queue(
+        client: RadioParadiseClient,
+        chunk_duration_ms: u32,
+        block_queue: BlockQueueHandle,
+    ) -> Self {
         // Calculer chunk_frames pour la durée cible (on suppose 44.1kHz)
         let chunk_frames = ((chunk_duration_ms as f64 / 1000.0) * 44100.0) as usize;
 
@@ -56,14 +117,14 @@ impl RadioParadiseStreamSourceLogic {
             client,
             chunk_frames,
             recent_blocks: VecDeque::with_capacity(RECENT_BLOCKS_CACHE_SIZE),
-            block_queue: VecDeque::new(),
+            block_queue,
             stats: NodeStats::new("RadioParadiseStreamSource"),
         }
     }
 
     /// Ajoute un block ID à la file d'attente
-    pub fn push_block_id(&mut self, event_id: EventId) {
-        self.block_queue.push_back(event_id);
+    pub fn push_block_id(&self, event_id: EventId) {
+        self.block_queue.enqueue(event_id);
     }
 
     /// Vérifie si un bloc a été téléchargé récemment
@@ -97,7 +158,9 @@ impl RadioParadiseStreamSourceLogic {
             block.length as f64 / 60000.0,
             block.url
         );
-        let response = self.client.client
+        let response = self
+            .client
+            .client
             .get(&block.url)
             .timeout(self.client.block_timeout)
             .send()
@@ -125,9 +188,9 @@ impl RadioParadiseStreamSourceLogic {
 
         // Créer un stream reader
         tracing::debug!("Creating byte stream reader");
-        let byte_stream = response.bytes_stream().map(|result| {
-            result.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
-        });
+        let byte_stream = response
+            .bytes_stream()
+            .map(|result| result.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)));
         let stream_reader = StreamReader::new(byte_stream);
         tracing::debug!("Stream reader created");
 
@@ -140,7 +203,11 @@ impl RadioParadiseStreamSourceLogic {
         let stream_info = decoder.info().clone();
         let sample_rate = stream_info.sample_rate;
         let bits_per_sample = stream_info.bits_per_sample;
-        tracing::debug!("FLAC decoder initialized: {}Hz, {} bits/sample", sample_rate, bits_per_sample);
+        tracing::debug!(
+            "FLAC decoder initialized: {}Hz, {} bits/sample",
+            sample_rate,
+            bits_per_sample
+        );
 
         // Préparer les songs ordonnées pour tracking
         let songs = block.songs_ordered();
@@ -165,13 +232,16 @@ impl RadioParadiseStreamSourceLogic {
         // Envoyer TrackBoundary pour la première song AVANT le premier chunk audio
         // Même si son elapsed > 0, cela garantit que FlacCacheSink a des métadonnées
         // dès le début (sinon il attendrait indéfiniment un TrackBoundary)
-        let mut next_song: Option<(usize, &Song)> = if let Some((idx, song)) = songs.get(0).copied() {
-            tracing::debug!("Sending TrackBoundary for first song (idx={}, elapsed={}ms) at timestamp 0",
-                idx, song.elapsed);
+        let mut next_song: Option<(usize, &Song)> = if let Some((idx, song)) = songs.get(0).copied()
+        {
+            tracing::debug!(
+                "Sending TrackBoundary for first song (idx={}, elapsed={}ms) at timestamp 0",
+                idx,
+                song.elapsed
+            );
             let metadata = song_to_metadata(song, block).await;
             let track_boundary = AudioSegment::new_track_boundary(
-                *order,
-                0.0,  // timestamp = 0 au début du stream
+                *order, 0.0, // timestamp = 0 au début du stream
                 metadata,
             );
             self.send_to_children(output, track_boundary).await?;
@@ -182,7 +252,6 @@ impl RadioParadiseStreamSourceLogic {
             None
         };
         tracing::debug!("Starting audio chunk loop");
-
 
         // Buffer pour lecture
         let bytes_per_sample = (bits_per_sample / 8) as usize;
@@ -196,6 +265,7 @@ impl RadioParadiseStreamSourceLogic {
         let mut chunk_count = 0;
         let mut total_bytes_decoded = 0u64;
         let expected_duration_sec = block.length as f64 / 1000.0;
+        let mut stats_last_log = Instant::now();
 
         loop {
             // Vérifier stop_token
@@ -213,7 +283,9 @@ impl RadioParadiseStreamSourceLogic {
 
             // Remplir le buffer
             if pending.len() < chunk_byte_len {
-                let read = decoder.read(&mut read_buf).await
+                let read = decoder
+                    .read(&mut read_buf)
+                    .await
                     .map_err(|e| AudioError::ProcessingError(format!("Read error: {}", e)))?;
 
                 if read == 0 {
@@ -263,22 +335,35 @@ impl RadioParadiseStreamSourceLogic {
                     );
                     let metadata = song_to_metadata(song, block).await;
                     let timestamp_sec = total_samples as f64 / sample_rate as f64;
-                    let track_boundary = AudioSegment::new_track_boundary(
-                        *order,
-                        timestamp_sec,
-                        metadata,
-                    );
+                    let track_boundary =
+                        AudioSegment::new_track_boundary(*order, timestamp_sec, metadata);
                     self.send_to_children(output, track_boundary).await?;
 
                     // Passer à la song suivante
                     song_index += 1;
                     next_song = songs.get(song_index).copied();
-                    tracing::debug!("Moved to next song, song_index={}, next_song present={}", song_index, next_song.is_some());
+                    tracing::debug!(
+                        "Moved to next song, song_index={}, next_song present={}",
+                        song_index,
+                        next_song.is_some()
+                    );
                 }
             }
 
             // Envoyer le chunk audio
             let timestamp_sec = total_samples as f64 / sample_rate as f64;
+            if stats_last_log.elapsed() >= Duration::from_secs(1) {
+                let real_elapsed = start_instant.elapsed().as_secs_f64();
+                tracing::debug!(
+                    "RP timing: chunk={} ts={:.3}s real_elapsed={:.3}s delta={:.3}s chunk_len={} frames",
+                    chunk_count,
+                    timestamp_sec,
+                    real_elapsed,
+                    timestamp_sec - real_elapsed,
+                    chunk_len
+                );
+                stats_last_log = Instant::now();
+            }
             let audio_segment = pcm_to_audio_segment(
                 &pcm_data,
                 *order,
@@ -295,7 +380,11 @@ impl RadioParadiseStreamSourceLogic {
 
         // Retourner le timestamp du dernier chunk (durée totale du bloc) et l'instant de début
         let final_timestamp = total_samples as f64 / sample_rate as f64;
-        tracing::debug!("Block decode complete: {} samples, {:.2}s duration", total_samples, final_timestamp);
+        tracing::debug!(
+            "Block decode complete: {} samples, {:.2}s duration",
+            total_samples,
+            final_timestamp
+        );
 
         Ok((final_timestamp, start_instant))
     }
@@ -306,40 +395,42 @@ impl RadioParadiseStreamSourceLogic {
         output: &[mpsc::Sender<Arc<AudioSegment>>],
         segment: Arc<AudioSegment>,
     ) -> Result<(), AudioError> {
-        self.stats.record_segment_received(segment.timestamp_sec);
+        let segment_ts = segment.timestamp_sec;
+        self.stats.record_segment_received(segment_ts);
 
-        for (i, tx) in output.iter().enumerate() {
-            let capacity_before = tx.capacity();
-            tracing::trace!(
-                "send_to_children: Sending to child {} (channel capacity={}, timestamp={:.3}s)",
-                i, capacity_before, segment.timestamp_sec
-            );
+        let segment_bytes = match &segment.segment {
+            pmoaudio::_AudioSegment::Chunk(chunk) => chunk.len() * 2 * 4,
+            _ => 0,
+        };
 
-            let send_start = std::time::Instant::now();
-            tx.send(segment.clone())
-                .await
-                .map_err(|_| AudioError::ChildDied)?;
-            let send_duration = send_start.elapsed();
-
-            if send_duration.as_millis() > 10 {
-                let duration_ms = send_duration.as_millis() as u64;
-                self.stats.record_backpressure(duration_ms);
-                tracing::debug!(
-                    "send_to_children: Send to child {} BLOCKED for {:.3}s (backpressure triggered, timestamp={:.3}s)",
-                    i, send_duration.as_secs_f64(), segment.timestamp_sec
+        send_to_children_with_timing(
+            std::any::type_name::<Self>(),
+            output,
+            segment,
+            |i, send_duration, capacity_before| {
+                tracing::trace!(
+                    "send_to_children: Sending to child {} (channel capacity={}, timestamp={:.3}s)",
+                    i,
+                    capacity_before,
+                    segment_ts
                 );
-            }
 
-            // Estimer la taille du segment pour les stats (frames * 2 channels * bytes_per_sample)
-            let segment_bytes = match &segment.segment {
-                pmoaudio::_AudioSegment::Chunk(chunk) => {
-                    // Approximation: frames * 2 (stereo) * 4 bytes (i32/f32)
-                    chunk.len() * 2 * 4
+                if send_duration.as_millis() > 10 {
+                    let duration_ms = send_duration.as_millis() as u64;
+                    self.stats.record_backpressure(duration_ms);
+                    tracing::trace!(
+                        "send_to_children: Send to child {} BLOCKED for {:.3}s (channel capacity before send={}, timestamp={:.3}s)",
+                        i,
+                        send_duration.as_secs_f64(),
+                        capacity_before,
+                        segment_ts
+                    );
                 }
-                _ => 0,
-            };
-            self.stats.record_segment_sent(segment_bytes);
-        }
+
+                self.stats.record_segment_sent(segment_bytes);
+            },
+        )
+        .await?;
         Ok(())
     }
 }
@@ -519,8 +610,11 @@ impl NodeLogic for RadioParadiseStreamSourceLogic {
         output: Vec<mpsc::Sender<Arc<AudioSegment>>>,
         stop_token: CancellationToken,
     ) -> Result<(), AudioError> {
-        tracing::debug!("RadioParadiseStreamSource::process() started, block_queue has {} items", self.block_queue.len());
-        for (i, event_id) in self.block_queue.iter().enumerate() {
+        tracing::debug!(
+            "RadioParadiseStreamSource::process() started, block_queue has {} items",
+            self.block_queue.len()
+        );
+        for (i, event_id) in self.block_queue.snapshot().iter().enumerate() {
             tracing::debug!("  block_queue[{}] = {}", i, event_id);
         }
 
@@ -539,21 +633,26 @@ impl NodeLogic for RadioParadiseStreamSourceLogic {
                 }
 
                 // Essayer de pop un event_id
-                if let Some(id) = self.block_queue.pop_front() {
+                if let Some(id) = self.block_queue.pop() {
                     tracing::debug!("Got event_id {} from queue", id);
 
                     // Vérifier si c'est le signal de fin
                     if id == END_OF_BLOCKS_SIGNAL {
-                        tracing::info!("Received END_OF_BLOCKS_SIGNAL, finishing after current block");
+                        tracing::info!(
+                            "Received END_OF_BLOCKS_SIGNAL, finishing after current block"
+                        );
                         break None;
                     }
 
                     break Some(id);
                 }
 
-                // Queue vide, attendre un peu et réessayer
-                tracing::trace!("block_queue is empty, sleeping 100ms...");
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                tracing::trace!("block_queue is empty, waiting for new events...");
+                tokio::select! {
+                    _ = stop_token.cancelled() => break None,
+                    _ = self.block_queue.notify.notified() => {},
+                    _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+                };
             };
 
             // Si on n'a pas d'event_id, on termine
@@ -573,10 +672,10 @@ impl NodeLogic for RadioParadiseStreamSourceLogic {
 
             // Récupérer les métadonnées du bloc
             tracing::debug!("Fetching block metadata for event_id {}...", event_id);
-            let block = self.client
-                .get_block(Some(event_id))
-                .await
-                .map_err(|e| AudioError::ProcessingError(format!("Failed to get block: {}", e)))?;
+            let block =
+                self.client.get_block(Some(event_id)).await.map_err(|e| {
+                    AudioError::ProcessingError(format!("Failed to get block: {}", e))
+                })?;
             tracing::debug!("Block metadata received: url={}", block.url);
 
             // Marquer comme téléchargé
@@ -584,21 +683,26 @@ impl NodeLogic for RadioParadiseStreamSourceLogic {
 
             // Télécharger et décoder le bloc
             tracing::info!("Starting download and decode for block {}...", event_id);
-            let (block_duration, start_instant) = self.download_and_decode_block(&block, &output, &stop_token, &mut order)
+            let (block_duration, start_instant) = self
+                .download_and_decode_block(&block, &output, &stop_token, &mut order)
                 .await?;
             last_timestamp = block_duration;
             last_start_instant = Some(start_instant);
-            tracing::info!("Finished download and decode for block {} (duration: {:.2}s)", event_id, block_duration);
+            tracing::info!(
+                "Finished download and decode for block {} (duration: {:.2}s)",
+                event_id,
+                block_duration
+            );
         }
 
         // Envoyer EndOfStream avec le timestamp du dernier chunk
-        tracing::info!("Sending EndOfStream with timestamp {:.2}s to {} outputs", last_timestamp, output.len());
+        tracing::info!(
+            "Sending EndOfStream with timestamp {:.2}s to {} outputs",
+            last_timestamp,
+            output.len()
+        );
         let eos = AudioSegment::new_end_of_stream(order, last_timestamp);
-        for tx in &output {
-            tx.send(eos.clone())
-                .await
-                .map_err(|_| AudioError::ChildDied)?;
-        }
+        send_to_children(std::any::type_name::<Self>(), &output, eos).await?;
 
         // IMPORTANT: Attendre que tous les channels soient fermés par les enfants
         // Cela garantit que tous les chunks (y compris ceux en attente dans les buffers MPSC)
@@ -632,6 +736,7 @@ impl NodeLogic for RadioParadiseStreamSourceLogic {
 
 pub struct RadioParadiseStreamSource {
     inner: Node<RadioParadiseStreamSourceLogic>,
+    block_handle: BlockQueueHandle,
 }
 
 impl RadioParadiseStreamSource {
@@ -642,15 +747,23 @@ impl RadioParadiseStreamSource {
 
     /// Crée une nouvelle source avec durée de chunk personnalisée
     pub fn with_chunk_duration(client: RadioParadiseClient, chunk_duration_ms: u32) -> Self {
-        let logic = RadioParadiseStreamSourceLogic::new(client, chunk_duration_ms);
+        let handle = BlockQueueHandle::new();
+        let logic =
+            RadioParadiseStreamSourceLogic::with_queue(client, chunk_duration_ms, handle.clone());
         Self {
             inner: Node::new_source(logic),
+            block_handle: handle,
         }
     }
 
     /// Ajoute un block ID à la file d'attente de téléchargement
-    pub fn push_block_id(&mut self, event_id: EventId) {
-        self.inner.logic_mut().push_block_id(event_id);
+    pub fn push_block_id(&self, event_id: EventId) {
+        self.block_handle.enqueue(event_id);
+    }
+
+    /// Retourne un handle permettant d'enfiler des blocks dynamiquement.
+    pub fn block_handle(&self) -> BlockQueueHandle {
+        self.block_handle.clone()
     }
 }
 
@@ -692,7 +805,8 @@ mod tests {
     #[test]
     fn test_cache_fifo_basic() {
         let client = create_test_client();
-        let mut logic = RadioParadiseStreamSourceLogic::new(client, DEFAULT_CHUNK_DURATION_MS as u32);
+        let mut logic =
+            RadioParadiseStreamSourceLogic::new(client, DEFAULT_CHUNK_DURATION_MS as u32);
 
         // Ajouter 5 blocs
         for i in 1..=5 {
@@ -709,7 +823,8 @@ mod tests {
     #[test]
     fn test_cache_fifo_exactly_10_elements() {
         let client = create_test_client();
-        let mut logic = RadioParadiseStreamSourceLogic::new(client, DEFAULT_CHUNK_DURATION_MS as u32);
+        let mut logic =
+            RadioParadiseStreamSourceLogic::new(client, DEFAULT_CHUNK_DURATION_MS as u32);
 
         // Ajouter exactement 10 blocs
         for i in 1..=10 {
@@ -717,7 +832,11 @@ mod tests {
         }
 
         // Vérifier qu'on a exactement 10 éléments
-        assert_eq!(logic.recent_blocks.len(), 10, "Cache should have exactly 10 elements");
+        assert_eq!(
+            logic.recent_blocks.len(),
+            10,
+            "Cache should have exactly 10 elements"
+        );
 
         // Tous devraient être dans le cache
         for i in 1..=10 {
@@ -728,7 +847,8 @@ mod tests {
     #[test]
     fn test_cache_fifo_eviction_oldest() {
         let client = create_test_client();
-        let mut logic = RadioParadiseStreamSourceLogic::new(client, DEFAULT_CHUNK_DURATION_MS as u32);
+        let mut logic =
+            RadioParadiseStreamSourceLogic::new(client, DEFAULT_CHUNK_DURATION_MS as u32);
 
         // Remplir le cache avec 10 éléments (1..=10)
         for i in 1..=10 {
@@ -739,10 +859,17 @@ mod tests {
         logic.mark_block_downloaded(11);
 
         // Le cache doit toujours avoir 10 éléments
-        assert_eq!(logic.recent_blocks.len(), 10, "Cache should still have 10 elements");
+        assert_eq!(
+            logic.recent_blocks.len(),
+            10,
+            "Cache should still have 10 elements"
+        );
 
         // Le premier (plus ancien) doit avoir été évincé
-        assert!(!logic.is_recent_block(1), "Oldest block (1) should be evicted");
+        assert!(
+            !logic.is_recent_block(1),
+            "Oldest block (1) should be evicted"
+        );
 
         // Les éléments 2..=11 doivent être présents
         for i in 2..=11 {
@@ -753,7 +880,8 @@ mod tests {
     #[test]
     fn test_cache_fifo_multiple_evictions() {
         let client = create_test_client();
-        let mut logic = RadioParadiseStreamSourceLogic::new(client, DEFAULT_CHUNK_DURATION_MS as u32);
+        let mut logic =
+            RadioParadiseStreamSourceLogic::new(client, DEFAULT_CHUNK_DURATION_MS as u32);
 
         // Remplir avec 10 éléments
         for i in 1..=10 {
@@ -766,7 +894,11 @@ mod tests {
         }
 
         // Toujours 10 éléments
-        assert_eq!(logic.recent_blocks.len(), 10, "Cache should have 10 elements");
+        assert_eq!(
+            logic.recent_blocks.len(),
+            10,
+            "Cache should have 10 elements"
+        );
 
         // Les 5 premiers doivent avoir été évincés
         for i in 1..=5 {
@@ -782,7 +914,8 @@ mod tests {
     #[test]
     fn test_cache_never_exceeds_capacity() {
         let client = create_test_client();
-        let mut logic = RadioParadiseStreamSourceLogic::new(client, DEFAULT_CHUNK_DURATION_MS as u32);
+        let mut logic =
+            RadioParadiseStreamSourceLogic::new(client, DEFAULT_CHUNK_DURATION_MS as u32);
 
         // Vérifier la capacité pré-allouée
         assert_eq!(logic.recent_blocks.capacity(), RECENT_BLOCKS_CACHE_SIZE);
@@ -812,7 +945,8 @@ mod tests {
     #[test]
     fn test_cache_fifo_order_preserved() {
         let client = create_test_client();
-        let mut logic = RadioParadiseStreamSourceLogic::new(client, DEFAULT_CHUNK_DURATION_MS as u32);
+        let mut logic =
+            RadioParadiseStreamSourceLogic::new(client, DEFAULT_CHUNK_DURATION_MS as u32);
 
         // Ajouter 10 éléments
         for i in 1..=10 {
@@ -830,7 +964,8 @@ mod tests {
     #[test]
     fn test_block_queue_push() {
         let client = create_test_client();
-        let mut logic = RadioParadiseStreamSourceLogic::new(client, DEFAULT_CHUNK_DURATION_MS as u32);
+        let mut logic =
+            RadioParadiseStreamSourceLogic::new(client, DEFAULT_CHUNK_DURATION_MS as u32);
 
         // Tester push_block_id
         logic.push_block_id(100);
@@ -838,7 +973,7 @@ mod tests {
         logic.push_block_id(300);
 
         assert_eq!(logic.block_queue.len(), 3);
-        assert_eq!(logic.block_queue.front(), Some(&100));
-        assert_eq!(logic.block_queue.back(), Some(&300));
+        assert_eq!(logic.block_queue.front(), Some(100));
+        assert_eq!(logic.block_queue.back(), Some(300));
     }
 }

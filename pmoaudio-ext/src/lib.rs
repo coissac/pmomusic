@@ -22,15 +22,21 @@
 //! Aucune des crates ci-dessus ne dépend de `pmoaudio-ext`, évitant ainsi
 //! tout cycle de dépendances.
 
-#[cfg(feature = "cache-sink")]
+#[cfg(any(feature = "cache-sink", feature = "http-stream"))]
 pub mod sinks;
+
+#[cfg(any(feature = "cache-sink", feature = "http-stream"))]
+pub mod nodes;
 
 #[cfg(feature = "playlist")]
 pub mod sources;
 
 // Re-exports pour faciliter l'utilisation
-#[cfg(feature = "cache-sink")]
+#[cfg(any(feature = "cache-sink", feature = "http-stream"))]
 pub use sinks::*;
+
+#[cfg(any(feature = "cache-sink", feature = "http-stream"))]
+pub use nodes::*;
 
 #[cfg(feature = "playlist")]
 pub use sources::*;

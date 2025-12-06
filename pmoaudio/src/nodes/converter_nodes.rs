@@ -15,7 +15,7 @@
 
 use crate::{
     nodes::AudioError,
-    pipeline::{Node, NodeLogic},
+    pipeline::{send_to_children, Node, NodeLogic},
     AudioChunk, AudioPipelineNode, AudioSegment,
 };
 use std::sync::Arc;
@@ -100,12 +100,7 @@ where
                 segment
             };
 
-            // Envoyer à tous les enfants
-            for tx in &output {
-                tx.send(output_segment.clone())
-                    .await
-                    .map_err(|_| AudioError::ChildDied)?;
-            }
+            send_to_children(std::any::type_name::<Self>(), &output, output_segment).await?;
         }
 
         Ok(())

@@ -28,9 +28,13 @@
 
 use pmoaudio::{AudioPipelineNode, AudioSink, TimerNode};
 use pmoaudio_ext::{FlacCacheSink, PlaylistSource};
-use pmoaudiocache::Cache as AudioCache;
-use pmocovers::Cache as CoverCache;
+use pmoaudiocache::{
+    new_cache_with_consolidation as new_audio_cache,
+    register_audio_cache as register_global_audio_cache,
+};
+use pmocovers::{new_cache_with_consolidation as new_cover_cache, register_cover_cache};
 use pmoparadise::{RadioParadiseClient, RadioParadiseStreamSource};
+use pmoplaylist::register_audio_cache as register_playlist_audio_cache;
 use std::env;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -46,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .add_directive("pmoaudio_ext=debug".parse()?)
                 .add_directive("pmoplaylist=debug".parse()?)
                 .add_directive("pmoparadise=debug".parse()?)
-                .add_directive("pmoaudiocache=debug".parse()?)
+                .add_directive("pmoaudiocache=debug".parse()?),
         )
         .init();
 
@@ -89,7 +93,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialiser les caches et le gestionnaire de playlist
     // ═══════════════════════════════════════════════════════════════════════════
 
-    let base_dir = std::env::var("PMO_CONFIG_DIR").unwrap_or_else(|_| "/tmp/pmomusic_test".to_string());
+    let base_dir =
+        std::env::var("PMO_CONFIG_DIR").unwrap_or_else(|_| "/tmp/pmomusic_test".to_string());
     std::fs::create_dir_all(&base_dir)?;
 
     tracing::info!("Initializing caches in: {}", base_dir);
@@ -97,24 +102,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Créer le cache audio
     let audio_cache_dir = format!("{}/audio_cache", base_dir);
     std::fs::create_dir_all(&audio_cache_dir)?;
-    let audio_cache = Arc::new(AudioCache::new(
-        &audio_cache_dir,
-        1000, // 1000 MB limit
-    )?);
+    let audio_cache = new_audio_cache(&audio_cache_dir, 1000).await?;
     tracing::debug!("Audio cache initialized at: {}", audio_cache_dir);
 
     // Créer le cache de covers
     let cover_cache_dir = format!("{}/cover_cache", base_dir);
     std::fs::create_dir_all(&cover_cache_dir)?;
-    let cover_cache = Arc::new(CoverCache::new(
-        &cover_cache_dir,
-        100, // 100 MB limit
-    )?);
+    let cover_cache = new_cover_cache(&cover_cache_dir, 100).await?;
     tracing::debug!("Cover cache initialized at: {}", cover_cache_dir);
 
     // Enregistrer le cache audio dans pmoplaylist
     // (requis par pmoplaylist pour valider les pks)
-    pmoplaylist::register_audio_cache(audio_cache.clone());
+    register_global_audio_cache(audio_cache.clone());
+    register_playlist_audio_cache(audio_cache.clone());
+    register_cover_cache(cover_cache.clone());
     tracing::debug!("Audio cache registered in pmoplaylist");
 
     // Utiliser le gestionnaire de playlist singleton
@@ -130,8 +131,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Creating playlist: {}", playlist_id);
 
     // Créer une playlist éphémère (non persistante) pour cet exemple
-    let writer = playlist_manager.get_write_handle(playlist_id.clone()).await?;
-    writer.set_title(format!("Radio Paradise - Channel {}", channel_id)).await?;
+    let writer = playlist_manager
+        .get_write_handle(playlist_id.clone())
+        .await?;
+    writer
+        .set_title(format!("Radio Paradise - Channel {}", channel_id))
+        .await?;
     writer.flush().await?; // Vider la playlist si elle existait
     tracing::debug!("Playlist created and flushed");
 
@@ -178,7 +183,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Créer la source Radio Paradise
     let mut download_source = RadioParadiseStreamSource::new(client);
     download_source.push_block_id(block.event);
-    tracing::debug!("RadioParadiseStreamSource created with block {}", block.event);
+    tracing::debug!(
+        "RadioParadiseStreamSource created with block {}",
+        block.event
+    );
 
     // Créer le sink de cache FLAC
     let mut cache_sink = FlacCacheSink::new(audio_cache.clone(), cover_cache.clone());

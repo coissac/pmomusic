@@ -11,10 +11,11 @@ use std::sync::Arc;
 const DEFAULT_COVER_CACHE_DIR: &str = "cache_covers";
 const DEFAULT_COVER_CACHE_SIZE: usize = 2000;
 
-/// Trait d'extension pour gérer le cache de couvertures dans pmoconfig
+/// Trait d'extension pour gérer le cache de couvertures dans pmoconfig.
 ///
-/// Ce trait étend `pmoconfig::Config` avec des méthodes spécifiques
-/// au cache de couvertures avec conversion WebP.
+/// Fournit des helpers pour récupérer/définir le répertoire et la taille du
+/// cache de couvertures, ainsi qu'une factory `create_cover_cache` prête à
+/// l'emploi (conversion WebP activée).
 ///
 /// # Exemple
 ///

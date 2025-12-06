@@ -13,6 +13,8 @@
 use pmodidl::{Container, DIDLLite};
 use pmosource::api::{get_source as get_source_from_registry, list_all_sources};
 use pmosource::{BrowseResult, MusicSource, MusicSourceError};
+use pmoutils::ToXmlElement;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 /// Convertit des containers et items en XML DIDL-Lite
@@ -28,12 +30,9 @@ fn to_didl_lite(containers: &[Container], items: &[pmodidl::Item]) -> Result<Str
         items: items.to_vec(),
     };
 
-    let body = quick_xml::se::to_string(&didl)
-        .map_err(|e| format!("Failed to serialize DIDL-Lite: {}", e))?;
-    Ok(format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>{}",
-        body
-    ))
+    // Retourne uniquement le corps DIDL, sans préfixer une seconde déclaration XML.
+    let body = didl.to_xml();
+    Ok(body)
 }
 
 /// Handler pour le service ContentDirectory
@@ -87,6 +86,16 @@ impl ContentHandler {
             "ContentDirectory::Browse"
         );
 
+        // Log rapide sur la branche flatten vs agrégée
+        if object_id == "0" {
+            let sources = list_all_sources().await;
+            tracing::info!(
+                "Browse root: sources.len() = {}, flatten = {}",
+                sources.len(),
+                sources.len() == 1
+            );
+        }
+
         match browse_flag {
             "BrowseMetadata" => self.browse_metadata(object_id).await,
             "BrowseDirectChildren" => {
@@ -100,9 +109,28 @@ impl ContentHandler {
     /// Browse les métadonnées d'un objet spécifique
     async fn browse_metadata(&self, object_id: &str) -> Result<(String, u32, u32, u32), String> {
         if object_id == "0" {
-            // Retourner le container racine
+            // Si un seul enfant, publier ce fils comme racine
+            let sources = list_all_sources().await;
+            if sources.len() == 1 {
+                let source = sources.into_iter().next().unwrap();
+                let mut container = source
+                    .root_container()
+                    .await
+                    .map_err(|e| format!("Failed to get root container: {}", e))?;
+                // Le présenter comme la racine (id=0, parent=-1)
+                container.id = "0".to_string();
+                container.parent_id = "-1".to_string();
+                container.child_count = None; // compatibilité CP
+                let didl = to_didl_lite(&[container], &[])?;
+                let update_id = source.update_id().await.max(1);
+                tracing::debug!("BrowseMetadata root (flatten) didl_len={}B", didl.len());
+                return Ok((didl, 1, 1, update_id));
+            }
+
+            // Sinon retourner le container racine agrégé
             let root = self.build_root_container().await;
             let didl = to_didl_lite(&[root], &[])?;
+            tracing::debug!("BrowseMetadata root (aggregate) didl_len={}B", didl.len());
             Ok((didl, 1, 1, 1))
         } else {
             // Essayer de trouver l'objet dans les sources
@@ -113,11 +141,38 @@ impl ContentHandler {
                     .await
                     .map_err(|e| format!("Failed to get root container: {}", e))?;
                 let didl = to_didl_lite(&[container], &[])?;
-                let update_id = source.update_id().await;
+                let update_id = source.update_id().await.max(1);
+                tracing::debug!(
+                    "BrowseMetadata source_root id={} didl_len={}B",
+                    object_id,
+                    didl.len()
+                );
                 return Ok((didl, 1, 1, update_id));
             }
 
-            // Sinon, chercher dans les sources
+            // Try to get item metadata first (for leaf items)
+            for source in list_all_sources().await {
+                match source.get_item(object_id).await {
+                    Ok(item) => {
+                        let didl = to_didl_lite(&[], &[item])?;
+                        let update_id = source.update_id().await.max(1);
+                        tracing::debug!(
+                            "BrowseMetadata item id={} didl_len={}B",
+                            object_id,
+                            didl.len()
+                        );
+                        return Ok((didl, 1, 1, update_id));
+                    }
+                    Err(MusicSourceError::ObjectNotFound(_))
+                    | Err(MusicSourceError::NotSupported(_)) => continue,
+                    Err(e) => {
+                        tracing::debug!("get_item failed for {}: {}", object_id, e);
+                        continue;
+                    }
+                }
+            }
+
+            // Fallback to browse for containers
             let mut non_not_found_error: Option<String> = None;
             for source in list_all_sources().await {
                 match source.browse(object_id).await {
@@ -127,25 +182,25 @@ impl ContentHandler {
                             BrowseResult::Containers(containers) => {
                                 if let Some(container) = containers.first() {
                                     let didl = to_didl_lite(&[container.clone()], &[])?;
-                                    let update_id = source.update_id().await;
+                                    let update_id = source.update_id().await.max(1);
                                     return Ok((didl, 1, 1, update_id));
                                 }
                             }
                             BrowseResult::Items(items) => {
                                 if let Some(item) = items.first() {
                                     let didl = to_didl_lite(&[], &[item.clone()])?;
-                                    let update_id = source.update_id().await;
+                                    let update_id = source.update_id().await.max(1);
                                     return Ok((didl, 1, 1, update_id));
                                 }
                             }
                             BrowseResult::Mixed { containers, items } => {
                                 if let Some(container) = containers.first() {
                                     let didl = to_didl_lite(&[container.clone()], &[])?;
-                                    let update_id = source.update_id().await;
+                                    let update_id = source.update_id().await.max(1);
                                     return Ok((didl, 1, 1, update_id));
                                 } else if let Some(item) = items.first() {
                                     let didl = to_didl_lite(&[], &[item.clone()])?;
-                                    let update_id = source.update_id().await;
+                                    let update_id = source.update_id().await.max(1);
                                     return Ok((didl, 1, 1, update_id));
                                 }
                             }
@@ -175,6 +230,53 @@ impl ContentHandler {
         requested_count: u32,
     ) -> Result<(String, u32, u32, u32), String> {
         if object_id == "0" {
+            // Si un seul enfant, publier directement ses enfants comme racine
+            let sources = list_all_sources().await;
+            if sources.len() == 1 {
+                let source = sources.into_iter().next().unwrap();
+                let source_id = source.id().to_string();
+
+                // Récupérer les enfants du container racine de la source
+                let mut result = source
+                    .browse(&source_id)
+                    .await
+                    .map_err(|e| format!("Browse failed: {}", e))?;
+
+                // Re-mapper parentID sur "0" pour éviter des parents inexistants côté CP
+                match &mut result {
+                    BrowseResult::Containers(c) => {
+                        for cont in c.iter_mut() {
+                            if cont.parent_id == source_id {
+                                cont.parent_id = "0".to_string();
+                            }
+                        }
+                    }
+                    BrowseResult::Items(i) => {
+                        for item in i.iter_mut() {
+                            if item.parent_id == source_id {
+                                item.parent_id = "0".to_string();
+                            }
+                        }
+                    }
+                    BrowseResult::Mixed { containers, items } => {
+                        for cont in containers.iter_mut() {
+                            if cont.parent_id == source_id {
+                                cont.parent_id = "0".to_string();
+                            }
+                        }
+                        for item in items.iter_mut() {
+                            if item.parent_id == source_id {
+                                item.parent_id = "0".to_string();
+                            }
+                        }
+                    }
+                }
+
+                return self
+                    .browse_result_to_didl("0", result, source, starting_index, requested_count)
+                    .await;
+            }
+
             // Retourner toutes les sources comme enfants de la racine
             return self.browse_root(starting_index, requested_count).await;
         }
@@ -192,7 +294,13 @@ impl ContentHandler {
             match source.browse(object_id).await {
                 Ok(result) => {
                     return self
-                        .browse_result_to_didl(result, source, starting_index, requested_count)
+                        .browse_result_to_didl(
+                            object_id,
+                            result,
+                            source,
+                            starting_index,
+                            requested_count,
+                        )
                         .await;
                 }
                 Err(MusicSourceError::ObjectNotFound(_)) => continue,
@@ -260,28 +368,59 @@ impl ContentHandler {
         starting_index: u32,
         requested_count: u32,
     ) -> Result<(String, u32, u32, u32), String> {
+        let source_id = source.id().to_string();
         let result = source
-            .browse(source.id())
+            .browse(&source_id)
             .await
             .map_err(|e| format!("Browse failed: {}", e))?;
 
-        self.browse_result_to_didl(result, source, starting_index, requested_count)
+        self.browse_result_to_didl(&source_id, result, source, starting_index, requested_count)
             .await
     }
 
     /// Convertit un BrowseResult en DIDL-Lite XML avec pagination
     async fn browse_result_to_didl(
         &self,
+        object_id: &str,
         result: BrowseResult,
         source: Arc<dyn MusicSource>,
         starting_index: u32,
         requested_count: u32,
     ) -> Result<(String, u32, u32, u32), String> {
-        let (mut containers, mut items) = match result {
+        let (containers, items) = match result {
             BrowseResult::Containers(c) => (c, vec![]),
             BrowseResult::Items(i) => (vec![], i),
             BrowseResult::Mixed { containers, items } => (containers, items),
         };
+
+        // Filter out any container that matches the object_id being browsed
+        // (to avoid containers appearing as children of themselves)
+        let mut containers: Vec<Container> = containers
+            .into_iter()
+            .filter(|c| c.id != object_id)
+            .collect();
+        let mut items = items;
+
+        // Log avant déduplication
+        tracing::debug!(
+            "BrowseResult before dedup: containers={}, items={}",
+            containers.len(),
+            items.len()
+        );
+
+        // Deduplicate containers/items by id to avoid doubles in the response
+        let mut seen_containers = HashSet::new();
+        containers.retain(|c| seen_containers.insert(c.id.clone()));
+
+        let mut seen_items = HashSet::new();
+        items.retain(|i| seen_items.insert(i.id.clone()));
+
+        // Log après déduplication
+        tracing::debug!(
+            "BrowseResult after dedup: containers={}, items={}",
+            containers.len(),
+            items.len()
+        );
 
         // Calculer le total avant pagination
         let total = (containers.len() + items.len()) as u32;
@@ -316,7 +455,7 @@ impl ContentHandler {
 
         let returned = (containers.len() + items.len()) as u32;
         let didl = to_didl_lite(&containers, &items)?;
-        let update_id = source.update_id().await;
+        let update_id = source.update_id().await.max(1);
 
         Ok((didl, returned, total, update_id))
     }
@@ -330,7 +469,8 @@ impl ContentHandler {
             id: "0".to_string(),
             parent_id: "-1".to_string(),
             restricted: Some("1".to_string()),
-            child_count: Some(child_count.to_string()),
+            // Laisser childCount absent sur la racine pour maximiser la compatibilité (BubbleUPnP)
+            child_count: None,
             searchable: Some("1".to_string()),
             title: "PMOMusic".to_string(),
             class: "object.container".to_string(),

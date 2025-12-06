@@ -15,6 +15,7 @@ use utoipa::OpenApi;
             pmocache::api::DeleteItemResponse,
             pmocache::api::ErrorResponse,
             pmocache::api::DownloadStatus,
+            crate::api::CoverUrlResponse,
         )
     ),
     tags(
@@ -56,6 +57,9 @@ Supprime une piste
 ### GET /api/audio/{pk}/status
 Récupère le statut du téléchargement et de la conversion
 
+### GET /api/audio/{pk}/cover-url
+Récupère l'URL de la cover avec fallback automatique (cover_pk → cover_url → image par défaut)
+
 ### DELETE /api/audio
 Purge complètement le cache
 
@@ -84,6 +88,8 @@ Les métadonnées suivantes sont extraites et stockées :
 - Numéro de piste/disque, total de pistes/disques
 - Durée, taux d'échantillonnage, bitrate
 - Nombre de canaux
+- Cover : `cover_pk` (clé dans le cache de covers) et `cover_url` (URL externe)
+  - Fallback automatique vers une image SVG par défaut si aucune cover n'est disponible
 
 ## Collections
 

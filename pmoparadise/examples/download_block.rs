@@ -84,10 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Block Information:");
     println!("  Event ID: {}", block.event);
     println!("  Songs: {}", block.song_count());
-    println!(
-        "  Duration: {:.1} minutes",
-        block.length as f64 / 60000.0
-    );
+    println!("  Duration: {:.1} minutes", block.length as f64 / 60000.0);
     println!();
 
     // Afficher la liste des pistes

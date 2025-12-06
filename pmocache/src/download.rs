@@ -32,6 +32,11 @@ pub type TransformContextHandle = Arc<TransformContext>;
 type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send>>;
 
 /// Source générique (HTTP ou lecteur) exposée aux transformers.
+///
+/// `CacheInput` masque l'origine des données pour les transformers (HTTP ou flux
+/// applicatif). Il permet de consulter la taille attendue (`content_length`),
+/// de récupérer l'intégralité du buffer (`bytes`) ou d'itérer en streaming
+/// (`into_byte_stream`).
 pub struct CacheInput {
     inner: CacheInputInner,
 }
@@ -50,6 +55,10 @@ enum CacheInputInner {
 }
 
 impl CacheInput {
+    /// Crée un `CacheInput` à partir d'une réponse HTTP (`reqwest::Response`).
+    ///
+    /// Conserve la longueur du contenu si elle est fournie par le serveur et
+    /// permet un accès ultérieur en streaming ou en mémoire.
     pub fn from_response(response: reqwest::Response) -> Self {
         let length = response.content_length();
         Self {
@@ -61,6 +70,10 @@ impl CacheInput {
         }
     }
 
+    /// Crée un `CacheInput` à partir d'un `AsyncRead` typé.
+    ///
+    /// La longueur peut être fournie si elle est connue, ce qui améliore la
+    /// mise à jour des métadonnées de progression.
     pub fn from_reader<R>(reader: R, length: Option<u64>) -> Self
     where
         R: AsyncRead + Send + Unpin + 'static,
@@ -68,6 +81,7 @@ impl CacheInput {
         Self::from_reader_box(Box::new(reader), length)
     }
 
+    /// Crée un `CacheInput` à partir d'un trait object `AsyncRead`.
     pub fn from_reader_box(reader: Box<dyn AsyncRead + Send + Unpin>, length: Option<u64>) -> Self {
         Self {
             inner: CacheInputInner::Reader {
@@ -78,6 +92,7 @@ impl CacheInput {
         }
     }
 
+    /// Retourne la taille du contenu si elle est connue (Content-Length ou buffer déjà lu).
     pub fn content_length(&self) -> Option<u64> {
         match &self.inner {
             CacheInputInner::Http { length, buffer, .. } => {
@@ -127,6 +142,9 @@ impl CacheInput {
         }
     }
 
+    /// Retourne un flux d'octets (stream) consommable par les transformers.
+    ///
+    /// Si le contenu a déjà été lu en mémoire, le stream renverra ce buffer.
     pub fn into_byte_stream(self) -> ByteStream {
         match self.inner {
             CacheInputInner::Http {
@@ -185,7 +203,12 @@ struct DownloadState {
     transform_metadata: Option<TransformMetadata>,
 }
 
-/// Objet représentant un téléchargement en cours
+/// Objet représentant un téléchargement en cours.
+///
+/// Expose la progression, les tailles attendues/transformées, l'état d'erreur
+/// et les métadonnées de transformation éventuelles. Les méthodes sont sûres
+/// côté concurrence et peuvent être utilisées depuis les routes HTTP pour
+/// suivre l'état du cache progressif.
 #[derive(Debug)]
 pub struct Download {
     filename: PathBuf,
@@ -208,10 +231,14 @@ impl Download {
         })
     }
 
+    /// Chemin du fichier cible sur disque.
     pub fn filename(&self) -> &Path {
         &self.filename
     }
 
+    /// Attend que `transformed_size` atteigne au moins `min_size` (ou fin / erreur).
+    ///
+    /// Utile pour le prébuffering audio ou vidéo avant de démarrer un stream HTTP.
     pub async fn wait_until_min_size(&self, min_size: u64) -> Result<(), String> {
         loop {
             let state = self.state.read().await;
@@ -226,6 +253,7 @@ impl Download {
         }
     }
 
+    /// Attend la fin complète du téléchargement ou renvoie l'erreur rencontrée.
     pub async fn wait_until_finished(&self) -> Result<(), String> {
         loop {
             let state = self.state.read().await;
@@ -240,58 +268,81 @@ impl Download {
         }
     }
 
+    /// Ouvre le fichier associé pour lecture (bloquant standard).
     pub fn open(&self) -> io::Result<File> {
         File::open(&self.filename)
     }
 
+    /// Dernière position lue (tracking pour lecture progressive).
     pub async fn pos(&self) -> u64 {
         let state = self.state.read().await;
         state.read_position
     }
 
+    /// Met à jour la position lue (utile pour les streamers progressifs).
     pub async fn set_pos(&self, pos: u64) {
         let mut state = self.state.write().await;
         state.read_position = pos;
     }
 
+    /// Taille attendue du flux source (Content-Length ou renseignée par l'appelant).
     pub async fn expected_size(&self) -> Option<u64> {
         let state = self.state.read().await;
         state.expected_size
     }
 
+    /// Nombre d'octets effectivement téléchargés (source).
     pub async fn current_size(&self) -> u64 {
         let state = self.state.read().await;
         state.current_size
     }
 
+    /// Nombre d'octets écrits après transformation (peut différer de `current_size`).
     pub async fn transformed_size(&self) -> u64 {
         let state = self.state.read().await;
         state.transformed_size
     }
 
+    /// Indique si le téléchargement est terminé (succès ou erreur).
     pub async fn finished(&self) -> bool {
         let state = self.state.read().await;
         state.finished
     }
 
+    /// Renvoie l'erreur rencontrée, le cas échéant.
     pub async fn error(&self) -> Option<String> {
         let state = self.state.read().await;
         state.error.clone()
     }
 
+    /// Métadonnées renseignées par le transformer (codec, sample rate, etc.).
     pub async fn transform_metadata(&self) -> Option<TransformMetadata> {
         let state = self.state.read().await;
         state.transform_metadata.clone()
     }
 }
 
+/// Métadonnées techniques optionnelles remontées par un transformer.
 #[derive(Debug, Clone, Default)]
 pub struct TransformMetadata {
+    /// Mode ou preset utilisé (ex: "flac", "webp-80").
     pub mode: Option<String>,
+    /// Codec ou format en entrée.
     pub input_codec: Option<String>,
+    /// Détails libres (ex: paramètres d'encodage).
     pub details: Option<String>,
+    /// Fréquence d'échantillonnage en Hz.
+    pub sample_rate: Option<u32>,
+    /// Profondeur de bits par échantillon.
+    pub bits_per_sample: Option<u8>,
+    /// Nombre de canaux audio.
+    pub channels: Option<u8>,
+    /// Nombre total d'échantillons (si connu).
+    pub total_samples: Option<u64>,
 }
 
+/// Contexte passé aux transformers pour signaler la progression et renseigner
+/// des métadonnées de transformation.
 pub struct TransformContext {
     state: Arc<RwLock<DownloadState>>,
     progress_cb: Arc<dyn Fn(u64) + Send + Sync>,
@@ -302,17 +353,17 @@ impl TransformContext {
         Self { state, progress_cb }
     }
 
-    /// Reports progress (in bytes) to the download state.
+    /// Signale une progression (en octets transformés) au download.
     pub fn report_progress(&self, bytes: u64) {
         (self.progress_cb)(bytes);
     }
 
-    /// Returns the underlying progress callback (useful for piping into other APIs).
+    /// Retourne le callback de progression sous-jacent (utile pour le passer à d'autres APIs).
     pub fn progress_callback(&self) -> Arc<dyn Fn(u64) + Send + Sync> {
         Arc::clone(&self.progress_cb)
     }
 
-    /// Stores metadata describing the transformation that occurred.
+    /// Stocke des métadonnées décrivant la transformation appliquée.
     pub async fn set_metadata(&self, metadata: TransformMetadata) {
         let mut state = self.state.write().await;
         state.transform_metadata = Some(metadata);
@@ -325,6 +376,9 @@ pub fn download<P: AsRef<Path>>(filename: P, url: &str) -> Arc<Download> {
 }
 
 /// Lance le téléchargement d'une URL avec transformation du stream.
+///
+/// Le transformer reçoit le flux source, un handle de fichier déjà ouvert et un
+/// [`TransformContext`] pour reporter la progression et les métadonnées.
 pub fn download_with_transformer<P: AsRef<Path>>(
     filename: P,
     url: &str,
@@ -333,7 +387,11 @@ pub fn download_with_transformer<P: AsRef<Path>>(
     spawn_download(filename, DownloadSource::Url(url.to_string()), transformer)
 }
 
-/// Ingère un flux (AsyncRead) dans le cache avec transformation optionnelle.
+/// Ingère un flux (`AsyncRead`) dans le cache avec transformation optionnelle.
+///
+/// Permet d'alimenter le cache depuis une source non-HTTP (ex: pipe interne,
+/// fichier local, décodage amont) tout en conservant la même mécanique de
+/// suivi de progression qu'un téléchargement classique.
 pub fn ingest_with_transformer<P, R>(
     filename: P,
     reader: R,

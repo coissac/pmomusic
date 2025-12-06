@@ -6,7 +6,9 @@ use tokio::fs::File;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let path_str = std::env::args().nth(1).expect("Usage: check_flac_bits <file.flac>");
+    let path_str = std::env::args()
+        .nth(1)
+        .expect("Usage: check_flac_bits <file.flac>");
     let path = Path::new(&path_str);
 
     println!("Checking: {}", path.display());

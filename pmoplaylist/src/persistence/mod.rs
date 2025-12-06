@@ -245,4 +245,85 @@ impl PersistenceManager {
             })?;
         Ok(())
     }
+
+    /// Consolide la base de données des playlists
+    ///
+    /// Cette fonction nettoie les incohérences:
+    /// - Active les contraintes de clés étrangères
+    /// - Supprime les tracks orphelins (référençant des playlists inexistantes)
+    /// - Nettoie les tracks avec TTL expirés
+    pub async fn consolidate(&self) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+
+        // Activer les contraintes de clés étrangères (désactivées par défaut dans SQLite)
+        conn.execute("PRAGMA foreign_keys = ON", []).map_err(|e| {
+            crate::Error::PersistenceError(format!("Failed to enable foreign keys: {}", e))
+        })?;
+
+        // Vérifier l'intégrité des clés étrangères
+        let mut stmt = conn.prepare("PRAGMA foreign_key_check").map_err(|e| {
+            crate::Error::PersistenceError(format!("Failed to prepare FK check: {}", e))
+        })?;
+
+        let violations: Vec<(String, i64, String, i64)> = stmt
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
+            .map_err(|e| {
+                crate::Error::PersistenceError(format!("Failed to check foreign keys: {}", e))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| {
+                crate::Error::PersistenceError(format!("Failed to read FK violations: {}", e))
+            })?;
+
+        if !violations.is_empty() {
+            tracing::warn!(
+                "Found {} foreign key violations, cleaning up orphaned tracks",
+                violations.len()
+            );
+
+            // Supprimer les tracks orphelins (ceux qui référencent des playlists inexistantes)
+            let deleted = conn
+                .execute(
+                    "DELETE FROM tracks WHERE playlist_id NOT IN (SELECT id FROM playlists)",
+                    [],
+                )
+                .map_err(|e| {
+                    crate::Error::PersistenceError(format!(
+                        "Failed to delete orphaned tracks: {}",
+                        e
+                    ))
+                })?;
+
+            if deleted > 0 {
+                tracing::info!("Removed {} orphaned tracks during consolidation", deleted);
+            }
+        }
+
+        // Nettoyer les tracks avec TTL expirés
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let deleted_expired = conn
+            .execute(
+                "DELETE FROM tracks WHERE ttl_secs IS NOT NULL AND (added_at + ttl_secs) < ?1",
+                params![now],
+            )
+            .map_err(|e| {
+                crate::Error::PersistenceError(format!("Failed to delete expired tracks: {}", e))
+            })?;
+
+        if deleted_expired > 0 {
+            tracing::info!(
+                "Removed {} expired tracks during consolidation",
+                deleted_expired
+            );
+        }
+
+        tracing::info!("Playlist database consolidation completed successfully");
+        Ok(())
+    }
 }

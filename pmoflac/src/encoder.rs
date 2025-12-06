@@ -98,6 +98,9 @@ struct ExtractedMetadata {
     year: Option<u32>,
     genre: Option<String>,
     track_number: Option<u32>,
+    cover_pk: Option<String>,
+    cover_url: Option<String>,
+    server_base_url: Option<String>,
 }
 
 /// Options for configuring FLAC encoding.
@@ -121,6 +124,10 @@ pub struct EncoderOptions {
     /// Metadata to embed in the FLAC file (Vorbis Comments).
     /// Default: None (no metadata)
     pub metadata: Option<Arc<RwLock<dyn pmometadata::TrackMetadata>>>,
+
+    /// Base URL of the server for constructing cover URLs.
+    /// Default: None
+    pub server_base_url: Option<String>,
 }
 
 impl Default for EncoderOptions {
@@ -131,6 +138,7 @@ impl Default for EncoderOptions {
             total_samples: None,
             block_size: None,
             metadata: None,
+            server_base_url: None,
         }
     }
 }
@@ -251,14 +259,15 @@ where
         let artist = metadata.get_artist().await.ok().flatten();
         let album = metadata.get_album().await.ok().flatten();
         let year = metadata.get_year().await.ok().flatten();
+        let cover_pk = metadata.get_cover_pk().await.ok().flatten();
+        let cover_url = metadata.get_cover_url().await.ok().flatten();
 
         // Try to extract genre and track_number from extra fields
         let extra = metadata.get_extra().await.ok().flatten();
         let genre = extra.as_ref().and_then(|e| e.get("genre").cloned());
-        let track_number = extra.as_ref().and_then(|e| {
-            e.get("track_number")
-                .and_then(|s| s.parse::<u32>().ok())
-        });
+        let track_number = extra
+            .as_ref()
+            .and_then(|e| e.get("track_number").and_then(|s| s.parse::<u32>().ok()));
 
         Some(ExtractedMetadata {
             title,
@@ -267,6 +276,9 @@ where
             year,
             genre,
             track_number,
+            cover_pk,
+            cover_url,
+            server_base_url: options.server_base_url.clone(),
         })
     } else {
         None
@@ -454,11 +466,17 @@ unsafe fn setup_metadata(
     if let Some(track_number) = metadata.track_number {
         append_comment("TRACKNUMBER", &track_number.to_string())?;
     }
+    // Construct cover URL: use cover_pk with server_base_url if available, fallback to cover_url
+    if let (Some(ref pk), Some(ref base_url)) = (&metadata.cover_pk, &metadata.server_base_url) {
+        let cover_url = format!("{}/covers/image/{}", base_url, pk);
+        append_comment("COVERART", &cover_url)?;
+    } else if let Some(cover_url) = &metadata.cover_url {
+        append_comment("COVERART", cover_url)?;
+    }
 
     // Set the metadata on the encoder
     let mut metadata_array = [meta];
-    let set_success =
-        FLAC__stream_encoder_set_metadata(encoder, metadata_array.as_mut_ptr(), 1);
+    let set_success = FLAC__stream_encoder_set_metadata(encoder, metadata_array.as_mut_ptr(), 1);
 
     if set_success == 0 {
         return Err(FlacError::LibFlacInit(
@@ -527,10 +545,18 @@ fn run_encoder(
             "set_verify failed",
         )?;
         if let Some(total) = options.total_samples {
+            tracing::debug!(
+                "FLAC encoder: setting total_samples_estimate = {} before init",
+                total
+            );
             ensure(
                 FLAC__stream_encoder_set_total_samples_estimate(encoder, total),
                 "set_total_samples_estimate failed",
             )?;
+        } else {
+            tracing::warn!(
+                "FLAC encoder: total_samples is None, STREAMINFO will have total_samples=0"
+            );
         }
         if let Some(block_size) = options.block_size {
             ensure(

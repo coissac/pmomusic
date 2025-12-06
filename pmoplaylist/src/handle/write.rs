@@ -38,6 +38,7 @@ impl WriteHandle {
         let record = Record::new(cache_pk);
         let mut core = self.playlist.core.write().await;
         core.push(record);
+        let snapshot = core.snapshot();
         drop(core);
 
         self.playlist.touch().await;
@@ -46,6 +47,48 @@ impl WriteHandle {
         if self.playlist.persistent {
             self.save_to_db().await?;
         }
+
+        // Notifier le manager
+        let manager = crate::manager::PlaylistManager();
+        manager
+            .rebuild_track_index(&self.playlist.id, &snapshot)
+            .await;
+        manager.notify_playlist_changed(&self.playlist.id);
+
+        Ok(())
+    }
+
+    /// Ajoute un morceau avec un TTL personnalisé
+    pub async fn push_with_ttl(&self, cache_pk: String, ttl: Duration) -> Result<()> {
+        if !self.playlist.is_alive() {
+            return Err(crate::Error::PlaylistDeleted(self.playlist.id.clone()));
+        }
+
+        // Vérifier que le pk existe dans le cache
+        let cache = crate::manager::audio_cache()?;
+        if !cache.is_valid_pk(&cache_pk).await {
+            return Err(crate::Error::CacheEntryNotFound(cache_pk));
+        }
+
+        // Ajouter à la playlist avec TTL
+        let record = Record::with_ttl(cache_pk, ttl);
+        let mut core = self.playlist.core.write().await;
+        core.push(record);
+        let snapshot = core.snapshot();
+        drop(core);
+
+        self.playlist.touch().await;
+
+        // Sauvegarder si persistante
+        if self.playlist.persistent {
+            self.save_to_db().await?;
+        }
+
+        let manager = crate::manager::PlaylistManager();
+        manager
+            .rebuild_track_index(&self.playlist.id, &snapshot)
+            .await;
+        manager.notify_playlist_changed(&self.playlist.id);
 
         Ok(())
     }
@@ -70,6 +113,7 @@ impl WriteHandle {
         // Ajouter atomiquement
         let mut core = self.playlist.core.write().await;
         core.push_all(records);
+        let snapshot = core.snapshot();
         drop(core);
 
         self.playlist.touch().await;
@@ -78,6 +122,12 @@ impl WriteHandle {
         if self.playlist.persistent {
             self.save_to_db().await?;
         }
+
+        let manager = crate::manager::PlaylistManager();
+        manager
+            .rebuild_track_index(&self.playlist.id, &snapshot)
+            .await;
+        manager.notify_playlist_changed(&self.playlist.id);
 
         Ok(())
     }
@@ -90,6 +140,7 @@ impl WriteHandle {
 
         let mut core = self.playlist.core.write().await;
         core.clear();
+        let snapshot = core.snapshot();
         drop(core);
 
         self.playlist.touch().await;
@@ -97,6 +148,12 @@ impl WriteHandle {
         if self.playlist.persistent {
             self.save_to_db().await?;
         }
+
+        let manager = crate::manager::PlaylistManager();
+        manager
+            .rebuild_track_index(&self.playlist.id, &snapshot)
+            .await;
+        manager.notify_playlist_changed(&self.playlist.id);
 
         Ok(())
     }
@@ -111,7 +168,13 @@ impl WriteHandle {
         self.playlist.mark_deleted();
 
         // Supprimer du manager
+        // Nettoyer les index puis supprimer du manager
+        let manager = crate::manager::PlaylistManager();
+        manager.rebuild_track_index(&self.playlist.id, &[]).await;
         crate::manager::delete_playlist_internal(&self.playlist.id).await?;
+
+        // Notifier la suppression
+        manager.notify_playlist_changed(&self.playlist.id);
 
         Ok(())
     }
@@ -128,6 +191,8 @@ impl WriteHandle {
             self.save_to_db().await?;
         }
 
+        crate::manager::PlaylistManager().notify_playlist_changed(&self.playlist.id);
+
         Ok(())
     }
 
@@ -139,6 +204,7 @@ impl WriteHandle {
 
         let mut core = self.playlist.core.write().await;
         core.set_capacity(max_size);
+        let snapshot = core.snapshot();
         drop(core);
 
         self.playlist.touch().await;
@@ -147,7 +213,23 @@ impl WriteHandle {
             self.save_to_db().await?;
         }
 
+        let manager = crate::manager::PlaylistManager();
+        manager
+            .rebuild_track_index(&self.playlist.id, &snapshot)
+            .await;
+        manager.notify_playlist_changed(&self.playlist.id);
+
         Ok(())
+    }
+
+    /// Vérifie si la playlist contient déjà un pk
+    pub async fn contains_pk(&self, cache_pk: &str) -> Result<bool> {
+        if !self.playlist.is_alive() {
+            return Err(crate::Error::PlaylistDeleted(self.playlist.id.clone()));
+        }
+
+        let core = self.playlist.core.read().await;
+        Ok(core.tracks.iter().any(|record| record.cache_pk == cache_pk))
     }
 
     /// Change le TTL par défaut
@@ -158,6 +240,7 @@ impl WriteHandle {
 
         let mut core = self.playlist.core.write().await;
         core.set_default_ttl(ttl);
+        let snapshot = core.snapshot();
         drop(core);
 
         self.playlist.touch().await;
@@ -165,6 +248,12 @@ impl WriteHandle {
         if self.playlist.persistent {
             self.save_to_db().await?;
         }
+
+        let manager = crate::manager::PlaylistManager();
+        manager
+            .rebuild_track_index(&self.playlist.id, &snapshot)
+            .await;
+        manager.notify_playlist_changed(&self.playlist.id);
 
         Ok(())
     }

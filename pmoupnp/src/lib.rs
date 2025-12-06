@@ -32,6 +32,7 @@ pub struct UpnpObjectType {
 #[derive(Debug)]
 pub struct UpnpObjectSet<T: UpnpTypedObject> {
     objects: RwLock<HashMap<String, Arc<T>>>,
+    order: RwLock<Vec<String>>,
 }
 
 #[derive(Debug)]

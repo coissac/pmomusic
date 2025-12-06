@@ -35,6 +35,10 @@ pub struct ParadiseParams {
     /// Capacité FIFO (optionnelle, 50 par défaut)
     #[serde(default)]
     pub fifo_capacity: Option<usize>,
+
+    /// URL de base du serveur (optionnelle, "http://localhost:8080" par défaut)
+    #[serde(default)]
+    pub base_url: Option<String>,
 }
 
 /// Réponse d'enregistrement de source
@@ -136,34 +140,13 @@ async fn register_paradise(Json(params): Json<ParadiseParams>) -> impl IntoRespo
     use pmoparadise::{RadioParadiseClient, RadioParadiseSource};
     use pmosource::api::register_source;
 
-    // Créer le client (Radio Paradise ne nécessite pas d'auth)
-    let client = match RadioParadiseClient::new().await {
-        Ok(c) => c,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: format!("Failed to create Radio Paradise client: {}", e),
-                }),
-            )
-                .into_response();
-        }
-    };
+    // Utiliser l'URL de base depuis les params ou une valeur par défaut
+    let base_url = params
+        .base_url
+        .unwrap_or_else(|| "http://localhost:8080".to_string());
 
-    // Créer et enregistrer la source depuis le registry
-    // Note: params.fifo_capacity is currently not used by from_registry
-    let source = match RadioParadiseSource::from_registry(client) {
-        Ok(s) => Arc::new(s),
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Failed to create source: {}", e),
-                }),
-            )
-                .into_response();
-        }
-    };
+    // Créer la source Radio Paradise (utilise le singleton PlaylistManager)
+    let source = Arc::new(RadioParadiseSource::new(base_url));
 
     let source_id = source.as_ref().id().to_string();
 

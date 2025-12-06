@@ -60,6 +60,7 @@ impl ReadHandle {
                 tracing::warn!("Cache entry {} missing, removing from playlist", cache_pk);
                 let mut core = self.playlist.core.write().await;
                 core.remove_by_cache_pk(&cache_pk);
+                let snapshot = core.snapshot();
                 drop(core);
 
                 // Sauvegarder si persistante
@@ -72,6 +73,11 @@ impl ReadHandle {
                             .await;
                     }
                 }
+
+                // Mettre à jour l'index pk -> playlists
+                crate::manager::PlaylistManager()
+                    .rebuild_track_index(&self.playlist.id, &snapshot)
+                    .await;
 
                 // Ne pas avancer le curseur, continuer avec la position actuelle
                 continue;
@@ -160,13 +166,13 @@ impl ReadHandle {
         }
 
         let title = self.playlist.title().await;
-        let remaining = self.remaining().await?;
+        let _remaining = self.remaining().await?;
 
         Ok(Container {
             id: self.playlist.id.clone(),
             parent_id: "0".to_string(),
             restricted: Some("1".to_string()),
-            child_count: Some(remaining.to_string()),
+            child_count: None,
             searchable: Some("0".to_string()),
             title,
             class: "object.container.playlistContainer".to_string(),
@@ -204,33 +210,51 @@ impl ReadHandle {
                 continue;
             }
 
-            // Charger métadonnées
-            let metadata = match pmoaudiocache::get_metadata(&*cache, &record.cache_pk) {
-                Ok(m) => m,
-                Err(_) => continue,
-            };
+            // Charger métadonnées via TrackMetadata
+            use pmoaudiocache::metadata_ext::{AudioTrackMetadataExt, TrackMetadataDidlExt};
+            let track_meta = cache.track_metadata(&record.cache_pk);
+            let meta = track_meta.read().await;
 
             // Construire l'URL via route_for
             let url = cache.route_for(&record.cache_pk, None);
 
-            // Créer le Resource DIDL
-            let resource = metadata.to_didl_resource(url);
+            // Créer le Resource DIDL via l'extension trait
+            let resource = meta.to_didl_resource(url).await;
+
+            // Récupérer les métadonnées pour construire l'Item DIDL
+            let title = meta
+                .get_title()
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "Unknown".to_string());
+            let artist = meta.get_artist().await.ok().flatten();
+            let album = meta.get_album().await.ok().flatten();
+            let genre = meta.get_genre().await.ok().flatten();
+            let year = meta.get_year().await.ok().flatten();
+            let track_number = meta.get_track_number().await.ok().flatten();
+            let cover_pk = meta.get_cover_pk().await.ok().flatten();
+            let cover_url = if let Some(pk) = cover_pk.as_ref() {
+                Some(format!("/covers/jpeg/{}/256", pk))
+            } else {
+                meta.get_cover_url().await.ok().flatten()
+            };
 
             // Créer l'Item
             let item = Item {
                 id: format!("{}:{}", self.playlist.id, pos + idx),
                 parent_id: self.playlist.id.clone(),
                 restricted: Some("1".to_string()),
-                title: metadata.title.unwrap_or_else(|| "Unknown".to_string()),
-                creator: metadata.artist.clone(),
+                title: title.clone(),
+                creator: artist.clone(),
                 class: "object.item.audioItem.musicTrack".to_string(),
-                artist: metadata.artist,
-                album: metadata.album,
-                genre: metadata.genre,
-                album_art: None, // TODO: intégrer pmocovers
-                album_art_pk: None,
-                date: metadata.year.map(|y| y.to_string()),
-                original_track_number: metadata.track_number.map(|n| n.to_string()),
+                artist,
+                album,
+                genre,
+                album_art: cover_url,
+                album_art_pk: cover_pk,
+                date: year.map(|y| y.to_string()),
+                original_track_number: track_number.map(|n| n.to_string()),
                 resources: vec![resource],
                 descriptions: vec![],
             };

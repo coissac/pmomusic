@@ -855,6 +855,120 @@ async fn resolve_source_uri(
     }
 }
 
+/// Récupère les métadonnées détaillées d'un item
+#[cfg(feature = "server")]
+#[utoipa::path(
+    get,
+    path = "/{id}/item",
+    params(
+        ("id" = String, Path, description = "ID de la source"),
+        ObjectQuery
+    ),
+    responses(
+        (status = 200, description = "Métadonnées de l'item", body = BrowseItemInfo),
+        (status = 404, description = "Source ou objet introuvable", body = ErrorResponse),
+        (status = 501, description = "Fonctionnalité non supportée", body = ErrorResponse),
+        (status = 500, description = "Erreur lors de la récupération de l'item", body = ErrorResponse),
+    ),
+    tag = "sources"
+)]
+async fn get_source_item(
+    Path(id): Path<String>,
+    Query(params): Query<ObjectQuery>,
+) -> impl IntoResponse {
+    match get_source(&id).await {
+        Some(source) => match source.get_item(&params.object_id).await {
+            Ok(item) => {
+                let item_info = BrowseItemInfo::from(&item);
+                (StatusCode::OK, Json(item_info)).into_response()
+            }
+            Err(MusicSourceError::ObjectNotFound(_)) => (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: "Item not found".to_string(),
+                }),
+            )
+                .into_response(),
+            Err(MusicSourceError::NotSupported(msg)) => (
+                StatusCode::NOT_IMPLEMENTED,
+                Json(ErrorResponse { error: msg }),
+            )
+                .into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to get item: {}", e),
+                }),
+            )
+                .into_response(),
+        },
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Source '{}' not found", id),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+/// Stream les métadonnées d'un item en temps réel via Server-Sent Events
+#[cfg(feature = "server")]
+async fn stream_source_item_metadata(
+    Path(id): Path<String>,
+    Query(params): Query<ObjectQuery>,
+) -> impl IntoResponse {
+    use axum::response::sse::{Event, KeepAlive, Sse};
+    use futures::stream::{self, Stream};
+    use std::convert::Infallible;
+    use std::time::Duration;
+    use tokio_stream::StreamExt as _;
+
+    match get_source(&id).await {
+        Some(source) => {
+            let object_id = params.object_id.clone();
+
+            // Create a stream that fetches metadata frequently for near-realtime updates
+            let stream = stream::repeat_with(move || {
+                let source = source.clone();
+                let object_id = object_id.clone();
+                async move {
+                    match source.get_item(&object_id).await {
+                        Ok(item) => {
+                            let item_info = BrowseItemInfo::from(&item);
+                            match serde_json::to_string(&item_info) {
+                                Ok(json) => Ok(Event::default().data(json)),
+                                Err(e) => Err(format!("Failed to serialize metadata: {}", e)),
+                            }
+                        }
+                        Err(e) => Err(format!("Failed to get item: {}", e)),
+                    }
+                }
+            })
+            .then(|fut| fut)
+            .throttle(Duration::from_millis(500))
+            .filter_map(|result| match result {
+                Ok(event) => Some(Ok::<_, Infallible>(event)),
+                Err(e) => {
+                    eprintln!("Error fetching metadata: {}", e);
+                    None
+                }
+            });
+
+            Sse::new(stream)
+                .keep_alive(KeepAlive::default())
+                .into_response()
+        }
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Source '{}' not found", id),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 /// Récupère le statut du cache pour un objet
 #[cfg(feature = "server")]
 #[utoipa::path(
@@ -1096,6 +1210,8 @@ pub fn create_sources_router() -> Router {
         .route("/{id}/root", get(get_source_root))
         .route("/{id}/browse", get(browse_source))
         .route("/{id}/image", get(get_source_image))
+        .route("/{id}/item", get(get_source_item))
+        .route("/{id}/item/stream", get(stream_source_item_metadata))
         .route("/{id}/resolve", get(resolve_source_uri))
         .route("/{id}/cache/status", get(get_source_cache_status))
         .route("/{id}/cache", post(request_source_cache))
@@ -1118,6 +1234,7 @@ pub fn create_sources_router() -> Router {
         get_source_root,
         browse_source,
         get_source_image,
+        get_source_item,
         resolve_source_uri,
         get_source_cache_status,
         request_source_cache,

@@ -173,23 +173,28 @@ impl SourcesExt for Server {
 
     #[cfg(feature = "paradise")]
     async fn register_paradise(&mut self) -> Result<()> {
-        use pmoparadise::{RadioParadiseClient, RadioParadiseExt, RadioParadiseSource};
+        use crate::contentdirectory::state;
+        use pmoparadise::{RadioParadiseExt, RadioParadiseSource};
 
         tracing::info!("Initializing Radio Paradise source...");
 
-        // Créer le client (Radio Paradise ne nécessite pas d'authentification)
-        let client = RadioParadiseClient::new().await.map_err(|e| {
-            SourceInitError::ParadiseError(format!("Failed to create client: {}", e))
-        })?;
+        // Obtenir l'URL de base du serveur
+        let base_url = self.base_url();
 
-        // Créer la source depuis le registry avec capacité FIFO par défaut
-        let source = RadioParadiseSource::from_registry_default(client).map_err(|e| {
-            SourceInitError::ParadiseError(format!("Failed to create source: {}", e))
-        })?;
+        // Créer la source Radio Paradise (utilise le singleton PlaylistManager)
+        let notifier = Arc::new(|containers: &[String]| {
+            let refs: Vec<&str> = containers.iter().map(|s| s.as_str()).collect();
+            state::notify_containers_updated(&refs);
+        });
+        let source = Arc::new(
+            RadioParadiseSource::new(base_url.to_string()).with_container_notifier(notifier),
+        );
+
+        // Brancher les callbacks de playlists (live/history) pour signaler les updates
+        source.attach_playlist_callbacks();
 
         // Enregistrer la source
-        // Note: La FIFO sera peuplée automatiquement lors du premier browse
-        self.register_music_source(Arc::new(source)).await;
+        self.register_music_source(source.clone()).await;
 
         tracing::info!("✅ Radio Paradise source registered successfully");
 

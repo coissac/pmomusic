@@ -11,6 +11,7 @@
 //! - **Error handling**: Distinguishes between transient errors (NotImplemented, ReadOnly)
 //!   and backend errors that should be propagated
 //! - **Metadata copying**: Helper function to copy metadata between implementations
+//! - **Fallback cover**: Provides a default cover image when none is available
 //!
 //! # Examples
 //!
@@ -39,6 +40,60 @@ use std::{
     time::{Duration, SystemTime},
 };
 use tokio::sync::RwLock;
+
+/// Image SVG par défaut pour les covers manquantes.
+///
+/// Cette constante contient un SVG élégant représentant une note de musique,
+/// utilisé comme fallback quand aucune cover n'est disponible.
+///
+/// # Utilisation
+///
+/// ```rust
+/// use pmometadata::DEFAULT_COVER_SVG;
+///
+/// // Utiliser comme data URL
+/// let data_url = format!("data:image/svg+xml;utf8,{}", DEFAULT_COVER_SVG);
+/// ```
+pub const DEFAULT_COVER_SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#667eea;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#764ba2;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <rect width="400" height="400" fill="url(#bgGrad)"/>
+  <g transform="translate(200, 200)">
+    <circle cx="0" cy="20" r="35" fill="white" opacity="0.9"/>
+    <ellipse cx="0" cy="20" rx="35" ry="10" fill="white" opacity="0.3"/>
+    <rect x="-6" y="-120" width="12" height="140" rx="6" fill="white" opacity="0.9"/>
+    <path d="M 6,-115 Q 45,-105 45,-70 Q 45,-40 20,-35"
+          fill="none" stroke="white" stroke-width="12"
+          stroke-linecap="round" opacity="0.9"/>
+  </g>
+  <text x="200" y="360" text-anchor="middle"
+        font-family="system-ui, -apple-system, sans-serif"
+        font-size="20" fill="white" opacity="0.6">
+    No Cover Available
+  </text>
+</svg>"#;
+
+/// Retourne l'URL de la cover par défaut comme data URL.
+///
+/// Cette fonction peut être étendue à l'avenir pour accepter des paramètres
+/// de personnalisation (taille, couleur, etc.).
+///
+/// # Exemples
+///
+/// ```rust
+/// use pmometadata::get_default_cover_url;
+///
+/// let url = get_default_cover_url();
+/// // url commence par "data:image/svg+xml;utf8,<svg..."
+/// assert!(url.starts_with("data:image/svg+xml"));
+/// ```
+pub fn get_default_cover_url() -> String {
+    format!("data:image/svg+xml;utf8,{}", DEFAULT_COVER_SVG)
+}
 
 /// Helper macro for copying a single metadata field.
 macro_rules! copy_a_metadata {
@@ -186,11 +241,91 @@ pub trait TrackMetadata: Send + Sync {
         Err(MetadataError::NotImplemented)
     }
 
+    async fn get_genre(&self) -> MetadataResult<String> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn set_genre(&mut self, _value: Option<String>) -> MetadataResult<()> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn get_track_number(&self) -> MetadataResult<u32> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn set_track_number(&mut self, _value: Option<u32>) -> MetadataResult<()> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn get_track_total(&self) -> MetadataResult<u32> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn set_track_total(&mut self, _value: Option<u32>) -> MetadataResult<()> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn get_disc_number(&self) -> MetadataResult<u32> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn set_disc_number(&mut self, _value: Option<u32>) -> MetadataResult<()> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn get_disc_total(&self) -> MetadataResult<u32> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn set_disc_total(&mut self, _value: Option<u32>) -> MetadataResult<()> {
+        Err(MetadataError::NotImplemented)
+    }
+
     async fn get_duration(&self) -> MetadataResult<Duration> {
         Err(MetadataError::NotImplemented)
     }
 
     async fn set_duration(&mut self, _value: Option<Duration>) -> MetadataResult<()> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn get_sample_rate(&self) -> MetadataResult<u32> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn set_sample_rate(&mut self, _value: Option<u32>) -> MetadataResult<()> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn get_total_samples(&self) -> MetadataResult<u64> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn set_total_samples(&mut self, _value: Option<u64>) -> MetadataResult<()> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn get_bits_per_sample(&self) -> MetadataResult<u8> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn set_bits_per_sample(&mut self, _value: Option<u8>) -> MetadataResult<()> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn get_channels(&self) -> MetadataResult<u8> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn set_channels(&mut self, _value: Option<u8>) -> MetadataResult<()> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn get_bitrate(&self) -> MetadataResult<u32> {
+        Err(MetadataError::NotImplemented)
+    }
+
+    async fn set_bitrate(&mut self, _value: Option<u32>) -> MetadataResult<()> {
         Err(MetadataError::NotImplemented)
     }
 
@@ -240,6 +375,105 @@ pub trait TrackMetadata: Send + Sync {
 
     async fn set_cover_pk(&mut self, _value: Option<String>) -> MetadataResult<()> {
         Err(MetadataError::NotImplemented)
+    }
+
+    /// Retourne l'URL de la cover avec logique de fallback.
+    ///
+    /// Cette méthode implémente la logique de priorité suivante :
+    /// 1. Si `cover_pk` est défini, retourne `Some(cover_pk)` (pour utilisation avec le cover cache)
+    /// 2. Sinon, si `cover_url` est défini, retourne `Some(cover_url)` (URL externe)
+    /// 3. Sinon, retourne `None`
+    ///
+    /// Si vous voulez toujours obtenir une URL (avec image par défaut),
+    /// utilisez [`get_cover_url_or_default`] à la place.
+    ///
+    /// Les implémentations peuvent overrider cette méthode si elles veulent un comportement
+    /// différent, mais l'implémentation par défaut devrait convenir à la plupart des cas.
+    ///
+    /// # Exemples
+    ///
+    /// ```rust
+    /// use pmometadata::{TrackMetadata, MemoryTrackMetadata};
+    ///
+    /// # tokio_test::block_on(async {
+    /// let mut metadata = MemoryTrackMetadata::new();
+    ///
+    /// // Cas 1: cover_pk défini (prioritaire)
+    /// metadata.set_cover_pk(Some("abc123".to_string())).await.unwrap();
+    /// metadata.set_cover_url(Some("https://example.com/cover.jpg".to_string())).await.unwrap();
+    /// assert_eq!(
+    ///     metadata.get_cover_url_with_fallback().await.unwrap(),
+    ///     Some("abc123".to_string())
+    /// );
+    ///
+    /// // Cas 2: seulement cover_url
+    /// let mut metadata2 = MemoryTrackMetadata::new();
+    /// metadata2.set_cover_url(Some("https://example.com/cover.jpg".to_string())).await.unwrap();
+    /// assert_eq!(
+    ///     metadata2.get_cover_url_with_fallback().await.unwrap(),
+    ///     Some("https://example.com/cover.jpg".to_string())
+    /// );
+    ///
+    /// // Cas 3: aucune cover
+    /// let metadata3 = MemoryTrackMetadata::new();
+    /// assert_eq!(metadata3.get_cover_url_with_fallback().await.unwrap(), None);
+    /// # });
+    /// ```
+    async fn get_cover_url_with_fallback(&self) -> MetadataResult<String> {
+        // Priorité 1: cover_pk (cache local)
+        if let Ok(Some(pk)) = self.get_cover_pk().await {
+            if !pk.is_empty() {
+                return Ok(Some(pk));
+            }
+        }
+
+        // Priorité 2: cover_url (URL externe)
+        if let Ok(Some(url)) = self.get_cover_url().await {
+            if !url.is_empty() {
+                return Ok(Some(url));
+            }
+        }
+
+        // Aucune cover disponible
+        Ok(None)
+    }
+
+    /// Retourne l'URL de la cover ou l'image par défaut.
+    ///
+    /// Contrairement à [`get_cover_url_with_fallback`], cette méthode retourne **toujours**
+    /// une URL utilisable, en fournissant une image SVG par défaut si aucune cover n'est disponible.
+    ///
+    /// La logique de priorité est :
+    /// 1. `cover_pk` (cache local)
+    /// 2. `cover_url` (URL externe)
+    /// 3. Image SVG par défaut (data URL)
+    ///
+    /// # Exemples
+    ///
+    /// ```rust
+    /// use pmometadata::{TrackMetadata, MemoryTrackMetadata};
+    ///
+    /// # tokio_test::block_on(async {
+    /// // Sans cover : retourne l'image par défaut
+    /// let metadata = MemoryTrackMetadata::new();
+    /// let url = metadata.get_cover_url_or_default().await.unwrap();
+    /// assert!(url.starts_with("data:image/svg+xml"));
+    ///
+    /// // Avec cover : retourne la cover
+    /// let mut metadata2 = MemoryTrackMetadata::new();
+    /// metadata2.set_cover_pk(Some("abc123".to_string())).await.unwrap();
+    /// assert_eq!(
+    ///     metadata2.get_cover_url_or_default().await.unwrap(),
+    ///     "abc123"
+    /// );
+    /// # });
+    /// ```
+    async fn get_cover_url_or_default(&self) -> Result<String, MetadataError> {
+        match self.get_cover_url_with_fallback().await {
+            Ok(Some(url)) => Ok(url),
+            Ok(None) => Ok(get_default_cover_url()),
+            Err(e) => Err(e),
+        }
     }
 
     async fn get_extra(&self) -> MetadataResult<HashMap<String, String>> {
@@ -318,8 +552,23 @@ where
     let src_guard = src.read().await;
 
     copy_metadata!(
-        src_guard, dest, title, artist, album, year, duration, track_id, channel_id, event, rating,
-        cover_url, cover_pk, extra
+        src_guard,
+        dest,
+        title,
+        artist,
+        album,
+        year,
+        duration,
+        sample_rate,
+        total_samples,
+        bits_per_sample,
+        track_id,
+        channel_id,
+        event,
+        rating,
+        cover_url,
+        cover_pk,
+        extra
     );
 
     // Try to update the timestamp, but ignore transient errors
@@ -337,7 +586,17 @@ pub struct MemoryTrackMetadata {
     artist: Option<String>,
     album: Option<String>,
     year: Option<u32>,
+    genre: Option<String>,
+    track_number: Option<u32>,
+    track_total: Option<u32>,
+    disc_number: Option<u32>,
+    disc_total: Option<u32>,
     duration: Option<Duration>,
+    sample_rate: Option<u32>,
+    total_samples: Option<u64>,
+    bits_per_sample: Option<u8>,
+    channels: Option<u8>,
+    bitrate: Option<u32>,
     track_id: Option<String>,
     channel_id: Option<String>,
     event: Option<String>,
@@ -396,12 +655,112 @@ impl TrackMetadata for MemoryTrackMetadata {
         Ok(Some(()))
     }
 
+    async fn get_genre(&self) -> MetadataResult<String> {
+        Ok(self.genre.clone())
+    }
+
+    async fn set_genre(&mut self, value: Option<String>) -> MetadataResult<()> {
+        self.genre = value;
+        self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_track_number(&self) -> MetadataResult<u32> {
+        Ok(self.track_number)
+    }
+
+    async fn set_track_number(&mut self, value: Option<u32>) -> MetadataResult<()> {
+        self.track_number = value;
+        self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_track_total(&self) -> MetadataResult<u32> {
+        Ok(self.track_total)
+    }
+
+    async fn set_track_total(&mut self, value: Option<u32>) -> MetadataResult<()> {
+        self.track_total = value;
+        self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_disc_number(&self) -> MetadataResult<u32> {
+        Ok(self.disc_number)
+    }
+
+    async fn set_disc_number(&mut self, value: Option<u32>) -> MetadataResult<()> {
+        self.disc_number = value;
+        self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_disc_total(&self) -> MetadataResult<u32> {
+        Ok(self.disc_total)
+    }
+
+    async fn set_disc_total(&mut self, value: Option<u32>) -> MetadataResult<()> {
+        self.disc_total = value;
+        self.touch().await?;
+        Ok(Some(()))
+    }
+
     async fn get_duration(&self) -> MetadataResult<Duration> {
         Ok(self.duration)
     }
 
     async fn set_duration(&mut self, value: Option<Duration>) -> MetadataResult<()> {
         self.duration = value;
+        self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_sample_rate(&self) -> MetadataResult<u32> {
+        Ok(self.sample_rate)
+    }
+
+    async fn set_sample_rate(&mut self, value: Option<u32>) -> MetadataResult<()> {
+        self.sample_rate = value;
+        self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_total_samples(&self) -> MetadataResult<u64> {
+        Ok(self.total_samples)
+    }
+
+    async fn set_total_samples(&mut self, value: Option<u64>) -> MetadataResult<()> {
+        self.total_samples = value;
+        self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_bits_per_sample(&self) -> MetadataResult<u8> {
+        Ok(self.bits_per_sample)
+    }
+
+    async fn set_bits_per_sample(&mut self, value: Option<u8>) -> MetadataResult<()> {
+        self.bits_per_sample = value;
+        self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_channels(&self) -> MetadataResult<u8> {
+        Ok(self.channels)
+    }
+
+    async fn set_channels(&mut self, value: Option<u8>) -> MetadataResult<()> {
+        self.channels = value;
+        self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_bitrate(&self) -> MetadataResult<u32> {
+        Ok(self.bitrate)
+    }
+
+    async fn set_bitrate(&mut self, value: Option<u32>) -> MetadataResult<()> {
+        self.bitrate = value;
         self.touch().await?;
         Ok(Some(()))
     }
@@ -499,6 +858,9 @@ mod tests {
         assert_eq!(metadata.get_album().await.unwrap(), None);
         assert_eq!(metadata.get_year().await.unwrap(), None);
         assert_eq!(metadata.get_duration().await.unwrap(), None);
+        assert_eq!(metadata.get_sample_rate().await.unwrap(), None);
+        assert_eq!(metadata.get_total_samples().await.unwrap(), None);
+        assert_eq!(metadata.get_bits_per_sample().await.unwrap(), None);
         assert_eq!(metadata.get_updated_at().await.unwrap(), None);
     }
 
@@ -861,5 +1223,102 @@ mod tests {
             dest_guard.get_artist().await.unwrap(),
             Some("Artist".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn test_get_cover_url_with_fallback_cover_pk_priority() {
+        let mut metadata = MemoryTrackMetadata::new();
+        metadata
+            .set_cover_pk(Some("abc123".to_string()))
+            .await
+            .unwrap();
+        metadata
+            .set_cover_url(Some("https://example.com/cover.jpg".to_string()))
+            .await
+            .unwrap();
+
+        // cover_pk should have priority
+        assert_eq!(
+            metadata.get_cover_url_with_fallback().await.unwrap(),
+            Some("abc123".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_cover_url_with_fallback_cover_url_only() {
+        let mut metadata = MemoryTrackMetadata::new();
+        metadata
+            .set_cover_url(Some("https://example.com/cover.jpg".to_string()))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            metadata.get_cover_url_with_fallback().await.unwrap(),
+            Some("https://example.com/cover.jpg".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_cover_url_with_fallback_none() {
+        let metadata = MemoryTrackMetadata::new();
+        assert_eq!(metadata.get_cover_url_with_fallback().await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn test_get_cover_url_with_fallback_empty_strings() {
+        let mut metadata = MemoryTrackMetadata::new();
+        metadata.set_cover_pk(Some("".to_string())).await.unwrap();
+        metadata
+            .set_cover_url(Some("https://example.com/cover.jpg".to_string()))
+            .await
+            .unwrap();
+
+        // Empty cover_pk should fallback to cover_url
+        assert_eq!(
+            metadata.get_cover_url_with_fallback().await.unwrap(),
+            Some("https://example.com/cover.jpg".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_cover_url_or_default_with_cover_pk() {
+        let mut metadata = MemoryTrackMetadata::new();
+        metadata
+            .set_cover_pk(Some("abc123".to_string()))
+            .await
+            .unwrap();
+
+        assert_eq!(metadata.get_cover_url_or_default().await.unwrap(), "abc123");
+    }
+
+    #[tokio::test]
+    async fn test_get_cover_url_or_default_with_cover_url() {
+        let mut metadata = MemoryTrackMetadata::new();
+        metadata
+            .set_cover_url(Some("https://example.com/cover.jpg".to_string()))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            metadata.get_cover_url_or_default().await.unwrap(),
+            "https://example.com/cover.jpg"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_cover_url_or_default_no_cover() {
+        let metadata = MemoryTrackMetadata::new();
+        let url = metadata.get_cover_url_or_default().await.unwrap();
+
+        // Should return the default SVG data URL
+        assert!(url.starts_with("data:image/svg+xml"));
+        assert!(url.contains("<svg"));
+    }
+
+    #[tokio::test]
+    async fn test_default_cover_url() {
+        let url = get_default_cover_url();
+        assert!(url.starts_with("data:image/svg+xml;utf8,<svg"));
+        assert!(url.contains("No Cover Available"));
     }
 }

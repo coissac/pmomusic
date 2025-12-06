@@ -247,11 +247,7 @@ fn i16_stereo_to_pairs_f32_inner(
 }
 
 /// Convertit deux canaux i16 (L/R) en pairs f32 normalisées [-1.0, 1.0]
-pub fn i16_stereo_to_pairs_f32(
-    left: &[i16],
-    right: &[i16],
-    out_pairs: &mut [[f32; 2]],
-) {
+pub fn i16_stereo_to_pairs_f32(left: &[i16], right: &[i16], out_pairs: &mut [[f32; 2]]) {
     i16_stereo_to_pairs_f32_inner(left, right, out_pairs, 32768.0);
 }
 
@@ -332,11 +328,7 @@ fn pairs_f32_to_i16_stereo_inner(
 }
 
 /// Convertit pairs f32 normalisées [-1.0, 1.0] en deux canaux i16 (L/R)
-pub fn pairs_f32_to_i16_stereo(
-    input_pairs: &[[f32; 2]],
-    left: &mut [i16],
-    right: &mut [i16],
-) {
+pub fn pairs_f32_to_i16_stereo(input_pairs: &[[f32; 2]], left: &mut [i16], right: &mut [i16]) {
     pairs_f32_to_i16_stereo_inner(input_pairs, left, right, 32768.0);
 }
 
@@ -399,11 +391,7 @@ fn i24_as_i32_stereo_to_pairs_f32_inner(
 }
 
 /// Convertit deux canaux i32 (contenant des valeurs I24) en pairs f32 normalisées
-pub fn i24_as_i32_stereo_to_pairs_f32(
-    left: &[i32],
-    right: &[i32],
-    out_pairs: &mut [[f32; 2]],
-) {
+pub fn i24_as_i32_stereo_to_pairs_f32(left: &[i32], right: &[i32], out_pairs: &mut [[f32; 2]]) {
     i24_as_i32_stereo_to_pairs_f32_inner(left, right, out_pairs, 8388608.0);
 }
 

@@ -1,6 +1,6 @@
+use image::{ImageBuffer, Rgba};
 use pmocovers::cache;
 use tempfile::TempDir;
-use image::{ImageBuffer, Rgba};
 
 fn create_test_cache() -> (TempDir, cache::Cache) {
     let temp_dir = tempfile::tempdir().unwrap();
@@ -19,8 +19,11 @@ fn create_test_image(width: u32, height: u32) -> Vec<u8> {
     });
 
     let mut buffer = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut buffer), image::ImageFormat::Png)
-        .unwrap();
+    img.write_to(
+        &mut std::io::Cursor::new(&mut buffer),
+        image::ImageFormat::Png,
+    )
+    .unwrap();
     buffer
 }
 

@@ -8,12 +8,25 @@ fn map_db_err(err: rusqlite::Error) -> MetadataError {
     MetadataError::Backend(err.to_string())
 }
 
+/// Implémentation `TrackMetadata` adossée au cache audio.
+///
+/// Cette couche lit/écrit directement dans la table `metadata` de `pmocache`
+/// pour un `pk` donné. Elle se comporte comme une façade `TrackMetadata`
+/// classique mais repose sur la DB du cache plutôt que sur un fichier taggé,
+/// ce qui permet :
+/// - d'exposer les métadonnées immédiatement après ingestion/transform ;
+/// - de servir des lecteurs UPnP/DLNA sans relire le FLAC sur disque ;
+/// - de persister les mises à jour d'un client (ex: renommer un titre).
 pub struct AudioCacheTrackMetadata {
     cache: Arc<crate::Cache>,
     pk: String,
 }
 
 impl AudioCacheTrackMetadata {
+    /// Construit un adaptateur `TrackMetadata` pour un `pk` du cache audio.
+    ///
+    /// Le type implémente ensuite toutes les méthodes du trait `pmometadata::TrackMetadata`
+    /// en stockant les données dans la base SQLite de `pmocache`.
     pub fn new(cache: Arc<crate::Cache>, pk: impl Into<String>) -> Self {
         Self {
             cache,
@@ -176,12 +189,139 @@ impl TrackMetadata for AudioCacheTrackMetadata {
         Ok(Some(()))
     }
 
+    async fn get_genre(&self) -> MetadataResult<String> {
+        Ok(self.read_string("genre")?)
+    }
+
+    async fn set_genre(&mut self, value: Option<String>) -> MetadataResult<()> {
+        self.write_string("genre", value)?;
+        let _ = self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_track_number(&self) -> MetadataResult<u32> {
+        Ok(match self.read_number("track_number")? {
+            Some(n) => n.as_i64().and_then(|v| u32::try_from(v).ok()),
+            None => None,
+        })
+    }
+
+    async fn set_track_number(&mut self, value: Option<u32>) -> MetadataResult<()> {
+        self.write_number("track_number", value.map(|v| v as i64))?;
+        let _ = self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_track_total(&self) -> MetadataResult<u32> {
+        Ok(match self.read_number("track_total")? {
+            Some(n) => n.as_i64().and_then(|v| u32::try_from(v).ok()),
+            None => None,
+        })
+    }
+
+    async fn set_track_total(&mut self, value: Option<u32>) -> MetadataResult<()> {
+        self.write_number("track_total", value.map(|v| v as i64))?;
+        let _ = self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_disc_number(&self) -> MetadataResult<u32> {
+        Ok(match self.read_number("disc_number")? {
+            Some(n) => n.as_i64().and_then(|v| u32::try_from(v).ok()),
+            None => None,
+        })
+    }
+
+    async fn set_disc_number(&mut self, value: Option<u32>) -> MetadataResult<()> {
+        self.write_number("disc_number", value.map(|v| v as i64))?;
+        let _ = self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_disc_total(&self) -> MetadataResult<u32> {
+        Ok(match self.read_number("disc_total")? {
+            Some(n) => n.as_i64().and_then(|v| u32::try_from(v).ok()),
+            None => None,
+        })
+    }
+
+    async fn set_disc_total(&mut self, value: Option<u32>) -> MetadataResult<()> {
+        self.write_number("disc_total", value.map(|v| v as i64))?;
+        let _ = self.touch().await?;
+        Ok(Some(()))
+    }
+
     async fn get_duration(&self) -> MetadataResult<Duration> {
         Ok(self.read_duration()?)
     }
 
     async fn set_duration(&mut self, value: Option<Duration>) -> MetadataResult<()> {
         self.write_duration(value)?;
+        let _ = self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_sample_rate(&self) -> MetadataResult<u32> {
+        Ok(match self.read_number("sample_rate")? {
+            Some(n) => n.as_i64().and_then(|v| u32::try_from(v).ok()),
+            None => None,
+        })
+    }
+
+    async fn set_sample_rate(&mut self, value: Option<u32>) -> MetadataResult<()> {
+        self.write_number("sample_rate", value.map(|v| v as i64))?;
+        let _ = self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_total_samples(&self) -> MetadataResult<u64> {
+        Ok(match self.read_number("total_samples")? {
+            Some(n) => n.as_i64().and_then(|v| u64::try_from(v).ok()),
+            None => None,
+        })
+    }
+
+    async fn set_total_samples(&mut self, value: Option<u64>) -> MetadataResult<()> {
+        self.write_u64("total_samples", value)?;
+        let _ = self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_bits_per_sample(&self) -> MetadataResult<u8> {
+        Ok(match self.read_number("bits_per_sample")? {
+            Some(n) => n.as_i64().and_then(|v| u8::try_from(v).ok()),
+            None => None,
+        })
+    }
+
+    async fn set_bits_per_sample(&mut self, value: Option<u8>) -> MetadataResult<()> {
+        self.write_number("bits_per_sample", value.map(|v| v as i64))?;
+        let _ = self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_channels(&self) -> MetadataResult<u8> {
+        Ok(match self.read_number("channels")? {
+            Some(n) => n.as_i64().and_then(|v| u8::try_from(v).ok()),
+            None => None,
+        })
+    }
+
+    async fn set_channels(&mut self, value: Option<u8>) -> MetadataResult<()> {
+        self.write_number("channels", value.map(|v| v as i64))?;
+        let _ = self.touch().await?;
+        Ok(Some(()))
+    }
+
+    async fn get_bitrate(&self) -> MetadataResult<u32> {
+        Ok(match self.read_number("bitrate")? {
+            Some(n) => n.as_i64().and_then(|v| u32::try_from(v).ok()),
+            None => None,
+        })
+    }
+
+    async fn set_bitrate(&mut self, value: Option<u32>) -> MetadataResult<()> {
+        self.write_number("bitrate", value.map(|v| v as i64))?;
         let _ = self.touch().await?;
         Ok(Some(()))
     }
@@ -286,6 +426,9 @@ mod tests {
             meta.set_duration(Some(Duration::from_secs(90)))
                 .await
                 .unwrap();
+            meta.set_sample_rate(Some(44100)).await.unwrap();
+            meta.set_total_samples(Some(9_999_999)).await.unwrap();
+            meta.set_bits_per_sample(Some(16)).await.unwrap();
             meta.set_track_id(Some("trk".into())).await.unwrap();
             meta.set_channel_id(Some("chn".into())).await.unwrap();
             meta.set_event(Some("event".into())).await.unwrap();
@@ -296,27 +439,29 @@ mod tests {
             meta.set_cover_pk(Some("cover123".into())).await.unwrap();
         }
         {
-            let meta  = track.read().await;
+            let meta = track.read().await;
 
-        
-        assert_eq!(meta.get_title().await.unwrap(), Some("Title".into()));
-        assert_eq!(meta.get_artist().await.unwrap(), Some("Artist".into()));
-        assert_eq!(meta.get_album().await.unwrap(), Some("Album".into()));
-        assert_eq!(meta.get_year().await.unwrap(), Some(2024));
-        assert_eq!(
-            meta.get_duration().await.unwrap(),
-            Some(Duration::from_secs(90))
-        );
-        assert_eq!(meta.get_track_id().await.unwrap(), Some("trk".into()));
-        assert_eq!(meta.get_channel_id().await.unwrap(), Some("chn".into()));
-        assert_eq!(meta.get_event().await.unwrap(), Some("event".into()));
-        assert_eq!(meta.get_rating().await.unwrap(), Some(4.5));
-        assert_eq!(
-            meta.get_cover_url().await.unwrap(),
-            Some("http://cover".into())
-        );
-        assert_eq!(meta.get_cover_pk().await.unwrap(), Some("cover123".into()));
-        assert!(meta.get_updated_at().await.unwrap().is_some());
-    }
+            assert_eq!(meta.get_title().await.unwrap(), Some("Title".into()));
+            assert_eq!(meta.get_artist().await.unwrap(), Some("Artist".into()));
+            assert_eq!(meta.get_album().await.unwrap(), Some("Album".into()));
+            assert_eq!(meta.get_year().await.unwrap(), Some(2024));
+            assert_eq!(
+                meta.get_duration().await.unwrap(),
+                Some(Duration::from_secs(90))
+            );
+            assert_eq!(meta.get_sample_rate().await.unwrap(), Some(44100));
+            assert_eq!(meta.get_total_samples().await.unwrap(), Some(9_999_999));
+            assert_eq!(meta.get_bits_per_sample().await.unwrap(), Some(16));
+            assert_eq!(meta.get_track_id().await.unwrap(), Some("trk".into()));
+            assert_eq!(meta.get_channel_id().await.unwrap(), Some("chn".into()));
+            assert_eq!(meta.get_event().await.unwrap(), Some("event".into()));
+            assert_eq!(meta.get_rating().await.unwrap(), Some(4.5));
+            assert_eq!(
+                meta.get_cover_url().await.unwrap(),
+                Some("http://cover".into())
+            );
+            assert_eq!(meta.get_cover_pk().await.unwrap(), Some("cover123".into()));
+            assert!(meta.get_updated_at().await.unwrap().is_some());
+        }
     }
 }

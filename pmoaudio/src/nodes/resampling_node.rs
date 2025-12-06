@@ -31,7 +31,7 @@
 use crate::{
     dsp::resampling::{build_resampler, resampling, Resampler},
     nodes::{AudioError, TypedAudioNode},
-    pipeline::{AudioPipelineNode, Node, NodeLogic},
+    pipeline::{send_to_children, AudioPipelineNode, Node, NodeLogic},
     type_constraints::TypeRequirement,
     AudioChunk, AudioChunkData, AudioSegment, BitDepth, I24,
 };
@@ -95,7 +95,9 @@ impl ResamplingLogic {
                 bit_depth
             );
             let resampler = build_resampler(source_sr, self.target_sample_rate, bit_depth)
-                .map_err(|e| AudioError::ProcessingError(format!("Resampler init failed: {}", e)))?;
+                .map_err(|e| {
+                    AudioError::ProcessingError(format!("Resampler init failed: {}", e))
+                })?;
             self.current_resampler = Some(ResamplerState {
                 source_hz: source_sr,
                 resampler,
@@ -111,7 +113,12 @@ impl ResamplingLogic {
         let (resampled_left, resampled_right) = resampling(&left, &right, &mut state.resampler);
 
         // Recréer le chunk avec le nouveau sample rate
-        reconstruct_chunk(chunk, resampled_left, resampled_right, self.target_sample_rate)
+        reconstruct_chunk(
+            chunk,
+            resampled_left,
+            resampled_right,
+            self.target_sample_rate,
+        )
     }
 }
 
@@ -165,12 +172,7 @@ impl NodeLogic for ResamplingLogic {
                 segment
             };
 
-            // Envoyer à tous les enfants
-            for tx in &output {
-                tx.send(output_segment.clone())
-                    .await
-                    .map_err(|_| AudioError::ChildDied)?;
-            }
+            send_to_children(std::any::type_name::<Self>(), &output, output_segment).await?;
         }
 
         Ok(())
@@ -360,10 +362,7 @@ impl AudioPipelineNode for ResamplingNode {
         self.inner.register(child)
     }
 
-    async fn run(
-        self: Box<Self>,
-        stop_token: CancellationToken,
-    ) -> Result<(), AudioError> {
+    async fn run(self: Box<Self>, stop_token: CancellationToken) -> Result<(), AudioError> {
         Box::new(self.inner).run(stop_token).await
     }
 }
@@ -418,11 +417,7 @@ mod tests {
 
     #[test]
     fn test_reconstruct_chunk_i16() {
-        let original = AudioChunk::I16(AudioChunkData::new(
-            vec![[100, 200]],
-            44100,
-            0.0,
-        ));
+        let original = AudioChunk::I16(AudioChunkData::new(vec![[100, 200]], 44100, 0.0));
 
         let left = vec![100i32, 300i32];
         let right = vec![200i32, 400i32];
@@ -495,7 +490,7 @@ mod tests {
 
         // Créer un TrackBoundary
         let metadata = Arc::new(tokio::sync::RwLock::new(
-            pmometadata::MemoryTrackMetadata::new()
+            pmometadata::MemoryTrackMetadata::new(),
         ));
         let boundary = AudioSegment::new_track_boundary(0, 0.0, metadata);
 
@@ -568,7 +563,11 @@ mod tests {
             // 100 frames @ 44.1kHz ≈ 109 frames @ 48kHz
             if let AudioChunk::I16(data) = chunk.as_ref() {
                 let frames = data.get_frames().len();
-                assert!(frames >= 105 && frames <= 115, "Expected ~109 frames, got {}", frames);
+                assert!(
+                    frames >= 105 && frames <= 115,
+                    "Expected ~109 frames, got {}",
+                    frames
+                );
             }
         } else {
             panic!("Expected audio chunk");

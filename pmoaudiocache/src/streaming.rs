@@ -9,9 +9,19 @@ use bytes::Bytes;
 use pmocache::download::TransformMetadata;
 use pmocache::StreamTransformer;
 use pmoflac::{transcode_to_flac_stream, AudioCodec, TranscodeOptions};
+use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-/// Creates the transformer consumed by the audio cache.
+/// Crée le `StreamTransformer` utilisé par le cache audio.
+///
+/// - Accepte n'importe quel codec pris en charge par `pmoflac` (FLAC, MP3, OGG/Vorbis,
+///   Opus, WAV, AIFF).
+/// - Convertit en FLAC en streaming (passthrough si entrée FLAC) et écrit dans le
+///   fichier fourni par `pmocache`.
+/// - Renseigne `TransformMetadata` (codec source, mode, SR, BPS, canaux, total_samples)
+///   pour que `pmocache` puisse les stocker en DB.
+///
+/// À utiliser comme factory dans `Cache::with_transformer`.
 pub fn create_streaming_flac_transformer() -> StreamTransformer {
     Box::new(|input, mut file, context| {
         Box::pin(async move {
@@ -32,13 +42,33 @@ pub fn create_streaming_flac_transformer() -> StreamTransformer {
                 "transcode"
             };
 
-            context
-                .set_metadata(TransformMetadata {
-                    mode: Some(mode.to_string()),
-                    input_codec: Some(codec_to_string(codec)),
-                    details: None,
-                })
-                .await;
+            let metadata = TransformMetadata {
+                mode: Some(mode.to_string()),
+                input_codec: Some(codec_to_string(codec)),
+                details: Some(
+                    json!({
+                        "sample_rate": info.sample_rate,
+                        "bits_per_sample": info.bits_per_sample,
+                        "channels": info.channels,
+                        "total_samples": info.total_samples,
+                    })
+                    .to_string(),
+                ),
+                sample_rate: Some(info.sample_rate),
+                bits_per_sample: Some(info.bits_per_sample),
+                channels: Some(info.channels),
+                total_samples: info.total_samples,
+            };
+
+            tracing::debug!(
+                "Transformer setting metadata: sr={:?}, bps={:?}, ch={:?}, ts={:?}",
+                metadata.sample_rate,
+                metadata.bits_per_sample,
+                metadata.channels,
+                metadata.total_samples
+            );
+
+            context.set_metadata(metadata).await;
 
             let mut flac_stream = transcode.into_stream();
             let mut buffer = vec![0u8; 64 * 1024];

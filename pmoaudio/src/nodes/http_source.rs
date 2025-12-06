@@ -1,6 +1,6 @@
 use crate::{
     nodes::{AudioError, TypedAudioNode, DEFAULT_CHUNK_DURATION_MS},
-    pipeline::{Node, NodeLogic},
+    pipeline::{send_to_children, Node, NodeLogic},
     type_constraints::TypeRequirement,
     AudioChunk, AudioChunkData, AudioPipelineNode, AudioSegment, I24,
 };
@@ -114,7 +114,7 @@ impl HttpSourceLogic {
         self.url.clone()
     }
 
-    pub fn get_chunc_frames(&self) -> usize  {
+    pub fn get_chunc_frames(&self) -> usize {
         self.chunk_frames
     }
 }
@@ -127,22 +127,10 @@ impl NodeLogic for HttpSourceLogic {
         output: Vec<mpsc::Sender<Arc<AudioSegment>>>,
         stop_token: CancellationToken,
     ) -> Result<(), AudioError> {
-        macro_rules! send_to_children {
-            ($segment:expr) => {
-                for tx in &output {
-                    tx.send($segment.clone())
-                        .await
-                        .map_err(|_| AudioError::ChildDied)?;
-                }
-            };
-        }
-
         // Effectuer la requête HTTP
-        let response = reqwest::get(&self.url)
-            .await
-            .map_err(|e| {
-                AudioError::ProcessingError(format!("HTTP request failed for {}: {}", self.url, e))
-            })?;
+        let response = reqwest::get(&self.url).await.map_err(|e| {
+            AudioError::ProcessingError(format!("HTTP request failed for {}: {}", self.url, e))
+        })?;
 
         // Vérifier le status
         if !response.status().is_success() {
@@ -158,9 +146,10 @@ impl NodeLogic for HttpSourceLogic {
 
         // Convertir le stream de bytes en AsyncRead
         let bytes_stream = response.bytes_stream();
-        let stream_reader = StreamReader::new(bytes_stream.map(|result| {
-            result.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
-        }));
+        let stream_reader =
+            StreamReader::new(bytes_stream.map(|result| {
+                result.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+            }));
 
         // Décoder le flux audio
         let mut stream = decode_audio_stream(stream_reader)
@@ -180,15 +169,17 @@ impl NodeLogic for HttpSourceLogic {
         };
 
         // Émettre TopZeroSync
-        send_to_children!(AudioSegment::new_top_zero_sync());
+        send_to_children(
+            std::any::type_name::<Self>(),
+            &output,
+            AudioSegment::new_top_zero_sync(),
+        )
+        .await?;
 
         // Émettre TrackBoundary avec les métadonnées HTTP
-        let track_boundary = AudioSegment::new_track_boundary(
-            0,
-            0.0,
-            Arc::new(tokio::sync::RwLock::new(metadata)),
-        );
-        send_to_children!(track_boundary);
+        let track_boundary =
+            AudioSegment::new_track_boundary(0, 0.0, Arc::new(tokio::sync::RwLock::new(metadata)));
+        send_to_children(std::any::type_name::<Self>(), &output, track_boundary).await?;
 
         // Préparer la lecture des chunks audio
         let frame_bytes = stream_info.bytes_per_sample() * stream_info.channels as usize;
@@ -246,7 +237,7 @@ impl NodeLogic for HttpSourceLogic {
                 timestamp_sec,
             )?;
 
-            send_to_children!(segment);
+            send_to_children(std::any::type_name::<Self>(), &output, segment).await?;
 
             chunk_index += 1;
             total_frames += frames_to_emit as u64;
@@ -259,7 +250,7 @@ impl NodeLogic for HttpSourceLogic {
                 let timestamp_sec = total_frames as f64 / stream_info.sample_rate as f64;
                 let segment =
                     bytes_to_segment(&pending, &stream_info, frames, chunk_index, timestamp_sec)?;
-                send_to_children!(segment);
+                send_to_children(std::any::type_name::<Self>(), &output, segment).await?;
                 total_frames += frames as u64;
                 chunk_index += 1;
             }
@@ -268,7 +259,7 @@ impl NodeLogic for HttpSourceLogic {
         // Émettre EndOfStream
         let final_timestamp = total_frames as f64 / stream_info.sample_rate as f64;
         let eos = AudioSegment::new_end_of_stream(chunk_index, final_timestamp);
-        send_to_children!(eos);
+        send_to_children(std::any::type_name::<Self>(), &output, eos).await?;
 
         // Attendre la fin du décodage
         stream
@@ -523,10 +514,7 @@ impl AudioPipelineNode for HttpSource {
         self.inner.register(child)
     }
 
-    async fn run(
-        self: Box<Self>,
-        stop_token: CancellationToken,
-    ) -> Result<(), AudioError> {
+    async fn run(self: Box<Self>, stop_token: CancellationToken) -> Result<(), AudioError> {
         Box::new(self.inner).run(stop_token).await
     }
 }
@@ -698,7 +686,10 @@ mod tests {
         }
 
         // Vérifications
-        assert_eq!(received_frames, frames, "Tous les frames doivent être reçus");
+        assert_eq!(
+            received_frames, frames,
+            "Tous les frames doivent être reçus"
+        );
         assert!(seen_top_zero, "TopZeroSync doit être émis");
         assert!(seen_track_boundary, "TrackBoundary doit être émis");
         assert!(seen_eos, "EndOfStream doit être émis");
@@ -725,9 +716,10 @@ mod tests {
             bits_per_sample: 16,
         };
 
-        let mut flac_stream = encode_flac_stream(Cursor::new(pcm), format, EncoderOptions::default())
-            .await
-            .unwrap();
+        let mut flac_stream =
+            encode_flac_stream(Cursor::new(pcm), format, EncoderOptions::default())
+                .await
+                .unwrap();
 
         let mut flac_data = Vec::new();
         tokio::io::copy(&mut flac_stream, &mut flac_data)
@@ -798,7 +790,10 @@ mod tests {
         assert!(result.is_err(), "Doit retourner une erreur pour HTTP 404");
 
         if let Err(AudioError::ProcessingError(msg)) = result {
-            assert!(msg.contains("404"), "Le message d'erreur doit mentionner le code 404");
+            assert!(
+                msg.contains("404"),
+                "Le message d'erreur doit mentionner le code 404"
+            );
         } else {
             panic!("Le type d'erreur doit être ProcessingError");
         }
@@ -854,9 +849,10 @@ mod tests {
             bits_per_sample: 16,
         };
 
-        let mut flac_stream = encode_flac_stream(Cursor::new(pcm), format, EncoderOptions::default())
-            .await
-            .unwrap();
+        let mut flac_stream =
+            encode_flac_stream(Cursor::new(pcm), format, EncoderOptions::default())
+                .await
+                .unwrap();
 
         let mut flac_data = Vec::new();
         tokio::io::copy(&mut flac_stream, &mut flac_data)
@@ -898,6 +894,9 @@ mod tests {
             }
         }
 
-        assert!(found_title, "Le nom du fichier doit être utilisé comme titre");
+        assert!(
+            found_title,
+            "Le nom du fichier doit être utilisé comme titre"
+        );
     }
 }

@@ -63,32 +63,6 @@ impl PlaylistTrack {
 
     /// Récupère les métadonnées audio complètes depuis le cache
     ///
-    /// **Important** : Cette méthode récupère TOUTES les métadonnées de la base de données.
-    /// Si vous n'avez besoin que d'un seul champ (ex: titre), utilisez plutôt les méthodes
-    /// légères `title()`, `artist()`, etc. qui utilisent `get_a_metadata()`.
-    ///
-    /// # Exemples
-    ///
-    /// ```no_run
-    /// # use pmoplaylist::*;
-    /// # async fn example(track: PlaylistTrack) -> Result<()> {
-    /// // ✅ BON : Si vous avez besoin de plusieurs champs
-    /// let metadata = track.metadata().await?;
-    /// let title = metadata.title.as_deref().unwrap_or("Unknown");
-    /// let artist = metadata.artist.as_deref().unwrap_or("Unknown");
-    /// let album = metadata.album.as_deref().unwrap_or("Unknown");
-    ///
-    /// // ✅ MIEUX : Si vous n'avez besoin que d'un seul champ (plus léger)
-    /// let title = track.title().await?.unwrap_or_else(|| "Unknown".to_string());
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn metadata(&self) -> Result<pmoaudiocache::AudioMetadata> {
-        let cache = crate::manager::audio_cache()?;
-        pmoaudiocache::get_metadata(&*cache, &self.cache_pk)
-            .map_err(|e| crate::Error::CacheError(e.to_string()))
-    }
-
     /// Retourne une instance de TrackMetadata pour ce morceau
     ///
     /// Cette méthode fournit un accès unifié aux métadonnées via le trait `TrackMetadata`.

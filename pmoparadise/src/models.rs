@@ -161,6 +161,27 @@ pub struct Song {
     #[serde(default, deserialize_with = "deserialize_optional_string_or_f32")]
     pub rating: Option<f32>,
 
+    /// Gapless URL for individual song FLAC
+    /// This URL points to a FLAC file containing only this song
+    #[serde(default)]
+    pub gapless_url: Option<String>,
+
+    /// Scheduled playback time on Radio Paradise (Unix timestamp in milliseconds, UTC)
+    #[serde(default)]
+    pub sched_time_millis: Option<u64>,
+
+    /// Radio Paradise song ID (unique identifier)
+    #[serde(default)]
+    pub song_id: Option<String>,
+
+    /// Radio Paradise artist ID (for building artist URLs)
+    #[serde(default)]
+    pub artist_id: Option<String>,
+
+    /// Large cover image path (best quality)
+    #[serde(default)]
+    pub cover_large: Option<String>,
+
     /// Additional metadata
     #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,
@@ -175,6 +196,18 @@ impl Song {
     /// Check if a given timestamp (ms) falls within this song
     pub fn contains_timestamp(&self, timestamp_ms: DurationMs) -> bool {
         timestamp_ms >= self.elapsed && timestamp_ms < self.end_time_ms()
+    }
+
+    /// Calcule le timestamp de fin de diffusion (sched_time + duration)
+    pub fn sched_end_time_ms(&self) -> Option<u64> {
+        self.sched_time_millis.map(|start| start + self.duration)
+    }
+
+    /// Vérifie si la chanson est encore en lecture ou à venir
+    pub fn is_still_playing(&self, now_ms: u64) -> bool {
+        self.sched_end_time_ms()
+            .map(|end| end >= now_ms)
+            .unwrap_or(false)
     }
 }
 
@@ -214,6 +247,10 @@ pub struct Block {
     #[serde(default)]
     pub image_base: Option<String>,
 
+    /// Scheduled start time for this block (Unix timestamp in milliseconds, UTC)
+    #[serde(default)]
+    pub sched_time_millis: Option<u64>,
+
     /// Map of song index (as string) to Song metadata
     /// Keys are "0", "1", "2", etc.
     #[serde(default)]
@@ -225,6 +262,16 @@ pub struct Block {
 }
 
 impl Block {
+    /// Scheduled start time in milliseconds if available.
+    pub fn start_time_millis(&self) -> Option<u64> {
+        if let Some(ts) = self.sched_time_millis {
+            return Some(ts);
+        }
+        self.songs_ordered()
+            .into_iter()
+            .find_map(|(_, song)| song.sched_time_millis)
+    }
+
     /// Get songs in order by index
     pub fn songs_ordered(&self) -> Vec<(usize, &Song)> {
         let mut songs: Vec<_> = self
@@ -329,6 +376,11 @@ mod tests {
             cover: None,
             rating: None,
             extra: HashMap::new(),
+            gapless_url: Some("http://example.com/song.flac".into()),
+            sched_time_millis: Some(1_700_000_000_000),
+            song_id: Some("song-id".into()),
+            artist_id: Some("artist-id".into()),
+            cover_large: Some("cover-large.jpg".into()),
         };
 
         assert_eq!(song.end_time_ms(), 6000);

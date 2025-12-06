@@ -9,13 +9,13 @@
 //!
 //! Architecture:
 //! ```text
-//! RadioParadiseStreamSource → TimerNode → StreamingFlacSink
-//!                                             ↓
-//!                                       StreamHandle
-//!                                             ↓
-//!                                     pmoserver (Axum)
-//!                                             ↓
-//!                                 VLC / Media Player Client
+//! RadioParadiseStreamSource → TimerBufferNode → StreamingFlacSink
+//!                                                    ↓
+//!                                              StreamHandle
+//!                                                    ↓
+//!                                            pmoserver (Axum)
+//!                                                    ↓
+//!                                        VLC / Media Player Client
 //! ```
 //!
 //! Usage:
@@ -38,11 +38,11 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
-use pmoaudio::{AudioPipelineNode, TimerNode};
+use pmoaudio::{AudioPipelineNode, TimerBufferNode};
 use pmoaudio_ext::{StreamingFlacSink, StreamingOggFlacSink};
 use pmoflac::EncoderOptions;
 use pmoparadise::{RadioParadiseClient, RadioParadiseStreamSource, END_OF_BLOCKS_SIGNAL};
-use pmoserver::{ServerBuilder, init_logging};
+use pmoserver::{init_logging, ServerBuilder};
 use std::env;
 use std::sync::Arc;
 use tokio_util::io::ReaderStream;
@@ -204,51 +204,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Pipeline 1: FLAC streaming
+    // Unique pipeline feeding both FLAC and OGG sinks
     // ─────────────────────────────────────────────────────────────────────────
 
-    let mut source_flac = RadioParadiseStreamSource::new(client.clone());
-    source_flac.push_block_id(block.event);
-    source_flac.push_block_id(END_OF_BLOCKS_SIGNAL); // Signal: no more blocks after this one
-    tracing::debug!("RadioParadiseStreamSource (FLAC) created with block {} + END signal", block.event);
+    let mut source = RadioParadiseStreamSource::new(client);
+    source.push_block_id(block.event);
+    source.push_block_id(END_OF_BLOCKS_SIGNAL); // Signal: no more blocks after this one
+    tracing::debug!(
+        "RadioParadiseStreamSource created with block {} + END signal",
+        block.event
+    );
 
-    // Use SMALL channel size to make backpressure more reactive
-    // Instead of trying to buffer 3s of audio (60 chunks), use a much smaller buffer
-    // This forces tighter backpressure control
-    let max_lead_time = 3.0;
-    let channel_size = 8; // Small buffer for reactive backpressure
-    tracing::debug!("Using channel size: {} chunks ({:.1}s buffer at 50ms/chunk)", channel_size, channel_size as f64 * 0.05);
+    // Use SMALL channel size to make backpressure plus fan-out manageable.
+    let buffer_sec = 0.1;
+    let max_lead_time = buffer_sec;
+    let channel_size = 512;
+    tracing::debug!(
+        "Using channel size: {} chunks ({:.1}s buffer à 50ms/chunk)",
+        channel_size,
+        channel_size as f64 * 0.05
+    );
 
-    let mut timer_flac = TimerNode::with_channel_size(max_lead_time, channel_size);
-    tracing::debug!("TimerNode (FLAC) created with {:.1}s max lead time, {} chunk buffer", max_lead_time, channel_size);
+    let mut timer_node = TimerBufferNode::with_channel_size(buffer_sec, channel_size);
+    tracing::debug!(
+        "TimerBufferNode created with {:.1}s buffer, {} chunk queue",
+        buffer_sec,
+        channel_size
+    );
 
-    // StreamingFlacSink doesn't take channel_size - it uses bits_per_sample (16, 24, or 32)
-    let (streaming_sink, stream_handle) = StreamingFlacSink::new(encoder_options.clone(), 16);
+    // Streaming sinks
+    let (streaming_sink, stream_handle) =
+        StreamingFlacSink::with_max_broadcast_lead(encoder_options.clone(), 16, max_lead_time);
     tracing::debug!("StreamingFlacSink created");
 
-    timer_flac.register(Box::new(streaming_sink));
-    source_flac.register(Box::new(timer_flac));
-    tracing::info!("Pipeline 1 connected: RadioParadiseStreamSource → TimerNode → StreamingFlacSink");
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Pipeline 2: OGG-FLAC streaming
-    // ─────────────────────────────────────────────────────────────────────────
-
-    let mut source_ogg = RadioParadiseStreamSource::new(client);
-    source_ogg.push_block_id(block.event);
-    source_ogg.push_block_id(END_OF_BLOCKS_SIGNAL); // Signal: no more blocks after this one
-    tracing::debug!("RadioParadiseStreamSource (OGG) created with block {} + END signal", block.event);
-
-    let mut timer_ogg = TimerNode::with_channel_size(max_lead_time, channel_size);
-    tracing::debug!("TimerNode (OGG) created with {:.1}s max lead time, {} chunk buffer", max_lead_time, channel_size);
-
-    // StreamingOggFlacSink doesn't take channel_size - it uses bits_per_sample (16, 24, or 32)
-    let (ogg_sink, ogg_handle) = StreamingOggFlacSink::new(encoder_options, 16);
+    let (ogg_sink, ogg_handle) =
+        StreamingOggFlacSink::with_max_broadcast_lead(encoder_options, 16, max_lead_time);
     tracing::debug!("StreamingOggFlacSink created");
 
-    timer_ogg.register(Box::new(ogg_sink));
-    source_ogg.register(Box::new(timer_ogg));
-    tracing::info!("Pipeline 2 connected: RadioParadiseStreamSource → TimerNode → StreamingOggFlacSink");
+    // timer_node.register(Box::new(streaming_sink));
+    // timer_node.register(Box::new(ogg_sink));
+    // source.register(Box::new(timer_node));
+
+    source.register(Box::new(streaming_sink));
+    source.register(Box::new(ogg_sink));
+
+    tracing::info!("Pipeline connected: StreamSource → TimerBufferNode → {{FLAC, OGG}} sinks");
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Setup pmoserver with streaming routes
@@ -256,8 +256,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("Setting up pmoserver...");
 
-    let mut server = ServerBuilder::new("RadioParadiseStreamTest", "http://localhost", 8080)
-        .build();
+    let mut server =
+        ServerBuilder::new("RadioParadiseStreamTest", "http://localhost", 8080).build();
 
     let app_state = Arc::new(AppState {
         stream_handle,
@@ -265,12 +265,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Add streaming routes
-    server.add_handler_with_state("/test/stream", stream_handler, app_state.clone()).await;
-    server.add_handler_with_state("/test/stream-icy", stream_icy_handler, app_state.clone()).await;
-    server.add_handler_with_state("/test/stream-ogg", stream_ogg_handler, app_state.clone()).await;
+    let base = "/radioparadise/test";
+    server
+        .add_handler_with_state(
+            &format!("{}/stream", base),
+            stream_handler,
+            app_state.clone(),
+        )
+        .await;
+    server
+        .add_handler_with_state(
+            &format!("{}/stream-icy", base),
+            stream_icy_handler,
+            app_state.clone(),
+        )
+        .await;
+    server
+        .add_handler_with_state(
+            &format!("{}/stream-ogg", base),
+            stream_ogg_handler,
+            app_state.clone(),
+        )
+        .await;
 
     // Add metadata route
-    server.add_handler_with_state("/test/metadata", metadata_handler, app_state.clone()).await;
+    server
+        .add_handler_with_state(
+            &format!("{}/metadata", base),
+            metadata_handler,
+            app_state.clone(),
+        )
+        .await;
 
     // Add health check
     server.add_handler("/test/health", health_handler).await;
@@ -280,16 +305,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Ready to stream!");
     tracing::info!("");
     tracing::info!("Pure FLAC stream (for VLC, standard players):");
-    tracing::info!("  vlc http://localhost:8080/test/stream");
+    tracing::info!("  vlc http://localhost:8080{}/stream", base);
     tracing::info!("");
     tracing::info!("OGG-FLAC stream (streaming container with metadata support):");
-    tracing::info!("  vlc http://localhost:8080/test/stream-ogg");
+    tracing::info!("  vlc http://localhost:8080{}/stream-ogg", base);
     tracing::info!("");
     tracing::info!("FLAC + ICY metadata stream (for ICY-aware clients):");
-    tracing::info!("  http://localhost:8080/test/stream-icy");
+    tracing::info!("  http://localhost:8080{}/stream-icy", base);
     tracing::info!("");
     tracing::info!("Metadata endpoint (JSON):");
-    tracing::info!("  curl http://localhost:8080/test/metadata");
+    tracing::info!("  curl http://localhost:8080{}/metadata", base);
     tracing::info!("========================================");
     tracing::info!("");
 
@@ -298,27 +323,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ═══════════════════════════════════════════════════════════════════════════
 
     let stop_token = CancellationToken::new();
-    let stop_token_flac = stop_token.clone();
-    let stop_token_ogg = stop_token.clone();
+    let pipeline_stop = stop_token.clone();
 
-    // Start FLAC pipeline in background
-    let pipeline_flac_handle = tokio::spawn(async move {
-        tracing::info!("[PIPELINE-FLAC] Starting...");
-        let result = Box::new(source_flac).run(stop_token_flac).await;
+    // Start shared pipeline in background
+    let pipeline_handle = tokio::spawn(async move {
+        tracing::info!("[PIPELINE] Starting...");
+        let result = Box::new(source).run(pipeline_stop).await;
         match &result {
-            Ok(()) => tracing::info!("[PIPELINE-FLAC] Completed successfully"),
-            Err(e) => tracing::error!("[PIPELINE-FLAC] Error: {}", e),
-        }
-        result
-    });
-
-    // Start OGG-FLAC pipeline in background
-    let pipeline_ogg_handle = tokio::spawn(async move {
-        tracing::info!("[PIPELINE-OGG] Starting...");
-        let result = Box::new(source_ogg).run(stop_token_ogg).await;
-        match &result {
-            Ok(()) => tracing::info!("[PIPELINE-OGG] Completed successfully"),
-            Err(e) => tracing::error!("[PIPELINE-OGG] Error: {}", e),
+            Ok(()) => tracing::info!("[PIPELINE] Completed successfully"),
+            Err(e) => tracing::error!("[PIPELINE] Error: {}", e),
         }
         result
     });
@@ -332,17 +345,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Server stopped, canceling pipelines...");
     stop_token.cancel();
 
-    // Wait for both pipelines to finish
-    match pipeline_flac_handle.await {
-        Ok(Ok(())) => tracing::info!("FLAC pipeline completed successfully"),
-        Ok(Err(e)) => tracing::error!("FLAC pipeline error: {}", e),
-        Err(e) => tracing::error!("FLAC pipeline task error: {}", e),
-    }
-
-    match pipeline_ogg_handle.await {
-        Ok(Ok(())) => tracing::info!("OGG-FLAC pipeline completed successfully"),
-        Ok(Err(e)) => tracing::error!("OGG-FLAC pipeline error: {}", e),
-        Err(e) => tracing::error!("OGG-FLAC pipeline task error: {}", e),
+    // Wait for pipeline to finish
+    match pipeline_handle.await {
+        Ok(Ok(())) => tracing::info!("Pipeline completed successfully"),
+        Ok(Err(e)) => tracing::error!("Pipeline error: {}", e),
+        Err(e) => tracing::error!("Pipeline task error: {}", e),
     }
 
     tracing::info!("Shutdown complete");

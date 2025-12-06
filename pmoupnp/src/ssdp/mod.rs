@@ -22,9 +22,11 @@
 //! - **Max-Age**: 1800 secondes (30 minutes)
 //! - **Announcement Period**: 900 secondes (15 minutes, Max-Age/2)
 
+mod client;
 mod device;
 mod server;
 
+pub use client::{SsdpClient, SsdpEvent};
 pub use device::SsdpDevice;
 pub use server::SsdpServer;
 
