@@ -1,0 +1,56 @@
+# Configuration exemple pour pmoqobuz
+#
+# Ce fichier montre comment configurer l'accès à Qobuz avec AppID et Secret.
+# Pour utiliser cette configuration :
+#
+# 1. Copier ce fichier vers ~/.pmomusic/config.yaml (ou le répertoire de config approprié)
+# 2. Remplacer les valeurs par vos propres credentials
+# 3. Utiliser le Spoofer pour obtenir un AppID et Secret valides :
+#    cargo run --example spoofer
+
+host:
+  http_port: '8080'
+  cover_cache:
+    directory: cache_covers
+    size: 2000
+  audio_cache:
+    directory: cache_audio
+    size: 500
+  logger:
+    buffer_capacity: 200
+    enable_console: true
+    min_level: INFO
+
+playlists:
+  directory: playlists
+
+devices:
+  mediarenderer:
+    pmo_mediarenderer:
+      udn: e4b68fbc-2bd5-4cea-98d8-be843fec0bd4
+  mediaserver:
+    pmo_mediaserver:
+      udn: 17fe2ea6-8908-4e30-bc52-b28ea4cab3e4
+
+accounts:
+  qobuz:
+    # Credentials utilisateur (REQUIS)
+    username: "your_email@example.com"
+    password: "your_password"
+
+    # AppID et Secret (OPTIONNEL mais RECOMMANDÉ)
+    # Pour obtenir ces valeurs, exécutez : cargo run --example spoofer
+    #
+    # Exemple de valeurs récupérées le 2025-12-10 :
+    appid: "798273057"
+    secret: "f69a7734686cb9427629378a4b7ac381"  # Secret pour timezone "london"
+
+    # Autres secrets disponibles (testez si "london" ne fonctionne pas) :
+    # secret: "806331c3b0b641da923b890aed01d04a"  # Secret pour timezone "abidjan"
+    # secret: "abb21364945c0583309667d13ca3d93a"  # Secret pour timezone "berlin"
+
+    # Note sur les secrets :
+    # - Les secrets sont des valeurs base64-encodées retournées par le Spoofer
+    # - Ils sont nécessaires pour les requêtes signées (streaming, bibliothèque)
+    # - Sans secret, seules les fonctionnalités de base sont disponibles
+    # - Les secrets peuvent expirer : réexécutez le Spoofer pour en obtenir de nouveaux

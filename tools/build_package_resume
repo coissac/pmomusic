@@ -4,7 +4,7 @@ TARGET=$1
 DEST=$(basename $TARGET)
 VERSION=$2
 
-find $TARGET -type f -not -name '.*' \
+find $TARGET -type f -not -name '.*' -not -name '*.webp' \
   | while read filename ; do 
       echo "=============== $filename ============"
 	  cat $filename 

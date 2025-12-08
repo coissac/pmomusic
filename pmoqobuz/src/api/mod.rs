@@ -4,6 +4,8 @@
 
 pub mod auth;
 pub mod catalog;
+pub mod signing;
+pub mod spoofer;
 pub mod user;
 
 use crate::error::{QobuzError, Result};
@@ -14,8 +16,21 @@ use serde_json::Value;
 use std::time::Duration;
 use tracing::{debug, warn};
 
+pub use spoofer::Spoofer;
+
 /// URL de base de l'API Qobuz
 const API_BASE_URL: &str = "https://www.qobuz.com/api.json/0.2";
+
+/// App ID Qobuz par défaut
+///
+/// Cet App ID est un fallback au cas où :
+/// - Aucun appID n'est configuré dans pmoconfig
+/// - Le Spoofer n'est pas disponible ou échoue
+///
+/// Note: Cet App ID peut devenir obsolète avec le temps.
+/// Il est recommandé d'utiliser soit la configuration manuelle,
+/// soit le Spoofer pour obtenir un App ID à jour.
+pub const DEFAULT_APP_ID: &str = "1401488693436528";
 
 /// Client API bas-niveau pour communiquer avec Qobuz
 pub struct QobuzApi {
@@ -23,6 +38,12 @@ pub struct QobuzApi {
     client: Client,
     /// App ID pour l'authentification
     app_id: String,
+    /// Secret s4 pour signer les requêtes sensibles (track/getFileUrl, userLibrary/*)
+    ///
+    /// Ce secret est obtenu soit :
+    /// - En décodant un `configvalue` (base64) et XOR avec l'app_id
+    /// - Depuis le Spoofer (secrets dynamiques)
+    secret: Option<Vec<u8>>,
     /// Token d'authentification utilisateur
     user_auth_token: Option<String>,
     /// ID utilisateur
@@ -44,10 +65,70 @@ impl QobuzApi {
         Ok(Self {
             client,
             app_id: app_id.into(),
+            secret: None,
             user_auth_token: None,
             user_id: None,
             format_id: AudioFormat::default(),
         })
+    }
+
+    /// Crée une API avec un secret depuis configvalue (base64)
+    ///
+    /// # Arguments
+    ///
+    /// * `app_id` - App ID Qobuz
+    /// * `configvalue` - Secret encodé en base64 (à XORer avec l'app_id)
+    ///
+    /// # Note
+    ///
+    /// Cette méthode reproduit le comportement Python de `__set_s4()`.
+    /// Le configvalue est décodé depuis base64, puis XORé avec l'app_id
+    /// pour obtenir le secret s4.
+    pub fn with_secret(app_id: impl Into<String>, configvalue: &str) -> Result<Self> {
+        let mut api = Self::new(app_id)?;
+        api.set_secret_from_configvalue(configvalue)?;
+        Ok(api)
+    }
+
+    /// Définit le secret s4 directement
+    ///
+    /// # Arguments
+    ///
+    /// * `secret` - Secret s4 en bytes (déjà décodé et dérivé)
+    pub fn set_secret(&mut self, secret: Vec<u8>) {
+        self.secret = Some(secret);
+    }
+
+    /// Dérive et définit le secret s4 depuis un configvalue
+    ///
+    /// Reproduit la logique Python de `__set_s4()`:
+    /// 1. Décode le configvalue depuis base64
+    /// 2. XOR avec l'app_id
+    /// 3. Stocke le résultat comme secret s4
+    fn set_secret_from_configvalue(&mut self, configvalue: &str) -> Result<()> {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
+        // Décoder le configvalue depuis base64
+        let s3s = STANDARD
+            .decode(configvalue.trim())
+            .map_err(|e| QobuzError::Configuration(format!("Invalid configvalue: {}", e)))?;
+
+        // XOR avec l'app_id
+        let app_id_bytes = self.app_id.as_bytes();
+        let mut s4 = Vec::with_capacity(s3s.len());
+
+        for (i, &byte) in s3s.iter().enumerate() {
+            let app_byte = app_id_bytes[i % app_id_bytes.len()];
+            s4.push(byte ^ app_byte);
+        }
+
+        self.secret = Some(s4);
+        Ok(())
+    }
+
+    /// Retourne le secret s4 si disponible
+    pub fn secret(&self) -> Option<&[u8]> {
+        self.secret.as_deref()
     }
 
     /// Définit le token d'authentification

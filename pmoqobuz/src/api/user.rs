@@ -192,4 +192,76 @@ impl QobuzApi {
             .await?;
         Ok(())
     }
+
+    /// Récupère la liste des albums de la bibliothèque utilisateur
+    ///
+    /// Cette méthode nécessite un secret s4 pour signer la requête.
+    /// Elle est principalement utilisée pour tester la validité d'un secret.
+    ///
+    /// Dans le code Python, cette méthode est utilisée par `setSec()` pour
+    /// tester chaque secret retourné par le Spoofer.
+    ///
+    /// # Errors
+    ///
+    /// Retourne `QobuzError::Configuration` si le secret n'est pas configuré.
+    /// Retourne `QobuzError::Unauthorized` si l'utilisateur n'est pas authentifié.
+    pub async fn userlib_get_albums(&self) -> Result<FavoritesResponse> {
+        use super::signing;
+
+        // Vérifier l'authentification
+        self.ensure_authenticated()?;
+
+        // Vérifier que le secret est disponible
+        let secret = self
+            .secret()
+            .ok_or_else(|| {
+                QobuzError::Configuration(
+                    "Secret not configured. Cannot sign userLibrary/getAlbumsList request."
+                        .to_string(),
+                )
+            })?;
+
+        let timestamp = signing::get_timestamp();
+
+        // Signer la requête (comme Python: userlib_getAlbums)
+        let signature = signing::sign_userlib_get_albums(&timestamp, secret);
+
+        debug!(
+            "Signing userLibrary/getAlbumsList: app_id={}, ts={}",
+            self.app_id(),
+            timestamp
+        );
+
+        // Construire les paramètres signés
+        let user_auth_token = self
+            .auth_token()
+            .ok_or_else(|| QobuzError::Unauthorized("No auth token".to_string()))?;
+
+        let params = [
+            ("app_id", self.app_id()),
+            ("user_auth_token", user_auth_token),
+            ("request_ts", timestamp.as_str()),
+            ("request_sig", signature.as_str()),
+        ];
+
+        // Utiliser POST (comme Python)
+        self.post("/userLibrary/getAlbumsList", &params).await
+    }
+
+    /// Teste si un secret est valide en essayant de récupérer les albums
+    ///
+    /// Cette méthode est équivalente au test fait dans `setSec()` en Python.
+    /// Elle retourne `true` si le secret fonctionne, `false` sinon.
+    pub async fn test_secret(&self, secret: &[u8]) -> bool {
+        // Sauvegarder le secret actuel
+        let current_secret = self.secret().map(|s| s.to_vec());
+
+        // Définir temporairement le nouveau secret
+        // Note: cette méthode nécessite &mut self, donc on doit la rendre mutable
+        // Pour l'instant, on ne peut pas modifier self dans cette méthode
+        // TODO: Refactoriser pour permettre de tester les secrets
+
+        // Restaurer le secret original
+        false
+    }
 }

@@ -3,16 +3,14 @@
 //! Ce module fournit un client haut-niveau avec authentification et cache intégré.
 
 use crate::api::auth::AuthInfo;
-use crate::api::QobuzApi;
+use crate::api::{QobuzApi, DEFAULT_APP_ID};
 use crate::cache::QobuzCache;
+use crate::config_ext::QobuzConfigExt;
 use crate::error::{QobuzError, Result};
 use crate::models::*;
 use pmoconfig::Config;
 use std::sync::Arc;
 use tracing::{debug, info};
-
-/// App ID Qobuz par défaut (peut être overridé)
-const DEFAULT_APP_ID: &str = "950611386";
 
 /// Client Qobuz haut-niveau avec cache
 pub struct QobuzClient {
@@ -80,9 +78,236 @@ impl QobuzClient {
     }
 
     /// Crée un client depuis un objet Config spécifique
+    ///
+    /// Cette méthode récupère les credentials, l'App ID et optionnellement
+    /// le secret depuis la configuration.
+    ///
+    /// Ordre de priorité pour l'initialisation :
+    /// 0. **Vérifier le cache du token d'authentification** (évite un login si token valide)
+    /// 1. Si `appid` ET `secret` configurés → teste d'abord avec ces credentials
+    /// 2. Si échec d'authentification → utilise le Spoofer pour obtenir de nouveaux credentials
+    /// 3. Si aucun `appid`/`secret` configuré → utilise directement le Spoofer
+    /// 4. Fallback ultime → utilise DEFAULT_APP_ID sans secret (requêtes signées échoueront)
     pub async fn from_config_obj(config: &Config) -> Result<Self> {
         let (username, password) = config.get_qobuz_credentials()?;
-        Self::new(&username, &password).await
+
+        // Étape 0 : Essayer de réutiliser le token stocké dans la configuration
+        // Note: On ne vérifie PAS l'expiration - si le token est invalide, les requêtes
+        // échoueront avec 401/403 et déclencheront un re-login automatique
+        if let (Ok(Some(token)), Ok(Some(user_id))) =
+            (config.get_qobuz_auth_token(), config.get_qobuz_user_id())
+        {
+            info!("✓ Found stored authentication token in configuration");
+
+            // Récupérer l'App ID et le secret depuis la config pour créer l'API
+            let config_appid = config.get_qobuz_appid()?;
+            let config_secret = config.get_qobuz_secret()?;
+
+            match (config_appid, config_secret) {
+                (Some(app_id), Some(secret)) => match QobuzApi::with_secret(&app_id, &secret) {
+                    Ok(mut api) => {
+                        // Réutiliser le token de la configuration
+                        api.set_auth_token(token.clone(), user_id.clone());
+
+                        info!("✓ Reusing authentication token (no login required)");
+                        info!("   → Token will be validated on first API request");
+
+                        let auth_info = AuthInfo {
+                            token,
+                            user_id,
+                            subscription_label: config.get_qobuz_subscription_label().ok().flatten(),
+                        };
+
+                        return Ok(Self {
+                            api,
+                            cache: Arc::new(QobuzCache::new()),
+                            auth_info: Some(auth_info),
+                        });
+                    }
+                    Err(e) => {
+                        debug!("Failed to create API with stored credentials: {}", e);
+                        info!("→ Credentials in config are invalid, will perform login");
+                        // Continuer vers le login normal
+                    }
+                },
+                _ => {
+                    debug!("No appid/secret in config, cannot reuse token");
+                    info!("→ Missing AppID/secret, will perform login");
+                    // Continuer vers le login normal
+                }
+            }
+        } else {
+            debug!("No stored authentication token found in configuration, will perform login");
+        }
+
+        // Récupérer l'App ID et le secret depuis la config
+        let config_appid = config.get_qobuz_appid()?;
+        let config_secret = config.get_qobuz_secret()?;
+
+        // Déterminer comment créer l'API
+        let mut api = match (config_appid, config_secret) {
+            // Cas 1: AppID ET secret configurés → test avec authentification
+            (Some(app_id), Some(secret)) => {
+                info!(
+                    "Creating Qobuz API with configured App ID: {} and secret",
+                    app_id
+                );
+
+                match QobuzApi::with_secret(&app_id, &secret) {
+                    Ok(mut test_api) => {
+                        // Tenter l'authentification pour valider les credentials
+                        debug!("Testing configured credentials with login...");
+                        match test_api.login(&username, &password).await {
+                            Ok(auth_info) => {
+                                info!("✓ Configured credentials are valid");
+
+                                // Sauvegarder le token dans la configuration
+                                use std::time::{SystemTime, UNIX_EPOCH, Duration};
+                                let expires_at = SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .unwrap()
+                                    .as_secs()
+                                    + Duration::from_secs(24 * 3600).as_secs(); // 24h
+
+                                if let Err(e) = config.set_qobuz_auth_info(
+                                    &auth_info.token,
+                                    &auth_info.user_id,
+                                    auth_info.subscription_label.as_deref(),
+                                    expires_at,
+                                ) {
+                                    debug!("Failed to save authentication to config: {}", e);
+                                } else {
+                                    info!("✓ Saved authentication token to configuration");
+                                }
+
+                                // Les credentials sont valides, retourner directement
+                                return Ok(Self {
+                                    api: test_api,
+                                    cache: Arc::new(QobuzCache::new()),
+                                    auth_info: Some(auth_info),
+                                });
+                            }
+                            Err(e) if e.is_auth_error() => {
+                                info!("✗ Configured credentials failed authentication: {}", e);
+                                info!("→ Falling back to Spoofer to obtain new credentials...");
+                                // Continuer vers le Spoofer (voir après le match)
+                            }
+                            Err(e) => {
+                                // Autre erreur (réseau, etc.) → propager
+                                return Err(e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        info!("✗ Failed to create API with configured credentials: {}", e);
+                        info!("→ Falling back to Spoofer...");
+                        // Continuer vers le Spoofer
+                    }
+                }
+
+                // Si on arrive ici, les credentials configurés ont échoué
+                // → Appel du Spoofer
+                Self::try_spoofer_fallback(config).await?
+            }
+
+            // Cas 2: Aucun ou seulement l'un des deux → utiliser directement le Spoofer
+            _ => {
+                info!("AppID or secret not configured, using Spoofer to obtain valid credentials...");
+                Self::try_spoofer_fallback(config).await?
+            }
+        };
+
+        // Authentifier l'utilisateur
+        let auth_info = api.login(&username, &password).await?;
+
+        // Sauvegarder le token dans la configuration pour éviter de re-login la prochaine fois
+        use std::time::{Duration, SystemTime, UNIX_EPOCH};
+        let expires_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + Duration::from_secs(24 * 3600).as_secs(); // 24h
+
+        if let Err(e) = config.set_qobuz_auth_info(
+            &auth_info.token,
+            &auth_info.user_id,
+            auth_info.subscription_label.as_deref(),
+            expires_at,
+        ) {
+            debug!("Failed to save authentication to config: {}", e);
+        } else {
+            info!("✓ Saved authentication token to configuration");
+        }
+
+        Ok(Self {
+            api,
+            cache: Arc::new(QobuzCache::new()),
+            auth_info: Some(auth_info),
+        })
+    }
+
+    /// Tente d'utiliser le Spoofer pour obtenir des credentials valides
+    ///
+    /// Cette méthode est appelée soit :
+    /// - Quand aucun appid/secret n'est configuré
+    /// - Quand les credentials configurés sont invalides/expirés
+    async fn try_spoofer_fallback(config: &Config) -> Result<QobuzApi> {
+        match crate::api::Spoofer::new().await {
+            Ok(spoofer) => {
+                match spoofer.get_app_id() {
+                    Ok(app_id) => {
+                        info!("Spoofer found App ID: {}", app_id);
+
+                        match spoofer.get_secrets() {
+                            Ok(secrets) => {
+                                info!("Spoofer found {} secret(s), testing them...", secrets.len());
+
+                                // Tester chaque secret pour trouver celui qui fonctionne
+                                for (timezone, secret) in secrets.iter() {
+                                    debug!("Testing secret for timezone: {}", timezone);
+
+                                    match QobuzApi::with_secret(&app_id, secret) {
+                                        Ok(test_api) => {
+                                            info!("✓ Successfully created API with secret from timezone: {}", timezone);
+
+                                            // Sauvegarder les credentials valides dans la config
+                                            if let Err(e) = config.set_qobuz_appid(&app_id) {
+                                                debug!("Could not save appid to config: {}", e);
+                                            }
+                                            if let Err(e) = config.set_qobuz_secret(secret) {
+                                                debug!("Could not save secret to config: {}", e);
+                                            }
+
+                                            return Ok(test_api);
+                                        }
+                                        Err(e) => {
+                                            debug!("Failed to create API with secret from {}: {}", timezone, e);
+                                            continue;
+                                        }
+                                    }
+                                }
+
+                                // Si aucun secret n'a fonctionné, utiliser le fallback
+                                info!("✗ No valid secret found from Spoofer, falling back to DEFAULT_APP_ID without secret");
+                                QobuzApi::new(DEFAULT_APP_ID)
+                            }
+                            Err(e) => {
+                                info!("Spoofer failed to extract secrets: {}, falling back to DEFAULT_APP_ID", e);
+                                QobuzApi::new(DEFAULT_APP_ID)
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        info!("Spoofer failed to extract app_id: {}, falling back to DEFAULT_APP_ID", e);
+                        QobuzApi::new(DEFAULT_APP_ID)
+                    }
+                }
+            }
+            Err(e) => {
+                info!("Spoofer failed: {}, falling back to DEFAULT_APP_ID without secret", e);
+                QobuzApi::new(DEFAULT_APP_ID)
+            }
+        }
     }
 
     /// Définit le format audio par défaut
@@ -360,11 +585,6 @@ impl QobuzClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_default_app_id() {
-        assert!(!DEFAULT_APP_ID.is_empty());
-    }
 
     #[test]
     fn test_audio_format() {

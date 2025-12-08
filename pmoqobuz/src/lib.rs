@@ -216,7 +216,9 @@
 pub mod api;
 pub mod cache;
 pub mod client;
+pub mod config_ext;
 pub mod didl;
+pub mod disk_cache;
 pub mod error;
 pub mod models;
 pub mod source;
@@ -232,6 +234,7 @@ pub mod pmoserver_ext;
 mod pmoserver_impl;
 
 pub use client::QobuzClient;
+pub use config_ext::QobuzConfigExt;
 pub use error::{QobuzError, Result};
 pub use models::{Album, Artist, AudioFormat, Genre, Playlist, SearchResult, Track};
 pub use source::QobuzSource;

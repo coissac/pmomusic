@@ -24,9 +24,13 @@ pub enum QobuzError {
     #[error("JSON parsing error: {0}")]
     JsonParse(#[from] serde_json::Error),
 
-    /// Erreur de configuration
+    /// Erreur de configuration (anyhow)
     #[error("Configuration error: {0}")]
     Config(#[from] anyhow::Error),
+
+    /// Erreur de configuration Qobuz (App ID, secret, etc.)
+    #[error("Qobuz configuration error: {0}")]
+    Configuration(String),
 
     /// Erreur de l'API Qobuz
     #[error("Qobuz API error (code {code}): {message}")]
@@ -71,9 +75,15 @@ impl QobuzError {
         }
     }
 
-    /// Vérifie si l'erreur est une erreur de credentials
+    /// Vérifie si l'erreur est une erreur de credentials (401/403)
+    /// ou d'AppID invalide (400 avec "app_id")
     pub fn is_auth_error(&self) -> bool {
-        matches!(self, QobuzError::Unauthorized(_))
+        match self {
+            QobuzError::Unauthorized(_) => true,
+            QobuzError::ApiError { code: 400, message }
+                if message.contains("app_id") || message.contains("Invalid") => true,
+            _ => false,
+        }
     }
 
     /// Vérifie si l'erreur est une erreur de rate limiting

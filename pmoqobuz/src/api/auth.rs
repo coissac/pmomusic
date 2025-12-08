@@ -15,7 +15,8 @@ struct LoginResponse {
 /// Informations utilisateur retournées par l'API
 #[derive(Debug, Deserialize)]
 struct UserInfo {
-    id: u64,
+    #[serde(deserialize_with = "crate::models::deserialize_id")]
+    id: String,
     #[serde(default)]
     email: Option<String>,
     #[serde(default)]
@@ -80,7 +81,7 @@ impl QobuzApi {
             ));
         }
 
-        let user_id = response.user.id.to_string();
+        let user_id = response.user.id;
         let subscription_label = response
             .user
             .credential
