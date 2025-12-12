@@ -41,8 +41,9 @@ impl Spoofer {
             .await?;
 
         // Extraire l'URL du bundle
-        let bundle_url_regex =
-            Regex::new(r#"<script src="(/resources/\d+\.\d+\.\d+-[a-z]\d{3}/bundle\.js)"></script>"#)?;
+        let bundle_url_regex = Regex::new(
+            r#"<script src="(/resources/\d+\.\d+\.\d+-[a-z]\d{3}/bundle\.js)"></script>"#,
+        )?;
         let bundle_url = bundle_url_regex
             .captures(&login_page)
             .and_then(|cap| cap.get(1))
@@ -168,19 +169,14 @@ impl Spoofer {
 
                 // Décoder en base64
                 match STANDARD.decode(trimmed) {
-                    Ok(decoded_bytes) => {
-                        match String::from_utf8(decoded_bytes) {
-                            Ok(decoded_str) => {
-                                decoded_secrets.insert(timezone, decoded_str);
-                            }
-                            Err(e) => {
-                                eprintln!(
-                                    "Erreur UTF-8 pour timezone {}: {}",
-                                    timezone, e
-                                );
-                            }
+                    Ok(decoded_bytes) => match String::from_utf8(decoded_bytes) {
+                        Ok(decoded_str) => {
+                            decoded_secrets.insert(timezone, decoded_str);
                         }
-                    }
+                        Err(e) => {
+                            eprintln!("Erreur UTF-8 pour timezone {}: {}", timezone, e);
+                        }
+                    },
                     Err(e) => {
                         eprintln!(
                             "Erreur de décodage base64 pour timezone {}: {}",

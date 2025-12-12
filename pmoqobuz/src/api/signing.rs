@@ -115,13 +115,8 @@ mod tests {
 
     #[test]
     fn test_sign_track_get_file_url() {
-        let signature = sign_track_get_file_url(
-            "27",
-            "stream",
-            "12345",
-            "1234567890.123",
-            b"test_secret",
-        );
+        let signature =
+            sign_track_get_file_url("27", "stream", "12345", "1234567890.123", b"test_secret");
 
         // Vérifier que c'est un hash MD5 valide (32 caractères hex)
         assert_eq!(signature.len(), 32);

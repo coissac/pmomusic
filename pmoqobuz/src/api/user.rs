@@ -32,9 +32,8 @@ struct UserPlaylistsResponse {
 
 impl QobuzApi {
     /// Vérifie que l'utilisateur est authentifié
-    fn ensure_authenticated(&self) -> Result<&str> {
-        self.user_id
-            .as_deref()
+    fn ensure_authenticated(&self) -> Result<String> {
+        self.user_id()
             .ok_or_else(|| QobuzError::Unauthorized("Not authenticated".to_string()))
     }
 
@@ -43,7 +42,11 @@ impl QobuzApi {
         let user_id = self.ensure_authenticated()?;
         debug!("Fetching favorite albums for user {}", user_id);
 
-        let params = [("user_id", user_id), ("type", "albums"), ("limit", "1000")];
+        let params = [
+            ("user_id", user_id.as_str()),
+            ("type", "albums"),
+            ("limit", "1000"),
+        ];
 
         let response: FavoritesResponse = self.get("/favorite/getUserFavorites", &params).await?;
 
@@ -64,7 +67,11 @@ impl QobuzApi {
         let user_id = self.ensure_authenticated()?;
         debug!("Fetching favorite artists for user {}", user_id);
 
-        let params = [("user_id", user_id), ("type", "artists"), ("limit", "1000")];
+        let params = [
+            ("user_id", user_id.as_str()),
+            ("type", "artists"),
+            ("limit", "1000"),
+        ];
 
         let response: FavoritesResponse = self.get("/favorite/getUserFavorites", &params).await?;
 
@@ -84,7 +91,11 @@ impl QobuzApi {
         let user_id = self.ensure_authenticated()?;
         debug!("Fetching favorite tracks for user {}", user_id);
 
-        let params = [("user_id", user_id), ("type", "tracks"), ("limit", "1000")];
+        let params = [
+            ("user_id", user_id.as_str()),
+            ("type", "tracks"),
+            ("limit", "1000"),
+        ];
 
         let response: FavoritesResponse = self.get("/favorite/getUserFavorites", &params).await?;
 
@@ -105,7 +116,7 @@ impl QobuzApi {
         let user_id = self.ensure_authenticated()?;
         debug!("Fetching playlists for user {}", user_id);
 
-        let params = [("user_id", user_id), ("limit", "1000")];
+        let params = [("user_id", user_id.as_str()), ("limit", "1000")];
 
         let response: UserPlaylistsResponse =
             self.get("/playlist/getUserPlaylists", &params).await?;
@@ -126,7 +137,7 @@ impl QobuzApi {
             album_id, user_id
         );
 
-        let params = [("album_id", album_id), ("user_id", user_id)];
+        let params = [("album_id", album_id), ("user_id", user_id.as_str())];
 
         self.get::<serde_json::Value>("/favorite/create", &params)
             .await?;
@@ -141,7 +152,7 @@ impl QobuzApi {
             album_id, user_id
         );
 
-        let params = [("album_ids", album_id), ("user_id", user_id)];
+        let params = [("album_ids", album_id), ("user_id", user_id.as_str())];
 
         self.get::<serde_json::Value>("/favorite/delete", &params)
             .await?;
@@ -156,7 +167,7 @@ impl QobuzApi {
             track_id, user_id
         );
 
-        let params = [("track_id", track_id), ("user_id", user_id)];
+        let params = [("track_id", track_id), ("user_id", user_id.as_str())];
 
         self.get::<serde_json::Value>("/favorite/create", &params)
             .await?;
@@ -171,7 +182,7 @@ impl QobuzApi {
             track_id, user_id
         );
 
-        let params = [("track_ids", track_id), ("user_id", user_id)];
+        let params = [("track_ids", track_id), ("user_id", user_id.as_str())];
 
         self.get::<serde_json::Value>("/favorite/delete", &params)
             .await?;
@@ -212,19 +223,16 @@ impl QobuzApi {
         self.ensure_authenticated()?;
 
         // Vérifier que le secret est disponible
-        let secret = self
-            .secret()
-            .ok_or_else(|| {
-                QobuzError::Configuration(
-                    "Secret not configured. Cannot sign userLibrary/getAlbumsList request."
-                        .to_string(),
-                )
-            })?;
+        let secret = self.secret().ok_or_else(|| {
+            QobuzError::Configuration(
+                "Secret not configured. Cannot sign userLibrary/getAlbumsList request.".to_string(),
+            )
+        })?;
 
         let timestamp = signing::get_timestamp();
 
         // Signer la requête (comme Python: userlib_getAlbums)
-        let signature = signing::sign_userlib_get_albums(&timestamp, secret);
+        let signature = signing::sign_userlib_get_albums(&timestamp, &secret);
 
         debug!(
             "Signing userLibrary/getAlbumsList: app_id={}, ts={}",
@@ -239,7 +247,7 @@ impl QobuzApi {
 
         let params = [
             ("app_id", self.app_id()),
-            ("user_auth_token", user_auth_token),
+            ("user_auth_token", user_auth_token.as_str()),
             ("request_ts", timestamp.as_str()),
             ("request_sig", signature.as_str()),
         ];
@@ -252,9 +260,9 @@ impl QobuzApi {
     ///
     /// Cette méthode est équivalente au test fait dans `setSec()` en Python.
     /// Elle retourne `true` si le secret fonctionne, `false` sinon.
-    pub async fn test_secret(&self, secret: &[u8]) -> bool {
+    pub async fn test_secret(&self, _secret: &[u8]) -> bool {
         // Sauvegarder le secret actuel
-        let current_secret = self.secret().map(|s| s.to_vec());
+        let _current_secret = self.secret();
 
         // Définir temporairement le nouveau secret
         // Note: cette méthode nécessite &mut self, donc on doit la rendre mutable

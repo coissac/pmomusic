@@ -1,366 +1,215 @@
-//! Cache disque simple pour les données volumineuses de l'API Qobuz
-//!
-//! Ce module gère le cache sur disque des données qui changent rarement :
-//! - Favoris (albums, tracks, artistes)
-//! - Playlists utilisateur
-//! - Bibliothèque
-//!
-//! Contrairement à pmocache (conçu pour des fichiers binaires avec téléchargement),
-//! ce cache est optimisé pour du JSON provenant de l'API.
+#![cfg(feature = "disk-cache")]
 
-use anyhow::{anyhow, Result};
+use anyhow::anyhow;
 use serde::{de::DeserializeOwned, Serialize};
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
-use tracing::{debug, info};
+use std::{
+    path::PathBuf,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
-/// Cache disque pour données JSON de l'API Qobuz
-pub struct DiskCache {
-    /// Répertoire de cache
-    cache_dir: PathBuf,
+use rusqlite::{params, Connection};
+use tokio::task;
+
+#[derive(Debug, Clone)]
+pub struct CacheEntry<T> {
+    pub value: T,
+    pub age: Duration,
+    pub fresh: bool,
 }
 
-impl DiskCache {
-    /// Crée un nouveau cache disque
-    ///
-    /// # Arguments
-    ///
-    /// * `cache_dir` - Répertoire où stocker les fichiers cachés
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// use pmoqobuz::disk_cache::DiskCache;
-    ///
-    /// let cache = DiskCache::new(".pmomusic/cache/qobuz")?;
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    pub fn new<P: AsRef<Path>>(cache_dir: P) -> Result<Self> {
-        let cache_dir = cache_dir.as_ref().to_path_buf();
-
-        // Créer le répertoire s'il n'existe pas
-        if !cache_dir.exists() {
-            fs::create_dir_all(&cache_dir)?;
-            info!("Created cache directory: {}", cache_dir.display());
-        }
-
-        Ok(Self { cache_dir })
-    }
-
-    /// Construit le chemin d'un fichier de cache
-    ///
-    /// Format: `{cache_dir}/{key}.json`
-    fn cache_path(&self, key: &str) -> PathBuf {
-        self.cache_dir.join(format!("{}.json", key))
-    }
-
-    /// Sauvegarde des données dans le cache
-    ///
-    /// # Arguments
-    ///
-    /// * `key` - Identifiant unique du cache (ex: "favorites_albums_123456")
-    /// * `data` - Données à sauvegarder
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # use pmoqobuz::disk_cache::DiskCache;
-    /// # use pmoqobuz::Album;
-    /// # let cache = DiskCache::new(".cache")?;
-    /// let albums: Vec<Album> = vec![/* ... */];
-    /// cache.save("favorites_albums_123", &albums)?;
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    pub fn save<T: Serialize>(&self, key: &str, data: &T) -> Result<()> {
-        let path = self.cache_path(key);
-        let json = serde_json::to_string_pretty(data)?;
-
-        fs::write(&path, json)?;
-        debug!("Saved cache to {}", path.display());
-
-        Ok(())
-    }
-
-    /// Charge des données depuis le cache
-    ///
-    /// # Arguments
-    ///
-    /// * `key` - Identifiant unique du cache
-    ///
-    /// # Returns
-    ///
-    /// Les données désérialisées, ou None si le cache n'existe pas
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # use pmoqobuz::disk_cache::DiskCache;
-    /// # use pmoqobuz::Album;
-    /// # let cache = DiskCache::new(".cache")?;
-    /// if let Some(albums) = cache.load::<Vec<Album>>("favorites_albums_123")? {
-    ///     println!("Loaded {} albums from cache", albums.len());
-    /// }
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    pub fn load<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {
-        let path = self.cache_path(key);
-
-        if !path.exists() {
-            debug!("Cache file does not exist: {}", path.display());
-            return Ok(None);
-        }
-
-        let json = fs::read_to_string(&path)?;
-        let data: T = serde_json::from_str(&json)?;
-
-        debug!("Loaded cache from {}", path.display());
-        Ok(Some(data))
-    }
-
-    /// Charge des données avec vérification du TTL
-    ///
-    /// # Arguments
-    ///
-    /// * `key` - Identifiant unique du cache
-    /// * `ttl` - Durée de validité maximale
-    ///
-    /// # Returns
-    ///
-    /// Les données si le cache existe ET n'est pas expiré, None sinon
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # use pmoqobuz::disk_cache::DiskCache;
-    /// # use pmoqobuz::Album;
-    /// # use std::time::Duration;
-    /// # let cache = DiskCache::new(".cache")?;
-    /// // Cache valide pendant 1 heure
-    /// if let Some(albums) = cache.load_with_ttl::<Vec<Album>>(
-    ///     "favorites_albums_123",
-    ///     Duration::from_secs(3600)
-    /// )? {
-    ///     println!("Cache still valid!");
-    /// } else {
-    ///     println!("Cache expired or missing");
-    /// }
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    pub fn load_with_ttl<T: DeserializeOwned>(
+#[async_trait::async_trait]
+pub trait CacheStore: Send + Sync {
+    async fn get_json<T: DeserializeOwned + Send>(
         &self,
+        user_id: &str,
+        namespace: &str,
+        key: &str,
+    ) -> anyhow::Result<Option<CacheEntry<T>>>;
+
+    async fn put_json<T: Serialize + Send + Sync>(
+        &self,
+        user_id: &str,
+        namespace: &str,
         key: &str,
         ttl: Duration,
-    ) -> Result<Option<T>> {
-        let path = self.cache_path(key);
+        value: &T,
+    ) -> anyhow::Result<()>;
 
-        if !path.exists() {
-            debug!("Cache file does not exist: {}", path.display());
-            return Ok(None);
-        }
+    async fn invalidate(
+        &self,
+        user_id: &str,
+        namespace: &str,
+        key: &str,
+    ) -> anyhow::Result<()>;
 
-        // Vérifier l'âge du fichier
-        let metadata = fs::metadata(&path)?;
-        let modified = metadata.modified()?;
-        let age = SystemTime::now()
-            .duration_since(modified)
-            .unwrap_or(Duration::MAX);
+    async fn purge_expired(&self) -> anyhow::Result<usize>;
+}
 
-        if age > ttl {
-            debug!(
-                "Cache expired (age: {}s > ttl: {}s): {}",
-                age.as_secs(),
-                ttl.as_secs(),
-                path.display()
+pub struct SqliteCacheStore {
+    db_path: PathBuf,
+}
+
+impl SqliteCacheStore {
+    pub fn new(db_path: PathBuf) -> anyhow::Result<Self> {
+        let store = Self { db_path };
+        store.init_blocking()?;
+        Ok(store)
+    }
+
+    fn init_blocking(&self) -> anyhow::Result<()> {
+        let conn = Connection::open(&self.db_path)?;
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS qobuz_cache (
+                user_id      TEXT NOT NULL,
+                namespace    TEXT NOT NULL,
+                key          TEXT NOT NULL,
+                fetched_at   INTEGER NOT NULL,
+                ttl_seconds  INTEGER NOT NULL,
+                json         BLOB NOT NULL,
+                PRIMARY KEY (user_id, namespace, key)
             );
-            // Optionnel : supprimer le fichier expiré
-            let _ = fs::remove_file(&path);
-            return Ok(None);
-        }
-
-        debug!(
-            "Cache valid (age: {}s < ttl: {}s): {}",
-            age.as_secs(),
-            ttl.as_secs(),
-            path.display()
-        );
-
-        let json = fs::read_to_string(&path)?;
-        let data: T = serde_json::from_str(&json)?;
-
-        Ok(Some(data))
-    }
-
-    /// Invalide (supprime) un cache
-    ///
-    /// # Arguments
-    ///
-    /// * `key` - Identifiant unique du cache
-    pub fn invalidate(&self, key: &str) -> Result<()> {
-        let path = self.cache_path(key);
-
-        if path.exists() {
-            fs::remove_file(&path)?;
-            debug!("Invalidated cache: {}", path.display());
-        }
-
+            CREATE INDEX IF NOT EXISTS qobuz_cache_expiry
+                ON qobuz_cache (fetched_at, ttl_seconds);
+            "#,
+        )?;
         Ok(())
     }
 
-    /// Supprime tous les fichiers de cache
-    pub fn clear_all(&self) -> Result<()> {
-        for entry in fs::read_dir(&self.cache_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-
-            if path.extension().and_then(|s| s.to_str()) == Some("json") {
-                fs::remove_file(&path)?;
-                debug!("Removed cache file: {}", path.display());
-            }
+    fn now_seconds() -> i64 {
+        match SystemTime::now().duration_since(UNIX_EPOCH) {
+            Ok(duration) => i64::try_from(duration.as_secs()).unwrap_or(i64::MAX),
+            Err(_) => 0,
         }
-
-        info!("Cleared all cache files");
-        Ok(())
-    }
-
-    /// Retourne la taille totale du cache en octets
-    pub fn size(&self) -> Result<u64> {
-        let mut total = 0u64;
-
-        for entry in fs::read_dir(&self.cache_dir)? {
-            let entry = entry?;
-            let metadata = entry.metadata()?;
-
-            if metadata.is_file() {
-                total += metadata.len();
-            }
-        }
-
-        Ok(total)
-    }
-
-    /// Retourne le nombre de fichiers en cache
-    pub fn count(&self) -> Result<usize> {
-        let mut count = 0;
-
-        for entry in fs::read_dir(&self.cache_dir)? {
-            let entry = entry?;
-
-            if entry.path().extension().and_then(|s| s.to_str()) == Some("json") {
-                count += 1;
-            }
-        }
-
-        Ok(count)
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde::{Deserialize, Serialize};
-    use tempfile::tempdir;
+#[async_trait::async_trait]
+impl CacheStore for SqliteCacheStore {
+    async fn get_json<T: DeserializeOwned + Send>(
+        &self,
+        user_id: &str,
+        namespace: &str,
+        key: &str,
+    ) -> anyhow::Result<Option<CacheEntry<T>>> {
+        let user_id = user_id.to_owned();
+        let namespace = namespace.to_owned();
+        let key = key.to_owned();
+        let db_path = self.db_path.clone();
 
-    #[derive(Debug, Serialize, Deserialize, PartialEq)]
-    struct TestData {
-        id: String,
-        value: i32,
+        task::spawn_blocking(move || {
+            let conn = Connection::open(db_path)?;
+            let mut stmt = conn.prepare(
+                "SELECT fetched_at, ttl_seconds, json
+                 FROM qobuz_cache
+                 WHERE user_id = ?1 AND namespace = ?2 AND key = ?3",
+            )?;
+
+            let result = stmt.query_row(
+                params![user_id, namespace, key],
+                |row| {
+                    let fetched_at: i64 = row.get(0)?;
+                    let ttl_seconds: i64 = row.get(1)?;
+                    let data: Vec<u8> = row.get(2)?;
+                    let now = Self::now_seconds();
+                    let fresh = now <= fetched_at + ttl_seconds;
+                    let age_secs = if now >= fetched_at {
+                        (now - fetched_at) as u64
+                    } else {
+                        0
+                    };
+                    let age = Duration::from_secs(age_secs);
+                    let value = serde_json::from_slice(&data)?;
+                    Ok(CacheEntry {
+                        value,
+                        age,
+                        fresh,
+                    })
+                },
+            );
+
+            match result {
+                Ok(entry) => Ok(Some(entry)),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(err) => Err(err.into()),
+            }
+        })
+        .await
+        .map_err(|err| anyhow!(err))?
     }
 
-    #[test]
-    fn test_save_and_load() -> Result<()> {
-        let dir = tempdir()?;
-        let cache = DiskCache::new(dir.path())?;
+    async fn put_json<T: Serialize + Send + Sync>(
+        &self,
+        user_id: &str,
+        namespace: &str,
+        key: &str,
+        ttl: Duration,
+        value: &T,
+    ) -> anyhow::Result<()> {
+        let user_id = user_id.to_owned();
+        let namespace = namespace.to_owned();
+        let key = key.to_owned();
+        let db_path = self.db_path.clone();
+        let ttl_seconds = i64::try_from(ttl.as_secs()).unwrap_or(i64::MAX);
+        let now = Self::now_seconds();
+        let json = serde_json::to_vec(value)?;
 
-        let data = TestData {
-            id: "test123".to_string(),
-            value: 42,
-        };
-
-        // Sauvegarder
-        cache.save("test_key", &data)?;
-
-        // Charger
-        let loaded: Option<TestData> = cache.load("test_key")?;
-        assert!(loaded.is_some());
-        assert_eq!(loaded.unwrap(), data);
-
-        Ok(())
+        task::spawn_blocking(move || {
+            let conn = Connection::open(db_path)?;
+            let tx = conn.transaction()?;
+            tx.execute(
+                "INSERT OR REPLACE INTO qobuz_cache
+                 (user_id, namespace, key, fetched_at, ttl_seconds, json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![user_id, namespace, key, now, ttl_seconds, json],
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
+        .await
+        .map_err(|err| anyhow!(err))?
     }
 
-    #[test]
-    fn test_load_nonexistent() -> Result<()> {
-        let dir = tempdir()?;
-        let cache = DiskCache::new(dir.path())?;
+    async fn invalidate(
+        &self,
+        user_id: &str,
+        namespace: &str,
+        key: &str,
+    ) -> anyhow::Result<()> {
+        let user_id = user_id.to_owned();
+        let namespace = namespace.to_owned();
+        let key = key.to_owned();
+        let db_path = self.db_path.clone();
 
-        let loaded: Option<TestData> = cache.load("nonexistent")?;
-        assert!(loaded.is_none());
-
-        Ok(())
+        task::spawn_blocking(move || {
+            let conn = Connection::open(db_path)?;
+            conn.execute(
+                "DELETE FROM qobuz_cache
+                 WHERE user_id = ?1 AND namespace = ?2 AND key = ?3",
+                params![user_id, namespace, key],
+            )?;
+            Ok(())
+        })
+        .await
+        .map_err(|err| anyhow!(err))?
     }
 
-    #[test]
-    fn test_ttl() -> Result<()> {
-        let dir = tempdir()?;
-        let cache = DiskCache::new(dir.path())?;
+    async fn purge_expired(&self) -> anyhow::Result<usize> {
+        let db_path = self.db_path.clone();
+        let now = Self::now_seconds();
 
-        let data = TestData {
-            id: "test123".to_string(),
-            value: 42,
-        };
-
-        cache.save("test_key", &data)?;
-
-        // Charger immédiatement (< TTL)
-        let loaded: Option<TestData> =
-            cache.load_with_ttl("test_key", Duration::from_secs(60))?;
-        assert!(loaded.is_some());
-
-        // Charger avec TTL expiré
-        let loaded: Option<TestData> = cache.load_with_ttl("test_key", Duration::from_secs(0))?;
-        assert!(loaded.is_none());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_invalidate() -> Result<()> {
-        let dir = tempdir()?;
-        let cache = DiskCache::new(dir.path())?;
-
-        let data = TestData {
-            id: "test123".to_string(),
-            value: 42,
-        };
-
-        cache.save("test_key", &data)?;
-        assert!(cache.load::<TestData>("test_key")?.is_some());
-
-        cache.invalidate("test_key")?;
-        assert!(cache.load::<TestData>("test_key")?.is_none());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_size_and_count() -> Result<()> {
-        let dir = tempdir()?;
-        let cache = DiskCache::new(dir.path())?;
-
-        assert_eq!(cache.count()?, 0);
-        assert_eq!(cache.size()?, 0);
-
-        let data = TestData {
-            id: "test123".to_string(),
-            value: 42,
-        };
-
-        cache.save("test1", &data)?;
-        cache.save("test2", &data)?;
-
-        assert_eq!(cache.count()?, 2);
-        assert!(cache.size()? > 0);
-
-        Ok(())
+        task::spawn_blocking(move || {
+            let conn = Connection::open(db_path)?;
+            let changes = conn.execute(
+                "DELETE FROM qobuz_cache
+                 WHERE (fetched_at + ttl_seconds) <= ?1",
+                params![now],
+            )?;
+            Ok(changes)
+        })
+        .await
+        .map_err(|err| anyhow!(err))?
     }
 }
+
+pub use {CacheEntry, CacheStore, SqliteCacheStore};

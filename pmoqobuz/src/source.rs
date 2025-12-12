@@ -40,13 +40,18 @@ const DEFAULT_IMAGE: &[u8] = include_bytes!("../assets/default.webp");
 /// # Examples
 ///
 /// ```no_run
+/// use std::sync::Arc;
+/// use pmoaudiocache::cache as audio_cache;
+/// use pmocovers::cache as cover_cache;
 /// use pmoqobuz::{QobuzSource, QobuzClient};
 /// use pmosource::MusicSource;
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let client = QobuzClient::from_config().await?;
-///     let source = QobuzSource::new(client);
+///     let cover_cache = Arc::new(cover_cache::new_cache("/tmp/qobuz_covers", 256)?);
+///     let audio_cache = Arc::new(audio_cache::new_cache("/tmp/qobuz_audio", 64)?);
+///     let source = QobuzSource::new(client, cover_cache, audio_cache);
 ///
 ///     println!("Source: {}", source.name());
 ///     println!("Supports FIFO: {}", source.supports_fifo());
@@ -212,6 +217,274 @@ impl QobuzSource {
             .await;
 
         Ok(track_id)
+    }
+
+    /// Add track with lazy audio caching (cover eager, audio lazy)
+    ///
+    /// This method caches cover art immediately (small, needed for UI) but
+    /// defers audio download until the track is actually played.
+    ///
+    /// # Arguments
+    ///
+    /// * `track` - The Qobuz track to add
+    ///
+    /// # Returns
+    ///
+    /// The track ID (e.g., "qobuz://track/12345")
+    pub async fn add_track_lazy(&self, track: &Track) -> Result<String> {
+        let track_id = format!("qobuz://track/{}", track.id);
+
+        // Get streaming URL
+        let stream_url = self
+            .inner
+            .client
+            .get_stream_url(&track.id)
+            .await
+            .map_err(|e| MusicSourceError::UriResolutionError(e.to_string()))?;
+
+        // 1. Cache cover EAGERLY (small, UI needs it)
+        let cached_cover_pk = if let Some(ref album) = track.album {
+            if let Some(ref image_url) = album.image {
+                self.inner.cache_manager.cache_cover(image_url).await.ok()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // 2. Prepare rich metadata from Qobuz track
+        let metadata = AudioMetadata {
+            title: Some(track.title.clone()),
+            artist: track.performer.as_ref().map(|p| p.name.clone()),
+            album: track.album.as_ref().map(|a| a.title.clone()),
+            duration_secs: Some(track.duration as u64),
+            year: track.album.as_ref().and_then(|a| {
+                a.release_date
+                    .as_ref()
+                    .and_then(|d| d.split('-').next()?.parse().ok())
+            }),
+            track_number: Some(track.track_number),
+            track_total: track.album.as_ref().and_then(|a| a.tracks_count),
+            disc_number: Some(track.media_number),
+            disc_total: None,
+            genre: track.album.as_ref().and_then(|a| {
+                if !a.genres.is_empty() {
+                    Some(a.genres.join(", "))
+                } else {
+                    None
+                }
+            }),
+            sample_rate: track.sample_rate,
+            channels: track.channels,
+            bitrate: None,
+            conversion: None,
+        };
+
+        // 3. Cache audio LAZILY (KEY CHANGE: use cache_audio_lazy)
+        let cached_audio_pk = self
+            .inner
+            .cache_manager
+            .cache_audio_lazy(&stream_url, Some(metadata))
+            .await
+            .ok();
+
+        // 4. Store metadata
+        self.inner
+            .cache_manager
+            .update_metadata(
+                track_id.clone(),
+                pmosource::TrackMetadata {
+                    original_uri: stream_url,
+                    cached_audio_pk,
+                    cached_cover_pk,
+                },
+            )
+            .await;
+
+        Ok(track_id)
+    }
+
+    /// Load full album into pmoplaylist with lazy audio
+    ///
+    /// This method fetches all tracks from a Qobuz album and adds them to a playlist
+    /// with lazy audio loading. Covers are downloaded eagerly, audio lazily.
+    ///
+    /// # Arguments
+    ///
+    /// * `playlist_id` - ID of the target playlist
+    /// * `album_id` - Qobuz album ID
+    ///
+    /// # Returns
+    ///
+    /// Number of tracks successfully added
+    pub async fn add_album_to_playlist(
+        &self,
+        playlist_id: &str,
+        album_id: &str,
+    ) -> Result<usize> {
+        use tracing::{info, warn, debug};
+
+        // 1. Get tracks from Qobuz (goes through rate limiter)
+        let tracks = self
+            .inner
+            .client
+            .get_album_tracks(album_id)
+            .await
+            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+        if tracks.is_empty() {
+            return Ok(0);
+        }
+
+        info!(
+            "Adding album {} ({} tracks) to playlist {} with lazy audio",
+            album_id,
+            tracks.len(),
+            playlist_id
+        );
+
+        // 2. Add each track lazily + collect lazy PKs
+        let mut lazy_pks = Vec::with_capacity(tracks.len());
+
+        for (i, track) in tracks.iter().enumerate() {
+            match self.add_track_lazy(track).await {
+                Ok(track_id) => {
+                    debug!("Track {}/{}: {} (lazy)", i + 1, tracks.len(), track.title);
+
+                    // Extract lazy PK from cache manager
+                    if let Some(metadata) = self.inner.cache_manager.get_metadata(&track_id).await {
+                        if let Some(audio_pk) = metadata.cached_audio_pk {
+                            lazy_pks.push(audio_pk);
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to add track {} ({}): {}",
+                        i + 1,
+                        track.title,
+                        e
+                    );
+                    // Continue with other tracks
+                }
+            }
+        }
+
+        // 3. Batch insert into playlist (single DB transaction)
+        let playlist_manager = pmoplaylist::PlaylistManager();
+        let writer = playlist_manager
+            .get_write_handle(playlist_id.to_string())
+            .await
+            .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
+
+        writer
+            .push_lazy_batch(lazy_pks.clone())
+            .await
+            .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
+
+        // 4. Enable lazy mode with lookahead of 2 tracks
+        playlist_manager.enable_lazy_mode(playlist_id, 2);
+
+        info!(
+            "Album {} added: {}/{} tracks",
+            album_id,
+            lazy_pks.len(),
+            tracks.len()
+        );
+
+        Ok(lazy_pks.len())
+    }
+
+    /// Load Qobuz playlist into pmoplaylist with lazy audio
+    ///
+    /// This method fetches all tracks from a Qobuz playlist and adds them to a pmoplaylist
+    /// with lazy audio loading. Covers are downloaded eagerly, audio lazily.
+    ///
+    /// # Arguments
+    ///
+    /// * `playlist_id` - ID of the target pmoplaylist
+    /// * `qobuz_playlist_id` - Qobuz playlist ID
+    ///
+    /// # Returns
+    ///
+    /// Number of tracks successfully added
+    pub async fn add_qobuz_playlist_to_playlist(
+        &self,
+        playlist_id: &str,
+        qobuz_playlist_id: &str,
+    ) -> Result<usize> {
+        use tracing::{debug, info, warn};
+
+        // 1. Get tracks from Qobuz playlist (goes through rate limiter)
+        let tracks = self
+            .inner
+            .client
+            .get_playlist_tracks(qobuz_playlist_id)
+            .await
+            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+        if tracks.is_empty() {
+            return Ok(0);
+        }
+
+        info!(
+            "Adding Qobuz playlist {} ({} tracks) to pmoplaylist {} with lazy audio",
+            qobuz_playlist_id,
+            tracks.len(),
+            playlist_id
+        );
+
+        // 2. Add each track lazily + collect lazy PKs
+        let mut lazy_pks = Vec::with_capacity(tracks.len());
+
+        for (i, track) in tracks.iter().enumerate() {
+            match self.add_track_lazy(track).await {
+                Ok(track_id) => {
+                    debug!("Track {}/{}: {} (lazy)", i + 1, tracks.len(), track.title);
+
+                    // Extract lazy PK from cache manager
+                    if let Some(metadata) = self.inner.cache_manager.get_metadata(&track_id).await {
+                        if let Some(audio_pk) = metadata.cached_audio_pk {
+                            lazy_pks.push(audio_pk);
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to add track {} ({}): {}",
+                        i + 1,
+                        track.title,
+                        e
+                    );
+                    // Continue with other tracks
+                }
+            }
+        }
+
+        // 3. Batch insert into playlist (single DB transaction)
+        let playlist_manager = pmoplaylist::PlaylistManager();
+        let writer = playlist_manager
+            .get_write_handle(playlist_id.to_string())
+            .await
+            .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
+
+        writer
+            .push_lazy_batch(lazy_pks.clone())
+            .await
+            .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
+
+        // 4. Enable lazy mode with lookahead of 2 tracks
+        playlist_manager.enable_lazy_mode(playlist_id, 2);
+
+        info!(
+            "Qobuz playlist {} added: {}/{} tracks",
+            qobuz_playlist_id,
+            lazy_pks.len(),
+            tracks.len()
+        );
+
+        Ok(lazy_pks.len())
     }
 
     /// Increment update counter (called on catalog changes)

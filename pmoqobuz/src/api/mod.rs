@@ -13,6 +13,7 @@ use crate::models::AudioFormat;
 use reqwest::{Client, Response};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use std::sync::RwLock;
 use std::time::Duration;
 use tracing::{debug, warn};
 
@@ -45,9 +46,9 @@ pub struct QobuzApi {
     /// - Depuis le Spoofer (secrets dynamiques)
     secret: Option<Vec<u8>>,
     /// Token d'authentification utilisateur
-    user_auth_token: Option<String>,
+    user_auth_token: RwLock<Option<String>>,
     /// ID utilisateur
-    user_id: Option<String>,
+    user_id: RwLock<Option<String>>,
     /// Format audio par défaut
     format_id: AudioFormat,
 }
@@ -66,8 +67,8 @@ impl QobuzApi {
             client,
             app_id: app_id.into(),
             secret: None,
-            user_auth_token: None,
-            user_id: None,
+            user_auth_token: RwLock::new(None),
+            user_id: RwLock::new(None),
             format_id: AudioFormat::default(),
         })
     }
@@ -132,9 +133,15 @@ impl QobuzApi {
     }
 
     /// Définit le token d'authentification
-    pub fn set_auth_token(&mut self, token: String, user_id: String) {
-        self.user_auth_token = Some(token);
-        self.user_id = Some(user_id);
+    pub fn set_auth_token(&self, token: String, user_id: String) {
+        *self.user_auth_token.write().unwrap() = Some(token);
+        *self.user_id.write().unwrap() = Some(user_id);
+    }
+
+    /// Efface les informations d'authentification
+    pub fn clear_auth(&self) {
+        *self.user_auth_token.write().unwrap() = None;
+        *self.user_id.write().unwrap() = None;
     }
 
     /// Définit le format audio par défaut
@@ -153,13 +160,13 @@ impl QobuzApi {
     }
 
     /// Retourne le token d'authentification si disponible
-    pub fn auth_token(&self) -> Option<&str> {
-        self.user_auth_token.as_deref()
+    pub fn auth_token(&self) -> Option<String> {
+        self.user_auth_token.read().unwrap().clone()
     }
 
     /// Retourne l'ID utilisateur si disponible
-    pub fn user_id(&self) -> Option<&str> {
-        self.user_id.as_deref()
+    pub fn user_id(&self) -> Option<String> {
+        self.user_id.read().unwrap().clone()
     }
 
     /// Effectue une requête GET à l'API
@@ -200,7 +207,7 @@ impl QobuzApi {
         // Ajouter les headers
         request = request.header("X-App-Id", &self.app_id);
 
-        if let Some(ref token) = self.user_auth_token {
+        if let Some(token) = self.auth_token() {
             request = request.header("X-User-Auth-Token", token);
         }
 
@@ -269,10 +276,10 @@ mod tests {
 
     #[test]
     fn test_set_auth_token() {
-        let mut api = QobuzApi::new("test_app_id").unwrap();
+        let api = QobuzApi::new("test_app_id").unwrap();
         api.set_auth_token("test_token".to_string(), "user123".to_string());
-        assert_eq!(api.auth_token(), Some("test_token"));
-        assert_eq!(api.user_id(), Some("user123"));
+        assert_eq!(api.auth_token().as_deref(), Some("test_token"));
+        assert_eq!(api.user_id().as_deref(), Some("user123"));
     }
 
     #[test]

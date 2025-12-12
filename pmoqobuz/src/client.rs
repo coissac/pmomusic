@@ -8,8 +8,9 @@ use crate::cache::QobuzCache;
 use crate::config_ext::QobuzConfigExt;
 use crate::error::{QobuzError, Result};
 use crate::models::*;
-use pmoconfig::Config;
-use std::sync::Arc;
+use pmoconfig::{self, Config};
+use std::future::Future;
+use std::sync::{Arc, Mutex};
 use tracing::{debug, info};
 
 /// Client Qobuz haut-niveau avec cache
@@ -19,10 +20,38 @@ pub struct QobuzClient {
     /// Cache en mémoire
     cache: Arc<QobuzCache>,
     /// Informations d'authentification
-    auth_info: Option<AuthInfo>,
+    auth_info: Mutex<Option<AuthInfo>>,
+    /// Identifiants utilisateur pour relogin automatique
+    credentials: Option<(String, String)>,
+    /// Configuration partagée (pour persister les tokens)
+    config: Option<Arc<Config>>,
+    #[cfg(feature = "disk-cache")]
+    /// Cache disque optionnel
+    disk_cache: Option<Arc<dyn crate::disk_cache::CacheStore>>,
 }
 
 impl QobuzClient {
+    fn build_client(
+        api: QobuzApi,
+        auth_info: Option<AuthInfo>,
+        credentials: Option<(String, String)>,
+        config: Option<Arc<Config>>,
+    ) -> Self {
+        if let Some(info) = &auth_info {
+            api.set_auth_token(info.token.clone(), info.user_id.clone());
+        }
+
+        Self {
+            api,
+            cache: Arc::new(QobuzCache::new()),
+            auth_info: Mutex::new(auth_info),
+            credentials,
+            config,
+            #[cfg(feature = "disk-cache")]
+            disk_cache: None,
+        }
+    }
+
     /// Crée un nouveau client et authentifie avec les credentials fournis
     ///
     /// # Arguments
@@ -49,14 +78,17 @@ impl QobuzClient {
     pub async fn with_app_id(app_id: &str, username: &str, password: &str) -> Result<Self> {
         info!("Creating Qobuz client with app ID: {}", app_id);
 
-        let mut api = QobuzApi::new(app_id)?;
+        let api = QobuzApi::new(app_id)?;
         let auth_info = api.login(username, password).await?;
 
-        Ok(Self {
+        let client = Self::build_client(
             api,
-            cache: Arc::new(QobuzCache::new()),
-            auth_info: Some(auth_info),
-        })
+            Some(auth_info),
+            Some((username.to_string(), password.to_string())),
+            None,
+        );
+
+        Ok(client.finalize_disk_cache().await)
     }
 
     /// Crée un client en utilisant la configuration de pmoconfig
@@ -90,160 +122,94 @@ impl QobuzClient {
     /// 4. Fallback ultime → utilise DEFAULT_APP_ID sans secret (requêtes signées échoueront)
     pub async fn from_config_obj(config: &Config) -> Result<Self> {
         let (username, password) = config.get_qobuz_credentials()?;
+        let credentials = (username.clone(), password.clone());
+        let config_arc = Arc::new(config.clone());
 
-        // Étape 0 : Essayer de réutiliser le token stocké dans la configuration
-        // Note: On ne vérifie PAS l'expiration - si le token est invalide, les requêtes
-        // échoueront avec 401/403 et déclencheront un re-login automatique
-        if let (Ok(Some(token)), Ok(Some(user_id))) =
-            (config.get_qobuz_auth_token(), config.get_qobuz_user_id())
-        {
-            info!("✓ Found stored authentication token in configuration");
-
-            // Récupérer l'App ID et le secret depuis la config pour créer l'API
-            let config_appid = config.get_qobuz_appid()?;
-            let config_secret = config.get_qobuz_secret()?;
-
-            match (config_appid, config_secret) {
-                (Some(app_id), Some(secret)) => match QobuzApi::with_secret(&app_id, &secret) {
-                    Ok(mut api) => {
-                        // Réutiliser le token de la configuration
-                        api.set_auth_token(token.clone(), user_id.clone());
-
-                        info!("✓ Reusing authentication token (no login required)");
-                        info!("   → Token will be validated on first API request");
-
-                        let auth_info = AuthInfo {
-                            token,
-                            user_id,
-                            subscription_label: config.get_qobuz_subscription_label().ok().flatten(),
-                        };
-
-                        return Ok(Self {
-                            api,
-                            cache: Arc::new(QobuzCache::new()),
-                            auth_info: Some(auth_info),
-                        });
-                    }
-                    Err(e) => {
-                        debug!("Failed to create API with stored credentials: {}", e);
-                        info!("→ Credentials in config are invalid, will perform login");
-                        // Continuer vers le login normal
-                    }
-                },
-                _ => {
-                    debug!("No appid/secret in config, cannot reuse token");
-                    info!("→ Missing AppID/secret, will perform login");
-                    // Continuer vers le login normal
-                }
-            }
-        } else {
-            debug!("No stored authentication token found in configuration, will perform login");
-        }
-
-        // Récupérer l'App ID et le secret depuis la config
         let config_appid = config.get_qobuz_appid()?;
         let config_secret = config.get_qobuz_secret()?;
 
-        // Déterminer comment créer l'API
+        let mut used_config_credentials = false;
+
         let mut api = match (config_appid, config_secret) {
-            // Cas 1: AppID ET secret configurés → test avec authentification
             (Some(app_id), Some(secret)) => {
                 info!(
                     "Creating Qobuz API with configured App ID: {} and secret",
                     app_id
                 );
-
                 match QobuzApi::with_secret(&app_id, &secret) {
-                    Ok(mut test_api) => {
-                        // Tenter l'authentification pour valider les credentials
-                        debug!("Testing configured credentials with login...");
-                        match test_api.login(&username, &password).await {
-                            Ok(auth_info) => {
-                                info!("✓ Configured credentials are valid");
-
-                                // Sauvegarder le token dans la configuration
-                                use std::time::{SystemTime, UNIX_EPOCH, Duration};
-                                let expires_at = SystemTime::now()
-                                    .duration_since(UNIX_EPOCH)
-                                    .unwrap()
-                                    .as_secs()
-                                    + Duration::from_secs(24 * 3600).as_secs(); // 24h
-
-                                if let Err(e) = config.set_qobuz_auth_info(
-                                    &auth_info.token,
-                                    &auth_info.user_id,
-                                    auth_info.subscription_label.as_deref(),
-                                    expires_at,
-                                ) {
-                                    debug!("Failed to save authentication to config: {}", e);
-                                } else {
-                                    info!("✓ Saved authentication token to configuration");
-                                }
-
-                                // Les credentials sont valides, retourner directement
-                                return Ok(Self {
-                                    api: test_api,
-                                    cache: Arc::new(QobuzCache::new()),
-                                    auth_info: Some(auth_info),
-                                });
-                            }
-                            Err(e) if e.is_auth_error() => {
-                                info!("✗ Configured credentials failed authentication: {}", e);
-                                info!("→ Falling back to Spoofer to obtain new credentials...");
-                                // Continuer vers le Spoofer (voir après le match)
-                            }
-                            Err(e) => {
-                                // Autre erreur (réseau, etc.) → propager
-                                return Err(e);
-                            }
-                        }
+                    Ok(api) => {
+                        used_config_credentials = true;
+                        api
                     }
                     Err(e) => {
-                        info!("✗ Failed to create API with configured credentials: {}", e);
-                        info!("→ Falling back to Spoofer...");
-                        // Continuer vers le Spoofer
+                        info!(
+                            "✗ Failed to create API with configured credentials: {}. Falling back to Spoofer...",
+                            e
+                        );
+                        Self::try_spoofer_fallback(config).await?
                     }
                 }
-
-                // Si on arrive ici, les credentials configurés ont échoué
-                // → Appel du Spoofer
-                Self::try_spoofer_fallback(config).await?
             }
-
-            // Cas 2: Aucun ou seulement l'un des deux → utiliser directement le Spoofer
             _ => {
-                info!("AppID or secret not configured, using Spoofer to obtain valid credentials...");
+                info!(
+                    "AppID or secret not configured, using Spoofer to obtain valid credentials..."
+                );
                 Self::try_spoofer_fallback(config).await?
             }
         };
 
-        // Authentifier l'utilisateur
-        let auth_info = api.login(&username, &password).await?;
+        if config.is_qobuz_auth_valid() {
+            match (config.get_qobuz_auth_token(), config.get_qobuz_user_id()) {
+                (Ok(Some(token)), Ok(Some(user_id)))
+                    if !token.is_empty() && !user_id.is_empty() =>
+                {
+                    info!("✓ Reusing authentication token (optimistic, no login)");
+                    api.set_auth_token(token.clone(), user_id.clone());
 
-        // Sauvegarder le token dans la configuration pour éviter de re-login la prochaine fois
-        use std::time::{Duration, SystemTime, UNIX_EPOCH};
-        let expires_at = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-            + Duration::from_secs(24 * 3600).as_secs(); // 24h
+                    let auth_info = AuthInfo {
+                        token,
+                        user_id,
+                        subscription_label: config.get_qobuz_subscription_label().ok().flatten(),
+                    };
 
-        if let Err(e) = config.set_qobuz_auth_info(
-            &auth_info.token,
-            &auth_info.user_id,
-            auth_info.subscription_label.as_deref(),
-            expires_at,
-        ) {
-            debug!("Failed to save authentication to config: {}", e);
-        } else {
-            info!("✓ Saved authentication token to configuration");
+                    let client = Self::build_client(
+                        api,
+                        Some(auth_info),
+                        Some(credentials.clone()),
+                        Some(config_arc.clone()),
+                    );
+
+                    return Ok(client.finalize_disk_cache().await);
+                }
+                _ => {
+                    debug!(
+                        "Auth marked valid in config but token/user_id missing or invalid, performing login"
+                    );
+                }
+            }
         }
 
-        Ok(Self {
-            api,
-            cache: Arc::new(QobuzCache::new()),
-            auth_info: Some(auth_info),
-        })
+        // Authentifier l'utilisateur
+        let mut auth_result = api.login(&username, &password).await;
+
+        if used_config_credentials {
+            if let Err(err) = &auth_result {
+                if err.is_auth_error() {
+                    info!("✗ Configured credentials failed authentication: {}", err);
+                    info!("→ Falling back to Spoofer to obtain new credentials...");
+                    api = Self::try_spoofer_fallback(config).await?;
+                    auth_result = api.login(&username, &password).await;
+                }
+            }
+        }
+
+        let auth_info = auth_result?;
+
+        Self::persist_auth_info(config, &auth_info);
+
+        let client = Self::build_client(api, Some(auth_info), Some(credentials), Some(config_arc));
+
+        Ok(client.finalize_disk_cache().await)
     }
 
     /// Tente d'utiliser le Spoofer pour obtenir des credentials valides
@@ -281,7 +247,10 @@ impl QobuzClient {
                                             return Ok(test_api);
                                         }
                                         Err(e) => {
-                                            debug!("Failed to create API with secret from {}: {}", timezone, e);
+                                            debug!(
+                                                "Failed to create API with secret from {}: {}",
+                                                timezone, e
+                                            );
                                             continue;
                                         }
                                     }
@@ -298,13 +267,19 @@ impl QobuzClient {
                         }
                     }
                     Err(e) => {
-                        info!("Spoofer failed to extract app_id: {}, falling back to DEFAULT_APP_ID", e);
+                        info!(
+                            "Spoofer failed to extract app_id: {}, falling back to DEFAULT_APP_ID",
+                            e
+                        );
                         QobuzApi::new(DEFAULT_APP_ID)
                     }
                 }
             }
             Err(e) => {
-                info!("Spoofer failed: {}, falling back to DEFAULT_APP_ID without secret", e);
+                info!(
+                    "Spoofer failed: {}, falling back to DEFAULT_APP_ID without secret",
+                    e
+                );
                 QobuzApi::new(DEFAULT_APP_ID)
             }
         }
@@ -321,13 +296,175 @@ impl QobuzClient {
     }
 
     /// Retourne les informations d'authentification
-    pub fn auth_info(&self) -> Option<&AuthInfo> {
-        self.auth_info.as_ref()
+    pub fn auth_info(&self) -> Option<AuthInfo> {
+        self.auth_info.lock().unwrap().clone()
+    }
+
+    #[cfg(feature = "disk-cache")]
+    fn user_id(&self) -> Option<String> {
+        self.auth_info
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|info| info.user_id.clone())
     }
 
     /// Retourne une référence au cache
     pub fn cache(&self) -> Arc<QobuzCache> {
         self.cache.clone()
+    }
+
+    #[cfg(feature = "disk-cache")]
+    pub async fn purge_disk_cache(&self) -> Result<usize> {
+        if let Some(disk) = &self.disk_cache {
+            disk.purge_expired()
+                .await
+                .map_err(|err| QobuzError::Cache(err.to_string()))
+        } else {
+            Ok(0)
+        }
+    }
+
+    #[cfg(feature = "disk-cache")]
+    pub fn with_disk_cache(mut self, store: Arc<dyn crate::disk_cache::CacheStore>) -> Self {
+        self.disk_cache = Some(store);
+        self
+    }
+
+    #[cfg(feature = "disk-cache")]
+    fn attach_default_disk_cache(mut self) -> Self {
+        if let Some(store) = Self::default_disk_cache_store(self.config.as_deref()) {
+            self = self.with_disk_cache(store);
+        }
+        self
+    }
+
+    #[cfg(not(feature = "disk-cache"))]
+    fn attach_default_disk_cache(self) -> Self {
+        self
+    }
+
+    #[cfg(feature = "disk-cache")]
+    async fn finalize_disk_cache(self) -> Self {
+        let client = self.attach_default_disk_cache();
+        if let Err(err) = client.purge_disk_cache().await {
+            debug!("Failed to purge disk cache on startup: {}", err);
+        }
+        client
+    }
+
+    #[cfg(not(feature = "disk-cache"))]
+    async fn finalize_disk_cache(self) -> Self {
+        self.attach_default_disk_cache()
+    }
+
+    #[cfg(feature = "disk-cache")]
+    fn default_disk_cache_store(
+        config: Option<&Config>,
+    ) -> Option<Arc<dyn crate::disk_cache::CacheStore>> {
+        let cache_dir = match config {
+            Some(cfg) => match cfg.get_qobuz_cache_dir() {
+                Ok(dir) => dir,
+                Err(err) => {
+                    debug!("Failed to read qobuz cache dir from config: {}", err);
+                    return None;
+                }
+            },
+            None => {
+                let global = pmoconfig::get_config();
+                match global.get_qobuz_cache_dir() {
+                    Ok(dir) => dir,
+                    Err(err) => {
+                        debug!(
+                            "Failed to read qobuz cache dir from global config: {}",
+                            err
+                        );
+                        return None;
+                    }
+                }
+            }
+        };
+
+        let dir_path = std::path::PathBuf::from(&cache_dir);
+        if let Err(err) = std::fs::create_dir_all(&dir_path) {
+            debug!(
+                "Failed to create disk cache directory {}: {}",
+                dir_path.display(),
+                err
+            );
+            return None;
+        }
+
+        let db_path = dir_path.join("qobuz_cache.sqlite");
+
+        match crate::disk_cache::SqliteCacheStore::new(db_path) {
+            Ok(store) => {
+                let store: Arc<dyn crate::disk_cache::CacheStore> = Arc::new(store);
+                Some(store)
+            }
+            Err(err) => {
+                debug!("Failed to initialize SQLite disk cache: {}", err);
+                None
+            }
+        }
+    }
+
+    async fn call_with_auth_repair<T, F, Fut>(&self, operation: &str, mut op: F) -> Result<T>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = Result<T>> + Send,
+    {
+        match op().await {
+            Ok(result) => Ok(result),
+            Err(err) if err.is_auth_error() => {
+                info!(
+                    "Authentication error during {}. Attempting automatic repair...",
+                    operation
+                );
+                self.repair_auth().await?;
+                op().await
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn repair_auth(&self) -> Result<()> {
+        let (username, password) = self.credentials.as_ref().cloned().ok_or_else(|| {
+            QobuzError::Unauthorized(
+                "Cannot repair authentication without stored credentials".to_string(),
+            )
+        })?;
+
+        let auth_info = self.api.login(&username, &password).await?;
+
+        if let Some(config) = &self.config {
+            Self::persist_auth_info(config.as_ref(), &auth_info);
+        }
+
+        let mut guard = self.auth_info.lock().unwrap();
+        *guard = Some(auth_info);
+        Ok(())
+    }
+
+    fn persist_auth_info(config: &Config, auth_info: &AuthInfo) {
+        use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+        let expires_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + Duration::from_secs(24 * 3600).as_secs(); // 24h
+
+        if let Err(e) = config.set_qobuz_auth_info(
+            &auth_info.token,
+            &auth_info.user_id,
+            auth_info.subscription_label.as_deref(),
+            expires_at,
+        ) {
+            debug!("Failed to save authentication to config: {}", e);
+        } else {
+            info!("✓ Saved authentication token to configuration");
+        }
     }
 
     // ============ Albums ============
@@ -341,7 +478,9 @@ impl QobuzClient {
         }
 
         // Sinon, récupérer depuis l'API
-        let album = self.api.get_album(album_id).await?;
+        let album = self
+            .call_with_auth_repair("get_album", || self.api.get_album(album_id))
+            .await?;
 
         // Mettre en cache
         self.cache
@@ -353,7 +492,9 @@ impl QobuzClient {
 
     /// Récupère les tracks d'un album
     pub async fn get_album_tracks(&self, album_id: &str) -> Result<Vec<Track>> {
-        let tracks = self.api.get_album_tracks(album_id).await?;
+        let tracks = self
+            .call_with_auth_repair("get_album_tracks", || self.api.get_album_tracks(album_id))
+            .await?;
 
         // Mettre les tracks en cache
         for track in &tracks {
@@ -372,7 +513,9 @@ impl QobuzClient {
             return Ok(track);
         }
 
-        let track = self.api.get_track(track_id).await?;
+        let track = self
+            .call_with_auth_repair("get_track", || self.api.get_track(track_id))
+            .await?;
         self.cache
             .put_track(track_id.to_string(), track.clone())
             .await;
@@ -391,7 +534,9 @@ impl QobuzClient {
         }
 
         // Sinon, récupérer depuis l'API
-        let info = self.api.get_file_url(track_id).await?;
+        let info = self
+            .call_with_auth_repair("get_file_url", || self.api.get_file_url(track_id))
+            .await?;
         let url = info.url.clone();
 
         // Mettre en cache
@@ -410,7 +555,11 @@ impl QobuzClient {
         }
 
         // Pour récupérer un artiste, on doit passer par get_artist_albums
-        let albums = self.api.get_artist_albums(artist_id).await?;
+        let albums = self
+            .call_with_auth_repair("get_artist_albums_for_artist", || {
+                self.api.get_artist_albums(artist_id)
+            })
+            .await?;
 
         if let Some(first_album) = albums.first() {
             let artist = first_album.artist.clone();
@@ -428,12 +577,14 @@ impl QobuzClient {
 
     /// Récupère les albums d'un artiste
     pub async fn get_artist_albums(&self, artist_id: &str) -> Result<Vec<Album>> {
-        self.api.get_artist_albums(artist_id).await
+        self.call_with_auth_repair("get_artist_albums", || self.api.get_artist_albums(artist_id))
+        .await
     }
 
     /// Récupère les artistes similaires
     pub async fn get_similar_artists(&self, artist_id: &str) -> Result<Vec<Artist>> {
-        self.api.get_similar_artists(artist_id).await
+        self.call_with_auth_repair("get_similar_artists", || self.api.get_similar_artists(artist_id))
+        .await
     }
 
     // ============ Playlists ============
@@ -445,7 +596,9 @@ impl QobuzClient {
             return Ok(playlist);
         }
 
-        let playlist = self.api.get_playlist(playlist_id).await?;
+        let playlist = self
+            .call_with_auth_repair("get_playlist", || self.api.get_playlist(playlist_id))
+            .await?;
         self.cache
             .put_playlist(playlist_id.to_string(), playlist.clone())
             .await;
@@ -455,14 +608,18 @@ impl QobuzClient {
 
     /// Récupère les tracks d'une playlist
     pub async fn get_playlist_tracks(&self, playlist_id: &str) -> Result<Vec<Track>> {
-        self.api.get_playlist_tracks(playlist_id).await
+        self.call_with_auth_repair("get_playlist_tracks", || {
+            self.api.get_playlist_tracks(playlist_id)
+        })
+        .await
     }
 
     // ============ Catalogue ============
 
     /// Récupère la liste des genres
     pub async fn get_genres(&self) -> Result<Vec<Genre>> {
-        self.api.get_genres().await
+        self.call_with_auth_repair("get_genres", || self.api.get_genres())
+            .await
     }
 
     /// Récupère les albums featured (nouveautés, éditeur, etc.)
@@ -471,7 +628,10 @@ impl QobuzClient {
         genre_id: Option<&str>,
         type_: &str,
     ) -> Result<Vec<Album>> {
-        self.api.get_featured_albums(genre_id, type_).await
+        self.call_with_auth_repair("get_featured_albums", || {
+            self.api.get_featured_albums(genre_id, type_)
+        })
+        .await
     }
 
     /// Récupère les playlists featured
@@ -480,7 +640,10 @@ impl QobuzClient {
         genre_id: Option<&str>,
         tags: Option<&str>,
     ) -> Result<Vec<Playlist>> {
-        self.api.get_featured_playlists(genre_id, tags).await
+        self.call_with_auth_repair("get_featured_playlists", || {
+            self.api.get_featured_playlists(genre_id, tags)
+        })
+        .await
     }
 
     // ============ Recherche ============
@@ -502,7 +665,9 @@ impl QobuzClient {
         }
 
         // Sinon, rechercher via l'API
-        let result = self.api.search(query, type_).await?;
+        let result = self
+            .call_with_auth_repair("search", || self.api.search(query, type_))
+            .await?;
 
         // Mettre en cache
         self.cache.put_search(cache_key, result.clone()).await;
@@ -538,56 +703,188 @@ impl QobuzClient {
 
     /// Récupère les albums favoris de l'utilisateur
     pub async fn get_favorite_albums(&self) -> Result<Vec<Album>> {
-        self.api.get_favorite_albums().await
+        #[cfg(feature = "disk-cache")]
+        let user_id = self
+            .user_id()
+            .ok_or_else(|| QobuzError::Unauthorized("Missing authenticated user ID".into()))?;
+
+        #[cfg(feature = "disk-cache")]
+        let ttl = std::time::Duration::from_secs(6 * 3600);
+
+        #[cfg(feature = "disk-cache")]
+        if let Some(disk) = &self.disk_cache {
+            if let Some(entry) = disk
+                .get_json::<Vec<Album>>(&user_id, "favorites_albums", "all")
+                .await?
+            {
+                if entry.fresh {
+                    return Ok(entry.value);
+                }
+            }
+        }
+
+        let albums = self
+            .call_with_auth_repair("get_favorite_albums", || self.api.get_favorite_albums())
+            .await?;
+
+        #[cfg(feature = "disk-cache")]
+        if let Some(disk) = &self.disk_cache {
+            let _ = disk
+                .put_json(&user_id, "favorites_albums", "all", ttl, &albums)
+                .await;
+        }
+
+        Ok(albums)
     }
 
     /// Récupère les artistes favoris de l'utilisateur
     pub async fn get_favorite_artists(&self) -> Result<Vec<Artist>> {
-        self.api.get_favorite_artists().await
+        self.call_with_auth_repair("get_favorite_artists", || self.api.get_favorite_artists())
+        .await
     }
 
     /// Récupère les tracks favorites de l'utilisateur
     pub async fn get_favorite_tracks(&self) -> Result<Vec<Track>> {
-        self.api.get_favorite_tracks().await
+        #[cfg(feature = "disk-cache")]
+        let user_id = self
+            .user_id()
+            .ok_or_else(|| QobuzError::Unauthorized("Missing authenticated user ID".into()))?;
+
+        #[cfg(feature = "disk-cache")]
+        let ttl = std::time::Duration::from_secs(6 * 3600);
+
+        #[cfg(feature = "disk-cache")]
+        if let Some(disk) = &self.disk_cache {
+            if let Some(entry) = disk
+                .get_json::<Vec<Track>>(&user_id, "favorites_tracks", "all")
+                .await?
+            {
+                if entry.fresh {
+                    return Ok(entry.value);
+                }
+            }
+        }
+
+        let tracks = self
+            .call_with_auth_repair("get_favorite_tracks", || self.api.get_favorite_tracks())
+            .await?;
+
+        #[cfg(feature = "disk-cache")]
+        if let Some(disk) = &self.disk_cache {
+            let _ = disk
+                .put_json(&user_id, "favorites_tracks", "all", ttl, &tracks)
+                .await;
+        }
+
+        Ok(tracks)
     }
 
     /// Récupère les playlists de l'utilisateur
     pub async fn get_user_playlists(&self) -> Result<Vec<Playlist>> {
-        self.api.get_user_playlists().await
+        #[cfg(feature = "disk-cache")]
+        let user_id = self
+            .user_id()
+            .ok_or_else(|| QobuzError::Unauthorized("Missing authenticated user ID".into()))?;
+
+        #[cfg(feature = "disk-cache")]
+        let ttl = std::time::Duration::from_secs(6 * 3600);
+
+        #[cfg(feature = "disk-cache")]
+        if let Some(disk) = &self.disk_cache {
+            if let Some(entry) = disk
+                .get_json::<Vec<Playlist>>(&user_id, "user_playlists", "all")
+                .await?
+            {
+                if entry.fresh {
+                    return Ok(entry.value);
+                }
+            }
+        }
+
+        let playlists = self
+            .call_with_auth_repair("get_user_playlists", || self.api.get_user_playlists())
+            .await?;
+
+        #[cfg(feature = "disk-cache")]
+        if let Some(disk) = &self.disk_cache {
+            let _ = disk
+                .put_json(&user_id, "user_playlists", "all", ttl, &playlists)
+                .await;
+        }
+
+        Ok(playlists)
     }
 
     /// Ajoute un album aux favoris
     pub async fn add_favorite_album(&self, album_id: &str) -> Result<()> {
-        self.api.add_favorite_album(album_id).await
+        self.call_with_auth_repair("add_favorite_album", || {
+            self.api.add_favorite_album(album_id)
+        })
+        .await
     }
 
     /// Supprime un album des favoris
     pub async fn remove_favorite_album(&self, album_id: &str) -> Result<()> {
-        self.api.remove_favorite_album(album_id).await
+        self.call_with_auth_repair("remove_favorite_album", || {
+            self.api.remove_favorite_album(album_id)
+        })
+        .await
     }
 
     /// Ajoute un track aux favoris
     pub async fn add_favorite_track(&self, track_id: &str) -> Result<()> {
-        self.api.add_favorite_track(track_id).await
+        self.call_with_auth_repair("add_favorite_track", || {
+            self.api.add_favorite_track(track_id)
+        })
+        .await
     }
 
     /// Supprime un track des favoris
     pub async fn remove_favorite_track(&self, track_id: &str) -> Result<()> {
-        self.api.remove_favorite_track(track_id).await
+        self.call_with_auth_repair("remove_favorite_track", || {
+            self.api.remove_favorite_track(track_id)
+        })
+        .await
     }
 
     /// Ajoute un track à une playlist
     pub async fn add_to_playlist(&self, playlist_id: &str, track_id: &str) -> Result<()> {
-        self.api.add_to_playlist(playlist_id, track_id).await
+        self.call_with_auth_repair("add_to_playlist", || {
+            self.api.add_to_playlist(playlist_id, track_id)
+        })
+        .await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config_ext::QobuzConfigExt;
 
     #[test]
     fn test_audio_format() {
         assert_eq!(AudioFormat::default(), AudioFormat::Flac_Lossless);
+    }
+
+    #[tokio::test]
+    async fn from_config_reuses_token_without_login() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config_path = temp_dir.path().to_string_lossy().to_string();
+        let config = pmoconfig::Config::load_config(&config_path).unwrap();
+
+        config.set_qobuz_username("user@example.com").unwrap();
+        config.set_qobuz_password("password").unwrap();
+        config.set_qobuz_appid("1401488693436528").unwrap();
+        // base64 for "secret"
+        config.set_qobuz_secret("c2VjcmV0").unwrap();
+        config
+            .set_qobuz_auth_info("token123", "user123", Some("Hi-Fi"), 1_700_000_000)
+            .unwrap();
+
+        let client = QobuzClient::from_config_obj(&config).await.unwrap();
+        let auth_info = client.auth_info().expect("auth info");
+
+        assert_eq!(auth_info.token, "token123");
+        assert_eq!(auth_info.user_id, "user123");
     }
 }

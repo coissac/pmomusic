@@ -225,26 +225,19 @@ impl QobuzApi {
         debug!("Fetching file URL for track {}", track_id);
 
         // Vérifier que le secret est disponible
-        let secret = self
-            .secret()
-            .ok_or_else(|| {
-                QobuzError::Configuration(
-                    "Secret not configured. Cannot sign track/getFileUrl request.".to_string(),
-                )
-            })?;
+        let secret = self.secret().ok_or_else(|| {
+            QobuzError::Configuration(
+                "Secret not configured. Cannot sign track/getFileUrl request.".to_string(),
+            )
+        })?;
 
         let format_id = self.format_id.id().to_string();
         let intent = "stream";
         let timestamp = signing::get_timestamp();
 
         // Signer la requête (comme Python: track_getFileUrl)
-        let signature = signing::sign_track_get_file_url(
-            &format_id,
-            intent,
-            track_id,
-            &timestamp,
-            secret,
-        );
+        let signature =
+            signing::sign_track_get_file_url(&format_id, intent, track_id, &timestamp, &secret);
 
         debug!(
             "Signing track/getFileUrl: track_id={}, format_id={}, ts={}",

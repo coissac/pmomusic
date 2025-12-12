@@ -5,16 +5,27 @@
 //! - Accessing the embedded WebP image
 //! - Optionally saving it to a file
 
+use pmoaudiocache::cache as audio_cache;
+use pmocovers::cache as cover_cache;
 use pmoqobuz::{QobuzClient, QobuzSource};
 use pmosource::MusicSource;
 use std::fs;
 use std::io::Write;
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create the client and source
     let client = QobuzClient::from_config().await?;
-    let source = QobuzSource::new(client, "http://localhost:8080");
+    let temp_dir = std::env::temp_dir().join("pmoqobuz_show_source_image");
+    let covers_dir = temp_dir.join("covers");
+    let audio_dir = temp_dir.join("audio");
+    fs::create_dir_all(&covers_dir)?;
+    fs::create_dir_all(&audio_dir)?;
+
+    let cover_cache = Arc::new(cover_cache::new_cache(&covers_dir.to_string_lossy(), 128)?);
+    let audio_cache = Arc::new(audio_cache::new_cache(&audio_dir.to_string_lossy(), 32)?);
+    let source = QobuzSource::new(client, cover_cache, audio_cache);
 
     // Display source information
     println!("Music Source Information");

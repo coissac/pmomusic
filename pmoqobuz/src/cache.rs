@@ -188,6 +188,13 @@ impl QobuzCache {
 
     /// Retourne des statistiques sur le cache
     pub async fn stats(&self) -> CacheStats {
+        self.albums.run_pending_tasks().await;
+        self.tracks.run_pending_tasks().await;
+        self.artists.run_pending_tasks().await;
+        self.playlists.run_pending_tasks().await;
+        self.searches.run_pending_tasks().await;
+        self.stream_urls.run_pending_tasks().await;
+
         CacheStats {
             albums_count: self.albums.entry_count(),
             tracks_count: self.tracks.entry_count(),

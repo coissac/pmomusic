@@ -7,6 +7,7 @@ edition = "2021"
 regex = "1.12"
 base64 = "0.22"
 indexmap = "2.0"
+async-trait = { version = "0.1", optional = true }
 
 # HTTP client pour les requêtes à l'API Qobuz
 reqwest = { version = "0.12", features = ["json", "cookies"] }
@@ -52,12 +53,16 @@ pmodidl = { path = "../pmodidl" }
 # Intégration avec pmoserver pour l'API HTTP
 pmoserver = { path = "../pmoserver", optional = true }
 axum = { version = "0.8", optional = true }
+rusqlite = { version = "0.37", features = ["bundled"], optional = true }
 
 # Documentation OpenAPI
 utoipa = { version = "5.3", optional = true }
 
 # Common music source traits
 pmosource = { path = "../pmosource" }
+
+# Playlist management
+pmoplaylist = { path = "../pmoplaylist" }
 
 [features]
 default = []
@@ -67,6 +72,7 @@ pmoserver = ["dep:pmoserver", "dep:axum", "dep:utoipa"]
 server = ["pmosource/server"]
 # Feature cache (deprecated - toujours actif maintenant)
 cache = []
+disk-cache = ["dep:rusqlite", "dep:async-trait"]
 
 [dev-dependencies]
 # Tests
@@ -75,6 +81,7 @@ mockito = "1.0"
 tempfile = "3.0"
 # Pour les exemples
 tracing-subscriber = "0.3"
+pmocache = { path = "../pmocache" }
 # Pour l'exemple spoofer
 
 # Specify that the with_cache example requires the cache feature

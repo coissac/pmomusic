@@ -24,7 +24,6 @@ use crate::{client::QobuzClient, error::QobuzError, models::*};
 #[derive(Clone)]
 pub struct QobuzState {
     pub client: Arc<QobuzClient>,
-    #[cfg(feature = "covers")]
     pub cover_cache: Option<Arc<pmocovers::Cache>>,
 }
 
@@ -121,7 +120,6 @@ async fn get_album(
 ) -> Result<Json<Album>, AppError> {
     let mut album = state.client.get_album(&id).await?;
 
-    #[cfg(feature = "covers")]
     if let Some(ref cover_cache) = state.cover_cache {
         album = cache_album_image(album, cover_cache).await;
     }
@@ -163,7 +161,6 @@ async fn get_artist_albums(
 ) -> Result<Json<Vec<Album>>, AppError> {
     let mut albums = state.client.get_artist_albums(&id).await?;
 
-    #[cfg(feature = "covers")]
     if let Some(ref cover_cache) = state.cover_cache {
         albums = cache_albums_images(albums, cover_cache).await;
     }
@@ -208,7 +205,6 @@ async fn search(
         .search(&params.q, params.search_type.as_deref())
         .await?;
 
-    #[cfg(feature = "covers")]
     if let Some(ref cover_cache) = state.cover_cache {
         result.albums = cache_albums_images(result.albums, cover_cache).await;
     }
@@ -222,7 +218,6 @@ async fn get_favorite_albums(
 ) -> Result<Json<Vec<Album>>, AppError> {
     let mut albums = state.client.get_favorite_albums().await?;
 
-    #[cfg(feature = "covers")]
     if let Some(ref cover_cache) = state.cover_cache {
         albums = cache_albums_images(albums, cover_cache).await;
     }
@@ -270,7 +265,6 @@ async fn get_featured_albums(
         .get_featured_albums(params.genre_id.as_deref(), &params.type_)
         .await?;
 
-    #[cfg(feature = "covers")]
     if let Some(ref cover_cache) = state.cover_cache {
         albums = cache_albums_images(albums, cover_cache).await;
     }
@@ -300,7 +294,7 @@ async fn get_cache_stats(
 
 // ============ Helpers pour le cache d'images ============
 
-#[cfg(all(feature = "pmoserver", feature = "covers"))]
+#[cfg(feature = "pmoserver")]
 async fn cache_album_image(mut album: Album, cover_cache: &Arc<pmocovers::Cache>) -> Album {
     if let Some(ref image_url) = album.image {
         match cover_cache.add_from_url(image_url, None).await {
@@ -315,7 +309,7 @@ async fn cache_album_image(mut album: Album, cover_cache: &Arc<pmocovers::Cache>
     album
 }
 
-#[cfg(all(feature = "pmoserver", feature = "covers"))]
+#[cfg(feature = "pmoserver")]
 async fn cache_albums_images(
     albums: Vec<Album>,
     cover_cache: &Arc<pmocovers::Cache>,

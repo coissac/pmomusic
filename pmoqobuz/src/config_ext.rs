@@ -188,6 +188,36 @@ pub trait QobuzConfigExt {
 
     /// Définit le répertoire de cache Qobuz
     fn set_qobuz_cache_dir(&self, directory: String) -> Result<()>;
+
+    /// Récupère le nombre maximum de requêtes concurrentes
+    ///
+    /// # Returns
+    ///
+    /// Le nombre maximum de requêtes concurrentes, ou None si non configuré (défaut: 2)
+    fn get_qobuz_rate_limit_max_concurrent(&self) -> Result<Option<usize>>;
+
+    /// Définit le nombre maximum de requêtes concurrentes
+    fn set_qobuz_rate_limit_max_concurrent(&self, max: usize) -> Result<()>;
+
+    /// Récupère le délai minimum entre requêtes en millisecondes
+    ///
+    /// # Returns
+    ///
+    /// Le délai minimum en ms, ou None si non configuré (défaut: 400ms)
+    fn get_qobuz_rate_limit_min_delay_ms(&self) -> Result<Option<u64>>;
+
+    /// Définit le délai minimum entre requêtes
+    fn set_qobuz_rate_limit_min_delay_ms(&self, delay_ms: u64) -> Result<()>;
+
+    /// Vérifie si le rate limiting est activé
+    ///
+    /// # Returns
+    ///
+    /// true si activé (défaut), false sinon
+    fn is_qobuz_rate_limiting_enabled(&self) -> bool;
+
+    /// Active ou désactive le rate limiting
+    fn set_qobuz_rate_limiting_enabled(&self, enabled: bool) -> Result<()>;
 }
 
 impl QobuzConfigExt for Config {
@@ -343,23 +373,21 @@ impl QobuzConfigExt for Config {
     }
 
     fn is_qobuz_auth_valid(&self) -> bool {
-        // Vérifier si un token existe
-        if self.get_qobuz_auth_token().ok().flatten().is_none() {
-            return false;
-        }
+        let token_present = self
+            .get_qobuz_auth_token()
+            .ok()
+            .flatten()
+            .map(|token| !token.is_empty())
+            .unwrap_or(false);
 
-        // Vérifier si le token n'est pas expiré
-        if let Ok(Some(expires_at)) = self.get_qobuz_token_expires_at() {
-            use std::time::{SystemTime, UNIX_EPOCH};
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
+        let user_present = self
+            .get_qobuz_user_id()
+            .ok()
+            .flatten()
+            .map(|user_id| !user_id.is_empty())
+            .unwrap_or(false);
 
-            now < expires_at
-        } else {
-            false
-        }
+        token_present && user_present
     }
 
     fn get_qobuz_cache_dir(&self) -> Result<String> {
@@ -368,5 +396,49 @@ impl QobuzConfigExt for Config {
 
     fn set_qobuz_cache_dir(&self, directory: String) -> Result<()> {
         self.set_managed_dir(&["host", "qobuz_cache", "directory"], directory)
+    }
+
+    fn get_qobuz_rate_limit_max_concurrent(&self) -> Result<Option<usize>> {
+        match self.get_value(&["accounts", "qobuz", "rate_limit", "max_concurrent"]) {
+            Ok(Value::Number(n)) if n.is_u64() => Ok(Some(n.as_u64().unwrap() as usize)),
+            Ok(_) => Ok(None),
+            Err(_) => Ok(Some(2)), // Default: 2 concurrent requests
+        }
+    }
+
+    fn set_qobuz_rate_limit_max_concurrent(&self, max: usize) -> Result<()> {
+        self.set_value(
+            &["accounts", "qobuz", "rate_limit", "max_concurrent"],
+            Value::Number(serde_yaml::Number::from(max)),
+        )
+    }
+
+    fn get_qobuz_rate_limit_min_delay_ms(&self) -> Result<Option<u64>> {
+        match self.get_value(&["accounts", "qobuz", "rate_limit", "min_delay_ms"]) {
+            Ok(Value::Number(n)) if n.is_u64() => Ok(Some(n.as_u64().unwrap())),
+            Ok(_) => Ok(None),
+            Err(_) => Ok(Some(400)), // Default: 400ms
+        }
+    }
+
+    fn set_qobuz_rate_limit_min_delay_ms(&self, delay_ms: u64) -> Result<()> {
+        self.set_value(
+            &["accounts", "qobuz", "rate_limit", "min_delay_ms"],
+            Value::Number(serde_yaml::Number::from(delay_ms)),
+        )
+    }
+
+    fn is_qobuz_rate_limiting_enabled(&self) -> bool {
+        match self.get_value(&["accounts", "qobuz", "rate_limit", "enabled"]) {
+            Ok(Value::Bool(b)) => b,
+            _ => true, // Default: enabled
+        }
+    }
+
+    fn set_qobuz_rate_limiting_enabled(&self, enabled: bool) -> Result<()> {
+        self.set_value(
+            &["accounts", "qobuz", "rate_limit", "enabled"],
+            Value::Bool(enabled),
+        )
     }
 }

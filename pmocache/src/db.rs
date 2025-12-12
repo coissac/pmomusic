@@ -118,7 +118,8 @@ impl DB {
                 collection TEXT,
                 id TEXT,
                 hits INTEGER DEFAULT 0,
-                last_used TEXT
+                last_used TEXT,
+                lazy_pk TEXT
             )",
             [],
         )?;
@@ -156,16 +157,7 @@ impl DB {
             [],
         )?;
 
-        // LAZY PK SUPPORT : Ajouter colonne lazy_pk pour mode deferred
-        // Cette colonne permet de stocker un PK temporaire calculé à partir de l'URL
-        // sans télécharger le fichier. Quand le fichier est téléchargé, le real pk
-        // est calculé et stocké, mais le lazy_pk est conservé pour compatibilité UPnP.
-        conn.execute(
-            "ALTER TABLE asset ADD COLUMN IF NOT EXISTS lazy_pk TEXT",
-            [],
-        )?;
-
-        // Index sur lazy_pk pour lookups rapides (lazy_pk → real pk)
+        // LAZY PK SUPPORT: Index sur lazy_pk pour lookups rapides (lazy_pk → real pk)
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_asset_lazy_pk ON asset (lazy_pk)",
             [],
@@ -953,7 +945,7 @@ impl DB {
     /// Version générique de set_a_metadata qui accepte une clé arbitraire
     ///
     /// Utilisé en interne pour stocker des métadonnées avec lazy_pk au lieu de pk
-    fn set_a_metadata_by_key(
+    pub fn set_a_metadata_by_key(
         &self,
         key: &str,
         metadata_key: &str,

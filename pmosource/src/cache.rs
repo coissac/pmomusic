@@ -218,6 +218,45 @@ impl SourceCacheManager {
         Ok(pk)
     }
 
+    /// Cache audio with lazy loading (deferred download)
+    ///
+    /// Creates a lazy PK for the audio file without downloading it immediately.
+    /// The actual download will occur when the HTTP endpoint is first requested.
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - URL source de la piste
+    /// * `metadata` - Métadonnées audio optionnelles
+    ///
+    /// # Returns
+    ///
+    /// La clé primaire lazy (pk) commençant par "L:"
+    pub async fn cache_audio_lazy(
+        &self,
+        url: &str,
+        metadata: Option<AudioMetadata>,
+    ) -> Result<String> {
+        // Use pmocache add_from_url_deferred (already implemented)
+        let lazy_pk = self
+            .audio_cache
+            .add_from_url_deferred(url, Some(&self.collection_id))
+            .await
+            .map_err(|e| MusicSourceError::CacheError(e.to_string()))?;
+
+        // Store metadata in lazy_pk metadata table if provided
+        if let Some(meta) = metadata {
+            // Serialize metadata to JSON and store
+            if let Ok(json) = serde_json::to_value(&meta) {
+                let _ = self
+                    .audio_cache
+                    .db
+                    .set_a_metadata_by_key(&lazy_pk, "audio_metadata", json);
+            }
+        }
+
+        Ok(lazy_pk)
+    }
+
     /// Cache un flux audio via un reader asynchrone
     pub async fn cache_audio_from_reader<R>(
         &self,

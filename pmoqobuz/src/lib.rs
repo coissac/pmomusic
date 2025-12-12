@@ -46,7 +46,7 @@
 //! ### Exemple basique avec configuration automatique
 //!
 //! ```rust,no_run
-//! use pmoqobuz::QobuzClient;
+//! use pmoqobuz::{QobuzClient, ToDIDL};
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
@@ -66,7 +66,7 @@
 //! ### Exemple avec credentials personnalisés
 //!
 //! ```rust,no_run
-//! use pmoqobuz::QobuzClient;
+//! use pmoqobuz::{QobuzClient, ToDIDL};
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
@@ -82,7 +82,7 @@
 //! ### Export DIDL-Lite
 //!
 //! ```rust,no_run
-//! use pmoqobuz::QobuzClient;
+//! use pmoqobuz::{QobuzClient, ToDIDL};
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
@@ -115,19 +115,16 @@
 //!
 //! ```rust,no_run
 //! use pmoqobuz::{QobuzSource, QobuzClient};
+//! use pmoaudiocache::Cache as AudioCache;
 //! use pmocovers::Cache as CoverCache;
 //! use std::sync::Arc;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let client = QobuzClient::from_config().await?;
 //! let cover_cache = Arc::new(CoverCache::new("./cache/covers", 500)?);
+//! let audio_cache = Arc::new(AudioCache::new("./cache/audio", 100)?);
 //!
-//! let source = QobuzSource::new_with_cache(
-//!     client,
-//!     "http://localhost:8080",
-//!     Some(cover_cache),
-//!     None,
-//! );
+//! let source = QobuzSource::new(client, cover_cache, audio_cache);
 //! # Ok(())
 //! # }
 //! ```
@@ -139,7 +136,8 @@
 //! ```rust,no_run
 //! use pmoqobuz::{QobuzSource, QobuzClient};
 //! use pmocovers::Cache as CoverCache;
-//! use pmoaudiocache::AudioCache;
+//! use pmoaudiocache::Cache as AudioCache;
+//! use pmosource::MusicSource;
 //! use std::sync::Arc;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -147,15 +145,10 @@
 //! let cover_cache = Arc::new(CoverCache::new("./cache/covers", 500)?);
 //! let audio_cache = Arc::new(AudioCache::new("./cache/audio", 100)?);
 //!
-//! let source = QobuzSource::new_with_cache(
-//!     client.clone(),
-//!     "http://localhost:8080",
-//!     Some(cover_cache),
-//!     Some(audio_cache),
-//! );
+//! let source = QobuzSource::new(client, cover_cache, audio_cache);
 //!
 //! // Add a track with caching
-//! let tracks = client.get_favorite_tracks().await?;
+//! let tracks = source.client().get_favorite_tracks().await?;
 //! if let Some(track) = tracks.first() {
 //!     let track_id = source.add_track(track).await?;
 //!     // Audio and cover are now cached with rich metadata
@@ -218,6 +211,7 @@ pub mod cache;
 pub mod client;
 pub mod config_ext;
 pub mod didl;
+#[cfg(feature = "disk-cache")]
 pub mod disk_cache;
 pub mod error;
 pub mod models;
