@@ -129,7 +129,10 @@ pub mod openapi;
 #[cfg(feature = "pmoconfig")]
 pub mod config_ext;
 
-pub use cache::{Cache, CacheBroadcastEvent, CacheConfig, CacheSubscription};
+pub use cache::{
+    generate_lazy_pk, is_lazy_pk, Cache, CacheBroadcastEvent, CacheConfig, CacheEvent,
+    CacheSubscription,
+};
 pub use cache_trait::{pk_from_content_header, FileCache};
 pub use db::{CacheEntry, DB};
 pub use download::{

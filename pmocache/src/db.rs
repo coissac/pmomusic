@@ -149,10 +149,33 @@ impl DB {
 
         // Crée un index composite pour rendre unique les ids si défini dans une collection
         conn.execute(
-            "CREATE UNIQUE INDEX 
+            "CREATE UNIQUE INDEX
                              IF NOT EXISTS asset_collection_id_unique
                              ON asset (collection, id)
                              WHERE id IS NOT NULL;",
+            [],
+        )?;
+
+        // LAZY PK SUPPORT : Ajouter colonne lazy_pk pour mode deferred
+        // Cette colonne permet de stocker un PK temporaire calculé à partir de l'URL
+        // sans télécharger le fichier. Quand le fichier est téléchargé, le real pk
+        // est calculé et stocké, mais le lazy_pk est conservé pour compatibilité UPnP.
+        conn.execute(
+            "ALTER TABLE asset ADD COLUMN IF NOT EXISTS lazy_pk TEXT",
+            [],
+        )?;
+
+        // Index sur lazy_pk pour lookups rapides (lazy_pk → real pk)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_asset_lazy_pk ON asset (lazy_pk)",
+            [],
+        )?;
+
+        // Index unique sur lazy_pk (non-NULL) pour éviter les doublons
+        // Un lazy_pk ne peut pointer que vers un seul entry
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_asset_lazy_pk_unique
+             ON asset (lazy_pk) WHERE lazy_pk IS NOT NULL",
             [],
         )?;
 
@@ -744,6 +767,219 @@ impl DB {
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(entries)
+    }
+
+    // ============================================================================
+    // LAZY PK SUPPORT
+    // ============================================================================
+
+    /// Ajoute une entrée en mode lazy (pk = NULL, lazy_pk rempli)
+    ///
+    /// Utilisé pour créer des entries sans télécharger le fichier.
+    /// Le lazy_pk est calculé à partir de l'URL, le real pk sera calculé
+    /// lors du téléchargement effectif.
+    ///
+    /// # Arguments
+    ///
+    /// * `lazy_pk` - PK temporaire (format "L:" + hash(url))
+    /// * `id` - Identifiant optionnel
+    /// * `collection` - Collection optionnelle
+    pub fn add_lazy(
+        &self,
+        lazy_pk: &str,
+        id: Option<&str>,
+        collection: Option<&str>,
+    ) -> rusqlite::Result<()> {
+        let conn = self.lock_conn("add_lazy");
+
+        // Créer une entry avec pk = NULL et lazy_pk rempli
+        // On utilise une astuce: insérer avec lazy_pk comme clé temporaire
+        // puis mettre pk à NULL
+        conn.execute(
+            "INSERT INTO asset (pk, lazy_pk, id, collection, hits, last_used)
+             VALUES (NULL, ?1, ?2, ?3, 0, ?4)",
+            params![lazy_pk, id, collection, Utc::now().to_rfc3339()],
+        )?;
+
+        Ok(())
+    }
+
+    /// Récupère le real pk associé à un lazy_pk
+    ///
+    /// # Arguments
+    ///
+    /// * `lazy_pk` - Le lazy PK à rechercher
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Some(pk))` - Le real pk si le fichier a été téléchargé
+    /// * `Ok(None)` - Pas encore téléchargé (pk = NULL) ou lazy_pk inconnu
+    pub fn get_pk_by_lazy_pk(&self, lazy_pk: &str) -> rusqlite::Result<Option<String>> {
+        let conn = self.lock_conn("get_pk_by_lazy_pk");
+
+        conn.query_row(
+            "SELECT pk FROM asset WHERE lazy_pk = ?1",
+            [lazy_pk],
+            |row| row.get(0),
+        )
+        .optional()
+    }
+
+    /// Transition d'une entry lazy vers downloaded (ajoute le real pk)
+    ///
+    /// Cette méthode est appelée après le téléchargement d'un fichier lazy.
+    /// Elle crée une nouvelle entry avec le real pk ET garde le lazy_pk
+    /// pour permettre aux Control Points de continuer à utiliser l'URL lazy.
+    ///
+    /// # Arguments
+    ///
+    /// * `lazy_pk` - Le lazy PK de l'entry originale
+    /// * `real_pk` - Le real PK calculé après téléchargement
+    pub fn update_lazy_to_downloaded(
+        &self,
+        lazy_pk: &str,
+        real_pk: &str,
+    ) -> rusqlite::Result<()> {
+        let mut conn = self.lock_conn("update_lazy_to_downloaded");
+
+        let tx = conn.transaction()?;
+
+        // 1. Récupérer les infos de l'entry lazy
+        let (collection, id): (Option<String>, Option<String>) = tx
+            .query_row(
+                "SELECT collection, id FROM asset WHERE lazy_pk = ?1 AND pk IS NULL",
+                [lazy_pk],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?
+            .ok_or_else(|| Error::QueryReturnedNoRows)?;
+
+        // 2. Supprimer l'entry lazy (pk = NULL)
+        tx.execute(
+            "DELETE FROM asset WHERE lazy_pk = ?1 AND pk IS NULL",
+            [lazy_pk],
+        )?;
+
+        // 3. Créer nouvelle entry avec pk rempli ET lazy_pk
+        // Si le real_pk existe déjà (téléchargé via eager mode), on met juste à jour
+        tx.execute(
+            "INSERT INTO asset (pk, lazy_pk, collection, id, hits, last_used)
+             VALUES (?1, ?2, ?3, ?4, 1, ?5)
+             ON CONFLICT(pk) DO UPDATE SET
+                lazy_pk = excluded.lazy_pk,
+                last_used = excluded.last_used,
+                hits = hits + 1",
+            params![real_pk, lazy_pk, collection, id, Utc::now().to_rfc3339()],
+        )?;
+
+        tx.commit()
+    }
+
+    /// Recherche une entry par son origin_url
+    ///
+    /// Retourne (pk, lazy_pk) si trouvé. Vérifie à la fois les entries
+    /// eager (avec pk) et lazy (avec lazy_pk).
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - L'URL d'origine à rechercher
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Some((Some(pk), Some(lazy_pk))))` - Entry téléchargée (lazy→eager)
+    /// * `Ok(Some((Some(pk), None)))` - Entry eager (jamais lazy)
+    /// * `Ok(Some((None, Some(lazy_pk))))` - Entry lazy (pas encore téléchargée)
+    /// * `Ok(None)` - URL inconnue
+    pub fn get_entry_by_url(
+        &self,
+        url: &str,
+    ) -> rusqlite::Result<Option<(Option<String>, Option<String>)>> {
+        let conn = self.lock_conn("get_entry_by_url");
+
+        // Chercher via origin_url dans metadata
+        // On joint avec asset pour récupérer pk et lazy_pk
+        let result: Option<(Option<String>, Option<String>)> = conn
+            .query_row(
+                "SELECT a.pk, a.lazy_pk
+                 FROM asset a
+                 JOIN metadata m ON (a.pk = m.pk OR a.lazy_pk = m.pk)
+                 WHERE m.key = 'origin_url' AND m.value = ?1
+                 LIMIT 1",
+                [url],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+
+        Ok(result)
+    }
+
+    /// Met à jour le compteur d'accès pour une entry lazy (pk = NULL)
+    ///
+    /// # Arguments
+    ///
+    /// * `lazy_pk` - Le lazy PK de l'entry
+    pub fn update_hit_by_lazy_pk(&self, lazy_pk: &str) -> rusqlite::Result<()> {
+        let conn = self.lock_conn("update_hit_by_lazy_pk");
+
+        conn.execute(
+            "UPDATE asset
+             SET hits = hits + 1, last_used = ?1
+             WHERE lazy_pk = ?2",
+            params![Utc::now().to_rfc3339(), lazy_pk],
+        )?;
+
+        Ok(())
+    }
+
+    /// Enregistre l'URL d'origine pour une entry lazy
+    ///
+    /// Contrairement à `set_origin_url()` qui utilise le pk, cette méthode
+    /// utilise le lazy_pk comme clé dans la table metadata (car pk = NULL).
+    ///
+    /// # Arguments
+    ///
+    /// * `lazy_pk` - Le lazy PK de l'entry
+    /// * `origin_url` - L'URL d'origine à stocker
+    pub fn set_origin_url_for_lazy(
+        &self,
+        lazy_pk: &str,
+        origin_url: &str,
+    ) -> rusqlite::Result<()> {
+        // Pour les entries lazy, on stocke l'origin_url avec lazy_pk comme clé
+        // dans la table metadata (au lieu de pk qui est NULL)
+        self.set_a_metadata_by_key(lazy_pk, "origin_url", Value::String(origin_url.to_owned()))
+    }
+
+    /// Version générique de set_a_metadata qui accepte une clé arbitraire
+    ///
+    /// Utilisé en interne pour stocker des métadonnées avec lazy_pk au lieu de pk
+    fn set_a_metadata_by_key(
+        &self,
+        key: &str,
+        metadata_key: &str,
+        value: Value,
+    ) -> rusqlite::Result<()> {
+        let (value_type, value_text): (&str, Option<String>) = match value {
+            Value::Null => ("null", None),
+            Value::Bool(b) => ("boolean", Some(b.to_string())),
+            Value::Number(n) => ("number", Some(n.to_string())),
+            Value::String(s) => ("string", Some(s)),
+            Value::Array(arr) => ("string", Some(Value::Array(arr).to_string())),
+            Value::Object(map) => ("string", Some(Value::Object(map).to_string())),
+        };
+
+        let conn = self.lock_conn("set_a_metadata_by_key");
+
+        conn.execute(
+            "INSERT INTO metadata (pk, key, value_type, value)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(pk, key) DO UPDATE SET
+                 value_type = excluded.value_type,
+                 value = excluded.value",
+            params![key, metadata_key, value_type, value_text.as_deref()],
+        )?;
+
+        Ok(())
     }
 }
 

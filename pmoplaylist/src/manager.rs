@@ -528,6 +528,137 @@ impl PlaylistManager {
         self.inner.persistence.as_ref()
     }
 
+    // ============================================================================
+    // LAZY PK SUPPORT
+    // ============================================================================
+
+    /// Active le mode lazy pour une playlist
+    ///
+    /// Configure l'écoute des events du cache pour :
+    /// 1. Commuter automatiquement les lazy PK vers real PK après téléchargement
+    /// 2. Prefetch intelligent des N tracks suivants
+    ///
+    /// # Arguments
+    ///
+    /// * `playlist_id` - ID de la playlist à gérer
+    /// * `lookahead` - Nombre de tracks à prefetch (recommandé: 3-5)
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// let manager = PlaylistManager::get();
+    /// manager.enable_lazy_mode("qobuz-favorites-123", 5);
+    /// // → La playlist commute automatiquement lazy → real PK
+    /// // → Prefetch 5 tracks en avance pendant la lecture
+    /// ```
+    pub fn enable_lazy_mode(&self, playlist_id: &str, lookahead: usize) {
+        let playlist_id = playlist_id.to_string();
+
+        // Obtenir le cache audio
+        let cache = match audio_cache() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!("Cannot enable lazy mode: audio cache not available: {}", e);
+                return;
+            }
+        };
+
+        // S'abonner aux events du cache
+        let mut rx = cache.subscribe_events();
+        let manager = self.clone();
+
+        tokio::spawn(async move {
+            tracing::info!("Lazy mode enabled for playlist {} (lookahead: {})", playlist_id, lookahead);
+
+            while let Ok(event) = rx.recv().await {
+                match event {
+                    pmocache::CacheEvent::LazyDownloaded { lazy_pk, real_pk } => {
+                        tracing::debug!("Received LazyDownloaded event: {} → {}", lazy_pk, real_pk);
+
+                        // 1. Commuter le PK dans la playlist
+                        if let Ok(writer) = manager.get_write_handle(playlist_id.clone()).await {
+                            tracing::info!(
+                                "Switching PK in playlist {}: {} -> {}",
+                                playlist_id, lazy_pk, real_pk
+                            );
+                            if let Err(e) = writer.update_cache_pk(&lazy_pk, &real_pk).await {
+                                tracing::error!("Failed to update PK in playlist: {}", e);
+                            }
+                        }
+
+                        // 2. Prefetch les tracks suivants
+                        manager.prefetch_next_tracks(&playlist_id, &real_pk, lookahead).await;
+                    }
+                    _ => {}
+                }
+            }
+
+            tracing::warn!("Lazy mode listener stopped for playlist {}", playlist_id);
+        });
+    }
+
+    /// Prefetch les N tracks suivants après une position donnée
+    ///
+    /// Cette méthode est appelée automatiquement par `enable_lazy_mode()`.
+    async fn prefetch_next_tracks(&self, playlist_id: &str, current_pk: &str, lookahead: usize) {
+        let playlist = {
+            let playlists = self.inner.playlists.read().await;
+            playlists.get(playlist_id).cloned()
+        };
+
+        let Some(playlist) = playlist else {
+            return;
+        };
+
+        let core = playlist.core.read().await;
+        let tracks = core.snapshot();
+
+        // Trouver position actuelle
+        let Some(pos) = tracks.iter().position(|r| &r.cache_pk == current_pk) else {
+            return;
+        };
+
+        // Prefetch N tracks suivants
+        let cache = match audio_cache() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+
+        for i in (pos + 1)..=(pos + lookahead).min(tracks.len() - 1) {
+            let next_pk = &tracks[i].cache_pk;
+
+            // Si lazy PK, déclencher download en background
+            if pmocache::is_lazy_pk(next_pk) {
+                tracing::debug!("Prefetching lazy track {}: {}", i, next_pk);
+
+                let cache = cache.clone();
+                let next_pk = next_pk.clone();
+
+                tokio::spawn(async move {
+                    // Récupérer l'origin_url depuis la DB
+                    let origin_url = match cache.db.get_origin_url(&next_pk) {
+                        Ok(Some(url)) => url,
+                        Ok(None) => {
+                            tracing::warn!("No origin_url for lazy pk {}", next_pk);
+                            return;
+                        }
+                        Err(e) => {
+                            tracing::error!("Error getting origin_url for {}: {}", next_pk, e);
+                            return;
+                        }
+                    };
+
+                    // Déclencher download (ne bloque pas)
+                    if let Err(e) = cache.add_from_url(&origin_url, None).await {
+                        tracing::error!("Failed to prefetch {}: {}", next_pk, e);
+                    } else {
+                        tracing::debug!("Prefetch completed for {}", next_pk);
+                    }
+                });
+            }
+        }
+    }
+
     /// Task d'�viction en background
     async fn eviction_task(&self) {
         loop {

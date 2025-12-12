@@ -10,13 +10,54 @@ use crate::download::{
 };
 use anyhow::{anyhow, bail, Result};
 use serde_json::{Number, Value};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt};
-use tokio::sync::RwLock;
+use tokio::sync::{broadcast, RwLock};
 use tracing;
+
+// ============================================================================
+// LAZY PK SUPPORT
+// ============================================================================
+
+/// Préfixe magique pour identifier les lazy PK
+const LAZY_PK_PREFIX: &str = "L:";
+
+/// Génère un lazy PK à partir d'une URL
+///
+/// Le lazy PK est calculable sans télécharger le fichier, ce qui permet
+/// de créer des URLs UPnP stables avant tout téléchargement.
+///
+/// Format: "L:" + hex(sha256(url)[..16])
+pub fn generate_lazy_pk(url: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(url.as_bytes());
+    let hash = hasher.finalize();
+    format!("{}{}", LAZY_PK_PREFIX, hex::encode(&hash[..16]))
+}
+
+/// Vérifie si un PK est en mode lazy
+pub fn is_lazy_pk(pk: &str) -> bool {
+    pk.starts_with(LAZY_PK_PREFIX)
+}
+
+/// Events émis par le cache pour notifier les changements d'état
+#[derive(Debug, Clone)]
+pub enum CacheEvent {
+    /// Un fichier a été servi via HTTP
+    Served {
+        pk: String,
+        format: String,
+    },
+    /// Un fichier lazy a été téléchargé et est maintenant disponible
+    LazyDownloaded {
+        lazy_pk: String,
+        real_pk: String,
+    },
+}
 
 /// Informations transmises lors de la diffusion d'un élément du cache via HTTP.
 ///
@@ -99,6 +140,8 @@ pub struct Cache<C: CacheConfig> {
     transformer_factory: Option<Arc<dyn Fn() -> StreamTransformer + Send + Sync>>,
     /// Taille minimale de prébuffering en octets (0 = désactivé)
     min_prebuffer_size: u64,
+    /// LAZY PK SUPPORT: Channel pour broadcaster les events (lazy downloads, etc.)
+    served_tx: Option<broadcast::Sender<CacheEvent>>,
     /// Phantom data pour le type de configuration
     _phantom: std::marker::PhantomData<C>,
 }
@@ -350,6 +393,9 @@ impl<C: CacheConfig> Cache<C> {
         std::fs::create_dir_all(&directory)?;
         let db = DB::init(&directory.join("cache.db"))?;
 
+        // Créer un channel pour les events (capacité de 100 events en buffer)
+        let (served_tx, _) = broadcast::channel(100);
+
         Ok(Self {
             dir: directory,
             limit,
@@ -359,6 +405,7 @@ impl<C: CacheConfig> Cache<C> {
             subscriber_counter: AtomicU64::new(1),
             transformer_factory,
             min_prebuffer_size: DEFAULT_PREBUFFER_SIZE,
+            served_tx: Some(served_tx),
             _phantom: std::marker::PhantomData,
         })
     }
@@ -601,7 +648,7 @@ impl<C: CacheConfig> Cache<C> {
     pub async fn add_from_reader<R>(
         &self,
         source_uri: Option<&str>,
-        mut reader: R,
+        reader: R,
         length: Option<u64>,
         collection: Option<&str>,
     ) -> Result<String>
@@ -1206,6 +1253,122 @@ impl<C: CacheConfig> Cache<C> {
         }
 
         Ok(removed)
+    }
+
+    // ============================================================================
+    // LAZY PK SUPPORT - Methods
+    // ============================================================================
+
+    /// S'abonne aux events du cache (lazy downloads, etc.)
+    ///
+    /// Retourne un receiver pour écouter les events. Chaque abonné reçoit
+    /// une copie indépendante des events.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// let cache = Cache::<AudioConfig>::new("./cache", 1000)?;
+    /// let mut rx = cache.subscribe_events();
+    ///
+    /// tokio::spawn(async move {
+    ///     while let Ok(event) = rx.recv().await {
+    ///         match event {
+    ///             CacheEvent::LazyDownloaded { lazy_pk, real_pk } => {
+    ///                 println!("Lazy {} → Real {}", lazy_pk, real_pk);
+    ///             }
+    ///             _ => {}
+    ///         }
+    ///     }
+    /// });
+    /// ```
+    pub fn subscribe_events(&self) -> broadcast::Receiver<CacheEvent> {
+        self.served_tx
+            .as_ref()
+            .expect("Cache event channel not initialized")
+            .subscribe()
+    }
+
+    /// Broadcast un event quand un lazy PK est téléchargé
+    ///
+    /// Cette méthode est appelée après qu'un fichier lazy a été téléchargé
+    /// et son real pk calculé. Elle permet aux playlists de commuter leurs PK.
+    pub async fn broadcast_lazy_downloaded(&self, lazy_pk: &str, real_pk: &str) {
+        if let Some(tx) = &self.served_tx {
+            let event = CacheEvent::LazyDownloaded {
+                lazy_pk: lazy_pk.to_string(),
+                real_pk: real_pk.to_string(),
+            };
+            // Ignorer l'erreur si pas d'abonnés
+            let _ = tx.send(event);
+        }
+    }
+
+    /// Ajoute une URL en mode deferred (pas de download immédiat)
+    ///
+    /// Vérifie d'abord si l'URL existe déjà en DB :
+    /// - Si eager (déjà téléchargé) : retourne le lazy_pk si existe, sinon le real pk
+    /// - Si lazy (pas encore téléchargé) : retourne le lazy pk existant
+    /// - Sinon : crée nouvelle entry lazy
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - URL à cacher
+    /// * `collection` - Collection optionnelle
+    ///
+    /// # Returns
+    ///
+    /// PK (lazy ou real selon l'état)
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// let cache = Cache::<AudioConfig>::new("./cache", 1000)?;
+    /// let lazy_pk = cache.add_from_url_deferred("https://example.com/track.mp3", Some("qobuz")).await?;
+    /// // → Returns "L:abc123..." (lazy PK)
+    /// // Fichier pas encore téléchargé, juste métadonnées en DB
+    /// ```
+    pub async fn add_from_url_deferred(
+        &self,
+        url: &str,
+        collection: Option<&str>,
+    ) -> Result<String> {
+        // 1. Vérifier si URL déjà en cache
+        if let Ok(Some((pk_opt, lazy_pk_opt))) = self.db.get_entry_by_url(url) {
+            // URL existe déjà
+            if let Some(pk) = pk_opt {
+                // Fichier déjà téléchargé (eager ou lazy→eager)
+                tracing::debug!("URL {} already downloaded with pk {}", url, pk);
+                self.db.update_hit(&pk)?;
+
+                // Retourner lazy_pk si existe (pour compatibilité Control Point)
+                // sinon retourner pk
+                if let Some(lpk) = lazy_pk_opt {
+                    return Ok(lpk);
+                }
+                return Ok(pk);
+            } else if let Some(lpk) = lazy_pk_opt {
+                // Entry lazy existante (pas encore téléchargé)
+                tracing::debug!("URL {} already in lazy mode with pk {}", url, lpk);
+                self.db.update_hit_by_lazy_pk(&lpk)?;
+                return Ok(lpk);
+            }
+        }
+
+        // 2. URL inconnue → créer nouvelle entry lazy
+        let lazy_pk = generate_lazy_pk(url);
+
+        // Vérifier si ce lazy_pk existe déjà (collision improbable mais...)
+        if let Ok(Some(_)) = self.db.get_pk_by_lazy_pk(&lazy_pk) {
+            bail!("Lazy PK collision for URL: {}", url);
+        }
+
+        // 3. Ajouter en DB
+        self.db.add_lazy(&lazy_pk, None, collection)?;
+        self.db.set_origin_url_for_lazy(&lazy_pk, url)?;
+
+        tracing::debug!("Created new lazy pk {} for URL {}", lazy_pk, url);
+
+        Ok(lazy_pk)
     }
 }
 
