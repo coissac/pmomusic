@@ -78,6 +78,23 @@ impl Spoofer {
             .to_string())
     }
 
+    /// Extrait l'appSecret depuis le bundle (secret MD5 à 32 caractères)
+    ///
+    /// Ce secret est utilisé directement par Qobuz (nouvelle méthode)
+    /// au lieu d'être XORé avec l'app_id
+    pub fn get_app_secret(&self) -> Result<String> {
+        let captures = self
+            .app_id_regex
+            .captures(&self.bundle)
+            .ok_or_else(|| anyhow::anyhow!("AppSecret non trouvé dans le bundle"))?;
+
+        Ok(captures
+            .name("secret")
+            .ok_or_else(|| anyhow::anyhow!("Groupe secret non trouvé"))?
+            .as_str()
+            .to_string())
+    }
+
     /// Extrait les secrets depuis le bundle
     pub fn get_secrets(&self) -> Result<IndexMap<String, String>> {
         // Étape 1: Extraire tous les seed/timezone pairs

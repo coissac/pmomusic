@@ -92,6 +92,20 @@ impl Spoofer {
             .to_string())
     }
 
+    /// Extrait l'appSecret depuis le bundle (secret à 32 caractères)
+    fn get_app_secret(&self) -> Result<String> {
+        let captures = self
+            .app_id_regex
+            .captures(&self.bundle)
+            .ok_or_else(|| anyhow::anyhow!("AppSecret non trouvé dans le bundle"))?;
+
+        Ok(captures
+            .name("secret")
+            .ok_or_else(|| anyhow::anyhow!("Groupe secret non trouvé"))?
+            .as_str()
+            .to_string())
+    }
+
     /// Extrait les secrets depuis le bundle
     fn get_secrets(&self) -> Result<IndexMap<String, String>> {
         // Étape 1: Extraire tous les seed/timezone pairs
@@ -222,8 +236,15 @@ async fn main() -> Result<()> {
         Err(e) => eprintln!("Erreur lors de l'extraction de l'App ID: {}", e),
     }
 
-    // Extraire les secrets
-    println!("\n--- Secrets ---");
+    // Extraire l'appSecret (32 caractères)
+    println!("\n--- AppSecret (32 chars) ---");
+    match spoofer.get_app_secret() {
+        Ok(secret) => println!("AppSecret: {}", secret),
+        Err(e) => eprintln!("Erreur lors de l'extraction de l'AppSecret: {}", e),
+    }
+
+    // Extraire les secrets timezone
+    println!("\n--- Secrets timezone (décodés base64) ---");
     match spoofer.get_secrets() {
         Ok(secrets) => {
             for (timezone, secret) in secrets {

@@ -72,7 +72,13 @@ impl QobuzApi {
 
         let params = [("username", username), ("password", password)];
 
-        let response: LoginResponse = self.post("/user/login", &params).await?;
+        let response: LoginResponse = match self.post("/user/login", &params).await {
+            Ok(resp) => resp,
+            Err(e) => {
+                info!("✗ Login failed for {}: {}", username, e);
+                return Err(e);
+            }
+        };
 
         // Vérifier que l'utilisateur a un abonnement valide
         if response.user.credential.parameters.is_none() {
@@ -88,8 +94,8 @@ impl QobuzApi {
             .parameters
             .and_then(|p| p.short_label);
 
-        debug!(
-            "Login successful - User ID: {}, Subscription: {:?}",
+        info!(
+            "✓ Login successful - User ID: {}, Subscription: {:?}",
             user_id, subscription_label
         );
 

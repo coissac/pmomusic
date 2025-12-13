@@ -133,7 +133,7 @@ impl QobuzClient {
         let mut api = match (config_appid, config_secret) {
             (Some(app_id), Some(secret)) => {
                 info!(
-                    "Creating Qobuz API with configured App ID: {} and secret",
+                    "Creating Qobuz API with configured App ID: {} and XOR secret",
                     app_id
                 );
                 match QobuzApi::with_secret(&app_id, &secret) {
@@ -152,7 +152,7 @@ impl QobuzClient {
             }
             _ => {
                 info!(
-                    "AppID or secret not configured, using Spoofer to obtain valid credentials..."
+                    "AppID or secret not configured (or app_id without secret), using Spoofer..."
                 );
                 Self::try_spoofer_fallback(config).await?
             }
@@ -219,7 +219,8 @@ impl QobuzClient {
     /// - Quand les credentials configurés sont invalides/expirés
     async fn try_spoofer_fallback(config: &Config) -> Result<QobuzApi> {
         if let Some((app_id, secret)) = Self::fetch_spoofer_credentials(config).await? {
-            return QobuzApi::with_secret(app_id, &secret);
+            // Use raw secret from Spoofer (no XOR)
+            return QobuzApi::with_raw_secret(app_id, &secret);
         }
 
         info!(
@@ -231,48 +232,41 @@ impl QobuzClient {
     async fn fetch_spoofer_credentials(config: &Config) -> Result<Option<(String, String)>> {
         match crate::api::Spoofer::new().await {
             Ok(spoofer) => match spoofer.get_app_id() {
-                Ok(app_id) => match spoofer.get_secrets() {
-                    Ok(secrets) => {
-                        info!("Spoofer found {} secret(s), testing them...", secrets.len());
+                Ok(app_id) => {
+                    // Use timezone secrets (like Python)
+                    // Note: App Secret from bundle doesn't work for signed requests
+                    match spoofer.get_secrets() {
+                        Ok(secrets) => {
+                            info!("Testing {} timezone secret(s)...", secrets.len());
+                            let (username, password) = config.get_qobuz_credentials()?;
 
-                        for (timezone, secret) in secrets.iter() {
-                            debug!("Testing secret for timezone: {}", timezone);
+                            for (timezone, secret) in secrets.iter() {
+                                debug!("Testing timezone secret: {}", timezone);
 
-                            match QobuzApi::with_secret(&app_id, secret) {
-                                Ok(_) => {
-                                    info!(
-                                        "✓ Successfully created API with secret from timezone: {}",
-                                        timezone
-                                    );
-
-                                    if let Err(e) = config.set_qobuz_appid(&app_id) {
-                                        debug!("Could not save appid to config: {}", e);
+                                if let Ok(test_api) = QobuzApi::with_raw_secret(&app_id, secret) {
+                                    if let Ok(auth_info) = test_api.login(&username, &password).await {
+                                        // Test the secret using userlib_get_albums (like Python's setSec())
+                                        // This matches Python's behavior exactly
+                                        if test_api.userlib_get_albums().await.is_ok() {
+                                            info!("✓ Secret from timezone '{}' works!", timezone);
+                                            if let Err(e) = config.set_qobuz_appid(&app_id) {
+                                                debug!("Could not save appid: {}", e);
+                                            }
+                                            return Ok(Some((app_id.clone(), secret.clone())));
+                                        } else {
+                                            debug!("✗ Secret from timezone '{}' failed userlib test", timezone);
+                                        }
                                     }
-                                    if let Err(e) = config.set_qobuz_secret(secret) {
-                                        debug!("Could not save secret to config: {}", e);
-                                    }
-
-                                    return Ok(Some((app_id.clone(), secret.clone())));
-                                }
-                                Err(e) => {
-                                    debug!(
-                                        "Failed to create API with secret from {}: {}",
-                                        timezone, e
-                                    );
-                                    continue;
                                 }
                             }
-                        }
 
-                        info!("✗ No valid secret from Spoofer secrets list");
-                        Ok(None)
-                    }
-                    Err(e) => {
-                        info!(
-                            "Spoofer failed to extract secrets: {}, falling back to DEFAULT_APP_ID",
-                            e
-                        );
-                        Ok(None)
+                            info!("✗ No valid secret found");
+                            Ok(None)
+                        }
+                        Err(e) => {
+                            info!("Failed to extract timezone secrets: {}", e);
+                            Ok(None)
+                        }
                     }
                 },
                 Err(e) => {
@@ -301,7 +295,8 @@ impl QobuzClient {
 
         match Self::fetch_spoofer_credentials(config_arc.as_ref()).await? {
             Some((app_id, secret)) => {
-                self.api.update_credentials(app_id, &secret)?;
+                // Use raw secret (no XOR) from Spoofer
+                self.api.update_credentials_raw(app_id, &secret);
                 info!("✓ Updated Qobuz API credentials using Spoofer");
                 Ok(())
             }

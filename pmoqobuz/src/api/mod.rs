@@ -21,6 +21,7 @@ pub use spoofer::Spoofer;
 
 /// URL de base de l'API Qobuz
 const API_BASE_URL: &str = "https://www.qobuz.com/api.json/0.2";
+//const API_BASE_URL: &str = "http://localhost:8080/api.json/0.2";
 
 /// App ID Qobuz par défaut
 ///
@@ -88,6 +89,23 @@ impl QobuzApi {
     pub fn with_secret(app_id: impl Into<String>, configvalue: &str) -> Result<Self> {
         let api = Self::new(app_id)?;
         api.set_secret_from_configvalue(configvalue)?;
+        Ok(api)
+    }
+
+    /// Crée une API avec un secret brut (déjà décodé/dérivé)
+    ///
+    /// # Arguments
+    ///
+    /// * `app_id` - App ID Qobuz
+    /// * `raw_secret` - Secret prêt à l'emploi (comme ceux du Spoofer)
+    ///
+    /// # Note
+    ///
+    /// Utilisez cette méthode pour les secrets du Spoofer qui sont déjà
+    /// décodés et prêts à l'emploi (pas besoin de XOR avec l'app_id)
+    pub fn with_raw_secret(app_id: impl Into<String>, raw_secret: &str) -> Result<Self> {
+        let api = Self::new(app_id)?;
+        api.set_secret(raw_secret.as_bytes().to_vec());
         Ok(api)
     }
 
@@ -160,7 +178,7 @@ impl QobuzApi {
         self.app_id.read().unwrap().clone()
     }
 
-    /// Met à jour dynamiquement l'app_id et le secret associés
+    /// Met à jour dynamiquement l'app_id et le secret associés (avec XOR)
     pub fn update_credentials(&self, app_id: impl Into<String>, configvalue: &str) -> Result<()> {
         {
             let mut current = self.app_id.write().unwrap();
@@ -168,6 +186,16 @@ impl QobuzApi {
         }
 
         self.set_secret_from_configvalue(configvalue)
+    }
+
+    /// Met à jour dynamiquement l'app_id et le secret brut (sans XOR)
+    pub fn update_credentials_raw(&self, app_id: impl Into<String>, raw_secret: &str) {
+        {
+            let mut current = self.app_id.write().unwrap();
+            *current = app_id.into();
+        }
+
+        self.set_secret(raw_secret.as_bytes().to_vec());
     }
 
     /// Retourne le token d'authentification si disponible
@@ -232,11 +260,11 @@ impl QobuzApi {
 
         // Envoyer la requête
         let response = request.send().await?;
-        self.handle_response(response).await
+        self.handle_response(response, endpoint).await
     }
 
     /// Traite la réponse HTTP
-    async fn handle_response<T: DeserializeOwned>(&self, response: Response) -> Result<T> {
+    async fn handle_response<T: DeserializeOwned>(&self, response: Response, endpoint: &str) -> Result<T> {
         let status = response.status();
         let status_code = status.as_u16();
 
@@ -244,7 +272,7 @@ impl QobuzApi {
 
         if !status.is_success() {
             let error_text = response.text().await.unwrap_or_default();
-            warn!("API error ({}): {}", status_code, error_text);
+            warn!("API error ({}) on {}: {}", status_code, endpoint, error_text);
             return Err(QobuzError::from_status_code(status_code, error_text));
         }
 
@@ -258,7 +286,7 @@ impl QobuzApi {
                         .get("message")
                         .and_then(|m| m.as_str())
                         .unwrap_or("Unknown error");
-                    warn!("Qobuz API error: {}", message);
+                    warn!("Qobuz API error on {}: {}", endpoint, message);
                     return Err(QobuzError::ApiError {
                         code: status_code,
                         message: message.to_string(),

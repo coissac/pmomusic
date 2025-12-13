@@ -45,6 +45,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("💾 Initializing caches...");
     let cover_cache = Arc::new(CoverCache::new("./cache/qobuz-covers", 500)?);
     let audio_cache = Arc::new(AudioCache::new("./cache/qobuz-audio", 100)?);
+
+    // IMPORTANT: Register audio cache globally so PlaylistManager can access it
+    pmoplaylist::register_audio_cache(audio_cache.clone());
+
     println!("✅ Caches initialized\n");
 
     // Step 3: Create QobuzSource with caches
