@@ -38,13 +38,13 @@ pub struct QobuzApi {
     /// Client HTTP
     client: Client,
     /// App ID pour l'authentification
-    app_id: String,
+    app_id: RwLock<String>,
     /// Secret s4 pour signer les requêtes sensibles (track/getFileUrl, userLibrary/*)
     ///
     /// Ce secret est obtenu soit :
     /// - En décodant un `configvalue` (base64) et XOR avec l'app_id
     /// - Depuis le Spoofer (secrets dynamiques)
-    secret: Option<Vec<u8>>,
+    secret: RwLock<Option<Vec<u8>>>,
     /// Token d'authentification utilisateur
     user_auth_token: RwLock<Option<String>>,
     /// ID utilisateur
@@ -65,8 +65,8 @@ impl QobuzApi {
 
         Ok(Self {
             client,
-            app_id: app_id.into(),
-            secret: None,
+            app_id: RwLock::new(app_id.into()),
+            secret: RwLock::new(None),
             user_auth_token: RwLock::new(None),
             user_id: RwLock::new(None),
             format_id: AudioFormat::default(),
@@ -86,7 +86,7 @@ impl QobuzApi {
     /// Le configvalue est décodé depuis base64, puis XORé avec l'app_id
     /// pour obtenir le secret s4.
     pub fn with_secret(app_id: impl Into<String>, configvalue: &str) -> Result<Self> {
-        let mut api = Self::new(app_id)?;
+        let api = Self::new(app_id)?;
         api.set_secret_from_configvalue(configvalue)?;
         Ok(api)
     }
@@ -96,8 +96,8 @@ impl QobuzApi {
     /// # Arguments
     ///
     /// * `secret` - Secret s4 en bytes (déjà décodé et dérivé)
-    pub fn set_secret(&mut self, secret: Vec<u8>) {
-        self.secret = Some(secret);
+    pub fn set_secret(&self, secret: Vec<u8>) {
+        *self.secret.write().unwrap() = Some(secret);
     }
 
     /// Dérive et définit le secret s4 depuis un configvalue
@@ -106,7 +106,7 @@ impl QobuzApi {
     /// 1. Décode le configvalue depuis base64
     /// 2. XOR avec l'app_id
     /// 3. Stocke le résultat comme secret s4
-    fn set_secret_from_configvalue(&mut self, configvalue: &str) -> Result<()> {
+    fn set_secret_from_configvalue(&self, configvalue: &str) -> Result<()> {
         use base64::{engine::general_purpose::STANDARD, Engine};
 
         // Décoder le configvalue depuis base64
@@ -115,7 +115,8 @@ impl QobuzApi {
             .map_err(|e| QobuzError::Configuration(format!("Invalid configvalue: {}", e)))?;
 
         // XOR avec l'app_id
-        let app_id_bytes = self.app_id.as_bytes();
+        let app_id = self.app_id.read().unwrap();
+        let app_id_bytes = app_id.as_bytes();
         let mut s4 = Vec::with_capacity(s3s.len());
 
         for (i, &byte) in s3s.iter().enumerate() {
@@ -123,13 +124,13 @@ impl QobuzApi {
             s4.push(byte ^ app_byte);
         }
 
-        self.secret = Some(s4);
+        *self.secret.write().unwrap() = Some(s4);
         Ok(())
     }
 
     /// Retourne le secret s4 si disponible
-    pub fn secret(&self) -> Option<&[u8]> {
-        self.secret.as_deref()
+    pub fn secret(&self) -> Option<Vec<u8>> {
+        self.secret.read().unwrap().clone()
     }
 
     /// Définit le token d'authentification
@@ -155,8 +156,18 @@ impl QobuzApi {
     }
 
     /// Retourne l'App ID
-    pub fn app_id(&self) -> &str {
-        &self.app_id
+    pub fn app_id(&self) -> String {
+        self.app_id.read().unwrap().clone()
+    }
+
+    /// Met à jour dynamiquement l'app_id et le secret associés
+    pub fn update_credentials(&self, app_id: impl Into<String>, configvalue: &str) -> Result<()> {
+        {
+            let mut current = self.app_id.write().unwrap();
+            *current = app_id.into();
+        }
+
+        self.set_secret_from_configvalue(configvalue)
     }
 
     /// Retourne le token d'authentification si disponible
@@ -205,7 +216,8 @@ impl QobuzApi {
         };
 
         // Ajouter les headers
-        request = request.header("X-App-Id", &self.app_id);
+        let app_id = self.app_id.read().unwrap().clone();
+        request = request.header("X-App-Id", app_id);
 
         if let Some(token) = self.auth_token() {
             request = request.header("X-User-Auth-Token", token);
@@ -270,7 +282,7 @@ mod tests {
     #[test]
     fn test_api_creation() {
         let api = QobuzApi::new("test_app_id").unwrap();
-        assert_eq!(api.app_id(), "test_app_id");
+        assert_eq!(api.app_id(), "test_app_id".to_string());
         assert!(api.auth_token().is_none());
     }
 

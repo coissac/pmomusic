@@ -263,8 +263,8 @@ impl QobuzConfigExt for Config {
         match self.get_value(&["accounts", "qobuz", "appid"]) {
             Ok(Value::String(s)) if !s.is_empty() => Ok(Some(s)),
             Ok(Value::String(_)) => Ok(None), // Empty string
-            Ok(_) => Ok(None), // Wrong type
-            Err(_) => Ok(None), // Not configured
+            Ok(_) => Ok(None),                // Wrong type
+            Err(_) => Ok(None),               // Not configured
         }
     }
 
@@ -279,8 +279,8 @@ impl QobuzConfigExt for Config {
         match self.get_value(&["accounts", "qobuz", "secret"]) {
             Ok(Value::String(s)) if !s.is_empty() => Ok(Some(s)),
             Ok(Value::String(_)) => Ok(None), // Empty string
-            Ok(_) => Ok(None), // Wrong type
-            Err(_) => Ok(None), // Not configured
+            Ok(_) => Ok(None),                // Wrong type
+            Err(_) => Ok(None),               // Not configured
         }
     }
 
@@ -295,8 +295,8 @@ impl QobuzConfigExt for Config {
         match self.get_value(&["accounts", "qobuz", "auth_token"]) {
             Ok(Value::String(s)) if !s.is_empty() => Ok(Some(s)),
             Ok(Value::String(_)) => Ok(None), // Empty string
-            Ok(_) => Ok(None),                 // Wrong type
-            Err(_) => Ok(None),                // Not configured
+            Ok(_) => Ok(None),                // Wrong type
+            Err(_) => Ok(None),               // Not configured
         }
     }
 
@@ -304,8 +304,8 @@ impl QobuzConfigExt for Config {
         match self.get_value(&["accounts", "qobuz", "user_id"]) {
             Ok(Value::String(s)) if !s.is_empty() => Ok(Some(s)),
             Ok(Value::String(_)) => Ok(None), // Empty string
-            Ok(_) => Ok(None),                 // Wrong type
-            Err(_) => Ok(None),                // Not configured
+            Ok(_) => Ok(None),                // Wrong type
+            Err(_) => Ok(None),               // Not configured
         }
     }
 
@@ -322,8 +322,8 @@ impl QobuzConfigExt for Config {
         match self.get_value(&["accounts", "qobuz", "subscription_label"]) {
             Ok(Value::String(s)) if !s.is_empty() => Ok(Some(s)),
             Ok(Value::String(_)) => Ok(None), // Empty string
-            Ok(_) => Ok(None),                 // Wrong type
-            Err(_) => Ok(None),                // Not configured
+            Ok(_) => Ok(None),                // Wrong type
+            Err(_) => Ok(None),               // Not configured
         }
     }
 
@@ -359,8 +359,14 @@ impl QobuzConfigExt for Config {
 
     fn clear_qobuz_auth_info(&self) -> Result<()> {
         // On ne propage pas les erreurs car les valeurs peuvent ne pas exister
-        let _ = self.set_value(&["accounts", "qobuz", "auth_token"], Value::String(String::new()));
-        let _ = self.set_value(&["accounts", "qobuz", "user_id"], Value::String(String::new()));
+        let _ = self.set_value(
+            &["accounts", "qobuz", "auth_token"],
+            Value::String(String::new()),
+        );
+        let _ = self.set_value(
+            &["accounts", "qobuz", "user_id"],
+            Value::String(String::new()),
+        );
         let _ = self.set_value(
             &["accounts", "qobuz", "token_expires_at"],
             Value::Number(serde_yaml::Number::from(0)),

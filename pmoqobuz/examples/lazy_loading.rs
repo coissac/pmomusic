@@ -92,8 +92,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     let elapsed = start.elapsed();
 
-    println!("✅ Album added: {} tracks in {:.2}s", count, elapsed.as_secs_f64());
-    println!("   Average: {:.0}ms per track\n", elapsed.as_millis() as f64 / count as f64);
+    println!(
+        "✅ Album added: {} tracks in {:.2}s",
+        count,
+        elapsed.as_secs_f64()
+    );
+    println!(
+        "   Average: {:.0}ms per track\n",
+        elapsed.as_millis() as f64 / count as f64
+    );
 
     // Step 8: Verify lazy PKs
     println!("🔍 Verifying lazy PKs...");
@@ -120,10 +127,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let is_lazy = pmocache::is_lazy_pk(&first_track_pk);
 
     println!("   First track PK: {}", first_track_pk);
-    println!("   Is lazy: {}", if is_lazy { "✅ YES (starts with 'L:')" } else { "❌ NO" });
+    println!(
+        "   Is lazy: {}",
+        if is_lazy {
+            "✅ YES (starts with 'L:')"
+        } else {
+            "❌ NO"
+        }
+    );
 
     // Count lazy vs downloaded
-    let lazy_count = tracks.iter().filter(|t| pmocache::is_lazy_pk(t.cache_pk())).count();
+    let lazy_count = tracks
+        .iter()
+        .filter(|t| pmocache::is_lazy_pk(t.cache_pk()))
+        .count();
     let downloaded_count = tracks.len() - lazy_count;
 
     println!("\n📊 Track status:");
@@ -153,7 +170,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("│  🎉 Lazy Loading Demo Complete!        │");
     println!("╰─────────────────────────────────────────╯");
     println!("\n📈 Benefits demonstrated:");
-    println!("   ✓ Fast album loading (~{}ms per track)", elapsed.as_millis() / count as u128);
+    println!(
+        "   ✓ Fast album loading (~{}ms per track)",
+        elapsed.as_millis() / count as u128
+    );
     println!("   ✓ Minimal initial download (covers only)");
     println!("   ✓ Audio downloaded on-demand");
     println!("   ✓ Rate limiting active (respectful to Qobuz)");

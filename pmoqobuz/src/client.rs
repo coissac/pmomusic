@@ -11,7 +11,7 @@ use crate::models::*;
 use pmoconfig::{self, Config};
 use std::future::Future;
 use std::sync::{Arc, Mutex};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Client Qobuz haut-niveau avec cache
 pub struct QobuzClient {
@@ -218,70 +218,96 @@ impl QobuzClient {
     /// - Quand aucun appid/secret n'est configuré
     /// - Quand les credentials configurés sont invalides/expirés
     async fn try_spoofer_fallback(config: &Config) -> Result<QobuzApi> {
+        if let Some((app_id, secret)) = Self::fetch_spoofer_credentials(config).await? {
+            return QobuzApi::with_secret(app_id, &secret);
+        }
+
+        info!(
+            "✗ No valid secret found from Spoofer, falling back to DEFAULT_APP_ID without secret"
+        );
+        QobuzApi::new(DEFAULT_APP_ID)
+    }
+
+    async fn fetch_spoofer_credentials(config: &Config) -> Result<Option<(String, String)>> {
         match crate::api::Spoofer::new().await {
-            Ok(spoofer) => {
-                match spoofer.get_app_id() {
-                    Ok(app_id) => {
-                        info!("Spoofer found App ID: {}", app_id);
+            Ok(spoofer) => match spoofer.get_app_id() {
+                Ok(app_id) => match spoofer.get_secrets() {
+                    Ok(secrets) => {
+                        info!("Spoofer found {} secret(s), testing them...", secrets.len());
 
-                        match spoofer.get_secrets() {
-                            Ok(secrets) => {
-                                info!("Spoofer found {} secret(s), testing them...", secrets.len());
+                        for (timezone, secret) in secrets.iter() {
+                            debug!("Testing secret for timezone: {}", timezone);
 
-                                // Tester chaque secret pour trouver celui qui fonctionne
-                                for (timezone, secret) in secrets.iter() {
-                                    debug!("Testing secret for timezone: {}", timezone);
+                            match QobuzApi::with_secret(&app_id, secret) {
+                                Ok(_) => {
+                                    info!(
+                                        "✓ Successfully created API with secret from timezone: {}",
+                                        timezone
+                                    );
 
-                                    match QobuzApi::with_secret(&app_id, secret) {
-                                        Ok(test_api) => {
-                                            info!("✓ Successfully created API with secret from timezone: {}", timezone);
-
-                                            // Sauvegarder les credentials valides dans la config
-                                            if let Err(e) = config.set_qobuz_appid(&app_id) {
-                                                debug!("Could not save appid to config: {}", e);
-                                            }
-                                            if let Err(e) = config.set_qobuz_secret(secret) {
-                                                debug!("Could not save secret to config: {}", e);
-                                            }
-
-                                            return Ok(test_api);
-                                        }
-                                        Err(e) => {
-                                            debug!(
-                                                "Failed to create API with secret from {}: {}",
-                                                timezone, e
-                                            );
-                                            continue;
-                                        }
+                                    if let Err(e) = config.set_qobuz_appid(&app_id) {
+                                        debug!("Could not save appid to config: {}", e);
                                     }
-                                }
+                                    if let Err(e) = config.set_qobuz_secret(secret) {
+                                        debug!("Could not save secret to config: {}", e);
+                                    }
 
-                                // Si aucun secret n'a fonctionné, utiliser le fallback
-                                info!("✗ No valid secret found from Spoofer, falling back to DEFAULT_APP_ID without secret");
-                                QobuzApi::new(DEFAULT_APP_ID)
-                            }
-                            Err(e) => {
-                                info!("Spoofer failed to extract secrets: {}, falling back to DEFAULT_APP_ID", e);
-                                QobuzApi::new(DEFAULT_APP_ID)
+                                    return Ok(Some((app_id.clone(), secret.clone())));
+                                }
+                                Err(e) => {
+                                    debug!(
+                                        "Failed to create API with secret from {}: {}",
+                                        timezone, e
+                                    );
+                                    continue;
+                                }
                             }
                         }
+
+                        info!("✗ No valid secret from Spoofer secrets list");
+                        Ok(None)
                     }
                     Err(e) => {
                         info!(
-                            "Spoofer failed to extract app_id: {}, falling back to DEFAULT_APP_ID",
+                            "Spoofer failed to extract secrets: {}, falling back to DEFAULT_APP_ID",
                             e
                         );
-                        QobuzApi::new(DEFAULT_APP_ID)
+                        Ok(None)
                     }
+                },
+                Err(e) => {
+                    info!(
+                        "Spoofer failed to extract app_id: {}, falling back to DEFAULT_APP_ID",
+                        e
+                    );
+                    Ok(None)
                 }
-            }
+            },
             Err(e) => {
                 info!(
                     "Spoofer failed: {}, falling back to DEFAULT_APP_ID without secret",
                     e
                 );
-                QobuzApi::new(DEFAULT_APP_ID)
+                Ok(None)
             }
+        }
+    }
+
+    async fn refresh_credentials_via_spoofer(&self) -> Result<()> {
+        let config_arc = match &self.config {
+            Some(cfg) => cfg.clone(),
+            None => pmoconfig::get_config(),
+        };
+
+        match Self::fetch_spoofer_credentials(config_arc.as_ref()).await? {
+            Some((app_id, secret)) => {
+                self.api.update_credentials(app_id, &secret)?;
+                info!("✓ Updated Qobuz API credentials using Spoofer");
+                Ok(())
+            }
+            None => Err(QobuzError::Configuration(
+                "Unable to refresh Qobuz credentials via Spoofer".to_string(),
+            )),
         }
     }
 
@@ -375,10 +401,7 @@ impl QobuzClient {
                 match global.get_qobuz_cache_dir() {
                     Ok(dir) => dir,
                     Err(err) => {
-                        debug!(
-                            "Failed to read qobuz cache dir from global config: {}",
-                            err
-                        );
+                        debug!("Failed to read qobuz cache dir from global config: {}", err);
                         return None;
                     }
                 }
@@ -416,6 +439,25 @@ impl QobuzClient {
     {
         match op().await {
             Ok(result) => Ok(result),
+            Err(err) if err.is_signature_error() => {
+                warn!(
+                    "Request signature error during {}. Qobuz app secret may be outdated.",
+                    operation
+                );
+                if let Err(refresh_err) = self.refresh_credentials_via_spoofer().await {
+                    warn!(
+                        "Failed to refresh Qobuz credentials automatically: {}",
+                        refresh_err
+                    );
+                    Err(err)
+                } else {
+                    info!(
+                        "Successfully refreshed Qobuz credentials. Retrying {}...",
+                        operation
+                    );
+                    op().await
+                }
+            }
             Err(err) if err.is_auth_error() => {
                 info!(
                     "Authentication error during {}. Attempting automatic repair...",
@@ -577,13 +619,17 @@ impl QobuzClient {
 
     /// Récupère les albums d'un artiste
     pub async fn get_artist_albums(&self, artist_id: &str) -> Result<Vec<Album>> {
-        self.call_with_auth_repair("get_artist_albums", || self.api.get_artist_albums(artist_id))
+        self.call_with_auth_repair("get_artist_albums", || {
+            self.api.get_artist_albums(artist_id)
+        })
         .await
     }
 
     /// Récupère les artistes similaires
     pub async fn get_similar_artists(&self, artist_id: &str) -> Result<Vec<Artist>> {
-        self.call_with_auth_repair("get_similar_artists", || self.api.get_similar_artists(artist_id))
+        self.call_with_auth_repair("get_similar_artists", || {
+            self.api.get_similar_artists(artist_id)
+        })
         .await
     }
 
@@ -740,7 +786,7 @@ impl QobuzClient {
     /// Récupère les artistes favoris de l'utilisateur
     pub async fn get_favorite_artists(&self) -> Result<Vec<Artist>> {
         self.call_with_auth_repair("get_favorite_artists", || self.api.get_favorite_artists())
-        .await
+            .await
     }
 
     /// Récupère les tracks favorites de l'utilisateur

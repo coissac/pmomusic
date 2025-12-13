@@ -318,12 +318,8 @@ impl QobuzSource {
     /// # Returns
     ///
     /// Number of tracks successfully added
-    pub async fn add_album_to_playlist(
-        &self,
-        playlist_id: &str,
-        album_id: &str,
-    ) -> Result<usize> {
-        use tracing::{info, warn, debug};
+    pub async fn add_album_to_playlist(&self, playlist_id: &str, album_id: &str) -> Result<usize> {
+        use tracing::{debug, info, warn};
 
         // 1. Get tracks from Qobuz (goes through rate limiter)
         let tracks = self
@@ -360,12 +356,7 @@ impl QobuzSource {
                     }
                 }
                 Err(e) => {
-                    warn!(
-                        "Failed to add track {} ({}): {}",
-                        i + 1,
-                        track.title,
-                        e
-                    );
+                    warn!("Failed to add track {} ({}): {}", i + 1, track.title, e);
                     // Continue with other tracks
                 }
             }
@@ -451,12 +442,7 @@ impl QobuzSource {
                     }
                 }
                 Err(e) => {
-                    warn!(
-                        "Failed to add track {} ({}): {}",
-                        i + 1,
-                        track.title,
-                        e
-                    );
+                    warn!("Failed to add track {} ({}): {}", i + 1, track.title, e);
                     // Continue with other tracks
                 }
             }

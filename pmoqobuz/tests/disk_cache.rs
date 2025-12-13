@@ -12,7 +12,13 @@ async fn sqlite_cache_returns_fresh_entries() -> anyhow::Result<()> {
 
     let data = vec!["album".to_string()];
     store
-        .put_json("user", "favorites_albums", "all", Duration::from_secs(3600), &data)
+        .put_json(
+            "user",
+            "favorites_albums",
+            "all",
+            Duration::from_secs(3600),
+            &data,
+        )
         .await?;
 
     let entry = store
@@ -34,7 +40,13 @@ async fn sqlite_cache_marks_entries_as_stale_after_ttl() -> anyhow::Result<()> {
 
     let data = vec!["track".to_string()];
     store
-        .put_json("user", "favorites_tracks", "all", Duration::from_secs(1), &data)
+        .put_json(
+            "user",
+            "favorites_tracks",
+            "all",
+            Duration::from_secs(1),
+            &data,
+        )
         .await?;
 
     sleep(Duration::from_secs(2)).await;
@@ -57,7 +69,13 @@ async fn sqlite_cache_purge_expired_removes_entries() -> anyhow::Result<()> {
 
     let data = vec!["playlist".to_string()];
     store
-        .put_json("user", "user_playlists", "all", Duration::from_secs(1), &data)
+        .put_json(
+            "user",
+            "user_playlists",
+            "all",
+            Duration::from_secs(1),
+            &data,
+        )
         .await?;
 
     sleep(Duration::from_secs(2)).await;

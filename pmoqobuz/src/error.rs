@@ -80,8 +80,25 @@ impl QobuzError {
     pub fn is_auth_error(&self) -> bool {
         match self {
             QobuzError::Unauthorized(_) => true,
+            QobuzError::ApiError {
+                code: 401 | 403, ..
+            } => true,
             QobuzError::ApiError { code: 400, message }
-                if message.contains("app_id") || message.contains("Invalid") => true,
+                if message.contains("app_id") || message.contains("App ID") =>
+            {
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Vérifie si l'erreur indique un problème de signature des requêtes
+    pub fn is_signature_error(&self) -> bool {
+        match self {
+            QobuzError::ApiError { code: 400, message } => {
+                let lowered = message.to_lowercase();
+                lowered.contains("request_signature") || lowered.contains("request_sig")
+            }
             _ => false,
         }
     }

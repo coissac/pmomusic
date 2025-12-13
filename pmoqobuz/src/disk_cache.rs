@@ -35,12 +35,7 @@ pub trait CacheStore: Send + Sync {
         value: &T,
     ) -> anyhow::Result<()>;
 
-    async fn invalidate(
-        &self,
-        user_id: &str,
-        namespace: &str,
-        key: &str,
-    ) -> anyhow::Result<()>;
+    async fn invalidate(&self, user_id: &str, namespace: &str, key: &str) -> anyhow::Result<()>;
 
     async fn purge_expired(&self) -> anyhow::Result<usize>;
 }
@@ -105,28 +100,21 @@ impl CacheStore for SqliteCacheStore {
                  WHERE user_id = ?1 AND namespace = ?2 AND key = ?3",
             )?;
 
-            let result = stmt.query_row(
-                params![user_id, namespace, key],
-                |row| {
-                    let fetched_at: i64 = row.get(0)?;
-                    let ttl_seconds: i64 = row.get(1)?;
-                    let data: Vec<u8> = row.get(2)?;
-                    let now = Self::now_seconds();
-                    let fresh = now <= fetched_at + ttl_seconds;
-                    let age_secs = if now >= fetched_at {
-                        (now - fetched_at) as u64
-                    } else {
-                        0
-                    };
-                    let age = Duration::from_secs(age_secs);
-                    let value = serde_json::from_slice(&data)?;
-                    Ok(CacheEntry {
-                        value,
-                        age,
-                        fresh,
-                    })
-                },
-            );
+            let result = stmt.query_row(params![user_id, namespace, key], |row| {
+                let fetched_at: i64 = row.get(0)?;
+                let ttl_seconds: i64 = row.get(1)?;
+                let data: Vec<u8> = row.get(2)?;
+                let now = Self::now_seconds();
+                let fresh = now <= fetched_at + ttl_seconds;
+                let age_secs = if now >= fetched_at {
+                    (now - fetched_at) as u64
+                } else {
+                    0
+                };
+                let age = Duration::from_secs(age_secs);
+                let value = serde_json::from_slice(&data)?;
+                Ok(CacheEntry { value, age, fresh })
+            });
 
             match result {
                 Ok(entry) => Ok(Some(entry)),
@@ -170,12 +158,7 @@ impl CacheStore for SqliteCacheStore {
         .map_err(|err| anyhow!(err))?
     }
 
-    async fn invalidate(
-        &self,
-        user_id: &str,
-        namespace: &str,
-        key: &str,
-    ) -> anyhow::Result<()> {
+    async fn invalidate(&self, user_id: &str, namespace: &str, key: &str) -> anyhow::Result<()> {
         let user_id = user_id.to_owned();
         let namespace = namespace.to_owned();
         let key = key.to_owned();

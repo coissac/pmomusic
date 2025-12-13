@@ -234,6 +234,10 @@ impl QobuzApi {
         let format_id = self.format_id.id().to_string();
         let intent = "stream";
         let timestamp = signing::get_timestamp();
+        let app_id = self.app_id();
+        let user_auth_token = self
+            .auth_token()
+            .ok_or_else(|| QobuzError::Unauthorized("Missing auth token".to_string()))?;
 
         // Signer la requête (comme Python: track_getFileUrl)
         let signature =
@@ -251,6 +255,8 @@ impl QobuzApi {
             ("intent", intent),
             ("request_ts", timestamp.as_str()),
             ("request_sig", signature.as_str()),
+            ("app_id", app_id.as_str()),
+            ("user_auth_token", user_auth_token.as_str()),
         ];
 
         // Utiliser GET (comme Python après sept 2024 selon le commentaire)

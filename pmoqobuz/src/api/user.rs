@@ -234,10 +234,11 @@ impl QobuzApi {
         // Signer la requête (comme Python: userlib_getAlbums)
         let signature = signing::sign_userlib_get_albums(&timestamp, &secret);
 
+        let app_id = self.app_id();
+
         debug!(
             "Signing userLibrary/getAlbumsList: app_id={}, ts={}",
-            self.app_id(),
-            timestamp
+            app_id, timestamp
         );
 
         // Construire les paramètres signés
@@ -246,7 +247,7 @@ impl QobuzApi {
             .ok_or_else(|| QobuzError::Unauthorized("No auth token".to_string()))?;
 
         let params = [
-            ("app_id", self.app_id()),
+            ("app_id", app_id.as_str()),
             ("user_auth_token", user_auth_token.as_str()),
             ("request_ts", timestamp.as_str()),
             ("request_sig", signature.as_str()),
