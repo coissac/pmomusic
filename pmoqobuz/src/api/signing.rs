@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 ///
 /// # Returns
 ///
-/// Timestamp Unix sous forme de string avec décimales
+/// Timestamp Unix sous forme de string (integer, sans décimales)
 ///
 /// # Exemple
 ///
@@ -23,7 +23,7 @@ pub fn get_timestamp() -> String {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
-        .as_secs_f64()
+        .as_secs()
         .to_string()
 }
 
@@ -107,16 +107,16 @@ mod tests {
     #[test]
     fn test_get_timestamp() {
         let ts = get_timestamp();
-        // Vérifier que c'est un nombre valide
-        assert!(ts.parse::<f64>().is_ok());
+        // Vérifier que c'est un nombre entier valide
+        assert!(ts.parse::<u64>().is_ok());
         // Vérifier que c'est proche du temps actuel (>= 2024)
-        assert!(ts.parse::<f64>().unwrap() > 1704067200.0); // 1er janvier 2024
+        assert!(ts.parse::<u64>().unwrap() > 1704067200); // 1er janvier 2024
     }
 
     #[test]
     fn test_sign_track_get_file_url() {
         let signature =
-            sign_track_get_file_url("27", "stream", "12345", "1234567890.123", b"test_secret");
+            sign_track_get_file_url("27", "stream", "12345", "1234567890", b"test_secret");
 
         // Vérifier que c'est un hash MD5 valide (32 caractères hex)
         assert_eq!(signature.len(), 32);
@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn test_sign_userlib_get_albums() {
-        let signature = sign_userlib_get_albums("1234567890.123", b"test_secret");
+        let signature = sign_userlib_get_albums("1234567890", b"test_secret");
 
         // Vérifier que c'est un hash MD5 valide (32 caractères hex)
         assert_eq!(signature.len(), 32);

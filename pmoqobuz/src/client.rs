@@ -127,11 +127,33 @@ impl QobuzClient {
 
         let config_appid = config.get_qobuz_appid()?;
         let config_secret = config.get_qobuz_secret()?;
+        let config_spoofer_secret = config.get_qobuz_spoofer_secret()?;
 
         let mut used_config_credentials = false;
 
-        let mut api = match (config_appid, config_secret) {
-            (Some(app_id), Some(secret)) => {
+        let mut api = match (config_appid.clone(), config_spoofer_secret, config_secret) {
+            // Priority 1: Try memorized Spoofer secret (raw, no XOR)
+            (Some(app_id), Some(spoofer_secret), _) => {
+                info!(
+                    "Trying memorized Spoofer secret with App ID: {}",
+                    app_id
+                );
+                match QobuzApi::with_raw_secret(&app_id, &spoofer_secret) {
+                    Ok(api) => {
+                        used_config_credentials = true;
+                        api
+                    }
+                    Err(e) => {
+                        info!(
+                            "✗ Memorized Spoofer secret failed: {}. Re-fetching from Spoofer...",
+                            e
+                        );
+                        Self::try_spoofer_fallback(config).await?
+                    }
+                }
+            }
+            // Priority 2: Try XOR secret (legacy configvalue)
+            (Some(app_id), None, Some(secret)) => {
                 info!(
                     "Creating Qobuz API with configured App ID: {} and XOR secret",
                     app_id
@@ -150,9 +172,10 @@ impl QobuzClient {
                     }
                 }
             }
+            // Priority 3: Fallback to Spoofer
             _ => {
                 info!(
-                    "AppID or secret not configured (or app_id without secret), using Spoofer..."
+                    "AppID or secret not configured, using Spoofer..."
                 );
                 Self::try_spoofer_fallback(config).await?
             }
@@ -240,21 +263,40 @@ impl QobuzClient {
                             info!("Testing {} timezone secret(s)...", secrets.len());
                             let (username, password) = config.get_qobuz_credentials()?;
 
-                            for (timezone, secret) in secrets.iter() {
-                                debug!("Testing timezone secret: {}", timezone);
+                            // Optimization: Login once with first secret to get auth token
+                            // Then test all secrets using the same token
+                            if let Some((first_timezone, first_secret)) = secrets.first() {
+                                if let Ok(temp_api) = QobuzApi::with_raw_secret(&app_id, first_secret) {
+                                    if let Ok(_auth_info) = temp_api.login(&username, &password).await {
+                                        // Now test each secret with the authenticated token
+                                        for (timezone, secret) in secrets.iter() {
+                                            debug!("Testing timezone secret: {}", timezone);
 
-                                if let Ok(test_api) = QobuzApi::with_raw_secret(&app_id, secret) {
-                                    if let Ok(auth_info) = test_api.login(&username, &password).await {
-                                        // Test the secret using userlib_get_albums (like Python's setSec())
-                                        // This matches Python's behavior exactly
-                                        if test_api.userlib_get_albums().await.is_ok() {
-                                            info!("✓ Secret from timezone '{}' works!", timezone);
-                                            if let Err(e) = config.set_qobuz_appid(&app_id) {
-                                                debug!("Could not save appid: {}", e);
+                                            if let Ok(test_api) = QobuzApi::with_raw_secret(&app_id, secret) {
+                                                // Set the auth token from our initial login
+                                                test_api.set_auth_token(
+                                                    temp_api.auth_token().unwrap(),
+                                                    temp_api.user_id().unwrap(),
+                                                );
+
+                                                // Test the secret using track/getFileUrl (like qobuz-player-client)
+                                                // Use the same hardcoded track_id (64868955) as qobuz-player-client
+                                                if test_api.get_file_url("64868955").await.is_ok() {
+                                                    info!("✓ Secret from timezone '{}' works!", timezone);
+
+                                                    // Save both appid and the working secret
+                                                    if let Err(e) = config.set_qobuz_appid(&app_id) {
+                                                        debug!("Could not save appid: {}", e);
+                                                    }
+                                                    if let Err(e) = config.set_qobuz_spoofer_secret(secret) {
+                                                        debug!("Could not save spoofer secret: {}", e);
+                                                    }
+
+                                                    return Ok(Some((app_id.clone(), secret.clone())));
+                                                } else {
+                                                    debug!("✗ Secret from timezone '{}' failed track/getFileUrl test", timezone);
+                                                }
                                             }
-                                            return Ok(Some((app_id.clone(), secret.clone())));
-                                        } else {
-                                            debug!("✗ Secret from timezone '{}' failed userlib test", timezone);
                                         }
                                     }
                                 }

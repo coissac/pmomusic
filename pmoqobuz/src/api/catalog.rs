@@ -167,7 +167,7 @@ struct SearchResponse {
 struct FileUrlResponse {
     url: String,
     mime_type: String,
-    sampling_rate: u32,
+    sampling_rate: f64,
     bit_depth: u32,
     format_id: u8,
 }
@@ -260,8 +260,8 @@ impl QobuzApi {
             ("track_id", track_id),
         ];
 
-        // Utiliser POST (comme Python)
-        let response: FileUrlResponse = self.post("/track/getFileUrl", &params).await?;
+        // Utiliser GET (comme qobuz-player-client qui fonctionne)
+        let response: FileUrlResponse = self.get("/track/getFileUrl", &params).await?;
 
         Ok(StreamInfo {
             url: response.url,

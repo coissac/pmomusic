@@ -251,6 +251,10 @@ impl QobuzApi {
             request = request.header("X-User-Auth-Token", token);
         }
 
+        // Headers additionnels pour compatibilité avec qobuz-player-client
+        request = request.header("Accept-Language", "en,en-US;q=0.8,ko;q=0.6,zh;q=0.4,zh-CN;q=0.2");
+        request = request.header("Access-Control-Request-Headers", "x-user-auth-token,x-app-id");
+
         // Ajouter les paramètres
         if method == "GET" {
             request = request.query(params);
@@ -272,7 +276,7 @@ impl QobuzApi {
 
         if !status.is_success() {
             let error_text = response.text().await.unwrap_or_default();
-            warn!("API error ({}) on {}: {}", status_code, endpoint, error_text);
+            debug!("API error ({}) on {}: {}", status_code, endpoint, error_text);
             return Err(QobuzError::from_status_code(status_code, error_text));
         }
 
@@ -286,7 +290,7 @@ impl QobuzApi {
                         .get("message")
                         .and_then(|m| m.as_str())
                         .unwrap_or("Unknown error");
-                    warn!("Qobuz API error on {}: {}", endpoint, message);
+                    debug!("Qobuz API error on {}: {}", endpoint, message);
                     return Err(QobuzError::ApiError {
                         code: status_code,
                         message: message.to_string(),
@@ -297,7 +301,7 @@ impl QobuzApi {
 
         // Parser la réponse
         serde_json::from_str(&text).map_err(|e| {
-            warn!("Failed to parse response: {}", e);
+            debug!("Failed to parse response: {}", e);
             QobuzError::JsonParse(e)
         })
     }

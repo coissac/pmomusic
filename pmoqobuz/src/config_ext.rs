@@ -129,6 +129,26 @@ pub trait QobuzConfigExt {
     /// * `secret` - Le secret encodé en base64 (configvalue)
     fn set_qobuz_secret(&self, secret: &str) -> Result<()>;
 
+    /// Récupère le secret brut du Spoofer depuis la configuration
+    ///
+    /// # Returns
+    ///
+    /// Le secret brut (non XORé), ou None si non configuré
+    ///
+    /// # Note
+    ///
+    /// Ce secret est obtenu par le Spoofer et est utilisé directement
+    /// sans XOR avec l'App ID. Si ce secret est présent, il est testé
+    /// en priorité avant de relancer le Spoofer.
+    fn get_qobuz_spoofer_secret(&self) -> Result<Option<String>>;
+
+    /// Définit le secret brut du Spoofer dans la configuration
+    ///
+    /// # Arguments
+    ///
+    /// * `secret` - Le secret brut obtenu par le Spoofer
+    fn set_qobuz_spoofer_secret(&self, secret: &str) -> Result<()>;
+
     /// Récupère le token d'authentification depuis la configuration
     ///
     /// # Returns
@@ -287,6 +307,22 @@ impl QobuzConfigExt for Config {
     fn set_qobuz_secret(&self, secret: &str) -> Result<()> {
         self.set_value(
             &["accounts", "qobuz", "secret"],
+            Value::String(secret.to_string()),
+        )
+    }
+
+    fn get_qobuz_spoofer_secret(&self) -> Result<Option<String>> {
+        match self.get_value(&["accounts", "qobuz", "spoofer_secret"]) {
+            Ok(Value::String(s)) if !s.is_empty() => Ok(Some(s)),
+            Ok(Value::String(_)) => Ok(None), // Empty string
+            Ok(_) => Ok(None),                // Wrong type
+            Err(_) => Ok(None),               // Not configured
+        }
+    }
+
+    fn set_qobuz_spoofer_secret(&self, secret: &str) -> Result<()> {
+        self.set_value(
+            &["accounts", "qobuz", "spoofer_secret"],
             Value::String(secret.to_string()),
         )
     }

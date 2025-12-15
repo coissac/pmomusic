@@ -191,8 +191,8 @@ pub struct StreamInfo {
     pub url: String,
     /// Type MIME
     pub mime_type: String,
-    /// Fréquence d'échantillonnage (Hz)
-    pub sampling_rate: u32,
+    /// Fréquence d'échantillonnage (kHz)
+    pub sampling_rate: f64,
     /// Profondeur de bits
     pub bit_depth: u32,
     /// Format ID Qobuz
