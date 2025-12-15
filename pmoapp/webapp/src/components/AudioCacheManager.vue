@@ -4,6 +4,7 @@
       <h2>🎵 Audio Cache Manager</h2>
       <div class="stats">
         <span>{{ tracks.length }} tracks</span>
+        <span v-if="lazyTracksCount > 0">{{ lazyTracksCount }} lazy pending</span>
         <span v-if="totalHits > 0">{{ totalHits }} hits</span>
       </div>
     </div>
@@ -85,7 +86,8 @@
           />
           <div v-else class="music-icon">🎵</div>
           <div class="track-overlay">
-            <span class="hits">{{ track.hits }} plays</span>
+            <span class="hits" v-if="!isLazyTrack(track)">{{ track.hits }} plays</span>
+            <span class="hits lazy" v-else>Lazy</span>
           </div>
         </div>
         <div class="track-info">
@@ -98,7 +100,10 @@
           <div class="track-album" v-if="track.metadata?.album">
             {{ track.metadata.album }}
           </div>
-          <div class="pk">{{ track.pk }}</div>
+          <div class="pk">
+            {{ track.pk }}
+            <span v-if="isLazyTrack(track)" class="lazy-tag">lazy</span>
+          </div>
           <div class="meta">
             <span v-if="durationMs(track) !== undefined">
               {{ formatDuration(durationMs(track)!) }}
@@ -119,12 +124,15 @@
           <div class="last-used" v-if="track.last_used">
             Last used: {{ formatDate(track.last_used) }}
           </div>
+          <div class="lazy-warning" v-if="isLazyTrack(track)">
+            Audio not downloaded yet. First playback (or forcing download) will fetch it automatically.
+          </div>
         </div>
         <div class="track-actions">
           <button
             @click.stop="playTrack(track.pk)"
             class="btn-play"
-            title="Play"
+            :title="isLazyTrack(track) ? 'Trigger download & play once available' : 'Play'"
           >
             ▶️
           </button>
@@ -135,6 +143,30 @@
             title="Delete"
           >
             {{ deletingTracks.has(track.pk) ? "..." : "🗑️" }}
+          </button>
+          <button
+            @click.stop="downloadTrack(track.pk)"
+            class="btn-secondary"
+            :disabled="isLazyTrack(track)"
+            :title="
+              isLazyTrack(track)
+                ? 'Download available once audio finished downloading'
+                : 'Download original file'
+            "
+          >
+            ⬇️
+          </button>
+          <button
+            @click.stop="copyTrackUrl(track.pk)"
+            class="btn-secondary"
+            :disabled="isLazyTrack(track)"
+            :title="
+              isLazyTrack(track)
+                ? 'URL available after download completes'
+                : 'Copy stream URL'
+            "
+          >
+            📋
           </button>
         </div>
       </div>
@@ -175,6 +207,7 @@
           <div class="cache-section">
             <h4>Cache Info</h4>
             <p><strong>PK:</strong> {{ selectedTrack.pk }}</p>
+            <p><strong>Status:</strong> {{ trackStatusLabel(selectedTrack) }}</p>
             <p v-if="resolveTrackOrigin(selectedTrack)">
               <strong>Source URL:</strong>
               <a :href="resolveTrackOrigin(selectedTrack)" target="_blank">{{ resolveTrackOrigin(selectedTrack) }}</a>
@@ -188,10 +221,18 @@
             <button @click="playTrack(selectedTrack.pk)" class="btn-play">
               ▶️ Play
             </button>
-            <button @click="downloadTrack(selectedTrack.pk)" class="btn-secondary">
+            <button
+              @click="downloadTrack(selectedTrack.pk)"
+              class="btn-secondary"
+              :disabled="isLazyTrack(selectedTrack)"
+            >
               ⬇️ Download
             </button>
-            <button @click="copyTrackUrl(selectedTrack.pk)" class="btn-secondary">
+            <button
+              @click="copyTrackUrl(selectedTrack.pk)"
+              class="btn-secondary"
+              :disabled="isLazyTrack(selectedTrack)"
+            >
               📋 Copy URL
             </button>
             <button @click="handleDeleteTrack(selectedTrack.pk); selectedTrack = null" class="btn-danger">
@@ -244,6 +285,7 @@ const selectedTrack = ref<AudioCacheEntry | null>(null);
 const isLoading = ref(false);
 const sortBy = ref<"hits" | "last_used" | "recent">("hits");
 const audioPlayer = ref<HTMLAudioElement | null>(null);
+const LAZY_PREFIX = "L:";
 
 // Formulaire d'ajout
 const newTrackUrl = ref("");
@@ -266,6 +308,9 @@ const failedCovers = ref(new Set<string>());
 
 // --- Computed ---
 const totalHits = computed(() => tracks.value.reduce((sum, t) => sum + t.hits, 0));
+const lazyTracksCount = computed(() =>
+  tracks.value.reduce((acc, track) => (isLazyTrack(track) ? acc + 1 : acc), 0)
+);
 
 const sortedTracks = computed(() => {
   const arr = [...tracks.value];
@@ -410,10 +455,20 @@ function handleAudioError() {
 }
 
 function downloadTrack(pk: string) {
+  const track = getTrackByPk(pk);
+  if (track && isLazyTrack(track)) {
+    alert("This track is still in lazy cache. Play it once to download the audio before exporting.");
+    return;
+  }
   window.open(getOriginalTrackUrl(pk), "_blank");
 }
 
 function copyTrackUrl(pk: string) {
+  const track = getTrackByPk(pk);
+  if (track && isLazyTrack(track)) {
+    alert("URL available after the lazy audio has been downloaded.");
+    return;
+  }
   navigator.clipboard.writeText(window.location.origin + getTrackUrl(pk));
   alert("✅ URL copied!");
 }
@@ -474,6 +529,21 @@ function getTrackCoverUrl(track: AudioCacheEntry | null, size?: number): string 
 
 function handleCoverError(pk: string) {
   failedCovers.value.add(pk);
+}
+
+function isLazyTrack(track: AudioCacheEntry | null | undefined): boolean {
+  return !!track?.pk && track.pk.startsWith(LAZY_PREFIX);
+}
+
+function trackStatusLabel(track: AudioCacheEntry | null): string {
+  if (isLazyTrack(track)) {
+    return "Lazy (audio pending download)";
+  }
+  return "Cached";
+}
+
+function getTrackByPk(pk: string): AudioCacheEntry | undefined {
+  return tracks.value.find((t) => t.pk === pk);
 }
 
 onMounted(() => {
@@ -751,6 +821,14 @@ button:disabled {
   font-size: 0.9rem;
 }
 
+.track-overlay .hits.lazy {
+  background: rgba(255, 152, 0, 0.85);
+  color: #000;
+  font-weight: bold;
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+}
+
 .track-info {
   padding: 1rem;
   flex: 1;
@@ -790,6 +868,18 @@ button:disabled {
   margin-bottom: 0.5rem;
 }
 
+.lazy-tag {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  background: #ff9800;
+  color: #000;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  font-weight: bold;
+}
+
 .meta {
   display: flex;
   gap: 0.75rem;
@@ -809,6 +899,16 @@ button:disabled {
   color: #777;
   font-size: 0.8rem;
   margin-top: 0.5rem;
+}
+
+.lazy-warning {
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+  color: #ffb347;
+  background: rgba(255, 152, 0, 0.15);
+  border: 1px solid rgba(255, 152, 0, 0.3);
+  padding: 0.5rem;
+  border-radius: 6px;
 }
 
 .track-actions {

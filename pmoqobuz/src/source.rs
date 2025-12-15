@@ -11,6 +11,7 @@ use pmocovers::Cache as CoverCache;
 use pmodidl::{Container, Item};
 use pmosource::SourceCacheManager;
 use pmosource::{async_trait, BrowseResult, MusicSource, MusicSourceError, Result};
+use serde_json::json;
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -203,6 +204,13 @@ impl QobuzSource {
             .await
             .ok();
 
+        if let (Some(ref audio_pk), Some(ref cover_pk)) = (&cached_audio_pk, &cached_cover_pk) {
+            let _ =
+                self.inner
+                    .cache_manager
+                    .set_audio_metadata(audio_pk, "cover_pk", json!(cover_pk));
+        }
+
         // 4. Store metadata
         self.inner
             .cache_manager
@@ -294,6 +302,14 @@ impl QobuzSource {
                     track.title, e
                 ))
             })?;
+
+        if let Some(ref cover_pk) = cached_cover_pk {
+            let _ = self.inner.cache_manager.set_audio_metadata(
+                &cached_audio_pk,
+                "cover_pk",
+                json!(cover_pk),
+            );
+        }
 
         // 4. Store metadata
         self.inner

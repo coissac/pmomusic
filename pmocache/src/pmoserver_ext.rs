@@ -140,9 +140,20 @@ async fn serve_lazy_audio_file<C: CacheConfig>(
 
         // Construire l'URL de redirection
         let redirect_url = if param == C::default_param() {
-            format!("/cache/{}/{}", C::cache_type(), real_pk)
+            format!(
+                "/{}/{}/{}",
+                C::cache_name(),
+                C::cache_type(),
+                real_pk
+            )
         } else {
-            format!("/cache/{}/{}/{}", C::cache_type(), real_pk, param)
+            format!(
+                "/{}/{}/{}/{}",
+                C::cache_name(),
+                C::cache_type(),
+                real_pk,
+                param
+            )
         };
 
         return Redirect::temporary(&redirect_url).into_response();
@@ -190,9 +201,20 @@ async fn serve_lazy_audio_file<C: CacheConfig>(
 
     // 6. Rediriger vers la vraie URL
     let redirect_url = if param == C::default_param() {
-        format!("/cache/{}/{}", C::cache_type(), real_pk)
+        format!(
+            "/{}/{}/{}",
+            C::cache_name(),
+            C::cache_type(),
+            real_pk
+        )
     } else {
-        format!("/cache/{}/{}/{}", C::cache_type(), real_pk, param)
+        format!(
+            "/{}/{}/{}/{}",
+            C::cache_name(),
+            C::cache_type(),
+            real_pk,
+            param
+        )
     };
 
     tracing::debug!(

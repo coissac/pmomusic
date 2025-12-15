@@ -16,8 +16,10 @@
 //! cargo run -p pmoqobuz --example lazy_loading
 //! ```
 
-use pmoaudiocache::Cache as AudioCache;
+use pmoaudiocache::{register_audio_cache, AudioCacheConfigExt, Cache as AudioCache};
+use pmoconfig::get_config;
 use pmocovers::Cache as CoverCache;
+use pmocovers::CoverCacheConfigExt;
 use pmoplaylist::PlaylistManager;
 use pmoqobuz::{QobuzClient, QobuzSource};
 use std::sync::Arc;
@@ -43,13 +45,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 2: Initialize caches
     println!("💾 Initializing caches...");
-    let cover_cache = Arc::new(CoverCache::new("./cache/qobuz-covers", 500)?);
-    let audio_cache = Arc::new(AudioCache::new("./cache/qobuz-audio", 100)?);
+    let config = get_config();
+
+    let (cover_cache, audio_cache, using_global) =
+        match (config.create_cover_cache(), config.create_audio_cache()) {
+            (Ok(covers), Ok(audio)) => (covers, audio, true),
+            (covers_res, audio_res) => {
+                let err_cover = covers_res.err();
+                let err_audio = audio_res.err();
+                if let Some(err) = err_cover {
+                    println!(
+                        "   ⚠️ Could not open configured cover cache: {}. Falling back to ./cache",
+                        err
+                    );
+                }
+                if let Some(err) = err_audio {
+                    println!(
+                        "   ⚠️ Could not open configured audio cache: {}. Falling back to ./cache",
+                        err
+                    );
+                }
+                let cover_cache = Arc::new(CoverCache::new("./cache/qobuz-covers", 500)?);
+                let audio_cache = Arc::new(AudioCache::new("./cache/qobuz-audio", 100)?);
+                (cover_cache, audio_cache, false)
+            }
+        };
 
     // IMPORTANT: Register audio cache globally so PlaylistManager can access it
+    register_audio_cache(audio_cache.clone());
     pmoplaylist::register_audio_cache(audio_cache.clone());
 
-    println!("✅ Caches initialized\n");
+    if using_global {
+        println!("✅ Caches initialized from global configuration\n");
+    } else {
+        println!("✅ Local caches initialized in ./cache (global config unavailable)\n");
+    }
 
     // Step 3: Create QobuzSource with caches
     let source = QobuzSource::new(client, cover_cache.clone(), audio_cache.clone());
