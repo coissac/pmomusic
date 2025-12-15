@@ -214,6 +214,7 @@ pub mod didl;
 #[cfg(feature = "disk-cache")]
 pub mod disk_cache;
 pub mod error;
+mod lazy_provider;
 pub mod models;
 pub mod source;
 

@@ -110,15 +110,38 @@ async fn get_file_with_param<C: CacheConfig + 'static>(
     serve_file_with_streaming(&cache, &pk, &param, content_type, param_generator).await
 }
 
+#[cfg(feature = "pmoserver")]
+async fn serve_finalized_pk<C: CacheConfig>(
+    cache: &Arc<Cache<C>>,
+    pk: &str,
+    param: &str,
+    content_type: &'static str,
+) -> Response {
+    let qualifier = param.to_string();
+    let file_path = cache.get_file_path_with_qualifier(pk, param);
+
+    if let Err(e) = cache.db.update_hit(pk) {
+        warn!("Error updating hit count for {}: {}", pk, e);
+    }
+
+    let response = serve_complete_file(file_path, content_type).await;
+
+    if response.status().is_success() {
+        cache.notify_broadcast(pk, &qualifier).await;
+    }
+
+    response
+}
+
 /// Handler spécifique pour les lazy PK
 ///
 /// Gère le téléchargement on-demand des fichiers lazy :
 /// 1. Fast path : vérifie si déjà téléchargé
-/// 2. Récupère l'origin_url depuis la DB
+/// 2. Résout l'URL via la DB ou un provider
 /// 3. Lance le téléchargement et calcule le real pk
 /// 4. Met à jour la DB (lazy → downloaded)
 /// 5. Broadcast l'event pour PK switching
-/// 6. Redirige vers le real pk
+/// 6. Sert directement le fichier téléchargé
 #[cfg(feature = "pmoserver")]
 async fn serve_lazy_audio_file<C: CacheConfig>(
     cache: &Arc<Cache<C>>,
@@ -126,54 +149,20 @@ async fn serve_lazy_audio_file<C: CacheConfig>(
     param: &str,
     content_type: &'static str,
 ) -> Response {
-    use axum::response::Redirect;
-
     tracing::info!("Lazy download triggered for pk: {}", lazy_pk);
 
     // 1. Vérifier si déjà téléchargé (fast path)
     if let Ok(Some(real_pk)) = cache.db.get_pk_by_lazy_pk(lazy_pk) {
         tracing::debug!(
-            "Lazy PK {} already downloaded as {}, redirecting",
+            "Lazy PK {} already downloaded as {}, serving immediately",
             lazy_pk,
             real_pk
         );
-
-        // Construire l'URL de redirection
-        let redirect_url = if param == C::default_param() {
-            format!(
-                "/{}/{}/{}",
-                C::cache_name(),
-                C::cache_type(),
-                real_pk
-            )
-        } else {
-            format!(
-                "/{}/{}/{}/{}",
-                C::cache_name(),
-                C::cache_type(),
-                real_pk,
-                param
-            )
-        };
-
-        return Redirect::temporary(&redirect_url).into_response();
+        return serve_finalized_pk(cache, &real_pk, param, content_type).await;
     }
 
-    // 2. Récupérer origin_url
-    let origin_url = match cache.db.get_origin_url(lazy_pk) {
-        Ok(Some(url)) => url,
-        Ok(None) => {
-            tracing::error!("Lazy PK {} has no origin_url", lazy_pk);
-            return (StatusCode::NOT_FOUND, "Origin URL not found").into_response();
-        }
-        Err(e) => {
-            tracing::error!("Error getting origin_url for {}: {}", lazy_pk, e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response();
-        }
-    };
-
-    // 3. Lancer download complet (cela calcule le VRAI pk basé sur content[512:2048])
-    let real_pk = match cache.add_from_url(&origin_url, None).await {
+    // 2. Télécharger en résolvant l'URL via la DB ou un provider
+    let real_pk = match cache.download_lazy(lazy_pk, None).await {
         Ok(pk) => pk,
         Err(e) => {
             tracing::error!("Failed to download lazy file: {}", e);
@@ -185,46 +174,11 @@ async fn serve_lazy_audio_file<C: CacheConfig>(
         }
     };
 
-    // 4. Mettre à jour DB : lazy_pk → real_pk mapping
-    if let Err(e) = cache.db.update_lazy_to_downloaded(lazy_pk, &real_pk) {
-        tracing::error!(
-            "Failed to update DB for lazy transition {} → {}: {}",
-            lazy_pk,
-            real_pk,
-            e
-        );
-        // Continuer quand même, le fichier est téléchargé
-    }
-
-    // 5. Broadcast event pour prefetch ET commutation PK
+    // 4. Broadcast event pour prefetch ET commutation PK
     cache.broadcast_lazy_downloaded(lazy_pk, &real_pk).await;
 
-    // 6. Rediriger vers la vraie URL
-    let redirect_url = if param == C::default_param() {
-        format!(
-            "/{}/{}/{}",
-            C::cache_name(),
-            C::cache_type(),
-            real_pk
-        )
-    } else {
-        format!(
-            "/{}/{}/{}/{}",
-            C::cache_name(),
-            C::cache_type(),
-            real_pk,
-            param
-        )
-    };
-
-    tracing::debug!(
-        "Lazy PK {} downloaded as {}, redirecting to {}",
-        lazy_pk,
-        real_pk,
-        redirect_url
-    );
-
-    Redirect::temporary(&redirect_url).into_response()
+    // 5. Servir directement le fichier téléchargé
+    serve_finalized_pk(cache, &real_pk, param, content_type).await
 }
 
 /// Fonction utilitaire pour servir un fichier avec streaming progressif

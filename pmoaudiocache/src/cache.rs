@@ -8,7 +8,6 @@ use crate::metadata_ext::AudioTrackMetadataExt;
 use anyhow::Result;
 use pmocache::download::TransformMetadata;
 use pmocache::CacheConfig;
-use serde_json::Value;
 use std::sync::Arc;
 
 /// Configuration pour le cache audio

@@ -5,6 +5,7 @@
 
 use crate::client::QobuzClient;
 use crate::didl::ToDIDL;
+use crate::lazy_provider::QobuzLazyProvider;
 use crate::models::Track;
 use pmoaudiocache::{AudioMetadata, Cache as AudioCache};
 use pmocovers::Cache as CoverCache;
@@ -71,7 +72,7 @@ pub struct QobuzSource {
 
 struct QobuzSourceInner {
     /// Qobuz API client
-    client: QobuzClient,
+    client: Arc<QobuzClient>,
 
     /// Cache manager (centralisé)
     cache_manager: SourceCacheManager,
@@ -103,6 +104,8 @@ impl QobuzSource {
     #[cfg(feature = "server")]
     pub fn from_registry(client: QobuzClient) -> Result<Self> {
         let cache_manager = SourceCacheManager::from_registry("qobuz".to_string())?;
+        let client = Arc::new(client);
+        cache_manager.register_lazy_provider(Arc::new(QobuzLazyProvider::new(client.clone())));
 
         Ok(Self {
             inner: Arc::new(QobuzSourceInner {
@@ -127,6 +130,8 @@ impl QobuzSource {
         audio_cache: Arc<AudioCache>,
     ) -> Self {
         let cache_manager = SourceCacheManager::new("qobuz".to_string(), cover_cache, audio_cache);
+        let client = Arc::new(client);
+        cache_manager.register_lazy_provider(Arc::new(QobuzLazyProvider::new(client.clone())));
 
         Self {
             inner: Arc::new(QobuzSourceInner {
@@ -243,7 +248,9 @@ impl QobuzSource {
     pub async fn add_track_lazy(&self, track: &Track) -> Result<(String, String)> {
         let track_id = format!("qobuz://track/{}", track.id);
 
-        // Get streaming URL
+        let lazy_pk = format!("QOBUZ:{}", track.id);
+
+        // Get streaming URL (for metadata fallback)
         let stream_url = self
             .inner
             .client
@@ -290,15 +297,19 @@ impl QobuzSource {
             conversion: None,
         };
 
-        // 3. Cache audio LAZILY (KEY CHANGE: use cache_audio_lazy)
+        // 3. Cache audio LAZILY avec un provider
         let cached_audio_pk = self
             .inner
             .cache_manager
-            .cache_audio_lazy(&stream_url, Some(metadata))
+            .cache_audio_lazy_with_provider(
+                &lazy_pk,
+                Some(metadata.clone()),
+                cached_cover_pk.clone(),
+            )
             .await
             .map_err(|e| {
                 MusicSourceError::CacheError(format!(
-                    "Failed to cache lazy track {}: {}",
+                    "Failed to register lazy track {}: {}",
                     track.title, e
                 ))
             })?;

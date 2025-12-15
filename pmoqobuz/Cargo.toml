@@ -63,15 +63,17 @@ pmosource = { path = "../pmosource" }
 
 # Playlist management
 pmoplaylist = { path = "../pmoplaylist" }
+pmocache = { path = "../pmocache" }
 
 [features]
-default = []
+default = ["async-trait-support"]
 # Feature pour activer les extensions pmoserver
 pmoserver = ["dep:pmoserver", "dep:axum", "dep:utoipa"]
 # Feature pour activer le support serveur (cache registry)
 server = ["pmosource/server"]
 # Feature cache (deprecated - toujours actif maintenant)
 cache = []
+async-trait-support = ["dep:async-trait"]
 disk-cache = ["dep:rusqlite", "dep:async-trait"]
 
 [dev-dependencies]
@@ -81,7 +83,6 @@ mockito = "1.0"
 tempfile = "3.0"
 # Pour les exemples
 tracing-subscriber = "0.3"
-pmocache = { path = "../pmocache" }
 # Pour l'exemple spoofer
 
 # Specify that the with_cache example requires the cache feature

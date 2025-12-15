@@ -87,7 +87,13 @@
           <div v-else class="music-icon">🎵</div>
           <div class="track-overlay">
             <span class="hits" v-if="!isLazyTrack(track)">{{ track.hits }} plays</span>
-            <span class="hits lazy" v-else>Lazy</span>
+            <span
+              v-else
+              class="hits lazy"
+              :class="lazyProviderClass(track)"
+            >
+              {{ lazyBadgeLabel(track) }}
+            </span>
           </div>
         </div>
         <div class="track-info">
@@ -102,7 +108,16 @@
           </div>
           <div class="pk">
             {{ track.pk }}
-            <span v-if="isLazyTrack(track)" class="lazy-tag">lazy</span>
+            <span
+              v-if="isLazyTrack(track)"
+              class="lazy-tag"
+              :class="lazyProviderClass(track)"
+            >
+              <span class="lazy-label">Lazy</span>
+              <span class="lazy-provider-name" v-if="lazyProviderName(track)">
+                {{ lazyProviderName(track) }}
+              </span>
+            </span>
           </div>
           <div class="meta">
             <span v-if="durationMs(track) !== undefined">
@@ -125,7 +140,9 @@
             Last used: {{ formatDate(track.last_used) }}
           </div>
           <div class="lazy-warning" v-if="isLazyTrack(track)">
-            Audio not downloaded yet. First playback (or forcing download) will fetch it automatically.
+            Audio not downloaded yet
+            <span v-if="lazyProviderName(track)">({{ lazyProviderName(track) }} provider)</span>.
+            First playback (or forcing download) will fetch it automatically.
           </div>
         </div>
         <div class="track-actions">
@@ -279,13 +296,30 @@ import {
   getCoverUrl,
 } from "../services/audioCache";
 
+interface LazyDisplayInfo {
+  prefix: string;
+  display: string;
+  className: string;
+  isLegacy: boolean;
+}
+
+const LAZY_PROVIDER_LABELS: Record<string, string> = {
+  QOBUZ: "Qobuz",
+};
+const LEGACY_LAZY_INFO: LazyDisplayInfo = {
+  prefix: "legacy",
+  display: "Legacy",
+  className: "lazy-provider-legacy",
+  isLegacy: true,
+};
+
 // --- États ---
 const tracks = ref<AudioCacheEntry[]>([]);
 const selectedTrack = ref<AudioCacheEntry | null>(null);
 const isLoading = ref(false);
 const sortBy = ref<"hits" | "last_used" | "recent">("hits");
 const audioPlayer = ref<HTMLAudioElement | null>(null);
-const LAZY_PREFIX = "L:";
+const LEGACY_LAZY_PREFIX = "L:";
 
 // Formulaire d'ajout
 const newTrackUrl = ref("");
@@ -531,13 +565,73 @@ function handleCoverError(pk: string) {
   failedCovers.value.add(pk);
 }
 
+function prettifyLazyProvider(prefix: string): string {
+  if (LAZY_PROVIDER_LABELS[prefix]) {
+    return LAZY_PROVIDER_LABELS[prefix];
+  }
+  const normalized = prefix.replace(/[^A-Za-z0-9]+/g, " ").trim();
+  if (!normalized) {
+    return prefix.trim().toUpperCase() || "Lazy";
+  }
+  return normalized
+    .split(/\s+/)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function buildLazyClass(prefix: string): string {
+  return `lazy-provider-${prefix.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+}
+
+function extractLazyInfoFromPk(pk: string | undefined | null): LazyDisplayInfo | undefined {
+  if (!pk) return undefined;
+  if (pk.startsWith(LEGACY_LAZY_PREFIX)) {
+    return LEGACY_LAZY_INFO;
+  }
+  const separatorIndex = pk.indexOf(":");
+  if (separatorIndex <= 0) {
+    return undefined;
+  }
+  const prefix = pk.slice(0, separatorIndex);
+  if (!prefix) {
+    return undefined;
+  }
+  return {
+    prefix,
+    display: prettifyLazyProvider(prefix),
+    className: buildLazyClass(prefix),
+    isLegacy: false,
+  };
+}
+
+function getLazyInfo(track: AudioCacheEntry | null | undefined): LazyDisplayInfo | undefined {
+  if (!track?.pk) return undefined;
+  return extractLazyInfoFromPk(track.pk);
+}
+
 function isLazyTrack(track: AudioCacheEntry | null | undefined): boolean {
-  return !!track?.pk && track.pk.startsWith(LAZY_PREFIX);
+  return !!getLazyInfo(track);
+}
+
+function lazyProviderName(track: AudioCacheEntry | null | undefined): string | undefined {
+  return getLazyInfo(track)?.display;
+}
+
+function lazyProviderClass(track: AudioCacheEntry | null | undefined): string {
+  return getLazyInfo(track)?.className ?? "lazy-provider-generic";
+}
+
+function lazyBadgeLabel(track: AudioCacheEntry | null | undefined): string {
+  const info = getLazyInfo(track);
+  if (!info) return "";
+  return info.isLegacy ? "Lazy" : `Lazy - ${info.display}`;
 }
 
 function trackStatusLabel(track: AudioCacheEntry | null): string {
-  if (isLazyTrack(track)) {
-    return "Lazy (audio pending download)";
+  const info = getLazyInfo(track);
+  if (info) {
+    const provider = info.isLegacy ? "" : ` - ${info.display}`;
+    return `Lazy${provider} (audio pending download)`;
   }
   return "Cached";
 }
@@ -822,11 +916,14 @@ button:disabled {
 }
 
 .track-overlay .hits.lazy {
-  background: rgba(255, 152, 0, 0.85);
-  color: #000;
+  display: inline-flex;
+  align-items: center;
+  background: rgba(156, 39, 176, 0.85);
+  color: #fff;
   font-weight: bold;
-  padding: 0.2rem 0.5rem;
+  padding: 0.2rem 0.6rem;
   border-radius: 999px;
+  font-size: 0.8rem;
 }
 
 .track-info {
@@ -869,15 +966,30 @@ button:disabled {
 }
 
 .lazy-tag {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
   margin-left: 0.5rem;
-  padding: 0.1rem 0.4rem;
+  padding: 0.15rem 0.6rem;
   border-radius: 999px;
-  background: #ff9800;
-  color: #000;
-  font-size: 0.65rem;
+  background: rgba(156, 39, 176, 0.25);
+  color: #f5f5f5;
+  font-size: 0.7rem;
   text-transform: uppercase;
-  font-weight: bold;
+  font-weight: 600;
+  border: 1px solid rgba(156, 39, 176, 0.4);
+}
+
+.lazy-tag .lazy-label {
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.lazy-tag .lazy-provider-name {
+  font-size: 0.6rem;
+  text-transform: none;
+  letter-spacing: 0.4px;
+  opacity: 0.9;
 }
 
 .meta {
@@ -909,6 +1021,27 @@ button:disabled {
   border: 1px solid rgba(255, 152, 0, 0.3);
   padding: 0.5rem;
   border-radius: 6px;
+}
+
+.track-overlay .hits.lazy.lazy-provider-legacy,
+.lazy-tag.lazy-provider-legacy {
+  background: rgba(255, 152, 0, 0.85);
+  color: #000;
+  border-color: rgba(255, 193, 7, 0.8);
+}
+
+.track-overlay .hits.lazy.lazy-provider-qobuz,
+.lazy-tag.lazy-provider-qobuz {
+  background: rgba(76, 175, 80, 0.9);
+  color: #fff;
+  border-color: rgba(165, 214, 167, 0.9);
+}
+
+.track-overlay .hits.lazy.lazy-provider-generic,
+.lazy-tag.lazy-provider-generic {
+  background: rgba(103, 58, 183, 0.85);
+  color: #fff;
+  border-color: rgba(179, 157, 219, 0.8);
 }
 
 .track-actions {

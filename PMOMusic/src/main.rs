@@ -38,10 +38,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Enregistrer les sources musicales
     info!("🎵 Registering music sources...");
 
-    // // Enregistrer Qobuz
-    // if let Err(e) = server.write().await.register_qobuz().await {
-    //     tracing::warn!("⚠️ Failed to register Qobuz: {}", e);
-    // }
+    // Enregistrer Qobuz pour activer les lazy providers (QOBUZ:PK)
+    if let Err(e) = server.write().await.register_qobuz().await {
+        tracing::warn!("⚠️ Failed to register Qobuz source: {}", e);
+    }
 
     // Initialiser les canaux de streaming Radio Paradise (pipelines + routes HTTP)
     info!("📻 Initializing Radio Paradise streaming channels...");

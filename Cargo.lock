@@ -3281,6 +3281,7 @@ name = "pmocache"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum 0.8.7",
  "bytes",
  "chrono",
@@ -3603,6 +3604,7 @@ dependencies = [
  "futures",
  "lazy_static",
  "pmoaudiocache",
+ "pmocache",
  "pmoconfig",
  "pmocovers",
  "pmodidl",

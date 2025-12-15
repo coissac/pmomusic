@@ -111,6 +111,7 @@ impl DB {
     /// ```
     pub fn init(path: &Path) -> Result<Self, rusqlite::Error> {
         let conn = Connection::open(path)?;
+        conn.execute("PRAGMA foreign_keys = ON", [])?;
 
         conn.execute(
             "CREATE TABLE IF NOT EXISTS asset (
@@ -130,9 +131,10 @@ impl DB {
                 value_type    TEXT    NOT NULL CHECK (value_type IN ('string','number','boolean','null')),
                 value TEXT,
                 PRIMARY KEY (pk, key),
-                FOREIGN KEY (pk) REFERENCES asset (pk) ON DELETE CASCADE
-            )"
-            , [])?;
+                FOREIGN KEY (pk) REFERENCES asset (pk) ON DELETE CASCADE ON UPDATE CASCADE
+            )",
+            [],
+        )?;
 
         // Créer un index sur la collection pour les requêtes rapides
         conn.execute(
@@ -856,11 +858,9 @@ impl DB {
     /// * `real_pk` - Le real PK calculé après téléchargement
     pub fn update_lazy_to_downloaded(&self, lazy_pk: &str, real_pk: &str) -> rusqlite::Result<()> {
         let mut conn = self.lock_conn("update_lazy_to_downloaded");
-
         let tx = conn.transaction()?;
 
-        // 1. Récupérer l'entry lazy (pk = lazy_pk tant que pas téléchargé)
-        let (old_pk, collection, id, hits): (String, Option<String>, Option<String>, i32) = tx
+        let (current_pk, collection, id, hits): (String, Option<String>, Option<String>, i32) = tx
             .query_row(
                 "SELECT pk, collection, id, hits FROM asset WHERE lazy_pk = ?1",
                 [lazy_pk],
@@ -869,35 +869,40 @@ impl DB {
             .optional()?
             .ok_or_else(|| Error::QueryReturnedNoRows)?;
 
-        if old_pk == real_pk {
-            // Rien à faire si déjà commuté
+        if current_pk == real_pk {
             return Ok(());
         }
 
         let now = Utc::now().to_rfc3339();
         let hits_to_add = if hits > 0 { hits } else { 1 };
 
-        // 2. Créer/mettre à jour l'entry avec le real pk
-        tx.execute(
-            "INSERT INTO asset (pk, lazy_pk, collection, id, hits, last_used)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-             ON CONFLICT(pk) DO UPDATE SET
-                lazy_pk = excluded.lazy_pk,
-                collection = COALESCE(excluded.collection, collection),
-                id = COALESCE(excluded.id, id),
-                hits = hits + excluded.hits,
-                last_used = excluded.last_used",
-            params![real_pk, lazy_pk, collection, id, hits_to_add, now],
+        // Supprimer d'éventuelles métadonnées résiduelles associées au futur pk réel
+        // (peut arriver si un ancien téléchargement a laissé des traces sans asset correspondant).
+        tx.execute("DELETE FROM metadata WHERE pk = ?1", [real_pk])?;
+
+        let updated = tx.execute(
+            "UPDATE asset
+             SET pk = ?1,
+                 lazy_pk = ?2,
+                 collection = COALESCE(?3, collection),
+                 id = COALESCE(?4, id),
+                 hits = hits + ?5,
+                 last_used = ?6
+             WHERE lazy_pk = ?7",
+            params![
+                real_pk,
+                lazy_pk,
+                collection,
+                id,
+                hits_to_add,
+                now,
+                lazy_pk
+            ],
         )?;
 
-        // 3. Re-pointer les métadonnées vers le real pk
-        tx.execute(
-            "UPDATE metadata SET pk = ?1 WHERE pk = ?2",
-            params![real_pk, old_pk],
-        )?;
-
-        // 4. Supprimer l'ancienne entry lazy
-        tx.execute("DELETE FROM asset WHERE pk = ?1", [old_pk])?;
+        if updated == 0 {
+            return Err(Error::QueryReturnedNoRows);
+        }
 
         tx.commit()
     }
@@ -950,6 +955,20 @@ impl DB {
         });
 
         Ok(result)
+    }
+
+    /// Retourne une entry à partir d'un pk ou lazy_pk.
+    pub fn get_entry_by_pk_or_lazy_pk(
+        &self,
+        value: &str,
+    ) -> rusqlite::Result<Option<(Option<String>, Option<String>, Option<String>)>> {
+        let conn = self.lock_conn("get_entry_by_pk_or_lazy_pk");
+        conn.query_row(
+            "SELECT pk, lazy_pk, collection FROM asset WHERE pk = ?1 OR lazy_pk = ?1 LIMIT 1",
+            [value],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
     }
 
     /// Met à jour le compteur d'accès pour une entry lazy (pk = NULL)

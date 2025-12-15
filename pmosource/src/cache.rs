@@ -20,6 +20,7 @@
 
 use crate::{CacheStatus, MusicSourceError, Result};
 use pmoaudiocache::{AudioMetadata, Cache as AudioCache};
+use pmocache::lazy::LazyProvider;
 use pmocovers::Cache as CoverCache;
 use serde_json::{json, Value as JsonValue};
 use std::collections::HashMap;
@@ -128,6 +129,11 @@ impl SourceCacheManager {
             cover_cache,
             audio_cache,
         }
+    }
+
+    /// Enregistre un provider lazy supplémentaire auprès du cache audio.
+    pub fn register_lazy_provider(&self, provider: Arc<dyn LazyProvider>) {
+        self.audio_cache.register_lazy_provider(provider);
     }
 
     /// Résoudre l'URI d'une piste (priorité au cache)
@@ -259,19 +265,77 @@ impl SourceCacheManager {
             .await
             .map_err(|e| MusicSourceError::CacheError(e.to_string()))?;
 
-        // Store metadata in lazy_pk metadata table if provided
+        // Seed individual metadata entries directly (no redundant JSON blob)
         if let Some(meta) = metadata {
-            // Serialize metadata to JSON and store
-            if let Ok(json) = serde_json::to_value(&meta) {
-                let _ = self
-                    .audio_cache
-                    .db
-                    .set_a_metadata_by_key(&lazy_pk, "audio_metadata", json);
-            }
             self.seed_audio_metadata(&lazy_pk, &meta);
         }
 
         Ok(lazy_pk)
+    }
+
+    /// Crée une entrée lazy basée sur un provider enregistré.
+    ///
+    /// # Arguments
+    ///
+    /// * `lazy_pk` - Identifiant logique (préfixe provider + valeur)
+    /// * `metadata` - Métadonnées optionnelles connues à l'avance
+    /// * `cover_pk_hint` - PK éventuel d'une cover déjà cachée
+    pub async fn cache_audio_lazy_with_provider(
+        &self,
+        lazy_pk: &str,
+        metadata: Option<AudioMetadata>,
+        cover_pk_hint: Option<String>,
+    ) -> Result<String> {
+        self.audio_cache
+            .ensure_lazy_entry(lazy_pk, Some(&self.collection_id), None)
+            .await
+            .map_err(|e| MusicSourceError::CacheError(e.to_string()))?;
+
+        let needs_provider_metadata = metadata.is_none();
+        let needs_provider_cover = cover_pk_hint.is_none();
+
+        let provider_data = if needs_provider_metadata || needs_provider_cover {
+            Some(
+                self.audio_cache
+                    .fetch_lazy_provider_data(lazy_pk)
+                    .await
+                    .map_err(|e| MusicSourceError::CacheError(e.to_string()))?,
+            )
+        } else {
+            None
+        };
+
+        let mut final_metadata = metadata;
+        if final_metadata.is_none() {
+            if let Some(data) = provider_data.as_ref() {
+                if let Some(value) = data.metadata.as_ref() {
+                    if let Ok(meta) = serde_json::from_value::<AudioMetadata>(value.clone()) {
+                        final_metadata = Some(meta);
+                    }
+                }
+            }
+        }
+
+        let mut final_cover_pk = cover_pk_hint;
+        if final_cover_pk.is_none() {
+            if let Some(data) = provider_data.as_ref() {
+                if let Some(url) = data.cover_url.as_ref() {
+                    if let Ok(pk) = self.cache_cover(url).await {
+                        final_cover_pk = Some(pk);
+                    }
+                }
+            }
+        }
+
+        if let Some(meta) = final_metadata.as_ref() {
+            self.seed_audio_metadata(lazy_pk, meta);
+        }
+
+        if let Some(cover_pk) = final_cover_pk {
+            let _ = self.set_audio_metadata(lazy_pk, "cover_pk", json!(cover_pk));
+        }
+
+        Ok(lazy_pk.to_string())
     }
 
     /// Cache un flux audio via un reader asynchrone
@@ -323,7 +387,7 @@ impl SourceCacheManager {
     /// Pré-remplit les métadonnées audio pour une entrée lazy
     fn seed_audio_metadata(&self, audio_pk: &str, metadata: &AudioMetadata) {
         let audio_pk = audio_pk.to_string();
-        let mut store = |key: &str, value: JsonValue| {
+        let store = |key: &str, value: JsonValue| {
             if let Err(e) = self.audio_cache.db.set_a_metadata(&audio_pk, key, value) {
                 log_metadata_warning(key, &audio_pk, &e.to_string());
             }

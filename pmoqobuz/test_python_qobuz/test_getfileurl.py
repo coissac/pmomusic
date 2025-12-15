@@ -52,7 +52,7 @@ def main():
     mime_type = file_url_data.get('mime_type', '')
 
     print(f"   ✓ Success!")
-    print(f"   URL: {url[:80]}...")
+    print(f"   URL: {url}...")
     print(f"   MIME type: {mime_type}")
 
     print("\n=== Test completed successfully! ===")
