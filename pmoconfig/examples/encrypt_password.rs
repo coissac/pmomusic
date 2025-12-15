@@ -120,7 +120,5 @@ fn print_usage() {
     println!("  cargo run --example encrypt_password -- test");
     println!("\nExamples:");
     println!("  cargo run --example encrypt_password -- encrypt \"MySecretPassword\"");
-    println!(
-        "  cargo run --example encrypt_password -- decrypt \"encrypted:SGVsbG8gV29ybGQh...\""
-    );
+    println!("  cargo run --example encrypt_password -- decrypt \"encrypted:SGVsbG8gV29ybGQh...\"");
 }

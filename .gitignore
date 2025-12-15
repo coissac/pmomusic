@@ -41,5 +41,5 @@ test_upnp*.cargo/
 setup-env.sh
 cache
 gupnp-tools
-pmocontrol_[0_9]*.txt
+pmo*_[0_9]*.txt
 webapp_[0_9]*.txt

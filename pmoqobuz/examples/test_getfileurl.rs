@@ -50,7 +50,10 @@ async fn main() -> Result<()> {
     match api.get_file_url(track_id).await {
         Ok(stream_info) => {
             println!("   ✓ Success!");
-            println!("   URL: {}...", &stream_info.url[..80.min(stream_info.url.len())]);
+            println!(
+                "   URL: {}...",
+                &stream_info.url[..80.min(stream_info.url.len())]
+            );
             println!("   MIME type: {}", stream_info.mime_type);
         }
         Err(e) => {

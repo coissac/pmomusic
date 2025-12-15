@@ -568,7 +568,11 @@ impl PlaylistManager {
         let manager = self.clone();
 
         tokio::spawn(async move {
-            tracing::info!("Lazy mode enabled for playlist {} (lookahead: {})", playlist_id, lookahead);
+            tracing::info!(
+                "Lazy mode enabled for playlist {} (lookahead: {})",
+                playlist_id,
+                lookahead
+            );
 
             while let Ok(event) = rx.recv().await {
                 match event {
@@ -579,7 +583,9 @@ impl PlaylistManager {
                         if let Ok(writer) = manager.get_write_handle(playlist_id.clone()).await {
                             tracing::info!(
                                 "Switching PK in playlist {}: {} -> {}",
-                                playlist_id, lazy_pk, real_pk
+                                playlist_id,
+                                lazy_pk,
+                                real_pk
                             );
                             if let Err(e) = writer.update_cache_pk(&lazy_pk, &real_pk).await {
                                 tracing::error!("Failed to update PK in playlist: {}", e);
@@ -587,7 +593,9 @@ impl PlaylistManager {
                         }
 
                         // 2. Prefetch les tracks suivants
-                        manager.prefetch_next_tracks(&playlist_id, &real_pk, lookahead).await;
+                        manager
+                            .prefetch_next_tracks(&playlist_id, &real_pk, lookahead)
+                            .await;
                     }
                     _ => {}
                 }

@@ -48,15 +48,9 @@ pub fn is_lazy_pk(pk: &str) -> bool {
 #[derive(Debug, Clone)]
 pub enum CacheEvent {
     /// Un fichier a été servi via HTTP
-    Served {
-        pk: String,
-        format: String,
-    },
+    Served { pk: String, format: String },
     /// Un fichier lazy a été téléchargé et est maintenant disponible
-    LazyDownloaded {
-        lazy_pk: String,
-        real_pk: String,
-    },
+    LazyDownloaded { lazy_pk: String, real_pk: String },
 }
 
 /// Informations transmises lors de la diffusion d'un élément du cache via HTTP.
@@ -1358,7 +1352,7 @@ impl<C: CacheConfig> Cache<C> {
         let lazy_pk = generate_lazy_pk(url);
 
         // Vérifier si ce lazy_pk existe déjà (collision improbable mais...)
-        if let Ok(Some(_)) = self.db.get_pk_by_lazy_pk(&lazy_pk) {
+        if let Ok(true) = self.db.has_lazy_entry(&lazy_pk) {
             bail!("Lazy PK collision for URL: {}", url);
         }
 

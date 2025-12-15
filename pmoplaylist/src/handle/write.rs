@@ -357,7 +357,9 @@ impl WriteHandle {
         }
 
         let manager = crate::manager::PlaylistManager();
-        manager.rebuild_track_index(&self.playlist.id, &snapshot).await;
+        manager
+            .rebuild_track_index(&self.playlist.id, &snapshot)
+            .await;
         manager.notify_playlist_changed(&self.playlist.id);
 
         Ok(())
@@ -390,7 +392,9 @@ impl WriteHandle {
         }
 
         let manager = crate::manager::PlaylistManager();
-        manager.rebuild_track_index(&self.playlist.id, &snapshot).await;
+        manager
+            .rebuild_track_index(&self.playlist.id, &snapshot)
+            .await;
         manager.notify_playlist_changed(&self.playlist.id);
 
         Ok(())
@@ -452,7 +456,9 @@ impl WriteHandle {
             }
 
             let manager = crate::manager::PlaylistManager();
-            manager.rebuild_track_index(&self.playlist.id, &snapshot).await;
+            manager
+                .rebuild_track_index(&self.playlist.id, &snapshot)
+                .await;
             manager.notify_playlist_changed(&self.playlist.id);
         }
 

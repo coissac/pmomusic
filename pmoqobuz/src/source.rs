@@ -230,8 +230,9 @@ impl QobuzSource {
     ///
     /// # Returns
     ///
-    /// The track ID (e.g., "qobuz://track/12345")
-    pub async fn add_track_lazy(&self, track: &Track) -> Result<String> {
+    /// `(track_id, lazy_pk)` where `track_id` is the logical Qobuz URI and
+    /// `lazy_pk` the cache identifier stored in pmocache.
+    pub async fn add_track_lazy(&self, track: &Track) -> Result<(String, String)> {
         let track_id = format!("qobuz://track/{}", track.id);
 
         // Get streaming URL
@@ -287,7 +288,12 @@ impl QobuzSource {
             .cache_manager
             .cache_audio_lazy(&stream_url, Some(metadata))
             .await
-            .ok();
+            .map_err(|e| {
+                MusicSourceError::CacheError(format!(
+                    "Failed to cache lazy track {}: {}",
+                    track.title, e
+                ))
+            })?;
 
         // 4. Store metadata
         self.inner
@@ -296,13 +302,13 @@ impl QobuzSource {
                 track_id.clone(),
                 pmosource::TrackMetadata {
                     original_uri: stream_url,
-                    cached_audio_pk,
+                    cached_audio_pk: Some(cached_audio_pk.clone()),
                     cached_cover_pk,
                 },
             )
             .await;
 
-        Ok(track_id)
+        Ok((track_id, cached_audio_pk))
     }
 
     /// Load full album into pmoplaylist with lazy audio
@@ -345,15 +351,15 @@ impl QobuzSource {
 
         for (i, track) in tracks.iter().enumerate() {
             match self.add_track_lazy(track).await {
-                Ok(track_id) => {
-                    debug!("Track {}/{}: {} (lazy)", i + 1, tracks.len(), track.title);
-
-                    // Extract lazy PK from cache manager
-                    if let Some(metadata) = self.inner.cache_manager.get_metadata(&track_id).await {
-                        if let Some(audio_pk) = metadata.cached_audio_pk {
-                            lazy_pks.push(audio_pk);
-                        }
-                    }
+                Ok((_track_id, lazy_pk)) => {
+                    debug!(
+                        "Track {}/{}: {} (lazy pk {})",
+                        i + 1,
+                        tracks.len(),
+                        track.title,
+                        &lazy_pk
+                    );
+                    lazy_pks.push(lazy_pk);
                 }
                 Err(e) => {
                     warn!("Failed to add track {} ({}): {}", i + 1, track.title, e);
@@ -431,15 +437,15 @@ impl QobuzSource {
 
         for (i, track) in tracks.iter().enumerate() {
             match self.add_track_lazy(track).await {
-                Ok(track_id) => {
-                    debug!("Track {}/{}: {} (lazy)", i + 1, tracks.len(), track.title);
-
-                    // Extract lazy PK from cache manager
-                    if let Some(metadata) = self.inner.cache_manager.get_metadata(&track_id).await {
-                        if let Some(audio_pk) = metadata.cached_audio_pk {
-                            lazy_pks.push(audio_pk);
-                        }
-                    }
+                Ok((_track_id, lazy_pk)) => {
+                    debug!(
+                        "Track {}/{}: {} (lazy pk {})",
+                        i + 1,
+                        tracks.len(),
+                        track.title,
+                        &lazy_pk
+                    );
+                    lazy_pks.push(lazy_pk);
                 }
                 Err(e) => {
                     warn!("Failed to add track {} ({}): {}", i + 1, track.title, e);

@@ -134,10 +134,7 @@ impl QobuzClient {
         let mut api = match (config_appid.clone(), config_spoofer_secret, config_secret) {
             // Priority 1: Try memorized Spoofer secret (raw, no XOR)
             (Some(app_id), Some(spoofer_secret), _) => {
-                info!(
-                    "Trying memorized Spoofer secret with App ID: {}",
-                    app_id
-                );
+                info!("Trying memorized Spoofer secret with App ID: {}", app_id);
                 match QobuzApi::with_raw_secret(&app_id, &spoofer_secret) {
                     Ok(api) => {
                         used_config_credentials = true;
@@ -174,9 +171,7 @@ impl QobuzClient {
             }
             // Priority 3: Fallback to Spoofer
             _ => {
-                info!(
-                    "AppID or secret not configured, using Spoofer..."
-                );
+                info!("AppID or secret not configured, using Spoofer...");
                 Self::try_spoofer_fallback(config).await?
             }
         };
@@ -266,13 +261,19 @@ impl QobuzClient {
                             // Optimization: Login once with first secret to get auth token
                             // Then test all secrets using the same token
                             if let Some((first_timezone, first_secret)) = secrets.first() {
-                                if let Ok(temp_api) = QobuzApi::with_raw_secret(&app_id, first_secret) {
-                                    if let Ok(_auth_info) = temp_api.login(&username, &password).await {
+                                if let Ok(temp_api) =
+                                    QobuzApi::with_raw_secret(&app_id, first_secret)
+                                {
+                                    if let Ok(_auth_info) =
+                                        temp_api.login(&username, &password).await
+                                    {
                                         // Now test each secret with the authenticated token
                                         for (timezone, secret) in secrets.iter() {
                                             debug!("Testing timezone secret: {}", timezone);
 
-                                            if let Ok(test_api) = QobuzApi::with_raw_secret(&app_id, secret) {
+                                            if let Ok(test_api) =
+                                                QobuzApi::with_raw_secret(&app_id, secret)
+                                            {
                                                 // Set the auth token from our initial login
                                                 test_api.set_auth_token(
                                                     temp_api.auth_token().unwrap(),
@@ -282,17 +283,29 @@ impl QobuzClient {
                                                 // Test the secret using track/getFileUrl (like qobuz-player-client)
                                                 // Use the same hardcoded track_id (64868955) as qobuz-player-client
                                                 if test_api.get_file_url("64868955").await.is_ok() {
-                                                    info!("✓ Secret from timezone '{}' works!", timezone);
+                                                    info!(
+                                                        "✓ Secret from timezone '{}' works!",
+                                                        timezone
+                                                    );
 
                                                     // Save both appid and the working secret
-                                                    if let Err(e) = config.set_qobuz_appid(&app_id) {
+                                                    if let Err(e) = config.set_qobuz_appid(&app_id)
+                                                    {
                                                         debug!("Could not save appid: {}", e);
                                                     }
-                                                    if let Err(e) = config.set_qobuz_spoofer_secret(secret) {
-                                                        debug!("Could not save spoofer secret: {}", e);
+                                                    if let Err(e) =
+                                                        config.set_qobuz_spoofer_secret(secret)
+                                                    {
+                                                        debug!(
+                                                            "Could not save spoofer secret: {}",
+                                                            e
+                                                        );
                                                     }
 
-                                                    return Ok(Some((app_id.clone(), secret.clone())));
+                                                    return Ok(Some((
+                                                        app_id.clone(),
+                                                        secret.clone(),
+                                                    )));
                                                 } else {
                                                     debug!("✗ Secret from timezone '{}' failed track/getFileUrl test", timezone);
                                                 }
@@ -310,7 +323,7 @@ impl QobuzClient {
                             Ok(None)
                         }
                     }
-                },
+                }
                 Err(e) => {
                     info!(
                         "Spoofer failed to extract app_id: {}, falling back to DEFAULT_APP_ID",

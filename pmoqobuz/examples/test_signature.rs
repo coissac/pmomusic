@@ -29,7 +29,10 @@ async fn main() -> Result<()> {
     println!("   format_id: {}", format_id);
     println!("   intent: {}", intent);
     println!("   timestamp: {}", timestamp);
-    println!("   secret: {}... (first 10 chars)", &app_secret[..10.min(app_secret.len())]);
+    println!(
+        "   secret: {}... (first 10 chars)",
+        &app_secret[..10.min(app_secret.len())]
+    );
 
     // Calculer la signature
     let signature = signing::sign_track_get_file_url(

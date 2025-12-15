@@ -56,8 +56,8 @@ impl OpenHomeQueue {
             .info_client
             .as_ref()
             .and_then(|client| client.id().ok());
-        let current_index = current_id
-            .and_then(|id| track_ids.iter().position(|entry_id| *entry_id == id));
+        let current_index =
+            current_id.and_then(|id| track_ids.iter().position(|entry_id| *entry_id == id));
 
         self.items = items;
         self.track_ids = track_ids;
@@ -76,10 +76,7 @@ impl OpenHomeQueue {
                 title: item.metadata.as_ref().and_then(|m| m.title.clone()),
                 artist: item.metadata.as_ref().and_then(|m| m.artist.clone()),
                 album: item.metadata.as_ref().and_then(|m| m.album.clone()),
-                album_art_uri: item
-                    .metadata
-                    .as_ref()
-                    .and_then(|m| m.album_art_uri.clone()),
+                album_art_uri: item.metadata.as_ref().and_then(|m| m.album_art_uri.clone()),
             })
             .collect();
 
@@ -151,7 +148,10 @@ impl OpenHomeQueue {
                 if id == 0 {
                     Some(0)
                 } else {
-                    self.track_ids.iter().position(|tid| *tid == id).map(|pos| pos + 1)
+                    self.track_ids
+                        .iter()
+                        .position(|tid| *tid == id)
+                        .map(|pos| pos + 1)
                 }
             })
             .unwrap_or_else(|| self.track_ids.len());
@@ -166,13 +166,8 @@ impl OpenHomeQueue {
         self.current_index = if play {
             Some(insert_index)
         } else {
-            self.current_index.map(|idx| {
-                if insert_index <= idx {
-                    idx + 1
-                } else {
-                    idx
-                }
-            })
+            self.current_index
+                .map(|idx| if insert_index <= idx { idx + 1 } else { idx })
         };
 
         Ok(new_id)
@@ -213,11 +208,7 @@ pub fn didl_id_from_metadata(xml: &str) -> Option<String> {
     }
 
     let parsed = pmodidl::parse_metadata::<DIDLLite>(xml).ok()?;
-    parsed
-        .data
-        .items
-        .first()
-        .map(|item| item.id.clone())
+    parsed.data.items.first().map(|item| item.id.clone())
 }
 
 fn build_metadata_xml(item: &PlaybackItem) -> String {
@@ -255,10 +246,7 @@ fn build_metadata_xml(item: &PlaybackItem) -> String {
         }
         if let Some(uri) = meta.album_art_uri.as_deref() {
             let escaped = escape(uri);
-            xml.push_str(&format!(
-                "<upnp:albumArtURI>{}</upnp:albumArtURI>",
-                escaped
-            ));
+            xml.push_str(&format!("<upnp:albumArtURI>{}</upnp:albumArtURI>", escaped));
         }
         if let Some(date) = meta.date.as_deref() {
             let escaped = escape(date);

@@ -765,11 +765,11 @@ impl DB {
     // LAZY PK SUPPORT
     // ============================================================================
 
-    /// Ajoute une entrée en mode lazy (pk = NULL, lazy_pk rempli)
+    /// Ajoute une entrée en mode lazy (pk = lazy_pk tant que non téléchargé)
     ///
     /// Utilisé pour créer des entries sans télécharger le fichier.
-    /// Le lazy_pk est calculé à partir de l'URL, le real pk sera calculé
-    /// lors du téléchargement effectif.
+    /// Le lazy_pk est calculé à partir de l'URL et sert temporairement
+    /// également de pk pour satisfaire les contraintes de clé étrangère.
     ///
     /// # Arguments
     ///
@@ -784,12 +784,9 @@ impl DB {
     ) -> rusqlite::Result<()> {
         let conn = self.lock_conn("add_lazy");
 
-        // Créer une entry avec pk = NULL et lazy_pk rempli
-        // On utilise une astuce: insérer avec lazy_pk comme clé temporaire
-        // puis mettre pk à NULL
         conn.execute(
             "INSERT INTO asset (pk, lazy_pk, id, collection, hits, last_used)
-             VALUES (NULL, ?1, ?2, ?3, 0, ?4)",
+             VALUES (?1, ?1, ?2, ?3, 0, ?4)",
             params![lazy_pk, id, collection, Utc::now().to_rfc3339()],
         )?;
 
@@ -805,16 +802,46 @@ impl DB {
     /// # Returns
     ///
     /// * `Ok(Some(pk))` - Le real pk si le fichier a été téléchargé
-    /// * `Ok(None)` - Pas encore téléchargé (pk = NULL) ou lazy_pk inconnu
+    /// * `Ok(None)` - Pas encore téléchargé ou lazy_pk inconnu
     pub fn get_pk_by_lazy_pk(&self, lazy_pk: &str) -> rusqlite::Result<Option<String>> {
         let conn = self.lock_conn("get_pk_by_lazy_pk");
 
-        conn.query_row(
-            "SELECT pk FROM asset WHERE lazy_pk = ?1",
-            [lazy_pk],
-            |row| row.get(0),
-        )
-        .optional()
+        let result: Option<(String, Option<String>)> = conn
+            .query_row(
+                "SELECT pk, lazy_pk FROM asset WHERE lazy_pk = ?1",
+                [lazy_pk],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+
+        Ok(result.and_then(|(pk, lazy)| {
+            if let Some(lazy_pk_value) = lazy {
+                if pk == lazy_pk_value {
+                    None
+                } else {
+                    Some(pk)
+                }
+            } else {
+                Some(pk)
+            }
+        }))
+    }
+
+    /// Vérifie l'existence d'une entrée lazy sans télécharger le fichier
+    ///
+    /// Retourne `true` si une ligne avec `lazy_pk` existe, même si `pk` est `NULL`.
+    pub fn has_lazy_entry(&self, lazy_pk: &str) -> rusqlite::Result<bool> {
+        let conn = self.lock_conn("has_lazy_entry");
+
+        let exists: Option<i64> = conn
+            .query_row(
+                "SELECT 1 FROM asset WHERE lazy_pk = ?1 LIMIT 1",
+                [lazy_pk],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        Ok(exists.is_some())
     }
 
     /// Transition d'une entry lazy vers downloaded (ajoute le real pk)
@@ -827,42 +854,50 @@ impl DB {
     ///
     /// * `lazy_pk` - Le lazy PK de l'entry originale
     /// * `real_pk` - Le real PK calculé après téléchargement
-    pub fn update_lazy_to_downloaded(
-        &self,
-        lazy_pk: &str,
-        real_pk: &str,
-    ) -> rusqlite::Result<()> {
+    pub fn update_lazy_to_downloaded(&self, lazy_pk: &str, real_pk: &str) -> rusqlite::Result<()> {
         let mut conn = self.lock_conn("update_lazy_to_downloaded");
 
         let tx = conn.transaction()?;
 
-        // 1. Récupérer les infos de l'entry lazy
-        let (collection, id): (Option<String>, Option<String>) = tx
+        // 1. Récupérer l'entry lazy (pk = lazy_pk tant que pas téléchargé)
+        let (old_pk, collection, id, hits): (String, Option<String>, Option<String>, i32) = tx
             .query_row(
-                "SELECT collection, id FROM asset WHERE lazy_pk = ?1 AND pk IS NULL",
+                "SELECT pk, collection, id, hits FROM asset WHERE lazy_pk = ?1",
                 [lazy_pk],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .optional()?
             .ok_or_else(|| Error::QueryReturnedNoRows)?;
 
-        // 2. Supprimer l'entry lazy (pk = NULL)
-        tx.execute(
-            "DELETE FROM asset WHERE lazy_pk = ?1 AND pk IS NULL",
-            [lazy_pk],
-        )?;
+        if old_pk == real_pk {
+            // Rien à faire si déjà commuté
+            return Ok(());
+        }
 
-        // 3. Créer nouvelle entry avec pk rempli ET lazy_pk
-        // Si le real_pk existe déjà (téléchargé via eager mode), on met juste à jour
+        let now = Utc::now().to_rfc3339();
+        let hits_to_add = if hits > 0 { hits } else { 1 };
+
+        // 2. Créer/mettre à jour l'entry avec le real pk
         tx.execute(
             "INSERT INTO asset (pk, lazy_pk, collection, id, hits, last_used)
-             VALUES (?1, ?2, ?3, ?4, 1, ?5)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(pk) DO UPDATE SET
                 lazy_pk = excluded.lazy_pk,
-                last_used = excluded.last_used,
-                hits = hits + 1",
-            params![real_pk, lazy_pk, collection, id, Utc::now().to_rfc3339()],
+                collection = COALESCE(excluded.collection, collection),
+                id = COALESCE(excluded.id, id),
+                hits = hits + excluded.hits,
+                last_used = excluded.last_used",
+            params![real_pk, lazy_pk, collection, id, hits_to_add, now],
         )?;
+
+        // 3. Re-pointer les métadonnées vers le real pk
+        tx.execute(
+            "UPDATE metadata SET pk = ?1 WHERE pk = ?2",
+            params![real_pk, old_pk],
+        )?;
+
+        // 4. Supprimer l'ancienne entry lazy
+        tx.execute("DELETE FROM asset WHERE pk = ?1", [old_pk])?;
 
         tx.commit()
     }
@@ -890,17 +925,29 @@ impl DB {
 
         // Chercher via origin_url dans metadata
         // On joint avec asset pour récupérer pk et lazy_pk
-        let result: Option<(Option<String>, Option<String>)> = conn
+        let raw: Option<(String, Option<String>)> = conn
             .query_row(
                 "SELECT a.pk, a.lazy_pk
                  FROM asset a
-                 JOIN metadata m ON (a.pk = m.pk OR a.lazy_pk = m.pk)
+                 JOIN metadata m ON a.pk = m.pk
                  WHERE m.key = 'origin_url' AND m.value = ?1
                  LIMIT 1",
                 [url],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
+
+        let result = raw.map(|(pk, lazy_pk)| {
+            if let Some(ref lazy) = lazy_pk {
+                if pk == *lazy {
+                    (None, Some(lazy.clone()))
+                } else {
+                    (Some(pk), lazy_pk)
+                }
+            } else {
+                (Some(pk), lazy_pk)
+            }
+        });
 
         Ok(result)
     }
@@ -932,13 +979,7 @@ impl DB {
     ///
     /// * `lazy_pk` - Le lazy PK de l'entry
     /// * `origin_url` - L'URL d'origine à stocker
-    pub fn set_origin_url_for_lazy(
-        &self,
-        lazy_pk: &str,
-        origin_url: &str,
-    ) -> rusqlite::Result<()> {
-        // Pour les entries lazy, on stocke l'origin_url avec lazy_pk comme clé
-        // dans la table metadata (au lieu de pk qui est NULL)
+    pub fn set_origin_url_for_lazy(&self, lazy_pk: &str, origin_url: &str) -> rusqlite::Result<()> {
         self.set_a_metadata_by_key(lazy_pk, "origin_url", Value::String(origin_url.to_owned()))
     }
 

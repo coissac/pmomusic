@@ -252,8 +252,14 @@ impl QobuzApi {
         }
 
         // Headers additionnels pour compatibilité avec qobuz-player-client
-        request = request.header("Accept-Language", "en,en-US;q=0.8,ko;q=0.6,zh;q=0.4,zh-CN;q=0.2");
-        request = request.header("Access-Control-Request-Headers", "x-user-auth-token,x-app-id");
+        request = request.header(
+            "Accept-Language",
+            "en,en-US;q=0.8,ko;q=0.6,zh;q=0.4,zh-CN;q=0.2",
+        );
+        request = request.header(
+            "Access-Control-Request-Headers",
+            "x-user-auth-token,x-app-id",
+        );
 
         // Ajouter les paramètres
         if method == "GET" {
@@ -268,7 +274,11 @@ impl QobuzApi {
     }
 
     /// Traite la réponse HTTP
-    async fn handle_response<T: DeserializeOwned>(&self, response: Response, endpoint: &str) -> Result<T> {
+    async fn handle_response<T: DeserializeOwned>(
+        &self,
+        response: Response,
+        endpoint: &str,
+    ) -> Result<T> {
         let status = response.status();
         let status_code = status.as_u16();
 
@@ -276,7 +286,10 @@ impl QobuzApi {
 
         if !status.is_success() {
             let error_text = response.text().await.unwrap_or_default();
-            debug!("API error ({}) on {}: {}", status_code, endpoint, error_text);
+            debug!(
+                "API error ({}) on {}: {}",
+                status_code, endpoint, error_text
+            );
             return Err(QobuzError::from_status_code(status_code, error_text));
         }
 

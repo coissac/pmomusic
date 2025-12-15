@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::net::{IpAddr, TcpListener, TcpStream, UdpSocket};
 use std::marker::PhantomData;
+use std::net::{IpAddr, TcpListener, TcpStream, UdpSocket};
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 use std::thread;
@@ -10,9 +10,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow};
 use crossbeam_channel::{Receiver, Sender, unbounded};
-use quick_xml::se::to_string as to_didl_string;
 use pmodidl::{DIDLLite, Item as DidlItem, Resource as DidlResource};
 use pmoupnp::ssdp::SsdpClient;
+use quick_xml::se::to_string as to_didl_string;
 use thiserror::Error;
 use tracing::{debug, error, info, warn};
 use ureq::{Agent, http};
@@ -21,23 +21,22 @@ use xmltree::{Element, XMLNode};
 pub mod music_queue;
 pub mod openhome_queue;
 
-use crate::control_point::music_queue::MusicQueue;
-use crate::control_point::openhome_queue::OpenHomeQueue;
-use crate::music_renderer::{
-    OpenHomeQueueProvider, RendererRuntimeState, set_openhome_queue_provider,
-};
-use crate::queue_interne::InternalQueue;
 use crate::MusicRenderer;
 use crate::capabilities::{
     PlaybackPosition, PlaybackPositionInfo, PlaybackState, PlaybackStatus, TransportControl,
     VolumeControl,
 };
+use crate::control_point::music_queue::MusicQueue;
+use crate::control_point::openhome_queue::OpenHomeQueue;
 use crate::discovery::DiscoveryManager;
 use crate::events::{MediaServerEventBus, RendererEventBus};
 use crate::media_server::{MediaBrowser, MediaEntry, MediaServerInfo, MusicServer, ServerId};
 use crate::media_server_events::spawn_media_server_event_runtime;
 use crate::model::TrackMetadata;
 use crate::model::{MediaServerEvent, RendererEvent, RendererId, RendererInfo};
+use crate::music_renderer::{
+    OpenHomeQueueProvider, RendererRuntimeState, set_openhome_queue_provider,
+};
 #[cfg(feature = "pmoserver")]
 use crate::openapi::{
     CurrentTrackMetadata, FullRendererSnapshot, QueueItem, QueueSnapshotView, RendererBindingView,
@@ -46,8 +45,9 @@ use crate::openapi::{
 use crate::openhome_client::{OhInfoClient, OhPlaylistClient, parse_track_metadata_from_didl};
 use crate::openhome_playlist::{OpenHomePlaylistSnapshot, OpenHomePlaylistTrack};
 use crate::openhome_renderer::{format_seconds, map_openhome_state};
-use crate::queue_backend::{EnqueueMode, PlaybackItem, QueueBackend};
 use crate::provider::HttpXmlDescriptionProvider;
+use crate::queue_backend::{EnqueueMode, PlaybackItem, QueueBackend};
+use crate::queue_interne::InternalQueue;
 use crate::registry::{DeviceRegistry, DeviceRegistryRead, DeviceUpdate};
 use crate::upnp_renderer::UpnpRenderer;
 
@@ -212,12 +212,10 @@ impl ControlPoint {
                                 }
                             }
                             PlaylistBackend::PMOQueue => {
-                                runtime_cp
-                                    .runtime
-                                    .set_music_queue(
-                                        &info.id,
-                                        MusicQueue::Internal(InternalQueue::new()),
-                                    );
+                                runtime_cp.runtime.set_music_queue(
+                                    &info.id,
+                                    MusicQueue::Internal(InternalQueue::new()),
+                                );
                             }
                         }
                         if matches!(backend, PlaylistBackend::OpenHome) {
@@ -842,10 +840,7 @@ impl ControlPoint {
                 title: item.metadata.as_ref().and_then(|m| m.title.clone()),
                 artist: item.metadata.as_ref().and_then(|m| m.artist.clone()),
                 album: item.metadata.as_ref().and_then(|m| m.album.clone()),
-                album_art_uri: item
-                    .metadata
-                    .as_ref()
-                    .and_then(|m| m.album_art_uri.clone()),
+                album_art_uri: item.metadata.as_ref().and_then(|m| m.album_art_uri.clone()),
                 server_id: Some(item.media_server_id.0.clone()),
                 object_id: Some(item.didl_id.clone()),
             })
@@ -1741,10 +1736,7 @@ impl RuntimeState {
         })
     }
 
-    fn renderer_state_mut(
-        &self,
-        id: &RendererId,
-    ) -> anyhow::Result<RendererRuntimeStateMut<'_>> {
+    fn renderer_state_mut(&self, id: &RendererId) -> anyhow::Result<RendererRuntimeStateMut<'_>> {
         let mut entries = self.entries.lock().unwrap();
         let queue_ptr = {
             let entry = entries
@@ -1997,8 +1989,7 @@ fn refresh_attached_queue_for(
             container = container_id.as_str(),
             "Refreshed playlist is empty, clearing queue"
         );
-        runtime
-            .with_music_queue_mut(renderer_id, |queue| queue.clear_queue())?;
+        runtime.with_music_queue_mut(renderer_id, |queue| queue.clear_queue())?;
 
         // Emit QueueUpdated event
         event_bus.broadcast(RendererEvent::QueueUpdated {
@@ -2023,54 +2014,57 @@ fn refresh_attached_queue_for(
         new_items
             .iter()
             .position(|new_item| new_item.unique_id() == current_uid)
-            .or_else(|| new_items.iter().position(|new_item| new_item.uri == current.uri))
+            .or_else(|| {
+                new_items
+                    .iter()
+                    .position(|new_item| new_item.uri == current.uri)
+            })
     });
 
-    let final_queue_len = runtime
-        .with_music_queue_mut(renderer_id, |queue| {
-            if let Some(idx) = item_found_at {
-                queue.replace_queue(new_items.clone(), Some(idx))?;
-                info!(
-                    renderer = renderer_id.0.as_str(),
-                    server = server_id.0.as_str(),
-                    container = container_id.as_str(),
-                    total_items = new_items.len(),
-                    current_index = idx,
-                    upcoming = new_items.len().saturating_sub(idx + 1),
-                    current_preserved = true,
-                    "Refreshed queue from playlist container"
-                );
-                Ok(new_items.len())
-            } else if let Some(ref current) = current_item {
-                let mut combined = Vec::with_capacity(new_items.len() + 1);
-                combined.push(current.clone());
-                combined.extend(new_items.clone());
-                queue.replace_queue(combined, Some(0))?;
-                info!(
-                    renderer = renderer_id.0.as_str(),
-                    server = server_id.0.as_str(),
-                    container = container_id.as_str(),
-                    total_items = new_items.len() + 1,
-                    current_index = 0,
-                    upcoming = new_items.len(),
-                    current_preserved = true,
-                    current_reinserted = true,
-                    "Refreshed queue from playlist container (current item reinserted at start)"
-                );
-                Ok(new_items.len() + 1)
-            } else {
-                queue.replace_queue(new_items.clone(), None)?;
-                info!(
-                    renderer = renderer_id.0.as_str(),
-                    server = server_id.0.as_str(),
-                    container = container_id.as_str(),
-                    total_items = new_items.len(),
-                    current_preserved = false,
-                    "Refreshed queue from playlist container (no current item)"
-                );
-                Ok(new_items.len())
-            }
-        })?;
+    let final_queue_len = runtime.with_music_queue_mut(renderer_id, |queue| {
+        if let Some(idx) = item_found_at {
+            queue.replace_queue(new_items.clone(), Some(idx))?;
+            info!(
+                renderer = renderer_id.0.as_str(),
+                server = server_id.0.as_str(),
+                container = container_id.as_str(),
+                total_items = new_items.len(),
+                current_index = idx,
+                upcoming = new_items.len().saturating_sub(idx + 1),
+                current_preserved = true,
+                "Refreshed queue from playlist container"
+            );
+            Ok(new_items.len())
+        } else if let Some(ref current) = current_item {
+            let mut combined = Vec::with_capacity(new_items.len() + 1);
+            combined.push(current.clone());
+            combined.extend(new_items.clone());
+            queue.replace_queue(combined, Some(0))?;
+            info!(
+                renderer = renderer_id.0.as_str(),
+                server = server_id.0.as_str(),
+                container = container_id.as_str(),
+                total_items = new_items.len() + 1,
+                current_index = 0,
+                upcoming = new_items.len(),
+                current_preserved = true,
+                current_reinserted = true,
+                "Refreshed queue from playlist container (current item reinserted at start)"
+            );
+            Ok(new_items.len() + 1)
+        } else {
+            queue.replace_queue(new_items.clone(), None)?;
+            info!(
+                renderer = renderer_id.0.as_str(),
+                server = server_id.0.as_str(),
+                container = container_id.as_str(),
+                total_items = new_items.len(),
+                current_preserved = false,
+                "Refreshed queue from playlist container (no current item)"
+            );
+            Ok(new_items.len())
+        }
+    })?;
 
     // Emit QueueUpdated event
     event_bus.broadcast(RendererEvent::QueueUpdated {

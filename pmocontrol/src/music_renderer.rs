@@ -9,9 +9,9 @@
 use std::sync::{Arc, OnceLock, RwLock};
 
 use crate::capabilities::{PlaybackPositionInfo, PlaybackStatus};
+use crate::control_point::RendererRuntimeStateMut;
 use crate::control_point::music_queue::MusicQueue;
 use crate::control_point::openhome_queue::didl_id_from_metadata;
-use crate::control_point::RendererRuntimeStateMut;
 use crate::media_server::ServerId;
 use crate::model::{RendererId, RendererInfo, RendererProtocol};
 use crate::openhome_client::parse_track_metadata_from_didl;
@@ -67,9 +67,7 @@ pub trait OpenHomeQueueProvider: Send + Sync + 'static {
 
 static OPENHOME_QUEUE_PROVIDER: OnceLock<Arc<dyn OpenHomeQueueProvider>> = OnceLock::new();
 
-pub fn set_openhome_queue_provider(
-    provider: Arc<dyn OpenHomeQueueProvider>,
-) {
+pub fn set_openhome_queue_provider(provider: Arc<dyn OpenHomeQueueProvider>) {
     let _ = OPENHOME_QUEUE_PROVIDER.set(provider);
 }
 
@@ -240,11 +238,7 @@ impl MusicRenderer {
             }
         } else {
             let snapshot = self.fetch_openhome_playlist_snapshot()?;
-            Ok(snapshot
-                .tracks
-                .into_iter()
-                .map(|track| track.id)
-                .collect())
+            Ok(snapshot.tracks.into_iter().map(|track| track.id).collect())
         }
     }
 

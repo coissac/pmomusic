@@ -317,9 +317,7 @@ pub trait QueueBackend {
                     .unwrap_or(0);
 
                 for (offset, it) in items.into_iter().enumerate() {
-                    snapshot
-                        .items
-                        .insert(insert_pos + offset, it);
+                    snapshot.items.insert(insert_pos + offset, it);
                 }
             }
             EnqueueMode::ReplaceAll => {

@@ -195,7 +195,12 @@ async fn serve_lazy_audio_file<C: CacheConfig>(
         format!("/cache/{}/{}/{}", C::cache_type(), real_pk, param)
     };
 
-    tracing::debug!("Lazy PK {} downloaded as {}, redirecting to {}", lazy_pk, real_pk, redirect_url);
+    tracing::debug!(
+        "Lazy PK {} downloaded as {}, redirecting to {}",
+        lazy_pk,
+        real_pk,
+        redirect_url
+    );
 
     Redirect::temporary(&redirect_url).into_response()
 }

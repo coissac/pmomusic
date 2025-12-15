@@ -52,7 +52,10 @@ impl InternalQueue {
         } else {
             None
         };
-        Self { items, current_index }
+        Self {
+            items,
+            current_index,
+        }
     }
 
     /// Exposes a read-only view of the underlying items.

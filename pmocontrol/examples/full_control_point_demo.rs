@@ -433,9 +433,7 @@ impl App {
         } else {
             for (idx, item) in self.queue_snapshot.iter().enumerate() {
                 let meta = item.metadata.as_ref();
-                let title = meta
-                    .and_then(|m| m.title.as_deref())
-                    .unwrap_or("<titre>");
+                let title = meta.and_then(|m| m.title.as_deref()).unwrap_or("<titre>");
                 let artist = meta.and_then(|m| m.artist.as_deref()).unwrap_or("");
                 let prefix = match self.queue_current_index {
                     Some(current) if current == idx => "▶",

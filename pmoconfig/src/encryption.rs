@@ -117,8 +117,8 @@ fn derive_key() -> Result<[u8; 32]> {
 /// ```
 pub fn encrypt_password(password: &str) -> Result<String> {
     let key = derive_key()?;
-    let cipher = Aes256Gcm::new_from_slice(&key)
-        .map_err(|e| anyhow!("Failed to create cipher: {}", e))?;
+    let cipher =
+        Aes256Gcm::new_from_slice(&key).map_err(|e| anyhow!("Failed to create cipher: {}", e))?;
 
     // Nonce de 96 bits (12 bytes) - dérivé du mot de passe pour avoir
     // un chiffrement déterministe (même password = même ciphertext)
@@ -173,8 +173,8 @@ pub fn decrypt_password(encrypted: &str) -> Result<String> {
         .ok_or_else(|| anyhow!("Invalid encrypted password format (missing prefix)"))?;
 
     let key = derive_key()?;
-    let cipher = Aes256Gcm::new_from_slice(&key)
-        .map_err(|e| anyhow!("Failed to create cipher: {}", e))?;
+    let cipher =
+        Aes256Gcm::new_from_slice(&key).map_err(|e| anyhow!("Failed to create cipher: {}", e))?;
 
     let ciphertext = base64::engine::general_purpose::STANDARD
         .decode(base64_data)
