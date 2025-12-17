@@ -44,6 +44,8 @@
 //! # }
 //! ```
 
+#[cfg(feature = "pmoserver")]
+pub mod api;
 mod error;
 mod handle;
 mod manager;
@@ -59,6 +61,8 @@ mod track;
 mod config_ext;
 
 // Réexports publics
+#[cfg(feature = "pmoserver")]
+pub use api::playlist_api_router;
 pub use error::{Error, Result};
 pub use handle::{ReadHandle, WriteHandle};
 pub use manager::{register_audio_cache, PlaylistManager, PlaylistManager as Manager};

@@ -7,14 +7,14 @@ use crate::playlist::{Playlist, PlaylistRole};
 use crate::Result;
 use once_cell::sync::OnceCell;
 use pmocache::{CacheBroadcastEvent, CacheEvent, CacheSubscription};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::RwLock as StdRwLock;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     Arc,
 };
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tokio::sync::broadcast;
 use tokio::sync::RwLock;
 
@@ -58,6 +58,34 @@ pub struct PlaylistEventEnvelope {
     pub event: PlaylistEvent,
     pub timestamp: std::time::SystemTime,
     pub source_client: Option<String>,
+}
+
+/// Métadonnées de synthèse d'une playlist.
+#[derive(Debug, Clone)]
+pub struct PlaylistOverview {
+    pub id: String,
+    pub title: String,
+    pub role: PlaylistRole,
+    pub persistent: bool,
+    pub track_count: usize,
+    pub max_size: Option<usize>,
+    pub default_ttl: Option<Duration>,
+    pub last_change: SystemTime,
+}
+
+/// Informations détaillées sur un track référencé par une playlist.
+#[derive(Debug, Clone)]
+pub struct PlaylistTrackSnapshot {
+    pub cache_pk: String,
+    pub added_at: SystemTime,
+    pub ttl: Option<Duration>,
+}
+
+/// Snapshot complet d'une playlist (métadonnées + tracks).
+#[derive(Debug, Clone)]
+pub struct PlaylistSnapshot {
+    pub overview: PlaylistOverview,
+    pub tracks: Vec<PlaylistTrackSnapshot>,
 }
 
 /// Gestionnaire central de playlists
@@ -552,6 +580,104 @@ impl PlaylistManager {
     /// V�rifie si une playlist existe
     pub async fn exists(&self, id: &str) -> bool {
         self.inner.playlists.read().await.contains_key(id)
+    }
+
+    /// Retourne les métadonnées complètes d'une playlist (charge depuis la DB si nécessaire).
+    pub async fn playlist_overview(&self, id: &str) -> Result<PlaylistOverview> {
+        let playlist = self.ensure_playlist_loaded(id).await?;
+        let title = playlist.title().await;
+        let role = playlist.role().await;
+        let persistent = playlist.persistent;
+        let last_change = playlist.last_change().await;
+        let core = playlist.core.read().await;
+        let track_count = core.len();
+        let config = core.config.clone();
+
+        Ok(PlaylistOverview {
+            id: playlist.id.clone(),
+            title,
+            role,
+            persistent,
+            track_count,
+            max_size: config.max_size,
+            default_ttl: config.default_ttl,
+            last_change,
+        })
+    }
+
+    /// Retourne un snapshot complet (tracks inclus).
+    pub async fn playlist_snapshot(&self, id: &str) -> Result<PlaylistSnapshot> {
+        let overview = self.playlist_overview(id).await?;
+        let playlist = self.ensure_playlist_loaded(id).await?;
+        let core = playlist.core.read().await;
+        let snapshot = core.snapshot();
+        drop(core);
+
+        let tracks = snapshot
+            .into_iter()
+            .map(|record| PlaylistTrackSnapshot {
+                cache_pk: record.cache_pk.clone(),
+                added_at: record.added_at,
+                ttl: record.ttl,
+            })
+            .collect();
+
+        Ok(PlaylistSnapshot { overview, tracks })
+    }
+
+    /// Retourne les métadonnées de toutes les playlists connues (en mémoire + persistantes).
+    pub async fn all_playlist_overviews(&self) -> Result<Vec<PlaylistOverview>> {
+        let ids = self.collect_all_playlist_ids().await?;
+        let mut overviews = Vec::with_capacity(ids.len());
+
+        for id in ids {
+            match self.playlist_overview(&id).await {
+                Ok(info) => overviews.push(info),
+                Err(crate::Error::PlaylistNotFound(_)) | Err(crate::Error::PlaylistDeleted(_)) => {
+                    continue
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        overviews.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok(overviews)
+    }
+
+    async fn collect_all_playlist_ids(&self) -> Result<Vec<String>> {
+        let mut ids: HashSet<String> = {
+            let playlists = self.inner.playlists.read().await;
+            playlists.keys().cloned().collect()
+        };
+
+        if let Some(persistence) = &self.inner.persistence {
+            for id in persistence.list_playlist_ids().await? {
+                ids.insert(id);
+            }
+        }
+
+        Ok(ids.into_iter().collect())
+    }
+
+    async fn ensure_playlist_loaded(&self, id: &str) -> Result<Arc<Playlist>> {
+        {
+            let playlists = self.inner.playlists.read().await;
+            if let Some(playlist) = playlists.get(id) {
+                if !playlist.is_alive() {
+                    return Err(crate::Error::PlaylistDeleted(id.to_string()));
+                }
+                return Ok(playlist.clone());
+            }
+        }
+
+        // Charger la playlist depuis la persistance si possible
+        self.get_read_handle(id).await?;
+
+        let playlists = self.inner.playlists.read().await;
+        playlists
+            .get(id)
+            .cloned()
+            .ok_or_else(|| crate::Error::PlaylistNotFound(id.to_string()))
     }
 
     /// Retourne la r�f�rence au PersistenceManager

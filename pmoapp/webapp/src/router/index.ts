@@ -10,6 +10,7 @@ import GenericMusicPlayer from "../components/GenericMusicPlayer.vue";
 import LogView from "../components/LogView.vue";
 import CoverCacheManager from "../components/CoverCacheManager.vue";
 import AudioCacheManager from "../components/AudioCacheManager.vue";
+import PlayListManager from "../components/PlayListManager.vue";
 import UpnpExplorer from "../components/UpnpExplorer.vue";
 import APIDashboard from "../components/APIDashboard.vue";
 import RadioParadiseExplorer from "../components/RadioParadiseExplorer.vue";
@@ -52,6 +53,11 @@ const routes = [
     path: "/debug/audio-cache",
     name: "AudioCache",
     component: AudioCacheManager,
+  },
+  {
+    path: "/debug/playlists",
+    name: "PlaylistsManager",
+    component: PlayListManager,
   },
   {
     path: "/debug/upnp",

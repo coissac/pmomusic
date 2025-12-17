@@ -15,6 +15,7 @@
           <router-link to="/debug/upnp" @click="showDebugMenu = false">🎵 UPnP Explorer</router-link>
           <router-link to="/debug/covers-cache" @click="showDebugMenu = false">🎨 Cover Cache</router-link>
           <router-link to="/debug/audio-cache" @click="showDebugMenu = false">🎵 Audio Cache</router-link>
+          <router-link to="/debug/playlists" @click="showDebugMenu = false">🗂️ Playlists</router-link>
           <router-link to="/debug/api-dashboard" @click="showDebugMenu = false">🚀 API Dashboard</router-link>
 
           <div class="submenu-divider">Sources</div>

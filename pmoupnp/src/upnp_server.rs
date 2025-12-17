@@ -25,15 +25,15 @@ use std::sync::RwLock;
 use pmoserver::Server;
 use utoipa::OpenApi;
 
-use crate::UpnpModel;
 use crate::devices::errors::DeviceError;
 use crate::devices::{Device, DeviceInstance, DeviceRegistry};
 use crate::ssdp::SsdpServer;
 use crate::upnp_api::UpnpApiExt;
+use crate::UpnpModel;
 
 use pmoaudiocache::Cache as AudioCache;
 use pmocovers::Cache as CoverCache;
-use pmoutils::{TransportProtocol, find_process_using_port};
+use pmoutils::{find_process_using_port, TransportProtocol};
 
 /// Registre de devices global et thread-safe.
 ///
@@ -318,10 +318,10 @@ impl UpnpServerExt for Server {
         // API playlists (SSE + OpenAPI)
         #[cfg(feature = "server")]
         {
-            use pmoplaylist::{openapi::ApiDoc, playlist_events_router};
-            // SSE /api/playlists/events
-            self.add_router("/api/playlists", playlist_events_router())
-                .await;
+            use pmoplaylist::{openapi::ApiDoc, playlist_api_router, playlist_events_router};
+            // API REST + SSE sous /api/playlists
+            let router = playlist_api_router().merge(playlist_events_router());
+            self.add_router("/api/playlists", router).await;
             // OpenAPI pour playlists
             let openapi = ApiDoc::openapi();
             self.add_openapi(axum::Router::new(), openapi, "playlists")
