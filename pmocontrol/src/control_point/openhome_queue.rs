@@ -181,6 +181,8 @@ impl OpenHomeQueue {
             media_server_id: ServerId(format!("openhome:{}", self.renderer_id.0)),
             didl_id,
             uri: entry.uri.clone(),
+            // OpenHome tracks don't provide protocolInfo, use generic default
+            protocol_info: "http-get:*:audio/*:*".to_string(),
             metadata,
         }
     }
@@ -261,9 +263,10 @@ fn build_metadata_xml(item: &PlaybackItem) -> String {
         }
     }
 
+    let escaped_protocol_info = escape(item.protocol_info.as_str());
     xml.push_str(&format!(
-        r#"<res protocolInfo="http-get:*:audio/*:*">{}</res>"#,
-        escaped_uri
+        r#"<res protocolInfo="{}">{}</res>"#,
+        escaped_protocol_info, escaped_uri
     ));
     xml.push_str(r#"<upnp:class>object.item.audioItem.musicTrack</upnp:class></item></DIDL-Lite>"#);
     xml

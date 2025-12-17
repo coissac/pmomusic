@@ -552,6 +552,7 @@ fn playback_item_from_entry(server: &MusicServer, entry: &MediaEntry) -> Option<
         media_server_id: server.id().clone(),
         didl_id: entry.id.clone(),
         uri: resource.uri.clone(),
+        protocol_info: resource.protocol_info.clone(),
         metadata: Some(metadata),
     })
 }

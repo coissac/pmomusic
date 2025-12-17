@@ -356,6 +356,8 @@ impl MusicRenderer {
             media_server_id: ServerId(format!("openhome:{}", renderer_id.0)),
             didl_id,
             uri: uri.to_string(),
+            // OpenHome tracks don't provide protocolInfo, use generic default
+            protocol_info: "http-get:*:audio/*:*".to_string(),
             metadata,
         })
     }

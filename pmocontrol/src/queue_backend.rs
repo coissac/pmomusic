@@ -66,6 +66,13 @@ pub struct PlaybackItem {
     /// from the DIDL-Lite item.
     pub uri: String,
 
+    /// UPnP protocolInfo string for the resource (e.g., "http-get:*:audio/flac:*").
+    ///
+    /// This string describes the protocol, network, MIME type, and additional
+    /// info about the media resource. It's required for proper UPnP/OpenHome
+    /// renderer compatibility.
+    pub protocol_info: String,
+
     /// Optional rich metadata for the track (title, artist, album, cover,
     /// duration, …).
     ///

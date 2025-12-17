@@ -14,7 +14,7 @@ use pmodidl::{DIDLLite, Item as DidlItem, Resource as DidlResource};
 use pmoupnp::ssdp::SsdpClient;
 use quick_xml::se::to_string as to_didl_string;
 use thiserror::Error;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 use ureq::{Agent, http};
 use xmltree::{Element, XMLNode};
 
@@ -1424,6 +1424,13 @@ impl ControlPoint {
 
         for item in items.iter() {
             let metadata = playback_item_to_didl(item);
+            debug!(
+                uri = item.uri.as_str(),
+                protocol_info = item.protocol_info.as_str(),
+                metadata_len = metadata.len(),
+                "Inserting track to OpenHome playlist"
+            );
+            trace!(metadata = metadata.as_str(), "DIDL-Lite metadata");
             after_id =
                 Some(renderer.openhome_playlist_add_track(&item.uri, &metadata, after_id, false)?);
         }
@@ -2119,6 +2126,7 @@ fn playback_item_from_entry(server: &MusicServer, entry: &MediaEntry) -> Option<
         media_server_id: server.id().clone(),
         didl_id: entry.id.clone(),
         uri: resource.uri.clone(),
+        protocol_info: resource.protocol_info.clone(),
         metadata: Some(metadata),
     })
 }
@@ -2144,6 +2152,8 @@ fn playback_item_from_openhome_track(
         media_server_id: ServerId(format!("openhome:{}", renderer_id.0)),
         didl_id: format!("{}{}", OPENHOME_TRACK_PREFIX, track.id),
         uri: track.uri.clone(),
+        // OpenHome tracks don't provide protocolInfo, use generic default
+        protocol_info: "http-get:*:audio/*:*".to_string(),
         metadata: Some(metadata),
     }
 }
@@ -2178,7 +2188,7 @@ fn didl_item_from_playback_item(item: &PlaybackItem) -> DidlItem {
         date: metadata.and_then(|m| m.date.clone()),
         original_track_number: metadata.and_then(|m| m.track_number.clone()),
         resources: vec![DidlResource {
-            protocol_info: "http-get:*:audio/*:*".to_string(),
+            protocol_info: item.protocol_info.clone(),
             bits_per_sample: None,
             sample_frequency: None,
             nr_audio_channels: None,

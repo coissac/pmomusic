@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use pmoupnp::soap::{SoapEnvelope, build_soap_request, parse_soap_envelope};
+use tracing::{debug, trace};
 use ureq::Agent;
 
 /// Result of a SOAP call:
@@ -39,6 +40,15 @@ pub fn invoke_upnp_action_with_timeout(
     let body_xml = build_soap_request(service_type, action, args)
         .context("Failed to build SOAP request body")?;
 
+    debug!(
+        url = control_url,
+        action = action,
+        service_type = service_type,
+        "Sending SOAP request"
+    );
+
+    trace!(body = body_xml.as_str(), "SOAP request body");
+
     let mut builder = Agent::config_builder();
     builder = builder.http_status_as_error(false);
     if let Some(duration) = timeout {
@@ -60,6 +70,7 @@ pub fn invoke_upnp_action_with_timeout(
         .with_context(|| format!("HTTP error when sending SOAP request to {}", control_url))?;
 
     let status = response.status();
+    debug!(status = status.as_u16(), "SOAP response received");
 
     // 5. Read full body
     //
