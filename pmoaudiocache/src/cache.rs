@@ -111,18 +111,7 @@ async fn persist_transform_streaminfo(cache: Arc<Cache>, pk: &str, tmeta: &Trans
 /// ```
 pub async fn new_cache_with_consolidation(dir: &str, limit: usize) -> Result<Arc<Cache>> {
     let cache = Arc::new(new_cache(dir, limit)?);
-
-    // Lancer la consolidation en arrière-plan pour nettoyer les fichiers incomplets
-    let cache_clone = cache.clone();
-    tokio::spawn(async move {
-        if let Err(e) = cache_clone.consolidate().await {
-            tracing::warn!("Failed to consolidate cache on startup: {}", e);
-        } else {
-            tracing::info!("Cache consolidated successfully on startup");
-        }
-    });
-
-    Ok(cache)
+    Ok(pmocache::Cache::with_consolidation(cache).await)
 }
 
 /// Ajoute un fichier audio local. Les FLAC sont référencés sans copie, les autres formats

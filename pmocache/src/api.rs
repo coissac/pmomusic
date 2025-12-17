@@ -115,7 +115,7 @@ pub struct ErrorResponse {
 /// Liste tous les items en cache avec leurs statistiques
 ///
 /// Retourne la liste complète des entrées du cache triées par nombre d'accès décroissant.
-pub async fn list_items<C: CacheConfig>(State(cache): State<Arc<Cache<C>>>) -> impl IntoResponse {
+pub async fn list_items<C: CacheConfig + 'static>(State(cache): State<Arc<Cache<C>>>) -> impl IntoResponse {
     match cache.db.get_all(true) {
         Ok(entries) => (StatusCode::OK, Json(entries)).into_response(),
         Err(e) => (
@@ -132,7 +132,7 @@ pub async fn list_items<C: CacheConfig>(State(cache): State<Arc<Cache<C>>>) -> i
 /// Récupère les informations d'un item spécifique
 ///
 /// Retourne les métadonnées d'un item identifié par sa clé (pk).
-pub async fn get_item_info<C: CacheConfig>(
+pub async fn get_item_info<C: CacheConfig + 'static>(
     State(cache): State<Arc<Cache<C>>>,
     Path(pk): Path<String>,
 ) -> impl IntoResponse {
@@ -153,7 +153,7 @@ pub async fn get_item_info<C: CacheConfig>(
 ///
 /// Retourne le statut actuel du téléchargement (progression, tailles, erreurs).
 /// Si le téléchargement est terminé, retourne les informations du fichier.
-pub async fn get_download_status<C: CacheConfig>(
+pub async fn get_download_status<C: CacheConfig + 'static>(
     State(cache): State<Arc<Cache<C>>>,
     Path(pk): Path<String>,
 ) -> impl IntoResponse {
@@ -265,7 +265,7 @@ enum AddSource<'a> {
 ///
 /// Télécharge l'item depuis l'URL fournie et l'ajoute au cache.
 /// Si l'item existe déjà, il est mis à jour.
-pub async fn add_item<C: CacheConfig>(
+pub async fn add_item<C: CacheConfig + 'static>(
     State(cache): State<Arc<Cache<C>>>,
     Json(req): Json<AddItemRequest>,
 ) -> impl IntoResponse {
@@ -337,7 +337,7 @@ pub async fn add_item<C: CacheConfig>(
 /// Supprime un item du cache
 ///
 /// Supprime l'item et toutes ses variantes du disque et de la base de données.
-pub async fn delete_item<C: CacheConfig>(
+pub async fn delete_item<C: CacheConfig + 'static>(
     State(cache): State<Arc<Cache<C>>>,
     Path(pk): Path<String>,
 ) -> impl IntoResponse {
@@ -389,7 +389,7 @@ pub async fn delete_item<C: CacheConfig>(
 /// Purge complètement le cache
 ///
 /// Supprime tous les items et vide la base de données. Opération irréversible.
-pub async fn purge_cache<C: CacheConfig>(State(cache): State<Arc<Cache<C>>>) -> impl IntoResponse {
+pub async fn purge_cache<C: CacheConfig + 'static>(State(cache): State<Arc<Cache<C>>>) -> impl IntoResponse {
     match cache.purge().await {
         Ok(_) => (
             StatusCode::OK,
@@ -413,7 +413,7 @@ pub async fn purge_cache<C: CacheConfig>(State(cache): State<Arc<Cache<C>>>) -> 
 ///
 /// Re-télécharge les items manquants et supprime les fichiers orphelins.
 /// Utile pour réparer un cache corrompu.
-pub async fn consolidate_cache<C: CacheConfig>(
+pub async fn consolidate_cache<C: CacheConfig + 'static>(
     State(cache): State<Arc<Cache<C>>>,
 ) -> impl IntoResponse {
     match cache.consolidate().await {

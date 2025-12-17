@@ -111,7 +111,7 @@ async fn get_file_with_param<C: CacheConfig + 'static>(
 }
 
 #[cfg(feature = "pmoserver")]
-async fn serve_finalized_pk<C: CacheConfig>(
+async fn serve_finalized_pk<C: CacheConfig + 'static>(
     cache: &Arc<Cache<C>>,
     pk: &str,
     param: &str,
@@ -143,7 +143,7 @@ async fn serve_finalized_pk<C: CacheConfig>(
 /// 5. Broadcast l'event pour PK switching
 /// 6. Sert directement le fichier téléchargé
 #[cfg(feature = "pmoserver")]
-async fn serve_lazy_audio_file<C: CacheConfig>(
+async fn serve_lazy_audio_file<C: CacheConfig + 'static>(
     cache: &Arc<Cache<C>>,
     lazy_pk: &str,
     param: &str,
@@ -187,7 +187,7 @@ async fn serve_lazy_audio_file<C: CacheConfig>(
 /// Sinon, le fichier complet est servi normalement.
 /// Si le fichier n'existe pas et qu'un param_generator est fourni, tente de générer le param.
 #[cfg(feature = "pmoserver")]
-async fn serve_file_with_streaming<C: CacheConfig>(
+async fn serve_file_with_streaming<C: CacheConfig + 'static>(
     cache: &Arc<Cache<C>>,
     pk: &str,
     param: &str,

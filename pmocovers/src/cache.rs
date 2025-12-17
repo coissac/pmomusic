@@ -91,13 +91,117 @@ pub fn new_cache(dir: &str, limit: usize) -> Result<Cache> {
 /// des requêtes.
 pub async fn new_cache_with_consolidation(dir: &str, limit: usize) -> Result<Arc<Cache>> {
     let cache = Arc::new(new_cache(dir, limit)?);
-    let cache_clone = cache.clone();
-    tokio::spawn(async move {
-        if let Err(e) = cache_clone.consolidate().await {
-            tracing::warn!("Failed to consolidate cover cache on startup: {}", e);
-        } else {
-            tracing::info!("Cover cache consolidated successfully on startup");
+    Ok(pmocache::Cache::with_consolidation(cache).await)
+}
+
+/// Détecte si un buffer contient un fichier WebP
+///
+/// Le format WebP commence par "RIFF" (4 octets), suivi de la taille (4 octets),
+/// puis "WEBP" (4 octets).
+fn is_webp_header(buf: &[u8]) -> bool {
+    buf.len() >= 12 && &buf[0..4] == b"RIFF" && &buf[8..12] == b"WEBP"
+}
+
+/// Ajoute un fichier image local au cache
+///
+/// Les images WebP sont référencées sans copie (symlink/hardlink), les autres formats
+/// sont convertis en WebP via le pipeline classique.
+///
+/// # Arguments
+///
+/// * `cache` - Instance du cache de couvertures
+/// * `path` - Chemin vers le fichier image local
+/// * `collection` - Collection optionnelle (ex: "album:xyz")
+///
+/// # Returns
+///
+/// Clé primaire (pk) de l'image ajoutée au cache
+///
+/// # Exemples
+///
+/// ```rust,no_run
+/// use pmocovers::cache;
+///
+/// # async fn example() -> anyhow::Result<()> {
+/// let cache = cache::new_cache("./covers", 1000)?;
+/// let pk = cache::add_local_file(&cache, "/path/to/cover.webp", None).await?;
+/// println!("Image ajoutée avec pk: {}", pk);
+/// # Ok(())
+/// # }
+/// ```
+pub async fn add_local_file(cache: &Cache, path: &str, collection: Option<&str>) -> Result<String> {
+    use pmocache::download::read_exact_or_eof;
+    use pmocache::pk_from_content_header;
+    use serde_json::json;
+    use tokio::io::AsyncSeekExt;
+
+    let canonical_path = std::fs::canonicalize(path)?;
+    let file_url = format!("file://{}", canonical_path.display());
+    let length = tokio::fs::metadata(&canonical_path)
+        .await
+        .ok()
+        .map(|m| m.len());
+    let mut reader = tokio::fs::File::open(&canonical_path).await?;
+
+    let header = read_exact_or_eof(&mut reader, 1024)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to read header bytes: {}", e))?;
+
+    let pk_bytes = if header.len() >= 1024 {
+        &header[512..]
+    } else {
+        &header[..]
+    };
+    let pk = pk_from_content_header(pk_bytes);
+
+    // Si déjà en cache, incrémenter hit et retourner
+    if cache.db.get(&pk, false).is_ok() {
+        cache.db.update_hit(&pk)?;
+        return Ok(pk);
+    }
+
+    // Si téléchargement en cours, attendre et retourner
+    if let Some(download) = cache.get_download(&pk).await {
+        if download.finished().await {
+            cache.db.update_hit(&pk)?;
         }
-    });
-    Ok(cache)
+        return Ok(pk);
+    }
+
+    let is_webp = is_webp_header(&header);
+    if !is_webp {
+        // Format non-WebP : passer par le pipeline de conversion
+        reader
+            .rewind()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to rewind local file: {}", e))?;
+
+        return cache
+            .add_from_reader_with_pk(Some(&file_url), reader, length, collection, Some(pk))
+            .await;
+    }
+
+    // Format WebP : créer un lien sans copie (passthrough)
+    let mut metadata = vec![
+        ("local_passthrough".to_string(), json!(true)),
+        (
+            "local_source_path".to_string(),
+            json!(canonical_path.to_string_lossy().to_string()),
+        ),
+    ];
+    if let Some(len) = length {
+        metadata.push(("source_size".to_string(), json!(len)));
+    }
+
+    cache
+        .register_local_file_reference(
+            &pk,
+            &canonical_path,
+            collection,
+            Some(&file_url),
+            Some(&metadata),
+        )
+        .await?;
+
+    Ok(pk)
 }

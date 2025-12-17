@@ -83,8 +83,14 @@
 pub mod cache;
 pub mod metadata;
 pub mod metadata_ext;
-pub mod streaming;
 pub mod track_metadata;
+
+/// Module public pour la création de transformers FLAC streaming
+///
+/// Ce module expose les fonctionnalités de conversion FLAC progressive
+/// pour permettre aux utilisateurs de créer des transformers custom ou
+/// de réutiliser les implémentations par défaut.
+pub mod streaming;
 
 #[cfg(feature = "pmoserver")]
 pub mod api;

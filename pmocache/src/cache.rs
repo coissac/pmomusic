@@ -152,7 +152,7 @@ pub struct Cache<C: CacheConfig> {
     _phantom: std::marker::PhantomData<C>,
 }
 
-impl<C: CacheConfig> Cache<C> {
+impl<C: CacheConfig + 'static> Cache<C> {
     /// Retourne le chemin du fichier marker de complétion
     fn get_completion_marker_path(&self, pk: &str) -> PathBuf {
         self.get_file_path(pk)
@@ -422,6 +422,58 @@ impl<C: CacheConfig> Cache<C> {
             lazy_providers: StdRwLock::new(HashMap::new()),
             _phantom: std::marker::PhantomData,
         })
+    }
+
+    /// Lance une consolidation en arrière-plan pour un cache existant
+    ///
+    /// Cette fonction utilitaire lance une tâche asynchrone qui consolide le cache
+    /// (supprime les fichiers incomplets sans marker de complétion) et retourne
+    /// immédiatement le cache fourni en paramètre.
+    ///
+    /// Idéal pour les crates spécialisées qui veulent offrir une fonction
+    /// `new_cache_with_consolidation` sans dupliquer la logique de lancement.
+    ///
+    /// # Arguments
+    ///
+    /// * `cache` - Instance du cache à consolider
+    ///
+    /// # Returns
+    ///
+    /// Le même `Arc<Cache<C>>` fourni en paramètre
+    ///
+    /// # Exemple
+    ///
+    /// ```rust,ignore
+    /// use pmocache::{Cache, CacheConfig};
+    /// use std::sync::Arc;
+    ///
+    /// struct MyConfig;
+    /// impl CacheConfig for MyConfig {
+    ///     fn file_extension() -> &'static str { "dat" }
+    /// }
+    ///
+    /// async fn create_cache_with_cleanup() -> anyhow::Result<Arc<Cache<MyConfig>>> {
+    ///     let cache = Arc::new(Cache::new("./cache", 1000)?);
+    ///     Ok(Cache::with_consolidation(cache).await)
+    /// }
+    /// ```
+    pub async fn with_consolidation(cache: Arc<Cache<C>>) -> Arc<Cache<C>> {
+        let cache_clone = cache.clone();
+        tokio::spawn(async move {
+            if let Err(e) = cache_clone.consolidate().await {
+                tracing::warn!(
+                    "Failed to consolidate {} cache on startup: {}",
+                    C::cache_name(),
+                    e
+                );
+            } else {
+                tracing::info!(
+                    "{} cache consolidated successfully on startup",
+                    C::cache_name()
+                );
+            }
+        });
+        cache
     }
 
     /// Configure la taille minimale de prébuffering
@@ -1559,7 +1611,7 @@ fn link_file(source: &Path, destination: &Path) -> std::io::Result<()> {
 }
 
 /// Implémentation du trait FileCache pour Cache
-impl<C: CacheConfig> FileCache<C> for Cache<C> {
+impl<C: CacheConfig + 'static> FileCache<C> for Cache<C> {
     fn get_cache_dir(&self) -> &Path {
         self.cache_dir()
     }

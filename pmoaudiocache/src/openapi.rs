@@ -7,6 +7,9 @@ use utoipa::OpenApi;
 /// L'API réutilise les handlers génériques de pmocache.
 #[derive(OpenApi)]
 #[openapi(
+    paths(
+        crate::api::get_cover_url,
+    ),
     components(
         schemas(
             pmocache::CacheEntry,
