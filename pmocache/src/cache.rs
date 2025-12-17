@@ -372,7 +372,7 @@ impl<C: CacheConfig> Cache<C> {
     ///
     /// # Exemple
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// use pmocache::{Cache, CacheConfig, StreamTransformer};
     /// use std::sync::Arc;
     ///
@@ -382,11 +382,10 @@ impl<C: CacheConfig> Cache<C> {
     /// }
     ///
     /// let transformer_factory = Arc::new(|| {
-    ///     // Créer un transformer qui convertit les données
-    ///     Box::new(|input, file, ctx| {
+    ///     // Créer un transformer qui effectue une opération personnalisée
+    ///     Box::new(|_input, _file, _ctx| {
     ///         Box::pin(async move {
     ///             // Transformation personnalisée
-    ///             ctx.report_progress(0);
     ///             Ok(())
     ///         })
     ///     }) as StreamTransformer
@@ -660,8 +659,14 @@ impl<C: CacheConfig> Cache<C> {
         }
 
         // Finaliser avec prébuffering et nettoyage
-        self.finalize_download(&pk, download, collection, Some(url), FinalizeMode::InsertNew)
-            .await
+        self.finalize_download(
+            &pk,
+            download,
+            collection,
+            Some(url),
+            FinalizeMode::InsertNew,
+        )
+        .await
     }
 
     /// Télécharge un fichier lazy et commute l'entrée existante
@@ -827,38 +832,17 @@ impl<C: CacheConfig> Cache<C> {
         }
 
         // Finaliser avec prébuffering et nettoyage
-        self.finalize_download(&pk, download, collection, source_uri, FinalizeMode::InsertNew)
-            .await
+        self.finalize_download(
+            &pk,
+            download,
+            collection,
+            source_uri,
+            FinalizeMode::InsertNew,
+        )
+        .await
     }
 
-    /// Ajoute un fichier local au cache
-    ///
-    /// Cette méthode lit les 512 premiers octets du fichier local pour calculer
-    /// l'identifiant basé sur le contenu, puis utilise `add_from_reader()` pour
-    /// l'ingestion complète.
-    ///
-    /// # Arguments
-    ///
-    /// * `path` - Chemin du fichier local
-    /// * `collection` - Collection optionnelle à laquelle appartient le fichier
-    ///
-    /// # Returns
-    ///
-    /// La clé primaire (pk) du fichier dans le cache, calculée à partir du contenu
-    ///
-    /// # Exemple
-    ///
-    /// ```rust,ignore
-    /// use pmocache::{Cache, CacheConfig};
-    ///
-    /// struct MyConfig;
-    /// impl CacheConfig for MyConfig {
-    ///     fn file_extension() -> &'static str { "dat" }
-    /// }
-    ///
-    /// let cache = Cache::<MyConfig>::new("./cache", 1000)?;
-    /// let pk = cache.add_from_file("/path/to/file.dat", None).await?;
-    /// ```
+    /// Ajoute un fichier local au cache en copiant son contenu.
     pub async fn add_from_file(&self, path: &str, collection: Option<&str>) -> Result<String> {
         let canonical_path = std::fs::canonicalize(path)?;
         let file_url = format!("file://{}", canonical_path.display());
@@ -868,9 +852,58 @@ impl<C: CacheConfig> Cache<C> {
             .map(|m| m.len());
         let reader = tokio::fs::File::open(&canonical_path).await?;
 
-        // add_from_reader() s'occupe de lire les 512 premiers octets et de calculer le pk
         self.add_from_reader(Some(&file_url), reader, length, collection)
             .await
+    }
+
+    /// Enregistre une référence vers un fichier déjà présent sur le disque sans duplication.
+    pub async fn register_local_file_reference(
+        &self,
+        pk: &str,
+        source_path: &Path,
+        collection: Option<&str>,
+        origin_url: Option<&str>,
+        extra_metadata: Option<&[(String, Value)]>,
+    ) -> Result<()> {
+        let cache_path = self.get_file_path(pk);
+        if cache_path.exists() {
+            if let Err(err) = tokio::fs::remove_file(&cache_path).await {
+                if err.kind() != std::io::ErrorKind::NotFound {
+                    return Err(err.into());
+                }
+            }
+        }
+
+        link_file(source_path, &cache_path)
+            .map_err(|e| anyhow!("Failed to link local file into cache: {}", e))?;
+
+        let completion_marker = self.get_completion_marker_path(pk);
+        if completion_marker.exists() {
+            let _ = std::fs::remove_file(&completion_marker);
+        }
+        std::fs::write(&completion_marker, "")
+            .map_err(|e| anyhow!("Failed to create completion marker for local file: {}", e))?;
+
+        self.db.add(pk, None, collection)?;
+        if let Some(url) = origin_url {
+            self.db.set_origin_url(pk, url)?;
+        }
+
+        if let Some(entries) = extra_metadata {
+            for (key, value) in entries {
+                self.db.set_a_metadata(pk, key, value.clone())?;
+            }
+        }
+
+        if let Err(e) = self.enforce_limit().await {
+            tracing::warn!(
+                "Error enforcing cache limit after local file registration (pk={}): {}",
+                pk,
+                e
+            );
+        }
+
+        Ok(())
     }
 
     pub async fn delete_item(&self, pk: &str) -> Result<()> {
@@ -1363,6 +1396,14 @@ impl<C: CacheConfig> Cache<C> {
     /// # Example
     ///
     /// ```rust,no_run
+    /// use pmocache::{Cache, CacheConfig, CacheEvent};
+    ///
+    /// struct AudioConfig;
+    /// impl CacheConfig for AudioConfig {
+    ///     fn file_extension() -> &'static str { "flac" }
+    /// }
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let cache = Cache::<AudioConfig>::new("./cache", 1000)?;
     /// let mut rx = cache.subscribe_events();
     ///
@@ -1376,6 +1417,8 @@ impl<C: CacheConfig> Cache<C> {
     ///         }
     ///     }
     /// });
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn subscribe_events(&self) -> broadcast::Receiver<CacheEvent> {
         self.served_tx
@@ -1424,7 +1467,10 @@ impl<C: CacheConfig> Cache<C> {
         if let Some(provider) = self.provider_for_lazy_pk(lazy_pk) {
             let metadata = provider.metadata(lazy_pk).await?;
             let cover_url = provider.cover_url(lazy_pk).await?;
-            Ok(LazyEntryRemoteData { metadata, cover_url })
+            Ok(LazyEntryRemoteData {
+                metadata,
+                cover_url,
+            })
         } else {
             Ok(LazyEntryRemoteData::default())
         }
@@ -1486,9 +1532,29 @@ impl<C: CacheConfig> Cache<C> {
             bail!("Lazy PK collision for URL: {}", url);
         }
 
-        self.ensure_lazy_entry(&lazy_pk, collection, Some(url)).await?;
+        self.ensure_lazy_entry(&lazy_pk, collection, Some(url))
+            .await?;
         tracing::debug!("Created new lazy pk {} for URL {}", lazy_pk, url);
         Ok(lazy_pk)
+    }
+}
+
+fn link_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        symlink(source, destination)
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::symlink_file;
+        symlink_file(source, destination)
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        std::fs::hard_link(source, destination)
     }
 }
 

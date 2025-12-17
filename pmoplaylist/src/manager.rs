@@ -495,8 +495,13 @@ impl PlaylistManager {
                 // Reconstruire la playlist
                 let mut playlists = self.inner.playlists.write().await;
 
-                let playlist =
-                    Arc::new(Playlist::new(id.to_string(), title.clone(), config, true, role));
+                let playlist = Arc::new(Playlist::new(
+                    id.to_string(),
+                    title.clone(),
+                    config,
+                    true,
+                    role,
+                ));
 
                 // Restaurer les tracks
                 {
@@ -718,9 +723,7 @@ impl PlaylistManager {
             let mut rx = cache.subscribe_events();
             while let Ok(event) = rx.recv().await {
                 if let CacheEvent::LazyDownloaded { lazy_pk, real_pk } = event {
-                    manager
-                        .handle_lazy_download_event(&lazy_pk, &real_pk)
-                        .await;
+                    manager.handle_lazy_download_event(&lazy_pk, &real_pk).await;
                 }
             }
             inner.lazy_listener_started.store(false, Ordering::SeqCst);

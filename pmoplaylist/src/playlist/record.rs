@@ -77,12 +77,7 @@ fn next_timestamp() -> SystemTime {
             last.saturating_add(1)
         };
 
-        match LAST_ADDED_AT.compare_exchange(
-            last,
-            candidate,
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-        ) {
+        match LAST_ADDED_AT.compare_exchange(last, candidate, Ordering::SeqCst, Ordering::SeqCst) {
             Ok(_) => {
                 let nanos = candidate as u64;
                 return UNIX_EPOCH + Duration::from_nanos(nanos);

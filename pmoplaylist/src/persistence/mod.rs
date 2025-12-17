@@ -7,9 +7,9 @@ use crate::Result;
 use rusqlite::{params, Connection};
 use std::collections::VecDeque;
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use std::str::FromStr;
 
 /// Gestionnaire de persistance (une base pour toutes les playlists)
 pub struct PersistenceManager {
@@ -145,9 +145,7 @@ impl PersistenceManager {
 
         // Charger les métadonnées
         let mut stmt = conn
-            .prepare(
-                "SELECT title, role, max_size, default_ttl_secs FROM playlists WHERE id = ?1",
-            )
+            .prepare("SELECT title, role, max_size, default_ttl_secs FROM playlists WHERE id = ?1")
             .map_err(|e| {
                 crate::Error::PersistenceError(format!("Failed to prepare statement: {}", e))
             })?;

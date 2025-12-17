@@ -83,9 +83,12 @@ impl LazyProvider for QobuzLazyProvider {
 
     async fn cover_url(&self, lazy_pk: &str) -> Result<Option<String>> {
         let track = self.fetch_track(lazy_pk).await?;
-        Ok(track
-            .album
-            .and_then(|a| a.image)
-            .and_then(|url| if url.is_empty() { None } else { Some(url) }))
+        Ok(track.album.and_then(|a| a.image).and_then(|url| {
+            if url.is_empty() {
+                None
+            } else {
+                Some(url)
+            }
+        }))
     }
 }

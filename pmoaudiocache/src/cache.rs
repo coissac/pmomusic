@@ -5,10 +5,13 @@
 //! des métadonnées en JSON dans la base de données.
 
 use crate::metadata_ext::AudioTrackMetadataExt;
-use anyhow::Result;
-use pmocache::download::TransformMetadata;
-use pmocache::CacheConfig;
+use anyhow::{anyhow, Result};
+use pmocache::download::{read_exact_or_eof, TransformMetadata};
+use pmocache::{pk_from_content_header, CacheConfig};
+use pmoflac::is_flac_magic_header;
+use serde_json::json;
 use std::sync::Arc;
+use tokio::io::AsyncSeekExt;
 
 /// Configuration pour le cache audio
 pub struct AudioConfig;
@@ -120,6 +123,76 @@ pub async fn new_cache_with_consolidation(dir: &str, limit: usize) -> Result<Arc
     });
 
     Ok(cache)
+}
+
+/// Ajoute un fichier audio local. Les FLAC sont référencés sans copie, les autres formats
+/// sont convertis via le pipeline classique.
+pub async fn add_local_file(cache: &Cache, path: &str, collection: Option<&str>) -> Result<String> {
+    let canonical_path = std::fs::canonicalize(path)?;
+    let file_url = format!("file://{}", canonical_path.display());
+    let length = tokio::fs::metadata(&canonical_path)
+        .await
+        .ok()
+        .map(|m| m.len());
+    let mut reader = tokio::fs::File::open(&canonical_path).await?;
+
+    let header = read_exact_or_eof(&mut reader, 1024)
+        .await
+        .map_err(|e| anyhow!("Failed to read header bytes: {}", e))?;
+
+    let pk_bytes = if header.len() >= 1024 {
+        &header[512..]
+    } else {
+        &header[..]
+    };
+    let pk = pk_from_content_header(pk_bytes);
+
+    if cache.db.get(&pk, false).is_ok() {
+        cache.db.update_hit(&pk)?;
+        return Ok(pk);
+    }
+
+    if let Some(download) = cache.get_download(&pk).await {
+        if download.finished().await {
+            cache.db.update_hit(&pk)?;
+        }
+        return Ok(pk);
+    }
+
+    let is_flac = is_flac_magic_header(&header);
+    if !is_flac {
+        reader
+            .rewind()
+            .await
+            .map_err(|e| anyhow!("Failed to rewind local file: {}", e))?;
+
+        return cache
+            .add_from_reader_with_pk(Some(&file_url), reader, length, collection, Some(pk))
+            .await;
+    }
+
+    let mut metadata = vec![
+        ("local_passthrough".to_string(), json!(true)),
+        (
+            "local_source_path".to_string(),
+            json!(canonical_path.to_string_lossy().to_string()),
+        ),
+    ];
+    if let Some(len) = length {
+        metadata.push(("source_size".to_string(), json!(len)));
+    }
+
+    cache
+        .register_local_file_reference(
+            &pk,
+            &canonical_path,
+            collection,
+            Some(&file_url),
+            Some(&metadata),
+        )
+        .await?;
+
+    Ok(pk)
 }
 
 /// Ajoute une piste audio depuis une URL avec extraction et stockage des métadonnées

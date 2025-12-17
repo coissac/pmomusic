@@ -107,7 +107,7 @@ impl DB {
     /// use pmocache::db::DB;
     /// use std::path::Path;
     ///
-    /// let db = DB::init(Path::new("cache.db"), "my_cache").unwrap();
+    /// let db = DB::init(Path::new("cache.db")).unwrap();
     /// ```
     pub fn init(path: &Path) -> Result<Self, rusqlite::Error> {
         let conn = Connection::open(path)?;
@@ -889,15 +889,7 @@ impl DB {
                  hits = hits + ?5,
                  last_used = ?6
              WHERE lazy_pk = ?7",
-            params![
-                real_pk,
-                lazy_pk,
-                collection,
-                id,
-                hits_to_add,
-                now,
-                lazy_pk
-            ],
+            params![real_pk, lazy_pk, collection, id, hits_to_add, now, lazy_pk],
         )?;
 
         if updated == 0 {

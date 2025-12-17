@@ -13,14 +13,39 @@
     <div class="add-form">
       <h3>➕ Add New Track</h3>
       <form @submit.prevent="handleAddTrack">
+        <div class="source-toggle">
+          <label>
+            <input type="radio" value="url" v-model="newTrackSourceType" /> Remote URL
+          </label>
+          <label>
+            <input type="radio" value="path" v-model="newTrackSourceType" /> Local FLAC reference
+          </label>
+        </div>
         <div class="form-group">
-          <input
-            v-model="newTrackUrl"
-            type="url"
-            placeholder="https://example.com/track.flac"
-            required
-            :disabled="isAdding"
-          />
+          <template v-if="newTrackSourceType === 'url'">
+            <input
+              v-model="newTrackUrl"
+              type="url"
+              placeholder="https://example.com/track.flac"
+              :required="newTrackSourceType === 'url'"
+              :disabled="isAdding"
+            />
+          </template>
+          <template v-else>
+            <input
+              v-model="newTrackPath"
+              type="text"
+              placeholder="/mnt/music/MyTrack.flac"
+              :required="newTrackSourceType === 'path'"
+              :disabled="isAdding"
+            />
+          </template>
+        </div>
+        <p class="local-tip" v-if="newTrackSourceType === 'path'">
+          Local FLAC files are referenced without duplication. Removing the cache entry never deletes
+          the original file.
+        </p>
+        <div class="form-group">
           <input
             v-model="newTrackCollection"
             type="text"
@@ -28,8 +53,8 @@
             :disabled="isAdding"
             class="collection-input"
           />
-          <button type="submit" :disabled="isAdding || !newTrackUrl">
-            {{ isAdding ? "Adding..." : "Add Track" }}
+          <button type="submit" :disabled="addButtonDisabled">
+            {{ addButtonLabel }}
           </button>
         </div>
         <p v-if="addError" class="error">{{ addError }}</p>
@@ -73,7 +98,7 @@
       <div
         v-for="track in sortedTracks"
         :key="track.pk"
-        class="track-card"
+        :class="['track-card', { 'local-reference': isLocalFile(track) }]"
         @click="selectedTrack = track"
       >
         <div class="track-icon">
@@ -94,6 +119,7 @@
             >
               {{ lazyBadgeLabel(track) }}
             </span>
+            <span v-if="isLocalFile(track)" class="local-pill">Local file</span>
           </div>
         </div>
         <div class="track-info">
@@ -131,6 +157,12 @@
             </span>
             <span v-if="conversionLabel(track)">
               {{ conversionLabel(track) }}
+            </span>
+          </div>
+          <div class="local-path" v-if="isLocalFile(track)">
+            <span class="local-badge">Local</span>
+            <span class="local-path-text">
+              {{ localSourcePath(track) || "Original file" }}
             </span>
           </div>
           <div class="collection" v-if="track.collection">
@@ -225,6 +257,12 @@
             <h4>Cache Info</h4>
             <p><strong>PK:</strong> {{ selectedTrack.pk }}</p>
             <p><strong>Status:</strong> {{ trackStatusLabel(selectedTrack) }}</p>
+            <p v-if="isLocalFile(selectedTrack)">
+              <strong>Local file:</strong>
+              <span class="local-path-text">
+                {{ localSourcePath(selectedTrack) || "Original file retained" }}
+              </span>
+            </p>
             <p v-if="resolveTrackOrigin(selectedTrack)">
               <strong>Source URL:</strong>
               <a :href="resolveTrackOrigin(selectedTrack)" target="_blank">{{ resolveTrackOrigin(selectedTrack) }}</a>
@@ -323,7 +361,9 @@ const LEGACY_LAZY_PREFIX = "L:";
 
 // Formulaire d'ajout
 const newTrackUrl = ref("");
+const newTrackPath = ref("");
 const newTrackCollection = ref("");
+const newTrackSourceType = ref<"url" | "path">("url");
 const isAdding = ref(false);
 const addError = ref("");
 const addSuccess = ref("");
@@ -364,6 +404,22 @@ const sortedTracks = computed(() => {
   }
 });
 
+const addButtonDisabled = computed(() => {
+  if (isAdding.value) return true;
+  const value =
+    newTrackSourceType.value === "url"
+      ? newTrackUrl.value?.trim()
+      : newTrackPath.value?.trim();
+  return !value;
+});
+
+const addButtonLabel = computed(() => {
+  if (newTrackSourceType.value === "url") {
+    return isAdding.value ? "Adding..." : "Add Track";
+  }
+  return isAdding.value ? "Linking..." : "Add Local File";
+});
+
 // --- Fonctions ---
 async function refreshTracks() {
   isLoading.value = true;
@@ -375,17 +431,27 @@ async function refreshTracks() {
 }
 
 async function handleAddTrack() {
-  if (!newTrackUrl.value) return;
+  const useUrl = newTrackSourceType.value === "url";
+  const rawValue = useUrl ? newTrackUrl.value.trim() : newTrackPath.value.trim();
+  if (!rawValue) {
+    addError.value = useUrl ? "URL is required" : "Local path is required";
+    return;
+  }
   isAdding.value = true;
   addError.value = "";
   addSuccess.value = "";
   try {
-    const result = await addTrack(
-      newTrackUrl.value,
-      newTrackCollection.value || undefined
-    );
-    addSuccess.value = `Track added! PK: ${result.pk}`;
+    const result = await addTrack({
+      url: useUrl ? rawValue : undefined,
+      path: useUrl ? undefined : rawValue,
+      collection: newTrackCollection.value || undefined,
+    });
+    addSuccess.value =
+      newTrackSourceType.value === "path"
+        ? `Local file linked! PK: ${result.pk}`
+        : `Track added! PK: ${result.pk}`;
     newTrackUrl.value = "";
+    newTrackPath.value = "";
     newTrackCollection.value = "";
     await refreshTracks();
   } catch (e: any) {
@@ -397,7 +463,16 @@ async function handleAddTrack() {
 }
 
 async function handleDeleteTrack(pk: string) {
-  if (!confirm(`Delete track ${pk}?`)) return;
+  const track = getTrackByPk(pk);
+  let confirmMessage = `Delete track ${pk}?`;
+  if (track && isLocalFile(track)) {
+    const path = localSourcePath(track);
+    confirmMessage =
+      `Remove cached reference for local file?\nPK: ${pk}` +
+      (path ? `\nSource: ${path}` : "") +
+      "\nOriginal file will remain untouched.";
+  }
+  if (!confirm(confirmMessage)) return;
   deletingTracks.value.add(pk);
   try {
     await deleteTrack(pk);
@@ -507,7 +582,7 @@ function copyTrackUrl(pk: string) {
   alert("✅ URL copied!");
 }
 
-function resolveTrackOrigin(track: AudioCacheEntry | null): string | undefined {
+function resolveTrackOrigin(track: AudioCacheEntry | null | undefined): string | undefined {
   return track ? getOriginUrl(track) : undefined;
 }
 
@@ -628,6 +703,9 @@ function lazyBadgeLabel(track: AudioCacheEntry | null | undefined): string {
 }
 
 function trackStatusLabel(track: AudioCacheEntry | null): string {
+  if (isLocalFile(track)) {
+    return "Local FLAC reference (original preserved)";
+  }
   const info = getLazyInfo(track);
   if (info) {
     const provider = info.isLegacy ? "" : ` - ${info.display}`;
@@ -638,6 +716,23 @@ function trackStatusLabel(track: AudioCacheEntry | null): string {
 
 function getTrackByPk(pk: string): AudioCacheEntry | undefined {
   return tracks.value.find((t) => t.pk === pk);
+}
+
+function isLocalFile(track: AudioCacheEntry | null | undefined): boolean {
+  return track?.metadata?.local_passthrough === true;
+}
+
+function localSourcePath(track: AudioCacheEntry | null | undefined): string | undefined {
+  if (!track) return undefined;
+  const metaValue = track.metadata?.local_source_path;
+  if (typeof metaValue === "string" && metaValue.trim().length > 0) {
+    return metaValue;
+  }
+  const origin = resolveTrackOrigin(track);
+  if (origin?.startsWith("file://")) {
+    return origin.replace("file://", "");
+  }
+  return undefined;
 }
 
 onMounted(() => {
@@ -700,6 +795,25 @@ onMounted(() => {
 .add-form h3 {
   margin-top: 0;
   color: #61dafb;
+}
+
+.source-toggle {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+  color: #ccc;
+  font-size: 0.95rem;
+}
+
+.source-toggle input {
+  margin-right: 0.3rem;
+}
+
+.local-tip {
+  margin: 0.25rem 0 0.75rem;
+  font-size: 0.85rem;
+  color: #bbb;
 }
 
 .form-group {
@@ -870,6 +984,11 @@ button:disabled {
   flex-direction: column;
 }
 
+.track-card.local-reference {
+  border: 1px solid rgba(97, 218, 251, 0.6);
+  box-shadow: 0 0 0 1px rgba(97, 218, 251, 0.1);
+}
+
 .track-card:hover {
   transform: translateY(-4px);
   box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
@@ -924,6 +1043,17 @@ button:disabled {
   padding: 0.2rem 0.6rem;
   border-radius: 999px;
   font-size: 0.8rem;
+}
+
+.local-pill {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  background: rgba(97, 218, 251, 0.9);
+  color: #0c1924;
+  font-size: 0.75rem;
+  font-weight: 600;
 }
 
 .track-info {
@@ -998,6 +1128,33 @@ button:disabled {
   font-size: 0.85rem;
   color: #999;
   flex-wrap: wrap;
+}
+
+.local-path {
+  margin: 0.4rem 0;
+  font-size: 0.8rem;
+  color: #a0f0ff;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: baseline;
+}
+
+.local-badge {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  background: rgba(97, 218, 251, 0.2);
+  border: 1px solid rgba(97, 218, 251, 0.4);
+  border-radius: 999px;
+  padding: 0.1rem 0.5rem;
+  color: #61dafb;
+}
+
+.local-path-text {
+  font-family: "Fira Code", "SFMono-Regular", Consolas, monospace;
+  color: #e3f7ff;
+  word-break: break-all;
 }
 
 .collection {

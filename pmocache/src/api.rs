@@ -57,13 +57,20 @@ pub struct ConversionStatus {
     pub details: Option<String>,
 }
 
-/// Requête pour ajouter un item au cache
+/// Requête pour ajouter un item au cache.
+///
+/// Au moins une des deux entrées (`url` ou `path`) doit être fournie.
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct AddItemRequest {
-    /// URL de la source
+    /// URL HTTP/HTTPS/UPnP à télécharger
+    #[serde(default)]
     #[cfg_attr(feature = "openapi", schema(example = "https://example.com/file.dat"))]
-    pub url: String,
+    pub url: Option<String>,
+    /// Chemin local (`file://` implicite) à référencer
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(example = "/mnt/music/track.flac"))]
+    pub path: Option<String>,
     /// Collection optionnelle
     #[cfg_attr(feature = "openapi", schema(example = "album:the_wall"))]
     pub collection: Option<String>,
@@ -76,7 +83,7 @@ pub struct AddItemResponse {
     /// Clé primaire (pk) de l'item ajouté
     #[cfg_attr(feature = "openapi", schema(example = "1a2b3c4d5e6f7a8b"))]
     pub pk: String,
-    /// URL source de l'item
+    /// URL ou chemin source de l'item
     #[cfg_attr(feature = "openapi", schema(example = "https://example.com/file.dat"))]
     pub url: String,
     /// Message de succès
@@ -248,6 +255,12 @@ fn conversion_from_json(value: &Value) -> Option<ConversionStatus> {
         .and_then(|conv| serde_json::from_value(conv.clone()).ok())
 }
 
+#[derive(Clone, Copy)]
+enum AddSource<'a> {
+    Url(&'a str),
+    Local(&'a str),
+}
+
 /// Ajoute un item au cache depuis une URL
 ///
 /// Télécharge l'item depuis l'URL fournie et l'ajoute au cache.
@@ -256,30 +269,60 @@ pub async fn add_item<C: CacheConfig>(
     State(cache): State<Arc<Cache<C>>>,
     Json(req): Json<AddItemRequest>,
 ) -> impl IntoResponse {
-    if req.url.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "INVALID_REQUEST".to_string(),
-                message: "URL cannot be empty".to_string(),
-            }),
-        )
-            .into_response();
-    }
+    let mode = match (req.url.as_deref(), req.path.as_deref()) {
+        (Some(url), None) if !url.is_empty() => AddSource::Url(url),
+        (None, Some(path)) if !path.is_empty() => AddSource::Local(path),
+        (Some(_), Some(_)) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "INVALID_REQUEST".to_string(),
+                    message: "Provide either 'url' or 'path', not both".to_string(),
+                }),
+            )
+                .into_response()
+        }
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "INVALID_REQUEST".to_string(),
+                    message: "Either 'url' or 'path' must be provided".to_string(),
+                }),
+            )
+                .into_response()
+        }
+    };
 
-    match cache
-        .add_from_url(&req.url, req.collection.as_deref())
-        .await
-    {
-        Ok(pk) => (
-            StatusCode::CREATED,
-            Json(AddItemResponse {
-                pk,
-                url: req.url,
-                message: "Item added successfully".to_string(),
-            }),
-        )
-            .into_response(),
+    let collection = req.collection.as_deref();
+    let add_result = match mode {
+        AddSource::Url(url) => cache.add_from_url(url, collection).await,
+        AddSource::Local(path) => cache.add_from_file(path, collection).await,
+    };
+
+    match add_result {
+        Ok(pk) => {
+            let origin =
+                cache
+                    .db
+                    .get_origin_url(&pk)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| match mode {
+                        AddSource::Url(url) => url.to_string(),
+                        AddSource::Local(path) => format!("file://{}", path),
+                    });
+
+            (
+                StatusCode::CREATED,
+                Json(AddItemResponse {
+                    pk,
+                    url: origin,
+                    message: "Item added successfully".to_string(),
+                }),
+            )
+                .into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {

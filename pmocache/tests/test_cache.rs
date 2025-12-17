@@ -1,5 +1,4 @@
 use pmocache::{Cache, CacheConfig};
-use std::io::Write;
 use tempfile::TempDir;
 
 /// Configuration de test simple
@@ -307,7 +306,7 @@ async fn test_touch() {
 
 #[tokio::test]
 async fn test_consolidate() {
-    let (temp_dir, cache) = create_test_cache(10);
+    let (_temp_dir, cache) = create_test_cache(10);
 
     // Ajouter un fichier
     let test_data = b"Test data";

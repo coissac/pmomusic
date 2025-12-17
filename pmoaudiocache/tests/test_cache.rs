@@ -94,3 +94,47 @@ async fn test_cache_limit() {
     let count = cache.db.count().unwrap();
     assert_eq!(count, 2);
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_local_flac_passthrough_symlink() {
+    let (_temp_dir, cache) = create_test_cache();
+
+    let flac_file = tempfile::NamedTempFile::with_suffix(".flac").unwrap();
+    let mut data = vec![0u8; 2048];
+    data[..4].copy_from_slice(b"fLaC");
+    for (idx, byte) in data.iter_mut().enumerate().skip(4) {
+        *byte = (idx % 251) as u8;
+    }
+    std::fs::write(flac_file.path(), &data).unwrap();
+
+    let pk = cache::add_local_file(
+        &cache,
+        flac_file.path().to_str().unwrap(),
+        Some("album:test"),
+    )
+    .await
+    .unwrap();
+
+    let cached_path = cache.get(&pk).await.unwrap();
+    let metadata = std::fs::symlink_metadata(&cached_path).unwrap();
+    assert!(metadata.file_type().is_symlink());
+
+    let canonical_source = std::fs::canonicalize(flac_file.path()).unwrap();
+    let link_target = std::fs::read_link(&cached_path).unwrap();
+    assert_eq!(link_target, canonical_source);
+
+    let stored_metadata = cache.db.get_metadata(&pk).unwrap().unwrap();
+    assert_eq!(
+        stored_metadata
+            .get("local_passthrough")
+            .and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    assert_eq!(
+        stored_metadata
+            .get("local_source_path")
+            .and_then(|v| v.as_str()),
+        Some(canonical_source.to_str().unwrap())
+    );
+}

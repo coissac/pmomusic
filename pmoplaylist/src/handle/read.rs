@@ -70,7 +70,13 @@ impl ReadHandle {
                         let role = self.playlist.role().await;
                         let core = self.playlist.core.read().await;
                         let _ = persistence
-                            .save_playlist(&self.playlist.id, &title, &role, &core.config, &core.tracks)
+                            .save_playlist(
+                                &self.playlist.id,
+                                &title,
+                                &role,
+                                &core.config,
+                                &core.tracks,
+                            )
                             .await;
                     }
                 }

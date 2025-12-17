@@ -11,6 +11,11 @@
 //! - stockage des métadonnées dans la table `metadata` de `pmocache::DB` ;
 //! - helpers pour renseigner les collections à partir des tags ;
 //! - intégration optionnelle avec `pmoserver` (routes REST + diffusion de fichiers).
+//! - référence de fichiers FLAC locaux : [`cache::add_local_file`] détecte les fichiers déjà au
+//!   bon format et enregistre une entrée du cache sans recopier les octets tout en laissant les
+//!   autres formats passer par la conversion standard.
+//! - support complet des lazy PK hérités de [`pmocache`], permettant de publier des playlists
+//!   avec des entrées différées et de déclencher le téléchargement lors de la première lecture.
 //!
 //! ## Exemple rapide
 //!
@@ -198,7 +203,7 @@ pub trait AudioCacheExt {
 }
 
 #[cfg(feature = "pmoserver")]
-use pmocache::pmoserver_ext::{create_api_router, create_file_router};
+use pmocache::pmoserver_ext::create_file_router;
 #[cfg(feature = "pmoserver")]
 use utoipa::OpenApi;
 
@@ -219,9 +224,28 @@ impl AudioCacheExt for pmoserver::Server {
         );
         self.add_router("/", file_router).await;
 
-        // API REST générique (pmocache)
-        // Routes: GET/POST/DELETE /api/audio, etc.
-        let mut api_router = create_api_router(cache.clone());
+        // API REST (handlers génériques + POST spécialisé audio)
+        let mut api_router = axum::Router::new()
+            .route(
+                "/",
+                axum::routing::get(pmocache::api::list_items::<AudioConfig>)
+                    .post(crate::api::add_audio_item)
+                    .delete(pmocache::api::purge_cache::<AudioConfig>),
+            )
+            .route(
+                "/{pk}",
+                axum::routing::get(pmocache::api::get_item_info::<AudioConfig>)
+                    .delete(pmocache::api::delete_item::<AudioConfig>),
+            )
+            .route(
+                "/{pk}/status",
+                axum::routing::get(pmocache::api::get_download_status::<AudioConfig>),
+            )
+            .route(
+                "/consolidate",
+                axum::routing::post(pmocache::api::consolidate_cache::<AudioConfig>),
+            )
+            .with_state(cache.clone());
 
         // Ajouter les endpoints audio spécifiques
         // Route: GET /api/audio/{pk}/cover-url
