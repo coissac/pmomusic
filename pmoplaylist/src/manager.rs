@@ -6,12 +6,12 @@ use crate::playlist::core::PlaylistConfig;
 use crate::playlist::Playlist;
 use crate::Result;
 use once_cell::sync::OnceCell;
-use pmocache::{CacheBroadcastEvent, CacheSubscription};
+use pmocache::{CacheBroadcastEvent, CacheEvent, CacheSubscription};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::RwLock as StdRwLock;
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc,
 };
 use std::time::Duration;
@@ -33,6 +33,7 @@ struct ManagerInner {
     track_index: StdRwLock<HashMap<String, Vec<String>>>, // cache_pk -> playlists
     cache_subscriptions: StdRwLock<HashMap<String, CacheSubscription>>,
     event_tx: broadcast::Sender<PlaylistEventEnvelope>,
+    lazy_listener_started: AtomicBool,
 }
 
 /// Type d'évènement émis par le PlaylistManager.
@@ -87,14 +88,24 @@ impl PlaylistManager {
                 track_index: StdRwLock::new(HashMap::new()),
                 cache_subscriptions: StdRwLock::new(HashMap::new()),
                 event_tx: broadcast::channel(256).0,
+                lazy_listener_started: AtomicBool::new(false),
             }),
         };
 
         // Lancer la task d'�viction en background
-        let manager_clone = manager.clone();
-        tokio::spawn(async move {
-            manager_clone.eviction_task().await;
-        });
+        {
+            let manager_clone = manager.clone();
+            tokio::spawn(async move {
+                manager_clone.eviction_task().await;
+            });
+        }
+
+        {
+            let manager_clone = manager.clone();
+            tokio::spawn(async move {
+                manager_clone.ensure_lazy_listener().await;
+            });
+        }
 
         Ok(manager)
     }
@@ -667,6 +678,77 @@ impl PlaylistManager {
         }
     }
 
+    async fn ensure_lazy_listener(&self) {
+        if self.inner.lazy_listener_started.load(Ordering::SeqCst) {
+            return;
+        }
+
+        let cache = match audio_cache() {
+            Ok(cache) => cache,
+            Err(_) => return,
+        };
+
+        if self
+            .inner
+            .lazy_listener_started
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return;
+        }
+
+        let manager = self.clone();
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            let mut rx = cache.subscribe_events();
+            while let Ok(event) = rx.recv().await {
+                if let CacheEvent::LazyDownloaded { lazy_pk, real_pk } = event {
+                    manager
+                        .handle_lazy_download_event(&lazy_pk, &real_pk)
+                        .await;
+                }
+            }
+            inner.lazy_listener_started.store(false, Ordering::SeqCst);
+        });
+    }
+
+    async fn handle_lazy_download_event(&self, lazy_pk: &str, real_pk: &str) {
+        let playlists = {
+            let index = self.inner.track_index.read().unwrap();
+            index.get(lazy_pk).cloned()
+        };
+
+        let Some(playlists) = playlists else {
+            tracing::debug!(
+                "Lazy download {} converted to {} but no playlists referenced it",
+                lazy_pk,
+                real_pk
+            );
+            return;
+        };
+
+        for playlist_id in playlists {
+            match self.get_write_handle(playlist_id.clone()).await {
+                Ok(writer) => {
+                    if let Err(e) = writer.update_cache_pk(lazy_pk, real_pk).await {
+                        tracing::error!(
+                            "Failed to update playlist {} from {} to {}: {}",
+                            playlist_id,
+                            lazy_pk,
+                            real_pk,
+                            e
+                        );
+                    }
+                }
+                Err(e) => tracing::debug!(
+                    "Failed to acquire write handle for playlist {} during lazy swap: {}",
+                    playlist_id,
+                    e
+                ),
+            }
+        }
+    }
+
     /// Task d'�viction en background
     async fn eviction_task(&self) {
         loop {
@@ -739,6 +821,7 @@ pub fn register_audio_cache(cache: Arc<pmoaudiocache::Cache>) {
         let manager = manager.clone();
         tokio::spawn(async move {
             manager.sync_cache_subscriptions().await;
+            manager.ensure_lazy_listener().await;
         });
     }
 }
