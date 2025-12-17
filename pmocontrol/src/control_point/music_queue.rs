@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 
 use crate::control_point::openhome_queue::OpenHomeQueue;
 use crate::openhome_playlist::OpenHomePlaylistSnapshot;
@@ -22,6 +22,17 @@ impl MusicQueue {
             _ => Err(anyhow!(
                 "OpenHome playlist snapshot is only available for OpenHome queues"
             )),
+        }
+    }
+
+    pub fn replace_with_attached_playlist(
+        &mut self,
+        items: Vec<PlaybackItem>,
+        current_index: Option<usize>,
+    ) -> Result<()> {
+        match self {
+            MusicQueue::OpenHome(queue) => queue.replace_entire_playlist(items, current_index),
+            MusicQueue::Internal(queue) => queue.replace_queue(items, current_index),
         }
     }
 }

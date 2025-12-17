@@ -1,11 +1,13 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use pmodidl::DIDLLite;
 use quick_xml::escape::escape;
+use tracing::debug;
 
 use crate::media_server::ServerId;
 use crate::model::RendererId;
 use crate::openhome_client::{
-    OhInfoClient, OhPlaylistClient, OhTrackEntry, parse_track_metadata_from_didl,
+    parse_track_metadata_from_didl, OhInfoClient, OhPlaylistClient, OhProductClient, OhTrackEntry,
+    OPENHOME_PLAYLIST_HEAD_ID,
 };
 use crate::openhome_playlist::{OpenHomePlaylistSnapshot, OpenHomePlaylistTrack};
 use crate::queue_backend::{PlaybackItem, QueueBackend, QueueSnapshot};
@@ -16,6 +18,7 @@ pub struct OpenHomeQueue {
     pub renderer_id: RendererId,
     pub playlist: OhPlaylistClient,
     pub info_client: Option<OhInfoClient>,
+    pub product_client: Option<OhProductClient>,
     pub items: Vec<PlaybackItem>,
     pub current_index: Option<usize>,
     track_ids: Vec<u32>,
@@ -26,11 +29,13 @@ impl OpenHomeQueue {
         renderer_id: RendererId,
         playlist: OhPlaylistClient,
         info_client: Option<OhInfoClient>,
+        product_client: Option<OhProductClient>,
     ) -> Self {
         Self {
             renderer_id,
             playlist,
             info_client,
+            product_client,
             items: Vec::new(),
             current_index: None,
             track_ids: Vec::new(),
@@ -43,6 +48,7 @@ impl OpenHomeQueue {
     /// `OpenHomeRenderer::snapshot_openhome_playlist` but converts entries
     /// directly into `PlaybackItem`s.
     pub fn refresh_from_openhome(&mut self) -> Result<()> {
+        self.ensure_playlist_source_selected()?;
         let entries = self.playlist.read_all_tracks()?;
         let mut items = Vec::with_capacity(entries.len());
         let mut track_ids = Vec::with_capacity(entries.len());
@@ -56,8 +62,16 @@ impl OpenHomeQueue {
             .info_client
             .as_ref()
             .and_then(|client| client.id().ok());
-        let current_index =
-            current_id.and_then(|id| track_ids.iter().position(|entry_id| *entry_id == id));
+        let previous_index = self
+            .current_index
+            .and_then(|idx| if idx < track_ids.len() { Some(idx) } else { None });
+        let mut current_index = current_id
+            .and_then(|id| track_ids.iter().position(|entry_id| *entry_id == id))
+            .or(previous_index);
+
+        if current_index.is_none() && !track_ids.is_empty() {
+            current_index = Some(0);
+        }
 
         self.items = items;
         self.track_ids = track_ids;
@@ -85,6 +99,7 @@ impl OpenHomeQueue {
             current_id: self
                 .current_index
                 .and_then(|idx| self.track_ids.get(idx).copied()),
+            current_index: self.current_index,
             tracks,
         })
     }
@@ -110,16 +125,60 @@ impl OpenHomeQueue {
             }
         };
 
+        self.ensure_playlist_source_selected()?;
         self.playlist.play_id(id)?;
         self.current_index = Some(index);
         Ok(())
     }
 
     pub fn clear(&mut self) -> Result<()> {
+        self.ensure_playlist_source_selected()?;
         self.playlist.delete_all()?;
         self.items.clear();
         self.track_ids.clear();
         self.current_index = None;
+        Ok(())
+    }
+
+    /// Replace the remote OpenHome playlist entirely with `items`.
+    ///
+    /// This is used when attaching a media server playlist: we want to drop any
+    /// stale entries (even if they were inserted by another control point) and
+    /// rebuild the renderer playlist from scratch.
+    pub fn replace_entire_playlist(
+        &mut self,
+        items: Vec<PlaybackItem>,
+        current_index: Option<usize>,
+    ) -> Result<()> {
+        self.ensure_playlist_source_selected()?;
+        self.playlist.delete_all()?;
+        self.items.clear();
+        self.track_ids.clear();
+        self.current_index = None;
+
+        if items.is_empty() {
+            return Ok(());
+        }
+
+        let mut rebuilt_items = Vec::with_capacity(items.len());
+        let mut rebuilt_ids = Vec::with_capacity(items.len());
+        let mut previous_id = OPENHOME_PLAYLIST_HEAD_ID;
+
+        for item in items {
+            let metadata = build_metadata_xml(&item);
+            let new_id = self.playlist.insert(previous_id, &item.uri, &metadata)?;
+            previous_id = new_id;
+            rebuilt_ids.push(new_id);
+            rebuilt_items.push(self.item_with_openhome_id(item, new_id));
+        }
+
+        let normalized = current_index
+            .filter(|&idx| idx < rebuilt_ids.len())
+            .or_else(|| Some(0));
+
+        self.items = rebuilt_items;
+        self.track_ids = rebuilt_ids;
+        self.current_index = normalized;
         Ok(())
     }
 
@@ -129,6 +188,7 @@ impl OpenHomeQueue {
         after_id: Option<u32>,
         play: bool,
     ) -> Result<u32> {
+        self.ensure_playlist_source_selected()?;
         let metadata_xml = build_metadata_xml(&item);
         let insert_after = match after_id {
             Some(id) => id,
@@ -161,7 +221,8 @@ impl OpenHomeQueue {
         }
 
         self.track_ids.insert(insert_index, new_id);
-        self.items.insert(insert_index, item);
+        let stored_item = self.item_with_openhome_id(item, new_id);
+        self.items.insert(insert_index, stored_item);
 
         self.current_index = if play {
             Some(insert_index)
@@ -171,6 +232,20 @@ impl OpenHomeQueue {
         };
 
         Ok(new_id)
+    }
+
+    fn ensure_playlist_source_selected(&self) -> Result<()> {
+        if let Some(product) = &self.product_client {
+            product.ensure_playlist_source_selected().map_err(|err| {
+                anyhow!(
+                    "Failed to select OpenHome Playlist source for {}: {}",
+                    self.renderer_id.0,
+                    err
+                )
+            })
+        } else {
+            Ok(())
+        }
     }
 
     fn playback_item_from_entry(&self, entry: &OhTrackEntry) -> PlaybackItem {
@@ -185,6 +260,12 @@ impl OpenHomeQueue {
             protocol_info: "http-get:*:audio/*:*".to_string(),
             metadata,
         }
+    }
+
+    fn item_with_openhome_id(&self, mut item: PlaybackItem, track_id: u32) -> PlaybackItem {
+        item.didl_id = format!("openhome:{}", track_id);
+        item.media_server_id = ServerId(format!("openhome:{}", self.renderer_id.0));
+        item
     }
 
     fn ensure_track_id(&mut self, index: usize) -> Result<u32> {
@@ -272,6 +353,41 @@ fn build_metadata_xml(item: &PlaybackItem) -> String {
     xml
 }
 
+fn lcs_flags(current: &[PlaybackItem], desired: &[PlaybackItem]) -> (Vec<bool>, Vec<bool>) {
+    let m = current.len();
+    let n = desired.len();
+    let mut dp = vec![vec![0u32; n + 1]; m + 1];
+
+    for i in 0..m {
+        for j in 0..n {
+            if current[i].uri == desired[j].uri {
+                dp[i + 1][j + 1] = dp[i][j] + 1;
+            } else {
+                dp[i + 1][j + 1] = dp[i + 1][j].max(dp[i][j + 1]);
+            }
+        }
+    }
+
+    let mut keep_current = vec![false; m];
+    let mut keep_desired = vec![false; n];
+    let (mut i, mut j) = (m, n);
+
+    while i > 0 && j > 0 {
+        if current[i - 1].uri == desired[j - 1].uri {
+            keep_current[i - 1] = true;
+            keep_desired[j - 1] = true;
+            i -= 1;
+            j -= 1;
+        } else if dp[i - 1][j] >= dp[i][j - 1] {
+            i -= 1;
+        } else {
+            j -= 1;
+        }
+    }
+
+    (keep_current, keep_desired)
+}
+
 impl QueueBackend for OpenHomeQueue {
     fn queue_snapshot(&self) -> Result<QueueSnapshot> {
         Ok(QueueSnapshot {
@@ -284,6 +400,7 @@ impl QueueBackend for OpenHomeQueue {
         let normalized = index.filter(|&i| i < self.items.len());
         if let Some(idx) = normalized {
             let track_id = self.ensure_track_id(idx)?;
+            self.ensure_playlist_source_selected()?;
             self.playlist.play_id(track_id)?;
         }
         self.current_index = normalized;
@@ -295,27 +412,90 @@ impl QueueBackend for OpenHomeQueue {
         items: Vec<PlaybackItem>,
         current_index: Option<usize>,
     ) -> Result<()> {
-        self.playlist.delete_all()?;
-
-        let mut previous_id = 0u32;
-        let mut inserted_ids = Vec::with_capacity(items.len());
-
-        for item in &items {
-            let metadata = build_metadata_xml(item);
-            let new_id = self.playlist.insert(previous_id, &item.uri, &metadata)?;
-            previous_id = new_id;
-            inserted_ids.push(new_id);
+        self.ensure_playlist_source_selected()?;
+        if items.is_empty() {
+            self.playlist.delete_all()?;
+            self.items.clear();
+            self.track_ids.clear();
+            self.current_index = None;
+            return Ok(());
         }
 
-        let normalized = current_index.filter(|&i| i < inserted_ids.len());
-        if let Some(idx) = normalized {
-            if let Some(track_id) = inserted_ids.get(idx).copied() {
-                self.playlist.play_id(track_id)?;
+        // Synchronize local state with the actual OpenHome playlist before computing
+        // differences. Without this, any drift between our cache and the renderer
+        // (e.g., manual edits from another control point) would keep the stale items.
+        self.refresh_from_openhome()?;
+        debug!(
+            renderer = self.renderer_id.0.as_str(),
+            actual_items = self.items.len(),
+            "OpenHome playlist state refreshed before replace_queue"
+        );
+
+        let (keep_current, keep_desired) = lcs_flags(&self.items, &items);
+
+        let items_to_keep = keep_current.iter().filter(|&&k| k).count();
+        let items_to_delete = keep_current.iter().filter(|&&k| !k).count();
+        let items_to_add = keep_desired.iter().filter(|&&k| !k).count();
+
+        debug!(
+            renderer = self.renderer_id.0.as_str(),
+            keep = items_to_keep,
+            delete = items_to_delete,
+            add = items_to_add,
+            "LCS computed: minimizing OpenHome playlist operations"
+        );
+
+        for idx in (0..self.track_ids.len()).rev() {
+            if !keep_current[idx] {
+                let track_id = self.track_ids[idx];
+                self.playlist.delete_id(track_id)?;
+                self.track_ids.remove(idx);
+                self.items.remove(idx);
             }
         }
 
-        self.items = items;
-        self.track_ids = inserted_ids;
+        let remaining_ids = self.track_ids.clone();
+        let mut remaining_idx = 0usize;
+        let mut previous_id = OPENHOME_PLAYLIST_HEAD_ID;
+        let mut rebuilt_items = Vec::with_capacity(items.len());
+        let mut rebuilt_ids = Vec::with_capacity(items.len());
+
+        for (idx, item) in items.into_iter().enumerate() {
+            if keep_desired[idx] {
+                if remaining_idx >= remaining_ids.len() {
+                    return Err(anyhow!(
+                        "OpenHome playlist refresh bookkeeping mismatch (kept entries underflow)"
+                    ));
+                }
+                let existing_id = remaining_ids[remaining_idx];
+                remaining_idx += 1;
+                previous_id = existing_id;
+                rebuilt_ids.push(existing_id);
+                rebuilt_items.push(self.item_with_openhome_id(item, existing_id));
+            } else {
+                let metadata = build_metadata_xml(&item);
+                let new_id = self.playlist.insert(previous_id, &item.uri, &metadata)?;
+                previous_id = new_id;
+                rebuilt_ids.push(new_id);
+                rebuilt_items.push(self.item_with_openhome_id(item, new_id));
+            }
+        }
+
+        if remaining_idx != remaining_ids.len() {
+            return Err(anyhow!(
+                "OpenHome playlist refresh bookkeeping mismatch (kept entries overflow)"
+            ));
+        }
+
+        let previous_index = self
+            .current_index
+            .and_then(|idx| if idx < rebuilt_ids.len() { Some(idx) } else { None });
+        let normalized = current_index
+            .filter(|&i| i < rebuilt_ids.len())
+            .or(previous_index)
+            .or_else(|| if rebuilt_ids.is_empty() { None } else { Some(0) });
+        self.items = rebuilt_items;
+        self.track_ids = rebuilt_ids;
         self.current_index = normalized;
         Ok(())
     }
@@ -329,9 +509,10 @@ impl QueueBackend for OpenHomeQueue {
             return Ok(());
         }
 
+        self.ensure_playlist_source_selected()?;
         let track_id = self.ensure_track_id(index)?;
         let before_id = if index == 0 {
-            0
+            OPENHOME_PLAYLIST_HEAD_ID
         } else {
             self.ensure_track_id(index - 1)?
         };
@@ -344,7 +525,7 @@ impl QueueBackend for OpenHomeQueue {
             self.playlist.play_id(new_id)?;
         }
 
-        self.items[index] = item;
+        self.items[index] = self.item_with_openhome_id(item, new_id);
         self.track_ids[index] = new_id;
         Ok(())
     }

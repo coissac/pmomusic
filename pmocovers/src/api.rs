@@ -2,12 +2,7 @@
 
 use crate::cache;
 use crate::Cache;
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
-    Json,
-};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use pmocache::api::{AddItemRequest, AddItemResponse, ErrorResponse};
 use std::sync::Arc;
 

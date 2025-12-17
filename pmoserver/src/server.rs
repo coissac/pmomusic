@@ -551,7 +551,13 @@ impl Server {
         self.join_handle = Some(tokio::spawn(async move {
             let server_future = async {
                 let r = router.read().await.clone();
-                let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+                let listener = match tokio::net::TcpListener::bind(addr).await {
+                    Ok(l) => l,
+                    Err(e) => {
+                        error!("Failed to bind to {}: {}", addr, e);
+                        panic!("Cannot start server: {}", e);
+                    }
+                };
 
                 axum::serve(listener, r.into_make_service())
                     .with_graceful_shutdown(async move {

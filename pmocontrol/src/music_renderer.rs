@@ -63,6 +63,7 @@ pub trait OpenHomeQueueProvider: Send + Sync + 'static {
         &'a self,
         renderer_id: &RendererId,
     ) -> Result<RendererRuntimeStateMut<'a>>;
+    fn invalidate_openhome_cache(&self, renderer_id: &RendererId) -> Result<()>;
 }
 
 static OPENHOME_QUEUE_PROVIDER: OnceLock<Arc<dyn OpenHomeQueueProvider>> = OnceLock::new();
@@ -187,18 +188,7 @@ impl MusicRenderer {
     }
 
     pub fn openhome_playlist_snapshot(&self) -> Result<OpenHomePlaylistSnapshot> {
-        if let Some(provider) = OPENHOME_QUEUE_PROVIDER.get() {
-            let state = provider.renderer_state(self.id())?;
-            match &state.queue {
-                MusicQueue::OpenHome(queue) => queue.openhome_playlist_snapshot(),
-                _ => Err(op_not_supported(
-                    "openhome_playlist_snapshot",
-                    self.unsupported_backend_name(),
-                )),
-            }
-        } else {
-            self.fetch_openhome_playlist_snapshot()
-        }
+        self.fetch_openhome_playlist_snapshot()
     }
 
     pub(crate) fn fetch_openhome_playlist_snapshot(&self) -> Result<OpenHomePlaylistSnapshot> {
@@ -212,46 +202,41 @@ impl MusicRenderer {
     }
 
     pub fn openhome_playlist_len(&self) -> Result<usize> {
-        if let Some(provider) = OPENHOME_QUEUE_PROVIDER.get() {
-            let state = provider.renderer_state(self.id())?;
-            match &state.queue {
-                MusicQueue::OpenHome(queue) => Ok(queue.len()),
-                _ => Err(op_not_supported(
-                    "openhome_playlist_len",
-                    self.unsupported_backend_name(),
-                )),
-            }
-        } else {
-            Ok(self.fetch_openhome_playlist_snapshot()?.tracks.len())
+        match self {
+            MusicRenderer::OpenHome(renderer) => renderer.openhome_playlist_len(),
+            _ => Err(op_not_supported(
+                "openhome_playlist_len",
+                self.unsupported_backend_name(),
+            )),
         }
     }
 
     pub fn openhome_playlist_ids(&self) -> Result<Vec<u32>> {
-        if let Some(provider) = OPENHOME_QUEUE_PROVIDER.get() {
-            let state = provider.renderer_state(self.id())?;
-            match &state.queue {
-                MusicQueue::OpenHome(queue) => Ok(queue.openhome_track_ids()),
-                _ => Err(op_not_supported(
-                    "openhome_playlist_ids",
-                    self.unsupported_backend_name(),
-                )),
-            }
-        } else {
-            let snapshot = self.fetch_openhome_playlist_snapshot()?;
-            Ok(snapshot.tracks.into_iter().map(|track| track.id).collect())
+        match self {
+            MusicRenderer::OpenHome(renderer) => renderer.openhome_playlist_ids(),
+            _ => Err(op_not_supported(
+                "openhome_playlist_ids",
+                self.unsupported_backend_name(),
+            )),
         }
     }
 
     pub fn openhome_playlist_clear(&self) -> Result<()> {
         if let Some(provider) = OPENHOME_QUEUE_PROVIDER.get() {
-            let mut state = provider.renderer_state_mut(self.id())?;
-            match &mut *state.queue {
-                MusicQueue::OpenHome(queue) => queue.clear(),
-                _ => Err(op_not_supported(
-                    "openhome_playlist_clear",
-                    self.unsupported_backend_name(),
-                )),
+            let result = {
+                let mut state = provider.renderer_state_mut(self.id())?;
+                match &mut *state.queue {
+                    MusicQueue::OpenHome(queue) => queue.clear(),
+                    _ => Err(op_not_supported(
+                        "openhome_playlist_clear",
+                        self.unsupported_backend_name(),
+                    )),
+                }
+            };
+            if result.is_ok() {
+                provider.invalidate_openhome_cache(self.id())?;
             }
+            result
         } else {
             self.fetch_openhome_playlist_clear()
         }
@@ -275,17 +260,24 @@ impl MusicRenderer {
         play: bool,
     ) -> Result<u32> {
         if let Some(provider) = OPENHOME_QUEUE_PROVIDER.get() {
-            let mut state = provider.renderer_state_mut(self.id())?;
-            match &mut *state.queue {
-                MusicQueue::OpenHome(queue) => {
-                    let playback_item = Self::playback_item_from_params(self.id(), uri, metadata)?;
-                    queue.add_playback_item(playback_item, after_id, play)
+            let result = {
+                let mut state = provider.renderer_state_mut(self.id())?;
+                match &mut *state.queue {
+                    MusicQueue::OpenHome(queue) => {
+                        let playback_item =
+                            Self::playback_item_from_params(self.id(), uri, metadata)?;
+                        queue.add_playback_item(playback_item, after_id, play)
+                    }
+                    _ => Err(op_not_supported(
+                        "openhome_playlist_add_track",
+                        self.unsupported_backend_name(),
+                    )),
                 }
-                _ => Err(op_not_supported(
-                    "openhome_playlist_add_track",
-                    self.unsupported_backend_name(),
-                )),
+            };
+            if result.is_ok() {
+                provider.invalidate_openhome_cache(self.id())?;
             }
+            result
         } else {
             self.fetch_openhome_playlist_add_track(uri, metadata, after_id, play)
         }
@@ -293,14 +285,20 @@ impl MusicRenderer {
 
     pub fn openhome_playlist_play_id(&self, id: u32) -> Result<()> {
         if let Some(provider) = OPENHOME_QUEUE_PROVIDER.get() {
-            let mut state = provider.renderer_state_mut(self.id())?;
-            match &mut *state.queue {
-                MusicQueue::OpenHome(queue) => queue.select_track_id(id),
-                _ => Err(op_not_supported(
-                    "openhome_playlist_play_id",
-                    self.unsupported_backend_name(),
-                )),
+            let result = {
+                let mut state = provider.renderer_state_mut(self.id())?;
+                match &mut *state.queue {
+                    MusicQueue::OpenHome(queue) => queue.select_track_id(id),
+                    _ => Err(op_not_supported(
+                        "openhome_playlist_play_id",
+                        self.unsupported_backend_name(),
+                    )),
+                }
+            };
+            if result.is_ok() {
+                provider.invalidate_openhome_cache(self.id())?;
             }
+            result
         } else {
             self.fetch_openhome_playlist_play_id(id)
         }

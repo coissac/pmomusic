@@ -7,14 +7,13 @@
 ///
 /// Usage:
 ///   cargo run --example test_attach_playlist
-
 use anyhow::{Context, Result};
 use pmocontrol::{
     media_server::{MediaBrowser, MediaEntry, MediaServer, ServerId},
     openhome_client::OhPlaylistClient,
 };
 use tracing::{debug, error, info, warn};
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -47,7 +46,8 @@ async fn main() -> Result<()> {
     info!("📡 Step 1: Connecting to MediaServer");
     let content_directory_url = format!(
         "{}/device/{}/service/ContentDirectory/control",
-        media_server_url, media_server_id.replace("uuid:", "")
+        media_server_url,
+        media_server_id.replace("uuid:", "")
     );
 
     let server = MediaServer::new(
@@ -82,7 +82,8 @@ async fn main() -> Result<()> {
     // Display the first few items
     info!("📋 First items in playlist:");
     for (idx, entry) in entries.iter().take(3).enumerate() {
-        info!("  [{}] {} - {}",
+        info!(
+            "  [{}] {} - {}",
             idx,
             entry.title,
             entry.artist.as_deref().unwrap_or("Unknown")
@@ -163,8 +164,11 @@ async fn main() -> Result<()> {
     }
 
     info!("");
-    info!("✅ Test completed: {}/{} items inserted successfully",
-        inserted_count, entries.len());
+    info!(
+        "✅ Test completed: {}/{} items inserted successfully",
+        inserted_count,
+        entries.len()
+    );
 
     Ok(())
 }

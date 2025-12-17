@@ -25,15 +25,15 @@ use std::sync::RwLock;
 use pmoserver::Server;
 use utoipa::OpenApi;
 
+use crate::UpnpModel;
 use crate::devices::errors::DeviceError;
 use crate::devices::{Device, DeviceInstance, DeviceRegistry};
 use crate::ssdp::SsdpServer;
 use crate::upnp_api::UpnpApiExt;
-use crate::UpnpModel;
 
 use pmoaudiocache::Cache as AudioCache;
 use pmocovers::Cache as CoverCache;
-use pmoutils::{find_process_using_port, TransportProtocol};
+use pmoutils::{TransportProtocol, find_process_using_port};
 
 /// Registre de devices global et thread-safe.
 ///

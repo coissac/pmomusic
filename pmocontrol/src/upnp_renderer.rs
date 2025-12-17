@@ -203,6 +203,8 @@ mod tests {
             oh_volume_control_url: None,
             oh_radio_service_type: None,
             oh_radio_control_url: None,
+            oh_product_service_type: None,
+            oh_product_control_url: None,
         }
     }
 

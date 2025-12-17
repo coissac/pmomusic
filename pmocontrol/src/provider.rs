@@ -1,7 +1,7 @@
 use std::io::BufReader;
 use std::time::{Duration, SystemTime};
 
-use quick_xml::{Error as XmlError, Reader, events::Event};
+use quick_xml::{events::Event, Error as XmlError, Reader};
 use thiserror::Error;
 use tracing::{debug, warn};
 
@@ -69,6 +69,8 @@ struct ParsedDeviceDescription {
     oh_volume_control_url: Option<String>,
     oh_radio_service_type: Option<String>,
     oh_radio_control_url: Option<String>,
+    oh_product_service_type: Option<String>,
+    oh_product_control_url: Option<String>,
 }
 
 impl ParsedDeviceDescription {
@@ -301,6 +303,17 @@ impl HttpXmlDescriptionProvider {
                                             );
                                         }
                                     }
+
+                                    if lower.contains("urn:av-openhome-org:service:product:") {
+                                        if parsed.oh_product_service_type.is_none() {
+                                            parsed.oh_product_service_type = Some(st.clone());
+                                            parsed.oh_product_control_url = Some(ctrl.clone());
+                                            debug!(
+                                                "Found OpenHome Product for {}: type={} controlURL={}",
+                                                endpoint.udn, st, ctrl
+                                            );
+                                        }
+                                    }
                                 }
 
                                 in_service = false;
@@ -463,6 +476,11 @@ impl HttpXmlDescriptionProvider {
                 .oh_radio_control_url
                 .as_ref()
                 .map(|ctrl| resolve_control_url(&endpoint.location, ctrl)),
+            oh_product_service_type: parsed.oh_product_service_type.clone(),
+            oh_product_control_url: parsed
+                .oh_product_control_url
+                .as_ref()
+                .map(|ctrl| resolve_control_url(&endpoint.location, ctrl)),
         })
     }
 
@@ -618,6 +636,26 @@ pub(crate) fn resolve_control_url(description_url: &str, control_url: &str) -> S
 
     // Fallback: just return the raw control_url if we cannot parse
     control_url.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_control_url;
+
+    #[test]
+    fn resolves_relative_path_against_description() {
+        let base = "http://192.0.2.10:49152/device.xml";
+        let control = "/upnp/control/playlist";
+        let resolved = resolve_control_url(base, control);
+        assert_eq!(resolved, "http://192.0.2.10:49152/upnp/control/playlist");
+    }
+
+    #[test]
+    fn leaves_absolute_url_untouched() {
+        let url = "http://renderer.local:1400/MediaRenderer/Control";
+        let resolved = resolve_control_url("http://example.invalid/device.xml", url);
+        assert_eq!(resolved, url);
+    }
 }
 
 impl DeviceDescriptionProvider for HttpXmlDescriptionProvider {

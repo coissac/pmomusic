@@ -11,6 +11,7 @@ pub mod linkplay;
 pub mod media_server;
 pub mod model;
 pub mod music_renderer;
+pub mod openhome;
 pub mod openhome_client;
 pub mod openhome_playlist;
 pub mod openhome_renderer;

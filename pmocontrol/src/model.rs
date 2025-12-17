@@ -85,6 +85,8 @@ pub struct RendererInfo {
     pub oh_volume_control_url: Option<String>,
     pub oh_radio_service_type: Option<String>,
     pub oh_radio_control_url: Option<String>,
+    pub oh_product_service_type: Option<String>,
+    pub oh_product_control_url: Option<String>,
 }
 
 #[derive(Clone, Debug)]

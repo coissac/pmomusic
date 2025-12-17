@@ -4,7 +4,9 @@
 //! et naviguer dans les serveurs de médias.
 
 #[cfg(feature = "pmoserver")]
-use crate::control_point::{ControlPoint, OpenHomeAccessError};
+use crate::control_point::{
+    ControlPoint, OpenHomeAccessError, OPENHOME_SNAPSHOT_CACHE_TTL,
+};
 #[cfg(feature = "pmoserver")]
 use crate::media_server::{MediaBrowser, MediaEntry, MusicServer, ServerId};
 #[cfg(feature = "pmoserver")]
@@ -1099,7 +1101,10 @@ async fn get_openhome_playlist(
     let rid_for_task = rid.clone();
 
     let fetch_task = tokio::task::spawn_blocking(move || {
-        control_point.get_openhome_playlist_snapshot(&rid_for_task)
+        control_point.get_cached_openhome_playlist_snapshot(
+            &rid_for_task,
+            OPENHOME_SNAPSHOT_CACHE_TTL,
+        )
     });
 
     let snapshot = fetch_task
