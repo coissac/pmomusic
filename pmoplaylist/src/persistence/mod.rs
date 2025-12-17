@@ -36,6 +36,7 @@ impl PersistenceManager {
                 id TEXT PRIMARY KEY,
                 title TEXT NOT NULL,
                 role TEXT NOT NULL,
+                cover_pk TEXT,
                 max_size INTEGER,
                 default_ttl_secs INTEGER,
                 created_at INTEGER NOT NULL,
@@ -84,6 +85,7 @@ impl PersistenceManager {
         id: &str,
         title: &str,
         role: &PlaylistRole,
+        cover_pk: Option<&str>,
         config: &PlaylistConfig,
         tracks: &VecDeque<Arc<Record>>,
     ) -> Result<()> {
@@ -96,19 +98,21 @@ impl PersistenceManager {
 
         // Upsert playlist metadata
         conn.execute(
-            "INSERT OR REPLACE INTO playlists (id, title, role, max_size, default_ttl_secs, created_at, last_modified)
-             VALUES (?1, ?2, ?3, ?4, ?5,
-                     COALESCE((SELECT created_at FROM playlists WHERE id = ?1), ?6),
-                     ?6)",
+            "INSERT OR REPLACE INTO playlists (id, title, role, cover_pk, max_size, default_ttl_secs, created_at, last_modified)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6,
+                     COALESCE((SELECT created_at FROM playlists WHERE id = ?1), ?7),
+                     ?7)",
             params![
                 id,
                 title,
                 role.as_str(),
+                cover_pk,
                 config.max_size.map(|s| s as i64),
                 config.default_ttl.map(|d| d.as_secs() as i64),
                 now_nanos,
             ],
-        ).map_err(|e| crate::Error::PersistenceError(format!("Failed to save playlist: {}", e)))?;
+        )
+        .map_err(|e| crate::Error::PersistenceError(format!("Failed to save playlist: {}", e)))?;
 
         // Supprimer les anciens tracks
         conn.execute("DELETE FROM tracks WHERE playlist_id = ?1", params![id])
@@ -140,21 +144,31 @@ impl PersistenceManager {
     pub async fn load_playlist(
         &self,
         id: &str,
-    ) -> Result<Option<(String, PlaylistRole, PlaylistConfig, VecDeque<Arc<Record>>)>> {
+    ) -> Result<
+        Option<(
+            String,
+            PlaylistRole,
+            PlaylistConfig,
+            Option<String>,
+            VecDeque<Arc<Record>>,
+        )>,
+    > {
         let conn = self.conn.lock().unwrap();
 
         // Charger les métadonnées
-        let mut stmt = conn
-            .prepare("SELECT title, role, max_size, default_ttl_secs FROM playlists WHERE id = ?1")
-            .map_err(|e| {
-                crate::Error::PersistenceError(format!("Failed to prepare statement: {}", e))
-            })?;
+        let mut stmt = conn.prepare(
+            "SELECT title, role, cover_pk, max_size, default_ttl_secs FROM playlists WHERE id = ?1",
+        )
+        .map_err(|e| {
+            crate::Error::PersistenceError(format!("Failed to prepare statement: {}", e))
+        })?;
 
         let result = stmt.query_row(params![id], |row| {
             let title: String = row.get(0)?;
             let role_raw: String = row.get(1)?;
-            let max_size: Option<i64> = row.get(2)?;
-            let default_ttl_secs: Option<i64> = row.get(3)?;
+            let cover_pk: Option<String> = row.get(2)?;
+            let max_size: Option<i64> = row.get(3)?;
+            let default_ttl_secs: Option<i64> = row.get(4)?;
 
             Ok((
                 title,
@@ -164,10 +178,11 @@ impl PersistenceManager {
                     max_size: max_size.map(|s| s as usize),
                     default_ttl: default_ttl_secs.map(|s| Duration::from_secs(s as u64)),
                 },
+                cover_pk,
             ))
         });
 
-        let (title, role, config) = match result {
+        let (title, role, config, cover_pk) = match result {
             Ok(data) => data,
             Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
             Err(e) => {
@@ -210,7 +225,7 @@ impl PersistenceManager {
             tracks.push_back(Arc::new(record));
         }
 
-        Ok(Some((title, role, config, tracks)))
+        Ok(Some((title, role, config, cover_pk, tracks)))
     }
 
     /// Supprime une playlist

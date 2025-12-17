@@ -3,16 +3,24 @@ export interface PlaylistSummary {
   title: string;
   role: string;
   persistent: boolean;
+  cover_pk?: string | null;
+  cover_url?: string | null;
   track_count: number;
   max_size?: number | null;
   default_ttl_secs?: number | null;
   last_change: string;
 }
 
+import type { AudioCacheMetadata } from "./audioCache";
+
 export interface PlaylistTrack {
   cache_pk: string;
   added_at: string;
   ttl_secs?: number | null;
+  lazy_pk?: string | null;
+  metadata?: AudioCacheMetadata | null;
+  cover_url?: string | null;
+  cover_source?: string | null;
 }
 
 export interface PlaylistDetail {
@@ -29,6 +37,7 @@ export interface CreatePlaylistPayload {
   id: string;
   title?: string;
   role?: string;
+  cover_pk?: string;
   persistent?: boolean;
   max_size?: number;
   default_ttl_secs?: number;
@@ -39,6 +48,7 @@ export interface UpdatePlaylistPayload {
   role?: string;
   max_size?: number | null;
   default_ttl_secs?: number | null;
+  cover_pk?: string | null;
 }
 
 export interface AddTracksPayload {

@@ -24,6 +24,9 @@ pub struct CacheEntry {
     /// Clé primaire unique de l'élément (hash SHA1 de l'URL)
     #[cfg_attr(feature = "openapi", schema(example = "1a2b3c4d5e6f7a8b"))]
     pub pk: String,
+    /// Lazy PK historique associé (si l'élément provient d'un téléchargement différé)
+    #[cfg_attr(feature = "openapi", schema(example = "L:QOBUZ:123456"))]
+    pub lazy_pk: Option<String>,
     /// URL source de l'élément
     #[cfg_attr(feature = "openapi", schema(example = "https://example.com/resource"))]
     pub id: Option<String>,
@@ -486,17 +489,18 @@ impl DB {
         let mut entry = {
             let conn = self.lock_conn("get");
             conn.query_row(
-                "SELECT pk, id, collection, hits, last_used \
+                "SELECT pk, lazy_pk, id, collection, hits, last_used \
                  FROM asset \
                  WHERE pk = ?1",
                 [pk],
                 |row| {
                     Ok(CacheEntry {
                         pk: row.get(0)?,
-                        id: row.get::<_, Option<String>>(1)?,
-                        collection: row.get(2)?,
-                        hits: row.get(3)?,
-                        last_used: row.get(4)?,
+                        lazy_pk: row.get::<_, Option<String>>(1)?,
+                        id: row.get::<_, Option<String>>(2)?,
+                        collection: row.get(3)?,
+                        hits: row.get(4)?,
+                        last_used: row.get(5)?,
                         metadata: None,
                     })
                 },
@@ -526,17 +530,18 @@ impl DB {
         let mut entry = {
             let conn = self.lock_conn("get_from_id");
             conn.query_row(
-                "SELECT pk, id, collection, hits, last_used \
+                "SELECT pk, lazy_pk, id, collection, hits, last_used \
              FROM asset \
              WHERE collection = ?1 AND id = ?2",
                 params![collection, id],
                 |row| {
                     Ok(CacheEntry {
                         pk: row.get(0)?,
-                        id: row.get::<_, Option<String>>(1)?,
-                        collection: row.get(2)?,
-                        hits: row.get(3)?,
-                        last_used: row.get(4)?,
+                        lazy_pk: row.get::<_, Option<String>>(1)?,
+                        id: row.get::<_, Option<String>>(2)?,
+                        collection: row.get(3)?,
+                        hits: row.get(4)?,
+                        last_used: row.get(5)?,
                         metadata: None,
                     })
                 },
@@ -627,7 +632,7 @@ impl DB {
             let conn = self.lock_conn("get_all");
 
             let mut stmt = conn.prepare(
-                "SELECT pk, id, collection, hits, last_used 
+                "SELECT pk, lazy_pk, id, collection, hits, last_used 
                  FROM asset 
                  ORDER BY hits DESC",
             )?;
@@ -635,10 +640,11 @@ impl DB {
             let rows = stmt.query_map([], |row| {
                 Ok(CacheEntry {
                     pk: row.get(0)?,
-                    id: row.get::<_, Option<String>>(1)?,
-                    collection: row.get(2)?,
-                    hits: row.get(3)?,
-                    last_used: row.get(4)?,
+                    lazy_pk: row.get::<_, Option<String>>(1)?,
+                    id: row.get::<_, Option<String>>(2)?,
+                    collection: row.get(3)?,
+                    hits: row.get(4)?,
+                    last_used: row.get(5)?,
                     metadata: None,
                 })
             })?;
@@ -670,17 +676,18 @@ impl DB {
             let conn = self.lock_conn("get_by_collection");
 
             let mut stmt = conn.prepare(
-                "SELECT pk, id, collection, hits, last_used 
+                "SELECT pk, lazy_pk, id, collection, hits, last_used 
                   FROM asset 
                   WHERE collection = ?1 ORDER BY hits DESC",
             )?;
             let rows = stmt.query_map([collection], |row| {
                 Ok(CacheEntry {
                     pk: row.get(0)?,
-                    id: row.get::<_, Option<String>>(1)?,
-                    collection: row.get(2)?,
-                    hits: row.get(3)?,
-                    last_used: row.get(4)?,
+                    lazy_pk: row.get::<_, Option<String>>(1)?,
+                    id: row.get::<_, Option<String>>(2)?,
+                    collection: row.get(3)?,
+                    hits: row.get(4)?,
+                    last_used: row.get(5)?,
                     metadata: None,
                 })
             })?;
@@ -741,7 +748,7 @@ impl DB {
         let conn = self.lock_conn("get_oldest");
 
         let mut stmt = conn.prepare(
-            "SELECT pk, id, collection, hits, last_used
+            "SELECT pk, lazy_pk, id, collection, hits, last_used
              FROM asset
              ORDER BY last_used ASC, hits ASC
              LIMIT ?1",
@@ -751,10 +758,11 @@ impl DB {
             .query_map([limit], |row| {
                 Ok(CacheEntry {
                     pk: row.get(0)?,
-                    id: row.get::<_, Option<String>>(1)?,
-                    collection: row.get(2)?,
-                    hits: row.get(3)?,
-                    last_used: row.get(4)?,
+                    lazy_pk: row.get::<_, Option<String>>(1)?,
+                    id: row.get::<_, Option<String>>(2)?,
+                    collection: row.get(3)?,
+                    hits: row.get(4)?,
+                    last_used: row.get(5)?,
                     metadata: None,
                 })
             })?

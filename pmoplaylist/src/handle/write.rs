@@ -292,6 +292,23 @@ impl WriteHandle {
         Ok(())
     }
 
+    /// Met à jour la cover (cover_pk) associée à la playlist.
+    pub async fn set_cover_pk(&self, cover_pk: Option<String>) -> Result<()> {
+        if !self.playlist.is_alive() {
+            return Err(crate::Error::PlaylistDeleted(self.playlist.id.clone()));
+        }
+
+        self.playlist.set_cover_pk(cover_pk).await;
+
+        if self.playlist.persistent {
+            self.save_to_db().await?;
+        }
+
+        crate::manager::PlaylistManager().notify_playlist_changed(&self.playlist.id);
+
+        Ok(())
+    }
+
     /// Vérifie si la playlist contient déjà un pk
     pub async fn contains_pk(&self, cache_pk: &str) -> Result<bool> {
         if !self.playlist.is_alive() {
@@ -530,8 +547,17 @@ impl WriteHandle {
         let config = &core.config;
         let tracks = &core.tracks;
 
+        let cover_pk = self.playlist.cover_pk().await;
+
         persistence
-            .save_playlist(&self.playlist.id, &title, &role, config, tracks)
+            .save_playlist(
+                &self.playlist.id,
+                &title,
+                &role,
+                cover_pk.as_deref(),
+                config,
+                tracks,
+            )
             .await
     }
 }

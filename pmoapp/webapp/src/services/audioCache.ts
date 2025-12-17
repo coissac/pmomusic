@@ -29,6 +29,7 @@ export interface AudioCacheMetadata {
 
 export interface AudioCacheEntry {
   pk: string;
+  lazy_pk?: string | null;
   id: string | null;
   hits: number;
   last_used: string | null;

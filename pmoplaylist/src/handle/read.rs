@@ -68,12 +68,14 @@ impl ReadHandle {
                     if let Some(persistence) = crate::manager::PlaylistManager().persistence() {
                         let title = self.playlist.title().await;
                         let role = self.playlist.role().await;
+                        let cover_pk = self.playlist.cover_pk().await;
                         let core = self.playlist.core.read().await;
                         let _ = persistence
                             .save_playlist(
                                 &self.playlist.id,
                                 &title,
                                 &role,
+                                cover_pk.as_deref(),
                                 &core.config,
                                 &core.tracks,
                             )

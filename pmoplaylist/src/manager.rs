@@ -67,6 +67,7 @@ pub struct PlaylistOverview {
     pub title: String,
     pub role: PlaylistRole,
     pub persistent: bool,
+    pub cover_pk: Option<String>,
     pub track_count: usize,
     pub max_size: Option<usize>,
     pub default_ttl: Option<Duration>,
@@ -184,6 +185,7 @@ impl PlaylistManager {
             PlaylistConfig::default(),
             true, // persistent
             role,
+            None,
         ));
 
         // Acqu�rir le write lock
@@ -199,9 +201,17 @@ impl PlaylistManager {
         if let Some(persistence) = &self.inner.persistence {
             let title = playlist.title().await;
             let role = playlist.role().await;
+            let cover_pk = playlist.cover_pk().await;
             let core = playlist.core.read().await;
             persistence
-                .save_playlist(&playlist.id, &title, &role, &core.config, &core.tracks)
+                .save_playlist(
+                    &playlist.id,
+                    &title,
+                    &role,
+                    cover_pk.as_deref(),
+                    &core.config,
+                    &core.tracks,
+                )
                 .await?;
         }
 
@@ -436,6 +446,7 @@ impl PlaylistManager {
             PlaylistConfig::default(),
             false, // éphémère
             PlaylistRole::User,
+            None,
         ));
 
         let write_token = playlist
@@ -471,12 +482,20 @@ impl PlaylistManager {
 
         // Pas en mémoire, essayer de charger depuis la DB
         if let Some(persistence) = &self.inner.persistence {
-            if let Some((title, role, config, tracks)) = persistence.load_playlist(&id).await? {
+            if let Some((title, role, config, cover_pk, tracks)) =
+                persistence.load_playlist(&id).await?
+            {
                 // Reconstruire la playlist
                 let mut playlists = self.inner.playlists.write().await;
 
-                let playlist =
-                    Arc::new(Playlist::new(id.clone(), title.clone(), config, true, role));
+                let playlist = Arc::new(Playlist::new(
+                    id.clone(),
+                    title.clone(),
+                    config,
+                    true,
+                    role,
+                    cover_pk,
+                ));
 
                 // Restaurer les tracks
                 {
@@ -519,7 +538,9 @@ impl PlaylistManager {
 
         // Pas en m�moire, essayer de ressusciter depuis la DB
         if let Some(persistence) = &self.inner.persistence {
-            if let Some((title, role, config, tracks)) = persistence.load_playlist(id).await? {
+            if let Some((title, role, config, cover_pk, tracks)) =
+                persistence.load_playlist(id).await?
+            {
                 // Reconstruire la playlist
                 let mut playlists = self.inner.playlists.write().await;
 
@@ -529,6 +550,7 @@ impl PlaylistManager {
                     config,
                     true,
                     role,
+                    cover_pk,
                 ));
 
                 // Restaurer les tracks
@@ -587,6 +609,7 @@ impl PlaylistManager {
         let playlist = self.ensure_playlist_loaded(id).await?;
         let title = playlist.title().await;
         let role = playlist.role().await;
+        let cover_pk = playlist.cover_pk().await;
         let persistent = playlist.persistent;
         let last_change = playlist.last_change().await;
         let core = playlist.core.read().await;
@@ -598,6 +621,7 @@ impl PlaylistManager {
             title,
             role,
             persistent,
+            cover_pk,
             track_count,
             max_size: config.max_size,
             default_ttl: config.default_ttl,
@@ -916,9 +940,17 @@ impl PlaylistManager {
                     if let Some(persistence) = &self.inner.persistence {
                         let title = playlist.title().await;
                         let role = playlist.role().await;
+                        let cover_pk = playlist.cover_pk().await;
                         let core = playlist.core.read().await;
                         let _ = persistence
-                            .save_playlist(&playlist.id, &title, &role, &core.config, &core.tracks)
+                            .save_playlist(
+                                &playlist.id,
+                                &title,
+                                &role,
+                                cover_pk.as_deref(),
+                                &core.config,
+                                &core.tracks,
+                            )
                             .await;
                     }
                 }

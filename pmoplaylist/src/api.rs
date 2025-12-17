@@ -1,5 +1,6 @@
 //! API REST pour la gestion des playlists.
 
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use axum::{
@@ -11,6 +12,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use utoipa::ToSchema;
 
 use crate::manager::{PlaylistOverview, PlaylistSnapshot, PlaylistTrackSnapshot};
@@ -41,6 +43,10 @@ pub struct PlaylistSummaryResponse {
     #[schema(value_type = String)]
     pub role: PlaylistRole,
     pub persistent: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cover_pk: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cover_url: Option<String>,
     pub track_count: usize,
     pub max_size: Option<usize>,
     pub default_ttl_secs: Option<u64>,
@@ -62,6 +68,14 @@ pub struct PlaylistTrackResponse {
     pub cache_pk: String,
     pub added_at: DateTime<Utc>,
     pub ttl_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lazy_pk: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cover_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cover_source: Option<String>,
 }
 
 /// Requête pour créer une playlist persistante/éphémère.
@@ -71,6 +85,8 @@ pub struct CreatePlaylistRequest {
     pub title: Option<String>,
     #[schema(value_type = String)]
     pub role: Option<PlaylistRole>,
+    #[schema(example = "abc123")]
+    pub cover_pk: Option<String>,
     #[schema(example = true)]
     pub persistent: Option<bool>,
     pub max_size: Option<usize>,
@@ -85,6 +101,8 @@ pub struct UpdatePlaylistRequest {
     pub role: Option<PlaylistRole>,
     pub max_size: Option<Option<usize>>,
     pub default_ttl_secs: Option<Option<u64>>,
+    /// Utiliser `null` explicite pour supprimer la cover, ou omettre pour ne pas modifier.
+    pub cover_pk: Option<Option<String>>,
 }
 
 /// Requête pour ajouter des morceaux dans une playlist.
@@ -153,6 +171,7 @@ pub async fn create_playlist(Json(req): Json<CreatePlaylistRequest>) -> Response
 
     let result = async move {
         let id = req.id.clone();
+        let normalized_cover_pk = normalize_cover_pk(req.cover_pk.clone());
         if persistent {
             let writer = manager
                 .create_persistent_playlist_with_role(id.clone(), role)
@@ -164,6 +183,9 @@ pub async fn create_playlist(Json(req): Json<CreatePlaylistRequest>) -> Response
                 req.default_ttl_secs,
             )
             .await?;
+            if let Some(cover_pk) = normalized_cover_pk.clone() {
+                writer.set_cover_pk(Some(cover_pk)).await?;
+            }
         } else {
             let writer = manager.get_write_handle(id.clone()).await?;
             if let Some(role) = requested_role {
@@ -176,6 +198,9 @@ pub async fn create_playlist(Json(req): Json<CreatePlaylistRequest>) -> Response
                 req.default_ttl_secs,
             )
             .await?;
+            if let Some(cover_pk) = normalized_cover_pk {
+                writer.set_cover_pk(Some(cover_pk)).await?;
+            }
         }
 
         manager.playlist_snapshot(&req.id).await
@@ -236,6 +261,7 @@ pub async fn update_playlist(
         role,
         max_size,
         default_ttl_secs,
+        cover_pk,
     } = req;
 
     let manager = crate::manager::PlaylistManager();
@@ -255,6 +281,13 @@ pub async fn update_playlist(
         }
         if let Some(ttl) = default_ttl_secs {
             writer.set_default_ttl(ttl.map(Duration::from_secs)).await?;
+        }
+        if let Some(cover_pk) = cover_pk {
+            let normalized = match cover_pk {
+                Some(value) => normalize_cover_pk(Some(value)),
+                None => None,
+            };
+            writer.set_cover_pk(normalized).await?;
         }
 
         manager.playlist_snapshot(&playlist_id).await
@@ -440,21 +473,78 @@ fn apply_metadata_updates(
     }
 }
 
-fn playlist_track_to_response(track: &PlaylistTrackSnapshot) -> PlaylistTrackResponse {
-    PlaylistTrackResponse {
+fn playlist_track_to_response(
+    track: &PlaylistTrackSnapshot,
+    audio_cache: Option<&Arc<pmoaudiocache::Cache>>,
+) -> PlaylistTrackResponse {
+    let mut response = PlaylistTrackResponse {
         cache_pk: track.cache_pk.clone(),
         added_at: system_time_to_datetime(track.added_at),
         ttl_secs: track.ttl.map(|ttl| ttl.as_secs()),
+        lazy_pk: None,
+        metadata: None,
+        cover_url: None,
+        cover_source: None,
+    };
+
+    if let Some(cache) = audio_cache {
+        if let Ok(mut entry) = cache.db.get(&track.cache_pk, true) {
+            if let Some(lazy_pk) = entry.lazy_pk.take() {
+                if lazy_pk != response.cache_pk {
+                    response.lazy_pk = Some(lazy_pk);
+                }
+            }
+
+            if let Some(metadata) = entry.metadata {
+                if let Some((url, source)) = resolve_cover_from_metadata(&metadata) {
+                    response.cover_url = Some(url);
+                    response.cover_source = Some(source);
+                }
+                response.metadata = Some(metadata);
+            }
+        }
     }
+
+    response
+}
+
+fn cover_url_from_pk(pk: &str) -> String {
+    format!("/covers/image/{}/256", pk)
+}
+
+fn normalize_cover_pk(input: Option<String>) -> Option<String> {
+    input.and_then(|pk| {
+        let trimmed = pk.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn resolve_cover_from_metadata(metadata: &Value) -> Option<(String, String)> {
+    if let Some(cover_pk) = metadata.get("cover_pk").and_then(Value::as_str) {
+        return Some((cover_url_from_pk(cover_pk), "cover_pk".to_string()));
+    }
+
+    if let Some(url) = metadata.get("cover_url").and_then(Value::as_str) {
+        return Some((url.to_string(), "cover_url".to_string()));
+    }
+
+    None
 }
 
 impl From<PlaylistOverview> for PlaylistSummaryResponse {
     fn from(value: PlaylistOverview) -> Self {
+        let cover_pk = value.cover_pk.clone();
         Self {
             id: value.id,
             title: value.title,
             role: value.role,
             persistent: value.persistent,
+            cover_pk: cover_pk.clone(),
+            cover_url: cover_pk.as_deref().map(cover_url_from_pk),
             track_count: value.track_count,
             max_size: value.max_size,
             default_ttl_secs: value.default_ttl.map(|ttl| ttl.as_secs()),
@@ -466,10 +556,11 @@ impl From<PlaylistOverview> for PlaylistSummaryResponse {
 impl From<PlaylistSnapshot> for PlaylistDetailResponse {
     fn from(value: PlaylistSnapshot) -> Self {
         let summary = PlaylistSummaryResponse::from(value.overview);
+        let audio_cache = crate::manager::audio_cache().ok();
         let tracks = value
             .tracks
             .iter()
-            .map(playlist_track_to_response)
+            .map(|track| playlist_track_to_response(track, audio_cache.as_ref()))
             .collect();
         Self { summary, tracks }
     }

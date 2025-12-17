@@ -34,6 +34,7 @@ pub struct Playlist {
     pub id: String,
     title: RwLock<String>,
     role: RwLock<PlaylistRole>,
+    cover_pk: RwLock<Option<String>>,
     state: Arc<AtomicU8>,
     pub core: Arc<RwLock<PlaylistCore>>,
     pub persistent: bool,
@@ -49,11 +50,13 @@ impl Playlist {
         config: PlaylistConfig,
         persistent: bool,
         role: PlaylistRole,
+        cover_pk: Option<String>,
     ) -> Self {
         Self {
             id,
             title: RwLock::new(title),
             role: RwLock::new(role),
+            cover_pk: RwLock::new(cover_pk),
             state: Arc::new(AtomicU8::new(PlaylistState::Active as u8)),
             core: Arc::new(RwLock::new(PlaylistCore::new(config))),
             persistent,
@@ -97,6 +100,17 @@ impl Playlist {
     /// Change le rôle
     pub async fn set_role(&self, role: PlaylistRole) {
         *self.role.write().await = role;
+        self.touch().await;
+    }
+
+    /// Retourne la cover associée à la playlist.
+    pub async fn cover_pk(&self) -> Option<String> {
+        self.cover_pk.read().await.clone()
+    }
+
+    /// Modifie la cover (PK) de la playlist.
+    pub async fn set_cover_pk(&self, value: Option<String>) {
+        *self.cover_pk.write().await = value;
         self.touch().await;
     }
 

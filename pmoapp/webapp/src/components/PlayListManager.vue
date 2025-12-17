@@ -46,6 +46,20 @@
                 placeholder="ex: qobuz/discover"
               />
             </label>
+            <label class="field">
+              <span>Cover PK (optional)</span>
+              <input
+                v-model.trim="createForm.coverPk"
+                type="text"
+                placeholder="cover cache pk"
+              />
+            </label>
+            <div class="cover-preview-row" v-if="createCoverPreview">
+              <div class="cover-preview small">
+                <img :src="createCoverPreview" alt="Cover preview" loading="lazy" />
+              </div>
+              <span class="small muted">Preview sourced from /covers/image/{{ createForm.coverPk }}</span>
+            </div>
             <label class="checkbox">
               <input type="checkbox" v-model="createForm.persistent" />
               Persistent (stored in SQLite)
@@ -143,12 +157,18 @@
           </template>
           <template v-else>
             <div class="detail-header">
-              <div>
+              <div class="detail-cover">
+                <img v-if="summaryCoverUrl" :src="summaryCoverUrl" alt="Playlist cover" />
+                <div v-else class="cover-placeholder large">🎵</div>
+              </div>
+              <div class="detail-header-main">
                 <h3>
-                  {{ selectedSummary?.title || selectedSummary?.id || "Untitled" }}
-                  <span class="pill">{{ formatRoleLabel(selectedSummary?.role || "") }}</span>
+                  {{ detailTitle }}
+                  <span class="pill">{{ selectedSummary ? formatRoleLabel(selectedSummary.role) : "Unknown" }}</span>
                 </h3>
-                <p class="detail-id">#{{ selectedSummary?.id }}</p>
+                <p class="detail-id">
+                  {{ detailId ? `#${detailId}` : "—" }}
+                </p>
               </div>
               <div class="detail-header-actions">
                 <button @click="loadSelectedPlaylist(false)" :disabled="detailLoading">
@@ -157,12 +177,33 @@
               </div>
             </div>
             <div class="detail-stats">
-              <span><strong>{{ selectedSummary?.track_count ?? 0 }}</strong> tracks</span>
-              <span><strong>{{ formatCapacity(selectedSummary?.max_size) }}</strong> capacity</span>
-              <span><strong>{{ formatTtl(selectedSummary?.default_ttl_secs) }}</strong> TTL</span>
+              <span><strong>{{ selectedSummary ? selectedSummary.track_count : 0 }}</strong> tracks</span>
+              <span>
+                <strong>{{ formatCapacity(selectedSummary ? selectedSummary.max_size : undefined) }}</strong>
+                capacity
+              </span>
+              <span>
+                <strong>{{ formatTtl(selectedSummary ? selectedSummary.default_ttl_secs : undefined) }}</strong>
+                TTL
+              </span>
               <span>
                 Last change:
                 {{ selectedSummary ? formatRelativeDate(selectedSummary.last_change) : "—" }}
+              </span>
+              <span class="cover-stat">
+                Cover:
+                <template v-if="selectedSummary?.cover_pk">
+                  <code>{{ selectedSummary.cover_pk }}</code>
+                  <button
+                    class="btn-secondary btn-compact"
+                    @click="selectedSummary?.cover_pk && copyPk(selectedSummary.cover_pk)"
+                  >
+                    Copy
+                  </button>
+                </template>
+                <template v-else>
+                  <span>None</span>
+                </template>
               </span>
             </div>
             <div class="detail-messages">
@@ -199,19 +240,40 @@
                       <span>Max size</span>
                       <input v-model="updateForm.maxSize" type="number" min="0" placeholder="Unlimited" />
                     </label>
-                    <label class="field">
-                      <span>Default TTL (s)</span>
-                      <input
-                        v-model="updateForm.defaultTtl"
-                        type="number"
-                        min="0"
-                        placeholder="Never expire"
-                      />
-                    </label>
+                  <label class="field">
+                    <span>Default TTL (s)</span>
+                    <input
+                      v-model="updateForm.defaultTtl"
+                      type="number"
+                      min="0"
+                      placeholder="Never expire"
+                    />
+                  </label>
+                </div>
+                <label class="field">
+                  <span>Cover PK</span>
+                  <input
+                    v-model="updateForm.coverPk"
+                    type="text"
+                    placeholder="cover cache pk (leave blank to clear)"
+                  />
+                </label>
+                <div class="cover-preview-row">
+                  <div class="cover-preview">
+                    <img v-if="updateCoverPreview" :src="updateCoverPreview" alt="Cover preview" loading="lazy" />
+                    <div v-else class="cover-placeholder small">No cover</div>
                   </div>
-                  <div class="form-messages">
-                    <p v-if="updateState.error" class="error">❌ {{ updateState.error }}</p>
-                  </div>
+                  <button
+                    type="button"
+                    class="btn-secondary btn-compact"
+                    @click="updateForm.coverPk = ''"
+                  >
+                    Clear
+                  </button>
+                </div>
+                <div class="form-messages">
+                  <p v-if="updateState.error" class="error">❌ {{ updateState.error }}</p>
+                </div>
                   <button type="submit" class="primary" :disabled="updateState.busy">
                     {{ updateState.busy ? "Saving..." : "Apply changes" }}
                   </button>
@@ -257,27 +319,63 @@
                     <span v-if="lazyTracksCount > 0">· {{ lazyTracksCount }} lazy</span>
                   </span>
                 </div>
-                <div class="track-table" v-if="selectedPlaylist.tracks.length > 0">
-                  <div class="track-row track-header">
-                    <span>PK</span>
-                    <span>Added</span>
-                    <span>TTL</span>
-                    <span>Actions</span>
-                  </div>
-                  <div
+                <div class="track-grid" v-if="sortedTracks.length > 0">
+                  <article
                     v-for="track in sortedTracks"
-                    :key="track.cache_pk"
-                    class="track-row"
-                    :class="{ lazy: isLazyTrack(track.cache_pk) }"
+                    :key="`${track.cache_pk}-${track.added_at}`"
+                    class="track-card"
+                    :class="{ lazy: isLazyTrack(track) }"
                   >
-                    <span class="pk">
-                      {{ track.cache_pk }}
-                      <span v-if="isLazyTrack(track.cache_pk)" class="pill warning">Lazy</span>
-                    </span>
-                    <span>{{ formatRelativeDate(track.added_at) }}</span>
-                    <span>{{ trackTtlLabel(track.ttl_secs) }}</span>
-                    <span class="row-actions">
-                      <button class="btn-secondary" @click="copyPk(track.cache_pk)">Copy</button>
+                    <div class="cover-wrapper">
+                      <img
+                        v-if="trackCoverUrl(track, 200)"
+                        :src="trackCoverUrl(track, 200)"
+                        :alt="trackTitle(track)"
+                        loading="lazy"
+                      />
+                      <div v-else class="cover-placeholder">🎵</div>
+                      <span v-if="isLazyTrack(track) || trackLazyReference(track)" class="cover-lazy-pill">
+                        {{ isLazyTrack(track) ? "Lazy entry" : "Lazy ref" }}
+                      </span>
+                    </div>
+                    <div class="track-info">
+                      <div class="track-title">
+                        {{ trackTitle(track) }}
+                      </div>
+                      <div class="track-artist" v-if="trackArtist(track)">
+                        {{ trackArtist(track) }}
+                      </div>
+                      <div class="track-album" v-if="trackAlbum(track)">
+                        {{ trackAlbum(track) }}
+                      </div>
+                      <div class="track-meta">
+                        <span v-if="trackDurationLabel(track)">
+                          {{ trackDurationLabel(track) }}
+                        </span>
+                        <span v-if="trackSampleRateLabel(track)">
+                          {{ trackSampleRateLabel(track) }}
+                        </span>
+                        <span v-if="trackBitrateLabel(track)">
+                          {{ trackBitrateLabel(track) }}
+                        </span>
+                      </div>
+                      <div class="pk-info">
+                        <div class="pk-line">
+                          <span class="label">PK</span>
+                          <code>{{ track.cache_pk }}</code>
+                        </div>
+                        <div class="pk-line" v-if="trackLazyReference(track)">
+                          <span class="label">Lazy</span>
+                          <code>{{ trackLazyReference(track) }}</code>
+                        </div>
+                      </div>
+                      <div class="added-info">
+                        Added {{ formatRelativeDate(track.added_at) }} · TTL
+                        {{ trackTtlLabel(track.ttl_secs) }}
+                      </div>
+                    </div>
+                    <div class="track-actions">
+                      <button class="btn-secondary" @click="copyPk(track.cache_pk)">Copy PK</button>
                       <button
                         class="btn-danger"
                         @click="handleRemoveTrack(track.cache_pk)"
@@ -285,8 +383,8 @@
                       >
                         {{ isRemovingTrack(track.cache_pk) ? "..." : "Remove" }}
                       </button>
-                    </span>
-                  </div>
+                    </div>
+                  </article>
                 </div>
               </div>
             </div>
@@ -299,7 +397,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
-import type { PlaylistDetail, PlaylistSummary } from "../services/playlists";
+import type { PlaylistDetail, PlaylistSummary, PlaylistTrack } from "../services/playlists";
 import {
   addTracksToPlaylist,
   createPlaylist,
@@ -310,6 +408,15 @@ import {
   removeTrackFromPlaylist,
   updatePlaylist,
 } from "../services/playlists";
+
+import type { AudioCacheMetadata } from "../services/audioCache";
+import {
+  getCoverUrl as getAudioCoverUrl,
+  getDurationMs,
+  formatDuration,
+  formatBitrate,
+  formatSampleRate,
+} from "../services/audioCache";
 
 const playlists = ref<PlaylistSummary[]>([]);
 const listLoading = ref(false);
@@ -332,6 +439,7 @@ const createForm = reactive({
   title: "",
   role: "user",
   customRole: "",
+  coverPk: "",
   persistent: true,
   maxSize: "",
   defaultTtl: "",
@@ -347,6 +455,7 @@ const updateForm = reactive({
   title: "",
   role: "user",
   customRole: "",
+  coverPk: "",
   maxSize: "",
   defaultTtl: "",
 });
@@ -397,6 +506,25 @@ const selectedSummary = computed(() => {
   return playlists.value.find((p) => p.id === selectedPlaylistId.value) ?? detailSummary ?? null;
 });
 
+const detailTitle = computed(() => {
+  const summary = selectedSummary.value;
+  if (!summary) {
+    return "Playlist";
+  }
+  return summary.title || summary.id || "Playlist";
+});
+
+const detailId = computed(() => selectedSummary.value?.id ?? "");
+
+const summaryCoverUrl = computed(() => {
+  const summary = selectedSummary.value;
+  if (!summary) return undefined;
+  if (summary.cover_url && summary.cover_url.length > 0) {
+    return summary.cover_url;
+  }
+  return coverUrlFromPk(summary.cover_pk);
+});
+
 const sortedPlaylists = computed(() => {
   return [...playlists.value].sort(
     (a, b) => new Date(b.last_change).getTime() - new Date(a.last_change).getTime()
@@ -413,9 +541,12 @@ const sortedTracks = computed(() => {
 
 const lazyTracksCount = computed(() =>
   selectedPlaylist.value
-    ? selectedPlaylist.value.tracks.filter((track) => isLazyTrack(track.cache_pk)).length
+    ? selectedPlaylist.value.tracks.filter((track) => isLazyTrack(track)).length
     : 0
 );
+
+const updateCoverPreview = computed(() => coverUrlFromPk(updateForm.coverPk) ?? summaryCoverUrl.value);
+const createCoverPreview = computed(() => coverUrlFromPk(createForm.coverPk));
 
 function formatRelativeDate(dateString: string) {
   const date = new Date(dateString);
@@ -451,15 +582,18 @@ function formatTtl(ttl?: number | null) {
   return `${hours}h`;
 }
 
+function coverUrlFromPk(pk?: string | null, size = 256): string | undefined {
+  if (!pk) return undefined;
+  const trimmed = pk.trim();
+  if (!trimmed) return undefined;
+  return `/covers/image/${trimmed}/${size}`;
+}
+
 function trackTtlLabel(ttl?: number | null) {
   if (ttl === null || ttl === undefined) return "inherit";
   if (ttl === 0) return "Expires now";
   if (ttl < 60) return `${ttl}s`;
   return `${Math.round(ttl / 60)}m`;
-}
-
-function isLazyTrack(pk: string) {
-  return pk.startsWith("L:");
 }
 
 function copyPk(pk: string) {
@@ -507,6 +641,10 @@ watch(
   () => selectedPlaylistId.value,
   (id, previous) => {
     if (id) {
+      if (previous !== id) {
+        selectedPlaylist.value = null;
+        detailError.value = "";
+      }
       loadSelectedPlaylist(previous !== id);
     } else {
       selectedPlaylist.value = null;
@@ -532,6 +670,85 @@ async function loadSelectedPlaylist(syncForms = true) {
   }
 }
 
+function trackMetadata(track: PlaylistTrack): AudioCacheMetadata | null {
+  return track.metadata ?? null;
+}
+
+function trackTitle(track: PlaylistTrack): string {
+  const metadata = trackMetadata(track);
+  return metadata?.title || track.cache_pk;
+}
+
+function trackArtist(track: PlaylistTrack): string | undefined {
+  const metadata = trackMetadata(track);
+  return metadata?.artist || undefined;
+}
+
+function trackAlbum(track: PlaylistTrack): string | undefined {
+  const metadata = trackMetadata(track);
+  return metadata?.album || undefined;
+}
+
+function trackDurationLabel(track: PlaylistTrack): string | undefined {
+  const duration = getDurationMs(trackMetadata(track));
+  if (duration === undefined) return undefined;
+  return formatDuration(duration);
+}
+
+function trackSampleRateLabel(track: PlaylistTrack): string | undefined {
+  const metadata = trackMetadata(track);
+  if (!metadata?.sample_rate) return undefined;
+  return formatSampleRate(metadata.sample_rate);
+}
+
+function trackBitrateLabel(track: PlaylistTrack): string | undefined {
+  const metadata = trackMetadata(track);
+  if (!metadata?.bitrate) return undefined;
+  return formatBitrate(metadata.bitrate);
+}
+
+function trackCoverUrl(track: PlaylistTrack, size = 200): string | undefined {
+  if (track.cover_url) {
+    if (size && track.cover_source === "cover_pk") {
+      const [rawBase, query] = track.cover_url.split("?");
+      const base = rawBase ?? track.cover_url;
+      if (base) {
+        const segments = base.split("/");
+        const lastIndex = segments.length - 1;
+        if (lastIndex >= 0) {
+          const last = segments[lastIndex];
+          if (last && /^\d+$/.test(last)) {
+            segments[lastIndex] = String(size);
+            const rebuilt = segments.join("/");
+            return query ? `${rebuilt}?${query}` : rebuilt;
+          }
+        }
+      }
+    }
+    return track.cover_url;
+  }
+
+  const metadata = trackMetadata(track);
+  if (!metadata) return undefined;
+  try {
+    return getAudioCoverUrl(metadata, size) || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function trackLazyReference(track: PlaylistTrack): string | undefined {
+  return track.lazy_pk ?? undefined;
+}
+
+function isLazyPk(pk: string): boolean {
+  return pk.startsWith("L:");
+}
+
+function isLazyTrack(track: PlaylistTrack): boolean {
+  return isLazyPk(track.cache_pk);
+}
+
 function syncUpdateForm(detail: PlaylistDetail | null) {
   if (!detail) return;
   updateForm.title = detail.summary.title || "";
@@ -542,6 +759,7 @@ function syncUpdateForm(detail: PlaylistDetail | null) {
     updateForm.role = "custom";
     updateForm.customRole = detail.summary.role;
   }
+  updateForm.coverPk = detail.summary.cover_pk ?? "";
   updateForm.maxSize =
     detail.summary.max_size === null || detail.summary.max_size === undefined
       ? ""
@@ -557,6 +775,7 @@ function resetCreateForm() {
   createForm.title = "";
   createForm.role = "user";
   createForm.customRole = "";
+  createForm.coverPk = "";
   createForm.persistent = true;
   createForm.maxSize = "";
   createForm.defaultTtl = "";
@@ -607,6 +826,7 @@ async function handleCreatePlaylist() {
   }
 
   const roleValue = resolveRoleValue(createForm.role, createForm.customRole);
+  const coverPk = createForm.coverPk.trim();
 
   createState.busy = true;
   try {
@@ -614,6 +834,7 @@ async function handleCreatePlaylist() {
       id: createForm.id.trim(),
       title: createForm.title || undefined,
       role: roleValue,
+      cover_pk: coverPk || undefined,
       persistent: createForm.persistent,
       max_size: maxSize,
       default_ttl_secs: defaultTtl,
@@ -635,6 +856,7 @@ async function handleUpdatePlaylist() {
   if (!selectedSummary.value) return;
   updateState.error = "";
   updateState.message = "";
+  const summary = selectedSummary.value;
 
   let maxSizePayload: number | null | undefined;
   let defaultTtlPayload: number | null | undefined;
@@ -642,25 +864,22 @@ async function handleUpdatePlaylist() {
   try {
     if (updateForm.maxSize.trim() === "") {
       maxSizePayload =
-        selectedSummary.value.max_size === null || selectedSummary.value.max_size === undefined
-          ? undefined
-          : null;
+        summary.max_size === null || summary.max_size === undefined ? undefined : null;
     } else {
       const value = parseOptionalNumber(updateForm.maxSize);
-      if (value !== selectedSummary.value.max_size) {
+      if (value !== summary.max_size) {
         maxSizePayload = value ?? null;
       }
     }
 
     if (updateForm.defaultTtl.trim() === "") {
       defaultTtlPayload =
-        selectedSummary.value.default_ttl_secs === null ||
-        selectedSummary.value.default_ttl_secs === undefined
+        summary.default_ttl_secs === null || summary.default_ttl_secs === undefined
           ? undefined
           : null;
     } else {
       const ttlValue = parseOptionalNumber(updateForm.defaultTtl);
-      if (ttlValue !== selectedSummary.value.default_ttl_secs) {
+      if (ttlValue !== summary.default_ttl_secs) {
         defaultTtlPayload = ttlValue ?? null;
       }
     }
@@ -671,7 +890,7 @@ async function handleUpdatePlaylist() {
 
   const payload: Record<string, unknown> = {};
   const trimmedTitle = updateForm.title.trim();
-  if (trimmedTitle !== selectedSummary.value.title) {
+  if (trimmedTitle !== summary.title) {
     payload.title = trimmedTitle;
   }
 
@@ -681,7 +900,7 @@ async function handleUpdatePlaylist() {
     return;
   }
 
-  if (resolvedRole && resolvedRole !== selectedSummary.value.role) {
+  if (resolvedRole && resolvedRole !== summary.role) {
     payload.role = resolvedRole;
   }
 
@@ -690,6 +909,16 @@ async function handleUpdatePlaylist() {
   }
   if (defaultTtlPayload !== undefined) {
     payload.default_ttl_secs = defaultTtlPayload;
+  }
+
+  const trimmedCoverPk = updateForm.coverPk.trim();
+  const currentCoverPk = summary.cover_pk ?? "";
+  if (trimmedCoverPk === "") {
+    if (currentCoverPk !== "") {
+      payload.cover_pk = null;
+    }
+  } else if (trimmedCoverPk !== currentCoverPk) {
+    payload.cover_pk = trimmedCoverPk;
   }
 
   if (Object.keys(payload).length === 0) {
@@ -813,67 +1042,106 @@ onMounted(() => {
 
 <style scoped>
 .playlist-manager {
-  display: flex;
-  flex-direction: column;
-  gap: 1.5rem;
   padding: 1rem;
-  color: #f3f3f3;
+  width: 100%;
+  max-width: 1400px;
+  margin: 0 auto;
+  box-sizing: border-box;
+  color: #f5f5f5;
+}
+
+@media (max-width: 768px) {
+  .playlist-manager {
+    padding: 0.5rem;
+  }
 }
 
 .header {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
   flex-wrap: wrap;
+  justify-content: space-between;
   gap: 1rem;
-  border-bottom: 1px solid #333;
-  padding-bottom: 0.5rem;
+  padding: 1rem;
+  border-radius: 12px;
+  border: 1px solid #2b2b2b;
+  background: #151515;
+}
+
+.header h2 {
+  margin: 0;
+  color: #61dafb;
 }
 
 .subtitle {
-  color: #888;
   margin: 0.25rem 0 0;
+  color: #b0b0b0;
 }
 
 .header-stats {
   display: flex;
-  gap: 0.75rem;
-  font-weight: 500;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.header-stats span {
+  background: #232323;
+  border-radius: 999px;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.85rem;
+  color: #ddd;
 }
 
 .header-actions button {
-  padding: 0.5rem 1rem;
+  padding: 0.6rem 1.2rem;
+  border-radius: 6px;
+  border: none;
+  background: #61dafb;
+  color: #0b0b0b;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.header-actions button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .panels {
   display: grid;
-  grid-template-columns: 340px 1fr;
+  grid-template-columns: 360px 1fr;
   gap: 1.5rem;
+  align-items: start;
+}
+
+@media (max-width: 1100px) {
+  .panels {
+    grid-template-columns: 1fr;
+  }
 }
 
 .section-card {
-  background: #232323;
-  border: 1px solid #3a3a3a;
-  border-radius: 10px;
+  background: #1f1f1f;
+  border: 1px solid #2f2f2f;
+  border-radius: 12px;
   padding: 1rem;
   display: flex;
   flex-direction: column;
   gap: 1rem;
-  color: inherit;
 }
 
 .section-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 0.5rem;
 }
 
 .empty-state {
   padding: 1rem;
+  border: 1px dashed #3a3a3a;
+  border-radius: 8px;
   text-align: center;
-  color: #999;
-  border: 1px dashed #444;
-  border-radius: 6px;
+  color: #a8a8a8;
 }
 
 .list-section {
@@ -888,26 +1156,27 @@ onMounted(() => {
 }
 
 .playlist-card {
-  border: 1px solid #333;
-  border-radius: 8px;
-  padding: 0.75rem;
-  cursor: pointer;
+  border: 1px solid #2a2a2a;
+  border-radius: 10px;
+  padding: 0.85rem;
+  background: #242424;
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
-  background: #2b2b2b;
-  color: inherit;
+  cursor: pointer;
+  transition: border-color 0.2s, box-shadow 0.2s;
 }
 
 .playlist-card.selected {
-  border-color: #569cd6;
-  box-shadow: 0 0 0 1px rgba(86, 156, 214, 0.4);
+  border-color: #61dafb;
+  box-shadow: 0 0 0 1px rgba(97, 218, 251, 0.4);
 }
 
 .card-title {
   display: flex;
   justify-content: space-between;
   gap: 0.5rem;
+  font-weight: 600;
 }
 
 .card-metrics,
@@ -915,34 +1184,133 @@ onMounted(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
-  font-size: 0.9rem;
-  color: #bbb;
+  font-size: 0.85rem;
+  color: #bdbdbd;
 }
 
 .card-actions {
   display: flex;
-  gap: 0.5rem;
   flex-wrap: wrap;
-}
-
-.detail-panel {
-  min-height: 400px;
+  gap: 0.5rem;
 }
 
 .detail-card {
+  background: #111;
+  border: 1px solid #2b2b2b;
+  border-radius: 14px;
+  padding: 1.25rem;
   min-height: 400px;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
 }
 
 .detail-header {
+  display: grid;
+  grid-template-columns: 140px 1fr auto;
+  gap: 1rem;
+  align-items: center;
+}
+
+.detail-header-main h3 {
+  margin: 0;
   display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 0.75rem;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.detail-cover {
+  width: 120px;
+  height: 120px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #1a1a1a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #2f2f2f;
+}
+
+.detail-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .detail-id {
-  color: #aaa;
-  margin: 0;
+  margin: 0.2rem 0 0;
+  color: #9c9c9c;
+  font-size: 0.85rem;
+}
+
+.detail-header-actions button {
+  background: #232323;
+  border: 1px solid #3d3d3d;
+  border-radius: 6px;
+  padding: 0.5rem 0.9rem;
+  color: #f5f5f5;
+  cursor: pointer;
+}
+
+@media (max-width: 900px) {
+  .detail-header {
+    grid-template-columns: 100px 1fr;
+  }
+
+  .detail-header-actions {
+    grid-column: span 2;
+    justify-self: flex-start;
+  }
+}
+
+.cover-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #1b1b1b;
+  color: #666;
+  font-size: 2rem;
+}
+
+.cover-placeholder.small {
+  font-size: 1rem;
+}
+
+.cover-preview-row {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.cover-preview {
+  width: 96px;
+  height: 96px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #2d2d2d;
+  background: #0f0f0f;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cover-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.cover-preview.small {
+  width: 72px;
+  height: 72px;
+}
+
+.btn-compact {
+  padding: 0.25rem 0.6rem;
+  font-size: 0.8rem;
 }
 
 .detail-stats {
@@ -952,23 +1320,31 @@ onMounted(() => {
   font-size: 0.95rem;
 }
 
+.cover-stat code {
+  background: #0f0f0f;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  margin-right: 0.4rem;
+}
+
 .detail-messages .error,
 .detail-messages .success {
   margin: 0;
 }
 
 .section-subcard {
-  border: 1px solid #333;
-  border-radius: 8px;
-  padding: 0.75rem;
+  background: #181818;
+  border: 1px solid #2b2b2b;
+  border-radius: 10px;
+  padding: 1rem;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  background: #1a1a1a;
 }
 
 .section-subcard h4 {
   margin: 0;
+  color: #e7e7e7;
 }
 
 form {
@@ -977,31 +1353,31 @@ form {
   gap: 0.75rem;
 }
 
-.field {
+.field,
+.checkbox {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 0.35rem;
   font-size: 0.9rem;
+}
+
+.checkbox {
+  flex-direction: row;
+  align-items: center;
 }
 
 .field input,
 .field select,
 .field textarea {
-  background: #111;
+  background: #0f0f0f;
   border: 1px solid #3f3f3f;
   border-radius: 6px;
   padding: 0.5rem;
-  color: #f6f6f6;
+  color: #f5f5f5;
 }
 
 .field textarea {
   resize: vertical;
-}
-
-.field-group {
-  display: flex;
-  gap: 0.75rem;
-  flex-wrap: wrap;
 }
 
 .field-grid {
@@ -1010,142 +1386,212 @@ form {
   gap: 0.75rem;
 }
 
-.checkbox {
+.field-group {
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.9rem;
+  flex-wrap: wrap;
+  gap: 0.75rem;
 }
 
 .form-messages {
   min-height: 1rem;
 }
 
-.form-messages .error,
-.form-messages .success {
-  margin: 0;
-}
-
 .primary {
-  background: #569cd6;
+  background: #4b9ed0;
   color: #fff;
   border: none;
-  padding: 0.5rem 1rem;
+  padding: 0.6rem 1rem;
   border-radius: 6px;
   cursor: pointer;
+  font-weight: 600;
 }
 
 .primary:disabled {
-  opacity: 0.6;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
 button {
-  background: #333;
-  color: #fff;
-  border: 1px solid transparent;
-  padding: 0.4rem 0.75rem;
-  border-radius: 6px;
-  cursor: pointer;
   font-size: 0.9rem;
 }
 
 .btn-secondary {
   background: #2c2c2c;
-  border-color: #444;
+  border: 1px solid #3d3d3d;
+  color: #f5f5f5;
 }
 
 .btn-danger {
-  background: #a33;
-  border-color: #c55;
+  background: #c0392b;
+  border: 1px solid #d35400;
+  color: #fff;
 }
 
 button:disabled {
-  opacity: 0.6;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
 .pill {
-  background: #444;
-  color: #eee;
+  background: #2f2f2f;
   border-radius: 999px;
-  padding: 0.1rem 0.5rem;
+  padding: 0.15rem 0.6rem;
   font-size: 0.75rem;
-}
-
-.pill.transient {
-  background: #5b3d99;
-}
-
-.pill.warning {
-  background: #b78000;
-}
-
-.detail-header-actions {
-  display: flex;
-  gap: 0.5rem;
-}
-
-.tracks .track-table {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-
-.track-row {
-  display: grid;
-  grid-template-columns: 1fr 140px 80px 160px;
-  gap: 0.5rem;
-  align-items: center;
-  padding: 0.4rem;
-  border-radius: 6px;
-  background: #121212;
-  border: 1px solid #2f2f2f;
-  font-size: 0.9rem;
-  color: inherit;
-}
-
-.track-row.lazy {
-  border-color: #b78000;
-  background: rgba(183, 128, 0, 0.15);
-}
-
-.track-header {
-  font-weight: 600;
-  background: transparent;
-  border: none;
-}
-
-.row-actions {
-  display: flex;
-  gap: 0.5rem;
-  justify-content: flex-end;
-}
-
-.pk {
-  word-break: break-all;
-}
-
-.error {
-  color: #ff8a8a;
-}
-
-.success {
-  color: #7ed07e;
 }
 
 .small {
   font-size: 0.85rem;
-  color: #aaa;
+  color: #a5a5a5;
 }
 
-@media (max-width: 1100px) {
-  .panels {
+.muted {
+  color: #8a8a8a;
+}
+
+.tracks .section-header {
+  margin-bottom: 0.5rem;
+}
+
+.track-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.track-card {
+  display: grid;
+  grid-template-columns: 120px 1fr auto;
+  gap: 1rem;
+  padding: 0.9rem;
+  border-radius: 12px;
+  border: 1px solid #2a2a2a;
+  background: #16181f;
+  align-items: center;
+}
+
+@media (max-width: 900px) {
+  .track-card {
     grid-template-columns: 1fr;
   }
 
-  .list-section {
-    max-height: none;
+  .cover-wrapper {
+    width: 100%;
+    height: 220px;
   }
 }
+
+.track-card.lazy {
+  border-color: #d4a017;
+  box-shadow: 0 0 0 1px rgba(212, 160, 23, 0.4);
+}
+
+.cover-wrapper {
+  width: 120px;
+  height: 120px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #1f1f1f;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.cover-wrapper img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.track-card .cover-placeholder {
+  font-size: 2rem;
+  color: #6f6f6f;
+}
+
+.cover-lazy-pill {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  background: #d4a017;
+  color: #1a1a1a;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.track-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.track-title {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.track-artist,
+.track-album {
+  font-size: 0.9rem;
+  color: #bbbbbb;
+}
+
+.track-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  font-size: 0.85rem;
+  color: #a0a0a0;
+}
+
+.pk-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  word-break: break-word;
+}
+
+.pk-line {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.pk-line .label {
+  font-size: 0.75rem;
+  color: #888;
+  text-transform: uppercase;
+}
+
+.pk-line code {
+  background: #0f0f0f;
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+}
+
+.added-info {
+  font-size: 0.8rem;
+  color: #909090;
+}
+
+.track-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.error {
+  color: #ff7a7a;
+}
+
+.success {
+  color: #6adf8b;
+}
 </style>
+.detail-header-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
