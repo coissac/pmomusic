@@ -20,7 +20,7 @@ use pmoaudiocache::{register_audio_cache, AudioCacheConfigExt, Cache as AudioCac
 use pmoconfig::get_config;
 use pmocovers::Cache as CoverCache;
 use pmocovers::CoverCacheConfigExt;
-use pmoplaylist::PlaylistManager;
+use pmoplaylist::{PlaylistManager, PlaylistRole};
 use pmoqobuz::{QobuzClient, QobuzSource};
 use std::sync::Arc;
 use std::time::Instant;
@@ -107,7 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let playlist_manager = PlaylistManager();
     let playlist_id = {
         let writer = playlist_manager
-            .create_persistent_playlist("lazy-test".to_string())
+            .create_persistent_playlist_with_role("lazy-test".to_string(), PlaylistRole::Album)
             .await?;
         writer.id().to_string()
     }; // Drop writer here to release the lock

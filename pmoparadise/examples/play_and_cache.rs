@@ -34,7 +34,7 @@ use pmoaudiocache::{
 };
 use pmocovers::{new_cache_with_consolidation as new_cover_cache, register_cover_cache};
 use pmoparadise::{RadioParadiseClient, RadioParadiseStreamSource};
-use pmoplaylist::register_audio_cache as register_playlist_audio_cache;
+use pmoplaylist::{register_audio_cache as register_playlist_audio_cache, PlaylistRole};
 use std::env;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -137,6 +137,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     writer
         .set_title(format!("Radio Paradise - Channel {}", channel_id))
         .await?;
+    writer.set_role(PlaylistRole::Radio).await?;
     writer.flush().await?; // Vider la playlist si elle existait
     tracing::debug!("Playlist created and flushed");
 

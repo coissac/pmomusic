@@ -63,6 +63,7 @@ pub use error::{Error, Result};
 pub use handle::{ReadHandle, WriteHandle};
 pub use manager::{register_audio_cache, PlaylistManager, PlaylistManager as Manager};
 pub use manager::{subscribe_events, PlaylistEvent, PlaylistEventEnvelope, PlaylistEventKind};
+pub use playlist::PlaylistRole;
 #[cfg(feature = "pmoserver")]
 pub use sse::playlist_events_router;
 pub use track::PlaylistTrack;

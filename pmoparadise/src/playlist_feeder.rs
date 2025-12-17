@@ -6,7 +6,7 @@ use crate::{client::RadioParadiseClient, models::EventId};
 use anyhow::Result;
 use pmoaudiocache::Cache as AudioCache;
 use pmocovers::Cache as CoversCache;
-use pmoplaylist::{PlaylistManager, ReadHandle, WriteHandle};
+use pmoplaylist::{PlaylistManager, PlaylistRole, ReadHandle, WriteHandle};
 use std::{
     collections::{HashMap, VecDeque},
     sync::Arc,
@@ -115,7 +115,7 @@ impl RadioParadisePlaylistFeeder {
     ) -> Result<(Self, ReadHandle)> {
         let manager = PlaylistManager::get();
         let write_handle = manager
-            .create_persistent_playlist(playlist_id.clone())
+            .create_persistent_playlist_with_role(playlist_id.clone(), PlaylistRole::Radio)
             .await?;
         let read_handle = manager.get_read_handle(&playlist_id).await?;
 

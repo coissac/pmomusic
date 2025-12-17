@@ -403,6 +403,11 @@ impl QobuzSource {
             .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
 
         writer
+            .set_role(pmoplaylist::PlaylistRole::Album)
+            .await
+            .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
+
+        writer
             .push_lazy_batch(lazy_pks.clone())
             .await
             .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;

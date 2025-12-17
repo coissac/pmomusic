@@ -117,7 +117,7 @@ use pmoaudio::{
 };
 use pmoaudiocache::Cache as AudioCache;
 use pmoflac::{decode_audio_stream, StreamInfo};
-use pmoplaylist::ReadHandle;
+use pmoplaylist::{PlaylistRole, ReadHandle};
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::{fs::File, io::AsyncReadExt, sync::mpsc};
 use tokio_util::sync::CancellationToken;

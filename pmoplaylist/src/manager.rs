@@ -3,7 +3,7 @@
 use crate::handle::{ReadHandle, WriteHandle};
 use crate::persistence::PersistenceManager;
 use crate::playlist::core::PlaylistConfig;
-use crate::playlist::Playlist;
+use crate::playlist::{Playlist, PlaylistRole};
 use crate::Result;
 use once_cell::sync::OnceCell;
 use pmocache::{CacheBroadcastEvent, CacheEvent, CacheSubscription};
@@ -138,8 +138,12 @@ impl PlaylistManager {
         }
     }
 
-    /// Cr�e une playlist persistante (erreur si existe d�j�)
-    pub async fn create_persistent_playlist(&self, id: String) -> Result<WriteHandle> {
+    /// Cr�e une playlist persistante (erreur si existe d�j�) avec rôle personnalisé
+    pub async fn create_persistent_playlist_with_role(
+        &self,
+        id: String,
+        role: PlaylistRole,
+    ) -> Result<WriteHandle> {
         let mut playlists = self.inner.playlists.write().await;
 
         if playlists.contains_key(&id) {
@@ -148,9 +152,10 @@ impl PlaylistManager {
 
         let playlist = Arc::new(Playlist::new(
             id.clone(),
-            id.clone(), // Titre = id par d�faut
+            id.clone(), // Titre = id par défaut
             PlaylistConfig::default(),
             true, // persistent
+            role,
         ));
 
         // Acqu�rir le write lock
@@ -165,13 +170,20 @@ impl PlaylistManager {
         // Sauvegarder la structure vide
         if let Some(persistence) = &self.inner.persistence {
             let title = playlist.title().await;
+            let role = playlist.role().await;
             let core = playlist.core.read().await;
             persistence
-                .save_playlist(&playlist.id, &title, &core.config, &core.tracks)
+                .save_playlist(&playlist.id, &title, &role, &core.config, &core.tracks)
                 .await?;
         }
 
         Ok(WriteHandle::new(playlist, write_token))
+    }
+
+    /// Cr�e une playlist persistante avec rôle par défaut (user)
+    pub async fn create_persistent_playlist(&self, id: String) -> Result<WriteHandle> {
+        self.create_persistent_playlist_with_role(id, PlaylistRole::User)
+            .await
     }
 
     /// Enregistre un callback d'évènement playlist (update, track joué).
@@ -394,7 +406,8 @@ impl PlaylistManager {
             id.clone(),
             id.clone(),
             PlaylistConfig::default(),
-            false, // �ph�m�re
+            false, // éphémère
+            PlaylistRole::User,
         ));
 
         let write_token = playlist
@@ -430,11 +443,12 @@ impl PlaylistManager {
 
         // Pas en mémoire, essayer de charger depuis la DB
         if let Some(persistence) = &self.inner.persistence {
-            if let Some((title, config, tracks)) = persistence.load_playlist(&id).await? {
+            if let Some((title, role, config, tracks)) = persistence.load_playlist(&id).await? {
                 // Reconstruire la playlist
                 let mut playlists = self.inner.playlists.write().await;
 
-                let playlist = Arc::new(Playlist::new(id.clone(), title.clone(), config, true));
+                let playlist =
+                    Arc::new(Playlist::new(id.clone(), title.clone(), config, true, role));
 
                 // Restaurer les tracks
                 {
@@ -477,11 +491,12 @@ impl PlaylistManager {
 
         // Pas en m�moire, essayer de ressusciter depuis la DB
         if let Some(persistence) = &self.inner.persistence {
-            if let Some((title, config, tracks)) = persistence.load_playlist(id).await? {
+            if let Some((title, role, config, tracks)) = persistence.load_playlist(id).await? {
                 // Reconstruire la playlist
                 let mut playlists = self.inner.playlists.write().await;
 
-                let playlist = Arc::new(Playlist::new(id.to_string(), title.clone(), config, true));
+                let playlist =
+                    Arc::new(Playlist::new(id.to_string(), title.clone(), config, true, role));
 
                 // Restaurer les tracks
                 {
@@ -767,13 +782,14 @@ impl PlaylistManager {
                 let new_len = core.len();
                 drop(core);
 
-                // Si des morceaux ont �t� �vict�s et la playlist est persistante
+                // Si des morceaux ont été évictés et la playlist est persistante
                 if new_len < initial_len && playlist.persistent {
                     if let Some(persistence) = &self.inner.persistence {
                         let title = playlist.title().await;
+                        let role = playlist.role().await;
                         let core = playlist.core.read().await;
                         let _ = persistence
-                            .save_playlist(&playlist.id, &title, &core.config, &core.tracks)
+                            .save_playlist(&playlist.id, &title, &role, &core.config, &core.tracks)
                             .await;
                     }
                 }

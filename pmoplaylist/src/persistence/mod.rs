@@ -2,12 +2,14 @@
 
 use crate::playlist::core::PlaylistConfig;
 use crate::playlist::record::Record;
+use crate::playlist::PlaylistRole;
 use crate::Result;
 use rusqlite::{params, Connection};
 use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::str::FromStr;
 
 /// Gestionnaire de persistance (une base pour toutes les playlists)
 pub struct PersistenceManager {
@@ -33,6 +35,7 @@ impl PersistenceManager {
             "CREATE TABLE IF NOT EXISTS playlists (
                 id TEXT PRIMARY KEY,
                 title TEXT NOT NULL,
+                role TEXT NOT NULL,
                 max_size INTEGER,
                 default_ttl_secs INTEGER,
                 created_at INTEGER NOT NULL,
@@ -80,6 +83,7 @@ impl PersistenceManager {
         &self,
         id: &str,
         title: &str,
+        role: &PlaylistRole,
         config: &PlaylistConfig,
         tracks: &VecDeque<Arc<Record>>,
     ) -> Result<()> {
@@ -92,13 +96,14 @@ impl PersistenceManager {
 
         // Upsert playlist metadata
         conn.execute(
-            "INSERT OR REPLACE INTO playlists (id, title, max_size, default_ttl_secs, created_at, last_modified)
-             VALUES (?1, ?2, ?3, ?4, 
-                     COALESCE((SELECT created_at FROM playlists WHERE id = ?1), ?5), 
-                     ?5)",
+            "INSERT OR REPLACE INTO playlists (id, title, role, max_size, default_ttl_secs, created_at, last_modified)
+             VALUES (?1, ?2, ?3, ?4, ?5,
+                     COALESCE((SELECT created_at FROM playlists WHERE id = ?1), ?6),
+                     ?6)",
             params![
                 id,
                 title,
+                role.as_str(),
                 config.max_size.map(|s| s as i64),
                 config.default_ttl.map(|d| d.as_secs() as i64),
                 now_nanos,
@@ -135,23 +140,28 @@ impl PersistenceManager {
     pub async fn load_playlist(
         &self,
         id: &str,
-    ) -> Result<Option<(String, PlaylistConfig, VecDeque<Arc<Record>>)>> {
+    ) -> Result<Option<(String, PlaylistRole, PlaylistConfig, VecDeque<Arc<Record>>)>> {
         let conn = self.conn.lock().unwrap();
 
         // Charger les métadonnées
         let mut stmt = conn
-            .prepare("SELECT title, max_size, default_ttl_secs FROM playlists WHERE id = ?1")
+            .prepare(
+                "SELECT title, role, max_size, default_ttl_secs FROM playlists WHERE id = ?1",
+            )
             .map_err(|e| {
                 crate::Error::PersistenceError(format!("Failed to prepare statement: {}", e))
             })?;
 
         let result = stmt.query_row(params![id], |row| {
             let title: String = row.get(0)?;
-            let max_size: Option<i64> = row.get(1)?;
-            let default_ttl_secs: Option<i64> = row.get(2)?;
+            let role_raw: String = row.get(1)?;
+            let max_size: Option<i64> = row.get(2)?;
+            let default_ttl_secs: Option<i64> = row.get(3)?;
 
             Ok((
                 title,
+                PlaylistRole::from_str(&role_raw)
+                    .unwrap_or_else(|_| PlaylistRole::custom(role_raw)),
                 PlaylistConfig {
                     max_size: max_size.map(|s| s as usize),
                     default_ttl: default_ttl_secs.map(|s| Duration::from_secs(s as u64)),
@@ -159,7 +169,7 @@ impl PersistenceManager {
             ))
         });
 
-        let (title, config) = match result {
+        let (title, role, config) = match result {
             Ok(data) => data,
             Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
             Err(e) => {
@@ -202,7 +212,7 @@ impl PersistenceManager {
             tracks.push_back(Arc::new(record));
         }
 
-        Ok(Some((title, config, tracks)))
+        Ok(Some((title, role, config, tracks)))
     }
 
     /// Supprime une playlist

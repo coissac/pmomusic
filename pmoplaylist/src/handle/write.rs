@@ -1,7 +1,7 @@
 //! WriteHandle : accès exclusif en écriture à une playlist
 
 use crate::playlist::record::Record;
-use crate::playlist::Playlist;
+use crate::playlist::{Playlist, PlaylistRole};
 use crate::Result;
 use pmocache::cache_trait::FileCache;
 use std::sync::Arc;
@@ -196,6 +196,23 @@ impl WriteHandle {
         Ok(())
     }
 
+    /// Modifie le rôle logique de la playlist
+    pub async fn set_role(&self, role: PlaylistRole) -> Result<()> {
+        if !self.playlist.is_alive() {
+            return Err(crate::Error::PlaylistDeleted(self.playlist.id.clone()));
+        }
+
+        self.playlist.set_role(role).await;
+
+        if self.playlist.persistent {
+            self.save_to_db().await?;
+        }
+
+        crate::manager::PlaylistManager().notify_playlist_changed(&self.playlist.id);
+
+        Ok(())
+    }
+
     /// Change la capacité maximale
     pub async fn set_capacity(&self, max_size: Option<usize>) -> Result<()> {
         if !self.playlist.is_alive() {
@@ -266,6 +283,7 @@ impl WriteHandle {
 
         // Récupérer les données actuelles
         let title = self.playlist.title().await;
+        let role = self.playlist.role().await;
         let core = self.playlist.core.read().await;
         let config = core.config.clone();
         let tracks = core.snapshot();
@@ -273,7 +291,9 @@ impl WriteHandle {
 
         // Créer la nouvelle playlist persistante
         let manager = crate::manager::PlaylistManager();
-        let new_handle = manager.create_persistent_playlist(new_id).await?;
+        let new_handle = manager
+            .create_persistent_playlist_with_role(new_id, role)
+            .await?;
 
         // Copier le titre et la config
         new_handle.set_title(title).await?;
@@ -295,6 +315,10 @@ impl WriteHandle {
 
     pub async fn title(&self) -> String {
         self.playlist.title().await
+    }
+
+    pub async fn role(&self) -> PlaylistRole {
+        self.playlist.role().await
     }
 
     pub fn is_persistent(&self) -> bool {
@@ -474,12 +498,13 @@ impl WriteHandle {
             .ok_or_else(|| crate::Error::PersistenceError("No persistence manager".into()))?;
 
         let title = self.playlist.title().await;
+        let role = self.playlist.role().await;
         let core = self.playlist.core.read().await;
         let config = &core.config;
         let tracks = &core.tracks;
 
         persistence
-            .save_playlist(&self.playlist.id, &title, config, tracks)
+            .save_playlist(&self.playlist.id, &title, &role, config, tracks)
             .await
     }
 }
