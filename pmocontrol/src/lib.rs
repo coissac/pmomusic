@@ -4,6 +4,8 @@ mod media_server_events;
 pub mod arylic_tcp;
 pub mod avtransport_client;
 pub mod capabilities;
+pub mod chromecast_discovery;
+pub mod chromecast_renderer;
 pub mod connection_manager_client;
 pub mod control_point;
 pub mod discovery;
@@ -40,6 +42,7 @@ pub use capabilities::{
     PlaybackPosition, PlaybackPositionInfo, PlaybackState, PlaybackStatus, TransportControl,
     VolumeControl,
 };
+pub use chromecast_renderer::ChromecastRenderer;
 pub use connection_manager_client::{ConnectionInfo, ConnectionManagerClient, ProtocolInfo};
 pub use control_point::{ControlPoint, PlaylistBinding};
 pub use linkplay::LinkPlayRenderer;

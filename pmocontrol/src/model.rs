@@ -22,6 +22,7 @@ pub enum RendererProtocol {
     UpnpAvOnly,
     OpenHomeOnly,
     Hybrid,
+    ChromecastOnly,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -41,6 +42,8 @@ pub struct RendererCapabilities {
     pub has_oh_info: bool,
     pub has_oh_time: bool,
     pub has_oh_radio: bool,
+
+    pub has_chromecast: bool,
 }
 
 impl RendererCapabilities {

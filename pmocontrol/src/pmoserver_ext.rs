@@ -1891,6 +1891,7 @@ fn protocol_summary(protocol: &RendererProtocol) -> RendererProtocolSummary {
         RendererProtocol::UpnpAvOnly => RendererProtocolSummary::Upnp,
         RendererProtocol::OpenHomeOnly => RendererProtocolSummary::Openhome,
         RendererProtocol::Hybrid => RendererProtocolSummary::Hybrid,
+        RendererProtocol::ChromecastOnly => RendererProtocolSummary::Chromecast,
     }
 }
 
@@ -1908,6 +1909,7 @@ fn capability_summary(caps: &RendererCapabilities) -> RendererCapabilitiesSummar
         has_oh_info: caps.has_oh_info,
         has_oh_time: caps.has_oh_time,
         has_oh_radio: caps.has_oh_radio,
+        has_chromecast: caps.has_chromecast,
     }
 }
 

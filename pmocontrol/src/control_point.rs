@@ -166,6 +166,57 @@ impl ControlPoint {
             });
         });
 
+        // Thread de découverte mDNS pour Chromecast
+        let registry_for_mdns = Arc::clone(&registry);
+        thread::spawn(move || {
+            use crate::chromecast_discovery;
+            use futures_util::StreamExt;
+
+            debug!("Starting mDNS discovery thread for Chromecast devices");
+
+            const SERVICE_NAME: &str = "_googlecast._tcp.local";
+
+            // Run async discovery in a blocking task
+            async_std::task::block_on(async {
+                // Create mDNS discovery stream with 30 second query interval
+                match mdns::discover::all(SERVICE_NAME, Duration::from_secs(30)) {
+                    Ok(discovery) => {
+                        let stream = discovery.listen();
+                        futures_util::pin_mut!(stream);
+
+                        debug!("mDNS discovery stream started for Chromecast devices");
+
+                        // Listen to mDNS responses
+                        while let Some(result) = stream.next().await {
+                            match result {
+                                Ok(response) => {
+                                    debug!("Received mDNS response with {} records",
+                                           response.records().count());
+
+                                    // Process the mDNS response
+                                    if let Some(update) = chromecast_discovery::process_mdns_response(response) {
+                                        debug!("Processed Chromecast device update: {:?}", update);
+
+                                        // Update the registry
+                                        let mut registry = registry_for_mdns.write().unwrap();
+                                        registry.apply_update(update);
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!("mDNS discovery error: {}", e);
+                                }
+                            }
+                        }
+
+                        warn!("mDNS discovery stream ended unexpectedly");
+                    }
+                    Err(e) => {
+                        error!("Failed to start mDNS discovery: {}", e);
+                    }
+                }
+            });
+        });
+
         let runtime_cp = ControlPoint {
             registry: Arc::clone(&registry),
             event_bus: event_bus.clone(),

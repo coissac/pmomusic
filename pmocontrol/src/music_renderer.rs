@@ -1,7 +1,7 @@
 //! Backend-agnostic music renderer façade for PMOMusic.
 //!
 //! `MusicRenderer` wraps every supported backend (UPnP AV/DLNA, OpenHome,
-//! LinkPlay HTTP, Arylic TCP, and the hybrid UPnP + Arylic pairing) behind a
+//! LinkPlay HTTP, Arylic TCP, Chromecast, and the hybrid UPnP + Arylic pairing) behind a
 //! single control surface. Higher layers in PMOMusic must only interact with
 //! renderers through this type so that transport, volume, and state queries
 //! stay backend-neutral.
@@ -18,8 +18,8 @@ use crate::openhome_client::parse_track_metadata_from_didl;
 use crate::openhome_playlist::OpenHomePlaylistSnapshot;
 use crate::queue_backend::PlaybackItem;
 use crate::{
-    ArylicTcpRenderer, DeviceRegistry, LinkPlayRenderer, OpenHomeRenderer, PlaybackPosition,
-    PlaybackState, TransportControl, UpnpRenderer, VolumeControl,
+    ArylicTcpRenderer, ChromecastRenderer, DeviceRegistry, LinkPlayRenderer, OpenHomeRenderer,
+    PlaybackPosition, PlaybackState, TransportControl, UpnpRenderer, VolumeControl,
 };
 use anyhow::{Result, anyhow};
 use tracing::warn;
@@ -35,6 +35,8 @@ pub enum MusicRenderer {
     LinkPlay(LinkPlayRenderer),
     /// Renderer reachable through the Arylic TCP control protocol (port 8899).
     ArylicTcp(ArylicTcpRenderer),
+    /// Renderer controlled via the Google Cast protocol (Chromecast).
+    Chromecast(ChromecastRenderer),
     /// Combined backend using UPnP for transport + volume writes and Arylic TCP
     /// to read detailed playback information as well as live volume/mute state.
     HybridUpnpArylic {
@@ -81,6 +83,7 @@ impl MusicRenderer {
             MusicRenderer::Upnp(r) => r.id(),
             MusicRenderer::LinkPlay(r) => r.id(),
             MusicRenderer::ArylicTcp(r) => r.id(),
+            MusicRenderer::Chromecast(r) => r.id(),
         }
     }
 
@@ -92,6 +95,7 @@ impl MusicRenderer {
             MusicRenderer::Upnp(r) => r.friendly_name(),
             MusicRenderer::LinkPlay(r) => r.friendly_name(),
             MusicRenderer::ArylicTcp(r) => r.friendly_name(),
+            MusicRenderer::Chromecast(r) => r.friendly_name(),
         }
     }
 
@@ -108,6 +112,7 @@ impl MusicRenderer {
             MusicRenderer::Upnp(r) => &r.info,
             MusicRenderer::LinkPlay(r) => &r.info,
             MusicRenderer::ArylicTcp(r) => &r.info,
+            MusicRenderer::Chromecast(r) => &r.info,
         }
     }
 
@@ -148,6 +153,17 @@ impl MusicRenderer {
             }
         }
 
+        if matches!(info.protocol, RendererProtocol::ChromecastOnly) {
+            if let Ok(renderer) = ChromecastRenderer::from_renderer_info(info.clone()) {
+                return Some(MusicRenderer::Chromecast(renderer));
+            }
+            warn!(
+                renderer = info.friendly_name.as_str(),
+                "Failed to build Chromecast renderer"
+            );
+            return None;
+        }
+
         match info.protocol {
             RendererProtocol::UpnpAvOnly | RendererProtocol::Hybrid => {
                 let has_arylic = info.capabilities.has_arylic_tcp;
@@ -184,6 +200,7 @@ impl MusicRenderer {
                 )))
             }
             RendererProtocol::OpenHomeOnly => None,
+            RendererProtocol::ChromecastOnly => None,
         }
     }
 
@@ -310,6 +327,7 @@ impl MusicRenderer {
             MusicRenderer::OpenHome(_) => "OpenHome",
             MusicRenderer::LinkPlay(_) => "LinkPlay",
             MusicRenderer::ArylicTcp(_) => "ArylicTcp",
+            MusicRenderer::Chromecast(_) => "Chromecast",
             MusicRenderer::HybridUpnpArylic { .. } => "HybridUpnpArylic",
         }
     }
@@ -370,6 +388,7 @@ impl TransportControl for MusicRenderer {
             MusicRenderer::OpenHome(oh) => oh.play_uri(uri, meta),
             MusicRenderer::LinkPlay(lp) => lp.play_uri(uri, meta),
             MusicRenderer::ArylicTcp(_) => Err(op_not_supported("play_uri", "ArylicTcp")),
+            MusicRenderer::Chromecast(cc) => cc.play_uri(uri, meta),
             MusicRenderer::HybridUpnpArylic { upnp, .. } => upnp.play_uri(uri, meta),
         }
     }
@@ -380,6 +399,7 @@ impl TransportControl for MusicRenderer {
             MusicRenderer::OpenHome(oh) => oh.play(),
             MusicRenderer::LinkPlay(lp) => lp.play(),
             MusicRenderer::ArylicTcp(ary) => ary.play(),
+            MusicRenderer::Chromecast(cc) => cc.play(),
             MusicRenderer::HybridUpnpArylic { arylic, .. } => arylic.play(),
         }
     }
@@ -390,6 +410,7 @@ impl TransportControl for MusicRenderer {
             MusicRenderer::OpenHome(oh) => oh.pause(),
             MusicRenderer::LinkPlay(lp) => lp.pause(),
             MusicRenderer::ArylicTcp(ary) => ary.pause(),
+            MusicRenderer::Chromecast(cc) => cc.pause(),
             MusicRenderer::HybridUpnpArylic { arylic, .. } => arylic.pause(),
         }
     }
@@ -400,6 +421,7 @@ impl TransportControl for MusicRenderer {
             MusicRenderer::OpenHome(oh) => oh.stop(),
             MusicRenderer::LinkPlay(lp) => lp.stop(),
             MusicRenderer::ArylicTcp(ary) => ary.stop(),
+            MusicRenderer::Chromecast(cc) => cc.stop(),
             MusicRenderer::HybridUpnpArylic { arylic, .. } => arylic.stop(),
         }
     }
@@ -410,6 +432,7 @@ impl TransportControl for MusicRenderer {
             MusicRenderer::OpenHome(oh) => oh.seek_rel_time(hhmmss),
             MusicRenderer::LinkPlay(lp) => lp.seek_rel_time(hhmmss),
             MusicRenderer::ArylicTcp(_) => Err(op_not_supported("seek_rel_time", "ArylicTcp")),
+            MusicRenderer::Chromecast(cc) => cc.seek_rel_time(hhmmss),
             MusicRenderer::HybridUpnpArylic { upnp, .. } => upnp.seek_rel_time(hhmmss),
         }
     }
@@ -427,6 +450,7 @@ impl VolumeControl for MusicRenderer {
             MusicRenderer::OpenHome(oh) => oh.volume(),
             MusicRenderer::Upnp(upnp) => upnp.volume(),
             MusicRenderer::LinkPlay(lp) => lp.volume(),
+            MusicRenderer::Chromecast(cc) => cc.volume(),
         }
     }
 
@@ -437,6 +461,7 @@ impl VolumeControl for MusicRenderer {
             MusicRenderer::OpenHome(oh) => oh.set_volume(vol),
             MusicRenderer::Upnp(upnp) => upnp.set_volume(vol),
             MusicRenderer::LinkPlay(lp) => lp.set_volume(vol),
+            MusicRenderer::Chromecast(cc) => cc.set_volume(vol),
         }
     }
 
@@ -447,6 +472,7 @@ impl VolumeControl for MusicRenderer {
             MusicRenderer::Upnp(r) => r.get_master_mute(),
             MusicRenderer::LinkPlay(r) => r.mute(),
             MusicRenderer::ArylicTcp(r) => r.mute(),
+            MusicRenderer::Chromecast(cc) => cc.mute(),
         }
     }
 
@@ -457,6 +483,7 @@ impl VolumeControl for MusicRenderer {
             MusicRenderer::Upnp(r) => r.set_master_mute(m),
             MusicRenderer::LinkPlay(r) => r.set_mute(m),
             MusicRenderer::ArylicTcp(r) => r.set_mute(m),
+            MusicRenderer::Chromecast(cc) => cc.set_mute(m),
         }
     }
 }
@@ -472,6 +499,7 @@ impl PlaybackStatus for MusicRenderer {
             MusicRenderer::OpenHome(r) => PlaybackStatus::playback_state(r),
             MusicRenderer::LinkPlay(r) => r.playback_state(),
             MusicRenderer::ArylicTcp(r) => r.playback_state(),
+            MusicRenderer::Chromecast(cc) => cc.playback_state(),
             MusicRenderer::HybridUpnpArylic { arylic, .. } => arylic.playback_state(),
         }
     }
@@ -486,6 +514,7 @@ impl PlaybackPosition for MusicRenderer {
             MusicRenderer::OpenHome(r) => r.playback_position(),
             MusicRenderer::LinkPlay(r) => r.playback_position(),
             MusicRenderer::ArylicTcp(r) => r.playback_position(),
+            MusicRenderer::Chromecast(cc) => cc.playback_position(),
             MusicRenderer::HybridUpnpArylic { arylic, .. } => arylic.playback_position(),
         }
     }

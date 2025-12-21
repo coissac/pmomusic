@@ -17,6 +17,10 @@ xmltree = "0.11.0"
 crossbeam-channel = "0.5"
 ratatui = { version = "0.26", default-features = false, features = ["crossterm"] }
 crossterm = "0.27"
+rust_cast = "0.19"
+mdns = "3.0"
+async-std = "1.12"
+futures-util = "0.3"
 
 # pmoserver extension support (optional)
 pmoserver = { path = "../pmoserver", optional = true }
