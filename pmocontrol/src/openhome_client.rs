@@ -276,7 +276,7 @@ impl OhPlaylistClient {
             }
         }
 
-        info!(
+        debug!(
             control_url = self.control_url.as_str(),
             track_count = entries.len(),
             expected_count = ids.len(),
@@ -562,7 +562,7 @@ impl OhProductClient {
         let sources = self.source_xml()?;
 
         // Log all available sources for diagnostics
-        info!(
+        debug!(
             control_url = self.control_url.as_str(),
             source_count = sources.len(),
             "OpenHome Product sources available"
@@ -594,7 +594,7 @@ impl OhProductClient {
 
         // Log current source state
         let current_source = sources.get(current_index as usize);
-        info!(
+        debug!(
             control_url = self.control_url.as_str(),
             current_index,
             current_source_name = current_source.map(|s| s.name.as_str()).unwrap_or("unknown"),

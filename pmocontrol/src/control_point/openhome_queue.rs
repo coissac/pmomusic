@@ -445,12 +445,26 @@ impl QueueBackend for OpenHomeQueue {
             "LCS computed: minimizing OpenHome playlist operations"
         );
 
-        for idx in (0..self.track_ids.len()).rev() {
-            if !keep_current[idx] {
-                let track_id = self.track_ids[idx];
-                self.playlist.delete_id(track_id)?;
-                self.track_ids.remove(idx);
-                self.items.remove(idx);
+        // If we're replacing everything (keep=0), use delete_all() instead of
+        // individual delete_id() calls. This is much more robust for live playlists
+        // where track IDs can become invalid between refresh and deletion.
+        if items_to_keep == 0 && items_to_delete > 0 {
+            debug!(
+                renderer = self.renderer_id.0.as_str(),
+                "Using delete_all() for complete replacement (more robust for live playlists)"
+            );
+            self.playlist.delete_all()?;
+            self.track_ids.clear();
+            self.items.clear();
+        } else {
+            // Selective deletion when keeping some items
+            for idx in (0..self.track_ids.len()).rev() {
+                if !keep_current[idx] {
+                    let track_id = self.track_ids[idx];
+                    self.playlist.delete_id(track_id)?;
+                    self.track_ids.remove(idx);
+                    self.items.remove(idx);
+                }
             }
         }
 

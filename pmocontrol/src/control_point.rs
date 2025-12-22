@@ -435,6 +435,7 @@ impl ControlPoint {
             Arc::clone(&runtime),
             event_bus.clone(),
             oh_event_tx,
+            Arc::clone(&playlist_bindings),
         )?;
 
         // Worker thread to process MediaServerEvent and trigger queue refreshes
@@ -2669,6 +2670,7 @@ fn spawn_openhome_event_runtime(
     runtime: Arc<RuntimeState>,
     event_bus: RendererEventBus,
     event_tx: Sender<RendererEvent>,
+    playlist_bindings: Arc<Mutex<HashMap<RendererId, PlaylistBinding>>>,
 ) -> io::Result<()> {
     let listener = TcpListener::bind("0.0.0.0:0")?;
     let listener_addr = listener
@@ -2689,6 +2691,7 @@ fn spawn_openhome_event_runtime(
         notify_rx,
         event_tx,
         listener_addr.port(),
+        playlist_bindings,
     );
 
     thread::Builder::new()
@@ -2707,6 +2710,7 @@ struct OpenHomeEventRuntime {
     http_timeout: Duration,
     subscriptions: HashMap<OpenHomeSubscriptionKey, OpenHomeSubscriptionState>,
     path_index: HashMap<String, OpenHomeSubscriptionKey>,
+    playlist_bindings: Arc<Mutex<HashMap<RendererId, PlaylistBinding>>>,
 }
 
 impl OpenHomeEventRuntime {
@@ -2717,6 +2721,7 @@ impl OpenHomeEventRuntime {
         notify_rx: Receiver<OpenHomeIncomingNotify>,
         event_tx: Sender<RendererEvent>,
         listener_port: u16,
+        playlist_bindings: Arc<Mutex<HashMap<RendererId, PlaylistBinding>>>,
     ) -> Self {
         Self {
             registry,
@@ -2728,6 +2733,7 @@ impl OpenHomeEventRuntime {
             http_timeout: Duration::from_secs(5),
             subscriptions: HashMap::new(),
             path_index: HashMap::new(),
+            playlist_bindings,
         }
     }
 
@@ -2889,30 +2895,27 @@ impl OpenHomeEventRuntime {
                     .any(|(name, _)| is_id_array_property(name))
                 {
                     if self.runtime.uses_openhome_playlist(&entry.renderer.id) {
-                        self.runtime
-                            .invalidate_openhome_cache(&entry.renderer.id);
+                        // Check if this renderer has an active playlist binding
+                        // If it does, skip sync because refresh_attached_queue_for() handles it
+                        let has_active_binding = {
+                            let bindings = self.playlist_bindings.lock().unwrap();
+                            bindings.contains_key(&entry.renderer.id)
+                        };
 
-                        match openhome_renderer_from_registry(&self.registry, &entry.renderer.id) {
-                            Ok(renderer) => match renderer.openhome_playlist_len() {
-                                Ok(queue_len) => {
-                                    self.event_bus.broadcast(RendererEvent::QueueUpdated {
-                                        id: entry.renderer.id.clone(),
-                                        queue_length: queue_len,
-                                    });
-                                }
-                                Err(err) => {
-                                    warn!(
-                                        renderer = entry.renderer.friendly_name.as_str(),
-                                        error = %err,
-                                        "Failed to read OpenHome playlist length after IdArray event"
-                                    );
-                                }
-                            },
-                            Err(err) => {
+                        if !has_active_binding {
+                            // Synchronize the local queue with the renderer's playlist state
+                            // This ensures our local mirror stays in sync when the renderer
+                            // playlist changes from other control points or manual edits
+                            if let Err(err) = sync_openhome_playlist(
+                                &self.registry,
+                                &self.runtime,
+                                &self.event_bus,
+                                &entry.renderer.id,
+                            ) {
                                 warn!(
                                     renderer = entry.renderer.friendly_name.as_str(),
                                     error = %err,
-                                    "Failed to build OpenHome renderer after IdArray event"
+                                    "Failed to sync OpenHome playlist after IdArray event"
                                 );
                             }
                         }
