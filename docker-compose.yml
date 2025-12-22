@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  pmomusic:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pmomusic:latest
+    container_name: pmomusic
+
+    # Port mapping (adjust to your needs)
+    ports:
+      - "8080:8080"
+
+    # Volume for persistent configuration
+    volumes:
+      - ./config:/home/pmomusic/.pmomusic
+      - ./cache:/home/pmomusic/cache
+
+    # Environment variables (adjust as needed)
+    environment:
+      - RUST_LOG=info
+      # Add other environment variables here
+
+    # Network mode for UPnP/DLNA discovery (host mode for multicast)
+    network_mode: host
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Resource limits (optional)
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
