@@ -1,0 +1,70 @@
+# Build artifacts
+target/
+**/target/
+
+# Webapp build artifacts and dependencies
+pmoapp/webapp/node_modules/
+pmoapp/webapp/dist/
+**/node_modules/
+
+# Git
+.git/
+.gitignore
+.jj/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# Cache directories
+cache/
+.pmomusic/
+
+# Log files
+*.log
+
+# Documentation
+doc/
+*.md
+!Readme.md
+
+# Test files
+test_upnp/
+examples/
+
+# Temporary files
+*.tmp
+*.temp
+*.pcap
+
+# Database files
+db/
+
+# Old code and backups
+old_code/
+*.txt
+!Cargo.lock
+
+# Development tools
+tools/
+gupnp-tools/
+
+# Build scripts (we have them in the Dockerfile)
+Makefile
+setup-deps.sh
+setup-env.sh
+
+# SVG and other assets not needed for runtime
+*.svg
+
+# Audio test files
+*.ogg
+*.flac
+*.wav
+*.mp3
