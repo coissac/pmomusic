@@ -70,14 +70,6 @@ pub fn process_mdns_response(response: mdns::Response) -> Option<DeviceUpdate> {
 
     debug!("Processing mDNS response for service: {}", service_name);
 
-    // Extract the friendly name from the service instance name
-    // Format is typically "Friendly Name._googlecast._tcp.local"
-    let friendly_name = service_name
-        .split("._googlecast._tcp.local")
-        .next()
-        .unwrap_or("Unknown Chromecast")
-        .to_string();
-
     // Extract IP addresses
     let addresses: Vec<IpAddr> = response
         .records()
@@ -89,7 +81,7 @@ pub fn process_mdns_response(response: mdns::Response) -> Option<DeviceUpdate> {
         .collect();
 
     if addresses.is_empty() {
-        warn!("No IP address found for Chromecast device: {}", friendly_name);
+        warn!("No IP address found for Chromecast device: {}", service_name);
         return None;
     }
 
@@ -143,6 +135,25 @@ pub fn process_mdns_response(response: mdns::Response) -> Option<DeviceUpdate> {
         .cloned()
         .unwrap_or_else(|| format!("chromecast-{}-{}", host, port));
     let manufacturer = Some("Google Inc.".to_string());
+
+    // Extract friendly name from TXT record "fn" if available
+    // Otherwise, extract from service instance name (PTR record)
+    let friendly_name = txt_records
+        .get("fn")
+        .cloned()
+        .unwrap_or_else(|| {
+            // Fallback: extract from service name, removing the UUID suffix if present
+            service_name
+                .split("._googlecast._tcp.local")
+                .next()
+                .unwrap_or("Unknown Chromecast")
+                .split('-')
+                .take_while(|part| part.len() != 32) // Skip 32-char hex UUID
+                .collect::<Vec<_>>()
+                .join("-")
+                .trim()
+                .to_string()
+        });
 
     debug!(
         "Discovered Chromecast: {} at {}:{} (UUID: {}, Model: {:?})",

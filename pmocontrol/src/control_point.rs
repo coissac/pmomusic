@@ -104,6 +104,12 @@ pub struct ControlPoint {
     /// Key   : RendererId
     /// Value : PlaylistBinding
     playlist_bindings: Arc<Mutex<HashMap<RendererId, PlaylistBinding>>>,
+    /// Cache of MusicRenderer instances to avoid recreating them.
+    /// This is critical for Chromecast which maintains a persistent TLS connection.
+    ///
+    /// Key   : RendererId
+    /// Value : MusicRenderer
+    renderer_cache: Arc<Mutex<HashMap<RendererId, MusicRenderer>>>,
 }
 
 impl ControlPoint {
@@ -119,6 +125,7 @@ impl ControlPoint {
             runtime: Arc::clone(&runtime),
         }));
         let playlist_bindings = Arc::new(Mutex::new(HashMap::new()));
+        let renderer_cache = Arc::new(Mutex::new(HashMap::new()));
 
         // SsdpClient
         let client = SsdpClient::new()?; // pmoupnp::ssdp::SsdpClient
@@ -178,8 +185,9 @@ impl ControlPoint {
 
             // Run async discovery in a blocking task
             async_std::task::block_on(async {
-                // Create mDNS discovery stream with 30 second query interval
-                match mdns::discover::all(SERVICE_NAME, Duration::from_secs(30)) {
+                // Create mDNS discovery stream with 15 second query interval
+                // (shorter interval for faster initial discovery)
+                match mdns::discover::all(SERVICE_NAME, Duration::from_secs(15)) {
                     Ok(discovery) => {
                         let stream = discovery.listen();
                         futures_util::pin_mut!(stream);
@@ -223,21 +231,51 @@ impl ControlPoint {
             media_event_bus: media_event_bus.clone(),
             runtime: Arc::clone(&runtime),
             playlist_bindings: Arc::clone(&playlist_bindings),
+            renderer_cache: Arc::clone(&renderer_cache),
         };
 
         thread::spawn(move || {
             let mut tick: u32 = 0;
+
             loop {
                 let infos = {
                     let reg = runtime_cp.registry.read().unwrap();
                     reg.list_renderers()
                 };
-                let renderers = infos
+
+                // Build a map of current renderer IDs for cleanup
+                let current_ids: HashSet<RendererId> = infos.iter().map(|i| i.id.clone()).collect();
+
+                // Remove offline renderers from shared cache
+                {
+                    let mut cache = runtime_cp.renderer_cache.lock().unwrap();
+                    cache.retain(|id, _| current_ids.contains(id));
+                }
+
+                // Get or create renderers from shared cache
+                let renderers: Vec<MusicRenderer> = infos
                     .into_iter()
                     .filter_map(|info| {
-                        MusicRenderer::from_registry_info(info, &runtime_cp.registry)
+                        let id = info.id.clone();
+
+                        // Try to get from cache first
+                        {
+                            let cache = runtime_cp.renderer_cache.lock().unwrap();
+                            if let Some(renderer) = cache.get(&id) {
+                                return Some(renderer.clone());
+                            }
+                        }
+
+                        // Create new renderer and add to cache
+                        if let Some(renderer) = MusicRenderer::from_registry_info(info, &runtime_cp.registry) {
+                            let mut cache = runtime_cp.renderer_cache.lock().unwrap();
+                            cache.insert(id, renderer.clone());
+                            Some(renderer)
+                        } else {
+                            None
+                        }
                     })
-                    .collect::<Vec<_>>();
+                    .collect();
 
                 for renderer in renderers {
                     let info = renderer.info();
@@ -252,7 +290,10 @@ impl ControlPoint {
                         PlaylistBackend::PMOQueue
                     };
                     let previous_backend = runtime_cp.runtime.playlist_backend(&info.id);
-                    if previous_backend != backend {
+                    let runtime_entry_exists = runtime_cp.runtime.has_entry(&info.id);
+
+                    // Initialize queue if: backend changed OR runtime entry doesn't exist yet
+                    if previous_backend != backend || !runtime_entry_exists {
                         runtime_cp.runtime.set_playlist_backend(&info.id, backend);
                         match backend {
                             PlaylistBackend::OpenHome => {
@@ -420,6 +461,7 @@ impl ControlPoint {
             media_event_bus: media_event_bus.clone(),
             runtime: Arc::clone(&runtime),
             playlist_bindings: Arc::clone(&playlist_bindings),
+            renderer_cache: Arc::clone(&renderer_cache),
         };
 
         thread::Builder::new()
@@ -574,6 +616,7 @@ impl ControlPoint {
             media_event_bus,
             runtime,
             playlist_bindings,
+            renderer_cache,
         })
     }
 
@@ -615,6 +658,30 @@ impl ControlPoint {
         Some(UpnpRenderer::from_registry(info, &self.registry))
     }
 
+    /// Internal helper to get or create a renderer from the cache.
+    /// This ensures that Chromecast renderers maintain their persistent connections.
+    fn get_or_create_renderer(&self, info: RendererInfo) -> Option<MusicRenderer> {
+        let id = info.id.clone();
+
+        // Try to get from cache first
+        {
+            let cache = self.renderer_cache.lock().unwrap();
+            if let Some(renderer) = cache.get(&id) {
+                return Some(renderer.clone());
+            }
+        }
+
+        // Not in cache, create new renderer
+        if let Some(renderer) = MusicRenderer::from_registry_info(info, &self.registry) {
+            // Add to cache
+            let mut cache = self.renderer_cache.lock().unwrap();
+            cache.insert(id, renderer.clone());
+            Some(renderer)
+        } else {
+            None
+        }
+    }
+
     /// Snapshot list of music renderers (protocol-agnostic view).
     pub fn list_music_renderers(&self) -> Vec<MusicRenderer> {
         let infos = {
@@ -622,9 +689,16 @@ impl ControlPoint {
             reg.list_renderers()
         };
 
+        // Clean up cache - remove renderers that are no longer in the registry
+        {
+            let current_ids: HashSet<RendererId> = infos.iter().map(|i| i.id.clone()).collect();
+            let mut cache = self.renderer_cache.lock().unwrap();
+            cache.retain(|id, _| current_ids.contains(id));
+        }
+
         infos
             .into_iter()
-            .filter_map(|info| MusicRenderer::from_registry_info(info, &self.registry))
+            .filter_map(|info| self.get_or_create_renderer(info))
             .collect()
     }
 
@@ -637,7 +711,7 @@ impl ControlPoint {
 
         infos
             .into_iter()
-            .find_map(|info| MusicRenderer::from_registry_info(info, &self.registry))
+            .find_map(|info| self.get_or_create_renderer(info))
     }
 
     /// Lookup a music renderer by id.
@@ -647,7 +721,7 @@ impl ControlPoint {
             reg.get_renderer(id)
         }?;
 
-        MusicRenderer::from_registry_info(info, &self.registry)
+        self.get_or_create_renderer(info)
     }
 
     /// Snapshot list of media servers currently known by the registry.
@@ -1316,14 +1390,32 @@ impl ControlPoint {
     fn start_queue_playback_if_idle(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
         let snapshot = self.runtime.snapshot_for(renderer_id);
         let renderer_playing = matches!(snapshot.state, Some(PlaybackState::Playing));
-        if renderer_playing || self.runtime.is_playing_from_queue(renderer_id) {
+        let from_queue = self.runtime.is_playing_from_queue(renderer_id);
+
+        debug!(
+            renderer = renderer_id.0.as_str(),
+            renderer_playing,
+            from_queue,
+            state = ?snapshot.state,
+            "start_queue_playback_if_idle: checking if should start playback"
+        );
+
+        // Only skip if the renderer is actually playing
+        // Don't skip just because playback_source is FromQueue - the renderer might have stopped
+        if renderer_playing {
+            debug!(
+                renderer = renderer_id.0.as_str(),
+                "start_queue_playback_if_idle: skipping because renderer is already playing"
+            );
             return Ok(());
         }
 
+        // Check if queue has ANY items (not just upcoming items after current)
+        // This is important for newly attached playlists with current_index set
         let has_items = self
             .runtime
-            .queue_snapshot(renderer_id)
-            .map(|items| !items.is_empty())
+            .queue_full_snapshot(renderer_id)
+            .map(|(items, _)| !items.is_empty())
             .unwrap_or(false);
         if !has_items {
             debug!(
