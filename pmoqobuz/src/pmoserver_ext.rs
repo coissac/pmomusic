@@ -141,7 +141,6 @@ pub trait QobuzServerExt {
     ///     Ok(())
     /// }
     /// ```
-    #[cfg(feature = "covers")]
     async fn init_qobuz_client_with_covers(
         &mut self,
         username: &str,
@@ -176,7 +175,6 @@ pub trait QobuzServerExt {
     ///     Ok(())
     /// }
     /// ```
-    #[cfg(feature = "covers")]
     async fn init_qobuz_client_configured_with_covers(
         &mut self,
         cover_cache: Arc<pmocovers::Cache>,

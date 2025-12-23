@@ -15,7 +15,8 @@ struct LoginResponse {
 /// Informations utilisateur retournées par l'API
 #[derive(Debug, Deserialize)]
 struct UserInfo {
-    id: u64,
+    #[serde(deserialize_with = "crate::models::deserialize_id")]
+    id: String,
     #[serde(default)]
     email: Option<String>,
     #[serde(default)]
@@ -66,12 +67,18 @@ impl QobuzApi {
     ///
     /// * `QobuzError::Unauthorized` - Credentials invalides
     /// * `QobuzError::SubscriptionRequired` - Compte gratuit (non éligible)
-    pub async fn login(&mut self, username: &str, password: &str) -> Result<AuthInfo> {
+    pub async fn login(&self, username: &str, password: &str) -> Result<AuthInfo> {
         info!("Attempting to login to Qobuz as {}", username);
 
         let params = [("username", username), ("password", password)];
 
-        let response: LoginResponse = self.post("/user/login", &params).await?;
+        let response: LoginResponse = match self.post("/user/login", &params).await {
+            Ok(resp) => resp,
+            Err(e) => {
+                info!("✗ Login failed for {}: {}", username, e);
+                return Err(e);
+            }
+        };
 
         // Vérifier que l'utilisateur a un abonnement valide
         if response.user.credential.parameters.is_none() {
@@ -80,15 +87,15 @@ impl QobuzApi {
             ));
         }
 
-        let user_id = response.user.id.to_string();
+        let user_id = response.user.id;
         let subscription_label = response
             .user
             .credential
             .parameters
             .and_then(|p| p.short_label);
 
-        debug!(
-            "Login successful - User ID: {}, Subscription: {:?}",
+        info!(
+            "✓ Login successful - User ID: {}, Subscription: {:?}",
             user_id, subscription_label
         );
 
@@ -104,14 +111,13 @@ impl QobuzApi {
 
     /// Vérifie si le client est authentifié
     pub fn is_authenticated(&self) -> bool {
-        self.user_auth_token.is_some() && self.user_id.is_some()
+        self.auth_token().is_some() && self.user_id().is_some()
     }
 
     /// Déconnecte l'utilisateur
-    pub fn logout(&mut self) {
+    pub fn logout(&self) {
         debug!("Logging out");
-        self.user_auth_token = None;
-        self.user_id = None;
+        self.clear_auth();
     }
 }
 
@@ -121,7 +127,7 @@ mod tests {
 
     #[test]
     fn test_is_authenticated() {
-        let mut api = QobuzApi::new("test_app_id").unwrap();
+        let api = QobuzApi::new("test_app_id").unwrap();
         assert!(!api.is_authenticated());
 
         api.set_auth_token("token".to_string(), "user123".to_string());

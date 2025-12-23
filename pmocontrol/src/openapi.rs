@@ -38,6 +38,7 @@ pub enum RendererProtocolSummary {
     Upnp,
     Openhome,
     Hybrid,
+    Chromecast,
 }
 
 /// Drapeaux de capacités renderer (transport, volume, services OpenHome, etc.)
@@ -55,6 +56,7 @@ pub struct RendererCapabilitiesSummary {
     pub has_oh_info: bool,
     pub has_oh_time: bool,
     pub has_oh_radio: bool,
+    pub has_chromecast: bool,
 }
 
 /// État détaillé d'un renderer

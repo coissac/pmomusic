@@ -99,6 +99,7 @@ export interface OpenHomePlaylistTrack {
 export interface OpenHomePlaylistSnapshot {
   renderer_id: string
   current_id: number | null
+  current_index: number | null
   tracks: OpenHomePlaylistTrack[]
 }
 

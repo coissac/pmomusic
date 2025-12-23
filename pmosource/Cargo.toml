@@ -29,6 +29,7 @@ pmoplaylist = { path = "../pmoplaylist" }
 # Optional cache integrations
 pmoaudiocache = { path = "../pmoaudiocache", optional = true }
 pmocovers = { path = "../pmocovers", optional = true }
+pmocache = { path = "../pmocache", optional = true }
 
 # Serialization (required for cache metadata)
 serde = { version = "1.0", features = ["derive"] }
@@ -49,5 +50,5 @@ futures = { version = "0.3", optional = true }
 
 [features]
 default = ["cache"]
-cache = ["pmoaudiocache", "pmocovers"]
+cache = ["pmoaudiocache", "pmocovers", "pmocache"]
 server = ["pmoserver", "pmoconfig", "pmoupnp", "axum", "utoipa", "tracing", "lazy_static", "tokio-stream", "futures"]

@@ -1,7 +1,7 @@
 //! Module d'accès au catalogue Qobuz (albums, tracks, artistes, playlists)
 
 use super::QobuzApi;
-use crate::error::Result;
+use crate::error::{QobuzError, Result};
 use crate::models::*;
 use serde::Deserialize;
 use tracing::debug;
@@ -21,6 +21,7 @@ struct PaginatedResponse<T> {
 /// Réponse de l'endpoint /album/get
 #[derive(Debug, Deserialize)]
 pub(crate) struct AlbumResponse {
+    #[serde(deserialize_with = "crate::models::deserialize_id")]
     id: String,
     title: String,
     artist: ArtistResponse,
@@ -51,6 +52,7 @@ pub(crate) struct AlbumResponse {
 /// Réponse de l'endpoint /track/get
 #[derive(Debug, Deserialize)]
 pub(crate) struct TrackResponse {
+    #[serde(deserialize_with = "crate::models::deserialize_id")]
     id: String,
     title: String,
     #[serde(default)]
@@ -69,7 +71,8 @@ pub(crate) struct TrackResponse {
 /// Réponse artiste
 #[derive(Debug, Deserialize)]
 pub(crate) struct ArtistResponse {
-    id: u64,
+    #[serde(deserialize_with = "crate::models::deserialize_id")]
+    id: String,
     name: String,
     #[serde(default)]
     image: Option<ImageResponse>,
@@ -101,7 +104,8 @@ struct LabelResponse {
 /// Réponse playlist
 #[derive(Debug, Deserialize)]
 pub(crate) struct PlaylistResponse {
-    id: u64,
+    #[serde(deserialize_with = "crate::models::deserialize_id")]
+    id: String,
     name: String,
     #[serde(default)]
     description: Option<String>,
@@ -122,7 +126,8 @@ pub(crate) struct PlaylistResponse {
 /// Réponse propriétaire
 #[derive(Debug, Deserialize)]
 struct OwnerResponse {
-    id: u64,
+    #[serde(deserialize_with = "crate::models::deserialize_id")]
+    id: String,
     name: String,
 }
 
@@ -162,7 +167,7 @@ struct SearchResponse {
 struct FileUrlResponse {
     url: String,
     mime_type: String,
-    sampling_rate: u32,
+    sampling_rate: f64,
     bit_depth: u32,
     format_id: u8,
 }
@@ -207,14 +212,55 @@ impl QobuzApi {
     }
 
     /// Récupère l'URL de streaming d'une track
+    ///
+    /// Cette méthode nécessite un secret s4 pour signer la requête.
+    /// Si aucun secret n'est configuré, retourne une erreur.
+    ///
+    /// # Errors
+    ///
+    /// Retourne `QobuzError::Configuration` si le secret n'est pas configuré.
     pub async fn get_file_url(&self, track_id: &str) -> Result<StreamInfo> {
+        use super::signing;
+
         debug!("Fetching file URL for track {}", track_id);
+
+        // Vérifier que le secret est disponible
+        let secret = self.secret().ok_or_else(|| {
+            QobuzError::Configuration(
+                "Secret not configured. Cannot sign track/getFileUrl request.".to_string(),
+            )
+        })?;
+
         let format_id = self.format_id.id().to_string();
+        let intent = "stream";
+        let timestamp = signing::get_timestamp();
+
+        // Vérifier que le token d'authentification est disponible
+        self.auth_token()
+            .ok_or_else(|| QobuzError::Unauthorized("Missing auth token".to_string()))?;
+
+        // Signer la requête (comme Python: track_getFileUrl)
+        let signature =
+            signing::sign_track_get_file_url(&format_id, intent, track_id, &timestamp, &secret);
+
+        debug!(
+            "Signing track/getFileUrl: track_id={}, format_id={}, ts={}",
+            track_id, format_id, timestamp
+        );
+
+        // Construire les paramètres signés
+        // Note: app_id et user_auth_token sont envoyés automatiquement comme headers
+        // par la méthode request() (X-App-Id et X-User-Auth-Token)
+        // IMPORTANT: L'ordre doit correspondre EXACTEMENT à Python (raw.py)
         let params = [
+            ("format_id", format_id.as_str()),
+            ("intent", intent),
+            ("request_ts", timestamp.as_str()),
+            ("request_sig", signature.as_str()),
             ("track_id", track_id),
-            ("format_id", &format_id),
-            ("intent", "stream"),
         ];
+
+        // Utiliser GET (comme qobuz-player-client qui fonctionne)
         let response: FileUrlResponse = self.get("/track/getFileUrl", &params).await?;
 
         Ok(StreamInfo {
@@ -441,7 +487,7 @@ impl QobuzApi {
 
     pub(crate) fn parse_artist(response: ArtistResponse) -> Artist {
         Artist {
-            id: response.id.to_string(),
+            id: response.id,
             name: response.name,
             image: response.image.and_then(|i| i.large),
             image_cached: None,
@@ -450,7 +496,7 @@ impl QobuzApi {
 
     pub(crate) fn parse_playlist(response: PlaylistResponse) -> Playlist {
         Playlist {
-            id: response.id.to_string(),
+            id: response.id,
             name: response.name,
             description: response.description,
             tracks_count: response.tracks_count,
@@ -459,7 +505,7 @@ impl QobuzApi {
             image_cached: None,
             is_public: response.is_public,
             owner: response.owner.map(|o| PlaylistOwner {
-                id: o.id,
+                id: o.id.parse().unwrap_or(0),
                 name: o.name,
             }),
         }

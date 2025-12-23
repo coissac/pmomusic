@@ -38,6 +38,22 @@ pub struct MediaResource {
     pub duration: Option<String>,
 }
 
+impl MediaResource {
+    /// Returns true if this resource represents audio content.
+    pub fn is_audio(&self) -> bool {
+        let lower = self.protocol_info.to_ascii_lowercase();
+        if lower.contains("audio/") {
+            return true;
+        }
+        // protocolInfo format: protocol:network:contentFormat:additionalInfo
+        lower
+            .split(':')
+            .nth(2)
+            .map(|mime| mime.starts_with("audio/"))
+            .unwrap_or(false)
+    }
+}
+
 /// Representation of either a container or an item returned by ContentDirectory.
 #[derive(Clone, Debug)]
 pub struct MediaEntry {

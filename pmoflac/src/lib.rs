@@ -115,7 +115,9 @@ mod util;
 pub mod wav;
 
 pub use aiff::{decode_aiff_stream, AiffDecodedStream, AiffError};
-pub use autodetect::{decode_audio_stream, DecodeAudioError, DecodedAudioStream, DecodedReader};
+pub use autodetect::{
+    decode_audio_stream, is_flac_magic_header, DecodeAudioError, DecodedAudioStream, DecodedReader,
+};
 pub use decoder::{decode_flac_stream, FlacDecodedStream};
 pub use encoder::{encode_flac_stream, EncoderOptions, FlacEncodedStream};
 pub use error::FlacError;

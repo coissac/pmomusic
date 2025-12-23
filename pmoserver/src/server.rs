@@ -28,7 +28,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::{signal, sync::RwLock, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
-use tracing::info;
+use tracing::{error, info, warn};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -543,43 +543,51 @@ impl Server {
         );
 
         let router = self.router.clone();
+        let shutdown_token = self.shutdown_token.clone();
 
         // Créer un channel pour signaler l'arrêt gracieux
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
-        // Tâche qui écoute Ctrl+C et signale l'arrêt
-        let shutdown_token_for_signal = self.shutdown_token.clone();
-        let shutdown_signal = tokio::spawn(async move {
-            signal::ctrl_c().await.expect("failed to listen for ctrl_c");
-            info!("Ctrl+C reçu, arrêt gracieux");
-            // Déclencher le token d'arrêt pour tous les composants
-            shutdown_token_for_signal.cancel();
-            // Envoyer le signal d'arrêt au serveur HTTP (ignorer l'erreur si le receiver a déjà été drop)
-            let _ = shutdown_tx.send(());
-        });
-
-        // Tâche serveur avec arrêt gracieux
-        let server_task = tokio::spawn(async move {
-            let r = router.read().await.clone();
-            let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-
-            // Serveur avec arrêt gracieux
-            axum::serve(listener, r.into_make_service())
-                .with_graceful_shutdown(async move {
-                    // Attendre le signal d'arrêt
-                    let _ = shutdown_rx.await;
-                })
-                .await
-                .unwrap();
-
-            info!("Serveur HTTP arrêté proprement");
-        });
-
         self.join_handle = Some(tokio::spawn(async move {
-            // Attendre que le serveur se termine (après réception du signal)
-            let _ = server_task.await;
-            // Nettoyer la tâche de signal
-            let _ = shutdown_signal.await;
+            let server_future = async {
+                let r = router.read().await.clone();
+                let listener = match tokio::net::TcpListener::bind(addr).await {
+                    Ok(l) => l,
+                    Err(e) => {
+                        error!("Failed to bind to {}: {}", addr, e);
+                        panic!("Cannot start server: {}", e);
+                    }
+                };
+
+                axum::serve(listener, r.into_make_service())
+                    .with_graceful_shutdown(async move {
+                        let _ = shutdown_rx.await;
+                    })
+                    .await
+            };
+
+            tokio::pin!(server_future);
+            let ctrl_c = signal::ctrl_c();
+            tokio::pin!(ctrl_c);
+
+            tokio::select! {
+                result = &mut server_future => {
+                    if let Err(err) = result {
+                        error!("Serveur HTTP arrêté avec une erreur: {}", err);
+                    } else {
+                        info!("Serveur HTTP arrêté proprement");
+                    }
+                }
+                _ = &mut ctrl_c => {
+                    info!("Ctrl+C reçu, arrêt gracieux");
+                    shutdown_token.cancel();
+                    let _ = shutdown_tx.send(());
+
+                    if tokio::time::timeout(std::time::Duration::from_secs(5), &mut server_future).await.is_err() {
+                        warn!("Arrêt gracieux trop long, fermeture forcée du serveur HTTP");
+                    }
+                }
+            }
         }));
     }
 

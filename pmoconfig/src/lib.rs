@@ -37,6 +37,9 @@ use std::{
 use tracing::info;
 use uuid::Uuid;
 
+// Module de chiffrement des mots de passe
+pub mod encryption;
+
 // Modules conditionnels pour l'API REST
 #[cfg(feature = "api")]
 pub mod api;
@@ -62,24 +65,6 @@ const DEFAULT_HTTP_PORT: u16 = 8080;
 const DEFAULT_LOG_BUFFER_CAPACITY: usize = 1000;
 const DEFAULT_LOG_MIN_LEVEL: &str = "TRACE";
 const DEFAULT_LOG_ENABLE_CONSOLE: bool = true;
-
-/// Macro to generate getter/setter for String values
-macro_rules! impl_string_config {
-    ($(#[$meta:meta])* $getter:ident, $setter:ident, $path:expr, $default:expr) => {
-        $(#[$meta])*
-        pub fn $getter(&self) -> Result<String> {
-            match self.get_value($path)? {
-                Value::String(s) => Ok(s),
-                _ => Err(anyhow!(concat!(stringify!($getter), " not configured"))),
-            }
-        }
-
-        $(#[$meta])*
-        pub fn $setter(&self, value: &str) -> Result<()> {
-            self.set_value($path, Value::String(value.to_string()))
-        }
-    };
-}
 
 /// Macro to generate getter/setter for usize values with default
 macro_rules! impl_usize_config {
@@ -604,37 +589,6 @@ impl Config {
         let udn_str = udn.trim();
         let sanitized = udn_str.strip_prefix("uuid:").unwrap_or(udn_str).to_string();
         self.set_value(&["devices", devtype, name, "udn"], Value::String(sanitized))
-    }
-
-    impl_string_config!(
-        /// Gets the Qobuz username from configuration
-        get_qobuz_username,
-        set_qobuz_username,
-        &["accounts", "qobuz", "username"],
-        ""
-    );
-
-    impl_string_config!(
-        /// Gets the Qobuz password from configuration
-        get_qobuz_password,
-        set_qobuz_password,
-        &["accounts", "qobuz", "password"],
-        ""
-    );
-
-    /// Gets the Qobuz credentials (username and password) from configuration
-    ///
-    /// # Returns
-    ///
-    /// Returns a `Result` containing a tuple of (username, password)
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if either username or password is not configured
-    pub fn get_qobuz_credentials(&self) -> Result<(String, String)> {
-        let username = self.get_qobuz_username()?;
-        let password = self.get_qobuz_password()?;
-        Ok((username, password))
     }
 
     impl_usize_config!(

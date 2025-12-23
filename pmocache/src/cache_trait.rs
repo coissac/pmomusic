@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use crate::{CacheConfig, DB};
+use crate::{cache::is_lazy_pk, CacheConfig, DB};
 
 /// Trait générique pour les caches de fichiers
 ///
@@ -145,6 +145,29 @@ pub trait FileCache<C: CacheConfig>: Send + Sync {
     /// Ceci permet le progressive caching: les fichiers en cours de download sont acceptés
     /// dès que le prebuffer est atteint, sans attendre le marker de completion.
     async fn is_valid_pk(&self, pk: &str) -> bool {
+        if is_lazy_pk(pk) {
+            match self.get_database().has_lazy_entry(pk) {
+                Ok(true) => {
+                    tracing::debug!(
+                        "is_valid_pk({}): Lazy entry present in DB, download deferred",
+                        pk
+                    );
+                    return true;
+                }
+                Ok(false) => {
+                    tracing::warn!(
+                        "is_valid_pk({}): Lazy pk not registered in DB, rejecting",
+                        pk
+                    );
+                    return false;
+                }
+                Err(e) => {
+                    tracing::error!("is_valid_pk({}): Error while checking lazy pk: {}", pk, e);
+                    return false;
+                }
+            }
+        }
+
         if self.get_database().get(pk, false).is_err() {
             tracing::debug!("is_valid_pk({}): DB entry not found", pk);
             return false;

@@ -4,6 +4,7 @@
       <h2>🎵 Audio Cache Manager</h2>
       <div class="stats">
         <span>{{ tracks.length }} tracks</span>
+        <span v-if="lazyTracksCount > 0">{{ lazyTracksCount }} lazy pending</span>
         <span v-if="totalHits > 0">{{ totalHits }} hits</span>
       </div>
     </div>
@@ -12,14 +13,39 @@
     <div class="add-form">
       <h3>➕ Add New Track</h3>
       <form @submit.prevent="handleAddTrack">
+        <div class="source-toggle">
+          <label>
+            <input type="radio" value="url" v-model="newTrackSourceType" /> Remote URL
+          </label>
+          <label>
+            <input type="radio" value="path" v-model="newTrackSourceType" /> Local FLAC reference
+          </label>
+        </div>
         <div class="form-group">
-          <input
-            v-model="newTrackUrl"
-            type="url"
-            placeholder="https://example.com/track.flac"
-            required
-            :disabled="isAdding"
-          />
+          <template v-if="newTrackSourceType === 'url'">
+            <input
+              v-model="newTrackUrl"
+              type="url"
+              placeholder="https://example.com/track.flac"
+              :required="newTrackSourceType === 'url'"
+              :disabled="isAdding"
+            />
+          </template>
+          <template v-else>
+            <input
+              v-model="newTrackPath"
+              type="text"
+              placeholder="/mnt/music/MyTrack.flac"
+              :required="newTrackSourceType === 'path'"
+              :disabled="isAdding"
+            />
+          </template>
+        </div>
+        <p class="local-tip" v-if="newTrackSourceType === 'path'">
+          Local FLAC files are referenced without duplication. Removing the cache entry never deletes
+          the original file.
+        </p>
+        <div class="form-group">
           <input
             v-model="newTrackCollection"
             type="text"
@@ -27,8 +53,8 @@
             :disabled="isAdding"
             class="collection-input"
           />
-          <button type="submit" :disabled="isAdding || !newTrackUrl">
-            {{ isAdding ? "Adding..." : "Add Track" }}
+          <button type="submit" :disabled="addButtonDisabled">
+            {{ addButtonLabel }}
           </button>
         </div>
         <p v-if="addError" class="error">{{ addError }}</p>
@@ -72,7 +98,7 @@
       <div
         v-for="track in sortedTracks"
         :key="track.pk"
-        class="track-card"
+        :class="['track-card', { 'local-reference': isLocalFile(track) }]"
         @click="selectedTrack = track"
       >
         <div class="track-icon">
@@ -85,7 +111,15 @@
           />
           <div v-else class="music-icon">🎵</div>
           <div class="track-overlay">
-            <span class="hits">{{ track.hits }} plays</span>
+            <span class="hits" v-if="!isLazyTrack(track)">{{ track.hits }} plays</span>
+            <span
+              v-else
+              class="hits lazy"
+              :class="lazyProviderClass(track)"
+            >
+              {{ lazyBadgeLabel(track) }}
+            </span>
+            <span v-if="isLocalFile(track)" class="local-pill">Local file</span>
           </div>
         </div>
         <div class="track-info">
@@ -98,7 +132,19 @@
           <div class="track-album" v-if="track.metadata?.album">
             {{ track.metadata.album }}
           </div>
-          <div class="pk">{{ track.pk }}</div>
+          <div class="pk">
+            {{ track.pk }}
+            <span
+              v-if="isLazyTrack(track)"
+              class="lazy-tag"
+              :class="lazyProviderClass(track)"
+            >
+              <span class="lazy-label">Lazy</span>
+              <span class="lazy-provider-name" v-if="lazyProviderName(track)">
+                {{ lazyProviderName(track) }}
+              </span>
+            </span>
+          </div>
           <div class="meta">
             <span v-if="durationMs(track) !== undefined">
               {{ formatDuration(durationMs(track)!) }}
@@ -113,18 +159,29 @@
               {{ conversionLabel(track) }}
             </span>
           </div>
+          <div class="local-path" v-if="isLocalFile(track)">
+            <span class="local-badge">Local</span>
+            <span class="local-path-text">
+              {{ localSourcePath(track) || "Original file" }}
+            </span>
+          </div>
           <div class="collection" v-if="track.collection">
             {{ track.collection }}
           </div>
           <div class="last-used" v-if="track.last_used">
             Last used: {{ formatDate(track.last_used) }}
           </div>
+          <div class="lazy-warning" v-if="isLazyTrack(track)">
+            Audio not downloaded yet
+            <span v-if="lazyProviderName(track)">({{ lazyProviderName(track) }} provider)</span>.
+            First playback (or forcing download) will fetch it automatically.
+          </div>
         </div>
         <div class="track-actions">
           <button
             @click.stop="playTrack(track.pk)"
             class="btn-play"
-            title="Play"
+            :title="isLazyTrack(track) ? 'Trigger download & play once available' : 'Play'"
           >
             ▶️
           </button>
@@ -135,6 +192,30 @@
             title="Delete"
           >
             {{ deletingTracks.has(track.pk) ? "..." : "🗑️" }}
+          </button>
+          <button
+            @click.stop="downloadTrack(track.pk)"
+            class="btn-secondary"
+            :disabled="isLazyTrack(track)"
+            :title="
+              isLazyTrack(track)
+                ? 'Download available once audio finished downloading'
+                : 'Download original file'
+            "
+          >
+            ⬇️
+          </button>
+          <button
+            @click.stop="copyTrackUrl(track.pk)"
+            class="btn-secondary"
+            :disabled="isLazyTrack(track)"
+            :title="
+              isLazyTrack(track)
+                ? 'URL available after download completes'
+                : 'Copy stream URL'
+            "
+          >
+            📋
           </button>
         </div>
       </div>
@@ -175,6 +256,13 @@
           <div class="cache-section">
             <h4>Cache Info</h4>
             <p><strong>PK:</strong> {{ selectedTrack.pk }}</p>
+            <p><strong>Status:</strong> {{ trackStatusLabel(selectedTrack) }}</p>
+            <p v-if="isLocalFile(selectedTrack)">
+              <strong>Local file:</strong>
+              <span class="local-path-text">
+                {{ localSourcePath(selectedTrack) || "Original file retained" }}
+              </span>
+            </p>
             <p v-if="resolveTrackOrigin(selectedTrack)">
               <strong>Source URL:</strong>
               <a :href="resolveTrackOrigin(selectedTrack)" target="_blank">{{ resolveTrackOrigin(selectedTrack) }}</a>
@@ -188,10 +276,18 @@
             <button @click="playTrack(selectedTrack.pk)" class="btn-play">
               ▶️ Play
             </button>
-            <button @click="downloadTrack(selectedTrack.pk)" class="btn-secondary">
+            <button
+              @click="downloadTrack(selectedTrack.pk)"
+              class="btn-secondary"
+              :disabled="isLazyTrack(selectedTrack)"
+            >
               ⬇️ Download
             </button>
-            <button @click="copyTrackUrl(selectedTrack.pk)" class="btn-secondary">
+            <button
+              @click="copyTrackUrl(selectedTrack.pk)"
+              class="btn-secondary"
+              :disabled="isLazyTrack(selectedTrack)"
+            >
               📋 Copy URL
             </button>
             <button @click="handleDeleteTrack(selectedTrack.pk); selectedTrack = null" class="btn-danger">
@@ -238,16 +334,36 @@ import {
   getCoverUrl,
 } from "../services/audioCache";
 
+interface LazyDisplayInfo {
+  prefix: string;
+  display: string;
+  className: string;
+  isLegacy: boolean;
+}
+
+const LAZY_PROVIDER_LABELS: Record<string, string> = {
+  QOBUZ: "Qobuz",
+};
+const LEGACY_LAZY_INFO: LazyDisplayInfo = {
+  prefix: "legacy",
+  display: "Legacy",
+  className: "lazy-provider-legacy",
+  isLegacy: true,
+};
+
 // --- États ---
 const tracks = ref<AudioCacheEntry[]>([]);
 const selectedTrack = ref<AudioCacheEntry | null>(null);
 const isLoading = ref(false);
 const sortBy = ref<"hits" | "last_used" | "recent">("hits");
 const audioPlayer = ref<HTMLAudioElement | null>(null);
+const LEGACY_LAZY_PREFIX = "L:";
 
 // Formulaire d'ajout
 const newTrackUrl = ref("");
+const newTrackPath = ref("");
 const newTrackCollection = ref("");
+const newTrackSourceType = ref<"url" | "path">("url");
 const isAdding = ref(false);
 const addError = ref("");
 const addSuccess = ref("");
@@ -266,6 +382,9 @@ const failedCovers = ref(new Set<string>());
 
 // --- Computed ---
 const totalHits = computed(() => tracks.value.reduce((sum, t) => sum + t.hits, 0));
+const lazyTracksCount = computed(() =>
+  tracks.value.reduce((acc, track) => (isLazyTrack(track) ? acc + 1 : acc), 0)
+);
 
 const sortedTracks = computed(() => {
   const arr = [...tracks.value];
@@ -285,6 +404,22 @@ const sortedTracks = computed(() => {
   }
 });
 
+const addButtonDisabled = computed(() => {
+  if (isAdding.value) return true;
+  const value =
+    newTrackSourceType.value === "url"
+      ? newTrackUrl.value?.trim()
+      : newTrackPath.value?.trim();
+  return !value;
+});
+
+const addButtonLabel = computed(() => {
+  if (newTrackSourceType.value === "url") {
+    return isAdding.value ? "Adding..." : "Add Track";
+  }
+  return isAdding.value ? "Linking..." : "Add Local File";
+});
+
 // --- Fonctions ---
 async function refreshTracks() {
   isLoading.value = true;
@@ -296,17 +431,27 @@ async function refreshTracks() {
 }
 
 async function handleAddTrack() {
-  if (!newTrackUrl.value) return;
+  const useUrl = newTrackSourceType.value === "url";
+  const rawValue = useUrl ? newTrackUrl.value.trim() : newTrackPath.value.trim();
+  if (!rawValue) {
+    addError.value = useUrl ? "URL is required" : "Local path is required";
+    return;
+  }
   isAdding.value = true;
   addError.value = "";
   addSuccess.value = "";
   try {
-    const result = await addTrack(
-      newTrackUrl.value,
-      newTrackCollection.value || undefined
-    );
-    addSuccess.value = `Track added! PK: ${result.pk}`;
+    const result = await addTrack({
+      url: useUrl ? rawValue : undefined,
+      path: useUrl ? undefined : rawValue,
+      collection: newTrackCollection.value || undefined,
+    });
+    addSuccess.value =
+      newTrackSourceType.value === "path"
+        ? `Local file linked! PK: ${result.pk}`
+        : `Track added! PK: ${result.pk}`;
     newTrackUrl.value = "";
+    newTrackPath.value = "";
     newTrackCollection.value = "";
     await refreshTracks();
   } catch (e: any) {
@@ -318,7 +463,16 @@ async function handleAddTrack() {
 }
 
 async function handleDeleteTrack(pk: string) {
-  if (!confirm(`Delete track ${pk}?`)) return;
+  const track = getTrackByPk(pk);
+  let confirmMessage = `Delete track ${pk}?`;
+  if (track && isLocalFile(track)) {
+    const path = localSourcePath(track);
+    confirmMessage =
+      `Remove cached reference for local file?\nPK: ${pk}` +
+      (path ? `\nSource: ${path}` : "") +
+      "\nOriginal file will remain untouched.";
+  }
+  if (!confirm(confirmMessage)) return;
   deletingTracks.value.add(pk);
   try {
     await deleteTrack(pk);
@@ -410,15 +564,25 @@ function handleAudioError() {
 }
 
 function downloadTrack(pk: string) {
+  const track = getTrackByPk(pk);
+  if (track && isLazyTrack(track)) {
+    alert("This track is still in lazy cache. Play it once to download the audio before exporting.");
+    return;
+  }
   window.open(getOriginalTrackUrl(pk), "_blank");
 }
 
 function copyTrackUrl(pk: string) {
+  const track = getTrackByPk(pk);
+  if (track && isLazyTrack(track)) {
+    alert("URL available after the lazy audio has been downloaded.");
+    return;
+  }
   navigator.clipboard.writeText(window.location.origin + getTrackUrl(pk));
   alert("✅ URL copied!");
 }
 
-function resolveTrackOrigin(track: AudioCacheEntry | null): string | undefined {
+function resolveTrackOrigin(track: AudioCacheEntry | null | undefined): string | undefined {
   return track ? getOriginUrl(track) : undefined;
 }
 
@@ -474,6 +638,101 @@ function getTrackCoverUrl(track: AudioCacheEntry | null, size?: number): string 
 
 function handleCoverError(pk: string) {
   failedCovers.value.add(pk);
+}
+
+function prettifyLazyProvider(prefix: string): string {
+  if (LAZY_PROVIDER_LABELS[prefix]) {
+    return LAZY_PROVIDER_LABELS[prefix];
+  }
+  const normalized = prefix.replace(/[^A-Za-z0-9]+/g, " ").trim();
+  if (!normalized) {
+    return prefix.trim().toUpperCase() || "Lazy";
+  }
+  return normalized
+    .split(/\s+/)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function buildLazyClass(prefix: string): string {
+  return `lazy-provider-${prefix.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+}
+
+function extractLazyInfoFromPk(pk: string | undefined | null): LazyDisplayInfo | undefined {
+  if (!pk) return undefined;
+  if (pk.startsWith(LEGACY_LAZY_PREFIX)) {
+    return LEGACY_LAZY_INFO;
+  }
+  const separatorIndex = pk.indexOf(":");
+  if (separatorIndex <= 0) {
+    return undefined;
+  }
+  const prefix = pk.slice(0, separatorIndex);
+  if (!prefix) {
+    return undefined;
+  }
+  return {
+    prefix,
+    display: prettifyLazyProvider(prefix),
+    className: buildLazyClass(prefix),
+    isLegacy: false,
+  };
+}
+
+function getLazyInfo(track: AudioCacheEntry | null | undefined): LazyDisplayInfo | undefined {
+  if (!track?.pk) return undefined;
+  return extractLazyInfoFromPk(track.pk);
+}
+
+function isLazyTrack(track: AudioCacheEntry | null | undefined): boolean {
+  return !!getLazyInfo(track);
+}
+
+function lazyProviderName(track: AudioCacheEntry | null | undefined): string | undefined {
+  return getLazyInfo(track)?.display;
+}
+
+function lazyProviderClass(track: AudioCacheEntry | null | undefined): string {
+  return getLazyInfo(track)?.className ?? "lazy-provider-generic";
+}
+
+function lazyBadgeLabel(track: AudioCacheEntry | null | undefined): string {
+  const info = getLazyInfo(track);
+  if (!info) return "";
+  return info.isLegacy ? "Lazy" : `Lazy - ${info.display}`;
+}
+
+function trackStatusLabel(track: AudioCacheEntry | null): string {
+  if (isLocalFile(track)) {
+    return "Local FLAC reference (original preserved)";
+  }
+  const info = getLazyInfo(track);
+  if (info) {
+    const provider = info.isLegacy ? "" : ` - ${info.display}`;
+    return `Lazy${provider} (audio pending download)`;
+  }
+  return "Cached";
+}
+
+function getTrackByPk(pk: string): AudioCacheEntry | undefined {
+  return tracks.value.find((t) => t.pk === pk);
+}
+
+function isLocalFile(track: AudioCacheEntry | null | undefined): boolean {
+  return track?.metadata?.local_passthrough === true;
+}
+
+function localSourcePath(track: AudioCacheEntry | null | undefined): string | undefined {
+  if (!track) return undefined;
+  const metaValue = track.metadata?.local_source_path;
+  if (typeof metaValue === "string" && metaValue.trim().length > 0) {
+    return metaValue;
+  }
+  const origin = resolveTrackOrigin(track);
+  if (origin?.startsWith("file://")) {
+    return origin.replace("file://", "");
+  }
+  return undefined;
 }
 
 onMounted(() => {
@@ -536,6 +795,25 @@ onMounted(() => {
 .add-form h3 {
   margin-top: 0;
   color: #61dafb;
+}
+
+.source-toggle {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+  color: #ccc;
+  font-size: 0.95rem;
+}
+
+.source-toggle input {
+  margin-right: 0.3rem;
+}
+
+.local-tip {
+  margin: 0.25rem 0 0.75rem;
+  font-size: 0.85rem;
+  color: #bbb;
 }
 
 .form-group {
@@ -706,6 +984,11 @@ button:disabled {
   flex-direction: column;
 }
 
+.track-card.local-reference {
+  border: 1px solid rgba(97, 218, 251, 0.6);
+  box-shadow: 0 0 0 1px rgba(97, 218, 251, 0.1);
+}
+
 .track-card:hover {
   transform: translateY(-4px);
   box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
@@ -751,6 +1034,28 @@ button:disabled {
   font-size: 0.9rem;
 }
 
+.track-overlay .hits.lazy {
+  display: inline-flex;
+  align-items: center;
+  background: rgba(156, 39, 176, 0.85);
+  color: #fff;
+  font-weight: bold;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+}
+
+.local-pill {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  background: rgba(97, 218, 251, 0.9);
+  color: #0c1924;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
 .track-info {
   padding: 1rem;
   flex: 1;
@@ -790,12 +1095,66 @@ button:disabled {
   margin-bottom: 0.5rem;
 }
 
+.lazy-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: 0.5rem;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  background: rgba(156, 39, 176, 0.25);
+  color: #f5f5f5;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  font-weight: 600;
+  border: 1px solid rgba(156, 39, 176, 0.4);
+}
+
+.lazy-tag .lazy-label {
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.lazy-tag .lazy-provider-name {
+  font-size: 0.6rem;
+  text-transform: none;
+  letter-spacing: 0.4px;
+  opacity: 0.9;
+}
+
 .meta {
   display: flex;
   gap: 0.75rem;
   font-size: 0.85rem;
   color: #999;
   flex-wrap: wrap;
+}
+
+.local-path {
+  margin: 0.4rem 0;
+  font-size: 0.8rem;
+  color: #a0f0ff;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: baseline;
+}
+
+.local-badge {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  background: rgba(97, 218, 251, 0.2);
+  border: 1px solid rgba(97, 218, 251, 0.4);
+  border-radius: 999px;
+  padding: 0.1rem 0.5rem;
+  color: #61dafb;
+}
+
+.local-path-text {
+  font-family: "Fira Code", "SFMono-Regular", Consolas, monospace;
+  color: #e3f7ff;
+  word-break: break-all;
 }
 
 .collection {
@@ -809,6 +1168,37 @@ button:disabled {
   color: #777;
   font-size: 0.8rem;
   margin-top: 0.5rem;
+}
+
+.lazy-warning {
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+  color: #ffb347;
+  background: rgba(255, 152, 0, 0.15);
+  border: 1px solid rgba(255, 152, 0, 0.3);
+  padding: 0.5rem;
+  border-radius: 6px;
+}
+
+.track-overlay .hits.lazy.lazy-provider-legacy,
+.lazy-tag.lazy-provider-legacy {
+  background: rgba(255, 152, 0, 0.85);
+  color: #000;
+  border-color: rgba(255, 193, 7, 0.8);
+}
+
+.track-overlay .hits.lazy.lazy-provider-qobuz,
+.lazy-tag.lazy-provider-qobuz {
+  background: rgba(76, 175, 80, 0.9);
+  color: #fff;
+  border-color: rgba(165, 214, 167, 0.9);
+}
+
+.track-overlay .hits.lazy.lazy-provider-generic,
+.lazy-tag.lazy-provider-generic {
+  background: rgba(103, 58, 183, 0.85);
+  color: #fff;
+  border-color: rgba(179, 157, 219, 0.8);
 }
 
 .track-actions {

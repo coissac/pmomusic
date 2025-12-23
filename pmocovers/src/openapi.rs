@@ -10,6 +10,10 @@ use utoipa::OpenApi;
 /// L'API réutilise les handlers génériques de pmocache.
 #[derive(OpenApi)]
 #[openapi(
+    paths(
+        crate::serve_cover_jpeg,
+        crate::serve_cover_jpeg_with_size,
+    ),
     components(
         schemas(
             pmocache::CacheEntry,

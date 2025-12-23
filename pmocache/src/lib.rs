@@ -5,6 +5,15 @@
 //! conservées dans une base SQLite, ainsi que les opérations de téléchargement,
 //! d'éviction et de mise à jour.
 //!
+//! Les fonctionnalités clés incluent :
+//! - **lazy caching** : génération de clés « lazy » (préfixées `L:`) permettant de publier des
+//!   URLs stables avant le téléchargement. Le cache résout automatiquement un lazy PK lors du
+//!   premier accès, commute l'entrée vers le PK réel et notifie les abonnés ;
+//! - **local caching** : possibilité d’enregistrer un fichier déjà présent sur le disque via
+//!   [`Cache::register_local_file_reference`] sans duplication physique. Cette méthode crée un
+//!   lien (symlink ou hard link suivant la plateforme), marque l’élément comme complet et laisse
+//!   la gestion métier (audio, images…) décider des métadonnées à persister.
+//!
 //! ## Vue d'ensemble
 //!
 //! `pmocache` met à disposition :
@@ -115,6 +124,7 @@ pub mod cache;
 pub mod cache_trait;
 pub mod db;
 pub mod download;
+pub mod lazy;
 pub mod metadata_macros;
 
 #[cfg(feature = "pmoserver")]
@@ -129,13 +139,17 @@ pub mod openapi;
 #[cfg(feature = "pmoconfig")]
 pub mod config_ext;
 
-pub use cache::{Cache, CacheBroadcastEvent, CacheConfig, CacheSubscription};
+pub use cache::{
+    generate_lazy_pk, is_lazy_pk, Cache, CacheBroadcastEvent, CacheConfig, CacheEvent,
+    CacheSubscription,
+};
 pub use cache_trait::{pk_from_content_header, FileCache};
 pub use db::{CacheEntry, DB};
 pub use download::{
     download, download_with_transformer, ingest_with_transformer, peek_header, peek_reader_header,
     Download, StreamTransformer, TransformContextHandle, TransformMetadata,
 };
+pub use lazy::{lazy_prefix_from_pk, LazyEntryRemoteData, LazyProvider};
 
 #[cfg(feature = "pmoserver")]
 pub use pmoserver_ext::{create_api_router, create_file_router, GenericCacheExt};

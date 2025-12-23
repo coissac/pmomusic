@@ -1,6 +1,9 @@
 //! Record : entrée dans la playlist pointant vers le cache audio
 
-use std::time::{Duration, SystemTime};
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+static LAST_ADDED_AT: AtomicI64 = AtomicI64::new(0);
 
 /// Un enregistrement dans la playlist
 ///
@@ -23,7 +26,7 @@ impl Record {
     pub fn new(cache_pk: String) -> Self {
         Self {
             cache_pk,
-            added_at: SystemTime::now(),
+            added_at: next_timestamp(),
             ttl: None,
         }
     }
@@ -32,7 +35,7 @@ impl Record {
     pub fn with_ttl(cache_pk: String, ttl: Duration) -> Self {
         Self {
             cache_pk,
-            added_at: SystemTime::now(),
+            added_at: next_timestamp(),
             ttl: Some(ttl),
         }
     }
@@ -57,5 +60,31 @@ impl Record {
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos() as i64
+    }
+}
+
+fn next_timestamp() -> SystemTime {
+    let now_nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as i64;
+
+    let mut last = LAST_ADDED_AT.load(Ordering::Relaxed);
+    loop {
+        let candidate = if now_nanos > last {
+            now_nanos
+        } else {
+            last.saturating_add(1)
+        };
+
+        match LAST_ADDED_AT.compare_exchange(last, candidate, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => {
+                let nanos = candidate as u64;
+                return UNIX_EPOCH + Duration::from_nanos(nanos);
+            }
+            Err(updated) => {
+                last = updated;
+            }
+        }
     }
 }

@@ -57,13 +57,20 @@ pub struct ConversionStatus {
     pub details: Option<String>,
 }
 
-/// Requête pour ajouter un item au cache
+/// Requête pour ajouter un item au cache.
+///
+/// Au moins une des deux entrées (`url` ou `path`) doit être fournie.
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct AddItemRequest {
-    /// URL de la source
+    /// URL HTTP/HTTPS/UPnP à télécharger
+    #[serde(default)]
     #[cfg_attr(feature = "openapi", schema(example = "https://example.com/file.dat"))]
-    pub url: String,
+    pub url: Option<String>,
+    /// Chemin local (`file://` implicite) à référencer
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(example = "/mnt/music/track.flac"))]
+    pub path: Option<String>,
     /// Collection optionnelle
     #[cfg_attr(feature = "openapi", schema(example = "album:the_wall"))]
     pub collection: Option<String>,
@@ -76,7 +83,7 @@ pub struct AddItemResponse {
     /// Clé primaire (pk) de l'item ajouté
     #[cfg_attr(feature = "openapi", schema(example = "1a2b3c4d5e6f7a8b"))]
     pub pk: String,
-    /// URL source de l'item
+    /// URL ou chemin source de l'item
     #[cfg_attr(feature = "openapi", schema(example = "https://example.com/file.dat"))]
     pub url: String,
     /// Message de succès
@@ -108,7 +115,9 @@ pub struct ErrorResponse {
 /// Liste tous les items en cache avec leurs statistiques
 ///
 /// Retourne la liste complète des entrées du cache triées par nombre d'accès décroissant.
-pub async fn list_items<C: CacheConfig>(State(cache): State<Arc<Cache<C>>>) -> impl IntoResponse {
+pub async fn list_items<C: CacheConfig + 'static>(
+    State(cache): State<Arc<Cache<C>>>,
+) -> impl IntoResponse {
     match cache.db.get_all(true) {
         Ok(entries) => (StatusCode::OK, Json(entries)).into_response(),
         Err(e) => (
@@ -125,7 +134,7 @@ pub async fn list_items<C: CacheConfig>(State(cache): State<Arc<Cache<C>>>) -> i
 /// Récupère les informations d'un item spécifique
 ///
 /// Retourne les métadonnées d'un item identifié par sa clé (pk).
-pub async fn get_item_info<C: CacheConfig>(
+pub async fn get_item_info<C: CacheConfig + 'static>(
     State(cache): State<Arc<Cache<C>>>,
     Path(pk): Path<String>,
 ) -> impl IntoResponse {
@@ -146,7 +155,7 @@ pub async fn get_item_info<C: CacheConfig>(
 ///
 /// Retourne le statut actuel du téléchargement (progression, tailles, erreurs).
 /// Si le téléchargement est terminé, retourne les informations du fichier.
-pub async fn get_download_status<C: CacheConfig>(
+pub async fn get_download_status<C: CacheConfig + 'static>(
     State(cache): State<Arc<Cache<C>>>,
     Path(pk): Path<String>,
 ) -> impl IntoResponse {
@@ -248,38 +257,74 @@ fn conversion_from_json(value: &Value) -> Option<ConversionStatus> {
         .and_then(|conv| serde_json::from_value(conv.clone()).ok())
 }
 
+#[derive(Clone, Copy)]
+enum AddSource<'a> {
+    Url(&'a str),
+    Local(&'a str),
+}
+
 /// Ajoute un item au cache depuis une URL
 ///
 /// Télécharge l'item depuis l'URL fournie et l'ajoute au cache.
 /// Si l'item existe déjà, il est mis à jour.
-pub async fn add_item<C: CacheConfig>(
+pub async fn add_item<C: CacheConfig + 'static>(
     State(cache): State<Arc<Cache<C>>>,
     Json(req): Json<AddItemRequest>,
 ) -> impl IntoResponse {
-    if req.url.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "INVALID_REQUEST".to_string(),
-                message: "URL cannot be empty".to_string(),
-            }),
-        )
-            .into_response();
-    }
+    let mode = match (req.url.as_deref(), req.path.as_deref()) {
+        (Some(url), None) if !url.is_empty() => AddSource::Url(url),
+        (None, Some(path)) if !path.is_empty() => AddSource::Local(path),
+        (Some(_), Some(_)) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "INVALID_REQUEST".to_string(),
+                    message: "Provide either 'url' or 'path', not both".to_string(),
+                }),
+            )
+                .into_response()
+        }
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "INVALID_REQUEST".to_string(),
+                    message: "Either 'url' or 'path' must be provided".to_string(),
+                }),
+            )
+                .into_response()
+        }
+    };
 
-    match cache
-        .add_from_url(&req.url, req.collection.as_deref())
-        .await
-    {
-        Ok(pk) => (
-            StatusCode::CREATED,
-            Json(AddItemResponse {
-                pk,
-                url: req.url,
-                message: "Item added successfully".to_string(),
-            }),
-        )
-            .into_response(),
+    let collection = req.collection.as_deref();
+    let add_result = match mode {
+        AddSource::Url(url) => cache.add_from_url(url, collection).await,
+        AddSource::Local(path) => cache.add_from_file(path, collection).await,
+    };
+
+    match add_result {
+        Ok(pk) => {
+            let origin =
+                cache
+                    .db
+                    .get_origin_url(&pk)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| match mode {
+                        AddSource::Url(url) => url.to_string(),
+                        AddSource::Local(path) => format!("file://{}", path),
+                    });
+
+            (
+                StatusCode::CREATED,
+                Json(AddItemResponse {
+                    pk,
+                    url: origin,
+                    message: "Item added successfully".to_string(),
+                }),
+            )
+                .into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
@@ -294,7 +339,7 @@ pub async fn add_item<C: CacheConfig>(
 /// Supprime un item du cache
 ///
 /// Supprime l'item et toutes ses variantes du disque et de la base de données.
-pub async fn delete_item<C: CacheConfig>(
+pub async fn delete_item<C: CacheConfig + 'static>(
     State(cache): State<Arc<Cache<C>>>,
     Path(pk): Path<String>,
 ) -> impl IntoResponse {
@@ -346,7 +391,9 @@ pub async fn delete_item<C: CacheConfig>(
 /// Purge complètement le cache
 ///
 /// Supprime tous les items et vide la base de données. Opération irréversible.
-pub async fn purge_cache<C: CacheConfig>(State(cache): State<Arc<Cache<C>>>) -> impl IntoResponse {
+pub async fn purge_cache<C: CacheConfig + 'static>(
+    State(cache): State<Arc<Cache<C>>>,
+) -> impl IntoResponse {
     match cache.purge().await {
         Ok(_) => (
             StatusCode::OK,
@@ -370,7 +417,7 @@ pub async fn purge_cache<C: CacheConfig>(State(cache): State<Arc<Cache<C>>>) -> 
 ///
 /// Re-télécharge les items manquants et supprime les fichiers orphelins.
 /// Utile pour réparer un cache corrompu.
-pub async fn consolidate_cache<C: CacheConfig>(
+pub async fn consolidate_cache<C: CacheConfig + 'static>(
     State(cache): State<Arc<Cache<C>>>,
 ) -> impl IntoResponse {
     match cache.consolidate().await {

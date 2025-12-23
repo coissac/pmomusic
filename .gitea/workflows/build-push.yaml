@@ -1,0 +1,29 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches:
+      - main  # Changez cela si votre branche principale a un autre nom
+    
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Setup cache
+        uses: actions/cache@v3
+        with:
+          path: ~/.npm
+          key: dont-cache-${{ github.run_id }}        
+      - name: Build and push image
+        uses: https://gargoton.petite-maison-orange.fr/pmo-actions/build-push-image@main
+        with:
+          image_name: public/pmomusic
+          image_tags: latest
+          no_cache: true
+          version_file: version.txt
+          check_uuid: 82a30d23-b3bd-4199-9237-776965831d20
+
+
+  

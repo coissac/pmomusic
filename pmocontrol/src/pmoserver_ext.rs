@@ -4,11 +4,13 @@
 //! et naviguer dans les serveurs de médias.
 
 #[cfg(feature = "pmoserver")]
-use crate::control_point::{ControlPoint, OpenHomeAccessError};
+use crate::control_point::{
+    ControlPoint, OpenHomeAccessError, OPENHOME_SNAPSHOT_CACHE_TTL,
+};
 #[cfg(feature = "pmoserver")]
-use crate::media_server::{MediaBrowser, MediaEntry, MediaResource, MusicServer, ServerId};
+use crate::media_server::{MediaBrowser, MediaEntry, MusicServer, ServerId};
 #[cfg(feature = "pmoserver")]
-use crate::model::{RendererCapabilities, RendererId, RendererProtocol};
+use crate::model::{RendererCapabilities, RendererId, RendererProtocol, TrackMetadata};
 #[cfg(feature = "pmoserver")]
 use crate::openapi::{
     AttachPlaylistRequest, AttachedPlaylistInfo, BrowseResponse, ContainerEntry, ErrorResponse,
@@ -17,7 +19,7 @@ use crate::openapi::{
     RendererProtocolSummary, RendererState, RendererSummary, SuccessResponse, VolumeSetRequest,
 };
 #[cfg(feature = "pmoserver")]
-use crate::playback_queue::PlaybackItem;
+use crate::queue_backend::PlaybackItem;
 #[cfg(feature = "pmoserver")]
 use crate::{PlaybackPosition, PlaybackStatus, TransportControl, VolumeControl};
 
@@ -1099,7 +1101,10 @@ async fn get_openhome_playlist(
     let rid_for_task = rid.clone();
 
     let fetch_task = tokio::task::spawn_blocking(move || {
-        control_point.get_openhome_playlist_snapshot(&rid_for_task)
+        control_point.get_cached_openhome_playlist_snapshot(
+            &rid_for_task,
+            OPENHOME_SNAPSHOT_CACHE_TTL,
+        )
     });
 
     let snapshot = fetch_task
@@ -1858,37 +1863,26 @@ fn playback_item_from_entry(server: &MusicServer, entry: &MediaEntry) -> Option<
     }
 
     // Find an audio resource
-    let resource = entry.resources.iter().find(|res| is_audio_resource(res))?;
+    let resource = entry.resources.iter().find(|res| res.is_audio())?;
 
-    let mut item = PlaybackItem::new(resource.uri.clone());
-    item.title = Some(entry.title.clone());
-    item.server_id = Some(server.id().clone());
-    item.object_id = Some(entry.id.clone());
-    item.artist = entry.artist.clone();
-    item.album = entry.album.clone();
-    item.genre = entry.genre.clone();
-    item.album_art_uri = entry.album_art_uri.clone();
-    item.date = entry.date.clone();
-    item.track_number = entry.track_number.clone();
-    item.creator = entry.creator.clone();
-    item.protocol_info = Some(resource.protocol_info.clone());
+    let metadata = TrackMetadata {
+        title: Some(entry.title.clone()),
+        artist: entry.artist.clone(),
+        album: entry.album.clone(),
+        genre: entry.genre.clone(),
+        album_art_uri: entry.album_art_uri.clone(),
+        date: entry.date.clone(),
+        track_number: entry.track_number.clone(),
+        creator: entry.creator.clone(),
+    };
 
-    Some(item)
-}
-
-/// Helper to detect if a MediaResource is audio content.
-#[cfg(feature = "pmoserver")]
-fn is_audio_resource(res: &MediaResource) -> bool {
-    let lower = res.protocol_info.to_ascii_lowercase();
-    if lower.contains("audio/") {
-        return true;
-    }
-    // Check MIME type in protocolInfo (format: protocol:network:contentFormat:additionalInfo)
-    lower
-        .split(':')
-        .nth(2)
-        .map(|mime| mime.starts_with("audio/"))
-        .unwrap_or(false)
+    Some(PlaybackItem {
+        media_server_id: server.id().clone(),
+        didl_id: entry.id.clone(),
+        uri: resource.uri.clone(),
+        protocol_info: resource.protocol_info.clone(),
+        metadata: Some(metadata),
+    })
 }
 
 #[cfg(feature = "pmoserver")]
@@ -1897,6 +1891,7 @@ fn protocol_summary(protocol: &RendererProtocol) -> RendererProtocolSummary {
         RendererProtocol::UpnpAvOnly => RendererProtocolSummary::Upnp,
         RendererProtocol::OpenHomeOnly => RendererProtocolSummary::Openhome,
         RendererProtocol::Hybrid => RendererProtocolSummary::Hybrid,
+        RendererProtocol::ChromecastOnly => RendererProtocolSummary::Chromecast,
     }
 }
 
@@ -1914,19 +1909,7 @@ fn capability_summary(caps: &RendererCapabilities) -> RendererCapabilitiesSummar
         has_oh_info: caps.has_oh_info,
         has_oh_time: caps.has_oh_time,
         has_oh_radio: caps.has_oh_radio,
-    }
-}
-
-#[cfg(feature = "pmoserver")]
-fn state_to_string(state: crate::PlaybackState) -> String {
-    use crate::PlaybackState;
-    match state {
-        PlaybackState::Stopped => "STOPPED".to_string(),
-        PlaybackState::Playing => "PLAYING".to_string(),
-        PlaybackState::Paused => "PAUSED".to_string(),
-        PlaybackState::Transitioning => "TRANSITIONING".to_string(),
-        PlaybackState::NoMedia => "NO_MEDIA".to_string(),
-        PlaybackState::Unknown(s) => s,
+        has_chromecast: caps.has_chromecast,
     }
 }
 

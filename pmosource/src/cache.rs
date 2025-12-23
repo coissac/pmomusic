@@ -20,12 +20,29 @@
 
 use crate::{CacheStatus, MusicSourceError, Result};
 use pmoaudiocache::{AudioMetadata, Cache as AudioCache};
+use pmocache::lazy::LazyProvider;
 use pmocovers::Cache as CoverCache;
-use serde_json::Value as JsonValue;
+use serde_json::{json, Value as JsonValue};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::AsyncRead;
 use tokio::sync::RwLock;
+
+fn log_metadata_warning(key: &str, audio_pk: &str, error: &str) {
+    #[cfg(feature = "server")]
+    {
+        tracing::warn!(
+            "Failed to store metadata {} for {}: {}",
+            key,
+            audio_pk,
+            error
+        );
+    }
+    #[cfg(not(feature = "server"))]
+    {
+        let _ = (key, audio_pk, error);
+    }
+}
 
 /// Métadonnées d'une piste en cache
 #[derive(Debug, Clone)]
@@ -112,6 +129,11 @@ impl SourceCacheManager {
             cover_cache,
             audio_cache,
         }
+    }
+
+    /// Enregistre un provider lazy supplémentaire auprès du cache audio.
+    pub fn register_lazy_provider(&self, provider: Arc<dyn LazyProvider>) {
+        self.audio_cache.register_lazy_provider(provider);
     }
 
     /// Résoudre l'URI d'une piste (priorité au cache)
@@ -218,6 +240,104 @@ impl SourceCacheManager {
         Ok(pk)
     }
 
+    /// Cache audio with lazy loading (deferred download)
+    ///
+    /// Creates a lazy PK for the audio file without downloading it immediately.
+    /// The actual download will occur when the HTTP endpoint is first requested.
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - URL source de la piste
+    /// * `metadata` - Métadonnées audio optionnelles
+    ///
+    /// # Returns
+    ///
+    /// La clé primaire lazy (pk) commençant par "L:"
+    pub async fn cache_audio_lazy(
+        &self,
+        url: &str,
+        metadata: Option<AudioMetadata>,
+    ) -> Result<String> {
+        // Use pmocache add_from_url_deferred (already implemented)
+        let lazy_pk = self
+            .audio_cache
+            .add_from_url_deferred(url, Some(&self.collection_id))
+            .await
+            .map_err(|e| MusicSourceError::CacheError(e.to_string()))?;
+
+        // Seed individual metadata entries directly (no redundant JSON blob)
+        if let Some(meta) = metadata {
+            self.seed_audio_metadata(&lazy_pk, &meta);
+        }
+
+        Ok(lazy_pk)
+    }
+
+    /// Crée une entrée lazy basée sur un provider enregistré.
+    ///
+    /// # Arguments
+    ///
+    /// * `lazy_pk` - Identifiant logique (préfixe provider + valeur)
+    /// * `metadata` - Métadonnées optionnelles connues à l'avance
+    /// * `cover_pk_hint` - PK éventuel d'une cover déjà cachée
+    pub async fn cache_audio_lazy_with_provider(
+        &self,
+        lazy_pk: &str,
+        metadata: Option<AudioMetadata>,
+        cover_pk_hint: Option<String>,
+    ) -> Result<String> {
+        self.audio_cache
+            .ensure_lazy_entry(lazy_pk, Some(&self.collection_id), None)
+            .await
+            .map_err(|e| MusicSourceError::CacheError(e.to_string()))?;
+
+        let needs_provider_metadata = metadata.is_none();
+        let needs_provider_cover = cover_pk_hint.is_none();
+
+        let provider_data = if needs_provider_metadata || needs_provider_cover {
+            Some(
+                self.audio_cache
+                    .fetch_lazy_provider_data(lazy_pk)
+                    .await
+                    .map_err(|e| MusicSourceError::CacheError(e.to_string()))?,
+            )
+        } else {
+            None
+        };
+
+        let mut final_metadata = metadata;
+        if final_metadata.is_none() {
+            if let Some(data) = provider_data.as_ref() {
+                if let Some(value) = data.metadata.as_ref() {
+                    if let Ok(meta) = serde_json::from_value::<AudioMetadata>(value.clone()) {
+                        final_metadata = Some(meta);
+                    }
+                }
+            }
+        }
+
+        let mut final_cover_pk = cover_pk_hint;
+        if final_cover_pk.is_none() {
+            if let Some(data) = provider_data.as_ref() {
+                if let Some(url) = data.cover_url.as_ref() {
+                    if let Ok(pk) = self.cache_cover(url).await {
+                        final_cover_pk = Some(pk);
+                    }
+                }
+            }
+        }
+
+        if let Some(meta) = final_metadata.as_ref() {
+            self.seed_audio_metadata(lazy_pk, meta);
+        }
+
+        if let Some(cover_pk) = final_cover_pk {
+            let _ = self.set_audio_metadata(lazy_pk, "cover_pk", json!(cover_pk));
+        }
+
+        Ok(lazy_pk.to_string())
+    }
+
     /// Cache un flux audio via un reader asynchrone
     pub async fn cache_audio_from_reader<R>(
         &self,
@@ -262,6 +382,62 @@ impl SourceCacheManager {
     pub async fn remove_track(&self, track_id: &str) {
         let mut cache = self.track_cache.write().await;
         cache.remove(track_id);
+    }
+
+    /// Pré-remplit les métadonnées audio pour une entrée lazy
+    fn seed_audio_metadata(&self, audio_pk: &str, metadata: &AudioMetadata) {
+        let audio_pk = audio_pk.to_string();
+        let store = |key: &str, value: JsonValue| {
+            if let Err(e) = self.audio_cache.db.set_a_metadata(&audio_pk, key, value) {
+                log_metadata_warning(key, &audio_pk, &e.to_string());
+            }
+        };
+
+        if let Some(title) = metadata.title.as_ref() {
+            store("title", JsonValue::String(title.clone()));
+        }
+        if let Some(artist) = metadata.artist.as_ref() {
+            store("artist", JsonValue::String(artist.clone()));
+        }
+        if let Some(album) = metadata.album.as_ref() {
+            store("album", JsonValue::String(album.clone()));
+        }
+        if let Some(year) = metadata.year {
+            store("year", json!(year));
+        }
+        if let Some(track_number) = metadata.track_number {
+            store("track_number", json!(track_number));
+        }
+        if let Some(track_total) = metadata.track_total {
+            store("track_total", json!(track_total));
+        }
+        if let Some(disc_number) = metadata.disc_number {
+            store("disc_number", json!(disc_number));
+        }
+        if let Some(disc_total) = metadata.disc_total {
+            store("disc_total", json!(disc_total));
+        }
+        if let Some(genre) = metadata.genre.as_ref() {
+            store("genre", JsonValue::String(genre.clone()));
+        }
+        if let Some(duration_secs) = metadata.duration_secs {
+            store("duration_secs", json!(duration_secs));
+            store("duration_ms", json!(duration_secs * 1000));
+        }
+        if let Some(sample_rate) = metadata.sample_rate {
+            store("sample_rate", json!(sample_rate));
+        }
+        if let Some(channels) = metadata.channels {
+            store("channels", json!(channels));
+        }
+        if let Some(bitrate) = metadata.bitrate {
+            store("bitrate", json!(bitrate));
+        }
+        if let Some(conversion) = metadata.conversion.as_ref() {
+            if let Ok(value) = serde_json::to_value(conversion) {
+                store("conversion", value);
+            }
+        }
     }
 
     /// Stocke une métadonnée personnalisée pour un fichier audio caché

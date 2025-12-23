@@ -91,7 +91,7 @@ pub trait CacheConfigExt {
     /// let config = get_config();
     /// let cache = config.create_cache::<AudioConfig>("audio_cache", "cache_audio", 500)?;
     /// ```
-    fn create_cache<C: crate::CacheConfig>(
+    fn create_cache<C: crate::CacheConfig + 'static>(
         &self,
         cache_type: &str,
         default_dir: &str,
@@ -121,7 +121,7 @@ impl CacheConfigExt for Config {
         self.set_value(&["host", cache_type, "size"], Value::Number(n))
     }
 
-    fn create_cache<C: crate::CacheConfig>(
+    fn create_cache<C: crate::CacheConfig + 'static>(
         &self,
         cache_type: &str,
         default_dir: &str,

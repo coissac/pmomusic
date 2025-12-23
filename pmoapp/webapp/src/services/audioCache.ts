@@ -4,6 +4,9 @@
 
 export interface AudioCacheMetadata {
   origin_url?: string;
+  local_passthrough?: boolean;
+  local_source_path?: string;
+  source_size?: number;
   title?: string;
   artist?: string;
   album?: string;
@@ -26,6 +29,7 @@ export interface AudioCacheMetadata {
 
 export interface AudioCacheEntry {
   pk: string;
+  lazy_pk?: string | null;
   id: string | null;
   hits: number;
   last_used: string | null;
@@ -40,7 +44,8 @@ export interface ConversionInfo {
 }
 
 export interface AddTrackRequest {
-  url: string;
+  url?: string;
+  path?: string;
   collection?: string;
 }
 
@@ -127,10 +132,12 @@ export async function getDownloadStatus(pk: string): Promise<DownloadStatus> {
 /**
  * Ajoute une nouvelle piste au cache depuis une URL
  */
-export async function addTrack(url: string, collection?: string): Promise<AddTrackResponse> {
-  const body: AddTrackRequest = { url };
-  if (collection) {
-    body.collection = collection;
+export async function addTrack(body: AddTrackRequest): Promise<AddTrackResponse> {
+  if ((!body.url || body.url.trim().length === 0) && (!body.path || body.path.trim().length === 0)) {
+    throw new Error("Either a URL or a local path must be provided");
+  }
+  if (body.url && body.path) {
+    throw new Error("Provide either a URL or a local path, not both");
   }
 
   const response = await fetch("/api/audio", {

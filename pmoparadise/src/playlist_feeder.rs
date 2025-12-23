@@ -6,7 +6,7 @@ use crate::{client::RadioParadiseClient, models::EventId};
 use anyhow::Result;
 use pmoaudiocache::Cache as AudioCache;
 use pmocovers::Cache as CoversCache;
-use pmoplaylist::{PlaylistManager, ReadHandle, WriteHandle};
+use pmoplaylist::{PlaylistManager, PlaylistRole, ReadHandle, WriteHandle};
 use std::{
     collections::{HashMap, VecDeque},
     sync::Arc,
@@ -114,9 +114,21 @@ impl RadioParadisePlaylistFeeder {
         collection: Option<String>,
     ) -> Result<(Self, ReadHandle)> {
         let manager = PlaylistManager::get();
-        let write_handle = manager
-            .create_persistent_playlist(playlist_id.clone())
-            .await?;
+        let mut write_handle = manager.get_write_handle(playlist_id.clone()).await?;
+
+        // Assure-toi que les playlists Live ne deviennent jamais persistantes.
+        if write_handle.is_persistent() {
+            tracing::warn!(
+                "RadioParadisePlaylistFeeder: playlist {} was persistent, recreating as transient",
+                playlist_id
+            );
+            write_handle.delete().await?;
+            write_handle = manager.get_write_handle(playlist_id.clone()).await?;
+        }
+
+        // Force the logical role to 'Radio' for better visibility/debug.
+        write_handle.set_role(PlaylistRole::Radio).await?;
+
         let read_handle = manager.get_read_handle(&playlist_id).await?;
 
         Ok((

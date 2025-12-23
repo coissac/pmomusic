@@ -110,19 +110,95 @@ async fn get_file_with_param<C: CacheConfig + 'static>(
     serve_file_with_streaming(&cache, &pk, &param, content_type, param_generator).await
 }
 
+#[cfg(feature = "pmoserver")]
+async fn serve_finalized_pk<C: CacheConfig + 'static>(
+    cache: &Arc<Cache<C>>,
+    pk: &str,
+    param: &str,
+    content_type: &'static str,
+) -> Response {
+    let qualifier = param.to_string();
+    let file_path = cache.get_file_path_with_qualifier(pk, param);
+
+    if let Err(e) = cache.db.update_hit(pk) {
+        warn!("Error updating hit count for {}: {}", pk, e);
+    }
+
+    let response = serve_complete_file(file_path, content_type).await;
+
+    if response.status().is_success() {
+        cache.notify_broadcast(pk, &qualifier).await;
+    }
+
+    response
+}
+
+/// Handler spécifique pour les lazy PK
+///
+/// Gère le téléchargement on-demand des fichiers lazy :
+/// 1. Fast path : vérifie si déjà téléchargé
+/// 2. Résout l'URL via la DB ou un provider
+/// 3. Lance le téléchargement et calcule le real pk
+/// 4. Met à jour la DB (lazy → downloaded)
+/// 5. Broadcast l'event pour PK switching
+/// 6. Sert directement le fichier téléchargé
+#[cfg(feature = "pmoserver")]
+async fn serve_lazy_audio_file<C: CacheConfig + 'static>(
+    cache: &Arc<Cache<C>>,
+    lazy_pk: &str,
+    param: &str,
+    content_type: &'static str,
+) -> Response {
+    tracing::info!("Lazy download triggered for pk: {}", lazy_pk);
+
+    // 1. Vérifier si déjà téléchargé (fast path)
+    if let Ok(Some(real_pk)) = cache.db.get_pk_by_lazy_pk(lazy_pk) {
+        tracing::debug!(
+            "Lazy PK {} already downloaded as {}, serving immediately",
+            lazy_pk,
+            real_pk
+        );
+        return serve_finalized_pk(cache, &real_pk, param, content_type).await;
+    }
+
+    // 2. Télécharger en résolvant l'URL via la DB ou un provider
+    let real_pk = match cache.download_lazy(lazy_pk, None).await {
+        Ok(pk) => pk,
+        Err(e) => {
+            tracing::error!("Failed to download lazy file: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Download failed: {}", e),
+            )
+                .into_response();
+        }
+    };
+
+    // 4. Broadcast event pour prefetch ET commutation PK
+    cache.broadcast_lazy_downloaded(lazy_pk, &real_pk).await;
+
+    // 5. Servir directement le fichier téléchargé
+    serve_finalized_pk(cache, &real_pk, param, content_type).await
+}
+
 /// Fonction utilitaire pour servir un fichier avec streaming progressif
 ///
 /// Si le fichier est en cours de téléchargement, il est streamé au fur et à mesure.
 /// Sinon, le fichier complet est servi normalement.
 /// Si le fichier n'existe pas et qu'un param_generator est fourni, tente de générer le param.
 #[cfg(feature = "pmoserver")]
-async fn serve_file_with_streaming<C: CacheConfig>(
+async fn serve_file_with_streaming<C: CacheConfig + 'static>(
     cache: &Arc<Cache<C>>,
     pk: &str,
     param: &str,
     content_type: &'static str,
     param_generator: Option<ParamGenerator<C>>,
 ) -> Response {
+    // LAZY PK SUPPORT: Détecter si c'est un lazy PK
+    if crate::cache::is_lazy_pk(pk) {
+        return serve_lazy_audio_file(cache, pk, param, content_type).await;
+    }
+
     let file_path = cache.get_file_path_with_qualifier(pk, param);
     let qualifier = param.to_string();
 

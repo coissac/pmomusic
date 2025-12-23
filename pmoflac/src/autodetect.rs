@@ -221,8 +221,13 @@ impl AsyncRead for DecodedReader {
     }
 }
 
+/// Retourne `true` si les octets fournis contiennent la signature magique FLAC (`fLaC`).
+pub fn is_flac_magic_header(bytes: &[u8]) -> bool {
+    bytes.len() >= 4 && &bytes[..4] == b"fLaC"
+}
+
 fn detect_format(bytes: &[u8]) -> Option<DetectedFormat> {
-    if bytes.len() >= 4 && &bytes[..4] == b"fLaC" {
+    if is_flac_magic_header(bytes) {
         return Some(DetectedFormat::Flac);
     }
     if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WAVE" {

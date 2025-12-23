@@ -8,7 +8,7 @@
 //!
 //! Pour tester :
 //! ```bash
-//! cargo run --example server_with_covers --features "pmoserver,covers"
+//! cargo run --example server_with_covers --features "pmoserver"
 //! ```
 //!
 //! Endpoints disponibles :
@@ -20,16 +20,16 @@
 //! - GET /api/covers - API REST du cache d'images
 //! - GET /swagger-ui - Documentation interactive
 
-#[cfg(all(feature = "pmoserver", feature = "covers"))]
+#[cfg(feature = "pmoserver")]
 use pmocovers::CoverCacheExt;
 
-#[cfg(all(feature = "pmoserver", feature = "covers"))]
+#[cfg(feature = "pmoserver")]
 use pmoqobuz::QobuzServerExt;
 
-#[cfg(all(feature = "pmoserver", feature = "covers"))]
+#[cfg(feature = "pmoserver")]
 use pmoserver::ServerBuilder;
 
-#[cfg(all(feature = "pmoserver", feature = "covers"))]
+#[cfg(feature = "pmoserver")]
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Initialiser le logging
@@ -94,9 +94,9 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(not(all(feature = "pmoserver", feature = "covers")))]
+#[cfg(not(feature = "pmoserver"))]
 fn main() {
-    eprintln!("Cet exemple nécessite les features 'pmoserver' et 'covers'");
-    eprintln!("Exécutez: cargo run --example server_with_covers --features \"pmoserver,covers\"");
+    eprintln!("Cet exemple nécessite la feature 'pmoserver'");
+    eprintln!("Exécutez: cargo run --example server_with_covers --features \"pmoserver\"");
     std::process::exit(1);
 }

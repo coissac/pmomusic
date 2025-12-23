@@ -4,6 +4,8 @@
 
 pub mod auth;
 pub mod catalog;
+pub mod signing;
+pub mod spoofer;
 pub mod user;
 
 use crate::error::{QobuzError, Result};
@@ -11,22 +13,43 @@ use crate::models::AudioFormat;
 use reqwest::{Client, Response};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use std::sync::RwLock;
 use std::time::Duration;
 use tracing::{debug, warn};
 
+pub use spoofer::Spoofer;
+
 /// URL de base de l'API Qobuz
 const API_BASE_URL: &str = "https://www.qobuz.com/api.json/0.2";
+//const API_BASE_URL: &str = "http://localhost:8080/api.json/0.2";
+
+/// App ID Qobuz par défaut
+///
+/// Cet App ID est un fallback au cas où :
+/// - Aucun appID n'est configuré dans pmoconfig
+/// - Le Spoofer n'est pas disponible ou échoue
+///
+/// Note: Cet App ID peut devenir obsolète avec le temps.
+/// Il est recommandé d'utiliser soit la configuration manuelle,
+/// soit le Spoofer pour obtenir un App ID à jour.
+pub const DEFAULT_APP_ID: &str = "1401488693436528";
 
 /// Client API bas-niveau pour communiquer avec Qobuz
 pub struct QobuzApi {
     /// Client HTTP
     client: Client,
     /// App ID pour l'authentification
-    app_id: String,
+    app_id: RwLock<String>,
+    /// Secret s4 pour signer les requêtes sensibles (track/getFileUrl, userLibrary/*)
+    ///
+    /// Ce secret est obtenu soit :
+    /// - En décodant un `configvalue` (base64) et XOR avec l'app_id
+    /// - Depuis le Spoofer (secrets dynamiques)
+    secret: RwLock<Option<Vec<u8>>>,
     /// Token d'authentification utilisateur
-    user_auth_token: Option<String>,
+    user_auth_token: RwLock<Option<String>>,
     /// ID utilisateur
-    user_id: Option<String>,
+    user_id: RwLock<Option<String>>,
     /// Format audio par défaut
     format_id: AudioFormat,
 }
@@ -43,17 +66,101 @@ impl QobuzApi {
 
         Ok(Self {
             client,
-            app_id: app_id.into(),
-            user_auth_token: None,
-            user_id: None,
+            app_id: RwLock::new(app_id.into()),
+            secret: RwLock::new(None),
+            user_auth_token: RwLock::new(None),
+            user_id: RwLock::new(None),
             format_id: AudioFormat::default(),
         })
     }
 
+    /// Crée une API avec un secret depuis configvalue (base64)
+    ///
+    /// # Arguments
+    ///
+    /// * `app_id` - App ID Qobuz
+    /// * `configvalue` - Secret encodé en base64 (à XORer avec l'app_id)
+    ///
+    /// # Note
+    ///
+    /// Cette méthode reproduit le comportement Python de `__set_s4()`.
+    /// Le configvalue est décodé depuis base64, puis XORé avec l'app_id
+    /// pour obtenir le secret s4.
+    pub fn with_secret(app_id: impl Into<String>, configvalue: &str) -> Result<Self> {
+        let api = Self::new(app_id)?;
+        api.set_secret_from_configvalue(configvalue)?;
+        Ok(api)
+    }
+
+    /// Crée une API avec un secret brut (déjà décodé/dérivé)
+    ///
+    /// # Arguments
+    ///
+    /// * `app_id` - App ID Qobuz
+    /// * `raw_secret` - Secret prêt à l'emploi (comme ceux du Spoofer)
+    ///
+    /// # Note
+    ///
+    /// Utilisez cette méthode pour les secrets du Spoofer qui sont déjà
+    /// décodés et prêts à l'emploi (pas besoin de XOR avec l'app_id)
+    pub fn with_raw_secret(app_id: impl Into<String>, raw_secret: &str) -> Result<Self> {
+        let api = Self::new(app_id)?;
+        api.set_secret(raw_secret.as_bytes().to_vec());
+        Ok(api)
+    }
+
+    /// Définit le secret s4 directement
+    ///
+    /// # Arguments
+    ///
+    /// * `secret` - Secret s4 en bytes (déjà décodé et dérivé)
+    pub fn set_secret(&self, secret: Vec<u8>) {
+        *self.secret.write().unwrap() = Some(secret);
+    }
+
+    /// Dérive et définit le secret s4 depuis un configvalue
+    ///
+    /// Reproduit la logique Python de `__set_s4()`:
+    /// 1. Décode le configvalue depuis base64
+    /// 2. XOR avec l'app_id
+    /// 3. Stocke le résultat comme secret s4
+    fn set_secret_from_configvalue(&self, configvalue: &str) -> Result<()> {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
+        // Décoder le configvalue depuis base64
+        let s3s = STANDARD
+            .decode(configvalue.trim())
+            .map_err(|e| QobuzError::Configuration(format!("Invalid configvalue: {}", e)))?;
+
+        // XOR avec l'app_id
+        let app_id = self.app_id.read().unwrap();
+        let app_id_bytes = app_id.as_bytes();
+        let mut s4 = Vec::with_capacity(s3s.len());
+
+        for (i, &byte) in s3s.iter().enumerate() {
+            let app_byte = app_id_bytes[i % app_id_bytes.len()];
+            s4.push(byte ^ app_byte);
+        }
+
+        *self.secret.write().unwrap() = Some(s4);
+        Ok(())
+    }
+
+    /// Retourne le secret s4 si disponible
+    pub fn secret(&self) -> Option<Vec<u8>> {
+        self.secret.read().unwrap().clone()
+    }
+
     /// Définit le token d'authentification
-    pub fn set_auth_token(&mut self, token: String, user_id: String) {
-        self.user_auth_token = Some(token);
-        self.user_id = Some(user_id);
+    pub fn set_auth_token(&self, token: String, user_id: String) {
+        *self.user_auth_token.write().unwrap() = Some(token);
+        *self.user_id.write().unwrap() = Some(user_id);
+    }
+
+    /// Efface les informations d'authentification
+    pub fn clear_auth(&self) {
+        *self.user_auth_token.write().unwrap() = None;
+        *self.user_id.write().unwrap() = None;
     }
 
     /// Définit le format audio par défaut
@@ -67,18 +174,38 @@ impl QobuzApi {
     }
 
     /// Retourne l'App ID
-    pub fn app_id(&self) -> &str {
-        &self.app_id
+    pub fn app_id(&self) -> String {
+        self.app_id.read().unwrap().clone()
+    }
+
+    /// Met à jour dynamiquement l'app_id et le secret associés (avec XOR)
+    pub fn update_credentials(&self, app_id: impl Into<String>, configvalue: &str) -> Result<()> {
+        {
+            let mut current = self.app_id.write().unwrap();
+            *current = app_id.into();
+        }
+
+        self.set_secret_from_configvalue(configvalue)
+    }
+
+    /// Met à jour dynamiquement l'app_id et le secret brut (sans XOR)
+    pub fn update_credentials_raw(&self, app_id: impl Into<String>, raw_secret: &str) {
+        {
+            let mut current = self.app_id.write().unwrap();
+            *current = app_id.into();
+        }
+
+        self.set_secret(raw_secret.as_bytes().to_vec());
     }
 
     /// Retourne le token d'authentification si disponible
-    pub fn auth_token(&self) -> Option<&str> {
-        self.user_auth_token.as_deref()
+    pub fn auth_token(&self) -> Option<String> {
+        self.user_auth_token.read().unwrap().clone()
     }
 
     /// Retourne l'ID utilisateur si disponible
-    pub fn user_id(&self) -> Option<&str> {
-        self.user_id.as_deref()
+    pub fn user_id(&self) -> Option<String> {
+        self.user_id.read().unwrap().clone()
     }
 
     /// Effectue une requête GET à l'API
@@ -117,11 +244,22 @@ impl QobuzApi {
         };
 
         // Ajouter les headers
-        request = request.header("X-App-Id", &self.app_id);
+        let app_id = self.app_id.read().unwrap().clone();
+        request = request.header("X-App-Id", app_id);
 
-        if let Some(ref token) = self.user_auth_token {
+        if let Some(token) = self.auth_token() {
             request = request.header("X-User-Auth-Token", token);
         }
+
+        // Headers additionnels pour compatibilité avec qobuz-player-client
+        request = request.header(
+            "Accept-Language",
+            "en,en-US;q=0.8,ko;q=0.6,zh;q=0.4,zh-CN;q=0.2",
+        );
+        request = request.header(
+            "Access-Control-Request-Headers",
+            "x-user-auth-token,x-app-id",
+        );
 
         // Ajouter les paramètres
         if method == "GET" {
@@ -132,11 +270,15 @@ impl QobuzApi {
 
         // Envoyer la requête
         let response = request.send().await?;
-        self.handle_response(response).await
+        self.handle_response(response, endpoint).await
     }
 
     /// Traite la réponse HTTP
-    async fn handle_response<T: DeserializeOwned>(&self, response: Response) -> Result<T> {
+    async fn handle_response<T: DeserializeOwned>(
+        &self,
+        response: Response,
+        endpoint: &str,
+    ) -> Result<T> {
         let status = response.status();
         let status_code = status.as_u16();
 
@@ -144,7 +286,10 @@ impl QobuzApi {
 
         if !status.is_success() {
             let error_text = response.text().await.unwrap_or_default();
-            warn!("API error ({}): {}", status_code, error_text);
+            debug!(
+                "API error ({}) on {}: {}",
+                status_code, endpoint, error_text
+            );
             return Err(QobuzError::from_status_code(status_code, error_text));
         }
 
@@ -158,7 +303,7 @@ impl QobuzApi {
                         .get("message")
                         .and_then(|m| m.as_str())
                         .unwrap_or("Unknown error");
-                    warn!("Qobuz API error: {}", message);
+                    debug!("Qobuz API error on {}: {}", endpoint, message);
                     return Err(QobuzError::ApiError {
                         code: status_code,
                         message: message.to_string(),
@@ -169,7 +314,7 @@ impl QobuzApi {
 
         // Parser la réponse
         serde_json::from_str(&text).map_err(|e| {
-            warn!("Failed to parse response: {}", e);
+            debug!("Failed to parse response: {}", e);
             QobuzError::JsonParse(e)
         })
     }
@@ -182,16 +327,16 @@ mod tests {
     #[test]
     fn test_api_creation() {
         let api = QobuzApi::new("test_app_id").unwrap();
-        assert_eq!(api.app_id(), "test_app_id");
+        assert_eq!(api.app_id(), "test_app_id".to_string());
         assert!(api.auth_token().is_none());
     }
 
     #[test]
     fn test_set_auth_token() {
-        let mut api = QobuzApi::new("test_app_id").unwrap();
+        let api = QobuzApi::new("test_app_id").unwrap();
         api.set_auth_token("test_token".to_string(), "user123".to_string());
-        assert_eq!(api.auth_token(), Some("test_token"));
-        assert_eq!(api.user_id(), Some("user123"));
+        assert_eq!(api.auth_token().as_deref(), Some("test_token"));
+        assert_eq!(api.user_id().as_deref(), Some("user123"));
     }
 
     #[test]

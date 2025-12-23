@@ -203,6 +203,8 @@ mod tests {
             oh_volume_control_url: None,
             oh_radio_service_type: None,
             oh_radio_control_url: None,
+            oh_product_service_type: None,
+            oh_product_control_url: None,
         }
     }
 
@@ -238,7 +240,9 @@ mod tests {
 /// Cette impl se base sur AVTransport (InstanceID = 0).
 impl TransportControl for UpnpRenderer {
     fn play_uri(&self, uri: &str, meta: &str) -> Result<()> {
-        self.play_uri(uri, meta)
+        let avt = self.avtransport()?;
+        avt.set_av_transport_uri(uri, meta)?;
+        avt.play(0, "1")
     }
 
     fn play(&self) -> Result<()> {
@@ -247,15 +251,18 @@ impl TransportControl for UpnpRenderer {
     }
 
     fn pause(&self) -> Result<()> {
-        self.pause()
+        let avt = self.avtransport()?;
+        avt.pause(0)
     }
 
     fn stop(&self) -> Result<()> {
-        self.stop()
+        let avt = self.avtransport()?;
+        avt.stop(0)
     }
 
     fn seek_rel_time(&self, hhmmss: &str) -> Result<()> {
-        self.seek_rel_time(hhmmss)
+        let avt = self.avtransport()?;
+        avt.seek(0, "REL_TIME", hhmmss)
     }
 }
 

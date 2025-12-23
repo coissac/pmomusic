@@ -19,9 +19,9 @@ use crossterm::terminal::{
 };
 use pmocontrol::model::TrackMetadata;
 use pmocontrol::{
-    ControlPoint, DeviceRegistryRead, MediaBrowser, MediaEntry, MediaResource, MediaServerEvent,
-    MediaServerInfo, MusicServer, PlaybackItem, PlaybackPosition, PlaybackPositionInfo,
-    PlaybackStatus, RendererEvent, RendererInfo, TransportControl, VolumeControl,
+    ControlPoint, DeviceRegistryRead, MediaBrowser, MediaEntry, MediaServerEvent, MediaServerInfo,
+    MusicServer, PlaybackItem, PlaybackPosition, PlaybackPositionInfo, PlaybackStatus,
+    RendererEvent, RendererInfo, TransportControl, VolumeControl,
 };
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -432,8 +432,9 @@ impl App {
             lines.push(Line::from("  <vide>"));
         } else {
             for (idx, item) in self.queue_snapshot.iter().enumerate() {
-                let title = item.title.as_deref().unwrap_or("<titre>");
-                let artist = item.artist.as_deref().unwrap_or("");
+                let meta = item.metadata.as_ref();
+                let title = meta.and_then(|m| m.title.as_deref()).unwrap_or("<titre>");
+                let artist = meta.and_then(|m| m.artist.as_deref()).unwrap_or("");
                 let prefix = match self.queue_current_index {
                     Some(current) if current == idx => "▶",
                     _ => " ",
@@ -924,8 +925,9 @@ impl App {
             self.ui_state.set_status(format_track_status(&meta));
         } else {
             let label = item
-                .title
-                .as_deref()
+                .metadata
+                .as_ref()
+                .and_then(|meta| meta.title.as_deref())
                 .map(|t| t.to_string())
                 .unwrap_or_else(|| item.uri.clone());
             self.ui_state.metadata = None;
@@ -1046,6 +1048,10 @@ impl App {
                     self.ui_state
                         .set_status(format!("File mise à jour ({queue_length})"));
                 }
+            }
+            RendererEvent::BindingChanged { .. } => {
+                // Binding events are surfaced via the REST API; the demo UI does not
+                // expose binding info yet, so we ignore them.
             }
         }
     }
@@ -1250,59 +1256,28 @@ fn collect_playable_items(
 
 /// Convert MediaEntry to PlaybackItem.
 fn playback_item_from_entry(server: &MusicServer, entry: &MediaEntry) -> Option<PlaybackItem> {
-    let resource = entry.resources.iter().find(|res| is_audio_resource(res))?;
-    let mut item = PlaybackItem::new(resource.uri.clone());
-    item.title = Some(entry.title.clone());
-    item.server_id = Some(server.id().clone());
-    item.object_id = Some(entry.id.clone());
-    item.artist = entry.artist.clone();
-    item.album = entry.album.clone();
-    item.genre = entry.genre.clone();
-    item.album_art_uri = entry.album_art_uri.clone();
-    item.date = entry.date.clone();
-    item.track_number = entry.track_number.clone();
-    item.creator = entry.creator.clone();
-    Some(item)
+    let resource = entry.resources.iter().find(|res| res.is_audio())?;
+    let metadata = TrackMetadata {
+        title: Some(entry.title.clone()),
+        artist: entry.artist.clone(),
+        album: entry.album.clone(),
+        genre: entry.genre.clone(),
+        album_art_uri: entry.album_art_uri.clone(),
+        date: entry.date.clone(),
+        track_number: entry.track_number.clone(),
+        creator: entry.creator.clone(),
+    };
+    Some(PlaybackItem {
+        media_server_id: server.id().clone(),
+        didl_id: entry.id.clone(),
+        uri: resource.uri.clone(),
+        protocol_info: resource.protocol_info.clone(),
+        metadata: Some(metadata),
+    })
 }
 
 fn playback_metadata_from_item(item: &PlaybackItem) -> Option<TrackMetadata> {
-    let metadata = TrackMetadata {
-        title: item.title.clone(),
-        artist: item.artist.clone(),
-        album: item.album.clone(),
-        genre: item.genre.clone(),
-        album_art_uri: item.album_art_uri.clone(),
-        date: item.date.clone(),
-        track_number: item.track_number.clone(),
-        creator: item.creator.clone(),
-    };
-
-    if metadata.title.is_none()
-        && metadata.artist.is_none()
-        && metadata.album.is_none()
-        && metadata.genre.is_none()
-        && metadata.album_art_uri.is_none()
-        && metadata.date.is_none()
-        && metadata.track_number.is_none()
-        && metadata.creator.is_none()
-    {
-        return None;
-    }
-
-    Some(metadata)
-}
-
-/// Check if MediaResource is audio.
-fn is_audio_resource(res: &MediaResource) -> bool {
-    let lower = res.protocol_info.to_ascii_lowercase();
-    if lower.contains("audio/") {
-        return true;
-    }
-    lower
-        .split(':')
-        .nth(2)
-        .map(|mime| mime.starts_with("audio/"))
-        .unwrap_or(false)
+    item.metadata.clone()
 }
 
 fn render_metadata_block(metadata: Option<&TrackMetadata>) -> Vec<Line<'static>> {

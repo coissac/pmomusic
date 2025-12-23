@@ -7,10 +7,25 @@ use utoipa::OpenApi;
 #[derive(OpenApi)]
 #[openapi(
     paths(
+        crate::api::list_playlists,
+        crate::api::create_playlist,
+        crate::api::get_playlist,
+        crate::api::update_playlist,
+        crate::api::delete_playlist,
+        crate::api::add_tracks,
+        crate::api::flush_tracks,
+        crate::api::remove_track,
         crate::sse::playlist_events_sse,
     ),
     components(
         schemas(
+            crate::api::PlaylistSummaryResponse,
+            crate::api::PlaylistDetailResponse,
+            crate::api::PlaylistTrackResponse,
+            crate::api::CreatePlaylistRequest,
+            crate::api::UpdatePlaylistRequest,
+            crate::api::AddTracksRequest,
+            crate::api::ErrorResponse,
             crate::sse::EventPayload,
             crate::sse::EventsQuery,
         )

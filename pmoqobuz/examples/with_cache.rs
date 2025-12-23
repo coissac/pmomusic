@@ -8,7 +8,7 @@
 //! cargo run --example with_cache --features cache
 //! ```
 
-use pmoaudiocache::AudioCache;
+use pmoaudiocache::Cache as AudioCache;
 use pmocovers::Cache as CoverCache;
 use pmoqobuz::{QobuzClient, QobuzSource};
 use pmosource::MusicSource;
@@ -34,12 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("✅ Caches initialized!\n");
 
     // Create the source with caching enabled
-    let source = QobuzSource::new_with_cache(
-        client,
-        "http://localhost:8080",
-        Some(cover_cache.clone()),
-        Some(audio_cache.clone()),
-    );
+    let source = QobuzSource::new(client, cover_cache.clone(), audio_cache.clone());
 
     println!("📻 Source: {}", source.name());
     println!("🆔 ID: {}", source.id());

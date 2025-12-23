@@ -51,7 +51,6 @@ impl QobuzServerExt for Server {
         // Créer l'état de l'API sans cache d'images
         let state = QobuzState {
             client: client.clone(),
-            #[cfg(feature = "covers")]
             cover_cache: None,
         };
 
@@ -75,7 +74,6 @@ impl QobuzServerExt for Server {
         self.init_qobuz_client(&username, &password).await
     }
 
-    #[cfg(feature = "covers")]
     async fn init_qobuz_client_with_covers(
         &mut self,
         username: &str,
@@ -106,7 +104,6 @@ impl QobuzServerExt for Server {
         Ok(client)
     }
 
-    #[cfg(feature = "covers")]
     async fn init_qobuz_client_configured_with_covers(
         &mut self,
         cover_cache: Arc<pmocovers::Cache>,

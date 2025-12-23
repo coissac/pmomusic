@@ -15,8 +15,6 @@
 //! seule source de vérité de l'état renderer.
 
 #[cfg(feature = "pmoserver")]
-use crate::PlaybackState;
-#[cfg(feature = "pmoserver")]
 use crate::control_point::ControlPoint;
 #[cfg(feature = "pmoserver")]
 use crate::model::{MediaServerEvent, RendererEvent};
@@ -155,7 +153,7 @@ pub async fn renderer_events_sse(
                 RendererEvent::StateChanged { id, state } => {
                     RendererEventPayload::StateChanged {
                         renderer_id: id.0,
-                        state: state_to_string(state),
+                        state: state.as_str().to_string(),
                         timestamp,
                     }
                 }
@@ -327,11 +325,11 @@ pub async fn all_events_sse(State(control_point): State<Arc<ControlPoint>>) -> i
 
                     let renderer_payload = match event {
                         RendererEvent::StateChanged { id, state } => {
-                            RendererEventPayload::StateChanged {
-                                renderer_id: id.0,
-                                state: state_to_string(state),
-                                timestamp,
-                            }
+                        RendererEventPayload::StateChanged {
+                            renderer_id: id.0,
+                            state: state.as_str().to_string(),
+                            timestamp,
+                        }
                         }
                         RendererEvent::PositionChanged { id, position } => {
                             RendererEventPayload::PositionChanged {
@@ -437,20 +435,4 @@ pub fn create_sse_router(control_point: Arc<ControlPoint>) -> Router {
         .route("/events/renderers", get(renderer_events_sse))
         .route("/events/servers", get(media_server_events_sse))
         .with_state(control_point)
-}
-
-// ============================================================================
-// HELPERS
-// ============================================================================
-
-#[cfg(feature = "pmoserver")]
-fn state_to_string(state: PlaybackState) -> String {
-    match state {
-        PlaybackState::Stopped => "STOPPED".to_string(),
-        PlaybackState::Playing => "PLAYING".to_string(),
-        PlaybackState::Paused => "PAUSED".to_string(),
-        PlaybackState::Transitioning => "TRANSITIONING".to_string(),
-        PlaybackState::NoMedia => "NO_MEDIA".to_string(),
-        PlaybackState::Unknown(s) => s,
-    }
 }

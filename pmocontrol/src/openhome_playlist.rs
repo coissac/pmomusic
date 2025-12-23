@@ -6,6 +6,8 @@ pub struct OpenHomePlaylistSnapshot {
     pub renderer_id: String,
     /// ID courant dans la playlist (si connu).
     pub current_id: Option<u32>,
+    /// Position courante dans la playlist (si connue).
+    pub current_index: Option<usize>,
     /// Tracks présents dans la playlist native.
     pub tracks: Vec<OpenHomePlaylistTrack>,
 }

@@ -13,8 +13,6 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "pmoserver")]
-use tokio_stream::StreamExt;
-
 #[derive(Debug, Default, Deserialize)]
 #[cfg_attr(feature = "pmoserver", derive(utoipa::IntoParams, utoipa::ToSchema))]
 pub struct EventsQuery {

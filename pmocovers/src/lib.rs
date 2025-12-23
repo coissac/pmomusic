@@ -55,12 +55,15 @@ pub mod cache;
 pub mod webp;
 
 #[cfg(feature = "pmoserver")]
+pub mod api;
+
+#[cfg(feature = "pmoserver")]
 pub mod openapi;
 
 #[cfg(feature = "pmoconfig")]
 pub mod config_ext;
 
-pub use cache::{new_cache, new_cache_with_consolidation, Cache, CoversConfig};
+pub use cache::{add_local_file, new_cache, new_cache_with_consolidation, Cache, CoversConfig};
 
 #[cfg(feature = "pmoserver")]
 pub use openapi::ApiDoc;
@@ -172,7 +175,34 @@ fn create_variant_generator() -> pmocache::pmoserver_ext::ParamGenerator<CoversC
 // Handlers JPEG (transcodage à la volée)
 // ========================================================================
 
+/// Sert une image de couverture au format JPEG (transcodage depuis WebP)
+///
+/// Cette route transcode à la volée l'image WebP stockée en cache vers le format JPEG.
+/// Utile pour la compatibilité avec les clients qui ne supportent pas WebP (ex: UPnP).
+///
+/// # Arguments
+///
+/// * `pk` - Clé primaire de l'image
+///
+/// # Responses
+///
+/// * `200 OK` - Image JPEG transcodée
+/// * `404 NOT_FOUND` - Image non trouvée
+/// * `500 INTERNAL_SERVER_ERROR` - Erreur de transcodage
 #[cfg(feature = "pmoserver")]
+#[utoipa::path(
+    get,
+    path = "/covers/jpeg/{pk}",
+    tag = "covers",
+    params(
+        ("pk" = String, Path, description = "Clé primaire de l'image")
+    ),
+    responses(
+        (status = 200, description = "Image JPEG", content_type = "image/jpeg"),
+        (status = 404, description = "Image non trouvée"),
+        (status = 500, description = "Erreur de transcodage"),
+    )
+)]
 async fn serve_cover_jpeg(
     axum::extract::State(cache): axum::extract::State<Arc<Cache>>,
     axum::extract::Path(pk): axum::extract::Path<String>,
@@ -180,7 +210,36 @@ async fn serve_cover_jpeg(
     serve_jpeg_internal(cache, pk, None).await
 }
 
+/// Sert une image de couverture redimensionnée au format JPEG (transcodage depuis WebP)
+///
+/// Cette route transcode à la volée l'image WebP stockée en cache vers le format JPEG,
+/// en la redimensionnant à la taille demandée (format carré).
+///
+/// # Arguments
+///
+/// * `pk` - Clé primaire de l'image
+/// * `size` - Taille souhaitée en pixels (ex: 256 pour 256x256)
+///
+/// # Responses
+///
+/// * `200 OK` - Image JPEG redimensionnée et transcodée
+/// * `404 NOT_FOUND` - Image non trouvée
+/// * `500 INTERNAL_SERVER_ERROR` - Erreur de transcodage ou redimensionnement
 #[cfg(feature = "pmoserver")]
+#[utoipa::path(
+    get,
+    path = "/covers/jpeg/{pk}/{size}",
+    tag = "covers",
+    params(
+        ("pk" = String, Path, description = "Clé primaire de l'image"),
+        ("size" = String, Path, description = "Taille en pixels (ex: 256, 512)")
+    ),
+    responses(
+        (status = 200, description = "Image JPEG redimensionnée", content_type = "image/jpeg"),
+        (status = 404, description = "Image non trouvée"),
+        (status = 500, description = "Erreur de transcodage"),
+    )
+)]
 async fn serve_cover_jpeg_with_size(
     axum::extract::State(cache): axum::extract::State<Arc<Cache>>,
     axum::extract::Path((pk, size)): axum::extract::Path<(String, String)>,
@@ -276,7 +335,7 @@ impl CoverCacheExt for pmoserver::Server {
         cache_dir: &str,
         limit: usize,
     ) -> anyhow::Result<Arc<Cache>> {
-        use pmocache::pmoserver_ext::{create_api_router, create_file_router_with_generator};
+        use pmocache::pmoserver_ext::create_file_router_with_generator;
 
         let cache = Arc::new(cache::new_cache(cache_dir, limit)?);
 
@@ -302,9 +361,29 @@ impl CoverCacheExt for pmoserver::Server {
         let combined_router = file_router.merge(jpeg_router);
         self.add_router("/", combined_router).await;
 
-        // API REST générique (pmocache)
-        // Routes: GET/POST/DELETE /api/covers, etc.
-        let api_router = create_api_router(cache.clone());
+        // API REST (handlers génériques + POST spécialisé covers)
+        let api_router = axum::Router::new()
+            .route(
+                "/",
+                axum::routing::get(pmocache::api::list_items::<CoversConfig>)
+                    .post(crate::api::add_cover_item)
+                    .delete(pmocache::api::purge_cache::<CoversConfig>),
+            )
+            .route(
+                "/{pk}",
+                axum::routing::get(pmocache::api::get_item_info::<CoversConfig>)
+                    .delete(pmocache::api::delete_item::<CoversConfig>),
+            )
+            .route(
+                "/{pk}/status",
+                axum::routing::get(pmocache::api::get_download_status::<CoversConfig>),
+            )
+            .route(
+                "/consolidate",
+                axum::routing::post(pmocache::api::consolidate_cache::<CoversConfig>),
+            )
+            .with_state(cache.clone());
+
         let openapi = crate::ApiDoc::openapi();
         self.add_openapi(api_router, openapi, "covers").await;
 

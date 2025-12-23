@@ -1,12 +1,29 @@
 //! Structures de données pour représenter les objets Qobuz
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+/// Désérialiseur flexible pour les IDs qui peuvent être des strings ou des integers
+pub(crate) fn deserialize_id<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::Error;
+    use serde_json::Value;
+
+    let value = Value::deserialize(deserializer)?;
+    match value {
+        Value::String(s) => Ok(s),
+        Value::Number(n) => Ok(n.to_string()),
+        _ => Err(Error::custom("ID must be a string or number")),
+    }
+}
 
 /// Représente un artiste Qobuz
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Artist {
     /// Identifiant unique de l'artiste
+    #[serde(deserialize_with = "deserialize_id")]
     pub id: String,
     /// Nom de l'artiste
     pub name: String,
@@ -22,6 +39,7 @@ pub struct Artist {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Album {
     /// Identifiant unique de l'album
+    #[serde(deserialize_with = "deserialize_id")]
     pub id: String,
     /// Titre de l'album
     pub title: String,
@@ -66,6 +84,7 @@ pub struct Album {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Track {
     /// Identifiant unique de la piste
+    #[serde(deserialize_with = "deserialize_id")]
     pub id: String,
     /// Titre de la piste
     pub title: String,
@@ -100,6 +119,7 @@ pub struct Track {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Playlist {
     /// Identifiant unique de la playlist
+    #[serde(deserialize_with = "deserialize_id")]
     pub id: String,
     /// Nom de la playlist
     pub name: String,
@@ -171,8 +191,8 @@ pub struct StreamInfo {
     pub url: String,
     /// Type MIME
     pub mime_type: String,
-    /// Fréquence d'échantillonnage (Hz)
-    pub sampling_rate: u32,
+    /// Fréquence d'échantillonnage (kHz)
+    pub sampling_rate: f64,
     /// Profondeur de bits
     pub bit_depth: u32,
     /// Format ID Qobuz

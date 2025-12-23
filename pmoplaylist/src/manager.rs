@@ -3,18 +3,18 @@
 use crate::handle::{ReadHandle, WriteHandle};
 use crate::persistence::PersistenceManager;
 use crate::playlist::core::PlaylistConfig;
-use crate::playlist::Playlist;
+use crate::playlist::{Playlist, PlaylistRole};
 use crate::Result;
 use once_cell::sync::OnceCell;
-use pmocache::{CacheBroadcastEvent, CacheSubscription};
-use std::collections::HashMap;
+use pmocache::{CacheBroadcastEvent, CacheEvent, CacheSubscription};
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::RwLock as StdRwLock;
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc,
 };
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tokio::sync::broadcast;
 use tokio::sync::RwLock;
 
@@ -33,6 +33,7 @@ struct ManagerInner {
     track_index: StdRwLock<HashMap<String, Vec<String>>>, // cache_pk -> playlists
     cache_subscriptions: StdRwLock<HashMap<String, CacheSubscription>>,
     event_tx: broadcast::Sender<PlaylistEventEnvelope>,
+    lazy_listener_started: AtomicBool,
 }
 
 /// Type d'évènement émis par le PlaylistManager.
@@ -57,6 +58,35 @@ pub struct PlaylistEventEnvelope {
     pub event: PlaylistEvent,
     pub timestamp: std::time::SystemTime,
     pub source_client: Option<String>,
+}
+
+/// Métadonnées de synthèse d'une playlist.
+#[derive(Debug, Clone)]
+pub struct PlaylistOverview {
+    pub id: String,
+    pub title: String,
+    pub role: PlaylistRole,
+    pub persistent: bool,
+    pub cover_pk: Option<String>,
+    pub track_count: usize,
+    pub max_size: Option<usize>,
+    pub default_ttl: Option<Duration>,
+    pub last_change: SystemTime,
+}
+
+/// Informations détaillées sur un track référencé par une playlist.
+#[derive(Debug, Clone)]
+pub struct PlaylistTrackSnapshot {
+    pub cache_pk: String,
+    pub added_at: SystemTime,
+    pub ttl: Option<Duration>,
+}
+
+/// Snapshot complet d'une playlist (métadonnées + tracks).
+#[derive(Debug, Clone)]
+pub struct PlaylistSnapshot {
+    pub overview: PlaylistOverview,
+    pub tracks: Vec<PlaylistTrackSnapshot>,
 }
 
 /// Gestionnaire central de playlists
@@ -87,14 +117,24 @@ impl PlaylistManager {
                 track_index: StdRwLock::new(HashMap::new()),
                 cache_subscriptions: StdRwLock::new(HashMap::new()),
                 event_tx: broadcast::channel(256).0,
+                lazy_listener_started: AtomicBool::new(false),
             }),
         };
 
         // Lancer la task d'�viction en background
-        let manager_clone = manager.clone();
-        tokio::spawn(async move {
-            manager_clone.eviction_task().await;
-        });
+        {
+            let manager_clone = manager.clone();
+            tokio::spawn(async move {
+                manager_clone.eviction_task().await;
+            });
+        }
+
+        {
+            let manager_clone = manager.clone();
+            tokio::spawn(async move {
+                manager_clone.ensure_lazy_listener().await;
+            });
+        }
 
         Ok(manager)
     }
@@ -127,8 +167,12 @@ impl PlaylistManager {
         }
     }
 
-    /// Cr�e une playlist persistante (erreur si existe d�j�)
-    pub async fn create_persistent_playlist(&self, id: String) -> Result<WriteHandle> {
+    /// Cr�e une playlist persistante (erreur si existe d�j�) avec rôle personnalisé
+    pub async fn create_persistent_playlist_with_role(
+        &self,
+        id: String,
+        role: PlaylistRole,
+    ) -> Result<WriteHandle> {
         let mut playlists = self.inner.playlists.write().await;
 
         if playlists.contains_key(&id) {
@@ -137,9 +181,11 @@ impl PlaylistManager {
 
         let playlist = Arc::new(Playlist::new(
             id.clone(),
-            id.clone(), // Titre = id par d�faut
+            id.clone(), // Titre = id par défaut
             PlaylistConfig::default(),
             true, // persistent
+            role,
+            None,
         ));
 
         // Acqu�rir le write lock
@@ -154,13 +200,28 @@ impl PlaylistManager {
         // Sauvegarder la structure vide
         if let Some(persistence) = &self.inner.persistence {
             let title = playlist.title().await;
+            let role = playlist.role().await;
+            let cover_pk = playlist.cover_pk().await;
             let core = playlist.core.read().await;
             persistence
-                .save_playlist(&playlist.id, &title, &core.config, &core.tracks)
+                .save_playlist(
+                    &playlist.id,
+                    &title,
+                    &role,
+                    cover_pk.as_deref(),
+                    &core.config,
+                    &core.tracks,
+                )
                 .await?;
         }
 
         Ok(WriteHandle::new(playlist, write_token))
+    }
+
+    /// Cr�e une playlist persistante avec rôle par défaut (user)
+    pub async fn create_persistent_playlist(&self, id: String) -> Result<WriteHandle> {
+        self.create_persistent_playlist_with_role(id, PlaylistRole::User)
+            .await
     }
 
     /// Enregistre un callback d'évènement playlist (update, track joué).
@@ -383,7 +444,9 @@ impl PlaylistManager {
             id.clone(),
             id.clone(),
             PlaylistConfig::default(),
-            false, // �ph�m�re
+            false, // éphémère
+            PlaylistRole::User,
+            None,
         ));
 
         let write_token = playlist
@@ -419,11 +482,20 @@ impl PlaylistManager {
 
         // Pas en mémoire, essayer de charger depuis la DB
         if let Some(persistence) = &self.inner.persistence {
-            if let Some((title, config, tracks)) = persistence.load_playlist(&id).await? {
+            if let Some((title, role, config, cover_pk, tracks)) =
+                persistence.load_playlist(&id).await?
+            {
                 // Reconstruire la playlist
                 let mut playlists = self.inner.playlists.write().await;
 
-                let playlist = Arc::new(Playlist::new(id.clone(), title.clone(), config, true));
+                let playlist = Arc::new(Playlist::new(
+                    id.clone(),
+                    title.clone(),
+                    config,
+                    true,
+                    role,
+                    cover_pk,
+                ));
 
                 // Restaurer les tracks
                 {
@@ -466,11 +538,20 @@ impl PlaylistManager {
 
         // Pas en m�moire, essayer de ressusciter depuis la DB
         if let Some(persistence) = &self.inner.persistence {
-            if let Some((title, config, tracks)) = persistence.load_playlist(id).await? {
+            if let Some((title, role, config, cover_pk, tracks)) =
+                persistence.load_playlist(id).await?
+            {
                 // Reconstruire la playlist
                 let mut playlists = self.inner.playlists.write().await;
 
-                let playlist = Arc::new(Playlist::new(id.to_string(), title.clone(), config, true));
+                let playlist = Arc::new(Playlist::new(
+                    id.to_string(),
+                    title.clone(),
+                    config,
+                    true,
+                    role,
+                    cover_pk,
+                ));
 
                 // Restaurer les tracks
                 {
@@ -523,9 +604,317 @@ impl PlaylistManager {
         self.inner.playlists.read().await.contains_key(id)
     }
 
+    /// Retourne les métadonnées complètes d'une playlist (charge depuis la DB si nécessaire).
+    pub async fn playlist_overview(&self, id: &str) -> Result<PlaylistOverview> {
+        let playlist = self.ensure_playlist_loaded(id).await?;
+        let title = playlist.title().await;
+        let role = playlist.role().await;
+        let cover_pk = playlist.cover_pk().await;
+        let persistent = playlist.persistent;
+        let last_change = playlist.last_change().await;
+        let core = playlist.core.read().await;
+        let track_count = core.len();
+        let config = core.config.clone();
+
+        Ok(PlaylistOverview {
+            id: playlist.id.clone(),
+            title,
+            role,
+            persistent,
+            cover_pk,
+            track_count,
+            max_size: config.max_size,
+            default_ttl: config.default_ttl,
+            last_change,
+        })
+    }
+
+    /// Retourne un snapshot complet (tracks inclus).
+    pub async fn playlist_snapshot(&self, id: &str) -> Result<PlaylistSnapshot> {
+        let overview = self.playlist_overview(id).await?;
+        let playlist = self.ensure_playlist_loaded(id).await?;
+        let core = playlist.core.read().await;
+        let snapshot = core.snapshot();
+        drop(core);
+
+        let tracks = snapshot
+            .into_iter()
+            .map(|record| PlaylistTrackSnapshot {
+                cache_pk: record.cache_pk.clone(),
+                added_at: record.added_at,
+                ttl: record.ttl,
+            })
+            .collect();
+
+        Ok(PlaylistSnapshot { overview, tracks })
+    }
+
+    /// Retourne les métadonnées de toutes les playlists connues (en mémoire + persistantes).
+    pub async fn all_playlist_overviews(&self) -> Result<Vec<PlaylistOverview>> {
+        let ids = self.collect_all_playlist_ids().await?;
+        let mut overviews = Vec::with_capacity(ids.len());
+
+        for id in ids {
+            match self.playlist_overview(&id).await {
+                Ok(info) => overviews.push(info),
+                Err(crate::Error::PlaylistNotFound(_)) | Err(crate::Error::PlaylistDeleted(_)) => {
+                    continue
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        overviews.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok(overviews)
+    }
+
+    async fn collect_all_playlist_ids(&self) -> Result<Vec<String>> {
+        let mut ids: HashSet<String> = {
+            let playlists = self.inner.playlists.read().await;
+            playlists.keys().cloned().collect()
+        };
+
+        if let Some(persistence) = &self.inner.persistence {
+            for id in persistence.list_playlist_ids().await? {
+                ids.insert(id);
+            }
+        }
+
+        Ok(ids.into_iter().collect())
+    }
+
+    async fn ensure_playlist_loaded(&self, id: &str) -> Result<Arc<Playlist>> {
+        {
+            let playlists = self.inner.playlists.read().await;
+            if let Some(playlist) = playlists.get(id) {
+                if !playlist.is_alive() {
+                    return Err(crate::Error::PlaylistDeleted(id.to_string()));
+                }
+                return Ok(playlist.clone());
+            }
+        }
+
+        // Charger la playlist depuis la persistance si possible
+        self.get_read_handle(id).await?;
+
+        let playlists = self.inner.playlists.read().await;
+        playlists
+            .get(id)
+            .cloned()
+            .ok_or_else(|| crate::Error::PlaylistNotFound(id.to_string()))
+    }
+
     /// Retourne la r�f�rence au PersistenceManager
     pub(crate) fn persistence(&self) -> Option<&Arc<PersistenceManager>> {
         self.inner.persistence.as_ref()
+    }
+
+    // ============================================================================
+    // LAZY PK SUPPORT
+    // ============================================================================
+
+    /// Active le mode lazy pour une playlist
+    ///
+    /// Configure l'écoute des events du cache pour :
+    /// 1. Commuter automatiquement les lazy PK vers real PK après téléchargement
+    /// 2. Prefetch intelligent des N tracks suivants
+    ///
+    /// # Arguments
+    ///
+    /// * `playlist_id` - ID de la playlist à gérer
+    /// * `lookahead` - Nombre de tracks à prefetch (recommandé: 3-5)
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// let manager = PlaylistManager::get();
+    /// manager.enable_lazy_mode("qobuz-favorites-123", 5);
+    /// // → La playlist commute automatiquement lazy → real PK
+    /// // → Prefetch 5 tracks en avance pendant la lecture
+    /// ```
+    pub fn enable_lazy_mode(&self, playlist_id: &str, lookahead: usize) {
+        let playlist_id = playlist_id.to_string();
+
+        // Obtenir le cache audio
+        let cache = match audio_cache() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!("Cannot enable lazy mode: audio cache not available: {}", e);
+                return;
+            }
+        };
+
+        // S'abonner aux events du cache
+        let mut rx = cache.subscribe_events();
+        let manager = self.clone();
+
+        tokio::spawn(async move {
+            tracing::info!(
+                "Lazy mode enabled for playlist {} (lookahead: {})",
+                playlist_id,
+                lookahead
+            );
+
+            while let Ok(event) = rx.recv().await {
+                match event {
+                    pmocache::CacheEvent::LazyDownloaded { lazy_pk, real_pk } => {
+                        tracing::debug!("Received LazyDownloaded event: {} → {}", lazy_pk, real_pk);
+
+                        // 1. Commuter le PK dans la playlist
+                        if let Ok(writer) = manager.get_write_handle(playlist_id.clone()).await {
+                            tracing::info!(
+                                "Switching PK in playlist {}: {} -> {}",
+                                playlist_id,
+                                lazy_pk,
+                                real_pk
+                            );
+                            if let Err(e) = writer.update_cache_pk(&lazy_pk, &real_pk).await {
+                                tracing::error!("Failed to update PK in playlist: {}", e);
+                            }
+                        }
+
+                        // 2. Prefetch les tracks suivants
+                        manager
+                            .prefetch_next_tracks(&playlist_id, &real_pk, lookahead)
+                            .await;
+                    }
+                    _ => {}
+                }
+            }
+
+            tracing::warn!("Lazy mode listener stopped for playlist {}", playlist_id);
+        });
+    }
+
+    /// Prefetch les N tracks suivants après une position donnée
+    ///
+    /// Cette méthode est appelée automatiquement par `enable_lazy_mode()`.
+    async fn prefetch_next_tracks(&self, playlist_id: &str, current_pk: &str, lookahead: usize) {
+        let playlist = {
+            let playlists = self.inner.playlists.read().await;
+            playlists.get(playlist_id).cloned()
+        };
+
+        let Some(playlist) = playlist else {
+            return;
+        };
+
+        let core = playlist.core.read().await;
+        let tracks = core.snapshot();
+
+        // Trouver position actuelle
+        let Some(pos) = tracks.iter().position(|r| &r.cache_pk == current_pk) else {
+            return;
+        };
+
+        // Prefetch N tracks suivants
+        let cache = match audio_cache() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+
+        for i in (pos + 1)..=(pos + lookahead).min(tracks.len() - 1) {
+            let next_pk = &tracks[i].cache_pk;
+
+            // Si lazy PK, déclencher download en background
+            if pmocache::is_lazy_pk(next_pk) {
+                tracing::debug!("Prefetching lazy track {}: {}", i, next_pk);
+
+                let cache = cache.clone();
+                let next_pk = next_pk.clone();
+
+                tokio::spawn(async move {
+                    // Récupérer l'origin_url depuis la DB
+                    let origin_url = match cache.db.get_origin_url(&next_pk) {
+                        Ok(Some(url)) => url,
+                        Ok(None) => {
+                            tracing::warn!("No origin_url for lazy pk {}", next_pk);
+                            return;
+                        }
+                        Err(e) => {
+                            tracing::error!("Error getting origin_url for {}: {}", next_pk, e);
+                            return;
+                        }
+                    };
+
+                    // Déclencher download (ne bloque pas)
+                    if let Err(e) = cache.add_from_url(&origin_url, None).await {
+                        tracing::error!("Failed to prefetch {}: {}", next_pk, e);
+                    } else {
+                        tracing::debug!("Prefetch completed for {}", next_pk);
+                    }
+                });
+            }
+        }
+    }
+
+    async fn ensure_lazy_listener(&self) {
+        if self.inner.lazy_listener_started.load(Ordering::SeqCst) {
+            return;
+        }
+
+        let cache = match audio_cache() {
+            Ok(cache) => cache,
+            Err(_) => return,
+        };
+
+        if self
+            .inner
+            .lazy_listener_started
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return;
+        }
+
+        let manager = self.clone();
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            let mut rx = cache.subscribe_events();
+            while let Ok(event) = rx.recv().await {
+                if let CacheEvent::LazyDownloaded { lazy_pk, real_pk } = event {
+                    manager.handle_lazy_download_event(&lazy_pk, &real_pk).await;
+                }
+            }
+            inner.lazy_listener_started.store(false, Ordering::SeqCst);
+        });
+    }
+
+    async fn handle_lazy_download_event(&self, lazy_pk: &str, real_pk: &str) {
+        let playlists = {
+            let index = self.inner.track_index.read().unwrap();
+            index.get(lazy_pk).cloned()
+        };
+
+        let Some(playlists) = playlists else {
+            tracing::debug!(
+                "Lazy download {} converted to {} but no playlists referenced it",
+                lazy_pk,
+                real_pk
+            );
+            return;
+        };
+
+        for playlist_id in playlists {
+            match self.get_write_handle(playlist_id.clone()).await {
+                Ok(writer) => {
+                    if let Err(e) = writer.update_cache_pk(lazy_pk, real_pk).await {
+                        tracing::error!(
+                            "Failed to update playlist {} from {} to {}: {}",
+                            playlist_id,
+                            lazy_pk,
+                            real_pk,
+                            e
+                        );
+                    }
+                }
+                Err(e) => tracing::debug!(
+                    "Failed to acquire write handle for playlist {} during lazy swap: {}",
+                    playlist_id,
+                    e
+                ),
+            }
+        }
     }
 
     /// Task d'�viction en background
@@ -546,13 +935,22 @@ impl PlaylistManager {
                 let new_len = core.len();
                 drop(core);
 
-                // Si des morceaux ont �t� �vict�s et la playlist est persistante
+                // Si des morceaux ont été évictés et la playlist est persistante
                 if new_len < initial_len && playlist.persistent {
                     if let Some(persistence) = &self.inner.persistence {
                         let title = playlist.title().await;
+                        let role = playlist.role().await;
+                        let cover_pk = playlist.cover_pk().await;
                         let core = playlist.core.read().await;
                         let _ = persistence
-                            .save_playlist(&playlist.id, &title, &core.config, &core.tracks)
+                            .save_playlist(
+                                &playlist.id,
+                                &title,
+                                &role,
+                                cover_pk.as_deref(),
+                                &core.config,
+                                &core.tracks,
+                            )
                             .await;
                     }
                 }
@@ -600,6 +998,7 @@ pub fn register_audio_cache(cache: Arc<pmoaudiocache::Cache>) {
         let manager = manager.clone();
         tokio::spawn(async move {
             manager.sync_cache_subscriptions().await;
+            manager.ensure_lazy_listener().await;
         });
     }
 }

@@ -50,6 +50,18 @@ impl PlaybackState {
             _ => PlaybackState::Unknown(raw.to_string()),
         }
     }
+
+    /// Returns a human-readable label for the playback state.
+    pub fn as_str(&self) -> &str {
+        match self {
+            PlaybackState::Stopped => "STOPPED",
+            PlaybackState::Playing => "PLAYING",
+            PlaybackState::Paused => "PAUSED",
+            PlaybackState::Transitioning => "TRANSITIONING",
+            PlaybackState::NoMedia => "NO_MEDIA",
+            PlaybackState::Unknown(s) => s.as_str(),
+        }
+    }
 }
 
 /// Generic abstraction for playback status (transport state).
