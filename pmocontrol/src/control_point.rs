@@ -1512,6 +1512,20 @@ impl ControlPoint {
         container_id: &str,
         auto_play: bool,
     ) -> anyhow::Result<()> {
+        // CRITICAL: When attaching a new playlist to a renderer, we must UNCONDITIONALLY
+        // clear the queue first. This is different from refreshing an already-attached
+        // playlist (which uses gentle sync to avoid interrupting playback).
+        //
+        // Attach workflow: Stop (if playing) → Clear → Fill → Play
+        // Update workflow: Gentle sync (preserve current item, use LCS)
+        info!(
+            renderer = renderer_id.0.as_str(),
+            server = server_id.0.as_str(),
+            container = container_id,
+            "Attaching new playlist: clearing queue first"
+        );
+        self.clear_queue(renderer_id)?;
+
         let binding = PlaylistBinding {
             server_id: server_id.clone(),
             container_id: container_id.to_string(),

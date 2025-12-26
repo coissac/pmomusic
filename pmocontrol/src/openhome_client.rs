@@ -198,11 +198,13 @@ impl OhPlaylistClient {
                     || err_msg.contains("not found")
                     || err_msg.contains("does not exist")
                     || err_msg.contains("unknown")
+                    || err_msg.contains("500") // HTTP 500 = renderer in inconsistent state
+                    || err_msg.contains("Action Failed") // UPnP error 501
                 {
                     warn!(
                         control_url = self.control_url.as_str(),
                         id,
-                        "DeleteId silently ignored - ID does not exist (likely modified by another control point)"
+                        "DeleteId silently ignored - ID does not exist or renderer in inconsistent state (likely modified by events)"
                     );
                     Ok(false)
                 } else {
@@ -735,16 +737,26 @@ fn parse_track_list(payload: &str) -> Result<Vec<OhTrackEntry>> {
 
 fn parse_track_entry(elem: &Element) -> Result<OhTrackEntry> {
     let id_text = extract_child_text_local(elem, "Id")?;
+
+    // Some renderers (like upmpdcli) return a comma-separated list of IDs in the Id element
+    // when using ReadList. This is a non-standard compact format that we cannot parse properly
+    // because we need to fetch each track individually to get its Uri and Metadata.
+    // Return an error to force the fallback to individual Read() calls.
     if id_text.contains(',') {
         debug!(
             raw_entry = %elem.name,
             raw_id = id_text.as_str(),
-            "Unexpected multi-value Id element in OpenHome TrackList entry"
+            "Multi-value Id element detected - forcing fallback to individual reads"
         );
+        return Err(anyhow!(
+            "Renderer returned comma-separated IDs in single Entry - need individual reads"
+        ));
     }
+
     let id = id_text
         .parse::<u32>()
         .map_err(|_| anyhow!("Invalid OpenHome Entry Id: {}", id_text))?;
+
     let uri = extract_child_text_local(elem, "Uri")?;
     let metadata_xml = extract_child_text_optional_local(elem, "Metadata")?.unwrap_or_default();
 
@@ -962,7 +974,7 @@ pub(crate) fn decode_base64(input: &str) -> Result<Vec<u8>> {
 
 fn is_invalid_entry_id_error(err: &anyhow::Error) -> bool {
     let msg = format!("{err}");
-    msg.contains("Invalid OpenHome Entry Id")
+    msg.contains("Invalid OpenHome Entry Id") || msg.contains("comma-separated IDs")
 }
 
 #[cfg(test)]
