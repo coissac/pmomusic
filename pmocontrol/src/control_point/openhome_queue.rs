@@ -461,7 +461,9 @@ impl QueueBackend for OpenHomeQueue {
             for idx in (0..self.track_ids.len()).rev() {
                 if !keep_current[idx] {
                     let track_id = self.track_ids[idx];
-                    self.playlist.delete_id(track_id)?;
+                    // Use delete_id_if_exists() to handle cases where another control point
+                    // may have already modified the playlist
+                    self.playlist.delete_id_if_exists(track_id)?;
                     self.track_ids.remove(idx);
                     self.items.remove(idx);
                 }
@@ -531,7 +533,9 @@ impl QueueBackend for OpenHomeQueue {
             self.ensure_track_id(index - 1)?
         };
 
-        self.playlist.delete_id(track_id)?;
+        // Use delete_id_if_exists() to handle cases where another control point
+        // may have already modified the playlist
+        self.playlist.delete_id_if_exists(track_id)?;
         let metadata = build_metadata_xml(&item);
         let new_id = self.playlist.insert(before_id, &item.uri, &metadata)?;
 

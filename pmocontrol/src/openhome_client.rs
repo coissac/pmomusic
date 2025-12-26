@@ -178,6 +178,41 @@ impl OhPlaylistClient {
         handle_action_response("DeleteId", &call_result)
     }
 
+    /// Attempts to delete an OpenHome playlist entry by ID.
+    /// Unlike delete_id(), this function silently ignores errors related to invalid/missing IDs,
+    /// which is useful in multi-control-point scenarios where playlist state may have changed.
+    ///
+    /// Returns:
+    /// - Ok(true) if the ID was successfully deleted
+    /// - Ok(false) if the ID didn't exist (logged as warning)
+    /// - Err(_) for other errors (network issues, etc.)
+    pub fn delete_id_if_exists(&self, id: u32) -> Result<bool> {
+        match self.delete_id(id) {
+            Ok(()) => Ok(true),
+            Err(err) => {
+                // Check if this is an error about an invalid/missing ID
+                // OpenHome servers may return different error messages/codes for this case
+                let err_msg = format!("{err}");
+                if err_msg.contains("Invalid")
+                    || err_msg.contains("invalid")
+                    || err_msg.contains("not found")
+                    || err_msg.contains("does not exist")
+                    || err_msg.contains("unknown")
+                {
+                    warn!(
+                        control_url = self.control_url.as_str(),
+                        id,
+                        "DeleteId silently ignored - ID does not exist (likely modified by another control point)"
+                    );
+                    Ok(false)
+                } else {
+                    // Re-throw other errors (network issues, etc.)
+                    Err(err)
+                }
+            }
+        }
+    }
+
     pub fn delete_all(&self) -> Result<()> {
         let call_result =
             invoke_upnp_action(&self.control_url, &self.service_type, "DeleteAll", &[])?;
