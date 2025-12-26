@@ -36,9 +36,36 @@ function ensureSSEConnected() {
     const serverId = event.server_id
 
     switch (event.type) {
-      case 'global_updated':
-        // Invalider tout le cache de ce serveur
-        console.log(`[useMediaServers] GlobalUpdated pour ${serverId}`)
+      case 'online':
+        // Nouveau serveur découvert
+        console.log(`[useMediaServers] Serveur ${serverId} (${event.friendly_name}) est maintenant en ligne`)
+
+        // Ajouter au cache avec les infos disponibles
+        const server: MediaServerSummary = {
+          id: serverId,
+          friendly_name: event.friendly_name,
+          model_name: event.model_name,
+          online: true,
+        }
+        serversCache.value.set(serverId, server)
+
+        // Fetch la liste complète pour avoir les bonnes infos
+        // On ne le fait pas ici car on pourrait déclencher trop de requêtes
+        // La liste se mettra à jour au prochain refresh automatique
+        break
+
+      case 'offline':
+        // Serveur déconnecté
+        console.log(`[useMediaServers] Serveur ${serverId} est maintenant hors ligne`)
+
+        // Marquer comme offline dans le cache
+        const existingServer = serversCache.value.get(serverId)
+        if (existingServer) {
+          existingServer.online = false
+          serversCache.value.set(serverId, existingServer)
+        }
+
+        // Invalider tout le cache browse de ce serveur
         const keysToDelete: string[] = []
         browseCache.value.forEach((_, key) => {
           if (key.startsWith(serverId + '/')) {
@@ -46,6 +73,18 @@ function ensureSSEConnected() {
           }
         })
         keysToDelete.forEach(key => browseCache.value.delete(key))
+        break
+
+      case 'global_updated':
+        // Invalider tout le cache de ce serveur
+        console.log(`[useMediaServers] GlobalUpdated pour ${serverId}`)
+        const globalKeysToDelete: string[] = []
+        browseCache.value.forEach((_, key) => {
+          if (key.startsWith(serverId + '/')) {
+            globalKeysToDelete.push(key)
+          }
+        })
+        globalKeysToDelete.forEach(key => browseCache.value.delete(key))
         break
 
       case 'containers_updated':
