@@ -72,6 +72,15 @@ RUN strip /build/target/release/PMOMusic
 # ===================================
 FROM debian:bookworm-slim
 
+ARG BUILD_DATE
+LABEL org.opencontainers.image.created=$BUILD_DATE
+LABEL org.opencontainers.image.title="PMOMusic UPNP Music Server"
+LABEL org.opencontainers.image.version="0.1"
+LABEL org.opencontainers.image.authors="eric@coissac.eu"
+LABEL org.opencontainers.image.licenses="CeCILL-2.0"
+LABEL org.opencontainers.image.url="https://gargoton.petite-maison-orange.fr/eric/pmomusic"
+LABEL org.opencontainers.image.description="PMOMusic est une application Rust proposant en un binaire unique une Serveur de Musique, et une point de controle UPNP controlable via une application web."
+
 # Install only runtime dependencies
 RUN apt-get update && apt-get install -y \
     libsoxr0 \

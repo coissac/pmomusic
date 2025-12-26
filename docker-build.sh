@@ -89,7 +89,7 @@ if [ "$NO_CACHE" = true ]; then
     DOCKER_CMD="$DOCKER_CMD --no-cache"
 fi
 
-DOCKER_CMD="$DOCKER_CMD -t $FULL_IMAGE_NAME ."
+DOCKER_CMD="$DOCKER_CMD --build-arg BUILD_DATE=\"$(date -u +'%Y-%m-%dT%H:%M:%SZ')\" -t $FULL_IMAGE_NAME ."
 
 # Exécuter le build
 echo -e "${YELLOW}→ Démarrage du build...${NC}"
