@@ -54,6 +54,7 @@ pub enum SsdpEvent {
 }
 
 /// Client SSDP pour envoyer des M-SEARCH et écouter les annonces
+#[derive(Clone)]
 pub struct SsdpClient {
     socket: Arc<UdpSocket>,
 }

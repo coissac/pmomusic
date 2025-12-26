@@ -82,6 +82,17 @@ pub enum RendererEventPayload {
         container_id: Option<String>,
         timestamp: chrono::DateTime<chrono::Utc>,
     },
+    Online {
+        renderer_id: String,
+        friendly_name: String,
+        model_name: String,
+        manufacturer: String,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    },
+    Offline {
+        renderer_id: String,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    },
 }
 
 /// Payload SSE pour un événement serveur de médias
@@ -97,6 +108,17 @@ pub enum MediaServerEventPayload {
     ContainersUpdated {
         server_id: String,
         container_ids: Vec<String>,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    },
+    Online {
+        server_id: String,
+        friendly_name: String,
+        model_name: String,
+        manufacturer: String,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    },
+    Offline {
+        server_id: String,
         timestamp: chrono::DateTime<chrono::Utc>,
     },
 }
@@ -205,6 +227,21 @@ pub async fn renderer_events_sse(
                         timestamp,
                     }
                 }
+                RendererEvent::Online { id, info } => {
+                    RendererEventPayload::Online {
+                        renderer_id: id.0,
+                        friendly_name: info.friendly_name,
+                        model_name: info.model_name,
+                        manufacturer: info.manufacturer,
+                        timestamp,
+                    }
+                }
+                RendererEvent::Offline { id } => {
+                    RendererEventPayload::Offline {
+                        renderer_id: id.0,
+                        timestamp,
+                    }
+                }
             };
 
             if let Ok(json) = serde_json::to_string(&payload) {
@@ -263,6 +300,21 @@ pub async fn media_server_events_sse(
                     MediaServerEventPayload::ContainersUpdated {
                         server_id: server_id.0,
                         container_ids,
+                        timestamp,
+                    }
+                }
+                MediaServerEvent::Online { server_id, info } => {
+                    MediaServerEventPayload::Online {
+                        server_id: server_id.0,
+                        friendly_name: info.friendly_name,
+                        model_name: info.model_name,
+                        manufacturer: info.manufacturer,
+                        timestamp,
+                    }
+                }
+                MediaServerEvent::Offline { server_id } => {
+                    MediaServerEventPayload::Offline {
+                        server_id: server_id.0,
                         timestamp,
                     }
                 }
@@ -379,6 +431,21 @@ pub async fn all_events_sse(State(control_point): State<Arc<ControlPoint>>) -> i
                                 timestamp,
                             }
                         }
+                        RendererEvent::Online { id, info } => {
+                            RendererEventPayload::Online {
+                                renderer_id: id.0,
+                                friendly_name: info.friendly_name,
+                                model_name: info.model_name,
+                                manufacturer: info.manufacturer,
+                                timestamp,
+                            }
+                        }
+                        RendererEvent::Offline { id } => {
+                            RendererEventPayload::Offline {
+                                renderer_id: id.0,
+                                timestamp,
+                            }
+                        }
                     };
 
                     let payload = UnifiedEventPayload::Renderer(renderer_payload);
@@ -402,6 +469,21 @@ pub async fn all_events_sse(State(control_point): State<Arc<ControlPoint>>) -> i
                             MediaServerEventPayload::ContainersUpdated {
                                 server_id: server_id.0,
                                 container_ids,
+                                timestamp,
+                            }
+                        }
+                        MediaServerEvent::Online { server_id, info } => {
+                            MediaServerEventPayload::Online {
+                                server_id: server_id.0,
+                                friendly_name: info.friendly_name,
+                                model_name: info.model_name,
+                                manufacturer: info.manufacturer,
+                                timestamp,
+                            }
+                        }
+                        MediaServerEvent::Offline { server_id } => {
+                            MediaServerEventPayload::Offline {
+                                server_id: server_id.0,
                                 timestamp,
                             }
                         }

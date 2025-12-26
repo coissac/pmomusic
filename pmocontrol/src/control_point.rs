@@ -130,8 +130,13 @@ impl ControlPoint {
         // SsdpClient
         let client = SsdpClient::new()?; // pmoupnp::ssdp::SsdpClient
 
+        // Clone pour le thread de renouvellement périodique
+        let client_for_renewal = client.clone();
+
         // Arc utilisé dans le thread
         let registry_for_thread = Arc::clone(&registry);
+        let event_bus_for_discovery = event_bus.clone();
+        let media_event_bus_for_discovery = media_event_bus.clone();
 
         // Thread de découverte
         thread::spawn(move || {
@@ -167,10 +172,175 @@ impl ControlPoint {
 
                 if let Ok(mut reg) = registry_for_thread.write() {
                     for update in updates {
+                        // Émettre les événements Online/Offline avant d'appliquer l'update
+                        match &update {
+                            DeviceUpdate::RendererOnline(info) => {
+                                event_bus_for_discovery.broadcast(RendererEvent::Online {
+                                    id: info.id.clone(),
+                                    info: info.clone(),
+                                });
+                            }
+                            DeviceUpdate::RendererOfflineById(id) => {
+                                event_bus_for_discovery.broadcast(RendererEvent::Offline {
+                                    id: id.clone(),
+                                });
+                            }
+                            DeviceUpdate::RendererOfflineByUdn(udn) => {
+                                // Trouver l'ID avant de marquer offline
+                                if let Some(renderer) = reg.get_renderer_by_udn(udn) {
+                                    event_bus_for_discovery.broadcast(RendererEvent::Offline {
+                                        id: renderer.id.clone(),
+                                    });
+                                }
+                            }
+                            DeviceUpdate::ServerOnline(info) => {
+                                media_event_bus_for_discovery.broadcast(MediaServerEvent::Online {
+                                    server_id: info.id.clone(),
+                                    info: info.clone(),
+                                });
+                            }
+                            DeviceUpdate::ServerOfflineById(id) => {
+                                media_event_bus_for_discovery.broadcast(MediaServerEvent::Offline {
+                                    server_id: id.clone(),
+                                });
+                            }
+                            DeviceUpdate::ServerOfflineByUdn(udn) => {
+                                // Trouver l'ID avant de marquer offline
+                                if let Some(server) = reg.get_server_by_udn(udn) {
+                                    media_event_bus_for_discovery.broadcast(MediaServerEvent::Offline {
+                                        server_id: server.id.clone(),
+                                    });
+                                }
+                            }
+                        }
+
                         reg.apply_update(update);
                     }
                 }
             });
+        });
+
+        // Thread de renouvellement périodique des M-SEARCH
+        // Envoie des requêtes de découverte toutes les 60 secondes pour forcer
+        // les nouveaux appareils à se présenter
+        thread::spawn(move || {
+            let search_targets = [
+                "ssdp:all",
+                "urn:schemas-upnp-org:device:MediaRenderer:1",
+                "urn:av-openhome-org:device:MediaRenderer:1",
+                "urn:schemas-upnp-org:device:MediaServer:1",
+                "urn:schemas-wiimu-com:service:PlayQueue:1",
+            ];
+
+            loop {
+                // Attendre 60 secondes avant le prochain cycle
+                thread::sleep(Duration::from_secs(60));
+
+                debug!("Sending periodic M-SEARCH for device discovery");
+
+                // Envoyer les M-SEARCH
+                for st in &search_targets {
+                    if let Err(e) = client_for_renewal.send_msearch(st, 3) {
+                        warn!("Failed to send periodic M-SEARCH for {}: {}", st, e);
+                    }
+                    thread::sleep(Duration::from_millis(200));
+                }
+            }
+        });
+
+        // Thread de vérification de présence périodique
+        // Vérifie toutes les 60 secondes que les devices connus sont toujours accessibles
+        let registry_for_presence = Arc::clone(&registry);
+        let event_bus_for_presence = event_bus.clone();
+        let media_event_bus_for_presence = media_event_bus.clone();
+        thread::spawn(move || {
+            use ureq::Agent;
+
+            // HTTP client avec timeout court pour les vérifications de présence
+            let config = Agent::config_builder()
+                .timeout_global(Some(Duration::from_secs(5)))
+                .build();
+            let agent: Agent = config.into();
+
+            loop {
+                // Attendre 60 secondes avant le prochain cycle
+                thread::sleep(Duration::from_secs(60));
+
+                debug!("Starting periodic presence check for devices");
+
+                let mut updates = Vec::new();
+
+                // Lire la liste des devices
+                if let Ok(reg) = registry_for_presence.read() {
+                    // Vérifier les renderers
+                    for renderer in reg.list_renderers() {
+                        if !renderer.online {
+                            continue; // Skip déjà offline
+                        }
+
+                        // Faire un HTTP HEAD pour vérifier la présence
+                        match agent.head(&renderer.location).call() {
+                            Ok(_) => {
+                                // Device répond toujours
+                                debug!("Renderer {} ({:?}) is still online",
+                                       renderer.friendly_name, renderer.id);
+                            }
+                            Err(e) => {
+                                // Device ne répond plus
+                                warn!("Renderer {} ({:?}) is no longer responding: {} - marking offline",
+                                      renderer.friendly_name, renderer.id, e);
+                                updates.push(DeviceUpdate::RendererOfflineById(renderer.id));
+                            }
+                        }
+                    }
+
+                    // Vérifier les servers
+                    for server in reg.list_servers() {
+                        if !server.online {
+                            continue; // Skip déjà offline
+                        }
+
+                        // Faire un HTTP HEAD pour vérifier la présence
+                        match agent.head(&server.location).call() {
+                            Ok(_) => {
+                                // Device répond toujours
+                                debug!("Server {} ({:?}) is still online",
+                                       server.friendly_name, server.id);
+                            }
+                            Err(e) => {
+                                // Device ne répond plus
+                                warn!("Server {} ({:?}) is no longer responding: {} - marking offline",
+                                      server.friendly_name, server.id, e);
+                                updates.push(DeviceUpdate::ServerOfflineById(server.id));
+                            }
+                        }
+                    }
+                }
+
+                // Appliquer les updates et émettre les événements
+                if !updates.is_empty() {
+                    if let Ok(mut reg) = registry_for_presence.write() {
+                        for update in updates {
+                            // Émettre les événements Offline
+                            match &update {
+                                DeviceUpdate::RendererOfflineById(id) => {
+                                    event_bus_for_presence.broadcast(RendererEvent::Offline {
+                                        id: id.clone(),
+                                    });
+                                }
+                                DeviceUpdate::ServerOfflineById(id) => {
+                                    media_event_bus_for_presence.broadcast(MediaServerEvent::Offline {
+                                        server_id: id.clone(),
+                                    });
+                                }
+                                _ => {}
+                            }
+
+                            reg.apply_update(update);
+                        }
+                    }
+                }
+            }
         });
 
         // Thread de découverte mDNS pour Chromecast
@@ -554,6 +724,19 @@ impl ControlPoint {
                                 );
                             }
                         }
+                    }
+                    MediaServerEvent::Online { server_id, info } => {
+                        debug!(
+                            server = server_id.0.as_str(),
+                            friendly_name = info.friendly_name.as_str(),
+                            "MediaServer came online"
+                        );
+                    }
+                    MediaServerEvent::Offline { server_id } => {
+                        debug!(
+                            server = server_id.0.as_str(),
+                            "MediaServer went offline"
+                        );
                     }
                 }
             })?;

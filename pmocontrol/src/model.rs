@@ -1,6 +1,6 @@
 use crate::capabilities::{PlaybackPositionInfo, PlaybackState};
 use crate::control_point::PlaylistBinding;
-use crate::media_server::ServerId;
+use crate::media_server::{MediaServerInfo, ServerId};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RendererId(pub String);
@@ -122,6 +122,13 @@ pub enum RendererEvent {
         id: RendererId,
         binding: Option<PlaylistBinding>,
     },
+    Online {
+        id: RendererId,
+        info: RendererInfo,
+    },
+    Offline {
+        id: RendererId,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -133,5 +140,12 @@ pub enum MediaServerEvent {
     ContainersUpdated {
         server_id: ServerId,
         container_ids: Vec<String>,
+    },
+    Online {
+        server_id: ServerId,
+        info: MediaServerInfo,
+    },
+    Offline {
+        server_id: ServerId,
     },
 }

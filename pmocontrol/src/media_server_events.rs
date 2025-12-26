@@ -541,6 +541,9 @@ impl MediaServerEventWorker {
                         "Broadcasting MediaServerEvent::ContainersUpdated"
                     );
                 }
+                MediaServerEvent::Online { .. } | MediaServerEvent::Offline { .. } => {
+                    // Online/Offline events are generated from SSDP discovery, not from notify payloads
+                }
             }
             self.bus.broadcast(event);
         }
