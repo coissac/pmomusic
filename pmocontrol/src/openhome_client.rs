@@ -121,12 +121,12 @@ impl OhPlaylistClient {
 
     pub fn play_id(&self, id: u32) -> Result<()> {
         let id_str = id.to_string();
-        let args = [("Id", id_str.as_str())];
+        let args = [("Value", id_str.as_str())];
 
         let call_result =
-            invoke_upnp_action(&self.control_url, &self.service_type, "PlayId", &args)?;
+            invoke_upnp_action(&self.control_url, &self.service_type, "SeekId", &args)?;
 
-        handle_action_response("PlayId", &call_result)
+        handle_action_response("SeekId", &call_result)
     }
 
     pub fn play(&self) -> Result<()> {
@@ -170,7 +170,7 @@ impl OhPlaylistClient {
 
     pub fn delete_id(&self, id: u32) -> Result<()> {
         let id_str = id.to_string();
-        let args = [("Id", id_str.as_str())];
+        let args = [("Value", id_str.as_str())];
 
         let call_result =
             invoke_upnp_action(&self.control_url, &self.service_type, "DeleteId", &args)?;
@@ -221,6 +221,16 @@ impl OhPlaylistClient {
         handle_action_response("DeleteAll", &call_result)
     }
 
+    pub fn current_id(&self)  -> Result<String> {
+        let call_result =
+            invoke_upnp_action(&self.control_url, &self.service_type, "Id", &[])?;
+        let envelope = ensure_success("Id", &call_result)?;
+        let response = find_child_with_suffix(&envelope.body.content, "IdResponse")
+            .ok_or_else(|| anyhow!("Missing IdResponse element in SOAP body"))?;
+        let value: String = extract_child_text_any(response, &["aValue", "Value"])?;
+        Ok(value)
+    }
+    
     pub fn tracks_max(&self) -> Result<u32> {
         let call_result =
             invoke_upnp_action(&self.control_url, &self.service_type, "TracksMax", &[])?;
@@ -228,7 +238,7 @@ impl OhPlaylistClient {
         let envelope = ensure_success("TracksMax", &call_result)?;
         let response = find_child_with_suffix(&envelope.body.content, "TracksMaxResponse")
             .ok_or_else(|| anyhow!("Missing TracksMaxResponse element in SOAP body"))?;
-        let value_text = extract_child_text_any(response, &["aValue", "Value"])?;
+        let value_text: String = extract_child_text_any(response, &["aValue", "Value"])?;
         let value = value_text
             .parse::<u32>()
             .map_err(|_| anyhow!("Invalid TracksMax value: {}", value_text))?;

@@ -1696,18 +1696,34 @@ impl ControlPoint {
         auto_play: bool,
     ) -> anyhow::Result<()> {
         // CRITICAL: When attaching a new playlist to a renderer, we must UNCONDITIONALLY
-        // clear the queue first. This is different from refreshing an already-attached
-        // playlist (which uses gentle sync to avoid interrupting playback).
+        // clear the RENDERER queue first (but NOT the local queue cache, which will be
+        // replaced by refresh_attached_queue_for() using replace_entire_playlist()).
         //
-        // Attach workflow: Stop (if playing) → Clear → Fill → Play
+        // Attach workflow: Clear renderer → Fill with new playlist
         // Update workflow: Gentle sync (preserve current item, use LCS)
         info!(
             renderer = renderer_id.0.as_str(),
             server = server_id.0.as_str(),
             container = container_id,
-            "Attaching new playlist: clearing queue first"
+            "Attaching new playlist: clearing renderer queue"
         );
-        self.clear_queue(renderer_id)?;
+
+        // Clear the renderer's queue for OpenHome renderers
+        // We also sync the local cache to reflect the empty state, which will trigger
+        // refresh_attached_queue_for() to use replace_entire_playlist() instead of gentle sync
+        if self.runtime.uses_openhome_playlist(renderer_id) {
+            let renderer = self.openhome_renderer(renderer_id)?;
+            renderer.openhome_playlist_clear()?;
+            // Sync local cache to reflect the empty renderer state
+            self.sync_openhome_playlist_for(renderer_id)?;
+            debug!(
+                renderer = renderer_id.0.as_str(),
+                "Cleared OpenHome renderer playlist and synced local cache"
+            );
+        } else {
+            // For non-OpenHome renderers, use the standard clear_queue
+            self.clear_queue(renderer_id)?;
+        }
 
         let binding = PlaylistBinding {
             server_id: server_id.clone(),
@@ -2622,6 +2638,9 @@ fn refresh_attached_queue_for(
     let current_item = current_idx.and_then(|idx| full_queue.get(idx).cloned());
 
     // Check if renderer is playing - if so, we MUST preserve the current track
+    // We use multiple signals to determine playback state:
+    // 1. Direct playback_state() query (may fail on some renderers like upmpdcli)
+    // 2. Presence of current_idx (if we have a current track, likely playing)
     let is_playing = {
         let renderer_info = {
             let reg = registry.read().unwrap();
@@ -2630,7 +2649,20 @@ fn refresh_attached_queue_for(
 
         if let Some(info) = renderer_info {
             if let Some(renderer) = MusicRenderer::from_registry_info(info, registry) {
-                matches!(renderer.playback_state(), Ok(PlaybackState::Playing))
+                // Try direct query first
+                if matches!(renderer.playback_state(), Ok(PlaybackState::Playing)) {
+                    true
+                } else if current_idx.is_some() && !full_queue.is_empty() {
+                    // Fallback: if we have a current index and non-empty queue,
+                    // assume playback is happening (handles renderers where playback_state() fails)
+                    debug!(
+                        renderer = renderer_id.0.as_str(),
+                        "playback_state() failed or not Playing, but current_idx is set - assuming playback"
+                    );
+                    true
+                } else {
+                    false
+                }
             } else {
                 false
             }
