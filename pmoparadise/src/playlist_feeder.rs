@@ -272,14 +272,25 @@ impl RadioParadisePlaylistFeeder {
             // 5. Sauvegarder les métadonnées
             self.save_metadata(&pk, song, &block).await?;
 
-            // 6. Calculer le TTL
+            // 6. Vérifier si la chanson est déjà dans la playlist
+            if self.playlist_handle.contains_pk(&pk).await? {
+                tracing::debug!(
+                    "RadioParadisePlaylistFeeder: Skipping duplicate song {} - {} (pk={})",
+                    idx,
+                    song.title,
+                    pk
+                );
+                continue;
+            }
+
+            // 7. Calculer le TTL
             let sched_end = song
                 .sched_end_time_ms()
                 .ok_or_else(|| anyhow::anyhow!("Cannot calculate TTL without sched_time_millis"))?;
             let ttl_ms = sched_end.saturating_sub(now_ms);
             let ttl = Duration::from_millis(ttl_ms);
 
-            // 7. Push dans la playlist avec TTL
+            // 8. Push dans la playlist avec TTL
             self.playlist_handle.push_with_ttl(pk.clone(), ttl).await?;
 
             tracing::info!(

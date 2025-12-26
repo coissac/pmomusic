@@ -341,13 +341,6 @@ fn spawn_playlist_event_handler(manager: Arc<ParadiseChannelManager>) {
                             e
                         );
                     }
-                    if let Err(e) = append_track_to_history(descriptor, &cache_pk).await {
-                        tracing::warn!(
-                            "Failed to update history for channel {}: {}",
-                            descriptor.display_name,
-                            e
-                        );
-                    }
                 }
             }
         }
@@ -360,23 +353,4 @@ fn channel_from_live_playlist(playlist_id: &str) -> Option<&'static ChannelDescr
     ALL_CHANNELS
         .iter()
         .find(|descriptor| descriptor.slug == slug)
-}
-
-async fn append_track_to_history(descriptor: &ChannelDescriptor, cache_pk: &str) -> Result<()> {
-    let playlist_id = format!("radio-paradise-history-{}", descriptor.slug);
-    let manager = pmoplaylist::PlaylistManager();
-    let handle = manager
-        .get_persistent_write_handle(playlist_id.clone())
-        .await
-        .with_context(|| format!("Failed to get history playlist {}", playlist_id))?;
-
-    if handle.contains_pk(cache_pk).await? {
-        return Ok(());
-    }
-
-    handle
-        .push(cache_pk.to_string())
-        .await
-        .with_context(|| format!("Failed to append {} to {}", cache_pk, playlist_id))?;
-    Ok(())
 }
