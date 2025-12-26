@@ -133,6 +133,15 @@ impl DeviceRegistry {
         }
     }
 
+    /// Helper: get a server by UDN (case-insensitive, via udn_index).
+    pub fn get_server_by_udn(&self, udn: &str) -> Option<MediaServerInfo> {
+        let lookup = udn.to_ascii_lowercase();
+        match self.udn_index.get(&lookup) {
+            Some(DeviceKey::Server(id)) => self.servers.get(id).cloned(),
+            _ => None,
+        }
+    }
+
     /// Construct an AvTransportClient for a given renderer id, if possible.
     ///
     /// Returns:

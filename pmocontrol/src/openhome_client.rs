@@ -121,12 +121,12 @@ impl OhPlaylistClient {
 
     pub fn play_id(&self, id: u32) -> Result<()> {
         let id_str = id.to_string();
-        let args = [("Id", id_str.as_str())];
+        let args = [("Value", id_str.as_str())];
 
         let call_result =
-            invoke_upnp_action(&self.control_url, &self.service_type, "PlayId", &args)?;
+            invoke_upnp_action(&self.control_url, &self.service_type, "SeekId", &args)?;
 
-        handle_action_response("PlayId", &call_result)
+        handle_action_response("SeekId", &call_result)
     }
 
     pub fn play(&self) -> Result<()> {
@@ -170,12 +170,49 @@ impl OhPlaylistClient {
 
     pub fn delete_id(&self, id: u32) -> Result<()> {
         let id_str = id.to_string();
-        let args = [("Id", id_str.as_str())];
+        let args = [("Value", id_str.as_str())];
 
         let call_result =
             invoke_upnp_action(&self.control_url, &self.service_type, "DeleteId", &args)?;
 
         handle_action_response("DeleteId", &call_result)
+    }
+
+    /// Attempts to delete an OpenHome playlist entry by ID.
+    /// Unlike delete_id(), this function silently ignores errors related to invalid/missing IDs,
+    /// which is useful in multi-control-point scenarios where playlist state may have changed.
+    ///
+    /// Returns:
+    /// - Ok(true) if the ID was successfully deleted
+    /// - Ok(false) if the ID didn't exist (logged as warning)
+    /// - Err(_) for other errors (network issues, etc.)
+    pub fn delete_id_if_exists(&self, id: u32) -> Result<bool> {
+        match self.delete_id(id) {
+            Ok(()) => Ok(true),
+            Err(err) => {
+                // Check if this is an error about an invalid/missing ID
+                // OpenHome servers may return different error messages/codes for this case
+                let err_msg = format!("{err}");
+                if err_msg.contains("Invalid")
+                    || err_msg.contains("invalid")
+                    || err_msg.contains("not found")
+                    || err_msg.contains("does not exist")
+                    || err_msg.contains("unknown")
+                    || err_msg.contains("500") // HTTP 500 = renderer in inconsistent state
+                    || err_msg.contains("Action Failed") // UPnP error 501
+                {
+                    warn!(
+                        control_url = self.control_url.as_str(),
+                        id,
+                        "DeleteId silently ignored - ID does not exist or renderer in inconsistent state (likely modified by events)"
+                    );
+                    Ok(false)
+                } else {
+                    // Re-throw other errors (network issues, etc.)
+                    Err(err)
+                }
+            }
+        }
     }
 
     pub fn delete_all(&self) -> Result<()> {
@@ -184,6 +221,16 @@ impl OhPlaylistClient {
         handle_action_response("DeleteAll", &call_result)
     }
 
+    pub fn current_id(&self)  -> Result<String> {
+        let call_result =
+            invoke_upnp_action(&self.control_url, &self.service_type, "Id", &[])?;
+        let envelope = ensure_success("Id", &call_result)?;
+        let response = find_child_with_suffix(&envelope.body.content, "IdResponse")
+            .ok_or_else(|| anyhow!("Missing IdResponse element in SOAP body"))?;
+        let value: String = extract_child_text_any(response, &["aValue", "Value"])?;
+        Ok(value)
+    }
+    
     pub fn tracks_max(&self) -> Result<u32> {
         let call_result =
             invoke_upnp_action(&self.control_url, &self.service_type, "TracksMax", &[])?;
@@ -191,7 +238,7 @@ impl OhPlaylistClient {
         let envelope = ensure_success("TracksMax", &call_result)?;
         let response = find_child_with_suffix(&envelope.body.content, "TracksMaxResponse")
             .ok_or_else(|| anyhow!("Missing TracksMaxResponse element in SOAP body"))?;
-        let value_text = extract_child_text_any(response, &["aValue", "Value"])?;
+        let value_text: String = extract_child_text_any(response, &["aValue", "Value"])?;
         let value = value_text
             .parse::<u32>()
             .map_err(|_| anyhow!("Invalid TracksMax value: {}", value_text))?;
@@ -700,16 +747,26 @@ fn parse_track_list(payload: &str) -> Result<Vec<OhTrackEntry>> {
 
 fn parse_track_entry(elem: &Element) -> Result<OhTrackEntry> {
     let id_text = extract_child_text_local(elem, "Id")?;
+
+    // Some renderers (like upmpdcli) return a comma-separated list of IDs in the Id element
+    // when using ReadList. This is a non-standard compact format that we cannot parse properly
+    // because we need to fetch each track individually to get its Uri and Metadata.
+    // Return an error to force the fallback to individual Read() calls.
     if id_text.contains(',') {
         debug!(
             raw_entry = %elem.name,
             raw_id = id_text.as_str(),
-            "Unexpected multi-value Id element in OpenHome TrackList entry"
+            "Multi-value Id element detected - forcing fallback to individual reads"
         );
+        return Err(anyhow!(
+            "Renderer returned comma-separated IDs in single Entry - need individual reads"
+        ));
     }
+
     let id = id_text
         .parse::<u32>()
         .map_err(|_| anyhow!("Invalid OpenHome Entry Id: {}", id_text))?;
+
     let uri = extract_child_text_local(elem, "Uri")?;
     let metadata_xml = extract_child_text_optional_local(elem, "Metadata")?.unwrap_or_default();
 
@@ -927,7 +984,7 @@ pub(crate) fn decode_base64(input: &str) -> Result<Vec<u8>> {
 
 fn is_invalid_entry_id_error(err: &anyhow::Error) -> bool {
     let msg = format!("{err}");
-    msg.contains("Invalid OpenHome Entry Id")
+    msg.contains("Invalid OpenHome Entry Id") || msg.contains("comma-separated IDs")
 }
 
 #[cfg(test)]

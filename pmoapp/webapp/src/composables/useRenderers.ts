@@ -45,6 +45,63 @@ function ensureSSEConnected() {
   sse.onRendererEvent((event) => {
     const rendererId = event.renderer_id
     const timestamp = Date.parse(event.timestamp ?? '') || Date.now()
+
+    // Gérer les événements Online/Offline différemment
+    if (event.type === 'online') {
+      // Nouveau renderer découvert
+      console.log(`[useRenderers] Renderer ${rendererId} (${event.friendly_name}) est maintenant en ligne`)
+
+      // Ajouter au cache avec les infos disponibles
+      // Note: on n'a pas toutes les infos (capabilities, protocol) donc on fetch ensuite
+      const renderer: RendererSummary = {
+        id: rendererId,
+        friendly_name: event.friendly_name,
+        model_name: event.model_name,
+        protocol: 'upnp', // Valeur par défaut, sera mise à jour par le fetch
+        capabilities: {
+          has_avtransport: false,
+          has_avtransport_set_next: false,
+          has_rendering_control: false,
+          has_connection_manager: false,
+          has_linkplay_http: false,
+          has_arylic_tcp: false,
+          has_oh_playlist: false,
+          has_oh_volume: false,
+          has_oh_info: false,
+          has_oh_time: false,
+          has_oh_radio: false,
+        },
+        online: true,
+      }
+      renderersCache.value.set(rendererId, renderer)
+
+      // Fetch la liste complète pour avoir les bonnes infos
+      void fetchRenderers(true)
+
+      // Fetch le snapshot complet pour ce renderer
+      void fetchRendererSnapshot(rendererId, { force: true })
+      return
+    }
+
+    if (event.type === 'offline') {
+      // Renderer déconnecté
+      console.log(`[useRenderers] Renderer ${rendererId} est maintenant hors ligne`)
+
+      // Marquer comme offline dans le cache
+      const renderer = renderersCache.value.get(rendererId)
+      if (renderer) {
+        renderer.online = false
+        renderersCache.value.set(rendererId, renderer)
+      }
+
+      // Supprimer le snapshot (il n'est plus valide)
+      snapshotState.snapshots.delete(rendererId)
+      snapshotState.lastSnapshotAt.delete(rendererId)
+      snapshotState.lastEventAt.delete(rendererId)
+      return
+    }
+
+    // Pour les autres événements, comportement existant
     snapshotState.lastEventAt.set(rendererId, timestamp)
     const lastSnapshot = snapshotState.lastSnapshotAt.get(rendererId) ?? 0
     if (!snapshotState.snapshots.has(rendererId) || timestamp > lastSnapshot) {

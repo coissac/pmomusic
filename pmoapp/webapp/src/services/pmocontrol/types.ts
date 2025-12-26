@@ -176,10 +176,14 @@ export type RendererEventPayload =
   | { type: 'metadata_changed'; renderer_id: string; title: string | null; artist: string | null; album: string | null; album_art_uri: string | null; timestamp: string }
   | { type: 'queue_updated'; renderer_id: string; queue_length: number; timestamp: string }
   | { type: 'binding_changed'; renderer_id: string; server_id: string | null; container_id: string | null; timestamp: string }
+  | { type: 'online'; renderer_id: string; friendly_name: string; model_name: string; manufacturer: string; timestamp: string }
+  | { type: 'offline'; renderer_id: string; timestamp: string }
 
 export type MediaServerEventPayload =
   | { type: 'global_updated'; server_id: string; system_update_id: number | null; timestamp: string }
   | { type: 'containers_updated'; server_id: string; container_ids: string[]; timestamp: string }
+  | { type: 'online'; server_id: string; friendly_name: string; model_name: string; manufacturer: string; timestamp: string }
+  | { type: 'offline'; server_id: string; timestamp: string }
 
 export type UnifiedEventPayload =
   | { category: 'renderer' } & RendererEventPayload
