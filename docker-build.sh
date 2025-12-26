@@ -14,8 +14,8 @@ NC='\033[0m' # No Color
 IMAGE_NAME="pmomusic"
 TAG="latest"
 NO_CACHE=false
-PUSH=false
-REGISTRY=""
+PUSH=true
+REGISTRY="niepce.petite-maison-orange.fr/public"
 
 # Fonction d'aide
 show_help() {
