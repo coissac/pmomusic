@@ -118,63 +118,8 @@ impl OpenHomeRenderer {
         let playlist = self.playlist_client_for("snapshot_openhome_playlist")?;
         let entries = playlist.read_all_tracks()?;
 
-        // Essayer d'obtenir current_id depuis Info.Id()
-        let mut current_id = self
-            .playlist
-            .as_ref()
-            .and_then(|client| {
-                match client.id() {
-                    Ok(id) => {
-                        debug!(
-                            renderer = self.info.id.0.as_str(),
-                            current_id = id,
-                            "OpenHome Info service returned current_id"
-                        );
-                        Some(id)
-                    }
-                    Err(err) => {
-                        debug!(
-                            renderer = self.info.id.0.as_str(),
-                            error = %err,
-                            "OpenHome Info.Id() failed, will try Info.Track()"
-                        );
-                        None
-                    }
-                }
-            });
-
-        // Fallback: Si Info.Id() échoue, essayer Info.Track() et matcher l'URI
-        if current_id.is_none() {
-            if let Some(client) = self.info_client.as_ref() {
-                match client.track() {
-                    Ok(track_info) => {
-                        debug!(
-                            renderer = self.info.id.0.as_str(),
-                            track_uri = track_info.uri.as_str(),
-                            "OpenHome Info.Track() returned, searching by URI"
-                        );
-                        // Trouver l'entry qui matche cet URI
-                        current_id = entries.iter()
-                            .find(|entry| entry.uri == track_info.uri)
-                            .map(|entry| {
-                                debug!(
-                                    renderer = self.info.id.0.as_str(),
-                                    found_id = entry.id,
-                                    "Found current_id by matching URI"
-                                );
-                                entry.id
-                            });
-                    }
-                    Err(err) => {
-                        debug!(
-                            renderer = self.info.id.0.as_str(),
-                            error = %err,
-                            "OpenHome Info.Track() also failed"
-                        );
-                    }
-                }
-            }
-        }
+        // Get current track ID from the playlist service
+        let current_id = playlist.id().ok();
 
         let current_index =
             current_id.and_then(|id| entries.iter().position(|entry| entry.id == id));
