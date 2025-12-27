@@ -16,7 +16,8 @@ use crate::openapi::{
     AttachPlaylistRequest, AttachedPlaylistInfo, BrowseResponse, ContainerEntry, ErrorResponse,
     FullRendererSnapshot, MediaServerSummary, OpenHomePlaylistAddRequest, OpenHomePlaylistSnapshot,
     PlayContentRequest, QueueItem, QueueSnapshot, RendererCapabilitiesSummary,
-    RendererProtocolSummary, RendererState, RendererSummary, SuccessResponse, VolumeSetRequest,
+    RendererProtocolSummary, RendererState, RendererSummary, SeekQueueRequest, SuccessResponse,
+    VolumeSetRequest,
 };
 #[cfg(feature = "pmoserver")]
 use crate::queue_backend::PlaybackItem;
@@ -618,6 +619,89 @@ async fn next_renderer(
 
     Ok(Json(SuccessResponse {
         message: "Skipped to next track".to_string(),
+    }))
+}
+
+/// POST /control/renderers/{renderer_id}/queue/seek - Saute à un index spécifique dans la queue
+#[cfg(feature = "pmoserver")]
+#[utoipa::path(
+    post,
+    path = "/renderers/{renderer_id}/queue/seek",
+    tag = "control",
+    request_body = SeekQueueRequest,
+    responses(
+        (status = 200, description = "Lecture démarrée à l'index spécifié", body = SuccessResponse),
+        (status = 404, description = "Renderer non trouvé", body = ErrorResponse),
+        (status = 400, description = "Index invalide", body = ErrorResponse),
+        (status = 500, description = "Erreur interne", body = ErrorResponse),
+    )
+)]
+async fn seek_queue_index(
+    State(state): State<ControlPointState>,
+    Path(renderer_id): Path<String>,
+    Json(payload): Json<SeekQueueRequest>,
+) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let rid = RendererId(renderer_id.clone());
+    state
+        .control_point
+        .music_renderer_by_id(&rid)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("Renderer {} not found", renderer_id),
+                }),
+            )
+        })?;
+
+    let control_point = Arc::clone(&state.control_point);
+    let rid_for_task = rid.clone();
+    let index = payload.index;
+    let seek_task = tokio::task::spawn_blocking(move || {
+        control_point.play_queue_index(&rid_for_task, index)
+    });
+
+    time::timeout(TRANSPORT_COMMAND_TIMEOUT, seek_task)
+        .await
+        .map_err(|_| {
+            warn!(
+                "Seek queue command for renderer {} exceeded {:?}",
+                renderer_id, TRANSPORT_COMMAND_TIMEOUT
+            );
+            (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Seek command timed out after {}s",
+                        TRANSPORT_COMMAND_TIMEOUT.as_secs()
+                    ),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!("Task join error during queue seek: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Internal task error: {}", e),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!(
+                "Failed to seek to index {} for renderer {}: {}",
+                index, renderer_id, e
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to seek to index {}: {}", index, e),
+                }),
+            )
+        })?;
+
+    Ok(Json(SuccessResponse {
+        message: format!("Playing item at index {}", index),
     }))
 }
 
@@ -1939,6 +2023,8 @@ pub fn create_api_router(state: ControlPointState, control_point: Arc<ControlPoi
         .route("/renderers/{renderer_id}/stop", post(stop_renderer))
         .route("/renderers/{renderer_id}/resume", post(resume_renderer))
         .route("/renderers/{renderer_id}/next", post(next_renderer))
+        // Queue control
+        .route("/renderers/{renderer_id}/queue/seek", post(seek_queue_index))
         // Volume control
         .route(
             "/renderers/{renderer_id}/volume/set",

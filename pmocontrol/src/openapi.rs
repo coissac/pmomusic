@@ -280,6 +280,14 @@ pub struct PlayContentRequest {
     pub object_id: String,
 }
 
+/// Requête pour sauter à un index spécifique dans la queue
+#[cfg(feature = "pmoserver")]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct SeekQueueRequest {
+    /// Index de l'item dans la queue (0-based)
+    pub index: usize,
+}
+
 /// Réponse générique de succès
 #[cfg(feature = "pmoserver")]
 #[derive(Debug, Clone, Serialize, ToSchema)]

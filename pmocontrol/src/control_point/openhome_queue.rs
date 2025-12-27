@@ -58,11 +58,9 @@ impl OpenHomeQueue {
             track_ids.push(entry.id);
         }
 
-        // Try multiple methods to determine the currently playing track, from most to least reliable:
-        // 1. Info.Id() - Direct ID query (fastest, but fails if track no longer in playlist)
-        // 2. Info.Track() - Returns URI, which we can search for (works even if track removed)
-        // 3. None - No current track can be determined
-        let current_id = self.playlist.id()?;
+        // Try to get the currently playing track ID from the renderer
+        // If this fails (renderer doesn't support it or no track playing), we'll just set current_index to None
+        let current_id = self.playlist.id().ok();
         //  {
         //     // Try Info.Id() first
         //     if let Ok(id) = client.id() {
@@ -105,9 +103,13 @@ impl OpenHomeQueue {
         // let current_index = current_id
         //     .and_then(|id| track_ids.iter().position(|entry_id| *entry_id == id));
 
+        // Convert track ID to array index by searching in track_ids
+        let current_index = current_id
+            .and_then(|id| track_ids.iter().position(|&entry_id| entry_id == id));
+
         self.items = items;
         self.track_ids = track_ids;
-        self.current_index = Some(current_id as usize);
+        self.current_index = current_index;
         Ok(())
     }
 
@@ -159,6 +161,20 @@ impl OpenHomeQueue {
 
         self.ensure_playlist_source_selected()?;
         self.playlist.play_id(id)?;
+        self.current_index = Some(index);
+        Ok(())
+    }
+
+    /// Selects and plays a track by its queue index (0-based).
+    pub fn select_track_index(&mut self, index: usize) -> Result<()> {
+        let track_id = self
+            .track_ids
+            .get(index)
+            .copied()
+            .ok_or_else(|| anyhow!("Index {} out of bounds (queue length: {})", index, self.track_ids.len()))?;
+
+        self.ensure_playlist_source_selected()?;
+        self.playlist.play_id(track_id)?;
         self.current_index = Some(index);
         Ok(())
     }
