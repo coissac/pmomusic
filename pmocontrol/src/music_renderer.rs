@@ -13,10 +13,10 @@ use crate::control_point::RendererRuntimeStateMut;
 use crate::control_point::music_queue::MusicQueue;
 use crate::control_point::openhome_queue::didl_id_from_metadata;
 use crate::media_server::ServerId;
-use crate::model::{RendererId, RendererInfo, RendererProtocol};
+use crate::model::{RendererId, RendererInfo, RendererProtocol, TrackMetadata};
 use crate::openhome_client::parse_track_metadata_from_didl;
-use crate::openhome_playlist::OpenHomePlaylistSnapshot;
-use crate::queue_backend::PlaybackItem;
+use crate::openhome_playlist::{OpenHomePlaylistSnapshot, OpenHomePlaylistTrack};
+use crate::queue_backend::{PlaybackItem, QueueSnapshot};
 use crate::{
     ArylicTcpRenderer, ChromecastRenderer, DeviceRegistry, LinkPlayRenderer, OpenHomeRenderer,
     PlaybackPosition, PlaybackState, TransportControl, UpnpRenderer, VolumeControl,
@@ -301,6 +301,240 @@ impl MusicRenderer {
                     Ok(())
                 })
             }
+        }
+    }
+
+    /// Synchronize the local queue state with the backend's actual state.
+    ///
+    /// - For OpenHome: fetches the playlist from the renderer and updates local cache
+    /// - For Internal queue/AVTransport: no-op (queue is already local)
+    pub fn sync_queue_state(&self) -> Result<()> {
+        match self {
+            MusicRenderer::OpenHome(_) => {
+                if let Some(provider) = OPENHOME_QUEUE_PROVIDER.get() {
+                    // Fetch fresh playlist snapshot and update cache
+                    provider.invalidate_openhome_cache(self.id())?;
+                }
+                Ok(())
+            }
+            MusicRenderer::Upnp(_)
+            | MusicRenderer::Chromecast(_)
+            | MusicRenderer::LinkPlay(_)
+            | MusicRenderer::ArylicTcp(_)
+            | MusicRenderer::HybridUpnpArylic { .. } => {
+                // No sync needed - queue is local only
+                Ok(())
+            }
+        }
+    }
+
+    /// Clear the queue on both the backend and in local state.
+    ///
+    /// This ensures the backend renderer and local cache are consistent.
+    /// Should be called before queue mutations to ensure clean state.
+    pub fn clear_queue(&self) -> Result<()> {
+        match self {
+            MusicRenderer::OpenHome(_) => {
+                // For OpenHome: clear the playlist on the renderer itself
+                self.openhome_playlist_clear()
+            }
+            MusicRenderer::Upnp(_)
+            | MusicRenderer::Chromecast(_)
+            | MusicRenderer::LinkPlay(_)
+            | MusicRenderer::ArylicTcp(_)
+            | MusicRenderer::HybridUpnpArylic { .. } => {
+                // For other renderers: no persistent queue to clear
+                Ok(())
+            }
+        }
+    }
+
+    /// Add a track to the backend's queue, returning backend-specific track ID if applicable.
+    ///
+    /// - For OpenHome: adds to OpenHome playlist and returns track ID
+    /// - For others: returns error (not supported for single-track renderers)
+    pub fn add_track_to_queue(
+        &self,
+        uri: &str,
+        metadata: &str,
+        after_id: Option<u32>,
+        play: bool,
+    ) -> Result<Option<u32>> {
+        match self {
+            MusicRenderer::OpenHome(_) => {
+                let track_id = self.openhome_playlist_add_track(uri, metadata, after_id, play)?;
+                Ok(Some(track_id))
+            }
+            MusicRenderer::Upnp(_)
+            | MusicRenderer::Chromecast(_)
+            | MusicRenderer::LinkPlay(_)
+            | MusicRenderer::ArylicTcp(_)
+            | MusicRenderer::HybridUpnpArylic { .. } => Err(anyhow!(
+                "add_track_to_queue is not supported for {} backend",
+                self.unsupported_backend_name()
+            )),
+        }
+    }
+
+    /// Select and play a specific track from the backend's queue.
+    ///
+    /// - For OpenHome: uses track ID to select from OpenHome playlist
+    /// - For others: returns error (use play_uri instead)
+    pub fn select_queue_track(&self, track_id: u32) -> Result<()> {
+        match self {
+            MusicRenderer::OpenHome(_) => self.openhome_playlist_play_id(track_id),
+            MusicRenderer::Upnp(_)
+            | MusicRenderer::Chromecast(_)
+            | MusicRenderer::LinkPlay(_)
+            | MusicRenderer::ArylicTcp(_)
+            | MusicRenderer::HybridUpnpArylic { .. } => Err(anyhow!(
+                "select_queue_track is not supported for {} backend",
+                self.unsupported_backend_name()
+            )),
+        }
+    }
+
+    /// Get the current queue state from the backend.
+    ///
+    /// - For OpenHome: fetches current playlist snapshot
+    /// - For others: returns None (no persistent queue on backend)
+    pub fn queue_snapshot(&self) -> Result<Option<QueueSnapshot>> {
+        match self {
+            MusicRenderer::OpenHome(_) => {
+                let oh_snapshot = self.fetch_openhome_playlist_snapshot()?;
+
+                // Convert OpenHome tracks to PlaybackItems
+                let items: Vec<PlaybackItem> = oh_snapshot.tracks.iter().map(|track| {
+                    Self::playback_item_from_openhome_track(self.id(), track)
+                }).collect();
+
+                let snapshot = QueueSnapshot {
+                    items,
+                    current_index: oh_snapshot.current_index,
+                };
+
+                Ok(Some(snapshot))
+            }
+            MusicRenderer::Upnp(_)
+            | MusicRenderer::Chromecast(_)
+            | MusicRenderer::LinkPlay(_)
+            | MusicRenderer::ArylicTcp(_)
+            | MusicRenderer::HybridUpnpArylic { .. } => {
+                // No backend queue for these renderers
+                Ok(None)
+            }
+        }
+    }
+
+    /// Play the current item from the backend queue.
+    ///
+    /// - For OpenHome: Uses the native playlist to play the current track
+    /// - For others: Returns error (no backend queue)
+    pub fn play_current_from_backend_queue(&self) -> Result<()> {
+        match self {
+            MusicRenderer::OpenHome(_) => {
+                // Get the current OpenHome playlist snapshot
+                let snapshot = self.fetch_openhome_playlist_snapshot()?;
+
+                if snapshot.tracks.is_empty() {
+                    return Err(anyhow!("OpenHome playlist is empty"));
+                }
+
+                // Find the track_id to play (prefer current_id, then current_index, then first)
+                let target_track_id = if let Some(current_id) = snapshot.current_id {
+                    Some(current_id)
+                } else if let Some(current_idx) = snapshot.current_index {
+                    snapshot.tracks.get(current_idx).map(|track| track.id)
+                } else {
+                    snapshot.tracks.first().map(|track| track.id)
+                };
+
+                if let Some(track_id) = target_track_id {
+                    self.openhome_playlist_play_id(track_id)?;
+                    Ok(())
+                } else {
+                    Err(anyhow!("No track to play in OpenHome playlist"))
+                }
+            }
+            MusicRenderer::Upnp(_)
+            | MusicRenderer::Chromecast(_)
+            | MusicRenderer::LinkPlay(_)
+            | MusicRenderer::ArylicTcp(_)
+            | MusicRenderer::HybridUpnpArylic { .. } => Err(anyhow!(
+                "play_current_from_backend_queue is not supported for {} backend (no persistent queue)",
+                self.unsupported_backend_name()
+            )),
+        }
+    }
+
+    /// Play the next item from the backend queue.
+    ///
+    /// - For OpenHome: Advances to the next track in the playlist
+    /// - For others: Returns error (no backend queue)
+    pub fn play_next_from_backend_queue(&self) -> Result<()> {
+        match self {
+            MusicRenderer::OpenHome(_) => {
+                // Get the current OpenHome playlist snapshot
+                let snapshot = self.fetch_openhome_playlist_snapshot()?;
+
+                if snapshot.tracks.is_empty() {
+                    return Err(anyhow!("OpenHome playlist is empty, cannot play next"));
+                }
+
+                // Determine the next track_id
+                let next_track_id = match snapshot.current_index {
+                    Some(idx) => {
+                        // Take the next track if it exists, otherwise loop to first
+                        snapshot
+                            .tracks
+                            .get(idx + 1)
+                            .map(|track| track.id)
+                            .or_else(|| snapshot.tracks.first().map(|track| track.id))
+                    }
+                    None => snapshot.tracks.first().map(|track| track.id),
+                };
+
+                if let Some(track_id) = next_track_id {
+                    self.openhome_playlist_play_id(track_id)?;
+                    Ok(())
+                } else {
+                    Err(anyhow!("No track available to advance to in OpenHome playlist"))
+                }
+            }
+            MusicRenderer::Upnp(_)
+            | MusicRenderer::Chromecast(_)
+            | MusicRenderer::LinkPlay(_)
+            | MusicRenderer::ArylicTcp(_)
+            | MusicRenderer::HybridUpnpArylic { .. } => Err(anyhow!(
+                "play_next_from_backend_queue is not supported for {} backend (no persistent queue)",
+                self.unsupported_backend_name()
+            )),
+        }
+    }
+
+    /// Convert an OpenHome playlist track to a PlaybackItem.
+    fn playback_item_from_openhome_track(
+        renderer_id: &RendererId,
+        track: &OpenHomePlaylistTrack,
+    ) -> PlaybackItem {
+        let metadata = TrackMetadata {
+            title: track.title.clone(),
+            artist: track.artist.clone(),
+            album: track.album.clone(),
+            genre: None,
+            album_art_uri: track.album_art_uri.clone(),
+            date: None,
+            track_number: None,
+            creator: None,
+        };
+
+        PlaybackItem {
+            media_server_id: ServerId(format!("openhome:{}", renderer_id.0)),
+            didl_id: format!("openhome:{}", track.id),
+            uri: track.uri.clone(),
+            // OpenHome tracks don't provide protocolInfo, use generic default
+            protocol_info: "http-get:*:audio/*:*".to_string(),
+            metadata: Some(metadata),
         }
     }
 
