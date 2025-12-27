@@ -19,6 +19,8 @@ use crate::control_point::ControlPoint;
 #[cfg(feature = "pmoserver")]
 use crate::model::{MediaServerEvent, RendererEvent};
 #[cfg(feature = "pmoserver")]
+use crate::registry::DeviceRegistryRead;
+#[cfg(feature = "pmoserver")]
 use async_stream::stream;
 #[cfg(feature = "pmoserver")]
 use axum::{
@@ -168,6 +170,32 @@ pub async fn renderer_events_sse(
     });
 
     let stream = stream! {
+        // INITIAL SNAPSHOT: Send Online events for all currently discovered renderers
+        // This ensures clients see devices that were discovered before they connected
+        let initial_renderers = {
+            let registry = control_point.registry();
+            let reg = registry.read().unwrap();
+            reg.list_renderers()
+        };
+
+        for info in initial_renderers {
+            if info.online {
+                let timestamp = chrono::Utc::now();
+                let payload = RendererEventPayload::Online {
+                    renderer_id: info.id.0.clone(),
+                    friendly_name: info.friendly_name.clone(),
+                    model_name: info.model_name.clone(),
+                    manufacturer: info.manufacturer.clone(),
+                    timestamp,
+                };
+
+                if let Ok(json) = serde_json::to_string(&payload) {
+                    yield Ok::<_, axum::Error>(Event::default().event("renderer").data(json));
+                }
+            }
+        }
+
+        // Then stream future events
         while let Some(event) = rx_tokio.recv().await {
             let timestamp = chrono::Utc::now();
 
@@ -285,6 +313,32 @@ pub async fn media_server_events_sse(
     });
 
     let stream = stream! {
+        // INITIAL SNAPSHOT: Send Online events for all currently discovered media servers
+        // This ensures clients see servers that were discovered before they connected
+        let initial_servers = {
+            let registry = control_point.registry();
+            let reg = registry.read().unwrap();
+            reg.list_servers()
+        };
+
+        for info in initial_servers {
+            if info.online {
+                let timestamp = chrono::Utc::now();
+                let payload = MediaServerEventPayload::Online {
+                    server_id: info.id.0.clone(),
+                    friendly_name: info.friendly_name.clone(),
+                    model_name: info.model_name.clone(),
+                    manufacturer: info.manufacturer.clone(),
+                    timestamp,
+                };
+
+                if let Ok(json) = serde_json::to_string(&payload) {
+                    yield Ok::<_, axum::Error>(Event::default().event("media_server").data(json));
+                }
+            }
+        }
+
+        // Then stream future events
         while let Some(event) = rx_tokio.recv().await {
             let timestamp = chrono::Utc::now();
 
@@ -370,6 +424,53 @@ pub async fn all_events_sse(State(control_point): State<Arc<ControlPoint>>) -> i
     });
 
     let stream = stream! {
+        // INITIAL SNAPSHOT: Send Online events for all currently discovered devices
+        // This ensures clients see devices that were discovered before they connected
+        let (initial_renderers, initial_servers) = {
+            let registry = control_point.registry();
+            let reg = registry.read().unwrap();
+            (reg.list_renderers(), reg.list_servers())
+        };
+
+        // Send renderer Online events
+        for info in initial_renderers {
+            if info.online {
+                let timestamp = chrono::Utc::now();
+                let renderer_payload = RendererEventPayload::Online {
+                    renderer_id: info.id.0.clone(),
+                    friendly_name: info.friendly_name.clone(),
+                    model_name: info.model_name.clone(),
+                    manufacturer: info.manufacturer.clone(),
+                    timestamp,
+                };
+                let payload = UnifiedEventPayload::Renderer(renderer_payload);
+
+                if let Ok(json) = serde_json::to_string(&payload) {
+                    yield Ok::<_, axum::Error>(Event::default().event("control").data(json));
+                }
+            }
+        }
+
+        // Send server Online events
+        for info in initial_servers {
+            if info.online {
+                let timestamp = chrono::Utc::now();
+                let server_payload = MediaServerEventPayload::Online {
+                    server_id: info.id.0.clone(),
+                    friendly_name: info.friendly_name.clone(),
+                    model_name: info.model_name.clone(),
+                    manufacturer: info.manufacturer.clone(),
+                    timestamp,
+                };
+                let payload = UnifiedEventPayload::MediaServer(server_payload);
+
+                if let Ok(json) = serde_json::to_string(&payload) {
+                    yield Ok::<_, axum::Error>(Event::default().event("control").data(json));
+                }
+            }
+        }
+
+        // Then stream future events
         loop {
             tokio::select! {
                 Some(event) = renderer_rx_tokio.recv() => {

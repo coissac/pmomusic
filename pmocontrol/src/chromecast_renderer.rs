@@ -94,6 +94,12 @@ fn connect_to_device<'a>(host: &'a str, port: u16) -> Result<CastDevice<'a>> {
         .connect(DEFAULT_DESTINATION_ID.to_string())
         .map_err(|e| anyhow!("Failed to connect channel: {}", e))?;
 
+    // Send initial gre to establish heartbeat communication
+    // This is critical per rust_caster.rs example
+    device.heartbeat
+        .ping()
+        .map_err(|e| anyhow!("Failed to send initial heartbeat ping: {}", e))?;
+
     Ok(device)
 }
 
