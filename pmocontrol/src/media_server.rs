@@ -4,8 +4,11 @@ use anyhow::{Result, anyhow};
 use pmodidl::{self, DIDLLite};
 use pmoupnp::soap::SoapEnvelope;
 use pmoupnp::soap::error_codes;
+use tracing::{debug, warn};
 use xmltree::{Element, XMLNode};
 
+use crate::model::TrackMetadata;
+use crate::queue_backend::PlaybackItem;
 use crate::soap_client::{SoapCallResult, invoke_upnp_action_with_timeout};
 
 /// Unique identifier for a media server registered by the control point.
@@ -42,15 +45,49 @@ impl MediaResource {
     /// Returns true if this resource represents audio content.
     pub fn is_audio(&self) -> bool {
         let lower = self.protocol_info.to_ascii_lowercase();
+
+        // Standard case: audio/* MIME types
         if lower.contains("audio/") {
             return true;
         }
+
+        // List of known audio format subtypes (the part after the /)
+        // These are recognized regardless of the MIME type prefix
+        const AUDIO_FORMATS: &[&str] = &[
+            "flac", "ogg", "opus", "vorbis",
+            "mp3", "mpeg", "mp4", "m4a", "aac",
+            "wav", "wave", "pcm",
+            "wma", "webm",
+            "ape", "alac", "aiff",
+            "dsd", "dsf", "dff",
+        ];
+
+        // Check if any known audio format appears in the protocol_info
+        for format in AUDIO_FORMATS {
+            if lower.contains(format) {
+                return true;
+            }
+        }
+
         // protocolInfo format: protocol:network:contentFormat:additionalInfo
-        lower
-            .split(':')
-            .nth(2)
-            .map(|mime| mime.starts_with("audio/"))
-            .unwrap_or(false)
+        // Extract the MIME type (3rd field) for more precise checking
+        if let Some(mime) = lower.split(':').nth(2) {
+            // Check if it's audio/* or contains a known audio format
+            if mime.starts_with("audio/") {
+                return true;
+            }
+
+            // Check the subtype (part after /) for known audio formats
+            if let Some(subtype) = mime.split('/').nth(1) {
+                for format in AUDIO_FORMATS {
+                    if subtype.contains(format) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
     }
 }
 
@@ -143,6 +180,80 @@ impl MediaBrowser for MusicServer {
             MusicServer::Upnp(upnp) => upnp.search(container_id, query, start, count),
         }
     }
+}
+
+/// Helper to convert a MediaEntry to a PlaybackItem.
+///
+/// This function filters out containers and entries without audio resources,
+/// returning None for items that cannot be played.
+pub fn playback_item_from_entry(server: &MusicServer, entry: &MediaEntry) -> Option<PlaybackItem> {
+    // Ignore containers
+    if entry.is_container {
+        debug!(
+            server_id = server.id().0.as_str(),
+            entry_id = entry.id.as_str(),
+            title = entry.title.as_str(),
+            class = entry.class.as_str(),
+            "Skipping container entry"
+        );
+        return None;
+    }
+
+    // Skip "live stream" entries (heuristic from example)
+    if entry.title.to_ascii_lowercase().contains("live stream") {
+        debug!(
+            server_id = server.id().0.as_str(),
+            entry_id = entry.id.as_str(),
+            title = entry.title.as_str(),
+            "Skipping 'live stream' entry"
+        );
+        return None;
+    }
+
+    // Find an audio resource
+    let resource = entry.resources.iter().find(|res| res.is_audio());
+
+    if resource.is_none() {
+        warn!(
+            server_id = server.id().0.as_str(),
+            entry_id = entry.id.as_str(),
+            title = entry.title.as_str(),
+            class = entry.class.as_str(),
+            resource_count = entry.resources.len(),
+            resources = ?entry.resources.iter().map(|r| &r.protocol_info).collect::<Vec<_>>(),
+            "No audio resource found for entry"
+        );
+        return None;
+    }
+
+    let resource = resource.unwrap();
+
+    let metadata = TrackMetadata {
+        title: Some(entry.title.clone()),
+        artist: entry.artist.clone(),
+        album: entry.album.clone(),
+        genre: entry.genre.clone(),
+        album_art_uri: entry.album_art_uri.clone(),
+        date: entry.date.clone(),
+        track_number: entry.track_number.clone(),
+        creator: entry.creator.clone(),
+    };
+
+    debug!(
+        server_id = server.id().0.as_str(),
+        entry_id = entry.id.as_str(),
+        title = entry.title.as_str(),
+        uri = resource.uri.as_str(),
+        "Created playback item"
+    );
+
+    Some(PlaybackItem {
+        media_server_id: server.id().clone(),
+        didl_id: entry.id.clone(),
+        uri: resource.uri.clone(),
+        protocol_info: resource.protocol_info.clone(),
+        metadata: Some(metadata),
+    })
 }
 
 /// Single UPnP ContentDirectory backend implementation.

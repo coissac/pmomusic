@@ -31,7 +31,9 @@ use crate::control_point::music_queue::MusicQueue;
 use crate::control_point::openhome_queue::OpenHomeQueue;
 use crate::discovery::DiscoveryManager;
 use crate::events::{MediaServerEventBus, RendererEventBus};
-use crate::media_server::{MediaBrowser, MediaEntry, MediaServerInfo, MusicServer, ServerId};
+use crate::media_server::{
+    playback_item_from_entry, MediaBrowser, MediaEntry, MediaServerInfo, MusicServer, ServerId,
+};
 use crate::media_server_events::spawn_media_server_event_runtime;
 use crate::model::TrackMetadata;
 use crate::model::{MediaServerEvent, RendererEvent, RendererId, RendererInfo};
@@ -1820,22 +1822,28 @@ impl ControlPoint {
             "Attaching new playlist: clearing renderer queue"
         );
 
-        // Clear the renderer's queue for OpenHome renderers
-        // We also sync the local cache to reflect the empty state, which will trigger
-        // refresh_attached_queue_for() to use replace_entire_playlist() instead of gentle sync
+        // Prepare the renderer for the new playlist (backend-agnostic)
+        let renderer = self.music_renderer_by_id(renderer_id).ok_or_else(|| {
+            anyhow!("Renderer {} not found", renderer_id.0)
+        })?;
+        renderer.clear_for_playlist_attach()?;
+
+        // For OpenHome, also sync the local cache to reflect the empty state
         if self.runtime.uses_openhome_playlist(renderer_id) {
-            let renderer = self.openhome_renderer(renderer_id)?;
-            renderer.openhome_playlist_clear()?;
-            // Sync local cache to reflect the empty renderer state
             self.sync_openhome_playlist_for(renderer_id)?;
-            debug!(
-                renderer = renderer_id.0.as_str(),
-                "Cleared OpenHome renderer playlist and synced local cache"
-            );
-        } else {
-            // For non-OpenHome renderers, use the standard clear_queue
-            self.clear_queue(renderer_id)?;
         }
+
+        // Clear the local queue (detach binding + clear runtime queue structure)
+        self.detach_playlist_binding(renderer_id, "attach_new_playlist");
+        self.runtime.with_music_queue_mut(renderer_id, |queue| {
+            queue.clear_queue()?;
+            Ok(())
+        })?;
+
+        debug!(
+            renderer = renderer_id.0.as_str(),
+            "Cleared renderer and local queue for new playlist"
+        );
 
         let binding = PlaylistBinding {
             server_id: server_id.clone(),
@@ -2712,6 +2720,16 @@ fn refresh_attached_queue_for(
         }
     };
 
+    debug!(
+        renderer = renderer_id.0.as_str(),
+        server = server_id.0.as_str(),
+        container = container_id.as_str(),
+        total_entries = entries.len(),
+        containers = entries.iter().filter(|e| e.is_container).count(),
+        items_count = entries.iter().filter(|e| !e.is_container).count(),
+        "Browse returned entries for playlist refresh"
+    );
+
     // Step 4: Convert MediaEntry to PlaybackItem
     let new_items: Vec<PlaybackItem> = entries
         .iter()
@@ -2719,11 +2737,12 @@ fn refresh_attached_queue_for(
         .collect();
 
     if new_items.is_empty() {
-        debug!(
+        warn!(
             renderer = renderer_id.0.as_str(),
             server = server_id.0.as_str(),
             container = container_id.as_str(),
-            "Refreshed playlist is empty, clearing queue"
+            total_entries = entries.len(),
+            "Refreshed playlist is empty, clearing queue - all entries were filtered out"
         );
         runtime.with_music_queue_mut(renderer_id, |queue| queue.clear_queue())?;
         runtime.invalidate_openhome_cache(renderer_id);
@@ -2884,41 +2903,6 @@ fn refresh_attached_queue_for(
     }
 
     Ok(())
-}
-
-/// Helper to convert a MediaEntry to a PlaybackItem.
-fn playback_item_from_entry(server: &MusicServer, entry: &MediaEntry) -> Option<PlaybackItem> {
-    // Ignore containers
-    if entry.is_container {
-        return None;
-    }
-
-    // Skip "live stream" entries (heuristic from example)
-    if entry.title.to_ascii_lowercase().contains("live stream") {
-        return None;
-    }
-
-    // Find an audio resource
-    let resource = entry.resources.iter().find(|res| res.is_audio())?;
-
-    let metadata = TrackMetadata {
-        title: Some(entry.title.clone()),
-        artist: entry.artist.clone(),
-        album: entry.album.clone(),
-        genre: entry.genre.clone(),
-        album_art_uri: entry.album_art_uri.clone(),
-        date: entry.date.clone(),
-        track_number: entry.track_number.clone(),
-        creator: entry.creator.clone(),
-    };
-
-    Some(PlaybackItem {
-        media_server_id: server.id().clone(),
-        didl_id: entry.id.clone(),
-        uri: resource.uri.clone(),
-        protocol_info: resource.protocol_info.clone(),
-        metadata: Some(metadata),
-    })
 }
 
 const OPENHOME_TRACK_PREFIX: &str = "openhome:";

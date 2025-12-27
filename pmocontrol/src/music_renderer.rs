@@ -269,6 +269,41 @@ impl MusicRenderer {
         }
     }
 
+    /// High-level method to prepare the renderer for attaching a new playlist.
+    ///
+    /// This method handles backend-specific clearing logic:
+    /// - For OpenHome: clears the OpenHome playlist
+    /// - For AVTransport/Chromecast/etc.: stops the renderer (since they don't have a persistent queue)
+    ///
+    /// This should be called by ControlPoint when attaching a new playlist, ensuring that:
+    /// - Any currently playing content is stopped
+    /// - The renderer is in a clean state ready to receive new content
+    pub fn clear_for_playlist_attach(&self) -> Result<()> {
+        match self {
+            MusicRenderer::OpenHome(_) => {
+                // For OpenHome: clear the playlist on the renderer itself
+                self.openhome_playlist_clear()
+            }
+            MusicRenderer::Upnp(_)
+            | MusicRenderer::Chromecast(_)
+            | MusicRenderer::LinkPlay(_)
+            | MusicRenderer::ArylicTcp(_)
+            | MusicRenderer::HybridUpnpArylic { .. } => {
+                // For AVTransport and other single-track renderers: stop playback
+                // This ensures we're not in the middle of playing when we start the new playlist
+                self.stop().or_else(|err| {
+                    // If stop fails (e.g., already stopped), that's fine - we just want to ensure it's not playing
+                    warn!(
+                        renderer = self.id().0.as_str(),
+                        error = %err,
+                        "Stop failed when preparing for playlist attach (continuing anyway)"
+                    );
+                    Ok(())
+                })
+            }
+        }
+    }
+
     pub fn openhome_playlist_add_track(
         &self,
         uri: &str,
