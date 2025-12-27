@@ -1,6 +1,9 @@
 import { createRouter, createWebHistory } from "vue-router";
 
-// PMOControl Views (nouvelle home)
+// PMOControl Unified View (nouvelle interface unifiée)
+import UnifiedControlView from "../views/UnifiedControlView.vue";
+
+// PMOControl Views (anciennes vues - conservées pour fallback)
 import DashboardView from "../views/DashboardView.vue";
 import RendererView from "../views/RendererView.vue";
 import MediaServerView from "../views/MediaServerView.vue";
@@ -16,19 +19,26 @@ import APIDashboard from "../components/APIDashboard.vue";
 import RadioParadiseExplorer from "../components/RadioParadiseExplorer.vue";
 
 const routes = [
-  // PMOControl (nouvelle home)
+  // PMOControl Unified Interface (nouvelle interface unifiée avec onglets)
   {
     path: "/",
+    name: "Control",
+    component: UnifiedControlView,
+  },
+
+  // Anciennes routes (conservées sous /legacy pour fallback)
+  {
+    path: "/legacy",
     name: "Dashboard",
     component: DashboardView,
   },
   {
-    path: "/renderer/:id",
+    path: "/legacy/renderer/:id",
     name: "Renderer",
     component: RendererView,
   },
   {
-    path: "/server/:serverId",
+    path: "/legacy/server/:serverId",
     name: "MediaServer",
     component: MediaServerView,
   },

@@ -13,6 +13,7 @@ import { useUIStore } from "./stores/ui";
 import "./style.css";
 import "./assets/styles/variables.css";
 import "./assets/styles/pmocontrol.css";
+import "./assets/styles/glass-theme.css";
 
 // Créer l'application Vue
 const app = createApp(App);

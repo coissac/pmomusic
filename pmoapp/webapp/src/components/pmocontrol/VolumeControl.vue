@@ -83,16 +83,116 @@ async function handleToggleMute() {
   gap: var(--spacing-md);
   width: 100%;
   max-width: 300px;
+  padding: var(--spacing-md) var(--spacing-lg);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
 }
 
+@media (prefers-color-scheme: dark) {
+  .volume-control {
+    background: rgba(0, 0, 0, 0.3);
+    border-color: rgba(255, 255, 255, 0.12);
+  }
+}
+
+/* Bouton mute avec effet glass */
+.volume-control .btn-icon {
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  background: rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 50%;
+  transition: all 0.3s ease;
+}
+
+.volume-control .btn-icon:hover {
+  background: rgba(255, 255, 255, 0.25);
+  border-color: rgba(255, 255, 255, 0.3);
+  transform: scale(1.1);
+}
+
+.volume-control .btn-icon:active {
+  transform: scale(1.0);
+}
+
+/* Slider avec effet glass */
 .volume-slider {
   flex: 1;
+  -webkit-appearance: none;
+  appearance: none;
+  background: rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-radius: 8px;
+  height: 8px;
+  outline: none;
+  transition: all 0.3s ease;
+}
+
+.volume-slider:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+/* Thumb Webkit (Chrome, Safari) */
+.volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow:
+    0 4px 12px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.volume-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+  box-shadow:
+    0 6px 16px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+.volume-slider::-webkit-slider-thumb:active {
+  transform: scale(1.1);
+}
+
+/* Thumb Mozilla */
+.volume-slider::-moz-range-thumb {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(10px);
+  box-shadow:
+    0 4px 12px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.volume-slider::-moz-range-thumb:hover {
+  transform: scale(1.2);
 }
 
 .volume-value {
   font-size: var(--text-sm);
   font-weight: 600;
-  color: var(--color-text-secondary);
+  color: var(--color-text);
   min-width: 2.5rem;
   text-align: right;
 }
@@ -100,5 +200,53 @@ async function handleToggleMute() {
 .volume-slider:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.volume-slider:disabled::-webkit-slider-thumb {
+  cursor: not-allowed;
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.volume-slider:disabled::-moz-range-thumb {
+  cursor: not-allowed;
+  background: rgba(255, 255, 255, 0.5);
+}
+
+@media (prefers-color-scheme: dark) {
+  .volume-control .btn-icon {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.15);
+  }
+
+  .volume-control .btn-icon:hover {
+    background: rgba(255, 255, 255, 0.2);
+    border-color: rgba(255, 255, 255, 0.25);
+  }
+
+  .volume-slider {
+    background: rgba(255, 255, 255, 0.15);
+  }
+}
+
+/* Fallback pour navigateurs sans backdrop-filter */
+@supports not (backdrop-filter: blur(20px)) {
+  .volume-control {
+    background: rgba(255, 255, 255, 0.95);
+  }
+
+  .volume-slider {
+    background: rgba(200, 200, 200, 0.8);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .volume-control {
+      background: rgba(0, 0, 0, 0.95);
+    }
+
+    .volume-slider {
+      background: rgba(100, 100, 100, 0.8);
+    }
+  }
 }
 </style>

@@ -92,8 +92,103 @@ async function handleNext() {
 <style scoped>
 .transport-controls {
   display: flex;
-  gap: var(--spacing-sm);
+  gap: var(--spacing-md);
   align-items: center;
   justify-content: center;
+  padding: var(--spacing-lg);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow:
+    0 8px 32px 0 rgba(31, 38, 135, 0.15),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.3);
+}
+
+@media (prefers-color-scheme: dark) {
+  .transport-controls {
+    background: rgba(0, 0, 0, 0.3);
+    border-color: rgba(255, 255, 255, 0.12);
+  }
+}
+
+/* Boutons avec effet glass */
+.transport-controls .btn-icon {
+  width: 56px;
+  height: 56px;
+  min-width: 56px;
+  min-height: 56px;
+  background: rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(10px) saturate(150%);
+  -webkit-backdrop-filter: blur(10px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 50%;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  transform: translateZ(0);
+}
+
+.transport-controls .btn-icon:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.25);
+  border-color: rgba(255, 255, 255, 0.3);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.15);
+}
+
+.transport-controls .btn-icon:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.transport-controls .btn-icon:disabled {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.1);
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Bouton primary (play) avec accent vert */
+.transport-controls .btn-primary {
+  background: rgba(34, 197, 94, 0.3);
+  border-color: rgba(34, 197, 94, 0.5);
+}
+
+.transport-controls .btn-primary:hover:not(:disabled) {
+  background: rgba(34, 197, 94, 0.4);
+  border-color: rgba(34, 197, 94, 0.6);
+}
+
+@media (prefers-color-scheme: dark) {
+  .transport-controls .btn-icon {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.15);
+  }
+
+  .transport-controls .btn-icon:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.2);
+    border-color: rgba(255, 255, 255, 0.25);
+  }
+}
+
+/* Fallback pour navigateurs sans backdrop-filter */
+@supports not (backdrop-filter: blur(20px)) {
+  .transport-controls {
+    background: rgba(255, 255, 255, 0.95);
+  }
+
+  .transport-controls .btn-icon {
+    background: rgba(255, 255, 255, 0.9);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .transport-controls {
+      background: rgba(0, 0, 0, 0.95);
+    }
+
+    .transport-controls .btn-icon {
+      background: rgba(255, 255, 255, 0.15);
+    }
+  }
 }
 </style>

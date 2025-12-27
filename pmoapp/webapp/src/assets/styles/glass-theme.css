@@ -1,0 +1,430 @@
+/**
+ * Liquid Glass Theme - Glassmorphism Effects
+ * Style inspiré de macOS Big Sur et suivants
+ * Utilise backdrop-filter pour des effets de flou et transparence
+ */
+
+/* ========================================
+   CLASSES DE BASE GLASS
+   ======================================== */
+
+/* Panel glass standard (fond clair) */
+.glass-panel {
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow:
+    0 8px 32px 0 rgba(31, 38, 135, 0.15),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.3);
+}
+
+/* Panel glass pour fond sombre */
+.glass-panel-dark {
+  background: rgba(0, 0, 0, 0.25);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow:
+    0 8px 32px 0 rgba(0, 0, 0, 0.37),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.15);
+}
+
+/* Variantes d'intensité */
+.glass-subtle {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(10px) saturate(150%);
+  -webkit-backdrop-filter: blur(10px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.glass-medium {
+  background: rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(15px) saturate(170%);
+  -webkit-backdrop-filter: blur(15px) saturate(170%);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.glass-strong {
+  background: rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(30px) saturate(200%);
+  -webkit-backdrop-filter: blur(30px) saturate(200%);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+/* ========================================
+   BOUTONS GLASS
+   ======================================== */
+
+.glass-button {
+  background: rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(10px) saturate(150%);
+  -webkit-backdrop-filter: blur(10px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.glass-button:hover {
+  background: rgba(255, 255, 255, 0.25);
+  border-color: rgba(255, 255, 255, 0.3);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.15);
+}
+
+.glass-button:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.glass-button:disabled {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.1);
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Bouton glass primary (avec couleur d'accent) */
+.glass-button-primary {
+  background: rgba(102, 126, 234, 0.3);
+  backdrop-filter: blur(10px) saturate(150%);
+  -webkit-backdrop-filter: blur(10px) saturate(150%);
+  border: 1px solid rgba(102, 126, 234, 0.5);
+  color: white;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+.glass-button-primary:hover {
+  background: rgba(102, 126, 234, 0.4);
+  border-color: rgba(102, 126, 234, 0.6);
+}
+
+/* ========================================
+   INPUTS GLASS
+   ======================================== */
+
+.glass-input {
+  background: rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  transition: all 0.3s ease;
+}
+
+.glass-input:focus {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(102, 126, 234, 0.5);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+.glass-input::placeholder {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+/* ========================================
+   CARTES GLASS
+   ======================================== */
+
+.glass-card {
+  background: rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(15px) saturate(170%);
+  -webkit-backdrop-filter: blur(15px) saturate(170%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+  transition: all 0.3s ease;
+}
+
+.glass-card:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.18);
+  transform: translateY(-4px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15);
+}
+
+/* ========================================
+   SLIDER GLASS (pour volume control)
+   ======================================== */
+
+.glass-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  background: rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-radius: 8px;
+  height: 8px;
+  outline: none;
+  transition: all 0.3s ease;
+}
+
+.glass-slider:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* Thumb Webkit (Chrome, Safari) */
+.glass-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow:
+    0 4px 12px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.glass-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+  box-shadow:
+    0 6px 16px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+.glass-slider::-webkit-slider-thumb:active {
+  transform: scale(1.1);
+}
+
+/* Thumb Mozilla */
+.glass-slider::-moz-range-thumb {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(10px);
+  box-shadow:
+    0 4px 12px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.glass-slider::-moz-range-thumb:hover {
+  transform: scale(1.2);
+}
+
+/* ========================================
+   OVERLAY GLASS (pour CurrentTrack)
+   ======================================== */
+
+.glass-overlay {
+  position: relative;
+  overflow: hidden;
+  border-radius: 16px;
+}
+
+.glass-overlay::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0) 0%, rgba(0, 0, 0, 0.3) 100%);
+  backdrop-filter: blur(0px);
+  -webkit-backdrop-filter: blur(0px);
+  transition: backdrop-filter 0.3s ease;
+  pointer-events: none;
+}
+
+.glass-overlay:hover::before {
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+/* ========================================
+   UTILITAIRES
+   ======================================== */
+
+/* Backdrop blur seul */
+.glass-blur {
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+.glass-blur-sm {
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.glass-blur-lg {
+  backdrop-filter: blur(30px);
+  -webkit-backdrop-filter: blur(30px);
+}
+
+/* Saturation */
+.glass-saturate {
+  backdrop-filter: saturate(180%);
+  -webkit-backdrop-filter: saturate(180%);
+}
+
+/* Bordures glass */
+.glass-border {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.glass-border-subtle {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.glass-border-strong {
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+/* Shadow glass */
+.glass-shadow {
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+}
+
+.glass-shadow-lg {
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.2);
+}
+
+/* Inset shadow (lumière interne) */
+.glass-inset-light {
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.3);
+}
+
+/* ========================================
+   THÈME SOMBRE (prefers-color-scheme)
+   ======================================== */
+
+@media (prefers-color-scheme: dark) {
+  .glass-panel {
+    background: rgba(0, 0, 0, 0.3);
+    border-color: rgba(255, 255, 255, 0.12);
+  }
+
+  .glass-subtle {
+    background: rgba(0, 0, 0, 0.2);
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .glass-medium {
+    background: rgba(0, 0, 0, 0.4);
+    border-color: rgba(255, 255, 255, 0.15);
+  }
+
+  .glass-strong {
+    background: rgba(0, 0, 0, 0.5);
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+
+  .glass-button {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.15);
+  }
+
+  .glass-button:hover {
+    background: rgba(255, 255, 255, 0.2);
+    border-color: rgba(255, 255, 255, 0.25);
+  }
+
+  .glass-card {
+    background: rgba(0, 0, 0, 0.3);
+    border-color: rgba(255, 255, 255, 0.1);
+  }
+
+  .glass-card:hover {
+    background: rgba(0, 0, 0, 0.4);
+    border-color: rgba(255, 255, 255, 0.15);
+  }
+}
+
+/* ========================================
+   FALLBACK (pas de backdrop-filter)
+   ======================================== */
+
+@supports not (backdrop-filter: blur(20px)) {
+  .glass-panel,
+  .glass-panel-dark,
+  .glass-subtle,
+  .glass-medium,
+  .glass-strong {
+    background: rgba(255, 255, 255, 0.95);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .glass-panel,
+    .glass-panel-dark,
+    .glass-subtle,
+    .glass-medium,
+    .glass-strong {
+      background: rgba(0, 0, 0, 0.95);
+    }
+  }
+
+  .glass-button,
+  .glass-button-primary {
+    background: rgba(255, 255, 255, 0.9);
+  }
+
+  .glass-card {
+    background: rgba(255, 255, 255, 0.98);
+  }
+
+  .glass-slider {
+    background: rgba(200, 200, 200, 0.8);
+  }
+}
+
+/* ========================================
+   ANIMATIONS
+   ======================================== */
+
+@keyframes glassShimmer {
+  0% {
+    background-position: -200% center;
+  }
+  100% {
+    background-position: 200% center;
+  }
+}
+
+.glass-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.1) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  background-size: 200% 100%;
+  animation: glassShimmer 2s ease-in-out infinite;
+}
+
+/* ========================================
+   PERFORMANCE
+   ======================================== */
+
+/* GPU acceleration pour les éléments glass animés */
+.glass-panel,
+.glass-button,
+.glass-card,
+.glass-slider {
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  will-change: transform, opacity;
+}
+
+/* Réduire l'animation sur préférence système */
+@media (prefers-reduced-motion: reduce) {
+  .glass-button,
+  .glass-card,
+  .glass-slider::-webkit-slider-thumb,
+  .glass-slider::-moz-range-thumb {
+    transition: none;
+  }
+
+  .glass-shimmer {
+    animation: none;
+  }
+}
