@@ -1,26 +1,85 @@
 <script setup lang="ts">
-import { watch, onMounted, computed } from 'vue'
+import { ref, watch, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useTabs } from '@/composables/useTabs'
-import BottomTabBar from '@/components/unified/BottomTabBar.vue'
+import { useRenderers } from '@/composables/useRenderers'
+import { useMediaServers } from '@/composables/useMediaServers'
+import { useSwipe } from '@vueuse/core'
+import type { MediaServerSummary } from '@/services/pmocontrol/types'
 
-// Import des composants de contenu
-import HomeTabContent from '@/components/unified/HomeTabContent.vue'
+// Import des composants
+import BottomTabBar from '@/components/unified/BottomTabBar.vue'
+import EmptyState from '@/components/unified/EmptyState.vue'
+import ServerDrawer from '@/components/unified/ServerDrawer.vue'
 import RendererTabContent from '@/components/unified/RendererTabContent.vue'
 import ServerTabContent from '@/components/unified/ServerTabContent.vue'
 
 const route = useRoute()
 const router = useRouter()
-const { tabs, activeTabId, switchTab, activeTab } = useTabs()
+const { tabs, activeTabId, switchTab, activeTab, syncWithRenderers, isEmpty, openServer } = useTabs()
+const { allRenderers, fetchRenderers } = useRenderers()
+const { allServers, fetchServers } = useMediaServers()
+
+// État du drawer server
+const drawerOpen = ref(false)
+
+// Ref pour le swipe edge detection
+const viewRef = ref<HTMLElement | null>(null)
+
+// Swipe depuis le bord gauche pour ouvrir le drawer
+useSwipe(viewRef, {
+  threshold: 50,
+  onSwipeEnd(_e: TouchEvent, swipeDirection: string) {
+    // Swipe right depuis le bord gauche → ouvrir drawer
+    if (swipeDirection === 'right' && !drawerOpen.value) {
+      const touch = _e.changedTouches[0]
+      // Vérifier que le swipe commence depuis le bord gauche (< 50px)
+      if (touch && touch.clientX < 50) {
+        drawerOpen.value = true
+      }
+    }
+  },
+})
+
+// Gestion de l'ouverture d'un server depuis le drawer
+function handleServerSelected(server: MediaServerSummary) {
+  openServer(server)
+}
+
+// Nombre de servers online pour afficher dans le badge
+const onlineServersCount = computed(() => allServers.value.filter((s) => s.online).length)
+
+// Gestion de l'ouverture du drawer depuis le bouton
+function handleDrawerOpen() {
+  drawerOpen.value = true
+}
 
 // Sync route query params avec l'état des tabs
-onMounted(() => {
-  // Restaurer l'onglet actif depuis l'URL au montage
+onMounted(async () => {
+  // Fetch renderers et servers au montage
+  await Promise.all([
+    fetchRenderers(),
+    fetchServers()
+  ])
+
+  // Sync initial des tabs avec les renderers
+  syncWithRenderers(allRenderers.value)
+
+  // Restaurer l'onglet actif depuis l'URL
   const urlTabId = route.query.tab as string
   if (urlTabId && tabs.value.find((t) => t.id === urlTabId)) {
     switchTab(urlTabId)
   }
 })
+
+// Watch renderers pour sync automatique des tabs
+watch(
+  () => allRenderers.value,
+  (newRenderers) => {
+    syncWithRenderers(newRenderers)
+  },
+  { deep: true },
+)
 
 // Watch les changements d'URL pour changer d'onglet
 watch(
@@ -58,8 +117,6 @@ const currentTabComponent = computed(() => {
   if (!tab) return null
 
   switch (tab.type) {
-    case 'home':
-      return HomeTabContent
     case 'renderer':
       return RendererTabContent
     case 'server':
@@ -68,24 +125,45 @@ const currentTabComponent = computed(() => {
       return null
   }
 })
+
+// Props pour le composant actif
+const currentTabProps = computed(() => {
+  const tab = activeTab.value
+  if (!tab || !tab.metadata) return null
+
+  if (tab.type === 'renderer' && tab.metadata.rendererId) {
+    return { rendererId: tab.metadata.rendererId }
+  }
+  if (tab.type === 'server' && tab.metadata.serverId) {
+    return { serverId: tab.metadata.serverId }
+  }
+  return null
+})
 </script>
 
 <template>
-  <div class="unified-control-view">
-    <!-- Zone de contenu avec keep-alive pour la performance -->
+  <div ref="viewRef" class="unified-control-view">
+    <!-- Zone de contenu -->
     <main class="content-area">
-      <keep-alive :max="8">
+      <!-- État vide: aucun renderer détecté -->
+      <EmptyState v-if="isEmpty" />
+
+      <!-- Onglets renderers/servers avec keep-alive -->
+      <keep-alive v-else :max="12">
         <component
-          v-if="currentTabComponent"
+          v-if="currentTabComponent && currentTabProps"
           :is="currentTabComponent"
           :key="activeTab?.id"
-          v-bind="activeTab?.metadata || {}"
+          v-bind="currentTabProps"
         />
       </keep-alive>
     </main>
 
     <!-- Barre d'onglets en bas -->
-    <BottomTabBar />
+    <BottomTabBar :online-servers-count="onlineServersCount" @open-drawer="handleDrawerOpen" />
+
+    <!-- Drawer servers (swipe depuis bord gauche) -->
+    <ServerDrawer v-model="drawerOpen" @server-selected="handleServerSelected" />
   </div>
 </template>
 

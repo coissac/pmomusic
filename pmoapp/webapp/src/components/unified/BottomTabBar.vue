@@ -1,10 +1,18 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted } from 'vue'
-import { X, ChevronLeft, ChevronRight } from 'lucide-vue-next'
+import { X, ChevronLeft, ChevronRight, Server } from 'lucide-vue-next'
 import { useTabs } from '@/composables/useTabs'
 import { useSwipe } from '@vueuse/core'
 
-const { tabs, activeTabId, switchTab, closeTab, nextTab, previousTab } = useTabs()
+defineProps<{
+  onlineServersCount?: number
+}>()
+
+const emit = defineEmits<{
+  'open-drawer': []
+}>()
+
+const { tabs, activeTabId, switchTab, closeTab, nextTab, previousTab, compactMode } = useTabs()
 
 const tabBarRef = ref<HTMLElement | null>(null)
 const scrollContainerRef = ref<HTMLElement | null>(null)
@@ -85,10 +93,26 @@ function handleCloseClick(event: Event, tabId: string) {
   event.stopPropagation()
   closeTab(tabId)
 }
+
+// Gestion du clic sur le bouton server drawer
+function handleServerDrawerClick() {
+  emit('open-drawer')
+}
 </script>
 
 <template>
   <div ref="tabBarRef" class="bottom-tab-bar">
+    <!-- Bouton pour ouvrir le drawer des servers -->
+    <button
+      class="server-drawer-button"
+      @click="handleServerDrawerClick"
+      :aria-label="`Open media servers (${onlineServersCount || 0} online)`"
+      :title="`Media Servers (${onlineServersCount || 0} online)`"
+    >
+      <Server :size="24" />
+      <span v-if="onlineServersCount && onlineServersCount > 0" class="server-badge">{{ onlineServersCount }}</span>
+    </button>
+
     <!-- Bouton scroll gauche -->
     <button
       v-if="showLeftScroll"
@@ -106,23 +130,27 @@ function handleCloseClick(event: Event, tabId: string) {
           v-for="tab in tabs"
           :key="tab.id"
           class="tab-item"
-          :class="{ active: tab.id === activeTabId }"
+          :class="{
+            active: tab.id === activeTabId,
+            compact: compactMode
+          }"
           @click="handleTabClick(tab.id)"
-          :aria-label="`Switch to ${tab.title} tab`"
+          :title="tab.fullTitle"
+          :aria-label="`Switch to ${tab.fullTitle} tab`"
           :aria-current="tab.id === activeTabId ? 'page' : undefined"
         >
           <!-- Icône -->
-          <component :is="tab.icon" class="tab-icon" :size="24" />
+          <component :is="tab.icon" class="tab-icon" :size="compactMode ? 28 : 24" />
 
-          <!-- Titre -->
-          <span class="tab-title">{{ tab.title }}</span>
+          <!-- Titre (masqué en mode compact) -->
+          <span v-if="!compactMode" class="tab-title">{{ tab.title }}</span>
 
-          <!-- Bouton fermer (seulement pour les onglets fermables) -->
+          <!-- Bouton fermer (seulement pour les onglets fermables, masqué en mode compact) -->
           <button
-            v-if="tab.closeable"
+            v-if="tab.closeable && !compactMode"
             class="tab-close"
             @click="(e) => handleCloseClick(e, tab.id)"
-            :aria-label="`Close ${tab.title} tab`"
+            :aria-label="`Close ${tab.fullTitle} tab`"
           >
             <X :size="16" />
           </button>
@@ -203,6 +231,14 @@ function handleCloseClick(event: Event, tabId: string) {
   font-family: inherit;
   white-space: nowrap;
   flex-shrink: 0;
+}
+
+/* Mode compact: icônes seulement */
+.tab-item.compact {
+  min-width: 60px;
+  max-width: 60px;
+  padding: 8px;
+  justify-content: center;
 }
 
 .tab-item:hover {
@@ -349,5 +385,65 @@ function handleCloseClick(event: Event, tabId: string) {
 /* Effet de swipe visuel */
 .tabs-scroll-container {
   touch-action: pan-x;
+}
+
+/* Bouton server drawer */
+.server-drawer-button {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  margin: 0 8px;
+  background: rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 50%;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  color: var(--color-text);
+}
+
+.server-drawer-button:hover {
+  background: rgba(255, 255, 255, 0.3);
+  transform: scale(1.1);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.server-drawer-button:active {
+  transform: scale(0.95);
+}
+
+@media (prefers-color-scheme: dark) {
+  .server-drawer-button {
+    background: rgba(255, 255, 255, 0.15);
+  }
+
+  .server-drawer-button:hover {
+    background: rgba(255, 255, 255, 0.25);
+  }
+}
+
+/* Badge pour le nombre de servers online */
+.server-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: white;
+  background: rgba(102, 126, 234, 0.9);
+  border: 2px solid var(--color-bg);
+  border-radius: 10px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 }
 </style>
