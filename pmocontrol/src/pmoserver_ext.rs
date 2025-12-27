@@ -8,7 +8,9 @@ use crate::control_point::{
     ControlPoint, OpenHomeAccessError, OPENHOME_SNAPSHOT_CACHE_TTL,
 };
 #[cfg(feature = "pmoserver")]
-use crate::media_server::{MediaBrowser, MediaEntry, MusicServer, ServerId};
+use crate::media_server::{
+    playback_item_from_entry, MediaBrowser, MediaEntry, MusicServer, ServerId,
+};
 #[cfg(feature = "pmoserver")]
 use crate::model::{RendererCapabilities, RendererId, RendererProtocol, TrackMetadata};
 #[cfg(feature = "pmoserver")]
@@ -1924,49 +1926,31 @@ fn fetch_playback_items(
     // Browse the object to get entries
     let entries = music_server.browse_children(object_id, 0, BROWSE_PAGE_SIZE)?;
 
+    debug!(
+        server_id = server_id.0.as_str(),
+        object_id = object_id,
+        total_entries = entries.len(),
+        containers = entries.iter().filter(|e| e.is_container).count(),
+        items_count = entries.iter().filter(|e| !e.is_container).count(),
+        "Browse returned entries"
+    );
+
     // Convert to PlaybackItem
     let items: Vec<PlaybackItem> = entries
         .iter()
         .filter_map(|entry| playback_item_from_entry(&music_server, entry))
         .collect();
 
+    if items.is_empty() && !entries.is_empty() {
+        warn!(
+            server_id = server_id.0.as_str(),
+            object_id = object_id,
+            total_entries = entries.len(),
+            "No playable items found - all entries were filtered out"
+        );
+    }
+
     Ok(items)
-}
-
-/// Helper to convert a MediaEntry to a PlaybackItem.
-#[cfg(feature = "pmoserver")]
-fn playback_item_from_entry(server: &MusicServer, entry: &MediaEntry) -> Option<PlaybackItem> {
-    // Ignore containers
-    if entry.is_container {
-        return None;
-    }
-
-    // Skip "live stream" entries
-    if entry.title.to_ascii_lowercase().contains("live stream") {
-        return None;
-    }
-
-    // Find an audio resource
-    let resource = entry.resources.iter().find(|res| res.is_audio())?;
-
-    let metadata = TrackMetadata {
-        title: Some(entry.title.clone()),
-        artist: entry.artist.clone(),
-        album: entry.album.clone(),
-        genre: entry.genre.clone(),
-        album_art_uri: entry.album_art_uri.clone(),
-        date: entry.date.clone(),
-        track_number: entry.track_number.clone(),
-        creator: entry.creator.clone(),
-    };
-
-    Some(PlaybackItem {
-        media_server_id: server.id().clone(),
-        didl_id: entry.id.clone(),
-        uri: resource.uri.clone(),
-        protocol_info: resource.protocol_info.clone(),
-        metadata: Some(metadata),
-    })
 }
 
 #[cfg(feature = "pmoserver")]

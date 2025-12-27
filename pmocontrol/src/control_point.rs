@@ -31,7 +31,9 @@ use crate::control_point::music_queue::MusicQueue;
 use crate::control_point::openhome_queue::OpenHomeQueue;
 use crate::discovery::DiscoveryManager;
 use crate::events::{MediaServerEventBus, RendererEventBus};
-use crate::media_server::{MediaBrowser, MediaEntry, MediaServerInfo, MusicServer, ServerId};
+use crate::media_server::{
+    playback_item_from_entry, MediaBrowser, MediaEntry, MediaServerInfo, MusicServer, ServerId,
+};
 use crate::media_server_events::spawn_media_server_event_runtime;
 use crate::model::TrackMetadata;
 use crate::model::{MediaServerEvent, RendererEvent, RendererId, RendererInfo};
@@ -50,7 +52,7 @@ use crate::openhome_client::parse_track_metadata_from_didl;
 use crate::openhome_playlist::{OpenHomePlaylistSnapshot, OpenHomePlaylistTrack};
 use crate::openhome_renderer::{format_seconds, map_openhome_state};
 use crate::provider::HttpXmlDescriptionProvider;
-use crate::queue_backend::{EnqueueMode, PlaybackItem, QueueBackend};
+use crate::queue_backend::{EnqueueMode, PlaybackItem, QueueBackend, QueueSnapshot};
 use crate::queue_interne::InternalQueue;
 use crate::registry::{DeviceRegistry, DeviceRegistryRead, DeviceUpdate};
 use crate::upnp_renderer::UpnpRenderer;
@@ -939,17 +941,15 @@ impl ControlPoint {
         // User-driven mutation: detach any playlist binding
         self.detach_playlist_binding(renderer_id, "clear_queue");
 
-        if self.runtime.uses_openhome_playlist(renderer_id) {
-            let renderer = self.openhome_renderer(renderer_id)?;
-            renderer.openhome_playlist_clear()?;
-            self.sync_openhome_playlist_for(renderer_id)?;
-            debug!(
-                renderer = renderer_id.0.as_str(),
-                "Cleared OpenHome playlist"
-            );
-            return Ok(());
-        }
+        // Clear the queue on the backend (backend-agnostic)
+        let renderer = self.music_renderer_by_id(renderer_id)
+            .ok_or_else(|| anyhow!("Renderer {} not found", renderer_id.0))?;
+        renderer.clear_queue()?;
 
+        // Sync backend state to local cache (for OpenHome, this updates the cache)
+        renderer.sync_queue_state()?;
+
+        // Clear the local queue state
         let removed = self.runtime.with_music_queue_mut(renderer_id, |queue| {
             let removed = queue.upcoming_len()?;
             queue.clear_queue()?;
@@ -996,11 +996,7 @@ impl ControlPoint {
         // User-driven mutation: detach any playlist binding
         self.detach_playlist_binding(renderer_id, "enqueue_items");
 
-        if self.runtime.uses_openhome_playlist(renderer_id) {
-            self.enqueue_items_openhome(renderer_id, items)?;
-            return Ok(());
-        }
-
+        // Enqueue items using QueueBackend abstraction (works for both backends)
         let item_count = items.len();
         let new_len = self.runtime.with_music_queue_mut(renderer_id, |queue| {
             queue.enqueue_items(items, EnqueueMode::AppendToEnd)?;
@@ -1086,6 +1082,29 @@ impl ControlPoint {
         self.sync_openhome_playlist_for(renderer_id)
     }
 
+    /// Gets the backend queue snapshot for renderers with persistent queues.
+    ///
+    /// Returns the queue snapshot if the renderer has a backend queue (e.g., OpenHome),
+    /// or None if it doesn't (e.g., AVTransport).
+    pub fn get_renderer_queue_snapshot(
+        &self,
+        renderer_id: &RendererId,
+    ) -> anyhow::Result<Option<QueueSnapshot>> {
+        let renderer = self.music_renderer_by_id(renderer_id)
+            .ok_or_else(|| anyhow!("Renderer {} not found", renderer_id.0))?;
+        renderer.queue_snapshot()
+    }
+
+    /// Gets the length of the backend queue for renderers with persistent queues.
+    ///
+    /// Returns the queue length if the renderer has a backend queue, or 0 if it doesn't.
+    pub fn get_renderer_queue_length(&self, renderer_id: &RendererId) -> anyhow::Result<usize> {
+        let snapshot = self.get_renderer_queue_snapshot(renderer_id)?;
+        Ok(snapshot.map(|s| s.len()).unwrap_or(0))
+    }
+
+    // Deprecated: Use get_renderer_queue_snapshot instead
+    #[deprecated(since = "0.1.0", note = "Use get_renderer_queue_snapshot instead")]
     pub fn get_openhome_playlist_snapshot(
         &self,
         renderer_id: &RendererId,
@@ -1103,6 +1122,8 @@ impl ControlPoint {
         self.runtime.openhome_snapshot_cached(&renderer, ttl)
     }
 
+    // Deprecated: Use get_renderer_queue_length instead
+    #[deprecated(since = "0.1.0", note = "Use get_renderer_queue_length instead")]
     pub fn get_openhome_playlist_len(&self, renderer_id: &RendererId) -> anyhow::Result<usize> {
         let renderer = self.openhome_renderer(renderer_id)?;
         renderer.openhome_playlist_len()
@@ -1119,123 +1140,31 @@ impl ControlPoint {
             .ok_or_else(|| anyhow!("Renderer {} not found", renderer_id.0))?;
         let info = renderer.info();
 
-        // MICRO-PATCH 5: Chemin OpenHome complètement découplé du miroir local
-        if self.runtime.uses_openhome_playlist(renderer_id) {
-            // Pour OpenHome: récupérer UNIQUEMENT runtime_snapshot pour volume/state/position
-            // Ne PAS utiliser queue_items/current_index du runtime (miroir local)
-            let (runtime_snapshot, _, _) = self.runtime.renderer_snapshot_bundle(renderer_id);
+        // Get runtime snapshot (needed for all backends: volume, state, position)
+        let (runtime_snapshot, runtime_queue_items, runtime_current_index) =
+            self.runtime.renderer_snapshot_bundle(renderer_id);
 
-            // OpenHome est la source de vérité pour la queue - pas de fallback au runtime
-            let snapshot = self.get_cached_openhome_playlist_snapshot(
-                renderer_id,
-                OPENHOME_SNAPSHOT_CACHE_TTL,
-            )?;
+        // Try to get queue from backend (returns Some for OpenHome, None for others)
+        let backend_queue = renderer.queue_snapshot()?;
 
-            let queue_items: Vec<PlaybackItem> = snapshot
-                .tracks
-                .iter()
-                .map(|track| playback_item_from_openhome_track(renderer_id, track))
-                .collect();
-
-            let queue_len = snapshot.tracks.len();
-
-            // Pour OpenHome: current_index vient UNIQUEMENT d'OpenHome, pas d'heuristiques runtime
-            let queue_current_index = snapshot.current_index.or_else(|| {
-                snapshot.current_id.and_then(|id| {
-                    snapshot.tracks.iter().position(|track| track.id == id)
-                })
-            });
-
+        // Use backend queue if available (OpenHome), otherwise use runtime queue (AVTransport)
+        let (queue_items, mut queue_current_index, from_backend) = if let Some(snapshot) = backend_queue {
             debug!(
                 renderer = renderer_id.0.as_str(),
-                current_id = ?snapshot.current_id,
-                current_index = ?queue_current_index,
-                track_count = snapshot.tracks.len(),
-                "renderer_full_snapshot: OpenHome snapshot retrieved"
+                current_index = ?snapshot.current_index,
+                track_count = snapshot.items.len(),
+                "renderer_full_snapshot: using backend queue (OpenHome)"
             );
+            (snapshot.items, snapshot.current_index, true)
+        } else {
+            (runtime_queue_items, runtime_current_index, false)
+        };
 
-            let queue_view_items: Vec<QueueItem> = queue_items
-                .iter()
-                .enumerate()
-                .map(|(index, item)| QueueItem {
-                    index,
-                    uri: item.uri.clone(),
-                    title: item.metadata.as_ref().and_then(|m| m.title.clone()),
-                    artist: item.metadata.as_ref().and_then(|m| m.artist.clone()),
-                    album: item.metadata.as_ref().and_then(|m| m.album.clone()),
-                    album_art_uri: item.metadata.as_ref().and_then(|m| m.album_art_uri.clone()),
-                    server_id: Some(item.media_server_id.0.clone()),
-                    object_id: Some(item.didl_id.clone()),
-                })
-                .collect();
-
-            let queue_view = QueueSnapshotView {
-                renderer_id: renderer_id.0.clone(),
-                items: queue_view_items,
-                current_index: queue_current_index,
-            };
-
-            let binding = self.current_queue_playlist_binding(renderer_id).map(
-                |(server_id, container_id, has_seen_update)| RendererBindingView {
-                    server_id: server_id.0,
-                    container_id,
-                    has_seen_update,
-                },
-            );
-
-            let (position_ms, duration_ms) =
-                convert_runtime_position(runtime_snapshot.position.as_ref());
-            let queue_current_metadata = queue_current_index
-                .and_then(|idx| queue_items.get(idx))
-                .map(current_track_from_playback_item);
-
-            // MICRO-PATCH 5: Pour OpenHome, préférer les métadonnées depuis le snapshot OpenHome
-            // car runtime_snapshot.last_metadata n'est jamais mis à jour pour OpenHome
-            let current_track = queue_current_metadata.or_else(|| {
-                runtime_snapshot
-                    .last_metadata
-                    .as_ref()
-                    .map(|meta| CurrentTrackMetadata {
-                        title: meta.title.clone(),
-                        artist: meta.artist.clone(),
-                        album: meta.album.clone(),
-                        album_art_uri: meta.album_art_uri.clone(),
-                    })
-            });
-
-            let state_view = RendererStateView {
-                id: renderer_id.0.clone(),
-                friendly_name: info.friendly_name.clone(),
-                transport_state: runtime_snapshot
-                    .state
-                    .as_ref()
-                    .map(|state| state.as_str().to_string())
-                    .unwrap_or_else(|| "UNKNOWN".to_string()),
-                position_ms,
-                duration_ms,
-                volume: runtime_snapshot
-                    .last_volume
-                    .and_then(|value| u8::try_from(value).ok()),
-                mute: runtime_snapshot.last_mute,
-                queue_len,
-                attached_playlist: binding.clone(),
-                current_track,
-            };
-
-            return Ok(FullRendererSnapshot {
-                state: state_view,
-                queue: queue_view,
-                binding,
-            });
-        }
-
-        // Chemin non-OpenHome (UPnP AV): continue d'utiliser le runtime
-        let (runtime_snapshot, queue_items, mut queue_current_index) =
-            self.runtime.renderer_snapshot_bundle(renderer_id);
         let playback_source = self.runtime.playback_source(renderer_id);
         let queue_len = queue_items.len();
 
-        if queue_current_index.is_none() {
+        // For non-backend queues (AVTransport), try heuristics to determine current_index
+        if !from_backend && queue_current_index.is_none() {
             if let Some(position) = runtime_snapshot.position.as_ref() {
                 if let Some(uri) = position.track_uri.as_ref() {
                     if let Some(idx) = queue_items.iter().position(|item| item.uri == *uri) {
@@ -1248,18 +1177,19 @@ impl ControlPoint {
                     }
                 }
             }
-        }
 
-        if queue_current_index.is_none()
-            && matches!(playback_source, PlaybackSource::FromQueue)
-            && runtime_snapshot
-                .state
-                .as_ref()
-                .map(|state| matches!(state, PlaybackState::Playing | PlaybackState::Paused))
-                .unwrap_or(false)
-            && !queue_items.is_empty()
-        {
-            queue_current_index = Some(0);
+            // Final fallback: if playing from queue and no index, assume first track
+            if queue_current_index.is_none()
+                && matches!(playback_source, PlaybackSource::FromQueue)
+                && runtime_snapshot
+                    .state
+                    .as_ref()
+                    .map(|state| matches!(state, PlaybackState::Playing | PlaybackState::Paused))
+                    .unwrap_or(false)
+                && !queue_items.is_empty()
+            {
+                queue_current_index = Some(0);
+            }
         }
 
         let queue_view_items: Vec<QueueItem> = queue_items
@@ -1297,16 +1227,32 @@ impl ControlPoint {
             .and_then(|idx| queue_items.get(idx))
             .map(current_track_from_playback_item);
 
-        let current_track = runtime_snapshot
-            .last_metadata
-            .as_ref()
-            .map(|meta| CurrentTrackMetadata {
-                title: meta.title.clone(),
-                artist: meta.artist.clone(),
-                album: meta.album.clone(),
-                album_art_uri: meta.album_art_uri.clone(),
+        // For backend queues (OpenHome), prefer queue metadata since runtime isn't updated
+        // For runtime queues (AVTransport), prefer runtime metadata which is fresher
+        let current_track = if from_backend {
+            queue_current_metadata.or_else(|| {
+                runtime_snapshot
+                    .last_metadata
+                    .as_ref()
+                    .map(|meta| CurrentTrackMetadata {
+                        title: meta.title.clone(),
+                        artist: meta.artist.clone(),
+                        album: meta.album.clone(),
+                        album_art_uri: meta.album_art_uri.clone(),
+                    })
             })
-            .or(queue_current_metadata);
+        } else {
+            runtime_snapshot
+                .last_metadata
+                .as_ref()
+                .map(|meta| CurrentTrackMetadata {
+                    title: meta.title.clone(),
+                    artist: meta.artist.clone(),
+                    album: meta.album.clone(),
+                    album_art_uri: meta.album_art_uri.clone(),
+                })
+                .or(queue_current_metadata)
+        };
 
         let state_view = RendererStateView {
             id: renderer_id.0.clone(),
@@ -1334,12 +1280,63 @@ impl ControlPoint {
         })
     }
 
-    pub fn clear_openhome_playlist(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
-        let renderer = self.openhome_renderer(renderer_id)?;
-        renderer.openhome_playlist_clear()?;
-        self.sync_openhome_playlist_for(renderer_id)
+    /// Clears the renderer's backend queue.
+    ///
+    /// For renderers with persistent queues (OpenHome), this clears the queue on the renderer.
+    /// For other renderers, this returns an error.
+    pub fn clear_renderer_queue(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
+        let renderer = self.music_renderer_by_id(renderer_id)
+            .ok_or_else(|| anyhow!("Renderer {} not found", renderer_id.0))?;
+        renderer.clear_queue()?;
+        renderer.sync_queue_state()
     }
 
+    /// Adds a track to the renderer's backend queue.
+    ///
+    /// For renderers with persistent queues (OpenHome), this adds the track to the queue.
+    /// For other renderers, this returns an error.
+    ///
+    /// Returns the backend-specific track ID if applicable.
+    pub fn add_track_to_renderer(
+        &self,
+        renderer_id: &RendererId,
+        uri: &str,
+        metadata: &str,
+        after_id: Option<u32>,
+        play: bool,
+    ) -> anyhow::Result<Option<u32>> {
+        let renderer = self.music_renderer_by_id(renderer_id)
+            .ok_or_else(|| anyhow!("Renderer {} not found", renderer_id.0))?;
+        let track_id = renderer.add_track_to_queue(uri, metadata, after_id, play)?;
+        renderer.sync_queue_state()?;
+        Ok(track_id)
+    }
+
+    /// Selects and plays a specific track from the renderer's backend queue.
+    ///
+    /// For renderers with persistent queues (OpenHome), this uses the track ID.
+    /// For other renderers, this returns an error.
+    pub fn select_renderer_track(
+        &self,
+        renderer_id: &RendererId,
+        track_id: u32,
+    ) -> anyhow::Result<()> {
+        let renderer = self.music_renderer_by_id(renderer_id)
+            .ok_or_else(|| anyhow!("Renderer {} not found", renderer_id.0))?;
+        renderer.select_queue_track(track_id)?;
+        self.runtime
+            .set_playback_source(renderer_id, PlaybackSource::FromQueue);
+        renderer.sync_queue_state()
+    }
+
+    // Deprecated: Use clear_renderer_queue instead
+    #[deprecated(since = "0.1.0", note = "Use clear_renderer_queue instead")]
+    pub fn clear_openhome_playlist(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
+        self.clear_renderer_queue(renderer_id)
+    }
+
+    // Deprecated: Use add_track_to_renderer instead
+    #[deprecated(since = "0.1.0", note = "Use add_track_to_renderer instead")]
     pub fn add_openhome_track(
         &self,
         renderer_id: &RendererId,
@@ -1348,21 +1345,18 @@ impl ControlPoint {
         after_id: Option<u32>,
         play: bool,
     ) -> anyhow::Result<()> {
-        let renderer = self.openhome_renderer(renderer_id)?;
-        renderer.openhome_playlist_add_track(uri, metadata, after_id, play)?;
-        self.sync_openhome_playlist_for(renderer_id)
+        self.add_track_to_renderer(renderer_id, uri, metadata, after_id, play)?;
+        Ok(())
     }
 
+    // Deprecated: Use select_renderer_track instead
+    #[deprecated(since = "0.1.0", note = "Use select_renderer_track instead")]
     pub fn play_openhome_track_id(
         &self,
         renderer_id: &RendererId,
         track_id: u32,
     ) -> anyhow::Result<()> {
-        let renderer = self.openhome_renderer(renderer_id)?;
-        renderer.openhome_playlist_play_id(track_id)?;
-        self.runtime
-            .set_playback_source(renderer_id, PlaybackSource::FromQueue);
-        self.sync_openhome_playlist_for(renderer_id)
+        self.select_renderer_track(renderer_id, track_id)
     }
 
     /// Plays the current queue item without advancing the index.
@@ -1381,10 +1375,18 @@ impl ControlPoint {
             return Err(err);
         }
 
-        if self.runtime.uses_openhome_playlist(renderer_id) {
-            return self.play_current_openhome(renderer_id);
+        let renderer = self.music_renderer_by_id(renderer_id).ok_or_else(|| {
+            anyhow!("Renderer {} not found", renderer_id.0)
+        })?;
+
+        // If renderer has a backend queue (OpenHome), use backend playback
+        if renderer.queue_snapshot()?.is_some() {
+            renderer.play_current_from_backend_queue()?;
+            self.runtime.set_playback_source(renderer_id, PlaybackSource::FromQueue);
+            return Ok(());
         }
 
+        // Otherwise use local queue playback (AVTransport)
         let Some((item, remaining)) = self.runtime.peek_current(renderer_id) else {
             debug!(
                 renderer = renderer_id.0.as_str(),
@@ -1401,14 +1403,6 @@ impl ControlPoint {
             uri = item.uri.as_str(),
             "Playing current playback item from queue"
         );
-
-        let renderer = self.music_renderer_by_id(renderer_id).ok_or_else(|| {
-            warn!(
-                renderer = renderer_id.0.as_str(),
-                "Renderer disappeared before queue playback could start"
-            );
-            anyhow!("Renderer {} not found", renderer_id.0)
-        })?;
 
         let playback = (|| -> anyhow::Result<()> {
             let didl_metadata = playback_item_to_didl(&item);
@@ -1462,8 +1456,14 @@ impl ControlPoint {
             return Err(err);
         }
 
-        if self.runtime.uses_openhome_playlist(renderer_id) {
-            self.play_next_openhome(renderer_id)?;
+        let renderer = self.music_renderer_by_id(renderer_id).ok_or_else(|| {
+            anyhow!("Renderer {} not found", renderer_id.0)
+        })?;
+
+        // If renderer has a backend queue (OpenHome), use backend playback
+        if renderer.queue_snapshot()?.is_some() {
+            renderer.play_next_from_backend_queue()?;
+            self.runtime.set_playback_source(renderer_id, PlaybackSource::FromQueue);
             return Ok(());
         }
 
@@ -1584,8 +1584,12 @@ impl ControlPoint {
             return Err(err);
         }
 
-        // For OpenHome, use select_track_index which handles the track_id lookup
-        if self.runtime.uses_openhome_playlist(renderer_id) {
+        let renderer = self.music_renderer_by_id(renderer_id).ok_or_else(|| {
+            anyhow!("Renderer {} not found", renderer_id.0)
+        })?;
+
+        // For backend queues (OpenHome), use select_track_index which handles the track_id lookup
+        if renderer.queue_snapshot()?.is_some() {
             info!(
                 renderer = renderer_id.0.as_str(),
                 index,
@@ -1720,7 +1724,13 @@ impl ControlPoint {
             return Ok(());
         }
 
-        if self.runtime.uses_openhome_playlist(renderer_id) {
+        let renderer = self.music_renderer_by_id(renderer_id).ok_or_else(|| {
+            anyhow!("Renderer {} not found", renderer_id.0)
+        })?;
+
+        // For backend queues (OpenHome), play current (renderer tracks its own position)
+        // For local queues (AVTransport), dequeue next (we manage position locally)
+        if renderer.queue_snapshot()?.is_some() {
             self.play_current_from_queue(renderer_id)
         } else {
             self.play_next_from_queue(renderer_id)
@@ -1820,22 +1830,26 @@ impl ControlPoint {
             "Attaching new playlist: clearing renderer queue"
         );
 
-        // Clear the renderer's queue for OpenHome renderers
-        // We also sync the local cache to reflect the empty state, which will trigger
-        // refresh_attached_queue_for() to use replace_entire_playlist() instead of gentle sync
-        if self.runtime.uses_openhome_playlist(renderer_id) {
-            let renderer = self.openhome_renderer(renderer_id)?;
-            renderer.openhome_playlist_clear()?;
-            // Sync local cache to reflect the empty renderer state
-            self.sync_openhome_playlist_for(renderer_id)?;
-            debug!(
-                renderer = renderer_id.0.as_str(),
-                "Cleared OpenHome renderer playlist and synced local cache"
-            );
-        } else {
-            // For non-OpenHome renderers, use the standard clear_queue
-            self.clear_queue(renderer_id)?;
-        }
+        // Prepare the renderer for the new playlist (backend-agnostic)
+        let renderer = self.music_renderer_by_id(renderer_id).ok_or_else(|| {
+            anyhow!("Renderer {} not found", renderer_id.0)
+        })?;
+        renderer.clear_for_playlist_attach()?;
+
+        // Sync backend state to local cache (backend-agnostic)
+        renderer.sync_queue_state()?;
+
+        // Clear the local queue (detach binding + clear runtime queue structure)
+        self.detach_playlist_binding(renderer_id, "attach_new_playlist");
+        self.runtime.with_music_queue_mut(renderer_id, |queue| {
+            queue.clear_queue()?;
+            Ok(())
+        })?;
+
+        debug!(
+            renderer = renderer_id.0.as_str(),
+            "Cleared renderer and local queue for new playlist"
+        );
 
         let binding = PlaylistBinding {
             server_id: server_id.clone(),
@@ -2034,141 +2048,6 @@ impl ControlPoint {
         Ok(())
     }
 
-    fn play_current_openhome(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
-        let renderer = self.openhome_renderer(renderer_id)?;
-
-        // MICRO-PATCH 5: Pour OpenHome, récupérer les données directement depuis la playlist native
-        // au lieu du miroir local (qui peut être vide ou obsolète)
-        match self.get_cached_openhome_playlist_snapshot(
-            renderer_id,
-            OPENHOME_SNAPSHOT_CACHE_TTL,
-        ) {
-            Ok(snapshot) => {
-                if snapshot.tracks.is_empty() {
-                    debug!(
-                        renderer = renderer_id.0.as_str(),
-                        "OpenHome playlist is empty"
-                    );
-                    self.runtime
-                        .set_playback_source(renderer_id, PlaybackSource::None);
-                    return Ok(());
-                }
-
-                // Trouver le track_id courant depuis le snapshot OpenHome
-                let target_track_id = if let Some(current_id) = snapshot.current_id {
-                    Some(current_id)
-                } else if let Some(current_idx) = snapshot.current_index {
-                    snapshot.tracks.get(current_idx).map(|track| track.id)
-                } else {
-                    snapshot.tracks.first().map(|track| track.id)
-                };
-
-                if let Some(track_id) = target_track_id {
-                    match renderer.openhome_playlist_play_id(track_id) {
-                        Ok(()) => {
-                            self.runtime
-                                .set_playback_source(renderer_id, PlaybackSource::FromQueue);
-                            self.sync_openhome_playlist_for(renderer_id)?;
-                            info!(
-                                renderer = renderer_id.0.as_str(),
-                                track_id,
-                                playlist_len = snapshot.tracks.len(),
-                                "Started OpenHome playlist playback (current item)"
-                            );
-                            return Ok(());
-                        }
-                        Err(err) => {
-                            warn!(
-                                renderer = renderer_id.0.as_str(),
-                                track_id,
-                                error = %err,
-                                "PlayId failed, falling back to Play()"
-                            );
-                        }
-                    }
-                }
-
-                // Fallback: appeler Play() sans spécifier de track_id
-                renderer.play()?;
-                self.runtime
-                    .set_playback_source(renderer_id, PlaybackSource::FromQueue);
-                self.sync_openhome_playlist_for(renderer_id)?;
-                info!(
-                    renderer = renderer_id.0.as_str(),
-                    playlist_len = snapshot.tracks.len(),
-                    "Started OpenHome native playlist playback"
-                );
-                return Ok(());
-            }
-            Err(err) => {
-                warn!(
-                    renderer = renderer_id.0.as_str(),
-                    error = %err,
-                    "Failed to fetch OpenHome playlist snapshot, playlist might be empty"
-                );
-                debug!(
-                    renderer = renderer_id.0.as_str(),
-                    "OpenHome playlist is empty or unavailable"
-                );
-                self.runtime
-                    .set_playback_source(renderer_id, PlaybackSource::None);
-                return Ok(());
-            }
-        }
-    }
-
-    fn play_next_openhome(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
-        let renderer = self.openhome_renderer(renderer_id)?;
-
-        // MICRO-PATCH 5: Récupérer les données directement depuis OpenHome au lieu du miroir local
-        let snapshot = self.get_cached_openhome_playlist_snapshot(
-            renderer_id,
-            OPENHOME_SNAPSHOT_CACHE_TTL,
-        )?;
-
-        if snapshot.tracks.is_empty() {
-            debug!(
-                renderer = renderer_id.0.as_str(),
-                "OpenHome playlist is empty, cannot play next"
-            );
-            self.runtime
-                .set_playback_source(renderer_id, PlaybackSource::None);
-            return Ok(());
-        }
-
-        // Déterminer le prochain track_id
-        let next_track_id = match snapshot.current_index {
-            Some(idx) => {
-                // Prendre la piste suivante si elle existe
-                snapshot
-                    .tracks
-                    .get(idx + 1)
-                    .map(|track| track.id)
-                    .or_else(|| snapshot.tracks.first().map(|track| track.id))
-            }
-            None => snapshot.tracks.first().map(|track| track.id),
-        };
-
-        let Some(track_id) = next_track_id else {
-            debug!(
-                renderer = renderer_id.0.as_str(),
-                "No OpenHome track available to advance to"
-            );
-            self.runtime
-                .set_playback_source(renderer_id, PlaybackSource::None);
-            return Ok(());
-        };
-
-        renderer.openhome_playlist_play_id(track_id)?;
-        self.runtime
-            .set_playback_source(renderer_id, PlaybackSource::FromQueue);
-        self.sync_openhome_playlist_for(renderer_id)?;
-        info!(
-            renderer = renderer_id.0.as_str(),
-            track_id, "Advanced OpenHome playlist to next track"
-        );
-        Ok(())
-    }
 }
 
 #[cfg(feature = "pmoserver")]
@@ -2712,6 +2591,16 @@ fn refresh_attached_queue_for(
         }
     };
 
+    debug!(
+        renderer = renderer_id.0.as_str(),
+        server = server_id.0.as_str(),
+        container = container_id.as_str(),
+        total_entries = entries.len(),
+        containers = entries.iter().filter(|e| e.is_container).count(),
+        items_count = entries.iter().filter(|e| !e.is_container).count(),
+        "Browse returned entries for playlist refresh"
+    );
+
     // Step 4: Convert MediaEntry to PlaybackItem
     let new_items: Vec<PlaybackItem> = entries
         .iter()
@@ -2719,11 +2608,12 @@ fn refresh_attached_queue_for(
         .collect();
 
     if new_items.is_empty() {
-        debug!(
+        warn!(
             renderer = renderer_id.0.as_str(),
             server = server_id.0.as_str(),
             container = container_id.as_str(),
-            "Refreshed playlist is empty, clearing queue"
+            total_entries = entries.len(),
+            "Refreshed playlist is empty, clearing queue - all entries were filtered out"
         );
         runtime.with_music_queue_mut(renderer_id, |queue| queue.clear_queue())?;
         runtime.invalidate_openhome_cache(renderer_id);
@@ -2884,41 +2774,6 @@ fn refresh_attached_queue_for(
     }
 
     Ok(())
-}
-
-/// Helper to convert a MediaEntry to a PlaybackItem.
-fn playback_item_from_entry(server: &MusicServer, entry: &MediaEntry) -> Option<PlaybackItem> {
-    // Ignore containers
-    if entry.is_container {
-        return None;
-    }
-
-    // Skip "live stream" entries (heuristic from example)
-    if entry.title.to_ascii_lowercase().contains("live stream") {
-        return None;
-    }
-
-    // Find an audio resource
-    let resource = entry.resources.iter().find(|res| res.is_audio())?;
-
-    let metadata = TrackMetadata {
-        title: Some(entry.title.clone()),
-        artist: entry.artist.clone(),
-        album: entry.album.clone(),
-        genre: entry.genre.clone(),
-        album_art_uri: entry.album_art_uri.clone(),
-        date: entry.date.clone(),
-        track_number: entry.track_number.clone(),
-        creator: entry.creator.clone(),
-    };
-
-    Some(PlaybackItem {
-        media_server_id: server.id().clone(),
-        didl_id: entry.id.clone(),
-        uri: resource.uri.clone(),
-        protocol_info: resource.protocol_info.clone(),
-        metadata: Some(metadata),
-    })
 }
 
 const OPENHOME_TRACK_PREFIX: &str = "openhome:";

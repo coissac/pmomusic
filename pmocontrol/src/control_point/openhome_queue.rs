@@ -10,7 +10,7 @@ use crate::openhome_client::{
     OPENHOME_PLAYLIST_HEAD_ID,
 };
 use crate::openhome_playlist::{OpenHomePlaylistSnapshot, OpenHomePlaylistTrack};
-use crate::queue_backend::{PlaybackItem, QueueBackend, QueueSnapshot};
+use crate::queue_backend::{EnqueueMode, PlaybackItem, QueueBackend, QueueSnapshot};
 
 /// Local mirror of an OpenHome playlist for a single renderer.
 #[derive(Clone, Debug)]
@@ -835,6 +835,45 @@ impl QueueBackend for OpenHomeQueue {
 
         self.items[index] = self.item_with_openhome_id(item, new_id);
         self.track_ids[index] = new_id;
+        Ok(())
+    }
+
+    /// Override enqueue_items to add items directly to the OpenHome playlist.
+    fn enqueue_items(&mut self, items: Vec<PlaybackItem>, mode: EnqueueMode) -> Result<()> {
+        if items.is_empty() {
+            return Ok(());
+        }
+
+        match mode {
+            EnqueueMode::AppendToEnd => {
+                // Append to the end of the OpenHome playlist
+                let mut after_id = self.track_ids.last().copied();
+
+                for item in items {
+                    after_id = Some(self.add_playback_item(item, after_id, false)?);
+                }
+            }
+            EnqueueMode::InsertAfterCurrent => {
+                // Insert after the current playing track
+                let after_id = if let Some(idx) = self.current_index {
+                    self.track_ids.get(idx).copied()
+                } else {
+                    None
+                };
+
+                let mut next_after_id = after_id;
+                for item in items {
+                    next_after_id = Some(self.add_playback_item(item, next_after_id, false)?);
+                }
+            }
+            EnqueueMode::ReplaceAll => {
+                // Replace the entire playlist
+                self.replace_queue(items, None)?;
+            }
+        }
+
+        // Refresh local cache from OpenHome after modification
+        self.refresh_from_openhome()?;
         Ok(())
     }
 }
