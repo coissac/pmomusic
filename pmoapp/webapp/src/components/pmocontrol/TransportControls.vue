@@ -191,4 +191,19 @@ async function handleNext() {
     }
   }
 }
+
+/* Mode kiosque - compactage pour petites hauteurs (800x600) */
+@media (max-height: 700px) and (orientation: landscape) {
+  .transport-controls {
+    gap: var(--spacing-sm);
+    padding: var(--spacing-sm) var(--spacing-md);
+  }
+
+  .transport-controls .btn-icon {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
 </style>

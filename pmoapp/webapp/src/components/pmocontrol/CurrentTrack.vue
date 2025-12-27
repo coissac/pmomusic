@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, toRef } from 'vue'
+import { computed, toRef, ref } from 'vue'
 import { useRenderer } from '@/composables/useRenderers'
-import { Music } from 'lucide-vue-next'
+import { Music, X } from 'lucide-vue-next'
 
 const props = defineProps<{
   rendererId: string
@@ -9,6 +9,35 @@ const props = defineProps<{
 
 const { state } = useRenderer(toRef(props, 'rendererId'))
 const metadata = computed(() => state.value?.current_track)
+
+// État pour l'overlay de la cover
+const showCoverOverlay = ref(false)
+const showMetadata = ref(false)
+
+function openCoverOverlay() {
+  if (hasCover.value) {
+    showCoverOverlay.value = true
+    showMetadata.value = false // Reset metadata visibility when opening
+  }
+}
+
+function closeCoverOverlay() {
+  showCoverOverlay.value = false
+  showMetadata.value = false
+}
+
+// Détecter le clic sur la partie basse de l'image
+function handleOverlayContentClick(event: MouseEvent) {
+  const target = event.currentTarget as HTMLElement
+  const rect = target.getBoundingClientRect()
+  const clickY = event.clientY - rect.top
+  const height = rect.height
+
+  // Si le clic est dans le tiers inférieur, toggle les métadonnées
+  if (clickY > height * 0.66) {
+    showMetadata.value = !showMetadata.value
+  }
+}
 
 // Calcul du pourcentage de progression
 const progressPercent = computed(() => {
@@ -43,7 +72,7 @@ function handleImageError(event: Event) {
 <template>
   <div class="current-track">
     <!-- Cover Art -->
-    <div class="cover-container">
+    <div class="cover-container" :class="{ clickable: hasCover }" @click="openCoverOverlay">
       <img
         v-if="hasCover"
         :src="metadata?.album_art_uri!"
@@ -77,6 +106,32 @@ function handleImageError(event: Event) {
         <span>{{ totalTime }}</span>
       </div>
     </div>
+
+    <!-- Overlay cover en grand avec effet glassmorphism -->
+    <Teleport to="body">
+      <Transition name="cover-overlay">
+        <div v-if="showCoverOverlay" class="cover-overlay" @click="closeCoverOverlay">
+          <div class="cover-overlay-content" @click.stop="handleOverlayContentClick">
+            <button class="cover-overlay-close" @click="closeCoverOverlay" title="Fermer">
+              <X :size="24" />
+            </button>
+            <img
+              v-if="hasCover"
+              :src="metadata?.album_art_uri!"
+              :alt="metadata?.album || 'Album cover'"
+              class="cover-overlay-image"
+            />
+            <Transition name="metadata-fade">
+              <div v-if="metadata && showMetadata" class="cover-overlay-metadata">
+                <h2>{{ metadata.title }}</h2>
+                <p class="artist">{{ metadata.artist }}</p>
+                <p v-if="metadata.album" class="album">{{ metadata.album }}</p>
+              </div>
+            </Transition>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
@@ -96,6 +151,16 @@ function handleImageError(event: Event) {
   overflow: hidden;
   background-color: var(--color-bg-secondary);
   box-shadow: var(--shadow-lg);
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.cover-container.clickable {
+  cursor: pointer;
+}
+
+.cover-container.clickable:hover {
+  transform: scale(1.02);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
 }
 
 .cover-image {
@@ -164,5 +229,304 @@ function handleImageError(event: Event) {
   .cover-container {
     max-width: 300px;
   }
+}
+
+/* Mode kiosque - compactage pour petites hauteurs (800x600) */
+@media (max-height: 700px) and (orientation: landscape) {
+  .current-track {
+    gap: var(--spacing-sm);
+  }
+
+  .cover-container {
+    max-width: 160px !important;
+    max-height: 160px;
+  }
+
+  .cover-placeholder {
+    font-size: 40px;
+  }
+
+  .metadata {
+    margin-top: -8px;
+  }
+
+  .title {
+    font-size: var(--text-lg);
+    margin: 0 0 4px;
+  }
+
+  .artist {
+    font-size: var(--text-sm);
+    margin: 0 0 2px;
+  }
+
+  .album {
+    font-size: var(--text-xs);
+  }
+
+  .progress-section {
+    gap: 4px;
+  }
+
+  .time-display {
+    font-size: 11px;
+  }
+}
+
+/* Overlay cover en grand - Liquid metal style */
+.cover-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  padding: 16px;
+}
+
+.cover-overlay-content {
+  position: relative;
+  width: calc(100vw - 32px);
+  height: calc(100vh - 32px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 24px;
+  box-shadow:
+    0 20px 60px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.3);
+}
+
+@media (prefers-color-scheme: dark) {
+  .cover-overlay-content {
+    background: rgba(0, 0, 0, 0.3);
+    border-color: rgba(255, 255, 255, 0.15);
+  }
+
+  .cover-overlay-metadata {
+    background: rgba(0, 0, 0, 0.7);
+  }
+}
+
+.cover-overlay-close {
+  position: absolute;
+  top: var(--spacing-md);
+  right: var(--spacing-md);
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 50%;
+  cursor: pointer;
+  color: var(--color-text);
+  transition: all 0.3s ease;
+  z-index: 10;
+}
+
+.cover-overlay-close:hover {
+  background: rgba(255, 255, 255, 0.3);
+  transform: scale(1.1) rotate(90deg);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.cover-overlay-close:active {
+  transform: scale(1.0) rotate(90deg);
+}
+
+@media (prefers-color-scheme: dark) {
+  .cover-overlay-close {
+    background: rgba(0, 0, 0, 0.3);
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+
+  .cover-overlay-close:hover {
+    background: rgba(0, 0, 0, 0.5);
+  }
+}
+
+.cover-overlay-image {
+  width: calc(100vw - 64px);
+  height: calc(100vh - 64px);
+  border-radius: 16px;
+  box-shadow:
+    0 30px 80px rgba(0, 0, 0, 0.6),
+    0 0 2px rgba(255, 255, 255, 0.2);
+  object-fit: contain;
+}
+
+.cover-overlay-metadata {
+  position: absolute;
+  bottom: 24px;
+  left: 24px;
+  right: 24px;
+  text-align: center;
+  padding: var(--spacing-lg);
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(30px) saturate(180%);
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+}
+
+.cover-overlay-metadata h2 {
+  font-size: clamp(1.5rem, 4vw, 2.5rem);
+  font-weight: 700;
+  color: white;
+  margin: 0;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.8);
+  line-height: 1.2;
+}
+
+.cover-overlay-metadata .artist {
+  font-size: clamp(1rem, 2.5vw, 1.5rem);
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.9);
+  margin: 8px 0 0 0;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.6);
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.cover-overlay-metadata .album {
+  font-size: clamp(0.875rem, 2vw, 1.125rem);
+  font-weight: 400;
+  font-style: italic;
+  color: rgba(255, 255, 255, 0.75);
+  margin: 6px 0 0 0;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.6);
+}
+
+/* Animations de transition */
+.cover-overlay-enter-active,
+.cover-overlay-leave-active {
+  transition: all 0.3s ease;
+}
+
+.cover-overlay-enter-active .cover-overlay-content,
+.cover-overlay-leave-active .cover-overlay-content {
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.cover-overlay-enter-from,
+.cover-overlay-leave-to {
+  opacity: 0;
+  backdrop-filter: blur(0px);
+  -webkit-backdrop-filter: blur(0px);
+}
+
+.cover-overlay-enter-from .cover-overlay-content,
+.cover-overlay-leave-to .cover-overlay-content {
+  opacity: 0;
+  transform: scale(0.9);
+}
+
+.cover-overlay-enter-to,
+.cover-overlay-leave-from {
+  opacity: 1;
+}
+
+.cover-overlay-enter-to .cover-overlay-content,
+.cover-overlay-leave-from .cover-overlay-content {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* Responsive overlay */
+@media (max-width: 768px) {
+  .cover-overlay {
+    padding: 12px;
+  }
+
+  .cover-overlay-content {
+    width: calc(100vw - 24px);
+    height: calc(100vh - 24px);
+    border-radius: 16px;
+  }
+
+  .cover-overlay-image {
+    width: calc(100vw - 48px);
+    height: calc(100vh - 48px);
+  }
+
+  .cover-overlay-metadata {
+    bottom: 16px;
+    left: 16px;
+    right: 16px;
+    padding: var(--spacing-md);
+  }
+
+  .cover-overlay-close {
+    width: 40px;
+    height: 40px;
+    top: 12px;
+    right: 12px;
+  }
+}
+
+/* Mode kiosque - overlay adapté */
+@media (max-height: 700px) and (orientation: landscape) {
+  .cover-overlay {
+    padding: 12px;
+  }
+
+  .cover-overlay-content {
+    width: calc(100vw - 24px);
+    height: calc(100vh - 24px);
+  }
+
+  .cover-overlay-image {
+    width: calc(100vw - 48px);
+    height: calc(100vh - 48px);
+  }
+
+  .cover-overlay-metadata {
+    bottom: 12px;
+    left: 12px;
+    right: 12px;
+    padding: var(--spacing-sm);
+  }
+
+  .cover-overlay-metadata .artist {
+    padding-top: 4px;
+  }
+
+  .cover-overlay-metadata .album {
+    display: none; /* Masquer l'album en mode kiosque pour plus d'espace */
+  }
+}
+
+/* Transition pour les métadonnées */
+.metadata-fade-enter-active,
+.metadata-fade-leave-active {
+  transition: all 0.3s ease;
+}
+
+.metadata-fade-enter-from,
+.metadata-fade-leave-to {
+  opacity: 0;
+  transform: translateY(20px);
+}
+
+.metadata-fade-enter-to,
+.metadata-fade-leave-from {
+  opacity: 1;
+  transform: translateY(0);
 }
 </style>

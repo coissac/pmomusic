@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, toRef, onMounted } from 'vue'
+import { useMediaQuery } from '@vueuse/core'
 import { useRenderer } from '@/composables/useRenderers'
 import CurrentTrack from '@/components/pmocontrol/CurrentTrack.vue'
 import TransportControls from '@/components/pmocontrol/TransportControls.vue'
@@ -17,6 +18,9 @@ const props = defineProps<{
 const { renderer, state, queue, binding, refresh } = useRenderer(toRef(props, 'rendererId'))
 const { detachPlaylist } = useRenderers()
 const uiStore = useUIStore()
+
+// Détection mobile portrait pour afficher le drawer au lieu de la colonne
+const isMobilePortrait = useMediaQuery('(max-width: 768px) and (orientation: portrait)')
 
 // État du drawer queue sur mobile
 const queueDrawerOpen = ref(false)
@@ -94,22 +98,13 @@ async function handleDetachPlaylist() {
         </div>
       </div>
 
-      <!-- Colonne droite: Queue (desktop) -->
-      <div class="queue-column">
-        <div class="queue-header">
-          <h2 class="queue-title">File d'attente</h2>
-          <span v-if="queue" class="queue-count">{{ queue.items.length }} morceaux</span>
-        </div>
-
-        <QueueViewer v-if="queue" :renderer-id="rendererId" class="queue-viewer" />
-
-        <div v-else class="queue-empty">
-          <p>Aucun morceau en file d'attente</p>
-        </div>
+      <!-- Colonne droite: Queue (desktop et landscape uniquement) -->
+      <div v-if="!isMobilePortrait" class="queue-column">
+        <QueueViewer :renderer-id="rendererId" class="queue-viewer" />
       </div>
 
-      <!-- Drawer queue (mobile uniquement) -->
-      <div class="queue-drawer" :class="{ open: queueDrawerOpen }">
+      <!-- Drawer queue (mobile portrait uniquement) -->
+      <div v-if="isMobilePortrait" class="queue-drawer" :class="{ open: queueDrawerOpen }">
         <!-- Toggle button -->
         <button class="queue-drawer-toggle" @click="toggleQueueDrawer">
           <ChevronUp v-if="queueDrawerOpen" :size="24" />
@@ -119,10 +114,7 @@ async function handleDetachPlaylist() {
 
         <!-- Contenu du drawer -->
         <div class="queue-drawer-content">
-          <QueueViewer v-if="queue" :renderer-id="rendererId" />
-          <div v-else class="queue-empty">
-            <p>Aucun morceau en file d'attente</p>
-          </div>
+          <QueueViewer :renderer-id="rendererId" />
         </div>
       </div>
 
@@ -286,31 +278,7 @@ async function handleDetachPlaylist() {
 .queue-column {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-md);
   overflow: hidden;
-}
-
-.queue-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding-bottom: var(--spacing-sm);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.queue-title {
-  font-size: var(--text-xl);
-  font-weight: 600;
-  color: var(--color-text);
-  margin: 0;
-}
-
-.queue-count {
-  font-size: var(--text-sm);
-  color: var(--color-text-secondary);
-  padding: 4px 12px;
-  background: rgba(255, 255, 255, 0.05);
-  border-radius: var(--radius-sm);
 }
 
 .queue-viewer {
@@ -318,25 +286,12 @@ async function handleDetachPlaylist() {
   overflow-y: auto;
 }
 
-.queue-empty {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--spacing-xl);
-  background: rgba(255, 255, 255, 0.03);
-  border-radius: var(--radius-md);
-  border: 1px dashed rgba(255, 255, 255, 0.1);
-}
-
-.queue-empty p {
-  color: var(--color-text-tertiary);
-  font-size: var(--text-base);
-  margin: 0;
-}
-
-/* Queue drawer - masqué sur desktop, visible sur mobile */
+/* Queue drawer - masqué sur desktop, visible uniquement sur mobile portrait */
 .queue-drawer {
+  display: none;
+}
+
+.queue-drawer-backdrop {
   display: none;
 }
 
@@ -358,17 +313,11 @@ async function handleDetachPlaylist() {
     grid-template-columns: 1fr;
     gap: var(--spacing-md);
     padding: var(--spacing-md);
-    padding-bottom: 0;
+    padding-bottom: var(--spacing-xl); /* Espace pour éviter que la tab bar cache les contrôles */
   }
 
-  /* Queue column cachée sur mobile */
-  .queue-column {
-    display: none;
-  }
-
-  /* Queue drawer visible sur mobile */
+  /* Queue drawer visible sur mobile (géré par v-if maintenant) */
   .queue-drawer {
-    display: block;
     position: fixed;
     bottom: 64px; /* Hauteur de la tab bar */
     left: 0;
@@ -425,10 +374,11 @@ async function handleDetachPlaylist() {
 
   .controls-column {
     padding-right: 0;
+    padding-bottom: 100px; /* Espace supplémentaire pour éviter que la tab bar (64px) cache le volume */
   }
 }
 
-/* Responsive - 800x600 landscape */
+/* Responsive - 800x600 landscape et petites hauteurs (mode kiosque) */
 @media (min-width: 600px) and (max-width: 1024px) and (orientation: landscape) {
   .renderer-layout {
     grid-template-columns: 280px 1fr;
@@ -443,9 +393,34 @@ async function handleDetachPlaylist() {
   .renderer-name {
     font-size: var(--text-xl);
   }
+}
 
-  .queue-title {
+/* Mode kiosque - compactage pour hauteurs ≤ 700px (ex: 800x600) */
+@media (max-height: 700px) and (orientation: landscape) {
+  .renderer-header {
+    padding: var(--spacing-xs) var(--spacing-md);
+  }
+
+  .renderer-name {
     font-size: var(--text-lg);
+  }
+
+  .renderer-model {
+    font-size: 11px;
+  }
+
+  .renderer-layout {
+    gap: var(--spacing-sm);
+    padding: var(--spacing-sm);
+  }
+
+  .controls-column {
+    gap: var(--spacing-sm);
+  }
+
+  /* Masquer le scroll, tout doit tenir */
+  .controls-column {
+    overflow-y: visible;
   }
 }
 

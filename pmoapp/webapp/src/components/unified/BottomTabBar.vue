@@ -139,8 +139,8 @@ function handleServerDrawerClick() {
           :aria-label="`Switch to ${tab.fullTitle} tab`"
           :aria-current="tab.id === activeTabId ? 'page' : undefined"
         >
-          <!-- Icône -->
-          <component :is="tab.icon" class="tab-icon" :size="compactMode ? 28 : 24" />
+          <!-- Icône (réduite pour plus d'espace pour le texte) -->
+          <component :is="tab.icon" class="tab-icon" :size="compactMode ? 24 : 20" />
 
           <!-- Titre (masqué en mode compact) -->
           <span v-if="!compactMode" class="tab-title">{{ tab.title }}</span>
@@ -172,7 +172,10 @@ function handleServerDrawerClick() {
 
 <style scoped>
 .bottom-tab-bar {
-  position: relative;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
   display: flex;
   align-items: center;
   height: 64px;
@@ -216,27 +219,24 @@ function handleServerDrawerClick() {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-width: 100px;
-  max-width: 200px;
+  gap: 6px;
+  width: 140px; /* Largeur fixe pour éviter l'espace blanc */
   height: 64px;
-  padding: 8px 16px;
+  padding: 6px 12px;
   background: transparent;
   border: none;
   border-bottom: 4px solid transparent;
   cursor: pointer;
   transition: all 0.3s ease;
   color: var(--color-text-secondary);
-  font-size: var(--text-sm);
+  font-size: 13px; /* Réduit de var(--text-sm) pour plus d'espace */
   font-family: inherit;
-  white-space: nowrap;
   flex-shrink: 0;
 }
 
 /* Mode compact: icônes seulement */
 .tab-item.compact {
-  min-width: 60px;
-  max-width: 60px;
+  width: 60px;
   padding: 8px;
   justify-content: center;
 }
@@ -274,8 +274,14 @@ function handleServerDrawerClick() {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
   text-align: left;
+  /* Permettre au texte de se replier sur 2 lignes */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.2;
+  max-height: 2.4em; /* 2 lignes × 1.2 line-height */
+  word-break: break-word;
 }
 
 .tab-close {
@@ -345,19 +351,16 @@ function handleServerDrawerClick() {
 /* Responsive mobile */
 @media (max-width: 768px) {
   .tab-item {
-    min-width: 80px;
-    max-width: 150px;
-    padding: 8px 12px;
-    gap: 6px;
+    width: 110px; /* Largeur fixe plus petite sur mobile */
+    padding: 6px 10px;
+    gap: 4px;
+    font-size: 12px; /* Encore un peu plus petit sur mobile */
   }
 
   .tab-title {
     font-size: 12px;
-  }
-
-  .tab-icon {
-    width: 20px;
-    height: 20px;
+    line-height: 1.3;
+    max-height: 2.6em; /* 2 lignes × 1.3 line-height */
   }
 
   .tab-close {

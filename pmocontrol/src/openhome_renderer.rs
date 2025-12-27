@@ -120,7 +120,7 @@ impl OpenHomeRenderer {
 
         // Essayer d'obtenir current_id depuis Info.Id()
         let mut current_id = self
-            .info_client
+            .playlist
             .as_ref()
             .and_then(|client| {
                 match client.id() {
@@ -316,7 +316,7 @@ impl VolumeControl for OpenHomeRenderer {
 
 impl PlaybackStatus for OpenHomeRenderer {
     fn playback_state(&self) -> Result<PlaybackState> {
-        let client = self.info_client_for("playback_state")?;
+        let client = self.playlist_client_for("playback_state")?;
         let state = client.transport_state()?;
         Ok(map_openhome_state(&state))
     }
@@ -330,8 +330,8 @@ impl PlaybackPosition for OpenHomeRenderer {
         let mut track_uri = None;
         let mut track_metadata_xml = None;
 
-        if let Some(info_client) = &self.info_client {
-            match info_client.id() {
+        if let Some(playlist_client) = &self.playlist {
+            match playlist_client.id() {
                 Ok(id) => track_id = Some(id),
                 Err(err) => debug!(
                     renderer = self.info.id.0.as_str(),
@@ -339,7 +339,9 @@ impl PlaybackPosition for OpenHomeRenderer {
                     "Failed to read OpenHome track id"
                 ),
             }
+        }
 
+        if let Some(info_client) = &self.info_client {
             match info_client.track() {
                 Ok(track) => {
                     track_uri = Some(track.uri);

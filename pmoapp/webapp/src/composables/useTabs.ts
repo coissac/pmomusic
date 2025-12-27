@@ -4,6 +4,7 @@
  * Onglets server ouverts manuellement via le drawer (fermables).
  */
 import { reactive, computed, watch, onMounted, type Component } from 'vue'
+import { useMediaQuery } from '@vueuse/core'
 import { Radio, Server } from 'lucide-vue-next'
 import type { RendererSummary, MediaServerSummary } from '../services/pmocontrol/types'
 
@@ -28,7 +29,6 @@ interface TabsState {
 
 const MAX_TABS = 12 // Augmenté car onglets auto-générés
 const STORAGE_KEY = 'pmo-tabs-state'
-const COMPACT_MODE_THRESHOLD = 5 // Passer en mode icônes seulement au-delà de 5 onglets
 
 // État global partagé entre toutes les instances du composable
 const state = reactive<TabsState>({
@@ -41,10 +41,12 @@ const state = reactive<TabsState>({
 let isRestoringFromStorage = false
 
 /**
- * Tronque un titre pour mobile si nécessaire
+ * Retourne le titre complet sans troncature
+ * Note: On laisse le CSS gérer l'overflow avec ellipsis pour un affichage stable
  */
-function truncateTitle(title: string, maxLength = 15): string {
-  return title.length > maxLength ? title.slice(0, maxLength) + '...' : title
+function truncateTitle(title: string): string {
+  // Retourner le titre complet, le CSS gère l'ellipsis de façon stable
+  return title
 }
 
 /**
@@ -345,12 +347,16 @@ export function useTabs() {
     }
   })
 
+  // Détection de la largeur d'écran pour le mode compact
+  // Mode compact sur les écrans < 900px (tablettes et mobiles)
+  const isNarrowScreen = useMediaQuery('(max-width: 900px)')
+
   // Computed properties
   const activeTab = computed(() => findTab(state.activeTabId) || state.tabs[0] || null)
   const hasMultipleTabs = computed(() => state.tabs.length > 1)
   const canAddTab = computed(() => state.tabs.length < MAX_TABS)
   const isEmpty = computed(() => state.tabs.length === 0)
-  const compactMode = computed(() => state.tabs.length > COMPACT_MODE_THRESHOLD)
+  const compactMode = computed(() => isNarrowScreen.value)
 
   return {
     // State

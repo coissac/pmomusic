@@ -5,7 +5,8 @@ import { useTabs } from '@/composables/useTabs'
 import { useRenderers } from '@/composables/useRenderers'
 import { useMediaServers } from '@/composables/useMediaServers'
 import { useSwipe } from '@vueuse/core'
-import type { MediaServerSummary } from '@/services/pmocontrol/types'
+import { api } from '@/services/pmocontrol/api'
+import type { ContainerEntry } from '@/services/pmocontrol/types'
 
 // Import des composants
 import BottomTabBar from '@/components/unified/BottomTabBar.vue'
@@ -16,7 +17,7 @@ import ServerTabContent from '@/components/unified/ServerTabContent.vue'
 
 const route = useRoute()
 const router = useRouter()
-const { tabs, activeTabId, switchTab, activeTab, syncWithRenderers, isEmpty, openServer } = useTabs()
+const { tabs, activeTabId, switchTab, activeTab, syncWithRenderers, isEmpty } = useTabs()
 const { allRenderers, fetchRenderers } = useRenderers()
 const { allServers, fetchServers } = useMediaServers()
 
@@ -41,9 +42,50 @@ useSwipe(viewRef, {
   },
 })
 
-// Gestion de l'ouverture d'un server depuis le drawer
-function handleServerSelected(server: MediaServerSummary) {
-  openServer(server)
+// Gestion de la lecture d'un item depuis le drawer
+async function handlePlayItem(item: ContainerEntry, serverId: string) {
+  const currentTab = activeTab.value
+
+  if (!currentTab || currentTab.type !== 'renderer' || !currentTab.metadata?.rendererId) {
+    console.error('[UnifiedControlView] Pas de renderer actif')
+    return
+  }
+
+  const rendererId = currentTab.metadata.rendererId
+
+  try {
+    console.log('[UnifiedControlView] Play item:', item.title, 'on renderer:', rendererId)
+
+    await api.attachPlaylist(rendererId, serverId, item.id, true) // autoPlay = true
+
+    // Fermer le drawer après succès
+    drawerOpen.value = false
+  } catch (error) {
+    console.error('[UnifiedControlView] Erreur lors de la lecture:', error)
+  }
+}
+
+// Gestion de l'ajout d'un item à la queue depuis le drawer
+async function handleQueueItem(item: ContainerEntry, serverId: string) {
+  const currentTab = activeTab.value
+
+  if (!currentTab || currentTab.type !== 'renderer' || !currentTab.metadata?.rendererId) {
+    console.error('[UnifiedControlView] Pas de renderer actif')
+    return
+  }
+
+  const rendererId = currentTab.metadata.rendererId
+
+  try {
+    console.log('[UnifiedControlView] Queue item:', item.title, 'on renderer:', rendererId)
+
+    await api.attachPlaylist(rendererId, serverId, item.id, false) // autoPlay = false
+
+    // Fermer le drawer après succès
+    drawerOpen.value = false
+  } catch (error) {
+    console.error('[UnifiedControlView] Erreur lors de l\'ajout à la queue:', error)
+  }
 }
 
 // Nombre de servers online pour afficher dans le badge
@@ -163,7 +205,11 @@ const currentTabProps = computed(() => {
     <BottomTabBar :online-servers-count="onlineServersCount" @open-drawer="handleDrawerOpen" />
 
     <!-- Drawer servers (swipe depuis bord gauche) -->
-    <ServerDrawer v-model="drawerOpen" @server-selected="handleServerSelected" />
+    <ServerDrawer
+      v-model="drawerOpen"
+      @play-item="handlePlayItem"
+      @queue-item="handleQueueItem"
+    />
   </div>
 </template>
 
@@ -182,6 +228,7 @@ const currentTabProps = computed(() => {
   overflow-y: auto;
   overflow-x: hidden;
   padding: 0;
+  padding-bottom: 80px; /* Espace pour la barre fixe en bas (64px + marge) */
   position: relative;
 }
 

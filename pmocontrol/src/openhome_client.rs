@@ -85,7 +85,7 @@ impl OhPlaylistClient {
             .ok_or_else(|| anyhow!("Missing ReadListResponse element in SOAP body"))?;
 
         let track_list_b64 =
-            extract_child_text_any(response, &["aTrackList", "TrackList", "aValue", "Value"])?;
+            extract_child_text_any(response, &["TrackList", "Value"])?;
         let track_list_sample: String = track_list_b64.chars().take(256).collect();
         debug!(
             control_url = self.control_url.as_str(),
@@ -111,10 +111,10 @@ impl OhPlaylistClient {
         let response = find_child_with_suffix(&envelope.body.content, "InsertResponse")
             .ok_or_else(|| anyhow!("Missing InsertResponse element in SOAP body"))?;
         let new_id_text =
-            extract_child_text_any(response, &["aNewId", "NewId", "aValue", "Value"])?;
+            extract_child_text_any(response, &["NewId", "Value"])?;
         let new_id = new_id_text
             .parse::<u32>()
-            .map_err(|_| anyhow!("Invalid aNewId value: {}", new_id_text))?;
+            .map_err(|_| anyhow!("Invalid NewId value: {}", new_id_text))?;
 
         Ok(new_id)
     }
@@ -128,6 +128,31 @@ impl OhPlaylistClient {
 
         handle_action_response("SeekId", &call_result)
     }
+
+    pub fn transport_state(&self) -> Result<String> {
+        let call_result =
+            invoke_upnp_action(&self.control_url, &self.service_type, "TransportState", &[])?;
+
+        let envelope = ensure_success("TransportState", &call_result)?;
+        let response = find_child_with_suffix(&envelope.body.content, "TransportStateResponse")
+            .ok_or_else(|| anyhow!("Missing TransportStateResponse element in SOAP body"))?;
+        let state = extract_child_text_any(response, &["State", "Value"])?;
+        Ok(state)
+    }
+
+    pub fn id(&self) -> Result<u32> {
+        let call_result = invoke_upnp_action(&self.control_url, &self.service_type, "Id", &[])?;
+
+        let envelope = ensure_success("Id", &call_result)?;
+        let response = find_child_with_suffix(&envelope.body.content, "IdResponse")
+            .ok_or_else(|| anyhow!("Missing IdResponse element in SOAP body"))?;
+        let id_text = extract_child_text(response, "Id")?;
+        let id = id_text
+            .parse::<u32>()
+            .map_err(|_| anyhow!("Invalid Info.Id value: {}", id_text))?;
+        Ok(id)
+    }
+
 
     pub fn play(&self) -> Result<()> {
         let call_result = invoke_upnp_action(&self.control_url, &self.service_type, "Play", &[])?;
@@ -227,10 +252,10 @@ impl OhPlaylistClient {
         let envelope = ensure_success("Id", &call_result)?;
         let response = find_child_with_suffix(&envelope.body.content, "IdResponse")
             .ok_or_else(|| anyhow!("Missing IdResponse element in SOAP body"))?;
-        let value: String = extract_child_text_any(response, &["aValue", "Value"])?;
+        let value: String = extract_child_text_any(response, &["Value"])?;
         Ok(value)
     }
-    
+
     pub fn tracks_max(&self) -> Result<u32> {
         let call_result =
             invoke_upnp_action(&self.control_url, &self.service_type, "TracksMax", &[])?;
@@ -238,7 +263,7 @@ impl OhPlaylistClient {
         let envelope = ensure_success("TracksMax", &call_result)?;
         let response = find_child_with_suffix(&envelope.body.content, "TracksMaxResponse")
             .ok_or_else(|| anyhow!("Missing TracksMaxResponse element in SOAP body"))?;
-        let value_text: String = extract_child_text_any(response, &["aValue", "Value"])?;
+        let value_text: String = extract_child_text_any(response, &["Value"])?;
         let value = value_text
             .parse::<u32>()
             .map_err(|_| anyhow!("Invalid TracksMax value: {}", value_text))?;
@@ -256,7 +281,7 @@ impl OhPlaylistClient {
         // Try to extract the array element. If missing, assume empty playlist.
         let array_text = match extract_child_text_any(
             response,
-            &["aArray", "Array", "aIdArray", "IdArray", "aValue", "Value"],
+            &["Array", "IdArray", "Value"],
         ) {
             Ok(text) => text,
             Err(_) => {
@@ -355,9 +380,9 @@ impl OhInfoClient {
         let response = find_child_with_suffix(&envelope.body.content, "TrackResponse")
             .ok_or_else(|| anyhow!("Missing TrackResponse element in SOAP body"))?;
 
-        let uri = extract_child_text_any(response, &["aUri", "Uri", "aValue", "Value"])
+        let uri = extract_child_text_any(response, &["Uri", "Uri", "Value"])
             .unwrap_or_default();
-        let metadata_xml = extract_child_text_optional(response, "aMetadata")
+        let metadata_xml = extract_child_text_optional(response, "Metadata")
             .unwrap_or(None)
             .filter(|s| !s.is_empty());
 
@@ -382,37 +407,13 @@ impl OhInfoClient {
         let response = find_child_with_suffix(&envelope.body.content, "NextResponse")
             .ok_or_else(|| anyhow!("Missing NextResponse element in SOAP body"))?;
 
-        let uri = extract_child_text_any(response, &["aUri", "Uri", "aValue", "Value"])
+        let uri = extract_child_text_any(response, &["Uri", "Value"])
             .unwrap_or_default();
-        let metadata_xml = extract_child_text_optional(response, "aMetadata")
+        let metadata_xml = extract_child_text_optional(response, "Metadata")
             .unwrap_or(None)
             .filter(|s| !s.is_empty());
 
         Ok(OhInfoTrack { uri, metadata_xml })
-    }
-
-    pub fn id(&self) -> Result<u32> {
-        let call_result = invoke_upnp_action(&self.control_url, &self.service_type, "Id", &[])?;
-
-        let envelope = ensure_success("Id", &call_result)?;
-        let response = find_child_with_suffix(&envelope.body.content, "IdResponse")
-            .ok_or_else(|| anyhow!("Missing IdResponse element in SOAP body"))?;
-        let id_text = extract_child_text(response, "aId")?;
-        let id = id_text
-            .parse::<u32>()
-            .map_err(|_| anyhow!("Invalid Info.Id value: {}", id_text))?;
-        Ok(id)
-    }
-
-    pub fn transport_state(&self) -> Result<String> {
-        let call_result =
-            invoke_upnp_action(&self.control_url, &self.service_type, "TransportState", &[])?;
-
-        let envelope = ensure_success("TransportState", &call_result)?;
-        let response = find_child_with_suffix(&envelope.body.content, "TransportStateResponse")
-            .ok_or_else(|| anyhow!("Missing TransportStateResponse element in SOAP body"))?;
-        let state = extract_child_text_any(response, &["aState", "State", "aValue", "Value"])?;
-        Ok(state)
     }
 
     pub fn read_current_metadata(&self) -> Result<Option<TrackMetadata>> {
@@ -443,17 +444,17 @@ impl OhTimeClient {
             .ok_or_else(|| anyhow!("Missing TimeResponse element in SOAP body"))?;
 
         let track_count =
-            extract_child_text_any(response, &["aTrackCount", "TrackCount", "aValue", "Value"])?
+            extract_child_text_any(response, &["TrackCount", "Value"])?
                 .parse::<u32>()
-                .map_err(|_| anyhow!("Invalid aTrackCount value in Time response"))?;
+                .map_err(|_| anyhow!("Invalid TrackCount value in Time response"))?;
         let duration_secs =
-            extract_child_text_any(response, &["aDuration", "Duration", "aValue", "Value"])?
+            extract_child_text_any(response, &["Duration","Value"])?
                 .parse::<u32>()
-                .map_err(|_| anyhow!("Invalid aDuration value in Time response"))?;
+                .map_err(|_| anyhow!("Invalid Duration value in Time response"))?;
         let elapsed_secs =
-            extract_child_text_any(response, &["aSeconds", "Seconds", "aValue", "Value"])?
+            extract_child_text_any(response, &["Seconds", "Value"])?
                 .parse::<u32>()
-                .map_err(|_| anyhow!("Invalid aSeconds value in Time response"))?;
+                .map_err(|_| anyhow!("Invalid Seconds value in Time response"))?;
 
         Ok(OhTimePosition {
             track_count,
@@ -482,7 +483,7 @@ impl OhVolumeClient {
         let envelope = ensure_success("Volume", &call_result)?;
         let response = find_child_with_suffix(&envelope.body.content, "VolumeResponse")
             .ok_or_else(|| anyhow!("Missing VolumeResponse element in SOAP body"))?;
-        let value = extract_child_text_any(response, &["aVolume", "Volume", "aValue", "Value"])?;
+        let value = extract_child_text_any(response, &["Volume", "Value"])?;
         let parsed = value
             .parse::<u32>()
             .map_err(|_| anyhow!("Invalid volume value: {}", value))?;
@@ -502,7 +503,7 @@ impl OhVolumeClient {
         let envelope = ensure_success("Mute", &call_result)?;
         let response = find_child_with_suffix(&envelope.body.content, "MuteResponse")
             .ok_or_else(|| anyhow!("Missing MuteResponse element in SOAP body"))?;
-        let value = extract_child_text_any(response, &["aMute", "Mute", "aValue", "Value"])?;
+        let value = extract_child_text_any(response, &["Mute", "Value"])?;
         parse_bool(&value)
     }
 
@@ -547,9 +548,9 @@ impl OhRadioClient {
         let response = find_child_with_suffix(&envelope.body.content, "ChannelResponse")
             .ok_or_else(|| anyhow!("Missing ChannelResponse element in SOAP body"))?;
 
-        let uri = extract_child_text_any(response, &["aUri", "Uri", "aValue", "Value"])
+        let uri = extract_child_text_any(response, &["Uri", "Value"])
             .unwrap_or_default();
-        let metadata_xml = extract_child_text_optional(response, "aMetadata")
+        let metadata_xml = extract_child_text_optional(response, "Metadata")
             .unwrap_or(None)
             .filter(|s| !s.is_empty());
 
@@ -577,7 +578,7 @@ impl OhProductClient {
         let envelope = ensure_success("SourceXml", &call_result)?;
         let response = find_child_with_suffix(&envelope.body.content, "SourceXmlResponse")
             .ok_or_else(|| anyhow!("Missing SourceXmlResponse element in SOAP body"))?;
-        let xml = extract_child_text_any(response, &["aSourceXml", "aXml", "aValue", "Value"])?;
+        let xml = extract_child_text_any(response, &["SourceXml", "Xml", "Value"])?;
         parse_product_source_list(&xml)
     }
 
@@ -587,7 +588,7 @@ impl OhProductClient {
         let envelope = ensure_success("SourceIndex", &call_result)?;
         let response = find_child_with_suffix(&envelope.body.content, "SourceIndexResponse")
             .ok_or_else(|| anyhow!("Missing SourceIndexResponse element in SOAP body"))?;
-        let value = extract_child_text_any(response, &["aIndex", "Index", "aValue", "Value"])?;
+        let value = extract_child_text_any(response, &["Index", "Value"])?;
         value
             .parse::<u32>()
             .map_err(|_| anyhow!("Invalid Product.SourceIndex value: {}", value))
@@ -998,7 +999,7 @@ mod tests {
         let mut cursor = Cursor::new(xml.as_bytes());
         let response = Element::parse(&mut cursor).expect("valid xml");
         let value =
-            extract_child_text_any(&response, &["aNewId", "NewId", "aValue", "Value"]).unwrap();
+            extract_child_text_any(&response, &["NewId", "Value"]).unwrap();
         assert_eq!(value, "1337");
     }
 
@@ -1008,7 +1009,7 @@ mod tests {
         let mut cursor = Cursor::new(xml.as_bytes());
         let response = Element::parse(&mut cursor).expect("valid xml");
         let value =
-            extract_child_text_any(&response, &["aTrackList", "TrackList", "aValue", "Value"])
+            extract_child_text_any(&response, &["TrackList", "Value"])
                 .expect("tracklist");
         assert_eq!(value, "PGVudHJ5PjwvZW50cnk+");
     }
@@ -1020,7 +1021,7 @@ mod tests {
         let response = Element::parse(&mut cursor).expect("valid xml");
         let value = extract_child_text_any(
             &response,
-            &["aArray", "Array", "aIdArray", "IdArray", "aValue", "Value"],
+            &["Array", "IdArray", "Value"],
         )
         .expect("array content");
         assert_eq!(value, "AAAAAQAAAAI=");

@@ -249,4 +249,38 @@ async function handleToggleMute() {
     }
   }
 }
+
+/* Mode kiosque - compactage pour petites hauteurs (800x600) */
+@media (max-height: 700px) and (orientation: landscape) {
+  .volume-control {
+    padding: var(--spacing-sm) var(--spacing-md);
+    gap: var(--spacing-sm);
+  }
+
+  .volume-control .btn-icon {
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+    min-height: 36px;
+  }
+
+  .volume-slider {
+    height: 6px;
+  }
+
+  .volume-slider::-webkit-slider-thumb {
+    width: 18px;
+    height: 18px;
+  }
+
+  .volume-slider::-moz-range-thumb {
+    width: 18px;
+    height: 18px;
+  }
+
+  .volume-value {
+    font-size: 11px;
+    min-width: 2rem;
+  }
+}
 </style>

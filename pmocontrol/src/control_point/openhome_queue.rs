@@ -62,51 +62,52 @@ impl OpenHomeQueue {
         // 1. Info.Id() - Direct ID query (fastest, but fails if track no longer in playlist)
         // 2. Info.Track() - Returns URI, which we can search for (works even if track removed)
         // 3. None - No current track can be determined
-        let current_id = self.info_client.as_ref().and_then(|client| {
-            // Try Info.Id() first
-            if let Ok(id) = client.id() {
-                debug!(
-                    renderer = self.renderer_id.0.as_str(),
-                    track_id = id,
-                    "Detected current track via Info.Id()"
-                );
-                return Some(id);
-            }
+        let current_id = self.playlist.id()?;
+        //  {
+        //     // Try Info.Id() first
+        //     if let Ok(id) = client.id() {
+        //         debug!(
+        //             renderer = self.renderer_id.0.as_str(),
+        //             track_id = id,
+        //             "Detected current track via Info.Id()"
+        //         );
+        //         return Some(id);
+        //     }
 
-            // If Id() fails, try Track() to get the URI and search for it
-            if let Ok(track_info) = client.track() {
-                debug!(
-                    renderer = self.renderer_id.0.as_str(),
-                    track_uri = track_info.uri.as_str(),
-                    "Info.Id() failed, searching for current track by URI from Info.Track()"
-                );
-                return entries
-                    .iter()
-                    .find(|entry| entry.uri == track_info.uri)
-                    .map(|entry| {
-                        debug!(
-                            renderer = self.renderer_id.0.as_str(),
-                            found_id = entry.id,
-                            found_uri = entry.uri.as_str(),
-                            "Found current track ID by matching URI"
-                        );
-                        entry.id
-                    });
-            }
+        //     // If Id() fails, try Track() to get the URI and search for it
+        //     if let Ok(track_info) = client.track() {
+        //         debug!(
+        //             renderer = self.renderer_id.0.as_str(),
+        //             track_uri = track_info.uri.as_str(),
+        //             "Info.Id() failed, searching for current track by URI from Info.Track()"
+        //         );
+        //         return entries
+        //             .iter()
+        //             .find(|entry| entry.uri == track_info.uri)
+        //             .map(|entry| {
+        //                 debug!(
+        //                     renderer = self.renderer_id.0.as_str(),
+        //                     found_id = entry.id,
+        //                     found_uri = entry.uri.as_str(),
+        //                     "Found current track ID by matching URI"
+        //                 );
+        //                 entry.id
+        //             });
+        //     }
 
-            debug!(
-                renderer = self.renderer_id.0.as_str(),
-                "Both Info.Id() and Info.Track() failed, cannot determine current track"
-            );
-            None
-        });
+        //     debug!(
+        //         renderer = self.renderer_id.0.as_str(),
+        //         "Both Info.Id() and Info.Track() failed, cannot determine current track"
+        //     );
+        //     None
+        // });
 
-        let current_index = current_id
-            .and_then(|id| track_ids.iter().position(|entry_id| *entry_id == id));
+        // let current_index = current_id
+        //     .and_then(|id| track_ids.iter().position(|entry_id| *entry_id == id));
 
         self.items = items;
         self.track_ids = track_ids;
-        self.current_index = current_index;
+        self.current_index = Some(current_id as usize);
         Ok(())
     }
 
@@ -844,9 +845,7 @@ impl QueueBackend for OpenHomeQueue {
         // Note: Some OpenHome renderers (like upmpdcli) don't reliably support Info.Id(),
         // so we fall back to using our internal current_index pointer.
         let currently_playing_id_from_renderer = self
-            .info_client
-            .as_ref()
-            .and_then(|client| client.id().ok());
+            .playlist.id().ok();
 
         // Find the currently playing item in our local state.
         // Priority: 1) Renderer-reported ID, 2) Our internal current_index
