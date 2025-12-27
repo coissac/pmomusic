@@ -10,6 +10,8 @@ import StatusBadge from '@/components/pmocontrol/StatusBadge.vue'
 import { ChevronUp, ChevronDown, Link } from 'lucide-vue-next'
 import { useRenderers } from '@/composables/useRenderers'
 import { useUIStore } from '@/stores/ui'
+import { api } from '@/services/pmocontrol/api'
+import type { QueueItem } from '@/services/pmocontrol/types'
 
 const props = defineProps<{
   rendererId: string
@@ -46,6 +48,17 @@ async function handleDetachPlaylist() {
     uiStore.notifySuccess('Playlist détachée')
   } catch (error) {
     uiStore.notifyError(`Erreur: ${error instanceof Error ? error.message : 'Erreur inconnue'}`)
+  }
+}
+
+// Gérer le clic sur un item de la queue
+async function handleQueueItemClick(item: QueueItem) {
+  try {
+    await api.seekQueueIndex(props.rendererId, item.index)
+    console.log('[RendererTabContent] Jumped to queue index:', item.index, item.title)
+  } catch (error) {
+    console.error('[RendererTabContent] Error seeking to queue index:', error)
+    uiStore.notifyError(`Erreur: ${error instanceof Error ? error.message : 'Impossible de sauter à cet item'}`)
   }
 }
 </script>
@@ -100,7 +113,7 @@ async function handleDetachPlaylist() {
 
       <!-- Colonne droite: Queue (desktop et landscape uniquement) -->
       <div v-if="!isMobilePortrait" class="queue-column">
-        <QueueViewer :renderer-id="rendererId" class="queue-viewer" />
+        <QueueViewer :renderer-id="rendererId" class="queue-viewer" @click-item="handleQueueItemClick" />
       </div>
 
       <!-- Drawer queue (mobile portrait uniquement) -->
@@ -114,7 +127,7 @@ async function handleDetachPlaylist() {
 
         <!-- Contenu du drawer -->
         <div class="queue-drawer-content">
-          <QueueViewer :renderer-id="rendererId" />
+          <QueueViewer :renderer-id="rendererId" @click-item="handleQueueItemClick" />
         </div>
       </div>
 

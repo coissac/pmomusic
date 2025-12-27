@@ -3,9 +3,14 @@ import { computed, ref, watch, nextTick, toRef } from 'vue'
 import { useRenderer } from '@/composables/useRenderers'
 import QueueItem from './QueueItem.vue'
 import { Link } from 'lucide-vue-next'
+import type { QueueItem as QueueItemType } from '@/services/pmocontrol/types'
 
 const props = defineProps<{
   rendererId: string
+}>()
+
+const emit = defineEmits<{
+  clickItem: [item: QueueItemType]
 }>()
 
 const { queue, binding } = useRenderer(toRef(props, 'rendererId'))
@@ -13,6 +18,10 @@ const { queue, binding } = useRenderer(toRef(props, 'rendererId'))
 const isAttached = computed(() => !!binding.value)
 
 const queueContainer = ref<HTMLElement | null>(null)
+
+function handleItemClick(item: QueueItemType) {
+  emit('clickItem', item)
+}
 
 // Auto-scroll vers la piste courante lors de l'ouverture
 watch(() => queue.value?.current_index, async (currentIndex) => {
@@ -53,6 +62,7 @@ watch(() => queue.value?.current_index, async (currentIndex) => {
         :key="item.index"
         :item="item"
         :is-current="item.index === queue.current_index"
+        @click="handleItemClick"
       />
     </div>
 

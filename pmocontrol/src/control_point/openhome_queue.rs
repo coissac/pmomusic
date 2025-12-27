@@ -163,6 +163,20 @@ impl OpenHomeQueue {
         Ok(())
     }
 
+    /// Selects and plays a track by its queue index (0-based).
+    pub fn select_track_index(&mut self, index: usize) -> Result<()> {
+        let track_id = self
+            .track_ids
+            .get(index)
+            .copied()
+            .ok_or_else(|| anyhow!("Index {} out of bounds (queue length: {})", index, self.track_ids.len()))?;
+
+        self.ensure_playlist_source_selected()?;
+        self.playlist.play_id(track_id)?;
+        self.current_index = Some(index);
+        Ok(())
+    }
+
     pub fn clear(&mut self) -> Result<()> {
         self.ensure_playlist_source_selected()?;
         self.playlist.delete_all()?;

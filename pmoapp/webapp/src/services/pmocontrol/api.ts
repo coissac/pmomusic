@@ -147,6 +147,17 @@ class PMOControlAPI {
     })
   }
 
+  /**
+   * Saute à un index spécifique dans la queue
+   * POST /api/control/renderers/{id}/queue/seek
+   */
+  async seekQueueIndex(id: string, index: number): Promise<SuccessResponse> {
+    return this.request<SuccessResponse>(`/renderers/${encodeURIComponent(id)}/queue/seek`, {
+      method: 'POST',
+      body: JSON.stringify({ index }),
+    })
+  }
+
   // ============================================================================
   // CONTRÔLE VOLUME
   // ============================================================================

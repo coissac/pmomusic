@@ -6,10 +6,19 @@ defineProps<{
   item: QueueItem
   isCurrent: boolean
 }>()
+
+const emit = defineEmits<{
+  click: [item: QueueItem]
+}>()
+
+function handleClick(item: QueueItem) {
+  console.log('[QueueItem] Click detected on item:', item.index, item.title)
+  emit('click', item)
+}
 </script>
 
 <template>
-  <div :class="['queue-item', { current: isCurrent }]">
+  <div :class="['queue-item', { current: isCurrent }]" @click="handleClick(item)">
     <!-- Indicateur piste en cours -->
     <div class="current-indicator" v-if="isCurrent">
       <Play :size="16" fill="currentColor" />
@@ -51,6 +60,7 @@ defineProps<{
   border-radius: var(--radius-md);
   transition: background-color var(--transition-fast);
   position: relative;
+  cursor: pointer;
 }
 
 .queue-item:hover {
