@@ -58,56 +58,15 @@ impl OpenHomeQueue {
             track_ids.push(entry.id);
         }
 
-        // Try multiple methods to determine the currently playing track, from most to least reliable:
-        // 1. Info.Id() - Direct ID query (fastest, but fails if track no longer in playlist)
-        // 2. Info.Track() - Returns URI, which we can search for (works even if track removed)
-        // 3. None - No current track can be determined
-        let current_id = self.playlist.id()?;
-        //  {
-        //     // Try Info.Id() first
-        //     if let Ok(id) = client.id() {
-        //         debug!(
-        //             renderer = self.renderer_id.0.as_str(),
-        //             track_id = id,
-        //             "Detected current track via Info.Id()"
-        //         );
-        //         return Some(id);
-        //     }
+        // Get the currently playing track ID from the renderer (may be None if no track is playing)
+        let current_id = self.playlist.id().ok();
 
-        //     // If Id() fails, try Track() to get the URI and search for it
-        //     if let Ok(track_info) = client.track() {
-        //         debug!(
-        //             renderer = self.renderer_id.0.as_str(),
-        //             track_uri = track_info.uri.as_str(),
-        //             "Info.Id() failed, searching for current track by URI from Info.Track()"
-        //         );
-        //         return entries
-        //             .iter()
-        //             .find(|entry| entry.uri == track_info.uri)
-        //             .map(|entry| {
-        //                 debug!(
-        //                     renderer = self.renderer_id.0.as_str(),
-        //                     found_id = entry.id,
-        //                     found_uri = entry.uri.as_str(),
-        //                     "Found current track ID by matching URI"
-        //                 );
-        //                 entry.id
-        //             });
-        //     }
-
-        //     debug!(
-        //         renderer = self.renderer_id.0.as_str(),
-        //         "Both Info.Id() and Info.Track() failed, cannot determine current track"
-        //     );
-        //     None
-        // });
-
-        // let current_index = current_id
-        //     .and_then(|id| track_ids.iter().position(|entry_id| *entry_id == id));
+        // Find the index of the current track in the playlist
+        let current_index = current_id.and_then(|id| track_ids.iter().position(|entry_id| *entry_id == id));
 
         self.items = items;
         self.track_ids = track_ids;
-        self.current_index = Some(current_id as usize);
+        self.current_index = current_index;
         Ok(())
     }
 
@@ -339,34 +298,10 @@ impl OpenHomeQueue {
         playing_idx: usize,
         playing_id: u32,
     ) -> Result<()> {
-        // Re-read the current playlist state to get fresh IDs
-        // This minimizes race conditions where IDs become invalid between our last refresh
-        // and now (due to UPnP events from the server)
-        let current_entries = self.playlist.read_all_tracks()?;
-        let current_ids: Vec<u32> = current_entries.iter().map(|e| e.id).collect();
-
-        debug!(
-            renderer = self.renderer_id.0.as_str(),
-            fresh_id_count = current_ids.len(),
-            cached_id_count = self.track_ids.len(),
-            "Re-read playlist before deletions to avoid stale ID errors"
-        );
-
-        // Find the playing track in the fresh list
-        let fresh_playing_idx = current_ids.iter().position(|&id| id == playing_id);
-
-        if fresh_playing_idx.is_none() {
-            debug!(
-                renderer = self.renderer_id.0.as_str(),
-                playing_id,
-                "Playing track not found in fresh playlist - renderer state may have changed, aborting modification"
-            );
-            // The playing track is gone - don't try to manipulate the playlist
-            return Ok(());
-        }
-
-        // Delete everything except the currently playing item (using fresh IDs)
-        for &track_id in current_ids.iter().rev() {
+        // Delete everything except the currently playing item
+        // Using delete_id_if_exists() to handle cases where another control point
+        // may have already modified the playlist
+        for &track_id in self.track_ids.iter().rev() {
             if track_id != playing_id {
                 self.playlist.delete_id_if_exists(track_id)?;
             }
@@ -409,53 +344,15 @@ impl OpenHomeQueue {
         pivot_idx_new: usize,
         pivot_id: u32,
     ) -> Result<()> {
-        debug!(
-            renderer = self.renderer_id.0.as_str(),
-            pivot_id,
-            pivot_idx_new,
-            new_playlist_len = new_items.len(),
-            "Starting replace_queue_with_pivot - will re-read from OpenHome"
-        );
+        // Find the pivot index in our current state
+        let pivot_idx = self.track_ids.iter().position(|&id| id == pivot_id)
+            .ok_or_else(|| anyhow!("Pivot track ID {} not found in playlist", pivot_id))?;
 
-        // Re-read the current playlist state from OpenHome (the ONLY source of truth)
-        // This is CRITICAL to avoid deleting IDs that no longer exist, which can
-        // put the renderer (upmpdcli) into a degraded state where Info.TransportState()
-        // starts returning HTTP 500 errors.
-        let current_entries = self.playlist.read_all_tracks()?;
-
-        // Convert entries to PlaybackItems - this is the REAL current state
-        let mut fresh_items = Vec::with_capacity(current_entries.len());
-        let mut fresh_ids = Vec::with_capacity(current_entries.len());
-        for entry in &current_entries {
-            fresh_items.push(self.playback_item_from_entry(entry));
-            fresh_ids.push(entry.id);
-        }
-
-        debug!(
-            renderer = self.renderer_id.0.as_str(),
-            fresh_count = fresh_items.len(),
-            "Re-read playlist from OpenHome (source of truth)"
-        );
-
-        // Find the pivot in the fresh list
-        let fresh_pivot_idx = fresh_ids.iter().position(|&id| id == pivot_id);
-
-        if fresh_pivot_idx.is_none() {
-            debug!(
-                renderer = self.renderer_id.0.as_str(),
-                pivot_id,
-                "Pivot track not found in fresh playlist - renderer state changed, aborting"
-            );
-            return Ok(());
-        }
-
-        let fresh_pivot_idx = fresh_pivot_idx.unwrap();
-
-        // Split fresh data at the pivot - use ONLY fresh data, ignore cache
-        let old_before: Vec<PlaybackItem> = fresh_items[..fresh_pivot_idx].to_vec();
-        let old_after: Vec<PlaybackItem> = fresh_items[fresh_pivot_idx + 1..].to_vec();
-        let old_ids_before: Vec<u32> = fresh_ids[..fresh_pivot_idx].to_vec();
-        let old_ids_after: Vec<u32> = fresh_ids[fresh_pivot_idx + 1..].to_vec();
+        // Split current data at the pivot
+        let old_before: Vec<PlaybackItem> = self.items[..pivot_idx].to_vec();
+        let old_after: Vec<PlaybackItem> = self.items[pivot_idx + 1..].to_vec();
+        let old_ids_before: Vec<u32> = self.track_ids[..pivot_idx].to_vec();
+        let old_ids_after: Vec<u32> = self.track_ids[pivot_idx + 1..].to_vec();
 
         let new_before = &new_items[..pivot_idx_new];
         let new_after = &new_items[pivot_idx_new + 1..];
@@ -855,43 +752,17 @@ impl QueueBackend for OpenHomeQueue {
         // (e.g., manual edits from another control point) would keep the stale items.
         self.refresh_from_openhome()?;
 
-        // Try to get the currently playing track ID from the renderer.
-        // Note: Some OpenHome renderers (like upmpdcli) don't reliably support Info.Id(),
-        // so we fall back to using our internal current_index pointer.
-        let currently_playing_id_from_renderer = self
-            .playlist.id().ok();
-
-        // Find the currently playing item in our local state.
-        // Priority: 1) Renderer-reported ID, 2) Our internal current_index
-        let playing_info = if let Some(id) = currently_playing_id_from_renderer {
-            // CASE: Renderer explicitly reported the playing track ID
+        // Get the currently playing track ID from the renderer
+        let playing_info = self.playlist.id().ok().and_then(|id| {
             self.track_ids
                 .iter()
                 .position(|&tid| tid == id)
                 .map(|idx| (idx, id, self.items[idx].uri.clone()))
-        } else if let Some(idx) = self.current_index {
-            // CASE: Use our internal pointer (fallback for renderers without Info.Id() support)
-            if idx < self.track_ids.len() && idx < self.items.len() {
-                let id = self.track_ids[idx];
-                let uri = self.items[idx].uri.clone();
-                debug!(
-                    renderer = self.renderer_id.0.as_str(),
-                    current_index = idx,
-                    track_id = id,
-                    "Using internal current_index as fallback (renderer didn't report playing ID)"
-                );
-                Some((idx, id, uri))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        });
 
         debug!(
             renderer = self.renderer_id.0.as_str(),
             actual_items = self.items.len(),
-            currently_playing_id_from_renderer = ?currently_playing_id_from_renderer,
             playing_info_detected = playing_info.is_some(),
             "OpenHome playlist state refreshed before replace_queue"
         );

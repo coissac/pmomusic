@@ -56,6 +56,10 @@ async function handleQueueItemClick(item: QueueItem) {
   try {
     await api.seekQueueIndex(props.rendererId, item.index)
     console.log('[RendererTabContent] Jumped to queue index:', item.index, item.title)
+
+    // Force un refetch immédiat pour synchroniser la cover affichée
+    // sans attendre l'événement SSE qui peut avoir un délai
+    await refresh(true)
   } catch (error) {
     console.error('[RendererTabContent] Error seeking to queue index:', error)
     uiStore.notifyError(`Erreur: ${error instanceof Error ? error.message : 'Impossible de sauter à cet item'}`)

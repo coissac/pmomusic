@@ -146,10 +146,10 @@ impl OhPlaylistClient {
         let envelope = ensure_success("Id", &call_result)?;
         let response = find_child_with_suffix(&envelope.body.content, "IdResponse")
             .ok_or_else(|| anyhow!("Missing IdResponse element in SOAP body"))?;
-        let id_text = extract_child_text(response, "Id")?;
+        let id_text = extract_child_text(response, "Value")?;
         let id = id_text
             .parse::<u32>()
-            .map_err(|_| anyhow!("Invalid Info.Id value: {}", id_text))?;
+            .map_err(|_| anyhow!("Invalid Playlist.Id value: {}", id_text))?;
         Ok(id)
     }
 
