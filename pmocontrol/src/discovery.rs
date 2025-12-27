@@ -183,8 +183,10 @@ where
         endpoint.touch(location, server_header, max_age);
         endpoint.types_seen.insert(device_type);
 
-        if !endpoint.seen_as_renderer {
-            if let Some(info) = self.provider.build_renderer_info(endpoint) {
+        // Toujours tenter de classifier et envoyer un événement Online pour maintenir
+        // l'état à jour dans le registre (important pour les serveurs qui ré-apparaissent)
+        if let Some(info) = self.provider.build_renderer_info(endpoint) {
+            if !endpoint.seen_as_renderer {
                 tracing::debug!(
                     "Renderer classified: udn={} friendly_name={} model={}",
                     info.udn,
@@ -192,12 +194,12 @@ where
                     info.model_name
                 );
                 endpoint.seen_as_renderer = true;
-                updates.push(DeviceUpdate::RendererOnline(info));
             }
+            updates.push(DeviceUpdate::RendererOnline(info));
         }
 
-        if !endpoint.seen_as_server {
-            if let Some(info) = self.provider.build_server_info(endpoint) {
+        if let Some(info) = self.provider.build_server_info(endpoint) {
+            if !endpoint.seen_as_server {
                 tracing::debug!(
                     "Server classified: udn={} friendly_name={} model={}",
                     info.udn,
@@ -205,8 +207,8 @@ where
                     info.model_name
                 );
                 endpoint.seen_as_server = true;
-                updates.push(DeviceUpdate::ServerOnline(info));
             }
+            updates.push(DeviceUpdate::ServerOnline(info));
         }
     }
 }

@@ -1570,6 +1570,118 @@ impl ControlPoint {
         Ok(())
     }
 
+    /// Jumps to a specific index in the queue and starts playback.
+    ///
+    /// For OpenHome renderers, this uses the playlist's native SeekId capability.
+    /// For internal queues, this updates the current index and starts playback.
+    pub fn play_queue_index(&self, renderer_id: &RendererId, index: usize) -> anyhow::Result<()> {
+        if !self.runtime.has_entry(renderer_id) {
+            let err = Self::runtime_entry_missing(renderer_id);
+            warn!(
+                renderer = renderer_id.0.as_str(),
+                "Cannot jump to index: renderer not registered in runtime"
+            );
+            return Err(err);
+        }
+
+        // For OpenHome, use select_track_index which handles the track_id lookup
+        if self.runtime.uses_openhome_playlist(renderer_id) {
+            info!(
+                renderer = renderer_id.0.as_str(),
+                index,
+                "Seeking to OpenHome queue index"
+            );
+
+            // Use the queue to select the track by index
+            self.runtime.with_music_queue_mut(renderer_id, |queue| {
+                if let crate::control_point::music_queue::MusicQueue::OpenHome(oh_queue) = queue {
+                    oh_queue.select_track_index(index)
+                } else {
+                    Err(anyhow!("Expected OpenHome queue"))
+                }
+            })?;
+
+            info!(
+                renderer = renderer_id.0.as_str(),
+                index,
+                "Successfully seeked to OpenHome queue index"
+            );
+
+            self.runtime
+                .set_playback_source(renderer_id, PlaybackSource::FromQueue);
+            return self.sync_openhome_playlist_for(renderer_id);
+        }
+
+        // For internal queue, set the index and play
+        self.runtime.with_music_queue_mut(renderer_id, |queue| {
+            queue.set_index(Some(index))
+        })?;
+
+        let Some((item, remaining)) = self.runtime.peek_current(renderer_id) else {
+            debug!(
+                renderer = renderer_id.0.as_str(),
+                index,
+                "play_queue_index: no item at index"
+            );
+            self.runtime
+                .set_playback_source(renderer_id, PlaybackSource::None);
+            return Ok(());
+        };
+
+        debug!(
+            renderer = renderer_id.0.as_str(),
+            index,
+            queue_len = remaining + 1,
+            uri = item.uri.as_str(),
+            "Playing item at index from queue"
+        );
+
+        let renderer = self.music_renderer_by_id(renderer_id).ok_or_else(|| {
+            warn!(
+                renderer = renderer_id.0.as_str(),
+                "Renderer disappeared before queue playback could start"
+            );
+            anyhow!("Renderer {} not found", renderer_id.0)
+        })?;
+
+        let playback = (|| -> anyhow::Result<()> {
+            let didl_metadata = playback_item_to_didl(&item);
+            renderer.play_uri(&item.uri, &didl_metadata)?;
+            Ok(())
+        })();
+
+        match playback {
+            Ok(()) => {
+                info!(
+                    renderer = renderer_id.0.as_str(),
+                    index,
+                    uri = item.uri.as_str(),
+                    "Queue playback started at index"
+                );
+
+                let metadata = playback_item_track_metadata(&item);
+                self.runtime.update_snapshot_with(renderer_id, |snapshot| {
+                    snapshot.last_metadata = Some(metadata);
+                });
+
+                self.runtime
+                    .set_playback_source(renderer_id, PlaybackSource::FromQueue);
+                Ok(())
+            }
+            Err(err) => {
+                error!(
+                    renderer = renderer_id.0.as_str(),
+                    index,
+                    error = %err,
+                    "Failed to start playback for queued item at index"
+                );
+                self.runtime
+                    .set_playback_source(renderer_id, PlaybackSource::None);
+                Err(err)
+            }
+        }
+    }
+
     fn start_queue_playback_if_idle(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
         let snapshot = self.runtime.snapshot_for(renderer_id);
         let renderer_playing = matches!(snapshot.state, Some(PlaybackState::Playing));
