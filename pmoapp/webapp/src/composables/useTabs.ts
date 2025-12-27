@@ -1,21 +1,23 @@
 /**
  * Composable pour gérer les onglets dynamiques de l'interface unifiée.
- * Supporte les onglets home, renderer et server avec persistance localStorage.
+ * Onglets renderer auto-générés depuis la liste des renderers online.
+ * Onglets server ouverts manuellement via le drawer (fermables).
  */
 import { reactive, computed, watch, onMounted, type Component } from 'vue'
-import { Home, Radio, Server } from 'lucide-vue-next'
+import { Radio, Server } from 'lucide-vue-next'
 import type { RendererSummary, MediaServerSummary } from '../services/pmocontrol/types'
 
 export interface Tab {
-  id: string // "home", "renderer-{id}", "server-{id}"
-  type: 'home' | 'renderer' | 'server'
+  id: string // "renderer-{id}", "server-{id}"
+  type: 'renderer' | 'server'
   title: string // Nom affiché (tronqué sur mobile)
+  fullTitle: string // Nom complet (pour tooltip)
   icon: Component
   metadata?: {
     rendererId?: string
     serverId?: string
   }
-  closeable: boolean // home tab non fermable
+  closeable: boolean // renderer: false (auto-géré), server: true (manuel)
 }
 
 interface TabsState {
@@ -24,22 +26,15 @@ interface TabsState {
   tabHistory: string[] // Pour back/forward navigation
 }
 
-const MAX_TABS = 8
+const MAX_TABS = 12 // Augmenté car onglets auto-générés
 const STORAGE_KEY = 'pmo-tabs-state'
+const COMPACT_MODE_THRESHOLD = 5 // Passer en mode icônes seulement au-delà de 5 onglets
 
 // État global partagé entre toutes les instances du composable
 const state = reactive<TabsState>({
-  tabs: [
-    {
-      id: 'home',
-      type: 'home',
-      title: 'Home',
-      icon: Home,
-      closeable: false,
-    },
-  ],
-  activeTabId: 'home',
-  tabHistory: ['home'],
+  tabs: [],
+  activeTabId: '',
+  tabHistory: [],
 })
 
 // Flag pour éviter les boucles de sauvegarde
@@ -54,17 +49,21 @@ function truncateTitle(title: string, maxLength = 15): string {
 
 /**
  * Sauvegarde l'état dans localStorage
+ * Note: On ne sauvegarde que les onglets server (les renderer tabs sont auto-générés)
  */
 function saveToLocalStorage() {
   if (isRestoringFromStorage) return
 
   try {
     const stateToSave = {
-      tabs: state.tabs.map((tab) => ({
-        ...tab,
-        // On ne peut pas sauvegarder les composants Vue, on sauve juste le type
-        icon: undefined,
-      })),
+      // Sauvegarder uniquement les onglets server (fermables manuellement)
+      tabs: state.tabs
+        .filter((tab) => tab.type === 'server')
+        .map((tab) => ({
+          ...tab,
+          // On ne peut pas sauvegarder les composants Vue, on sauve juste le type
+          icon: undefined,
+        })),
       activeTabId: state.activeTabId,
       tabHistory: state.tabHistory,
     }
@@ -76,6 +75,7 @@ function saveToLocalStorage() {
 
 /**
  * Restaure l'état depuis localStorage
+ * Note: Restaure uniquement les onglets server (les renderer tabs seront auto-générés)
  */
 function restoreFromLocalStorage() {
   try {
@@ -85,18 +85,25 @@ function restoreFromLocalStorage() {
     isRestoringFromStorage = true
     const savedState = JSON.parse(saved)
 
-    // Reconstituer les tabs avec les bonnes icônes
-    state.tabs = savedState.tabs.map((tab: Tab) => ({
-      ...tab,
-      icon: tab.type === 'home' ? Home : tab.type === 'renderer' ? Radio : Server,
-    }))
+    // Reconstituer uniquement les tabs server avec les bonnes icônes
+    const serverTabs = (savedState.tabs || [])
+      .filter((tab: Tab) => tab.type === 'server')
+      .map((tab: Tab) => ({
+        ...tab,
+        icon: Server,
+        closeable: true,
+        fullTitle: tab.fullTitle || tab.title, // Fallback si fullTitle n'existe pas
+      }))
 
-    state.activeTabId = savedState.activeTabId || 'home'
-    state.tabHistory = savedState.tabHistory || ['home']
+    // Ajouter les tabs server restaurés (les renderer tabs seront ajoutés par syncWithRenderers)
+    state.tabs.push(...serverTabs)
 
-    // Vérifier que l'onglet actif existe toujours
+    state.activeTabId = savedState.activeTabId || ''
+    state.tabHistory = savedState.tabHistory || []
+
+    // Vérifier que l'onglet actif existe toujours (sera validé après syncWithRenderers)
     if (!state.tabs.find((t) => t.id === state.activeTabId)) {
-      state.activeTabId = 'home'
+      state.activeTabId = ''
     }
 
     isRestoringFromStorage = false
@@ -116,15 +123,13 @@ function findTab(tabId: string): Tab | undefined {
 /**
  * Ouvre un nouvel onglet ou active un onglet existant
  */
-function openTab(newTab: Omit<Tab, 'id'> & { id?: string }): string {
+function openTab(newTab: Omit<Tab, 'id' | 'fullTitle'> & { id?: string; fullTitle?: string }): string {
   // Générer un ID si non fourni
   const tabId =
     newTab.id ||
-    (newTab.type === 'home'
-      ? 'home'
-      : newTab.type === 'renderer'
-        ? `renderer-${newTab.metadata?.rendererId}`
-        : `server-${newTab.metadata?.serverId}`)
+    (newTab.type === 'renderer'
+      ? `renderer-${newTab.metadata?.rendererId}`
+      : `server-${newTab.metadata?.serverId}`)
 
   // Si l'onglet existe déjà, on le sélectionne
   const existingTab = findTab(tabId)
@@ -144,6 +149,7 @@ function openTab(newTab: Omit<Tab, 'id'> & { id?: string }): string {
     id: tabId,
     type: newTab.type,
     title: truncateTitle(newTab.title),
+    fullTitle: newTab.fullTitle || newTab.title, // Utiliser fullTitle si fourni, sinon title
     icon: newTab.icon,
     metadata: newTab.metadata,
     closeable: newTab.closeable !== false, // true par défaut sauf si explicitement false
@@ -156,15 +162,17 @@ function openTab(newTab: Omit<Tab, 'id'> & { id?: string }): string {
 }
 
 /**
- * Ferme un onglet
+ * Ferme un onglet (uniquement les onglets server manuels)
+ * Les onglets renderer sont auto-gérés et ne peuvent pas être fermés manuellement
  */
 function closeTab(tabId: string) {
   const tab = findTab(tabId)
   if (!tab) return
 
-  // Ne pas fermer l'onglet home
-  if (!tab.closeable) {
-    console.warn('[useTabs] Impossible de fermer un onglet non fermable')
+  // Ne fermer que les onglets server (closeable = true)
+  // Les renderer tabs sont auto-gérés par syncWithRenderers
+  if (!tab.closeable || tab.type === 'renderer') {
+    console.warn('[useTabs] Impossible de fermer un onglet renderer (auto-géré)')
     return
   }
 
@@ -188,8 +196,13 @@ function closeTab(tabId: string) {
     if (previousTab) {
       switchTab(previousTab)
     } else {
-      // Fallback sur home
-      switchTab('home')
+      // Fallback sur le premier onglet disponible (ou vide)
+      const firstTab = state.tabs[0]
+      if (firstTab) {
+        switchTab(firstTab.id)
+      } else {
+        state.activeTabId = ''
+      }
     }
   }
 }
@@ -238,25 +251,69 @@ function previousTab() {
 }
 
 /**
- * Ouvre un onglet renderer
+ * Synchronise les onglets avec la liste des renderers online
+ * Les renderer tabs sont automatiquement créés/supprimés selon l'état online
  */
-function openRenderer(renderer: RendererSummary | undefined) {
-  if (!renderer) return 'home'
+function syncWithRenderers(renderers: RendererSummary[]) {
+  const onlineRenderers = renderers.filter((r) => r.online)
 
-  return openTab({
-    type: 'renderer',
-    title: renderer.friendly_name,
-    icon: Radio,
-    metadata: { rendererId: renderer.id },
-    closeable: true,
+  // Extraire les tabs renderer actuels
+  const currentRendererTabs = state.tabs.filter((t) => t.type === 'renderer')
+
+  // IDs des renderers online
+  const onlineRendererIds = new Set(onlineRenderers.map((r) => `renderer-${r.id}`))
+
+  // Supprimer les tabs des renderers qui ne sont plus online
+  const renderersToRemove = currentRendererTabs.filter((t) => !onlineRendererIds.has(t.id))
+  renderersToRemove.forEach((tab) => {
+    const index = state.tabs.findIndex((t) => t.id === tab.id)
+    if (index !== -1) state.tabs.splice(index, 1)
+    state.tabHistory = state.tabHistory.filter((id) => id !== tab.id)
   })
+
+  // Ajouter les nouveaux renderers online
+  const currentRendererIds = new Set(currentRendererTabs.map((t) => t.id))
+  onlineRenderers.forEach((renderer) => {
+    const tabId = `renderer-${renderer.id}`
+    if (!currentRendererIds.has(tabId)) {
+      const newTab: Tab = {
+        id: tabId,
+        type: 'renderer',
+        title: truncateTitle(renderer.friendly_name),
+        fullTitle: renderer.friendly_name,
+        icon: Radio,
+        metadata: { rendererId: renderer.id },
+        closeable: false, // renderer tabs ne sont pas fermables manuellement
+      }
+      state.tabs.unshift(newTab) // Ajouter au début
+    }
+  })
+
+  // Vérifier que l'onglet actif existe toujours
+  if (state.activeTabId && !state.tabs.find((t) => t.id === state.activeTabId)) {
+    // Basculer vers le premier onglet disponible
+    const firstTab = state.tabs[0]
+    if (firstTab) {
+      state.activeTabId = firstTab.id
+    } else {
+      state.activeTabId = ''
+    }
+  }
+
+  // Si aucun onglet actif et qu'il y a des onglets, sélectionner le premier
+  if (!state.activeTabId && state.tabs.length > 0) {
+    const firstTab = state.tabs[0]
+    if (firstTab) {
+      state.activeTabId = firstTab.id
+    }
+  }
 }
 
 /**
- * Ouvre un onglet server
+ * Ouvre un onglet server (manuel)
  */
 function openServer(server: MediaServerSummary | undefined) {
-  if (!server) return 'home'
+  if (!server) return ''
 
   return openTab({
     type: 'server',
@@ -268,30 +325,10 @@ function openServer(server: MediaServerSummary | undefined) {
 }
 
 /**
- * Ferme tous les onglets sauf home
- */
-function closeAllTabs() {
-  state.tabs = state.tabs.filter((t) => !t.closeable)
-  state.activeTabId = 'home'
-  state.tabHistory = ['home']
-}
-
-/**
- * Ferme tous les onglets sauf l'actif
- */
-function closeOtherTabs() {
-  const activeTab = findTab(state.activeTabId)
-  if (!activeTab) return
-
-  state.tabs = state.tabs.filter((t) => !t.closeable || t.id === state.activeTabId)
-  state.tabHistory = state.tabHistory.filter((id) => state.tabs.some((t) => t.id === id))
-}
-
-/**
  * Composable principal
  */
 export function useTabs() {
-  // Watch pour sauvegarde automatique
+  // Watch pour sauvegarde automatique (uniquement les server tabs)
   watch(
     () => [state.tabs, state.activeTabId, state.tabHistory],
     () => {
@@ -300,10 +337,10 @@ export function useTabs() {
     { deep: true },
   )
 
-  // Restaurer au montage (une seule fois)
+  // Restaurer au montage (uniquement les server tabs)
   onMounted(() => {
-    const firstTab = state.tabs[0]
-    if (state.tabs.length === 1 && firstTab && firstTab.id === 'home') {
+    // Restaurer seulement si pas déjà fait
+    if (state.tabs.filter((t) => t.type === 'server').length === 0) {
       restoreFromLocalStorage()
     }
   })
@@ -312,6 +349,8 @@ export function useTabs() {
   const activeTab = computed(() => findTab(state.activeTabId) || state.tabs[0] || null)
   const hasMultipleTabs = computed(() => state.tabs.length > 1)
   const canAddTab = computed(() => state.tabs.length < MAX_TABS)
+  const isEmpty = computed(() => state.tabs.length === 0)
+  const compactMode = computed(() => state.tabs.length > COMPACT_MODE_THRESHOLD)
 
   return {
     // State
@@ -321,17 +360,17 @@ export function useTabs() {
     tabHistory: computed(() => state.tabHistory),
     hasMultipleTabs,
     canAddTab,
+    isEmpty,
+    compactMode,
 
     // Actions
+    syncWithRenderers, // Nouvelle fonction clé pour auto-sync
     openTab,
     closeTab,
     switchTab,
     nextTab,
     previousTab,
-    openRenderer,
     openServer,
-    closeAllTabs,
-    closeOtherTabs,
     findTab,
   }
 }
