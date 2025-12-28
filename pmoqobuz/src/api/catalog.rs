@@ -149,6 +149,12 @@ struct FeaturedPlaylistsResponse {
     playlists: PaginatedResponse<PlaylistResponse>,
 }
 
+/// Réponse artistes featured
+#[derive(Debug, Deserialize)]
+struct FeaturedArtistsResponse {
+    artists: PaginatedResponse<ArtistResponse>,
+}
+
 /// Réponse search
 #[derive(Debug, Deserialize)]
 struct SearchResponse {
@@ -394,6 +400,36 @@ impl QobuzApi {
             .items
             .into_iter()
             .map(Self::parse_playlist)
+            .collect())
+    }
+
+    /// Récupère les artistes featured
+    pub async fn get_featured_artists(
+        &self,
+        genre_id: Option<&str>,
+        limit: Option<u32>,
+        offset: Option<u32>,
+    ) -> Result<Vec<Artist>> {
+        debug!("Fetching featured artists");
+        let limit_str = limit.unwrap_or(100).to_string();
+        let offset_str = offset.unwrap_or(0).to_string();
+
+        let mut params = vec![
+            ("type", "featured-artists"),
+            ("limit", &limit_str),
+            ("offset", &offset_str),
+        ];
+
+        if let Some(gid) = genre_id {
+            params.push(("genre_ids", gid));
+        }
+
+        let response: FeaturedArtistsResponse = self.get("/artist/getFeatured", &params).await?;
+        Ok(response
+            .artists
+            .items
+            .into_iter()
+            .map(Self::parse_artist)
             .collect())
     }
 

@@ -316,3 +316,109 @@ impl SearchResult {
         self.total_count() == 0
     }
 }
+
+/// Types d'albums featured disponibles dans le catalogue Qobuz
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeaturedAlbumType {
+    /// Nouveautés
+    NewReleases,
+    /// Nouveautés complètes
+    NewReleasesFull,
+    /// Discographie idéale
+    IdealDiscography,
+    /// Qobuzissime
+    Qobuzissims,
+    /// Choix de l'éditeur
+    EditorPicks,
+    /// Prix de la presse
+    PressAwards,
+}
+
+impl FeaturedAlbumType {
+    /// Retourne l'identifiant API pour ce type
+    pub fn api_id(&self) -> &'static str {
+        match self {
+            Self::NewReleases => "new-releases",
+            Self::NewReleasesFull => "new-releases-full",
+            Self::IdealDiscography => "ideal-discography",
+            Self::Qobuzissims => "qobuzissims",
+            Self::EditorPicks => "editor-picks",
+            Self::PressAwards => "press-awards",
+        }
+    }
+}
+
+/// Tags de playlists disponibles dans le catalogue Qobuz
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaylistTag {
+    /// Hi-Res
+    HiRes,
+    /// Nouvelles
+    New,
+    /// Thématiques
+    Themes,
+    /// Choix d'artistes
+    ArtistsChoices,
+    /// Labels
+    Labels,
+    /// Humeurs
+    Moods,
+    /// Artistes
+    Artists,
+    /// Événements
+    Events,
+    /// Auditoriums
+    Auditoriums,
+    /// Populaires
+    Popular,
+}
+
+impl PlaylistTag {
+    /// Retourne l'identifiant API pour ce tag
+    pub fn api_id(&self) -> &'static str {
+        match self {
+            Self::HiRes => "hi-res",
+            Self::New => "new",
+            Self::Themes => "focus",
+            Self::ArtistsChoices => "danslecasque",
+            Self::Labels => "label",
+            Self::Moods => "mood",
+            Self::Artists => "artist",
+            Self::Events => "events",
+            Self::Auditoriums => "auditoriums",
+            Self::Popular => "popular",
+        }
+    }
+
+    /// Retourne le titre localisé pour ce tag
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::HiRes => "Playlists (Hi-Res)",
+            Self::New => "Playlists (New)",
+            Self::Themes => "Playlists (Themes)",
+            Self::ArtistsChoices => "Playlists (Artist's Choices)",
+            Self::Labels => "Playlists (Labels)",
+            Self::Moods => "Playlists (Moods)",
+            Self::Artists => "Playlists (Artists)",
+            Self::Events => "Playlists (Events)",
+            Self::Auditoriums => "Playlists (Auditoriums)",
+            Self::Popular => "Playlists (Popular)",
+        }
+    }
+
+    /// Retourne la liste de tous les tags
+    pub fn all() -> &'static [PlaylistTag] {
+        &[
+            Self::HiRes,
+            Self::New,
+            Self::Themes,
+            Self::ArtistsChoices,
+            Self::Labels,
+            Self::Moods,
+            Self::Artists,
+            Self::Events,
+            Self::Auditoriums,
+            Self::Popular,
+        ]
+    }
+}
