@@ -124,6 +124,24 @@ async fn serve_finalized_pk<C: CacheConfig + 'static>(
         warn!("Error updating hit count for {}: {}", pk, e);
     }
 
+    // ROUTE 1 : Fichier en cours de téléchargement
+    // Utilise le streaming progressif avec Content-Length pour permettre
+    // la lecture pendant le téléchargement tout en préservant la durée/position
+    if let Some(download) = cache.get_download(pk).await {
+        if !download.finished().await {
+            let response = stream_file_progressive(file_path, download, content_type).await;
+
+            if response.status().is_success() {
+                cache.notify_broadcast(pk, &qualifier).await;
+            }
+
+            return response;
+        }
+    }
+
+    // ROUTE 2 : Fichier complètement téléchargé
+    // Utilise l'ancien système éprouvé qui garantit un passage correct
+    // de toutes les informations (Content-Length automatique, etc.)
     let response = serve_complete_file(file_path, content_type).await;
 
     if response.status().is_success() {
@@ -256,6 +274,8 @@ async fn stream_file_progressive(
     download: Arc<crate::download::Download>,
     content_type: &'static str,
 ) -> Response {
+    use axum::http::header;
+
     // Attendre qu'au moins 64 KB soient disponibles avant de commencer
     const MIN_SIZE_TO_START: u64 = 64 * 1024;
 
@@ -284,15 +304,24 @@ async fn stream_file_progressive(
     let stream = ReaderStream::new(file);
     let body = Body::from_stream(stream);
 
-    (
-        StatusCode::OK,
-        [
-            ("content-type", content_type),
-            ("transfer-encoding", "chunked"),
-        ],
-        body,
-    )
-        .into_response()
+    // Récupérer la taille attendue du fichier si disponible
+    let expected_size = download.expected_size().await;
+
+    // Construire la réponse avec Content-Length si connu
+    let mut response = axum::http::Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type);
+
+    if let Some(size) = expected_size {
+        // Si on connaît la taille finale, l'envoyer au renderer
+        // pour qu'il puisse calculer la durée et afficher la position
+        response = response.header(header::CONTENT_LENGTH, size);
+    } else {
+        // Sinon, utiliser chunked encoding
+        response = response.header(header::TRANSFER_ENCODING, "chunked");
+    }
+
+    response.body(body).unwrap()
 }
 
 /// Sert un fichier complet déjà téléchargé
