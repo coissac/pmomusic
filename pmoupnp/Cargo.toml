@@ -13,6 +13,8 @@ pmoaudiocache = { path = "../pmoaudiocache", features = ["pmoserver"] }
 pmoplaylist = { path = "../pmoplaylist", optional = true, features = ["pmoserver"] }
 pmocache = { path = "../pmocache" }
 
+async-trait = "0.1"
+async-recursion = "1.1"
 url = "2.5.7"
 uuid = "1.18.1"
 hex = "0.4.3"

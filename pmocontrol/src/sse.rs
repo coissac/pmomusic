@@ -179,13 +179,13 @@ pub async fn renderer_events_sse(
         };
 
         for info in initial_renderers {
-            if info.online {
+            if info.is_online() {
                 let timestamp = chrono::Utc::now();
                 let payload = RendererEventPayload::Online {
-                    renderer_id: info.id.0.clone(),
-                    friendly_name: info.friendly_name.clone(),
-                    model_name: info.model_name.clone(),
-                    manufacturer: info.manufacturer.clone(),
+                    renderer_id: info.id().0,
+                    friendly_name: info.friendly_name().to_string(),
+                    model_name: info. ().to_string(),
+                    manufacturer: info.manufacturer().to_string(),
                     timestamp,
                 };
 

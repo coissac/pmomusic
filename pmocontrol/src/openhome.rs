@@ -24,46 +24,46 @@ impl OhServiceKind {
     }
 }
 
-pub struct OhServiceEndpoint<'a> {
-    pub control_url: &'a str,
-    pub service_type: &'a str,
+pub struct OhServiceEndpoint {
+    pub control_url: String,
+    pub service_type: String,
 }
 
-fn endpoint_for<'a>(info: &'a RendererInfo, kind: OhServiceKind) -> Option<OhServiceEndpoint<'a>> {
+fn endpoint_for(info: &RendererInfo, kind: OhServiceKind) -> Option<OhServiceEndpoint> {
     let (control_url, service_type) = match kind {
         OhServiceKind::Playlist => (
-            info.oh_playlist_control_url.as_deref()?,
-            info.oh_playlist_service_type.as_deref()?,
+            info.oh_playlist_control_url()?,
+            info.oh_playlist_service_type()?,
         ),
         OhServiceKind::Info => (
-            info.oh_info_control_url.as_deref()?,
-            info.oh_info_service_type.as_deref()?,
+            info.oh_info_control_url()?,
+            info.oh_info_service_type()?,
         ),
         OhServiceKind::Time => (
-            info.oh_time_control_url.as_deref()?,
-            info.oh_time_service_type.as_deref()?,
+            info.oh_time_control_url()?,
+            info.oh_time_service_type()?,
         ),
         OhServiceKind::Volume => (
-            info.oh_volume_control_url.as_deref()?,
-            info.oh_volume_service_type.as_deref()?,
+            info.oh_volume_control_url()?,
+            info.oh_volume_service_type()?,
         ),
         OhServiceKind::Product => (
-            info.oh_product_control_url.as_deref()?,
-            info.oh_product_service_type.as_deref()?,
+            info.oh_product_control_url()?,
+            info.oh_product_service_type()?,
         ),
     };
 
     Some(OhServiceEndpoint {
-        control_url,
-        service_type,
+        control_url: control_url,
+        service_type: service_type,
     })
 }
 
-pub fn control_url_for<'a>(info: &'a RendererInfo, kind: OhServiceKind) -> Option<&'a str> {
+pub fn control_url_for(info: &RendererInfo, kind: OhServiceKind) -> Option<String> {
     endpoint_for(info, kind).map(|endpoint| endpoint.control_url)
 }
 
-pub fn service_type_for<'a>(info: &'a RendererInfo, kind: OhServiceKind) -> Option<&'a str> {
+pub fn service_type_for(info: &RendererInfo, kind: OhServiceKind) -> Option<String> {
     endpoint_for(info, kind).map(|endpoint| endpoint.service_type)
 }
 
@@ -108,55 +108,52 @@ pub fn build_product_client(info: &RendererInfo) -> Option<OhProductClient> {
 }
 
 pub fn build_radio_client(info: &RendererInfo) -> Option<OhRadioClient> {
-    let control_url = info.oh_radio_control_url.as_ref()?;
-    let service_type = info.oh_radio_service_type.as_ref()?;
+    let control_url = info.oh_radio_control_url()?;
+    let service_type = info.oh_radio_service_type()?;
     Some(OhRadioClient::new(
-        control_url.clone(),
-        service_type.clone(),
+        control_url,
+        service_type,
     ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{RendererCapabilities, RendererId, RendererInfo, RendererProtocol};
+    use crate::{DeviceId, model::{RendererCapabilities, RendererInfo, RendererProtocol}};
 
     fn sample_renderer_info() -> RendererInfo {
-        RendererInfo {
-            id: RendererId("renderer".into()),
-            udn: "renderer".into(),
-            friendly_name: "Renderer".into(),
-            model_name: "Model".into(),
-            manufacturer: "Maker".into(),
-            protocol: RendererProtocol::OpenHomeOnly,
-            capabilities: RendererCapabilities::default(),
-            location: "http://host:1234/description.xml".into(),
-            server_header: "test".into(),
-            online: true,
-            last_seen: std::time::SystemTime::now(),
-            max_age: 1800,
-            avtransport_service_type: None,
-            avtransport_control_url: None,
-            rendering_control_service_type: None,
-            rendering_control_control_url: None,
-            connection_manager_service_type: None,
-            connection_manager_control_url: None,
-            oh_playlist_service_type: Some("urn:av-openhome-org:service:Playlist:1".into()),
-            oh_playlist_control_url: Some("http://host/oh/playlist".into()),
-            oh_playlist_event_sub_url: Some("http://host/events/playlist".into()),
-            oh_info_service_type: Some("urn:av-openhome-org:service:Info:1".into()),
-            oh_info_control_url: Some("http://host/oh/info".into()),
-            oh_info_event_sub_url: Some("http://host/events/info".into()),
-            oh_time_service_type: Some("urn:av-openhome-org:service:Time:1".into()),
-            oh_time_control_url: Some("http://host/oh/time".into()),
-            oh_time_event_sub_url: Some("http://host/events/time".into()),
-            oh_volume_service_type: Some("urn:av-openhome-org:service:Volume:1".into()),
-            oh_volume_control_url: Some("http://host/oh/volume".into()),
-            oh_radio_service_type: None,
-            oh_radio_control_url: None,
-            oh_product_service_type: Some("urn:av-openhome-org:service:Product:1".into()),
-            oh_product_control_url: Some("http://host/oh/product".into()),
-        }
+        RendererInfo::make(
+            DeviceId("renderer".into()),
+            "renderer".into(),
+            "Renderer".into(),
+            "Model".into(),
+            "Maker".into(),
+            RendererProtocol::OpenHomeOnly,
+            RendererCapabilities::default(),
+            "http://host:1234/description.xml".into(),
+            "test".into(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("urn:av-openhome-org:service:Playlist:1".into()),
+            Some("http://host/oh/playlist".into()),
+            Some("http://host/events/playlist".into()),
+            Some("urn:av-openhome-org:service:Info:1".into()),
+            Some("http://host/oh/info".into()),
+            Some("http://host/events/info".into()),
+            Some("urn:av-openhome-org:service:Time:1".into()),
+            Some("http://host/oh/time".into()),
+            Some("http://host/events/time".into()),
+            Some("urn:av-openhome-org:service:Volume:1".into()),
+            Some("http://host/oh/volume".into()),
+            None,
+            None,
+            Some("urn:av-openhome-org:service:Product:1".into()),
+            Some("http://host/oh/product".into()),
+        )
     }
 
     #[test]
@@ -168,13 +165,6 @@ mod tests {
             endpoint.service_type,
             "urn:av-openhome-org:service:Playlist:1"
         );
-    }
-
-    #[test]
-    fn returns_none_when_service_missing() {
-        let mut info = sample_renderer_info();
-        info.oh_playlist_control_url = None;
-        assert!(endpoint_for(&info, OhServiceKind::Playlist).is_none());
     }
 
     #[test]

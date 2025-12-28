@@ -7,11 +7,13 @@ use anyhow::{Context, Result, anyhow};
 use tracing::debug;
 use ureq::Agent;
 
+use crate::DeviceIdentity;
 use crate::capabilities::{
     PlaybackPosition, PlaybackPositionInfo, PlaybackState, PlaybackStatus, TransportControl,
     VolumeControl,
 };
-use crate::model::{RendererId, RendererInfo};
+use crate::errors::ControlPointError;
+use crate::model::{RendererInfo};
 
 const DEFAULT_HTTP_TIMEOUT_SECS: u64 = 3;
 const STATUS_COMMAND: &str = "getPlayerStatus";
@@ -19,7 +21,6 @@ const STATUS_COMMAND: &str = "getPlayerStatus";
 /// Renderer backend for devices exposing the LinkPlay HTTP API.
 #[derive(Clone)]
 pub struct LinkPlayRenderer {
-    pub info: RendererInfo,
     host: String,
     timeout: Duration,
 }
@@ -27,8 +28,6 @@ pub struct LinkPlayRenderer {
 impl fmt::Debug for LinkPlayRenderer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LinkPlayRenderer")
-            .field("id", &self.info.id)
-            .field("friendly_name", &self.info.friendly_name)
             .field("host", &self.host)
             .finish()
     }
@@ -36,12 +35,11 @@ impl fmt::Debug for LinkPlayRenderer {
 
 impl LinkPlayRenderer {
     /// Build a LinkPlay backend from a registry snapshot.
-    pub fn from_renderer_info(info: RendererInfo) -> Result<Self> {
-        let host = extract_linkplay_host(&info.location)
-            .ok_or_else(|| anyhow!("Renderer {} has no valid LOCATION host", info.udn))?;
+    pub fn from_renderer_info(info: RendererInfo) -> Result<Self, ControlPointError> {
+        let host = extract_linkplay_host(&info.location())
+            .ok_or_else(|| ControlPointError::LinkPlayError(format!("Renderer {} has no valid LOCATION host", info.udn())))?;
 
         Ok(Self {
-            info,
             host,
             timeout: Duration::from_secs(DEFAULT_HTTP_TIMEOUT_SECS),
         })
@@ -51,15 +49,7 @@ impl LinkPlayRenderer {
         build_agent(self.timeout)
     }
 
-    pub fn id(&self) -> &RendererId {
-        &self.info.id
-    }
-
-    pub fn friendly_name(&self) -> &str {
-        &self.info.friendly_name
-    }
-
-    fn send_player_command(&self, command: &str) -> Result<()> {
+    fn send_player_command(&self, command: &str) -> Result<(), ControlPointError> {
         let url = format!(
             "http://{}/httpapi.asp?command=setPlayerCmd:{}",
             self.host, command
@@ -67,67 +57,67 @@ impl LinkPlayRenderer {
         self.agent()
             .get(&url)
             .call()
-            .with_context(|| format!("LinkPlay command {} failed for {}", command, self.host))?;
+            .map_err(|_| ControlPointError::ArilycTcpError(format!("LinkPlay command {} failed for {}", command, self.host)))?;
         Ok(())
     }
 
-    fn fetch_status(&self) -> Result<LinkPlayStatus> {
+    fn fetch_status(&self) -> Result<LinkPlayStatus, ControlPointError> {
         fetch_status_for_host(&self.host, self.timeout)
     }
 }
 
 impl TransportControl for LinkPlayRenderer {
-    fn play_uri(&self, uri: &str, _meta: &str) -> Result<()> {
+    fn play_uri(&self, uri: &str, _meta: &str) -> Result<(), ControlPointError> {
         let encoded = percent_encode(uri);
         self.send_player_command(&format!("play:{}", encoded))
     }
 
-    fn play(&self) -> Result<()> {
+    fn play(&self) -> Result<(), ControlPointError> {
         self.send_player_command("resume")
     }
 
-    fn pause(&self) -> Result<()> {
+    fn pause(&self) -> Result<(), ControlPointError> {
         self.send_player_command("pause")
     }
 
-    fn stop(&self) -> Result<()> {
+    fn stop(&self) -> Result<(), ControlPointError> {
         self.send_player_command("stop")
     }
 
-    fn seek_rel_time(&self, hhmmss: &str) -> Result<()> {
+    fn seek_rel_time(&self, hhmmss: &str) -> Result<(), ControlPointError> {
         let secs = parse_hhmmss_to_secs(hhmmss)
-            .ok_or_else(|| anyhow!("Invalid seek position format: {}", hhmmss))?;
+            .ok_or_else(|| ControlPointError::LinkPlayError(format!("Invalid seek position format: {}", hhmmss)))?;
         self.send_player_command(&format!("seek:{}", secs))
     }
 }
 
 impl VolumeControl for LinkPlayRenderer {
-    fn volume(&self) -> Result<u16> {
+    fn volume(&self) -> Result<u16, ControlPointError> {
         Ok(self.fetch_status()?.volume)
     }
 
-    fn set_volume(&self, v: u16) -> Result<()> {
+    fn set_volume(&self, v: u16) -> Result<(), ControlPointError> {
         let value = v.min(100);
         self.send_player_command(&format!("vol:{}", value))
     }
 
-    fn mute(&self) -> Result<bool> {
+    fn mute(&self) -> Result<bool, ControlPointError> {
         Ok(self.fetch_status()?.mute)
     }
 
-    fn set_mute(&self, m: bool) -> Result<()> {
+    fn set_mute(&self, m: bool) -> Result<(), ControlPointError> {
         self.send_player_command(if m { "mute:1" } else { "mute:0" })
     }
 }
 
 impl PlaybackStatus for LinkPlayRenderer {
-    fn playback_state(&self) -> Result<PlaybackState> {
+    fn playback_state(&self) -> Result<PlaybackState, ControlPointError> {
         Ok(self.fetch_status()?.playback_state())
     }
 }
 
 impl PlaybackPosition for LinkPlayRenderer {
-    fn playback_position(&self) -> Result<PlaybackPositionInfo> {
+    fn playback_position(&self) -> Result<PlaybackPositionInfo, ControlPointError> {
         Ok(self.fetch_status()?.position_info())
     }
 }
@@ -174,17 +164,17 @@ pub fn extract_linkplay_host(location: &str) -> Option<String> {
     }
 }
 
-fn fetch_status_for_host(host: &str, timeout: Duration) -> Result<LinkPlayStatus> {
+fn fetch_status_for_host(host: &str, timeout: Duration) -> Result<LinkPlayStatus, ControlPointError> {
     let url = format!("http://{}/httpapi.asp?command={}", host, STATUS_COMMAND);
     let mut response = build_agent(timeout)
         .get(&url)
         .call()
-        .with_context(|| format!("HTTP request failed for LinkPlay status on {}", host))?;
+        .map_err(|_| ControlPointError::ArilycTcpError(format!("HTTP request failed for LinkPlay status on {}", host)))?;
 
     let body = response
         .body_mut()
         .read_to_string()
-        .context("Failed to read LinkPlay status body")?;
+        .map_err(|e| ControlPointError::ArilycTcpError(format!("Failed to read LinkPlay status body : {}",e)))?;
 
     parse_linkplay_status(&body)
 }
@@ -233,12 +223,12 @@ impl LinkPlayStatus {
     }
 }
 
-fn parse_linkplay_status(body: &str) -> Result<LinkPlayStatus> {
+fn parse_linkplay_status(body: &str) -> Result<LinkPlayStatus, ControlPointError> {
     let mut map = parse_flat_json(body)?;
 
     let state_raw = map
         .remove("status")
-        .ok_or_else(|| anyhow!("LinkPlay status missing `status` field"))?;
+        .ok_or_else(|| ControlPointError::ArilycTcpError(format!("LinkPlay status missing `status` field")))?;
 
     let curpos_ms = parse_u64_field(&map, "curpos")?;
     let totlen_ms = parse_u64_field(&map, "totlen")?;
@@ -247,9 +237,9 @@ fn parse_linkplay_status(body: &str) -> Result<LinkPlayStatus> {
         Some("1") => true,
         Some("0") => false,
         Some(other) => {
-            return Err(anyhow!("Invalid LinkPlay mute value: {}", other));
+            return Err(ControlPointError::ArilycTcpError(format!("Invalid LinkPlay mute value: {}", other)));
         }
-        None => return Err(anyhow!("LinkPlay status missing `mute` field")),
+        None => return Err(ControlPointError::arilyc_tcp_error("LinkPlay status missing `mute` field")),
     };
 
     let track_index = map
@@ -267,29 +257,29 @@ fn parse_linkplay_status(body: &str) -> Result<LinkPlayStatus> {
     })
 }
 
-fn parse_u64_field(map: &HashMap<String, String>, key: &str) -> Result<u64> {
+fn parse_u64_field(map: &HashMap<String, String>, key: &str) -> Result<u64, ControlPointError> {
     let raw = map
         .get(key)
-        .ok_or_else(|| anyhow!("LinkPlay status missing `{}` field", key))?;
+        .ok_or_else(|| ControlPointError::ArilycTcpError(format!("LinkPlay status missing `{}` field", key)))?;
     raw.parse::<u64>()
-        .with_context(|| format!("Invalid `{}` value: {}", key, raw))
+        .map_err(|_| ControlPointError::LinkPlayError(format!("Invalid `{}` value: {}", key, raw)))
 }
 
-fn parse_u16_field(map: &HashMap<String, String>, key: &str) -> Result<u16> {
+fn parse_u16_field(map: &HashMap<String, String>, key: &str) -> Result<u16, ControlPointError> {
     let raw = map
         .get(key)
-        .ok_or_else(|| anyhow!("LinkPlay status missing `{}` field", key))?;
+        .ok_or_else(|| ControlPointError::ArilycTcpError(format!("LinkPlay status missing `{}` field", key)))?;
     let value = raw
         .parse::<u16>()
-        .with_context(|| format!("Invalid `{}` value: {}", key, raw))?;
+        .map_err(|_| ControlPointError::LinkPlayError(format!("Invalid `{}` value: {}", key, raw)))?;
     Ok(value.min(100))
 }
 
-pub(crate) fn parse_flat_json(input: &str) -> Result<HashMap<String, String>> {
+pub(crate) fn parse_flat_json(input: &str) -> Result<HashMap<String, String>, ControlPointError> {
     let mut chars = input.chars().peekable();
     skip_ws(&mut chars);
     if chars.next() != Some('{') {
-        return Err(anyhow!("LinkPlay status is not a JSON object"));
+        return Err(ControlPointError::ArilycTcpError(format!("LinkPlay status is not a JSON object")));
     }
 
     let mut map = HashMap::new();
@@ -301,7 +291,7 @@ pub(crate) fn parse_flat_json(input: &str) -> Result<HashMap<String, String>> {
                 break;
             }
             Some(_) => {}
-            None => return Err(anyhow!("Unexpected end of JSON object")),
+            None => return Err(ControlPointError::ArilycTcpError(format!("Unexpected end of JSON object"))),
         }
 
         let key = parse_json_string(&mut chars)?;
@@ -322,19 +312,19 @@ pub(crate) fn parse_flat_json(input: &str) -> Result<HashMap<String, String>> {
                 break;
             }
             Some(other) => {
-                return Err(anyhow!(
+                return Err(ControlPointError::ArilycTcpError(format!(
                     "Unexpected character '{}' while parsing JSON",
                     other
-                ));
+                )));
             }
-            None => return Err(anyhow!("Unexpected end of JSON while parsing fields")),
+            None => return Err(ControlPointError::ArilycTcpError(format!("Unexpected end of JSON while parsing fields"))),
         }
     }
 
     Ok(map)
 }
 
-fn parse_json_value(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Result<String> {
+fn parse_json_value(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Result<String, ControlPointError> {
     match chars.peek() {
         Some('"') => parse_json_string(chars),
         Some(ch) if ch.is_ascii_digit() || *ch == '-' => parse_json_number(chars),
@@ -346,13 +336,13 @@ fn parse_json_value(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Res
             expect_literal(chars, "false")?;
             Ok("false".to_string())
         }
-        _ => Err(anyhow!("Unsupported JSON value in LinkPlay status")),
+        _ => Err(ControlPointError::ArilycTcpError(format!("Unsupported JSON value in LinkPlay status"))),
     }
 }
 
-fn parse_json_string(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Result<String> {
+fn parse_json_string(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Result<String, ControlPointError> {
     if chars.next() != Some('"') {
-        return Err(anyhow!("Expected string"));
+        return Err(ControlPointError::ArilycTcpError(format!("Expected string")));
     }
 
     let mut out = String::new();
@@ -360,7 +350,7 @@ fn parse_json_string(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Re
         match ch {
             '"' => return Ok(out),
             '\\' => {
-                let escaped = chars.next().ok_or_else(|| anyhow!("Invalid escape"))?;
+                let escaped = chars.next().ok_or_else(|| ControlPointError::ArilycTcpError(format!("Invalid escape")))?;
                 match escaped {
                     '"' => out.push('"'),
                     '\\' => out.push('\\'),
@@ -373,28 +363,28 @@ fn parse_json_string(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Re
                     'u' => {
                         let mut hex = String::with_capacity(4);
                         for _ in 0..4 {
-                            let h = chars.next().ok_or_else(|| anyhow!("Invalid \\u escape"))?;
+                            let h = chars.next().ok_or_else(|| ControlPointError::ArilycTcpError(format!("Invalid \\u escape")))?;
                             hex.push(h);
                         }
                         let code = u16::from_str_radix(&hex, 16)
-                            .with_context(|| format!("Invalid unicode escape: {}", hex))?;
+                            .map_err(|e| ControlPointError::ArilycTcpError(format!("Invalid unicode escape: {}", hex)))?;
                         if let Some(c) = char::from_u32(code as u32) {
                             out.push(c);
                         } else {
-                            return Err(anyhow!("Invalid unicode code point: {}", code));
+                            return Err(ControlPointError::ArilycTcpError(format!("Invalid unicode code point: {}", code)));
                         }
                     }
-                    other => return Err(anyhow!("Unsupported escape: {}", other)),
+                    other => return Err(ControlPointError::ArilycTcpError(format!("Unsupported escape: {}", other))),
                 }
             }
             other => out.push(other),
         }
     }
 
-    Err(anyhow!("Unterminated JSON string"))
+    Err(ControlPointError::ArilycTcpError(format!("Unterminated JSON string")))
 }
 
-fn parse_json_number(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Result<String> {
+fn parse_json_number(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Result<String, ControlPointError> {
     let mut out = String::new();
 
     if matches!(chars.peek(), Some('-')) {
@@ -412,7 +402,7 @@ fn parse_json_number(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Re
     }
 
     if out.is_empty() || out == "-" {
-        return Err(anyhow!("Invalid number"));
+        return Err(ControlPointError::ArilycTcpError(format!("Invalid number")));
     }
 
     Ok(out)
@@ -421,20 +411,20 @@ fn parse_json_number(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Re
 fn expect_literal(
     chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
     literal: &str,
-) -> Result<()> {
+) -> Result<(), ControlPointError> {
     for expected in literal.chars() {
         match chars.next() {
             Some(ch) if ch == expected => {}
-            _ => return Err(anyhow!("Invalid literal while parsing JSON")),
+            _ => return Err(ControlPointError::ArilycTcpError(format!("Invalid literal while parsing JSON"))),
         }
     }
     Ok(())
 }
 
-fn expect_char(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, expected: char) -> Result<()> {
+fn expect_char(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, expected: char) -> Result<(), ControlPointError> {
     match chars.next() {
         Some(ch) if ch == expected => Ok(()),
-        _ => Err(anyhow!("Missing '{}' while parsing JSON", expected)),
+        _ => Err(ControlPointError::ArilycTcpError(format!("Missing '{}' while parsing JSON", expected))),
     }
 }
 

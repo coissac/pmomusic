@@ -5,16 +5,17 @@ use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
-use anyhow::anyhow;
 use anyhow::{Context, Result};
 use tracing::{debug, warn};
 
+use crate::DeviceIdentity;
 use crate::capabilities::{
     PlaybackPosition, PlaybackPositionInfo, PlaybackState, PlaybackStatus, TransportControl,
     VolumeControl,
 };
-use crate::linkplay::{extract_linkplay_host, parse_flat_json};
-use crate::model::{RendererId, RendererInfo};
+use crate::errors::ControlPointError;
+use crate::linkplay_renderer::{extract_linkplay_host, parse_flat_json};
+use crate::model::RendererInfo;
 use std::time::Instant;
 
 // Garde global pour respecter le délai de 200ms entre commandes
@@ -76,7 +77,7 @@ pub(crate) fn detect_arylic_tcp(location: &str, timeout: Duration) -> bool {
     detected
 }
 
-fn try_detect_tcp(host: &str, timeout: Duration) -> Result<()> {
+fn try_detect_tcp(host: &str, timeout: Duration) -> Result<(), ControlPointError> {
     let payload = send_command_required(
         host,
         ARYLIC_TCP_PORT,
@@ -88,57 +89,47 @@ fn try_detect_tcp(host: &str, timeout: Duration) -> Result<()> {
     if payload.starts_with("AXX+INF+") || payload.starts_with("AXX+DEV+") {
         Ok(())
     } else {
-        Err(anyhow!(
+        Err(ControlPointError::ArilycTcpError(format!(
             "Unexpected INF response from {}: {}",
             host,
             payload
-        ))
+        )))
     }
 }
 
 /// Backend speaking the Arylic TCP control protocol (port 8899).
 #[derive(Clone, Debug)]
 pub struct ArylicTcpRenderer {
-    pub info: RendererInfo,
     host: String,
     port: u16,
     timeout: Duration,
 }
 
 impl ArylicTcpRenderer {
-    pub fn from_renderer_info(info: RendererInfo) -> Result<Self> {
-        let host = extract_linkplay_host(&info.location)
-            .ok_or_else(|| anyhow!("Renderer {} has no valid LOCATION host", info.udn))?;
+    pub fn from_renderer_info(info: RendererInfo) -> Result<Self, ControlPointError> {
+        let host = extract_linkplay_host(info.location())
+            .ok_or_else(|| ControlPointError::ArilycTcpError(format!("Renderer {} has no valid LOCATION host", info.udn())))?;
 
         Ok(Self {
-            info,
             host,
             port: ARYLIC_TCP_PORT,
             timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
         })
     }
 
-    pub fn id(&self) -> &RendererId {
-        &self.info.id
-    }
-
-    pub fn friendly_name(&self) -> &str {
-        &self.info.friendly_name
-    }
-
-    fn send_required(&self, cmd: &str, expected: &[&str]) -> Result<String> {
+    fn send_required(&self, cmd: &str, expected: &[&str]) -> Result<String, ControlPointError> {
         send_command_required(&self.host, self.port, self.timeout, cmd, expected)
     }
 
-    fn send_optional(&self, cmd: &str, expected: &[&str]) -> Result<Option<String>> {
+    fn send_optional(&self, cmd: &str, expected: &[&str]) -> Result<Option<String>, ControlPointError> {
         send_command_optional(&self.host, self.port, self.timeout, cmd, expected)
     }
 
-    fn send_no_response(&self, cmd: &str) -> Result<()> {
+    fn send_no_response(&self, cmd: &str) -> Result<(), ControlPointError> {
         send_command_no_response(&self.host, self.port, self.timeout, cmd)
     }
 
-    fn fetch_playback_info(&self) -> Result<ArylicPlaybackInfo> {
+    fn fetch_playback_info(&self) -> Result<ArylicPlaybackInfo, ControlPointError> {
         let payload = self.send_required("MCU+PINFGET", &["AXX+PLY+INF"])?;
         match parse_playback_info(&payload) {
             Ok(info) => Ok(info),
@@ -156,59 +147,60 @@ impl ArylicTcpRenderer {
         format!("MCU+VOL+{:03}", value.min(100))
     }
 
-    fn parse_volume_payload(payload: &str) -> Result<u16> {
+    fn parse_volume_payload(payload: &str) -> Result<u16, ControlPointError> {
         let data = payload
             .strip_prefix("AXX+VOL+")
-            .ok_or_else(|| anyhow!("Unexpected volume response: {}", payload))?;
+            .ok_or_else(|| ControlPointError::ArilycTcpError(format!("Unexpected volume response: {}", payload)))?;
         let value: u16 = data
             .trim()
             .parse()
-            .with_context(|| format!("Invalid volume value: {}", data))?;
+            .map_err(|_| ControlPointError::ArilycTcpError(format!("Invalid volume value: {}", data)))?;
         Ok(value.min(100))
     }
 
-    fn parse_mute_payload(payload: &str) -> Result<bool> {
+    fn parse_mute_payload(payload: &str) -> Result<bool, ControlPointError> {
         let data = payload
             .strip_prefix("AXX+MUT+")
-            .ok_or_else(|| anyhow!("Unexpected mute response: {}", payload))?;
+            .ok_or_else(|| ControlPointError::ArilycTcpError(format!("Unexpected mute response: {}", payload)))?;
         match data.trim() {
             "000" | "0" => Ok(false),
             "001" | "1" => Ok(true),
-            other => Err(anyhow!("Invalid mute value: {}", other)),
+            other => Err(ControlPointError::ArilycTcpError(format!("Invalid mute value: {}", other))),
         }
     }
 }
 
 impl TransportControl for ArylicTcpRenderer {
-    fn play_uri(&self, _uri: &str, _meta: &str) -> Result<()> {
-        Err(anyhow!(
-            "Arylic TCP backend does not support direct URL loading. Use UPnP AVTransport SetAVTransportURI instead."
+    fn play_uri(&self, _uri: &str, _meta: &str) -> Result<(), ControlPointError> {
+        Err(ControlPointError::upnp_operation_not_supported(
+            "Arylic TCP backend does not support direct URL loading.",
+            "ArylicTcpRenderer",
         ))
     }
 
-    fn play(&self) -> Result<()> {
+    fn play(&self) -> Result<(), ControlPointError>  {
         self.send_no_response("MCU+PLY-PLA")
     }
 
-    fn pause(&self) -> Result<()> {
+    fn pause(&self) -> Result<(), ControlPointError> {
         let _ = self.send_optional("MCU+PLY-PUS", &["AXX+PLY+"])?;
         Ok(())
     }
 
-    fn stop(&self) -> Result<()> {
+    fn stop(&self) -> Result<(), ControlPointError> {
         self.send_no_response("MCU+PLY-STP")
     }
 
-    fn seek_rel_time(&self, hhmmss: &str) -> Result<()> {
+    fn seek_rel_time(&self, hhmmss: &str) -> Result<(), ControlPointError> {
         let _ = parse_hhmmss(hhmmss)?;
-        Err(anyhow!(
+        Err(ControlPointError::ArilycTcpError(format!(
             "Arylic TCP seek_rel_time is not implemented yet for this device."
-        ))
+        )))
     }
 }
 
 impl VolumeControl for ArylicTcpRenderer {
-    fn volume(&self) -> Result<u16> {
+    fn volume(&self) -> Result<u16, ControlPointError> {
         if let Ok(info) = self.fetch_playback_info() {
             if let Some(vol) = info.volume {
                 return Ok(vol);
@@ -222,13 +214,13 @@ impl VolumeControl for ArylicTcpRenderer {
         Self::parse_volume_payload(&payload)
     }
 
-    fn set_volume(&self, v: u16) -> Result<()> {
+    fn set_volume(&self, v: u16) -> Result<(), ControlPointError> {
         let command = Self::format_volume_command(v);
         let _ = self.send_optional(&command, &["AXX+VOL+"])?;
         Ok(())
     }
 
-    fn mute(&self) -> Result<bool> {
+    fn mute(&self) -> Result<bool, ControlPointError> {
         if let Ok(info) = self.fetch_playback_info() {
             if let Some(mute) = info.mute {
                 return Ok(mute);
@@ -242,7 +234,7 @@ impl VolumeControl for ArylicTcpRenderer {
         Self::parse_mute_payload(&payload)
     }
 
-    fn set_mute(&self, m: bool) -> Result<()> {
+    fn set_mute(&self, m: bool) -> Result<(), ControlPointError> {
         let command = if m { "MCU+MUT+001" } else { "MCU+MUT+000" };
         let payload = self.send_required(command, &["AXX+MUT+"])?;
         let _ = Self::parse_mute_payload(&payload)?;
@@ -251,14 +243,14 @@ impl VolumeControl for ArylicTcpRenderer {
 }
 
 impl PlaybackStatus for ArylicTcpRenderer {
-    fn playback_state(&self) -> Result<PlaybackState> {
+    fn playback_state(&self) -> Result<PlaybackState, ControlPointError> {
         let info = self.fetch_playback_info()?;
         Ok(info.playback_state())
     }
 }
 
 impl PlaybackPosition for ArylicTcpRenderer {
-    fn playback_position(&self) -> Result<PlaybackPositionInfo> {
+    fn playback_position(&self) -> Result<PlaybackPositionInfo, ControlPointError>  {
         let info = self.fetch_playback_info()?;
         Ok(info.position_info())
     }
@@ -307,10 +299,10 @@ impl ArylicPlaybackInfo {
     }
 }
 
-fn parse_playback_info(payload: &str) -> Result<ArylicPlaybackInfo> {
+fn parse_playback_info(payload: &str) -> Result<ArylicPlaybackInfo, ControlPointError> {
     let json_blob = payload
         .strip_prefix("AXX+PLY+INF")
-        .ok_or_else(|| anyhow!("Unexpected playback info prefix: {}", payload))?;
+        .ok_or_else(|| ControlPointError::ArilycTcpError(format!("Unexpected playback info prefix: {}", payload)))?;
 
     let json_blob = json_blob.trim_end_matches('&').trim();
     let map = parse_flat_json(json_blob)?;
@@ -318,7 +310,7 @@ fn parse_playback_info(payload: &str) -> Result<ArylicPlaybackInfo> {
     let status_raw = map
         .get("status")
         .cloned()
-        .ok_or_else(|| anyhow!("Playback info missing `status` field"))?;
+        .ok_or_else(|| ControlPointError::ArilycTcpError(format!("Playback info missing `status` field")))?;
 
     let curpos_ms = parse_u64_field(&map, "curpos")?;
     let totlen_ms = parse_u64_field(&map, "totlen")?;
@@ -375,15 +367,15 @@ fn parse_playback_info(payload: &str) -> Result<ArylicPlaybackInfo> {
     })
 }
 
-fn parse_u64_field(map: &HashMap<String, String>, key: &str) -> Result<u64> {
+fn parse_u64_field(map: &HashMap<String, String>, key: &str) -> Result<u64, ControlPointError> {
     let raw = map
         .get(key)
-        .ok_or_else(|| anyhow!("Playback info missing `{}` field", key))?;
+        .ok_or_else(|| ControlPointError::ArilycTcpError(format!("Playback info missing `{}` field", key)))?;
     raw.parse::<u64>()
-        .with_context(|| format!("Invalid `{}` value: {}", key, raw))
+        .map_err(|_|  ControlPointError::ArilycTcpError(format!("Invalid `{}` value: {}", key, raw)))
 }
 
-fn connect(host: &str, port: u16, timeout: Duration) -> Result<TcpStream> {
+fn connect(host: &str, port: u16, timeout: Duration) -> Result<TcpStream, ControlPointError> {
     if let Ok(mut last_time) = last_command_time().lock() {
         let elapsed = last_time.elapsed();
         if elapsed < Duration::from_millis(200) {
@@ -406,14 +398,24 @@ fn connect(host: &str, port: u16, timeout: Duration) -> Result<TcpStream> {
     let mut last_err = None;
     for addr in address
         .to_socket_addrs()
-        .with_context(|| format!("Failed to resolve {}:{}", host, port))?
+        .with_context(|| format!("Failed to resolve {}:{}", host, port))
+        .map_err(|_| {
+            ControlPointError::ArilycTcpError(format!("Failed to resolve {}:{}", host, port))
+        })?
     {
         match TcpStream::connect_timeout(&addr, timeout) {
             Ok(stream) => {
                 stream
                     .set_read_timeout(Some(timeout))
                     .and_then(|_| stream.set_write_timeout(Some(timeout)))
-                    .with_context(|| format!("Failed to set socket timeouts for {}", address))?;
+                    .with_context(|| format!("Failed to set socket timeouts for {}", address))
+                    .map_err(|err| {
+                        ControlPointError::ArilycTcpError(format!(
+                            "Failed to set socket timeouts for {}",
+                            address
+                        ))
+                    })?;
+
                 return Ok(stream);
             }
             Err(err) => {
@@ -423,13 +425,14 @@ fn connect(host: &str, port: u16, timeout: Duration) -> Result<TcpStream> {
     }
 
     match last_err {
-        Some((addr, err)) => Err(anyhow!(
+        Some((addr, err)) => Err(ControlPointError::ArilycTcpError(format!(
             "Failed to connect to {} via {}: {}",
-            host,
-            addr,
-            err
-        )),
-        None => Err(anyhow!("No socket addresses resolved for {}", address)),
+            host, addr, err
+        ))),
+        None => Err(ControlPointError::ArilycTcpError(format!(
+            "No socket addresses resolved for {}",
+            address
+        ))),
     }
 }
 
@@ -447,26 +450,31 @@ fn encode_packet(payload: &str) -> Vec<u8> {
     out
 }
 
-fn read_packet(stream: &mut TcpStream) -> Result<String> {
+fn read_packet(stream: &mut TcpStream) -> Result<String, ControlPointError> {
     let mut header = [0u8; 4];
-    stream.read_exact(&mut header)?;
+    stream.read_exact(&mut header)
+    .map_err(|e| ControlPointError::ArilycTcpError(format!("{}",e)))?;
     if header != PACKET_HEADER {
-        return Err(anyhow!("Invalid Arylic packet header: {:x?}", header));
+        return Err(ControlPointError::ArilycTcpError(format!("Invalid Arylic packet header: {:x?}", header)));
     }
 
     let mut len_buf = [0u8; 4];
-    stream.read_exact(&mut len_buf)?;
+    stream.read_exact(&mut len_buf)
+    .map_err(|e| ControlPointError::ArilycTcpError(format!("{}",e)))?;
     let len = u32::from_le_bytes(len_buf) as usize;
 
     let mut checksum_buf = [0u8; 4];
-    stream.read_exact(&mut checksum_buf)?;
+    stream.read_exact(&mut checksum_buf)
+    .map_err(|e| ControlPointError::ArilycTcpError(format!("{}",e)))?;
     let expected_checksum = u32::from_le_bytes(checksum_buf);
 
     let mut reserved = [0u8; 8];
-    stream.read_exact(&mut reserved)?;
+    stream.read_exact(&mut reserved)
+    .map_err(|e| ControlPointError::ArilycTcpError(format!("{}",e)))?;
 
     let mut payload = vec![0u8; len];
-    stream.read_exact(&mut payload)?;
+    stream.read_exact(&mut payload)
+    .map_err(|e| ControlPointError::ArilycTcpError(format!("{}",e)))?;
 
     let actual_checksum = payload.iter().fold(0u32, |acc, b| acc + (*b as u32));
     if actual_checksum != expected_checksum {
@@ -476,7 +484,8 @@ fn read_packet(stream: &mut TcpStream) -> Result<String> {
         );
     }
 
-    Ok(String::from_utf8(payload)?)
+    Ok(String::from_utf8(payload)
+    .map_err(|e| ControlPointError::ArilycTcpError(format!("{}",e)))?)
 }
 
 fn format_hms(secs: u64) -> String {
@@ -486,30 +495,30 @@ fn format_hms(secs: u64) -> String {
     format!("{:02}:{:02}:{:02}", h, m, s)
 }
 
-fn parse_hhmmss(value: &str) -> Result<u64> {
+fn parse_hhmmss(value: &str) -> Result<u64, ControlPointError> {
     let parts: Vec<_> = value.split(':').collect();
     if parts.len() != 3 {
-        return Err(anyhow!(
+        return Err(ControlPointError::ArilycTcpError(format!(
             "Invalid time format `{}`. Expected HH:MM:SS.",
             value
-        ));
+        )));
     }
 
     let hours: u64 = parts[0]
         .parse()
-        .with_context(|| format!("Invalid hour component in {}", value))?;
+        .map_err(|_| ControlPointError::ArilycTcpError(format!("Invalid hour component in {}", value)))?;
     let minutes: u64 = parts[1]
         .parse()
-        .with_context(|| format!("Invalid minute component in {}", value))?;
+        .map_err(|_| ControlPointError::ArilycTcpError(format!("Invalid minute component in {}", value)))?;
     let seconds: u64 = parts[2]
         .parse()
-        .with_context(|| format!("Invalid second component in {}", value))?;
+        .map_err(|_| ControlPointError::ArilycTcpError(format!("Invalid second component in {}", value)))?;
 
     if minutes > 59 || seconds > 59 {
-        return Err(anyhow!(
+        return Err(ControlPointError::ArilycTcpError(format!(
             "Invalid HH:MM:SS value `{}`. Minutes and seconds must be < 60.",
             value
-        ));
+        )));
     }
 
     Ok(hours * 3600 + minutes * 60 + seconds)
@@ -521,21 +530,24 @@ fn send_command_with_mode(
     timeout: Duration,
     payload: &str,
     mode: ResponseMode<'_>,
-) -> Result<Option<String>> {
+) -> Result<Option<String>, ControlPointError> {
     let mut stream = connect(host, port, timeout)?;
     let packet = encode_packet(payload);
 
-    stream.write_all(&packet).with_context(|| {
+    stream.write_all(&packet).map_err(|_| {
+        ControlPointError::ArilycTcpError(
         format!(
             "Failed to write Arylic TCP packet for {}: {}",
             host, payload
-        )
+        ))
     })?;
-    stream.flush().with_context(|| {
+
+    stream.flush().map_err(|_| {
+        ControlPointError::ArilycTcpError(
         format!(
             "Failed to flush Arylic TCP stream for {} (command {})",
             host, payload
-        )
+        ))
     })?;
 
     match mode {
@@ -572,11 +584,11 @@ fn send_command_with_mode(
                 }
             }
 
-            Err(anyhow!(
+            Err(ControlPointError::ArilycTcpError(format!(
                 "No expected response for optional command {} on {}",
                 payload,
                 host
-            ))
+            )))
         }
     }
 }
@@ -586,17 +598,17 @@ fn read_expected_response(
     host: &str,
     payload: &str,
     expected: &[&str],
-) -> Result<String> {
+) -> Result<String, ControlPointError> {
     for _ in 0..MAX_RESPONSE_ATTEMPTS {
         let response = match read_packet(stream) {
             Ok(resp) => resp,
             Err(err) => {
-                return Err(anyhow!(
+                return Err(ControlPointError::ArilycTcpError(format!(
                     "Failed to read Arylic TCP response for {} (command {}): {}",
                     host,
                     payload,
                     err
-                ));
+                )));
             }
         };
         if expected.iter().any(|prefix| response.starts_with(prefix)) {
@@ -609,11 +621,11 @@ fn read_expected_response(
         );
     }
 
-    Err(anyhow!(
+    Err(ControlPointError::ArilycTcpError(format!(
         "No expected response for command {} on {}",
         payload,
         host
-    ))
+    )))
 }
 
 fn send_command_required(
@@ -622,7 +634,7 @@ fn send_command_required(
     timeout: Duration,
     payload: &str,
     expected: &[&str],
-) -> Result<String> {
+) -> Result<String, ControlPointError> {
     match send_command_with_mode(
         host,
         port,
@@ -631,10 +643,10 @@ fn send_command_required(
         ResponseMode::Required(expected),
     )? {
         Some(s) => Ok(s),
-        None => Err(anyhow!(
+        None => Err(ControlPointError::ArilycTcpError(format!(
             "Arylic TCP: no response payload for required command {}",
             payload
-        )),
+        ))),
     }
 }
 
@@ -644,7 +656,7 @@ fn send_command_optional(
     timeout: Duration,
     payload: &str,
     expected: &[&str],
-) -> Result<Option<String>> {
+) -> Result<Option<String>, ControlPointError> {
     send_command_with_mode(
         host,
         port,
@@ -654,6 +666,6 @@ fn send_command_optional(
     )
 }
 
-fn send_command_no_response(host: &str, port: u16, timeout: Duration, payload: &str) -> Result<()> {
+fn send_command_no_response(host: &str, port: u16, timeout: Duration, payload: &str) -> Result<(), ControlPointError> {
     send_command_with_mode(host, port, timeout, payload, ResponseMode::None).map(|_| ())
 }

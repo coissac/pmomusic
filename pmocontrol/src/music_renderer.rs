@@ -6,27 +6,30 @@
 //! renderers through this type so that transport, volume, and state queries
 //! stay backend-neutral.
 
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::SystemTime;
 
 use crate::capabilities::{PlaybackPositionInfo, PlaybackStatus};
-use crate::control_point::RendererRuntimeStateMut;
+// use crate::control_point::RendererRuntimeStateMut;
 use crate::control_point::music_queue::MusicQueue;
 use crate::control_point::openhome_queue::didl_id_from_metadata;
+use crate::errors::ControlPointError;
 use crate::media_server::ServerId;
-use crate::model::{RendererId, RendererInfo, RendererProtocol, TrackMetadata};
+use crate::model::{
+    RendererConnectionState, ServiceId, RendererInfo, RendererProtocol, TrackMetadata,
+};
 use crate::openhome_client::parse_track_metadata_from_didl;
 use crate::openhome_playlist::{OpenHomePlaylistSnapshot, OpenHomePlaylistTrack};
 use crate::queue_backend::{PlaybackItem, QueueSnapshot};
 use crate::{
-    ArylicTcpRenderer, ChromecastRenderer, DeviceRegistry, LinkPlayRenderer, OpenHomeRenderer,
-    PlaybackPosition, PlaybackState, TransportControl, UpnpRenderer, VolumeControl,
+    ArylicTcpRenderer, ChromecastRenderer, DeviceIdentity, DeviceOnline, DeviceRegistry, LinkPlayRenderer, OpenHomeRenderer, PlaybackPosition, PlaybackState, TransportControl, UpnpRenderer, VolumeControl
 };
 use anyhow::{Result, anyhow};
 use tracing::{debug, info, warn};
 
 /// Backend-agnostic façade exposing transport, volume, and status contracts.
 #[derive(Clone, Debug)]
-pub enum MusicRenderer {
+pub enum MusicRendererBackend {
     /// Classic UPnP AV / DLNA renderer (AVTransport + RenderingControl).
     Upnp(UpnpRenderer),
     /// Renderer powered by OpenHome services.
@@ -45,158 +48,280 @@ pub enum MusicRenderer {
     },
 }
 
-/// Build a standardized error when an operation is not supported by a backend.
-pub(crate) fn op_not_supported(op: &str, backend: &str) -> anyhow::Error {
-    anyhow!(
-        "MusicRenderer operation '{}' is not supported by backend '{}'",
-        op,
-        backend
-    )
-}
-
-#[derive(Clone, Debug)]
-pub struct RendererRuntimeState {
-    pub queue: MusicQueue,
-}
-
-pub trait OpenHomeQueueProvider: Send + Sync + 'static {
-    fn renderer_state(&self, renderer_id: &RendererId) -> Result<RendererRuntimeState>;
-    fn renderer_state_mut<'a>(
-        &'a self,
-        renderer_id: &RendererId,
-    ) -> Result<RendererRuntimeStateMut<'a>>;
-    fn invalidate_openhome_cache(&self, renderer_id: &RendererId) -> Result<()>;
-}
-
-static OPENHOME_QUEUE_PROVIDER: OnceLock<Arc<dyn OpenHomeQueueProvider>> = OnceLock::new();
-
-pub fn set_openhome_queue_provider(provider: Arc<dyn OpenHomeQueueProvider>) {
-    let _ = OPENHOME_QUEUE_PROVIDER.set(provider);
+#[derive(Debug, Clone)]
+pub struct MusicRenderer {
+    info: RendererInfo,
+    connection: Arc<Mutex<RendererConnectionState>>,
+    backend: Arc<Mutex<MusicRendererBackend>>,
+    queue: Arc<Mutex<MusicQueue>>,
 }
 
 impl MusicRenderer {
-    /// Renderer identifier (stable within the registry).
-    pub fn id(&self) -> &RendererId {
-        match self {
-            MusicRenderer::HybridUpnpArylic { arylic, .. } => arylic.id(),
-            MusicRenderer::OpenHome(r) => r.id(),
-            MusicRenderer::Upnp(r) => r.id(),
-            MusicRenderer::LinkPlay(r) => r.id(),
-            MusicRenderer::ArylicTcp(r) => r.id(),
-            MusicRenderer::Chromecast(r) => r.id(),
-        }
+    pub fn new(
+        info: RendererInfo,
+        backend: Arc<Mutex<MusicRendererBackend>>,
+        queue: Arc<Mutex<MusicQueue>>,
+    ) -> Arc<MusicRenderer> {
+        let connection = RendererConnectionState::new();
+
+        let renderer = MusicRenderer {
+            info,
+            connection,
+            backend,
+            queue,
+        };
+
+        Arc::new(renderer)
     }
 
-    /// Human-friendly name reported by the device.
-    pub fn friendly_name(&self) -> &str {
-        match self {
-            MusicRenderer::HybridUpnpArylic { arylic, .. } => arylic.friendly_name(),
-            MusicRenderer::OpenHome(r) => r.friendly_name(),
-            MusicRenderer::Upnp(r) => r.friendly_name(),
-            MusicRenderer::LinkPlay(r) => r.friendly_name(),
-            MusicRenderer::ArylicTcp(r) => r.friendly_name(),
-            MusicRenderer::Chromecast(r) => r.friendly_name(),
-        }
+    pub fn from_renderer_info(info: RendererInfo) -> Result<Arc<MusicRenderer>,ControlPointError>  {
+        let connection = RendererConnectionState::new();
+        let backend = MusicRendererBackend::from_renderer_info(info)?;
+        let queue = Mutex::new(MusicQueue::new());
+
+        let renderer = Arc::new(MusicRenderer { info, connection, backend, queue });
+        Ok(renderer)
     }
 
-    /// Protocol classification (UPnP AV only, OpenHome only, hybrid).
-    pub fn protocol(&self) -> &RendererProtocol {
-        &self.info().protocol
-    }
-
-    /// Full static info as stored in the registry.
     pub fn info(&self) -> &RendererInfo {
-        match self {
-            MusicRenderer::HybridUpnpArylic { arylic, .. } => &arylic.info,
-            MusicRenderer::OpenHome(r) => &r.info,
-            MusicRenderer::Upnp(r) => &r.info,
-            MusicRenderer::LinkPlay(r) => &r.info,
-            MusicRenderer::ArylicTcp(r) => &r.info,
-            MusicRenderer::Chromecast(r) => &r.info,
+        &self.info
+    }
+
+    /// Returns the protocol.
+    fn protocol(&self) -> RendererProtocol {
+        self.info.protocol()
+    }
+
+    fn is_upnp(&self) -> bool {
+        match &*self.backend.lock().expect("Backend mutex poisoned") {
+            MusicRendererBackend::Upnp(_) => true,
+            _ => false,
         }
     }
 
-    /// Return a reference to the underlying UPnP backend, if any.
-    pub fn as_upnp(&self) -> Option<&UpnpRenderer> {
-        match self {
-            MusicRenderer::Upnp(r) => Some(r),
-            _ => None,
+    fn is_openhome(&self) -> bool {
+        match &*self.backend.lock().expect("Backend mutex poisoned") {
+            MusicRendererBackend::OpenHome(_) => true,
+            _ => false,
         }
     }
+
+    fn is_linkplay(&self) -> bool {
+        match &*self.backend.lock().expect("Backend mutex poisoned") {
+            MusicRendererBackend::LinkPlay(_) => true,
+            _ => false,
+        }
+    }
+
+    fn is_arylictcp(&self) -> bool {
+        match &*self.backend.lock().expect("Backend mutex poisoned") {
+            MusicRendererBackend::ArylicTcp(_) => true,
+            _ => false,
+        }
+    }
+
+    fn is_chromecast(&self) -> bool {
+        match &*self.backend.lock().expect("Backend mutex poisoned") {
+            MusicRendererBackend::Chromecast(_) => true,
+            _ => false,
+        }
+    }
+
+    fn is_hybridupnparylic(&self) -> bool {
+        match &*self.backend.lock().expect("Backend mutex poisoned") {
+            MusicRendererBackend::HybridUpnpArylic { .. } => true,
+            _ => false,
+        }
+    }
+
+    /// Returns true if this renderer is known to support SetNextAVTransportURI.
+    pub fn supports_set_next(&self) -> bool {
+        self.info.capabilities().supports_set_next()
+    }
+
+
+}
+
+impl DeviceIdentity for MusicRenderer  {
+    fn id(&self) -> ServiceId {
+        self.info.id()
+    }
+
+    fn udn(&self)   -> &str {
+         &*self.info.udn()
+      }
+
+    fn friendly_name(&self) -> &str {
+        &self.info.friendly_name()
+    }
+
+    fn model_name(&self)  -> &str {
+         &self.info.model_name()
+     }
+    fn manufacturer(&self)   -> &str {
+         &self.info.manufacturer()
+      }
+    fn location(&self)   ->  &str {
+          &self.info.location()
+       }
+    fn server_header(&self)   -> &str {
+          &self.info.server_header()
+       }
+
+}
+
+impl DeviceOnline for MusicRenderer {
+     fn is_online(&self) -> bool {
+        self.connection
+            .lock()
+            .expect("Connection mutex poisoned")
+            .is_online()
+    }
+
+     fn last_seen(&self) -> SystemTime {
+        self.connection
+            .lock()
+            .expect("Connection mutex poisoned")
+            .last_seen()
+    }
+
+     fn has_been_seen_now(&self, max_age: u32) {
+        self.connection
+            .lock()
+            .expect("Connection mutex poisoned")
+            .has_been_seen_now(max_age)
+    }
+
+     fn mark_as_offline(&self) {
+        self.connection
+             .lock()
+              .expect("Connection mutex poisoned")
+               .mark_as_offline()
+    }
+
+     fn max_age(&self) -> u32 {
+        self.connection
+            .lock()
+            .expect("Connection mutex poisoned")
+            .max_age()
+    }}
+// #[derive(Clone, Debug)]
+// pub struct RendererRuntimeState {
+//     pub queue: MusicQueue,
+// }
+
+// pub trait OpenHomeQueueProvider: Send + Sync + 'static {
+//     fn renderer_state(&self, renderer_id: &RendererId) -> Result<RendererRuntimeState>;
+//     fn renderer_state_mut<'a>(
+//         &'a self,
+//         renderer_id: &RendererId,
+//     ) -> Result<RendererRuntimeStateMut<'a>>;
+//     fn invalidate_openhome_cache(&self, renderer_id: &RendererId) -> Result<()>;
+// }
+
+// static OPENHOME_QUEUE_PROVIDER: OnceLock<Arc<dyn OpenHomeQueueProvider>> = OnceLock::new();
+
+// pub fn set_openhome_queue_provider(provider: Arc<dyn OpenHomeQueueProvider>) {
+//     let _ = OPENHOME_QUEUE_PROVIDER.set(provider);
+// }
+
+impl MusicRendererBackend {
+    // fn as_backend(&self) -> &dyn MusicRendererBackend {
+    //     match self {
+    //         MusicRendererBackend::OpenHome(r) => r,
+    //         MusicRendererBackend::HybridUpnpArylic { arylic, .. } => arylic,
+    //         MusicRendererBackend::Upnp(r) => r,
+    //         MusicRendererBackend::LinkPlay(r) => r,
+    //         MusicRendererBackend::ArylicTcp(r) => r,
+    //         MusicRendererBackend::Chromecast(r) => r,
+    //     }
+    // }
 
     /// Construct a music renderer from a [`RendererInfo`] and the registry.
     ///
     /// Returns `None` when no supported backend can be built for this renderer.
     /// UPnP AV / hybrid renderers map either to [`MusicRenderer::LinkPlay`] (when supported)
     /// or [`MusicRenderer::Upnp`].
-    pub fn from_registry_info(
+    pub fn from_renderer_info(
         info: RendererInfo,
-        registry: &Arc<RwLock<DeviceRegistry>>,
-    ) -> Option<Self> {
+    ) -> Result<Arc<Mutex<Self>>, ControlPointError>  {
+
+        match info.protocol() {
+            RendererProtocol::OpenHomeOnly | RendererProtocol::OpenHomeHybrid => {
+                OpenHomeRenderer::from_renderer_info(info.clone())
+            }
+
+            _ =>   Err(ControlPointError::MusicRendererBackendBuild(format!("{:#?}", info.id()))),   
+        }    
+        
+
+        // Le backend est de type openhome
+
         if matches!(
-            info.protocol,
-            RendererProtocol::OpenHomeOnly | RendererProtocol::Hybrid
+            info.protocol(),
+            RendererProtocol::OpenHomeOnly | RendererProtocol::OpenHomeHybrid
         ) {
             if let Some(renderer) = {
                 let renderer = OpenHomeRenderer::new(info.clone());
                 renderer.has_any_openhome_service().then_some(renderer)
             } {
-                return Some(MusicRenderer::OpenHome(renderer));
+                return Some(MusicRendererBackend::OpenHome(renderer));
             }
 
-            if matches!(info.protocol, RendererProtocol::OpenHomeOnly) {
+            if matches!(info.protocol(), RendererProtocol::OpenHomeOnly) {
                 warn!(
-                    renderer = info.friendly_name.as_str(),
+                    renderer = info.friendly_name(),
                     "Renderer advertises OpenHome only but exposes no usable services"
                 );
                 return None;
             }
         }
 
-        if matches!(info.protocol, RendererProtocol::ChromecastOnly) {
+        if matches!(info.protocol(), RendererProtocol::ChromecastOnly) {
             if let Ok(renderer) = ChromecastRenderer::from_renderer_info(info.clone()) {
-                return Some(MusicRenderer::Chromecast(renderer));
+                return Some(MusicRendererBackend::Chromecast(renderer));
             }
             warn!(
-                renderer = info.friendly_name.as_str(),
+                renderer = info.friendly_name(),
                 "Failed to build Chromecast renderer"
             );
             return None;
         }
 
-        match info.protocol {
-            RendererProtocol::UpnpAvOnly | RendererProtocol::Hybrid => {
-                let has_arylic = info.capabilities.has_arylic_tcp;
-                let has_avtransport = info.capabilities.has_avtransport;
+        match info.protocol() {
+            RendererProtocol::UpnpAvOnly | RendererProtocol::OpenHomeHybrid => {
+                let has_arylic = info.capabilities().has_arylic_tcp;
+                let has_avtransport = info.capabilities().has_avtransport;
 
                 if has_arylic && has_avtransport {
                     // Construire UpnpRenderer
-                    let upnp = UpnpRenderer::from_registry(info.clone(), registry);
+                    let upnp = UpnpRenderer::from_info(&info);
 
                     // Construire ArylicTcpRenderer
                     match ArylicTcpRenderer::from_renderer_info(info.clone()) {
                         Ok(arylic) => {
-                            return Some(MusicRenderer::HybridUpnpArylic { upnp, arylic });
+                            return Some(MusicRendererBackend::HybridUpnpArylic { upnp, arylic });
                         }
                         Err(err) => {
                             warn!(
                                 "Failed to build Arylic TCP backend for {}: {}. Falling back to UPnP only.",
-                                info.friendly_name, err
+                                info.friendly_name(),
+                                err
                             );
-                            return Some(MusicRenderer::Upnp(upnp));
+                            return Some(MusicRendererBackend::Upnp(upnp));
                         }
                     }
                 }
 
                 // Pas d’Arylic : logique existante
-                if info.capabilities.has_linkplay_http {
+                if info.capabilities().has_linkplay_http() {
                     if let Ok(lp) = LinkPlayRenderer::from_renderer_info(info.clone()) {
-                        return Some(MusicRenderer::LinkPlay(lp));
+                        return Some(MusicRendererBackend::LinkPlay(lp));
                     }
                 }
 
-                Some(MusicRenderer::Upnp(UpnpRenderer::from_registry(
-                    info, registry,
+                Some(MusicRendererBackend::Upnp(UpnpRenderer::from_info(
+                    &info,
                 )))
             }
             RendererProtocol::OpenHomeOnly => None,
@@ -205,12 +330,8 @@ impl MusicRenderer {
     }
 
     pub fn openhome_playlist_snapshot(&self) -> Result<OpenHomePlaylistSnapshot> {
-        self.fetch_openhome_playlist_snapshot()
-    }
-
-    pub(crate) fn fetch_openhome_playlist_snapshot(&self) -> Result<OpenHomePlaylistSnapshot> {
         match self {
-            MusicRenderer::OpenHome(renderer) => renderer.snapshot_openhome_playlist(),
+            MusicRendererBackend::OpenHome(renderer) => renderer.snapshot_openhome_playlist(),
             _ => Err(op_not_supported(
                 "openhome_playlist_snapshot",
                 self.unsupported_backend_name(),
@@ -220,7 +341,7 @@ impl MusicRenderer {
 
     pub fn openhome_playlist_len(&self) -> Result<usize> {
         match self {
-            MusicRenderer::OpenHome(renderer) => renderer.openhome_playlist_len(),
+            MusicRendererBackend::OpenHome(renderer) => renderer.openhome_playlist_len(),
             _ => Err(op_not_supported(
                 "openhome_playlist_len",
                 self.unsupported_backend_name(),
@@ -230,7 +351,7 @@ impl MusicRenderer {
 
     pub fn openhome_playlist_ids(&self) -> Result<Vec<u32>> {
         match self {
-            MusicRenderer::OpenHome(renderer) => renderer.openhome_playlist_ids(),
+            MusicRendererBackend::OpenHome(renderer) => renderer.openhome_playlist_ids(),
             _ => Err(op_not_supported(
                 "openhome_playlist_ids",
                 self.unsupported_backend_name(),
@@ -261,7 +382,7 @@ impl MusicRenderer {
 
     pub(crate) fn fetch_openhome_playlist_clear(&self) -> Result<()> {
         match self {
-            MusicRenderer::OpenHome(renderer) => renderer.clear_openhome_playlist(),
+            MusicRendererBackend::OpenHome(renderer) => renderer.clear_openhome_playlist(),
             _ => Err(op_not_supported(
                 "openhome_playlist_clear",
                 self.unsupported_backend_name(),
@@ -280,7 +401,7 @@ impl MusicRenderer {
     /// - The renderer is in a clean state ready to receive new content
     pub fn clear_for_playlist_attach(&self) -> Result<()> {
         match self {
-            MusicRenderer::OpenHome(_) => {
+            MusicRendererBackend::OpenHome(_) => {
                 // For OpenHome: clear the playlist (DeleteAll also stops playback automatically)
                 // then explicitly stop to ensure clean state
                 self.openhome_playlist_clear()?;
@@ -294,11 +415,11 @@ impl MusicRenderer {
                     Ok(())
                 })
             }
-            MusicRenderer::Upnp(_)
-            | MusicRenderer::Chromecast(_)
-            | MusicRenderer::LinkPlay(_)
-            | MusicRenderer::ArylicTcp(_)
-            | MusicRenderer::HybridUpnpArylic { .. } => {
+            MusicRendererBackend::Upnp(_)
+            | MusicRendererBackend::Chromecast(_)
+            | MusicRendererBackend::LinkPlay(_)
+            | MusicRendererBackend::ArylicTcp(_)
+            | MusicRendererBackend::HybridUpnpArylic { .. } => {
                 // For AVTransport and other single-track renderers: stop playback
                 // This ensures we're not in the middle of playing when we start the new playlist
                 self.stop().or_else(|err| {
@@ -320,18 +441,18 @@ impl MusicRenderer {
     /// - For Internal queue/AVTransport: no-op (queue is already local)
     pub fn sync_queue_state(&self) -> Result<()> {
         match self {
-            MusicRenderer::OpenHome(_) => {
+            MusicRendererBackend::OpenHome(_) => {
                 if let Some(provider) = OPENHOME_QUEUE_PROVIDER.get() {
                     // Fetch fresh playlist snapshot and update cache
                     provider.invalidate_openhome_cache(self.id())?;
                 }
                 Ok(())
             }
-            MusicRenderer::Upnp(_)
-            | MusicRenderer::Chromecast(_)
-            | MusicRenderer::LinkPlay(_)
-            | MusicRenderer::ArylicTcp(_)
-            | MusicRenderer::HybridUpnpArylic { .. } => {
+            MusicRendererBackend::Upnp(_)
+            | MusicRendererBackend::Chromecast(_)
+            | MusicRendererBackend::LinkPlay(_)
+            | MusicRendererBackend::ArylicTcp(_)
+            | MusicRendererBackend::HybridUpnpArylic { .. } => {
                 // No sync needed - queue is local only
                 Ok(())
             }
@@ -344,15 +465,15 @@ impl MusicRenderer {
     /// Should be called before queue mutations to ensure clean state.
     pub fn clear_queue(&self) -> Result<()> {
         match self {
-            MusicRenderer::OpenHome(_) => {
+            MusicRendererBackend::OpenHome(_) => {
                 // For OpenHome: clear the playlist on the renderer itself
                 self.openhome_playlist_clear()
             }
-            MusicRenderer::Upnp(_)
-            | MusicRenderer::Chromecast(_)
-            | MusicRenderer::LinkPlay(_)
-            | MusicRenderer::ArylicTcp(_)
-            | MusicRenderer::HybridUpnpArylic { .. } => {
+            MusicRendererBackend::Upnp(_)
+            | MusicRendererBackend::Chromecast(_)
+            | MusicRendererBackend::LinkPlay(_)
+            | MusicRendererBackend::ArylicTcp(_)
+            | MusicRendererBackend::HybridUpnpArylic { .. } => {
                 // For other renderers: no persistent queue to clear
                 Ok(())
             }
@@ -371,15 +492,15 @@ impl MusicRenderer {
         play: bool,
     ) -> Result<Option<u32>> {
         match self {
-            MusicRenderer::OpenHome(_) => {
+            MusicRendererBackend::OpenHome(_) => {
                 let track_id = self.openhome_playlist_add_track(uri, metadata, after_id, play)?;
                 Ok(Some(track_id))
             }
-            MusicRenderer::Upnp(_)
-            | MusicRenderer::Chromecast(_)
-            | MusicRenderer::LinkPlay(_)
-            | MusicRenderer::ArylicTcp(_)
-            | MusicRenderer::HybridUpnpArylic { .. } => Err(anyhow!(
+            MusicRendererBackend::Upnp(_)
+            | MusicRendererBackend::Chromecast(_)
+            | MusicRendererBackend::LinkPlay(_)
+            | MusicRendererBackend::ArylicTcp(_)
+            | MusicRendererBackend::HybridUpnpArylic { .. } => Err(anyhow!(
                 "add_track_to_queue is not supported for {} backend",
                 self.unsupported_backend_name()
             )),
@@ -392,12 +513,12 @@ impl MusicRenderer {
     /// - For others: returns error (use play_uri instead)
     pub fn select_queue_track(&self, track_id: u32) -> Result<()> {
         match self {
-            MusicRenderer::OpenHome(_) => self.openhome_playlist_play_id(track_id),
-            MusicRenderer::Upnp(_)
-            | MusicRenderer::Chromecast(_)
-            | MusicRenderer::LinkPlay(_)
-            | MusicRenderer::ArylicTcp(_)
-            | MusicRenderer::HybridUpnpArylic { .. } => Err(anyhow!(
+            MusicRendererBackend::OpenHome(_) => self.openhome_playlist_play_id(track_id),
+            MusicRendererBackend::Upnp(_)
+            | MusicRendererBackend::Chromecast(_)
+            | MusicRendererBackend::LinkPlay(_)
+            | MusicRendererBackend::ArylicTcp(_)
+            | MusicRendererBackend::HybridUpnpArylic { .. } => Err(anyhow!(
                 "select_queue_track is not supported for {} backend",
                 self.unsupported_backend_name()
             )),
@@ -410,13 +531,15 @@ impl MusicRenderer {
     /// - For others: returns None (no persistent queue on backend)
     pub fn queue_snapshot(&self) -> Result<Option<QueueSnapshot>> {
         match self {
-            MusicRenderer::OpenHome(_) => {
-                let oh_snapshot = self.fetch_openhome_playlist_snapshot()?;
+            MusicRendererBackend::OpenHome(_) => {
+                let oh_snapshot = self.openhome_playlist_snapshot()?;
 
                 // Convert OpenHome tracks to PlaybackItems
-                let items: Vec<PlaybackItem> = oh_snapshot.tracks.iter().map(|track| {
-                    Self::playback_item_from_openhome_track(self.id(), track)
-                }).collect();
+                let items: Vec<PlaybackItem> = oh_snapshot
+                    .tracks
+                    .iter()
+                    .map(|track| Self::playback_item_from_openhome_track(self.id(), track))
+                    .collect();
 
                 let snapshot = QueueSnapshot {
                     items,
@@ -425,11 +548,11 @@ impl MusicRenderer {
 
                 Ok(Some(snapshot))
             }
-            MusicRenderer::Upnp(_)
-            | MusicRenderer::Chromecast(_)
-            | MusicRenderer::LinkPlay(_)
-            | MusicRenderer::ArylicTcp(_)
-            | MusicRenderer::HybridUpnpArylic { .. } => {
+            MusicRendererBackend::Upnp(_)
+            | MusicRendererBackend::Chromecast(_)
+            | MusicRendererBackend::LinkPlay(_)
+            | MusicRendererBackend::ArylicTcp(_)
+            | MusicRendererBackend::HybridUpnpArylic { .. } => {
                 // No backend queue for these renderers
                 Ok(None)
             }
@@ -442,9 +565,9 @@ impl MusicRenderer {
     /// - For others: Returns error (no backend queue)
     pub fn play_current_from_backend_queue(&self) -> Result<()> {
         match self {
-            MusicRenderer::OpenHome(_) => {
+            MusicRendererBackend::OpenHome(_) => {
                 // Get the current OpenHome playlist snapshot
-                let snapshot = self.fetch_openhome_playlist_snapshot()?;
+                let snapshot = self.openhome_playlist_snapshot()?;
 
                 debug!(
                     renderer = self.id().0.as_str(),
@@ -488,25 +611,23 @@ impl MusicRenderer {
                 if let Some(track_id) = target_track_id {
                     info!(
                         renderer = self.id().0.as_str(),
-                        track_id,
-                        "Calling openhome_playlist_play_id to start playback"
+                        track_id, "Calling openhome_playlist_play_id to start playback"
                     );
                     self.openhome_playlist_play_id(track_id)?;
                     info!(
                         renderer = self.id().0.as_str(),
-                        track_id,
-                        "Successfully called openhome_playlist_play_id"
+                        track_id, "Successfully called openhome_playlist_play_id"
                     );
                     Ok(())
                 } else {
                     Err(anyhow!("No track to play in OpenHome playlist"))
                 }
             }
-            MusicRenderer::Upnp(_)
-            | MusicRenderer::Chromecast(_)
-            | MusicRenderer::LinkPlay(_)
-            | MusicRenderer::ArylicTcp(_)
-            | MusicRenderer::HybridUpnpArylic { .. } => Err(anyhow!(
+            MusicRendererBackend::Upnp(_)
+            | MusicRendererBackend::Chromecast(_)
+            | MusicRendererBackend::LinkPlay(_)
+            | MusicRendererBackend::ArylicTcp(_)
+            | MusicRendererBackend::HybridUpnpArylic { .. } => Err(anyhow!(
                 "play_current_from_backend_queue is not supported for {} backend (no persistent queue)",
                 self.unsupported_backend_name()
             )),
@@ -519,9 +640,9 @@ impl MusicRenderer {
     /// - For others: Returns error (no backend queue)
     pub fn play_next_from_backend_queue(&self) -> Result<()> {
         match self {
-            MusicRenderer::OpenHome(_) => {
+            MusicRendererBackend::OpenHome(_) => {
                 // Get the current OpenHome playlist snapshot
-                let snapshot = self.fetch_openhome_playlist_snapshot()?;
+                let snapshot = self.openhome_playlist_snapshot()?;
 
                 if snapshot.tracks.is_empty() {
                     return Err(anyhow!("OpenHome playlist is empty, cannot play next"));
@@ -544,14 +665,16 @@ impl MusicRenderer {
                     self.openhome_playlist_play_id(track_id)?;
                     Ok(())
                 } else {
-                    Err(anyhow!("No track available to advance to in OpenHome playlist"))
+                    Err(anyhow!(
+                        "No track available to advance to in OpenHome playlist"
+                    ))
                 }
             }
-            MusicRenderer::Upnp(_)
-            | MusicRenderer::Chromecast(_)
-            | MusicRenderer::LinkPlay(_)
-            | MusicRenderer::ArylicTcp(_)
-            | MusicRenderer::HybridUpnpArylic { .. } => Err(anyhow!(
+            MusicRendererBackend::Upnp(_)
+            | MusicRendererBackend::Chromecast(_)
+            | MusicRendererBackend::LinkPlay(_)
+            | MusicRendererBackend::ArylicTcp(_)
+            | MusicRendererBackend::HybridUpnpArylic { .. } => Err(anyhow!(
                 "play_next_from_backend_queue is not supported for {} backend (no persistent queue)",
                 self.unsupported_backend_name()
             )),
@@ -560,7 +683,7 @@ impl MusicRenderer {
 
     /// Convert an OpenHome playlist track to a PlaybackItem.
     fn playback_item_from_openhome_track(
-        renderer_id: &RendererId,
+        renderer_id: &ServiceId,
         track: &OpenHomePlaylistTrack,
     ) -> PlaybackItem {
         let metadata = TrackMetadata {
@@ -638,12 +761,12 @@ impl MusicRenderer {
 
     fn unsupported_backend_name(&self) -> &'static str {
         match self {
-            MusicRenderer::Upnp(_) => "UPnP",
-            MusicRenderer::OpenHome(_) => "OpenHome",
-            MusicRenderer::LinkPlay(_) => "LinkPlay",
-            MusicRenderer::ArylicTcp(_) => "ArylicTcp",
-            MusicRenderer::Chromecast(_) => "Chromecast",
-            MusicRenderer::HybridUpnpArylic { .. } => "HybridUpnpArylic",
+            MusicRendererBackend::Upnp(_) => "UPnP",
+            MusicRendererBackend::OpenHome(_) => "OpenHome",
+            MusicRendererBackend::LinkPlay(_) => "LinkPlay",
+            MusicRendererBackend::ArylicTcp(_) => "ArylicTcp",
+            MusicRendererBackend::Chromecast(_) => "Chromecast",
+            MusicRendererBackend::HybridUpnpArylic { .. } => "HybridUpnpArylic",
         }
     }
 
@@ -655,7 +778,7 @@ impl MusicRenderer {
         play: bool,
     ) -> Result<u32> {
         match self {
-            MusicRenderer::OpenHome(renderer) => {
+            MusicRendererBackend::OpenHome(renderer) => {
                 renderer.add_track_openhome(uri, metadata, after_id, play)
             }
             _ => Err(op_not_supported(
@@ -667,7 +790,7 @@ impl MusicRenderer {
 
     fn fetch_openhome_playlist_play_id(&self, id: u32) -> Result<()> {
         match self {
-            MusicRenderer::OpenHome(renderer) => renderer.play_openhome_track_id(id),
+            MusicRendererBackend::OpenHome(renderer) => renderer.play_openhome_track_id(id),
             _ => Err(op_not_supported(
                 "openhome_playlist_play_id",
                 self.unsupported_backend_name(),
@@ -676,7 +799,7 @@ impl MusicRenderer {
     }
 
     fn playback_item_from_params(
-        renderer_id: &RendererId,
+        renderer_id: &ServiceId,
         uri: &str,
         metadata_xml: &str,
     ) -> Result<PlaybackItem> {
@@ -696,59 +819,61 @@ impl MusicRenderer {
 
 /// Transport control façade that dispatches to whichever backend can fulfill
 /// the request, returning a standardized error if the backend lacks support.
-impl TransportControl for MusicRenderer {
+impl TransportControl for MusicRendererBackend {
     fn play_uri(&self, uri: &str, meta: &str) -> Result<()> {
         match self {
-            MusicRenderer::Upnp(upnp) => upnp.play_uri(uri, meta),
-            MusicRenderer::OpenHome(oh) => oh.play_uri(uri, meta),
-            MusicRenderer::LinkPlay(lp) => lp.play_uri(uri, meta),
-            MusicRenderer::ArylicTcp(_) => Err(op_not_supported("play_uri", "ArylicTcp")),
-            MusicRenderer::Chromecast(cc) => cc.play_uri(uri, meta),
-            MusicRenderer::HybridUpnpArylic { upnp, .. } => upnp.play_uri(uri, meta),
+            MusicRendererBackend::Upnp(upnp) => upnp.play_uri(uri, meta),
+            MusicRendererBackend::OpenHome(oh) => oh.play_uri(uri, meta),
+            MusicRendererBackend::LinkPlay(lp) => lp.play_uri(uri, meta),
+            MusicRendererBackend::ArylicTcp(_) => Err(op_not_supported("play_uri", "ArylicTcp")),
+            MusicRendererBackend::Chromecast(cc) => cc.play_uri(uri, meta),
+            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.play_uri(uri, meta),
         }
     }
 
     fn play(&self) -> Result<()> {
         match self {
-            MusicRenderer::Upnp(upnp) => upnp.play(),
-            MusicRenderer::OpenHome(oh) => oh.play(),
-            MusicRenderer::LinkPlay(lp) => lp.play(),
-            MusicRenderer::ArylicTcp(ary) => ary.play(),
-            MusicRenderer::Chromecast(cc) => cc.play(),
-            MusicRenderer::HybridUpnpArylic { arylic, .. } => arylic.play(),
+            MusicRendererBackend::Upnp(upnp) => upnp.play(),
+            MusicRendererBackend::OpenHome(oh) => oh.play(),
+            MusicRendererBackend::LinkPlay(lp) => lp.play(),
+            MusicRendererBackend::ArylicTcp(ary) => ary.play(),
+            MusicRendererBackend::Chromecast(cc) => cc.play(),
+            MusicRendererBackend::HybridUpnpArylic { arylic, .. } => arylic.play(),
         }
     }
 
     fn pause(&self) -> Result<()> {
         match self {
-            MusicRenderer::Upnp(upnp) => upnp.pause(),
-            MusicRenderer::OpenHome(oh) => oh.pause(),
-            MusicRenderer::LinkPlay(lp) => lp.pause(),
-            MusicRenderer::ArylicTcp(ary) => ary.pause(),
-            MusicRenderer::Chromecast(cc) => cc.pause(),
-            MusicRenderer::HybridUpnpArylic { arylic, .. } => arylic.pause(),
+            MusicRendererBackend::Upnp(upnp) => upnp.pause(),
+            MusicRendererBackend::OpenHome(oh) => oh.pause(),
+            MusicRendererBackend::LinkPlay(lp) => lp.pause(),
+            MusicRendererBackend::ArylicTcp(ary) => ary.pause(),
+            MusicRendererBackend::Chromecast(cc) => cc.pause(),
+            MusicRendererBackend::HybridUpnpArylic { arylic, .. } => arylic.pause(),
         }
     }
 
     fn stop(&self) -> Result<()> {
         match self {
-            MusicRenderer::Upnp(upnp) => upnp.stop(),
-            MusicRenderer::OpenHome(oh) => oh.stop(),
-            MusicRenderer::LinkPlay(lp) => lp.stop(),
-            MusicRenderer::ArylicTcp(ary) => ary.stop(),
-            MusicRenderer::Chromecast(cc) => cc.stop(),
-            MusicRenderer::HybridUpnpArylic { arylic, .. } => arylic.stop(),
+            MusicRendererBackend::Upnp(upnp) => upnp.stop(),
+            MusicRendererBackend::OpenHome(oh) => oh.stop(),
+            MusicRendererBackend::LinkPlay(lp) => lp.stop(),
+            MusicRendererBackend::ArylicTcp(ary) => ary.stop(),
+            MusicRendererBackend::Chromecast(cc) => cc.stop(),
+            MusicRendererBackend::HybridUpnpArylic { arylic, .. } => arylic.stop(),
         }
     }
 
     fn seek_rel_time(&self, hhmmss: &str) -> Result<()> {
         match self {
-            MusicRenderer::Upnp(upnp) => upnp.seek_rel_time(hhmmss),
-            MusicRenderer::OpenHome(oh) => oh.seek_rel_time(hhmmss),
-            MusicRenderer::LinkPlay(lp) => lp.seek_rel_time(hhmmss),
-            MusicRenderer::ArylicTcp(_) => Err(op_not_supported("seek_rel_time", "ArylicTcp")),
-            MusicRenderer::Chromecast(cc) => cc.seek_rel_time(hhmmss),
-            MusicRenderer::HybridUpnpArylic { upnp, .. } => upnp.seek_rel_time(hhmmss),
+            MusicRendererBackend::Upnp(upnp) => upnp.seek_rel_time(hhmmss),
+            MusicRendererBackend::OpenHome(oh) => oh.seek_rel_time(hhmmss),
+            MusicRendererBackend::LinkPlay(lp) => lp.seek_rel_time(hhmmss),
+            MusicRendererBackend::ArylicTcp(_) => {
+                Err(op_not_supported("seek_rel_time", "ArylicTcp"))
+            }
+            MusicRendererBackend::Chromecast(cc) => cc.seek_rel_time(hhmmss),
+            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.seek_rel_time(hhmmss),
         }
     }
 }
@@ -757,48 +882,48 @@ impl TransportControl for MusicRenderer {
 ///
 /// Hybrid backends may read via Arylic TCP and write via UPnP, but callers
 /// always depend on a single [`VolumeControl`] entry point.
-impl VolumeControl for MusicRenderer {
+impl VolumeControl for MusicRendererBackend {
     fn volume(&self) -> Result<u16> {
         match self {
-            MusicRenderer::HybridUpnpArylic { arylic, .. } => arylic.volume(),
-            MusicRenderer::ArylicTcp(ary) => ary.volume(),
-            MusicRenderer::OpenHome(oh) => oh.volume(),
-            MusicRenderer::Upnp(upnp) => upnp.volume(),
-            MusicRenderer::LinkPlay(lp) => lp.volume(),
-            MusicRenderer::Chromecast(cc) => cc.volume(),
+            MusicRendererBackend::HybridUpnpArylic { arylic, .. } => arylic.volume(),
+            MusicRendererBackend::ArylicTcp(ary) => ary.volume(),
+            MusicRendererBackend::OpenHome(oh) => oh.volume(),
+            MusicRendererBackend::Upnp(upnp) => upnp.volume(),
+            MusicRendererBackend::LinkPlay(lp) => lp.volume(),
+            MusicRendererBackend::Chromecast(cc) => cc.volume(),
         }
     }
 
     fn set_volume(&self, vol: u16) -> Result<()> {
         match self {
-            MusicRenderer::HybridUpnpArylic { upnp, .. } => upnp.set_volume(vol),
-            MusicRenderer::ArylicTcp(ary) => ary.set_volume(vol),
-            MusicRenderer::OpenHome(oh) => oh.set_volume(vol),
-            MusicRenderer::Upnp(upnp) => upnp.set_volume(vol),
-            MusicRenderer::LinkPlay(lp) => lp.set_volume(vol),
-            MusicRenderer::Chromecast(cc) => cc.set_volume(vol),
+            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.set_volume(vol),
+            MusicRendererBackend::ArylicTcp(ary) => ary.set_volume(vol),
+            MusicRendererBackend::OpenHome(oh) => oh.set_volume(vol),
+            MusicRendererBackend::Upnp(upnp) => upnp.set_volume(vol),
+            MusicRendererBackend::LinkPlay(lp) => lp.set_volume(vol),
+            MusicRendererBackend::Chromecast(cc) => cc.set_volume(vol),
         }
     }
 
     fn mute(&self) -> Result<bool> {
         match self {
-            MusicRenderer::HybridUpnpArylic { arylic, .. } => arylic.mute(),
-            MusicRenderer::OpenHome(r) => r.mute(),
-            MusicRenderer::Upnp(r) => r.get_master_mute(),
-            MusicRenderer::LinkPlay(r) => r.mute(),
-            MusicRenderer::ArylicTcp(r) => r.mute(),
-            MusicRenderer::Chromecast(cc) => cc.mute(),
+            MusicRendererBackend::HybridUpnpArylic { arylic, .. } => arylic.mute(),
+            MusicRendererBackend::OpenHome(r) => r.mute(),
+            MusicRendererBackend::Upnp(r) => r.get_master_mute(),
+            MusicRendererBackend::LinkPlay(r) => r.mute(),
+            MusicRendererBackend::ArylicTcp(r) => r.mute(),
+            MusicRendererBackend::Chromecast(cc) => cc.mute(),
         }
     }
 
     fn set_mute(&self, m: bool) -> Result<()> {
         match self {
-            MusicRenderer::HybridUpnpArylic { arylic, .. } => arylic.set_mute(m),
-            MusicRenderer::OpenHome(r) => r.set_mute(m),
-            MusicRenderer::Upnp(r) => r.set_master_mute(m),
-            MusicRenderer::LinkPlay(r) => r.set_mute(m),
-            MusicRenderer::ArylicTcp(r) => r.set_mute(m),
-            MusicRenderer::Chromecast(cc) => cc.set_mute(m),
+            MusicRendererBackend::HybridUpnpArylic { arylic, .. } => arylic.set_mute(m),
+            MusicRendererBackend::OpenHome(r) => r.set_mute(m),
+            MusicRendererBackend::Upnp(r) => r.set_master_mute(m),
+            MusicRendererBackend::LinkPlay(r) => r.set_mute(m),
+            MusicRendererBackend::ArylicTcp(r) => r.set_mute(m),
+            MusicRendererBackend::Chromecast(cc) => cc.set_mute(m),
         }
     }
 }
@@ -807,30 +932,30 @@ impl VolumeControl for MusicRenderer {
 ///
 /// Each backend reports into [`PlaybackState`], ensuring consumers never have
 /// to reason about protocol-specific state machines.
-impl PlaybackStatus for MusicRenderer {
+impl PlaybackStatus for MusicRendererBackend {
     fn playback_state(&self) -> Result<PlaybackState> {
         match self {
-            MusicRenderer::Upnp(r) => PlaybackStatus::playback_state(r),
-            MusicRenderer::OpenHome(r) => PlaybackStatus::playback_state(r),
-            MusicRenderer::LinkPlay(r) => r.playback_state(),
-            MusicRenderer::ArylicTcp(r) => r.playback_state(),
-            MusicRenderer::Chromecast(cc) => cc.playback_state(),
-            MusicRenderer::HybridUpnpArylic { arylic, .. } => arylic.playback_state(),
+            MusicRendererBackend::Upnp(r) => PlaybackStatus::playback_state(r),
+            MusicRendererBackend::OpenHome(r) => PlaybackStatus::playback_state(r),
+            MusicRendererBackend::LinkPlay(r) => r.playback_state(),
+            MusicRendererBackend::ArylicTcp(r) => r.playback_state(),
+            MusicRendererBackend::Chromecast(cc) => cc.playback_state(),
+            MusicRendererBackend::HybridUpnpArylic { arylic, .. } => arylic.playback_state(),
         }
     }
 }
 
 /// Playback-position queries that always yield a [`PlaybackPositionInfo`]
 /// regardless of the backend providing the raw transport data.
-impl PlaybackPosition for MusicRenderer {
+impl PlaybackPosition for MusicRendererBackend {
     fn playback_position(&self) -> Result<PlaybackPositionInfo> {
         match self {
-            MusicRenderer::Upnp(r) => r.playback_position(),
-            MusicRenderer::OpenHome(r) => r.playback_position(),
-            MusicRenderer::LinkPlay(r) => r.playback_position(),
-            MusicRenderer::ArylicTcp(r) => r.playback_position(),
-            MusicRenderer::Chromecast(cc) => cc.playback_position(),
-            MusicRenderer::HybridUpnpArylic { arylic, .. } => arylic.playback_position(),
+            MusicRendererBackend::Upnp(r) => r.playback_position(),
+            MusicRendererBackend::OpenHome(r) => r.playback_position(),
+            MusicRendererBackend::LinkPlay(r) => r.playback_position(),
+            MusicRendererBackend::ArylicTcp(r) => r.playback_position(),
+            MusicRendererBackend::Chromecast(cc) => cc.playback_position(),
+            MusicRendererBackend::HybridUpnpArylic { arylic, .. } => arylic.playback_position(),
         }
     }
 }

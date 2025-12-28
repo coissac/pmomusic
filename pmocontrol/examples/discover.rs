@@ -3,7 +3,7 @@ use std::thread;
 use std::time::Duration;
 
 use pmocontrol::RendererProtocol;
-use pmocontrol::{ControlPoint, DeviceRegistryRead, MediaServerInfo, RendererInfo};
+use pmocontrol::{ControlPoint, DeviceRegistryRead, UpnpMediaServer, RendererInfo};
 
 fn main() -> std::io::Result<()> {
     // Un tout petit logging optionnel
@@ -21,7 +21,7 @@ fn main() -> std::io::Result<()> {
         let reg = reg.read().expect("registry poisoned");
 
         let renderers: Vec<RendererInfo> = reg.list_renderers();
-        let servers: Vec<MediaServerInfo> = reg.list_servers();
+        let servers: Vec<UpnpMediaServer> = reg.list_servers();
 
         println!("=====================");
         println!("Renderers detected : {}", renderers.len());
@@ -29,7 +29,7 @@ fn main() -> std::io::Result<()> {
             let proto = match r.protocol {
                 RendererProtocol::UpnpAvOnly => "UPnP AV",
                 RendererProtocol::OpenHomeOnly => "OpenHome",
-                RendererProtocol::Hybrid => "Hybrid",
+                RendererProtocol::OpenHomeHybrid => "Hybrid",
             };
 
             println!(

@@ -28,13 +28,12 @@
 //!   - This identity is used by the sync helpers to preserve the current
 //!     track across queue rebuilds when the MediaServer content changes.
 
-use anyhow::Result;
-
+use crate::DeviceId;
+use crate::errors::ControlPointError;
 // ADAPTE ces imports aux modules existants dans pmocontrol.
 // Exemple probable :
 // use crate::model::MediaServerId;
 // use crate::model::TrackMetadata;
-use crate::media_server::ServerId as MediaServerId;
 use crate::model::TrackMetadata;
 
 /// Canonical representation of a track in a renderer queue.
@@ -52,7 +51,14 @@ pub struct PlaybackItem {
     ///
     /// Typically this is the UDN of the MediaServer device, or an
     /// equivalent logical identifier.
-    pub media_server_id: MediaServerId,
+    pub media_server_id: DeviceId,
+
+    /// L'ID interne de l'item dans la queue.
+    /// Cet ID n'a de sens que lors du retour d'un snapshot.
+    /// Dans une queue interne, il peut avoir n'importe quelle valeur, 
+    /// l'ID qui compte et la position dans le vecteur.
+    /// Par principe, on la peut la mettre égale à usize::MAX.
+    pub backend_id: usize,
 
     /// DIDL-Lite `id` attribute of the `item` in the ContentDirectory.
     ///
@@ -159,13 +165,13 @@ pub trait QueueBackend {
     // =====================================================================
 
     /// Returns the full snapshot (items + current index) of this queue.
-    fn queue_snapshot(&self) -> Result<QueueSnapshot>;
+    fn queue_snapshot(&self) -> Result<QueueSnapshot, ControlPointError>;
 
     /// Sets the current index for this queue.
     ///
     /// This method only updates the queue structure (pointer to the current
     /// item). It MUST NOT start playback.
-    fn set_index(&mut self, index: Option<usize>) -> Result<()>;
+    fn set_index(&mut self, index: Option<usize>) -> Result<(), ControlPointError>;
 
     /// Replaces the entire queue with a new list of items and a new
     /// current index.
@@ -173,45 +179,45 @@ pub trait QueueBackend {
         &mut self,
         items: Vec<PlaybackItem>,
         current_index: Option<usize>,
-    ) -> Result<()>;
+    ) -> Result<(), ControlPointError>;
 
     /// Returns the item at `index`, if it exists.
-    fn get_item(&self, index: usize) -> Result<Option<PlaybackItem>>;
+    fn get_item(&self, index: usize) -> Result<Option<PlaybackItem>, ControlPointError>;
 
     /// Replaces the item at `index` with `item`.
-    fn replace_item(&mut self, index: usize, item: PlaybackItem) -> Result<()>;
+    fn replace_item(&mut self, index: usize, item: PlaybackItem) -> Result<(), ControlPointError>;
 
     // =====================================================================
     //  DEFAULT HELPERS (backend-agnostic logic)
     // =====================================================================
 
     /// Clears the queue.
-    fn clear_queue(&mut self) -> Result<()> {
+    fn clear_queue(&mut self) -> Result<(), ControlPointError> {
         self.replace_queue(Vec::new(), None)
     }
 
     /// Alias for `clear_queue`, semantic name for “empty before rebuild”.
-    fn empty_queue(&mut self) -> Result<()> {
+    fn empty_queue(&mut self) -> Result<(), ControlPointError> {
         self.clear_queue()
     }
 
     /// Returns the current index, if any.
-    fn current_index(&self) -> Result<Option<usize>> {
+    fn current_index(&self) -> Result<Option<usize>, ControlPointError> {
         Ok(self.queue_snapshot()?.current_index)
     }
 
     /// Returns the number of items in the queue.
-    fn len(&self) -> Result<usize> {
+    fn len(&self) -> Result<usize, ControlPointError> {
         Ok(self.queue_snapshot()?.len())
     }
 
     /// Returns `true` if the queue is empty.
-    fn is_empty(&self) -> Result<bool> {
+    fn is_empty(&self) -> Result<bool, ControlPointError> {
         Ok(self.queue_snapshot()?.is_empty())
     }
 
     /// Returns a full snapshot of the queue.
-    fn full_snapshot(&self) -> Result<QueueSnapshot> {
+    fn full_snapshot(&self) -> Result<QueueSnapshot, ControlPointError> {
         self.queue_snapshot()
     }
 
@@ -220,13 +226,13 @@ pub trait QueueBackend {
     /// The default implementation:
     ///   - takes a snapshot,
     ///   - returns a boxed iterator owning the underlying `Vec`.
-    fn iter_items(&self) -> Result<Box<dyn Iterator<Item = PlaybackItem>>> {
+    fn iter_items(&self) -> Result<Box<dyn Iterator<Item = PlaybackItem>>, ControlPointError> {
         let snapshot = self.queue_snapshot()?;
         Ok(Box::new(snapshot.items.into_iter()))
     }
 
     /// Returns the list of items that come strictly after the current index.
-    fn upcoming_items(&self) -> Result<Vec<PlaybackItem>> {
+    fn upcoming_items(&self) -> Result<Vec<PlaybackItem>, ControlPointError> {
         let snapshot = self.queue_snapshot()?;
         let items = match snapshot.current_index {
             None => snapshot.items,
@@ -236,13 +242,13 @@ pub trait QueueBackend {
     }
 
     /// Returns how many items remain in the queue after the current index.
-    fn upcoming_len(&self) -> Result<usize> {
+    fn upcoming_len(&self) -> Result<usize, ControlPointError> {
         Ok(self.upcoming_items()?.len())
     }
 
     /// Returns the current item (or the first pending item if no index is set)
     /// along with the count of remaining items.
-    fn peek_current(&self) -> Result<Option<(PlaybackItem, usize)>> {
+    fn peek_current(&self) -> Result<Option<(PlaybackItem, usize)>, ControlPointError> {
         let snapshot = self.queue_snapshot()?;
         let QueueSnapshot {
             items,
@@ -274,7 +280,7 @@ pub trait QueueBackend {
 
     /// Advances the queue to the next item (respecting the current index) and
     /// returns it with the number of remaining items.
-    fn dequeue_next(&mut self) -> Result<Option<(PlaybackItem, usize)>> {
+    fn dequeue_next(&mut self) -> Result<Option<(PlaybackItem, usize)>, ControlPointError> {
         let snapshot = self.queue_snapshot()?;
         let QueueSnapshot {
             items,
@@ -310,7 +316,7 @@ pub trait QueueBackend {
     ///
     /// This method only manipulates the queue structure; it does not
     /// start playback.
-    fn enqueue_items(&mut self, items: Vec<PlaybackItem>, mode: EnqueueMode) -> Result<()> {
+    fn enqueue_items(&mut self, items: Vec<PlaybackItem>, mode: EnqueueMode) -> Result<(), ControlPointError> {
         let mut snapshot = self.queue_snapshot()?;
 
         match mode {
@@ -337,7 +343,7 @@ pub trait QueueBackend {
     }
 
     /// Replaces the queue with `items` and sets a default index.
-    fn replace_all(&mut self, items: Vec<PlaybackItem>) -> Result<()> {
+    fn replace_all(&mut self, items: Vec<PlaybackItem>) -> Result<(), ControlPointError> {
         if items.is_empty() {
             self.replace_queue(Vec::new(), None)
         } else {
@@ -347,7 +353,7 @@ pub trait QueueBackend {
 
     /// Appends items and, if the queue was previously empty, initializes
     /// the current index to `0`.
-    fn append_or_init_index(&mut self, items: Vec<PlaybackItem>) -> Result<()> {
+    fn append_or_init_index(&mut self, items: Vec<PlaybackItem>) -> Result<(), ControlPointError> {
         let was_empty = self.is_empty()?;
         let mut snapshot = self.queue_snapshot()?;
         snapshot.items.extend(items);
@@ -362,7 +368,7 @@ pub trait QueueBackend {
     }
 
     /// Computes the “next” index.
-    fn next_index(&self) -> Result<Option<usize>> {
+    fn next_index(&self) -> Result<Option<usize>, ControlPointError> {
         let len = self.len()?;
         if len == 0 {
             return Ok(None);
@@ -376,7 +382,7 @@ pub trait QueueBackend {
     }
 
     /// Computes the “previous” index.
-    fn previous_index(&self) -> Result<Option<usize>> {
+    fn previous_index(&self) -> Result<Option<usize>, ControlPointError> {
         match self.current_index()? {
             None => Ok(None),
             Some(0) => Ok(None),
@@ -385,7 +391,7 @@ pub trait QueueBackend {
     }
 
     /// Advances the current index to the next item, if any.
-    fn advance(&mut self) -> Result<bool> {
+    fn advance(&mut self) -> Result<bool, ControlPointError> {
         if let Some(next) = self.next_index()? {
             self.set_index(Some(next))?;
             Ok(true)
@@ -395,7 +401,7 @@ pub trait QueueBackend {
     }
 
     /// Rewinds the current index to the previous item, if any.
-    fn rewind(&mut self) -> Result<bool> {
+    fn rewind(&mut self) -> Result<bool, ControlPointError> {
         if let Some(prev) = self.previous_index()? {
             self.set_index(Some(prev))?;
             Ok(true)
@@ -409,18 +415,18 @@ pub trait QueueBackend {
         &mut self,
         index: usize,
         update: impl FnOnce(PlaybackItem) -> PlaybackItem,
-    ) -> Result<()> {
+    ) -> Result<(), ControlPointError> {
         if let Some(item) = self.get_item(index)? {
             let new_item = update(item);
             self.replace_item(index, new_item)
         } else {
-            anyhow::bail!("Queue index {} out of range", index);
+            Err(ControlPointError::QueueError(format!("Queue index {} out of range", index)))
         }
     }
 
     /// Synchronizes the queue with a new list of items coming from an
     /// external MediaServer, trying to preserve the current track.
-    fn sync_from_external_preserve_current(&mut self, new_items: Vec<PlaybackItem>) -> Result<()> {
+    fn sync_from_external_preserve_current(&mut self, new_items: Vec<PlaybackItem>) -> Result<(), ControlPointError> {
         let snapshot = self.queue_snapshot()?;
         let current = snapshot
             .current_index

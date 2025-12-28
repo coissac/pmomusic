@@ -15,9 +15,19 @@
 //!   - maintains a `current_index`,
 //!   - never starts playback (transport control is handled elsewhere).
 
+use std::sync::{Arc, Mutex};
+
 use anyhow::Result;
 
-use crate::queue_backend::{PlaybackItem, QueueBackend, QueueSnapshot};
+use crate::{
+    DeviceId, RendererInfo,
+    DeviceIdentity,
+    errors::ControlPointError,
+    queue::{
+        MusicQueue,
+        backend::{PlaybackItem, QueueBackend, QueueSnapshot},
+    },
+};
 
 /// Internal/local queue implementation.
 ///
@@ -27,35 +37,30 @@ use crate::queue_backend::{PlaybackItem, QueueBackend, QueueSnapshot};
 ///
 /// It does not talk to any remote service. All operations are pure
 /// structural mutations on in-memory data.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct InternalQueue {
+    renderer_id: DeviceId,
     items: Vec<PlaybackItem>,
     current_index: Option<usize>,
 }
 
 impl InternalQueue {
     /// Creates an empty internal queue.
-    pub fn new() -> Self {
+    pub fn new(renderer_id: DeviceId) -> Self {
         Self {
+            renderer_id,
             items: Vec::new(),
             current_index: None,
         }
     }
 
-    /// Creates an internal queue from an initial list of items.
-    ///
-    /// If `set_current_to_first` is `true` and the list is non-empty,
-    /// the current index is set to `Some(0)`. Otherwise, it is `None`.
-    pub fn from_items(items: Vec<PlaybackItem>, set_current_to_first: bool) -> Self {
-        let current_index = if set_current_to_first && !items.is_empty() {
-            Some(0)
-        } else {
-            None
-        };
-        Self {
-            items,
-            current_index,
-        }
+    pub fn from_renderer_info(
+        info: &RendererInfo,
+    ) -> Result<InternalQueue, ControlPointError> {
+        Ok(InternalQueue::new(
+                info.id(),
+            ),
+        )
     }
 
     /// Exposes a read-only view of the underlying items.
@@ -70,14 +75,19 @@ impl InternalQueue {
 }
 
 impl QueueBackend for InternalQueue {
-    fn queue_snapshot(&self) -> Result<QueueSnapshot> {
+    fn queue_snapshot(&self) -> Result<QueueSnapshot, ControlPointError> {
+        let mut items = self.items.clone();
+        for (i, item) in items.iter_mut().enumerate() {
+            item.backend_id = i;
+        }
+
         Ok(QueueSnapshot {
-            items: self.items.clone(),
+            items,
             current_index: self.current_index,
         })
     }
 
-    fn set_index(&mut self, index: Option<usize>) -> Result<()> {
+    fn set_index(&mut self, index: Option<usize>) -> Result<(), ControlPointError> {
         match index {
             None => {
                 self.current_index = None;
@@ -97,17 +107,17 @@ impl QueueBackend for InternalQueue {
         &mut self,
         items: Vec<PlaybackItem>,
         current_index: Option<usize>,
-    ) -> Result<()> {
+    ) -> Result<(), ControlPointError> {
         self.items = items;
         self.current_index = current_index.filter(|&i| i < self.items.len());
         Ok(())
     }
 
-    fn get_item(&self, index: usize) -> Result<Option<PlaybackItem>> {
+    fn get_item(&self, index: usize) -> Result<Option<PlaybackItem>, ControlPointError> {
         Ok(self.items.get(index).cloned())
     }
 
-    fn replace_item(&mut self, index: usize, item: PlaybackItem) -> Result<()> {
+    fn replace_item(&mut self, index: usize, item: PlaybackItem) -> Result<(), ControlPointError> {
         if index < self.items.len() {
             self.items[index] = item;
         }

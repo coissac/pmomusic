@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossbeam_channel::RecvTimeoutError;
-use pmocontrol::{ControlPoint, MediaServerEvent, MediaServerInfo, ServerId};
+use pmocontrol::{ControlPoint, MediaServerEvent, UpnpMediaServer, ServerId};
 
 const DISCOVERY_WAIT_SECS: u64 = 5;
 const MONITOR_DURATION_SECS: u64 = 90;
@@ -33,7 +33,7 @@ fn main() -> Result<()> {
         );
     }
 
-    let mut cache: HashMap<ServerId, MediaServerInfo> = servers
+    let mut cache: HashMap<ServerId, UpnpMediaServer> = servers
         .into_iter()
         .map(|info| (info.id.clone(), info))
         .collect();
@@ -64,7 +64,7 @@ fn main() -> Result<()> {
 
 fn print_event(
     cp: &ControlPoint,
-    cache: &mut HashMap<ServerId, MediaServerInfo>,
+    cache: &mut HashMap<ServerId, UpnpMediaServer>,
     event: &MediaServerEvent,
 ) {
     match event {
@@ -101,7 +101,7 @@ fn print_event(
 
 fn describe_server(
     cp: &ControlPoint,
-    cache: &mut HashMap<ServerId, MediaServerInfo>,
+    cache: &mut HashMap<ServerId, UpnpMediaServer>,
     id: &ServerId,
 ) -> String {
     if let Some(info) = cache.get(id) {

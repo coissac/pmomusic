@@ -17,7 +17,7 @@ use pmocontrol::PlaybackPosition;
 use pmocontrol::model::RendererInfo;
 use pmocontrol::openhome_client::{OhInfoClient, OhPlaylistClient, OhTimeClient};
 use pmocontrol::{
-    ControlPoint, MusicRenderer, PlaybackState, PlaybackStatus, RendererCapabilities,
+    ControlPoint, MusicRendererBackend, PlaybackState, PlaybackStatus, RendererCapabilities,
     RendererProtocol, TransportControl, VolumeControl,
 };
 use std::env;
@@ -37,7 +37,7 @@ fn main() -> Result<()> {
     thread::sleep(Duration::from_secs(5));
 
     // 2. Snapshot of logical music renderers
-    let mut renderers: Vec<MusicRenderer> = cp.list_music_renderers();
+    let mut renderers: Vec<MusicRendererBackend> = cp.list_music_renderers();
 
     // Filter out the in-dev PMOMusic renderer (if present)
     renderers.retain(|r| {
@@ -276,20 +276,20 @@ fn print_openhome_details(prefix: &str, info: &RendererInfo) {
     }
 }
 
-fn print_backend(prefix: &str, renderer: &MusicRenderer) {
+fn print_backend(prefix: &str, renderer: &MusicRendererBackend) {
     let backend = match renderer {
-        MusicRenderer::Upnp(_) => "UpnpRenderer (UPnP AV / DLNA)",
-        MusicRenderer::LinkPlay(_) => "LinkPlayRenderer (LinkPlay HTTP)",
-        MusicRenderer::ArylicTcp(_) => "ArylicTcpRenderer  (ARylic TCP Protocol)",
-        MusicRenderer::HybridUpnpArylic { .. } => {
+        MusicRendererBackend::Upnp(_) => "UpnpRenderer (UPnP AV / DLNA)",
+        MusicRendererBackend::LinkPlay(_) => "LinkPlayRenderer (LinkPlay HTTP)",
+        MusicRendererBackend::ArylicTcp(_) => "ArylicTcpRenderer  (ARylic TCP Protocol)",
+        MusicRendererBackend::HybridUpnpArylic { .. } => {
             "Hybrid UpnpArylicRenderer (UPnP AV / DLNA + ARylic TCP Protocol)"
         }
-        MusicRenderer::OpenHome(_) => "OpenHomeRenderer (native OpenHome stack)",
+        MusicRendererBackend::OpenHome(_) => "OpenHomeRenderer (native OpenHome stack)",
     };
     println!("{prefix}Backend       : {backend}");
 }
 
-fn dump_renderer_state(renderer: &MusicRenderer, label: &str) -> Result<()> {
+fn dump_renderer_state(renderer: &MusicRendererBackend, label: &str) -> Result<()> {
     println!("\n[{label}]");
 
     if let Ok(state) = renderer.playback_state() {
@@ -344,7 +344,7 @@ fn dump_renderer_state(renderer: &MusicRenderer, label: &str) -> Result<()> {
     Ok(())
 }
 
-fn progress_monitor(renderer: &MusicRenderer, label: &str, iterations: usize, interval_secs: u64) {
+fn progress_monitor(renderer: &MusicRendererBackend, label: &str, iterations: usize, interval_secs: u64) {
     println!(
         "\n[{label}] polling playback state/position {} times (every {} s)...",
         iterations, interval_secs
@@ -370,7 +370,7 @@ fn progress_monitor(renderer: &MusicRenderer, label: &str, iterations: usize, in
     }
 }
 
-fn volume_demo(renderer: &MusicRenderer) -> Result<()> {
+fn volume_demo(renderer: &MusicRendererBackend) -> Result<()> {
     // Try to get current volume
     let original = renderer.volume()?;
     println!("  Current music volume  : {}", original);

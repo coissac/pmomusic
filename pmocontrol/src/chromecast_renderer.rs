@@ -18,12 +18,14 @@ use anyhow::{Result, anyhow};
 
 use tracing::debug;
 
+use crate::DeviceIdentity;
 use crate::capabilities::{
     PlaybackPosition, PlaybackPositionInfo, PlaybackState, PlaybackStatus, TransportControl,
     VolumeControl,
 };
 use crate::chromecast_discovery::{extract_host_from_location, extract_port_from_location};
-use crate::model::{RendererId, RendererInfo, RendererProtocol};
+use crate::errors::ControlPointError;
+use crate::model::{RendererInfo};
 
 use rust_cast::{
     CastDevice, ChannelMessage,
@@ -46,7 +48,6 @@ const DEFAULT_CHROMECAST_PORT: u16 = 8009;
 /// spawned to handle heartbeat responses from the device.
 #[derive(Clone)]
 pub struct ChromecastRenderer {
-    pub info: RendererInfo,
     host: String,
     port: u16,
     stop_signal: Arc<Mutex<bool>>,
@@ -58,7 +59,6 @@ pub struct ChromecastRenderer {
 impl std::fmt::Debug for ChromecastRenderer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ChromecastRenderer")
-            .field("info", &self.info)
             .field("host", &self.host)
             .field("port", &self.port)
             .finish()
@@ -76,29 +76,31 @@ fn ensure_crypto_provider_initialized() {
     INIT.call_once(|| {
         // Install the default CryptoProvider (aws-lc-rs or ring, depending on features)
         let _ = rustls::crypto::CryptoProvider::install_default(
-            rustls::crypto::aws_lc_rs::default_provider()
+            rustls::crypto::aws_lc_rs::default_provider(),
         );
         tracing::debug!("Rustls CryptoProvider initialized for Chromecast connections");
     });
 }
 
 /// Helper function to connect to a Chromecast device.
-fn connect_to_device<'a>(host: &'a str, port: u16) -> Result<CastDevice<'a>> {
+fn connect_to_device<'a>(host: &'a str, port: u16) -> Result<CastDevice<'a>, ControlPointError> {
     // Ensure rustls crypto provider is initialized before any TLS connection
     ensure_crypto_provider_initialized();
 
     let device = CastDevice::connect_without_host_verification(host, port)
-        .map_err(|e| anyhow!("Failed to connect to Chromecast: {}", e))?;
+        .map_err(|e| ControlPointError::ChromecastError(format!("Failed to connect to Chromecast: {}", e)))?;
 
-    device.connection
+    device
+        .connection
         .connect(DEFAULT_DESTINATION_ID.to_string())
-        .map_err(|e| anyhow!("Failed to connect channel: {}", e))?;
+        .map_err(|e| ControlPointError::ChromecastError(format!("Failed to connect channel: {}", e)))?;
 
     // Send initial gre to establish heartbeat communication
     // This is critical per rust_caster.rs example
-    device.heartbeat
+    device
+        .heartbeat
         .ping()
-        .map_err(|e| anyhow!("Failed to send initial heartbeat ping: {}", e))?;
+        .map_err(|e| ControlPointError::ChromecastError(format!("Failed to send initial heartbeat ping: {}", e)))?;
 
     Ok(device)
 }
@@ -113,62 +115,42 @@ fn map_player_state(player_state: &CastPlayerState) -> PlaybackState {
     }
 }
 
+
 impl ChromecastRenderer {
     /// Creates a new ChromecastRenderer from RendererInfo.
     pub fn from_renderer_info(info: RendererInfo) -> Result<Self> {
         tracing::info!(
             "ChromecastRenderer::from_renderer_info location={} for {}",
-            info.location,
-            info.friendly_name
+            info.location(),
+            info.friendly_name()
         );
 
-        let host = extract_host_from_location(&info.location)
-            .ok_or_else(|| anyhow!("Invalid Chromecast location: {}", info.location))?;
+        let host = extract_host_from_location(info.location())
+            .ok_or_else(|| ControlPointError::ChromecastError(format!("Invalid Chromecast location: {}", info.location())))?;
 
-        let port = extract_port_from_location(&info.location)
-            .unwrap_or(DEFAULT_CHROMECAST_PORT);
+        let port = extract_port_from_location(info.location()).unwrap_or(DEFAULT_CHROMECAST_PORT);
 
         let stop_signal = Arc::new(Mutex::new(false));
         let thread_handle = Arc::new(Mutex::new(None));
 
         tracing::info!(
             "ChromecastRenderer created for {} with host={} port={}",
-            info.friendly_name,
+            info.friendly_name(),
             host,
             port
         );
 
         Ok(Self {
-            info,
             host,
             port,
             stop_signal,
             thread_handle,
         })
     }
-    /// Returns the renderer ID.
-    pub fn id(&self) -> &RendererId {
-        &self.info.id
-    }
-
-    /// Returns the friendly name.
-    pub fn friendly_name(&self) -> &str {
-        &self.info.friendly_name
-    }
-
-    /// Returns the protocol.
-    pub fn protocol(&self) -> &RendererProtocol {
-        &self.info.protocol
-    }
-
-    /// Returns the renderer info.
-    pub fn info(&self) -> &RendererInfo {
-        &self.info
-    }
 }
 
 impl TransportControl for ChromecastRenderer {
-    fn play_uri(&self, uri: &str, meta: &str) -> Result<()> {
+    fn play_uri(&self, uri: &str, meta: &str) -> Result<(), ControlPointError> {
         debug!("ChromecastRenderer: play_uri({})", uri);
 
         // Signal any existing play thread to stop
@@ -184,8 +166,7 @@ impl TransportControl for ChromecastRenderer {
 
                 // Wait for thread to finish (it should see stop_signal and exit)
                 // Note: device.receive() may block, so thread might take time to notice stop_signal
-                let join_result = std::thread::spawn(move || handle.join())
-                    .join();
+                let join_result = std::thread::spawn(move || handle.join()).join();
 
                 match join_result {
                     Ok(Ok(())) => {
@@ -225,7 +206,10 @@ impl TransportControl for ChromecastRenderer {
             };
 
             // Launch DefaultMediaReceiver app
-            let app = match device.receiver.launch_app(&CastDeviceApp::DefaultMediaReceiver) {
+            let app = match device
+                .receiver
+                .launch_app(&CastDeviceApp::DefaultMediaReceiver)
+            {
                 Ok(app) => app,
                 Err(e) => {
                     tracing::error!("Failed to launch DefaultMediaReceiver: {}", e);
@@ -249,11 +233,10 @@ impl TransportControl for ChromecastRenderer {
                 metadata: None,
             };
 
-            match device.media.load(
-                app.transport_id.as_str(),
-                app.session_id.as_str(),
-                &media,
-            ) {
+            match device
+                .media
+                .load(app.transport_id.as_str(), app.session_id.as_str(), &media)
+            {
                 Ok(status) => {
                     tracing::info!("Media loaded successfully: {:?}", status);
                 }
@@ -314,63 +297,87 @@ impl TransportControl for ChromecastRenderer {
         Ok(())
     }
 
-    fn play(&self) -> Result<()> {
+    fn play(&self) -> Result<(), ControlPointError> {
         debug!("ChromecastRenderer: play()");
 
         let device = connect_to_device(&self.host, self.port)?;
 
         // Get receiver status to find the active app
-        let status = device.receiver.get_status()
-            .map_err(|e| anyhow!("Failed to get receiver status: {}", e))?;
+        let status = device
+            .receiver
+            .get_status()
+            .map_err(|e| ControlPointError::ChromecastError(format!("Failed to get receiver status: {}", e)))?;
 
-        let app = status.applications.first()
-            .ok_or_else(|| anyhow!("No active app found"))?;
+        let app = status
+            .applications
+            .first()
+            .ok_or_else(|| ControlPointError::ChromecastError(format!("No active app found")))?;
 
         // Connect to the app
-        device.connection.connect(app.transport_id.as_str())
-            .map_err(|e| anyhow!("Failed to connect to app: {}", e))?;
+        device
+            .connection
+            .connect(app.transport_id.as_str())
+            .map_err(|e| ControlPointError::ChromecastError(format!("Failed to connect to app: {}", e)))?;
 
         // Get media status
-        let media_status = device.media.get_status(app.transport_id.as_str(), None)
-            .map_err(|e| anyhow!("Failed to get media status: {}", e))?;
+        let media_status = device
+            .media
+            .get_status(app.transport_id.as_str(), None)
+            .map_err(|e| ControlPointError::ChromecastError(format!("Failed to get media status: {}", e)))?;
 
-        let media_entry = media_status.entries.first()
-            .ok_or_else(|| anyhow!("No media session found"))?;
+        let media_entry = media_status
+            .entries
+            .first()
+            .ok_or_else(|| ControlPointError::ChromecastError(format!("No media session found")))?;
 
         // Send play command
-        device.media.play(app.transport_id.as_str(), media_entry.media_session_id)
-            .map_err(|e| anyhow!("Failed to play: {}", e))?;
+        device
+            .media
+            .play(app.transport_id.as_str(), media_entry.media_session_id)
+            .map_err(|e| ControlPointError::ChromecastError(format!("Failed to play: {}", e)))?;
 
         Ok(())
     }
 
-    fn pause(&self) -> Result<()> {
+    fn pause(&self) -> Result<(), ControlPointError> {
         debug!("ChromecastRenderer: pause()");
 
         let device = connect_to_device(&self.host, self.port)?;
 
-        let status = device.receiver.get_status()
-            .map_err(|e| anyhow!("Failed to get receiver status: {}", e))?;
+        let status = device
+            .receiver
+            .get_status()
+            .map_err(|e| ControlPointError::ChromecastError(format!("Failed to get receiver status: {}", e)))?;
 
-        let app = status.applications.first()
-            .ok_or_else(|| anyhow!("No active app found"))?;
+        let app = status
+            .applications
+            .first()
+            .ok_or_else(|| ControlPointError::ChromecastError(format!("No active app found")))?;
 
-        device.connection.connect(app.transport_id.as_str())
-            .map_err(|e| anyhow!("Failed to connect to app: {}", e))?;
+        device
+            .connection
+            .connect(app.transport_id.as_str())
+            .map_err(|e| ControlPointError::ChromecastError(format!("Failed to connect to app: {}", e)))?;
 
-        let media_status = device.media.get_status(app.transport_id.as_str(), None)
-            .map_err(|e| anyhow!("Failed to get media status: {}", e))?;
+        let media_status = device
+            .media
+            .get_status(app.transport_id.as_str(), None)
+            .map_err(|e| ControlPointError::ChromecastError(format!("Failed to get media status: {}", e)))?;
 
-        let media_entry = media_status.entries.first()
-            .ok_or_else(|| anyhow!("No media session found"))?;
+        let media_entry = media_status
+            .entries
+            .first()
+            .ok_or_else(|| ControlPointError::ChromecastError(format!("No media session found")))?;
 
-        device.media.pause(app.transport_id.as_str(), media_entry.media_session_id)
-            .map_err(|e| anyhow!("Failed to pause: {}", e))?;
+        device
+            .media
+            .pause(app.transport_id.as_str(), media_entry.media_session_id)
+            .map_err(|e| ControlPointError::ChromecastError(format!("Failed to pause: {}", e)))?;
 
         Ok(())
     }
 
-    fn stop(&self) -> Result<()> {
+    fn stop(&self) -> Result<(), ControlPointError> {
         debug!("ChromecastRenderer: stop()");
 
         // Signal the play thread to stop
@@ -385,81 +392,113 @@ impl TransportControl for ChromecastRenderer {
         // Also send stop command to the device
         let device = connect_to_device(&self.host, self.port)?;
 
-        let status = device.receiver.get_status()
-            .map_err(|e| anyhow!("Failed to get receiver status: {}", e))?;
+        let status = device
+            .receiver
+            .get_status()
+            .map_err(|e| ControlPointError::ChromecastError(format!("Failed to get receiver status: {}", e)))?;
 
-        let app = status.applications.first()
-            .ok_or_else(|| anyhow!("No active app found"))?;
+        let app = status
+            .applications
+            .first()
+            .ok_or_else(|| ControlPointError::ChromecastError(format!("No active app found")))?;
 
-        device.connection.connect(app.transport_id.as_str())
-            .map_err(|e| anyhow!("Failed to connect to app: {}", e))?;
+        device
+            .connection
+            .connect(app.transport_id.as_str())
+            .map_err(|e| ControlPointError::ChromecastError(format!("Failed to connect to app: {}", e)))?;
 
-        let media_status = device.media.get_status(app.transport_id.as_str(), None)
-            .map_err(|e| anyhow!("Failed to get media status: {}", e))?;
+        let media_status = device
+            .media
+            .get_status(app.transport_id.as_str(), None)
+            .map_err(|e| ControlPointError::ChromecastError(format!("Failed to get media status: {}", e)))?;
 
-        let media_entry = media_status.entries.first()
-            .ok_or_else(|| anyhow!("No media session found"))?;
+        let media_entry = media_status
+            .entries
+            .first()
+            .ok_or_else(|| ControlPointError::ChromecastError(format!("No media session found")))?;
 
-        device.media.stop(app.transport_id.as_str(), media_entry.media_session_id)
-            .map_err(|e| anyhow!("Failed to stop: {}", e))?;
+        device
+            .media
+            .stop(app.transport_id.as_str(), media_entry.media_session_id)
+            .map_err(|e| ControlPointError::ChromecastError(format!("Failed to stop: {}", e)))?;
 
         Ok(())
     }
 
-    fn seek_rel_time(&self, hhmmss: &str) -> Result<()> {
+    fn seek_rel_time(&self, hhmmss: &str) -> Result<(), ControlPointError> {
         debug!("ChromecastRenderer: seek_rel_time({})", hhmmss);
 
         // Parse HH:MM:SS to seconds
         let parts: Vec<&str> = hhmmss.split(':').collect();
         if parts.len() != 3 {
-            return Err(anyhow!("Invalid time format, expected HH:MM:SS: {}", hhmmss));
+            return Err(ControlPointError::ChromecastError(format!(
+                "Invalid time format, expected HH:MM:SS: {}",
+                hhmmss
+            )));
         }
 
-        let hours: u32 = parts[0].parse()
-            .map_err(|_| anyhow!("Invalid hours in time: {}", hhmmss))?;
-        let minutes: u32 = parts[1].parse()
-            .map_err(|_| anyhow!("Invalid minutes in time: {}", hhmmss))?;
-        let seconds: u32 = parts[2].parse()
-            .map_err(|_| anyhow!("Invalid seconds in time: {}", hhmmss))?;
+        let hours: u32 = parts[0]
+            .parse()
+            .map_err(|_| ControlPointError::ChromecastError(format!("Invalid hours in time: {}", hhmmss)))?;
+        let minutes: u32 = parts[1]
+            .parse()
+            .map_err(|_| ControlPointError::ChromecastError(format!("Invalid minutes in time: {}", hhmmss)))?;
+        let seconds: u32 = parts[2]
+            .parse()
+            .map_err(|_| ControlPointError::ChromecastError(format!("Invalid seconds in time: {}", hhmmss)))?;
 
         let total_seconds = (hours * 3600 + minutes * 60 + seconds) as f32;
 
         let device = connect_to_device(&self.host, self.port)?;
 
-        let status = device.receiver.get_status()
-            .map_err(|e| anyhow!("Failed to get receiver status: {}", e))?;
+        let status = device
+            .receiver
+            .get_status()
+            .map_err(|e| ControlPointError::ChromecastError(format!("Failed to get receiver status: {}", e)))?;
 
-        let app = status.applications.first()
-            .ok_or_else(|| anyhow!("No active app found"))?;
+        let app = status
+            .applications
+            .first()
+            .ok_or_else(|| ControlPointError::ChromecastError(format!("No active app found")))?;
 
-        device.connection.connect(app.transport_id.as_str())
-            .map_err(|e| anyhow!("Failed to connect to app: {}", e))?;
+        device
+            .connection
+            .connect(app.transport_id.as_str())
+            .map_err(|e| ControlPointError::ChromecastError(format!("Failed to connect to app: {}", e)))?;
 
-        let media_status = device.media.get_status(app.transport_id.as_str(), None)
-            .map_err(|e| anyhow!("Failed to get media status: {}", e))?;
+        let media_status = device
+            .media
+            .get_status(app.transport_id.as_str(), None)
+            .map_err(|e| ControlPointError::ChromecastError(format!("Failed to get media status: {}", e)))?;
 
-        let media_entry = media_status.entries.first()
-            .ok_or_else(|| anyhow!("No media session found"))?;
+        let media_entry = media_status
+            .entries
+            .first()
+            .ok_or_else(|| ControlPointError::ChromecastError(format!("No media session found")))?;
 
-        device.media.seek(
-            app.transport_id.as_str(),
-            media_entry.media_session_id,
-            Some(total_seconds),
-            None,
-        )
-        .map_err(|e| anyhow!("Failed to seek: {}", e))?;
+        device
+            .media
+            .seek(
+                app.transport_id.as_str(),
+                media_entry.media_session_id,
+                Some(total_seconds),
+                None,
+            )
+            .map_err(|e| ControlPointError::ChromecastError(format!("Failed to seek: {}", e)))?;
 
         Ok(())
     }
 }
 
 impl PlaybackStatus for ChromecastRenderer {
-    fn playback_state(&self) -> Result<PlaybackState> {
+    fn playback_state(&self) -> Result<PlaybackState, ControlPointError> {
         let device = connect_to_device(&self.host, self.port)?;
 
         // Get receiver status to find the active app
-        let status = device.receiver.get_status()
-            .map_err(|e| anyhow!("Failed to get receiver status: {}", e))?;
+        let status = device
+            .receiver
+            .get_status()
+            .map_err(|e| ControlPointError::ChromecastError(format!("Failed to get receiver status: {}", e)))?;
 
         // If no app is running, return NoMedia
         let app = match status.applications.first() {
@@ -468,12 +507,16 @@ impl PlaybackStatus for ChromecastRenderer {
         };
 
         // Connect to the app
-        device.connection.connect(app.transport_id.as_str())
-            .map_err(|e| anyhow!("Failed to connect to app: {}", e))?;
+        device
+            .connection
+            .connect(app.transport_id.as_str())
+            .map_err(|e| ControlPointError::ChromecastError(format!("Failed to connect to app: {}", e)))?;
 
         // Get media status
-        let media_status = device.media.get_status(app.transport_id.as_str(), None)
-            .map_err(|e| anyhow!("Failed to get media status: {}", e))?;
+        let media_status = device
+            .media
+            .get_status(app.transport_id.as_str(), None)
+            .map_err(|e| ControlPointError::ChromecastError(format!("Failed to get media status: {}", e)))?;
 
         // If no media entry, return NoMedia
         let media_entry = match media_status.entries.first() {
@@ -486,37 +529,49 @@ impl PlaybackStatus for ChromecastRenderer {
 }
 
 impl PlaybackPosition for ChromecastRenderer {
-    fn playback_position(&self) -> Result<PlaybackPositionInfo> {
+    fn playback_position(&self) -> Result<PlaybackPositionInfo, ControlPointError> {
         let device = connect_to_device(&self.host, self.port)?;
 
         // Get receiver status to find the active app
-        let status = device.receiver.get_status()
-            .map_err(|e| anyhow!("Failed to get receiver status: {}", e))?;
+        let status = device
+            .receiver
+            .get_status()
+            .map_err(|e| ControlPointError::ChromecastError(format!("Failed to get receiver status: {}", e)))?;
 
-        let app = status.applications.first()
-            .ok_or_else(|| anyhow!("No active app found"))?;
+        let app = status
+            .applications
+            .first()
+            .ok_or_else(|| ControlPointError::ChromecastError(format!("No active app found")))?;
 
         // Connect to the app
-        device.connection.connect(app.transport_id.as_str())
-            .map_err(|e| anyhow!("Failed to connect to app: {}", e))?;
+        device
+            .connection
+            .connect(app.transport_id.as_str())
+            .map_err(|e| ControlPointError::ChromecastError(format!("Failed to connect to app: {}", e)))?;
 
         // Get media status
-        let media_status = device.media.get_status(app.transport_id.as_str(), None)
-            .map_err(|e| anyhow!("Failed to get media status: {}", e))?;
+        let media_status = device
+            .media
+            .get_status(app.transport_id.as_str(), None)
+            .map_err(|e| ControlPointError::ChromecastError(format!("Failed to get media status: {}", e)))?;
 
-        let media_entry = media_status.entries.first()
-            .ok_or_else(|| anyhow!("No media session found"))?;
+        let media_entry = media_status
+            .entries
+            .first()
+            .ok_or_else(|| ControlPointError::ChromecastError(format!("No media session found")))?;
 
         // Extract position information
-        let rel_time = media_entry.current_time
+        let rel_time = media_entry
+            .current_time
             .map(|time| format_time_hhmmss(time as f64));
 
-        let track_duration = media_entry.media.as_ref()
+        let track_duration = media_entry
+            .media
+            .as_ref()
             .and_then(|m| m.duration)
             .map(|dur| format_time_hhmmss(dur as f64));
 
-        let track_uri = media_entry.media.as_ref()
-            .map(|m| m.content_id.clone());
+        let track_uri = media_entry.media.as_ref().map(|m| m.content_id.clone());
 
         Ok(PlaybackPositionInfo {
             track: Some(1),
@@ -600,11 +655,13 @@ fn format_time_hhmmss(seconds: f64) -> String {
 }
 
 impl VolumeControl for ChromecastRenderer {
-    fn volume(&self) -> Result<u16> {
+    fn volume(&self) -> Result<u16, ControlPointError> {
         let device = connect_to_device(&self.host, self.port)?;
 
-        let status = device.receiver.get_status()
-            .map_err(|e| anyhow!("Failed to get receiver status: {}", e))?;
+        let status = device
+            .receiver
+            .get_status()
+            .map_err(|e| ControlPointError::ChromecastError(format!("Failed to get receiver status: {}", e)))?;
 
         if let Some(level) = status.volume.level {
             Ok((level * 100.0) as u16)
@@ -613,34 +670,40 @@ impl VolumeControl for ChromecastRenderer {
         }
     }
 
-    fn set_volume(&self, volume: u16) -> Result<()> {
+    fn set_volume(&self, volume: u16) -> Result<(), ControlPointError> {
         debug!("ChromecastRenderer: set_volume({})", volume);
 
         let device = connect_to_device(&self.host, self.port)?;
 
         let level = (volume as f32) / 100.0;
-        device.receiver.set_volume(level)
-            .map_err(|e| anyhow!("Failed to set volume: {}", e))?;
+        device
+            .receiver
+            .set_volume(level)
+            .map_err(|e| ControlPointError::ChromecastError(format!("Failed to set volume: {}", e)))?;
 
         Ok(())
     }
 
-    fn mute(&self) -> Result<bool> {
+    fn mute(&self) -> Result<bool, ControlPointError> {
         let device = connect_to_device(&self.host, self.port)?;
 
-        let status = device.receiver.get_status()
-            .map_err(|e| anyhow!("Failed to get receiver status: {}", e))?;
+        let status = device
+            .receiver
+            .get_status()
+            .map_err(|e| ControlPointError::ChromecastError(format!("Failed to get receiver status: {}", e)))?;
 
         Ok(status.volume.muted.unwrap_or(false))
     }
 
-    fn set_mute(&self, mute: bool) -> Result<()> {
+    fn set_mute(&self, mute: bool) -> Result<(), ControlPointError> {
         debug!("ChromecastRenderer: set_mute({})", mute);
 
         let device = connect_to_device(&self.host, self.port)?;
 
-        device.receiver.set_volume(mute)
-            .map_err(|e| anyhow!("Failed to set mute: {}", e))?;
+        device
+            .receiver
+            .set_volume(mute)
+            .map_err(|e| ControlPointError::ChromecastError(format!("Failed to set mute: {}", e)))?;
 
         Ok(())
     }

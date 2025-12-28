@@ -280,44 +280,40 @@ impl DeviceInstance {
     }
 
     /// Enregistre toutes les URLs du device et de ses services dans le serveur.
-    pub fn register_urls<'a>(
-        &'a self,
-        server: &'a mut pmoserver::Server,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), DeviceError>> + 'a>> {
-        Box::pin(async move {
-            info!(
-                "✅ Device description for {} available at: {}{}",
-                self.get_name(),
-                self.base_url(),
-                self.description_route(),
-            );
+    #[async_recursion::async_recursion]
+    pub async fn register_urls(&self, server: &mut pmoserver::Server) -> Result<(), DeviceError> {
+        info!(
+            "✅ Device description for {} available at: {}{}",
+            self.get_name(),
+            self.base_url(),
+            self.description_route(),
+        );
 
-            // Handler pour la description du device
-            let instance_desc = self.clone();
-            server
-                .add_handler(&self.description_route(), move || {
-                    let instance = instance_desc.clone();
-                    async move { instance.description_handler().await }
-                })
-                .await;
+        // Handler pour la description du device
+        let instance_desc = self.clone();
+        server
+            .add_handler(&self.description_route(), move || {
+                let instance = instance_desc.clone();
+                async move { instance.description_handler().await }
+            })
+            .await;
 
-            // Enregistrer les services
-            for service in self.services() {
-                service
-                    .register_urls(server)
-                    .await
-                    .map_err(|e| DeviceError::UrlRegistrationError(e.to_string()))?;
-                // Start the periodic notifier so buffered state changes are flushed to subscribers.
-                let _ = service.start_notifier(DEFAULT_NOTIFY_INTERVAL);
-            }
+        // Enregistrer les services
+        for service in self.services() {
+            service
+                .register_urls(server)
+                .await
+                .map_err(|e| DeviceError::UrlRegistrationError(e.to_string()))?;
+            // Start the periodic notifier so buffered state changes are flushed to subscribers.
+            let _ = service.start_notifier(DEFAULT_NOTIFY_INTERVAL);
+        }
 
-            // Enregistrer les sous-devices
-            for device in self.devices() {
-                device.register_urls(server).await?;
-            }
+        // Enregistrer les sous-devices
+        for device in self.devices() {
+            device.register_urls(server).await?;
+        }
 
-            Ok(())
-        })
+        Ok(())
     }
 
     /// Génère l'élément XML de description du device.

@@ -19,8 +19,8 @@ use crossterm::terminal::{
 };
 use pmocontrol::model::TrackMetadata;
 use pmocontrol::{
-    ControlPoint, DeviceRegistryRead, MediaBrowser, MediaEntry, MediaServerEvent, MediaServerInfo,
-    MusicServer, PlaybackItem, PlaybackPosition, PlaybackPositionInfo, PlaybackStatus,
+    ControlPoint, DeviceRegistryRead, MediaBrowser, MediaEntry, MediaServerEvent, UpnpMediaServer,
+    UpnpMediaServer, PlaybackItem, PlaybackPosition, PlaybackPositionInfo, PlaybackStatus,
     RendererEvent, RendererInfo, TransportControl, VolumeControl,
 };
 use ratatui::Terminal;
@@ -102,7 +102,7 @@ fn main() -> Result<()> {
 
     let servers = {
         let reg = registry.read().expect("registry poisoned");
-        let list: Vec<MediaServerInfo> = reg
+        let list: Vec<UpnpMediaServer> = reg
             .list_servers()
             .into_iter()
             .filter(|s| s.has_content_directory && s.content_directory_control_url.is_some())
@@ -129,10 +129,10 @@ struct App {
     renderers: Vec<RendererInfo>,
     renderer_index: usize,
     renderer_info: Option<RendererInfo>,
-    servers: Vec<MediaServerInfo>,
+    servers: Vec<UpnpMediaServer>,
     server_index: usize,
-    server_info: Option<MediaServerInfo>,
-    music_server: Option<MusicServer>,
+    server_info: Option<UpnpMediaServer>,
+    music_server: Option<UpnpMediaServer>,
     browser: Option<BrowserState>,
     mode: Mode,
     ui_state: UiState,
@@ -168,7 +168,7 @@ impl App {
     fn new(
         control_point: Arc<ControlPoint>,
         renderers: Vec<RendererInfo>,
-        servers: Vec<MediaServerInfo>,
+        servers: Vec<UpnpMediaServer>,
     ) -> Self {
         Self {
             control_point,
@@ -192,7 +192,7 @@ impl App {
         }
     }
 
-    fn renderer_id(&self) -> Option<pmocontrol::model::RendererId> {
+    fn renderer_id(&self) -> Option<pmocontrol::model::ServiceId> {
         self.renderer_info.as_ref().map(|info| info.id.clone())
     }
 
@@ -552,7 +552,7 @@ impl App {
             }
             KeyCode::Enter => {
                 let info = self.servers[self.server_index].clone();
-                match MusicServer::from_info(&info, Duration::from_secs(DEFAULT_TIMEOUT_SECS)) {
+                match UpnpMediaServer::from_info(&info, Duration::from_secs(DEFAULT_TIMEOUT_SECS)) {
                     Ok(server) => {
                         let entries = server.browse_root()?;
                         let browser = BrowserState::new(entries);
@@ -947,7 +947,7 @@ impl App {
         }
     }
 
-    fn refresh_queue_snapshot(&mut self, renderer_id: &pmocontrol::model::RendererId) {
+    fn refresh_queue_snapshot(&mut self, renderer_id: &pmocontrol::model::ServiceId) {
         if let Ok((queue, current_index)) = self.control_point.get_full_queue_snapshot(renderer_id)
         {
             self.queue_snapshot = queue;
@@ -967,7 +967,7 @@ impl App {
 
     fn peek_next_queue_item(
         &self,
-        renderer_id: &pmocontrol::model::RendererId,
+        renderer_id: &pmocontrol::model::ServiceId,
     ) -> Option<PlaybackItem> {
         self.control_point
             .get_queue_snapshot(renderer_id)
@@ -975,7 +975,7 @@ impl App {
             .and_then(|queue| queue.into_iter().next())
     }
 
-    fn get_renderer(&self) -> Result<pmocontrol::MusicRenderer> {
+    fn get_renderer(&self) -> Result<pmocontrol::MusicRendererBackend> {
         let renderer_id = self
             .renderer_id()
             .ok_or_else(|| anyhow!("Renderer not selected"))?;
@@ -1230,7 +1230,7 @@ impl NavigationState {
 
 /// Collect playable items from MediaEntry list (including nested containers).
 fn collect_playable_items(
-    server: &MusicServer,
+    server: &UpnpMediaServer,
     entries: &[MediaEntry],
 ) -> Result<Vec<PlaybackItem>> {
     let mut items = Vec::new();
@@ -1255,7 +1255,7 @@ fn collect_playable_items(
 }
 
 /// Convert MediaEntry to PlaybackItem.
-fn playback_item_from_entry(server: &MusicServer, entry: &MediaEntry) -> Option<PlaybackItem> {
+fn playback_item_from_entry(server: &UpnpMediaServer, entry: &MediaEntry) -> Option<PlaybackItem> {
     let resource = entry.resources.iter().find(|res| res.is_audio())?;
     let metadata = TrackMetadata {
         title: Some(entry.title.clone()),

@@ -2,7 +2,12 @@
 
 use std::time::Duration;
 
-use crate::soap_client::{SoapCallResult, invoke_upnp_action, invoke_upnp_action_with_timeout};
+use crate::{
+    errors::ControlPointError,
+    soap_client::{
+        extract_child_text, handle_action_response, invoke_upnp_action, invoke_upnp_action_with_timeout
+    },
+};
 use anyhow::{Result, anyhow};
 use pmoupnp::soap::SoapEnvelope;
 use xmltree::{Element, XMLNode};
@@ -31,7 +36,7 @@ impl AvTransportClient {
     }
 
     /// AVTransport:1 — GetTransportInfo
-    pub fn get_transport_info(&self, instance_id: u32) -> Result<TransportInfo> {
+    pub fn get_transport_info(&self, instance_id: u32) -> Result<TransportInfo, ControlPointError> {
         let instance_id_str = instance_id.to_string();
         let args = [("InstanceID", instance_id_str.as_str())];
 
@@ -43,16 +48,16 @@ impl AvTransportClient {
         )?;
 
         if !call_result.status.is_success() {
-            return Err(anyhow!(
+            return Err(ControlPointError::UpnpError(format!(
                 "GetTransportInfo failed with HTTP status {}",
                 call_result.status
-            ));
+            )));
         }
 
         let envelope = call_result
             .envelope
             .as_ref()
-            .ok_or_else(|| anyhow!("Missing SOAP envelope in GetTransportInfo response"))?;
+            .ok_or_else(|| ControlPointError::UpnpError(format!("Missing SOAP envelope in GetTransportInfo response")))?;
 
         parse_transport_info(envelope)
     }
@@ -64,7 +69,7 @@ impl AvTransportClient {
     ///
     /// - `uri`  : CurrentURI
     /// - `meta` : CurrentURIMetaData (DIDL-Lite ou chaîne vide)
-    pub fn set_av_transport_uri(&self, uri: &str, meta: &str) -> Result<()> {
+    pub fn set_av_transport_uri(&self, uri: &str, meta: &str) -> Result<(), ControlPointError> {
         let args = [
             ("InstanceID", "0"),
             ("CurrentURI", uri),
@@ -82,7 +87,7 @@ impl AvTransportClient {
     }
 
     /// AVTransport:1 — Play
-    pub fn play(&self, instance_id: u32, speed: &str) -> Result<()> {
+    pub fn play(&self, instance_id: u32, speed: &str) -> Result<(), ControlPointError> {
         let instance_id_str = instance_id.to_string();
         let args = [("InstanceID", instance_id_str.as_str()), ("Speed", speed)];
 
@@ -92,7 +97,7 @@ impl AvTransportClient {
     }
 
     /// AVTransport:1 — Pause
-    pub fn pause(&self, instance_id: u32) -> Result<()> {
+    pub fn pause(&self, instance_id: u32) -> Result<(), ControlPointError> {
         let instance_id_str = instance_id.to_string();
         let args = [("InstanceID", instance_id_str.as_str())];
 
@@ -103,7 +108,7 @@ impl AvTransportClient {
     }
 
     /// AVTransport:1 — Stop
-    pub fn stop(&self, instance_id: u32) -> Result<()> {
+    pub fn stop(&self, instance_id: u32) -> Result<(), ControlPointError> {
         let instance_id_str = instance_id.to_string();
         let args = [("InstanceID", instance_id_str.as_str())];
 
@@ -113,7 +118,12 @@ impl AvTransportClient {
     }
 
     /// AVTransport:1 — Seek
-    pub fn seek(&self, instance_id: u32, unit: &str, target: &str) -> Result<()> {
+    pub fn seek(
+        &self,
+        instance_id: u32,
+        unit: &str,
+        target: &str,
+    ) -> Result<(), ControlPointError> {
         let instance_id_str = instance_id.to_string();
         let args = [
             ("InstanceID", instance_id_str.as_str()),
@@ -131,7 +141,11 @@ impl AvTransportClient {
     /// This should configure the *next* track to be played after the current one.
     /// Many renderers do NOT implement this action; in that case the method
     /// returns an error derived from the UPnP error code.
-    pub fn set_next_av_transport_uri(&self, next_uri: &str, next_meta: &str) -> Result<()> {
+    pub fn set_next_av_transport_uri(
+        &self,
+        next_uri: &str,
+        next_meta: &str,
+    ) -> Result<(), ControlPointError> {
         let args = [
             ("InstanceID", "0"),
             ("NextURI", next_uri),
@@ -150,10 +164,9 @@ impl AvTransportClient {
             if let Some(env) = &call_result.envelope {
                 if let Some(upnp_error) = parse_upnp_error(env) {
                     if is_set_next_not_supported_error(&upnp_error) {
-                        return Err(anyhow!(
-                            "Renderer does not support AVTransport.SetNextAVTransportURI (UPnP error {}: {})",
-                            upnp_error.error_code,
-                            upnp_error.error_description
+                        return Err(ControlPointError::upnp_operation_not_supported(
+                            "SetNextAVTransportURI",
+                            "AVTransport",
                         ));
                     }
                 }
@@ -166,43 +179,9 @@ impl AvTransportClient {
     }
 }
 
-fn handle_action_response(action: &str, call_result: &SoapCallResult) -> Result<()> {
-    if !call_result.status.is_success() {
-        if let Some(env) = &call_result.envelope {
-            if let Some(upnp_error) = parse_upnp_error(env) {
-                return Err(anyhow!(
-                    "{action} failed with UPnP error {}: {} (HTTP status {})",
-                    upnp_error.error_code,
-                    upnp_error.error_description,
-                    call_result.status
-                ));
-            }
-        }
-
-        return Err(anyhow!(
-            "{action} failed with HTTP status {} and body: {}",
-            call_result.status,
-            call_result.raw_body
-        ));
-    }
-
-    if let Some(env) = &call_result.envelope {
-        if let Some(upnp_error) = parse_upnp_error(env) {
-            return Err(anyhow!(
-                "{action} returned UPnP error {}: {} (HTTP status {})",
-                upnp_error.error_code,
-                upnp_error.error_description,
-                call_result.status
-            ));
-        }
-    }
-
-    Ok(())
-}
-
-fn parse_transport_info(envelope: &SoapEnvelope) -> Result<TransportInfo> {
+fn parse_transport_info(envelope: &SoapEnvelope) -> Result<TransportInfo, ControlPointError> {
     let response = find_child_with_suffix(&envelope.body.content, "GetTransportInfoResponse")
-        .ok_or_else(|| anyhow!("Missing GetTransportInfoResponse element in SOAP body"))?;
+        .ok_or_else(|| ControlPointError::UpnpError(format!("Missing GetTransportInfoResponse element in SOAP body")))?;
 
     let current_transport_state = extract_child_text(response, "CurrentTransportState")?;
     let current_transport_status = extract_child_text(response, "CurrentTransportStatus")?;
@@ -289,18 +268,6 @@ fn find_child_with_suffix<'a>(parent: &'a Element, suffix: &str) -> Option<&'a E
     })
 }
 
-fn extract_child_text(parent: &Element, suffix: &str) -> Result<String> {
-    let child = find_child_with_suffix(parent, suffix)
-        .ok_or_else(|| anyhow!("Missing {suffix} element in GetTransportInfoResponse"))?;
-
-    let text = child
-        .get_text()
-        .map(|t| t.trim().to_string())
-        .filter(|t| !t.is_empty())
-        .ok_or_else(|| anyhow!("{suffix} element missing text in GetTransportInfoResponse"))?;
-
-    Ok(text)
-}
 
 #[cfg(test)]
 mod tests {
@@ -397,7 +364,7 @@ pub struct PositionInfo {
 
 impl AvTransportClient {
     /// AVTransport:1 — GetPositionInfo
-    pub fn get_position_info(&self, instance_id: u32) -> Result<PositionInfo> {
+    pub fn get_position_info(&self, instance_id: u32) -> Result<PositionInfo, ControlPointError> {
         let instance_id_str = instance_id.to_string();
         let args = [("InstanceID", instance_id_str.as_str())];
 
@@ -409,24 +376,24 @@ impl AvTransportClient {
         )?;
 
         if !call_result.status.is_success() {
-            return Err(anyhow!(
+            return Err(ControlPointError::UpnpError(format!(
                 "GetPositionInfo failed with HTTP status {}",
                 call_result.status
-            ));
+            )));
         }
 
         let envelope = call_result
             .envelope
             .as_ref()
-            .ok_or_else(|| anyhow!("Missing SOAP envelope in GetPositionInfo response"))?;
+            .ok_or_else(|| ControlPointError::UpnpError(format!("Missing SOAP envelope in GetPositionInfo response")))?;
 
         parse_position_info(envelope)
     }
 }
 
-fn parse_position_info(envelope: &SoapEnvelope) -> Result<PositionInfo> {
+fn parse_position_info(envelope: &SoapEnvelope) -> Result<PositionInfo, ControlPointError> {
     let response = find_child_with_suffix(&envelope.body.content, "GetPositionInfoResponse")
-        .ok_or_else(|| anyhow!("Missing GetPositionInfoResponse element"))?;
+        .ok_or_else(|| ControlPointError::UpnpError(format!("Missing GetPositionInfoResponse element")))?;
 
     // Helpers allow missing text (AVTransport allows empty durations)
     fn opt(parent: &Element, name: &str) -> Option<String> {

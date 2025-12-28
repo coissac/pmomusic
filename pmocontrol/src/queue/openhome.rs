@@ -1,39 +1,38 @@
-use anyhow::{anyhow, Result};
 use pmodidl::DIDLLite;
 use quick_xml::escape::escape;
 use tracing::debug;
 
-use crate::media_server::ServerId;
-use crate::model::RendererId;
+use crate::errors::ControlPointError;
 use crate::openhome_client::{
-    parse_track_metadata_from_didl, OhInfoClient, OhPlaylistClient, OhProductClient, OhTrackEntry,
-    OPENHOME_PLAYLIST_HEAD_ID,
+    OPENHOME_PLAYLIST_HEAD_ID, OhInfoClient, OhPlaylistClient, OhProductClient, OhTrackEntry,
+    parse_track_metadata_from_didl,
 };
 use crate::openhome_playlist::{OpenHomePlaylistSnapshot, OpenHomePlaylistTrack};
-use crate::queue_backend::{EnqueueMode, PlaybackItem, QueueBackend, QueueSnapshot};
+use crate::queue::backend::{EnqueueMode, PlaybackItem, QueueBackend, QueueSnapshot};
+use crate::{DeviceId, DeviceIdentity, RendererInfo};
 
 /// Local mirror of an OpenHome playlist for a single renderer.
 #[derive(Clone, Debug)]
 pub struct OpenHomeQueue {
-    pub renderer_id: RendererId,
-    pub playlist: OhPlaylistClient,
-    pub info_client: Option<OhInfoClient>,
-    pub product_client: Option<OhProductClient>,
-    pub items: Vec<PlaybackItem>,
-    pub current_index: Option<usize>,
+    renderer_id: DeviceId,
+    playlist_client: OhPlaylistClient,
+    info_client: Option<OhInfoClient>,
+    product_client: Option<OhProductClient>,
+    items: Vec<PlaybackItem>,
+    current_index: Option<usize>,
     track_ids: Vec<u32>,
 }
 
 impl OpenHomeQueue {
     pub fn new(
-        renderer_id: RendererId,
+        renderer_id: DeviceId,
         playlist: OhPlaylistClient,
         info_client: Option<OhInfoClient>,
         product_client: Option<OhProductClient>,
     ) -> Self {
         Self {
             renderer_id,
-            playlist,
+            playlist_client: playlist,
             info_client,
             product_client,
             items: Vec::new(),
@@ -42,14 +41,29 @@ impl OpenHomeQueue {
         }
     }
 
+    pub fn from_renderer_info(
+        info: &RendererInfo,
+    ) -> Result<OpenHomeQueue, ControlPointError> {
+        let playlist_client = OhPlaylistClient::from_renderer_info(info)?;
+        let info_client = OhInfoClient::from_renderer_info(&info).ok();
+        let product_client = OhProductClient::from_renderer_info(&info).ok();
+
+        Ok(OpenHomeQueue::new(
+            info.id(),
+            playlist_client,
+            info_client,
+            product_client,
+        ))
+    }
+
     /// Reload the full OpenHome playlist snapshot into local playback items.
     ///
     /// This mirrors the logic previously implemented by
     /// `OpenHomeRenderer::snapshot_openhome_playlist` but converts entries
     /// directly into `PlaybackItem`s.
-    pub fn refresh_from_openhome(&mut self) -> Result<()> {
+    pub fn refresh_from_openhome(&mut self) -> Result<(), ControlPointError> {
         self.ensure_playlist_source_selected()?;
-        let entries = self.playlist.read_all_tracks()?;
+        let entries = self.playlist_client.read_all_tracks()?;
         let mut items = Vec::with_capacity(entries.len());
         let mut track_ids = Vec::with_capacity(entries.len());
 
@@ -59,10 +73,11 @@ impl OpenHomeQueue {
         }
 
         // Get the currently playing track ID from the renderer (may be None if no track is playing)
-        let current_id = self.playlist.id().ok();
+        let current_id = self.playlist_client.id().ok();
 
         // Find the index of the current track in the playlist
-        let current_index = current_id.and_then(|id| track_ids.iter().position(|entry_id| *entry_id == id));
+        let current_index =
+            current_id.and_then(|id| track_ids.iter().position(|entry_id| *entry_id == id));
 
         self.items = items;
         self.track_ids = track_ids;
@@ -70,7 +85,7 @@ impl OpenHomeQueue {
         Ok(())
     }
 
-    pub fn openhome_playlist_snapshot(&self) -> Result<OpenHomePlaylistSnapshot> {
+    pub fn openhome_playlist_snapshot(&self) -> Result<OpenHomePlaylistSnapshot, ControlPointError> {
         let tracks = self
             .items
             .iter()
@@ -104,7 +119,7 @@ impl OpenHomeQueue {
         self.track_ids.clone()
     }
 
-    pub fn select_track_id(&mut self, id: u32) -> Result<()> {
+    pub fn select_track_id(&mut self, id: u32) -> Result<(), ControlPointError> {
         let index = match self.track_ids.iter().position(|&tid| tid == id) {
             Some(pos) => pos,
             None => {
@@ -112,33 +127,35 @@ impl OpenHomeQueue {
                 self.track_ids
                     .iter()
                     .position(|&tid| tid == id)
-                    .ok_or_else(|| anyhow!("Unknown OpenHome track id {}", id))?
+                    .ok_or_else(|| ControlPointError::QueueError(format!("Unknown OpenHome track id {}", id)))?
             }
         };
 
         self.ensure_playlist_source_selected()?;
-        self.playlist.play_id(id)?;
+        self.playlist_client.play_id(id)?;
         self.current_index = Some(index);
         Ok(())
     }
 
     /// Selects and plays a track by its queue index (0-based).
-    pub fn select_track_index(&mut self, index: usize) -> Result<()> {
-        let track_id = self
-            .track_ids
-            .get(index)
-            .copied()
-            .ok_or_else(|| anyhow!("Index {} out of bounds (queue length: {})", index, self.track_ids.len()))?;
+    pub fn select_track_index(&mut self, index: usize) -> Result<(), ControlPointError> {
+        let track_id = self.track_ids.get(index).copied().ok_or_else(|| {
+            ControlPointError::QueueError(format!(
+                "Index {} out of bounds (queue length: {})",
+                index,
+                self.track_ids.len()
+            ))
+        })?;
 
         self.ensure_playlist_source_selected()?;
-        self.playlist.play_id(track_id)?;
+        self.playlist_client.play_id(track_id)?;
         self.current_index = Some(index);
         Ok(())
     }
 
-    pub fn clear(&mut self) -> Result<()> {
+    pub fn clear(&mut self) -> Result<(), ControlPointError> {
         self.ensure_playlist_source_selected()?;
-        self.playlist.delete_all()?;
+        self.playlist_client.delete_all()?;
         self.items.clear();
         self.track_ids.clear();
         self.current_index = None;
@@ -154,9 +171,9 @@ impl OpenHomeQueue {
         &mut self,
         items: Vec<PlaybackItem>,
         current_index: Option<usize>,
-    ) -> Result<()> {
+    ) -> Result<(), ControlPointError> {
         self.ensure_playlist_source_selected()?;
-        self.playlist.delete_all()?;
+        self.playlist_client.delete_all()?;
         self.items.clear();
         self.track_ids.clear();
         self.current_index = None;
@@ -171,7 +188,9 @@ impl OpenHomeQueue {
 
         for item in items {
             let metadata = build_metadata_xml(&item);
-            let new_id = self.playlist.insert(previous_id, &item.uri, &metadata)?;
+            let new_id = self
+                .playlist_client
+                .insert(previous_id, &item.uri, &metadata)?;
             previous_id = new_id;
             rebuilt_ids.push(new_id);
             rebuilt_items.push(self.item_with_openhome_id(item, new_id));
@@ -192,7 +211,7 @@ impl OpenHomeQueue {
         item: PlaybackItem,
         after_id: Option<u32>,
         play: bool,
-    ) -> Result<u32> {
+    ) -> Result<u32, ControlPointError> {
         self.ensure_playlist_source_selected()?;
         let metadata_xml = build_metadata_xml(&item);
         let insert_after = match after_id {
@@ -201,11 +220,11 @@ impl OpenHomeQueue {
         };
 
         let new_id = self
-            .playlist
+            .playlist_client
             .insert(insert_after, &item.uri, &metadata_xml)?;
 
         if play {
-            self.playlist.play_id(new_id)?;
+            self.playlist_client.play_id(new_id)?;
         }
 
         let mut insert_index = after_id
@@ -239,15 +258,9 @@ impl OpenHomeQueue {
         Ok(new_id)
     }
 
-    fn ensure_playlist_source_selected(&self) -> Result<()> {
+    fn ensure_playlist_source_selected(&self) -> Result<(), ControlPointError> {
         if let Some(product) = &self.product_client {
-            product.ensure_playlist_source_selected().map_err(|err| {
-                anyhow!(
-                    "Failed to select OpenHome Playlist source for {}: {}",
-                    self.renderer_id.0,
-                    err
-                )
-            })
+            product.ensure_playlist_source_selected()
         } else {
             Ok(())
         }
@@ -258,7 +271,8 @@ impl OpenHomeQueue {
         let didl_id = didl_id_from_metadata(&entry.metadata_xml)
             .unwrap_or_else(|| format!("openhome:{}", entry.id));
         PlaybackItem {
-            media_server_id: ServerId(format!("openhome:{}", self.renderer_id.0)),
+            media_server_id: DeviceId(format!("openhome:{}", self.renderer_id.0)),
+            backend_id: entry.id as usize,
             didl_id,
             uri: entry.uri.clone(),
             // OpenHome tracks don't provide protocolInfo, use generic default
@@ -269,13 +283,13 @@ impl OpenHomeQueue {
 
     fn item_with_openhome_id(&self, mut item: PlaybackItem, track_id: u32) -> PlaybackItem {
         item.didl_id = format!("openhome:{}", track_id);
-        item.media_server_id = ServerId(format!("openhome:{}", self.renderer_id.0));
+        item.media_server_id = DeviceId(format!("openhome:{}", self.renderer_id.0));
         item
     }
 
-    fn ensure_track_id(&mut self, index: usize) -> Result<u32> {
+    fn ensure_track_id(&mut self, index: usize) -> Result<u32, ControlPointError> {
         if index >= self.items.len() {
-            return Err(anyhow!("Index out of bounds in OpenHomeQueue: {}", index));
+            return Err(ControlPointError::OpenHomeError(format!("Index out of bounds in OpenHomeQueue: {}", index)));
         }
 
         if let Some(id) = self.track_ids.get(index).copied() {
@@ -286,7 +300,7 @@ impl OpenHomeQueue {
         self.track_ids
             .get(index)
             .copied()
-            .ok_or_else(|| anyhow!("Failed to resolve OpenHome track id at index {}", index))
+            .ok_or_else(|| ControlPointError::OpenHomeError(format!("Failed to resolve OpenHome track id at index {}", index)))
     }
 
     /// CASE 1: Replace queue while preserving the currently playing item as first.
@@ -297,13 +311,13 @@ impl OpenHomeQueue {
         new_items: Vec<PlaybackItem>,
         playing_idx: usize,
         playing_id: u32,
-    ) -> Result<()> {
+    ) -> Result<(), ControlPointError>  {
         // Delete everything except the currently playing item
         // Using delete_id_if_exists() to handle cases where another control point
         // may have already modified the playlist
         for &track_id in self.track_ids.iter().rev() {
             if track_id != playing_id {
-                self.playlist.delete_id_if_exists(track_id)?;
+                self.playlist_client.delete_id_if_exists(track_id)?;
             }
         }
 
@@ -317,7 +331,9 @@ impl OpenHomeQueue {
         let mut previous_id = playing_id;
         for item in new_items {
             let metadata = build_metadata_xml(&item);
-            let new_id = self.playlist.insert(previous_id, &item.uri, &metadata)?;
+            let new_id = self
+                .playlist_client
+                .insert(previous_id, &item.uri, &metadata)?;
             previous_id = new_id;
             rebuilt_ids.push(new_id);
             rebuilt_items.push(self.item_with_openhome_id(item, new_id));
@@ -343,10 +359,13 @@ impl OpenHomeQueue {
         new_items: Vec<PlaybackItem>,
         pivot_idx_new: usize,
         pivot_id: u32,
-    ) -> Result<()> {
+    ) -> Result<(), ControlPointError> {
         // Find the pivot index in our current state
-        let pivot_idx = self.track_ids.iter().position(|&id| id == pivot_id)
-            .ok_or_else(|| anyhow!("Pivot track ID {} not found in playlist", pivot_id))?;
+        let pivot_idx = self
+            .track_ids
+            .iter()
+            .position(|&id| id == pivot_id)
+            .ok_or_else(|| ControlPointError::OpenHomeError(format!("Pivot track ID {} not found in playlist", pivot_id)))?;
 
         // Split current data at the pivot
         let old_before: Vec<PlaybackItem> = self.items[..pivot_idx].to_vec();
@@ -373,7 +392,7 @@ impl OpenHomeQueue {
                     "RENDERER OP: DeleteId({})",
                     track_id
                 );
-                self.playlist.delete_id_if_exists(track_id)?;
+                self.playlist_client.delete_id_if_exists(track_id)?;
             }
         }
 
@@ -387,7 +406,7 @@ impl OpenHomeQueue {
                     "RENDERER OP: DeleteId({})",
                     track_id
                 );
-                self.playlist.delete_id_if_exists(track_id)?;
+                self.playlist_client.delete_id_if_exists(track_id)?;
             }
         }
 
@@ -422,7 +441,9 @@ impl OpenHomeQueue {
                 );
             } else {
                 let metadata = build_metadata_xml(item);
-                let new_id = self.playlist.insert(previous_id, &item.uri, &metadata)?;
+                let new_id = self
+                    .playlist_client
+                    .insert(previous_id, &item.uri, &metadata)?;
                 debug!(
                     renderer = self.renderer_id.0.as_str(),
                     after_id = previous_id,
@@ -477,7 +498,9 @@ impl OpenHomeQueue {
                 );
             } else {
                 let metadata = build_metadata_xml(item);
-                let new_id = self.playlist.insert(previous_id, &item.uri, &metadata)?;
+                let new_id = self
+                    .playlist_client
+                    .insert(previous_id, &item.uri, &metadata)?;
                 debug!(
                     renderer = self.renderer_id.0.as_str(),
                     after_id = previous_id,
@@ -500,11 +523,11 @@ impl OpenHomeQueue {
         // VERIFICATION: Check that pivot ID is preserved
         let final_pivot_id = self.track_ids.get(pivot_idx_new).copied();
         if final_pivot_id != Some(pivot_id) {
-            return Err(anyhow!(
+            return Err(ControlPointError::OpenHomeError(format!(
                 "CRITICAL BUG: Pivot ID changed from {} to {:?} during replace_queue_with_pivot!",
                 pivot_id,
                 final_pivot_id
-            ));
+            )));
         }
 
         debug!(
@@ -524,7 +547,7 @@ impl OpenHomeQueue {
         &mut self,
         items: Vec<PlaybackItem>,
         current_index: Option<usize>,
-    ) -> Result<()> {
+    ) -> Result<(), ControlPointError> {
         let (keep_current, keep_desired) = lcs_flags(&self.items, &items);
 
         let items_to_keep = keep_current.iter().filter(|&&k| k).count();
@@ -547,7 +570,7 @@ impl OpenHomeQueue {
                 renderer = self.renderer_id.0.as_str(),
                 "Using delete_all() for complete replacement (more robust for live playlists)"
             );
-            self.playlist.delete_all()?;
+            self.playlist_client.delete_all()?;
             self.track_ids.clear();
             self.items.clear();
         } else {
@@ -557,7 +580,7 @@ impl OpenHomeQueue {
                     let track_id = self.track_ids[idx];
                     // Use delete_id_if_exists() to handle cases where another control point
                     // may have already modified the playlist
-                    self.playlist.delete_id_if_exists(track_id)?;
+                    self.playlist_client.delete_id_if_exists(track_id)?;
                     self.track_ids.remove(idx);
                     self.items.remove(idx);
                 }
@@ -573,9 +596,9 @@ impl OpenHomeQueue {
         for (idx, item) in items.into_iter().enumerate() {
             if keep_desired[idx] {
                 if remaining_idx >= remaining_ids.len() {
-                    return Err(anyhow!(
+                    return Err(ControlPointError::OpenHomeError(format!(
                         "OpenHome playlist refresh bookkeeping mismatch (kept entries underflow)"
-                    ));
+                    )));
                 }
                 let existing_id = remaining_ids[remaining_idx];
                 remaining_idx += 1;
@@ -584,7 +607,9 @@ impl OpenHomeQueue {
                 rebuilt_items.push(self.item_with_openhome_id(item, existing_id));
             } else {
                 let metadata = build_metadata_xml(&item);
-                let new_id = self.playlist.insert(previous_id, &item.uri, &metadata)?;
+                let new_id = self
+                    .playlist_client
+                    .insert(previous_id, &item.uri, &metadata)?;
                 previous_id = new_id;
                 rebuilt_ids.push(new_id);
                 rebuilt_items.push(self.item_with_openhome_id(item, new_id));
@@ -592,18 +617,28 @@ impl OpenHomeQueue {
         }
 
         if remaining_idx != remaining_ids.len() {
-            return Err(anyhow!(
+            return Err(ControlPointError::OpenHomeError(format!(
                 "OpenHome playlist refresh bookkeeping mismatch (kept entries overflow)"
-            ));
+            )));
         }
 
-        let previous_index = self
-            .current_index
-            .and_then(|idx| if idx < rebuilt_ids.len() { Some(idx) } else { None });
+        let previous_index = self.current_index.and_then(|idx| {
+            if idx < rebuilt_ids.len() {
+                Some(idx)
+            } else {
+                None
+            }
+        });
         let normalized = current_index
             .filter(|&i| i < rebuilt_ids.len())
             .or(previous_index)
-            .or_else(|| if rebuilt_ids.is_empty() { None } else { Some(0) });
+            .or_else(|| {
+                if rebuilt_ids.is_empty() {
+                    None
+                } else {
+                    Some(0)
+                }
+            });
         self.items = rebuilt_items;
         self.track_ids = rebuilt_ids;
         self.current_index = normalized;
@@ -715,19 +750,34 @@ fn lcs_flags(current: &[PlaybackItem], desired: &[PlaybackItem]) -> (Vec<bool>, 
 }
 
 impl QueueBackend for OpenHomeQueue {
-    fn queue_snapshot(&self) -> Result<QueueSnapshot> {
+    fn queue_snapshot(&self) -> Result<QueueSnapshot, ControlPointError> {
+        self.ensure_playlist_source_selected()?;
+        let entries = self.playlist_client.read_all_tracks()?;
+        let mut items = Vec::with_capacity(entries.len());
+
+        for entry in &entries {
+            items.push(self.playback_item_from_entry(entry));
+        }
+
+        // Get the currently playing track ID from the renderer (may be None if no track is playing)
+        let current_id = self.playlist_client.id().ok();
+
+        // Find the index of the current track in the playlist
+        let current_index =
+            current_id.and_then(|id| items.iter().position(|entry_id| entry_id.backend_id == id as usize));
+
         Ok(QueueSnapshot {
             items: self.items.clone(),
             current_index: self.current_index,
         })
     }
 
-    fn set_index(&mut self, index: Option<usize>) -> Result<()> {
+    fn set_index(&mut self, index: Option<usize>) -> Result<(), ControlPointError> {
         let normalized = index.filter(|&i| i < self.items.len());
         if let Some(idx) = normalized {
             let track_id = self.ensure_track_id(idx)?;
             self.ensure_playlist_source_selected()?;
-            self.playlist.play_id(track_id)?;
+            self.playlist_client.play_id(track_id)?;
         }
         self.current_index = normalized;
         Ok(())
@@ -737,10 +787,10 @@ impl QueueBackend for OpenHomeQueue {
         &mut self,
         items: Vec<PlaybackItem>,
         current_index: Option<usize>,
-    ) -> Result<()> {
+    ) -> Result<(), ControlPointError> {
         self.ensure_playlist_source_selected()?;
         if items.is_empty() {
-            self.playlist.delete_all()?;
+            self.playlist_client.delete_all()?;
             self.items.clear();
             self.track_ids.clear();
             self.current_index = None;
@@ -753,7 +803,7 @@ impl QueueBackend for OpenHomeQueue {
         self.refresh_from_openhome()?;
 
         // Get the currently playing track ID from the renderer
-        let playing_info = self.playlist.id().ok().and_then(|id| {
+        let playing_info = self.playlist_client.id().ok().and_then(|id| {
             self.track_ids
                 .iter()
                 .position(|&tid| tid == id)
@@ -806,11 +856,11 @@ impl QueueBackend for OpenHomeQueue {
         Ok(())
     }
 
-    fn get_item(&self, index: usize) -> Result<Option<PlaybackItem>> {
+    fn get_item(&self, index: usize) -> Result<Option<PlaybackItem>, ControlPointError> {
         Ok(self.items.get(index).cloned())
     }
 
-    fn replace_item(&mut self, index: usize, item: PlaybackItem) -> Result<()> {
+    fn replace_item(&mut self, index: usize, item: PlaybackItem) -> Result<(), ControlPointError> {
         if index >= self.items.len() {
             return Ok(());
         }
@@ -825,12 +875,14 @@ impl QueueBackend for OpenHomeQueue {
 
         // Use delete_id_if_exists() to handle cases where another control point
         // may have already modified the playlist
-        self.playlist.delete_id_if_exists(track_id)?;
+        self.playlist_client.delete_id_if_exists(track_id)?;
         let metadata = build_metadata_xml(&item);
-        let new_id = self.playlist.insert(before_id, &item.uri, &metadata)?;
+        let new_id = self
+            .playlist_client
+            .insert(before_id, &item.uri, &metadata)?;
 
         if self.current_index == Some(index) {
-            self.playlist.play_id(new_id)?;
+            self.playlist_client.play_id(new_id)?;
         }
 
         self.items[index] = self.item_with_openhome_id(item, new_id);
@@ -839,7 +891,7 @@ impl QueueBackend for OpenHomeQueue {
     }
 
     /// Override enqueue_items to add items directly to the OpenHome playlist.
-    fn enqueue_items(&mut self, items: Vec<PlaybackItem>, mode: EnqueueMode) -> Result<()> {
+    fn enqueue_items(&mut self, items: Vec<PlaybackItem>, mode: EnqueueMode) -> Result<(), ControlPointError> {
         if items.is_empty() {
             return Ok(());
         }

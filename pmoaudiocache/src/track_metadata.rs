@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use pmometadata::{MetadataError, MetadataResult, TrackMetadata};
 use serde_json::{Number, Value};
@@ -394,7 +394,7 @@ impl TrackMetadata for AudioCacheTrackMetadata {
     }
 
     async fn touch(&mut self) -> MetadataResult<()> {
-        self.write_timestamp(SystemTime::now())?;
+        self.write_timestamp(Instant::now())?;
         Ok(Some(()))
     }
 }

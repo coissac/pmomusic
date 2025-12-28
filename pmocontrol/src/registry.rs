@@ -1,65 +1,100 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::SystemTime;
 
-use crate::avtransport_client::AvTransportClient;
-use crate::connection_manager_client::ConnectionManagerClient;
-use crate::media_server::{MediaServerInfo, ServerId};
-use crate::model::{RendererId, RendererInfo};
-use crate::rendering_control_client::RenderingControlClient;
-use tracing::debug;
+use tracing::warn;
 
-#[derive(Clone, Debug)]
-enum DeviceKey {
-    Renderer(RendererId),
-    Server(ServerId),
+use crate::errors::ControlPointError;
+use crate::media_server::MusicServer;
+use crate::model::RendererInfo;
+use crate::music_renderer::MusicRenderer;
+use crate::{DeviceId, DeviceIdentity, DeviceOnline, UpnpMediaServer};
+
+const DEFAULT_MAX_AGE: u32 = 1800;
+
+#[derive(Debug, Clone)]
+pub struct DeviceItem {
+    music_rendrer : Option<Arc<MusicRenderer>>,
+    music_server: Option<Arc<MusicServer>>,
 }
 
 #[derive(Debug, Default)]
 pub struct DeviceRegistry {
-    renderers: HashMap<RendererId, RendererInfo>,
-    servers: HashMap<ServerId, MediaServerInfo>,
-    udn_index: HashMap<String, DeviceKey>,
+    devices: HashMap<DeviceId, DeviceItem>,
+    udn_index: HashMap<String, DeviceId>,
 }
 
-/// Read-only view / trait for registry access.
-///
-/// Pour l’instant, on ne rajoute pas AVTransport ici, on se contente
-/// d’ajouter les helpers dans `impl DeviceRegistry`.
-pub trait DeviceRegistryRead {
-    fn list_renderers(&self) -> Vec<RendererInfo>;
-    fn list_servers(&self) -> Vec<MediaServerInfo>;
-
-    fn get_renderer(&self, id: &RendererId) -> Option<RendererInfo>;
-    fn get_server(&self, id: &ServerId) -> Option<MediaServerInfo>;
-}
-
-impl DeviceRegistryRead for DeviceRegistry {
-    fn list_renderers(&self) -> Vec<RendererInfo> {
-        self.renderers.values().cloned().collect()
-    }
-
-    fn list_servers(&self) -> Vec<MediaServerInfo> {
-        self.servers.values().cloned().collect()
-    }
-
-    fn get_renderer(&self, id: &RendererId) -> Option<RendererInfo> {
-        self.renderers.get(id).cloned()
-    }
-
-    fn get_server(&self, id: &ServerId) -> Option<MediaServerInfo> {
-        self.servers.get(id).cloned()
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum DeviceUpdate {
-    RendererOnline(RendererInfo),
-    RendererOfflineById(RendererId),
-    RendererOfflineByUdn(String),
+    OfflineById(DeviceId),
+    OfflineByUdn(String),
+}
 
-    ServerOnline(MediaServerInfo),
-    ServerOfflineById(ServerId),
-    ServerOfflineByUdn(String),
+impl DeviceItem {
+    pub fn as_music_renderer(&self) -> Result<Arc<MusicRenderer>, ControlPointError> {
+        match self {
+            DeviceItem::MusicRenderer(renderer) => Ok(Arc::clone(renderer)),
+            _ => Err(ControlPointError::IsNotAMediaRender(format!("{:#?}", self))),
+        }
+    }
+
+    pub fn is_a_music_renderer(&self) -> bool {
+        match self {
+            DeviceItem::MusicRenderer(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn as_music_server(&self) -> Result<Arc<MusicServer>, ControlPointError> {
+        match self {
+            DeviceItem::MusicServer(server) => Ok(Arc::clone(server)),
+            _ => Err(ControlPointError::IsNotAMediaServer(format!("{:#?}", self))),
+        }
+    }
+
+    pub fn is_a_music_server(&self) -> bool {
+        match self {
+            DeviceItem::MusicServer(_) => true,
+            _ => false,
+        }
+    }
+}
+
+impl DeviceOnline for DeviceItem {
+    fn is_online(&self) -> bool {
+        match self {
+            DeviceItem::MusicRenderer(r) => r.is_online(),
+            DeviceItem::MusicServer(s) => s.is_online(),
+        }
+    }
+
+    fn last_seen(&self) -> SystemTime {
+        match self {
+            DeviceItem::MusicRenderer(r) => r.last_seen(),
+            DeviceItem::MusicServer(s) => s.last_seen(),
+        }
+    }
+
+    fn has_been_seen_now(&self, max_age: u32) {
+        match self {
+            DeviceItem::MusicRenderer(r) => r.has_been_seen_now(max_age),
+            DeviceItem::MusicServer(s) => s.has_been_seen_now(max_age),
+        }
+    }
+
+    fn mark_as_offline(&self) {
+        match self {
+            DeviceItem::MusicRenderer(r) => r.mark_as_offline(),
+            DeviceItem::MusicServer(s) => s.mark_as_offline(),
+        }
+    }
+
+    fn max_age(&self) -> u32 {
+        match self {
+            DeviceItem::MusicRenderer(r) => r.max_age(),
+            DeviceItem::MusicServer(s) => s.max_age(),
+        }
+    }
 }
 
 impl DeviceRegistry {
@@ -67,149 +102,99 @@ impl DeviceRegistry {
         Self::default()
     }
 
+    pub fn list_renderers(&self) -> Result<Vec<Arc<MusicRenderer>>, ControlPointError> {
+        self.devices
+            .iter()
+            .filter(|(_, item)| item.is_a_music_renderer())
+            .map(|(_, item)| item.as_music_renderer())
+            .collect()
+    }
+
+    pub fn list_servers(&self) -> Result<Vec<Arc<MusicServer>>, ControlPointError> {
+        self.devices
+            .iter()
+            .filter(|(_, item)| item.is_a_music_server())
+            .map(|(_, item)| item.as_music_server())
+            .collect()
+    }
+
+    pub fn get_renderer(&self, id: &DeviceId) -> Option<Arc<MusicRenderer>> {
+        self.devices.get(id)?.as_music_renderer().ok()
+    }
+
+    pub fn get_server(&self, id: &DeviceId) -> Option<Arc<MusicServer>> {
+        self.devices.get(id)?.as_music_server().ok()
+    }
+
+    pub fn push_renderer(&mut self, info: RendererInfo, max_age: u32) {
+        if let Some(existing) = self.devices.get(&info.id()) {
+            existing.has_been_seen_now(max_age);
+        } else {
+            //    let renderer = MusicRenderer::from_renderer_info(info);
+            match MusicRenderer::from_renderer_info(info.clone()) {
+                Ok(renderer) => {
+                    self.devices
+                        .insert(info.id(), DeviceItem::MusicRenderer(renderer));
+                    self.udn_index.insert(info.udn().to_ascii_lowercase(), info.id());
+                }
+                Err(err) => {
+                    warn!("Failed to create renderer: {:#?}\n", err)
+                }
+            }
+        }
+    }
+
+    pub fn push_server(&mut self, info: UpnpMediaServer, max_age: u32) {
+        if let Some(existing) = self.devices.get(&info.id()) {
+            existing.has_been_seen_now(max_age);
+        } else {
+            let server = MusicServer::Upnp(info.clone());
+            self.devices
+                .insert(info.id(), DeviceItem::MusicServer(Arc::new(server)));
+            self.udn_index.insert(info.udn().to_ascii_lowercase(), info.id());
+        }
+    }
+
+    pub fn device_says_byebye(&mut self, udn: &str) {
+        if let Some(device) =  self.get_device_by_udn(udn) {
+            device.mark_as_offline();
+        }
+    }
+
     pub fn apply_update(&mut self, update: DeviceUpdate) {
         match update {
-            DeviceUpdate::RendererOnline(info) => {
-                let udn = info.udn.to_ascii_lowercase();
-                let id = info.id.clone();
-                let mut info = info;
-
-                info.online = true;
-                info.last_seen = SystemTime::now();
-
-                self.renderers.insert(id.clone(), info);
-                self.udn_index.insert(udn, DeviceKey::Renderer(id));
-            }
-            DeviceUpdate::RendererOfflineById(id) => {
-                if let Some(info) = self.renderers.get_mut(&id) {
-                    info.online = false;
-                    info.last_seen = SystemTime::now();
+            DeviceUpdate::OfflineById(id) => {
+                if let Some(renderer) = self.devices.get(&id) {
+                    renderer.mark_as_offline();
                 }
             }
-            DeviceUpdate::RendererOfflineByUdn(udn) => {
+            DeviceUpdate::OfflineByUdn(udn) => {
                 let lookup = udn.to_ascii_lowercase();
-                if let Some(DeviceKey::Renderer(id)) = self.udn_index.get(&lookup) {
-                    if let Some(info) = self.renderers.get_mut(id) {
-                        info.online = false;
-                        info.last_seen = SystemTime::now();
-                    }
-                }
-            }
-            DeviceUpdate::ServerOnline(info) => {
-                let udn = info.udn.to_ascii_lowercase();
-                let id = info.id.clone();
-                let mut info = info;
-
-                info.online = true;
-                info.last_seen = SystemTime::now();
-
-                self.servers.insert(id.clone(), info);
-                self.udn_index.insert(udn, DeviceKey::Server(id));
-            }
-            DeviceUpdate::ServerOfflineById(id) => {
-                if let Some(info) = self.servers.get_mut(&id) {
-                    info.online = false;
-                    info.last_seen = SystemTime::now();
-                }
-            }
-            DeviceUpdate::ServerOfflineByUdn(udn) => {
-                let lookup = udn.to_ascii_lowercase();
-                if let Some(DeviceKey::Server(id)) = self.udn_index.get(&lookup) {
-                    if let Some(info) = self.servers.get_mut(id) {
-                        info.online = false;
-                        info.last_seen = SystemTime::now();
+                if let Some(id) = self.udn_index.get(&lookup) {
+                    if let Some(renderer) = self.devices.get(id) {
+                        renderer.mark_as_offline();
                     }
                 }
             }
         }
+    }
+
+    pub fn get_device_by_udn(&self, udn: &str) -> Option<DeviceItem> {
+        let lookup = udn.to_ascii_lowercase();
+        self.udn_index
+            .get(&lookup)
+            .and_then(|id| self.devices.get(id).cloned())
     }
 
     /// Helper: get a renderer by UDN (case-insensitive, via udn_index).
-    pub fn get_renderer_by_udn(&self, udn: &str) -> Option<RendererInfo> {
-        let lookup = udn.to_ascii_lowercase();
-        match self.udn_index.get(&lookup) {
-            Some(DeviceKey::Renderer(id)) => self.renderers.get(id).cloned(),
-            _ => None,
-        }
+    pub fn get_renderer_by_udn(&self, udn: &str) -> Option<Arc<MusicRenderer>> {
+        self.get_device_by_udn(udn)
+            .and_then(|item| item.as_music_renderer().ok())
     }
 
     /// Helper: get a server by UDN (case-insensitive, via udn_index).
-    pub fn get_server_by_udn(&self, udn: &str) -> Option<MediaServerInfo> {
-        let lookup = udn.to_ascii_lowercase();
-        match self.udn_index.get(&lookup) {
-            Some(DeviceKey::Server(id)) => self.servers.get(id).cloned(),
-            _ => None,
-        }
-    }
-
-    /// Construct an AvTransportClient for a given renderer id, if possible.
-    ///
-    /// Returns:
-    /// - Some(client) if the renderer exists AND has avtransport_* fields set
-    /// - None if renderer not found or no AVTransport service.
-    pub fn avtransport_client_for_renderer(&self, id: &RendererId) -> Option<AvTransportClient> {
-        let info = self.renderers.get(id)?;
-
-        let service_type = info.avtransport_service_type.as_ref()?;
-        let control_url = info.avtransport_control_url.as_ref()?;
-
-        Some(AvTransportClient::new(
-            control_url.clone(),
-            service_type.clone(),
-        ))
-    }
-
-    /// Construct an AvTransportClient for a given UDN, if possible.
-    pub fn avtransport_client_for_udn(&self, udn: &str) -> Option<AvTransportClient> {
-        let info = self.get_renderer_by_udn(udn)?;
-
-        let service_type = info.avtransport_service_type?;
-        let control_url = info.avtransport_control_url?;
-
-        Some(AvTransportClient::new(control_url, service_type))
-    }
-
-    /// Construct a RenderingControlClient for a given renderer id, if possible.
-    pub fn rendering_control_client_for_renderer(
-        &self,
-        id: &RendererId,
-    ) -> Option<RenderingControlClient> {
-        let info = self.renderers.get(id)?;
-
-        let service_type = info.rendering_control_service_type.as_ref()?;
-        let control_url = info.rendering_control_control_url.as_ref()?;
-
-        Some(RenderingControlClient::new(
-            control_url.clone(),
-            service_type.clone(),
-        ))
-    }
-
-    /// Construct a ConnectionManagerClient for a given renderer id, if possible.
-    pub fn connection_manager_client_for_renderer(
-        &self,
-        id: &RendererId,
-    ) -> Option<ConnectionManagerClient> {
-        let info = self.renderers.get(id)?;
-
-        let service_type = info.connection_manager_service_type.as_ref()?;
-        let control_url = info.connection_manager_control_url.as_ref()?;
-
-        Some(ConnectionManagerClient::new(
-            control_url.clone(),
-            service_type.clone(),
-        ))
-    }
-
-    pub fn mark_renderer_supports_set_next(&mut self, id: &RendererId) {
-        if let Some(info) = self.renderers.get_mut(id) {
-            if !info.capabilities.has_avtransport_set_next {
-                info.capabilities.has_avtransport_set_next = true;
-                debug!(
-                    renderer = id.0.as_str(),
-                    "Renderer now marked as supporting AVTransport.SetNextAVTransportURI"
-                );
-            }
-        }
+    pub fn get_server_by_udn(&self, udn: &str) -> Option<Arc<MusicServer>> {
+        self.get_device_by_udn(udn)
+            .and_then(|item| item.as_music_server().ok())
     }
 }

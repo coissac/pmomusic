@@ -13,7 +13,7 @@ use ureq::{Agent, http};
 use xmltree::{Element, XMLNode};
 
 use crate::events::MediaServerEventBus;
-use crate::media_server::{MediaServerInfo, ServerId};
+use crate::media_server::{UpnpMediaServer, ServerId};
 use crate::model::MediaServerEvent;
 use crate::provider::resolve_control_url;
 use crate::registry::{DeviceRegistry, DeviceRegistryRead};
@@ -551,7 +551,7 @@ impl MediaServerEventWorker {
 }
 
 struct SubscriptionState {
-    info: MediaServerInfo,
+    info: UpnpMediaServer,
     event_sub_url: Option<String>,
     sid: Option<String>,
     expires_at: Option<Instant>,
@@ -560,7 +560,7 @@ struct SubscriptionState {
 }
 
 impl SubscriptionState {
-    fn new(info: MediaServerInfo) -> Self {
+    fn new(info: UpnpMediaServer) -> Self {
         Self {
             callback_path: build_callback_path(&info.id),
             info,
@@ -571,7 +571,7 @@ impl SubscriptionState {
         }
     }
 
-    fn update(&mut self, info: MediaServerInfo) {
+    fn update(&mut self, info: UpnpMediaServer) {
         if self.info.location != info.location {
             self.event_sub_url = None;
             self.sid = None;

@@ -9,10 +9,10 @@ use crate::control_point::{
 };
 #[cfg(feature = "pmoserver")]
 use crate::media_server::{
-    playback_item_from_entry, MediaBrowser, MediaEntry, MusicServer, ServerId,
+    playback_item_from_entry, MediaBrowser, MediaEntry, UpnpMediaServer, ServerId,
 };
 #[cfg(feature = "pmoserver")]
-use crate::model::{RendererCapabilities, RendererId, RendererProtocol, TrackMetadata};
+use crate::model::{RendererCapabilities, ServiceId, RendererProtocol, TrackMetadata};
 #[cfg(feature = "pmoserver")]
 use crate::openapi::{
     AttachPlaylistRequest, AttachedPlaylistInfo, BrowseResponse, ContainerEntry, ErrorResponse,
@@ -136,7 +136,7 @@ async fn get_renderer_state(
     State(state): State<ControlPointState>,
     Path(renderer_id): Path<String>,
 ) -> Result<Json<RendererState>, (StatusCode, Json<ErrorResponse>)> {
-    let rid = RendererId(renderer_id.clone());
+    let rid = ServiceId(renderer_id.clone());
     let snapshot = state
         .control_point
         .renderer_full_snapshot(&rid)
@@ -162,7 +162,7 @@ async fn get_renderer_full_snapshot(
     State(state): State<ControlPointState>,
     Path(renderer_id): Path<String>,
 ) -> Result<Json<FullRendererSnapshot>, (StatusCode, Json<ErrorResponse>)> {
-    let rid = RendererId(renderer_id.clone());
+    let rid = ServiceId(renderer_id.clone());
     let snapshot = state
         .control_point
         .renderer_full_snapshot(&rid)
@@ -193,7 +193,7 @@ async fn get_renderer_queue(
     State(state): State<ControlPointState>,
     Path(renderer_id): Path<String>,
 ) -> Result<Json<QueueSnapshot>, (StatusCode, Json<ErrorResponse>)> {
-    let rid = RendererId(renderer_id.clone());
+    let rid = ServiceId(renderer_id.clone());
     let snapshot = state
         .control_point
         .renderer_full_snapshot(&rid)
@@ -220,7 +220,7 @@ async fn get_renderer_binding(
     State(state): State<ControlPointState>,
     Path(renderer_id): Path<String>,
 ) -> Result<Json<Option<AttachedPlaylistInfo>>, (StatusCode, Json<ErrorResponse>)> {
-    let rid = RendererId(renderer_id.clone());
+    let rid = ServiceId(renderer_id.clone());
     let snapshot = state
         .control_point
         .renderer_full_snapshot(&rid)
@@ -252,7 +252,7 @@ async fn play_renderer(
     State(state): State<ControlPointState>,
     Path(renderer_id): Path<String>,
 ) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let rid = RendererId(renderer_id.clone());
+    let rid = ServiceId(renderer_id.clone());
     let renderer = state
         .control_point
         .music_renderer_by_id(&rid)
@@ -328,7 +328,7 @@ async fn pause_renderer(
     State(state): State<ControlPointState>,
     Path(renderer_id): Path<String>,
 ) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let rid = RendererId(renderer_id.clone());
+    let rid = ServiceId(renderer_id.clone());
     let renderer = state
         .control_point
         .music_renderer_by_id(&rid)
@@ -404,7 +404,7 @@ async fn stop_renderer(
     State(state): State<ControlPointState>,
     Path(renderer_id): Path<String>,
 ) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let rid = RendererId(renderer_id.clone());
+    let rid = ServiceId(renderer_id.clone());
     state
         .control_point
         .music_renderer_by_id(&rid)
@@ -481,7 +481,7 @@ async fn resume_renderer(
     State(state): State<ControlPointState>,
     Path(renderer_id): Path<String>,
 ) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let rid = RendererId(renderer_id.clone());
+    let rid = ServiceId(renderer_id.clone());
     state
         .control_point
         .music_renderer_by_id(&rid)
@@ -562,7 +562,7 @@ async fn next_renderer(
     State(state): State<ControlPointState>,
     Path(renderer_id): Path<String>,
 ) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let rid = RendererId(renderer_id.clone());
+    let rid = ServiceId(renderer_id.clone());
     state
         .control_point
         .music_renderer_by_id(&rid)
@@ -643,7 +643,7 @@ async fn seek_queue_index(
     Path(renderer_id): Path<String>,
     Json(payload): Json<SeekQueueRequest>,
 ) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let rid = RendererId(renderer_id.clone());
+    let rid = ServiceId(renderer_id.clone());
     state
         .control_point
         .music_renderer_by_id(&rid)
@@ -729,7 +729,7 @@ async fn set_renderer_volume(
     Path(renderer_id): Path<String>,
     Json(req): Json<VolumeSetRequest>,
 ) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let rid = RendererId(renderer_id.clone());
+    let rid = ServiceId(renderer_id.clone());
 
     let renderer = state
         .control_point
@@ -807,7 +807,7 @@ async fn volume_up_renderer(
     State(state): State<ControlPointState>,
     Path(renderer_id): Path<String>,
 ) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let rid = RendererId(renderer_id.clone());
+    let rid = ServiceId(renderer_id.clone());
 
     let renderer = state
         .control_point
@@ -892,7 +892,7 @@ async fn volume_down_renderer(
     State(state): State<ControlPointState>,
     Path(renderer_id): Path<String>,
 ) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let rid = RendererId(renderer_id.clone());
+    let rid = ServiceId(renderer_id.clone());
 
     let renderer = state
         .control_point
@@ -977,7 +977,7 @@ async fn toggle_mute_renderer(
     State(state): State<ControlPointState>,
     Path(renderer_id): Path<String>,
 ) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let rid = RendererId(renderer_id.clone());
+    let rid = ServiceId(renderer_id.clone());
 
     let renderer = state
         .control_point
@@ -1064,7 +1064,7 @@ async fn attach_playlist_binding(
     Path(renderer_id): Path<String>,
     Json(req): Json<AttachPlaylistRequest>,
 ) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let rid = RendererId(renderer_id.clone());
+    let rid = ServiceId(renderer_id.clone());
     let sid = ServerId(req.server_id.clone());
     let container_id = req.container_id.clone();
     let control_point = Arc::clone(&state.control_point);
@@ -1146,7 +1146,7 @@ async fn detach_playlist_binding(
     State(state): State<ControlPointState>,
     Path(renderer_id): Path<String>,
 ) -> Json<SuccessResponse> {
-    let rid = RendererId(renderer_id.clone());
+    let rid = ServiceId(renderer_id.clone());
 
     state.control_point.detach_queue_playlist(&rid);
 
@@ -1178,47 +1178,47 @@ async fn detach_playlist_binding(
     ),
     tag = "control"
 )]
-async fn get_openhome_playlist(
-    State(state): State<ControlPointState>,
-    Path(renderer_id): Path<String>,
-) -> Result<Json<OpenHomePlaylistSnapshot>, (StatusCode, Json<ErrorResponse>)> {
-    let rid = RendererId(renderer_id.clone());
-    let control_point = Arc::clone(&state.control_point);
-    let rid_for_task = rid.clone();
+// async fn get_openhome_playlist(
+//     State(state): State<ControlPointState>,
+//     Path(renderer_id): Path<String>,
+// ) -> Result<Json<OpenHomePlaylistSnapshot>, (StatusCode, Json<ErrorResponse>)> {
+//     let rid = RendererId(renderer_id.clone());
+//     let control_point = Arc::clone(&state.control_point);
+//     let rid_for_task = rid.clone();
 
-    let fetch_task = tokio::task::spawn_blocking(move || {
-        control_point.get_cached_openhome_playlist_snapshot(
-            &rid_for_task,
-            OPENHOME_SNAPSHOT_CACHE_TTL,
-        )
-    });
+//     let fetch_task = tokio::task::spawn_blocking(move || {
+//         control_point.get_cached_openhome_playlist_snapshot(
+//             &rid_for_task,
+//             OPENHOME_SNAPSHOT_CACHE_TTL,
+//         )
+//     });
 
-    let snapshot = fetch_task
-        .await
-        .map_err(|e| {
-            warn!(
-                renderer = renderer_id.as_str(),
-                error = %e,
-                "Join error while fetching OpenHome playlist"
-            );
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Internal task error: {}", e),
-                }),
-            )
-        })?
-        .map_err(|e| {
-            warn!(
-                renderer = renderer_id.as_str(),
-                error = %e,
-                "Failed to read OpenHome playlist"
-            );
-            map_openhome_error(&rid, e, "read OpenHome playlist")
-        })?;
+//     let snapshot = fetch_task
+//         .await
+//         .map_err(|e| {
+//             warn!(
+//                 renderer = renderer_id.as_str(),
+//                 error = %e,
+//                 "Join error while fetching OpenHome playlist"
+//             );
+//             (
+//                 StatusCode::INTERNAL_SERVER_ERROR,
+//                 Json(ErrorResponse {
+//                     error: format!("Internal task error: {}", e),
+//                 }),
+//             )
+//         })?
+//         .map_err(|e| {
+//             warn!(
+//                 renderer = renderer_id.as_str(),
+//                 error = %e,
+//                 "Failed to read OpenHome playlist"
+//             );
+//             map_openhome_error(&rid, e, "read OpenHome playlist")
+//         })?;
 
-    Ok(Json(snapshot))
-}
+//     Ok(Json(snapshot))
+// }
 
 /// POST /control/renderers/{renderer_id}/oh/playlist/clear - Vide la playlist OH
 #[cfg(feature = "pmoserver")]
@@ -1238,7 +1238,7 @@ async fn clear_openhome_playlist(
     State(state): State<ControlPointState>,
     Path(renderer_id): Path<String>,
 ) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let rid = RendererId(renderer_id.clone());
+    let rid = ServiceId(renderer_id.clone());
     let control_point = Arc::clone(&state.control_point);
     let rid_for_task = rid.clone();
 
@@ -1310,7 +1310,7 @@ async fn add_openhome_playlist_item(
     Path(renderer_id): Path<String>,
     Json(req): Json<OpenHomePlaylistAddRequest>,
 ) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let rid = RendererId(renderer_id.clone());
+    let rid = ServiceId(renderer_id.clone());
     let control_point = Arc::clone(&state.control_point);
     let rid_for_task = rid.clone();
 
@@ -1389,7 +1389,7 @@ async fn play_openhome_track(
     State(state): State<ControlPointState>,
     Path((renderer_id, track_id)): Path<(String, String)>,
 ) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let rid = RendererId(renderer_id.clone());
+    let rid = ServiceId(renderer_id.clone());
     let parsed_id = track_id.parse::<u32>().map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
@@ -1477,7 +1477,7 @@ async fn play_content(
     Path(renderer_id): Path<String>,
     Json(req): Json<PlayContentRequest>,
 ) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let rid = RendererId(renderer_id.clone());
+    let rid = ServiceId(renderer_id.clone());
     let sid = ServerId(req.server_id.clone());
     let object_id = req.object_id.clone();
     let object_id_for_log = object_id.clone();
@@ -1606,7 +1606,7 @@ async fn add_to_queue(
     Path(renderer_id): Path<String>,
     Json(req): Json<PlayContentRequest>,
 ) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let rid = RendererId(renderer_id.clone());
+    let rid = ServiceId(renderer_id.clone());
     let sid = ServerId(req.server_id.clone());
     let object_id = req.object_id.clone();
     let object_id_for_log = object_id.clone();
@@ -1772,7 +1772,7 @@ async fn browse_container(
     }
 
     let music_server =
-        MusicServer::from_info(&server_info, MEDIA_SERVER_SOAP_TIMEOUT).map_err(|e| {
+        UpnpMediaServer::from_info(&server_info, MEDIA_SERVER_SOAP_TIMEOUT).map_err(|e| {
             warn!("Failed to create MusicServer for {}: {}", server_id, e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1871,7 +1871,7 @@ fn map_snapshot_error(
 
 #[cfg(feature = "pmoserver")]
 fn map_openhome_error(
-    renderer_id: &RendererId,
+    renderer_id: &ServiceId,
     err: anyhow::Error,
     context: &str,
 ) -> (StatusCode, Json<ErrorResponse>) {
@@ -1922,7 +1922,7 @@ fn fetch_playback_items(
     }
 
     // Create MusicServer
-    let music_server = MusicServer::from_info(&server_info, MEDIA_SERVER_SOAP_TIMEOUT)?;
+    let music_server = UpnpMediaServer::from_info(&server_info, MEDIA_SERVER_SOAP_TIMEOUT)?;
 
     // Browse the object to get entries
     let entries = music_server.browse_children(object_id, 0, BROWSE_PAGE_SIZE)?;
@@ -1959,7 +1959,7 @@ fn protocol_summary(protocol: &RendererProtocol) -> RendererProtocolSummary {
     match protocol {
         RendererProtocol::UpnpAvOnly => RendererProtocolSummary::Upnp,
         RendererProtocol::OpenHomeOnly => RendererProtocolSummary::Openhome,
-        RendererProtocol::Hybrid => RendererProtocolSummary::Hybrid,
+        RendererProtocol::OpenHomeHybrid => RendererProtocolSummary::Hybrid,
         RendererProtocol::ChromecastOnly => RendererProtocolSummary::Chromecast,
     }
 }

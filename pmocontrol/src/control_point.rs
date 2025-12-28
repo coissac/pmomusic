@@ -32,14 +32,12 @@ use crate::control_point::openhome_queue::OpenHomeQueue;
 use crate::discovery::DiscoveryManager;
 use crate::events::{MediaServerEventBus, RendererEventBus};
 use crate::media_server::{
-    playback_item_from_entry, MediaBrowser, MediaServerInfo, MusicServer, ServerId,
+    playback_item_from_entry, MediaBrowser, UpnpMediaServer, UpnpMediaServer, ServerId,
 };
 use crate::media_server_events::spawn_media_server_event_runtime;
 use crate::model::TrackMetadata;
-use crate::model::{MediaServerEvent, RendererEvent, RendererId, RendererInfo};
-use crate::music_renderer::{
-    set_openhome_queue_provider, OpenHomeQueueProvider, RendererRuntimeState,
-};
+use crate::model::{MediaServerEvent, RendererEvent, ServiceId, RendererInfo};
+use crate::music_renderer::MusicRenderer;
 #[cfg(feature = "pmoserver")]
 use crate::openapi::{
     CurrentTrackMetadata, FullRendererSnapshot, QueueItem, QueueSnapshotView, RendererBindingView,
@@ -52,11 +50,13 @@ use crate::openhome_client::parse_track_metadata_from_didl;
 use crate::openhome_playlist::{OpenHomePlaylistSnapshot, OpenHomePlaylistTrack};
 use crate::openhome_renderer::{format_seconds, map_openhome_state};
 use crate::provider::HttpXmlDescriptionProvider;
-use crate::queue_backend::{EnqueueMode, PlaybackItem, QueueBackend, QueueSnapshot};
+use crate::queue::backend::{EnqueueMode, PlaybackItem, QueueBackend, QueueSnapshot};
 use crate::queue_interne::InternalQueue;
 use crate::registry::{DeviceRegistry, DeviceRegistryRead, DeviceUpdate};
 use crate::upnp_renderer::UpnpRenderer;
-use crate::MusicRenderer;
+use crate::MusicRendererBackend;
+use crate::MusicRendererInfo;
+
 
 /// Optional attachment between a renderer playback queue and a server-side
 /// DIDL-Lite playlist container.
@@ -97,6 +97,7 @@ pub enum OpenHomeAccessError {
 /// et n'utiliser les événements SSE que comme signaux de rafraîchissement.
 pub struct ControlPoint {
     registry: Arc<RwLock<DeviceRegistry>>,
+    udn_cache: Arc<Mutex<UDNRegistry>>,
     event_bus: RendererEventBus,
     media_event_bus: MediaServerEventBus,
     runtime: Arc<RuntimeState>,
@@ -105,13 +106,13 @@ pub struct ControlPoint {
     ///
     /// Key   : RendererId
     /// Value : PlaylistBinding
-    playlist_bindings: Arc<Mutex<HashMap<RendererId, PlaylistBinding>>>,
+    playlist_bindings: Arc<Mutex<HashMap<ServiceId, PlaylistBinding>>>,
     /// Cache of MusicRenderer instances to avoid recreating them.
     /// This is critical for Chromecast which maintains a persistent TLS connection.
     ///
     /// Key   : RendererId
     /// Value : MusicRenderer
-    renderer_cache: Arc<Mutex<HashMap<RendererId, MusicRenderer>>>,
+    renderer_cache: Arc<Mutex<HashMap<ServiceId, MusicRendererBackend>>>,
 }
 
 impl ControlPoint {
@@ -123,9 +124,9 @@ impl ControlPoint {
         let event_bus = RendererEventBus::new();
         let media_event_bus = MediaServerEventBus::new();
         let runtime = Arc::new(RuntimeState::new());
-        set_openhome_queue_provider(Arc::new(RuntimeOpenHomeQueueProvider {
-            runtime: Arc::clone(&runtime),
-        }));
+        // set_openhome_queue_provider(Arc::new(RuntimeOpenHomeQueueProvider {
+        //     runtime: Arc::clone(&runtime),
+        // }));
         let playlist_bindings = Arc::new(Mutex::new(HashMap::new()));
         let renderer_cache = Arc::new(Mutex::new(HashMap::new()));
 
@@ -416,7 +417,7 @@ impl ControlPoint {
                 };
 
                 // Build a map of current renderer IDs for cleanup
-                let current_ids: HashSet<RendererId> = infos.iter().map(|i| i.id.clone()).collect();
+                let current_ids: HashSet<ServiceId> = infos.iter().map(|i| i.id.clone()).collect();
 
                 // Remove offline renderers from shared cache
                 {
@@ -425,7 +426,7 @@ impl ControlPoint {
                 }
 
                 // Get or create renderers from shared cache
-                let renderers: Vec<MusicRenderer> = infos
+                let renderers: Vec<MusicRendererBackend> = infos
                     .into_iter()
                     .filter_map(|info| {
                         let id = info.id.clone();
@@ -439,7 +440,7 @@ impl ControlPoint {
                         }
 
                         // Create new renderer and add to cache
-                        if let Some(renderer) = MusicRenderer::from_registry_info(info, &runtime_cp.registry) {
+                        if let Some(renderer) = MusicRendererBackend::from_renderer_info(info, &runtime_cp.registry) {
                             let mut cache = runtime_cp.renderer_cache.lock().unwrap();
                             cache.insert(id, renderer.clone());
                             Some(renderer)
@@ -686,7 +687,7 @@ impl ControlPoint {
                         server_id,
                         container_ids,
                     } => {
-                        let renderers_to_refresh: Vec<RendererId> = {
+                        let renderers_to_refresh: Vec<ServiceId> = {
                             let mut bindings = bindings_for_media_worker.lock().unwrap();
                             let mut to_refresh = Vec::new();
 
@@ -758,7 +759,7 @@ impl ControlPoint {
                     thread::sleep(Duration::from_secs(60));
 
                     // Collect all renderers with active bindings and mark them for refresh
-                    let renderers_to_refresh: Vec<RendererId> = {
+                    let renderers_to_refresh: Vec<ServiceId> = {
                         let mut bindings = bindings_for_periodic.lock().unwrap();
                         let mut to_refresh = Vec::new();
 
@@ -819,34 +820,32 @@ impl ControlPoint {
 
         infos
             .into_iter()
-            .map(|info| UpnpRenderer::from_registry(info, &self.registry))
+            .map(|info| UpnpRenderer::from_info(&info))
             .collect()
     }
 
     /// Return the first renderer in the registry, if any.
-    pub fn default_upnp_renderer(&self) -> Option<UpnpRenderer> {
+    pub fn default_upnp_renderer(&self) -> Option<Arc<MusicRenderer>> {
         let info = {
             let reg = self.registry.read().unwrap();
             reg.list_renderers().into_iter().next()
         }?;
 
-        Some(UpnpRenderer::from_registry(info, &self.registry))
+        Some(UpnpRenderer::from_info(&info))
     }
 
     /// Lookup a renderer by id.
-    pub fn upnp_renderer_by_id(&self, id: &RendererId) -> Option<UpnpRenderer> {
-        let info = {
+    pub fn renderer_by_id(&self, id: &ServiceId) -> Option<Arc<MusicRenderer>> {
+        
             let reg = self.registry.read().unwrap();
             reg.get_renderer(id)
-        }?;
-
-        Some(UpnpRenderer::from_registry(info, &self.registry))
+        
     }
 
     /// Internal helper to get or create a renderer from the cache.
     /// This ensures that Chromecast renderers maintain their persistent connections.
-    fn get_or_create_renderer(&self, info: RendererInfo) -> Option<MusicRenderer> {
-        let id = info.id.clone();
+    fn get_or_create_renderer(&self, info: RendererInfo) -> Option<MusicRendererBackend> {
+        let id = info.id();
 
         // Try to get from cache first
         {
@@ -857,7 +856,7 @@ impl ControlPoint {
         }
 
         // Not in cache, create new renderer
-        if let Some(renderer) = MusicRenderer::from_registry_info(info, &self.registry) {
+        if let Some(renderer) = MusicRendererBackend::from_renderer_info(info, &self.registry) {
             // Add to cache
             let mut cache = self.renderer_cache.lock().unwrap();
             cache.insert(id, renderer.clone());
@@ -868,7 +867,7 @@ impl ControlPoint {
     }
 
     /// Snapshot list of music renderers (protocol-agnostic view).
-    pub fn list_music_renderers(&self) -> Vec<MusicRenderer> {
+    pub fn list_music_renderers(&self) -> Vec<MusicRendererBackend> {
         let infos = {
             let reg = self.registry.read().unwrap();
             reg.list_renderers()
@@ -876,7 +875,7 @@ impl ControlPoint {
 
         // Clean up cache - remove renderers that are no longer in the registry
         {
-            let current_ids: HashSet<RendererId> = infos.iter().map(|i| i.id.clone()).collect();
+            let current_ids: HashSet<ServiceId> = infos.iter().map(|i| i.id.clone()).collect();
             let mut cache = self.renderer_cache.lock().unwrap();
             cache.retain(|id, _| current_ids.contains(id));
         }
@@ -888,7 +887,7 @@ impl ControlPoint {
     }
 
     /// Return the first music renderer in the registry, if any.
-    pub fn default_music_renderer(&self) -> Option<MusicRenderer> {
+    pub fn default_music_renderer(&self) -> Option<MusicRendererBackend> {
         let infos = {
             let reg = self.registry.read().unwrap();
             reg.list_renderers()
@@ -900,7 +899,7 @@ impl ControlPoint {
     }
 
     /// Lookup a music renderer by id.
-    pub fn music_renderer_by_id(&self, id: &RendererId) -> Option<MusicRenderer> {
+    pub fn music_renderer_by_id(&self, id: &ServiceId) -> Option<MusicRendererBackend> {
         let info = {
             let reg = self.registry.read().unwrap();
             reg.get_renderer(id)
@@ -910,13 +909,13 @@ impl ControlPoint {
     }
 
     /// Snapshot list of media servers currently known by the registry.
-    pub fn list_media_servers(&self) -> Vec<MediaServerInfo> {
+    pub fn list_media_servers(&self) -> Vec<UpnpMediaServer> {
         let reg = self.registry.read().unwrap();
         reg.list_servers()
     }
 
     /// Lookup a media server by id.
-    pub fn media_server(&self, id: &ServerId) -> Option<MediaServerInfo> {
+    pub fn media_server(&self, id: &ServerId) -> Option<UpnpMediaServer> {
         let reg = self.registry.read().unwrap();
         reg.get_server(id)
     }
@@ -928,7 +927,7 @@ impl ControlPoint {
     /// attachment stays consistent with the local `QueueBackend` snapshot.
     /// The actual structural change then goes through the backend helpers
     /// (`QueueBackend::clear_queue` via `RuntimeState::with_music_queue_mut`).
-    pub fn clear_queue(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
+    pub fn clear_queue(&self, renderer_id: &ServiceId) -> anyhow::Result<()> {
         if !self.runtime.has_entry(renderer_id) {
             let err = Self::runtime_entry_missing(renderer_id);
             warn!(
@@ -981,7 +980,7 @@ impl ControlPoint {
     /// inside `RuntimeState::with_music_queue_mut`).
     pub fn enqueue_items(
         &self,
-        renderer_id: &RendererId,
+        renderer_id: &ServiceId,
         items: Vec<PlaybackItem>,
     ) -> anyhow::Result<()> {
         if !self.runtime.has_entry(renderer_id) {
@@ -1026,7 +1025,7 @@ impl ControlPoint {
     /// view, prefer [`get_full_queue_snapshot`].
     pub fn get_queue_snapshot(
         &self,
-        renderer_id: &RendererId,
+        renderer_id: &ServiceId,
     ) -> anyhow::Result<Vec<PlaybackItem>> {
         if !self.runtime.has_entry(renderer_id) {
             let err = Self::runtime_entry_missing(renderer_id);
@@ -1049,7 +1048,7 @@ impl ControlPoint {
     /// mutating the runtime.
     pub fn get_full_queue_snapshot(
         &self,
-        renderer_id: &RendererId,
+        renderer_id: &ServiceId,
     ) -> anyhow::Result<(Vec<PlaybackItem>, Option<usize>)> {
         if !self.runtime.has_entry(renderer_id) {
             // Renderer not yet initialized in runtime (just discovered via SSDP)
@@ -1070,7 +1069,7 @@ impl ControlPoint {
     ///
     /// Useful for UI layers that want to display the currently playing
     /// track even when the renderer is not returning metadata via UPnP.
-    pub fn get_current_track_metadata(&self, renderer_id: &RendererId) -> Option<TrackMetadata> {
+    pub fn get_current_track_metadata(&self, renderer_id: &ServiceId) -> Option<TrackMetadata> {
         self.runtime.current_track_metadata(renderer_id)
     }
 
@@ -1080,7 +1079,7 @@ impl ControlPoint {
     /// or None if it doesn't (e.g., AVTransport).
     pub fn get_renderer_queue_snapshot(
         &self,
-        renderer_id: &RendererId,
+        renderer_id: &ServiceId,
     ) -> anyhow::Result<Option<QueueSnapshot>> {
         let renderer = self.music_renderer_by_id(renderer_id)
             .ok_or_else(|| anyhow!("Renderer {} not found", renderer_id.0))?;
@@ -1090,14 +1089,14 @@ impl ControlPoint {
     /// Gets the length of the backend queue for renderers with persistent queues.
     ///
     /// Returns the queue length if the renderer has a backend queue, or 0 if it doesn't.
-    pub fn get_renderer_queue_length(&self, renderer_id: &RendererId) -> anyhow::Result<usize> {
+    pub fn get_renderer_queue_length(&self, renderer_id: &ServiceId) -> anyhow::Result<usize> {
         let snapshot = self.get_renderer_queue_snapshot(renderer_id)?;
         Ok(snapshot.map(|s| s.len()).unwrap_or(0))
     }
 
     pub fn get_cached_openhome_playlist_snapshot(
         &self,
-        renderer_id: &RendererId,
+        renderer_id: &ServiceId,
         ttl: Duration,
     ) -> anyhow::Result<OpenHomePlaylistSnapshot> {
         let renderer = self.openhome_renderer(renderer_id)?;
@@ -1108,7 +1107,7 @@ impl ControlPoint {
     #[cfg(feature = "pmoserver")]
     pub fn renderer_full_snapshot(
         &self,
-        renderer_id: &RendererId,
+        renderer_id: &ServiceId,
     ) -> anyhow::Result<FullRendererSnapshot> {
         let renderer = self
             .music_renderer_by_id(renderer_id)
@@ -1259,7 +1258,7 @@ impl ControlPoint {
     ///
     /// For renderers with persistent queues (OpenHome), this clears the queue on the renderer.
     /// For other renderers, this returns an error.
-    pub fn clear_renderer_queue(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
+    pub fn clear_renderer_queue(&self, renderer_id: &ServiceId) -> anyhow::Result<()> {
         let renderer = self.music_renderer_by_id(renderer_id)
             .ok_or_else(|| anyhow!("Renderer {} not found", renderer_id.0))?;
         renderer.clear_queue()?;
@@ -1274,7 +1273,7 @@ impl ControlPoint {
     /// Returns the backend-specific track ID if applicable.
     pub fn add_track_to_renderer(
         &self,
-        renderer_id: &RendererId,
+        renderer_id: &ServiceId,
         uri: &str,
         metadata: &str,
         after_id: Option<u32>,
@@ -1293,7 +1292,7 @@ impl ControlPoint {
     /// For other renderers, this returns an error.
     pub fn select_renderer_track(
         &self,
-        renderer_id: &RendererId,
+        renderer_id: &ServiceId,
         track_id: u32,
     ) -> anyhow::Result<()> {
         let renderer = self.music_renderer_by_id(renderer_id)
@@ -1310,7 +1309,7 @@ impl ControlPoint {
     /// The method only reads queue content via the runtime helpers and
     /// delegates potential structural mutations to `QueueBackend` (when an item
     /// needs to be restored after a playback error).
-    pub fn play_current_from_queue(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
+    pub fn play_current_from_queue(&self, renderer_id: &ServiceId) -> anyhow::Result<()> {
         if !self.runtime.has_entry(renderer_id) {
             let err = Self::runtime_entry_missing(renderer_id);
             warn!(
@@ -1395,7 +1394,7 @@ impl ControlPoint {
     ///
     /// The structural mutation uses the `QueueBackend::dequeue_next` helper
     /// (through `RuntimeState`) so that all pointer updates are consistent.
-    pub fn play_next_from_queue(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
+    pub fn play_next_from_queue(&self, renderer_id: &ServiceId) -> anyhow::Result<()> {
         if !self.runtime.has_entry(renderer_id) {
             let err = Self::runtime_entry_missing(renderer_id);
             warn!(
@@ -1527,7 +1526,7 @@ impl ControlPoint {
     ///
     /// For OpenHome renderers, this uses the playlist's native SeekId capability.
     /// For internal queues, this updates the current index and starts playback.
-    pub fn play_queue_index(&self, renderer_id: &RendererId, index: usize) -> anyhow::Result<()> {
+    pub fn play_queue_index(&self, renderer_id: &ServiceId, index: usize) -> anyhow::Result<()> {
         if !self.runtime.has_entry(renderer_id) {
             let err = Self::runtime_entry_missing(renderer_id);
             warn!(
@@ -1643,7 +1642,7 @@ impl ControlPoint {
         }
     }
 
-    fn start_queue_playback_if_idle(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
+    fn start_queue_playback_if_idle(&self, renderer_id: &ServiceId) -> anyhow::Result<()> {
         let snapshot = self.runtime.snapshot_for(renderer_id);
         let renderer_playing = matches!(snapshot.state, Some(PlaybackState::Playing));
         let from_queue = self.runtime.is_playing_from_queue(renderer_id);
@@ -1699,7 +1698,7 @@ impl ControlPoint {
     /// This method marks the stop as user-requested to prevent automatic
     /// advancement to the next track in the queue when the STOPPED event
     /// is received from the renderer.
-    pub fn user_stop(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
+    pub fn user_stop(&self, renderer_id: &ServiceId) -> anyhow::Result<()> {
         // Mark that user requested stop before actually stopping
         self.runtime.mark_user_stop_requested(renderer_id);
 
@@ -1746,7 +1745,7 @@ impl ControlPoint {
     /// The queue will be automatically refreshed when the playlist changes on the server.
     pub fn attach_queue_to_playlist(
         &self,
-        renderer_id: &RendererId,
+        renderer_id: &ServiceId,
         server_id: ServerId,
         container_id: String,
     ) -> anyhow::Result<()> {
@@ -1758,7 +1757,7 @@ impl ControlPoint {
     /// Same queue-mutation guarantees as [`attach_queue_to_playlist`].
     pub fn attach_queue_to_playlist_with_options(
         &self,
-        renderer_id: &RendererId,
+        renderer_id: &ServiceId,
         server_id: ServerId,
         container_id: String,
         auto_play: bool,
@@ -1769,7 +1768,7 @@ impl ControlPoint {
     /// Internal implementation shared by every attach wrapper.
     fn attach_queue_to_playlist_internal(
         &self,
-        renderer_id: &RendererId,
+        renderer_id: &ServiceId,
         server_id: &ServerId,
         container_id: &str,
         auto_play: bool,
@@ -1834,14 +1833,14 @@ impl ControlPoint {
         });
 
         // For initial attach with auto_play, force playback start (don't check if idle)
-        let mut auto_start_cb = |rid: &RendererId| {
+        let mut auto_start_cb = |rid: &ServiceId| {
             debug!(
                 renderer = rid.0.as_str(),
                 "Attach callback: forcing playback start (not checking if idle)"
             );
             self.play_current_from_queue(rid)
         };
-        let callback: Option<&mut dyn FnMut(&RendererId) -> anyhow::Result<()>> = if auto_play {
+        let callback: Option<&mut dyn FnMut(&ServiceId) -> anyhow::Result<()>> = if auto_play {
             Some(&mut auto_start_cb)
         } else {
             None
@@ -1862,7 +1861,7 @@ impl ControlPoint {
     /// Public mutation API paired with `attach_queue_to_playlist*`. After calling
     /// this, the queue will no longer be automatically refreshed from the server.
     /// If no binding existed, this is a no-op.
-    pub fn detach_queue_playlist(&self, renderer_id: &RendererId) {
+    pub fn detach_queue_playlist(&self, renderer_id: &ServiceId) {
         self.detach_playlist_binding(renderer_id, "api_detach");
     }
 
@@ -1872,7 +1871,7 @@ impl ControlPoint {
     /// bound to a server playlist container, or `None` otherwise.
     pub fn current_queue_playlist_binding(
         &self,
-        renderer_id: &RendererId,
+        renderer_id: &ServiceId,
     ) -> Option<(ServerId, String, bool)> {
         let bindings = self.playlist_bindings.lock().unwrap();
         bindings.get(renderer_id).map(|binding| {
@@ -1888,7 +1887,7 @@ impl ControlPoint {
     ///
     /// Invariant: every user-driven queue mutation **must** call this method so
     /// that bindings never become out of sync with the local queue snapshot.
-    fn detach_playlist_binding(&self, renderer_id: &RendererId, reason: &str) {
+    fn detach_playlist_binding(&self, renderer_id: &ServiceId, reason: &str) {
         let removed = {
             let mut bindings = self.playlist_bindings.lock().unwrap();
             bindings.remove(renderer_id)
@@ -1956,14 +1955,14 @@ impl ControlPoint {
         }
     }
 
-    fn runtime_entry_missing(renderer_id: &RendererId) -> anyhow::Error {
+    fn runtime_entry_missing(renderer_id: &ServiceId) -> anyhow::Error {
         anyhow!(
             "Renderer {} not registered in control point runtime",
             renderer_id.0
         )
     }
 
-    fn openhome_renderer(&self, renderer_id: &RendererId) -> anyhow::Result<MusicRenderer> {
+    fn openhome_renderer(&self, renderer_id: &ServiceId) -> anyhow::Result<MusicRendererBackend> {
         let renderer = self
             .music_renderer_by_id(renderer_id)
             .ok_or_else(|| OpenHomeAccessError::RendererNotFound(renderer_id.0.clone()))?;
@@ -1973,7 +1972,7 @@ impl ControlPoint {
         Ok(renderer)
     }
 
-    fn sync_openhome_playlist_for(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
+    fn sync_openhome_playlist_for(&self, renderer_id: &ServiceId) -> anyhow::Result<()> {
         sync_openhome_playlist(&self.registry, &self.runtime, &self.event_bus, renderer_id)
     }
 
@@ -2070,17 +2069,17 @@ struct OpenHomePlaylistCache {
 }
 
 struct RuntimeState {
-    entries: Mutex<HashMap<RendererId, RendererRuntimeEntry>>,
+    entries: Mutex<HashMap<ServiceId, RendererRuntimeEntry>>,
 }
 
 pub struct RendererRuntimeStateMut<'a> {
     pub queue: MusicQueueGuard<'a>,
-    _guard: MutexGuard<'a, HashMap<RendererId, RendererRuntimeEntry>>,
+    _guard: MutexGuard<'a, HashMap<ServiceId, RendererRuntimeEntry>>,
 }
 
 impl<'a> RendererRuntimeStateMut<'a> {
     fn new(
-        guard: MutexGuard<'a, HashMap<RendererId, RendererRuntimeEntry>>,
+        guard: MutexGuard<'a, HashMap<ServiceId, RendererRuntimeEntry>>,
         queue_ptr: *mut MusicQueue,
     ) -> Self {
         Self {
@@ -2122,23 +2121,23 @@ struct RuntimeOpenHomeQueueProvider {
     runtime: Arc<RuntimeState>,
 }
 
-impl OpenHomeQueueProvider for RuntimeOpenHomeQueueProvider {
-    fn renderer_state(&self, renderer_id: &RendererId) -> anyhow::Result<RendererRuntimeState> {
-        self.runtime.renderer_state(renderer_id)
-    }
+// impl OpenHomeQueueProvider for RuntimeOpenHomeQueueProvider {
+//     fn renderer_state(&self, renderer_id: &RendererId) -> anyhow::Result<RendererRuntimeState> {
+//         self.runtime.renderer_state(renderer_id)
+//     }
 
-    fn renderer_state_mut<'a>(
-        &'a self,
-        renderer_id: &RendererId,
-    ) -> anyhow::Result<RendererRuntimeStateMut<'a>> {
-        self.runtime.renderer_state_mut(renderer_id)
-    }
+//     fn renderer_state_mut<'a>(
+//         &'a self,
+//         renderer_id: &RendererId,
+//     ) -> anyhow::Result<RendererRuntimeStateMut<'a>> {
+//         self.runtime.renderer_state_mut(renderer_id)
+//     }
 
-    fn invalidate_openhome_cache(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
-        self.runtime.invalidate_openhome_cache(renderer_id);
-        Ok(())
-    }
-}
+//     fn invalidate_openhome_cache(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
+//         self.runtime.invalidate_openhome_cache(renderer_id);
+//         Ok(())
+//     }
+// }
 
 impl RuntimeState {
     fn new() -> Self {
@@ -2147,7 +2146,7 @@ impl RuntimeState {
         }
     }
 
-    fn snapshot_for(&self, id: &RendererId) -> RendererRuntimeSnapshot {
+    fn snapshot_for(&self, id: &ServiceId) -> RendererRuntimeSnapshot {
         let entries = self.entries.lock().unwrap();
         entries
             .get(id)
@@ -2155,13 +2154,13 @@ impl RuntimeState {
             .unwrap_or_default()
     }
 
-    fn update_snapshot(&self, id: &RendererId, snapshot: RendererRuntimeSnapshot) {
+    fn update_snapshot(&self, id: &ServiceId, snapshot: RendererRuntimeSnapshot) {
         self.with_entry(id, |entry| {
             entry.snapshot = snapshot;
         });
     }
 
-    fn update_snapshot_with<F>(&self, id: &RendererId, f: F)
+    fn update_snapshot_with<F>(&self, id: &ServiceId, f: F)
     where
         F: FnOnce(&mut RendererRuntimeSnapshot),
     {
@@ -2170,12 +2169,12 @@ impl RuntimeState {
         });
     }
 
-    fn has_entry(&self, id: &RendererId) -> bool {
+    fn has_entry(&self, id: &ServiceId) -> bool {
         let entries = self.entries.lock().unwrap();
         entries.contains_key(id)
     }
 
-    fn with_music_queue_mut<F, R>(&self, id: &RendererId, f: F) -> anyhow::Result<R>
+    fn with_music_queue_mut<F, R>(&self, id: &ServiceId, f: F) -> anyhow::Result<R>
     where
         F: FnOnce(&mut MusicQueue) -> anyhow::Result<R>,
     {
@@ -2186,14 +2185,14 @@ impl RuntimeState {
         f(&mut entry.queue)
     }
 
-    fn queue_snapshot(&self, id: &RendererId) -> Option<Vec<PlaybackItem>> {
+    fn queue_snapshot(&self, id: &ServiceId) -> Option<Vec<PlaybackItem>> {
         let entries = self.entries.lock().unwrap();
         entries
             .get(id)
             .and_then(|entry| entry.queue.upcoming_items().ok())
     }
 
-    fn queue_full_snapshot(&self, id: &RendererId) -> Option<(Vec<PlaybackItem>, Option<usize>)> {
+    fn queue_full_snapshot(&self, id: &ServiceId) -> Option<(Vec<PlaybackItem>, Option<usize>)> {
         let entries = self.entries.lock().unwrap();
         entries.get(id).and_then(|entry| {
             entry
@@ -2204,17 +2203,17 @@ impl RuntimeState {
         })
     }
 
-    fn renderer_state(&self, id: &RendererId) -> anyhow::Result<RendererRuntimeState> {
-        let entries = self.entries.lock().unwrap();
-        let entry = entries
-            .get(id)
-            .ok_or_else(|| anyhow!("Renderer {} not registered in runtime", id.0))?;
-        Ok(RendererRuntimeState {
-            queue: entry.queue.clone(),
-        })
-    }
+    // fn renderer_state(&self, id: &RendererId) -> anyhow::Result<RendererRuntimeState> {
+    //     let entries = self.entries.lock().unwrap();
+    //     let entry = entries
+    //         .get(id)
+    //         .ok_or_else(|| anyhow!("Renderer {} not registered in runtime", id.0))?;
+    //     Ok(RendererRuntimeState {
+    //         queue: entry.queue.clone(),
+    //     })
+    // }
 
-    fn renderer_state_mut(&self, id: &RendererId) -> anyhow::Result<RendererRuntimeStateMut<'_>> {
+    fn renderer_state_mut(&self, id: &ServiceId) -> anyhow::Result<RendererRuntimeStateMut<'_>> {
         let mut entries = self.entries.lock().unwrap();
         let queue_ptr = {
             let entry = entries
@@ -2226,7 +2225,7 @@ impl RuntimeState {
         Ok(RendererRuntimeStateMut::new(entries, queue_ptr))
     }
 
-    fn current_track_metadata(&self, id: &RendererId) -> Option<TrackMetadata> {
+    fn current_track_metadata(&self, id: &ServiceId) -> Option<TrackMetadata> {
         let entries = self.entries.lock().unwrap();
         entries
             .get(id)
@@ -2236,7 +2235,7 @@ impl RuntimeState {
     #[cfg(feature = "pmoserver")]
     fn renderer_snapshot_bundle(
         &self,
-        id: &RendererId,
+        id: &ServiceId,
     ) -> (RendererRuntimeSnapshot, Vec<PlaybackItem>, Option<usize>) {
         let entries = self.entries.lock().unwrap();
         if let Some(entry) = entries.get(id) {
@@ -2260,26 +2259,26 @@ impl RuntimeState {
         }
     }
 
-    fn dequeue_next(&self, id: &RendererId) -> Option<(PlaybackItem, usize)> {
+    fn dequeue_next(&self, id: &ServiceId) -> Option<(PlaybackItem, usize)> {
         let mut entries = self.entries.lock().unwrap();
         let entry = entries.get_mut(id)?;
         entry.queue.dequeue_next().ok().flatten()
     }
 
-    fn peek_current(&self, id: &RendererId) -> Option<(PlaybackItem, usize)> {
+    fn peek_current(&self, id: &ServiceId) -> Option<(PlaybackItem, usize)> {
         let entries = self.entries.lock().unwrap();
         let entry = entries.get(id)?;
         entry.queue.peek_current().ok().flatten()
     }
 
-    fn set_playback_source(&self, id: &RendererId, source: PlaybackSource) {
+    fn set_playback_source(&self, id: &ServiceId, source: PlaybackSource) {
         let mut entries = self.entries.lock().unwrap();
         if let Some(entry) = entries.get_mut(id) {
             entry.playback_source = source;
         }
     }
 
-    fn playback_source(&self, id: &RendererId) -> PlaybackSource {
+    fn playback_source(&self, id: &ServiceId) -> PlaybackSource {
         let entries = self.entries.lock().unwrap();
         entries
             .get(id)
@@ -2287,11 +2286,11 @@ impl RuntimeState {
             .unwrap_or(PlaybackSource::None)
     }
 
-    fn is_playing_from_queue(&self, id: &RendererId) -> bool {
+    fn is_playing_from_queue(&self, id: &ServiceId) -> bool {
         matches!(self.playback_source(id), PlaybackSource::FromQueue)
     }
 
-    fn mark_external_if_idle(&self, id: &RendererId) {
+    fn mark_external_if_idle(&self, id: &ServiceId) {
         let mut entries = self.entries.lock().unwrap();
         if let Some(entry) = entries.get_mut(id) {
             if matches!(entry.playback_source, PlaybackSource::None) {
@@ -2300,7 +2299,7 @@ impl RuntimeState {
         }
     }
 
-    fn with_entry<F, R>(&self, id: &RendererId, f: F) -> R
+    fn with_entry<F, R>(&self, id: &ServiceId, f: F) -> R
     where
         F: FnOnce(&mut RendererRuntimeEntry) -> R,
     {
@@ -2311,24 +2310,24 @@ impl RuntimeState {
         f(entry)
     }
 
-    fn set_music_queue(&self, id: &RendererId, queue: MusicQueue) {
+    fn set_music_queue(&self, id: &ServiceId, queue: MusicQueue) {
         self.with_entry(id, |entry| {
             entry.queue = queue;
         });
     }
 
-    fn invalidate_openhome_cache(&self, id: &RendererId) {
+    fn invalidate_openhome_cache(&self, id: &ServiceId) {
         self.with_entry(id, |entry| {
             entry.openhome_cache = OpenHomePlaylistCache::default();
         });
     }
 
-    fn get_openhome_cache(&self, id: &RendererId) -> Option<OpenHomePlaylistCache> {
+    fn get_openhome_cache(&self, id: &ServiceId) -> Option<OpenHomePlaylistCache> {
         let entries = self.entries.lock().unwrap();
         entries.get(id).map(|entry| entry.openhome_cache.clone())
     }
 
-    fn set_openhome_cache(&self, id: &RendererId, cache: OpenHomePlaylistCache) {
+    fn set_openhome_cache(&self, id: &ServiceId, cache: OpenHomePlaylistCache) {
         self.with_entry(id, |entry| {
             entry.openhome_cache = cache;
         });
@@ -2336,7 +2335,7 @@ impl RuntimeState {
 
     fn openhome_snapshot_cached(
         &self,
-        renderer: &MusicRenderer,
+        renderer: &MusicRendererBackend,
         ttl: Duration,
     ) -> anyhow::Result<OpenHomePlaylistSnapshot> {
         let ids = renderer.openhome_playlist_ids()?;
@@ -2352,7 +2351,7 @@ impl RuntimeState {
             }
         }
 
-        let snapshot = renderer.fetch_openhome_playlist_snapshot()?;
+        let snapshot = renderer.openhome_playlist_snapshot()?;
         let cache = OpenHomePlaylistCache {
             ids: Some(ids),
             snapshot: Some(snapshot.clone()),
@@ -2362,13 +2361,13 @@ impl RuntimeState {
         Ok(snapshot)
     }
 
-    fn set_playlist_backend(&self, id: &RendererId, backend: PlaylistBackend) {
+    fn set_playlist_backend(&self, id: &ServiceId, backend: PlaylistBackend) {
         self.with_entry(id, |entry| {
             entry.playlist_backend = backend;
         });
     }
 
-    fn playlist_backend(&self, id: &RendererId) -> PlaylistBackend {
+    fn playlist_backend(&self, id: &ServiceId) -> PlaylistBackend {
         let entries = self.entries.lock().unwrap();
         entries
             .get(id)
@@ -2376,18 +2375,18 @@ impl RuntimeState {
             .unwrap_or(PlaylistBackend::PMOQueue)
     }
 
-    fn uses_openhome_playlist(&self, id: &RendererId) -> bool {
+    fn uses_openhome_playlist(&self, id: &ServiceId) -> bool {
         matches!(self.playlist_backend(id), PlaylistBackend::OpenHome)
     }
 
-    fn mark_user_stop_requested(&self, id: &RendererId) {
+    fn mark_user_stop_requested(&self, id: &ServiceId) {
         let mut entries = self.entries.lock().unwrap();
         if let Some(entry) = entries.get_mut(id) {
             entry.user_stop_requested = true;
         }
     }
 
-    fn check_and_clear_user_stop_requested(&self, id: &RendererId) -> bool {
+    fn check_and_clear_user_stop_requested(&self, id: &ServiceId) -> bool {
         let mut entries = self.entries.lock().unwrap();
         if let Some(entry) = entries.get_mut(id) {
             let was_requested = entry.user_stop_requested;
@@ -2408,10 +2407,10 @@ impl RuntimeState {
 fn refresh_attached_queue_for(
     registry: &Arc<RwLock<DeviceRegistry>>,
     runtime: &Arc<RuntimeState>,
-    bindings: &Arc<Mutex<HashMap<RendererId, PlaylistBinding>>>,
-    renderer_id: &RendererId,
+    bindings: &Arc<Mutex<HashMap<ServiceId, PlaylistBinding>>>,
+    renderer_id: &ServiceId,
     event_bus: &RendererEventBus,
-    mut after_refresh: Option<&mut dyn FnMut(&RendererId) -> anyhow::Result<()>>,
+    mut after_refresh: Option<&mut dyn FnMut(&ServiceId) -> anyhow::Result<()>>,
 ) -> anyhow::Result<()> {
     // Step 1: Check binding and mark refresh as in-progress
     let (server_id, container_id, auto_play) = {
@@ -2483,7 +2482,7 @@ fn refresh_attached_queue_for(
     }
 
     // Step 3: Create MusicServer and browse container
-    let music_server = MusicServer::from_info(&server_info, Duration::from_secs(5))?;
+    let music_server = UpnpMediaServer::from_info(&server_info, Duration::from_secs(5))?;
 
     const MAX_BROWSE_ATTEMPTS: usize = 3;
     const BROWSE_RETRY_DELAY_MS: u64 = 200;
@@ -2579,7 +2578,7 @@ fn refresh_attached_queue_for(
         };
 
         if let Some(info) = renderer_info {
-            if let Some(renderer) = MusicRenderer::from_registry_info(info, registry) {
+            if let Some(renderer) = MusicRendererBackend::from_renderer_info(info, registry) {
                 // Try direct query first
                 if matches!(renderer.playback_state(), Ok(PlaybackState::Playing)) {
                     true
@@ -2731,7 +2730,7 @@ fn refresh_attached_queue_for(
 const OPENHOME_TRACK_PREFIX: &str = "openhome:";
 
 fn playback_item_from_openhome_track(
-    renderer_id: &RendererId,
+    renderer_id: &ServiceId,
     track: &OpenHomePlaylistTrack,
 ) -> PlaybackItem {
     let metadata = TrackMetadata {
@@ -2833,16 +2832,16 @@ fn playback_item_track_metadata(item: &PlaybackItem) -> TrackMetadata {
 
 fn openhome_renderer_from_registry(
     registry: &Arc<RwLock<DeviceRegistry>>,
-    renderer_id: &RendererId,
-) -> anyhow::Result<MusicRenderer> {
+    renderer_id: &ServiceId,
+) -> anyhow::Result<MusicRendererBackend> {
     let info = {
         let reg = registry.read().unwrap();
         reg.get_renderer(renderer_id)
             .ok_or_else(|| OpenHomeAccessError::RendererNotFound(renderer_id.0.clone()))?
     };
-    let renderer = MusicRenderer::from_registry_info(info, registry)
+    let renderer = MusicRendererBackend::from_renderer_info(info, registry)
         .and_then(|r| match r {
-            MusicRenderer::OpenHome(_) => Some(r),
+            MusicRendererBackend::OpenHome(_) => Some(r),
             _ => None,
         })
         .ok_or_else(|| OpenHomeAccessError::PlaylistNotSupported(renderer_id.0.clone()))?;
@@ -2853,11 +2852,11 @@ fn sync_openhome_playlist(
     registry: &Arc<RwLock<DeviceRegistry>>,
     runtime: &Arc<RuntimeState>,
     event_bus: &RendererEventBus,
-    renderer_id: &RendererId,
+    renderer_id: &ServiceId,
 ) -> anyhow::Result<()> {
     let renderer = openhome_renderer_from_registry(registry, renderer_id)?;
 
-    let snapshot = renderer.fetch_openhome_playlist_snapshot()?;
+    let snapshot = renderer.openhome_playlist_snapshot()?;
     let playback_items: Vec<PlaybackItem> = snapshot
         .tracks
         .iter()
@@ -2910,7 +2909,7 @@ fn spawn_openhome_event_runtime(
     runtime: Arc<RuntimeState>,
     event_bus: RendererEventBus,
     event_tx: Sender<RendererEvent>,
-    playlist_bindings: Arc<Mutex<HashMap<RendererId, PlaylistBinding>>>,
+    playlist_bindings: Arc<Mutex<HashMap<ServiceId, PlaylistBinding>>>,
 ) -> io::Result<()> {
     let listener = TcpListener::bind("0.0.0.0:0")?;
     let listener_addr = listener
@@ -2950,7 +2949,7 @@ struct OpenHomeEventRuntime {
     http_timeout: Duration,
     subscriptions: HashMap<OpenHomeSubscriptionKey, OpenHomeSubscriptionState>,
     path_index: HashMap<String, OpenHomeSubscriptionKey>,
-    playlist_bindings: Arc<Mutex<HashMap<RendererId, PlaylistBinding>>>,
+    playlist_bindings: Arc<Mutex<HashMap<ServiceId, PlaylistBinding>>>,
 }
 
 impl OpenHomeEventRuntime {
@@ -2961,7 +2960,7 @@ impl OpenHomeEventRuntime {
         notify_rx: Receiver<OpenHomeIncomingNotify>,
         event_tx: Sender<RendererEvent>,
         listener_port: u16,
-        playlist_bindings: Arc<Mutex<HashMap<RendererId, PlaylistBinding>>>,
+        playlist_bindings: Arc<Mutex<HashMap<ServiceId, PlaylistBinding>>>,
     ) -> Self {
         Self {
             registry,
@@ -3172,7 +3171,7 @@ impl OpenHomeEventRuntime {
         }
     }
 
-    fn handle_info_properties(&self, renderer_id: &RendererId, properties: Vec<(String, String)>) {
+    fn handle_info_properties(&self, renderer_id: &ServiceId, properties: Vec<(String, String)>) {
         let mut metadata_xml: Option<String> = None;
         let mut transport_state: Option<String> = None;
         let mut track_id: Option<u32> = None;
@@ -3245,7 +3244,7 @@ impl OpenHomeEventRuntime {
         }
     }
 
-    fn handle_time_properties(&self, renderer_id: &RendererId, properties: Vec<(String, String)>) {
+    fn handle_time_properties(&self, renderer_id: &ServiceId, properties: Vec<(String, String)>) {
         let mut duration: Option<u32> = None;
         let mut seconds: Option<u32> = None;
 
@@ -3422,12 +3421,12 @@ impl OpenHomeEventRuntime {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct OpenHomeSubscriptionKey {
-    renderer_id: RendererId,
+    renderer_id: ServiceId,
     service: OhServiceKind,
 }
 
 impl OpenHomeSubscriptionKey {
-    fn new(renderer_id: &RendererId, service: OhServiceKind) -> Self {
+    fn new(renderer_id: &ServiceId, service: OhServiceKind) -> Self {
         Self {
             renderer_id: renderer_id.clone(),
             service,
@@ -3607,7 +3606,7 @@ fn write_openhome_http_response(
     stream.write_all(response.as_bytes())
 }
 
-fn build_openhome_callback_path(id: &RendererId, service: OhServiceKind) -> String {
+fn build_openhome_callback_path(id: &ServiceId, service: OhServiceKind) -> String {
     let mut sanitized = String::new();
     for ch in id.0.chars() {
         if ch.is_ascii_alphanumeric() {
@@ -3624,7 +3623,7 @@ fn build_openhome_callback_path(id: &RendererId, service: OhServiceKind) -> Stri
 }
 
 fn parse_openhome_propertyset(
-    renderer_id: &RendererId,
+    renderer_id: &ServiceId,
     service: &OhServiceKind,
     body: &[u8],
 ) -> Vec<(String, String)> {

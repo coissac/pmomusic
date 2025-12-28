@@ -3,7 +3,7 @@ use std::thread;
 use std::time::Duration;
 
 use pmocontrol::{
-    ControlPoint, DeviceRegistryRead, MusicRenderer, PlaybackPosition, PlaybackPositionInfo,
+    ControlPoint, DeviceRegistryRead, MusicRendererBackend, PlaybackPosition, PlaybackPositionInfo,
     PlaybackState, PlaybackStatus, VolumeControl,
 };
 
@@ -34,10 +34,10 @@ fn main() -> io::Result<()> {
         );
     }
 
-    let linkplay_renderers: Vec<MusicRenderer> = renderers
+    let linkplay_renderers: Vec<MusicRendererBackend> = renderers
         .iter()
         .filter(|info| info.capabilities.has_linkplay_http)
-        .filter_map(|info| MusicRenderer::from_registry_info(info.clone(), &registry))
+        .filter_map(|info| MusicRendererBackend::from_renderer_info(info.clone(), &registry))
         .collect();
 
     if linkplay_renderers.is_empty() {

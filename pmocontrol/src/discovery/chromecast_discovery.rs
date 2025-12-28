@@ -9,8 +9,9 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::time::SystemTime;
 
+use crate::DeviceId;
 use crate::registry::DeviceUpdate;
-use crate::model::{RendererCapabilities, RendererInfo, RendererProtocol, RendererId};
+use crate::model::{RendererCapabilities, RendererInfo, RendererProtocol};
 use tracing::{debug, warn};
 
 /// Information about a discovered Chromecast device from mDNS.
@@ -183,7 +184,7 @@ fn build_renderer_info(
     manufacturer: Option<&str>,
 ) -> RendererInfo {
     let udn = format!("uuid:{}", uuid);
-    let id = RendererId(udn.clone());
+    let id = DeviceId(udn.clone());
 
     // Build Chromecast capabilities
     let mut capabilities = RendererCapabilities::default();
@@ -193,42 +194,38 @@ fn build_renderer_info(
     // (not a real HTTP endpoint like UPnP, but useful for identification)
     let location = format!("chromecast://{}:{}", host, port);
 
-    RendererInfo {
+    RendererInfo::make(
         id,
         udn,
-        friendly_name: friendly_name.to_string(),
-        model_name: model.unwrap_or("Chromecast").to_string(),
-        manufacturer: manufacturer.unwrap_or("Google Inc.").to_string(),
-        protocol: RendererProtocol::ChromecastOnly,
+        friendly_name.to_string(),
+        model.unwrap_or("Chromecast").to_string(),
+        manufacturer.unwrap_or("Google Inc.").to_string(),
+        RendererProtocol::ChromecastOnly,
         capabilities,
         location,
-        server_header: "Chromecast".to_string(),
-        online: true,
-        last_seen: SystemTime::now(),
-        max_age: 1800, // 30 minutes
-        // All UPnP/OpenHome fields are None for Chromecast
-        avtransport_service_type: None,
-        avtransport_control_url: None,
-        rendering_control_service_type: None,
-        rendering_control_control_url: None,
-        connection_manager_service_type: None,
-        connection_manager_control_url: None,
-        oh_playlist_service_type: None,
-        oh_playlist_control_url: None,
-        oh_playlist_event_sub_url: None,
-        oh_info_service_type: None,
-        oh_info_control_url: None,
-        oh_info_event_sub_url: None,
-        oh_time_service_type: None,
-        oh_time_control_url: None,
-        oh_time_event_sub_url: None,
-        oh_volume_service_type: None,
-        oh_volume_control_url: None,
-        oh_radio_service_type: None,
-        oh_radio_control_url: None,
-        oh_product_service_type: None,
-        oh_product_control_url: None,
-    }
+        "Chromecast".to_string(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
 }
 
 /// Extracts the host (IP address) from a Chromecast location URL.

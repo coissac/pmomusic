@@ -1,24 +1,27 @@
+use std::sync::{Arc, Mutex};
+
+use crate::{DeviceIdentity, MusicRendererBackend};
 use crate::capabilities::{
     PlaybackPosition, PlaybackPositionInfo, PlaybackState, PlaybackStatus, TransportControl,
     VolumeControl,
 };
-use crate::model::{RendererId, RendererInfo, RendererProtocol};
-use crate::music_renderer::op_not_supported;
+
+use crate::errors::ControlPointError;
+use crate::model::RendererInfo;
 use crate::openhome::{
     build_info_client, build_playlist_client, build_product_client, build_radio_client,
     build_time_client, build_volume_client,
 };
 use crate::openhome_client::{
-    parse_track_metadata_from_didl, OhInfoClient, OhPlaylistClient, OhProductClient, OhRadioClient,
-    OhTimeClient, OhTrackEntry, OhVolumeClient, OPENHOME_PLAYLIST_HEAD_ID,
+    OPENHOME_PLAYLIST_HEAD_ID, OhInfoClient, OhPlaylistClient, OhProductClient, OhRadioClient,
+    OhTimeClient, OhTrackEntry, OhVolumeClient, parse_track_metadata_from_didl,
 };
 use crate::openhome_playlist::{OpenHomePlaylistSnapshot, OpenHomePlaylistTrack};
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use tracing::debug;
 
 #[derive(Clone, Debug)]
 pub struct OpenHomeRenderer {
-    pub info: RendererInfo,
     playlist: Option<OhPlaylistClient>,
     info_client: Option<OhInfoClient>,
     time_client: Option<OhTimeClient>,
@@ -29,28 +32,46 @@ pub struct OpenHomeRenderer {
 }
 
 impl OpenHomeRenderer {
-    pub fn new(info: RendererInfo) -> Self {
+    pub fn new(
+        playlist: Option<OhPlaylistClient>,
+        info_client: Option<OhInfoClient>,
+        time_client: Option<OhTimeClient>,
+        volume_client: Option<OhVolumeClient>,
+        product_client: Option<OhProductClient>,
+        radio_client: Option<OhRadioClient>,
+    ) -> Self {
         Self {
-            playlist: build_playlist_client(&info),
-            info_client: build_info_client(&info),
-            time_client: build_time_client(&info),
-            volume_client: build_volume_client(&info),
-            product_client: build_product_client(&info),
-            radio_client: build_radio_client(&info),
-            info,
+            playlist,
+            info_client,
+            time_client,
+            volume_client,
+            product_client,
+            radio_client,
         }
     }
 
-    pub fn id(&self) -> &RendererId {
-        &self.info.id
-    }
+    pub fn from_renderer_info(
+        info: RendererInfo,
+    ) -> Result<Arc<Mutex<MusicRendererBackend>>, ControlPointError> {
+        let renderer = OpenHomeRenderer::new(
+            build_playlist_client(&info),
+            build_info_client(&info),
+            build_time_client(&info),
+            build_volume_client(&info),
+            build_product_client(&info),
+            build_radio_client(&info),
+        );
 
-    pub fn friendly_name(&self) -> &str {
-        &self.info.friendly_name
-    }
-
-    pub fn protocol(&self) -> &RendererProtocol {
-        &self.info.protocol
+        if renderer.has_any_openhome_service() {
+            Ok(Arc::new(Mutex::new(MusicRendererBackend::OpenHome(
+                renderer,
+            ))))
+        } else {
+            Err(ControlPointError::OpenHomeNotAValidDevice(format!(
+                "{:?}",
+                info.id()
+            )))
+        }
     }
 
     pub fn has_playlist(&self) -> bool {
@@ -73,74 +94,68 @@ impl OpenHomeRenderer {
         self.has_playlist() || self.has_info() || self.has_time() || self.has_volume()
     }
 
-    fn playlist_client_for(&self, op: &str) -> Result<&OhPlaylistClient> {
+    fn playlist_client_for(&self, op: &str) -> Result<&OhPlaylistClient, ControlPointError> {
         let playlist = self
             .playlist
             .as_ref()
-            .ok_or_else(|| op_not_supported(op, "OpenHome Playlist"))?;
+            .ok_or_else(|| ControlPointError::upnp_operation_not_supported(op, "OpenHome Playlist"))?;
         self.ensure_playlist_source_selected()?;
         Ok(playlist)
     }
 
-    fn info_client_for(&self, op: &str) -> Result<&OhInfoClient> {
+    fn info_client_for(&self, op: &str) -> Result<&OhInfoClient, ControlPointError> {
         self.info_client
             .as_ref()
-            .ok_or_else(|| op_not_supported(op, "OpenHome Info"))
+            .ok_or_else(|| ControlPointError::upnp_operation_not_supported(op, "OpenHome Info"))
     }
 
-    fn time_client_for(&self, op: &str) -> Result<&OhTimeClient> {
+    fn time_client_for(&self, op: &str) -> Result<&OhTimeClient, ControlPointError> {
         self.time_client
             .as_ref()
-            .ok_or_else(|| op_not_supported(op, "OpenHome Time"))
+            .ok_or_else(|| ControlPointError::upnp_operation_not_supported(op, "OpenHome Time"))
     }
 
-    fn volume_client_for(&self, op: &str) -> Result<&OhVolumeClient> {
+    fn volume_client_for(&self, op: &str) -> Result<&OhVolumeClient, ControlPointError> {
         self.volume_client
             .as_ref()
-            .ok_or_else(|| op_not_supported(op, "OpenHome Volume"))
+            .ok_or_else(|| ControlPointError::upnp_operation_not_supported(op, "OpenHome Volume"))
     }
 
-    fn ensure_playlist_source_selected(&self) -> Result<()> {
+    fn ensure_playlist_source_selected(&self) -> Result<(),ControlPointError> {
         if let Some(product) = &self.product_client {
-            product.ensure_playlist_source_selected().map_err(|err| {
-                anyhow!(
-                    "Failed to select OpenHome Playlist source for {}: {}",
-                    self.info.id.0,
-                    err
-                )
-            })
+            product
+                .ensure_playlist_source_selected()
         } else {
             Ok(())
         }
     }
 
-    pub(crate) fn snapshot_openhome_playlist(&self) -> Result<OpenHomePlaylistSnapshot> {
-        let playlist = self.playlist_client_for("snapshot_openhome_playlist")?;
-        let entries = playlist.read_all_tracks()?;
+    // pub(crate) fn snapshot_openhome_playlist(&self) -> Result<OpenHomePlaylistSnapshot> {
+    //     let playlist = self.playlist_client_for("snapshot_openhome_playlist")?;
+    //     let entries = playlist.read_all_tracks()?;
 
-        // Get current track ID from the playlist service
-        let current_id = playlist.id().ok();
+    //     // Get current track ID from the playlist service
+    //     let current_id = playlist.id().ok();
 
-        let current_index =
-            current_id.and_then(|id| entries.iter().position(|entry| entry.id == id));
+    //     let current_index =
+    //         current_id.and_then(|id| entries.iter().position(|entry| entry.id == id));
 
-        debug!(
-            renderer = self.info.id.0.as_str(),
-            current_id = ?current_id,
-            current_index = ?current_index,
-            track_count = entries.len(),
-            "snapshot_openhome_playlist completed"
-        );
+    //     debug!(
+    //         current_id = ?current_id,
+    //         current_index = ?current_index,
+    //         track_count = entries.len(),
+    //         "snapshot_openhome_playlist completed"
+    //     );
 
-        let tracks = entries.iter().map(convert_oh_track_entry).collect();
+    //     let tracks = entries.iter().map(convert_oh_track_entry).collect();
 
-        Ok(OpenHomePlaylistSnapshot {
-            renderer_id: self.info.id.0.clone(),
-            current_id,
-            current_index,
-            tracks,
-        })
-    }
+    //     Ok(OpenHomePlaylistSnapshot {
+    //         current_id,
+    //         current_index,
+    //         tracks,
+    //     })
+    // }
+
 
     /// Retourne la longueur de la playlist OpenHome sans récupérer toutes les métadonnées.
     /// Plus rapide que snapshot_openhome_playlist() pour juste connaître le nombre de pistes.
@@ -152,12 +167,12 @@ impl OpenHomeRenderer {
 
     /// Retourne les IDs des pistes de la playlist OpenHome.
     /// Plus rapide que snapshot_openhome_playlist() car ne récupère pas les métadonnées.
-    pub(crate) fn openhome_playlist_ids(&self) -> Result<Vec<u32>> {
+    pub(crate) fn openhome_playlist_ids(&self) -> Result<Vec<u32>, ControlPointError> {
         let playlist = self.playlist_client_for("openhome_playlist_ids")?;
         playlist.id_array()
     }
 
-    pub(crate) fn clear_openhome_playlist(&self) -> Result<()> {
+    pub(crate) fn clear_openhome_playlist(&self) -> Result<(), ControlPointError> {
         let playlist = self.playlist_client_for("clear_openhome_playlist")?;
         playlist.delete_all()
     }
@@ -168,7 +183,7 @@ impl OpenHomeRenderer {
         metadata: &str,
         after_id: Option<u32>,
         play: bool,
-    ) -> Result<u32> {
+    ) -> Result<u32, ControlPointError> {
         let playlist = self.playlist_client_for("add_track_openhome")?;
         let insert_after = match after_id {
             Some(id) => id,
@@ -186,19 +201,19 @@ impl OpenHomeRenderer {
         Ok(new_id)
     }
 
-    pub(crate) fn play_openhome_track_id(&self, id: u32) -> Result<()> {
+    pub(crate) fn play_openhome_track_id(&self, id: u32) -> Result<(), ControlPointError> {
         let playlist = self.playlist_client_for("play_openhome_track_id")?;
         playlist.play_id(id)
     }
 }
 
 impl TransportControl for OpenHomeRenderer {
-    fn play_uri(&self, uri: &str, meta: &str) -> Result<()> {
+    fn play_uri(&self, uri: &str, meta: &str) -> Result<(), ControlPointError> {
         let playlist = self.playlist_client_for("play_uri")?;
 
         if let Err(err) = playlist.delete_all() {
             debug!(
-                renderer = self.info.id.0.as_str(),
+               // renderer = self.info.id.0.as_str(),
                 error = %err,
                 "Failed to clear OpenHome playlist before insert"
             );
@@ -210,27 +225,24 @@ impl TransportControl for OpenHomeRenderer {
         Ok(())
     }
 
-    fn play(&self) -> Result<()> {
+    fn play(&self) -> Result<(), ControlPointError> {
         let playlist = self.playlist_client_for("play")?;
         playlist.play()
     }
 
-    fn pause(&self) -> Result<()> {
+    fn pause(&self) -> Result<(), ControlPointError> {
         let playlist = self.playlist_client_for("pause")?;
         playlist.pause()
     }
 
-    fn stop(&self) -> Result<()> {
+    fn stop(&self) -> Result<(), ControlPointError> {
         let playlist = self.playlist_client_for("stop")?;
         playlist.stop()
     }
 
-    fn seek_rel_time(&self, hhmmss: &str) -> Result<()> {
+    fn seek_rel_time(&self, hhmmss: &str) -> Result<(), ControlPointError> {
         let seconds = parse_hms(hhmmss).ok_or_else(|| {
-            anyhow!(
-                "Invalid HH:MM:SS format for OpenHome SeekSecondAbsolute: {}",
-                hhmmss
-            )
+            ControlPointError::upnp_bad_return_value("HH:MM:SS", &hhmmss)
         })?;
         let playlist = self.playlist_client_for("seek_rel_time")?;
         playlist.seek_second_absolute(seconds)
@@ -238,29 +250,29 @@ impl TransportControl for OpenHomeRenderer {
 }
 
 impl VolumeControl for OpenHomeRenderer {
-    fn volume(&self) -> Result<u16> {
+    fn volume(&self) -> Result<u16, ControlPointError> {
         let client = self.volume_client_for("volume")?;
         client.volume()
     }
 
-    fn set_volume(&self, v: u16) -> Result<()> {
+    fn set_volume(&self, v: u16) -> Result<(), ControlPointError> {
         let client = self.volume_client_for("set_volume")?;
         client.set_volume(v)
     }
 
-    fn mute(&self) -> Result<bool> {
+    fn mute(&self) -> Result<bool, ControlPointError> {
         let client = self.volume_client_for("mute")?;
         client.mute()
     }
 
-    fn set_mute(&self, m: bool) -> Result<()> {
+    fn set_mute(&self, m: bool) -> Result<(), ControlPointError> {
         let client = self.volume_client_for("set_mute")?;
         client.set_mute(m)
     }
 }
 
 impl PlaybackStatus for OpenHomeRenderer {
-    fn playback_state(&self) -> Result<PlaybackState> {
+    fn playback_state(&self) -> Result<PlaybackState, ControlPointError> {
         let client = self.playlist_client_for("playback_state")?;
         let state = client.transport_state()?;
         Ok(map_openhome_state(&state))
@@ -268,7 +280,7 @@ impl PlaybackStatus for OpenHomeRenderer {
 }
 
 impl PlaybackPosition for OpenHomeRenderer {
-    fn playback_position(&self) -> Result<PlaybackPositionInfo> {
+    fn playback_position(&self) -> Result<PlaybackPositionInfo, ControlPointError> {
         let time_info = self.time_client_for("playback_position")?.position()?;
 
         let mut track_id = None;
@@ -279,7 +291,7 @@ impl PlaybackPosition for OpenHomeRenderer {
             match playlist_client.id() {
                 Ok(id) => track_id = Some(id),
                 Err(err) => debug!(
-                    renderer = self.info.id.0.as_str(),
+                //   renderer = self.info.id.0.as_str(),
                     error = %err,
                     "Failed to read OpenHome track id"
                 ),
@@ -293,7 +305,7 @@ impl PlaybackPosition for OpenHomeRenderer {
                     track_metadata_xml = track.metadata_xml;
                 }
                 Err(err) => debug!(
-                    renderer = self.info.id.0.as_str(),
+                //    renderer = self.info.id.0.as_str(),
                     error = %err,
                     "Failed to read OpenHome track metadata"
                 ),

@@ -153,7 +153,7 @@ Chaque chanson contient :
 Pour éviter de télécharger des chansons déjà terminées :
 
 ```rust
-let now_ms = SystemTime::now()
+let now_ms = Instant::now()
     .duration_since(UNIX_EPOCH)?
     .as_millis() as u64;
 

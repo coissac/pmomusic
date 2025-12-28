@@ -1,36 +1,263 @@
-use std::time::{Duration, SystemTime};
+use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
 
-use anyhow::{Result, anyhow};
-use pmodidl::{self, DIDLLite};
+use pmodidl::DIDLLite;
 use pmoupnp::soap::SoapEnvelope;
 use pmoupnp::soap::error_codes;
 use tracing::{debug, warn};
 use xmltree::{Element, XMLNode};
 
+use crate::errors::ControlPointError;
 use crate::model::TrackMetadata;
-use crate::queue_backend::PlaybackItem;
+use crate::online::{DeviceConnectionState, DeviceOnline};
+use crate::queue::backend::PlaybackItem;
 use crate::soap_client::{SoapCallResult, invoke_upnp_action_with_timeout};
-
-/// Unique identifier for a media server registered by the control point.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct ServerId(pub String);
+use crate::{DEFAULT_HTTP_TIMEOUT, DeviceId, DeviceIdentity};
 
 /// Snapshot of a media server discovered through UPnP SSDP.
 #[derive(Clone, Debug)]
-pub struct MediaServerInfo {
-    pub id: ServerId,
-    pub udn: String,
-    pub friendly_name: String,
-    pub model_name: String,
-    pub manufacturer: String,
-    pub location: String,
-    pub server_header: String,
-    pub online: bool,
-    pub last_seen: SystemTime,
-    pub max_age: u32,
-    pub has_content_directory: bool,
-    pub content_directory_service_type: Option<String>,
-    pub content_directory_control_url: Option<String>,
+pub struct UpnpMediaServer {
+    id: DeviceId,
+    udn: String,
+    friendly_name: String,
+    model_name: String,
+    manufacturer: String,
+    location: String,
+    server_header: String,
+    has_content_directory: bool,
+    content_directory_service_type: Option<String>,
+    content_directory_control_url: Option<String>,
+    connection: Arc<Mutex<DeviceConnectionState>>,
+}
+
+impl UpnpMediaServer {
+    pub fn make(
+        id: DeviceId,
+        udn: String,
+        friendly_name: String,
+        model_name: String,
+        manufacturer: String,
+        location: String,
+        server_header: String,
+        has_content_directory: bool,
+        content_directory_service_type: Option<String>,
+        content_directory_control_url: Option<String>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            id,
+            udn,
+            friendly_name,
+            model_name,
+            manufacturer,
+            location,
+            server_header,
+            has_content_directory,
+            content_directory_service_type,
+            content_directory_control_url,
+            connection: DeviceConnectionState::make(),
+        })
+    }
+
+    fn browse_with_flag(
+        &self,
+        object_id: &str,
+        browse_flag: &str,
+        start: u32,
+        count: u32,
+    ) -> Result<Vec<MediaEntry>, ControlPointError> {
+        let start_str = start.to_string();
+        let count_str = count.to_string();
+        let args = vec![
+            ("ObjectID", object_id.to_string()),
+            ("BrowseFlag", browse_flag.to_string()),
+            ("Filter", "*".to_string()),
+            ("StartingIndex", start_str),
+            ("RequestedCount", count_str),
+            ("SortCriteria", String::new()),
+        ];
+
+        let response = self.invoke_content_directory("Browse", None, args)?;
+        let envelope = response.envelope.ok_or_else(|| {
+            ControlPointError::MediaServerError(format!("Missing SOAP envelope in Browse response"))
+        })?;
+        let didl_xml = extract_result_payload(&envelope, "BrowseResponse")?;
+        map_didl_entries(&didl_xml)
+    }
+
+    fn search_impl(
+        &self,
+        container_id: &str,
+        query: &str,
+        start: u32,
+        count: u32,
+    ) -> Result<Vec<MediaEntry>, ControlPointError> {
+        let start_str = start.to_string();
+        let count_str = count.to_string();
+
+        let args = vec![
+            ("ContainerID", container_id.to_string()),
+            ("SearchCriteria", query.to_string()),
+            ("Filter", "*".to_string()),
+            ("StartingIndex", start_str),
+            ("RequestedCount", count_str),
+            ("SortCriteria", String::new()),
+        ];
+
+        let response = self.invoke_content_directory("Search", Some("search"), args)?;
+        let envelope = response.envelope.ok_or_else(|| {
+            ControlPointError::MediaServerError(format!("Missing SOAP envelope in Search response"))
+        })?;
+        let didl_xml = extract_result_payload(&envelope, "SearchResponse")?;
+        map_didl_entries(&didl_xml)
+    }
+
+    fn invoke_content_directory(
+        &self,
+        action: &str,
+        op_name: Option<&str>,
+        args: Vec<(&'static str, String)>,
+    ) -> Result<SoapCallResult, ControlPointError> {
+        let op = op_name.unwrap_or(action);
+        let (control_url, service_type) = self.content_directory_endpoints(op)?;
+        let borrowed_args: Vec<(&str, &str)> = args.iter().map(|(k, v)| (*k, v.as_str())).collect();
+
+        let call_result = invoke_upnp_action_with_timeout(
+            control_url,
+            service_type,
+            action,
+            &borrowed_args,
+            Some(DEFAULT_HTTP_TIMEOUT),
+        )?;
+
+        if !call_result.status.is_success() {
+            if let Some(env) = &call_result.envelope {
+                if let Some(err) = parse_upnp_error(env) {
+                    if should_map_to_not_supported(action, op_name, err.error_code) {
+                        return Err(ControlPointError::upnp_operation_not_supported(
+                            op,
+                            "UpnpMediaServer",
+                        ));
+                    }
+
+                    return Err(ControlPointError::MediaServerError(format!(
+                        "{} failed with UPnP error {}: {}",
+                        action, err.error_code, err.error_description
+                    )));
+                }
+            }
+
+            return Err(ControlPointError::MediaServerError(format!(
+                "{} failed with HTTP status {} and body: {}",
+                action, call_result.status, call_result.raw_body
+            )));
+        }
+
+        if let Some(env) = &call_result.envelope {
+            if let Some(err) = parse_upnp_error(env) {
+                if should_map_to_not_supported(action, op_name, err.error_code) {
+                    return Err(ControlPointError::upnp_operation_not_supported(
+                        op,
+                        "UpnpMediaServer",
+                    ));
+                }
+
+                return Err(ControlPointError::MediaServerError(format!(
+                    "{} returned UPnP error {}: {}",
+                    action, err.error_code, err.error_description
+                )));
+            }
+        }
+
+        Ok(call_result)
+    }
+
+    fn content_directory_endpoints(
+        &self,
+        op_name: &str,
+    ) -> Result<(&str, &str), ControlPointError> {
+        if !self.has_content_directory {
+            return Err(ControlPointError::upnp_operation_not_supported(
+                op_name,
+                "UpnpMediaServer",
+            ));
+        }
+
+        let control_url = self
+            .content_directory_control_url
+            .as_deref()
+            .ok_or_else(|| {
+                ControlPointError::upnp_operation_not_supported(op_name, "UpnpMediaServer")
+            })?;
+        let service_type = self
+            .content_directory_service_type
+            .as_deref()
+            .ok_or_else(|| {
+                ControlPointError::upnp_operation_not_supported(op_name, "UpnpMediaServer")
+            })?;
+
+        Ok((control_url, service_type))
+    }
+}
+
+impl DeviceOnline for UpnpMediaServer {
+    fn is_online(&self) -> bool {
+        self.connection
+            .lock()
+            .expect("Connection Mutex Poisoned")
+            .is_online()
+    }
+    fn last_seen(&self) -> SystemTime {
+        self.connection
+            .lock()
+            .expect("Connection Mutex Poisoned")
+            .last_seen()
+    }
+    fn has_been_seen_now(&self, max_age: u32) {
+        self.connection
+            .lock()
+            .expect("Connection Mutex Poisoned")
+            .has_been_seen_now(max_age)
+    }
+    fn mark_as_offline(&self) {
+        self.connection
+            .lock()
+            .expect("Connection Mutex Poisoned")
+            .mark_as_offline()
+    }
+    fn max_age(&self) -> u32 {
+        self.connection
+            .lock()
+            .expect("Connection Mutex Poisoned")
+            .max_age()
+    }
+}
+
+impl DeviceIdentity for UpnpMediaServer {
+    fn id(&self) -> DeviceId {
+        self.id.clone()
+    }
+    fn udn(&self) -> &str {
+        &self.udn
+    }
+    fn friendly_name(&self) -> &str {
+        &self.friendly_name
+    }
+    fn model_name(&self) -> &str {
+        &self.model_name
+    }
+    fn manufacturer(&self) -> &str {
+        &self.manufacturer
+    }
+    fn location(&self) -> &str {
+        &self.location
+    }
+    fn server_header(&self) -> &str {
+        &self.server_header
+    }
+
+    fn is_a_media_server(&self) -> bool {
+        true
+    }
 }
 
 /// Simplified view over a DIDL-Lite resource entry.
@@ -54,12 +281,8 @@ impl MediaResource {
         // List of known audio format subtypes (the part after the /)
         // These are recognized regardless of the MIME type prefix
         const AUDIO_FORMATS: &[&str] = &[
-            "flac", "ogg", "opus", "vorbis",
-            "mp3", "mpeg", "mp4", "m4a", "aac",
-            "wav", "wave", "pcm",
-            "wma", "webm",
-            "ape", "alac", "aiff",
-            "dsd", "dsf", "dff",
+            "flac", "ogg", "opus", "vorbis", "mp3", "mpeg", "mp4", "m4a", "aac", "wav", "wave",
+            "pcm", "wma", "webm", "ape", "alac", "aiff", "dsd", "dsf", "dff",
         ];
 
         // Check if any known audio format appears in the protocol_info
@@ -111,16 +334,21 @@ pub struct MediaEntry {
 
 /// Backend-agnostic media browsing contract.
 pub trait MediaBrowser {
-    fn browse_root(&self) -> Result<Vec<MediaEntry>>;
-    fn browse_children(&self, object_id: &str, start: u32, count: u32) -> Result<Vec<MediaEntry>>;
-    fn browse_object(&self, object_id: &str) -> Result<MediaEntry>;
+    fn browse_root(&self) -> Result<Vec<MediaEntry>, ControlPointError>;
+    fn browse_children(
+        &self,
+        object_id: &str,
+        start: u32,
+        count: u32,
+    ) -> Result<Vec<MediaEntry>, ControlPointError>;
+    fn browse_object(&self, object_id: &str) -> Result<MediaEntry, ControlPointError>;
     fn search(
         &self,
         container_id: &str,
         query: &str,
         start: u32,
         count: u32,
-    ) -> Result<Vec<MediaEntry>>;
+    ) -> Result<Vec<MediaEntry>, ControlPointError>;
 }
 
 /// Façade over every supported media server backend.
@@ -129,41 +357,96 @@ pub enum MusicServer {
     Upnp(UpnpMediaServer),
 }
 
-impl MusicServer {
-    pub fn from_info(info: &MediaServerInfo, timeout: Duration) -> Result<Self> {
-        Ok(MusicServer::Upnp(UpnpMediaServer::new(
-            info.clone(),
-            timeout,
-        )))
-    }
-
-    pub fn id(&self) -> &ServerId {
+impl DeviceOnline for MusicServer {
+    fn is_online(&self) -> bool {
         match self {
-            MusicServer::Upnp(upnp) => upnp.id(),
+            MusicServer::Upnp(u) => u.is_online(),
         }
     }
-
-    pub fn info(&self) -> &MediaServerInfo {
+    fn last_seen(&self) -> SystemTime {
         match self {
-            MusicServer::Upnp(upnp) => upnp.info(),
+            MusicServer::Upnp(u) => u.last_seen(),
+        }
+    }
+    fn has_been_seen_now(&self, max_age: u32) {
+        match self {
+            MusicServer::Upnp(u) => u.has_been_seen_now(max_age),
+        }
+    }
+    fn mark_as_offline(&self) {
+        match self {
+            MusicServer::Upnp(u) => u.mark_as_offline(),
+        }
+    }
+    fn max_age(&self) -> u32 {
+        match self {
+            MusicServer::Upnp(u) => u.max_age(),
         }
     }
 }
 
+impl DeviceIdentity for MusicServer {
+    fn id(&self) -> DeviceId {
+        match self {
+            MusicServer::Upnp(u) => u.id(),
+        }
+    }
+
+    fn udn(&self) -> &str {
+        match self {
+            MusicServer::Upnp(u) => u.udn(),
+        }
+    }
+    fn friendly_name(&self) -> &str {
+        match self {
+            MusicServer::Upnp(u) => u.friendly_name(),
+        }
+    }
+    fn model_name(&self) -> &str {
+        match self {
+            MusicServer::Upnp(u) => u.model_name(),
+        }
+    }
+    fn manufacturer(&self) -> &str {
+        match self {
+            MusicServer::Upnp(u) => u.manufacturer(),
+        }
+    }
+    fn location(&self) -> &str {
+        match self {
+            MusicServer::Upnp(u) => u.location(),
+        }
+    }
+    fn server_header(&self) -> &str {
+        match self {
+            MusicServer::Upnp(u) => u.server_header(),
+        }
+    }
+
+    fn is_a_media_server(&self) -> bool {
+        true
+    }
+}
+
 impl MediaBrowser for MusicServer {
-    fn browse_root(&self) -> Result<Vec<MediaEntry>> {
+    fn browse_root(&self) -> Result<Vec<MediaEntry>, ControlPointError> {
         match self {
             MusicServer::Upnp(upnp) => upnp.browse_root(),
         }
     }
 
-    fn browse_children(&self, object_id: &str, start: u32, count: u32) -> Result<Vec<MediaEntry>> {
+    fn browse_children(
+        &self,
+        object_id: &str,
+        start: u32,
+        count: u32,
+    ) -> Result<Vec<MediaEntry>, ControlPointError> {
         match self {
             MusicServer::Upnp(upnp) => upnp.browse_children(object_id, start, count),
         }
     }
 
-    fn browse_object(&self, object_id: &str) -> Result<MediaEntry> {
+    fn browse_object(&self, object_id: &str) -> Result<MediaEntry, ControlPointError> {
         match self {
             MusicServer::Upnp(upnp) => upnp.browse_object(object_id),
         }
@@ -175,7 +458,7 @@ impl MediaBrowser for MusicServer {
         query: &str,
         start: u32,
         count: u32,
-    ) -> Result<Vec<MediaEntry>> {
+    ) -> Result<Vec<MediaEntry>, ControlPointError> {
         match self {
             MusicServer::Upnp(upnp) => upnp.search(container_id, query, start, count),
         }
@@ -186,7 +469,10 @@ impl MediaBrowser for MusicServer {
 ///
 /// This function filters out containers and entries without audio resources,
 /// returning None for items that cannot be played.
-pub fn playback_item_from_entry(server: &MusicServer, entry: &MediaEntry) -> Option<PlaybackItem> {
+pub fn playback_item_from_entry(
+    server: &UpnpMediaServer,
+    entry: &MediaEntry,
+) -> Option<PlaybackItem> {
     // Ignore containers
     if entry.is_container {
         debug!(
@@ -249,6 +535,7 @@ pub fn playback_item_from_entry(server: &MusicServer, entry: &MediaEntry) -> Opt
 
     Some(PlaybackItem {
         media_server_id: server.id().clone(),
+        backend_id: usize::MAX,
         didl_id: entry.id.clone(),
         uri: resource.uri.clone(),
         protocol_info: resource.protocol_info.clone(),
@@ -256,174 +543,28 @@ pub fn playback_item_from_entry(server: &MusicServer, entry: &MediaEntry) -> Opt
     })
 }
 
-/// Single UPnP ContentDirectory backend implementation.
-#[derive(Clone, Debug)]
-pub struct UpnpMediaServer {
-    info: MediaServerInfo,
-    timeout: Duration,
-}
-
-impl UpnpMediaServer {
-    pub fn new(info: MediaServerInfo, timeout: Duration) -> Self {
-        Self { info, timeout }
-    }
-
-    pub fn id(&self) -> &ServerId {
-        &self.info.id
-    }
-
-    pub fn info(&self) -> &MediaServerInfo {
-        &self.info
-    }
-
-    fn browse_with_flag(
-        &self,
-        object_id: &str,
-        browse_flag: &str,
-        start: u32,
-        count: u32,
-    ) -> Result<Vec<MediaEntry>> {
-        let start_str = start.to_string();
-        let count_str = count.to_string();
-        let args = vec![
-            ("ObjectID", object_id.to_string()),
-            ("BrowseFlag", browse_flag.to_string()),
-            ("Filter", "*".to_string()),
-            ("StartingIndex", start_str),
-            ("RequestedCount", count_str),
-            ("SortCriteria", String::new()),
-        ];
-
-        let response = self.invoke_content_directory("Browse", None, args)?;
-        let envelope = response
-            .envelope
-            .ok_or_else(|| anyhow!("Missing SOAP envelope in Browse response"))?;
-        let didl_xml = extract_result_payload(&envelope, "BrowseResponse")?;
-        map_didl_entries(&didl_xml)
-    }
-
-    fn search_impl(
-        &self,
-        container_id: &str,
-        query: &str,
-        start: u32,
-        count: u32,
-    ) -> Result<Vec<MediaEntry>> {
-        let start_str = start.to_string();
-        let count_str = count.to_string();
-
-        let args = vec![
-            ("ContainerID", container_id.to_string()),
-            ("SearchCriteria", query.to_string()),
-            ("Filter", "*".to_string()),
-            ("StartingIndex", start_str),
-            ("RequestedCount", count_str),
-            ("SortCriteria", String::new()),
-        ];
-
-        let response = self.invoke_content_directory("Search", Some("search"), args)?;
-        let envelope = response
-            .envelope
-            .ok_or_else(|| anyhow!("Missing SOAP envelope in Search response"))?;
-        let didl_xml = extract_result_payload(&envelope, "SearchResponse")?;
-        map_didl_entries(&didl_xml)
-    }
-
-    fn invoke_content_directory(
-        &self,
-        action: &str,
-        op_name: Option<&str>,
-        args: Vec<(&'static str, String)>,
-    ) -> Result<SoapCallResult> {
-        let op = op_name.unwrap_or(action);
-        let (control_url, service_type) = self.content_directory_endpoints(op)?;
-        let borrowed_args: Vec<(&str, &str)> = args.iter().map(|(k, v)| (*k, v.as_str())).collect();
-
-        let call_result = invoke_upnp_action_with_timeout(
-            control_url,
-            service_type,
-            action,
-            &borrowed_args,
-            Some(self.timeout),
-        )?;
-
-        if !call_result.status.is_success() {
-            if let Some(env) = &call_result.envelope {
-                if let Some(err) = parse_upnp_error(env) {
-                    if should_map_to_not_supported(action, op_name, err.error_code) {
-                        return Err(server_op_not_supported(op, "UpnpMediaServer"));
-                    }
-
-                    return Err(anyhow!(
-                        "{} failed with UPnP error {}: {}",
-                        action,
-                        err.error_code,
-                        err.error_description
-                    ));
-                }
-            }
-
-            return Err(anyhow!(
-                "{} failed with HTTP status {} and body: {}",
-                action,
-                call_result.status,
-                call_result.raw_body
-            ));
-        }
-
-        if let Some(env) = &call_result.envelope {
-            if let Some(err) = parse_upnp_error(env) {
-                if should_map_to_not_supported(action, op_name, err.error_code) {
-                    return Err(server_op_not_supported(op, "UpnpMediaServer"));
-                }
-
-                return Err(anyhow!(
-                    "{} returned UPnP error {}: {}",
-                    action,
-                    err.error_code,
-                    err.error_description
-                ));
-            }
-        }
-
-        Ok(call_result)
-    }
-
-    fn content_directory_endpoints(&self, op_name: &str) -> Result<(&str, &str)> {
-        if !self.info.has_content_directory {
-            return Err(server_op_not_supported(op_name, "UpnpMediaServer"));
-        }
-
-        let control_url = self
-            .info
-            .content_directory_control_url
-            .as_deref()
-            .ok_or_else(|| server_op_not_supported(op_name, "UpnpMediaServer"))?;
-        let service_type = self
-            .info
-            .content_directory_service_type
-            .as_deref()
-            .ok_or_else(|| server_op_not_supported(op_name, "UpnpMediaServer"))?;
-
-        Ok((control_url, service_type))
-    }
-}
-
 impl MediaBrowser for UpnpMediaServer {
-    fn browse_root(&self) -> Result<Vec<MediaEntry>> {
+    fn browse_root(&self) -> Result<Vec<MediaEntry>, ControlPointError> {
         self.browse_with_flag("0", "BrowseDirectChildren", 0, 0)
     }
 
-    fn browse_children(&self, object_id: &str, start: u32, count: u32) -> Result<Vec<MediaEntry>> {
+    fn browse_children(
+        &self,
+        object_id: &str,
+        start: u32,
+        count: u32,
+    ) -> Result<Vec<MediaEntry>, ControlPointError> {
         self.browse_with_flag(object_id, "BrowseDirectChildren", start, count)
     }
 
-    fn browse_object(&self, object_id: &str) -> Result<MediaEntry> {
+    fn browse_object(&self, object_id: &str) -> Result<MediaEntry, ControlPointError> {
         let entries = self.browse_with_flag(object_id, "BrowseMetadata", 0, 1)?;
-        entries
-            .into_iter()
-            .next()
-            .ok_or_else(|| anyhow!("Object {} was not returned by the server", object_id))
+        entries.into_iter().next().ok_or_else(|| {
+            ControlPointError::MediaServerError(format!(
+                "Object {} was not returned by the server",
+                object_id
+            ))
+        })
     }
 
     fn search(
@@ -432,19 +573,24 @@ impl MediaBrowser for UpnpMediaServer {
         query: &str,
         start: u32,
         count: u32,
-    ) -> Result<Vec<MediaEntry>> {
+    ) -> Result<Vec<MediaEntry>, ControlPointError> {
         self.search_impl(container_id, query, start, count)
     }
 }
 
-fn map_didl_entries(xml: &str) -> Result<Vec<MediaEntry>> {
+fn map_didl_entries(xml: &str) -> Result<Vec<MediaEntry>, ControlPointError> {
     let trimmed = xml.trim();
     if trimmed.is_empty() {
         return Ok(Vec::new());
     }
 
     let didl: DIDLLite = pmodidl::parse_metadata::<DIDLLite>(trimmed)
-        .map_err(|err| anyhow!("Failed to parse DIDL-Lite payload: {}", err))?
+        .map_err(|err| {
+            ControlPointError::MediaServerError(format!(
+                "Failed to parse DIDL-Lite payload: {}",
+                err
+            ))
+        })?
         .data;
 
     let mut entries = Vec::new();
@@ -503,11 +649,23 @@ fn map_didl_entries(xml: &str) -> Result<Vec<MediaEntry>> {
     Ok(entries)
 }
 
-fn extract_result_payload(envelope: &SoapEnvelope, response_suffix: &str) -> Result<String> {
-    let response = find_child_with_suffix(&envelope.body.content, response_suffix)
-        .ok_or_else(|| anyhow!("Missing {} element in SOAP body", response_suffix))?;
-    let result_elem = find_child_with_suffix(response, "Result")
-        .ok_or_else(|| anyhow!("Missing Result element in {}", response_suffix))?;
+fn extract_result_payload(
+    envelope: &SoapEnvelope,
+    response_suffix: &str,
+) -> Result<String, ControlPointError> {
+    let response =
+        find_child_with_suffix(&envelope.body.content, response_suffix).ok_or_else(|| {
+            ControlPointError::MediaServerError(format!(
+                "Missing {} element in SOAP body",
+                response_suffix
+            ))
+        })?;
+    let result_elem = find_child_with_suffix(response, "Result").ok_or_else(|| {
+        ControlPointError::MediaServerError(format!(
+            "Missing Result element in {}",
+            response_suffix
+        ))
+    })?;
 
     let payload = result_elem
         .get_text()
@@ -566,14 +724,6 @@ fn should_map_to_not_supported(action: &str, op_name: Option<&str>, error_code: 
     let cd_not_supported = matches!(action, "Search");
 
     cd_not_supported && (error_code == optional_code || error_code == invalid_action_code)
-}
-
-fn server_op_not_supported(op: &str, backend: &str) -> anyhow::Error {
-    anyhow!(
-        "MusicServer operation '{}' is not supported by backend '{}'",
-        op,
-        backend
-    )
 }
 
 #[derive(Debug, Clone)]

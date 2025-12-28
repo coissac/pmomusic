@@ -1,16 +1,17 @@
 use std::io::BufReader;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
-use quick_xml::{events::Event, Error as XmlError, Reader};
+use quick_xml::{Error as XmlError, Reader, events::Event};
 use thiserror::Error;
 use tracing::{debug, warn};
 
+use crate::DeviceId;
 use crate::arylic_tcp::detect_arylic_tcp;
 use crate::avtransport_client::AvTransportClient;
-use crate::discovery::{DeviceDescriptionProvider, DiscoveredEndpoint};
-use crate::linkplay::detect_linkplay_http;
-use crate::media_server::{MediaServerInfo, ServerId};
-use crate::model::{RendererCapabilities, RendererId, RendererInfo, RendererProtocol};
+use crate::discovery::upnp_discovery::DeviceDescriptionProvider;
+use crate::linkplay_renderer::detect_linkplay_http;
+use crate::media_server::UpnpMediaServer;
+use crate::model::{RendererCapabilities, RendererInfo, RendererProtocol};
 
 use ureq::Agent;
 
@@ -101,12 +102,11 @@ impl HttpXmlDescriptionProvider {
     /// Fetch and parse the device description.xml at endpoint.location.
     fn fetch_and_parse(
         &self,
-        endpoint: &DiscoveredEndpoint,
+        udn: &str,
+        location: &str,
+        server_header: &str,
     ) -> Result<ParsedDeviceDescription, DescriptionError> {
-        debug!(
-            "Fetching description for {} at {}",
-            endpoint.udn, endpoint.location
-        );
+        debug!("Fetching description for {} at {}", udn, location);
 
         let config = Agent::config_builder()
             .timeout_global(Some(std::time::Duration::from_secs(self.timeout_secs)))
@@ -114,7 +114,7 @@ impl HttpXmlDescriptionProvider {
 
         let agent: Agent = config.into();
 
-        let response = agent.get(&endpoint.location).call()?;
+        let response = agent.get(location).call()?;
 
         // response: http::Response<ureq::Body>
         let (_parts, body) = response.into_parts();
@@ -124,10 +124,7 @@ impl HttpXmlDescriptionProvider {
 
         let mut reader = Reader::from_reader(BufReader::new(body_reader));
         reader.config_mut().trim_text(true);
-        debug!(
-            "Parsing description XML for {} at {}",
-            endpoint.udn, endpoint.location
-        );
+        debug!("Parsing description XML for {} at {}", udn, location);
 
         let mut buf = Vec::new();
         let mut parsed = ParsedDeviceDescription::default();
@@ -187,7 +184,7 @@ impl HttpXmlDescriptionProvider {
                                             parsed.avtransport_control_url = Some(ctrl.clone());
                                             debug!(
                                                 "Found AVTransport service for {}: type={} controlURL={}",
-                                                endpoint.udn, st, ctrl
+                                                udn, st, ctrl
                                             );
                                         }
                                     }
@@ -202,7 +199,7 @@ impl HttpXmlDescriptionProvider {
                                                 Some(ctrl.clone());
                                             debug!(
                                                 "Found RenderingControl service for {}: type={} controlURL={}",
-                                                endpoint.udn, st, ctrl
+                                                udn, st, ctrl
                                             );
                                         }
                                     }
@@ -217,7 +214,7 @@ impl HttpXmlDescriptionProvider {
                                                 Some(ctrl.clone());
                                             debug!(
                                                 "Found ConnectionManager service for {}: type={} controlURL={}",
-                                                endpoint.udn, st, ctrl
+                                                udn, st, ctrl
                                             );
                                         }
                                     }
@@ -232,7 +229,7 @@ impl HttpXmlDescriptionProvider {
                                                 Some(ctrl.clone());
                                             debug!(
                                                 "Found ContentDirectory service for {}: type={} controlURL={}",
-                                                endpoint.udn, st, ctrl
+                                                udn, st, ctrl
                                             );
                                         }
                                     }
@@ -247,7 +244,7 @@ impl HttpXmlDescriptionProvider {
                                             }
                                             debug!(
                                                 "Found OpenHome Playlist for {}: type={} controlURL={}",
-                                                endpoint.udn, st, ctrl
+                                                udn, st, ctrl
                                             );
                                         }
                                     }
@@ -262,7 +259,7 @@ impl HttpXmlDescriptionProvider {
                                             }
                                             debug!(
                                                 "Found OpenHome Info for {}: type={} controlURL={}",
-                                                endpoint.udn, st, ctrl
+                                                udn, st, ctrl
                                             );
                                         }
                                     }
@@ -277,7 +274,7 @@ impl HttpXmlDescriptionProvider {
                                             }
                                             debug!(
                                                 "Found OpenHome Time for {}: type={} controlURL={}",
-                                                endpoint.udn, st, ctrl
+                                                udn, st, ctrl
                                             );
                                         }
                                     }
@@ -288,7 +285,7 @@ impl HttpXmlDescriptionProvider {
                                             parsed.oh_volume_control_url = Some(ctrl.clone());
                                             debug!(
                                                 "Found OpenHome Volume for {}: type={} controlURL={}",
-                                                endpoint.udn, st, ctrl
+                                                udn, st, ctrl
                                             );
                                         }
                                     }
@@ -299,7 +296,7 @@ impl HttpXmlDescriptionProvider {
                                             parsed.oh_radio_control_url = Some(ctrl.clone());
                                             debug!(
                                                 "Found OpenHome Radio for {}: type={} controlURL={}",
-                                                endpoint.udn, st, ctrl
+                                                udn, st, ctrl
                                             );
                                         }
                                     }
@@ -310,7 +307,7 @@ impl HttpXmlDescriptionProvider {
                                             parsed.oh_product_control_url = Some(ctrl.clone());
                                             debug!(
                                                 "Found OpenHome Product for {}: type={} controlURL={}",
-                                                endpoint.udn, st, ctrl
+                                                udn, st, ctrl
                                             );
                                         }
                                     }
@@ -375,7 +372,9 @@ impl HttpXmlDescriptionProvider {
 
     fn build_renderer(
         &self,
-        endpoint: &DiscoveredEndpoint,
+        udn: &str,
+        location: &str,
+        server_header: &str,
         parsed: &ParsedDeviceDescription,
     ) -> Option<RendererInfo> {
         let device_type = parsed.device_type.as_ref()?.to_ascii_lowercase();
@@ -385,110 +384,101 @@ impl HttpXmlDescriptionProvider {
         {
             debug!(
                 "build_renderer: ignoring deviceType for {}: {}",
-                endpoint.udn, device_type
+                udn, device_type
             );
             return None;
         }
 
-        let raw_udn = parsed
-            .udn
-            .as_deref()
-            .unwrap_or_else(|| endpoint.udn.as_str());
+        let raw_udn = parsed.udn.as_deref().unwrap_or_else(|| udn);
         let udn = raw_udn.to_ascii_lowercase();
         let mut caps = detect_renderer_capabilities(&parsed.service_types);
-        if detect_linkplay_http(
-            &endpoint.location,
-            Duration::from_secs(self.timeout_secs.max(1)),
-        ) {
+        if detect_linkplay_http(location, Duration::from_secs(self.timeout_secs.max(1))) {
             caps.has_linkplay_http = true;
         }
-        if detect_arylic_tcp(
-            &endpoint.location,
-            Duration::from_secs(self.timeout_secs.max(1)),
-        ) {
+        if detect_arylic_tcp(location, Duration::from_secs(self.timeout_secs.max(1))) {
             caps.has_arylic_tcp = true;
         }
         let protocol = detect_renderer_protocol(&caps);
-        let now = SystemTime::now();
+        let now = Instant::now();
 
-        Some(RendererInfo {
-            id: RendererId(udn.clone()),
+        Some(RendererInfo::make(
+            DeviceId(udn.clone()),
             udn,
-            friendly_name: parsed.friendly_name.clone().unwrap_or_default(),
-            model_name: parsed.model_name.clone().unwrap_or_default(),
-            manufacturer: parsed.manufacturer.clone().unwrap_or_default(),
+            parsed.friendly_name.clone().unwrap_or_default(),
+            parsed.model_name.clone().unwrap_or_default(),
+            parsed.manufacturer.clone().unwrap_or_default(),
             protocol,
-            capabilities: caps,
-            location: endpoint.location.clone(),
-            server_header: endpoint.server_header.clone(),
-            online: true,
-            last_seen: now,
-            max_age: endpoint.max_age,
-            avtransport_service_type: parsed.avtransport_service_type.clone(),
-            avtransport_control_url: parsed
+            caps,
+            location.to_string(),
+            endpoint.server_header.clone(),
+            // online: true,
+            // last_seen: now,
+            // max_age: endpoint.max_age,
+            parsed.avtransport_service_type.clone(),
+            parsed
                 .avtransport_control_url
                 .as_ref()
-                .map(|ctrl| resolve_control_url(&endpoint.location, ctrl)),
-            rendering_control_service_type: parsed.rendering_control_service_type.clone(),
-            rendering_control_control_url: parsed
+                .map(|ctrl| resolve_control_url(location, ctrl)),
+            parsed.rendering_control_service_type.clone(),
+            parsed
                 .rendering_control_control_url
                 .as_ref()
-                .map(|ctrl| resolve_control_url(&endpoint.location, ctrl)),
-            connection_manager_service_type: parsed.connection_manager_service_type.clone(),
-            connection_manager_control_url: parsed
+                .map(|ctrl| resolve_control_url(location, ctrl)),
+            parsed.connection_manager_service_type.clone(),
+            parsed
                 .connection_manager_control_url
                 .as_ref()
-                .map(|ctrl| resolve_control_url(&endpoint.location, ctrl)),
-            oh_playlist_service_type: parsed.oh_playlist_service_type.clone(),
-            oh_playlist_control_url: parsed
+                .map(|ctrl| resolve_control_url(location, ctrl)),
+            parsed.oh_playlist_service_type.clone(),
+            parsed
                 .oh_playlist_control_url
                 .as_ref()
-                .map(|ctrl| resolve_control_url(&endpoint.location, ctrl)),
-            oh_playlist_event_sub_url: parsed
+                .map(|ctrl| resolve_control_url(location, ctrl)),
+            parsed
                 .oh_playlist_event_sub_url
                 .as_ref()
-                .map(|url| resolve_control_url(&endpoint.location, url)),
-            oh_info_service_type: parsed.oh_info_service_type.clone(),
-            oh_info_control_url: parsed
+                .map(|url| resolve_control_url(location, url)),
+            parsed.oh_info_service_type.clone(),
+            parsed
                 .oh_info_control_url
                 .as_ref()
-                .map(|ctrl| resolve_control_url(&endpoint.location, ctrl)),
-            oh_info_event_sub_url: parsed
+                .map(|ctrl| resolve_control_url(location, ctrl)),
+            parsed
                 .oh_info_event_sub_url
                 .as_ref()
-                .map(|url| resolve_control_url(&endpoint.location, url)),
-            oh_time_service_type: parsed.oh_time_service_type.clone(),
-            oh_time_control_url: parsed
+                .map(|url| resolve_control_url(location, url)),
+            parsed.oh_time_service_type.clone(),
+            parsed
                 .oh_time_control_url
                 .as_ref()
-                .map(|ctrl| resolve_control_url(&endpoint.location, ctrl)),
-            oh_time_event_sub_url: parsed
+                .map(|ctrl| resolve_control_url(location, ctrl)),
+            parsed
                 .oh_time_event_sub_url
                 .as_ref()
-                .map(|url| resolve_control_url(&endpoint.location, url)),
-            oh_volume_service_type: parsed.oh_volume_service_type.clone(),
-            oh_volume_control_url: parsed
+                .map(|url| resolve_control_url(location, url)),
+            parsed.oh_volume_service_type.clone(),
+            parsed
                 .oh_volume_control_url
                 .as_ref()
-                .map(|ctrl| resolve_control_url(&endpoint.location, ctrl)),
-            oh_radio_service_type: parsed.oh_radio_service_type.clone(),
-            oh_radio_control_url: parsed
+                .map(|ctrl| resolve_control_url(location, ctrl)),
+            parsed.oh_radio_service_type.clone(),
+            parsed
                 .oh_radio_control_url
                 .as_ref()
-                .map(|ctrl| resolve_control_url(&endpoint.location, ctrl)),
-            oh_product_service_type: parsed.oh_product_service_type.clone(),
-            oh_product_control_url: parsed
+                .map(|ctrl| resolve_control_url(location, ctrl)),
+            parsed.oh_product_service_type.clone(),
+            parsed
                 .oh_product_control_url
                 .as_ref()
-                .map(|ctrl| resolve_control_url(&endpoint.location, ctrl)),
-        })
+                .map(|ctrl| resolve_control_url(location, ctrl)),
+        ))
     }
 
     fn build_server(
         &self,
         endpoint: &DiscoveredEndpoint,
         parsed: &ParsedDeviceDescription,
-    ) -> Option<MediaServerInfo> {
+    ) -> Option<UpnpMediaServer> {
         let device_type = parsed.device_type.as_ref()?.to_ascii_lowercase();
         if !device_type.contains("urn:schemas-upnp-org:device:mediaserver:") {
             return None;
@@ -503,15 +493,15 @@ impl HttpXmlDescriptionProvider {
             st.to_ascii_lowercase()
                 .contains("urn:schemas-upnp-org:service:contentdirectory:")
         });
-        let now = SystemTime::now();
+        let now = Instant::now();
 
         let content_directory_control_url = parsed
             .content_directory_control_url
             .as_ref()
             .map(|ctrl| resolve_control_url(&endpoint.location, ctrl));
 
-        Some(MediaServerInfo {
-            id: ServerId(udn.clone()),
+        Some(UpnpMediaServer {
+            id: DeviceId(udn.clone()),
             udn,
             friendly_name: parsed.friendly_name.clone().unwrap_or_default(),
             model_name: parsed.model_name.clone().unwrap_or_default(),
@@ -604,7 +594,7 @@ fn detect_renderer_protocol(caps: &RendererCapabilities) -> RendererProtocol {
         || caps.has_oh_radio;
 
     match (has_upnp_av, has_openhome) {
-        (true, true) => RendererProtocol::Hybrid,
+        (true, true) => RendererProtocol::OpenHomeHybrid,
         (true, false) => RendererProtocol::UpnpAvOnly,
         (false, true) => RendererProtocol::OpenHomeOnly,
         (false, false) => RendererProtocol::UpnpAvOnly,
@@ -679,7 +669,7 @@ impl DeviceDescriptionProvider for HttpXmlDescriptionProvider {
         }
     }
 
-    fn build_server_info(&self, endpoint: &DiscoveredEndpoint) -> Option<MediaServerInfo> {
+    fn build_server_info(&self, endpoint: &DiscoveredEndpoint) -> Option<UpnpMediaServer> {
         match self.fetch_and_parse(endpoint) {
             Ok(parsed) => {
                 let device_type = parsed.device_type.as_deref().unwrap_or("unknown");

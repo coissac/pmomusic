@@ -1,9 +1,16 @@
+use crate::errors::ControlPointError;
 use crate::model::TrackMetadata;
-use crate::soap_client::{invoke_upnp_action, parse_upnp_error, SoapCallResult};
-use anyhow::{anyhow, Result};
-use pmoupnp::soap::SoapEnvelope;
-use tracing::{debug, info, warn};
+use crate::soap_client::{
+    decode_base64, ensure_success_with_envelope as ensure_success, extract_child_text,
+    extract_child_text_any, extract_child_text_local, extract_child_text_optional,
+    extract_child_text_optional_local, find_child_with_suffix, handle_action_response,
+    invoke_upnp_action, parse_bool, parse_visible_flag,
+};
+use anyhow::{Result, anyhow};
+use tracing::{debug, info, trace, warn};
 use xmltree::{Element, XMLNode};
+
+use crate::model::RendererInfo;
 
 /// Value used by OpenHome renderers to indicate "insert at the head".
 /// Several implementations, including upmpdcli, expect zero rather than the
@@ -65,7 +72,16 @@ impl OhPlaylistClient {
         }
     }
 
-    pub fn read_list(&self, id_list: &[u32]) -> Result<Vec<OhTrackEntry>> {
+    pub fn from_renderer_info(info: &RendererInfo) -> Result<Self, ControlPointError> {
+        let control_url = info.oh_playlist_control_url()
+        .ok_or_else(|| ControlPointError::OpenHomeError("Cannot create playlist control client".to_string()))?;
+
+        let service_type = info.oh_playlist_service_type()
+        .ok_or_else(|| ControlPointError::OpenHomeError("Cannot create playlist service client".to_string()))?;
+        Ok(OhPlaylistClient::new(control_url, service_type))
+    }
+
+    pub fn read_list(&self, id_list: &[u32]) -> Result<Vec<OhTrackEntry>, ControlPointError> {
         if id_list.is_empty() {
             return Ok(Vec::new());
         }
@@ -82,10 +98,9 @@ impl OhPlaylistClient {
 
         let envelope = ensure_success("ReadList", &call_result)?;
         let response = find_child_with_suffix(&envelope.body.content, "ReadListResponse")
-            .ok_or_else(|| anyhow!("Missing ReadListResponse element in SOAP body"))?;
+            .ok_or_else(|| ControlPointError::OpenHomeError(format!("Missing ReadListResponse element in SOAP body")))?;
 
-        let track_list_b64 =
-            extract_child_text_any(response, &["TrackList", "Value"])?;
+        let track_list_b64 = extract_child_text_any(response, &["TrackList", "Value"])?;
         let track_list_sample: String = track_list_b64.chars().take(256).collect();
         debug!(
             control_url = self.control_url.as_str(),
@@ -96,7 +111,12 @@ impl OhPlaylistClient {
         parse_track_list(&track_list_b64)
     }
 
-    pub fn insert(&self, after_id: u32, uri: &str, metadata: &str) -> Result<u32> {
+    pub fn insert(
+        &self,
+        after_id: u32,
+        uri: &str,
+        metadata: &str,
+    ) -> Result<u32, ControlPointError> {
         let after_id_str = after_id.to_string();
         let args = [
             ("AfterId", after_id_str.as_str()),
@@ -107,19 +127,23 @@ impl OhPlaylistClient {
         let call_result =
             invoke_upnp_action(&self.control_url, &self.service_type, "Insert", &args)?;
 
-        let envelope = ensure_success("Insert", &call_result)?;
+        let envelope = ensure_success("Insert", &call_result)
+            .map_err(|e| ControlPointError::SoapAction(format!("{}", e)))?;
+
         let response = find_child_with_suffix(&envelope.body.content, "InsertResponse")
-            .ok_or_else(|| anyhow!("Missing InsertResponse element in SOAP body"))?;
-        let new_id_text =
-            extract_child_text_any(response, &["NewId", "Value"])?;
+            .ok_or_else(|| {
+                ControlPointError::UpnpMissingReturnValue("InsertResponse".to_string())
+            })?;
+
+        let new_id_text = extract_child_text_any(response, &["NewId", "Value"])?;
         let new_id = new_id_text
             .parse::<u32>()
-            .map_err(|_| anyhow!("Invalid NewId value: {}", new_id_text))?;
+            .map_err(|_| ControlPointError::UpnpBadReturnValue("NewId".to_string(), new_id_text))?;
 
         Ok(new_id)
     }
 
-    pub fn play_id(&self, id: u32) -> Result<()> {
+    pub fn play_id(&self, id: u32) -> Result<(), ControlPointError> {
         let id_str = id.to_string();
         let args = [("Value", id_str.as_str())];
 
@@ -129,58 +153,63 @@ impl OhPlaylistClient {
         handle_action_response("SeekId", &call_result)
     }
 
-    pub fn transport_state(&self) -> Result<String> {
+    pub fn transport_state(&self) -> Result<String, ControlPointError> {
         let call_result =
             invoke_upnp_action(&self.control_url, &self.service_type, "TransportState", &[])?;
 
         let envelope = ensure_success("TransportState", &call_result)?;
+
         let response = find_child_with_suffix(&envelope.body.content, "TransportStateResponse")
-            .ok_or_else(|| anyhow!("Missing TransportStateResponse element in SOAP body"))?;
+            .ok_or_else(|| {
+                ControlPointError::UpnpMissingReturnValue("TransportStateResponse".to_string())
+            })?;
+
         let state = extract_child_text_any(response, &["State", "Value"])?;
         Ok(state)
     }
 
-    pub fn id(&self) -> Result<u32> {
+    pub fn id(&self) -> Result<u32, ControlPointError> {
         let call_result = invoke_upnp_action(&self.control_url, &self.service_type, "Id", &[])?;
 
-        let envelope = ensure_success("Id", &call_result)?;
+        let envelope = ensure_success("Id", &call_result)
+            .map_err(|e| ControlPointError::SoapAction(format!("{}", e)))?;
+
         let response = find_child_with_suffix(&envelope.body.content, "IdResponse")
-            .ok_or_else(|| anyhow!("Missing IdResponse element in SOAP body"))?;
+            .ok_or_else(|| ControlPointError::UpnpMissingReturnValue("IdResponse".to_string()))?;
         let id_text = extract_child_text(response, "Value")?;
-        let id = id_text
-            .parse::<u32>()
-            .map_err(|_| anyhow!("Invalid Playlist.Id value: {}", id_text))?;
+        let id = id_text.parse::<u32>().map_err(|_| {
+            ControlPointError::UpnpBadReturnValue("Playlist.Id".to_string(), id_text)
+        })?;
         Ok(id)
     }
 
-
-    pub fn play(&self) -> Result<()> {
+    pub fn play(&self) -> Result<(), ControlPointError> {
         let call_result = invoke_upnp_action(&self.control_url, &self.service_type, "Play", &[])?;
         handle_action_response("Play", &call_result)
     }
 
-    pub fn pause(&self) -> Result<()> {
+    pub fn pause(&self) -> Result<(), ControlPointError> {
         let call_result = invoke_upnp_action(&self.control_url, &self.service_type, "Pause", &[])?;
         handle_action_response("Pause", &call_result)
     }
 
-    pub fn stop(&self) -> Result<()> {
+    pub fn stop(&self) -> Result<(), ControlPointError> {
         let call_result = invoke_upnp_action(&self.control_url, &self.service_type, "Stop", &[])?;
         handle_action_response("Stop", &call_result)
     }
 
-    pub fn next(&self) -> Result<()> {
+    pub fn next(&self) -> Result<(), ControlPointError> {
         let call_result = invoke_upnp_action(&self.control_url, &self.service_type, "Next", &[])?;
         handle_action_response("Next", &call_result)
     }
 
-    pub fn previous(&self) -> Result<()> {
+    pub fn previous(&self) -> Result<(), ControlPointError> {
         let call_result =
             invoke_upnp_action(&self.control_url, &self.service_type, "Previous", &[])?;
         handle_action_response("Previous", &call_result)
     }
 
-    pub fn seek_second_absolute(&self, second: u32) -> Result<()> {
+    pub fn seek_second_absolute(&self, second: u32) -> Result<(), ControlPointError> {
         let second_str = second.to_string();
         let args = [("Second", second_str.as_str())];
         let call_result = invoke_upnp_action(
@@ -193,7 +222,7 @@ impl OhPlaylistClient {
         handle_action_response("SeekSecondAbsolute", &call_result)
     }
 
-    pub fn delete_id(&self, id: u32) -> Result<()> {
+    pub fn delete_id(&self, id: u32) -> Result<(), ControlPointError> {
         let id_str = id.to_string();
         let args = [("Value", id_str.as_str())];
 
@@ -211,7 +240,7 @@ impl OhPlaylistClient {
     /// - Ok(true) if the ID was successfully deleted
     /// - Ok(false) if the ID didn't exist (logged as warning)
     /// - Err(_) for other errors (network issues, etc.)
-    pub fn delete_id_if_exists(&self, id: u32) -> Result<bool> {
+    pub fn delete_id_if_exists(&self, id: u32) -> Result<bool, ControlPointError> {
         match self.delete_id(id) {
             Ok(()) => Ok(true),
             Err(err) => {
@@ -224,7 +253,8 @@ impl OhPlaylistClient {
                     || err_msg.contains("does not exist")
                     || err_msg.contains("unknown")
                     || err_msg.contains("500") // HTTP 500 = renderer in inconsistent state
-                    || err_msg.contains("Action Failed") // UPnP error 501
+                    || err_msg.contains("Action Failed")
+                // UPnP error 501
                 {
                     warn!(
                         control_url = self.control_url.as_str(),
@@ -240,15 +270,14 @@ impl OhPlaylistClient {
         }
     }
 
-    pub fn delete_all(&self) -> Result<()> {
+    pub fn delete_all(&self) -> Result<(), ControlPointError> {
         let call_result =
             invoke_upnp_action(&self.control_url, &self.service_type, "DeleteAll", &[])?;
         handle_action_response("DeleteAll", &call_result)
     }
 
-    pub fn current_id(&self)  -> Result<String> {
-        let call_result =
-            invoke_upnp_action(&self.control_url, &self.service_type, "Id", &[])?;
+    pub fn current_id(&self) -> Result<String> {
+        let call_result = invoke_upnp_action(&self.control_url, &self.service_type, "Id", &[])?;
         let envelope = ensure_success("Id", &call_result)?;
         let response = find_child_with_suffix(&envelope.body.content, "IdResponse")
             .ok_or_else(|| anyhow!("Missing IdResponse element in SOAP body"))?;
@@ -256,33 +285,32 @@ impl OhPlaylistClient {
         Ok(value)
     }
 
-    pub fn tracks_max(&self) -> Result<u32> {
+    pub fn tracks_max(&self) -> Result<u32, ControlPointError> {
         let call_result =
             invoke_upnp_action(&self.control_url, &self.service_type, "TracksMax", &[])?;
 
         let envelope = ensure_success("TracksMax", &call_result)?;
         let response = find_child_with_suffix(&envelope.body.content, "TracksMaxResponse")
-            .ok_or_else(|| anyhow!("Missing TracksMaxResponse element in SOAP body"))?;
+            .ok_or_else(|| {
+                ControlPointError::UpnpMissingReturnValue("TracksMaxResponse".to_string())
+            })?;
         let value_text: String = extract_child_text_any(response, &["Value"])?;
-        let value = value_text
-            .parse::<u32>()
-            .map_err(|_| anyhow!("Invalid TracksMax value: {}", value_text))?;
+        let value = value_text.parse::<u32>().map_err(|_| {
+            ControlPointError::UpnpBadReturnValue("Playlist.Id".to_string(), value_text)
+        })?;
 
         Ok(value)
     }
 
-    pub fn id_array(&self) -> Result<Vec<u32>> {
+    pub fn id_array(&self) -> Result<Vec<u32>, ControlPointError> {
         let call_result =
             invoke_upnp_action(&self.control_url, &self.service_type, "IdArray", &[])?;
         let envelope = ensure_success("IdArray", &call_result)?;
         let response = find_child_with_suffix(&envelope.body.content, "IdArrayResponse")
-            .ok_or_else(|| anyhow!("Missing IdArrayResponse element in SOAP body"))?;
+            .ok_or_else(|| ControlPointError::upnp_missing_return_value("IdArrayResponse"))?;
 
         // Try to extract the array element. If missing, assume empty playlist.
-        let array_text = match extract_child_text_any(
-            response,
-            &["Array", "IdArray", "Value"],
-        ) {
+        let array_text = match extract_child_text_any(response, &["Array", "IdArray", "Value"]) {
             Ok(text) => text,
             Err(_) => {
                 // Element not found - playlist is likely empty
@@ -297,10 +325,10 @@ impl OhPlaylistClient {
 
         let bytes = decode_base64(&array_text)?;
         if bytes.len() % 4 != 0 {
-            return Err(anyhow!(
+            return Err(ControlPointError::SoapAction(format!(
                 "Invalid IdArray payload length {} (expected multiple of 4)",
                 bytes.len()
-            ));
+            )));
         }
 
         let mut ids = Vec::with_capacity(bytes.len() / 4);
@@ -310,7 +338,7 @@ impl OhPlaylistClient {
         Ok(ids)
     }
 
-    pub fn read_all_tracks(&self) -> Result<Vec<OhTrackEntry>> {
+    pub fn read_all_tracks(&self) -> Result<Vec<OhTrackEntry>, ControlPointError> {
         let ids = self.id_array()?;
         debug!(
             control_url = self.control_url.as_str(),
@@ -373,6 +401,15 @@ impl OhInfoClient {
         }
     }
 
+    pub fn from_renderer_info(info: &RendererInfo) -> Result<Self, ControlPointError> {
+        let control_url = info.oh_info_control_url()
+        .ok_or_else(|| ControlPointError::OpenHomeError("Cannot create info control client".to_string()))?;
+
+        let service_type = info.oh_info_service_type()
+        .ok_or_else(|| ControlPointError::OpenHomeError("Cannot create info service client".to_string()))?;
+        Ok(OhInfoClient::new(control_url, service_type))
+    }
+
     pub fn track(&self) -> Result<OhInfoTrack> {
         let call_result = invoke_upnp_action(&self.control_url, &self.service_type, "Track", &[])?;
 
@@ -380,8 +417,7 @@ impl OhInfoClient {
         let response = find_child_with_suffix(&envelope.body.content, "TrackResponse")
             .ok_or_else(|| anyhow!("Missing TrackResponse element in SOAP body"))?;
 
-        let uri = extract_child_text_any(response, &["Uri", "Uri", "Value"])
-            .unwrap_or_default();
+        let uri = extract_child_text_any(response, &["Uri", "Uri", "Value"]).unwrap_or_default();
         let metadata_xml = extract_child_text_optional(response, "Metadata")
             .unwrap_or(None)
             .filter(|s| !s.is_empty());
@@ -407,8 +443,7 @@ impl OhInfoClient {
         let response = find_child_with_suffix(&envelope.body.content, "NextResponse")
             .ok_or_else(|| anyhow!("Missing NextResponse element in SOAP body"))?;
 
-        let uri = extract_child_text_any(response, &["Uri", "Value"])
-            .unwrap_or_default();
+        let uri = extract_child_text_any(response, &["Uri", "Value"]).unwrap_or_default();
         let metadata_xml = extract_child_text_optional(response, "Metadata")
             .unwrap_or(None)
             .filter(|s| !s.is_empty());
@@ -436,25 +471,39 @@ impl OhTimeClient {
         }
     }
 
-    pub fn position(&self) -> Result<OhTimePosition> {
+    pub fn from_renderer_info(info: &RendererInfo) -> Result<Self, ControlPointError> {
+        let control_url = info.oh_time_control_url()
+        .ok_or_else(|| ControlPointError::OpenHomeError("Cannot create time control client".to_string()))?;
+
+        let service_type = info.oh_time_service_type()
+        .ok_or_else(|| ControlPointError::OpenHomeError("Cannot create time service client".to_string()))?;
+        Ok(OhTimeClient::new(control_url, service_type))
+    }
+
+    pub fn position(&self) -> Result<OhTimePosition, ControlPointError> {
         let call_result = invoke_upnp_action(&self.control_url, &self.service_type, "Time", &[])?;
 
         let envelope = ensure_success("Time", &call_result)?;
         let response = find_child_with_suffix(&envelope.body.content, "TimeResponse")
-            .ok_or_else(|| anyhow!("Missing TimeResponse element in SOAP body"))?;
+            .ok_or_else(|| ControlPointError::UpnpMissingReturnValue("TimeResponse".to_string()))?;
 
-        let track_count =
-            extract_child_text_any(response, &["TrackCount", "Value"])?
-                .parse::<u32>()
-                .map_err(|_| anyhow!("Invalid TrackCount value in Time response"))?;
-        let duration_secs =
-            extract_child_text_any(response, &["Duration","Value"])?
-                .parse::<u32>()
-                .map_err(|_| anyhow!("Invalid Duration value in Time response"))?;
-        let elapsed_secs =
-            extract_child_text_any(response, &["Seconds", "Value"])?
-                .parse::<u32>()
-                .map_err(|_| anyhow!("Invalid Seconds value in Time response"))?;
+        let track_count = extract_child_text_any(response, &["TrackCount", "Value"])?
+            .parse::<u32>()
+            .map_err(|_| {
+                ControlPointError::UpnpBadReturnValue("TrackCount".to_string(), "".to_string())
+            })?;
+
+        let duration_secs = extract_child_text_any(response, &["Duration", "Value"])?
+            .parse::<u32>()
+            .map_err(|_| {
+                ControlPointError::UpnpBadReturnValue("Duration".to_string(), "".to_string())
+            })?;
+
+        let elapsed_secs = extract_child_text_any(response, &["Seconds", "Value"])?
+            .parse::<u32>()
+            .map_err(|_| {
+                ControlPointError::UpnpBadReturnValue("Second".to_string(), "".to_string())
+            })?;
 
         Ok(OhTimePosition {
             track_count,
@@ -478,19 +527,33 @@ impl OhVolumeClient {
         }
     }
 
-    pub fn volume(&self) -> Result<u16> {
+    pub fn from_renderer_info(info: &RendererInfo) -> Result<Self, ControlPointError> {
+        let control_url = info.oh_volume_control_url()
+        .ok_or_else(|| ControlPointError::OpenHomeError("Cannot create volume control client".to_string()))?;
+
+        let service_type = info.oh_volume_service_type()
+        .ok_or_else(|| ControlPointError::OpenHomeError("Cannot create volume service client".to_string()))?;
+        Ok(OhVolumeClient::new(control_url, service_type))
+    }
+
+
+    pub fn volume(&self) -> Result<u16, ControlPointError> {
         let call_result = invoke_upnp_action(&self.control_url, &self.service_type, "Volume", &[])?;
         let envelope = ensure_success("Volume", &call_result)?;
         let response = find_child_with_suffix(&envelope.body.content, "VolumeResponse")
-            .ok_or_else(|| anyhow!("Missing VolumeResponse element in SOAP body"))?;
-        let value = extract_child_text_any(response, &["Volume", "Value"])?;
+            .ok_or_else(|| {
+                ControlPointError::UpnpMissingReturnValue("VolumeResponse".to_string())
+            })?;
+
+        let value = extract_child_text_any(response, &["Value"])?;
         let parsed = value
             .parse::<u32>()
-            .map_err(|_| anyhow!("Invalid volume value: {}", value))?;
+            .map_err(|_| ControlPointError::UpnpBadReturnValue("volume".to_string(), value))?;
+
         Ok(parsed.min(u16::MAX as u32) as u16)
     }
 
-    pub fn set_volume(&self, vol: u16) -> Result<()> {
+    pub fn set_volume(&self, vol: u16) -> Result<(), ControlPointError> {
         let vol_str = vol.to_string();
         let args = [("Value", vol_str.as_str())];
         let call_result =
@@ -498,18 +561,20 @@ impl OhVolumeClient {
         handle_action_response("SetVolume", &call_result)
     }
 
-    pub fn mute(&self) -> Result<bool> {
+    pub fn mute(&self) -> Result<bool, ControlPointError> {
         let call_result = invoke_upnp_action(&self.control_url, &self.service_type, "Mute", &[])?;
         let envelope = ensure_success("Mute", &call_result)?;
         let response = find_child_with_suffix(&envelope.body.content, "MuteResponse")
-            .ok_or_else(|| anyhow!("Missing MuteResponse element in SOAP body"))?;
-        let value = extract_child_text_any(response, &["Mute", "Value"])?;
-        parse_bool(&value)
+            .ok_or_else(|| ControlPointError::UpnpMissingReturnValue("MuteResponse".to_string()))?;
+
+        let value = extract_child_text_any(response, &["Value"])?;
+
+        Ok(parse_bool(&value))
     }
 
-    pub fn set_mute(&self, mute: bool) -> Result<()> {
+    pub fn set_mute(&self, mute: bool) -> Result<(), ControlPointError> {
         let mute_str = if mute { "1" } else { "0" };
-        let args = [("Mute", mute_str)];
+        let args = [("Value", mute_str)];
         let call_result =
             invoke_upnp_action(&self.control_url, &self.service_type, "SetMute", &args)?;
         handle_action_response("SetMute", &call_result)
@@ -530,7 +595,16 @@ impl OhRadioClient {
         }
     }
 
-    pub fn play_channel(&self, id: u32) -> Result<()> {
+    pub fn from_renderer_info(info: &RendererInfo) -> Result<Self, ControlPointError> {
+        let control_url = info.oh_radio_control_url()
+        .ok_or_else(|| ControlPointError::OpenHomeError("Cannot create radio control client".to_string()))?;
+
+        let service_type = info.oh_radio_service_type()
+        .ok_or_else(|| ControlPointError::OpenHomeError("Cannot create radio service client".to_string()))?;
+        Ok(OhRadioClient::new(control_url, service_type))
+    }
+
+    pub fn play_channel(&self, id: u32) -> Result<(), ControlPointError> {
         let id_str = id.to_string();
         let args = [("Id", id_str.as_str())];
         let call_result =
@@ -548,8 +622,7 @@ impl OhRadioClient {
         let response = find_child_with_suffix(&envelope.body.content, "ChannelResponse")
             .ok_or_else(|| anyhow!("Missing ChannelResponse element in SOAP body"))?;
 
-        let uri = extract_child_text_any(response, &["Uri", "Value"])
-            .unwrap_or_default();
+        let uri = extract_child_text_any(response, &["Uri", "Value"]).unwrap_or_default();
         let metadata_xml = extract_child_text_optional(response, "Metadata")
             .unwrap_or(None)
             .filter(|s| !s.is_empty());
@@ -572,6 +645,16 @@ impl OhProductClient {
         }
     }
 
+    pub fn from_renderer_info(info: &RendererInfo) -> Result<Self, ControlPointError> {
+        let control_url = info.oh_product_control_url()
+        .ok_or_else(|| ControlPointError::OpenHomeError("Cannot create product control client".to_string()))?;
+
+        let service_type = info.oh_product_service_type()
+        .ok_or_else(|| ControlPointError::OpenHomeError("Cannot create product service client".to_string()))?;
+        Ok(OhProductClient::new(control_url, service_type))
+    }
+
+
     pub fn source_xml(&self) -> Result<Vec<OhProductSource>> {
         let call_result =
             invoke_upnp_action(&self.control_url, &self.service_type, "SourceXml", &[])?;
@@ -582,19 +665,22 @@ impl OhProductClient {
         parse_product_source_list(&xml)
     }
 
-    pub fn source_index(&self) -> Result<u32> {
+    pub fn source_index(&self) -> Result<u32, ControlPointError> {
         let call_result =
             invoke_upnp_action(&self.control_url, &self.service_type, "SourceIndex", &[])?;
         let envelope = ensure_success("SourceIndex", &call_result)?;
         let response = find_child_with_suffix(&envelope.body.content, "SourceIndexResponse")
-            .ok_or_else(|| anyhow!("Missing SourceIndexResponse element in SOAP body"))?;
+            .ok_or_else(|| {
+                ControlPointError::UpnpMissingReturnValue("SourceIndexResponse".to_string())
+            })?;
+
         let value = extract_child_text_any(response, &["Index", "Value"])?;
         value
             .parse::<u32>()
-            .map_err(|_| anyhow!("Invalid Product.SourceIndex value: {}", value))
+            .map_err(|_| ControlPointError::UpnpBadReturnValue("volume".to_string(), value))
     }
 
-    pub fn set_source_index(&self, index: u32) -> Result<()> {
+    pub fn set_source_index(&self, index: u32) -> Result<(), ControlPointError> {
         let value = index.to_string();
         let args = [("Index", value.as_str())];
         let call_result = invoke_upnp_action(
@@ -606,8 +692,10 @@ impl OhProductClient {
         handle_action_response("SetSourceIndex", &call_result)
     }
 
-    pub fn ensure_playlist_source_selected(&self) -> Result<()> {
-        let sources = self.source_xml()?;
+    pub fn ensure_playlist_source_selected(&self) -> Result<(), ControlPointError> {
+        let sources = self
+            .source_xml()
+            .map_err(|e| ControlPointError::SoapAction(format!("{}", e)))?;
 
         // Log all available sources for diagnostics
         debug!(
@@ -615,8 +703,9 @@ impl OhProductClient {
             source_count = sources.len(),
             "OpenHome Product sources available"
         );
+
         for (idx, source) in sources.iter().enumerate() {
-            debug!(
+            trace!(
                 control_url = self.control_url.as_str(),
                 index = idx,
                 name = source.name.as_str(),
@@ -635,7 +724,7 @@ impl OhProductClient {
                     available_types = ?sources.iter().map(|s| s.source_type.as_str()).collect::<Vec<_>>(),
                     "OpenHome Product source list does not expose a Playlist entry"
                 );
-                anyhow!("OpenHome Product source list does not expose a Playlist entry")
+                ControlPointError::OpenHomeNoPlaylistEntry()
             })?;
         let playlist_index = playlist_index as u32;
         let current_index = self.source_index()?;
@@ -646,7 +735,9 @@ impl OhProductClient {
             control_url = self.control_url.as_str(),
             current_index,
             current_source_name = current_source.map(|s| s.name.as_str()).unwrap_or("unknown"),
-            current_source_type = current_source.map(|s| s.source_type.as_str()).unwrap_or("unknown"),
+            current_source_type = current_source
+                .map(|s| s.source_type.as_str())
+                .unwrap_or("unknown"),
             playlist_index,
             needs_switch = current_index != playlist_index,
             "OpenHome source state"
@@ -708,7 +799,7 @@ pub fn parse_track_metadata_from_didl(xml: &str) -> Option<TrackMetadata> {
     })
 }
 
-fn parse_track_list(payload: &str) -> Result<Vec<OhTrackEntry>> {
+fn parse_track_list(payload: &str) -> Result<Vec<OhTrackEntry>, ControlPointError> {
     let trimmed = payload.trim();
     if trimmed.is_empty() {
         return Ok(Vec::new());
@@ -718,8 +809,9 @@ fn parse_track_list(payload: &str) -> Result<Vec<OhTrackEntry>> {
         (trimmed.to_string(), false)
     } else {
         let bytes = decode_base64(trimmed)?;
-        let decoded = String::from_utf8(bytes)
-            .map_err(|err| anyhow!("TrackList payload not valid UTF-8 after base64 decode: {err}"))?;
+        let decoded = String::from_utf8(bytes).map_err(|err| {
+            ControlPointError::OpenHomeError(format!("TrackList payload not valid UTF-8 after base64 decode: {err}"))
+        })?;
         (decoded, true)
     };
     let xml_sample: String = xml.chars().take(256).collect();
@@ -732,7 +824,7 @@ fn parse_track_list(payload: &str) -> Result<Vec<OhTrackEntry>> {
 
     let mut reader = std::io::Cursor::new(xml.as_bytes());
     let root = Element::parse(&mut reader)
-        .map_err(|err| anyhow!("Failed to parse OpenHome TrackList XML: {}", err))?;
+        .map_err(|err| ControlPointError::OpenHomeError(format!("Failed to parse OpenHome TrackList XML: {}", err)))?;
     let mut entries = Vec::new();
 
     for node in &root.children {
@@ -746,7 +838,7 @@ fn parse_track_list(payload: &str) -> Result<Vec<OhTrackEntry>> {
     Ok(entries)
 }
 
-fn parse_track_entry(elem: &Element) -> Result<OhTrackEntry> {
+fn parse_track_entry(elem: &Element) -> Result<OhTrackEntry, ControlPointError> {
     let id_text = extract_child_text_local(elem, "Id")?;
 
     // Some renderers (like upmpdcli) return a comma-separated list of IDs in the Id element
@@ -759,14 +851,14 @@ fn parse_track_entry(elem: &Element) -> Result<OhTrackEntry> {
             raw_id = id_text.as_str(),
             "Multi-value Id element detected - forcing fallback to individual reads"
         );
-        return Err(anyhow!(
+        return Err(ControlPointError::OpenHomeError(format!(
             "Renderer returned comma-separated IDs in single Entry - need individual reads"
-        ));
+        )));
     }
 
     let id = id_text
         .parse::<u32>()
-        .map_err(|_| anyhow!("Invalid OpenHome Entry Id: {}", id_text))?;
+        .map_err(|_| ControlPointError::OpenHomeError(format!("Invalid OpenHome Entry Id: {}", id_text)))?;
 
     let uri = extract_child_text_local(elem, "Uri")?;
     let metadata_xml = extract_child_text_optional_local(elem, "Metadata")?.unwrap_or_default();
@@ -809,181 +901,7 @@ fn parse_product_source_list(xml: &str) -> Result<Vec<OhProductSource>> {
     Ok(sources)
 }
 
-fn parse_visible_flag(value: &str) -> bool {
-    let trimmed = value.trim();
-    if trimmed.eq_ignore_ascii_case("true") {
-        return true;
-    }
-    if trimmed.eq_ignore_ascii_case("false") {
-        return false;
-    }
-    trimmed == "1"
-}
-
-fn ensure_success<'a>(action: &str, call_result: &'a SoapCallResult) -> Result<&'a SoapEnvelope> {
-    if !call_result.status.is_success() {
-        if let Some(env) = &call_result.envelope {
-            if let Some(err) = parse_upnp_error(env) {
-                return Err(anyhow!(
-                    "{action} failed with UPnP error {}: {} (HTTP status {})",
-                    err.error_code,
-                    err.error_description,
-                    call_result.status
-                ));
-            }
-        }
-
-        return Err(anyhow!(
-            "{action} failed with HTTP status {} and body: {}",
-            call_result.status,
-            call_result.raw_body
-        ));
-    }
-
-    let envelope = call_result
-        .envelope
-        .as_ref()
-        .ok_or_else(|| anyhow!("Missing SOAP envelope in {action} response"))?;
-
-    if let Some(err) = parse_upnp_error(envelope) {
-        return Err(anyhow!(
-            "{action} returned UPnP error {}: {} (HTTP status {})",
-            err.error_code,
-            err.error_description,
-            call_result.status
-        ));
-    }
-
-    Ok(envelope)
-}
-
-fn handle_action_response(action: &str, call_result: &SoapCallResult) -> Result<()> {
-    ensure_success(action, call_result)?;
-    Ok(())
-}
-
-fn find_child_with_suffix<'a>(parent: &'a Element, suffix: &str) -> Option<&'a Element> {
-    parent.children.iter().find_map(|node| match node {
-        XMLNode::Element(elem) if elem.name.ends_with(suffix) => Some(elem),
-        _ => None,
-    })
-}
-
-fn find_child_with_local_name<'a>(parent: &'a Element, local: &str) -> Option<&'a Element> {
-    parent.children.iter().find_map(|node| {
-        if let XMLNode::Element(elem) = node {
-            if elem.name == local || elem.name.ends_with(&format!(":{}", local)) {
-                return Some(elem);
-            }
-        }
-        None
-    })
-}
-
-fn extract_child_text(parent: &Element, suffix: &str) -> Result<String> {
-    let child = find_child_with_suffix(parent, suffix)
-        .ok_or_else(|| anyhow!("Missing {suffix} element in response"))?;
-
-    let text = child
-        .get_text()
-        .map(|t| t.trim().to_string())
-        .ok_or_else(|| anyhow!("{suffix} element missing text in response"))?;
-
-    Ok(text)
-}
-
-fn extract_child_text_optional(parent: &Element, suffix: &str) -> Result<Option<String>> {
-    if let Some(child) = find_child_with_suffix(parent, suffix) {
-        let text = child
-            .get_text()
-            .map(|t| t.trim().to_string())
-            .unwrap_or_default();
-        Ok(Some(text))
-    } else {
-        Ok(None)
-    }
-}
-
-fn extract_child_text_any(parent: &Element, suffixes: &[&str]) -> Result<String> {
-    for suffix in suffixes {
-        if let Ok(text) = extract_child_text(parent, suffix) {
-            return Ok(text);
-        }
-    }
-    Err(anyhow!(
-        "Missing {} element in response",
-        suffixes.join(" or ")
-    ))
-}
-
-fn extract_child_text_local(parent: &Element, local: &str) -> Result<String> {
-    let child = find_child_with_local_name(parent, local)
-        .ok_or_else(|| anyhow!("Missing {local} element in response"))?;
-    let text = child
-        .get_text()
-        .map(|t| t.trim().to_string())
-        .ok_or_else(|| anyhow!("{local} element missing text in response"))?;
-    Ok(text)
-}
-
-fn extract_child_text_optional_local(parent: &Element, local: &str) -> Result<Option<String>> {
-    if let Some(child) = find_child_with_local_name(parent, local) {
-        let text = child
-            .get_text()
-            .map(|t| t.trim().to_string())
-            .unwrap_or_default();
-        Ok(Some(text))
-    } else {
-        Ok(None)
-    }
-}
-
-fn parse_bool(value: &str) -> Result<bool> {
-    match value.trim() {
-        "0" => Ok(false),
-        "1" => Ok(true),
-        other => Err(anyhow!("Invalid boolean value '{}'", other)),
-    }
-}
-
-pub(crate) fn decode_base64(input: &str) -> Result<Vec<u8>> {
-    fn value(byte: u8) -> Option<u8> {
-        match byte {
-            b'A'..=b'Z' => Some(byte - b'A'),
-            b'a'..=b'z' => Some(byte - b'a' + 26),
-            b'0'..=b'9' => Some(byte - b'0' + 52),
-            b'+' => Some(62),
-            b'/' => Some(63),
-            _ => None,
-        }
-    }
-
-    let mut output = Vec::new();
-    let mut buffer: u32 = 0;
-    let mut bits_collected: u8 = 0;
-
-    for byte in input.bytes() {
-        if byte == b'=' {
-            break;
-        }
-        if byte == b'\r' || byte == b'\n' || byte == b' ' || byte == b'\t' {
-            continue;
-        }
-        let val =
-            value(byte).ok_or_else(|| anyhow!("Invalid base64 character '{}'", byte as char))?;
-        buffer = (buffer << 6) | (val as u32);
-        bits_collected += 6;
-        if bits_collected >= 8 {
-            bits_collected -= 8;
-            let out = (buffer >> bits_collected) & 0xFF;
-            output.push(out as u8);
-        }
-    }
-
-    Ok(output)
-}
-
-fn is_invalid_entry_id_error(err: &anyhow::Error) -> bool {
+fn is_invalid_entry_id_error(err: &ControlPointError) -> bool {
     let msg = format!("{err}");
     msg.contains("Invalid OpenHome Entry Id") || msg.contains("comma-separated IDs")
 }
@@ -998,8 +916,7 @@ mod tests {
         let xml = r#"<u:InsertResponse xmlns:u="urn:av-openhome-org:service:Playlist:1"><NewId>1337</NewId></u:InsertResponse>"#;
         let mut cursor = Cursor::new(xml.as_bytes());
         let response = Element::parse(&mut cursor).expect("valid xml");
-        let value =
-            extract_child_text_any(&response, &["NewId", "Value"]).unwrap();
+        let value = extract_child_text_any(&response, &["NewId", "Value"]).unwrap();
         assert_eq!(value, "1337");
     }
 
@@ -1008,9 +925,7 @@ mod tests {
         let xml = r#"<u:ReadListResponse xmlns:u="urn:av-openhome-org:service:Playlist:1"><TrackList>PGVudHJ5PjwvZW50cnk+</TrackList></u:ReadListResponse>"#;
         let mut cursor = Cursor::new(xml.as_bytes());
         let response = Element::parse(&mut cursor).expect("valid xml");
-        let value =
-            extract_child_text_any(&response, &["TrackList", "Value"])
-                .expect("tracklist");
+        let value = extract_child_text_any(&response, &["TrackList", "Value"]).expect("tracklist");
         assert_eq!(value, "PGVudHJ5PjwvZW50cnk+");
     }
 
@@ -1019,11 +934,8 @@ mod tests {
         let xml = r#"<u:IdArrayResponse xmlns:u="urn:av-openhome-org:service:Playlist:1"><Token>1</Token><Array>AAAAAQAAAAI=</Array></u:IdArrayResponse>"#;
         let mut cursor = Cursor::new(xml.as_bytes());
         let response = Element::parse(&mut cursor).expect("valid xml");
-        let value = extract_child_text_any(
-            &response,
-            &["Array", "IdArray", "Value"],
-        )
-        .expect("array content");
+        let value = extract_child_text_any(&response, &["Array", "IdArray", "Value"])
+            .expect("array content");
         assert_eq!(value, "AAAAAQAAAAI=");
     }
 }
