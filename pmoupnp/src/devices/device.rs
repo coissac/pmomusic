@@ -122,6 +122,84 @@ impl Device {
         }
     }
 
+    /// Crée un nouveau modèle de device en utilisant la configuration.
+    ///
+    /// Cette factory method charge les préfixes depuis pmoconfig et construit
+    /// automatiquement les noms finaux en combinant les préfixes avec les suffixes.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Nom unique du device
+    /// * `device_type` - Type UPnP du device (ex: "MediaServer", "MediaRenderer")
+    /// * `friendly_name_suffix` - Suffixe pour le nom convivial (sera combiné avec le préfixe)
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use pmoupnp::devices::Device;
+    ///
+    /// let device = Device::new_from_config(
+    ///     "PMO_MediaServer".to_string(),
+    ///     "MediaServer".to_string(),
+    ///     "Media Server".to_string(),
+    /// );
+    /// // Avec config par défaut :
+    /// // - manufacturer = "PMOMusic"
+    /// // - udn_prefix = "pmomusic"
+    /// // - model_name = "PMOMusic Media Server"
+    /// // - friendly_name = "PMOMusic Media Server"
+    /// ```
+    pub fn new_from_config(
+        name: String,
+        device_type: String,
+        friendly_name_suffix: String,
+    ) -> Self {
+        use crate::config_ext::UpnpConfigExt;
+
+        let config = pmoconfig::get_config();
+
+        // Charger les valeurs depuis la config (avec fallback aux defaults)
+        let manufacturer = config
+            .get_upnp_manufacturer()
+            .unwrap_or_else(|_| "PMOMusic".to_string());
+        let udn_prefix = config
+            .get_upnp_udn_prefix()
+            .unwrap_or_else(|_| "pmomusic".to_string());
+        let model_name_prefix = config
+            .get_upnp_model_name_prefix()
+            .unwrap_or_else(|_| "PMOMusic".to_string());
+        let friendly_name_prefix = config
+            .get_upnp_friendly_name_prefix()
+            .unwrap_or_else(|_| "PMOMusic".to_string());
+
+        // Construire les noms finaux
+        let model_name = format!("{} {}", model_name_prefix, device_type);
+        let friendly_name = format!("{} {}", friendly_name_prefix, friendly_name_suffix);
+
+        Self {
+            object: UpnpObjectType {
+                name: name.clone(),
+                object_type: "Device".to_string(),
+            },
+            device_type,
+            version: 1,
+            friendly_name,
+            manufacturer,
+            manufacturer_url: None,
+            model_description: None,
+            model_name,
+            model_number: None,
+            model_url: None,
+            serial_number: None,
+            udn_prefix,
+            upc: None,
+            icon_url: None,
+            presentation_url: None,
+            services: RwLock::new(HashMap::new()),
+            devices: RwLock::new(HashMap::new()),
+        }
+    }
+
     /// Retourne le type de device UPnP.
     ///
     /// Format: `urn:schemas-upnp-org:device:{type}:{version}`

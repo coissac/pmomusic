@@ -1,5 +1,10 @@
 host:
   http_port: "8080"
+  upnp:
+    manufacturer: "PMOMusic"
+    udn_prefix: "pmomusic"
+    model_name_prefix: "PMOMusic"
+    friendly_name_prefix: "PMOMusic"
   cover_cache:
     directory: "cache_covers"
     size: 2000
