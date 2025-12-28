@@ -37,16 +37,13 @@ use pmoupnp::devices::Device;
 /// }
 /// ```
 pub static MEDIA_SERVER: Lazy<Arc<Device>> = Lazy::new(|| {
-    let mut device = Device::new(
+    let mut device = Device::new_from_config(
         "PMO_MediaServer".to_string(),
         "MediaServer".to_string(),
-        "PMOMusic Media Server".to_string(),
+        "Media Server".to_string(),
     );
 
-    device.set_manufacturer("PMOMusic".to_string());
-    device.set_model_name("PMOMusic Media Server".to_string());
     device.set_model_description("UPnP AV MediaServer for audio streaming".to_string());
-    device.set_udn_prefix("pmomusic".to_string());
 
     // Ajouter les deux services obligatoires
     device

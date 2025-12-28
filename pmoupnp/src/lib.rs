@@ -3,6 +3,7 @@ mod object_trait;
 
 pub mod actions;
 pub mod cache_registry;
+pub mod config_ext;
 pub mod devices;
 pub mod services;
 pub mod soap;
@@ -20,6 +21,7 @@ use std::{collections::HashMap, sync::Arc};
 pub use pmoaudiocache::get_audio_cache;
 pub use pmocovers::get_cover_cache;
 
+pub use crate::config_ext::UpnpConfigExt;
 pub use crate::object_trait::*;
 pub use crate::upnp_server::UpnpServerExt;
 

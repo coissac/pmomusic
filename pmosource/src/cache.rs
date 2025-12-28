@@ -217,6 +217,29 @@ impl SourceCacheManager {
         }
     }
 
+    /// Obtenir l'URL absolue d'un fichier audio en cache à partir de son pk
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Clé primaire du fichier audio dans le cache
+    ///
+    /// # Returns
+    ///
+    /// L'URL absolue complète du fichier audio (ex: http://localhost:8080/audio/flac/QOBUZ:123)
+    pub fn audio_url(&self, _pk: &str) -> Result<String> {
+        #[cfg(feature = "server")]
+        {
+            pmoupnp::cache_registry::build_audio_url(_pk, None)
+                .map_err(|e| MusicSourceError::CacheError(e.to_string()))
+        }
+        #[cfg(not(feature = "server"))]
+        {
+            Err(MusicSourceError::CacheError(
+                "Server feature not enabled - cannot build audio URL".to_string(),
+            ))
+        }
+    }
+
     /// Cacher une piste audio depuis une URL
     ///
     /// Utilise la collection de cette source pour organiser les pistes.

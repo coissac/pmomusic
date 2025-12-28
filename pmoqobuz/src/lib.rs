@@ -124,7 +124,7 @@
 //! let cover_cache = Arc::new(CoverCache::new("./cache/covers", 500)?);
 //! let audio_cache = Arc::new(AudioCache::new("./cache/audio", 100)?);
 //!
-//! let source = QobuzSource::new(client, cover_cache, audio_cache);
+//! let source = QobuzSource::new(client, cover_cache, audio_cache, "http://localhost:8080");
 //! # Ok(())
 //! # }
 //! ```
@@ -145,7 +145,7 @@
 //! let cover_cache = Arc::new(CoverCache::new("./cache/covers", 500)?);
 //! let audio_cache = Arc::new(AudioCache::new("./cache/audio", 100)?);
 //!
-//! let source = QobuzSource::new(client, cover_cache, audio_cache);
+//! let source = QobuzSource::new(client, cover_cache, audio_cache, "http://localhost:8080");
 //!
 //! // Add a track with caching
 //! let tracks = source.client().get_favorite_tracks().await?;

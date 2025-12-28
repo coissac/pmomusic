@@ -224,6 +224,28 @@ impl PlaylistManager {
             .await
     }
 
+    /// Récupère l'âge d'une playlist depuis sa création
+    pub async fn get_playlist_age(&self, id: &str) -> Result<Option<Duration>> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let persistence = match &self.inner.persistence {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+
+        let created_at_nanos = persistence.get_playlist_created_at(id).await?;
+
+        if let Some(nanos) = created_at_nanos {
+            let created_at = UNIX_EPOCH + Duration::from_nanos(nanos as u64);
+            let age = SystemTime::now()
+                .duration_since(created_at)
+                .unwrap_or(Duration::ZERO);
+            Ok(Some(age))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Enregistre un callback d'évènement playlist (update, track joué).
     ///
     /// Retourne un jeton (u64) pour désenregistrer plus tard.

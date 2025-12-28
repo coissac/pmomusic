@@ -261,7 +261,12 @@ impl UpnpServerExt for Server {
         if self.ssdp_enabled() {
             let ssdp_opt = SSDP_SERVER.read().unwrap();
             if let Some(ref ssdp) = *ssdp_opt {
-                let ssdp_device = di.to_ssdp_device("PMOMusic", "1.0");
+                use crate::config_ext::UpnpConfigExt;
+                let config = pmoconfig::get_config();
+                let manufacturer = config
+                    .get_upnp_manufacturer()
+                    .unwrap_or_else(|_| "PMOMusic".to_string());
+                let ssdp_device = di.to_ssdp_device(&manufacturer, "1.0");
                 ssdp.add_device(ssdp_device);
                 info!("✅ SSDP announcement for {}", di.udn());
             }
