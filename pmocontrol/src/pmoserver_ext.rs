@@ -1243,7 +1243,7 @@ async fn clear_openhome_playlist(
     let rid_for_task = rid.clone();
 
     let clear_task =
-        tokio::task::spawn_blocking(move || control_point.clear_openhome_playlist(&rid_for_task));
+        tokio::task::spawn_blocking(move || control_point.clear_renderer_queue(&rid_for_task));
 
     time::timeout(QUEUE_COMMAND_TIMEOUT, clear_task)
         .await
@@ -1315,13 +1315,14 @@ async fn add_openhome_playlist_item(
     let rid_for_task = rid.clone();
 
     let add_task = tokio::task::spawn_blocking(move || {
-        control_point.add_openhome_track(
+        control_point.add_track_to_renderer(
             &rid_for_task,
             &req.uri,
             &req.metadata,
             req.after_id,
             req.play,
         )
+        .map(|_| ()) // Ignore the track_id result for backward compatibility
     });
 
     time::timeout(QUEUE_COMMAND_TIMEOUT, add_task)
@@ -1402,7 +1403,7 @@ async fn play_openhome_track(
     let rid_for_task = rid.clone();
 
     let play_task = tokio::task::spawn_blocking(move || {
-        control_point.play_openhome_track_id(&rid_for_task, parsed_id)
+        control_point.select_renderer_track(&rid_for_task, parsed_id)
     });
 
     time::timeout(QUEUE_COMMAND_TIMEOUT, play_task)

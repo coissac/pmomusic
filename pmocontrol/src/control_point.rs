@@ -14,7 +14,7 @@ use pmodidl::{DIDLLite, Item as DidlItem, Resource as DidlResource};
 use pmoupnp::ssdp::SsdpClient;
 use quick_xml::se::to_string as to_didl_string;
 use thiserror::Error;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, warn};
 use ureq::{http, Agent};
 use xmltree::{Element, XMLNode};
 
@@ -32,7 +32,7 @@ use crate::control_point::openhome_queue::OpenHomeQueue;
 use crate::discovery::DiscoveryManager;
 use crate::events::{MediaServerEventBus, RendererEventBus};
 use crate::media_server::{
-    playback_item_from_entry, MediaBrowser, MediaEntry, MediaServerInfo, MusicServer, ServerId,
+    playback_item_from_entry, MediaBrowser, MediaServerInfo, MusicServer, ServerId,
 };
 use crate::media_server_events::spawn_media_server_event_runtime;
 use crate::model::TrackMetadata;
@@ -1074,14 +1074,6 @@ impl ControlPoint {
         self.runtime.current_track_metadata(renderer_id)
     }
 
-    /// Force a resynchronization of the OpenHome playlist cache for a renderer.
-    ///
-    /// This is used by external APIs after mutating the native playlist so that
-    /// the local queue mirrors the renderer state.
-    pub fn refresh_openhome_playlist(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
-        self.sync_openhome_playlist_for(renderer_id)
-    }
-
     /// Gets the backend queue snapshot for renderers with persistent queues.
     ///
     /// Returns the queue snapshot if the renderer has a backend queue (e.g., OpenHome),
@@ -1103,16 +1095,6 @@ impl ControlPoint {
         Ok(snapshot.map(|s| s.len()).unwrap_or(0))
     }
 
-    // Deprecated: Use get_renderer_queue_snapshot instead
-    #[deprecated(since = "0.1.0", note = "Use get_renderer_queue_snapshot instead")]
-    pub fn get_openhome_playlist_snapshot(
-        &self,
-        renderer_id: &RendererId,
-    ) -> anyhow::Result<OpenHomePlaylistSnapshot> {
-        let renderer = self.openhome_renderer(renderer_id)?;
-        renderer.openhome_playlist_snapshot()
-    }
-
     pub fn get_cached_openhome_playlist_snapshot(
         &self,
         renderer_id: &RendererId,
@@ -1120,13 +1102,6 @@ impl ControlPoint {
     ) -> anyhow::Result<OpenHomePlaylistSnapshot> {
         let renderer = self.openhome_renderer(renderer_id)?;
         self.runtime.openhome_snapshot_cached(&renderer, ttl)
-    }
-
-    // Deprecated: Use get_renderer_queue_length instead
-    #[deprecated(since = "0.1.0", note = "Use get_renderer_queue_length instead")]
-    pub fn get_openhome_playlist_len(&self, renderer_id: &RendererId) -> anyhow::Result<usize> {
-        let renderer = self.openhome_renderer(renderer_id)?;
-        renderer.openhome_playlist_len()
     }
 
     /// Build a fully consistent snapshot for UI consumers (state + queue + binding).
@@ -1329,36 +1304,6 @@ impl ControlPoint {
         renderer.sync_queue_state()
     }
 
-    // Deprecated: Use clear_renderer_queue instead
-    #[deprecated(since = "0.1.0", note = "Use clear_renderer_queue instead")]
-    pub fn clear_openhome_playlist(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
-        self.clear_renderer_queue(renderer_id)
-    }
-
-    // Deprecated: Use add_track_to_renderer instead
-    #[deprecated(since = "0.1.0", note = "Use add_track_to_renderer instead")]
-    pub fn add_openhome_track(
-        &self,
-        renderer_id: &RendererId,
-        uri: &str,
-        metadata: &str,
-        after_id: Option<u32>,
-        play: bool,
-    ) -> anyhow::Result<()> {
-        self.add_track_to_renderer(renderer_id, uri, metadata, after_id, play)?;
-        Ok(())
-    }
-
-    // Deprecated: Use select_renderer_track instead
-    #[deprecated(since = "0.1.0", note = "Use select_renderer_track instead")]
-    pub fn play_openhome_track_id(
-        &self,
-        renderer_id: &RendererId,
-        track_id: u32,
-    ) -> anyhow::Result<()> {
-        self.select_renderer_track(renderer_id, track_id)
-    }
-
     /// Plays the current queue item without advancing the index.
     ///
     /// Useful after a Stop operation to resume playback from the same track.
@@ -1403,6 +1348,10 @@ impl ControlPoint {
             uri = item.uri.as_str(),
             "Playing current playback item from queue"
         );
+
+        // Temporarily disable auto-advance to prevent race condition
+        // when renderer sends Stopped event during SetAVTransportURI
+        self.runtime.set_playback_source(renderer_id, PlaybackSource::None);
 
         let playback = (|| -> anyhow::Result<()> {
             let didl_metadata = playback_item_to_didl(&item);
@@ -1493,6 +1442,10 @@ impl ControlPoint {
             );
             anyhow!("Renderer {} not found", renderer_id.0)
         })?;
+
+        // Temporarily disable auto-advance to prevent race condition
+        // when renderer sends Stopped event during SetAVTransportURI
+        self.runtime.set_playback_source(renderer_id, PlaybackSource::None);
 
         let playback = (|| -> anyhow::Result<()> {
             let didl_metadata = playback_item_to_didl(&item);
@@ -1647,6 +1600,10 @@ impl ControlPoint {
             );
             anyhow!("Renderer {} not found", renderer_id.0)
         })?;
+
+        // Temporarily disable auto-advance to prevent race condition
+        // when renderer sends Stopped event during SetAVTransportURI
+        self.runtime.set_playback_source(renderer_id, PlaybackSource::None);
 
         let playback = (|| -> anyhow::Result<()> {
             let didl_metadata = playback_item_to_didl(&item);
@@ -2011,41 +1968,6 @@ impl ControlPoint {
 
     fn sync_openhome_playlist_for(&self, renderer_id: &RendererId) -> anyhow::Result<()> {
         sync_openhome_playlist(&self.registry, &self.runtime, &self.event_bus, renderer_id)
-    }
-
-    fn enqueue_items_openhome(
-        &self,
-        renderer_id: &RendererId,
-        items: Vec<PlaybackItem>,
-    ) -> anyhow::Result<()> {
-        if items.is_empty() {
-            return Ok(());
-        }
-
-        let renderer = self.openhome_renderer(renderer_id)?;
-
-        // Get the last track ID from the OpenHome native playlist
-        // This ensures we append to the end of the actual playlist, not just our local queue
-        let mut after_id = renderer
-            .openhome_playlist_ids()
-            .ok()
-            .and_then(|ids| ids.last().copied());
-
-        for item in items.iter() {
-            let metadata = playback_item_to_didl(item);
-            debug!(
-                uri = item.uri.as_str(),
-                protocol_info = item.protocol_info.as_str(),
-                metadata_len = metadata.len(),
-                "Inserting track to OpenHome playlist"
-            );
-            trace!(metadata = metadata.as_str(), "DIDL-Lite metadata");
-            after_id =
-                Some(renderer.openhome_playlist_add_track(&item.uri, &metadata, after_id, false)?);
-        }
-
-        self.sync_openhome_playlist_for(renderer_id)?;
-        Ok(())
     }
 
 }
