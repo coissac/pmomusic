@@ -527,7 +527,8 @@ impl WriteHandle {
             manager
                 .rebuild_track_index(&self.playlist.id, &snapshot)
                 .await;
-            manager.notify_playlist_changed(&self.playlist.id);
+            // PK swap uniquement - pas de notification UPnP pour éviter le reload
+            manager.notify_playlist_pk_updated(&self.playlist.id, old_pk, new_pk);
         }
 
         Ok(())

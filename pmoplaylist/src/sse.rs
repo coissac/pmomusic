@@ -55,6 +55,10 @@ pub async fn playlist_events_sse(Query(params): Query<EventsQuery>) -> impl Into
 
             let (kind, cache_pk, qualifier) = match &envelope.event.kind {
                 PlaylistEventKind::Updated => ("updated", None, None),
+                PlaylistEventKind::PkUpdated { old_pk: _, new_pk: _ } => {
+                    // PK swap silencieux - envoyer quand même l'événement SSE pour debug/monitoring
+                    ("pk_updated", None, None)
+                }
                 PlaylistEventKind::TrackPlayed { cache_pk, qualifier } => {
                     ("track_played", Some(cache_pk.as_str()), Some(qualifier.as_str()))
                 }

@@ -149,6 +149,12 @@ struct FeaturedPlaylistsResponse {
     playlists: PaginatedResponse<PlaylistResponse>,
 }
 
+/// Réponse artistes featured
+#[derive(Debug, Deserialize)]
+struct FeaturedArtistsResponse {
+    artists: PaginatedResponse<ArtistResponse>,
+}
+
 /// Réponse search
 #[derive(Debug, Deserialize)]
 struct SearchResponse {
@@ -397,6 +403,36 @@ impl QobuzApi {
             .collect())
     }
 
+    /// Récupère les artistes featured
+    pub async fn get_featured_artists(
+        &self,
+        genre_id: Option<&str>,
+        limit: Option<u32>,
+        offset: Option<u32>,
+    ) -> Result<Vec<Artist>> {
+        debug!("Fetching featured artists");
+        let limit_str = limit.unwrap_or(100).to_string();
+        let offset_str = offset.unwrap_or(0).to_string();
+
+        let mut params = vec![
+            ("type", "featured-artists"),
+            ("limit", &limit_str),
+            ("offset", &offset_str),
+        ];
+
+        if let Some(gid) = genre_id {
+            params.push(("genre_ids", gid));
+        }
+
+        let response: FeaturedArtistsResponse = self.get("/artist/getFeatured", &params).await?;
+        Ok(response
+            .artists
+            .items
+            .into_iter()
+            .map(Self::parse_artist)
+            .collect())
+    }
+
     /// Recherche dans le catalogue
     pub async fn search(&self, query: &str, type_: Option<&str>) -> Result<SearchResult> {
         debug!("Searching for '{}' (type: {:?})", query, type_);
@@ -443,6 +479,13 @@ impl QobuzApi {
     // Fonctions de parsing publiques (utilisées aussi par le module user)
 
     pub(crate) fn parse_album(response: AlbumResponse) -> Album {
+        // Log pour débugger les valeurs audio
+        if let Some(rate) = response.maximum_sampling_rate {
+            debug!("Album {} - maximum_sampling_rate: {} Hz", response.id, rate);
+        } else {
+            debug!("Album {} - maximum_sampling_rate: None", response.id);
+        }
+
         Album {
             id: response.id,
             title: response.title,

@@ -752,6 +752,19 @@ impl QobuzClient {
         .await
     }
 
+    /// Récupère les artistes featured
+    pub async fn get_featured_artists(
+        &self,
+        genre_id: Option<&str>,
+        limit: Option<u32>,
+        offset: Option<u32>,
+    ) -> Result<Vec<Artist>> {
+        self.call_with_auth_repair("get_featured_artists", || {
+            self.api.get_featured_artists(genre_id, limit, offset)
+        })
+        .await
+    }
+
     // ============ Recherche ============
 
     /// Recherche dans le catalogue Qobuz

@@ -721,13 +721,666 @@ impl QobuzSource {
         *last = SystemTime::now();
     }
 
+    /// Construit le container Discover Catalog
+    fn build_discover_catalog_container(&self) -> Container {
+        Container {
+            id: "qobuz:discover".to_string(),
+            parent_id: "qobuz".to_string(),
+            restricted: Some("1".to_string()),
+            child_count: None,
+            searchable: Some("1".to_string()),
+            title: "Discover Catalog".to_string(),
+            class: "object.container".to_string(),
+            containers: vec![],
+            items: vec![],
+        }
+    }
+
+    /// Construit le container Discover Genres
+    fn build_discover_genres_container(&self) -> Container {
+        Container {
+            id: "qobuz:genres".to_string(),
+            parent_id: "qobuz".to_string(),
+            restricted: Some("1".to_string()),
+            child_count: None,
+            searchable: Some("1".to_string()),
+            title: "Discover Genres".to_string(),
+            class: "object.container".to_string(),
+            containers: vec![],
+            items: vec![],
+        }
+    }
+
+    /// Construit le container Favourites (My Music)
+    fn build_favourites_container(&self) -> Container {
+        Container {
+            id: "qobuz:favorites".to_string(),
+            parent_id: "qobuz".to_string(),
+            restricted: Some("1".to_string()),
+            child_count: None,
+            searchable: Some("1".to_string()),
+            title: "My Music".to_string(),
+            class: "object.container".to_string(),
+            containers: vec![],
+            items: vec![],
+        }
+    }
+
+    /// Construit le container Albums favoris
+    fn build_favourite_albums_container(&self) -> Container {
+        Container {
+            id: "qobuz:favorites:albums".to_string(),
+            parent_id: "qobuz:favorites".to_string(),
+            restricted: Some("1".to_string()),
+            child_count: None,
+            searchable: Some("1".to_string()),
+            title: "Albums".to_string(),
+            class: "object.container".to_string(),
+            containers: vec![],
+            items: vec![],
+        }
+    }
+
+    /// Construit le container Tracks favoris
+    fn build_favourite_tracks_container(&self) -> Container {
+        Container {
+            id: "qobuz:favorites:tracks".to_string(),
+            parent_id: "qobuz:favorites".to_string(),
+            restricted: Some("1".to_string()),
+            child_count: None,
+            searchable: Some("1".to_string()),
+            title: "Tracks".to_string(),
+            class: "object.container".to_string(),
+            containers: vec![],
+            items: vec![],
+        }
+    }
+
+    /// Construit le container Artists favoris
+    fn build_favourite_artists_container(&self) -> Container {
+        Container {
+            id: "qobuz:favorites:artists".to_string(),
+            parent_id: "qobuz:favorites".to_string(),
+            restricted: Some("1".to_string()),
+            child_count: None,
+            searchable: Some("1".to_string()),
+            title: "Artists".to_string(),
+            class: "object.container".to_string(),
+            containers: vec![],
+            items: vec![],
+        }
+    }
+
+    /// Construit le container Playlists favoris
+    fn build_favourite_playlists_container(&self) -> Container {
+        Container {
+            id: "qobuz:favorites:playlists".to_string(),
+            parent_id: "qobuz:favorites".to_string(),
+            restricted: Some("1".to_string()),
+            child_count: None,
+            searchable: Some("1".to_string()),
+            title: "Playlists".to_string(),
+            class: "object.container".to_string(),
+            containers: vec![],
+            items: vec![],
+        }
+    }
+
+    /// Browse Favourites - retourne 4 sous-containers
+    async fn browse_favourites(&self) -> Result<BrowseResult> {
+        let containers = vec![
+            self.build_favourite_albums_container(),
+            self.build_favourite_tracks_container(),
+            self.build_favourite_artists_container(),
+            self.build_favourite_playlists_container(),
+        ];
+        Ok(BrowseResult::Containers(containers))
+    }
+
+    /// Browse Favourite Albums
+    async fn browse_favourite_albums(&self) -> Result<BrowseResult> {
+        let albums = self
+            .inner
+            .client
+            .get_favorite_albums()
+            .await
+            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+        let containers: Vec<Container> = albums
+            .into_iter()
+            .filter_map(|album| album.to_didl_container("qobuz:favorites:albums").ok())
+            .collect();
+
+        Ok(BrowseResult::Containers(containers))
+    }
+
+    /// Browse Favourite Tracks
+    async fn browse_favourite_tracks(&self) -> Result<BrowseResult> {
+        let tracks = self
+            .inner
+            .client
+            .get_favorite_tracks()
+            .await
+            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+        let items: Vec<Item> = tracks
+            .into_iter()
+            .filter_map(|track| track.to_didl_item("qobuz:favorites:tracks").ok())
+            .collect();
+
+        Ok(BrowseResult::Items(items))
+    }
+
+    /// Browse Favourite Artists
+    async fn browse_favourite_artists(&self) -> Result<BrowseResult> {
+        let artists = self
+            .inner
+            .client
+            .get_favorite_artists()
+            .await
+            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+        let containers: Vec<Container> = artists
+            .into_iter()
+            .filter_map(|artist| {
+                // Créer un container pour chaque artiste
+                Some(Container {
+                    id: format!("qobuz:artist:{}", artist.id),
+                    parent_id: "qobuz:favorites:artists".to_string(),
+                    restricted: Some("1".to_string()),
+                    child_count: None,
+                    searchable: Some("1".to_string()),
+                    title: artist.name.clone(),
+                    class: "object.container".to_string(),
+                    containers: vec![],
+                    items: vec![],
+                })
+            })
+            .collect();
+
+        Ok(BrowseResult::Containers(containers))
+    }
+
+    /// Browse Favourite Playlists
+    async fn browse_favourite_playlists(&self) -> Result<BrowseResult> {
+        let playlists = self
+            .inner
+            .client
+            .get_user_playlists()
+            .await
+            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+        let containers: Vec<Container> = playlists
+            .into_iter()
+            .filter_map(|playlist| playlist.to_didl_container("qobuz:favorites:playlists").ok())
+            .collect();
+
+        Ok(BrowseResult::Containers(containers))
+    }
+
+    // ===== DISCOVER CATALOG =====
+
+    /// Browse Discover Catalog - retourne 5 containers principaux + 10 playlists par tag
+    async fn browse_discover_catalog(&self) -> Result<BrowseResult> {
+        use crate::models::PlaylistTag;
+
+        let mut containers = vec![
+            self.build_discover_playlists_container(),
+            self.build_discover_albums_ideal_container(),
+            self.build_discover_albums_qobuzissime_container(),
+            self.build_discover_albums_new_container(),
+            self.build_discover_artists_container(),
+        ];
+
+        // Ajouter les 10 tags de playlists
+        for tag in PlaylistTag::all() {
+            containers.push(Container {
+                id: format!("qobuz:discover:playlists:{}", tag.api_id()),
+                parent_id: "qobuz:discover".to_string(),
+                restricted: Some("1".to_string()),
+                child_count: None,
+                searchable: Some("1".to_string()),
+                title: tag.display_name().to_string(),
+                class: "object.container".to_string(),
+                containers: vec![],
+                items: vec![],
+            });
+        }
+
+        Ok(BrowseResult::Containers(containers))
+    }
+
+    fn build_discover_playlists_container(&self) -> Container {
+        Container {
+            id: "qobuz:discover:playlists".to_string(),
+            parent_id: "qobuz:discover".to_string(),
+            restricted: Some("1".to_string()),
+            child_count: None,
+            searchable: Some("1".to_string()),
+            title: "Playlists".to_string(),
+            class: "object.container".to_string(),
+            containers: vec![],
+            items: vec![],
+        }
+    }
+
+    fn build_discover_albums_ideal_container(&self) -> Container {
+        Container {
+            id: "qobuz:discover:albums:ideal".to_string(),
+            parent_id: "qobuz:discover".to_string(),
+            restricted: Some("1".to_string()),
+            child_count: None,
+            searchable: Some("1".to_string()),
+            title: "Albums (Ideal Discography)".to_string(),
+            class: "object.container".to_string(),
+            containers: vec![],
+            items: vec![],
+        }
+    }
+
+    fn build_discover_albums_qobuzissime_container(&self) -> Container {
+        Container {
+            id: "qobuz:discover:albums:qobuzissime".to_string(),
+            parent_id: "qobuz:discover".to_string(),
+            restricted: Some("1".to_string()),
+            child_count: None,
+            searchable: Some("1".to_string()),
+            title: "Albums (Qobuzissime)".to_string(),
+            class: "object.container".to_string(),
+            containers: vec![],
+            items: vec![],
+        }
+    }
+
+    fn build_discover_albums_new_container(&self) -> Container {
+        Container {
+            id: "qobuz:discover:albums:new".to_string(),
+            parent_id: "qobuz:discover".to_string(),
+            restricted: Some("1".to_string()),
+            child_count: None,
+            searchable: Some("1".to_string()),
+            title: "Albums (New Releases)".to_string(),
+            class: "object.container".to_string(),
+            containers: vec![],
+            items: vec![],
+        }
+    }
+
+    fn build_discover_artists_container(&self) -> Container {
+        Container {
+            id: "qobuz:discover:artists".to_string(),
+            parent_id: "qobuz:discover".to_string(),
+            restricted: Some("1".to_string()),
+            child_count: None,
+            searchable: Some("1".to_string()),
+            title: "Artists".to_string(),
+            class: "object.container".to_string(),
+            containers: vec![],
+            items: vec![],
+        }
+    }
+
+    /// Browse Discover Playlists (all featured playlists)
+    async fn browse_discover_playlists(&self) -> Result<BrowseResult> {
+        let playlists = self
+            .inner
+            .client
+            .get_featured_playlists(None, None)
+            .await
+            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+        let containers: Vec<Container> = playlists
+            .into_iter()
+            .filter_map(|playlist| playlist.to_didl_container("qobuz:discover:playlists").ok())
+            .collect();
+
+        Ok(BrowseResult::Containers(containers))
+    }
+
+    /// Browse Discover Albums (Ideal Discography)
+    async fn browse_discover_albums_ideal(&self) -> Result<BrowseResult> {
+        let albums = self
+            .inner
+            .client
+            .get_featured_albums(None, "ideal-discography")
+            .await
+            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+        let containers: Vec<Container> = albums
+            .into_iter()
+            .filter_map(|album| album.to_didl_container("qobuz:discover:albums:ideal").ok())
+            .collect();
+
+        Ok(BrowseResult::Containers(containers))
+    }
+
+    /// Browse Discover Albums (Qobuzissime)
+    async fn browse_discover_albums_qobuzissime(&self) -> Result<BrowseResult> {
+        let albums = self
+            .inner
+            .client
+            .get_featured_albums(None, "qobuzissims")
+            .await
+            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+        let containers: Vec<Container> = albums
+            .into_iter()
+            .filter_map(|album| album.to_didl_container("qobuz:discover:albums:qobuzissime").ok())
+            .collect();
+
+        Ok(BrowseResult::Containers(containers))
+    }
+
+    /// Browse Discover Albums (New Releases)
+    async fn browse_discover_albums_new(&self) -> Result<BrowseResult> {
+        let albums = self
+            .inner
+            .client
+            .get_featured_albums(None, "new-releases")
+            .await
+            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+        let containers: Vec<Container> = albums
+            .into_iter()
+            .filter_map(|album| album.to_didl_container("qobuz:discover:albums:new").ok())
+            .collect();
+
+        Ok(BrowseResult::Containers(containers))
+    }
+
+    /// Browse Discover Artists (Featured Artists)
+    async fn browse_discover_artists(&self) -> Result<BrowseResult> {
+        let artists = self
+            .inner
+            .client
+            .get_featured_artists(None, None, None)
+            .await
+            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+        let containers: Vec<Container> = artists
+            .into_iter()
+            .map(|artist| Container {
+                id: format!("qobuz:artist:{}", artist.id),
+                parent_id: "qobuz:discover:artists".to_string(),
+                restricted: Some("1".to_string()),
+                child_count: None,
+                searchable: Some("1".to_string()),
+                title: artist.name.clone(),
+                class: "object.container".to_string(),
+                containers: vec![],
+                items: vec![],
+            })
+            .collect();
+
+        Ok(BrowseResult::Containers(containers))
+    }
+
+    /// Browse Discover Playlists by tag
+    async fn browse_discover_playlists_tag(&self, tag: &str) -> Result<BrowseResult> {
+        let playlists = self
+            .inner
+            .client
+            .get_featured_playlists(None, Some(tag))
+            .await
+            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+        let parent_id = format!("qobuz:discover:playlists:{}", tag);
+        let containers: Vec<Container> = playlists
+            .into_iter()
+            .filter_map(|playlist| playlist.to_didl_container(&parent_id).ok())
+            .collect();
+
+        Ok(BrowseResult::Containers(containers))
+    }
+
+    // ===== DISCOVER GENRES =====
+
+    /// Browse Discover Genres - liste des genres
+    async fn browse_discover_genres(&self) -> Result<BrowseResult> {
+        let genres = self
+            .inner
+            .client
+            .get_genres()
+            .await
+            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+        let containers: Vec<Container> = genres
+            .into_iter()
+            .filter_map(|genre| {
+                // Filtrer les genres sans ID
+                genre.id.map(|id| Container {
+                    id: format!("qobuz:genre:{}", id),
+                    parent_id: "qobuz:genres".to_string(),
+                    restricted: Some("1".to_string()),
+                    child_count: None,
+                    searchable: Some("1".to_string()),
+                    title: genre.name.clone(),
+                    class: "object.container".to_string(),
+                    containers: vec![],
+                    items: vec![],
+                })
+            })
+            .collect();
+
+        Ok(BrowseResult::Containers(containers))
+    }
+
+    /// Browse un genre spécifique - retourne 6 sous-containers
+    async fn browse_genre(&self, genre_id: &str) -> Result<BrowseResult> {
+        let containers = vec![
+            self.build_genre_new_releases_container(genre_id),
+            self.build_genre_ideal_discography_container(genre_id),
+            self.build_genre_qobuzissime_container(genre_id),
+            self.build_genre_editor_picks_container(genre_id),
+            self.build_genre_press_awards_container(genre_id),
+            self.build_genre_playlists_container(genre_id),
+        ];
+
+        Ok(BrowseResult::Containers(containers))
+    }
+
+    fn build_genre_new_releases_container(&self, genre_id: &str) -> Container {
+        Container {
+            id: format!("qobuz:genre:{}:new-releases", genre_id),
+            parent_id: format!("qobuz:genre:{}", genre_id),
+            restricted: Some("1".to_string()),
+            child_count: None,
+            searchable: Some("1".to_string()),
+            title: "New Releases".to_string(),
+            class: "object.container".to_string(),
+            containers: vec![],
+            items: vec![],
+        }
+    }
+
+    fn build_genre_ideal_discography_container(&self, genre_id: &str) -> Container {
+        Container {
+            id: format!("qobuz:genre:{}:ideal", genre_id),
+            parent_id: format!("qobuz:genre:{}", genre_id),
+            restricted: Some("1".to_string()),
+            child_count: None,
+            searchable: Some("1".to_string()),
+            title: "Ideal Discography".to_string(),
+            class: "object.container".to_string(),
+            containers: vec![],
+            items: vec![],
+        }
+    }
+
+    fn build_genre_qobuzissime_container(&self, genre_id: &str) -> Container {
+        Container {
+            id: format!("qobuz:genre:{}:qobuzissime", genre_id),
+            parent_id: format!("qobuz:genre:{}", genre_id),
+            restricted: Some("1".to_string()),
+            child_count: None,
+            searchable: Some("1".to_string()),
+            title: "Qobuzissime".to_string(),
+            class: "object.container".to_string(),
+            containers: vec![],
+            items: vec![],
+        }
+    }
+
+    fn build_genre_editor_picks_container(&self, genre_id: &str) -> Container {
+        Container {
+            id: format!("qobuz:genre:{}:editor-picks", genre_id),
+            parent_id: format!("qobuz:genre:{}", genre_id),
+            restricted: Some("1".to_string()),
+            child_count: None,
+            searchable: Some("1".to_string()),
+            title: "Editor Picks".to_string(),
+            class: "object.container".to_string(),
+            containers: vec![],
+            items: vec![],
+        }
+    }
+
+    fn build_genre_press_awards_container(&self, genre_id: &str) -> Container {
+        Container {
+            id: format!("qobuz:genre:{}:press-awards", genre_id),
+            parent_id: format!("qobuz:genre:{}", genre_id),
+            restricted: Some("1".to_string()),
+            child_count: None,
+            searchable: Some("1".to_string()),
+            title: "Press Awards".to_string(),
+            class: "object.container".to_string(),
+            containers: vec![],
+            items: vec![],
+        }
+    }
+
+    fn build_genre_playlists_container(&self, genre_id: &str) -> Container {
+        Container {
+            id: format!("qobuz:genre:{}:playlists", genre_id),
+            parent_id: format!("qobuz:genre:{}", genre_id),
+            restricted: Some("1".to_string()),
+            child_count: None,
+            searchable: Some("1".to_string()),
+            title: "Qobuz Playlists".to_string(),
+            class: "object.container".to_string(),
+            containers: vec![],
+            items: vec![],
+        }
+    }
+
+    /// Browse Genre New Releases
+    async fn browse_genre_new_releases(&self, genre_id: &str) -> Result<BrowseResult> {
+        let albums = self
+            .inner
+            .client
+            .get_featured_albums(Some(genre_id), "new-releases")
+            .await
+            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+        let parent_id = format!("qobuz:genre:{}:new-releases", genre_id);
+        let containers: Vec<Container> = albums
+            .into_iter()
+            .filter_map(|album| album.to_didl_container(&parent_id).ok())
+            .collect();
+
+        Ok(BrowseResult::Containers(containers))
+    }
+
+    /// Browse Genre Ideal Discography
+    async fn browse_genre_ideal_discography(&self, genre_id: &str) -> Result<BrowseResult> {
+        let albums = self
+            .inner
+            .client
+            .get_featured_albums(Some(genre_id), "ideal-discography")
+            .await
+            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+        let parent_id = format!("qobuz:genre:{}:ideal", genre_id);
+        let containers: Vec<Container> = albums
+            .into_iter()
+            .filter_map(|album| album.to_didl_container(&parent_id).ok())
+            .collect();
+
+        Ok(BrowseResult::Containers(containers))
+    }
+
+    /// Browse Genre Qobuzissime
+    async fn browse_genre_qobuzissime(&self, genre_id: &str) -> Result<BrowseResult> {
+        let albums = self
+            .inner
+            .client
+            .get_featured_albums(Some(genre_id), "qobuzissims")
+            .await
+            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+        let parent_id = format!("qobuz:genre:{}:qobuzissime", genre_id);
+        let containers: Vec<Container> = albums
+            .into_iter()
+            .filter_map(|album| album.to_didl_container(&parent_id).ok())
+            .collect();
+
+        Ok(BrowseResult::Containers(containers))
+    }
+
+    /// Browse Genre Editor Picks
+    async fn browse_genre_editor_picks(&self, genre_id: &str) -> Result<BrowseResult> {
+        let albums = self
+            .inner
+            .client
+            .get_featured_albums(Some(genre_id), "editor-picks")
+            .await
+            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+        let parent_id = format!("qobuz:genre:{}:editor-picks", genre_id);
+        let containers: Vec<Container> = albums
+            .into_iter()
+            .filter_map(|album| album.to_didl_container(&parent_id).ok())
+            .collect();
+
+        Ok(BrowseResult::Containers(containers))
+    }
+
+    /// Browse Genre Press Awards
+    async fn browse_genre_press_awards(&self, genre_id: &str) -> Result<BrowseResult> {
+        let albums = self
+            .inner
+            .client
+            .get_featured_albums(Some(genre_id), "press-awards")
+            .await
+            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+        let parent_id = format!("qobuz:genre:{}:press-awards", genre_id);
+        let containers: Vec<Container> = albums
+            .into_iter()
+            .filter_map(|album| album.to_didl_container(&parent_id).ok())
+            .collect();
+
+        Ok(BrowseResult::Containers(containers))
+    }
+
+    /// Browse Genre Playlists
+    async fn browse_genre_playlists(&self, genre_id: &str) -> Result<BrowseResult> {
+        let playlists = self
+            .inner
+            .client
+            .get_featured_playlists(Some(genre_id), None)
+            .await
+            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+        let parent_id = format!("qobuz:genre:{}:playlists", genre_id);
+        let containers: Vec<Container> = playlists
+            .into_iter()
+            .filter_map(|playlist| playlist.to_didl_container(&parent_id).ok())
+            .collect();
+
+        Ok(BrowseResult::Containers(containers))
+    }
+
     /// Parse object_id to determine what to browse
     ///
     /// Object IDs follow these patterns:
     /// - "qobuz" or "0" → Root container
-    /// - "qobuz:favorites" → User's favorite albums
+    /// - "qobuz:discover" → Discover Catalog
+    /// - "qobuz:genres" → Discover Genres
+    /// - "qobuz:favorites" → My Music
     /// - "qobuz:album:{id}" → Tracks in album
     /// - "qobuz:playlist:{id}" → Tracks in playlist
+    /// - etc.
     fn parse_object_id(&self, object_id: &str) -> ObjectIdType {
         if object_id == "qobuz" || object_id == "0" {
             return ObjectIdType::Root;
@@ -735,10 +1388,38 @@ impl QobuzSource {
 
         let parts: Vec<&str> = object_id.split(':').collect();
         match parts.as_slice() {
-            ["qobuz", "favorites"] => ObjectIdType::Favorites,
+            // Discover Catalog
+            ["qobuz", "discover"] => ObjectIdType::DiscoverCatalog,
+            ["qobuz", "discover", "playlists"] => ObjectIdType::DiscoverPlaylists,
+            ["qobuz", "discover", "albums", "ideal"] => ObjectIdType::DiscoverAlbumsIdeal,
+            ["qobuz", "discover", "albums", "qobuzissime"] => ObjectIdType::DiscoverAlbumsQobuzissime,
+            ["qobuz", "discover", "albums", "new"] => ObjectIdType::DiscoverAlbumsNew,
+            ["qobuz", "discover", "artists"] => ObjectIdType::DiscoverArtists,
+            ["qobuz", "discover", "playlists", tag] => ObjectIdType::DiscoverPlaylistsByTag(tag.to_string()),
+
+            // Discover Genres
+            ["qobuz", "genres"] => ObjectIdType::DiscoverGenres,
+            ["qobuz", "genre", id] => ObjectIdType::GenreRoot(id.to_string()),
+            ["qobuz", "genre", id, "new-releases"] => ObjectIdType::GenreNewReleases(id.to_string()),
+            ["qobuz", "genre", id, "ideal"] => ObjectIdType::GenreIdealDiscography(id.to_string()),
+            ["qobuz", "genre", id, "qobuzissime"] => ObjectIdType::GenreQobuzissime(id.to_string()),
+            ["qobuz", "genre", id, "editor-picks"] => ObjectIdType::GenreEditorPicks(id.to_string()),
+            ["qobuz", "genre", id, "press-awards"] => ObjectIdType::GenrePressAwards(id.to_string()),
+            ["qobuz", "genre", id, "playlists"] => ObjectIdType::GenrePlaylists(id.to_string()),
+
+            // Favourites
+            ["qobuz", "favorites"] => ObjectIdType::Favourites,
+            ["qobuz", "favorites", "albums"] => ObjectIdType::FavouriteAlbums,
+            ["qobuz", "favorites", "tracks"] => ObjectIdType::FavouriteTracks,
+            ["qobuz", "favorites", "artists"] => ObjectIdType::FavouriteArtists,
+            ["qobuz", "favorites", "playlists"] => ObjectIdType::FavouritePlaylists,
+
+            // Items (existant)
             ["qobuz", "album", id] => ObjectIdType::Album(id.to_string()),
             ["qobuz", "playlist", id] => ObjectIdType::Playlist(id.to_string()),
             ["qobuz", "artist", id] => ObjectIdType::Artist(id.to_string()),
+            ["qobuz", "track", id] => ObjectIdType::Track(id.to_string()),
+
             _ => ObjectIdType::Unknown,
         }
     }
@@ -747,10 +1428,39 @@ impl QobuzSource {
 #[derive(Debug)]
 enum ObjectIdType {
     Root,
-    Favorites,
+
+    // Discover Catalog
+    DiscoverCatalog,
+    DiscoverPlaylists,
+    DiscoverAlbumsIdeal,
+    DiscoverAlbumsQobuzissime,
+    DiscoverAlbumsNew,
+    DiscoverArtists,
+    DiscoverPlaylistsByTag(String), // tag
+
+    // Discover Genres
+    DiscoverGenres,
+    GenreRoot(String),               // genre_id
+    GenreNewReleases(String),        // genre_id
+    GenreIdealDiscography(String),   // genre_id
+    GenreQobuzissime(String),        // genre_id
+    GenreEditorPicks(String),        // genre_id
+    GenrePressAwards(String),        // genre_id
+    GenrePlaylists(String),          // genre_id
+
+    // Favourites
+    Favourites,
+    FavouriteAlbums,
+    FavouriteTracks,
+    FavouriteArtists,
+    FavouritePlaylists,
+
+    // Items (existant)
     Album(String),
     Playlist(String),
     Artist(String),
+    Track(String),
+
     Unknown,
 }
 
@@ -769,28 +1479,19 @@ impl MusicSource for QobuzSource {
     }
 
     async fn root_container(&self) -> Result<Container> {
-        // Create the root container with sub-containers for different categories
+        // Create the root container with 3 main branches
         Ok(Container {
             id: "qobuz".to_string(),
             parent_id: "0".to_string(),
             restricted: Some("1".to_string()),
-            child_count: Some("2".to_string()), // Favorites + Search (simplified)
+            child_count: Some("3".to_string()),
             searchable: Some("1".to_string()),
             title: "Qobuz".to_string(),
             class: "object.container".to_string(),
             containers: vec![
-                // Favorites container
-                Container {
-                    id: "qobuz:favorites".to_string(),
-                    parent_id: "qobuz".to_string(),
-                    restricted: Some("1".to_string()),
-                    child_count: None, // Will be determined when browsed
-                    searchable: Some("1".to_string()),
-                    title: "My Favorites".to_string(),
-                    class: "object.container".to_string(),
-                    containers: vec![],
-                    items: vec![],
-                },
+                self.build_discover_catalog_container(),
+                self.build_discover_genres_container(),
+                self.build_favourites_container(),
             ],
             items: vec![],
         })
@@ -804,23 +1505,33 @@ impl MusicSource for QobuzSource {
                 Ok(BrowseResult::Containers(root.containers))
             }
 
-            ObjectIdType::Favorites => {
-                // Get user's favorite albums
-                let albums = self
-                    .inner
-                    .client
-                    .get_favorite_albums()
-                    .await
-                    .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+            // Discover Catalog
+            ObjectIdType::DiscoverCatalog => self.browse_discover_catalog().await,
+            ObjectIdType::DiscoverPlaylists => self.browse_discover_playlists().await,
+            ObjectIdType::DiscoverAlbumsIdeal => self.browse_discover_albums_ideal().await,
+            ObjectIdType::DiscoverAlbumsQobuzissime => self.browse_discover_albums_qobuzissime().await,
+            ObjectIdType::DiscoverAlbumsNew => self.browse_discover_albums_new().await,
+            ObjectIdType::DiscoverArtists => self.browse_discover_artists().await,
+            ObjectIdType::DiscoverPlaylistsByTag(tag) => self.browse_discover_playlists_tag(&tag).await,
 
-                let containers: Vec<Container> = albums
-                    .into_iter()
-                    .filter_map(|album| album.to_didl_container("qobuz:favorites").ok())
-                    .collect();
+            // Discover Genres
+            ObjectIdType::DiscoverGenres => self.browse_discover_genres().await,
+            ObjectIdType::GenreRoot(id) => self.browse_genre(&id).await,
+            ObjectIdType::GenreNewReleases(id) => self.browse_genre_new_releases(&id).await,
+            ObjectIdType::GenreIdealDiscography(id) => self.browse_genre_ideal_discography(&id).await,
+            ObjectIdType::GenreQobuzissime(id) => self.browse_genre_qobuzissime(&id).await,
+            ObjectIdType::GenreEditorPicks(id) => self.browse_genre_editor_picks(&id).await,
+            ObjectIdType::GenrePressAwards(id) => self.browse_genre_press_awards(&id).await,
+            ObjectIdType::GenrePlaylists(id) => self.browse_genre_playlists(&id).await,
 
-                Ok(BrowseResult::Containers(containers))
-            }
+            // Favourites
+            ObjectIdType::Favourites => self.browse_favourites().await,
+            ObjectIdType::FavouriteAlbums => self.browse_favourite_albums().await,
+            ObjectIdType::FavouriteTracks => self.browse_favourite_tracks().await,
+            ObjectIdType::FavouriteArtists => self.browse_favourite_artists().await,
+            ObjectIdType::FavouritePlaylists => self.browse_favourite_playlists().await,
 
+            // Items (existant)
             ObjectIdType::Album(album_id) => {
                 let items = self
                     .get_or_create_album_playlist_items(&album_id, usize::MAX)
@@ -869,6 +1580,13 @@ impl MusicSource for QobuzSource {
                     .collect();
 
                 Ok(BrowseResult::Containers(containers))
+            }
+
+            ObjectIdType::Track(_) => {
+                // Track object_ids ne sont pas browsables, retourner une erreur
+                Err(MusicSourceError::NotSupported(
+                    "Tracks are not browsable containers".to_string(),
+                ))
             }
 
             ObjectIdType::Unknown => Err(MusicSourceError::ObjectNotFound(object_id.to_string())),
@@ -1242,7 +1960,7 @@ impl MusicSource for QobuzSource {
 
                 Ok(BrowseResult::Items(items))
             }
-            ObjectIdType::Favorites => {
+            ObjectIdType::FavouriteAlbums => {
                 let albums = self
                     .inner
                     .client
@@ -1254,7 +1972,7 @@ impl MusicSource for QobuzSource {
                     .into_iter()
                     .skip(offset)
                     .take(limit)
-                    .filter_map(|album| album.to_didl_container("qobuz:favorites").ok())
+                    .filter_map(|album| album.to_didl_container("qobuz:favorites:albums").ok())
                     .collect();
 
                 Ok(BrowseResult::Containers(containers))

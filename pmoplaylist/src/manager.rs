@@ -48,6 +48,9 @@ pub struct PlaylistEvent {
 pub enum PlaylistEventKind {
     /// La playlist a été modifiée (ajout/suppression/changement de config).
     Updated,
+    /// Cache PK commuté (lazy→real) - pas de changement structurel.
+    /// N'émet PAS de ContainersUpdated UPnP pour éviter le reload.
+    PkUpdated { old_pk: String, new_pk: String },
     /// Un morceau référencé par la playlist a été servi par le cache audio.
     TrackPlayed { cache_pk: String, qualifier: String },
 }
@@ -268,6 +271,18 @@ impl PlaylistManager {
     /// Notifie tous les callbacks qu'une playlist a changé.
     pub(crate) fn notify_playlist_changed(&self, id: &str) {
         self.notify_playlist_event(id, PlaylistEventKind::Updated);
+    }
+
+    /// Notifie que des PK ont été swappés (lazy→real).
+    /// N'émet PAS de notification UPnP ContainersUpdated pour éviter le reload.
+    pub(crate) fn notify_playlist_pk_updated(&self, id: &str, old_pk: &str, new_pk: &str) {
+        self.notify_playlist_event(
+            id,
+            PlaylistEventKind::PkUpdated {
+                old_pk: old_pk.to_string(),
+                new_pk: new_pk.to_string(),
+            },
+        );
     }
 
     /// Notifie les callbacks qu'un morceau a été joué pour une playlist donnée.

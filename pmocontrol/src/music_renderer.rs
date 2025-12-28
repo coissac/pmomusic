@@ -22,7 +22,7 @@ use crate::{
     PlaybackPosition, PlaybackState, TransportControl, UpnpRenderer, VolumeControl,
 };
 use anyhow::{Result, anyhow};
-use tracing::warn;
+use tracing::{debug, info, warn};
 
 /// Backend-agnostic façade exposing transport, volume, and status contracts.
 #[derive(Clone, Debug)]
@@ -281,8 +281,18 @@ impl MusicRenderer {
     pub fn clear_for_playlist_attach(&self) -> Result<()> {
         match self {
             MusicRenderer::OpenHome(_) => {
-                // For OpenHome: clear the playlist on the renderer itself
-                self.openhome_playlist_clear()
+                // For OpenHome: clear the playlist (DeleteAll also stops playback automatically)
+                // then explicitly stop to ensure clean state
+                self.openhome_playlist_clear()?;
+                self.stop().or_else(|err| -> Result<()> {
+                    // If stop fails (e.g., already stopped), that's fine
+                    warn!(
+                        renderer = self.id().0.as_str(),
+                        error = %err,
+                        "Stop failed after clearing OpenHome playlist (continuing anyway)"
+                    );
+                    Ok(())
+                })
             }
             MusicRenderer::Upnp(_)
             | MusicRenderer::Chromecast(_)
@@ -436,21 +446,57 @@ impl MusicRenderer {
                 // Get the current OpenHome playlist snapshot
                 let snapshot = self.fetch_openhome_playlist_snapshot()?;
 
+                debug!(
+                    renderer = self.id().0.as_str(),
+                    tracks_count = snapshot.tracks.len(),
+                    current_id = ?snapshot.current_id,
+                    current_index = ?snapshot.current_index,
+                    "play_current_from_backend_queue: OpenHome snapshot fetched"
+                );
+
                 if snapshot.tracks.is_empty() {
                     return Err(anyhow!("OpenHome playlist is empty"));
                 }
 
                 // Find the track_id to play (prefer current_id, then current_index, then first)
                 let target_track_id = if let Some(current_id) = snapshot.current_id {
+                    debug!(
+                        renderer = self.id().0.as_str(),
+                        track_id = current_id,
+                        "Using current_id for playback"
+                    );
                     Some(current_id)
                 } else if let Some(current_idx) = snapshot.current_index {
-                    snapshot.tracks.get(current_idx).map(|track| track.id)
+                    let track_id = snapshot.tracks.get(current_idx).map(|track| track.id);
+                    debug!(
+                        renderer = self.id().0.as_str(),
+                        current_idx,
+                        track_id = ?track_id,
+                        "Using current_index for playback"
+                    );
+                    track_id
                 } else {
-                    snapshot.tracks.first().map(|track| track.id)
+                    let track_id = snapshot.tracks.first().map(|track| track.id);
+                    debug!(
+                        renderer = self.id().0.as_str(),
+                        track_id = ?track_id,
+                        "Using first track for playback"
+                    );
+                    track_id
                 };
 
                 if let Some(track_id) = target_track_id {
+                    info!(
+                        renderer = self.id().0.as_str(),
+                        track_id,
+                        "Calling openhome_playlist_play_id to start playback"
+                    );
                     self.openhome_playlist_play_id(track_id)?;
+                    info!(
+                        renderer = self.id().0.as_str(),
+                        track_id,
+                        "Successfully called openhome_playlist_play_id"
+                    );
                     Ok(())
                 } else {
                     Err(anyhow!("No track to play in OpenHome playlist"))
