@@ -1,0 +1,46 @@
+# Configuration rust-analyzer pour gros workspace (23 crates)
+# Optimisé pour éviter les crashs et limiter l'utilisation mémoire
+
+# Limiter l'analyse en arrière-plan
+[checkOnSave]
+enable = true
+# N'analyser que la cible par défaut (pas tous les targets)
+allTargets = false
+# Utiliser clippy au lieu de cargo check (optionnel, commentez si trop lent)
+# command = "clippy"
+
+# Désactiver les build scripts pour réduire la charge
+[cargo]
+buildScripts.enable = false
+# Ne charger que les crates nécessaires
+loadOutDirsFromCheck = false
+
+# Désactiver les proc-macros si elles causent des problèmes
+[procMacro]
+enable = true
+# Si les crashs persistent, passez à false ci-dessus
+
+# Limiter la complétion
+[completion]
+limit = 50
+
+# Désactiver certains diagnostics coûteux
+[diagnostics]
+disabled = [
+    "unresolved-proc-macro",
+    "macro-error",
+]
+
+# Optimisations de performance
+[inlayHints]
+# Réduire les hints pour améliorer les perfs
+maxLength = 25
+
+# Limiter la profondeur d'analyse des types
+[typing]
+autoClosingAngleBrackets.enable = false
+
+# Pour les très gros workspaces, décommenter pour analyser moins de crates
+# [linkedProjects]
+# Spécifier uniquement les crates que vous éditez activement
+# Par exemple : ["PMOMusic/Cargo.toml", "pmocontrol/Cargo.toml"]

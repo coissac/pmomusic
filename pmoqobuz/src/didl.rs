@@ -27,10 +27,10 @@ impl ToDIDL for Album {
     ///
     /// ```rust,ignore
     /// let album = client.get_album("12345").await?;
-    /// let container = album.to_didl_container("0$qobuz$albums")?;
+    /// let container = album.to_didl_container("qobuz:favorites")?;
     /// ```
     fn to_didl_container(&self, parent_id: &str) -> Result<Container> {
-        let id = format!("0$qobuz$album${}", self.id);
+        let id = format!("qobuz:album:{}", self.id);
 
         Ok(Container {
             id,
@@ -71,10 +71,10 @@ impl ToDIDL for Track {
     ///
     /// ```rust,ignore
     /// let track = client.get_track("98765").await?;
-    /// let item = track.to_didl_item("0$qobuz$album$12345")?;
+    /// let item = track.to_didl_item("qobuz:album:12345")?;
     /// ```
     fn to_didl_item(&self, parent_id: &str) -> Result<Item> {
-        let id = format!("0$qobuz$track${}", self.id);
+        let id = format!("qobuz:track:{}", self.id);
 
         // Déterminer l'artiste à afficher
         let artist_name = self
@@ -128,7 +128,7 @@ impl ToDIDL for Track {
 impl ToDIDL for Playlist {
     /// Convertit une playlist en Container DIDL
     fn to_didl_container(&self, parent_id: &str) -> Result<Container> {
-        let id = format!("0$qobuz$playlist${}", self.id);
+        let id = format!("qobuz:playlist:{}", self.id);
 
         Ok(Container {
             id,
@@ -211,7 +211,7 @@ mod tests {
         };
 
         let container = album.to_didl_container("parent").unwrap();
-        assert_eq!(container.id, "0$qobuz$album$123");
+        assert_eq!(container.id, "qobuz:album:123");
         assert_eq!(container.parent_id, "parent");
         assert!(container.title.contains("Test Album"));
     }
@@ -234,7 +234,7 @@ mod tests {
         };
 
         let item = track.to_didl_item("parent").unwrap();
-        assert_eq!(item.id, "0$qobuz$track$789");
+        assert_eq!(item.id, "qobuz:track:789");
         assert_eq!(item.parent_id, "parent");
         assert_eq!(item.title, "Test Track");
     }

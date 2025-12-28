@@ -259,6 +259,28 @@ impl PersistenceManager {
         Ok(ids)
     }
 
+    /// Récupère le timestamp de création d'une playlist
+    pub async fn get_playlist_created_at(&self, id: &str) -> Result<Option<i64>> {
+        let conn = self.conn.lock().unwrap();
+
+        let mut stmt = conn
+            .prepare("SELECT created_at FROM playlists WHERE id = ?1")
+            .map_err(|e| {
+                crate::Error::PersistenceError(format!("Failed to prepare statement: {}", e))
+            })?;
+
+        let result = stmt.query_row(params![id], |row| row.get(0));
+
+        match result {
+            Ok(created_at) => Ok(Some(created_at)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(crate::Error::PersistenceError(format!(
+                "Failed to get created_at: {}",
+                e
+            ))),
+        }
+    }
+
     /// Supprime tous les tracks contenant un cache_pk donné
     pub async fn remove_by_cache_pk(&self, cache_pk: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();

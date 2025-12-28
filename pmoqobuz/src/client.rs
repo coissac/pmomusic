@@ -584,14 +584,24 @@ impl QobuzClient {
 
     /// Récupère les tracks d'un album
     pub async fn get_album_tracks(&self, album_id: &str) -> Result<Vec<Track>> {
+        // Vérifier le cache d'abord
+        if let Some(tracks) = self.cache.get_album_tracks(album_id).await {
+            debug!("Album tracks for {} found in cache", album_id);
+            return Ok(tracks);
+        }
+
+        // Sinon, récupérer depuis l'API
         let tracks = self
             .call_with_auth_repair("get_album_tracks", || self.api.get_album_tracks(album_id))
             .await?;
 
-        // Mettre les tracks en cache
+        // Mettre les tracks en cache (individuellement ET la liste complète)
         for track in &tracks {
             self.cache.put_track(track.id.clone(), track.clone()).await;
         }
+        self.cache
+            .put_album_tracks(album_id.to_string(), tracks.clone())
+            .await;
 
         Ok(tracks)
     }

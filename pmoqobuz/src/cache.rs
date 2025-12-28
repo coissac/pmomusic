@@ -14,6 +14,8 @@ pub struct QobuzCache {
     albums: Arc<MokaCache<String, Album>>,
     /// Cache des tracks (TTL: 1 heure)
     tracks: Arc<MokaCache<String, Track>>,
+    /// Cache des tracks d'un album complet (TTL: 1 heure)
+    album_tracks: Arc<MokaCache<String, Vec<Track>>>,
     /// Cache des artistes (TTL: 1 heure)
     artists: Arc<MokaCache<String, Artist>>,
     /// Cache des playlists (TTL: 30 minutes)
@@ -42,6 +44,12 @@ impl QobuzCache {
             tracks: Arc::new(
                 MokaCache::builder()
                     .max_capacity(max_capacity * 2)
+                    .time_to_live(Duration::from_secs(3600)) // 1 heure
+                    .build(),
+            ),
+            album_tracks: Arc::new(
+                MokaCache::builder()
+                    .max_capacity(max_capacity)
                     .time_to_live(Duration::from_secs(3600)) // 1 heure
                     .build(),
             ),
@@ -104,6 +112,23 @@ impl QobuzCache {
     /// Invalide une track du cache
     pub async fn invalidate_track(&self, id: &str) {
         self.tracks.invalidate(id).await;
+    }
+
+    // ============ Album Tracks (liste complète des tracks d'un album) ============
+
+    /// Récupère la liste complète des tracks d'un album depuis le cache
+    pub async fn get_album_tracks(&self, album_id: &str) -> Option<Vec<Track>> {
+        self.album_tracks.get(album_id).await
+    }
+
+    /// Ajoute la liste complète des tracks d'un album au cache
+    pub async fn put_album_tracks(&self, album_id: String, tracks: Vec<Track>) {
+        self.album_tracks.insert(album_id, tracks).await;
+    }
+
+    /// Invalide la liste des tracks d'un album du cache
+    pub async fn invalidate_album_tracks(&self, album_id: &str) {
+        self.album_tracks.invalidate(album_id).await;
     }
 
     // ============ Artists ============
@@ -180,6 +205,7 @@ impl QobuzCache {
     pub async fn clear_all(&self) {
         self.albums.invalidate_all();
         self.tracks.invalidate_all();
+        self.album_tracks.invalidate_all();
         self.artists.invalidate_all();
         self.playlists.invalidate_all();
         self.searches.invalidate_all();
@@ -190,6 +216,7 @@ impl QobuzCache {
     pub async fn stats(&self) -> CacheStats {
         self.albums.run_pending_tasks().await;
         self.tracks.run_pending_tasks().await;
+        self.album_tracks.run_pending_tasks().await;
         self.artists.run_pending_tasks().await;
         self.playlists.run_pending_tasks().await;
         self.searches.run_pending_tasks().await;
@@ -198,6 +225,7 @@ impl QobuzCache {
         CacheStats {
             albums_count: self.albums.entry_count(),
             tracks_count: self.tracks.entry_count(),
+            album_tracks_count: self.album_tracks.entry_count(),
             artists_count: self.artists.entry_count(),
             playlists_count: self.playlists.entry_count(),
             searches_count: self.searches.entry_count(),
@@ -219,6 +247,8 @@ pub struct CacheStats {
     pub albums_count: u64,
     /// Nombre de tracks en cache
     pub tracks_count: u64,
+    /// Nombre de listes complètes de tracks d'albums en cache
+    pub album_tracks_count: u64,
     /// Nombre d'artistes en cache
     pub artists_count: u64,
     /// Nombre de playlists en cache
@@ -234,6 +264,7 @@ impl CacheStats {
     pub fn total_count(&self) -> u64 {
         self.albums_count
             + self.tracks_count
+            + self.album_tracks_count
             + self.artists_count
             + self.playlists_count
             + self.searches_count
