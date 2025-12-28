@@ -269,7 +269,13 @@ impl Album {
     /// Retourne un titre formaté avec les informations audio si disponibles
     pub fn formatted_title(&self) -> String {
         if let (Some(rate), Some(depth)) = (self.maximum_sampling_rate, self.maximum_bit_depth) {
-            format!("{} ({:.0}/{} bit)", self.title, rate / 1000.0, depth)
+            // Convertir Hz en kHz, en gérant les valeurs qui pourraient déjà être en kHz
+            let rate_khz = if rate > 1000.0 {
+                rate / 1000.0
+            } else {
+                rate
+            };
+            format!("{} ({:.1} kHz / {} bits)", self.title, rate_khz, depth)
         } else {
             self.title.clone()
         }

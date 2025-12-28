@@ -1833,7 +1833,14 @@ impl ControlPoint {
             binding: Some(binding),
         });
 
-        let mut auto_start_cb = |rid: &RendererId| self.start_queue_playback_if_idle(rid);
+        // For initial attach with auto_play, force playback start (don't check if idle)
+        let mut auto_start_cb = |rid: &RendererId| {
+            debug!(
+                renderer = rid.0.as_str(),
+                "Attach callback: forcing playback start (not checking if idle)"
+            );
+            self.play_current_from_queue(rid)
+        };
         let callback: Option<&mut dyn FnMut(&RendererId) -> anyhow::Result<()>> = if auto_play {
             Some(&mut auto_start_cb)
         } else {
@@ -2683,6 +2690,12 @@ fn refresh_attached_queue_for(
 
     if auto_play {
         if let Some(callback) = after_refresh.as_deref_mut() {
+            debug!(
+                renderer = renderer_id.0.as_str(),
+                server = server_id.0.as_str(),
+                container = container_id.as_str(),
+                "Auto-play enabled: calling callback to start playback"
+            );
             if let Err(err) = callback(renderer_id) {
                 warn!(
                     renderer = renderer_id.0.as_str(),
@@ -2691,8 +2704,25 @@ fn refresh_attached_queue_for(
                     error = %err,
                     "Failed to auto-start playback after playlist refresh"
                 );
+            } else {
+                info!(
+                    renderer = renderer_id.0.as_str(),
+                    server = server_id.0.as_str(),
+                    container = container_id.as_str(),
+                    "Auto-play callback completed successfully"
+                );
             }
+        } else {
+            debug!(
+                renderer = renderer_id.0.as_str(),
+                "Auto-play enabled but no callback provided"
+            );
         }
+    } else {
+        debug!(
+            renderer = renderer_id.0.as_str(),
+            "Auto-play disabled, skipping playback start"
+        );
     }
 
     Ok(())

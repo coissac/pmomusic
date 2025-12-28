@@ -135,6 +135,14 @@ impl RadioParadiseSource {
             let token = mgr.register_callback(move |event| {
                 let pid = pid_clone.clone();
                 if event.playlist_id == pid {
+                    // Ignorer PkUpdated - pas de notification UPnP (évite le reload côté control point)
+                    if matches!(event.kind, pmoplaylist::PlaylistEventKind::PkUpdated { .. }) {
+                        tracing::debug!(
+                            "PK swap in playlist {} - no UPnP notification (prevents playback restart)",
+                            event.playlist_id
+                        );
+                        return;
+                    }
                     // On ne réagit qu'aux mises à jour structurelles (ajout/suppression)
                     if !matches!(event.kind, pmoplaylist::PlaylistEventKind::Updated) {
                         return;

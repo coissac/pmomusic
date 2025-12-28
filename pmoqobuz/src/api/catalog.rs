@@ -479,6 +479,13 @@ impl QobuzApi {
     // Fonctions de parsing publiques (utilisées aussi par le module user)
 
     pub(crate) fn parse_album(response: AlbumResponse) -> Album {
+        // Log pour débugger les valeurs audio
+        if let Some(rate) = response.maximum_sampling_rate {
+            debug!("Album {} - maximum_sampling_rate: {} Hz", response.id, rate);
+        } else {
+            debug!("Album {} - maximum_sampling_rate: None", response.id);
+        }
+
         Album {
             id: response.id,
             title: response.title,
