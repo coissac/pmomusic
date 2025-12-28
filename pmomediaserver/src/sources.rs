@@ -127,13 +127,16 @@ impl SourcesExt for Server {
 
         tracing::info!("Initializing Qobuz source...");
 
+        // Obtenir l'URL de base du serveur
+        let base_url = self.base_url();
+
         // Créer le client depuis la config
         let client = QobuzClient::from_config()
             .await
             .map_err(|e| SourceInitError::QobuzError(format!("Failed to create client: {}", e)))?;
 
         // Créer la source depuis le registry
-        let source = QobuzSource::from_registry(client)
+        let source = QobuzSource::from_registry(client, base_url)
             .map_err(|e| SourceInitError::QobuzError(format!("Failed to create source: {}", e)))?;
 
         // Enregistrer la source
@@ -154,13 +157,16 @@ impl SourcesExt for Server {
 
         tracing::info!("Initializing Qobuz source with explicit credentials...");
 
+        // Obtenir l'URL de base du serveur
+        let base_url = self.base_url();
+
         // Créer le client avec credentials
         let client = QobuzClient::new(username, password)
             .await
             .map_err(|e| SourceInitError::QobuzError(format!("Failed to authenticate: {}", e)))?;
 
         // Créer la source depuis le registry
-        let source = QobuzSource::from_registry(client)
+        let source = QobuzSource::from_registry(client, base_url)
             .map_err(|e| SourceInitError::QobuzError(format!("Failed to create source: {}", e)))?;
 
         // Enregistrer la source

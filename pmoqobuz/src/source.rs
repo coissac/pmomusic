@@ -56,7 +56,7 @@ const DEFAULT_IMAGE: &[u8] = include_bytes!("../assets/default.webp");
 ///     let client = QobuzClient::from_config().await?;
 ///     let cover_cache = Arc::new(cover_cache::new_cache("/tmp/qobuz_covers", 256)?);
 ///     let audio_cache = Arc::new(audio_cache::new_cache("/tmp/qobuz_audio", 64)?);
-///     let source = QobuzSource::new(client, cover_cache, audio_cache);
+///     let source = QobuzSource::new(client, cover_cache, audio_cache, "http://localhost:8080");
 ///
 ///     println!("Source: {}", source.name());
 ///     println!("Supports FIFO: {}", source.supports_fifo());
@@ -80,6 +80,9 @@ struct QobuzSourceInner {
     /// Cache manager (centralisé)
     cache_manager: SourceCacheManager,
 
+    /// Base URL for streaming server (e.g., "http://192.168.0.138:8080")
+    base_url: String,
+
     /// Update tracking
     update_counter: tokio::sync::RwLock<u32>,
     last_change: tokio::sync::RwLock<SystemTime>,
@@ -100,12 +103,13 @@ impl QobuzSource {
     /// # Arguments
     ///
     /// * `client` - Authenticated Qobuz API client
+    /// * `base_url` - Base URL for streaming server (e.g., "http://192.168.0.138:8080")
     ///
     /// # Errors
     ///
     /// Returns an error if the caches are not initialized in the registry
     #[cfg(feature = "server")]
-    pub fn from_registry(client: QobuzClient) -> Result<Self> {
+    pub fn from_registry(client: QobuzClient, base_url: impl Into<String>) -> Result<Self> {
         let cache_manager = SourceCacheManager::from_registry("qobuz".to_string())?;
         let client = Arc::new(client);
         cache_manager.register_lazy_provider(Arc::new(QobuzLazyProvider::new(client.clone())));
@@ -114,6 +118,7 @@ impl QobuzSource {
             inner: Arc::new(QobuzSourceInner {
                 client,
                 cache_manager,
+                base_url: base_url.into(),
                 update_counter: tokio::sync::RwLock::new(0),
                 last_change: tokio::sync::RwLock::new(SystemTime::now()),
             }),
@@ -127,10 +132,12 @@ impl QobuzSource {
     /// * `client` - Authenticated Qobuz API client
     /// * `cover_cache` - Cover image cache (required)
     /// * `audio_cache` - Audio cache (required)
+    /// * `base_url` - Base URL for streaming server (e.g., "http://192.168.0.138:8080")
     pub fn new(
         client: QobuzClient,
         cover_cache: Arc<CoverCache>,
         audio_cache: Arc<AudioCache>,
+        base_url: impl Into<String>,
     ) -> Self {
         let cache_manager = SourceCacheManager::new("qobuz".to_string(), cover_cache, audio_cache);
         let client = Arc::new(client);
@@ -140,6 +147,7 @@ impl QobuzSource {
             inner: Arc::new(QobuzSourceInner {
                 client,
                 cache_manager,
+                base_url: base_url.into(),
                 update_counter: tokio::sync::RwLock::new(0),
                 last_change: tokio::sync::RwLock::new(SystemTime::now()),
             }),
@@ -577,6 +585,15 @@ impl QobuzSource {
                     }
                 } else {
                     warn!("No qobuz_track_id metadata for {}", pk);
+                }
+
+                // Convertir URL relative en URL absolue
+                // From: /audio/flac/QOBUZ:123
+                // To: http://192.168.0.138:8080/audio/flac/QOBUZ:123
+                if let Some(resource) = item.resources.first_mut() {
+                    if resource.url.starts_with('/') {
+                        resource.url = format!("{}{}", self.inner.base_url, resource.url);
+                    }
                 }
             }
 

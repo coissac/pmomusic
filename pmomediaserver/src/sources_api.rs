@@ -26,6 +26,9 @@ pub struct QobuzCredentials {
     pub username: Option<String>,
     /// Mot de passe Qobuz (optionnel, lu depuis la config si absent)
     pub password: Option<String>,
+    /// URL de base du serveur (optionnelle, "http://localhost:8080" par défaut)
+    #[serde(default)]
+    pub base_url: Option<String>,
 }
 
 /// Paramètres pour Radio Paradise
@@ -75,6 +78,11 @@ async fn register_qobuz(Json(creds): Json<QobuzCredentials>) -> impl IntoRespons
     use pmoqobuz::{QobuzClient, QobuzSource};
     use pmosource::api::register_source;
 
+    // Utiliser l'URL de base depuis les params ou une valeur par défaut
+    let base_url = creds
+        .base_url
+        .unwrap_or_else(|| "http://localhost:8080".to_string());
+
     // Créer le client selon les credentials fournis
     let client_result = if let (Some(username), Some(password)) = (creds.username, creds.password) {
         QobuzClient::new(&username, &password).await
@@ -96,7 +104,7 @@ async fn register_qobuz(Json(creds): Json<QobuzCredentials>) -> impl IntoRespons
     };
 
     // Créer et enregistrer la source depuis le registry
-    let source = match QobuzSource::from_registry(client) {
+    let source = match QobuzSource::from_registry(client, base_url) {
         Ok(s) => Arc::new(s),
         Err(e) => {
             return (
