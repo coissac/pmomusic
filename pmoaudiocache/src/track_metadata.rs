@@ -394,7 +394,7 @@ impl TrackMetadata for AudioCacheTrackMetadata {
     }
 
     async fn touch(&mut self) -> MetadataResult<()> {
-        self.write_timestamp(Instant::now())?;
+        self.write_timestamp(SystemTime::now())?;
         Ok(Some(()))
     }
 }

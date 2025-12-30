@@ -3642,7 +3642,7 @@ dependencies = [
  "pmoflac",
  "pmometadata",
  "pmoserver",
- "quick-xml 0.37.5",
+ "quick-xml",
  "rusqlite",
  "serde",
  "serde_json",
@@ -3721,7 +3721,7 @@ dependencies = [
  "pmodidl",
  "pmoserver",
  "pmoupnp",
- "quick-xml 0.38.4",
+ "quick-xml",
  "ratatui",
  "rust_cast",
  "rustls",
@@ -3769,7 +3769,7 @@ dependencies = [
  "bevy_reflect",
  "bevy_reflect_derive",
  "pmoutils",
- "quick-xml 0.38.4",
+ "quick-xml",
  "serde",
  "utoipa",
  "utoipa-swagger-ui",
@@ -3790,7 +3790,7 @@ dependencies = [
  "opus",
  "pmometadata",
  "tempfile",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "tokio",
  "tracing",
 ]
@@ -3804,7 +3804,7 @@ dependencies = [
  "once_cell",
  "pmodidl",
  "pmoupnp",
- "quick-xml 0.38.4",
+ "quick-xml",
 ]
 
 [[package]]
@@ -3827,10 +3827,10 @@ dependencies = [
  "pmosource",
  "pmoupnp",
  "pmoutils",
- "quick-xml 0.38.4",
+ "quick-xml",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "tokio",
  "tokio-util",
  "tracing",
@@ -3909,7 +3909,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -3946,7 +3946,7 @@ dependencies = [
  "serde_yaml",
  "sha1",
  "tempfile",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "tokio",
  "tokio-test",
  "tracing",
@@ -3998,7 +3998,7 @@ dependencies = [
  "pmoupnp",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -4030,7 +4030,7 @@ dependencies = [
  "pmoplaylist",
  "pmoserver",
  "pmoutils",
- "quick-xml 0.37.5",
+ "quick-xml",
  "reqwest",
  "serde",
  "serde_json",
@@ -4053,7 +4053,7 @@ dependencies = [
  "get_if_addrs",
  "netstat2",
  "os_info",
- "quick-xml 0.38.4",
+ "quick-xml",
  "sysinfo",
  "users",
  "xmltree 0.10.3",
@@ -4336,16 +4336,6 @@ name = "quick-error"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
-
-[[package]]
-name = "quick-xml"
-version = "0.37.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "331e97a1af0bf59823e6eadffe373d7b27f485be8748f71471c662c1f269b7fb"
-dependencies = [
- "memchr",
- "serde",
-]
 
 [[package]]
 name = "quick-xml"

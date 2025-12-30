@@ -20,10 +20,10 @@ lofty = "0.22"
 minimp3 = "0.5"
 opus = "0.3"
 pmometadata = { path = "../pmometadata" }
-thiserror = { workspace = true }
-tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "io-util", "fs"] }
-tracing = { workspace = true }
+thiserror = "2.0"
+tokio = { version = "1.37", features = ["rt", "rt-multi-thread", "macros", "sync", "io-util", "fs"] }
+tracing = "0.1"
 
 [dev-dependencies]
 tempfile = "3.10"
-tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "io-util", "time", "fs"] }
+tokio = { version = "1.37", features = ["rt", "rt-multi-thread", "macros", "sync", "io-util", "time", "fs"] }

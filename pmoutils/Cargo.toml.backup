@@ -9,5 +9,5 @@ os_info = "3.8"
 netstat2 = "0.11"
 sysinfo = "0.30"
 users = "0.11"
-quick-xml = { workspace = true }
+quick-xml = "0.38.3"
 xmltree = "0.10"

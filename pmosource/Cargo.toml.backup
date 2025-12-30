@@ -11,14 +11,14 @@ categories = ["multimedia"]
 
 [dependencies]
 # Gestion des erreurs
-thiserror = { workspace = true }
-anyhow = { workspace = true }
+thiserror = "2.0"
+anyhow = "1.0"
 
 # Async traits
-async-trait = { workspace = true }
+async-trait = "0.1"
 
 # Async runtime
-tokio = { workspace = true, features = ["sync", "time"] }
+tokio = { version = "1.0", features = ["sync", "time"] }
 
 # DIDL-Lite support
 pmodidl = { path = "../pmodidl" }
@@ -32,8 +32,8 @@ pmocovers = { path = "../pmocovers", optional = true }
 pmocache = { path = "../pmocache", optional = true }
 
 # Serialization (required for cache metadata)
-serde = { workspace = true }
-serde_json = { workspace = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 # Server extension (optional)
 pmoserver = { path = "../pmoserver", optional = true }

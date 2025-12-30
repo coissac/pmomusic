@@ -840,7 +840,7 @@ impl TrackMetadata for MemoryTrackMetadata {
     }
 
     async fn touch(&mut self) -> MetadataResult<()> {
-        self.updated_at = Some());
+        self.updated_at = Some(SystemTime::now());
         Ok(Some(()))
     }
 }
