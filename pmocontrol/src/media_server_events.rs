@@ -12,11 +12,13 @@ use tracing::{debug, info, warn};
 use ureq::{Agent, http};
 use xmltree::{Element, XMLNode};
 
+use crate::DeviceId;
 use crate::events::MediaServerEventBus;
-use crate::media_server::{UpnpMediaServer, ServerId};
+use crate::media_server::{UpnpMediaServer};
 use crate::model::MediaServerEvent;
-use crate::provider::resolve_control_url;
-use crate::registry::{DeviceRegistry, DeviceRegistryRead};
+use crate::upnp_clients::resolve_control_url;
+use crate::registry::DeviceRegistry;
+use crate::{DeviceOnline,DeviceIdentity};
 
 const SUBSCRIPTION_TIMEOUT_SECS: u64 = 300;
 const RENEWAL_SAFETY_MARGIN_SECS: u64 = 60;
@@ -179,8 +181,8 @@ struct MediaServerEventWorker {
     http_timeout: Duration,
     notify_rx: Receiver<IncomingNotify>,
     listener_port: u16,
-    subscriptions: HashMap<ServerId, SubscriptionState>,
-    path_index: HashMap<String, ServerId>,
+    subscriptions: HashMap<DeviceId, SubscriptionState>,
+    path_index: HashMap<String, DeviceId>,
 }
 
 impl MediaServerEventWorker {
@@ -223,10 +225,10 @@ impl MediaServerEventWorker {
             reg.list_servers()
         };
 
-        let mut active: HashSet<ServerId> = HashSet::new();
+        let mut active: HashSet<DeviceId> = HashSet::new();
 
         for info in server_infos {
-            if !info.online || !info.has_content_directory {
+            if !info.is_online() || !info.has_content_directory {
                 continue;
             }
 

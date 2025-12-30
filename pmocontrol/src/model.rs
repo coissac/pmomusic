@@ -1,10 +1,52 @@
-use std::sync::{Arc, Mutex};
-
-use crate::{DeviceId,DeviceIdentity};
-use crate::capabilities::{PlaybackPositionInfo, PlaybackState};
 use crate::control_point::PlaylistBinding;
 use crate::media_server::UpnpMediaServer;
+use crate::music_renderer::PlaybackPositionInfo;
+use crate::{DeviceId, DeviceIdentity};
 
+/// High-level playback state across backends.
+#[derive(Clone, Debug)]
+pub enum PlaybackState {
+    Stopped,
+    Playing,
+    Paused,
+    Transitioning,
+    NoMedia,
+    /// Backend-specific or unknown state string.
+    Unknown(String),
+}
+
+impl PlaybackState {
+    /// Map a raw UPnP AVTransport CurrentTransportState string
+    /// to a logical PlaybackState.
+    pub fn from_upnp_state(raw: &str) -> Self {
+        let s = raw.trim().to_ascii_uppercase();
+        match s.as_str() {
+            "STOPPED" => PlaybackState::Stopped,
+            "PLAYING" => PlaybackState::Playing,
+            "PAUSED_PLAYBACK" => PlaybackState::Paused,
+            // States from the AVTransport spec that we normalize:
+            "PAUSED_RECORDING" => PlaybackState::Paused,
+            "RECORDING" => PlaybackState::Playing,
+            // Common vendor-specific states:
+            "TRANSITIONING" => PlaybackState::Transitioning,
+            "BUFFERING" | "PREPARING" => PlaybackState::Transitioning,
+            "NO_MEDIA_PRESENT" => PlaybackState::NoMedia,
+            _ => PlaybackState::Unknown(raw.to_string()),
+        }
+    }
+
+    /// Returns a human-readable label for the playback state.
+    pub fn as_str(&self) -> &str {
+        match self {
+            PlaybackState::Stopped => "STOPPED",
+            PlaybackState::Playing => "PLAYING",
+            PlaybackState::Paused => "PAUSED",
+            PlaybackState::Transitioning => "TRANSITIONING",
+            PlaybackState::NoMedia => "NO_MEDIA",
+            PlaybackState::Unknown(s) => s.as_str(),
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TrackMetadata {
@@ -233,71 +275,70 @@ impl RendererInfo {
         &self.capabilities
     }
 
-    pub fn avtransport_service_type(&self) ->  Option<String> {
+    pub fn avtransport_service_type(&self) -> Option<String> {
         self.avtransport_service_type.clone()
     }
 
-    pub fn avtransport_control_url(&self) ->  Option<String> {
+    pub fn avtransport_control_url(&self) -> Option<String> {
         self.avtransport_control_url.clone()
     }
-    pub fn rendering_control_service_type(&self) ->  Option<String> {
+    pub fn rendering_control_service_type(&self) -> Option<String> {
         self.rendering_control_service_type.clone()
     }
-    pub fn rendering_control_control_url(&self) ->  Option<String> {
+    pub fn rendering_control_control_url(&self) -> Option<String> {
         self.rendering_control_control_url.clone()
     }
-    pub fn connection_manager_service_type(&self) ->  Option<String> {
+    pub fn connection_manager_service_type(&self) -> Option<String> {
         self.connection_manager_service_type.clone()
     }
-    pub fn connection_manager_control_url(&self) ->  Option<String> {
+    pub fn connection_manager_control_url(&self) -> Option<String> {
         self.connection_manager_control_url.clone()
     }
-    pub fn oh_playlist_service_type(&self) ->  Option<String> {
+    pub fn oh_playlist_service_type(&self) -> Option<String> {
         self.oh_playlist_service_type.clone()
     }
-    pub fn oh_playlist_control_url(&self) ->  Option<String> {
+    pub fn oh_playlist_control_url(&self) -> Option<String> {
         self.oh_playlist_control_url.clone()
     }
-    pub fn oh_playlist_event_sub_url(&self) ->  Option<String> {
+    pub fn oh_playlist_event_sub_url(&self) -> Option<String> {
         self.oh_playlist_event_sub_url.clone()
     }
-    pub fn oh_info_service_type(&self) ->  Option<String> {
+    pub fn oh_info_service_type(&self) -> Option<String> {
         self.oh_info_service_type.clone()
     }
-    pub fn oh_info_control_url(&self) ->  Option<String> {
+    pub fn oh_info_control_url(&self) -> Option<String> {
         self.oh_info_control_url.clone()
     }
-    pub fn oh_info_event_sub_url(&self) ->  Option<String> {
+    pub fn oh_info_event_sub_url(&self) -> Option<String> {
         self.oh_info_event_sub_url.clone()
     }
-    pub fn oh_time_service_type(&self) ->  Option<String> {
+    pub fn oh_time_service_type(&self) -> Option<String> {
         self.oh_time_service_type.clone()
     }
-    pub fn oh_time_control_url(&self) ->  Option<String> {
+    pub fn oh_time_control_url(&self) -> Option<String> {
         self.oh_time_control_url.clone()
     }
-    pub fn oh_time_event_sub_url(&self) ->  Option<String> {
+    pub fn oh_time_event_sub_url(&self) -> Option<String> {
         self.oh_time_event_sub_url.clone()
     }
-    pub fn oh_volume_service_type(&self) ->  Option<String> {
+    pub fn oh_volume_service_type(&self) -> Option<String> {
         self.oh_volume_service_type.clone()
     }
-    pub fn oh_volume_control_url(&self) ->  Option<String> {
+    pub fn oh_volume_control_url(&self) -> Option<String> {
         self.oh_volume_control_url.clone()
     }
-    pub fn oh_radio_service_type(&self) ->  Option<String> {
+    pub fn oh_radio_service_type(&self) -> Option<String> {
         self.oh_radio_service_type.clone()
     }
-    pub fn oh_radio_control_url(&self) ->  Option<String> {
+    pub fn oh_radio_control_url(&self) -> Option<String> {
         self.oh_radio_control_url.clone()
     }
-    pub fn oh_product_service_type(&self) ->  Option<String> {
+    pub fn oh_product_service_type(&self) -> Option<String> {
         self.oh_product_service_type.clone()
     }
-    pub fn oh_product_control_url(&self) ->  Option<String> {
+    pub fn oh_product_control_url(&self) -> Option<String> {
         self.oh_product_control_url.clone()
     }
-
 }
 
 impl DeviceIdentity for RendererInfo {
@@ -323,7 +364,9 @@ impl DeviceIdentity for RendererInfo {
         &self.server_header
     }
 
-    fn is_a_music_renderer(&self)  -> bool {true }
+    fn is_a_music_renderer(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Clone, Debug)]

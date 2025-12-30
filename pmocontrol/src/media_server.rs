@@ -10,9 +10,9 @@ use xmltree::{Element, XMLNode};
 use crate::errors::ControlPointError;
 use crate::model::TrackMetadata;
 use crate::online::{DeviceConnectionState, DeviceOnline};
-use crate::queue::backend::PlaybackItem;
+use crate::queue::PlaybackItem;
 use crate::soap_client::{SoapCallResult, invoke_upnp_action_with_timeout};
-use crate::{DEFAULT_HTTP_TIMEOUT, DeviceId, DeviceIdentity};
+use crate::{DEFAULT_HTTP_TIMEOUT, DeviceId, DeviceIdentity, RendererInfo};
 
 /// Snapshot of a media server discovered through UPnP SSDP.
 #[derive(Clone, Debug)]
@@ -31,6 +31,33 @@ pub struct UpnpMediaServer {
 }
 
 impl UpnpMediaServer {
+    pub fn new(
+        id: DeviceId,
+        udn: String,
+        friendly_name: String,
+        model_name: String,
+        manufacturer: String,
+        location: String,
+        server_header: String,
+        has_content_directory: bool,
+        content_directory_service_type: Option<String>,
+        content_directory_control_url: Option<String>,
+    ) -> Self {
+        Self {
+            id,
+            udn,
+            friendly_name,
+            model_name,
+            manufacturer,
+            location,
+            server_header,
+            has_content_directory,
+            content_directory_service_type,
+            content_directory_control_url,
+            connection: DeviceConnectionState::make(),
+        }
+    }
+
     pub fn make(
         id: DeviceId,
         udn: String,
@@ -43,7 +70,7 @@ impl UpnpMediaServer {
         content_directory_service_type: Option<String>,
         content_directory_control_url: Option<String>,
     ) -> Arc<Self> {
-        Arc::new(Self {
+        Arc::new(Self::new(
             id,
             udn,
             friendly_name,
@@ -54,8 +81,7 @@ impl UpnpMediaServer {
             has_content_directory,
             content_directory_service_type,
             content_directory_control_url,
-            connection: DeviceConnectionState::make(),
-        })
+        ))
     }
 
     fn browse_with_flag(
@@ -355,6 +381,12 @@ pub trait MediaBrowser {
 #[derive(Clone, Debug)]
 pub enum MusicServer {
     Upnp(UpnpMediaServer),
+}
+
+impl MusicServer {
+    pub fn from_server_info(info: &UpnpMediaServer) -> Result<MusicServer, ControlPointError>  {
+        Ok(MusicServer::Upnp(info.clone()))
+    }
 }
 
 impl DeviceOnline for MusicServer {

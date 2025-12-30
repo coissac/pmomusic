@@ -7,6 +7,7 @@ use crate::soap_client::{
     invoke_upnp_action, parse_bool, parse_visible_flag,
 };
 use anyhow::{Result, anyhow};
+use pmodidl::DIDLLite;
 use tracing::{debug, info, trace, warn};
 use xmltree::{Element, XMLNode};
 
@@ -17,11 +18,25 @@ use crate::model::RendererInfo;
 /// historical 0xFFFFFFFF sentinel.
 pub const OPENHOME_PLAYLIST_HEAD_ID: u32 = 0;
 
-#[derive(Debug, Clone)]
-pub struct OhTrackEntry {
-    pub id: u32,
-    pub uri: String,
-    pub metadata_xml: String,
+pub trait OhTrack {
+    fn uri(&self) -> &str;
+    fn metadata_xml(&self) -> Option<&str>;
+
+    fn metadata(&self) -> Option<TrackMetadata> {
+        self.metadata_xml()
+            .as_deref()
+            .and_then(parse_track_metadata_from_didl)
+    }
+
+    fn didl_id(&self) -> Option<String> {
+        let trimmed = self.metadata_xml()?.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        let parsed = pmodidl::parse_metadata::<DIDLLite>(trimmed).ok()?;
+        parsed.data.items.first().map(|item| item.id.clone())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -31,10 +46,20 @@ pub struct OhInfoTrack {
 }
 
 impl OhInfoTrack {
-    pub fn metadata(&self) -> Option<TrackMetadata> {
-        self.metadata_xml
-            .as_deref()
-            .and_then(parse_track_metadata_from_didl)
+    pub fn new(uri: &str, metadata_xml: Option<&str>) -> Self {
+        OhInfoTrack {
+            uri: uri.to_string(),
+            metadata_xml: metadata_xml.map(|s| s.to_string()),
+        }
+    }
+}
+
+impl OhTrack for OhInfoTrack {
+    fn metadata_xml(&self) -> Option<&str> {
+        self.metadata_xml.as_deref()
+    }
+    fn uri(&self) -> &str {
+        &self.uri
     }
 }
 
@@ -59,9 +84,49 @@ pub struct OhProductSource {
 }
 
 #[derive(Debug, Clone)]
+pub struct OhInfoClient {
+    pub control_url: String,
+    pub service_type: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct OhPlaylistClient {
     pub control_url: String,
     pub service_type: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct OhTrackEntry {
+    pub id: u32,
+    uri: String,
+    metadata_xml: String,
+}
+
+impl OhTrackEntry {
+    pub fn new(id: u32, uri: &str, metadata_xml: &str) -> Self {
+        OhTrackEntry {
+            id,
+            uri: uri.to_string(),
+            metadata_xml: metadata_xml.to_string(),
+        }
+    }
+
+    pub fn id(&self) -> u32 {
+        self.id
+    }
+}
+
+impl OhTrack for OhTrackEntry {
+    fn metadata_xml(&self) -> Option<&str> {
+        if self.metadata_xml.is_empty() {
+            None
+        } else {
+            Some(&self.metadata_xml)
+        }
+    }
+    fn uri(&self) -> &str {
+        &self.uri
+    }
 }
 
 impl OhPlaylistClient {
@@ -73,12 +138,44 @@ impl OhPlaylistClient {
     }
 
     pub fn from_renderer_info(info: &RendererInfo) -> Result<Self, ControlPointError> {
-        let control_url = info.oh_playlist_control_url()
-        .ok_or_else(|| ControlPointError::OpenHomeError("Cannot create playlist control client".to_string()))?;
+        let control_url = info.oh_playlist_control_url().ok_or_else(|| {
+            ControlPointError::OpenHomeError("Cannot create playlist control client".to_string())
+        })?;
 
-        let service_type = info.oh_playlist_service_type()
-        .ok_or_else(|| ControlPointError::OpenHomeError("Cannot create playlist service client".to_string()))?;
+        let service_type = info.oh_playlist_service_type().ok_or_else(|| {
+            ControlPointError::OpenHomeError("Cannot create playlist service client".to_string())
+        })?;
         Ok(OhPlaylistClient::new(control_url, service_type))
+    }
+
+    /// Report the uri and metadata for a given track id.
+    /// Returns a 800 fault code if the given id is not in the playlist.
+    pub fn read(&self, id: u32) -> Result<OhTrackEntry, ControlPointError> {
+        let id_str = id.to_string();
+        let args = [("IdList", id_str.as_str())];
+
+        let call_result = invoke_upnp_action(&self.control_url, &self.service_type, "Read", &args)?;
+
+        if call_result.status == 800 {
+            return Err(ControlPointError::OpenHomeError(format!(
+                "Id {} not found in OpenHome playlist",
+                id
+            )));
+        }
+
+        let envelope: &pmoupnp::soap::SoapEnvelope = ensure_success("Read", &call_result)?;
+
+        let response =
+            find_child_with_suffix(&envelope.body.content, "ReadResponse").ok_or_else(|| {
+                ControlPointError::OpenHomeError(format!(
+                    "Missing ReadResponse element in SOAP body"
+                ))
+            })?;
+
+        let track_uri = extract_child_text(response, "Uri")?;
+        let metadata = extract_child_text(response, "Metadata")?;
+
+        Ok(OhTrackEntry::new(id, &track_uri, &metadata))
     }
 
     pub fn read_list(&self, id_list: &[u32]) -> Result<Vec<OhTrackEntry>, ControlPointError> {
@@ -96,9 +193,13 @@ impl OhPlaylistClient {
         let call_result =
             invoke_upnp_action(&self.control_url, &self.service_type, "ReadList", &args)?;
 
-        let envelope = ensure_success("ReadList", &call_result)?;
+        let envelope: &pmoupnp::soap::SoapEnvelope = ensure_success("ReadList", &call_result)?;
         let response = find_child_with_suffix(&envelope.body.content, "ReadListResponse")
-            .ok_or_else(|| ControlPointError::OpenHomeError(format!("Missing ReadListResponse element in SOAP body")))?;
+            .ok_or_else(|| {
+                ControlPointError::OpenHomeError(format!(
+                    "Missing ReadListResponse element in SOAP body"
+                ))
+            })?;
 
         let track_list_b64 = extract_child_text_any(response, &["TrackList", "Value"])?;
         let track_list_sample: String = track_list_b64.chars().take(256).collect();
@@ -143,7 +244,9 @@ impl OhPlaylistClient {
         Ok(new_id)
     }
 
-    pub fn play_id(&self, id: u32) -> Result<(), ControlPointError> {
+    /// The id of the current track (the track currently playing or that would be played
+    /// if the Play action was invoked). Or 0 if the playlist is empty.
+    pub fn seek_id(&self, id: u32) -> Result<(), ControlPointError> {
         let id_str = id.to_string();
         let args = [("Value", id_str.as_str())];
 
@@ -171,11 +274,13 @@ impl OhPlaylistClient {
     pub fn id(&self) -> Result<u32, ControlPointError> {
         let call_result = invoke_upnp_action(&self.control_url, &self.service_type, "Id", &[])?;
 
-        let envelope = ensure_success("Id", &call_result)
-            .map_err(|e| ControlPointError::SoapAction(format!("{}", e)))?;
+        let envelope = ensure_success("Id", &call_result)?;
 
-        let response = find_child_with_suffix(&envelope.body.content, "IdResponse")
-            .ok_or_else(|| ControlPointError::UpnpMissingReturnValue("IdResponse".to_string()))?;
+        let response = find_child_with_suffix(&envelope.body.content, "IdResponse").ok_or_else(|| {
+                ControlPointError::OpenHomeError(format!(
+                    "Missing ReadResponse element in SOAP body"
+                ))
+            })?;
         let id_text = extract_child_text(response, "Value")?;
         let id = id_text.parse::<u32>().map_err(|_| {
             ControlPointError::UpnpBadReturnValue("Playlist.Id".to_string(), id_text)
@@ -274,15 +379,6 @@ impl OhPlaylistClient {
         let call_result =
             invoke_upnp_action(&self.control_url, &self.service_type, "DeleteAll", &[])?;
         handle_action_response("DeleteAll", &call_result)
-    }
-
-    pub fn current_id(&self) -> Result<String> {
-        let call_result = invoke_upnp_action(&self.control_url, &self.service_type, "Id", &[])?;
-        let envelope = ensure_success("Id", &call_result)?;
-        let response = find_child_with_suffix(&envelope.body.content, "IdResponse")
-            .ok_or_else(|| anyhow!("Missing IdResponse element in SOAP body"))?;
-        let value: String = extract_child_text_any(response, &["Value"])?;
-        Ok(value)
     }
 
     pub fn tracks_max(&self) -> Result<u32, ControlPointError> {
@@ -387,12 +483,6 @@ impl OhPlaylistClient {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct OhInfoClient {
-    pub control_url: String,
-    pub service_type: String,
-}
-
 impl OhInfoClient {
     pub fn new(control_url: String, service_type: String) -> Self {
         Self {
@@ -402,11 +492,13 @@ impl OhInfoClient {
     }
 
     pub fn from_renderer_info(info: &RendererInfo) -> Result<Self, ControlPointError> {
-        let control_url = info.oh_info_control_url()
-        .ok_or_else(|| ControlPointError::OpenHomeError("Cannot create info control client".to_string()))?;
+        let control_url = info.oh_info_control_url().ok_or_else(|| {
+            ControlPointError::OpenHomeError("Cannot create info control client".to_string())
+        })?;
 
-        let service_type = info.oh_info_service_type()
-        .ok_or_else(|| ControlPointError::OpenHomeError("Cannot create info service client".to_string()))?;
+        let service_type = info.oh_info_service_type().ok_or_else(|| {
+            ControlPointError::OpenHomeError("Cannot create info service client".to_string())
+        })?;
         Ok(OhInfoClient::new(control_url, service_type))
     }
 
@@ -472,11 +564,13 @@ impl OhTimeClient {
     }
 
     pub fn from_renderer_info(info: &RendererInfo) -> Result<Self, ControlPointError> {
-        let control_url = info.oh_time_control_url()
-        .ok_or_else(|| ControlPointError::OpenHomeError("Cannot create time control client".to_string()))?;
+        let control_url = info.oh_time_control_url().ok_or_else(|| {
+            ControlPointError::OpenHomeError("Cannot create time control client".to_string())
+        })?;
 
-        let service_type = info.oh_time_service_type()
-        .ok_or_else(|| ControlPointError::OpenHomeError("Cannot create time service client".to_string()))?;
+        let service_type = info.oh_time_service_type().ok_or_else(|| {
+            ControlPointError::OpenHomeError("Cannot create time service client".to_string())
+        })?;
         Ok(OhTimeClient::new(control_url, service_type))
     }
 
@@ -528,14 +622,15 @@ impl OhVolumeClient {
     }
 
     pub fn from_renderer_info(info: &RendererInfo) -> Result<Self, ControlPointError> {
-        let control_url = info.oh_volume_control_url()
-        .ok_or_else(|| ControlPointError::OpenHomeError("Cannot create volume control client".to_string()))?;
+        let control_url = info.oh_volume_control_url().ok_or_else(|| {
+            ControlPointError::OpenHomeError("Cannot create volume control client".to_string())
+        })?;
 
-        let service_type = info.oh_volume_service_type()
-        .ok_or_else(|| ControlPointError::OpenHomeError("Cannot create volume service client".to_string()))?;
+        let service_type = info.oh_volume_service_type().ok_or_else(|| {
+            ControlPointError::OpenHomeError("Cannot create volume service client".to_string())
+        })?;
         Ok(OhVolumeClient::new(control_url, service_type))
     }
-
 
     pub fn volume(&self) -> Result<u16, ControlPointError> {
         let call_result = invoke_upnp_action(&self.control_url, &self.service_type, "Volume", &[])?;
@@ -596,11 +691,13 @@ impl OhRadioClient {
     }
 
     pub fn from_renderer_info(info: &RendererInfo) -> Result<Self, ControlPointError> {
-        let control_url = info.oh_radio_control_url()
-        .ok_or_else(|| ControlPointError::OpenHomeError("Cannot create radio control client".to_string()))?;
+        let control_url = info.oh_radio_control_url().ok_or_else(|| {
+            ControlPointError::OpenHomeError("Cannot create radio control client".to_string())
+        })?;
 
-        let service_type = info.oh_radio_service_type()
-        .ok_or_else(|| ControlPointError::OpenHomeError("Cannot create radio service client".to_string()))?;
+        let service_type = info.oh_radio_service_type().ok_or_else(|| {
+            ControlPointError::OpenHomeError("Cannot create radio service client".to_string())
+        })?;
         Ok(OhRadioClient::new(control_url, service_type))
     }
 
@@ -646,14 +743,15 @@ impl OhProductClient {
     }
 
     pub fn from_renderer_info(info: &RendererInfo) -> Result<Self, ControlPointError> {
-        let control_url = info.oh_product_control_url()
-        .ok_or_else(|| ControlPointError::OpenHomeError("Cannot create product control client".to_string()))?;
+        let control_url = info.oh_product_control_url().ok_or_else(|| {
+            ControlPointError::OpenHomeError("Cannot create product control client".to_string())
+        })?;
 
-        let service_type = info.oh_product_service_type()
-        .ok_or_else(|| ControlPointError::OpenHomeError("Cannot create product service client".to_string()))?;
+        let service_type = info.oh_product_service_type().ok_or_else(|| {
+            ControlPointError::OpenHomeError("Cannot create product service client".to_string())
+        })?;
         Ok(OhProductClient::new(control_url, service_type))
     }
-
 
     pub fn source_xml(&self) -> Result<Vec<OhProductSource>> {
         let call_result =
@@ -799,6 +897,15 @@ pub fn parse_track_metadata_from_didl(xml: &str) -> Option<TrackMetadata> {
     })
 }
 
+pub fn didl_id_from_metadata(xml: &str) -> Option<String> {
+    if xml.trim().is_empty() {
+        return None;
+    }
+
+    let parsed = pmodidl::parse_metadata::<DIDLLite>(xml).ok()?;
+    parsed.data.items.first().map(|item| item.id.clone())
+}
+
 fn parse_track_list(payload: &str) -> Result<Vec<OhTrackEntry>, ControlPointError> {
     let trimmed = payload.trim();
     if trimmed.is_empty() {
@@ -810,7 +917,9 @@ fn parse_track_list(payload: &str) -> Result<Vec<OhTrackEntry>, ControlPointErro
     } else {
         let bytes = decode_base64(trimmed)?;
         let decoded = String::from_utf8(bytes).map_err(|err| {
-            ControlPointError::OpenHomeError(format!("TrackList payload not valid UTF-8 after base64 decode: {err}"))
+            ControlPointError::OpenHomeError(format!(
+                "TrackList payload not valid UTF-8 after base64 decode: {err}"
+            ))
         })?;
         (decoded, true)
     };
@@ -823,8 +932,9 @@ fn parse_track_list(payload: &str) -> Result<Vec<OhTrackEntry>, ControlPointErro
     );
 
     let mut reader = std::io::Cursor::new(xml.as_bytes());
-    let root = Element::parse(&mut reader)
-        .map_err(|err| ControlPointError::OpenHomeError(format!("Failed to parse OpenHome TrackList XML: {}", err)))?;
+    let root = Element::parse(&mut reader).map_err(|err| {
+        ControlPointError::OpenHomeError(format!("Failed to parse OpenHome TrackList XML: {}", err))
+    })?;
     let mut entries = Vec::new();
 
     for node in &root.children {
@@ -856,9 +966,9 @@ fn parse_track_entry(elem: &Element) -> Result<OhTrackEntry, ControlPointError> 
         )));
     }
 
-    let id = id_text
-        .parse::<u32>()
-        .map_err(|_| ControlPointError::OpenHomeError(format!("Invalid OpenHome Entry Id: {}", id_text)))?;
+    let id = id_text.parse::<u32>().map_err(|_| {
+        ControlPointError::OpenHomeError(format!("Invalid OpenHome Entry Id: {}", id_text))
+    })?;
 
     let uri = extract_child_text_local(elem, "Uri")?;
     let metadata_xml = extract_child_text_optional_local(elem, "Metadata")?.unwrap_or_default();

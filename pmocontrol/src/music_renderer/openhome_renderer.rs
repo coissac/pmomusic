@@ -1,23 +1,22 @@
-use std::sync::{Arc, Mutex};
-
-use crate::{DeviceIdentity, MusicRendererBackend};
-use crate::capabilities::{
-    PlaybackPosition, PlaybackPositionInfo, PlaybackState, PlaybackStatus, TransportControl,
+use crate::DeviceIdentity;
+use crate::music_renderer::capabilities::{
+    PlaybackPosition, PlaybackPositionInfo, PlaybackStatus, TransportControl,
     VolumeControl,
 };
+use crate::music_renderer::time_utils::{parse_time_flexible, format_hhmmss_u32};
 
 use crate::errors::ControlPointError;
-use crate::model::RendererInfo;
-use crate::openhome::{
+use crate::model::{RendererInfo, PlaybackState};
+use crate::music_renderer::RendererFromMediaRendererInfo;
+use crate::music_renderer::musicrenderer::MusicRendererBackend;
+use crate::music_renderer::openhome::{
     build_info_client, build_playlist_client, build_product_client, build_radio_client,
     build_time_client, build_volume_client,
 };
-use crate::openhome_client::{
+use crate::upnp_clients::{
     OPENHOME_PLAYLIST_HEAD_ID, OhInfoClient, OhPlaylistClient, OhProductClient, OhRadioClient,
-    OhTimeClient, OhTrackEntry, OhVolumeClient, parse_track_metadata_from_didl,
+    OhTimeClient, OhVolumeClient,
 };
-use crate::openhome_playlist::{OpenHomePlaylistSnapshot, OpenHomePlaylistTrack};
-use anyhow::{Result, anyhow};
 use tracing::debug;
 
 #[derive(Clone, Debug)]
@@ -50,29 +49,6 @@ impl OpenHomeRenderer {
         }
     }
 
-    pub fn from_renderer_info(
-        info: RendererInfo,
-    ) -> Result<Arc<Mutex<MusicRendererBackend>>, ControlPointError> {
-        let renderer = OpenHomeRenderer::new(
-            build_playlist_client(&info),
-            build_info_client(&info),
-            build_time_client(&info),
-            build_volume_client(&info),
-            build_product_client(&info),
-            build_radio_client(&info),
-        );
-
-        if renderer.has_any_openhome_service() {
-            Ok(Arc::new(Mutex::new(MusicRendererBackend::OpenHome(
-                renderer,
-            ))))
-        } else {
-            Err(ControlPointError::OpenHomeNotAValidDevice(format!(
-                "{:?}",
-                info.id()
-            )))
-        }
-    }
 
     pub fn has_playlist(&self) -> bool {
         self.playlist.is_some()
@@ -159,7 +135,7 @@ impl OpenHomeRenderer {
 
     /// Retourne la longueur de la playlist OpenHome sans récupérer toutes les métadonnées.
     /// Plus rapide que snapshot_openhome_playlist() pour juste connaître le nombre de pistes.
-    pub(crate) fn openhome_playlist_len(&self) -> Result<usize> {
+    pub(crate) fn openhome_playlist_len(&self) -> Result<usize, ControlPointError> {
         let playlist = self.playlist_client_for("openhome_playlist_len")?;
         let ids = playlist.id_array()?;
         Ok(ids.len())
@@ -196,15 +172,45 @@ impl OpenHomeRenderer {
 
         let new_id = playlist.insert(insert_after, uri, metadata)?;
         if play {
-            playlist.play_id(new_id)?;
+            playlist.seek_id(new_id)?;
         }
         Ok(new_id)
     }
 
     pub(crate) fn play_openhome_track_id(&self, id: u32) -> Result<(), ControlPointError> {
         let playlist = self.playlist_client_for("play_openhome_track_id")?;
-        playlist.play_id(id)
+        playlist.seek_id(id)
     }
+}
+
+
+impl RendererFromMediaRendererInfo for OpenHomeRenderer {
+    fn from_renderer_info(
+        info: &RendererInfo,
+    ) -> Result<Self, ControlPointError> {
+        let renderer = OpenHomeRenderer::new(
+            build_playlist_client(&info),
+            build_info_client(&info),
+            build_time_client(&info),
+            build_volume_client(&info),
+            build_product_client(&info),
+            build_radio_client(&info),
+        );
+
+        if renderer.has_any_openhome_service() {
+            Ok(renderer)
+        } else {
+            Err(ControlPointError::OpenHomeNotAValidDevice(format!(
+                "{:?}",
+                info.id()
+            )))
+        }
+    }
+
+    fn to_backend(self) -> MusicRendererBackend {
+        MusicRendererBackend::OpenHome(self)
+    }
+
 }
 
 impl TransportControl for OpenHomeRenderer {
@@ -241,9 +247,7 @@ impl TransportControl for OpenHomeRenderer {
     }
 
     fn seek_rel_time(&self, hhmmss: &str) -> Result<(), ControlPointError> {
-        let seconds = parse_hms(hhmmss).ok_or_else(|| {
-            ControlPointError::upnp_bad_return_value("HH:MM:SS", &hhmmss)
-        })?;
+        let seconds = parse_time_flexible(hhmmss)?;
         let playlist = self.playlist_client_for("seek_rel_time")?;
         playlist.seek_second_absolute(seconds)
     }
@@ -314,27 +318,13 @@ impl PlaybackPosition for OpenHomeRenderer {
 
         Ok(PlaybackPositionInfo {
             track: track_id,
-            rel_time: Some(format_seconds(time_info.elapsed_secs)),
+            rel_time: Some(format_hhmmss_u32(time_info.elapsed_secs)),
             abs_time: None,
-            track_duration: Some(format_seconds(time_info.duration_secs)),
+            track_duration: Some(format_hhmmss_u32(time_info.duration_secs)),
             track_metadata: track_metadata_xml,
             track_uri,
         })
     }
-}
-
-fn parse_hms(input: &str) -> Option<u32> {
-    let parts: Vec<&str> = input.split(':').collect();
-    if parts.is_empty() || parts.len() > 3 {
-        return None;
-    }
-
-    let mut total = 0u32;
-    for part in parts {
-        let value = part.parse::<u32>().ok()?;
-        total = total * 60 + value;
-    }
-    Some(total)
 }
 
 pub(crate) fn map_openhome_state(raw: &str) -> PlaybackState {
@@ -347,21 +337,3 @@ pub(crate) fn map_openhome_state(raw: &str) -> PlaybackState {
     }
 }
 
-pub(crate) fn format_seconds(seconds: u32) -> String {
-    let hours = seconds / 3600;
-    let minutes = (seconds % 3600) / 60;
-    let secs = seconds % 60;
-    format!("{hours:02}:{minutes:02}:{secs:02}")
-}
-
-fn convert_oh_track_entry(entry: &OhTrackEntry) -> OpenHomePlaylistTrack {
-    let metadata = parse_track_metadata_from_didl(&entry.metadata_xml);
-    OpenHomePlaylistTrack {
-        id: entry.id,
-        uri: entry.uri.clone(),
-        title: metadata.as_ref().and_then(|m| m.title.clone()),
-        artist: metadata.as_ref().and_then(|m| m.artist.clone()),
-        album: metadata.as_ref().and_then(|m| m.album.clone()),
-        album_art_uri: metadata.and_then(|m| m.album_art_uri),
-    }
-}

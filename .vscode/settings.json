@@ -20,7 +20,7 @@
   "rust-analyzer.numThreads": 4,
   "rust-analyzer.cargo.loadOutDirsFromCheck": false,
   "rust-analyzer.checkOnSave.enable": true,
-  "rust-analyzer.checkOnSave.command": "clippy", 
+  "rust-analyzer.checkOnSave.command": "check", 
   "rust-analyzer.checkOnSave.extraArgs": ["--all-features"],
   "rust-analyzer.exclude": [
     "target",

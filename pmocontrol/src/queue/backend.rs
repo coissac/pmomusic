@@ -28,103 +28,7 @@
 //!   - This identity is used by the sync helpers to preserve the current
 //!     track across queue rebuilds when the MediaServer content changes.
 
-use crate::DeviceId;
-use crate::errors::ControlPointError;
-// ADAPTE ces imports aux modules existants dans pmocontrol.
-// Exemple probable :
-// use crate::model::MediaServerId;
-// use crate::model::TrackMetadata;
-use crate::model::TrackMetadata;
-
-/// Canonical representation of a track in a renderer queue.
-///
-/// This type is the bridge between:
-///   - the UPnP MediaServer (DIDL-Lite items),
-///   - the ControlPoint runtime,
-///   - and the different queue backends (internal / OpenHome).
-///
-/// It is intentionally DIDL-centric: every item in a queue comes from
-/// a UPnP ContentDirectory and carries its MediaServer identity.
-#[derive(Clone, Debug)]
-pub struct PlaybackItem {
-    /// Identifier of the UPnP MediaServer that owns this content.
-    ///
-    /// Typically this is the UDN of the MediaServer device, or an
-    /// equivalent logical identifier.
-    pub media_server_id: DeviceId,
-
-    /// L'ID interne de l'item dans la queue.
-    /// Cet ID n'a de sens que lors du retour d'un snapshot.
-    /// Dans une queue interne, il peut avoir n'importe quelle valeur, 
-    /// l'ID qui compte et la position dans le vecteur.
-    /// Par principe, on la peut la mettre égale à usize::MAX.
-    pub backend_id: usize,
-
-    /// DIDL-Lite `id` attribute of the `item` in the ContentDirectory.
-    ///
-    /// This, combined with `media_server_id`, is the logical identity
-    /// of the track across refreshes of the MediaServer state.
-    pub didl_id: String,
-
-    /// Main resource URI to be used for playback.
-    ///
-    /// This is usually the first `<res>` element (or a selected one)
-    /// from the DIDL-Lite item.
-    pub uri: String,
-
-    /// UPnP protocolInfo string for the resource (e.g., "http-get:*:audio/flac:*").
-    ///
-    /// This string describes the protocol, network, MIME type, and additional
-    /// info about the media resource. It's required for proper UPnP/OpenHome
-    /// renderer compatibility.
-    pub protocol_info: String,
-
-    /// Optional rich metadata for the track (title, artist, album, cover,
-    /// duration, …).
-    ///
-    /// The exact structure is defined in `TrackMetadata` and may
-    /// aggregate information from DIDL, tags, or additional sources.
-    pub metadata: Option<TrackMetadata>,
-}
-
-impl PlaybackItem {
-    /// Returns a stable, backend-agnostic logical identifier for this item.
-    ///
-    /// By default this is the concatenation of the MediaServer identifier
-    /// and the DIDL `id`. Backends and higher-level logic should use this
-    /// when they need to match items across queue rebuilds.
-    pub fn unique_id(&self) -> String {
-        // ADAPTE si MediaServerId n'implémente pas Display : utilise
-        // un champ string interne ou une méthode as_str().
-        format!("{}::{}", self.media_server_id.0, self.didl_id)
-    }
-}
-
-/// Logical snapshot of a renderer queue.
-///
-/// This is the canonical view used by the ControlPoint and the REST/API
-/// layer. It is independent of how the queue is actually stored (local
-/// in-memory queue, OpenHome playlist, …).
-#[derive(Clone, Debug)]
-pub struct QueueSnapshot {
-    /// All items currently in the queue, in play order.
-    pub items: Vec<PlaybackItem>,
-    /// Index (0-based) of the current item in `items`, or `None` if
-    /// no item is currently selected.
-    pub current_index: Option<usize>,
-}
-
-impl QueueSnapshot {
-    /// Returns the number of items in the snapshot.
-    pub fn len(&self) -> usize {
-        self.items.len()
-    }
-
-    /// Returns `true` if the snapshot contains no items.
-    pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
-    }
-}
+use crate::{PlaybackItem, QueueSnapshot, errors::ControlPointError};
 
 /// High-level enqueue mode.
 ///
@@ -164,6 +68,24 @@ pub trait QueueBackend {
     //  BACKEND PRIMITIVES (must be implemented)
     // =====================================================================
 
+    /// Returns the length of this queue.
+    fn len(&self) -> Result<usize, ControlPointError>;
+
+    /// Lists all the items in this queue.
+    fn track_ids(&self) -> Result<Vec<u32>, ControlPointError>;
+
+    /// Converts a track ID to its position in the queue.
+    fn id_to_position(&self, id: u32) -> Result<usize, ControlPointError>;
+
+    /// Converts a track ID to its position in the queue.
+    fn position_to_id(&self, id: usize) -> Result<u32, ControlPointError>;
+
+    /// Return the current playing track identifier
+    fn current_track(&self) -> Result<Option<u32>, ControlPointError>;
+
+    /// Returns the current playing track index in the queue
+    fn current_index(&self) -> Result<Option<usize>, ControlPointError>;
+
     /// Returns the full snapshot (items + current index) of this queue.
     fn queue_snapshot(&self) -> Result<QueueSnapshot, ControlPointError>;
 
@@ -181,11 +103,27 @@ pub trait QueueBackend {
         current_index: Option<usize>,
     ) -> Result<(), ControlPointError>;
 
+    /// Updates the queue while adjusting so that the new current_index
+    /// corresponds to the old current index track.
+    /// If the old current index track is absent from the new queue,
+    /// it is kept as the first item and the new items are appended after it.
+    fn sync_queue(&mut self, items: Vec<PlaybackItem>) -> Result<(), ControlPointError>;
+
     /// Returns the item at `index`, if it exists.
     fn get_item(&self, index: usize) -> Result<Option<PlaybackItem>, ControlPointError>;
 
     /// Replaces the item at `index` with `item`.
     fn replace_item(&mut self, index: usize, item: PlaybackItem) -> Result<(), ControlPointError>;
+
+    /// Enqueues items according to the selected `EnqueueMode`.
+    ///
+    /// This method only manipulates the queue structure; it does not
+    /// start playback.
+    fn enqueue_items(
+        &mut self,
+        items: Vec<PlaybackItem>,
+        mode: EnqueueMode,
+    ) -> Result<(), ControlPointError>;
 
     // =====================================================================
     //  DEFAULT HELPERS (backend-agnostic logic)
@@ -196,39 +134,9 @@ pub trait QueueBackend {
         self.replace_queue(Vec::new(), None)
     }
 
-    /// Alias for `clear_queue`, semantic name for “empty before rebuild”.
-    fn empty_queue(&mut self) -> Result<(), ControlPointError> {
-        self.clear_queue()
-    }
-
-    /// Returns the current index, if any.
-    fn current_index(&self) -> Result<Option<usize>, ControlPointError> {
-        Ok(self.queue_snapshot()?.current_index)
-    }
-
-    /// Returns the number of items in the queue.
-    fn len(&self) -> Result<usize, ControlPointError> {
-        Ok(self.queue_snapshot()?.len())
-    }
-
     /// Returns `true` if the queue is empty.
     fn is_empty(&self) -> Result<bool, ControlPointError> {
         Ok(self.queue_snapshot()?.is_empty())
-    }
-
-    /// Returns a full snapshot of the queue.
-    fn full_snapshot(&self) -> Result<QueueSnapshot, ControlPointError> {
-        self.queue_snapshot()
-    }
-
-    /// Returns an iterator over all items in the queue.
-    ///
-    /// The default implementation:
-    ///   - takes a snapshot,
-    ///   - returns a boxed iterator owning the underlying `Vec`.
-    fn iter_items(&self) -> Result<Box<dyn Iterator<Item = PlaybackItem>>, ControlPointError> {
-        let snapshot = self.queue_snapshot()?;
-        Ok(Box::new(snapshot.items.into_iter()))
     }
 
     /// Returns the list of items that come strictly after the current index.
@@ -243,7 +151,12 @@ pub trait QueueBackend {
 
     /// Returns how many items remain in the queue after the current index.
     fn upcoming_len(&self) -> Result<usize, ControlPointError> {
-        Ok(self.upcoming_items()?.len())
+        let snapshot = self.queue_snapshot()?;
+        let len = snapshot.items.len();
+        match snapshot.current_index {
+            None => Ok(len),
+            Some(idx) => Ok(len.saturating_sub(idx + 1)),
+        }
     }
 
     /// Returns the current item (or the first pending item if no index is set)
@@ -310,36 +223,6 @@ pub trait QueueBackend {
         let remaining = len.saturating_sub(next_index + 1);
         self.set_index(Some(next_index))?;
         Ok(Some((item, remaining)))
-    }
-
-    /// Enqueues items according to the selected `EnqueueMode`.
-    ///
-    /// This method only manipulates the queue structure; it does not
-    /// start playback.
-    fn enqueue_items(&mut self, items: Vec<PlaybackItem>, mode: EnqueueMode) -> Result<(), ControlPointError> {
-        let mut snapshot = self.queue_snapshot()?;
-
-        match mode {
-            EnqueueMode::AppendToEnd => {
-                snapshot.items.extend(items);
-            }
-            EnqueueMode::InsertAfterCurrent => {
-                let insert_pos = snapshot
-                    .current_index
-                    .map(|i| (i + 1).min(snapshot.items.len()))
-                    .unwrap_or(0);
-
-                for (offset, it) in items.into_iter().enumerate() {
-                    snapshot.items.insert(insert_pos + offset, it);
-                }
-            }
-            EnqueueMode::ReplaceAll => {
-                snapshot.items = items;
-                snapshot.current_index = None;
-            }
-        }
-
-        self.replace_queue(snapshot.items, snapshot.current_index)
     }
 
     /// Replaces the queue with `items` and sets a default index.
@@ -410,7 +293,7 @@ pub trait QueueBackend {
         }
     }
 
-    /// Convenience helper to update an item “in place” at the given index.
+    /// Convenience helper to update an item "in place" at the given index.
     fn update_item(
         &mut self,
         index: usize,
@@ -420,34 +303,10 @@ pub trait QueueBackend {
             let new_item = update(item);
             self.replace_item(index, new_item)
         } else {
-            Err(ControlPointError::QueueError(format!("Queue index {} out of range", index)))
-        }
-    }
-
-    /// Synchronizes the queue with a new list of items coming from an
-    /// external MediaServer, trying to preserve the current track.
-    fn sync_from_external_preserve_current(&mut self, new_items: Vec<PlaybackItem>) -> Result<(), ControlPointError> {
-        let snapshot = self.queue_snapshot()?;
-        let current = snapshot
-            .current_index
-            .and_then(|i| snapshot.items.get(i).cloned());
-
-        let Some(current) = current else {
-            return self.replace_all(new_items);
-        };
-
-        let current_uid = current.unique_id();
-
-        if let Some(new_idx) = new_items
-            .iter()
-            .position(|it| it.unique_id() == current_uid)
-        {
-            self.replace_queue(new_items, Some(new_idx))
-        } else {
-            let mut items = Vec::with_capacity(new_items.len() + 1);
-            items.push(current);
-            items.extend(new_items);
-            self.replace_queue(items, Some(0))
+            Err(ControlPointError::QueueError(format!(
+                "Queue index {} out of range",
+                index
+            )))
         }
     }
 }

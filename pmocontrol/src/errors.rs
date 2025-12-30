@@ -43,6 +43,8 @@ pub enum ControlPointError {
     MediaServerError(String),
     #[error("Queue Error: {0}")]
     QueueError(String),
+    #[error("Invalid time format: {0}")]
+    InvalidTimeFormat(String),
 }
 
 impl ControlPointError {

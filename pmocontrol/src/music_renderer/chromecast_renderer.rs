@@ -14,18 +14,19 @@
 use std::sync::{Arc, Mutex, Once};
 use std::thread::JoinHandle;
 
-use anyhow::{Result, anyhow};
-
 use tracing::debug;
 
 use crate::DeviceIdentity;
-use crate::capabilities::{
-    PlaybackPosition, PlaybackPositionInfo, PlaybackState, PlaybackStatus, TransportControl,
+use crate::music_renderer::capabilities::{
+    PlaybackPosition, PlaybackPositionInfo, PlaybackStatus, TransportControl,
     VolumeControl,
 };
-use crate::chromecast_discovery::{extract_host_from_location, extract_port_from_location};
+use crate::music_renderer::time_utils::{format_hhmmss_f64, parse_hhmmss_strict};
+use crate::discovery::chromecast_discovery::{extract_host_from_location, extract_port_from_location};
 use crate::errors::ControlPointError;
-use crate::model::{RendererInfo};
+use crate::model::{PlaybackState, RendererInfo};
+use crate::music_renderer::RendererFromMediaRendererInfo;
+use crate::music_renderer::musicrenderer::MusicRendererBackend;
 
 use rust_cast::{
     CastDevice, ChannelMessage,
@@ -116,9 +117,8 @@ fn map_player_state(player_state: &CastPlayerState) -> PlaybackState {
 }
 
 
-impl ChromecastRenderer {
-    /// Creates a new ChromecastRenderer from RendererInfo.
-    pub fn from_renderer_info(info: RendererInfo) -> Result<Self> {
+impl RendererFromMediaRendererInfo for ChromecastRenderer {
+    fn from_renderer_info(info: &RendererInfo) -> Result<Self, ControlPointError> {
         tracing::info!(
             "ChromecastRenderer::from_renderer_info location={} for {}",
             info.location(),
@@ -147,6 +147,11 @@ impl ChromecastRenderer {
             thread_handle,
         })
     }
+
+    fn to_backend(self) -> MusicRendererBackend {
+        MusicRendererBackend::Chromecast(self)
+    }
+
 }
 
 impl TransportControl for ChromecastRenderer {
@@ -428,26 +433,7 @@ impl TransportControl for ChromecastRenderer {
     fn seek_rel_time(&self, hhmmss: &str) -> Result<(), ControlPointError> {
         debug!("ChromecastRenderer: seek_rel_time({})", hhmmss);
 
-        // Parse HH:MM:SS to seconds
-        let parts: Vec<&str> = hhmmss.split(':').collect();
-        if parts.len() != 3 {
-            return Err(ControlPointError::ChromecastError(format!(
-                "Invalid time format, expected HH:MM:SS: {}",
-                hhmmss
-            )));
-        }
-
-        let hours: u32 = parts[0]
-            .parse()
-            .map_err(|_| ControlPointError::ChromecastError(format!("Invalid hours in time: {}", hhmmss)))?;
-        let minutes: u32 = parts[1]
-            .parse()
-            .map_err(|_| ControlPointError::ChromecastError(format!("Invalid minutes in time: {}", hhmmss)))?;
-        let seconds: u32 = parts[2]
-            .parse()
-            .map_err(|_| ControlPointError::ChromecastError(format!("Invalid seconds in time: {}", hhmmss)))?;
-
-        let total_seconds = (hours * 3600 + minutes * 60 + seconds) as f32;
+        let total_seconds = parse_hhmmss_strict(hhmmss)? as f32;
 
         let device = connect_to_device(&self.host, self.port)?;
 
@@ -563,13 +549,13 @@ impl PlaybackPosition for ChromecastRenderer {
         // Extract position information
         let rel_time = media_entry
             .current_time
-            .map(|time| format_time_hhmmss(time as f64));
+            .map(|time| format_hhmmss_f64(time as f64));
 
         let track_duration = media_entry
             .media
             .as_ref()
             .and_then(|m| m.duration)
-            .map(|dur| format_time_hhmmss(dur as f64));
+            .map(|dur| format_hhmmss_f64(dur as f64));
 
         let track_uri = media_entry.media.as_ref().map(|m| m.content_id.clone());
 
@@ -643,15 +629,6 @@ fn detect_content_type_from_meta(uri: &str, meta: &str) -> String {
     };
 
     content_type.to_string()
-}
-
-/// Converts seconds to HH:MM:SS format.
-fn format_time_hhmmss(seconds: f64) -> String {
-    let total_secs = seconds as u64;
-    let hours = total_secs / 3600;
-    let minutes = (total_secs % 3600) / 60;
-    let secs = total_secs % 60;
-    format!("{:02}:{:02}:{:02}", hours, minutes, secs)
 }
 
 impl VolumeControl for ChromecastRenderer {

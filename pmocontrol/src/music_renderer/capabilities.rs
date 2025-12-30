@@ -1,7 +1,7 @@
 // pmocontrol/src/capabilities.rs
 use anyhow::Result;
 
-use crate::errors::ControlPointError;
+use crate::{errors::ControlPointError, model::PlaybackState};
 
 /// Logical playback position across backends.
 ///
@@ -19,51 +19,6 @@ pub struct PlaybackPositionInfo {
 }
 pub trait PlaybackPosition {
     fn playback_position(&self) -> Result<PlaybackPositionInfo, ControlPointError>;
-}
-
-/// High-level playback state across backends.
-#[derive(Clone, Debug)]
-pub enum PlaybackState {
-    Stopped,
-    Playing,
-    Paused,
-    Transitioning,
-    NoMedia,
-    /// Backend-specific or unknown state string.
-    Unknown(String),
-}
-
-impl PlaybackState {
-    /// Map a raw UPnP AVTransport CurrentTransportState string
-    /// to a logical PlaybackState.
-    pub fn from_upnp_state(raw: &str) -> Self {
-        let s = raw.trim().to_ascii_uppercase();
-        match s.as_str() {
-            "STOPPED" => PlaybackState::Stopped,
-            "PLAYING" => PlaybackState::Playing,
-            "PAUSED_PLAYBACK" => PlaybackState::Paused,
-            // States from the AVTransport spec that we normalize:
-            "PAUSED_RECORDING" => PlaybackState::Paused,
-            "RECORDING" => PlaybackState::Playing,
-            // Common vendor-specific states:
-            "TRANSITIONING" => PlaybackState::Transitioning,
-            "BUFFERING" | "PREPARING" => PlaybackState::Transitioning,
-            "NO_MEDIA_PRESENT" => PlaybackState::NoMedia,
-            _ => PlaybackState::Unknown(raw.to_string()),
-        }
-    }
-
-    /// Returns a human-readable label for the playback state.
-    pub fn as_str(&self) -> &str {
-        match self {
-            PlaybackState::Stopped => "STOPPED",
-            PlaybackState::Playing => "PLAYING",
-            PlaybackState::Paused => "PAUSED",
-            PlaybackState::Transitioning => "TRANSITIONING",
-            PlaybackState::NoMedia => "NO_MEDIA",
-            PlaybackState::Unknown(s) => s.as_str(),
-        }
-    }
 }
 
 /// Generic abstraction for playback status (transport state).

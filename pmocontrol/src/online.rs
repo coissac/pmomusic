@@ -1,12 +1,12 @@
 use std::{
     sync::{Arc, Mutex},
-    time::{Instant, SystemTime},
+    time::{SystemTime},
 };
 
 #[derive(Clone,Debug)]
 pub struct DeviceConnectionState {
     online: bool,
-    last_seen: Instant,
+    last_seen: SystemTime,
     max_age: u32,
 }
 
@@ -19,13 +19,15 @@ pub trait DeviceOnline {
 }
 
 impl DeviceConnectionState {
-    pub fn make() -> Arc<Mutex<Self>> {
-        Arc::new(Mutex::new(DeviceConnectionState {
-            online: false,
-            last_seen: std::time::UNIX_EPOCH,
-            max_age: 1800,
-        }))
+    pub fn new() -> Self {
+        DeviceConnectionState { 
+            online: false, last_seen: std::time::UNIX_EPOCH, max_age: 1800 }
     }
+
+    pub fn make() -> Arc<Mutex<Self>> {
+        Arc::new(Mutex::new(DeviceConnectionState::new()))
+    }
+
     pub fn is_online(&self) -> bool {
         self.online
     }
@@ -39,7 +41,7 @@ impl DeviceConnectionState {
     }
 
     pub fn has_been_seen_now(&mut self, max_age: u32) {
-        self.last_seen = Instant::now();
+        self.last_seen = SystemTime::now();
         self.max_age = max_age;
     }
 

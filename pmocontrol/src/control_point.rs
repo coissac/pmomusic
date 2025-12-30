@@ -18,8 +18,6 @@ use tracing::{debug, error, info, warn};
 use ureq::{http, Agent};
 use xmltree::{Element, XMLNode};
 
-pub mod music_queue;
-pub mod openhome_queue;
 
 pub const OPENHOME_SNAPSHOT_CACHE_TTL: Duration = Duration::from_secs(2);
 
@@ -30,9 +28,10 @@ use crate::capabilities::{
 use crate::control_point::music_queue::MusicQueue;
 use crate::control_point::openhome_queue::OpenHomeQueue;
 use crate::discovery::DiscoveryManager;
+use crate::discovery::manager::UDNRegistry;
 use crate::events::{MediaServerEventBus, RendererEventBus};
 use crate::media_server::{
-    playback_item_from_entry, MediaBrowser, UpnpMediaServer, UpnpMediaServer, ServerId,
+    playback_item_from_entry, MediaBrowser, UpnpMediaServer, ServerId,
 };
 use crate::media_server_events::spawn_media_server_event_runtime;
 use crate::model::TrackMetadata;
@@ -48,7 +47,8 @@ use crate::openhome::{
 };
 use crate::openhome_client::parse_track_metadata_from_didl;
 use crate::openhome_playlist::{OpenHomePlaylistSnapshot, OpenHomePlaylistTrack};
-use crate::openhome_renderer::{format_seconds, map_openhome_state};
+use crate::music_renderer::openhome_renderer::map_openhome_state;
+use crate::music_renderer::time_utils::format_hhmmss_u32;
 use crate::provider::HttpXmlDescriptionProvider;
 use crate::queue::backend::{EnqueueMode, PlaybackItem, QueueBackend, QueueSnapshot};
 use crate::queue_interne::InternalQueue;
@@ -101,18 +101,6 @@ pub struct ControlPoint {
     event_bus: RendererEventBus,
     media_event_bus: MediaServerEventBus,
     runtime: Arc<RuntimeState>,
-    /// Optional attachment between a renderer playback queue and a
-    /// server-side DIDL-Lite playlist container.
-    ///
-    /// Key   : RendererId
-    /// Value : PlaylistBinding
-    playlist_bindings: Arc<Mutex<HashMap<ServiceId, PlaylistBinding>>>,
-    /// Cache of MusicRenderer instances to avoid recreating them.
-    /// This is critical for Chromecast which maintains a persistent TLS connection.
-    ///
-    /// Key   : RendererId
-    /// Value : MusicRenderer
-    renderer_cache: Arc<Mutex<HashMap<ServiceId, MusicRendererBackend>>>,
 }
 
 impl ControlPoint {
@@ -124,11 +112,6 @@ impl ControlPoint {
         let event_bus = RendererEventBus::new();
         let media_event_bus = MediaServerEventBus::new();
         let runtime = Arc::new(RuntimeState::new());
-        // set_openhome_queue_provider(Arc::new(RuntimeOpenHomeQueueProvider {
-        //     runtime: Arc::clone(&runtime),
-        // }));
-        let playlist_bindings = Arc::new(Mutex::new(HashMap::new()));
-        let renderer_cache = Arc::new(Mutex::new(HashMap::new()));
 
         // SsdpClient
         let client = SsdpClient::new()?; // pmoupnp::ssdp::SsdpClient
@@ -403,8 +386,6 @@ impl ControlPoint {
             event_bus: event_bus.clone(),
             media_event_bus: media_event_bus.clone(),
             runtime: Arc::clone(&runtime),
-            playlist_bindings: Arc::clone(&playlist_bindings),
-            renderer_cache: Arc::clone(&renderer_cache),
         };
 
         thread::spawn(move || {
@@ -416,37 +397,12 @@ impl ControlPoint {
                     reg.list_renderers()
                 };
 
-                // Build a map of current renderer IDs for cleanup
-                let current_ids: HashSet<ServiceId> = infos.iter().map(|i| i.id.clone()).collect();
-
-                // Remove offline renderers from shared cache
-                {
-                    let mut cache = runtime_cp.renderer_cache.lock().unwrap();
-                    cache.retain(|id, _| current_ids.contains(id));
-                }
-
-                // Get or create renderers from shared cache
+                // Create MusicRendererBackend for each renderer from registry
+                // No caching needed - backends manage their own connections
                 let renderers: Vec<MusicRendererBackend> = infos
                     .into_iter()
                     .filter_map(|info| {
-                        let id = info.id.clone();
-
-                        // Try to get from cache first
-                        {
-                            let cache = runtime_cp.renderer_cache.lock().unwrap();
-                            if let Some(renderer) = cache.get(&id) {
-                                return Some(renderer.clone());
-                            }
-                        }
-
-                        // Create new renderer and add to cache
-                        if let Some(renderer) = MusicRendererBackend::from_renderer_info(info, &runtime_cp.registry) {
-                            let mut cache = runtime_cp.renderer_cache.lock().unwrap();
-                            cache.insert(id, renderer.clone());
-                            Some(renderer)
-                        } else {
-                            None
-                        }
+                        MusicRendererBackend::from_renderer_info(info, &runtime_cp.registry)
                     })
                     .collect();
 
@@ -457,54 +413,13 @@ impl ControlPoint {
                         continue;
                     }
 
-                    let backend = if info.capabilities.has_oh_playlist {
-                        PlaylistBackend::OpenHome
-                    } else {
-                        PlaylistBackend::PMOQueue
-                    };
-                    let previous_backend = runtime_cp.runtime.playlist_backend(&info.id);
-                    let runtime_entry_exists = runtime_cp.runtime.has_entry(&info.id);
-
-                    // Initialize queue if: backend changed OR runtime entry doesn't exist yet
-                    if previous_backend != backend || !runtime_entry_exists {
-                        runtime_cp.runtime.set_playlist_backend(&info.id, backend);
-                        match backend {
-                            PlaylistBackend::OpenHome => {
-                                if let Some(queue) = build_openhome_queue(info) {
-                                    runtime_cp
-                                        .runtime
-                                        .set_music_queue(&info.id, MusicQueue::OpenHome(queue));
-                                } else {
-                                    runtime_cp.runtime.set_music_queue(
-                                        &info.id,
-                                        MusicQueue::Internal(InternalQueue::new()),
-                                    );
-                                }
-                            }
-                            PlaylistBackend::PMOQueue => {
-                                runtime_cp.runtime.set_music_queue(
-                                    &info.id,
-                                    MusicQueue::Internal(InternalQueue::new()),
-                                );
-                            }
-                        }
-                        if matches!(backend, PlaylistBackend::OpenHome) {
-                            if let Err(err) = sync_openhome_playlist(
-                                &runtime_cp.registry,
-                                &runtime_cp.runtime,
-                                &runtime_cp.event_bus,
-                                &info.id,
-                            ) {
-                                debug!(
-                                    renderer = info.id.0.as_str(),
-                                    error = %err,
-                                    "Initial OpenHome playlist sync failed"
-                                );
-                            }
-                        }
-                    }
-
                     let renderer_id = info.id.clone();
+
+                    // Initialize runtime entry if it doesn't exist
+                    // Queue is managed by MusicRenderer, not RuntimeState
+                    if !runtime_cp.runtime.has_entry(&renderer_id) {
+                        runtime_cp.runtime.create_entry(&renderer_id);
+                    }
                     let prev_snapshot = runtime_cp.runtime.snapshot_for(&renderer_id);
                     let mut new_snapshot = prev_snapshot.clone();
                     let prev_position = prev_snapshot.position.clone();
@@ -633,8 +548,6 @@ impl ControlPoint {
             event_bus: event_bus.clone(),
             media_event_bus: media_event_bus.clone(),
             runtime: Arc::clone(&runtime),
-            playlist_bindings: Arc::clone(&playlist_bindings),
-            renderer_cache: Arc::clone(&renderer_cache),
         };
 
         thread::Builder::new()
@@ -650,14 +563,12 @@ impl ControlPoint {
             Arc::clone(&runtime),
             event_bus.clone(),
             oh_event_tx,
-            Arc::clone(&playlist_bindings),
         )?;
 
         // Worker thread to process MediaServerEvent and trigger queue refreshes
         // for renderers bound to updated playlist containers
         let registry_for_media_worker = Arc::clone(&registry);
         let runtime_for_media_worker = Arc::clone(&runtime);
-        let bindings_for_media_worker = Arc::clone(&playlist_bindings);
         let event_bus_for_media_worker = event_bus.clone();
         let media_rx = media_event_bus.subscribe();
 
@@ -687,17 +598,26 @@ impl ControlPoint {
                         server_id,
                         container_ids,
                     } => {
+                        // Get all renderers from registry and check their bindings
                         let renderers_to_refresh: Vec<ServiceId> = {
-                            let mut bindings = bindings_for_media_worker.lock().unwrap();
+                            let reg = registry_for_media_worker.read().unwrap();
                             let mut to_refresh = Vec::new();
 
-                            for (renderer_id, binding) in bindings.iter_mut() {
-                                if binding.server_id == server_id
-                                    && container_ids.contains(&binding.container_id)
-                                {
-                                    binding.pending_refresh = true;
-                                    binding.has_seen_update = true;
-                                    to_refresh.push(renderer_id.clone());
+                            if let Ok(renderers) = reg.list_renderers() {
+                                for renderer in renderers {
+                                    let renderer_id = renderer.info().id.clone();
+                                    if let Some(binding) = renderer.get_playlist_binding() {
+                                        if binding.server_id == server_id
+                                            && container_ids.contains(&binding.container_id)
+                                        {
+                                            // Update binding to mark refresh needed
+                                            let mut updated_binding = binding.clone();
+                                            updated_binding.pending_refresh = true;
+                                            updated_binding.has_seen_update = true;
+                                            renderer.set_playlist_binding(Some(updated_binding));
+                                            to_refresh.push(renderer_id);
+                                        }
+                                    }
                                 }
                             }
 
@@ -714,7 +634,6 @@ impl ControlPoint {
                             if let Err(err) = refresh_attached_queue_for(
                                 &registry_for_media_worker,
                                 &runtime_for_media_worker,
-                                &bindings_for_media_worker,
                                 &renderer_id,
                                 &event_bus_for_media_worker,
                                 None,
@@ -748,7 +667,6 @@ impl ControlPoint {
         // Every 60 seconds, trigger a refresh for all renderers with active bindings
         let registry_for_periodic = Arc::clone(&registry);
         let runtime_for_periodic = Arc::clone(&runtime);
-        let bindings_for_periodic = Arc::clone(&playlist_bindings);
         let event_bus_for_periodic = event_bus.clone();
 
         thread::Builder::new()
@@ -760,12 +678,20 @@ impl ControlPoint {
 
                     // Collect all renderers with active bindings and mark them for refresh
                     let renderers_to_refresh: Vec<ServiceId> = {
-                        let mut bindings = bindings_for_periodic.lock().unwrap();
+                        let reg = registry_for_periodic.read().unwrap();
                         let mut to_refresh = Vec::new();
 
-                        for (renderer_id, binding) in bindings.iter_mut() {
-                            binding.pending_refresh = true;
-                            to_refresh.push(renderer_id.clone());
+                        if let Ok(renderers) = reg.list_renderers() {
+                            for renderer in renderers {
+                                let renderer_id = renderer.info().id.clone();
+                                if let Some(binding) = renderer.get_playlist_binding() {
+                                    // Mark binding for refresh
+                                    let mut updated_binding = binding.clone();
+                                    updated_binding.pending_refresh = true;
+                                    renderer.set_playlist_binding(Some(updated_binding));
+                                    to_refresh.push(renderer_id);
+                                }
+                            }
                         }
 
                         to_refresh
@@ -781,7 +707,6 @@ impl ControlPoint {
                         if let Err(err) = refresh_attached_queue_for(
                             &registry_for_periodic,
                             &runtime_for_periodic,
-                            &bindings_for_periodic,
                             &renderer_id,
                             &event_bus_for_periodic,
                             None,
@@ -798,11 +723,10 @@ impl ControlPoint {
 
         Ok(Self {
             registry,
+            udn_cache: Arc::new(Mutex::new(UDNRegistry::new())),
             event_bus,
             media_event_bus,
             runtime,
-            playlist_bindings,
-            renderer_cache,
         })
     }
 
@@ -842,70 +766,23 @@ impl ControlPoint {
         
     }
 
-    /// Internal helper to get or create a renderer from the cache.
-    /// This ensures that Chromecast renderers maintain their persistent connections.
-    fn get_or_create_renderer(&self, info: RendererInfo) -> Option<MusicRendererBackend> {
-        let id = info.id();
-
-        // Try to get from cache first
-        {
-            let cache = self.renderer_cache.lock().unwrap();
-            if let Some(renderer) = cache.get(&id) {
-                return Some(renderer.clone());
-            }
-        }
-
-        // Not in cache, create new renderer
-        if let Some(renderer) = MusicRendererBackend::from_renderer_info(info, &self.registry) {
-            // Add to cache
-            let mut cache = self.renderer_cache.lock().unwrap();
-            cache.insert(id, renderer.clone());
-            Some(renderer)
-        } else {
-            None
-        }
-    }
 
     /// Snapshot list of music renderers (protocol-agnostic view).
-    pub fn list_music_renderers(&self) -> Vec<MusicRendererBackend> {
-        let infos = {
-            let reg = self.registry.read().unwrap();
-            reg.list_renderers()
-        };
-
-        // Clean up cache - remove renderers that are no longer in the registry
-        {
-            let current_ids: HashSet<ServiceId> = infos.iter().map(|i| i.id.clone()).collect();
-            let mut cache = self.renderer_cache.lock().unwrap();
-            cache.retain(|id, _| current_ids.contains(id));
-        }
-
-        infos
-            .into_iter()
-            .filter_map(|info| self.get_or_create_renderer(info))
-            .collect()
+    pub fn list_music_renderers(&self) -> Vec<Arc<MusicRenderer>> {
+        let reg = self.registry.read().unwrap();
+        reg.list_renderers().unwrap_or_else(|_| vec![])
     }
 
     /// Return the first music renderer in the registry, if any.
-    pub fn default_music_renderer(&self) -> Option<MusicRendererBackend> {
-        let infos = {
-            let reg = self.registry.read().unwrap();
-            reg.list_renderers()
-        };
-
-        infos
-            .into_iter()
-            .find_map(|info| self.get_or_create_renderer(info))
+    pub fn default_music_renderer(&self) -> Option<Arc<MusicRenderer>> {
+        let reg = self.registry.read().unwrap();
+        reg.list_renderers().ok()?.into_iter().next()
     }
 
     /// Lookup a music renderer by id.
-    pub fn music_renderer_by_id(&self, id: &ServiceId) -> Option<MusicRendererBackend> {
-        let info = {
-            let reg = self.registry.read().unwrap();
-            reg.get_renderer(id)
-        }?;
-
-        self.get_or_create_renderer(info)
+    pub fn music_renderer_by_id(&self, id: &ServiceId) -> Option<Arc<MusicRenderer>> {
+        let reg = self.registry.read().unwrap();
+        reg.get_renderer(id)
     }
 
     /// Snapshot list of media servers currently known by the registry.
@@ -926,7 +803,7 @@ impl ControlPoint {
     /// `detach_playlist_binding` beforehand so that any server-side playlist
     /// attachment stays consistent with the local `QueueBackend` snapshot.
     /// The actual structural change then goes through the backend helpers
-    /// (`QueueBackend::clear_queue` via `RuntimeState::with_music_queue_mut`).
+    /// (`QueueBackend::clear_queue` via `MusicRenderer::get_queue_mut()`).
     pub fn clear_queue(&self, renderer_id: &ServiceId) -> anyhow::Result<()> {
         if !self.runtime.has_entry(renderer_id) {
             let err = Self::runtime_entry_missing(renderer_id);
@@ -943,17 +820,14 @@ impl ControlPoint {
         // Clear the queue on the backend (backend-agnostic)
         let renderer = self.music_renderer_by_id(renderer_id)
             .ok_or_else(|| anyhow!("Renderer {} not found", renderer_id.0))?;
+
+        // Get queue length before clearing
+        let removed = renderer.get_queue().upcoming_len().unwrap_or(0);
+
         renderer.clear_queue()?;
 
         // Sync backend state to local cache (for OpenHome, this updates the cache)
         renderer.sync_queue_state()?;
-
-        // Clear the local queue state
-        let removed = self.runtime.with_music_queue_mut(renderer_id, |queue| {
-            let removed = queue.upcoming_len()?;
-            queue.clear_queue()?;
-            Ok(removed)
-        })?;
 
         debug!(
             renderer = renderer_id.0.as_str(),
@@ -977,7 +851,7 @@ impl ControlPoint {
     /// Each caller-triggered queue mutation must first detach any playlist binding
     /// to avoid diverging from the server container, then manipulate the queue
     /// strictly through the `QueueBackend` helpers (here `QueueBackend::enqueue_items`
-    /// inside `RuntimeState::with_music_queue_mut`).
+    /// accessed via `MusicRenderer::get_queue_mut()`).
     pub fn enqueue_items(
         &self,
         renderer_id: &ServiceId,
@@ -997,10 +871,15 @@ impl ControlPoint {
 
         // Enqueue items using QueueBackend abstraction (works for both backends)
         let item_count = items.len();
-        let new_len = self.runtime.with_music_queue_mut(renderer_id, |queue| {
+        let renderer = self
+            .music_renderer_by_id(renderer_id)
+            .ok_or_else(|| anyhow!("Renderer {} not found", renderer_id.0))?;
+
+        let new_len = {
+            let mut queue = renderer.get_queue_mut();
             queue.enqueue_items(items, EnqueueMode::AppendToEnd)?;
-            queue.upcoming_len()
-        })?;
+            queue.upcoming_len()?
+        };
 
         debug!(
             renderer = renderer_id.0.as_str(),
@@ -1060,9 +939,13 @@ impl ControlPoint {
             return Err(Self::runtime_entry_missing(renderer_id));
         }
 
-        self.runtime
-            .queue_full_snapshot(renderer_id)
-            .ok_or_else(|| Self::runtime_entry_missing(renderer_id))
+        // Get queue from renderer
+        let renderer = self.music_renderer_by_id(renderer_id)
+            .map_err(|_| Self::runtime_entry_missing(renderer_id))?;
+        let queue = renderer.get_queue();
+        let snapshot = queue.queue_snapshot()
+            .map_err(|e| ControlPointError::QueueError(e.to_string()))?;
+        Ok((snapshot.items, snapshot.current_index))
     }
 
     /// Read-only accessor to the last known metadata for the renderer.
@@ -1094,15 +977,6 @@ impl ControlPoint {
         Ok(snapshot.map(|s| s.len()).unwrap_or(0))
     }
 
-    pub fn get_cached_openhome_playlist_snapshot(
-        &self,
-        renderer_id: &ServiceId,
-        ttl: Duration,
-    ) -> anyhow::Result<OpenHomePlaylistSnapshot> {
-        let renderer = self.openhome_renderer(renderer_id)?;
-        self.runtime.openhome_snapshot_cached(&renderer, ttl)
-    }
-
     /// Build a fully consistent snapshot for UI consumers (state + queue + binding).
     #[cfg(feature = "pmoserver")]
     pub fn renderer_full_snapshot(
@@ -1114,31 +988,21 @@ impl ControlPoint {
             .ok_or_else(|| anyhow!("Renderer {} not found", renderer_id.0))?;
         let info = renderer.info();
 
-        // Get runtime snapshot (needed for all backends: volume, state, position)
-        let (runtime_snapshot, runtime_queue_items, runtime_current_index) =
-            self.runtime.renderer_snapshot_bundle(renderer_id);
+        // Get runtime snapshot (state, position, volume, metadata)
+        let runtime_snapshot = self.runtime.snapshot_for(renderer_id);
 
-        // Try to get queue from backend (returns Some for OpenHome, None for others)
-        let backend_queue = renderer.queue_snapshot()?;
+        // Get queue from renderer (works for all backends)
+        let queue_snapshot = renderer.get_queue().queue_snapshot()
+            .map_err(|e| anyhow!("Failed to get queue snapshot: {}", e))?;
 
-        // Use backend queue if available (OpenHome), otherwise use runtime queue (AVTransport)
-        let (queue_items, mut queue_current_index, from_backend) = if let Some(snapshot) = backend_queue {
-            debug!(
-                renderer = renderer_id.0.as_str(),
-                current_index = ?snapshot.current_index,
-                track_count = snapshot.items.len(),
-                "renderer_full_snapshot: using backend queue (OpenHome)"
-            );
-            (snapshot.items, snapshot.current_index, true)
-        } else {
-            (runtime_queue_items, runtime_current_index, false)
-        };
+        let queue_items = queue_snapshot.items;
+        let mut queue_current_index = queue_snapshot.current_index;
 
         let playback_source = self.runtime.playback_source(renderer_id);
         let queue_len = queue_items.len();
 
-        // For non-backend queues (AVTransport), try heuristics to determine current_index
-        if !from_backend && queue_current_index.is_none() {
+        // Try heuristics to determine current_index if not set
+        if queue_current_index.is_none() {
             if let Some(position) = runtime_snapshot.position.as_ref() {
                 if let Some(uri) = position.track_uri.as_ref() {
                     if let Some(idx) = queue_items.iter().position(|item| item.uri == *uri) {
@@ -1201,21 +1065,8 @@ impl ControlPoint {
             .and_then(|idx| queue_items.get(idx))
             .map(current_track_from_playback_item);
 
-        // For backend queues (OpenHome), prefer queue metadata since runtime isn't updated
-        // For runtime queues (AVTransport), prefer runtime metadata which is fresher
-        let current_track = if from_backend {
-            queue_current_metadata.or_else(|| {
-                runtime_snapshot
-                    .last_metadata
-                    .as_ref()
-                    .map(|meta| CurrentTrackMetadata {
-                        title: meta.title.clone(),
-                        artist: meta.artist.clone(),
-                        album: meta.album.clone(),
-                        album_art_uri: meta.album_art_uri.clone(),
-                    })
-            })
-        } else {
+        // Prefer queue metadata, fallback to runtime metadata
+        let current_track = queue_current_metadata.or_else(|| {
             runtime_snapshot
                 .last_metadata
                 .as_ref()
@@ -1225,8 +1076,7 @@ impl ControlPoint {
                     album: meta.album.clone(),
                     album_art_uri: meta.album_art_uri.clone(),
                 })
-                .or(queue_current_metadata)
-        };
+        });
 
         let state_view = RendererStateView {
             id: renderer_id.0.clone(),
@@ -1323,15 +1173,8 @@ impl ControlPoint {
             anyhow!("Renderer {} not found", renderer_id.0)
         })?;
 
-        // If renderer has a backend queue (OpenHome), use backend playback
-        if renderer.queue_snapshot()?.is_some() {
-            renderer.play_current_from_backend_queue()?;
-            self.runtime.set_playback_source(renderer_id, PlaybackSource::FromQueue);
-            return Ok(());
-        }
-
-        // Otherwise use local queue playback (AVTransport)
-        let Some((item, remaining)) = self.runtime.peek_current(renderer_id) else {
+        // Use generic queue access (works for all backends)
+        let Some((item, remaining)) = renderer.get_queue().peek_current()? else {
             debug!(
                 renderer = renderer_id.0.as_str(),
                 "play_current_from_queue: queue is empty or no current item"
@@ -1408,14 +1251,8 @@ impl ControlPoint {
             anyhow!("Renderer {} not found", renderer_id.0)
         })?;
 
-        // If renderer has a backend queue (OpenHome), use backend playback
-        if renderer.queue_snapshot()?.is_some() {
-            renderer.play_next_from_backend_queue()?;
-            self.runtime.set_playback_source(renderer_id, PlaybackSource::FromQueue);
-            return Ok(());
-        }
-
-        let Some((item, remaining_after)) = self.runtime.dequeue_next(renderer_id) else {
+        // Use generic queue access (works for all backends)
+        let Some((item, remaining_after)) = renderer.get_queue_mut().dequeue_next()? else {
             debug!(
                 renderer = renderer_id.0.as_str(),
                 "play_next_from_queue: queue is empty"
@@ -1458,12 +1295,9 @@ impl ControlPoint {
                 error = %err,
                 "Failed to start playback for queued item"
             );
-            if self
-                .runtime
-                .with_music_queue_mut(renderer_id, |queue| {
-                    queue.enqueue_items(vec![item.clone()], EnqueueMode::InsertAfterCurrent)?;
-                    Ok(())
-                })
+            // Try to requeue the item
+            if renderer.get_queue_mut()
+                .enqueue_items(vec![item.clone()], EnqueueMode::InsertAfterCurrent)
                 .is_err()
             {
                 warn!(
@@ -1540,48 +1374,21 @@ impl ControlPoint {
             anyhow!("Renderer {} not found", renderer_id.0)
         })?;
 
-        // For backend queues (OpenHome), use select_track_index which handles the track_id lookup
-        if renderer.queue_snapshot()?.is_some() {
-            info!(
-                renderer = renderer_id.0.as_str(),
-                index,
-                "Seeking to OpenHome queue index"
-            );
+        // Use generic queue access (works for all backends)
+        renderer.get_queue_mut().set_index(Some(index))?;
 
-            // Use the queue to select the track by index
-            self.runtime.with_music_queue_mut(renderer_id, |queue| {
-                if let crate::control_point::music_queue::MusicQueue::OpenHome(oh_queue) = queue {
-                    oh_queue.select_track_index(index)
-                } else {
-                    Err(anyhow!("Expected OpenHome queue"))
-                }
-            })?;
-
-            info!(
-                renderer = renderer_id.0.as_str(),
-                index,
-                "Successfully seeked to OpenHome queue index"
-            );
-
-            self.runtime
-                .set_playback_source(renderer_id, PlaybackSource::FromQueue);
-            return self.sync_openhome_playlist_for(renderer_id);
-        }
-
-        // For internal queue, set the index and play
-        self.runtime.with_music_queue_mut(renderer_id, |queue| {
-            queue.set_index(Some(index))
-        })?;
-
-        let Some((item, remaining)) = self.runtime.peek_current(renderer_id) else {
-            debug!(
-                renderer = renderer_id.0.as_str(),
-                index,
-                "play_queue_index: no item at index"
-            );
-            self.runtime
-                .set_playback_source(renderer_id, PlaybackSource::None);
-            return Ok(());
+        let (item, remaining) = match renderer.get_queue().peek_current()? {
+            Some(result) => result,
+            None => {
+                debug!(
+                    renderer = renderer_id.0.as_str(),
+                    index,
+                    "play_queue_index: no item at index"
+                );
+                self.runtime
+                    .set_playback_source(renderer_id, PlaybackSource::None);
+                return Ok(());
+            }
         };
 
         debug!(
@@ -1668,9 +1475,10 @@ impl ControlPoint {
         // Check if queue has ANY items (not just upcoming items after current)
         // This is important for newly attached playlists with current_index set
         let has_items = self
-            .runtime
-            .queue_full_snapshot(renderer_id)
-            .map(|(items, _)| !items.is_empty())
+            .music_renderer_by_id(renderer_id)
+            .ok()
+            .and_then(|r| r.get_queue().queue_snapshot().ok())
+            .map(|s| !s.items.is_empty())
             .unwrap_or(false);
         if !has_items {
             debug!(
@@ -1680,13 +1488,15 @@ impl ControlPoint {
             return Ok(());
         }
 
-        let renderer = self.music_renderer_by_id(renderer_id).ok_or_else(|| {
-            anyhow!("Renderer {} not found", renderer_id.0)
-        })?;
+        // Play current item if index is set, otherwise play next (advances index to 0)
+        let has_current_index = self
+            .music_renderer_by_id(renderer_id)
+            .ok()
+            .and_then(|r| r.get_queue().queue_snapshot().ok())
+            .and_then(|s| s.current_index)
+            .is_some();
 
-        // For backend queues (OpenHome), play current (renderer tracks its own position)
-        // For local queues (AVTransport), dequeue next (we manage position locally)
-        if renderer.queue_snapshot()?.is_some() {
+        if has_current_index {
             self.play_current_from_queue(renderer_id)
         } else {
             self.play_next_from_queue(renderer_id)
@@ -1797,10 +1607,7 @@ impl ControlPoint {
 
         // Clear the local queue (detach binding + clear runtime queue structure)
         self.detach_playlist_binding(renderer_id, "attach_new_playlist");
-        self.runtime.with_music_queue_mut(renderer_id, |queue| {
-            queue.clear_queue()?;
-            Ok(())
-        })?;
+        renderer.get_queue_mut().clear_queue()?;
 
         debug!(
             renderer = renderer_id.0.as_str(),
@@ -1815,17 +1622,18 @@ impl ControlPoint {
             auto_play_on_refresh: auto_play,
         };
 
-        {
-            let mut bindings = self.playlist_bindings.lock().unwrap();
-            bindings.insert(renderer_id.clone(), binding.clone());
-            info!(
-                renderer = renderer_id.0.as_str(),
-                server = server_id.0.as_str(),
-                container = container_id,
-                auto_play,
-                "Queue attached to playlist container"
-            );
-        }
+        let renderer = self
+            .music_renderer_by_id(renderer_id)
+            .ok_or_else(|| anyhow!("Renderer {} not found", renderer_id.0))?;
+
+        renderer.set_playlist_binding(Some(binding.clone()));
+        info!(
+            renderer = renderer_id.0.as_str(),
+            server = server_id.0.as_str(),
+            container = container_id,
+            auto_play,
+            "Queue attached to playlist container"
+        );
 
         self.emit_renderer_event(RendererEvent::BindingChanged {
             id: renderer_id.clone(),
@@ -1849,7 +1657,6 @@ impl ControlPoint {
         refresh_attached_queue_for(
             &self.registry,
             &self.runtime,
-            &self.playlist_bindings,
             renderer_id,
             &self.event_bus,
             callback,
@@ -1873,8 +1680,8 @@ impl ControlPoint {
         &self,
         renderer_id: &ServiceId,
     ) -> Option<(ServerId, String, bool)> {
-        let bindings = self.playlist_bindings.lock().unwrap();
-        bindings.get(renderer_id).map(|binding| {
+        let renderer = self.music_renderer_by_id(renderer_id)?;
+        renderer.get_playlist_binding().map(|binding| {
             (
                 binding.server_id.clone(),
                 binding.container_id.clone(),
@@ -1888,10 +1695,13 @@ impl ControlPoint {
     /// Invariant: every user-driven queue mutation **must** call this method so
     /// that bindings never become out of sync with the local queue snapshot.
     fn detach_playlist_binding(&self, renderer_id: &ServiceId, reason: &str) {
-        let removed = {
-            let mut bindings = self.playlist_bindings.lock().unwrap();
-            bindings.remove(renderer_id)
+        let renderer = match self.music_renderer_by_id(renderer_id) {
+            Some(r) => r,
+            None => return,
         };
+
+        let removed = renderer.get_playlist_binding();
+        renderer.set_playlist_binding(None);
 
         if let Some(binding) = removed {
             info!(
@@ -1962,20 +1772,6 @@ impl ControlPoint {
         )
     }
 
-    fn openhome_renderer(&self, renderer_id: &ServiceId) -> anyhow::Result<MusicRendererBackend> {
-        let renderer = self
-            .music_renderer_by_id(renderer_id)
-            .ok_or_else(|| OpenHomeAccessError::RendererNotFound(renderer_id.0.clone()))?;
-        if !renderer.info().capabilities.has_oh_playlist {
-            return Err(OpenHomeAccessError::PlaylistNotSupported(renderer_id.0.clone()).into());
-        }
-        Ok(renderer)
-    }
-
-    fn sync_openhome_playlist_for(&self, renderer_id: &ServiceId) -> anyhow::Result<()> {
-        sync_openhome_playlist(&self.registry, &self.runtime, &self.event_bus, renderer_id)
-    }
-
 }
 
 #[cfg(feature = "pmoserver")]
@@ -1987,18 +1783,6 @@ fn convert_runtime_position(position: Option<&PlaybackPositionInfo>) -> (Option<
         ),
         None => (None, None),
     }
-}
-
-fn build_openhome_queue(info: &RendererInfo) -> Option<OpenHomeQueue> {
-    let playlist = build_playlist_client(info)?;
-    let info_client = build_info_client(info);
-    let product_client = build_product_client(info);
-    Some(OpenHomeQueue::new(
-        info.id.clone(),
-        playlist,
-        info_client,
-        product_client,
-    ))
 }
 
 #[cfg(feature = "pmoserver")]
@@ -2033,88 +1817,24 @@ enum PlaybackSource {
     External,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PlaylistBackend {
-    PMOQueue,
-    OpenHome,
-}
-
 struct RendererRuntimeEntry {
     snapshot: RendererRuntimeSnapshot,
-    pub queue: crate::control_point::music_queue::MusicQueue,
-    openhome_cache: OpenHomePlaylistCache,
     playback_source: PlaybackSource,
     user_stop_requested: bool,
-    playlist_backend: PlaylistBackend,
 }
 
 impl Default for RendererRuntimeEntry {
     fn default() -> Self {
         Self {
             snapshot: RendererRuntimeSnapshot::default(),
-            queue: MusicQueue::Internal(InternalQueue::new()),
-            openhome_cache: OpenHomePlaylistCache::default(),
             playback_source: PlaybackSource::None,
             user_stop_requested: false,
-            playlist_backend: PlaylistBackend::PMOQueue,
         }
     }
-}
-
-#[derive(Debug, Default, Clone)]
-struct OpenHomePlaylistCache {
-    ids: Option<Vec<u32>>,
-    snapshot: Option<OpenHomePlaylistSnapshot>,
-    last_refresh: Option<Instant>,
 }
 
 struct RuntimeState {
     entries: Mutex<HashMap<ServiceId, RendererRuntimeEntry>>,
-}
-
-pub struct RendererRuntimeStateMut<'a> {
-    pub queue: MusicQueueGuard<'a>,
-    _guard: MutexGuard<'a, HashMap<ServiceId, RendererRuntimeEntry>>,
-}
-
-impl<'a> RendererRuntimeStateMut<'a> {
-    fn new(
-        guard: MutexGuard<'a, HashMap<ServiceId, RendererRuntimeEntry>>,
-        queue_ptr: *mut MusicQueue,
-    ) -> Self {
-        Self {
-            queue: MusicQueueGuard::new(queue_ptr),
-            _guard: guard,
-        }
-    }
-}
-
-pub struct MusicQueueGuard<'a> {
-    ptr: *mut MusicQueue,
-    _marker: PhantomData<&'a mut MusicQueue>,
-}
-
-impl<'a> MusicQueueGuard<'a> {
-    fn new(ptr: *mut MusicQueue) -> Self {
-        Self {
-            ptr,
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl<'a> Deref for MusicQueueGuard<'a> {
-    type Target = MusicQueue;
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { &*self.ptr }
-    }
-}
-
-impl<'a> DerefMut for MusicQueueGuard<'a> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { &mut *self.ptr }
-    }
 }
 
 struct RuntimeOpenHomeQueueProvider {
@@ -2174,34 +1894,6 @@ impl RuntimeState {
         entries.contains_key(id)
     }
 
-    fn with_music_queue_mut<F, R>(&self, id: &ServiceId, f: F) -> anyhow::Result<R>
-    where
-        F: FnOnce(&mut MusicQueue) -> anyhow::Result<R>,
-    {
-        let mut entries = self.entries.lock().unwrap();
-        let entry = entries
-            .get_mut(id)
-            .ok_or_else(|| anyhow!("Renderer {} not registered in runtime", id.0))?;
-        f(&mut entry.queue)
-    }
-
-    fn queue_snapshot(&self, id: &ServiceId) -> Option<Vec<PlaybackItem>> {
-        let entries = self.entries.lock().unwrap();
-        entries
-            .get(id)
-            .and_then(|entry| entry.queue.upcoming_items().ok())
-    }
-
-    fn queue_full_snapshot(&self, id: &ServiceId) -> Option<(Vec<PlaybackItem>, Option<usize>)> {
-        let entries = self.entries.lock().unwrap();
-        entries.get(id).and_then(|entry| {
-            entry
-                .queue
-                .queue_snapshot()
-                .ok()
-                .map(|snapshot| (snapshot.items, snapshot.current_index))
-        })
-    }
 
     // fn renderer_state(&self, id: &RendererId) -> anyhow::Result<RendererRuntimeState> {
     //     let entries = self.entries.lock().unwrap();
@@ -2213,18 +1905,6 @@ impl RuntimeState {
     //     })
     // }
 
-    fn renderer_state_mut(&self, id: &ServiceId) -> anyhow::Result<RendererRuntimeStateMut<'_>> {
-        let mut entries = self.entries.lock().unwrap();
-        let queue_ptr = {
-            let entry = entries
-                .get_mut(id)
-                .ok_or_else(|| anyhow!("Renderer {} not registered in runtime", id.0))?;
-            let entry_ptr: *mut RendererRuntimeEntry = entry;
-            unsafe { &mut (*entry_ptr).queue as *mut MusicQueue }
-        };
-        Ok(RendererRuntimeStateMut::new(entries, queue_ptr))
-    }
-
     fn current_track_metadata(&self, id: &ServiceId) -> Option<TrackMetadata> {
         let entries = self.entries.lock().unwrap();
         entries
@@ -2232,44 +1912,6 @@ impl RuntimeState {
             .and_then(|entry| entry.snapshot.last_metadata.clone())
     }
 
-    #[cfg(feature = "pmoserver")]
-    fn renderer_snapshot_bundle(
-        &self,
-        id: &ServiceId,
-    ) -> (RendererRuntimeSnapshot, Vec<PlaybackItem>, Option<usize>) {
-        let entries = self.entries.lock().unwrap();
-        if let Some(entry) = entries.get(id) {
-            match entry.queue.queue_snapshot() {
-                Ok(snapshot) => (
-                    entry.snapshot.clone(),
-                    snapshot.items,
-                    snapshot.current_index,
-                ),
-                Err(err) => {
-                    warn!(
-                        renderer = id.0.as_str(),
-                        error = %err,
-                        "Failed to build queue snapshot for renderer"
-                    );
-                    (entry.snapshot.clone(), Vec::new(), None)
-                }
-            }
-        } else {
-            (RendererRuntimeSnapshot::default(), Vec::new(), None)
-        }
-    }
-
-    fn dequeue_next(&self, id: &ServiceId) -> Option<(PlaybackItem, usize)> {
-        let mut entries = self.entries.lock().unwrap();
-        let entry = entries.get_mut(id)?;
-        entry.queue.dequeue_next().ok().flatten()
-    }
-
-    fn peek_current(&self, id: &ServiceId) -> Option<(PlaybackItem, usize)> {
-        let entries = self.entries.lock().unwrap();
-        let entry = entries.get(id)?;
-        entry.queue.peek_current().ok().flatten()
-    }
 
     fn set_playback_source(&self, id: &ServiceId, source: PlaybackSource) {
         let mut entries = self.entries.lock().unwrap();
@@ -2310,74 +1952,6 @@ impl RuntimeState {
         f(entry)
     }
 
-    fn set_music_queue(&self, id: &ServiceId, queue: MusicQueue) {
-        self.with_entry(id, |entry| {
-            entry.queue = queue;
-        });
-    }
-
-    fn invalidate_openhome_cache(&self, id: &ServiceId) {
-        self.with_entry(id, |entry| {
-            entry.openhome_cache = OpenHomePlaylistCache::default();
-        });
-    }
-
-    fn get_openhome_cache(&self, id: &ServiceId) -> Option<OpenHomePlaylistCache> {
-        let entries = self.entries.lock().unwrap();
-        entries.get(id).map(|entry| entry.openhome_cache.clone())
-    }
-
-    fn set_openhome_cache(&self, id: &ServiceId, cache: OpenHomePlaylistCache) {
-        self.with_entry(id, |entry| {
-            entry.openhome_cache = cache;
-        });
-    }
-
-    fn openhome_snapshot_cached(
-        &self,
-        renderer: &MusicRendererBackend,
-        ttl: Duration,
-    ) -> anyhow::Result<OpenHomePlaylistSnapshot> {
-        let ids = renderer.openhome_playlist_ids()?;
-        let now = Instant::now();
-
-        if let Some(cache) = self.get_openhome_cache(renderer.id()) {
-            if let (Some(cached_ids), Some(snapshot), Some(last_refresh)) =
-                (cache.ids, cache.snapshot, cache.last_refresh)
-            {
-                if cached_ids == ids && now.saturating_duration_since(last_refresh) <= ttl {
-                    return Ok(snapshot);
-                }
-            }
-        }
-
-        let snapshot = renderer.openhome_playlist_snapshot()?;
-        let cache = OpenHomePlaylistCache {
-            ids: Some(ids),
-            snapshot: Some(snapshot.clone()),
-            last_refresh: Some(now),
-        };
-        self.set_openhome_cache(renderer.id(), cache);
-        Ok(snapshot)
-    }
-
-    fn set_playlist_backend(&self, id: &ServiceId, backend: PlaylistBackend) {
-        self.with_entry(id, |entry| {
-            entry.playlist_backend = backend;
-        });
-    }
-
-    fn playlist_backend(&self, id: &ServiceId) -> PlaylistBackend {
-        let entries = self.entries.lock().unwrap();
-        entries
-            .get(id)
-            .map(|entry| entry.playlist_backend)
-            .unwrap_or(PlaylistBackend::PMOQueue)
-    }
-
-    fn uses_openhome_playlist(&self, id: &ServiceId) -> bool {
-        matches!(self.playlist_backend(id), PlaylistBackend::OpenHome)
-    }
 
     fn mark_user_stop_requested(&self, id: &ServiceId) {
         let mut entries = self.entries.lock().unwrap();
@@ -2407,15 +1981,29 @@ impl RuntimeState {
 fn refresh_attached_queue_for(
     registry: &Arc<RwLock<DeviceRegistry>>,
     runtime: &Arc<RuntimeState>,
-    bindings: &Arc<Mutex<HashMap<ServiceId, PlaylistBinding>>>,
     renderer_id: &ServiceId,
     event_bus: &RendererEventBus,
     mut after_refresh: Option<&mut dyn FnMut(&ServiceId) -> anyhow::Result<()>>,
 ) -> anyhow::Result<()> {
-    // Step 1: Check binding and mark refresh as in-progress
+    // Step 1: Get renderer and check binding
+    let renderer = {
+        let reg = registry.read().unwrap();
+        reg.get_renderer(renderer_id)
+    };
+
+    let renderer = match renderer {
+        Some(r) => r,
+        None => {
+            debug!(
+                renderer = renderer_id.0.as_str(),
+                "refresh_attached_queue_for: renderer not found"
+            );
+            return Ok(());
+        }
+    };
+
     let (server_id, container_id, auto_play) = {
-        let mut bindings_lock = bindings.lock().unwrap();
-        let binding = match bindings_lock.get_mut(renderer_id) {
+        let binding = match renderer.get_playlist_binding() {
             Some(b) => b,
             None => {
                 debug!(
@@ -2434,10 +2022,13 @@ fn refresh_attached_queue_for(
             return Ok(());
         }
 
-        // Mark as processed
-        binding.pending_refresh = false;
-        let auto_play = binding.auto_play_on_refresh;
-        binding.auto_play_on_refresh = false;
+        // Mark as processed - clone, modify, and set back
+        let mut updated_binding = binding.clone();
+        updated_binding.pending_refresh = false;
+        let auto_play = updated_binding.auto_play_on_refresh;
+        updated_binding.auto_play_on_refresh = false;
+        renderer.set_playlist_binding(Some(updated_binding));
+
         (
             binding.server_id.clone(),
             binding.container_id.clone(),
@@ -2543,8 +2134,10 @@ fn refresh_attached_queue_for(
             total_entries = entries.len(),
             "Refreshed playlist is empty, clearing queue - all entries were filtered out"
         );
-        runtime.with_music_queue_mut(renderer_id, |queue| queue.clear_queue())?;
-        runtime.invalidate_openhome_cache(renderer_id);
+        {
+            let mut queue = renderer.queue.lock().unwrap();
+            queue.clear_queue()?;
+        }
 
         // Emit QueueUpdated event
         event_bus.broadcast(RendererEvent::QueueUpdated {
@@ -2560,9 +2153,16 @@ fn refresh_attached_queue_for(
     // This uses LCS algorithm to minimize playlist operations and avoid interrupting playback
 
     // Get the full queue snapshot to access the item currently being played
-    let (full_queue, current_idx) = runtime
-        .queue_full_snapshot(renderer_id)
-        .unwrap_or((vec![], None));
+    let (full_queue, current_idx) = {
+        let reg = registry.read().unwrap();
+        reg.renderer_by_id(renderer_id)
+            .and_then(|info| MusicRenderer::from_renderer_info(info).ok())
+            .and_then(|r| {
+                let queue = r.get_queue();
+                queue.queue_snapshot().ok().map(|s| (s.items, s.current_index))
+            })
+            .unwrap_or((vec![], None))
+    };
 
     // Get the item currently being played (at current_index), not the next one in queue
     let current_item = current_idx.and_then(|idx| full_queue.get(idx).cloned());
@@ -2613,7 +2213,25 @@ fn refresh_attached_queue_for(
             })
     });
 
-    let final_queue_len = runtime.with_music_queue_mut(renderer_id, |queue| {
+    let final_queue_len = {
+        let music_renderer = {
+            let reg = registry.read().unwrap();
+            reg.renderer_by_id(renderer_id)
+                .and_then(|info| MusicRenderer::from_renderer_info(info).ok())
+        };
+
+        let music_renderer = match music_renderer {
+            Some(r) => r,
+            None => {
+                warn!(
+                    renderer = renderer_id.0.as_str(),
+                    "refresh_attached_queue_for: renderer not found in registry"
+                );
+                return Ok(());
+            }
+        };
+
+        let mut queue = music_renderer.get_queue_mut();
         if let Some(idx) = item_found_at {
             // Current item is in new playlist - use gentle incremental update
             queue.replace_queue(new_items.clone(), Some(idx))?;
@@ -2628,7 +2246,7 @@ fn refresh_attached_queue_for(
                 is_playing,
                 "Gentle refresh: current item found in new playlist"
             );
-            Ok(new_items.len())
+            new_items.len()
         } else if let Some(ref current) = current_item {
             // Current item NOT in new playlist
             if is_playing {
@@ -2649,7 +2267,7 @@ fn refresh_attached_queue_for(
                     is_playing = true,
                     "Gentle refresh: preserved playing track not in new playlist"
                 );
-                Ok(new_items.len() + 1)
+                new_items.len() + 1
             } else {
                 // Not playing, use new playlist as-is
                 queue.replace_queue(new_items.clone(), None)?;
@@ -2662,7 +2280,7 @@ fn refresh_attached_queue_for(
                     is_playing = false,
                     "Gentle refresh: replaced queue (not playing)"
                 );
-                Ok(new_items.len())
+                new_items.len()
             }
         } else {
             // No current item, use new playlist as-is
@@ -2676,10 +2294,9 @@ fn refresh_attached_queue_for(
                 is_playing,
                 "Gentle refresh: no current item"
             );
-            Ok(new_items.len())
+            new_items.len()
         }
-    })?;
-    runtime.invalidate_openhome_cache(renderer_id);
+    };
 
     // Emit QueueUpdated event
     event_bus.broadcast(RendererEvent::QueueUpdated {
@@ -2830,77 +2447,6 @@ fn playback_item_track_metadata(item: &PlaybackItem) -> TrackMetadata {
     })
 }
 
-fn openhome_renderer_from_registry(
-    registry: &Arc<RwLock<DeviceRegistry>>,
-    renderer_id: &ServiceId,
-) -> anyhow::Result<MusicRendererBackend> {
-    let info = {
-        let reg = registry.read().unwrap();
-        reg.get_renderer(renderer_id)
-            .ok_or_else(|| OpenHomeAccessError::RendererNotFound(renderer_id.0.clone()))?
-    };
-    let renderer = MusicRendererBackend::from_renderer_info(info, registry)
-        .and_then(|r| match r {
-            MusicRendererBackend::OpenHome(_) => Some(r),
-            _ => None,
-        })
-        .ok_or_else(|| OpenHomeAccessError::PlaylistNotSupported(renderer_id.0.clone()))?;
-    Ok(renderer)
-}
-
-fn sync_openhome_playlist(
-    registry: &Arc<RwLock<DeviceRegistry>>,
-    runtime: &Arc<RuntimeState>,
-    event_bus: &RendererEventBus,
-    renderer_id: &ServiceId,
-) -> anyhow::Result<()> {
-    let renderer = openhome_renderer_from_registry(registry, renderer_id)?;
-
-    let snapshot = renderer.openhome_playlist_snapshot()?;
-    let playback_items: Vec<PlaybackItem> = snapshot
-        .tracks
-        .iter()
-        .map(|track| playback_item_from_openhome_track(renderer_id, track))
-        .collect();
-
-    debug!(
-        renderer = renderer_id.0.as_str(),
-        fetched_items = playback_items.len(),
-        current_id = ?snapshot.current_id,
-        "sync_openhome_playlist: fetched snapshot from renderer"
-    );
-
-    let current_id = snapshot.current_id;
-
-    let current_index = current_id.and_then(|id| {
-        playback_items
-            .iter()
-            .position(|item| openhome_track_id_from_item(item) == Some(id))
-    });
-
-    let queue_items = playback_items;
-    let queue_len = runtime
-        .with_music_queue_mut(renderer_id, move |queue| {
-            let len = queue_items.len();
-            queue.replace_queue(queue_items, current_index)?;
-            Ok(len)
-        })
-        .unwrap_or(0);
-
-    debug!(
-        renderer = renderer_id.0.as_str(),
-        queue_len,
-        "sync_openhome_playlist: updated local queue"
-    );
-
-    event_bus.broadcast(RendererEvent::QueueUpdated {
-        id: renderer_id.clone(),
-        queue_length: queue_len,
-    });
-
-    Ok(())
-}
-
 const OPENHOME_SUBSCRIPTION_TIMEOUT_SECS: u64 = 300;
 const OPENHOME_RENEWAL_MARGIN_SECS: u64 = 60;
 
@@ -2909,7 +2455,6 @@ fn spawn_openhome_event_runtime(
     runtime: Arc<RuntimeState>,
     event_bus: RendererEventBus,
     event_tx: Sender<RendererEvent>,
-    playlist_bindings: Arc<Mutex<HashMap<ServiceId, PlaylistBinding>>>,
 ) -> io::Result<()> {
     let listener = TcpListener::bind("0.0.0.0:0")?;
     let listener_addr = listener
@@ -2930,7 +2475,6 @@ fn spawn_openhome_event_runtime(
         notify_rx,
         event_tx,
         listener_addr.port(),
-        playlist_bindings,
     );
 
     thread::Builder::new()
@@ -2949,7 +2493,6 @@ struct OpenHomeEventRuntime {
     http_timeout: Duration,
     subscriptions: HashMap<OpenHomeSubscriptionKey, OpenHomeSubscriptionState>,
     path_index: HashMap<String, OpenHomeSubscriptionKey>,
-    playlist_bindings: Arc<Mutex<HashMap<ServiceId, PlaylistBinding>>>,
 }
 
 impl OpenHomeEventRuntime {
@@ -2960,7 +2503,6 @@ impl OpenHomeEventRuntime {
         notify_rx: Receiver<OpenHomeIncomingNotify>,
         event_tx: Sender<RendererEvent>,
         listener_port: u16,
-        playlist_bindings: Arc<Mutex<HashMap<ServiceId, PlaylistBinding>>>,
     ) -> Self {
         Self {
             registry,
@@ -2972,7 +2514,6 @@ impl OpenHomeEventRuntime {
             http_timeout: Duration::from_secs(5),
             subscriptions: HashMap::new(),
             path_index: HashMap::new(),
-            playlist_bindings,
         }
     }
 
@@ -3133,32 +2674,13 @@ impl OpenHomeEventRuntime {
                     .iter()
                     .any(|(name, _)| is_id_array_property(name))
                 {
-                    if self.runtime.uses_openhome_playlist(&entry.renderer.id) {
-                        // Check if this renderer has an active playlist binding
-                        // If it does, skip sync because refresh_attached_queue_for() handles it
-                        let has_active_binding = {
-                            let bindings = self.playlist_bindings.lock().unwrap();
-                            bindings.contains_key(&entry.renderer.id)
-                        };
-
-                        if !has_active_binding {
-                            // Synchronize the local queue with the renderer's playlist state
-                            // This ensures our local mirror stays in sync when the renderer
-                            // playlist changes from other control points or manual edits
-                            if let Err(err) = sync_openhome_playlist(
-                                &self.registry,
-                                &self.runtime,
-                                &self.event_bus,
-                                &entry.renderer.id,
-                            ) {
-                                warn!(
-                                    renderer = entry.renderer.friendly_name.as_str(),
-                                    error = %err,
-                                    "Failed to sync OpenHome playlist after IdArray event"
-                                );
-                            }
-                        }
-                    }
+                    // OpenHome playlist changed event
+                    // Queue synchronization is now handled by the generic queue backend
+                    // and doesn't need special treatment here
+                    debug!(
+                        renderer = entry.renderer.friendly_name.as_str(),
+                        "Received OpenHome IdArray change event"
+                    );
                 }
             }
             OhServiceKind::Info => {
@@ -3267,10 +2789,10 @@ impl OpenHomeEventRuntime {
         let position = self.runtime.snapshot_for(renderer_id).position;
         let mut new_position = position.unwrap_or_else(|| empty_playback_position());
         if let Some(d) = duration {
-            new_position.track_duration = Some(format_seconds(d));
+            new_position.track_duration = Some(format_hhmmss_u32(d));
         }
         if let Some(s) = seconds {
-            new_position.rel_time = Some(format_seconds(s));
+            new_position.rel_time = Some(format_hhmmss_u32(s));
         }
 
         self.runtime.update_snapshot_with(renderer_id, |snapshot| {

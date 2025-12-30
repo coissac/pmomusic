@@ -1,6 +1,9 @@
-use crate::model::RendererInfo;
-use crate::openhome_client::{
-    OhInfoClient, OhPlaylistClient, OhProductClient, OhRadioClient, OhTimeClient, OhVolumeClient,
+use crate::{
+    model::RendererInfo,
+    upnp_clients::{
+        OhInfoClient, OhPlaylistClient, OhProductClient, OhRadioClient, OhTimeClient,
+        OhVolumeClient,
+    },
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -35,14 +38,8 @@ fn endpoint_for(info: &RendererInfo, kind: OhServiceKind) -> Option<OhServiceEnd
             info.oh_playlist_control_url()?,
             info.oh_playlist_service_type()?,
         ),
-        OhServiceKind::Info => (
-            info.oh_info_control_url()?,
-            info.oh_info_service_type()?,
-        ),
-        OhServiceKind::Time => (
-            info.oh_time_control_url()?,
-            info.oh_time_service_type()?,
-        ),
+        OhServiceKind::Info => (info.oh_info_control_url()?, info.oh_info_service_type()?),
+        OhServiceKind::Time => (info.oh_time_control_url()?, info.oh_time_service_type()?),
         OhServiceKind::Volume => (
             info.oh_volume_control_url()?,
             info.oh_volume_service_type()?,
@@ -110,16 +107,16 @@ pub fn build_product_client(info: &RendererInfo) -> Option<OhProductClient> {
 pub fn build_radio_client(info: &RendererInfo) -> Option<OhRadioClient> {
     let control_url = info.oh_radio_control_url()?;
     let service_type = info.oh_radio_service_type()?;
-    Some(OhRadioClient::new(
-        control_url,
-        service_type,
-    ))
+    Some(OhRadioClient::new(control_url, service_type))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DeviceId, model::{RendererCapabilities, RendererInfo, RendererProtocol}};
+    use crate::{
+        DeviceId,
+        model::{RendererCapabilities, RendererInfo, RendererProtocol},
+    };
 
     fn sample_renderer_info() -> RendererInfo {
         RendererInfo::make(

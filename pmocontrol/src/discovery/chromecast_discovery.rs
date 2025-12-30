@@ -2,176 +2,181 @@
 //!
 //! Chromecast devices advertise themselves using mDNS (Multicast DNS) on the
 //! `_googlecast._tcp.local` service, unlike UPnP devices which use SSDP.
-//! This module handles the discovery of Chromecast devices and converts them
-//! into `DeviceUpdate` events that can be processed by the `DeviceRegistry`.
+//! This module handles the discovery of Chromecast devices and registers them
+//! directly into the `DeviceRegistry`.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::time::SystemTime;
+use std::sync::{Arc, Mutex};
 
 use crate::DeviceId;
-use crate::registry::DeviceUpdate;
+use crate::DeviceRegistry;
+use crate::discovery::manager::UDNRegistry;
 use crate::model::{RendererCapabilities, RendererInfo, RendererProtocol};
 use tracing::{debug, warn};
 
-/// Information about a discovered Chromecast device from mDNS.
-#[derive(Clone, Debug)]
-pub struct DiscoveredChromecast {
-    pub friendly_name: String,
-    pub host: String,
-    pub port: u16,
-    pub model: Option<String>,
-    pub uuid: String,
-    pub manufacturer: Option<String>,
-    pub last_seen: SystemTime,
-}
-
-/// Manages the discovery and tracking of Chromecast devices via mDNS.
+/// Gestionnaire des événements mDNS pour Chromecast.
 pub struct ChromecastDiscoveryManager {
-    discovered_devices: HashMap<String, DiscoveredChromecast>,
+    device_registry: Arc<Mutex<DeviceRegistry>>,
+    udn_cache: Arc<Mutex<UDNRegistry>>,
 }
 
 impl ChromecastDiscoveryManager {
-    pub fn new() -> Self {
+    pub fn new(
+        device_registry: Arc<Mutex<DeviceRegistry>>,
+        udn_cache: Arc<Mutex<UDNRegistry>>,
+    ) -> Self {
         Self {
-            discovered_devices: HashMap::new(),
+            device_registry,
+            udn_cache,
         }
     }
 
-    /// Adds or updates a discovered Chromecast device.
-    pub fn update_device(&mut self, device: DiscoveredChromecast) {
-        let uuid = device.uuid.clone();
-        self.discovered_devices.insert(uuid, device);
-    }
+    /// Traite une réponse mDNS pour un appareil Chromecast.
+    ///
+    /// Cette fonction parse les réponses de service discovery mDNS pour les appareils
+    /// Chromecast et les enregistre directement dans le registre.
+    pub fn handle_mdns_response(&mut self, response: mdns::Response) {
+        // Extract basic information from the mDNS response
+        let service_name = match response.records().find_map(|r| {
+            if let mdns::RecordKind::PTR(ref name) = r.kind {
+                Some(name.clone())
+            } else {
+                None
+            }
+        }) {
+            Some(name) => name,
+            None => {
+                warn!("No PTR record found in mDNS response");
+                return;
+            }
+        };
 
-    /// Retrieves a discovered device by UUID.
-    pub fn get_device(&self, uuid: &str) -> Option<&DiscoveredChromecast> {
-        self.discovered_devices.get(uuid)
-    }
+        debug!("Processing mDNS response for service: {}", service_name);
 
-    /// Lists all discovered devices.
-    pub fn list_devices(&self) -> Vec<&DiscoveredChromecast> {
-        self.discovered_devices.values().collect()
-    }
-}
+        // Extract IP addresses
+        let addresses: Vec<IpAddr> = response
+            .records()
+            .filter_map(|r| match r.kind {
+                mdns::RecordKind::A(addr) => Some(IpAddr::V4(addr)),
+                mdns::RecordKind::AAAA(addr) => Some(IpAddr::V6(addr)),
+                _ => None,
+            })
+            .collect();
 
-/// Processes an mDNS response and converts it into a `DeviceUpdate` event.
-///
-/// This function parses mDNS service discovery responses for Chromecast
-/// devices and creates the appropriate update event for the device registry.
-pub fn process_mdns_response(response: mdns::Response) -> Option<DeviceUpdate> {
-    // Extract basic information from the mDNS response
-    let service_name = response.records().filter_map(|r| {
-        if let mdns::RecordKind::PTR(ref name) = r.kind {
-            Some(name.clone())
-        } else {
-            None
+        if addresses.is_empty() {
+            warn!("No IP address found for Chromecast device: {}", service_name);
+            return;
         }
-    }).next()?;
 
-    debug!("Processing mDNS response for service: {}", service_name);
-
-    // Extract IP addresses
-    let addresses: Vec<IpAddr> = response
-        .records()
-        .filter_map(|r| match r.kind {
-            mdns::RecordKind::A(addr) => Some(IpAddr::V4(addr)),
-            mdns::RecordKind::AAAA(addr) => Some(IpAddr::V6(addr)),
-            _ => None,
-        })
-        .collect();
-
-    if addresses.is_empty() {
-        warn!("No IP address found for Chromecast device: {}", service_name);
-        return None;
-    }
-
-    // Prefer IPv4 addresses
-    let host = addresses
-        .iter()
-        .find(|addr| matches!(addr, IpAddr::V4(_)))
-        .or_else(|| addresses.first())
-        .map(|addr| addr.to_string())?;
-
-    // Extract port from SRV record
-    let port = response
-        .records()
-        .filter_map(|r| {
-            if let mdns::RecordKind::SRV { port, .. } = r.kind {
-                Some(port)
-            } else {
-                None
+        // Prefer IPv4 addresses
+        let host = match addresses
+            .iter()
+            .find(|addr| matches!(addr, IpAddr::V4(_)))
+            .or_else(|| addresses.first())
+        {
+            Some(addr) => addr.to_string(),
+            None => {
+                warn!("Could not extract host from addresses");
+                return;
             }
-        })
-        .next()
-        .unwrap_or(8009); // Default Chromecast port
+        };
 
-    // Extract TXT records for additional metadata
-    let txt_records: HashMap<String, String> = response
-        .records()
-        .filter_map(|r| {
-            if let mdns::RecordKind::TXT(ref data) = r.kind {
-                Some(data.clone())
-            } else {
-                None
-            }
-        })
-        .flat_map(|data| {
-            // data is Vec<String>, each string is "key=value"
-            data.into_iter().filter_map(|s| {
-                let parts: Vec<&str> = s.splitn(2, '=').collect();
-                if parts.len() == 2 {
-                    Some((parts[0].to_string(), parts[1].to_string()))
+        // Extract port from SRV record
+        let port = response
+            .records()
+            .find_map(|r| {
+                if let mdns::RecordKind::SRV { port, .. } = r.kind {
+                    Some(port)
                 } else {
                     None
                 }
             })
-        })
-        .collect();
+            .unwrap_or(8009); // Default Chromecast port
 
-    // Extract metadata from TXT records
-    let model = txt_records.get("md").cloned();
-    let uuid = txt_records
-        .get("id")
-        .cloned()
-        .unwrap_or_else(|| format!("chromecast-{}-{}", host, port));
-    let manufacturer = Some("Google Inc.".to_string());
+        // Extract TXT records for additional metadata
+        let txt_records: HashMap<String, String> = response
+            .records()
+            .filter_map(|r| {
+                if let mdns::RecordKind::TXT(ref data) = r.kind {
+                    Some(data.clone())
+                } else {
+                    None
+                }
+            })
+            .flat_map(|data| {
+                // data is Vec<String>, each string is "key=value"
+                data.into_iter().filter_map(|s| {
+                    let parts: Vec<&str> = s.splitn(2, '=').collect();
+                    if parts.len() == 2 {
+                        Some((parts[0].to_string(), parts[1].to_string()))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect();
 
-    // Extract friendly name from TXT record "fn" if available
-    // Otherwise, extract from service instance name (PTR record)
-    let friendly_name = txt_records
-        .get("fn")
-        .cloned()
-        .unwrap_or_else(|| {
-            // Fallback: extract from service name, removing the UUID suffix if present
-            service_name
-                .split("._googlecast._tcp.local")
-                .next()
-                .unwrap_or("Unknown Chromecast")
-                .split('-')
-                .take_while(|part| part.len() != 32) // Skip 32-char hex UUID
-                .collect::<Vec<_>>()
-                .join("-")
-                .trim()
-                .to_string()
-        });
+        // Extract metadata from TXT records
+        let model = txt_records.get("md").cloned();
+        let uuid = txt_records
+            .get("id")
+            .cloned()
+            .unwrap_or_else(|| format!("chromecast-{}-{}", host, port));
+        let manufacturer = Some("Google Inc.".to_string());
 
-    debug!(
-        "Discovered Chromecast: {} at {}:{} (UUID: {}, Model: {:?})",
-        friendly_name, host, port, uuid, model
-    );
+        // Extract friendly name from TXT record "fn" if available
+        // Otherwise, extract from service instance name (PTR record)
+        let friendly_name = txt_records
+            .get("fn")
+            .cloned()
+            .unwrap_or_else(|| {
+                // Fallback: extract from service name, removing the UUID suffix if present
+                service_name
+                    .split("._googlecast._tcp.local")
+                    .next()
+                    .unwrap_or("Unknown Chromecast")
+                    .split('-')
+                    .take_while(|part| part.len() != 32) // Skip 32-char hex UUID
+                    .collect::<Vec<_>>()
+                    .join("-")
+                    .trim()
+                    .to_string()
+            });
 
-    // Create RendererInfo for the registry
-    let renderer_info = build_renderer_info(
-        &uuid,
-        &friendly_name,
-        &host,
-        port,
-        model.as_deref(),
-        manufacturer.as_deref(),
-    );
+        debug!(
+            "Discovered Chromecast: {} at {}:{} (UUID: {}, Model: {:?})",
+            friendly_name, host, port, uuid, model
+        );
 
-    Some(DeviceUpdate::RendererOnline(renderer_info))
+        // Build UDN and check cache
+        let udn = format!("uuid:{}", uuid);
+
+        // Pour Chromecast, on utilise un max_age par défaut car mDNS n'a pas ce concept
+        let default_max_age = 1800u64; // 30 minutes
+
+        // Check cache to avoid redundant updates
+        if !UDNRegistry::should_fetch(self.udn_cache.clone(), &udn, default_max_age) {
+            debug!("Chromecast {} recently seen, skipping", udn);
+            return;
+        }
+
+        // Create RendererInfo for the registry
+        let renderer_info = build_renderer_info(
+            &uuid,
+            &friendly_name,
+            &host,
+            port,
+            model.as_deref(),
+            manufacturer.as_deref(),
+        );
+
+        // Register the renderer
+        self.device_registry
+            .lock()
+            .expect("DeviceRegistry mutex lock failed")
+            .push_renderer(&renderer_info, default_max_age as u32);
+    }
 }
 
 /// Builds a `RendererInfo` structure for a Chromecast device.
