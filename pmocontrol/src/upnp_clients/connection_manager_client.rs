@@ -1,8 +1,10 @@
-use anyhow::{Result, anyhow};
-
-use crate::{errors::ControlPointError, soap_client::{
-    SoapCallResult, ensure_success, extract_child_text, extract_child_text_allow_empty, find_child_with_suffix, invoke_upnp_action, parse_upnp_error
-}};
+use crate::{
+    errors::ControlPointError,
+    soap_client::{
+        ensure_success, extract_child_text, extract_child_text_allow_empty, find_child_with_suffix,
+        invoke_upnp_action, parse_upnp_error,
+    },
+};
 
 #[derive(Debug, Clone)]
 pub struct ConnectionManagerClient {
@@ -48,22 +50,25 @@ impl ConnectionManagerClient {
 
         ensure_success("GetProtocolInfo", &call_result)?;
 
-        let envelope = call_result
-            .envelope
-            .as_ref()
-            .ok_or_else(|| ControlPointError::UpnpError(format!("Missing SOAP envelope in GetProtocolInfo response")))?;
+        let envelope = call_result.envelope.as_ref().ok_or_else(|| {
+            ControlPointError::UpnpError(format!(
+                "Missing SOAP envelope in GetProtocolInfo response"
+            ))
+        })?;
 
         if let Some(err) = parse_upnp_error(envelope) {
             return Err(ControlPointError::UpnpError(format!(
                 "GetProtocolInfo returned UPnP error {}: {} (HTTP status {})",
-                err.error_code,
-                err.error_description,
-                call_result.status
+                err.error_code, err.error_description, call_result.status
             )));
         }
 
         let response = find_child_with_suffix(&envelope.body.content, "GetProtocolInfoResponse")
-            .ok_or_else(|| ControlPointError::UpnpError(format!("Missing GetProtocolInfoResponse element in SOAP body")))?;
+            .ok_or_else(|| {
+                ControlPointError::UpnpError(format!(
+                    "Missing GetProtocolInfoResponse element in SOAP body"
+                ))
+            })?;
 
         let source_text = extract_child_text_allow_empty(response, "Source")?;
         let sink_text = extract_child_text_allow_empty(response, "Sink")?;
@@ -85,24 +90,25 @@ impl ConnectionManagerClient {
 
         ensure_success("GetCurrentConnectionIDs", &call_result)?;
 
-        let envelope = call_result
-            .envelope
-            .as_ref()
-            .ok_or_else(|| ControlPointError::UpnpError(format!("Missing SOAP envelope in GetCurrentConnectionIDs response")))?;
+        let envelope = call_result.envelope.as_ref().ok_or_else(|| {
+            ControlPointError::UpnpError(format!(
+                "Missing SOAP envelope in GetCurrentConnectionIDs response"
+            ))
+        })?;
 
         if let Some(err) = parse_upnp_error(envelope) {
             return Err(ControlPointError::UpnpError(format!(
                 "GetCurrentConnectionIDs returned UPnP error {}: {} (HTTP status {})",
-                err.error_code,
-                err.error_description,
-                call_result.status
+                err.error_code, err.error_description, call_result.status
             )));
         }
 
         let response =
             find_child_with_suffix(&envelope.body.content, "GetCurrentConnectionIDsResponse")
                 .ok_or_else(|| {
-                    ControlPointError::UpnpError(format!("Missing GetCurrentConnectionIDsResponse element in SOAP body"))
+                    ControlPointError::UpnpError(format!(
+                        "Missing GetCurrentConnectionIDsResponse element in SOAP body"
+                    ))
                 })?;
 
         let ids_text = extract_child_text_allow_empty(response, "ConnectionIDs")?;
@@ -118,9 +124,9 @@ impl ConnectionManagerClient {
             if value.is_empty() {
                 continue;
             }
-            let parsed = value
-                .parse::<i32>()
-                .map_err(|_| ControlPointError::UpnpError(format!("Invalid ConnectionID value: {}", value)))?;
+            let parsed = value.parse::<i32>().map_err(|_| {
+                ControlPointError::UpnpError(format!("Invalid ConnectionID value: {}", value))
+            })?;
             ids.push(parsed);
         }
 
@@ -128,7 +134,10 @@ impl ConnectionManagerClient {
     }
 
     /// GetCurrentConnectionInfo
-    pub fn get_current_connection_info(&self, connection_id: i32) -> Result<ConnectionInfo, ControlPointError> {
+    pub fn get_current_connection_info(
+        &self,
+        connection_id: i32,
+    ) -> Result<ConnectionInfo, ControlPointError> {
         let connection_id_str = connection_id.to_string();
         let args = [("ConnectionID", connection_id_str.as_str())];
 
@@ -141,33 +150,38 @@ impl ConnectionManagerClient {
 
         ensure_success("GetCurrentConnectionInfo", &call_result)?;
 
-        let envelope = call_result
-            .envelope
-            .as_ref()
-            .ok_or_else(|| ControlPointError::UpnpError(format!("Missing SOAP envelope in GetCurrentConnectionInfo response")))?;
+        let envelope = call_result.envelope.as_ref().ok_or_else(|| {
+            ControlPointError::UpnpError(format!(
+                "Missing SOAP envelope in GetCurrentConnectionInfo response"
+            ))
+        })?;
 
         if let Some(err) = parse_upnp_error(envelope) {
             return Err(ControlPointError::UpnpError(format!(
                 "GetCurrentConnectionInfo returned UPnP error {}: {} (HTTP status {})",
-                err.error_code,
-                err.error_description,
-                call_result.status
+                err.error_code, err.error_description, call_result.status
             )));
         }
 
         let response =
             find_child_with_suffix(&envelope.body.content, "GetCurrentConnectionInfoResponse")
                 .ok_or_else(|| {
-                    ControlPointError::UpnpError(format!("Missing GetCurrentConnectionInfoResponse element in SOAP body"))
+                    ControlPointError::UpnpError(format!(
+                        "Missing GetCurrentConnectionInfoResponse element in SOAP body"
+                    ))
                 })?;
 
         let rcs_id = extract_child_text(response, "RcsID")?
             .parse::<i32>()
-            .map_err(|_| ControlPointError::UpnpError(format!("Invalid RcsID value in response")))?;
+            .map_err(|_| {
+                ControlPointError::UpnpError(format!("Invalid RcsID value in response"))
+            })?;
 
         let av_transport_id = extract_child_text(response, "AVTransportID")?
             .parse::<i32>()
-            .map_err(|_| ControlPointError::UpnpError(format!("Invalid AVTransportID value in response")))?;
+            .map_err(|_| {
+                ControlPointError::UpnpError(format!("Invalid AVTransportID value in response"))
+            })?;
 
         let protocol_info = extract_child_text_allow_empty(response, "ProtocolInfo")?;
         let peer_connection_manager =
@@ -175,7 +189,9 @@ impl ConnectionManagerClient {
 
         let peer_connection_id = extract_child_text(response, "PeerConnectionID")?
             .parse::<i32>()
-            .map_err(|_| ControlPointError::UpnpError(format!("Invalid PeerConnectionID value in response")))?;
+            .map_err(|_| {
+                ControlPointError::UpnpError(format!("Invalid PeerConnectionID value in response"))
+            })?;
 
         let direction = extract_child_text(response, "Direction")?;
         let status = extract_child_text(response, "Status")?;

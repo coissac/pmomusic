@@ -1,12 +1,11 @@
 use crate::DeviceIdentity;
 use crate::music_renderer::capabilities::{
-    PlaybackPosition, PlaybackPositionInfo, PlaybackStatus, TransportControl,
-    VolumeControl,
+    PlaybackPosition, PlaybackPositionInfo, PlaybackStatus, TransportControl, VolumeControl,
 };
-use crate::music_renderer::time_utils::{parse_time_flexible, format_hhmmss_u32};
+use crate::music_renderer::time_utils::{format_hhmmss_u32, parse_time_flexible};
 
 use crate::errors::ControlPointError;
-use crate::model::{RendererInfo, PlaybackState};
+use crate::model::{PlaybackState, RendererInfo};
 use crate::music_renderer::RendererFromMediaRendererInfo;
 use crate::music_renderer::musicrenderer::MusicRendererBackend;
 use crate::music_renderer::openhome::{
@@ -49,7 +48,6 @@ impl OpenHomeRenderer {
         }
     }
 
-
     pub fn has_playlist(&self) -> bool {
         self.playlist.is_some()
     }
@@ -71,10 +69,9 @@ impl OpenHomeRenderer {
     }
 
     fn playlist_client_for(&self, op: &str) -> Result<&OhPlaylistClient, ControlPointError> {
-        let playlist = self
-            .playlist
-            .as_ref()
-            .ok_or_else(|| ControlPointError::upnp_operation_not_supported(op, "OpenHome Playlist"))?;
+        let playlist = self.playlist.as_ref().ok_or_else(|| {
+            ControlPointError::upnp_operation_not_supported(op, "OpenHome Playlist")
+        })?;
         self.ensure_playlist_source_selected()?;
         Ok(playlist)
     }
@@ -97,10 +94,9 @@ impl OpenHomeRenderer {
             .ok_or_else(|| ControlPointError::upnp_operation_not_supported(op, "OpenHome Volume"))
     }
 
-    fn ensure_playlist_source_selected(&self) -> Result<(),ControlPointError> {
+    fn ensure_playlist_source_selected(&self) -> Result<(), ControlPointError> {
         if let Some(product) = &self.product_client {
-            product
-                .ensure_playlist_source_selected()
+            product.ensure_playlist_source_selected()
         } else {
             Ok(())
         }
@@ -131,7 +127,6 @@ impl OpenHomeRenderer {
     //         tracks,
     //     })
     // }
-
 
     /// Retourne la longueur de la playlist OpenHome sans récupérer toutes les métadonnées.
     /// Plus rapide que snapshot_openhome_playlist() pour juste connaître le nombre de pistes.
@@ -183,11 +178,8 @@ impl OpenHomeRenderer {
     }
 }
 
-
 impl RendererFromMediaRendererInfo for OpenHomeRenderer {
-    fn from_renderer_info(
-        info: &RendererInfo,
-    ) -> Result<Self, ControlPointError> {
+    fn from_renderer_info(info: &RendererInfo) -> Result<Self, ControlPointError> {
         let renderer = OpenHomeRenderer::new(
             build_playlist_client(&info),
             build_info_client(&info),
@@ -210,7 +202,6 @@ impl RendererFromMediaRendererInfo for OpenHomeRenderer {
     fn to_backend(self) -> MusicRendererBackend {
         MusicRendererBackend::OpenHome(self)
     }
-
 }
 
 impl TransportControl for OpenHomeRenderer {
@@ -228,6 +219,9 @@ impl TransportControl for OpenHomeRenderer {
         // Reuse the same insertion logic as the queue path so that we honor
         // renderer expectations (IdArray sequencing, etc.).
         self.add_track_openhome(uri, meta, None, true)?;
+
+        // Start playback (like UPnP renderer does with avt.play())
+        playlist.play()?;
         Ok(())
     }
 
@@ -336,4 +330,3 @@ pub(crate) fn map_openhome_state(raw: &str) -> PlaybackState {
         other => PlaybackState::Unknown(other.to_string()),
     }
 }
-

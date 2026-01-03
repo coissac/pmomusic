@@ -8,20 +8,23 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use crossbeam_channel::{Receiver, Sender, unbounded};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 use ureq::{Agent, http};
 use xmltree::{Element, XMLNode};
 
-use crate::DeviceId;
 use crate::events::MediaServerEventBus;
-use crate::media_server::{UpnpMediaServer};
+use crate::media_server::MusicServer;
 use crate::model::MediaServerEvent;
-use crate::upnp_clients::resolve_control_url;
 use crate::registry::DeviceRegistry;
-use crate::{DeviceOnline,DeviceIdentity};
+use crate::upnp_clients::resolve_control_url;
+use crate::{DeviceId, DeviceIdentity, DeviceOnline};
 
 const SUBSCRIPTION_TIMEOUT_SECS: u64 = 300;
 const RENEWAL_SAFETY_MARGIN_SECS: u64 = 60;
+const HTTP_READ_TIMEOUT_SECS: u64 = 5;
+const WORKER_LOOP_INTERVAL_MILLIS: u64 = 250;
+const RETRY_DELAY_SECS: u64 = 15;
+const SUBSCRIPTION_RESET_DELAY_SECS: u64 = 5;
 
 /// Launch the media server event runtime responsible for subscribing
 /// to ContentDirectory updates and forwarding notifications on the bus.
@@ -67,11 +70,47 @@ struct IncomingNotify {
     body: Vec<u8>,
 }
 
+impl IncomingNotify {
+    fn validate_sid(&self, expected: &Option<String>) -> bool {
+        match (&self.sid, expected) {
+            (Some(received), Some(expected)) => expected.eq_ignore_ascii_case(received),
+            _ => false,
+        }
+    }
+}
+
+/// Manages retry timing for subscription operations
+struct RetryPolicy {
+    retry_after: Instant,
+}
+
+impl RetryPolicy {
+    fn new() -> Self {
+        Self {
+            retry_after: Instant::now(),
+        }
+    }
+
+    fn should_retry(&self) -> bool {
+        Instant::now() >= self.retry_after
+    }
+
+    fn defer_retry(&mut self) {
+        self.retry_after = Instant::now() + Duration::from_secs(RETRY_DELAY_SECS);
+    }
+
+    fn schedule_soon(&mut self) {
+        self.retry_after = Instant::now() + Duration::from_secs(SUBSCRIPTION_RESET_DELAY_SECS);
+    }
+}
+
 fn run_http_listener(listener: TcpListener, notify_tx: Sender<IncomingNotify>) {
     for stream in listener.incoming() {
         match stream {
             Ok(mut stream) => {
-                if let Err(err) = stream.set_read_timeout(Some(Duration::from_secs(5))) {
+                if let Err(err) =
+                    stream.set_read_timeout(Some(Duration::from_secs(HTTP_READ_TIMEOUT_SECS)))
+                {
                     warn!("Failed to set read timeout on notify connection: {}", err);
                 }
 
@@ -209,7 +248,7 @@ impl MediaServerEventWorker {
             self.drain_notifications();
             self.refresh_servers();
             self.renew_expiring();
-            thread::sleep(Duration::from_millis(250));
+            thread::sleep(Duration::from_millis(WORKER_LOOP_INTERVAL_MILLIS));
         }
     }
 
@@ -220,54 +259,60 @@ impl MediaServerEventWorker {
     }
 
     fn refresh_servers(&mut self) {
-        let server_infos = {
+        let servers = {
             let reg = self.registry.read().unwrap();
-            reg.list_servers()
+            match reg.list_servers() {
+                Ok(servers) => servers,
+                Err(e) => {
+                    error!("Failed to list servers: {}", e);
+                    return;
+                }
+            }
         };
 
         let mut active: HashSet<DeviceId> = HashSet::new();
 
-        for info in server_infos {
-            if !info.is_online() || !info.has_content_directory {
+        for server in servers {
+            if !server.is_online() || !server.has_content_directory() {
                 continue;
             }
 
-            active.insert(info.id.clone());
+            active.insert(server.id());
             let entry = self
                 .subscriptions
-                .entry(info.id.clone())
-                .or_insert_with(|| SubscriptionState::new(info.clone()));
-            entry.update(info);
+                .entry(server.id())
+                .or_insert_with(|| SubscriptionState::from_music_server(&server));
+            entry.update_from_server(&server);
             self.path_index
-                .insert(entry.callback_path.clone(), entry.info.id.clone());
+                .insert(entry.callback_path.clone(), entry.device_id.clone());
 
             if entry.event_sub_url.is_none() {
-                if entry.should_retry() {
-                    match fetch_event_sub_url(&entry.info.location, self.http_timeout) {
+                if entry.retry_policy.should_retry() {
+                    match fetch_event_sub_url(&entry.location, self.http_timeout) {
                         Ok(Some(url)) => {
                             debug!(
-                                server = entry.info.friendly_name.as_str(),
+                                server = entry.friendly_name.as_str(),
                                 callback = url.as_str(),
                                 "ContentDirectory eventSub URL resolved"
                             );
                             entry.event_sub_url = Some(url);
-                            entry.retry_after = Instant::now();
+                            entry.retry_policy = RetryPolicy::new();
                         }
                         Ok(None) => {
                             debug!(
-                                server = entry.info.friendly_name.as_str(),
+                                server = entry.friendly_name.as_str(),
                                 "No ContentDirectory eventSub URL found"
                             );
-                            entry.defer_retry();
+                            entry.retry_policy.defer_retry();
                             continue;
                         }
                         Err(err) => {
                             warn!(
-                                server = entry.info.friendly_name.as_str(),
+                                server = entry.friendly_name.as_str(),
                                 error = %err,
                                 "Failed to fetch ContentDirectory eventSub URL"
                             );
-                            entry.defer_retry();
+                            entry.retry_policy.defer_retry();
                             continue;
                         }
                     }
@@ -276,21 +321,21 @@ impl MediaServerEventWorker {
                 }
             }
 
-            if entry.sid.is_none() && entry.should_retry() {
+            if entry.sid.is_none() && entry.retry_policy.should_retry() {
                 if let Err(err) =
                     Self::subscribe_entry(self.listener_port, self.http_timeout, entry)
                 {
                     warn!(
-                        server = entry.info.friendly_name.as_str(),
+                        server = entry.friendly_name.as_str(),
                         error = %err,
                         "ContentDirectory SUBSCRIBE failed"
                     );
-                    entry.defer_retry();
+                    entry.retry_policy.defer_retry();
                 }
             }
         }
 
-        let stale_ids: Vec<ServerId> = self
+        let stale_ids: Vec<DeviceId> = self
             .subscriptions
             .keys()
             .filter(|id| !active.contains(*id))
@@ -320,7 +365,7 @@ impl MediaServerEventWorker {
             if let Some(entry) = self.subscriptions.get_mut(&id) {
                 if let Err(err) = Self::renew_entry(self.http_timeout, entry) {
                     warn!(
-                        server = entry.info.friendly_name.as_str(),
+                        server = entry.friendly_name.as_str(),
                         error = %err,
                         "Failed to renew ContentDirectory subscription"
                     );
@@ -340,8 +385,10 @@ impl MediaServerEventWorker {
             .as_ref()
             .context("EventSub URL missing for server")?;
 
+        let (host_header, timeout_header) = build_subscribe_headers(event_url)?;
+
         let (remote_host, remote_port) =
-            parse_host_port(event_url).context("Cannot extract host for SUBSCRIBE")?;
+            parse_host_port(event_url).context("Cannot extract host for callback")?;
         let local_ip = determine_local_ip(&remote_host, remote_port)
             .context("Cannot determine local IP for callback")?;
 
@@ -353,13 +400,11 @@ impl MediaServerEventWorker {
         );
 
         debug!(
-            server = entry.info.friendly_name.as_str(),
+            server = entry.friendly_name.as_str(),
             callback = callback_url.as_str(),
             "Subscribing to ContentDirectory events"
         );
 
-        let host_header = format!("{}:{}", remote_host, remote_port);
-        let timeout_header = format!("Second-{}", SUBSCRIPTION_TIMEOUT_SECS);
         let callback_header = format!("<{}>", callback_url);
 
         let request = http::Request::builder()
@@ -393,10 +438,10 @@ impl MediaServerEventWorker {
 
         entry.sid = Some(sid);
         entry.expires_at = Some(Instant::now() + timeout);
-        entry.retry_after = Instant::now() + Duration::from_secs(5);
+        entry.retry_policy.schedule_soon();
 
         info!(
-            server = entry.info.friendly_name.as_str(),
+            server = entry.friendly_name.as_str(),
             "Subscribed to ContentDirectory events (timeout {}s)",
             timeout.as_secs()
         );
@@ -414,10 +459,9 @@ impl MediaServerEventWorker {
             .as_ref()
             .cloned()
             .context("SID missing for renew")?;
-        let (remote_host, remote_port) =
-            parse_host_port(event_url).context("Cannot extract host for renew")?;
-        let host_header = format!("{}:{}", remote_host, remote_port);
-        let timeout_header = format!("Second-{}", SUBSCRIPTION_TIMEOUT_SECS);
+
+        let (host_header, timeout_header) = build_subscribe_headers(event_url)?;
+
         let request = http::Request::builder()
             .method("SUBSCRIBE")
             .uri(event_url)
@@ -441,7 +485,7 @@ impl MediaServerEventWorker {
         .unwrap_or(Duration::from_secs(SUBSCRIPTION_TIMEOUT_SECS));
         entry.expires_at = Some(Instant::now() + timeout);
         debug!(
-            server = entry.info.friendly_name.as_str(),
+            server = entry.friendly_name.as_str(),
             "Renewed ContentDirectory subscription"
         );
         Ok(())
@@ -470,7 +514,7 @@ impl MediaServerEventWorker {
             Ok(req) => req,
             Err(err) => {
                 warn!(
-                    server = entry.info.friendly_name.as_str(),
+                    server = entry.friendly_name.as_str(),
                     error = %err,
                     "Failed to build UNSUBSCRIBE request"
                 );
@@ -482,12 +526,12 @@ impl MediaServerEventWorker {
             Ok(response) => {
                 if response.status().is_success() {
                     debug!(
-                        server = entry.info.friendly_name.as_str(),
+                        server = entry.friendly_name.as_str(),
                         "Unsubscribed from ContentDirectory events"
                     );
                 } else {
                     warn!(
-                        server = entry.info.friendly_name.as_str(),
+                        server = entry.friendly_name.as_str(),
                         status = %response.status(),
                         "UNSUBSCRIBE returned non-success status"
                     );
@@ -495,7 +539,7 @@ impl MediaServerEventWorker {
             }
             Err(err) => {
                 warn!(
-                    server = entry.info.friendly_name.as_str(),
+                    server = entry.friendly_name.as_str(),
                     error = %err,
                     "UNSUBSCRIBE request failed"
                 );
@@ -513,32 +557,30 @@ impl MediaServerEventWorker {
             return;
         };
 
-        if let (Some(expected), Some(received)) = (&entry.sid, &notify.sid) {
-            if !expected.eq_ignore_ascii_case(received) {
-                debug!(
-                    server = entry.info.friendly_name.as_str(),
-                    expected_sid = expected.as_str(),
-                    received_sid = received.as_str(),
-                    "Ignoring notify with mismatched SID"
-                );
-                return;
-            }
+        if !notify.validate_sid(&entry.sid) {
+            debug!(
+                server = entry.friendly_name.as_str(),
+                expected_sid = entry.sid.as_deref().unwrap_or("none"),
+                received_sid = notify.sid.as_deref().unwrap_or("none"),
+                "Ignoring notify with mismatched SID"
+            );
+            return;
         }
 
-        for event in parse_notify_payload(&entry.info.id, &notify.body) {
+        for event in parse_notify_payload(&entry.device_id, &notify.body) {
             match &event {
                 MediaServerEvent::GlobalUpdated {
                     system_update_id, ..
                 } => {
                     debug!(
-                        server = entry.info.friendly_name.as_str(),
+                        server = entry.friendly_name.as_str(),
                         update_id = system_update_id.unwrap_or_default(),
                         "Broadcasting MediaServerEvent::GlobalUpdated"
                     );
                 }
                 MediaServerEvent::ContainersUpdated { container_ids, .. } => {
                     debug!(
-                        server = entry.info.friendly_name.as_str(),
+                        server = entry.friendly_name.as_str(),
                         changed_containers = container_ids.join(",").as_str(),
                         "Broadcasting MediaServerEvent::ContainersUpdated"
                     );
@@ -553,52 +595,63 @@ impl MediaServerEventWorker {
 }
 
 struct SubscriptionState {
-    info: UpnpMediaServer,
+    device_id: DeviceId,
+    location: String,
+    friendly_name: String,
     event_sub_url: Option<String>,
     sid: Option<String>,
     expires_at: Option<Instant>,
     callback_path: String,
-    retry_after: Instant,
+    retry_policy: RetryPolicy,
 }
 
 impl SubscriptionState {
-    fn new(info: UpnpMediaServer) -> Self {
+    /// Creates a new subscription state from a MusicServer
+    fn from_music_server(server: &MusicServer) -> Self {
         Self {
-            callback_path: build_callback_path(&info.id),
-            info,
+            callback_path: build_callback_path(&server.id()),
+            device_id: server.id(),
+            location: server.location().to_string(),
+            friendly_name: server.friendly_name().to_string(),
             event_sub_url: None,
             sid: None,
             expires_at: None,
-            retry_after: Instant::now(),
+            retry_policy: RetryPolicy::new(),
         }
     }
 
-    fn update(&mut self, info: UpnpMediaServer) {
-        if self.info.location != info.location {
+    /// Updates the subscription state from a MusicServer
+    fn update_from_server(&mut self, server: &MusicServer) {
+        let new_location = server.location();
+        if self.location != new_location {
+            // Location changed - invalidate subscription
             self.event_sub_url = None;
             self.sid = None;
             self.expires_at = None;
-            self.retry_after = Instant::now();
+            self.retry_policy = RetryPolicy::new();
         }
-        self.info = info;
-    }
-
-    fn should_retry(&self) -> bool {
-        Instant::now() >= self.retry_after
-    }
-
-    fn defer_retry(&mut self) {
-        self.retry_after = Instant::now() + Duration::from_secs(15);
+        self.device_id = server.id();
+        self.location = new_location.to_string();
+        self.friendly_name = server.friendly_name().to_string();
     }
 
     fn reset_subscription(&mut self) {
         self.sid = None;
         self.expires_at = None;
-        self.retry_after = Instant::now() + Duration::from_secs(5);
+        self.retry_policy.schedule_soon();
     }
 }
 
-fn build_callback_path(id: &ServerId) -> String {
+/// Builds HTTP headers common to SUBSCRIBE requests
+fn build_subscribe_headers(event_url: &str) -> Result<(String, String)> {
+    let (remote_host, remote_port) =
+        parse_host_port(event_url).context("Cannot extract host for SUBSCRIBE")?;
+    let host_header = format!("{}:{}", remote_host, remote_port);
+    let timeout_header = format!("Second-{}", SUBSCRIPTION_TIMEOUT_SECS);
+    Ok((host_header, timeout_header))
+}
+
+fn build_callback_path(id: &DeviceId) -> String {
     let mut sanitized = String::new();
     for ch in id.0.chars() {
         if ch.is_ascii_alphanumeric() {
@@ -615,7 +668,7 @@ fn build_callback_path(id: &ServerId) -> String {
     format!("/media-server-events/{}-{:x}", sanitized, suffix)
 }
 
-fn parse_notify_payload(server_id: &ServerId, body: &[u8]) -> Vec<MediaServerEvent> {
+fn parse_notify_payload(server_id: &DeviceId, body: &[u8]) -> Vec<MediaServerEvent> {
     let mut events = Vec::new();
     let reader = std::io::Cursor::new(body);
     let Ok(root) = Element::parse(reader) else {
@@ -629,27 +682,21 @@ fn parse_notify_payload(server_id: &ServerId, body: &[u8]) -> Vec<MediaServerEve
     let mut system_update_id: Option<u32> = None;
     let mut container_ids: Vec<String> = Vec::new();
 
-    for property in root.children.iter().filter_map(|node| match node {
-        XMLNode::Element(elem) => Some(elem),
-        _ => None,
-    }) {
-        for child in property.children.iter().filter_map(|node| match node {
-            XMLNode::Element(elem) => Some(elem),
-            _ => None,
-        }) {
-            if child.name == "SystemUpdateID" {
-                if let Some(text) = child.get_text() {
-                    let trimmed = text.trim();
-                    if let Ok(value) = trimmed.parse::<u32>() {
-                        system_update_id = Some(value);
-                    } else {
-                        system_update_id = None;
+    // Navigate through property elements
+    for property in xml_children(&root) {
+        for child in xml_children(property) {
+            match child.name.as_str() {
+                "SystemUpdateID" => {
+                    system_update_id = child
+                        .get_text()
+                        .and_then(|text| text.trim().parse::<u32>().ok());
+                }
+                "ContainerUpdateIDs" => {
+                    if let Some(text) = child.get_text() {
+                        container_ids = parse_container_update_ids(text.as_ref());
                     }
                 }
-            } else if child.name == "ContainerUpdateIDs" {
-                if let Some(text) = child.get_text() {
-                    container_ids = parse_container_update_ids(text.as_ref());
-                }
+                _ => {}
             }
         }
     }
@@ -669,6 +716,14 @@ fn parse_notify_payload(server_id: &ServerId, body: &[u8]) -> Vec<MediaServerEve
     }
 
     events
+}
+
+/// Helper to iterate over XML element children (filters out non-element nodes)
+fn xml_children(element: &Element) -> impl Iterator<Item = &Element> {
+    element.children.iter().filter_map(|node| match node {
+        XMLNode::Element(elem) => Some(elem),
+        _ => None,
+    })
 }
 
 fn parse_container_update_ids(raw: &str) -> Vec<String> {
@@ -702,14 +757,9 @@ fn parse_container_update_ids(raw: &str) -> Vec<String> {
 }
 
 fn child_text(element: &Element, name: &str) -> Option<String> {
-    for node in &element.children {
-        if let XMLNode::Element(child) = node {
-            if child.name == name {
-                return child.get_text().map(|cow| cow.into_owned());
-            }
-        }
-    }
-    None
+    xml_children(element)
+        .find(|child| child.name == name)
+        .and_then(|child| child.get_text().map(|cow| cow.into_owned()))
 }
 
 fn fetch_event_sub_url(location: &str, timeout: Duration) -> Result<Option<String>> {
@@ -734,20 +784,18 @@ fn fetch_event_sub_url(location: &str, timeout: Duration) -> Result<Option<Strin
         None => return Ok(None),
     };
 
-    for node in &service_list.children {
-        if let XMLNode::Element(service) = node {
-            let Some(service_type) = child_text(service, "serviceType") else {
-                continue;
-            };
-            if !service_type
-                .to_ascii_lowercase()
-                .contains("urn:schemas-upnp-org:service:contentdirectory:")
-            {
-                continue;
-            }
-            if let Some(event_sub) = child_text(service, "eventSubURL") {
-                return Ok(Some(resolve_control_url(location, &event_sub)));
-            }
+    for service in xml_children(service_list) {
+        let Some(service_type) = child_text(service, "serviceType") else {
+            continue;
+        };
+        if !service_type
+            .to_ascii_lowercase()
+            .contains("urn:schemas-upnp-org:service:contentdirectory:")
+        {
+            continue;
+        }
+        if let Some(event_sub) = child_text(service, "eventSubURL") {
+            return Ok(Some(resolve_control_url(location, &event_sub)));
         }
     }
 

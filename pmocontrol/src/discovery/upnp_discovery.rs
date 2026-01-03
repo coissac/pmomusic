@@ -1,19 +1,27 @@
 use crate::{DeviceRegistry, discovery::upnp_provider::ParsedDeviceDescription};
 use pmoupnp::ssdp::SsdpEvent;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use crate::discovery::manager::UDNRegistry;
 
 /// Gestionnaire des événements SSDP -> DeviceUpdate.
 
 pub struct UpnpDiscoveryManager {
-    device_registry: Arc<Mutex<DeviceRegistry>>,
+    device_registry: Arc<RwLock<DeviceRegistry>>,
     udn_cache: Arc<Mutex<UDNRegistry>>,
 }
 
 impl UpnpDiscoveryManager {
-    // Dans handle_ssdp_event (upnp_discovery.rs)
-    fn handle_ssdp_event(&mut self, event: SsdpEvent) {
+    pub fn new(device_registry: Arc<RwLock<DeviceRegistry>>,
+        udn_cache: Arc<Mutex<UDNRegistry>>,
+    ) -> Self {
+        Self {
+            device_registry,
+            udn_cache,
+        }
+    }
+
+    pub fn handle_ssdp_event(&mut self, event: SsdpEvent) {
         let (alive, usn, location, max_age, server_header) = match event {
             SsdpEvent::Alive {
                 usn,
@@ -39,24 +47,20 @@ impl UpnpDiscoveryManager {
                     // ✅ Fetch + parse
                     if let Ok(info) = ParsedDeviceDescription::new(&udn, &location, &server_header,5) {
                         if let Some(renderer_info) = info.build_renderer() {
-                        self.device_registry
-                        .lock()
-                         .expect("UDNRegistry mutex lock failed")
-                          .push_renderer(&renderer_info,max_age);
-                    } else {
-                        if let Some(server_info) = info.build_server() {
-                            self.device_registry
-                                 .lock()
-                                  .expect("UDNRegistry mutex lock failed")
-                                   .push_server(&server_info,max_age);
+                            if let Ok(mut reg) = self.device_registry.write() {
+                                reg.push_renderer(&renderer_info, max_age);
+                            }
+                        } else if let Some(server_info) = info.build_server() {
+                            if let Ok(mut reg) = self.device_registry.write() {
+                                reg.push_server(&server_info, max_age);
+                            }
                         }
                     }
-                }}
+                }
             } else {
-                self.device_registry
-                    .lock()
-                    .expect("UDNRegistry mutex lock failed")
-                    .device_says_byebye(&udn);
+                if let Ok(mut reg) = self.device_registry.write() {
+                    reg.device_says_byebye(&udn);
+                }
             }
         }
     }

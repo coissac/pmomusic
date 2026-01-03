@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
-    time::{Instant, SystemTime},
+    time::Instant,
 };
 
 struct UDNSeen {
@@ -20,18 +20,21 @@ impl UDNRegistry {
         }
     }
 
-    /// Returns `true` if the UDN has been seen for at least half of its lifetime
+    /// Returns `true` if we should fetch/process this UDN (either first time or more than half max_age elapsed)
     pub fn should_fetch(registry: Arc<Mutex<UDNRegistry>>, udn: &str, max_age: u64) -> bool {
         let now = Instant::now();
         let mut r = registry.lock().expect("UDNRegistry mutex lock failed");
         if let Some(seen) = r.seen.get_mut(udn) {
+            // If more than half the max_age has elapsed, we should fetch/process again
             if now.duration_since(seen.last_seen).as_secs() > max_age / 2 {
-                false
-            } else {
                 seen.last_seen = now;
                 true
+            } else {
+                // Too soon, skip this SSDP event
+                false
             }
         } else {
+            // First time seeing this UDN, insert and fetch
             r.seen.insert(
                 udn.to_string(),
                 UDNSeen {

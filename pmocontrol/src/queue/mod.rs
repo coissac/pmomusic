@@ -1,18 +1,18 @@
-mod music_queue;
 mod backend;
-mod snapshot;
-mod openhome;
 mod interne;
+mod music_queue;
+mod openhome;
+mod snapshot;
 
 use std::sync::{Arc, Mutex};
 
+pub use backend::{EnqueueMode, QueueBackend};
 pub use music_queue::MusicQueue;
-pub use backend::{QueueBackend, EnqueueMode};
 pub use snapshot::{PlaybackItem, QueueSnapshot};
 
 // Internal queue implementations - not part of the public API
-pub(crate) use openhome::OpenHomeQueue;
 pub(crate) use interne::InternalQueue;
+pub(crate) use openhome::OpenHomeQueue;
 
 use crate::{RendererInfo, errors::ControlPointError};
 
@@ -23,9 +23,7 @@ pub trait QueueFromRendererInfo {
 
     fn to_backend(self) -> MusicQueue;
 
-    fn build_from_renderer_info(
-        renderer: &RendererInfo,
-    ) -> Result<MusicQueue, ControlPointError>
+    fn build_from_renderer_info(renderer: &RendererInfo) -> Result<MusicQueue, ControlPointError>
     where
         Self: Sized,
     {

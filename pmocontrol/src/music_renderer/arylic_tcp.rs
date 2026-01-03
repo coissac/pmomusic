@@ -4,17 +4,19 @@ use serde::Deserialize;
 use tracing::debug;
 
 use crate::DeviceIdentity;
-use crate::arylic_client::{ARYLIC_TCP_PORT, DEFAULT_TIMEOUT_SECS, send_command_no_response, send_command_optional, send_command_required};
+use crate::arylic_client::{
+    ARYLIC_TCP_PORT, DEFAULT_TIMEOUT_SECS, send_command_no_response, send_command_optional,
+    send_command_required,
+};
 use crate::errors::ControlPointError;
 use crate::linkplay_client::extract_linkplay_host;
 use crate::model::{PlaybackState, RendererInfo};
 use crate::music_renderer::RendererFromMediaRendererInfo;
 use crate::music_renderer::capabilities::{
-    PlaybackPosition, PlaybackPositionInfo, PlaybackStatus, TransportControl,
-    VolumeControl,
+    PlaybackPosition, PlaybackPositionInfo, PlaybackStatus, TransportControl, VolumeControl,
 };
-use crate::music_renderer::time_utils::{ms_to_seconds, format_hhmmss, parse_hhmmss_strict};
 use crate::music_renderer::musicrenderer::MusicRendererBackend;
+use crate::music_renderer::time_utils::{format_hhmmss, ms_to_seconds, parse_hhmmss_strict};
 
 /// Raw response from Arylic MCU+PINFGET command
 #[derive(Debug, Deserialize)]
@@ -145,7 +147,7 @@ impl TransportControl for ArylicTcpRenderer {
     fn seek_rel_time(&self, hhmmss: &str) -> Result<(), ControlPointError> {
         let _ = parse_hhmmss_strict(hhmmss)?;
         Err(ControlPointError::ArilycTcpError(
-            "Arylic TCP seek_rel_time is not implemented yet for this device.".to_string()
+            "Arylic TCP seek_rel_time is not implemented yet for this device.".to_string(),
         ))
     }
 }
@@ -255,59 +257,77 @@ fn parse_playback_info(payload: &str) -> Result<ArylicPlaybackInfo, ControlPoint
         ControlPointError::ArilycTcpError(format!("Unexpected playback info prefix: {}", payload))
     })?;
 
-    let json_blob = json_blob.trim_end_matches('&').trim();
+    // Extract JSON object between { and }, ignoring trailing & and other garbage
+    // Arylic devices send: AXX+PLY+INF{...json...}&
+    let json_start = json_blob.find('{').ok_or_else(|| {
+        ControlPointError::ArilycTcpError(format!(
+            "No JSON object found in playback info: {}",
+            payload
+        ))
+    })?;
 
-    let raw: ArylicPlaybackInfoRaw = serde_json::from_str(json_blob)
-        .map_err(|e| ControlPointError::ArilycTcpError(format!("Failed to parse Arylic playback info JSON: {}", e)))?;
+    let json_end = json_blob.rfind('}').ok_or_else(|| {
+        ControlPointError::ArilycTcpError(format!(
+            "No JSON object end found in playback info: {}",
+            payload
+        ))
+    })?;
 
-    let curpos_ms = raw.curpos.parse::<u64>()
-        .map_err(|_| ControlPointError::ArilycTcpError(format!("Invalid curpos value: {}", raw.curpos)))?;
+    let json_blob = &json_blob[json_start..=json_end];
 
-    let totlen_ms = raw.totlen.parse::<u64>()
-        .map_err(|_| ControlPointError::ArilycTcpError(format!("Invalid totlen value: {}", raw.totlen)))?;
+    let raw: ArylicPlaybackInfoRaw = serde_json::from_str(json_blob).map_err(|e| {
+        ControlPointError::ArilycTcpError(format!(
+            "Failed to parse Arylic playback info JSON: {}",
+            e
+        ))
+    })?;
 
-    let volume = raw.vol.and_then(|raw_vol| {
-        match raw_vol.parse::<u16>() {
-            Ok(value) => Some(value.min(100)),
-            Err(err) => {
-                debug!("Invalid Arylic `vol` value {}: {}", raw_vol, err);
-                None
-            }
+    let curpos_ms = raw.curpos.parse::<u64>().map_err(|_| {
+        ControlPointError::ArilycTcpError(format!("Invalid curpos value: {}", raw.curpos))
+    })?;
+
+    let totlen_ms = raw.totlen.parse::<u64>().map_err(|_| {
+        ControlPointError::ArilycTcpError(format!("Invalid totlen value: {}", raw.totlen))
+    })?;
+
+    let volume = raw.vol.and_then(|raw_vol| match raw_vol.parse::<u16>() {
+        Ok(value) => Some(value.min(100)),
+        Err(err) => {
+            debug!("Invalid Arylic `vol` value {}: {}", raw_vol, err);
+            None
         }
     });
 
-    let mute = raw.mute.and_then(|raw_mute| {
-        match raw_mute.as_str() {
-            "1" => Some(true),
-            "0" => Some(false),
-            other => {
-                debug!("Invalid Arylic `mute` value {}", other);
-                None
-            }
+    let mute = raw.mute.and_then(|raw_mute| match raw_mute.as_str() {
+        "1" => Some(true),
+        "0" => Some(false),
+        other => {
+            debug!("Invalid Arylic `mute` value {}", other);
+            None
         }
     });
 
-    let playlist_size = raw.plicount.and_then(|raw_count| {
-        match raw_count.parse::<u32>() {
+    let playlist_size = raw
+        .plicount
+        .and_then(|raw_count| match raw_count.parse::<u32>() {
             Ok(count) if count > 0 => Some(count),
             Ok(_) => None,
             Err(err) => {
                 debug!("Invalid Arylic `plicount` value {}: {}", raw_count, err);
                 None
             }
-        }
-    });
+        });
 
-    let track_index = raw.plicurr.and_then(|raw_idx| {
-        match raw_idx.parse::<u32>() {
+    let track_index = raw
+        .plicurr
+        .and_then(|raw_idx| match raw_idx.parse::<u32>() {
             Ok(idx) if idx > 0 => Some(idx),
             Ok(_) => None,
             Err(err) => {
                 debug!("Invalid Arylic `plicurr` value {}: {}", raw_idx, err);
                 None
             }
-        }
-    });
+        });
 
     Ok(ArylicPlaybackInfo {
         status_raw: raw.status,

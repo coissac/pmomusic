@@ -5,10 +5,10 @@ use std::time::Duration;
 use crate::{
     errors::ControlPointError,
     soap_client::{
-        extract_child_text, handle_action_response, invoke_upnp_action, invoke_upnp_action_with_timeout
+        extract_child_text, handle_action_response, invoke_upnp_action,
+        invoke_upnp_action_with_timeout,
     },
 };
-use anyhow::{Result, anyhow};
 use pmoupnp::soap::SoapEnvelope;
 use xmltree::{Element, XMLNode};
 
@@ -54,10 +54,11 @@ impl AvTransportClient {
             )));
         }
 
-        let envelope = call_result
-            .envelope
-            .as_ref()
-            .ok_or_else(|| ControlPointError::UpnpError(format!("Missing SOAP envelope in GetTransportInfo response")))?;
+        let envelope = call_result.envelope.as_ref().ok_or_else(|| {
+            ControlPointError::UpnpError(format!(
+                "Missing SOAP envelope in GetTransportInfo response"
+            ))
+        })?;
 
         parse_transport_info(envelope)
     }
@@ -181,7 +182,11 @@ impl AvTransportClient {
 
 fn parse_transport_info(envelope: &SoapEnvelope) -> Result<TransportInfo, ControlPointError> {
     let response = find_child_with_suffix(&envelope.body.content, "GetTransportInfoResponse")
-        .ok_or_else(|| ControlPointError::UpnpError(format!("Missing GetTransportInfoResponse element in SOAP body")))?;
+        .ok_or_else(|| {
+            ControlPointError::UpnpError(format!(
+                "Missing GetTransportInfoResponse element in SOAP body"
+            ))
+        })?;
 
     let current_transport_state = extract_child_text(response, "CurrentTransportState")?;
     let current_transport_status = extract_child_text(response, "CurrentTransportStatus")?;
@@ -267,7 +272,6 @@ fn find_child_with_suffix<'a>(parent: &'a Element, suffix: &str) -> Option<&'a E
         _ => None,
     })
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -382,10 +386,11 @@ impl AvTransportClient {
             )));
         }
 
-        let envelope = call_result
-            .envelope
-            .as_ref()
-            .ok_or_else(|| ControlPointError::UpnpError(format!("Missing SOAP envelope in GetPositionInfo response")))?;
+        let envelope = call_result.envelope.as_ref().ok_or_else(|| {
+            ControlPointError::UpnpError(format!(
+                "Missing SOAP envelope in GetPositionInfo response"
+            ))
+        })?;
 
         parse_position_info(envelope)
     }
@@ -393,7 +398,9 @@ impl AvTransportClient {
 
 fn parse_position_info(envelope: &SoapEnvelope) -> Result<PositionInfo, ControlPointError> {
     let response = find_child_with_suffix(&envelope.body.content, "GetPositionInfoResponse")
-        .ok_or_else(|| ControlPointError::UpnpError(format!("Missing GetPositionInfoResponse element")))?;
+        .ok_or_else(|| {
+            ControlPointError::UpnpError(format!("Missing GetPositionInfoResponse element"))
+        })?;
 
     // Helpers allow missing text (AVTransport allows empty durations)
     fn opt(parent: &Element, name: &str) -> Option<String> {

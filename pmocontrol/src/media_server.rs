@@ -12,7 +12,7 @@ use crate::model::TrackMetadata;
 use crate::online::{DeviceConnectionState, DeviceOnline};
 use crate::queue::PlaybackItem;
 use crate::soap_client::{SoapCallResult, invoke_upnp_action_with_timeout};
-use crate::{DEFAULT_HTTP_TIMEOUT, DeviceId, DeviceIdentity, RendererInfo};
+use crate::{DEFAULT_HTTP_TIMEOUT, DeviceId, DeviceIdentity};
 
 /// Snapshot of a media server discovered through UPnP SSDP.
 #[derive(Clone, Debug)]
@@ -70,7 +70,7 @@ impl UpnpMediaServer {
         content_directory_service_type: Option<String>,
         content_directory_control_url: Option<String>,
     ) -> Arc<Self> {
-        Arc::new(Self::new(
+        Arc::new(UpnpMediaServer::new(
             id,
             udn,
             friendly_name,
@@ -108,6 +108,10 @@ impl UpnpMediaServer {
         })?;
         let didl_xml = extract_result_payload(&envelope, "BrowseResponse")?;
         map_didl_entries(&didl_xml)
+    }
+
+    fn has_content_directory(&self) -> bool {
+        self.has_content_directory
     }
 
     fn search_impl(
@@ -384,8 +388,14 @@ pub enum MusicServer {
 }
 
 impl MusicServer {
-    pub fn from_server_info(info: &UpnpMediaServer) -> Result<MusicServer, ControlPointError>  {
+    pub fn from_server_info(info: &UpnpMediaServer) -> Result<MusicServer, ControlPointError> {
         Ok(MusicServer::Upnp(info.clone()))
+    }
+
+    pub fn has_content_directory(&self) -> bool {
+        match self {
+            MusicServer::Upnp(u) => u.has_content_directory(),
+        }
     }
 }
 
@@ -502,7 +512,7 @@ impl MediaBrowser for MusicServer {
 /// This function filters out containers and entries without audio resources,
 /// returning None for items that cannot be played.
 pub fn playback_item_from_entry(
-    server: &UpnpMediaServer,
+    server: Arc<MusicServer>,
     entry: &MediaEntry,
 ) -> Option<PlaybackItem> {
     // Ignore containers

@@ -5,7 +5,8 @@ use tracing::debug;
 
 use crate::errors::ControlPointError;
 use crate::upnp_clients::{
-    OPENHOME_PLAYLIST_HEAD_ID, OhInfoClient, OhPlaylistClient, OhProductClient, OhTrack, OhTrackEntry
+    OPENHOME_PLAYLIST_HEAD_ID, OhInfoClient, OhPlaylistClient, OhProductClient, OhTrack,
+    OhTrackEntry,
 };
 // use crate::openhome_playlist::{OpenHomePlaylistSnapshot, OpenHomePlaylistTrack};
 use crate::queue::{
@@ -253,8 +254,8 @@ impl OpenHomeQueue {
         self.delete_marked_items(&old_ids_before, &keep_old_before, "BEFORE pivot")?;
 
         // Rebuild the playlist: [BEFORE, PIVOT, AFTER]
-        // Rebuild BEFORE part
-        let previous_id = self.rebuild_playlist_section(
+        // Rebuild BEFORE part (we don't need the returned previous_id)
+        self.rebuild_playlist_section(
             new_before,
             &keep_new_before,
             &old_ids_before,
@@ -263,7 +264,7 @@ impl OpenHomeQueue {
             "BEFORE pivot",
         )?;
 
-        // Add PIVOT (keeps its ID!)
+        // PIVOT keeps its ID and position - it's the anchor point
         let previous_id = pivot_id as u32;
         debug!(
             renderer = self.renderer_id.0.as_str(),
@@ -513,7 +514,9 @@ impl QueueBackend for OpenHomeQueue {
     }
 
     fn current_track(&self) -> Result<Option<u32>, ControlPointError> {
-        Ok(Some(self.playlist_client.id()?))
+        let id = self.playlist_client.id()?;
+        // OpenHome returns 0 when no track is selected/playing
+        if id == 0 { Ok(None) } else { Ok(Some(id)) }
     }
 
     fn current_index(&self) -> Result<Option<usize>, ControlPointError> {

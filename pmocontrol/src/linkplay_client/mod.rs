@@ -1,10 +1,16 @@
 use std::time::Duration;
 
 use serde::Deserialize;
-use tracing::debug;
 use ureq::Agent;
 
-use crate::{errors::ControlPointError, model::PlaybackState, music_renderer::{PlaybackPositionInfo, time_utils::{format_hhmmss, ms_to_seconds}}};
+use crate::{
+    errors::ControlPointError,
+    model::PlaybackState,
+    music_renderer::{
+        PlaybackPositionInfo,
+        time_utils::{format_hhmmss, ms_to_seconds},
+    },
+};
 
 const STATUS_COMMAND: &str = "getPlayerStatus";
 
@@ -101,32 +107,41 @@ pub fn percent_encode(input: &str) -> String {
     out
 }
 
-pub fn fetch_status_for_host(host: &str, timeout: Duration) -> Result<LinkPlayStatus, ControlPointError> {
+pub fn fetch_status_for_host(
+    host: &str,
+    timeout: Duration,
+) -> Result<LinkPlayStatus, ControlPointError> {
     let url = format!("http://{}/httpapi.asp?command={}", host, STATUS_COMMAND);
-    let mut response = build_agent(timeout)
-        .get(&url)
-        .call()
-        .map_err(|_| ControlPointError::ArilycTcpError(format!("HTTP request failed for LinkPlay status on {}", host)))?;
+    let mut response = build_agent(timeout).get(&url).call().map_err(|_| {
+        ControlPointError::ArilycTcpError(format!(
+            "HTTP request failed for LinkPlay status on {}",
+            host
+        ))
+    })?;
 
-    let body = response
-        .body_mut()
-        .read_to_string()
-        .map_err(|e| ControlPointError::ArilycTcpError(format!("Failed to read LinkPlay status body : {}",e)))?;
+    let body = response.body_mut().read_to_string().map_err(|e| {
+        ControlPointError::ArilycTcpError(format!("Failed to read LinkPlay status body : {}", e))
+    })?;
 
     parse_linkplay_status(&body)
 }
 
 fn parse_linkplay_status(body: &str) -> Result<LinkPlayStatus, ControlPointError> {
-    let raw: LinkPlayStatusRaw = serde_json::from_str(body)
-        .map_err(|e| ControlPointError::LinkPlayError(format!("Failed to parse LinkPlay status JSON: {}", e)))?;
+    let raw: LinkPlayStatusRaw = serde_json::from_str(body).map_err(|e| {
+        ControlPointError::LinkPlayError(format!("Failed to parse LinkPlay status JSON: {}", e))
+    })?;
 
-    let curpos_ms = raw.curpos.parse::<u64>()
-        .map_err(|_| ControlPointError::LinkPlayError(format!("Invalid curpos value: {}", raw.curpos)))?;
+    let curpos_ms = raw.curpos.parse::<u64>().map_err(|_| {
+        ControlPointError::LinkPlayError(format!("Invalid curpos value: {}", raw.curpos))
+    })?;
 
-    let totlen_ms = raw.totlen.parse::<u64>()
-        .map_err(|_| ControlPointError::LinkPlayError(format!("Invalid totlen value: {}", raw.totlen)))?;
+    let totlen_ms = raw.totlen.parse::<u64>().map_err(|_| {
+        ControlPointError::LinkPlayError(format!("Invalid totlen value: {}", raw.totlen))
+    })?;
 
-    let volume = raw.vol.parse::<u16>()
+    let volume = raw
+        .vol
+        .parse::<u16>()
         .map_err(|_| ControlPointError::LinkPlayError(format!("Invalid vol value: {}", raw.vol)))?
         .min(100);
 
@@ -134,11 +149,15 @@ fn parse_linkplay_status(body: &str) -> Result<LinkPlayStatus, ControlPointError
         "1" => true,
         "0" => false,
         other => {
-            return Err(ControlPointError::LinkPlayError(format!("Invalid mute value: {}", other)));
+            return Err(ControlPointError::LinkPlayError(format!(
+                "Invalid mute value: {}",
+                other
+            )));
         }
     };
 
-    let track_index = raw.plicurr
+    let track_index = raw
+        .plicurr
         .and_then(|s| s.parse::<u32>().ok())
         .filter(|idx| *idx > 0);
 
@@ -151,6 +170,3 @@ fn parse_linkplay_status(body: &str) -> Result<LinkPlayStatus, ControlPointError
         mute,
     })
 }
-
-
-

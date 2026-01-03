@@ -1,11 +1,10 @@
 use crate::{
     errors::ControlPointError,
     soap_client::{
-        SoapCallResult, ensure_success, extract_child_text, find_child_with_suffix,
-        handle_action_response, invoke_upnp_action, parse_upnp_error,
+        ensure_success, extract_child_text, find_child_with_suffix, handle_action_response,
+        invoke_upnp_action, parse_upnp_error,
     },
 };
-use anyhow::{Result, anyhow};
 use tracing::debug;
 
 #[derive(Debug, Clone)]
@@ -96,22 +95,23 @@ impl RenderingControlClient {
 
         ensure_success("GetMute", &call_result)?;
 
-        let envelope = call_result
-            .envelope
-            .as_ref()
-            .ok_or_else(|| ControlPointError::UpnpError(format!("Missing SOAP envelope in GetMute response")))?;
+        let envelope = call_result.envelope.as_ref().ok_or_else(|| {
+            ControlPointError::UpnpError(format!("Missing SOAP envelope in GetMute response"))
+        })?;
 
         if let Some(err) = parse_upnp_error(envelope) {
             return Err(ControlPointError::UpnpError(format!(
                 "GetMute returned UPnP error {}: {} (HTTP status {})",
-                err.error_code,
-                err.error_description,
-                call_result.status
+                err.error_code, err.error_description, call_result.status
             )));
         }
 
         let response = find_child_with_suffix(&envelope.body.content, "GetMuteResponse")
-            .ok_or_else(|| ControlPointError::UpnpError(format!("Missing GetMuteResponse element in SOAP body")))?;
+            .ok_or_else(|| {
+                ControlPointError::UpnpError(format!(
+                    "Missing GetMuteResponse element in SOAP body"
+                ))
+            })?;
 
         let text = extract_child_text(response, "CurrentMute")?;
         let mute = match text.as_str() {

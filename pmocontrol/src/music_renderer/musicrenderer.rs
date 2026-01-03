@@ -9,24 +9,43 @@
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
-use crate::control_point::PlaylistBinding;
 use crate::errors::ControlPointError;
-use crate::model::{RendererInfo, RendererProtocol, TrackMetadata, PlaybackState};
+use crate::model::{PlaybackSource, PlaybackState, RendererInfo, RendererProtocol, TrackMetadata};
 use crate::music_renderer::RendererFromMediaRendererInfo;
 use crate::music_renderer::arylic_tcp::ArylicTcpRenderer;
 use crate::music_renderer::capabilities::{
-    PlaybackPosition, PlaybackPositionInfo, PlaybackStatus, TransportControl,
-    VolumeControl,
+    PlaybackPosition, PlaybackPositionInfo, PlaybackStatus, TransportControl, VolumeControl,
 };
 use crate::music_renderer::chromecast_renderer::ChromecastRenderer;
 use crate::music_renderer::linkplay_renderer::LinkPlayRenderer;
 use crate::music_renderer::openhome_renderer::OpenHomeRenderer;
 use crate::music_renderer::upnp_renderer::UpnpRenderer;
 use crate::online::DeviceConnectionState;
-use crate::queue::{EnqueueMode, MusicQueue, PlaybackItem, QueueBackend, QueueFromRendererInfo, QueueSnapshot};
+use crate::queue::{
+    EnqueueMode, MusicQueue, PlaybackItem, QueueBackend, QueueFromRendererInfo, QueueSnapshot,
+};
 use crate::{DeviceId, DeviceIdentity, DeviceOnline};
 
 use tracing::warn;
+
+/// Describes a renderer's attachment to a media server playlist container.
+///
+/// When a renderer is attached to a playlist, the ControlPoint monitors the container
+/// for updates and automatically refreshes the queue when changes are detected.
+#[derive(Clone, Debug)]
+pub struct PlaylistBinding {
+    /// MediaServer that owns the playlist container.
+    pub server_id: DeviceId,
+    /// DIDL-Lite object id of the playlist container.
+    pub container_id: String,
+    /// True once at least one ContainerUpdateIDs notification has been seen.
+    pub(crate) has_seen_update: bool,
+    /// Flag used internally to signal that the queue should be refreshed
+    /// from the server container.
+    pub(crate) pending_refresh: bool,
+    /// Whether the next refresh should auto-start playback if the renderer is idle.
+    pub(crate) auto_play_on_refresh: bool,
+}
 
 /// Backend-agnostic façade exposing transport, volume, and status contracts.
 #[derive(Clone, Debug)]
@@ -49,6 +68,17 @@ pub enum MusicRendererBackend {
     },
 }
 
+/// Internal state for tracking playback and control flow.
+#[derive(Debug, Clone, Default)]
+struct MusicRendererState {
+    /// Last known track metadata (cached to avoid repeated queries).
+    last_metadata: Option<TrackMetadata>,
+    /// Source of the current playback (queue vs external).
+    playback_source: PlaybackSource,
+    /// Flag to distinguish user-requested stop from automatic events.
+    user_stop_requested: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct MusicRenderer {
     info: RendererInfo,
@@ -56,6 +86,7 @@ pub struct MusicRenderer {
     backend: Arc<Mutex<MusicRendererBackend>>,
     queue: Arc<Mutex<MusicQueue>>,
     playlist_binding: Arc<Mutex<Option<PlaylistBinding>>>,
+    state: Arc<Mutex<MusicRendererState>>,
 }
 
 impl MusicRenderer {
@@ -72,6 +103,7 @@ impl MusicRenderer {
             backend,
             queue,
             playlist_binding: Arc::new(Mutex::new(None)),
+            state: Arc::new(Mutex::new(MusicRendererState::default())),
         };
 
         Arc::new(renderer)
@@ -88,6 +120,7 @@ impl MusicRenderer {
             backend,
             queue,
             playlist_binding: Arc::new(Mutex::new(None)),
+            state: Arc::new(Mutex::new(MusicRendererState::default())),
         };
         Ok(renderer)
     }
@@ -179,6 +212,23 @@ impl MusicRenderer {
             .queue_snapshot()
     }
 
+    /// Get the current queue item without advancing.
+    /// Returns the item and count of remaining items after current.
+    pub fn peek_current(&self) -> Result<Option<(PlaybackItem, usize)>, ControlPointError> {
+        self.queue
+            .lock()
+            .expect("Queue mutex poisoned")
+            .peek_current()
+    }
+
+    /// Get the count of items remaining after the current index.
+    pub fn upcoming_len(&self) -> Result<usize, ControlPointError> {
+        self.queue
+            .lock()
+            .expect("Queue mutex poisoned")
+            .upcoming_len()
+    }
+
     /// Play the current item from the queue.
     pub fn play_current_from_queue(&self) -> Result<(), ControlPointError> {
         let queue = self.queue.lock().expect("Queue mutex poisoned");
@@ -248,6 +298,22 @@ impl MusicRenderer {
         self.backend.lock().expect("Backend mutex poisoned").stop()
     }
 
+    /// Set the next URI for gapless playback (UPnP AVTransport only).
+    ///
+    /// Returns Ok if the backend supports this feature and it succeeded.
+    /// Returns Err if not supported or if it failed.
+    pub fn set_next_uri(&self, uri: &str, metadata: &str) -> Result<(), ControlPointError> {
+        let backend = self.backend.lock().expect("Backend mutex poisoned");
+
+        match &*backend {
+            MusicRendererBackend::Upnp(upnp) => upnp.set_next_uri(uri, metadata),
+            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.set_next_uri(uri, metadata),
+            _ => Err(ControlPointError::ControlPoint(
+                "SetNextURI not supported by this backend".to_string(),
+            )),
+        }
+    }
+
     /// Transport control: seek to relative time
     pub fn seek_rel_time(&self, hhmmss: &str) -> Result<(), ControlPointError> {
         self.backend
@@ -303,17 +369,126 @@ impl MusicRenderer {
 
     /// Sets the playlist binding for this renderer.
     pub fn set_playlist_binding(&self, binding: Option<PlaylistBinding>) {
-        *self.playlist_binding.lock().expect("Playlist binding mutex poisoned") = binding;
+        *self
+            .playlist_binding
+            .lock()
+            .expect("Playlist binding mutex poisoned") = binding;
     }
 
     /// Gets the current playlist binding, if any.
     pub fn get_playlist_binding(&self) -> Option<PlaylistBinding> {
-        self.playlist_binding.lock().expect("Playlist binding mutex poisoned").clone()
+        self.playlist_binding
+            .lock()
+            .expect("Playlist binding mutex poisoned")
+            .clone()
     }
 
     /// Clears the playlist binding.
     pub fn clear_playlist_binding(&self) {
-        *self.playlist_binding.lock().expect("Playlist binding mutex poisoned") = None;
+        *self
+            .playlist_binding
+            .lock()
+            .expect("Playlist binding mutex poisoned") = None;
+    }
+
+    /// Marks the current playlist binding for refresh if it matches the given server and container.
+    /// Returns true if a matching binding was found and marked.
+    pub fn mark_binding_for_refresh(&self, server_id: &DeviceId, container_ids: &[String]) -> bool {
+        let mut binding_guard = self
+            .playlist_binding
+            .lock()
+            .expect("Playlist binding mutex poisoned");
+
+        if let Some(binding) = binding_guard.as_mut() {
+            if &binding.server_id == server_id && container_ids.contains(&binding.container_id) {
+                binding.pending_refresh = true;
+                binding.has_seen_update = true;
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Checks if the binding has pending_refresh flag set.
+    /// Returns false if no binding exists.
+    pub fn has_pending_refresh(&self) -> bool {
+        self.playlist_binding
+            .lock()
+            .expect("Playlist binding mutex poisoned")
+            .as_ref()
+            .map(|b| b.pending_refresh)
+            .unwrap_or(false)
+    }
+
+    /// Resets the pending_refresh flag to false.
+    /// Does nothing if no binding exists.
+    pub fn reset_pending_refresh(&self) {
+        if let Some(binding) = self
+            .playlist_binding
+            .lock()
+            .expect("Playlist binding mutex poisoned")
+            .as_mut()
+        {
+            binding.pending_refresh = false;
+        }
+    }
+
+    /// Marks the binding as pending refresh.
+    /// Returns true if a binding exists and was marked, false otherwise.
+    pub fn mark_pending_refresh(&self) -> bool {
+        self.playlist_binding
+            .lock()
+            .expect("Playlist binding mutex poisoned")
+            .as_mut()
+            .map(|binding| {
+                binding.pending_refresh = true;
+                true
+            })
+            .unwrap_or(false)
+    }
+
+    /// Consumes and returns the auto_play_on_refresh flag, resetting it to false.
+    /// Returns false if no binding exists.
+    pub fn consume_auto_play(&self) -> bool {
+        self.playlist_binding
+            .lock()
+            .expect("Playlist binding mutex poisoned")
+            .as_mut()
+            .map(|binding| {
+                let auto_play = binding.auto_play_on_refresh;
+                binding.auto_play_on_refresh = false;
+                auto_play
+            })
+            .unwrap_or(false)
+    }
+
+    /// Add items to the queue using the specified enqueue mode.
+    pub fn enqueue_items(
+        &self,
+        items: Vec<PlaybackItem>,
+        mode: EnqueueMode,
+    ) -> Result<(), ControlPointError> {
+        let mut queue = self.queue.lock().expect("Queue mutex poisoned");
+        queue.enqueue_items(items, mode)
+    }
+
+    /// Synchronize the queue with new items while preserving the current track.
+    ///
+    /// This method intelligently updates the queue:
+    /// - If the current track is in the new items, it keeps playing at the new position
+    /// - If the current track is NOT in the new items, it's preserved as the first item
+    /// - If there's no current track, the queue is simply replaced
+    pub fn sync_queue(&self, items: Vec<PlaybackItem>) -> Result<(), ControlPointError> {
+        let mut queue = self.queue.lock().expect("Queue mutex poisoned");
+        queue.sync_queue(items)
+    }
+
+    /// Set the current queue index (for advanced use).
+    /// Note: This does NOT start playback. Use select_queue_track() to play.
+    pub fn set_queue_index(&self, index: Option<usize>) -> Result<(), ControlPointError> {
+        let mut queue = self.queue.lock().expect("Queue mutex poisoned");
+        queue.set_index(index)
     }
 
     /// Clears the renderer's queue using the generic QueueBackend trait.
@@ -340,7 +515,7 @@ impl MusicRenderer {
         // The generic implementation cannot support this without more context
         // (media_server_id, didl_id, protocol_info, etc.).
         Err(ControlPointError::QueueError(
-            "add_track_to_queue requires backend-specific implementation".to_string()
+            "add_track_to_queue requires backend-specific implementation".to_string(),
         ))
     }
 
@@ -360,7 +535,8 @@ impl MusicRenderer {
         queue.set_index(Some(position))?;
 
         // Get the item to play
-        let item = queue.get_item(position)?
+        let item = queue
+            .get_item(position)?
             .ok_or_else(|| ControlPointError::QueueError("Track not found".to_string()))?;
         drop(queue);
 
@@ -396,7 +572,8 @@ impl MusicRenderer {
         let queue = self.queue.lock().expect("Queue mutex poisoned");
 
         // Get current track ID using generic QueueBackend trait
-        let track_id = queue.current_track()?
+        let track_id = queue
+            .current_track()?
             .ok_or_else(|| ControlPointError::QueueError("No current track".to_string()))?;
 
         drop(queue);
@@ -415,6 +592,57 @@ impl MusicRenderer {
     /// This is a convenience method to avoid repetitive `queue.lock().unwrap()` patterns.
     pub fn get_queue_mut(&self) -> std::sync::MutexGuard<'_, MusicQueue> {
         self.queue.lock().unwrap()
+    }
+
+    // --- Playback State Management ---
+
+    /// Gets the last known track metadata.
+    pub fn last_metadata(&self) -> Option<TrackMetadata> {
+        self.state.lock().unwrap().last_metadata.clone()
+    }
+
+    /// Sets the last known track metadata.
+    pub fn set_last_metadata(&self, metadata: Option<TrackMetadata>) {
+        self.state.lock().unwrap().last_metadata = metadata;
+    }
+
+    /// Gets the current playback source.
+    pub fn playback_source(&self) -> PlaybackSource {
+        self.state.lock().unwrap().playback_source
+    }
+
+    /// Sets the playback source.
+    pub fn set_playback_source(&self, source: PlaybackSource) {
+        self.state.lock().unwrap().playback_source = source;
+    }
+
+    /// Checks if currently playing from queue.
+    pub fn is_playing_from_queue(&self) -> bool {
+        matches!(
+            self.state.lock().unwrap().playback_source,
+            PlaybackSource::FromQueue
+        )
+    }
+
+    /// Marks playback as external if currently idle (source is None).
+    pub fn mark_external_if_idle(&self) {
+        let mut state = self.state.lock().unwrap();
+        if matches!(state.playback_source, PlaybackSource::None) {
+            state.playback_source = PlaybackSource::External;
+        }
+    }
+
+    /// Marks that the user requested a stop (to prevent auto-advance).
+    pub fn mark_user_stop_requested(&self) {
+        self.state.lock().unwrap().user_stop_requested = true;
+    }
+
+    /// Checks and clears the user stop requested flag.
+    pub fn check_and_clear_user_stop_requested(&self) -> bool {
+        let mut state = self.state.lock().unwrap();
+        let was_requested = state.user_stop_requested;
+        state.user_stop_requested = false;
+        was_requested
     }
 }
 

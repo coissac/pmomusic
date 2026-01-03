@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 pub use crate::music_renderer::capabilities::{
     PlaybackPosition, PlaybackPositionInfo, PlaybackStatus,
 };
-pub use crate::music_renderer::musicrenderer::MusicRenderer;
+pub use crate::music_renderer::musicrenderer::{MusicRenderer, PlaylistBinding};
 use crate::{
     RendererInfo, errors::ControlPointError, music_renderer::musicrenderer::MusicRendererBackend,
 };

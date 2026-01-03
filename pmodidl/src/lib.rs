@@ -5,11 +5,11 @@
 use bevy_reflect::Reflect;
 use pmoutils::ToXmlElement;
 use serde::{Deserialize, Serialize};
-use std::time::SystemTime;
-use std::{borrow::Cow, time::Instant};
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::fmt::Write;
 use std::io::Cursor;
+use std::time::SystemTime;
 use xmltree::{Element, XMLNode};
 
 // ============= Couche d'abstraction générique =============

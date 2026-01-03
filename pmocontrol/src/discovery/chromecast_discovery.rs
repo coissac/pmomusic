@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use crate::DeviceId;
 use crate::DeviceRegistry;
@@ -17,13 +17,13 @@ use tracing::{debug, warn};
 
 /// Gestionnaire des événements mDNS pour Chromecast.
 pub struct ChromecastDiscoveryManager {
-    device_registry: Arc<Mutex<DeviceRegistry>>,
+    device_registry: Arc<RwLock<DeviceRegistry>>,
     udn_cache: Arc<Mutex<UDNRegistry>>,
 }
 
 impl ChromecastDiscoveryManager {
     pub fn new(
-        device_registry: Arc<Mutex<DeviceRegistry>>,
+        device_registry: Arc<RwLock<DeviceRegistry>>,
         udn_cache: Arc<Mutex<UDNRegistry>>,
     ) -> Self {
         Self {
@@ -173,7 +173,7 @@ impl ChromecastDiscoveryManager {
 
         // Register the renderer
         self.device_registry
-            .lock()
+            .write()
             .expect("DeviceRegistry mutex lock failed")
             .push_renderer(&renderer_info, default_max_age as u32);
     }

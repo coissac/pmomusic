@@ -1,7 +1,27 @@
-use crate::control_point::PlaylistBinding;
-use crate::media_server::UpnpMediaServer;
-use crate::music_renderer::PlaybackPositionInfo;
+use crate::music_renderer::{PlaybackPositionInfo, PlaylistBinding};
 use crate::{DeviceId, DeviceIdentity};
+
+/// Basic device information for event notifications
+/// Contains only the essential identification fields
+#[derive(Clone, Debug)]
+pub struct DeviceBasicInfo {
+    pub id: DeviceId,
+    pub friendly_name: String,
+    pub model_name: String,
+    pub manufacturer: String,
+}
+
+impl DeviceBasicInfo {
+    /// Create from any type implementing DeviceIdentity
+    pub fn from_device<D: DeviceIdentity>(device: &D) -> Self {
+        Self {
+            id: device.id(),
+            friendly_name: device.friendly_name().to_string(),
+            model_name: device.model_name().to_string(),
+            manufacturer: device.manufacturer().to_string(),
+        }
+    }
+}
 
 /// High-level playback state across backends.
 #[derive(Clone, Debug)]
@@ -46,6 +66,21 @@ impl PlaybackState {
             PlaybackState::Unknown(s) => s.as_str(),
         }
     }
+}
+
+/// Indicates the source of the current playback.
+///
+/// This helps the control point distinguish between playback initiated
+/// from the queue vs external sources (e.g., user playing from another app).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PlaybackSource {
+    /// No playback active or source unknown.
+    #[default]
+    None,
+    /// Playback was started from the control point's queue.
+    FromQueue,
+    /// Playback was started externally (e.g., from another app).
+    External,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -401,7 +436,7 @@ pub enum RendererEvent {
     },
     Online {
         id: DeviceId,
-        info: RendererInfo,
+        info: DeviceBasicInfo,
     },
     Offline {
         id: DeviceId,
@@ -420,7 +455,7 @@ pub enum MediaServerEvent {
     },
     Online {
         server_id: DeviceId,
-        info: UpnpMediaServer,
+        info: DeviceBasicInfo,
     },
     Offline {
         server_id: DeviceId,

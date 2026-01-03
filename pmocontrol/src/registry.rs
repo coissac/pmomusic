@@ -106,12 +106,12 @@ impl DeviceOnline for DeviceItem {
 }
 
 impl DeviceRegistry {
-    pub fn new(renderer_bus: RendererEventBus, server_bus: MediaServerEventBus) -> Self {
+    pub fn new(renderer_bus: &RendererEventBus, server_bus: &MediaServerEventBus) -> Self {
         Self {
             devices: HashMap::new(),
             udn_index: HashMap::new(),
-            renderer_bus,
-            server_bus,
+            renderer_bus: renderer_bus.clone(),
+            server_bus: server_bus.clone(),
         }
     }
 
@@ -168,8 +168,8 @@ impl DeviceRegistry {
 
                 if !was_online {
                     self.renderer_bus.broadcast(RendererEvent::Online {
-                        id: device_id,
-                        info: info.clone(),
+                        id: device_id.clone(),
+                        info: info.basic_info(),
                     });
                 }
                 return;
@@ -182,8 +182,8 @@ impl DeviceRegistry {
 
                 // Broadcast sur le bon bus
                 self.renderer_bus.broadcast(RendererEvent::Online {
-                    id: device_id,
-                    info: info.clone(),
+                    id: device_id.clone(),
+                    info: info.basic_info(),
                 });
             }
         } else {
@@ -201,7 +201,7 @@ impl DeviceRegistry {
                 // Broadcast sur le bon bus
                 self.renderer_bus.broadcast(RendererEvent::Online {
                     id: device_id,
-                    info: info.clone(),
+                    info: info.basic_info(),
                 });
             }
         }
@@ -217,8 +217,8 @@ impl DeviceRegistry {
 
                 if !was_online {
                     self.server_bus.broadcast(MediaServerEvent::Online {
-                        server_id: device_id,
-                        info: info.clone(),
+                        server_id: device_id.clone(),
+                        info: info.basic_info(),
                     });
                 }
 
@@ -232,8 +232,8 @@ impl DeviceRegistry {
 
                 // Broadcast sur le bon bus
                 self.server_bus.broadcast(MediaServerEvent::Online {
-                    server_id: device_id,
-                    info: info.clone(),
+                    server_id: device_id.clone(),
+                    info: info.basic_info(),
                 });
             }
         } else {
@@ -251,7 +251,7 @@ impl DeviceRegistry {
                 // Broadcast sur le bon bus
                 self.server_bus.broadcast(MediaServerEvent::Online {
                     server_id: device_id,
-                    info: info.clone(),
+                    info: info.basic_info(),
                 });
             }
         }
