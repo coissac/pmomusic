@@ -19,8 +19,6 @@ use crate::control_point::ControlPoint;
 #[cfg(feature = "pmoserver")]
 use crate::model::{MediaServerEvent, RendererEvent};
 #[cfg(feature = "pmoserver")]
-use crate::registry::DeviceRegistryRead;
-#[cfg(feature = "pmoserver")]
 use async_stream::stream;
 #[cfg(feature = "pmoserver")]
 use axum::{
@@ -33,6 +31,9 @@ use axum::{
 use serde::Serialize;
 #[cfg(feature = "pmoserver")]
 use std::sync::Arc;
+
+use crate::{DeviceIdentity, DeviceOnline};
+use tracing::error;
 
 // ============================================================================
 // PAYLOADS SSE
@@ -175,17 +176,23 @@ pub async fn renderer_events_sse(
         let initial_renderers = {
             let registry = control_point.registry();
             let reg = registry.read().unwrap();
-            reg.list_renderers()
+            match reg.list_renderers() {
+                Ok(renderers) => renderers,
+                Err(e) => {
+                    error!("Failed to list renderers: {}", e);
+                    Vec::new()
+                }
+            }
         };
 
-        for info in initial_renderers {
-            if info.online {
+        for renderer in initial_renderers {
+            if renderer.is_online() {
                 let timestamp = chrono::Utc::now();
                 let payload = RendererEventPayload::Online {
-                    renderer_id: info.id.0.clone(),
-                    friendly_name: info.friendly_name.clone(),
-                    model_name: info.model_name.clone(),
-                    manufacturer: info.manufacturer.clone(),
+                    renderer_id: renderer.id().0,
+                    friendly_name: renderer.friendly_name().to_string(),
+                    model_name: renderer.model_name().to_string(),
+                    manufacturer: renderer.manufacturer().to_string(),
                     timestamp,
                 };
 
@@ -258,9 +265,9 @@ pub async fn renderer_events_sse(
                 RendererEvent::Online { id, info } => {
                     RendererEventPayload::Online {
                         renderer_id: id.0,
-                        friendly_name: info.friendly_name,
-                        model_name: info.model_name,
-                        manufacturer: info.manufacturer,
+                        friendly_name: info.friendly_name.clone(),
+                        model_name: info.model_name.clone(),
+                        manufacturer: info.manufacturer.clone(),
                         timestamp,
                     }
                 }
@@ -318,17 +325,23 @@ pub async fn media_server_events_sse(
         let initial_servers = {
             let registry = control_point.registry();
             let reg = registry.read().unwrap();
-            reg.list_servers()
+            match reg.list_servers() {
+                Ok(servers) => servers,
+                Err(e) => {
+                    error!("Failed to list servers: {}", e);
+                    Vec::new()
+                }
+            }
         };
 
-        for info in initial_servers {
-            if info.online {
+        for server in initial_servers {
+            if server.is_online() {
                 let timestamp = chrono::Utc::now();
                 let payload = MediaServerEventPayload::Online {
-                    server_id: info.id.0.clone(),
-                    friendly_name: info.friendly_name.clone(),
-                    model_name: info.model_name.clone(),
-                    manufacturer: info.manufacturer.clone(),
+                    server_id: server.id().0,
+                    friendly_name: server.friendly_name().to_string(),
+                    model_name: server.model_name().to_string(),
+                    manufacturer: server.manufacturer().to_string(),
                     timestamp,
                 };
 
@@ -360,9 +373,9 @@ pub async fn media_server_events_sse(
                 MediaServerEvent::Online { server_id, info } => {
                     MediaServerEventPayload::Online {
                         server_id: server_id.0,
-                        friendly_name: info.friendly_name,
-                        model_name: info.model_name,
-                        manufacturer: info.manufacturer,
+                        friendly_name: info.friendly_name.clone(),
+                        model_name: info.model_name.clone(),
+                        manufacturer: info.manufacturer.clone(),
                         timestamp,
                     }
                 }
@@ -429,18 +442,32 @@ pub async fn all_events_sse(State(control_point): State<Arc<ControlPoint>>) -> i
         let (initial_renderers, initial_servers) = {
             let registry = control_point.registry();
             let reg = registry.read().unwrap();
-            (reg.list_renderers(), reg.list_servers())
+            let renderers = match reg.list_renderers() {
+                Ok(r) => r,
+                Err(e) => {
+                    error!("Failed to list renderers: {}", e);
+                    Vec::new()
+                }
+            };
+            let servers = match reg.list_servers() {
+                Ok(s) => s,
+                Err(e) => {
+                    error!("Failed to list servers: {}", e);
+                    Vec::new()
+                }
+            };
+            (renderers, servers)
         };
 
         // Send renderer Online events
-        for info in initial_renderers {
-            if info.online {
+        for renderer in initial_renderers {
+            if renderer.is_online() {
                 let timestamp = chrono::Utc::now();
                 let renderer_payload = RendererEventPayload::Online {
-                    renderer_id: info.id.0.clone(),
-                    friendly_name: info.friendly_name.clone(),
-                    model_name: info.model_name.clone(),
-                    manufacturer: info.manufacturer.clone(),
+                    renderer_id: renderer.id().0,
+                    friendly_name: renderer.friendly_name().to_string(),
+                    model_name: renderer.model_name().to_string(),
+                    manufacturer: renderer.manufacturer().to_string(),
                     timestamp,
                 };
                 let payload = UnifiedEventPayload::Renderer(renderer_payload);
@@ -452,14 +479,14 @@ pub async fn all_events_sse(State(control_point): State<Arc<ControlPoint>>) -> i
         }
 
         // Send server Online events
-        for info in initial_servers {
-            if info.online {
+        for server in initial_servers {
+            if server.is_online() {
                 let timestamp = chrono::Utc::now();
                 let server_payload = MediaServerEventPayload::Online {
-                    server_id: info.id.0.clone(),
-                    friendly_name: info.friendly_name.clone(),
-                    model_name: info.model_name.clone(),
-                    manufacturer: info.manufacturer.clone(),
+                    server_id: server.id().0,
+                    friendly_name: server.friendly_name().to_string(),
+                    model_name: server.model_name().to_string(),
+                    manufacturer: server.manufacturer().to_string(),
                     timestamp,
                 };
                 let payload = UnifiedEventPayload::MediaServer(server_payload);
@@ -535,9 +562,9 @@ pub async fn all_events_sse(State(control_point): State<Arc<ControlPoint>>) -> i
                         RendererEvent::Online { id, info } => {
                             RendererEventPayload::Online {
                                 renderer_id: id.0,
-                                friendly_name: info.friendly_name,
-                                model_name: info.model_name,
-                                manufacturer: info.manufacturer,
+                                friendly_name: info.friendly_name.clone(),
+                                model_name: info.model_name.clone(),
+                                manufacturer: info.manufacturer.clone(),
                                 timestamp,
                             }
                         }
@@ -576,9 +603,9 @@ pub async fn all_events_sse(State(control_point): State<Arc<ControlPoint>>) -> i
                         MediaServerEvent::Online { server_id, info } => {
                             MediaServerEventPayload::Online {
                                 server_id: server_id.0,
-                                friendly_name: info.friendly_name,
-                                model_name: info.model_name,
-                                manufacturer: info.manufacturer,
+                                friendly_name: info.friendly_name.clone(),
+                                model_name: info.model_name.clone(),
+                                manufacturer: info.manufacturer.clone(),
                                 timestamp,
                             }
                         }

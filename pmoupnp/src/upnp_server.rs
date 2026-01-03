@@ -81,6 +81,7 @@ static SSDP_SERVER: Lazy<RwLock<Option<SsdpServer>>> = Lazy::new(|| RwLock::new(
 /// // Introspection via le trait UpnpServer
 /// let devices = server.device_registry().list_devices();
 /// ```
+#[async_trait::async_trait]
 pub trait UpnpServerExt {
     // ========= Device Management (existant) =========
 
@@ -226,6 +227,7 @@ pub trait UpnpServerExt {
 }
 
 // Implémentation du trait UpnpServer pour pmoserver::Server
+#[async_trait::async_trait]
 impl UpnpServerExt for Server {
     async fn register_device(
         &mut self,
@@ -308,7 +310,6 @@ impl UpnpServerExt for Server {
         use pmoaudiocache::new_cache;
         use pmocache::pmoserver_ext::{create_api_router, create_file_router};
 
-        let base_url = self.info().base_url.clone();
         let cache = Arc::new(new_cache(cache_dir, limit)?);
 
         // Routes de fichiers pour servir les pistes FLAC

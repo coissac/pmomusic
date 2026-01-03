@@ -10,8 +10,8 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use pmocontrol::model::TrackMetadata;
 use pmocontrol::{
-    ControlPoint, DeviceRegistryRead, MediaBrowser, MediaEntry, MediaServerEvent, MediaServerInfo,
-    MusicRenderer, MusicServer, PlaybackItem, PlaybackPosition, PlaybackPositionInfo, RendererInfo,
+    ControlPoint, DeviceRegistryRead, MediaBrowser, MediaEntry, MediaServerEvent, UpnpMediaServer,
+    MusicRendererBackend, UpnpMediaServer, PlaybackItem, PlaybackPosition, PlaybackPositionInfo, RendererInfo,
 };
 
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
@@ -69,7 +69,7 @@ fn main() -> Result<()> {
         server_info.friendly_name, server_info.location, server_info.id.0
     );
 
-    let renderer_instance = MusicRenderer::from_registry_info(renderer.clone(), &registry)
+    let renderer_instance = MusicRendererBackend::from_renderer_info(renderer.clone(), &registry)
         .expect("Selected renderer is not usable by MusicRenderer façade");
     let supports_set_next = renderer_instance
         .as_upnp()
@@ -82,7 +82,7 @@ fn main() -> Result<()> {
 
     let timeout = Duration::from_secs(config.timeout_secs);
     let server =
-        MusicServer::from_info(&server_info, timeout).context("Failed to init MusicServer")?;
+        UpnpMediaServer::from_info(&server_info, timeout).context("Failed to init MusicServer")?;
 
     println!("Searching for a Live Playlist container in ContentDirectory...");
     let live_playlist_container = find_live_playlist_container(&server)
@@ -355,8 +355,8 @@ fn pick_renderer(renderers: Vec<RendererInfo>) -> Option<RendererInfo> {
     Some(selected)
 }
 
-fn pick_pmomusic_server(servers: Vec<MediaServerInfo>) -> Option<MediaServerInfo> {
-    let mut candidates: Vec<MediaServerInfo> = servers
+fn pick_pmomusic_server(servers: Vec<UpnpMediaServer>) -> Option<UpnpMediaServer> {
+    let mut candidates: Vec<UpnpMediaServer> = servers
         .into_iter()
         .filter(|info| info.has_content_directory)
         .filter(|info| info.content_directory_control_url.is_some())
@@ -381,7 +381,7 @@ fn pick_pmomusic_server(servers: Vec<MediaServerInfo>) -> Option<MediaServerInfo
     Some(candidates.remove(0))
 }
 
-fn is_pmomusic_server(info: &MediaServerInfo) -> bool {
+fn is_pmomusic_server(info: &UpnpMediaServer) -> bool {
     let name = info.friendly_name.to_ascii_lowercase();
     let model = info.model_name.to_ascii_lowercase();
     let manufacturer = info.manufacturer.to_ascii_lowercase();
@@ -395,7 +395,7 @@ fn is_pmomusic_renderer(info: &RendererInfo) -> bool {
 }
 
 /// Search for a container whose title contains "Live Playlist" using BFS.
-fn find_live_playlist_container(server: &MusicServer) -> Result<Option<MediaEntry>> {
+fn find_live_playlist_container(server: &UpnpMediaServer) -> Result<Option<MediaEntry>> {
     let root_entries = server
         .browse_root()
         .context("Failed to browse ContentDirectory root")?;
@@ -477,7 +477,7 @@ fn find_live_playlist_container(server: &MusicServer) -> Result<Option<MediaEntr
 /// Collect playable items from a specific container.
 /// Retries with fewer items if the initial browse times out.
 fn collect_playable_items_from_container(
-    server: &MusicServer,
+    server: &UpnpMediaServer,
     container_id: &str,
     max_tracks: usize,
 ) -> Result<Vec<PlaybackItem>> {
@@ -532,7 +532,7 @@ fn collect_playable_items_from_container(
     Ok(items)
 }
 
-fn playback_item_from_entry(server: &MusicServer, entry: &MediaEntry) -> Option<PlaybackItem> {
+fn playback_item_from_entry(server: &UpnpMediaServer, entry: &MediaEntry) -> Option<PlaybackItem> {
     // Skip live streams (we're looking for regular tracks in a live playlist)
     if entry.title.to_ascii_lowercase().contains("live stream") {
         return None;

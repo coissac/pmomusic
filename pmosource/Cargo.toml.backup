@@ -1,0 +1,54 @@
+[package]
+name = "pmosource"
+version = "0.1.0"
+edition = "2021"
+authors = ["PMOMusic Contributors"]
+description = "Common traits and types for PMOMusic sources"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/yourusername/pmomusic"
+keywords = ["music", "source", "streaming"]
+categories = ["multimedia"]
+
+[dependencies]
+# Gestion des erreurs
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Async traits
+async-trait = "0.1"
+
+# Async runtime
+tokio = { version = "1.0", features = ["sync", "time"] }
+
+# DIDL-Lite support
+pmodidl = { path = "../pmodidl" }
+
+# Playlist/FIFO support
+pmoplaylist = { path = "../pmoplaylist" }
+
+# Optional cache integrations
+pmoaudiocache = { path = "../pmoaudiocache", optional = true }
+pmocovers = { path = "../pmocovers", optional = true }
+pmocache = { path = "../pmocache", optional = true }
+
+# Serialization (required for cache metadata)
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Server extension (optional)
+pmoserver = { path = "../pmoserver", optional = true }
+pmoconfig = { path = "../pmoconfig", optional = true }
+pmoupnp = { path = "../pmoupnp", optional = true }
+
+# Web framework for API (optional)
+axum = { version = "0.8", optional = true }
+utoipa = { version = "5.3", optional = true }
+tracing = { version = "0.1", optional = true }
+lazy_static = { version = "1.4", optional = true }
+tokio-stream = { version = "0.1", optional = true, features = ["time"] }
+futures = { version = "0.3", optional = true }
+
+[features]
+default = ["cache"]
+cache = ["pmoaudiocache", "pmocovers", "pmocache"]
+server = ["pmoserver", "pmoconfig", "pmoupnp", "axum", "utoipa", "tracing", "lazy_static", "tokio-stream", "futures"]

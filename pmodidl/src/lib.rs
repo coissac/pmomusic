@@ -9,6 +9,7 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::fmt::Write;
 use std::io::Cursor;
+use std::time::SystemTime;
 use xmltree::{Element, XMLNode};
 
 // ============= Couche d'abstraction générique =============
@@ -36,7 +37,7 @@ pub struct ParsedMetadata<T> {
     /// Timestamp du parsing (exclu de la réflexion car SystemTime n'implémente pas Reflect)
     #[reflect(ignore)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub parsed_at: Option<std::time::SystemTime>,
+    pub parsed_at: Option<SystemTime>,
 }
 
 impl<T> ParsedMetadata<T> {
@@ -44,7 +45,7 @@ impl<T> ParsedMetadata<T> {
         Self {
             format: format.into(),
             data,
-            parsed_at: Some(std::time::SystemTime::now()),
+            parsed_at: Some(SystemTime::now()),
         }
     }
 

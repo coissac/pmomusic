@@ -3,7 +3,7 @@ use std::thread;
 use std::time::Duration;
 
 use pmocontrol::{
-    ControlPoint, DeviceRegistryRead, MusicRenderer, PlaybackPosition, PlaybackPositionInfo,
+    ControlPoint, DeviceRegistryRead, MusicRendererBackend, PlaybackPosition, PlaybackPositionInfo,
     PlaybackState, PlaybackStatus, TransportControl, VolumeControl,
 };
 
@@ -38,10 +38,10 @@ fn main() -> io::Result<()> {
         );
     }
 
-    let arylic_renderers: Vec<MusicRenderer> = renderers
+    let arylic_renderers: Vec<MusicRendererBackend> = renderers
         .iter()
         .filter(|info| info.capabilities.has_arylic_tcp)
-        .filter_map(|info| MusicRenderer::from_registry_info(info.clone(), &registry))
+        .filter_map(|info| MusicRendererBackend::from_renderer_info(info.clone(), &registry))
         .collect();
 
     if arylic_renderers.is_empty() {

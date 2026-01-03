@@ -1,0 +1,14 @@
+[package]
+name = "pmodidl"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = "1.0.228"
+utoipa = { version = "5.4.0", features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "9.0.2", features = ["axum"] }
+quick-xml = { version = "0.38.3", features = ["serialize"] }
+bevy_reflect = "0.17.1"
+bevy_reflect_derive = "0.17.1"
+pmoutils = { path = "../pmoutils" }
+xmltree = "0.10"

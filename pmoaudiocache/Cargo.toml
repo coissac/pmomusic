@@ -16,7 +16,7 @@ pmometadata = { path = "../pmometadata" }
 
 # Base de données
 rusqlite = { version = "0.37", features = ["bundled"] }
-chrono = "0.4"
+chrono = { workspace = true }
 
 # Métadonnées audio
 lofty = "0.22"
@@ -26,15 +26,15 @@ futures-util = "0.3"
 bytes = "1.0"
 
 # Utilitaires
-anyhow = "1.0"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-quick-xml = { version = "0.37", features = ["serialize"] }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+quick-xml = { workspace = true }
 paste = "1.0"
-async-trait = "0.1"
+async-trait = { workspace = true }
 
 # Async
-tokio = { version = "1.0", features = ["full"] }
+tokio = { workspace = true }
 
 # Singleton
 once_cell = "1.20"
@@ -45,7 +45,7 @@ pmoconfig = { path = "../pmoconfig", optional = true }
 axum = { version = "0.8", optional = true }
 utoipa = { version = "5.3", features = ["axum_extras"], optional = true }
 
-tracing = "0.1.41"
+tracing = { workspace = true }
 
 [dev-dependencies]
 tracing-subscriber = "0.3"

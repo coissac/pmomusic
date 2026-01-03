@@ -8,9 +8,9 @@ default = []
 simd = []
 
 [dependencies]
-tokio = { version = "1.42", features = ["full"] }
+tokio = { workspace = true }
 tokio-util = { version = "0.7", features = ["io"] }
-async-trait = "0.1"
+async-trait = { workspace = true }
 futures-util = "0.3"
 pmoflac = { path = "../pmoflac" }
 pmometadata = { path = "../pmometadata" }
@@ -18,7 +18,7 @@ paste = "1"
 soxr = "0.6.0"
 bytemuck = "1.24.0"
 reqwest = { version = "0.12", features = ["stream"] }
-tracing = "0.1"
+tracing = { workspace = true }
 cpal = "0.15"
 once_cell = "1.20"
 
@@ -26,4 +26,4 @@ once_cell = "1.20"
 tokio-test = "0.4"
 tempfile = "3"
 wiremock = "0.6"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { workspace = true }

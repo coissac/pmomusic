@@ -7,21 +7,21 @@ edition = "2021"
 [dependencies]
 pmoutils ={ path = "../pmoutils" }
 
-serde = { version = "1.0", features = ["derive"] }
-serde_yaml = "0.9.33"
-serde_json = "1.0"
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+serde_json = { workspace = true }
 lazy_static = "1.4.0"
 dirs = "6.0.0"
 log = "0.4.20"
 anyhow = "1.0.75"
-uuid = { version = "1.18.1", features = ["v4"] }
-tracing = "0.1.41"
+uuid = { workspace = true }
+tracing = { workspace = true }
 aes-gcm = "0.10"
 sha2 = "0.10"
 base64 = "0.22"
 
 # Async
-tokio = { version = "1.0", features = ["full"], optional = true }
+tokio = { workspace = true, optional = true }
 
 # Serveur HTTP (pour l'API REST)
 axum = { version = "0.8", optional = true }

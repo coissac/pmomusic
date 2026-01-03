@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
 use pmocontrol::{
-    DeviceDescriptionProvider, DiscoveredEndpoint, HttpXmlDescriptionProvider, MusicRenderer,
+    DeviceDescriptionProvider, DiscoveredEndpoint, HttpXmlDescriptionProvider, MusicRendererBackend,
     RendererInfo,
     control_point::ControlPoint,
     openhome_client::{
@@ -86,7 +86,7 @@ fn auto_discover_renderer() -> Result<RendererInfo> {
         let mut openhome_infos = Vec::new();
 
         for renderer in renderers {
-            if let MusicRenderer::OpenHome(oh) = renderer {
+            if let MusicRendererBackend::OpenHome(oh) = renderer {
                 if seen.insert(oh.id().0.clone()) {
                     openhome_infos.push(oh.info.clone());
                 }

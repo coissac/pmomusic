@@ -1,15 +1,37 @@
 {
-    "makefile.configureOnOpen": false,
-    "git.enabled": false,
-    "claude-code.environmentVariables": [
-        
-    ],
-    // Exclusions via VS Code
-    "files.exclude": {
-        "target": true,
-        "**/target": true,
-        "node_modules": true
-    },
-    "rust-analyzer.procMacro.enable": true,
-    "rust-analyzer.numThreads": 4
+  "makefile.configureOnOpen": false,
+  "git.enabled": false,
+  "claude-code.environmentVariables": [],
+
+  // Exclusions de fichiers/dossiers inutiles pour Rust Analyzer
+  "files.exclude": {
+    "target": true,
+    "**/target": true,
+    "node_modules": true,
+    "tests/huge_benchmarks": true,
+    "examples": true,
+    "docs": true
+  },
+  // Rust Analyzer settings
+  "rust-analyzer.rustupPath": "/Users/coissac/.cargo/bin/rustup",
+  "rust-analyzer.cargoPath": "/Users/coissac/.cargo/bin/cargo",
+  "rust-analyzer.rustcSource": "discover",
+  "rust-analyzer.procMacro.enable": true,
+  "rust-analyzer.numThreads": 4,
+  "rust-analyzer.cargo.loadOutDirsFromCheck": false,
+  "rust-analyzer.checkOnSave.enable": true,
+  "rust-analyzer.checkOnSave.command": "check", 
+  "rust-analyzer.checkOnSave.extraArgs": ["--all-features"],
+  "rust-analyzer.exclude": [
+    "target",
+    "tests/huge_benchmarks",
+    "examples",
+    "docs"
+  ],
+  "rust-analyzer.server.extraEnv": {
+    "RA_LARGE_PROJECT": "1"
+},
+"rust-analyzer.runnables.command": null,
+"rust-analyzer.server.path": null,
+"rust-analyzer.cargo.allTargets": true,
 }

@@ -150,28 +150,6 @@ pub struct QueueSnapshot {
 }
 
 // ============================================================================
-// OPENHOME PLAYLIST
-// ============================================================================
-
-#[cfg(feature = "pmoserver")]
-pub use crate::openhome_playlist::{OpenHomePlaylistSnapshot, OpenHomePlaylistTrack};
-
-/// Requête pour ajouter un track à la playlist OpenHome
-#[cfg(feature = "pmoserver")]
-#[derive(Debug, Clone, Deserialize, ToSchema)]
-pub struct OpenHomePlaylistAddRequest {
-    /// URI du flux à insérer
-    pub uri: String,
-    /// Métadonnées DIDL-Lite complètes
-    pub metadata: String,
-    /// ID devant lequel insérer (None => fin de playlist)
-    pub after_id: Option<u32>,
-    /// Si true, démarre immédiatement la lecture du track inséré
-    #[serde(default)]
-    pub play: bool,
-}
-
-// ============================================================================
 // MEDIA SERVERS
 // ============================================================================
 
@@ -318,20 +296,22 @@ pub struct ErrorResponse {
         description = r#"
 # API REST pour le Control Point PMOMusic
 
-Cette API permet de contrôler les renderers UPnP et de naviguer dans les serveurs de médias.
+Cette API permet de contrôler les renderers audio et de naviguer dans les serveurs de médias de manière agnostique du backend.
 
 ## Fonctionnalités
 
 ### Renderers
-- **Découverte** : Liste des renderers disponibles
+- **Découverte** : Liste des renderers disponibles (tous types: UPnP AV, OpenHome, LinkPlay, Chromecast)
 - **État** : Récupération de l'état détaillé d'un renderer
-- **Contrôle transport** : Play, pause, stop, next
+- **Contrôle transport** : Play, pause, stop, resume, next
 - **Contrôle volume** : Lecture et modification du volume / mute
-- **Queue** : Gestion de la queue de lecture
+- **Queue unifiée** : Gestion de la queue de lecture (indépendante du backend)
+- **Navigation dans la queue** : Saut à un index spécifique
 
 ### Playlists
 - **Binding** : Attachement de la queue à un container playlist d'un serveur
 - **Synchronisation automatique** : Mise à jour de la queue lors des changements côté serveur
+- **Auto-play** : Option pour démarrer la lecture automatiquement
 
 ### Serveurs de médias
 - **Découverte** : Liste des serveurs disponibles
@@ -339,11 +319,12 @@ Cette API permet de contrôler les renderers UPnP et de naviguer dans les serveu
 
 ## Architecture
 
-Le Control Point PMOMusic est un point de contrôle UPnP qui :
-1. Découvre automatiquement les renderers et serveurs via SSDP
-2. Maintient un registre des devices actifs
-3. Permet le contrôle unifié des renderers (UPnP AV, LinkPlay, Arylic TCP)
-4. Gère une queue de lecture locale avec synchronisation optionnelle
+Le Control Point PMOMusic est un point de contrôle multi-backend qui :
+1. Découvre automatiquement les renderers et serveurs via SSDP et mDNS
+2. Maintient un registre unifié des devices actifs
+3. Abstrait les différences entre backends (UPnP AV, OpenHome, LinkPlay, Arylic TCP, Chromecast)
+4. Gère une queue de lecture unifiée avec synchronisation optionnelle aux playlists serveur
+5. Expose une API REST cohérente indépendante du type de renderer
 
 ## Exemples d'utilisation
 
@@ -352,12 +333,33 @@ Le Control Point PMOMusic est un point de contrôle UPnP qui :
 GET /control/renderers
 ```
 
-### Contrôler un renderer
+### Obtenir l'état complet d'un renderer
+```
+GET /control/renderers/{renderer_id}/full
+```
+
+### Contrôler la lecture
 ```
 POST /control/renderers/{renderer_id}/play
 POST /control/renderers/{renderer_id}/pause
+POST /control/renderers/{renderer_id}/stop
+POST /control/renderers/{renderer_id}/resume
+POST /control/renderers/{renderer_id}/next
+```
+
+### Naviguer dans la queue
+```
+POST /control/renderers/{renderer_id}/queue/seek
+  Body: {"index": 5}
+```
+
+### Contrôler le volume
+```
 POST /control/renderers/{renderer_id}/volume/set
   Body: {"volume": 50}
+POST /control/renderers/{renderer_id}/volume/up
+POST /control/renderers/{renderer_id}/volume/down
+POST /control/renderers/{renderer_id}/mute/toggle
 ```
 
 ### Attacher une playlist
@@ -365,7 +367,17 @@ POST /control/renderers/{renderer_id}/volume/set
 POST /control/renderers/{renderer_id}/binding/attach
   Body: {
     "server_id": "uuid:...",
-    "container_id": "0$/Music/MyPlaylist"
+    "container_id": "0$/Music/MyPlaylist",
+    "auto_play": true
+  }
+```
+
+### Jouer du contenu
+```
+POST /control/renderers/{renderer_id}/queue/play
+  Body: {
+    "server_id": "uuid:...",
+    "object_id": "0$/Music/Track.flac"
   }
 ```
 
@@ -384,16 +396,15 @@ GET /control/servers/{server_id}/containers/{container_id}
     paths(
         crate::pmoserver_ext::list_renderers,
         crate::pmoserver_ext::get_renderer_state,
+        crate::pmoserver_ext::get_renderer_full_snapshot,
         crate::pmoserver_ext::get_renderer_queue,
         crate::pmoserver_ext::get_renderer_binding,
-        crate::pmoserver_ext::get_openhome_playlist,
-        crate::pmoserver_ext::clear_openhome_playlist,
-        crate::pmoserver_ext::add_openhome_playlist_item,
-        crate::pmoserver_ext::play_openhome_track,
         crate::pmoserver_ext::play_renderer,
         crate::pmoserver_ext::pause_renderer,
         crate::pmoserver_ext::stop_renderer,
+        crate::pmoserver_ext::resume_renderer,
         crate::pmoserver_ext::next_renderer,
+        crate::pmoserver_ext::seek_queue_index,
         crate::pmoserver_ext::set_renderer_volume,
         crate::pmoserver_ext::volume_up_renderer,
         crate::pmoserver_ext::volume_down_renderer,
@@ -415,17 +426,16 @@ GET /control/servers/{server_id}/containers/{container_id}
         RendererState,
         CurrentTrackMetadata,
         AttachedPlaylistInfo,
+        FullRendererSnapshot,
         QueueItem,
         QueueSnapshot,
-        OpenHomePlaylistSnapshot,
-        OpenHomePlaylistTrack,
-        OpenHomePlaylistAddRequest,
         MediaServerSummary,
         ContainerEntry,
         BrowseResponse,
         VolumeSetRequest,
         AttachPlaylistRequest,
         PlayContentRequest,
+        SeekQueueRequest,
         SuccessResponse,
         ErrorResponse,
     )),

@@ -14,16 +14,16 @@ categories = ["multimedia", "api-bindings"]
 reqwest = { version = "0.12", features = ["json", "stream"] }
 
 # Gestion asynchrone
-tokio = { version = "1", features = ["full"] }
+tokio = { workspace = true }
 
 # Sérialisation/Désérialisation JSON
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-serde_yaml = "0.9.33"
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 
 # Helpers
-chrono = { version = "0.4", features = ["serde"] }
-async-trait = "0.1"
+chrono = { workspace = true }
+async-trait = { workspace = true }
 sha2 = "0.10"
 hex = "0.4"
 tokio-util = { version = "0.7", features = ["io"] }
@@ -32,8 +32,8 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 once_cell = "1.20"
 
 # Gestion des erreurs
-thiserror = "2.0.17"
-anyhow = "1.0"
+thiserror = { workspace = true }
+anyhow = { workspace = true }
 
 # Streaming de bytes
 bytes = "1.5"
@@ -41,7 +41,7 @@ futures = "0.3"
 flacenc = "0.5.0"
 
 # Logging
-tracing = "0.1"
+tracing = { workspace = true }
 
 # URL manipulation
 url = "2.5"
