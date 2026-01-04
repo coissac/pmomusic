@@ -170,6 +170,8 @@ pub async fn renderer_events_sse(
         }
     });
 
+    let cp_for_heartbeat = control_point.clone();
+
     let stream = stream! {
         // INITIAL SNAPSHOT: Send Online events for all currently discovered renderers
         // This ensures clients see devices that were discovered before they connected
@@ -202,8 +204,17 @@ pub async fn renderer_events_sse(
             }
         }
 
-        // Then stream future events
-        while let Some(event) = rx_tokio.recv().await {
+        // Heartbeat interval: re-send Online events every 2 minutes for all online devices
+        // This allows UIs that reconnect to quickly recover device state without waiting
+        // for an actual state change event
+        let mut heartbeat_interval = tokio::time::interval(tokio::time::Duration::from_secs(120));
+        heartbeat_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        // Then stream future events with periodic heartbeat
+        loop {
+            tokio::select! {
+                // Regular events from the control point
+                Some(event) = rx_tokio.recv() => {
             let timestamp = chrono::Utc::now();
 
             let payload = match event {
@@ -279,8 +290,42 @@ pub async fn renderer_events_sse(
                 }
             };
 
-            if let Ok(json) = serde_json::to_string(&payload) {
-                yield Ok::<_, axum::Error>(Event::default().event("renderer").data(json));
+                    if let Ok(json) = serde_json::to_string(&payload) {
+                        yield Ok::<_, axum::Error>(Event::default().event("renderer").data(json));
+                    }
+                }
+
+                // Periodic heartbeat: re-send Online events for all online renderers
+                _ = heartbeat_interval.tick() => {
+                    let heartbeat_renderers = {
+                        let registry = cp_for_heartbeat.registry();
+                        let reg = registry.read().unwrap();
+                        match reg.list_renderers() {
+                            Ok(renderers) => renderers,
+                            Err(e) => {
+                                error!("Failed to list renderers for heartbeat: {}", e);
+                                Vec::new()
+                            }
+                        }
+                    };
+
+                    for renderer in heartbeat_renderers {
+                        if renderer.is_online() {
+                            let timestamp = chrono::Utc::now();
+                            let payload = RendererEventPayload::Online {
+                                renderer_id: renderer.id().0,
+                                friendly_name: renderer.friendly_name().to_string(),
+                                model_name: renderer.model_name().to_string(),
+                                manufacturer: renderer.manufacturer().to_string(),
+                                timestamp,
+                            };
+
+                            if let Ok(json) = serde_json::to_string(&payload) {
+                                yield Ok::<_, axum::Error>(Event::default().event("renderer_heartbeat").data(json));
+                            }
+                        }
+                    }
+                }
             }
         }
     };
@@ -319,6 +364,8 @@ pub async fn media_server_events_sse(
         }
     });
 
+    let cp_for_heartbeat = control_point.clone();
+
     let stream = stream! {
         // INITIAL SNAPSHOT: Send Online events for all currently discovered media servers
         // This ensures clients see servers that were discovered before they connected
@@ -351,8 +398,15 @@ pub async fn media_server_events_sse(
             }
         }
 
-        // Then stream future events
-        while let Some(event) = rx_tokio.recv().await {
+        // Heartbeat interval: re-send Online events every 2 minutes for all online servers
+        let mut heartbeat_interval = tokio::time::interval(tokio::time::Duration::from_secs(120));
+        heartbeat_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        // Then stream future events with periodic heartbeat
+        loop {
+            tokio::select! {
+                // Regular events from the control point
+                Some(event) = rx_tokio.recv() => {
             let timestamp = chrono::Utc::now();
 
             let payload = match event {
@@ -387,8 +441,42 @@ pub async fn media_server_events_sse(
                 }
             };
 
-            if let Ok(json) = serde_json::to_string(&payload) {
-                yield Ok::<_, axum::Error>(Event::default().event("media_server").data(json));
+                    if let Ok(json) = serde_json::to_string(&payload) {
+                        yield Ok::<_, axum::Error>(Event::default().event("media_server").data(json));
+                    }
+                }
+
+                // Periodic heartbeat: re-send Online events for all online servers
+                _ = heartbeat_interval.tick() => {
+                    let heartbeat_servers = {
+                        let registry = cp_for_heartbeat.registry();
+                        let reg = registry.read().unwrap();
+                        match reg.list_servers() {
+                            Ok(servers) => servers,
+                            Err(e) => {
+                                error!("Failed to list servers for heartbeat: {}", e);
+                                Vec::new()
+                            }
+                        }
+                    };
+
+                    for server in heartbeat_servers {
+                        if server.is_online() {
+                            let timestamp = chrono::Utc::now();
+                            let payload = MediaServerEventPayload::Online {
+                                server_id: server.id().0,
+                                friendly_name: server.friendly_name().to_string(),
+                                model_name: server.model_name().to_string(),
+                                manufacturer: server.manufacturer().to_string(),
+                                timestamp,
+                            };
+
+                            if let Ok(json) = serde_json::to_string(&payload) {
+                                yield Ok::<_, axum::Error>(Event::default().event("media_server_heartbeat").data(json));
+                            }
+                        }
+                    }
+                }
             }
         }
     };
