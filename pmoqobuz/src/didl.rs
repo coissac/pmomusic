@@ -40,6 +40,8 @@ impl ToDIDL for Album {
             searchable: Some("1".to_string()),
             title: self.formatted_title(),
             class: "object.container.album.musicAlbum".to_string(),
+            artist: Some(self.artist.name.clone()),
+            album_art: self.image_cached.clone().or_else(|| self.image.clone()),
             containers: Vec::new(),
             items: Vec::new(),
         })
@@ -138,6 +140,8 @@ impl ToDIDL for Playlist {
             searchable: Some("1".to_string()),
             title: self.name.clone(),
             class: "object.container.playlistContainer".to_string(),
+            album_art: self.image_cached.clone().or_else(|| self.image.clone()),
+            artist: self.owner.as_ref().map(|o| o.name.clone()),
             containers: Vec::new(),
             items: Vec::new(),
         })

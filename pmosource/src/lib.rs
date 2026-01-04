@@ -997,6 +997,8 @@ mod tests {
                 searchable: Some("1".to_string()),
                 title: "Test Source".to_string(),
                 class: "object.container".to_string(),
+                artist: None,
+                album_art: None,
                 containers: vec![],
                 items: vec![],
             })

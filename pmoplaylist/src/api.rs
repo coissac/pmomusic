@@ -47,6 +47,8 @@ pub struct PlaylistSummaryResponse {
     pub cover_pk: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cover_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artist: Option<String>,
     pub track_count: usize,
     pub max_size: Option<usize>,
     pub default_ttl_secs: Option<u64>,
@@ -103,6 +105,8 @@ pub struct UpdatePlaylistRequest {
     pub default_ttl_secs: Option<Option<u64>>,
     /// Utiliser `null` explicite pour supprimer la cover, ou omettre pour ne pas modifier.
     pub cover_pk: Option<Option<String>>,
+    /// Utiliser `null` explicite pour supprimer l'artiste, ou omettre pour ne pas modifier.
+    pub artist: Option<Option<String>>,
 }
 
 /// Requête pour ajouter des morceaux dans une playlist.
@@ -262,6 +266,7 @@ pub async fn update_playlist(
         max_size,
         default_ttl_secs,
         cover_pk,
+        artist,
     } = req;
 
     let manager = crate::manager::PlaylistManager();
@@ -288,6 +293,9 @@ pub async fn update_playlist(
                 None => None,
             };
             writer.set_cover_pk(normalized).await?;
+        }
+        if let Some(artist) = artist {
+            writer.set_artist(artist).await?;
         }
 
         manager.playlist_snapshot(&playlist_id).await
@@ -545,6 +553,7 @@ impl From<PlaylistOverview> for PlaylistSummaryResponse {
             persistent: value.persistent,
             cover_pk: cover_pk.clone(),
             cover_url: cover_pk.as_deref().map(cover_url_from_pk),
+            artist: value.artist,
             track_count: value.track_count,
             max_size: value.max_size,
             default_ttl_secs: value.default_ttl.map(|ttl| ttl.as_secs()),

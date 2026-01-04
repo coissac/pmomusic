@@ -364,6 +364,8 @@ impl RadioParadiseSource {
             searchable: Some("1".to_string()),
             title: descriptor.display_name.to_string(),
             class: "object.container".to_string(),
+            artist: None,
+            album_art: None,
             containers: vec![],
             items: vec![],
         }
@@ -379,6 +381,8 @@ impl RadioParadiseSource {
             searchable: Some("0".to_string()),
             title: format!("{} - Live Playlist", descriptor.display_name),
             class: "object.container.playlistContainer".to_string(),
+            artist: None,
+            album_art: None,
             containers: vec![],
             items: vec![],
         }
@@ -435,6 +439,8 @@ impl RadioParadiseSource {
             title: format!("{} - History", descriptor.display_name),
             // Expose l'historique comme une playlist jouable
             class: "object.container.playlistContainer".to_string(),
+            artist: None,
+            album_art: None,
             containers: vec![],
             items: vec![],
         }
@@ -650,6 +656,8 @@ impl MusicSource for RadioParadiseSource {
             searchable: Some("1".to_string()),
             title: "Radio Paradise".to_string(),
             class: "object.container".to_string(),
+            artist: None,
+            album_art: None,
             containers: vec![],
             items: vec![],
         })

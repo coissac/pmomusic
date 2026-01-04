@@ -309,6 +309,23 @@ impl WriteHandle {
         Ok(())
     }
 
+    /// Met à jour l'artiste associé à la playlist.
+    pub async fn set_artist(&self, artist: Option<String>) -> Result<()> {
+        if !self.playlist.is_alive() {
+            return Err(crate::Error::PlaylistDeleted(self.playlist.id.clone()));
+        }
+
+        self.playlist.set_artist(artist).await;
+
+        if self.playlist.persistent {
+            self.save_to_db().await?;
+        }
+
+        crate::manager::PlaylistManager().notify_playlist_changed(&self.playlist.id);
+
+        Ok(())
+    }
+
     /// Vérifie si la playlist contient déjà un pk
     pub async fn contains_pk(&self, cache_pk: &str) -> Result<bool> {
         if !self.playlist.is_alive() {
@@ -549,6 +566,7 @@ impl WriteHandle {
         let tracks = &core.tracks;
 
         let cover_pk = self.playlist.cover_pk().await;
+        let artist = self.playlist.artist().await;
 
         persistence
             .save_playlist(
@@ -556,6 +574,7 @@ impl WriteHandle {
                 &title,
                 &role,
                 cover_pk.as_deref(),
+                artist.as_deref(),
                 config,
                 tracks,
             )
