@@ -5,6 +5,7 @@ export interface PlaylistSummary {
   persistent: boolean;
   cover_pk?: string | null;
   cover_url?: string | null;
+  artist?: string | null;
   track_count: number;
   max_size?: number | null;
   default_ttl_secs?: number | null;
@@ -49,6 +50,7 @@ export interface UpdatePlaylistPayload {
   max_size?: number | null;
   default_ttl_secs?: number | null;
   cover_pk?: string | null;
+  artist?: string | null;
 }
 
 export interface AddTracksPayload {
@@ -99,7 +101,9 @@ export async function getPlaylistDetail(id: string): Promise<PlaylistDetail> {
   return parseJsonOrThrow(response);
 }
 
-export async function createPlaylist(body: CreatePlaylistPayload): Promise<PlaylistDetail> {
+export async function createPlaylist(
+  body: CreatePlaylistPayload,
+): Promise<PlaylistDetail> {
   const response = await fetch("/api/playlists", {
     method: "POST",
     headers: {
@@ -112,7 +116,7 @@ export async function createPlaylist(body: CreatePlaylistPayload): Promise<Playl
 
 export async function updatePlaylist(
   id: string,
-  body: UpdatePlaylistPayload
+  body: UpdatePlaylistPayload,
 ): Promise<PlaylistDetail> {
   const response = await fetch(`/api/playlists/${encodeURIComponent(id)}`, {
     method: "PATCH",
@@ -133,31 +137,40 @@ export async function deletePlaylist(id: string): Promise<void> {
 
 export async function addTracksToPlaylist(
   id: string,
-  payload: AddTracksPayload
+  payload: AddTracksPayload,
 ): Promise<PlaylistDetail> {
-  const response = await fetch(`/api/playlists/${encodeURIComponent(id)}/tracks`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
+  const response = await fetch(
+    `/api/playlists/${encodeURIComponent(id)}/tracks`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
     },
-    body: JSON.stringify(payload),
-  });
+  );
   return parseJsonOrThrow(response);
 }
 
 export async function flushPlaylist(id: string): Promise<PlaylistDetail> {
-  const response = await fetch(`/api/playlists/${encodeURIComponent(id)}/tracks`, {
-    method: "DELETE",
-  });
+  const response = await fetch(
+    `/api/playlists/${encodeURIComponent(id)}/tracks`,
+    {
+      method: "DELETE",
+    },
+  );
   return parseJsonOrThrow(response);
 }
 
-export async function removeTrackFromPlaylist(id: string, cachePk: string): Promise<PlaylistDetail> {
+export async function removeTrackFromPlaylist(
+  id: string,
+  cachePk: string,
+): Promise<PlaylistDetail> {
   const response = await fetch(
     `/api/playlists/${encodeURIComponent(id)}/tracks/${encodeURIComponent(cachePk)}`,
     {
       method: "DELETE",
-    }
+    },
   );
   return parseJsonOrThrow(response);
 }

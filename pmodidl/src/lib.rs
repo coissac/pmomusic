@@ -141,6 +141,20 @@ pub struct Container {
     #[serde(rename = "upnp:class", alias = "class", default)]
     pub class: String,
 
+    #[serde(
+        rename = "upnp:artist",
+        alias = "artist",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub artist: Option<String>,
+
+    #[serde(
+        rename = "upnp:albumArtURI",
+        alias = "albumArtURI",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub album_art: Option<String>,
+
     #[serde(rename = "container", default)]
     pub containers: Vec<Container>,
 

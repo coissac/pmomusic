@@ -71,6 +71,7 @@ pub struct PlaylistOverview {
     pub role: PlaylistRole,
     pub persistent: bool,
     pub cover_pk: Option<String>,
+    pub artist: Option<String>,
     pub track_count: usize,
     pub max_size: Option<usize>,
     pub default_ttl: Option<Duration>,
@@ -205,6 +206,7 @@ impl PlaylistManager {
             let title = playlist.title().await;
             let role = playlist.role().await;
             let cover_pk = playlist.cover_pk().await;
+            let artist = playlist.artist().await;
             let core = playlist.core.read().await;
             persistence
                 .save_playlist(
@@ -212,6 +214,7 @@ impl PlaylistManager {
                     &title,
                     &role,
                     cover_pk.as_deref(),
+                    artist.as_deref(),
                     &core.config,
                     &core.tracks,
                 )
@@ -519,7 +522,7 @@ impl PlaylistManager {
 
         // Pas en mémoire, essayer de charger depuis la DB
         if let Some(persistence) = &self.inner.persistence {
-            if let Some((title, role, config, cover_pk, tracks)) =
+            if let Some((title, role, config, cover_pk, artist, tracks)) =
                 persistence.load_playlist(&id).await?
             {
                 // Reconstruire la playlist
@@ -533,6 +536,11 @@ impl PlaylistManager {
                     role,
                     cover_pk,
                 ));
+
+                // Restaurer l'artiste si présent
+                if let Some(artist_name) = artist {
+                    playlist.set_artist(Some(artist_name)).await;
+                }
 
                 // Restaurer les tracks
                 {
@@ -575,7 +583,7 @@ impl PlaylistManager {
 
         // Pas en m�moire, essayer de ressusciter depuis la DB
         if let Some(persistence) = &self.inner.persistence {
-            if let Some((title, role, config, cover_pk, tracks)) =
+            if let Some((title, role, config, cover_pk, artist, tracks)) =
                 persistence.load_playlist(id).await?
             {
                 // Reconstruire la playlist
@@ -589,6 +597,11 @@ impl PlaylistManager {
                     role,
                     cover_pk,
                 ));
+
+                // Restaurer l'artiste si présent
+                if let Some(artist_name) = artist {
+                    playlist.set_artist(Some(artist_name)).await;
+                }
 
                 // Restaurer les tracks
                 {
@@ -653,12 +666,15 @@ impl PlaylistManager {
         let track_count = core.len();
         let config = core.config.clone();
 
+        let artist = playlist.artist().await;
+
         Ok(PlaylistOverview {
             id: playlist.id.clone(),
             title,
             role,
             persistent,
             cover_pk,
+            artist,
             track_count,
             max_size: config.max_size,
             default_ttl: config.default_ttl,
@@ -978,6 +994,7 @@ impl PlaylistManager {
                         let title = playlist.title().await;
                         let role = playlist.role().await;
                         let cover_pk = playlist.cover_pk().await;
+                        let artist = playlist.artist().await;
                         let core = playlist.core.read().await;
                         let _ = persistence
                             .save_playlist(
@@ -985,6 +1002,7 @@ impl PlaylistManager {
                                 &title,
                                 &role,
                                 cover_pk.as_deref(),
+                                artist.as_deref(),
                                 &core.config,
                                 &core.tracks,
                             )

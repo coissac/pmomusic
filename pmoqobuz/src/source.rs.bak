@@ -568,8 +568,7 @@ impl QobuzSource {
         for mut item in items {
             // Extraire cache_pk depuis l'URL du resource
             let cache_pk = if let Some(resource) = item.resources.first() {
-                resource
-                    .url
+                resource.url
                     .strip_prefix("/audio/flac/")
                     .map(|s| s.to_string())
             } else {
@@ -578,11 +577,7 @@ impl QobuzSource {
 
             if let Some(pk) = cache_pk {
                 // Récupérer track_id depuis metadata
-                if let Ok(Some(track_id_value)) = self
-                    .inner
-                    .cache_manager
-                    .get_audio_metadata(&pk, "qobuz_track_id")
-                {
+                if let Ok(Some(track_id_value)) = self.inner.cache_manager.get_audio_metadata(&pk, "qobuz_track_id") {
                     if let Some(track_id) = track_id_value.as_str() {
                         item.id = format!("qobuz:track:{}", track_id);
                     } else {
@@ -652,7 +647,11 @@ impl QobuzSource {
 
         // 2. Cache cover
         let cover_pk = if let Some(ref image_url) = album.image {
-            self.inner.cache_manager.cache_cover(image_url).await.ok()
+            self.inner
+                .cache_manager
+                .cache_cover(image_url)
+                .await
+                .ok()
         } else {
             None
         };
@@ -683,11 +682,6 @@ impl QobuzSource {
         // 4. Métadonnées playlist
         writer
             .set_title(album.title.clone())
-            .await
-            .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
-
-        writer
-            .set_artist(Some(album.artist.name.clone()))
             .await
             .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
 
@@ -737,8 +731,6 @@ impl QobuzSource {
             searchable: Some("1".to_string()),
             title: "Discover Catalog".to_string(),
             class: "object.container".to_string(),
-            artist: None,
-            album_art: None,
             containers: vec![],
             items: vec![],
         }
@@ -754,8 +746,6 @@ impl QobuzSource {
             searchable: Some("1".to_string()),
             title: "Discover Genres".to_string(),
             class: "object.container".to_string(),
-            artist: None,
-            album_art: None,
             containers: vec![],
             items: vec![],
         }
@@ -771,8 +761,6 @@ impl QobuzSource {
             searchable: Some("1".to_string()),
             title: "My Music".to_string(),
             class: "object.container".to_string(),
-            artist: None,
-            album_art: None,
             containers: vec![],
             items: vec![],
         }
@@ -788,8 +776,6 @@ impl QobuzSource {
             searchable: Some("1".to_string()),
             title: "Albums".to_string(),
             class: "object.container".to_string(),
-            artist: None,
-            album_art: None,
             containers: vec![],
             items: vec![],
         }
@@ -805,8 +791,6 @@ impl QobuzSource {
             searchable: Some("1".to_string()),
             title: "Tracks".to_string(),
             class: "object.container".to_string(),
-            artist: None,
-            album_art: None,
             containers: vec![],
             items: vec![],
         }
@@ -822,8 +806,6 @@ impl QobuzSource {
             searchable: Some("1".to_string()),
             title: "Artists".to_string(),
             class: "object.container".to_string(),
-            artist: None,
-            album_art: None,
             containers: vec![],
             items: vec![],
         }
@@ -839,8 +821,6 @@ impl QobuzSource {
             searchable: Some("1".to_string()),
             title: "Playlists".to_string(),
             class: "object.container".to_string(),
-            artist: None,
-            album_art: None,
             containers: vec![],
             items: vec![],
         }
@@ -912,8 +892,6 @@ impl QobuzSource {
                     searchable: Some("1".to_string()),
                     title: artist.name.clone(),
                     class: "object.container".to_string(),
-                    artist: Some(artist.name.clone()),
-                    album_art: artist.image_cached.clone().or_else(|| artist.image.clone()),
                     containers: vec![],
                     items: vec![],
                 })
@@ -964,8 +942,6 @@ impl QobuzSource {
                 searchable: Some("1".to_string()),
                 title: tag.display_name().to_string(),
                 class: "object.container".to_string(),
-                artist: None,
-                album_art: None,
                 containers: vec![],
                 items: vec![],
             });
@@ -983,8 +959,6 @@ impl QobuzSource {
             searchable: Some("1".to_string()),
             title: "Playlists".to_string(),
             class: "object.container".to_string(),
-            artist: None,
-            album_art: None,
             containers: vec![],
             items: vec![],
         }
@@ -999,8 +973,6 @@ impl QobuzSource {
             searchable: Some("1".to_string()),
             title: "Albums (Ideal Discography)".to_string(),
             class: "object.container".to_string(),
-            artist: None,
-            album_art: None,
             containers: vec![],
             items: vec![],
         }
@@ -1015,8 +987,6 @@ impl QobuzSource {
             searchable: Some("1".to_string()),
             title: "Albums (Qobuzissime)".to_string(),
             class: "object.container".to_string(),
-            artist: None,
-            album_art: None,
             containers: vec![],
             items: vec![],
         }
@@ -1031,8 +1001,6 @@ impl QobuzSource {
             searchable: Some("1".to_string()),
             title: "Albums (New Releases)".to_string(),
             class: "object.container".to_string(),
-            artist: None,
-            album_art: None,
             containers: vec![],
             items: vec![],
         }
@@ -1047,8 +1015,6 @@ impl QobuzSource {
             searchable: Some("1".to_string()),
             title: "Artists".to_string(),
             class: "object.container".to_string(),
-            artist: None,
-            album_art: None,
             containers: vec![],
             items: vec![],
         }
@@ -1099,11 +1065,7 @@ impl QobuzSource {
 
         let containers: Vec<Container> = albums
             .into_iter()
-            .filter_map(|album| {
-                album
-                    .to_didl_container("qobuz:discover:albums:qobuzissime")
-                    .ok()
-            })
+            .filter_map(|album| album.to_didl_container("qobuz:discover:albums:qobuzissime").ok())
             .collect();
 
         Ok(BrowseResult::Containers(containers))
@@ -1145,8 +1107,6 @@ impl QobuzSource {
                 searchable: Some("1".to_string()),
                 title: artist.name.clone(),
                 class: "object.container".to_string(),
-                artist: Some(artist.name.clone()),
-                album_art: artist.image_cached.clone().or_else(|| artist.image.clone()),
                 containers: vec![],
                 items: vec![],
             })
@@ -1196,8 +1156,6 @@ impl QobuzSource {
                     searchable: Some("1".to_string()),
                     title: genre.name.clone(),
                     class: "object.container".to_string(),
-                    artist: None,
-                    album_art: None,
                     containers: vec![],
                     items: vec![],
                 })
@@ -1230,8 +1188,6 @@ impl QobuzSource {
             searchable: Some("1".to_string()),
             title: "New Releases".to_string(),
             class: "object.container".to_string(),
-            artist: None,
-            album_art: None,
             containers: vec![],
             items: vec![],
         }
@@ -1246,8 +1202,6 @@ impl QobuzSource {
             searchable: Some("1".to_string()),
             title: "Ideal Discography".to_string(),
             class: "object.container".to_string(),
-            artist: None,
-            album_art: None,
             containers: vec![],
             items: vec![],
         }
@@ -1262,8 +1216,6 @@ impl QobuzSource {
             searchable: Some("1".to_string()),
             title: "Qobuzissime".to_string(),
             class: "object.container".to_string(),
-            artist: None,
-            album_art: None,
             containers: vec![],
             items: vec![],
         }
@@ -1278,8 +1230,6 @@ impl QobuzSource {
             searchable: Some("1".to_string()),
             title: "Editor Picks".to_string(),
             class: "object.container".to_string(),
-            artist: None,
-            album_art: None,
             containers: vec![],
             items: vec![],
         }
@@ -1294,8 +1244,6 @@ impl QobuzSource {
             searchable: Some("1".to_string()),
             title: "Press Awards".to_string(),
             class: "object.container".to_string(),
-            artist: None,
-            album_art: None,
             containers: vec![],
             items: vec![],
         }
@@ -1310,8 +1258,6 @@ impl QobuzSource {
             searchable: Some("1".to_string()),
             title: "Qobuz Playlists".to_string(),
             class: "object.container".to_string(),
-            artist: None,
-            album_art: None,
             containers: vec![],
             items: vec![],
         }
@@ -1446,29 +1392,19 @@ impl QobuzSource {
             ["qobuz", "discover"] => ObjectIdType::DiscoverCatalog,
             ["qobuz", "discover", "playlists"] => ObjectIdType::DiscoverPlaylists,
             ["qobuz", "discover", "albums", "ideal"] => ObjectIdType::DiscoverAlbumsIdeal,
-            ["qobuz", "discover", "albums", "qobuzissime"] => {
-                ObjectIdType::DiscoverAlbumsQobuzissime
-            }
+            ["qobuz", "discover", "albums", "qobuzissime"] => ObjectIdType::DiscoverAlbumsQobuzissime,
             ["qobuz", "discover", "albums", "new"] => ObjectIdType::DiscoverAlbumsNew,
             ["qobuz", "discover", "artists"] => ObjectIdType::DiscoverArtists,
-            ["qobuz", "discover", "playlists", tag] => {
-                ObjectIdType::DiscoverPlaylistsByTag(tag.to_string())
-            }
+            ["qobuz", "discover", "playlists", tag] => ObjectIdType::DiscoverPlaylistsByTag(tag.to_string()),
 
             // Discover Genres
             ["qobuz", "genres"] => ObjectIdType::DiscoverGenres,
             ["qobuz", "genre", id] => ObjectIdType::GenreRoot(id.to_string()),
-            ["qobuz", "genre", id, "new-releases"] => {
-                ObjectIdType::GenreNewReleases(id.to_string())
-            }
+            ["qobuz", "genre", id, "new-releases"] => ObjectIdType::GenreNewReleases(id.to_string()),
             ["qobuz", "genre", id, "ideal"] => ObjectIdType::GenreIdealDiscography(id.to_string()),
             ["qobuz", "genre", id, "qobuzissime"] => ObjectIdType::GenreQobuzissime(id.to_string()),
-            ["qobuz", "genre", id, "editor-picks"] => {
-                ObjectIdType::GenreEditorPicks(id.to_string())
-            }
-            ["qobuz", "genre", id, "press-awards"] => {
-                ObjectIdType::GenrePressAwards(id.to_string())
-            }
+            ["qobuz", "genre", id, "editor-picks"] => ObjectIdType::GenreEditorPicks(id.to_string()),
+            ["qobuz", "genre", id, "press-awards"] => ObjectIdType::GenrePressAwards(id.to_string()),
             ["qobuz", "genre", id, "playlists"] => ObjectIdType::GenrePlaylists(id.to_string()),
 
             // Favourites
@@ -1504,13 +1440,13 @@ enum ObjectIdType {
 
     // Discover Genres
     DiscoverGenres,
-    GenreRoot(String),             // genre_id
-    GenreNewReleases(String),      // genre_id
-    GenreIdealDiscography(String), // genre_id
-    GenreQobuzissime(String),      // genre_id
-    GenreEditorPicks(String),      // genre_id
-    GenrePressAwards(String),      // genre_id
-    GenrePlaylists(String),        // genre_id
+    GenreRoot(String),               // genre_id
+    GenreNewReleases(String),        // genre_id
+    GenreIdealDiscography(String),   // genre_id
+    GenreQobuzissime(String),        // genre_id
+    GenreEditorPicks(String),        // genre_id
+    GenrePressAwards(String),        // genre_id
+    GenrePlaylists(String),          // genre_id
 
     // Favourites
     Favourites,
@@ -1552,8 +1488,6 @@ impl MusicSource for QobuzSource {
             searchable: Some("1".to_string()),
             title: "Qobuz".to_string(),
             class: "object.container".to_string(),
-            artist: None,
-            album_art: None,
             containers: vec![
                 self.build_discover_catalog_container(),
                 self.build_discover_genres_container(),
@@ -1575,22 +1509,16 @@ impl MusicSource for QobuzSource {
             ObjectIdType::DiscoverCatalog => self.browse_discover_catalog().await,
             ObjectIdType::DiscoverPlaylists => self.browse_discover_playlists().await,
             ObjectIdType::DiscoverAlbumsIdeal => self.browse_discover_albums_ideal().await,
-            ObjectIdType::DiscoverAlbumsQobuzissime => {
-                self.browse_discover_albums_qobuzissime().await
-            }
+            ObjectIdType::DiscoverAlbumsQobuzissime => self.browse_discover_albums_qobuzissime().await,
             ObjectIdType::DiscoverAlbumsNew => self.browse_discover_albums_new().await,
             ObjectIdType::DiscoverArtists => self.browse_discover_artists().await,
-            ObjectIdType::DiscoverPlaylistsByTag(tag) => {
-                self.browse_discover_playlists_tag(&tag).await
-            }
+            ObjectIdType::DiscoverPlaylistsByTag(tag) => self.browse_discover_playlists_tag(&tag).await,
 
             // Discover Genres
             ObjectIdType::DiscoverGenres => self.browse_discover_genres().await,
             ObjectIdType::GenreRoot(id) => self.browse_genre(&id).await,
             ObjectIdType::GenreNewReleases(id) => self.browse_genre_new_releases(&id).await,
-            ObjectIdType::GenreIdealDiscography(id) => {
-                self.browse_genre_ideal_discography(&id).await
-            }
+            ObjectIdType::GenreIdealDiscography(id) => self.browse_genre_ideal_discography(&id).await,
             ObjectIdType::GenreQobuzissime(id) => self.browse_genre_qobuzissime(&id).await,
             ObjectIdType::GenreEditorPicks(id) => self.browse_genre_editor_picks(&id).await,
             ObjectIdType::GenrePressAwards(id) => self.browse_genre_press_awards(&id).await,
@@ -2024,7 +1952,11 @@ impl MusicSource for QobuzSource {
                     .get_or_create_album_playlist_items(&album_id, usize::MAX)
                     .await?;
 
-                let items: Vec<Item> = all_items.into_iter().skip(offset).take(limit).collect();
+                let items: Vec<Item> = all_items
+                    .into_iter()
+                    .skip(offset)
+                    .take(limit)
+                    .collect();
 
                 Ok(BrowseResult::Items(items))
             }

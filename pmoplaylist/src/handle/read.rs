@@ -69,6 +69,7 @@ impl ReadHandle {
                         let title = self.playlist.title().await;
                         let role = self.playlist.role().await;
                         let cover_pk = self.playlist.cover_pk().await;
+                        let artist = self.playlist.artist().await;
                         let core = self.playlist.core.read().await;
                         let _ = persistence
                             .save_playlist(
@@ -76,6 +77,7 @@ impl ReadHandle {
                                 &title,
                                 &role,
                                 cover_pk.as_deref(),
+                                artist.as_deref(),
                                 &core.config,
                                 &core.tracks,
                             )
@@ -175,7 +177,12 @@ impl ReadHandle {
         }
 
         let title = self.playlist.title().await;
+        let artist = self.playlist.artist().await;
+        let cover_pk = self.playlist.cover_pk().await;
         let _remaining = self.remaining().await?;
+
+        // Convertir cover_pk en URL si présent
+        let album_art = cover_pk.map(|pk| format!("/cover/{}", pk));
 
         Ok(Container {
             id: self.playlist.id.clone(),
@@ -185,6 +192,8 @@ impl ReadHandle {
             searchable: Some("0".to_string()),
             title,
             class: "object.container.playlistContainer".to_string(),
+            artist,
+            album_art,
             containers: vec![],
             items: vec![],
         })
