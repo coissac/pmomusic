@@ -257,6 +257,41 @@ impl DeviceRegistry {
         }
     }
 
+    /// Updates the last_seen timestamp for a device without fetching its full description.
+    ///
+    /// This is critical for keeping devices online when SSDP Alive messages arrive
+    /// more frequently than the UDN cache refresh interval (max_age/2).
+    pub fn refresh_device_presence(&mut self, udn: &str, max_age: u32) {
+        let lookup = udn.to_ascii_lowercase();
+
+        if let Some(id) = self.udn_index.get(&lookup) {
+            if let Some(device) = self.devices.get(id) {
+                let was_online = device.is_online();
+                device.has_been_seen_now(max_age);
+
+                // If device was offline and came back online, broadcast Online event
+                if !was_online {
+                    if device.is_a_music_renderer() {
+                        if let Ok(renderer) = device.as_music_renderer() {
+                            self.renderer_bus.broadcast(RendererEvent::Online {
+                                id: id.clone(),
+                                info: renderer.info().basic_info(),
+                            });
+                        }
+                    }
+                    if device.is_a_music_server() {
+                        if let Ok(server) = device.as_music_server() {
+                            self.server_bus.broadcast(MediaServerEvent::Online {
+                                server_id: id.clone(),
+                                info: server.basic_info(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub fn device_says_byebye(&mut self, udn: &str) {
         let lookup = udn.to_ascii_lowercase();
 

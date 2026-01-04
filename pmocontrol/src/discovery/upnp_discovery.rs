@@ -12,7 +12,8 @@ pub struct UpnpDiscoveryManager {
 }
 
 impl UpnpDiscoveryManager {
-    pub fn new(device_registry: Arc<RwLock<DeviceRegistry>>,
+    pub fn new(
+        device_registry: Arc<RwLock<DeviceRegistry>>,
         udn_cache: Arc<Mutex<UDNRegistry>>,
     ) -> Self {
         Self {
@@ -42,10 +43,15 @@ impl UpnpDiscoveryManager {
 
         if let Some(udn) = extract_udn_from_usn(&usn) {
             if alive {
-                // ✅ Check cache
-                if UDNRegistry::should_fetch(self.udn_cache.clone(), &udn, max_age as u64) {
-                    // ✅ Fetch + parse
-                    if let Ok(info) = ParsedDeviceDescription::new(&udn, &location, &server_header,5) {
+                // Check if we should fetch the full device description
+                let should_fetch =
+                    UDNRegistry::should_fetch(self.udn_cache.clone(), &udn, max_age as u64);
+
+                if should_fetch {
+                    // Fetch + parse the device description
+                    if let Ok(info) =
+                        ParsedDeviceDescription::new(&udn, &location, &server_header, 5)
+                    {
                         if let Some(renderer_info) = info.build_renderer() {
                             if let Ok(mut reg) = self.device_registry.write() {
                                 reg.push_renderer(&renderer_info, max_age);
@@ -56,6 +62,13 @@ impl UpnpDiscoveryManager {
                             }
                         }
                     }
+                } else {
+                    // Even if we don't fetch, we MUST update last_seen to prevent timeout
+                    // This is critical: SSDP Alive messages arrive more frequently than max_age/2,
+                    // and we need to acknowledge them to keep the device online
+                    if let Ok(mut reg) = self.device_registry.write() {
+                        reg.refresh_device_presence(&udn, max_age);
+                    }
                 }
             } else {
                 if let Ok(mut reg) = self.device_registry.write() {
@@ -64,10 +77,7 @@ impl UpnpDiscoveryManager {
             }
         }
     }
-
-
 }
-
 
 fn extract_udn_from_usn(usn: &str) -> Option<String> {
     let lower = usn.trim().to_ascii_lowercase();

@@ -130,46 +130,46 @@ impl MusicRenderer {
     }
 
     /// Returns the protocol.
-    fn protocol(&self) -> RendererProtocol {
+    pub fn protocol(&self) -> RendererProtocol {
         self.info.protocol()
     }
 
-    fn is_upnp(&self) -> bool {
+    pub fn is_upnp(&self) -> bool {
         match &*self.backend.lock().expect("Backend mutex poisoned") {
             MusicRendererBackend::Upnp(_) => true,
             _ => false,
         }
     }
 
-    fn is_openhome(&self) -> bool {
+    pub fn is_openhome(&self) -> bool {
         match &*self.backend.lock().expect("Backend mutex poisoned") {
             MusicRendererBackend::OpenHome(_) => true,
             _ => false,
         }
     }
 
-    fn is_linkplay(&self) -> bool {
+    pub fn is_linkplay(&self) -> bool {
         match &*self.backend.lock().expect("Backend mutex poisoned") {
             MusicRendererBackend::LinkPlay(_) => true,
             _ => false,
         }
     }
 
-    fn is_arylictcp(&self) -> bool {
+    pub fn is_arylictcp(&self) -> bool {
         match &*self.backend.lock().expect("Backend mutex poisoned") {
             MusicRendererBackend::ArylicTcp(_) => true,
             _ => false,
         }
     }
 
-    fn is_chromecast(&self) -> bool {
+    pub fn is_chromecast(&self) -> bool {
         match &*self.backend.lock().expect("Backend mutex poisoned") {
             MusicRendererBackend::Chromecast(_) => true,
             _ => false,
         }
     }
 
-    fn is_hybridupnparylic(&self) -> bool {
+    pub fn is_hybridupnparylic(&self) -> bool {
         match &*self.backend.lock().expect("Backend mutex poisoned") {
             MusicRendererBackend::HybridUpnpArylic { .. } => true,
             _ => false,
