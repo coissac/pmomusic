@@ -665,6 +665,15 @@ impl ToXmlElement for Container {
         elem.children
             .push(XMLNode::Element(text_element("upnp:class", &self.class)));
 
+        if let Some(ref artist) = self.artist {
+            elem.children
+                .push(XMLNode::Element(text_element("upnp:artist", artist)));
+        }
+        if let Some(ref art) = self.album_art {
+            elem.children
+                .push(XMLNode::Element(text_element("upnp:albumArtURI", art)));
+        }
+
         for c in &self.containers {
             elem.children.push(XMLNode::Element(c.to_xml_element()));
         }

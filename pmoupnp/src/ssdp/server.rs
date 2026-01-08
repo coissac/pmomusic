@@ -83,7 +83,6 @@ impl SsdpServer {
             &"0.0.0.0".parse().unwrap(),
         )?;
 
-        socket.set_read_timeout(Some(Duration::from_secs(1)))?;
         socket.set_multicast_loop_v4(false)?;
 
         let socket = Arc::new(socket);
@@ -118,8 +117,11 @@ impl SsdpServer {
 
         // Envoyer alive pour tous les NTs
         if let Some(ref socket) = self.socket {
-            for nt in device.get_notification_types() {
-                self.send_alive(socket, &device, nt);
+            let nts = device.get_notification_types();
+            for nt in nts.iter() {
+                Self::send_alive(socket, &device, nt, false);
+                // Petit délai pour éviter de saturer le buffer UDP sur macOS
+                std::thread::sleep(Duration::from_millis(5));
             }
         }
     }
@@ -146,7 +148,7 @@ impl SsdpServer {
     }
 
     /// Envoie un NOTIFY alive
-    fn send_alive(&self, socket: &UdpSocket, device: &SsdpDevice, nt: &str) {
+    fn send_alive(socket: &UdpSocket, device: &SsdpDevice, nt: &str, is_periodic: bool) {
         let usn = if nt.starts_with("uuid:") {
             format!("{}", nt)
         } else {
@@ -172,13 +174,18 @@ impl SsdpServer {
 
         match socket.send_to(msg.as_bytes(), addr) {
             Ok(_) => {
-                info!("✅ NOTIFY alive: {} (NT={})", usn, nt);
+                let label = if is_periodic { " (periodic)" } else { "" };
+                info!("✅ NOTIFY alive{}: {} (NT={})", label, usn, nt);
                 debug!(
-                    "📣 NOTIFY alive payload\n<details>\n\n```\n{}\n```\n</details>\n",
-                    msg
+                    "📣 NOTIFY alive{} payload\n<details>\n\n```\n{}\n```\n</details>\n",
+                    label, msg
                 );
             }
-            Err(e) => warn!("❌ Failed to send NOTIFY alive for {}: {}", usn, e),
+
+            Err(e) => {
+                let label = if is_periodic { "periodic " } else { "" };
+                warn!("❌ Failed to send {}NOTIFY alive for {}: {}", label, usn, e);
+            }
         }
     }
 
@@ -226,51 +233,18 @@ impl SsdpServer {
                 debug!("⏰ SSDP periodic announcement tick");
                 std::thread::sleep(period);
 
-                let devices = devices.read().unwrap();
-                for device in devices.values() {
+                // Clone la liste des devices pour libérer le lock rapidement
+                let devices_snapshot: Vec<SsdpDevice> = {
+                    let devices = devices.read().unwrap();
+                    devices.values().cloned().collect()
+                };
+                for device in &devices_snapshot {
                     for nt in device.get_notification_types() {
-                        Self::send_alive_static(&socket, device, nt);
+                        Self::send_alive(&socket, device, nt, true);
                     }
                 }
             }
         });
-    }
-
-    /// Version statique de send_alive pour les threads
-    fn send_alive_static(socket: &UdpSocket, device: &SsdpDevice, nt: &str) {
-        let usn = if nt.starts_with("uuid:") {
-            format!("{}", nt)
-        } else {
-            format!("uuid:{}::{}", device.uuid, nt)
-        };
-
-        let msg = format!(
-            "NOTIFY * HTTP/1.1\r\n\
-             HOST: {}:{}\r\n\
-             CACHE-CONTROL: max-age={}\r\n\
-             LOCATION: {}\r\n\
-             NT: {}\r\n\
-             NTS: ssdp:alive\r\n\
-             SERVER: {}\r\n\
-             USN: {}\r\n\
-             \r\n",
-            SSDP_MULTICAST_ADDR, SSDP_PORT, MAX_AGE, device.location, nt, device.server, usn
-        );
-
-        let addr: SocketAddr = format!("{}:{}", SSDP_MULTICAST_ADDR, SSDP_PORT)
-            .parse()
-            .unwrap();
-
-        match socket.send_to(msg.as_bytes(), addr) {
-            Ok(_) => {
-                info!("✅ NOTIFY alive (periodic): {} (NT={})", usn, nt);
-                debug!(
-                    "📣 NOTIFY alive (periodic) payload\n<details>\n\n```\n{}\n```\n</details>\n",
-                    msg
-                );
-            }
-            Err(e) => warn!("❌ Failed to send periodic NOTIFY alive for {}: {}", usn, e),
-        }
     }
 
     /// Démarre l'écoute des M-SEARCH
@@ -289,16 +263,16 @@ impl SsdpServer {
                                 src, data
                             );
                             if let Some(st) = Self::parse_st(&data) {
-                                let devices = devices.read().unwrap();
-                                for device in devices.values() {
+                                // Clone la liste des devices pour libérer le lock rapidement
+                                let devices_snapshot: Vec<SsdpDevice> = {
+                                    let devices = devices.read().unwrap();
+                                    devices.values().cloned().collect()
+                                };
+                                for device in &devices_snapshot {
                                     Self::handle_msearch(&socket, &src, &st, device);
                                 }
                             }
                         }
-                    }
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        // Timeout, continuer
-                        continue;
                     }
                     Err(e) => {
                         warn!("❌ SSDP read error: {}", e);

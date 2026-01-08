@@ -1,0 +1,281 @@
+Modified regular file PMOMusic/src/main.rs:
+    ...
+  71   71:         .await
+  72   72:         .expect("Failed to register MediaRenderer");
+  73   73: 
+  74     :     info!(
+  75     :         "✅ MediaRenderer ready at {}{}",
+  76     :         renderer_instance.base_url(),
+  77     :         renderer_instance.description_route()
+  78     :     );
+       74:     tracing::warn!("🔍 DEBUG: MediaRenderer registered, getting base_url...");
+       75:     let base_url = renderer_instance.base_url();
+       76:     tracing::warn!("🔍 DEBUG: Got base_url, getting description_route...");
+       77:     let desc_route = renderer_instance.description_route();
+       78:     tracing::warn!("🔍 DEBUG: Got description_route, logging...");
+       79:     info!("✅ MediaRenderer ready at {}{}", base_url, desc_route);
+       80:     tracing::warn!("🔍 DEBUG: Log complete!");
+  79   81: 
+       82:     tracing::warn!("🔍 DEBUG: About to register MediaServer...");
+  80   83:     let server_instance = server
+  81   84:         .write()
+  82   85:         .await
+  83   86:         .register_device(MEDIA_SERVER.clone())
+  84   87:         .await
+  85   88:         .expect("Failed to register MediaServer");
+       89:     tracing::warn!("🔍 DEBUG: MediaServer registered successfully");
+  86   90: 
+  87   91:     // Enregistrer l'instance ContentDirectory pour les notifications GENA
+  88   92:     if let Some(cd_service) = server_instance.get_service("ContentDirectory") {
+    ...
+Modified regular file pmocontrol/src/media_server.rs:
+    ...
+ 645  645:             is_container: true,
+ 646  646:             class: container.class,
+ 647  647:             resources: Vec::new(),
+ 648  648:             artist: Nonecontainer.artist,
+ 649  649:             album: None,
+ 650  650:             genre: None,
+ 651  651:             album_art_uri: Nonecontainer.album_art,
+ 652  652:             date: None,
+ 653  653:             track_number: None,
+ 654  654:             creator: None,
+    ...
+Modified regular file pmodidl/src/lib.rs:
+    ...
+ 665  665:         elem.children
+ 666  666:             .push(XMLNode::Element(text_element("upnp:class", &self.class)));
+ 667  667: 
+      668:         if let Some(ref artist) = self.artist {
+      669:             elem.children
+      670:                 .push(XMLNode::Element(text_element("upnp:artist", artist)));
+      671:         }
+      672:         if let Some(ref art) = self.album_art {
+      673:             elem.children
+      674:                 .push(XMLNode::Element(text_element("upnp:albumArtURI", art)));
+      675:         }
+      676: 
+ 668  677:         for c in &self.containers {
+ 669  678:             elem.children.push(XMLNode::Element(c.to_xml_element()));
+ 670  679:         }
+    ...
+Modified regular file pmomediaserver/src/paradise_streaming.rs:
+    ...
+  75   75: 
+  76   76:         // Récupérer ou initialiser les caches singletons
+  77   77:         info!("📦 Getting cache singletons...");
+       78:         tracing::warn!("🔍 DEBUG: About to check get_cover_cache()");
+  78   79:         let cover_cache = match get_cover_cache() {
+  79   80:             Some(cache) => {
+  80   81:                 info!("  ✅ Using existing cover cache singleton");
+  81   82:                 cache
+  82   83:             }
+  83   84:             None => {
+  84   85:                 info!("  📦 Initializing new cover cache singleton");
+       86:                 tracing::warn!("🔍 DEBUG: About to call init_cover_cache_configured()");
+  85   87:                 let cache = self
+  86   88:                     .init_cover_cache_configured()
+  87   89:                     .await
+  88   90:                     .context("Failed to initialize cover cache")?;
+       91:                 tracing::warn!("🔍 DEBUG: init_cover_cache_configured() completed");
+  89   92:                 register_cover_cache(cache.clone());
+  90   93:                 cache
+  91   94:             }
+  92   95:         };
+       96:         tracing::warn!("🔍 DEBUG: Cover cache ready, checking audio cache...");
+  93   97: 
+  94   98:         let audio_cache = match get_audio_cache() {
+  95   99:             Some(cache) => {
+    ...
+ 100  104:             }
+ 101  105:             None => {
+ 102  106:                 info!("  📦 Initializing new audio cache singleton");
+      107:                 tracing::warn!("🔍 DEBUG: About to call init_audio_cache_configured()");
+ 103  108:                 let cache = self
+ 104  109:                     .init_audio_cache_configured()
+ 105  110:                     .await
+ 106  111:                     .context("Failed to initialize audio cache")?;
+      112:                 tracing::warn!("🔍 DEBUG: init_audio_cache_configured() completed");
+ 107  113:                 register_audio_cache(cache.clone());
+ 108  114:                 register_playlist_audio_cache(cache.clone());
+ 109  115:                 cache
+ 110  116:             }
+ 111  117:         };
+      118:         tracing::warn!("🔍 DEBUG: Audio cache ready, creating ParadiseChannelManager...");
+ 112  119: 
+ 113  120:         // Créer le builder d'historique
+ 114  121:         let mut history_builder = ParadiseHistoryBuilder::default();
+    ...
+Modified regular file pmoupnp/src/ssdp/server.rs:
+    ...
+  83   83:             &"0.0.0.0".parse().unwrap(),
+  84   84:         )?;
+  85   85: 
+  86     :         socket.set_read_timeout(Some(Duration::from_secs(1)))?;
+  87   86:         socket.set_multicast_loop_v4(false)?;
+  88   87: 
+  89   88:         let socket = Arc::new(socket);
+    ...
+ 118  117: 
+ 119  118:         // Envoyer alive pour tous les NTs
+ 120  119:         if let Some(ref socket) = self.socket {
+ 121     :             for nt in device.get_notification_types() {
+ 122     :                 self.send_alive(socket, &device, nt);
+      120:             let nts = device.get_notification_types();
+      121:             for nt in nts.iter() {
+      122:                 Self::send_alive(socket, &device, nt, false);
+      123:                 // Petit délai pour éviter de saturer le buffer UDP sur macOS
+      124:                 std::thread::sleep(Duration::from_millis(5));
+ 123  125:             }
+ 124  126:         }
+ 125  127:     }
+    ...
+ 146  148:     }
+ 147  149: 
+ 148  150:     /// Envoie un NOTIFY alive
+ 149  151:     fn send_alive(&self, socket: &UdpSocket, device: &SsdpDevice, nt: &str, is_periodic: bool) {
+ 150  152:         let usn = if nt.starts_with("uuid:") {
+ 151  153:             format!("{}", nt)
+ 152  154:         } else {
+    ...
+ 172  174: 
+ 173  175:         match socket.send_to(msg.as_bytes(), addr) {
+ 174  176:             Ok(_) => {
+ 175  177:                 let label = if is_periodic { " (periodic)" } else { "" };
+ 175  178:                 info!("✅ NOTIFY alive{}: {} (NT={})", label, usn, nt);
+ 176  179:                 debug!(
+ 177  180:                     "📣 NOTIFY alive{} payload\n<details>\n\n```\n{}\n```\n</details>\n",
+ 178  181:                     label, msg
+ 179  182:                 );
+ 180  183:             }
+      184: 
+ 181  185:             Err(e) => {
+      186:                 let label = if is_periodic { "periodic " } else { "" };
+ 181  187:                 warn!("❌ Failed to send {}NOTIFY alive for {}: {}", label, usn, e),;
+ 181  188:             }
+ 182  189:         }
+ 183  190:     }
+ 184  191: 
+    ...
+ 226  233:                 debug!("⏰ SSDP periodic announcement tick");
+ 227  234:                 std::thread::sleep(period);
+ 228  235: 
+ 229  236:                 // Clone la liste des devices pour libérer le lock rapidement
+      237:                 let devices_snapshot: Vec<SsdpDevice> = {
+ 229  238:                     let devices = devices.read().unwrap();
+ 230  239:                     devices.values().cloned().collect()
+      240:                 };
+ 230  241:                 for device in devices.values()&devices_snapshot {
+ 231  242:                     for nt in device.get_notification_types() {
+ 232  243:                         Self::send_alive_staticsend_alive(&socket, device, nt, true);
+ 233  244:                     }
+ 234  245:                 }
+ 235  246:             }
+ 236  247:         });
+ 237  248:     }
+ 238  249: 
+ 239     :     /// Version statique de send_alive pour les threads
+ 240     :     fn send_alive_static(socket: &UdpSocket, device: &SsdpDevice, nt: &str) {
+ 241     :         let usn = if nt.starts_with("uuid:") {
+ 242     :             format!("{}", nt)
+ 243     :         } else {
+ 244     :             format!("uuid:{}::{}", device.uuid, nt)
+ 245     :         };
+ 246     : 
+ 247     :         let msg = format!(
+ 248     :             "NOTIFY * HTTP/1.1\r\n\
+ 249     :              HOST: {}:{}\r\n\
+ 250     :              CACHE-CONTROL: max-age={}\r\n\
+ 251     :              LOCATION: {}\r\n\
+ 252     :              NT: {}\r\n\
+ 253     :              NTS: ssdp:alive\r\n\
+ 254     :              SERVER: {}\r\n\
+ 255     :              USN: {}\r\n\
+ 256     :              \r\n",
+ 257     :             SSDP_MULTICAST_ADDR, SSDP_PORT, MAX_AGE, device.location, nt, device.server, usn
+ 258     :         );
+ 259     : 
+ 260     :         let addr: SocketAddr = format!("{}:{}", SSDP_MULTICAST_ADDR, SSDP_PORT)
+ 261     :             .parse()
+ 262     :             .unwrap();
+ 263     : 
+ 264     :         match socket.send_to(msg.as_bytes(), addr) {
+ 265     :             Ok(_) => {
+ 266     :                 info!("✅ NOTIFY alive (periodic): {} (NT={})", usn, nt);
+ 267     :                 debug!(
+ 268     :                     "📣 NOTIFY alive (periodic) payload\n<details>\n\n```\n{}\n```\n</details>\n",
+ 269     :                     msg
+ 270     :                 );
+ 271     :             }
+ 272     :             Err(e) => warn!("❌ Failed to send periodic NOTIFY alive for {}: {}", usn, e),
+ 273     :         }
+ 274     :     }
+ 275     : 
+ 276  250:     /// Démarre l'écoute des M-SEARCH
+ 277  251:     fn start_msearch_listener(&self, socket: Arc<UdpSocket>) {
+ 278  252:         let devices = Arc::clone(&self.devices);
+    ...
+ 289  263:                                 src, data
+ 290  264:                             );
+ 291  265:                             if let Some(st) = Self::parse_st(&data) {
+ 292  266:                                 // Clone la liste des devices pour libérer le lock rapidement
+      267:                                 let devices_snapshot: Vec<SsdpDevice> = {
+ 292  268:                                     let devices = devices.read().unwrap();
+ 293  269:                                     devices.values().cloned().collect()
+      270:                                 };
+ 293  271:                                 for device in devices.values()&devices_snapshot {
+ 294  272:                                     Self::handle_msearch(&socket, &src, &st, device);
+ 295  273:                                 }
+ 296  274:                             }
+ 297  275:                         }
+ 298  276:                     }
+ 299     :                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+ 300     :                         // Timeout, continuer
+ 301     :                         continue;
+ 302     :                     }
+ 303  277:                     Err(e) => {
+ 304  278:                         warn!("❌ SSDP read error: {}", e);
+ 305  279:                     }
+    ...
+Modified regular file pmoupnp/src/upnp_server.rs:
+    ...
+ 250  250:         }
+ 251  251: 
+ 252  252:         // Enregistrer les URLs dans le serveur web
+      253:         tracing::warn!("🔍 DEBUG: About to register_urls for device {}", di.udn());
+ 253  254:         di.register_urls(self).await?;
+      255:         tracing::warn!("🔍 DEBUG: register_urls completed for device {}", di.udn());
+ 254  256: 
+ 255  257:         // Ajouter au registre pour l'introspection
+      258:         tracing::warn!("🔍 DEBUG: Adding to DEVICE_REGISTRY...");
+ 256  259:         DEVICE_REGISTRY
+ 257  260:             .write()
+ 258  261:             .unwrap()
+ 259  262:             .register(di.clone())
+ 260  263:             .map_err(|e| DeviceError::UrlRegistrationError(e))?;
+      264:         tracing::warn!("🔍 DEBUG: Added to DEVICE_REGISTRY");
+ 261  265: 
+ 262  266:         // Annoncer via SSDP (si initialisé)
+      267:         tracing::warn!("🔍 DEBUG: Checking SSDP...");
+ 263  268:         if self.ssdp_enabled() {
+      269:             tracing::warn!("🔍 DEBUG: SSDP enabled, getting lock...");
+ 264  270:             let ssdp_opt = SSDP_SERVER.read().unwrap();
+ 265  271:             if let Some(ref ssdp) = *ssdp_opt {
+      272:                 tracing::warn!("🔍 DEBUG: SSDP server exists, announcing...");
+ 266  273:                 use crate::config_ext::UpnpConfigExt;
+ 267  274:                 let config = pmoconfig::get_config();
+ 268  275:                 let manufacturer = config
+    ...
+ 271  278:                 let ssdp_device = di.to_ssdp_device(&manufacturer, "1.0");
+ 272  279:                 ssdp.add_device(ssdp_device);
+ 273  280:                 info!("✅ SSDP announcement for {}", di.udn());
+      281:                 tracing::warn!("🔍 DEBUG: SSDP announcement complete");
+ 274  282:             }
+ 275  283:         }
+      284:         tracing::warn!("🔍 DEBUG: Returning device instance");
+ 276  285: 
+ 277  286:         Ok(di)
+ 278  287:     }
+    ...
+Added regular file toto:
+    (empty)
