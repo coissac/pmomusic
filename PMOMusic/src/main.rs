@@ -71,18 +71,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .expect("Failed to register MediaRenderer");
 
-    info!(
-        "✅ MediaRenderer ready at {}{}",
-        renderer_instance.base_url(),
-        renderer_instance.description_route()
-    );
+    tracing::warn!("🔍 DEBUG: MediaRenderer registered, getting base_url...");
+    let base_url = renderer_instance.base_url();
+    tracing::warn!("🔍 DEBUG: Got base_url, getting description_route...");
+    let desc_route = renderer_instance.description_route();
+    tracing::warn!("🔍 DEBUG: Got description_route, logging...");
+    info!("✅ MediaRenderer ready at {}{}", base_url, desc_route);
+    tracing::warn!("🔍 DEBUG: Log complete!");
 
+    tracing::warn!("🔍 DEBUG: About to register MediaServer...");
     let server_instance = server
         .write()
         .await
         .register_device(MEDIA_SERVER.clone())
         .await
         .expect("Failed to register MediaServer");
+    tracing::warn!("🔍 DEBUG: MediaServer registered successfully");
 
     // Enregistrer l'instance ContentDirectory pour les notifications GENA
     if let Some(cd_service) = server_instance.get_service("ContentDirectory") {

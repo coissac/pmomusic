@@ -75,6 +75,7 @@ impl ParadiseStreamingExt for pmoserver::Server {
 
         // Récupérer ou initialiser les caches singletons
         info!("📦 Getting cache singletons...");
+        tracing::warn!("🔍 DEBUG: About to check get_cover_cache()");
         let cover_cache = match get_cover_cache() {
             Some(cache) => {
                 info!("  ✅ Using existing cover cache singleton");
@@ -82,14 +83,17 @@ impl ParadiseStreamingExt for pmoserver::Server {
             }
             None => {
                 info!("  📦 Initializing new cover cache singleton");
+                tracing::warn!("🔍 DEBUG: About to call init_cover_cache_configured()");
                 let cache = self
                     .init_cover_cache_configured()
                     .await
                     .context("Failed to initialize cover cache")?;
+                tracing::warn!("🔍 DEBUG: init_cover_cache_configured() completed");
                 register_cover_cache(cache.clone());
                 cache
             }
         };
+        tracing::warn!("🔍 DEBUG: Cover cache ready, checking audio cache...");
 
         let audio_cache = match get_audio_cache() {
             Some(cache) => {
@@ -100,15 +104,18 @@ impl ParadiseStreamingExt for pmoserver::Server {
             }
             None => {
                 info!("  📦 Initializing new audio cache singleton");
+                tracing::warn!("🔍 DEBUG: About to call init_audio_cache_configured()");
                 let cache = self
                     .init_audio_cache_configured()
                     .await
                     .context("Failed to initialize audio cache")?;
+                tracing::warn!("🔍 DEBUG: init_audio_cache_configured() completed");
                 register_audio_cache(cache.clone());
                 register_playlist_audio_cache(cache.clone());
                 cache
             }
         };
+        tracing::warn!("🔍 DEBUG: Audio cache ready, creating ParadiseChannelManager...");
 
         // Créer le builder d'historique
         let mut history_builder = ParadiseHistoryBuilder::default();
