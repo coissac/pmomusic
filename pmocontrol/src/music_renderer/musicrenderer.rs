@@ -231,7 +231,7 @@ impl MusicRenderer {
 
     /// Play the current item from the queue.
     pub fn play_current_from_queue(&self) -> Result<(), ControlPointError> {
-        let queue = self.queue.lock().expect("Queue mutex poisoned");
+        let mut queue = self.queue.lock().expect("Queue mutex poisoned");
         let backend = self.backend.lock().expect("Backend mutex poisoned");
 
         // Get the current item from the queue

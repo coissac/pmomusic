@@ -778,7 +778,7 @@ impl QueueBackend for OpenHomeQueue {
     }
 
     /// Optimized peek_current: use primitives instead of full snapshot.
-    fn peek_current(&self) -> Result<Option<(PlaybackItem, usize)>, ControlPointError> {
+    fn peek_current(&mut self) -> Result<Option<(PlaybackItem, usize)>, ControlPointError> {
         let len = self.len()?;
         if len == 0 {
             return Ok(None);

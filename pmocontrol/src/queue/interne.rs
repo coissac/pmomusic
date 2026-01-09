@@ -15,7 +15,6 @@
 //!   - maintains a `current_index`,
 //!   - never starts playback (transport control is handled elsewhere).
 
-
 use crate::{
     DeviceId, DeviceIdentity, RendererInfo,
     errors::ControlPointError,
@@ -72,27 +71,16 @@ impl QueueBackend for InternalQueue {
     }
 
     fn position_to_id(&self, id: usize) -> Result<u32, ControlPointError> {
-        u32::try_from(id).map_err(|_| {
-            ControlPointError::QueueError(format!(
-                "Position {} exceeds u32::MAX",
-                id
-            ))
-        })
+        u32::try_from(id)
+            .map_err(|_| ControlPointError::QueueError(format!("Position {} exceeds u32::MAX", id)))
     }
 
     fn current_track(&self) -> Result<Option<u32>, ControlPointError> {
         match self.current_index {
             None => Ok(None),
-            Some(i) => {
-                u32::try_from(i)
-                    .map(Some)
-                    .map_err(|_| {
-                        ControlPointError::QueueError(format!(
-                            "Current index {} exceeds u32::MAX",
-                            i
-                        ))
-                    })
-            }
+            Some(i) => u32::try_from(i).map(Some).map_err(|_| {
+                ControlPointError::QueueError(format!("Current index {} exceeds u32::MAX", i))
+            }),
         }
     }
 
@@ -142,16 +130,14 @@ impl QueueBackend for InternalQueue {
         Ok(())
     }
 
-    fn sync_queue(
-        &mut self,
-        items: Vec<PlaybackItem>
-    ) -> Result<(), ControlPointError> {
+    fn sync_queue(&mut self, items: Vec<PlaybackItem>) -> Result<(), ControlPointError> {
         if items.is_empty() {
             return self.replace_queue(Vec::new(), None);
         }
 
         // Récupérer l'item actuel
-        let current = self.current_index
+        let current = self
+            .current_index
             .and_then(|idx| self.items.get(idx).map(|item| (idx, item.uri.clone())));
 
         if let Some((_current_idx, current_uri)) = current {
@@ -187,7 +173,8 @@ impl QueueBackend for InternalQueue {
                 self.items.extend(items);
             }
             EnqueueMode::InsertAfterCurrent => {
-                let insert_pos = self.current_index
+                let insert_pos = self
+                    .current_index
                     .map(|i| (i + 1).min(self.items.len()))
                     .unwrap_or(0);
 
@@ -242,7 +229,7 @@ impl QueueBackend for InternalQueue {
         Ok(items)
     }
 
-    fn peek_current(&self) -> Result<Option<(PlaybackItem, usize)>, ControlPointError> {
+    fn peek_current(&mut self) -> Result<Option<(PlaybackItem, usize)>, ControlPointError> {
         if self.items.is_empty() {
             return Ok(None);
         }
@@ -250,7 +237,11 @@ impl QueueBackend for InternalQueue {
         let len = self.items.len();
         let (item, resolved_index) = match self.current_index {
             Some(idx) if idx < len => (self.items.get(idx).cloned(), Some(idx)),
-            _ => (self.items.first().cloned(), None),
+            _ => {
+                // Si current_index est None ou invalide, initialiser à 0
+                self.current_index = Some(0);
+                (self.items.first().cloned(), Some(0))
+            }
         };
 
         let item = match item {

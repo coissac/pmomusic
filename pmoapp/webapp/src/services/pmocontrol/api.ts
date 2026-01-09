@@ -13,40 +13,40 @@ import type {
   AttachPlaylistRequest,
   PlayContentRequest,
   SuccessResponse,
-  ErrorResponse
-} from './types'
+  ErrorResponse,
+} from "./types";
 
 /**
  * Client API REST pour le Control Point PMOMusic
  */
 class PMOControlAPI {
-  private readonly baseURL = '/api/control'
+  private readonly baseURL = "/api/control";
 
   /**
    * Effectue une requête HTTP générique
    */
   private async request<T>(
     path: string,
-    options: RequestInit = {}
+    options: RequestInit = {},
   ): Promise<T> {
-    const url = `${this.baseURL}${path}`
+    const url = `${this.baseURL}${path}`;
 
     const response = await fetch(url, {
       ...options,
       headers: {
-        'Content-Type': 'application/json',
+        "Content-Type": "application/json",
         ...options.headers,
       },
-    })
+    });
 
     if (!response.ok) {
       const error: ErrorResponse = await response.json().catch(() => ({
         error: `HTTP ${response.status}: ${response.statusText}`,
-      }))
-      throw new Error(error.error)
+      }));
+      throw new Error(error.error);
     }
 
-    return response.json()
+    return response.json();
   }
 
   // ============================================================================
@@ -58,7 +58,7 @@ class PMOControlAPI {
    * GET /api/control/renderers
    */
   async getRenderers(): Promise<RendererSummary[]> {
-    return this.request<RendererSummary[]>('/renderers')
+    return this.request<RendererSummary[]>("/renderers");
   }
 
   /**
@@ -66,7 +66,7 @@ class PMOControlAPI {
    * GET /api/control/renderers/{id}
    */
   async getRendererState(id: string): Promise<RendererState> {
-    return this.request<RendererState>(`/renderers/${encodeURIComponent(id)}`)
+    return this.request<RendererState>(`/renderers/${encodeURIComponent(id)}`);
   }
 
   /**
@@ -74,7 +74,9 @@ class PMOControlAPI {
    * GET /api/control/renderers/{id}/full
    */
   async getRendererFullSnapshot(id: string): Promise<FullRendererSnapshot> {
-    return this.request<FullRendererSnapshot>(`/renderers/${encodeURIComponent(id)}/full`)
+    return this.request<FullRendererSnapshot>(
+      `/renderers/${encodeURIComponent(id)}/full`,
+    );
   }
 
   /**
@@ -82,7 +84,9 @@ class PMOControlAPI {
    * GET /api/control/renderers/{id}/queue
    */
   async getQueue(id: string): Promise<QueueSnapshot> {
-    return this.request<QueueSnapshot>(`/renderers/${encodeURIComponent(id)}/queue`)
+    return this.request<QueueSnapshot>(
+      `/renderers/${encodeURIComponent(id)}/queue`,
+    );
   }
 
   /**
@@ -90,7 +94,9 @@ class PMOControlAPI {
    * GET /api/control/renderers/{id}/binding
    */
   async getBinding(id: string): Promise<AttachedPlaylistInfo | null> {
-    return this.request<AttachedPlaylistInfo | null>(`/renderers/${encodeURIComponent(id)}/binding`)
+    return this.request<AttachedPlaylistInfo | null>(
+      `/renderers/${encodeURIComponent(id)}/binding`,
+    );
   }
 
   // ============================================================================
@@ -102,9 +108,12 @@ class PMOControlAPI {
    * POST /api/control/renderers/{id}/play
    */
   async play(id: string): Promise<SuccessResponse> {
-    return this.request<SuccessResponse>(`/renderers/${encodeURIComponent(id)}/play`, {
-      method: 'POST',
-    })
+    return this.request<SuccessResponse>(
+      `/renderers/${encodeURIComponent(id)}/play`,
+      {
+        method: "POST",
+      },
+    );
   }
 
   /**
@@ -112,9 +121,12 @@ class PMOControlAPI {
    * POST /api/control/renderers/{id}/pause
    */
   async pause(id: string): Promise<SuccessResponse> {
-    return this.request<SuccessResponse>(`/renderers/${encodeURIComponent(id)}/pause`, {
-      method: 'POST',
-    })
+    return this.request<SuccessResponse>(
+      `/renderers/${encodeURIComponent(id)}/pause`,
+      {
+        method: "POST",
+      },
+    );
   }
 
   /**
@@ -122,9 +134,12 @@ class PMOControlAPI {
    * POST /api/control/renderers/{id}/stop
    */
   async stop(id: string): Promise<SuccessResponse> {
-    return this.request<SuccessResponse>(`/renderers/${encodeURIComponent(id)}/stop`, {
-      method: 'POST',
-    })
+    return this.request<SuccessResponse>(
+      `/renderers/${encodeURIComponent(id)}/stop`,
+      {
+        method: "POST",
+      },
+    );
   }
 
   /**
@@ -132,9 +147,12 @@ class PMOControlAPI {
    * POST /api/control/renderers/{id}/resume
    */
   async resume(id: string): Promise<SuccessResponse> {
-    return this.request<SuccessResponse>(`/renderers/${encodeURIComponent(id)}/resume`, {
-      method: 'POST',
-    })
+    return this.request<SuccessResponse>(
+      `/renderers/${encodeURIComponent(id)}/resume`,
+      {
+        method: "POST",
+      },
+    );
   }
 
   /**
@@ -142,9 +160,12 @@ class PMOControlAPI {
    * POST /api/control/renderers/{id}/next
    */
   async next(id: string): Promise<SuccessResponse> {
-    return this.request<SuccessResponse>(`/renderers/${encodeURIComponent(id)}/next`, {
-      method: 'POST',
-    })
+    return this.request<SuccessResponse>(
+      `/renderers/${encodeURIComponent(id)}/next`,
+      {
+        method: "POST",
+      },
+    );
   }
 
   /**
@@ -152,10 +173,13 @@ class PMOControlAPI {
    * POST /api/control/renderers/{id}/queue/seek
    */
   async seekQueueIndex(id: string, index: number): Promise<SuccessResponse> {
-    return this.request<SuccessResponse>(`/renderers/${encodeURIComponent(id)}/queue/seek`, {
-      method: 'POST',
-      body: JSON.stringify({ index }),
-    })
+    return this.request<SuccessResponse>(
+      `/renderers/${encodeURIComponent(id)}/queue/seek`,
+      {
+        method: "POST",
+        body: JSON.stringify({ index }),
+      },
+    );
   }
 
   // ============================================================================
@@ -167,11 +191,14 @@ class PMOControlAPI {
    * POST /api/control/renderers/{id}/volume/set
    */
   async setVolume(id: string, volume: number): Promise<SuccessResponse> {
-    const payload: VolumeSetRequest = { volume }
-    return this.request<SuccessResponse>(`/renderers/${encodeURIComponent(id)}/volume/set`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    })
+    const payload: VolumeSetRequest = { volume };
+    return this.request<SuccessResponse>(
+      `/renderers/${encodeURIComponent(id)}/volume/set`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
   }
 
   /**
@@ -179,9 +206,12 @@ class PMOControlAPI {
    * POST /api/control/renderers/{id}/volume/up
    */
   async volumeUp(id: string): Promise<SuccessResponse> {
-    return this.request<SuccessResponse>(`/renderers/${encodeURIComponent(id)}/volume/up`, {
-      method: 'POST',
-    })
+    return this.request<SuccessResponse>(
+      `/renderers/${encodeURIComponent(id)}/volume/up`,
+      {
+        method: "POST",
+      },
+    );
   }
 
   /**
@@ -189,9 +219,12 @@ class PMOControlAPI {
    * POST /api/control/renderers/{id}/volume/down
    */
   async volumeDown(id: string): Promise<SuccessResponse> {
-    return this.request<SuccessResponse>(`/renderers/${encodeURIComponent(id)}/volume/down`, {
-      method: 'POST',
-    })
+    return this.request<SuccessResponse>(
+      `/renderers/${encodeURIComponent(id)}/volume/down`,
+      {
+        method: "POST",
+      },
+    );
   }
 
   /**
@@ -199,9 +232,12 @@ class PMOControlAPI {
    * POST /api/control/renderers/{id}/mute/toggle
    */
   async toggleMute(id: string): Promise<SuccessResponse> {
-    return this.request<SuccessResponse>(`/renderers/${encodeURIComponent(id)}/mute/toggle`, {
-      method: 'POST',
-    })
+    return this.request<SuccessResponse>(
+      `/renderers/${encodeURIComponent(id)}/mute/toggle`,
+      {
+        method: "POST",
+      },
+    );
   }
 
   // ============================================================================
@@ -216,17 +252,20 @@ class PMOControlAPI {
     rendererId: string,
     serverId: string,
     containerId: string,
-    autoPlay = false
+    autoPlay = false,
   ): Promise<SuccessResponse> {
     const payload: AttachPlaylistRequest = {
       server_id: serverId,
       container_id: containerId,
       auto_play: autoPlay,
-    }
-    return this.request<SuccessResponse>(`/renderers/${encodeURIComponent(rendererId)}/binding/attach`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    })
+    };
+    return this.request<SuccessResponse>(
+      `/renderers/${encodeURIComponent(rendererId)}/binding/attach`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
   }
 
   /**
@@ -234,9 +273,12 @@ class PMOControlAPI {
    * POST /api/control/renderers/{id}/binding/detach
    */
   async detachPlaylist(rendererId: string): Promise<SuccessResponse> {
-    return this.request<SuccessResponse>(`/renderers/${encodeURIComponent(rendererId)}/binding/detach`, {
-      method: 'POST',
-    })
+    return this.request<SuccessResponse>(
+      `/renderers/${encodeURIComponent(rendererId)}/binding/detach`,
+      {
+        method: "POST",
+      },
+    );
   }
 
   // ============================================================================
@@ -250,13 +292,19 @@ class PMOControlAPI {
   async playContent(
     rendererId: string,
     serverId: string,
-    objectId: string
+    objectId: string,
   ): Promise<SuccessResponse> {
-    const payload: PlayContentRequest = { server_id: serverId, object_id: objectId }
-    return this.request<SuccessResponse>(`/renderers/${encodeURIComponent(rendererId)}/queue/play`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    })
+    const payload: PlayContentRequest = {
+      server_id: serverId,
+      object_id: objectId,
+    };
+    return this.request<SuccessResponse>(
+      `/renderers/${encodeURIComponent(rendererId)}/queue/play`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
   }
 
   /**
@@ -266,13 +314,41 @@ class PMOControlAPI {
   async addToQueue(
     rendererId: string,
     serverId: string,
-    objectId: string
+    objectId: string,
   ): Promise<SuccessResponse> {
-    const payload: PlayContentRequest = { server_id: serverId, object_id: objectId }
-    return this.request<SuccessResponse>(`/renderers/${encodeURIComponent(rendererId)}/queue/add`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    })
+    const payload: PlayContentRequest = {
+      server_id: serverId,
+      object_id: objectId,
+    };
+    return this.request<SuccessResponse>(
+      `/renderers/${encodeURIComponent(rendererId)}/queue/add`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
+  }
+
+  /**
+   * Ajouter du contenu après le morceau actuel
+   * POST /api/control/renderers/{id}/queue/add-after
+   */
+  async addAfterCurrent(
+    rendererId: string,
+    serverId: string,
+    objectId: string,
+  ): Promise<SuccessResponse> {
+    const payload: PlayContentRequest = {
+      server_id: serverId,
+      object_id: objectId,
+    };
+    return this.request<SuccessResponse>(
+      `/renderers/${encodeURIComponent(rendererId)}/queue/add-after`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
   }
 
   // ============================================================================
@@ -284,19 +360,22 @@ class PMOControlAPI {
    * GET /api/control/servers
    */
   async getServers(): Promise<MediaServerSummary[]> {
-    return this.request<MediaServerSummary[]>('/servers')
+    return this.request<MediaServerSummary[]>("/servers");
   }
 
   /**
    * Browse le contenu d'un container sur un serveur
    * GET /api/control/servers/{serverId}/containers/{containerId}
    */
-  async browseContainer(serverId: string, containerId: string): Promise<BrowseResponse> {
+  async browseContainer(
+    serverId: string,
+    containerId: string,
+  ): Promise<BrowseResponse> {
     return this.request<BrowseResponse>(
-      `/servers/${encodeURIComponent(serverId)}/containers/${encodeURIComponent(containerId)}`
-    )
+      `/servers/${encodeURIComponent(serverId)}/containers/${encodeURIComponent(containerId)}`,
+    );
   }
 }
 
 // Export singleton
-export const api = new PMOControlAPI()
+export const api = new PMOControlAPI();

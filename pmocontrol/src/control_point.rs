@@ -589,6 +589,19 @@ impl ControlPoint {
         renderer_id: &DeviceId,
         items: Vec<PlaybackItem>,
     ) -> Result<(), ControlPointError> {
+        self.enqueue_items_with_mode(renderer_id, items, EnqueueMode::AppendToEnd)
+    }
+
+    /// Enqueue items to a renderer's queue with a specific enqueue mode.
+    ///
+    /// This is the low-level version that allows specifying the enqueue mode.
+    /// User-driven operations should detach any playlist binding.
+    pub fn enqueue_items_with_mode(
+        &self,
+        renderer_id: &DeviceId,
+        items: Vec<PlaybackItem>,
+        mode: EnqueueMode,
+    ) -> Result<(), ControlPointError> {
         // User-driven mutation: detach any playlist binding
         self.detach_playlist_binding(renderer_id, "enqueue_items");
 
@@ -600,7 +613,7 @@ impl ControlPoint {
 
         let new_len = {
             let mut queue = renderer.get_queue_mut();
-            queue.enqueue_items(items, EnqueueMode::AppendToEnd)?;
+            queue.enqueue_items(items, mode)?;
             queue.upcoming_len()?
         };
 
@@ -608,6 +621,7 @@ impl ControlPoint {
             renderer = renderer_id.0.as_str(),
             added = item_count,
             queue_len = new_len,
+            mode = ?mode,
             "Enqueued playback items"
         );
 
@@ -855,7 +869,7 @@ impl ControlPoint {
         })?;
 
         // Use generic queue access (works for all backends)
-        let Some((item, remaining)) = renderer.get_queue().peek_current()? else {
+        let Some((item, remaining)) = renderer.get_queue_mut().peek_current()? else {
             debug!(
                 renderer = renderer_id.0.as_str(),
                 "play_current_from_queue: queue is empty or no current item"
@@ -976,7 +990,7 @@ impl ControlPoint {
         }
 
         // Get the next item from the queue using peek_current
-        let Ok(Some((_, remaining))) = renderer.get_queue().peek_current() else {
+        let Ok(Some((_, remaining))) = renderer.get_queue_mut().peek_current() else {
             return;
         };
 
@@ -1022,7 +1036,7 @@ impl ControlPoint {
         // Set queue index
         renderer.get_queue_mut().set_index(Some(index))?;
 
-        let Some((item, remaining)) = renderer.get_queue().peek_current()? else {
+        let Some((item, remaining)) = renderer.get_queue_mut().peek_current()? else {
             debug!(
                 renderer = renderer_id.0.as_str(),
                 index, "play_queue_index: no item at index"

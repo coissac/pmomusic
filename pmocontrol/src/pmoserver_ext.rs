@@ -1392,6 +1392,118 @@ async fn add_to_queue(
     }))
 }
 
+/// POST /control/renderers/{renderer_id}/queue/add-after - Ajouter du contenu après le morceau actuel
+#[cfg(feature = "pmoserver")]
+#[utoipa::path(
+    post,
+    path = "/renderers/{renderer_id}/queue/add-after",
+    params(
+        ("renderer_id" = String, Path, description = "ID unique du renderer")
+    ),
+    request_body = PlayContentRequest,
+    responses(
+        (status = 200, description = "Contenu ajouté après le morceau actuel", body = SuccessResponse),
+        (status = 404, description = "Renderer ou serveur non trouvé", body = ErrorResponse),
+        (status = 504, description = "Timeout de la commande", body = ErrorResponse),
+        (status = 500, description = "Erreur lors de l'exécution", body = ErrorResponse)
+    ),
+    tag = "control"
+)]
+async fn add_after_current(
+    State(state): State<ControlPointState>,
+    Path(renderer_id): Path<String>,
+    Json(req): Json<PlayContentRequest>,
+) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let rid = DeviceId(renderer_id.clone());
+    let sid = DeviceId(req.server_id.clone());
+    let object_id = req.object_id.clone();
+    let object_id_for_log = object_id.clone();
+
+    // Verify renderer exists
+    state
+        .control_point
+        .music_renderer_by_id(&rid)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("Renderer {} not found", renderer_id),
+                }),
+            )
+        })?;
+
+    let control_point = Arc::clone(&state.control_point);
+
+    // Spawn blocking task for content loading
+    let add_task = tokio::task::spawn_blocking(move || {
+        // Fetch playback items from server
+        let items = fetch_playback_items(&control_point, &sid, &object_id)?;
+
+        if items.is_empty() {
+            return Err(anyhow::anyhow!("No playable content found"));
+        }
+
+        // Insert items after current using the new method
+        control_point.enqueue_items_with_mode(
+            &rid,
+            items,
+            crate::queue::EnqueueMode::InsertAfterCurrent,
+        )?;
+
+        Ok::<(), anyhow::Error>(())
+    });
+
+    time::timeout(QUEUE_COMMAND_TIMEOUT, add_task)
+        .await
+        .map_err(|_| {
+            warn!(
+                "Add after current command for renderer {} exceeded {:?}",
+                renderer_id, QUEUE_COMMAND_TIMEOUT
+            );
+            (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Add after current timed out after {}s",
+                        QUEUE_COMMAND_TIMEOUT.as_secs()
+                    ),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!("Task join error during add after current: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Internal task error: {}", e),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!(
+                "Failed to add content after current for renderer {}: {}",
+                renderer_id, e
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to add after current: {}", e),
+                }),
+            )
+        })?;
+
+    debug!(
+        renderer = renderer_id.as_str(),
+        server = req.server_id.as_str(),
+        object = object_id_for_log.as_str(),
+        "Content added after current via HTTP API"
+    );
+
+    Ok(Json(SuccessResponse {
+        message: "Content added after current track".to_string(),
+    }))
+}
+
 // ============================================================================
 // HANDLERS - MEDIA SERVERS
 // ============================================================================
@@ -1703,6 +1815,10 @@ pub fn create_api_router(state: ControlPointState, control_point: Arc<ControlPoi
         // Queue content
         .route("/renderers/{renderer_id}/queue/play", post(play_content))
         .route("/renderers/{renderer_id}/queue/add", post(add_to_queue))
+        .route(
+            "/renderers/{renderer_id}/queue/add-after",
+            post(add_after_current),
+        )
         // Servers
         .route("/servers", get(list_servers))
         .route(

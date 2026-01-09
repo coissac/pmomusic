@@ -156,7 +156,7 @@ impl QueueBackend for MusicQueue {
         }
     }
 
-    fn peek_current(&self) -> Result<Option<(PlaybackItem, usize)>, ControlPointError> {
+    fn peek_current(&mut self) -> Result<Option<(PlaybackItem, usize)>, ControlPointError> {
         match self {
             MusicQueue::Internal(q) => q.peek_current(),
             MusicQueue::OpenHome(q) => q.peek_current(),
