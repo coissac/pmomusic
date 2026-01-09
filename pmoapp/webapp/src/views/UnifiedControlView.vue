@@ -191,7 +191,6 @@ const currentTabProps = computed(() => {
     overflow-y: auto;
     overflow-x: hidden;
     padding: 0;
-    padding-bottom: 80px; /* Espace pour la barre fixe en bas (64px + marge) */
     position: relative;
 }
 
