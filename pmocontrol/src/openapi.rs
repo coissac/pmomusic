@@ -266,6 +266,14 @@ pub struct SeekQueueRequest {
     pub index: usize,
 }
 
+/// Requête pour transférer une queue d'un renderer vers un autre
+#[cfg(feature = "pmoserver")]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct TransferQueueRequest {
+    /// ID du renderer de destination
+    pub destination_renderer_id: String,
+}
+
 /// Réponse générique de succès
 #[cfg(feature = "pmoserver")]
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -413,6 +421,7 @@ GET /control/servers/{server_id}/containers/{container_id}
         crate::pmoserver_ext::detach_playlist_binding,
         crate::pmoserver_ext::play_content,
         crate::pmoserver_ext::add_to_queue,
+        crate::pmoserver_ext::transfer_queue,
         crate::pmoserver_ext::list_servers,
         crate::pmoserver_ext::browse_container,
         crate::sse::all_events_sse,
@@ -436,6 +445,7 @@ GET /control/servers/{server_id}/containers/{container_id}
         AttachPlaylistRequest,
         PlayContentRequest,
         SeekQueueRequest,
+        TransferQueueRequest,
         SuccessResponse,
         ErrorResponse,
     )),

@@ -12,8 +12,10 @@ import {
     Play,
     Plus,
     Settings,
+    MoreVertical,
 } from "lucide-vue-next";
 import { useMediaServers } from "@/composables/useMediaServers";
+import { useRenderers } from "@/composables/useRenderers";
 import type {
     MediaServerSummary,
     BrowseResponse,
@@ -22,12 +24,11 @@ import type {
 
 const props = defineProps<{
     modelValue: boolean; // v-model pour contrôler l'ouverture
+    selectedRendererId?: string | null; // ID du renderer sélectionné
 }>();
 
 const emit = defineEmits<{
     "update:modelValue": [value: boolean];
-    "play-item": [item: ContainerEntry, serverId: string];
-    "queue-item": [item: ContainerEntry, serverId: string];
 }>();
 
 const {
@@ -38,12 +39,19 @@ const {
     setPath,
     clearPath,
 } = useMediaServers();
+
+const { playContent, addToQueue, addAfterCurrent, attachAndPlayPlaylist } =
+    useRenderers();
+
 const router = useRouter();
 
 // État de navigation
 const currentServer = ref<MediaServerSummary | null>(null);
 const browseData = ref<BrowseResponse | null>(null);
 const isLoading = ref(false);
+
+// État du menu dropdown (pour chaque item, on stocke si son menu est ouvert)
+const openMenuId = ref<string | null>(null);
 
 // Rafraîchir la liste quand le drawer s'ouvre
 watch(
@@ -56,6 +64,34 @@ watch(
             currentServer.value = null;
             browseData.value = null;
             clearPath();
+            closeMenu();
+        }
+    },
+);
+
+// Fermer le menu quand on clique ailleurs (utilise un seul listener global)
+let clickOutsideHandler: ((e: MouseEvent) => void) | null = null;
+
+watch(
+    () => openMenuId.value,
+    (menuId) => {
+        // Nettoyer l'ancien listener s'il existe
+        if (clickOutsideHandler) {
+            document.removeEventListener("click", clickOutsideHandler);
+            clickOutsideHandler = null;
+        }
+
+        // Ajouter un nouveau listener seulement si un menu est ouvert
+        if (menuId) {
+            clickOutsideHandler = () => {
+                closeMenu();
+            };
+            // Utiliser setTimeout pour éviter que le clic qui ouvre le menu le ferme immédiatement
+            setTimeout(() => {
+                if (clickOutsideHandler) {
+                    document.addEventListener("click", clickOutsideHandler);
+                }
+            }, 0);
         }
     },
 );
@@ -169,16 +205,85 @@ function handleItemClick(item: ContainerEntry) {
     // Les tracks individuels : on ne fait rien (actions via boutons)
 }
 
-function handlePlayItem(event: Event, item: ContainerEntry) {
+function toggleMenu(itemId: string, event: Event) {
     event.stopPropagation();
-    if (!currentServer.value) return;
-    emit("play-item", item, currentServer.value.id);
+    openMenuId.value = openMenuId.value === itemId ? null : itemId;
 }
 
-function handleQueueItem(event: Event, item: ContainerEntry) {
+function closeMenu() {
+    openMenuId.value = null;
+}
+
+async function handlePlayItem(event: Event, item: ContainerEntry) {
     event.stopPropagation();
-    if (!currentServer.value) return;
-    emit("queue-item", item, currentServer.value.id);
+    closeMenu();
+
+    if (!currentServer.value || !props.selectedRendererId) {
+        console.warn("[ServerDrawer] No server or renderer selected");
+        return;
+    }
+
+    try {
+        if (item.is_container) {
+            // Container : attacher comme playlist avec auto_play
+            await attachAndPlayPlaylist(
+                props.selectedRendererId,
+                currentServer.value.id,
+                item.id,
+            );
+        } else {
+            // Item : vider queue + ajouter + jouer
+            await playContent(
+                props.selectedRendererId,
+                currentServer.value.id,
+                item.id,
+            );
+        }
+    } catch (error) {
+        console.error("[ServerDrawer] Error playing item:", error);
+    }
+}
+
+async function handleAddToQueue(event: Event, item: ContainerEntry) {
+    event.stopPropagation();
+    closeMenu();
+
+    if (!currentServer.value || !props.selectedRendererId) {
+        console.warn("[ServerDrawer] No server or renderer selected");
+        return;
+    }
+
+    try {
+        // Détacher le binding (fait côté serveur) + ajouter à la fin
+        await addToQueue(
+            props.selectedRendererId,
+            currentServer.value.id,
+            item.id,
+        );
+    } catch (error) {
+        console.error("[ServerDrawer] Error adding to queue:", error);
+    }
+}
+
+async function handleAddAfterCurrent(event: Event, item: ContainerEntry) {
+    event.stopPropagation();
+    closeMenu();
+
+    if (!currentServer.value || !props.selectedRendererId) {
+        console.warn("[ServerDrawer] No server or renderer selected");
+        return;
+    }
+
+    try {
+        // Détacher le binding + insérer après current
+        await addAfterCurrent(
+            props.selectedRendererId,
+            currentServer.value.id,
+            item.id,
+        );
+    } catch (error) {
+        console.error("[ServerDrawer] Error adding after current:", error);
+    }
 }
 
 function handleSettingsClick() {
@@ -358,6 +463,7 @@ function handleSettingsClick() {
                                 :class="{
                                     navigable:
                                         item.is_container && isNavigable(item),
+                                    'menu-open': openMenuId === item.id,
                                 }"
                                 @click="handleItemClick(item)"
                             >
@@ -433,6 +539,7 @@ function handleSettingsClick() {
                                     v-if="isPlayable(item)"
                                     class="content-actions"
                                 >
+                                    <!-- Bouton Play -->
                                     <button
                                         class="action-btn play-btn"
                                         :title="
@@ -444,17 +551,54 @@ function handleSettingsClick() {
                                     >
                                         <Play :size="16" />
                                     </button>
-                                    <button
-                                        class="action-btn queue-btn"
-                                        :title="
-                                            item.is_container
-                                                ? 'Ajouter tout à la queue'
-                                                : 'Ajouter à la queue'
-                                        "
-                                        @click="handleQueueItem($event, item)"
-                                    >
-                                        <Plus :size="16" />
-                                    </button>
+
+                                    <!-- Bouton Menu avec dropdown -->
+                                    <div class="action-menu-container">
+                                        <button
+                                            class="action-btn menu-btn"
+                                            :title="'Plus d\'actions'"
+                                            @click="toggleMenu(item.id, $event)"
+                                        >
+                                            <MoreVertical :size="16" />
+                                        </button>
+
+                                        <!-- Dropdown menu -->
+                                        <Transition name="menu-fade">
+                                            <div
+                                                v-if="openMenuId === item.id"
+                                                class="action-dropdown"
+                                                @click.stop
+                                            >
+                                                <button
+                                                    class="dropdown-item"
+                                                    @click="
+                                                        handleAddToQueue(
+                                                            $event,
+                                                            item,
+                                                        )
+                                                    "
+                                                >
+                                                    <Plus :size="14" />
+                                                    <span
+                                                        >Ajouter à la
+                                                        queue</span
+                                                    >
+                                                </button>
+                                                <button
+                                                    class="dropdown-item"
+                                                    @click="
+                                                        handleAddAfterCurrent(
+                                                            $event,
+                                                            item,
+                                                        )
+                                                    "
+                                                >
+                                                    <Plus :size="14" />
+                                                    <span>Ajouter après</span>
+                                                </button>
+                                            </div>
+                                        </Transition>
+                                    </div>
                                 </div>
 
                                 <!-- Chevron pour containers navigables (même si jouables) -->
@@ -507,7 +651,8 @@ function handleSettingsClick() {
 
 @media (max-width: 768px) and (orientation: portrait) {
     .drawer-backdrop {
-        left: 80vw; /* Mobile portrait: 80vw */
+        left: 0; /* Mobile portrait: backdrop commence à gauche car drawer prend 100vw */
+        background: rgba(0, 0, 0, 0.4); /* Plus sombre sur mobile */
     }
 }
 
@@ -517,11 +662,11 @@ function handleSettingsClick() {
     left: 0;
     bottom: 0;
     width: 50vw; /* Desktop/landscape: 50% de l'écran */
-    background: rgba(255, 255, 255, 0.12);
-    backdrop-filter: blur(30px) saturate(180%);
-    -webkit-backdrop-filter: blur(30px) saturate(180%);
-    border-right: 1px solid rgba(255, 255, 255, 0.2);
-    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.2);
+    background: rgba(255, 255, 255, 0.08); /* Plus transparent */
+    backdrop-filter: blur(40px) saturate(180%);
+    -webkit-backdrop-filter: blur(40px) saturate(180%);
+    border-right: 1px solid rgba(255, 255, 255, 0.15);
+    box-shadow: 4px 0 32px rgba(0, 0, 0, 0.25);
     z-index: 201;
     display: flex;
     flex-direction: column;
@@ -794,6 +939,10 @@ function handleSettingsClick() {
     transform: translateX(1px);
 }
 
+.content-item.menu-open {
+    z-index: 200; /* Passe au-dessus des autres items quand son menu est ouvert */
+}
+
 /* Cover avec image */
 .content-cover {
     position: relative;
@@ -884,7 +1033,8 @@ function handleSettingsClick() {
     flex-shrink: 0;
     opacity: 1; /* Toujours visible pour le tactile */
     transition: all 0.2s ease;
-    z-index: 1; /* Au-dessus pour capturer les clicks */
+    z-index: 10; /* Au-dessus pour capturer les clicks */
+    position: relative; /* Crée un contexte de stacking */
 }
 
 .action-btn {
@@ -923,13 +1073,90 @@ function handleSettingsClick() {
     box-shadow: 0 2px 8px rgba(102, 126, 234, 0.4);
 }
 
-.queue-btn {
+.menu-btn {
     color: var(--color-text-secondary);
 }
 
-.queue-btn:hover {
+.menu-btn:hover {
     background: rgba(255, 255, 255, 0.25);
     color: var(--color-text);
+}
+
+/* Menu dropdown container */
+.action-menu-container {
+    position: relative;
+    z-index: 100; /* Plus élevé que les content-item pour que le dropdown passe au-dessus */
+}
+
+/* Dropdown menu */
+.action-dropdown {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    min-width: 180px;
+    background: rgba(20, 20, 30, 0.98);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    padding: 4px;
+    z-index: 10000; /* Très haut pour passer au-dessus de tout */
+}
+
+@media (prefers-color-scheme: light) {
+    .action-dropdown {
+        background: rgba(255, 255, 255, 0.98);
+        border-color: rgba(0, 0, 0, 0.1);
+    }
+}
+
+/* Dropdown items */
+.dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    width: 100%;
+    padding: var(--spacing-sm) var(--spacing-md);
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    color: var(--color-text);
+    font-size: var(--text-sm);
+    text-align: left;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.dropdown-item:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.dropdown-item:active {
+    transform: scale(0.98);
+}
+
+.dropdown-item span {
+    flex: 1;
+}
+
+/* Menu fade animation */
+.menu-fade-enter-active {
+    transition: all 0.15s ease-out;
+}
+
+.menu-fade-leave-active {
+    transition: all 0.1s ease-in;
+}
+
+.menu-fade-enter-from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.95);
+}
+
+.menu-fade-leave-to {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
 }
 
 /* Loading state */
@@ -1017,12 +1244,12 @@ function handleSettingsClick() {
 
 /* Animations */
 .backdrop-enter-active {
-    transition: opacity 0.2s ease;
-    transition-delay: 0.15s; /* Attend que le drawer soit à moitié visible */
+    transition: opacity 0.3s ease-out;
+    transition-delay: 0.1s; /* Attend que le drawer soit un peu visible */
 }
 
 .backdrop-leave-active {
-    transition: opacity 0.2s ease;
+    transition: opacity 0.25s ease-in;
     /* Pas de delay au leave - disparaît en même temps que le drawer */
 }
 
@@ -1031,15 +1258,25 @@ function handleSettingsClick() {
     opacity: 0;
 }
 
-.drawer-enter-active,
-.drawer-leave-active {
-    transition: transform 0.3s ease;
+.drawer-enter-active {
+    transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1); /* Courbe d'animation fluide (easeOutExpo) */
 }
 
-.drawer-enter-from,
+.drawer-leave-active {
+    transition: all 0.3s cubic-bezier(0.7, 0, 0.84, 0); /* Courbe d'animation de sortie (easeInExpo) */
+}
+
+.drawer-enter-from {
+    transform: translateX(-100%);
+    opacity: 0;
+}
+
 .drawer-leave-to {
     transform: translateX(-100%);
+    opacity: 0;
 }
+
+/* Animation des contenus - désactivée pour éviter les problèmes de z-index en escalier */
 
 /* Scrollbar styling */
 .drawer-content::-webkit-scrollbar,
@@ -1068,7 +1305,14 @@ function handleSettingsClick() {
 /* Mobile responsive - portrait */
 @media (max-width: 768px) and (orientation: portrait) {
     .server-drawer {
-        width: 80vw; /* Mobile portrait: 80% de l'écran */
+        width: 100vw; /* Mobile portrait: 100% de l'écran */
+        background: rgba(
+            255,
+            255,
+            255,
+            0.06
+        ); /* Encore plus transparent sur mobile */
+        box-shadow: none; /* Pas d'ombre sur les côtés */
     }
 
     .drawer-header {
@@ -1077,6 +1321,16 @@ function handleSettingsClick() {
 
     .drawer-title {
         font-size: var(--text-lg);
+    }
+
+    /* Ajuster les items pour mobile */
+    .content-item {
+        padding: var(--spacing-md);
+    }
+
+    .content-cover {
+        width: 64px;
+        height: 64px;
     }
 }
 

@@ -589,6 +589,19 @@ impl ControlPoint {
         renderer_id: &DeviceId,
         items: Vec<PlaybackItem>,
     ) -> Result<(), ControlPointError> {
+        self.enqueue_items_with_mode(renderer_id, items, EnqueueMode::AppendToEnd)
+    }
+
+    /// Enqueue items to a renderer's queue with a specific enqueue mode.
+    ///
+    /// This is the low-level version that allows specifying the enqueue mode.
+    /// User-driven operations should detach any playlist binding.
+    pub fn enqueue_items_with_mode(
+        &self,
+        renderer_id: &DeviceId,
+        items: Vec<PlaybackItem>,
+        mode: EnqueueMode,
+    ) -> Result<(), ControlPointError> {
         // User-driven mutation: detach any playlist binding
         self.detach_playlist_binding(renderer_id, "enqueue_items");
 
@@ -600,7 +613,7 @@ impl ControlPoint {
 
         let new_len = {
             let mut queue = renderer.get_queue_mut();
-            queue.enqueue_items(items, EnqueueMode::AppendToEnd)?;
+            queue.enqueue_items(items, mode)?;
             queue.upcoming_len()?
         };
 
@@ -608,6 +621,7 @@ impl ControlPoint {
             renderer = renderer_id.0.as_str(),
             added = item_count,
             queue_len = new_len,
+            mode = ?mode,
             "Enqueued playback items"
         );
 
@@ -855,7 +869,7 @@ impl ControlPoint {
         })?;
 
         // Use generic queue access (works for all backends)
-        let Some((item, remaining)) = renderer.get_queue().peek_current()? else {
+        let Some((item, remaining)) = renderer.get_queue_mut().peek_current()? else {
             debug!(
                 renderer = renderer_id.0.as_str(),
                 "play_current_from_queue: queue is empty or no current item"
@@ -976,7 +990,7 @@ impl ControlPoint {
         }
 
         // Get the next item from the queue using peek_current
-        let Ok(Some((_, remaining))) = renderer.get_queue().peek_current() else {
+        let Ok(Some((_, remaining))) = renderer.get_queue_mut().peek_current() else {
             return;
         };
 
@@ -1022,7 +1036,7 @@ impl ControlPoint {
         // Set queue index
         renderer.get_queue_mut().set_index(Some(index))?;
 
-        let Some((item, remaining)) = renderer.get_queue().peek_current()? else {
+        let Some((item, remaining)) = renderer.get_queue_mut().peek_current()? else {
             debug!(
                 renderer = renderer_id.0.as_str(),
                 index, "play_queue_index: no item at index"
@@ -1228,6 +1242,109 @@ impl ControlPoint {
     /// If no binding existed, this is a no-op.
     pub fn detach_queue_playlist(&self, renderer_id: &DeviceId) {
         self.detach_playlist_binding(renderer_id, "api_detach");
+    }
+
+    /// Transfers the queue and playlist binding from one renderer to another.
+    ///
+    /// This method performs a complete transfer:
+    /// 1. Takes a snapshot of the source renderer's queue (including playlist binding)
+    /// 2. Clears the destination renderer's queue
+    /// 3. Fills the destination renderer's queue with the source snapshot
+    /// 4. If the source had a playlist binding, recreates it on the destination
+    /// 5. Stops playback on the source renderer
+    /// 6. Starts playback on the destination renderer at the same position
+    /// 7. Clears the source renderer's queue
+    ///
+    /// This is useful for seamlessly moving playback from one device to another
+    /// while preserving the queue state and playlist synchronization.
+    pub fn transfer_queue(
+        &self,
+        source_renderer_id: &DeviceId,
+        dest_renderer_id: &DeviceId,
+    ) -> Result<(), ControlPointError> {
+        // 1. Get snapshot from source renderer
+        let source_snapshot = self.get_renderer_queue_snapshot(source_renderer_id)?;
+        let source_binding = self.current_queue_playlist_binding(source_renderer_id);
+
+        tracing::info!(
+            source = source_renderer_id.0.as_str(),
+            dest = dest_renderer_id.0.as_str(),
+            items = source_snapshot.items.len(),
+            current_index = ?source_snapshot.current_index,
+            has_binding = source_binding.is_some(),
+            "Transferring queue between renderers"
+        );
+
+        // 2. Clear destination queue
+        self.clear_renderer_queue(dest_renderer_id)?;
+
+        // 3. Fill destination queue with source items
+        let dest_renderer = self.music_renderer_by_id(dest_renderer_id).ok_or_else(|| {
+            ControlPointError::SnapshotError(format!(
+                "Destination renderer {} not found",
+                dest_renderer_id.0
+            ))
+        })?;
+
+        dest_renderer
+            .replace_queue(source_snapshot.items.clone(), source_snapshot.current_index)?;
+
+        // 4. Recreate playlist binding on destination if source had one
+        if let Some((server_id, container_id, _)) = source_binding {
+            tracing::debug!(
+                dest = dest_renderer_id.0.as_str(),
+                server = server_id.0.as_str(),
+                container = container_id.as_str(),
+                "Recreating playlist binding on destination renderer"
+            );
+            self.attach_queue_to_playlist(dest_renderer_id, server_id, container_id)?;
+        }
+
+        // 5. Stop playback on source renderer
+        let source_renderer = self
+            .music_renderer_by_id(source_renderer_id)
+            .ok_or_else(|| {
+                ControlPointError::SnapshotError(format!(
+                    "Source renderer {} not found",
+                    source_renderer_id.0
+                ))
+            })?;
+
+        if let Err(e) = source_renderer.stop() {
+            tracing::warn!(
+                source = source_renderer_id.0.as_str(),
+                error = ?e,
+                "Failed to stop source renderer (continuing transfer)"
+            );
+        }
+
+        // 6. Start playback on destination renderer (if there was a current item)
+        if source_snapshot.current_index.is_some() && !source_snapshot.items.is_empty() {
+            if let Err(e) = dest_renderer.play() {
+                tracing::warn!(
+                    dest = dest_renderer_id.0.as_str(),
+                    error = ?e,
+                    "Failed to start playback on destination renderer"
+                );
+            }
+        }
+
+        // 7. Clear source queue
+        if let Err(e) = self.clear_renderer_queue(source_renderer_id) {
+            tracing::warn!(
+                source = source_renderer_id.0.as_str(),
+                error = ?e,
+                "Failed to clear source renderer queue after transfer"
+            );
+        }
+
+        tracing::info!(
+            source = source_renderer_id.0.as_str(),
+            dest = dest_renderer_id.0.as_str(),
+            "Queue transfer completed successfully"
+        );
+
+        Ok(())
     }
 
     /// Query the current playlist binding for a renderer's queue, if any.

@@ -14,7 +14,7 @@ use crate::openapi::{
     AttachPlaylistRequest, AttachedPlaylistInfo, BrowseResponse, ContainerEntry, ErrorResponse,
     FullRendererSnapshot, MediaServerSummary, PlayContentRequest, QueueSnapshot,
     RendererCapabilitiesSummary, RendererProtocolSummary, RendererState, RendererSummary,
-    SeekQueueRequest, SuccessResponse, VolumeSetRequest,
+    SeekQueueRequest, SuccessResponse, TransferQueueRequest, VolumeSetRequest,
 };
 #[cfg(feature = "pmoserver")]
 use crate::queue::PlaybackItem;
@@ -91,22 +91,29 @@ impl ControlPointState {
     tag = "control"
 )]
 async fn list_renderers(State(state): State<ControlPointState>) -> Json<Vec<RendererSummary>> {
-    let renderers = state.control_point.list_music_renderers();
+    // Use spawn_blocking to avoid blocking the tokio runtime
+    // This is critical because list_music_renderers acquires a RwLock
+    let control_point = state.control_point.clone();
+    let summaries = tokio::task::spawn_blocking(move || {
+        let renderers = control_point.list_music_renderers();
 
-    let summaries: Vec<RendererSummary> = renderers
-        .into_iter()
-        .map(|r| {
-            let info = r.info();
-            RendererSummary {
-                id: r.id().0.clone(),
-                friendly_name: r.friendly_name().to_string(),
-                model_name: r.model_name().to_string(),
-                protocol: protocol_summary(&info.protocol()),
-                capabilities: capability_summary(&info.capabilities()),
-                online: r.is_online(),
-            }
-        })
-        .collect();
+        renderers
+            .into_iter()
+            .map(|r| {
+                let info = r.info();
+                RendererSummary {
+                    id: r.id().0.clone(),
+                    friendly_name: r.friendly_name().to_string(),
+                    model_name: r.model_name().to_string(),
+                    protocol: protocol_summary(&info.protocol()),
+                    capabilities: capability_summary(&info.capabilities()),
+                    online: r.is_online(),
+                }
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    .unwrap_or_default();
 
     Json(summaries)
 }
@@ -156,10 +163,22 @@ async fn get_renderer_full_snapshot(
     Path(renderer_id): Path<String>,
 ) -> Result<Json<FullRendererSnapshot>, (StatusCode, Json<ErrorResponse>)> {
     let rid = DeviceId(renderer_id.clone());
-    let snapshot = state
-        .control_point
-        .renderer_full_snapshot(&rid)
-        .map_err(|err| map_snapshot_error(renderer_id, err))?;
+
+    // Use spawn_blocking because renderer_full_snapshot does sync UPnP calls
+    let control_point = state.control_point.clone();
+    let rid_clone = rid.clone();
+    let snapshot =
+        tokio::task::spawn_blocking(move || control_point.renderer_full_snapshot(&rid_clone))
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: format!("Task error: {}", e),
+                    }),
+                )
+            })?
+            .map_err(|err| map_snapshot_error(renderer_id, err))?;
 
     Ok(Json(snapshot))
 }
@@ -1392,6 +1411,194 @@ async fn add_to_queue(
     }))
 }
 
+/// POST /control/renderers/{renderer_id}/queue/add-after - Ajouter du contenu après le morceau actuel
+#[cfg(feature = "pmoserver")]
+#[utoipa::path(
+    post,
+    path = "/renderers/{renderer_id}/queue/add-after",
+    params(
+        ("renderer_id" = String, Path, description = "ID unique du renderer")
+    ),
+    request_body = PlayContentRequest,
+    responses(
+        (status = 200, description = "Contenu ajouté après le morceau actuel", body = SuccessResponse),
+        (status = 404, description = "Renderer ou serveur non trouvé", body = ErrorResponse),
+        (status = 504, description = "Timeout de la commande", body = ErrorResponse),
+        (status = 500, description = "Erreur lors de l'exécution", body = ErrorResponse)
+    ),
+    tag = "control"
+)]
+async fn add_after_current(
+    State(state): State<ControlPointState>,
+    Path(renderer_id): Path<String>,
+    Json(req): Json<PlayContentRequest>,
+) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let rid = DeviceId(renderer_id.clone());
+    let sid = DeviceId(req.server_id.clone());
+    let object_id = req.object_id.clone();
+    let object_id_for_log = object_id.clone();
+
+    // Verify renderer exists
+    state
+        .control_point
+        .music_renderer_by_id(&rid)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("Renderer {} not found", renderer_id),
+                }),
+            )
+        })?;
+
+    let control_point = Arc::clone(&state.control_point);
+
+    // Spawn blocking task for content loading
+    let add_task = tokio::task::spawn_blocking(move || {
+        // Fetch playback items from server
+        let items = fetch_playback_items(&control_point, &sid, &object_id)?;
+
+        if items.is_empty() {
+            return Err(anyhow::anyhow!("No playable content found"));
+        }
+
+        // Insert items after current using the new method
+        control_point.enqueue_items_with_mode(
+            &rid,
+            items,
+            crate::queue::EnqueueMode::InsertAfterCurrent,
+        )?;
+
+        Ok::<(), anyhow::Error>(())
+    });
+
+    time::timeout(QUEUE_COMMAND_TIMEOUT, add_task)
+        .await
+        .map_err(|_| {
+            warn!(
+                "Add after current command for renderer {} exceeded {:?}",
+                renderer_id, QUEUE_COMMAND_TIMEOUT
+            );
+            (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Add after current timed out after {}s",
+                        QUEUE_COMMAND_TIMEOUT.as_secs()
+                    ),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!("Task join error during add after current: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Internal task error: {}", e),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!(
+                "Failed to add content after current for renderer {}: {}",
+                renderer_id, e
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to add after current: {}", e),
+                }),
+            )
+        })?;
+
+    debug!(
+        renderer = renderer_id.as_str(),
+        server = req.server_id.as_str(),
+        object = object_id_for_log.as_str(),
+        "Content added after current via HTTP API"
+    );
+
+    Ok(Json(SuccessResponse {
+        message: "Content added after current track".to_string(),
+    }))
+}
+
+/// POST /control/renderers/{renderer_id}/queue/transfer - Transfère la queue vers un autre renderer
+#[cfg(feature = "pmoserver")]
+#[utoipa::path(
+    post,
+    path = "/renderers/{renderer_id}/queue/transfer",
+    params(
+        ("renderer_id" = String, Path, description = "ID du renderer source")
+    ),
+    request_body = TransferQueueRequest,
+    responses(
+        (status = 200, description = "Queue transférée avec succès", body = SuccessResponse),
+        (status = 404, description = "Renderer non trouvé", body = ErrorResponse),
+        (status = 500, description = "Erreur lors du transfert", body = ErrorResponse)
+    ),
+    tag = "control"
+)]
+async fn transfer_queue(
+    State(state): State<ControlPointState>,
+    Path(source_renderer_id): Path<String>,
+    Json(req): Json<TransferQueueRequest>,
+) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let source_id = DeviceId(source_renderer_id.clone());
+    let dest_id = DeviceId(req.destination_renderer_id.clone());
+
+    debug!(
+        source = source_renderer_id.as_str(),
+        dest = req.destination_renderer_id.as_str(),
+        "Transferring queue between renderers via HTTP API"
+    );
+
+    let control_point = state.control_point.clone();
+    tokio::task::spawn_blocking(move || control_point.transfer_queue(&source_id, &dest_id))
+        .await
+        .map_err(|e| {
+            warn!(
+                source = source_renderer_id.as_str(),
+                dest = req.destination_renderer_id.as_str(),
+                error = ?e,
+                "Failed to spawn transfer_queue task"
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to spawn transfer task: {}", e),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!(
+                source = source_renderer_id.as_str(),
+                dest = req.destination_renderer_id.as_str(),
+                error = ?e,
+                "Failed to transfer queue"
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to transfer queue: {}", e),
+                }),
+            )
+        })?;
+
+    debug!(
+        source = source_renderer_id.as_str(),
+        dest = req.destination_renderer_id.as_str(),
+        "Queue transferred successfully via HTTP API"
+    );
+
+    Ok(Json(SuccessResponse {
+        message: format!(
+            "Queue transferred from {} to {}",
+            source_renderer_id, req.destination_renderer_id
+        ),
+    }))
+}
+
 // ============================================================================
 // HANDLERS - MEDIA SERVERS
 // ============================================================================
@@ -1407,17 +1614,23 @@ async fn add_to_queue(
     tag = "control"
 )]
 async fn list_servers(State(state): State<ControlPointState>) -> Json<Vec<MediaServerSummary>> {
-    let servers = state.control_point.list_media_servers().unwrap_or_default();
+    // Use spawn_blocking to avoid blocking the tokio runtime
+    let control_point = state.control_point.clone();
+    let summaries = tokio::task::spawn_blocking(move || {
+        let servers = control_point.list_media_servers().unwrap_or_default();
 
-    let summaries: Vec<MediaServerSummary> = servers
-        .into_iter()
-        .map(|s| MediaServerSummary {
-            id: s.id().0.clone(),
-            friendly_name: s.friendly_name().to_string(),
-            model_name: s.model_name().to_string(),
-            online: s.is_online(),
-        })
-        .collect();
+        servers
+            .into_iter()
+            .map(|s| MediaServerSummary {
+                id: s.id().0.clone(),
+                friendly_name: s.friendly_name().to_string(),
+                model_name: s.model_name().to_string(),
+                online: s.is_online(),
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    .unwrap_or_default();
 
     Json(summaries)
 }
@@ -1703,6 +1916,14 @@ pub fn create_api_router(state: ControlPointState, control_point: Arc<ControlPoi
         // Queue content
         .route("/renderers/{renderer_id}/queue/play", post(play_content))
         .route("/renderers/{renderer_id}/queue/add", post(add_to_queue))
+        .route(
+            "/renderers/{renderer_id}/queue/add-after",
+            post(add_after_current),
+        )
+        .route(
+            "/renderers/{renderer_id}/queue/transfer",
+            post(transfer_queue),
+        )
         // Servers
         .route("/servers", get(list_servers))
         .route(

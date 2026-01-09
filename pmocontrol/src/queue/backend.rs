@@ -38,7 +38,7 @@ use crate::{PlaybackItem, QueueSnapshot, errors::ControlPointError};
 pub enum EnqueueMode {
     /// Append new items at the end of the queue.
     AppendToEnd,
-    /// Insert new items immediately after the current index
+    /// Insert new items immediately after the current playing index
     /// (or at the beginning if there is no current index).
     InsertAfterCurrent,
     /// Replace the whole queue with the new items.
@@ -161,11 +161,12 @@ pub trait QueueBackend {
 
     /// Returns the current item (or the first pending item if no index is set)
     /// along with the count of remaining items.
-    fn peek_current(&self) -> Result<Option<(PlaybackItem, usize)>, ControlPointError> {
+    fn peek_current(&mut self) -> Result<Option<(PlaybackItem, usize)>, ControlPointError> {
         let snapshot = self.queue_snapshot()?;
         let QueueSnapshot {
             items,
             current_index,
+            ..
         } = snapshot;
 
         if items.is_empty() {
@@ -198,6 +199,7 @@ pub trait QueueBackend {
         let QueueSnapshot {
             items,
             current_index,
+            ..
         } = snapshot;
 
         if items.is_empty() {

@@ -250,26 +250,19 @@ impl UpnpServerExt for Server {
         }
 
         // Enregistrer les URLs dans le serveur web
-        tracing::warn!("🔍 DEBUG: About to register_urls for device {}", di.udn());
         di.register_urls(self).await?;
-        tracing::warn!("🔍 DEBUG: register_urls completed for device {}", di.udn());
 
         // Ajouter au registre pour l'introspection
-        tracing::warn!("🔍 DEBUG: Adding to DEVICE_REGISTRY...");
         DEVICE_REGISTRY
             .write()
             .unwrap()
             .register(di.clone())
             .map_err(|e| DeviceError::UrlRegistrationError(e))?;
-        tracing::warn!("🔍 DEBUG: Added to DEVICE_REGISTRY");
 
         // Annoncer via SSDP (si initialisé)
-        tracing::warn!("🔍 DEBUG: Checking SSDP...");
         if self.ssdp_enabled() {
-            tracing::warn!("🔍 DEBUG: SSDP enabled, getting lock...");
             let ssdp_opt = SSDP_SERVER.read().unwrap();
             if let Some(ref ssdp) = *ssdp_opt {
-                tracing::warn!("🔍 DEBUG: SSDP server exists, announcing...");
                 use crate::config_ext::UpnpConfigExt;
                 let config = pmoconfig::get_config();
                 let manufacturer = config
@@ -278,10 +271,8 @@ impl UpnpServerExt for Server {
                 let ssdp_device = di.to_ssdp_device(&manufacturer, "1.0");
                 ssdp.add_device(ssdp_device);
                 info!("✅ SSDP announcement for {}", di.udn());
-                tracing::warn!("🔍 DEBUG: SSDP announcement complete");
             }
         }
-        tracing::warn!("🔍 DEBUG: Returning device instance");
 
         Ok(di)
     }

@@ -1,452 +1,377 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted } from 'vue'
-import { X, ChevronLeft, ChevronRight, Server } from 'lucide-vue-next'
-import { useTabs } from '@/composables/useTabs'
-import { useSwipe } from '@vueuse/core'
+import { computed } from "vue";
+import { Server, Music2 } from "lucide-vue-next";
+import StatusBadge from "@/components/pmocontrol/StatusBadge.vue";
+import type {
+    RendererSummary,
+    RendererState,
+} from "@/services/pmocontrol/types";
 
-defineProps<{
-  onlineServersCount?: number
-}>()
+const props = defineProps<{
+    onlineServersCount?: number;
+    onlineRenderersCount?: number;
+    activeRenderer?: RendererSummary | null;
+    activeRendererState?: RendererState | null;
+}>();
 
 const emit = defineEmits<{
-  'open-drawer': []
-}>()
+    "open-drawer": [];
+    "open-renderer-drawer": [];
+}>();
 
-const { tabs, activeTabId, switchTab, closeTab, nextTab, previousTab, compactMode } = useTabs()
-
-const tabBarRef = ref<HTMLElement | null>(null)
-const scrollContainerRef = ref<HTMLElement | null>(null)
-
-// Gestion du swipe pour changer d'onglet
-useSwipe(tabBarRef, {
-  threshold: 50,
-  onSwipeEnd(_e: TouchEvent, swipeDirection: string) {
-    if (swipeDirection === 'left') {
-      nextTab()
-    } else if (swipeDirection === 'right') {
-      previousTab()
+// Label du protocole
+const protocolLabel = computed(() => {
+    if (!props.activeRenderer) return "";
+    switch (props.activeRenderer.protocol) {
+        case "upnp":
+            return "UPnP";
+        case "openhome":
+            return "OpenHome";
+        case "hybrid":
+            return "Hybrid";
+        case "chromecast":
+            return "Chromecast";
+        default:
+            return props.activeRenderer.protocol;
     }
-  },
-})
+});
 
-// Scroll vers l'onglet actif
-function scrollToActiveTab() {
-  if (!scrollContainerRef.value) return
+// Classe CSS du protocole
+const protocolClass = computed(() => {
+    if (!props.activeRenderer) return "";
+    switch (props.activeRenderer.protocol) {
+        case "upnp":
+            return "protocol-upnp";
+        case "openhome":
+            return "protocol-openhome";
+        case "hybrid":
+            return "protocol-hybrid";
+        case "chromecast":
+            return "protocol-chromecast";
+        default:
+            return "protocol-unknown";
+    }
+});
 
-  const activeTabElement = scrollContainerRef.value.querySelector('.tab-item.active')
-  if (activeTabElement) {
-    activeTabElement.scrollIntoView({
-      behavior: 'smooth',
-      block: 'nearest',
-      inline: 'center',
-    })
-  }
-}
-
-// Scroll vers l'onglet actif quand il change
-watch(() => activeTabId.value, () => {
-  scrollToActiveTab()
-})
-
-// Gestion des boutons de scroll
-const showLeftScroll = ref(false)
-const showRightScroll = ref(false)
-
-function updateScrollButtons() {
-  if (!scrollContainerRef.value) return
-
-  const { scrollLeft, scrollWidth, clientWidth } = scrollContainerRef.value
-  showLeftScroll.value = scrollLeft > 10
-  showRightScroll.value = scrollLeft < scrollWidth - clientWidth - 10
-}
-
-function scrollLeft() {
-  if (!scrollContainerRef.value) return
-  scrollContainerRef.value.scrollBy({ left: -200, behavior: 'smooth' })
-}
-
-function scrollRight() {
-  if (!scrollContainerRef.value) return
-  scrollContainerRef.value.scrollBy({ left: 200, behavior: 'smooth' })
-}
-
-onMounted(() => {
-  if (scrollContainerRef.value) {
-    scrollContainerRef.value.addEventListener('scroll', updateScrollButtons)
-    updateScrollButtons()
-  }
-})
-
-onUnmounted(() => {
-  if (scrollContainerRef.value) {
-    scrollContainerRef.value.removeEventListener('scroll', updateScrollButtons)
-  }
-})
-
-// Gestion du clic sur un onglet
-function handleTabClick(tabId: string) {
-  switchTab(tabId)
-}
-
-// Gestion du clic sur le bouton fermer
-function handleCloseClick(event: Event, tabId: string) {
-  event.stopPropagation()
-  closeTab(tabId)
-}
-
-// Gestion du clic sur le bouton server drawer
 function handleServerDrawerClick() {
-  emit('open-drawer')
+    emit("open-drawer");
+}
+
+function handleRendererDrawerClick() {
+    emit("open-renderer-drawer");
 }
 </script>
 
 <template>
-  <div ref="tabBarRef" class="bottom-tab-bar">
-    <!-- Bouton pour ouvrir le drawer des servers -->
-    <button
-      class="server-drawer-button"
-      @click="handleServerDrawerClick"
-      :aria-label="`Open media servers (${onlineServersCount || 0} online)`"
-      :title="`Media Servers (${onlineServersCount || 0} online)`"
-    >
-      <Server :size="24" />
-      <span v-if="onlineServersCount && onlineServersCount > 0" class="server-badge">{{ onlineServersCount }}</span>
-    </button>
-
-    <!-- Bouton scroll gauche -->
-    <button
-      v-if="showLeftScroll"
-      class="scroll-button scroll-left"
-      @click="scrollLeft"
-      aria-label="Scroll left"
-    >
-      <ChevronLeft :size="20" />
-    </button>
-
-    <!-- Container avec scroll horizontal -->
-    <div ref="scrollContainerRef" class="tabs-scroll-container">
-      <div class="tabs-container">
+    <div class="bottom-bar">
+        <!-- Bouton pour ouvrir le drawer des servers (gauche) -->
         <button
-          v-for="tab in tabs"
-          :key="tab.id"
-          class="tab-item"
-          :class="{
-            active: tab.id === activeTabId,
-            compact: compactMode
-          }"
-          @click="handleTabClick(tab.id)"
-          :title="tab.fullTitle"
-          :aria-label="`Switch to ${tab.fullTitle} tab`"
-          :aria-current="tab.id === activeTabId ? 'page' : undefined"
+            class="drawer-button server-drawer-button"
+            @click="handleServerDrawerClick"
+            :aria-label="`Open media servers (${onlineServersCount || 0} online)`"
+            :title="`Media Servers (${onlineServersCount || 0} online)`"
         >
-          <!-- Icône (réduite pour plus d'espace pour le texte) -->
-          <component :is="tab.icon" class="tab-icon" :size="compactMode ? 24 : 20" />
-
-          <!-- Titre (masqué en mode compact) -->
-          <span v-if="!compactMode" class="tab-title">{{ tab.title }}</span>
-
-          <!-- Bouton fermer (seulement pour les onglets fermables, masqué en mode compact) -->
-          <button
-            v-if="tab.closeable && !compactMode"
-            class="tab-close"
-            @click="(e) => handleCloseClick(e, tab.id)"
-            :aria-label="`Close ${tab.fullTitle} tab`"
-          >
-            <X :size="16" />
-          </button>
+            <Server :size="24" />
+            <span
+                v-if="onlineServersCount && onlineServersCount > 0"
+                class="badge server-badge"
+                >{{ onlineServersCount }}</span
+            >
         </button>
-      </div>
-    </div>
 
-    <!-- Bouton scroll droite -->
-    <button
-      v-if="showRightScroll"
-      class="scroll-button scroll-right"
-      @click="scrollRight"
-      aria-label="Scroll right"
-    >
-      <ChevronRight :size="20" />
-    </button>
-  </div>
+        <!-- Zone centrale avec les infos du renderer -->
+        <div class="renderer-info-section">
+            <div v-if="activeRenderer" class="renderer-info-content">
+                <div class="renderer-name-row">
+                    <h2 class="renderer-name">
+                        {{ activeRenderer.friendly_name }}
+                    </h2>
+                    <span
+                        v-if="activeRenderer.protocol"
+                        :class="['protocol-badge', protocolClass]"
+                    >
+                        {{ protocolLabel }}
+                    </span>
+                </div>
+                <div class="renderer-details-row">
+                    <p v-if="activeRenderer.model_name" class="renderer-model">
+                        {{ activeRenderer.model_name }}
+                    </p>
+                    <StatusBadge
+                        v-if="activeRendererState"
+                        :status="activeRendererState.transport_state"
+                        class="status-badge"
+                    />
+                    <span v-if="!activeRenderer.online" class="offline-badge">
+                        OFFLINE
+                    </span>
+                </div>
+            </div>
+            <div v-else class="renderer-info-content empty">
+                <p class="no-renderer">Aucun renderer sélectionné</p>
+            </div>
+        </div>
+
+        <!-- Bouton pour ouvrir le drawer des renderers (droite) -->
+        <button
+            class="drawer-button renderer-drawer-button"
+            @click="handleRendererDrawerClick"
+            :aria-label="`Open renderers (${onlineRenderersCount || 0} online)`"
+            :title="`Renderers (${onlineRenderersCount || 0} online)`"
+        >
+            <Music2 :size="24" />
+            <span
+                v-if="onlineRenderersCount && onlineRenderersCount > 0"
+                class="badge renderer-badge"
+                >{{ onlineRenderersCount }}</span
+            >
+        </button>
+    </div>
 </template>
 
 <style scoped>
-.bottom-tab-bar {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  display: flex;
-  align-items: center;
-  height: 64px;
-  background: rgba(255, 255, 255, 0.1);
-  backdrop-filter: blur(30px) saturate(180%);
-  -webkit-backdrop-filter: blur(30px) saturate(180%);
-  border-top: 1px solid rgba(255, 255, 255, 0.2);
-  box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.1);
-  z-index: 100;
-  overflow: hidden;
-}
-
-/* Support pour thème sombre */
-@media (prefers-color-scheme: dark) {
-  .bottom-tab-bar {
-    background: rgba(0, 0, 0, 0.25);
-    border-top: 1px solid rgba(255, 255, 255, 0.1);
-  }
-}
-
-.tabs-scroll-container {
-  flex: 1;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none; /* Firefox */
-  -ms-overflow-style: none; /* IE/Edge */
-}
-
-.tabs-scroll-container::-webkit-scrollbar {
-  display: none; /* Chrome/Safari */
-}
-
-.tabs-container {
-  display: flex;
-  gap: 4px;
-  padding: 0 8px;
-  min-width: 100%;
-}
-
-.tab-item {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 140px; /* Largeur fixe pour éviter l'espace blanc */
-  height: 64px;
-  padding: 6px 12px;
-  background: transparent;
-  border: none;
-  border-bottom: 4px solid transparent;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  color: var(--color-text-secondary);
-  font-size: 13px; /* Réduit de var(--text-sm) pour plus d'espace */
-  font-family: inherit;
-  flex-shrink: 0;
-}
-
-/* Mode compact: icônes seulement */
-.tab-item.compact {
-  width: 60px;
-  padding: 8px;
-  justify-content: center;
-}
-
-.tab-item:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: var(--color-text);
-}
-
-.tab-item.active {
-  background: rgba(255, 255, 255, 0.2);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border-bottom-color: var(--color-primary);
-  color: var(--color-text);
-  font-weight: 600;
+.bottom-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    height: 72px;
+    padding: 0 var(--spacing-md);
+    background: rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(30px) saturate(180%);
+    -webkit-backdrop-filter: blur(30px) saturate(180%);
+    border-top: 1px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.1);
+    z-index: 100;
 }
 
 @media (prefers-color-scheme: dark) {
-  .tab-item:hover {
-    background: rgba(255, 255, 255, 0.15);
-  }
-
-  .tab-item.active {
-    background: rgba(255, 255, 255, 0.25);
-  }
+    .bottom-bar {
+        background: rgba(0, 0, 0, 0.25);
+        border-top: 1px solid rgba(255, 255, 255, 0.1);
+    }
 }
 
-.tab-icon {
-  flex-shrink: 0;
-  color: currentColor;
+/* Boutons drawer */
+.drawer-button {
+    position: relative;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 56px;
+    height: 56px;
+    background: rgba(255, 255, 255, 0.2);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: 50%;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    color: var(--color-text);
 }
 
-.tab-title {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-align: left;
-  /* Permettre au texte de se replier sur 2 lignes */
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  line-height: 1.2;
-  max-height: 2.4em; /* 2 lignes × 1.2 line-height */
-  word-break: break-word;
+.drawer-button:hover {
+    background: rgba(255, 255, 255, 0.3);
+    transform: scale(1.1);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 }
 
-.tab-close {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  background: rgba(255, 255, 255, 0.1);
-  border: none;
-  border-radius: 50%;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  color: var(--color-text-secondary);
+.drawer-button:active {
+    transform: scale(0.95);
 }
 
-.tab-close:hover {
-  background: rgba(255, 255, 255, 0.3);
-  color: var(--color-text);
-  transform: scale(1.1);
+@media (prefers-color-scheme: dark) {
+    .drawer-button {
+        background: rgba(255, 255, 255, 0.15);
+    }
+
+    .drawer-button:hover {
+        background: rgba(255, 255, 255, 0.25);
+    }
 }
 
-.tab-close:active {
-  transform: scale(0.95);
+/* Badges */
+.badge {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    font-size: 11px;
+    font-weight: 700;
+    color: white;
+    border: 2px solid var(--color-bg);
+    border-radius: 10px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 }
 
-/* Boutons de scroll */
-.scroll-button {
-  position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: 10;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  background: rgba(255, 255, 255, 0.2);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 50%;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  color: var(--color-text);
+.server-badge {
+    background: rgba(102, 126, 234, 0.9);
 }
 
-.scroll-button:hover {
-  background: rgba(255, 255, 255, 0.3);
-  transform: translateY(-50%) scale(1.1);
+.renderer-badge {
+    background: rgba(234, 102, 126, 0.9);
 }
 
-.scroll-button:active {
-  transform: translateY(-50%) scale(0.95);
+/* Zone centrale */
+.renderer-info-section {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
-.scroll-left {
-  left: 8px;
-}
-
-.scroll-right {
-  right: 8px;
-}
-
-/* Responsive mobile */
-@media (max-width: 768px) {
-  .tab-item {
-    width: 110px; /* Largeur fixe plus petite sur mobile */
-    padding: 6px 10px;
+.renderer-info-content {
+    display: flex;
+    flex-direction: column;
     gap: 4px;
-    font-size: 12px; /* Encore un peu plus petit sur mobile */
-  }
+    align-items: center;
+    text-align: center;
+    max-width: 100%;
+}
 
-  .tab-title {
-    font-size: 12px;
-    line-height: 1.3;
-    max-height: 2.6em; /* 2 lignes × 1.3 line-height */
-  }
+.renderer-info-content.empty {
+    color: var(--color-text-tertiary);
+}
 
-  .tab-close {
-    width: 24px;
-    height: 24px;
-  }
+.renderer-name-row {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+.renderer-name {
+    font-size: var(--text-lg);
+    font-weight: 700;
+    color: var(--color-text);
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 300px;
+}
+
+.renderer-details-row {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+.renderer-model {
+    font-size: var(--text-sm);
+    color: var(--color-text-secondary);
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.no-renderer {
+    font-size: var(--text-base);
+    color: var(--color-text-tertiary);
+    margin: 0;
+}
+
+/* Protocol badge */
+.protocol-badge {
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    flex-shrink: 0;
+}
+
+.protocol-upnp {
+    background-color: rgba(59, 130, 246, 0.15);
+    color: #3b82f6;
+    border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.protocol-openhome {
+    background-color: rgba(139, 92, 246, 0.15);
+    color: #8b5cf6;
+    border: 1px solid rgba(139, 92, 246, 0.3);
+}
+
+.protocol-hybrid {
+    background-color: rgba(16, 185, 129, 0.15);
+    color: #10b981;
+    border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.protocol-chromecast {
+    background-color: rgba(244, 114, 182, 0.15);
+    color: #f472b6;
+    border: 1px solid rgba(244, 114, 182, 0.3);
+}
+
+.status-badge {
+    flex-shrink: 0;
+}
+
+.offline-badge {
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    background-color: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+    .bottom-bar {
+        height: 64px;
+        padding: 0 var(--spacing-sm);
+        gap: var(--spacing-sm);
+    }
+
+    .drawer-button {
+        width: 48px;
+        height: 48px;
+    }
+
+    .renderer-name {
+        font-size: var(--text-base);
+        max-width: 200px;
+    }
+
+    .renderer-model {
+        font-size: var(--text-xs);
+    }
 }
 
 /* Animation d'entrée */
 @keyframes slideInUp {
-  from {
-    transform: translateY(100%);
-    opacity: 0;
-  }
-  to {
-    transform: translateY(0);
-    opacity: 1;
-  }
+    from {
+        transform: translateY(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
 }
 
-.bottom-tab-bar {
-  animation: slideInUp 0.3s ease-out;
-}
-
-/* Effet de swipe visuel */
-.tabs-scroll-container {
-  touch-action: pan-x;
-}
-
-/* Bouton server drawer */
-.server-drawer-button {
-  position: relative;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 56px;
-  height: 56px;
-  margin: 0 8px;
-  background: rgba(255, 255, 255, 0.2);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 50%;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  color: var(--color-text);
-}
-
-.server-drawer-button:hover {
-  background: rgba(255, 255, 255, 0.3);
-  transform: scale(1.1);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-}
-
-.server-drawer-button:active {
-  transform: scale(0.95);
-}
-
-@media (prefers-color-scheme: dark) {
-  .server-drawer-button {
-    background: rgba(255, 255, 255, 0.15);
-  }
-
-  .server-drawer-button:hover {
-    background: rgba(255, 255, 255, 0.25);
-  }
-}
-
-/* Badge pour le nombre de servers online */
-.server-badge {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 20px;
-  height: 20px;
-  padding: 0 6px;
-  font-size: 11px;
-  font-weight: 700;
-  color: white;
-  background: rgba(102, 126, 234, 0.9);
-  border: 2px solid var(--color-bg);
-  border-radius: 10px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+.bottom-bar {
+    animation: slideInUp 0.3s ease-out;
 }
 </style>
