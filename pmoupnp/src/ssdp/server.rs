@@ -83,6 +83,7 @@ impl SsdpServer {
             &"0.0.0.0".parse().unwrap(),
         )?;
 
+        socket.set_read_timeout(Some(Duration::from_secs(1)))?;
         socket.set_multicast_loop_v4(false)?;
 
         let socket = Arc::new(socket);
@@ -273,6 +274,10 @@ impl SsdpServer {
                                 }
                             }
                         }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        // Timeout, continuer
+                        continue;
                     }
                     Err(e) => {
                         warn!("❌ SSDP read error: {}", e);

@@ -10,6 +10,7 @@ import { useSwipe } from "@vueuse/core";
 import BottomTabBar from "@/components/unified/BottomTabBar.vue";
 import EmptyState from "@/components/unified/EmptyState.vue";
 import ServerDrawer from "@/components/unified/ServerDrawer.vue";
+import RendererDrawer from "@/components/unified/RendererDrawer.vue";
 import RendererTabContent from "@/components/unified/RendererTabContent.vue";
 import ServerTabContent from "@/components/unified/ServerTabContent.vue";
 
@@ -17,11 +18,12 @@ const route = useRoute();
 const router = useRouter();
 const { tabs, activeTabId, switchTab, activeTab, syncWithRenderers, isEmpty } =
     useTabs();
-const { allRenderers, fetchRenderers } = useRenderers();
+const { allRenderers, fetchRenderers, getStateById } = useRenderers();
 const { allServers, fetchServers } = useMediaServers();
 
-// État du drawer server
+// État des drawers
 const drawerOpen = ref(false);
+const rendererDrawerOpen = ref(false);
 
 // Ref pour le swipe edge detection
 const viewRef = ref<HTMLElement | null>(null);
@@ -50,14 +52,49 @@ const currentRendererId = computed(() => {
     return null;
 });
 
+// Récupérer le renderer actif
+const activeRenderer = computed(() => {
+    const rendererId = currentRendererId.value;
+    if (!rendererId) return null;
+    return allRenderers.value.find((r) => r.id === rendererId) || null;
+});
+
+// Récupérer l'état du renderer actif
+const activeRendererState = computed(() => {
+    const rendererId = currentRendererId.value;
+    if (!rendererId) return null;
+    return getStateById(rendererId);
+});
+
 // Nombre de servers online pour afficher dans le badge
 const onlineServersCount = computed(
     () => allServers.value.filter((s) => s.online).length,
 );
 
+// Nombre de renderers online pour afficher dans le badge
+const onlineRenderersCount = computed(
+    () => allRenderers.value.filter((r) => r.online).length,
+);
+
 // Gestion de l'ouverture du drawer depuis le bouton
 function handleDrawerOpen() {
     drawerOpen.value = true;
+}
+
+// Gestion de l'ouverture du renderer drawer depuis le bouton
+function handleRendererDrawerOpen() {
+    rendererDrawerOpen.value = true;
+}
+
+// Gestion de la sélection d'un renderer depuis le drawer
+function handleRendererSelect(rendererId: string) {
+    // Chercher le tab correspondant à ce renderer ou le créer
+    const existingTab = tabs.value.find(
+        (t) => t.type === "renderer" && t.metadata?.rendererId === rendererId,
+    );
+    if (existingTab) {
+        switchTab(existingTab.id);
+    }
 }
 
 // Sync route query params avec l'état des tabs
@@ -162,16 +199,27 @@ const currentTabProps = computed(() => {
             </keep-alive>
         </main>
 
-        <!-- Barre d'onglets en bas -->
+        <!-- Barre d'infos en bas -->
         <BottomTabBar
             :online-servers-count="onlineServersCount"
+            :online-renderers-count="onlineRenderersCount"
+            :active-renderer="activeRenderer"
+            :active-renderer-state="activeRendererState"
             @open-drawer="handleDrawerOpen"
+            @open-renderer-drawer="handleRendererDrawerOpen"
         />
 
         <!-- Drawer servers (swipe depuis bord gauche) -->
         <ServerDrawer
             v-model="drawerOpen"
             :selected-renderer-id="currentRendererId"
+        />
+
+        <!-- Drawer renderers (depuis bord droit) -->
+        <RendererDrawer
+            v-model="rendererDrawerOpen"
+            :selected-renderer-id="currentRendererId"
+            @select-renderer="handleRendererSelect"
         />
     </div>
 </template>

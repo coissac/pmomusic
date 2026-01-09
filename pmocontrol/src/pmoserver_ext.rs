@@ -91,22 +91,29 @@ impl ControlPointState {
     tag = "control"
 )]
 async fn list_renderers(State(state): State<ControlPointState>) -> Json<Vec<RendererSummary>> {
-    let renderers = state.control_point.list_music_renderers();
+    // Use spawn_blocking to avoid blocking the tokio runtime
+    // This is critical because list_music_renderers acquires a RwLock
+    let control_point = state.control_point.clone();
+    let summaries = tokio::task::spawn_blocking(move || {
+        let renderers = control_point.list_music_renderers();
 
-    let summaries: Vec<RendererSummary> = renderers
-        .into_iter()
-        .map(|r| {
-            let info = r.info();
-            RendererSummary {
-                id: r.id().0.clone(),
-                friendly_name: r.friendly_name().to_string(),
-                model_name: r.model_name().to_string(),
-                protocol: protocol_summary(&info.protocol()),
-                capabilities: capability_summary(&info.capabilities()),
-                online: r.is_online(),
-            }
-        })
-        .collect();
+        renderers
+            .into_iter()
+            .map(|r| {
+                let info = r.info();
+                RendererSummary {
+                    id: r.id().0.clone(),
+                    friendly_name: r.friendly_name().to_string(),
+                    model_name: r.model_name().to_string(),
+                    protocol: protocol_summary(&info.protocol()),
+                    capabilities: capability_summary(&info.capabilities()),
+                    online: r.is_online(),
+                }
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    .unwrap_or_default();
 
     Json(summaries)
 }
@@ -156,10 +163,22 @@ async fn get_renderer_full_snapshot(
     Path(renderer_id): Path<String>,
 ) -> Result<Json<FullRendererSnapshot>, (StatusCode, Json<ErrorResponse>)> {
     let rid = DeviceId(renderer_id.clone());
-    let snapshot = state
-        .control_point
-        .renderer_full_snapshot(&rid)
-        .map_err(|err| map_snapshot_error(renderer_id, err))?;
+
+    // Use spawn_blocking because renderer_full_snapshot does sync UPnP calls
+    let control_point = state.control_point.clone();
+    let rid_clone = rid.clone();
+    let snapshot =
+        tokio::task::spawn_blocking(move || control_point.renderer_full_snapshot(&rid_clone))
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: format!("Task error: {}", e),
+                    }),
+                )
+            })?
+            .map_err(|err| map_snapshot_error(renderer_id, err))?;
 
     Ok(Json(snapshot))
 }
@@ -1519,17 +1538,23 @@ async fn add_after_current(
     tag = "control"
 )]
 async fn list_servers(State(state): State<ControlPointState>) -> Json<Vec<MediaServerSummary>> {
-    let servers = state.control_point.list_media_servers().unwrap_or_default();
+    // Use spawn_blocking to avoid blocking the tokio runtime
+    let control_point = state.control_point.clone();
+    let summaries = tokio::task::spawn_blocking(move || {
+        let servers = control_point.list_media_servers().unwrap_or_default();
 
-    let summaries: Vec<MediaServerSummary> = servers
-        .into_iter()
-        .map(|s| MediaServerSummary {
-            id: s.id().0.clone(),
-            friendly_name: s.friendly_name().to_string(),
-            model_name: s.model_name().to_string(),
-            online: s.is_online(),
-        })
-        .collect();
+        servers
+            .into_iter()
+            .map(|s| MediaServerSummary {
+                id: s.id().0.clone(),
+                friendly_name: s.friendly_name().to_string(),
+                model_name: s.model_name().to_string(),
+                online: s.is_online(),
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    .unwrap_or_default();
 
     Json(summaries)
 }

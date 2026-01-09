@@ -1,14 +1,25 @@
 use crate::{DeviceRegistry, discovery::upnp_provider::ParsedDeviceDescription};
+use crossbeam_channel::{Sender, bounded};
 use pmoupnp::ssdp::SsdpEvent;
 use std::sync::{Arc, Mutex, RwLock};
+use std::thread;
 
 use crate::discovery::manager::UDNRegistry;
 
-/// Gestionnaire des événements SSDP -> DeviceUpdate.
+/// Task to fetch a device description
+struct FetchTask {
+    udn: String,
+    location: String,
+    server_header: String,
+    max_age: u32,
+    registry: Arc<RwLock<DeviceRegistry>>,
+}
 
+/// Gestionnaire des événements SSDP -> DeviceUpdate.
 pub struct UpnpDiscoveryManager {
     device_registry: Arc<RwLock<DeviceRegistry>>,
     udn_cache: Arc<Mutex<UDNRegistry>>,
+    fetch_sender: Sender<FetchTask>,
 }
 
 impl UpnpDiscoveryManager {
@@ -16,9 +27,39 @@ impl UpnpDiscoveryManager {
         device_registry: Arc<RwLock<DeviceRegistry>>,
         udn_cache: Arc<Mutex<UDNRegistry>>,
     ) -> Self {
+        // Create a bounded channel for fetch tasks (max 10 pending tasks)
+        let (sender, receiver) = bounded::<FetchTask>(10);
+
+        // Spawn a pool of 3 worker threads to process fetch tasks
+        for _ in 0..3 {
+            let receiver = receiver.clone();
+            thread::spawn(move || {
+                while let Ok(task) = receiver.recv() {
+                    // Fetch + parse the device description (may take up to 5 seconds)
+                    if let Ok(info) = ParsedDeviceDescription::new(
+                        &task.udn,
+                        &task.location,
+                        &task.server_header,
+                        5,
+                    ) {
+                        if let Some(renderer_info) = info.build_renderer() {
+                            if let Ok(mut reg) = task.registry.write() {
+                                reg.push_renderer(&renderer_info, task.max_age);
+                            }
+                        } else if let Some(server_info) = info.build_server() {
+                            if let Ok(mut reg) = task.registry.write() {
+                                reg.push_server(&server_info, task.max_age);
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
         Self {
             device_registry,
             udn_cache,
+            fetch_sender: sender,
         }
     }
 
@@ -48,20 +89,18 @@ impl UpnpDiscoveryManager {
                     UDNRegistry::should_fetch(self.udn_cache.clone(), &udn, max_age as u64);
 
                 if should_fetch {
-                    // Fetch + parse the device description
-                    if let Ok(info) =
-                        ParsedDeviceDescription::new(&udn, &location, &server_header, 5)
-                    {
-                        if let Some(renderer_info) = info.build_renderer() {
-                            if let Ok(mut reg) = self.device_registry.write() {
-                                reg.push_renderer(&renderer_info, max_age);
-                            }
-                        } else if let Some(server_info) = info.build_server() {
-                            if let Ok(mut reg) = self.device_registry.write() {
-                                reg.push_server(&server_info, max_age);
-                            }
-                        }
-                    }
+                    // Send fetch task to worker pool (non-blocking)
+                    // If the channel is full, try_send will fail and we skip this fetch
+                    let task = FetchTask {
+                        udn: udn.clone(),
+                        location: location.clone(),
+                        server_header: server_header.clone(),
+                        max_age,
+                        registry: Arc::clone(&self.device_registry),
+                    };
+
+                    // Use try_send to avoid blocking if the queue is full
+                    let _ = self.fetch_sender.try_send(task);
                 } else {
                     // Even if we don't fetch, we MUST update last_seen to prevent timeout
                     // This is critical: SSDP Alive messages arrive more frequently than max_age/2,

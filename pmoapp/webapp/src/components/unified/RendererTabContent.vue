@@ -6,9 +6,7 @@ import CurrentTrack from "@/components/pmocontrol/CurrentTrack.vue";
 import TransportControls from "@/components/pmocontrol/TransportControls.vue";
 import VolumeControl from "@/components/pmocontrol/VolumeControl.vue";
 import QueueViewer from "@/components/pmocontrol/QueueViewer.vue";
-import StatusBadge from "@/components/pmocontrol/StatusBadge.vue";
-import { ChevronUp, ChevronDown, Link } from "lucide-vue-next";
-import { useRenderers } from "@/composables/useRenderers";
+import { ChevronUp, ChevronDown } from "lucide-vue-next";
 import { useUIStore } from "@/stores/ui";
 import { api } from "@/services/pmocontrol/api";
 import type { QueueItem } from "@/services/pmocontrol/types";
@@ -17,10 +15,9 @@ const props = defineProps<{
     rendererId: string;
 }>();
 
-const { renderer, state, queue, binding, refresh } = useRenderer(
+const { renderer, state, queue, refresh } = useRenderer(
     toRef(props, "rendererId"),
 );
-const { detachPlaylist } = useRenderers();
 const uiStore = useUIStore();
 
 // Détection mobile portrait pour afficher le drawer au lieu de la colonne
@@ -42,22 +39,6 @@ onMounted(async () => {
 
 // État du renderer pour affichage
 const isOnline = computed(() => renderer.value?.online ?? false);
-const transportState = computed(
-    () => state.value?.transport_state ?? "STOPPED",
-);
-const hasPlaylistBinding = computed(() => !!binding.value);
-
-// Détacher la playlist
-async function handleDetachPlaylist() {
-    try {
-        await detachPlaylist(props.rendererId);
-        uiStore.notifySuccess("Playlist détachée");
-    } catch (error) {
-        uiStore.notifyError(
-            `Erreur: ${error instanceof Error ? error.message : "Erreur inconnue"}`,
-        );
-    }
-}
 
 // Gérer le clic sur un item de la queue
 async function handleQueueItemClick(item: QueueItem) {
@@ -86,42 +67,7 @@ async function handleQueueItemClick(item: QueueItem) {
 
 <template>
     <div class="renderer-tab-content">
-        <!-- Header avec nom du renderer et état -->
-        <header class="renderer-header">
-            <div class="header-info">
-                <h1 class="renderer-name">
-                    {{ renderer?.friendly_name || "Renderer" }}
-                </h1>
-                <p v-if="renderer?.model_name" class="renderer-model">
-                    {{ renderer.model_name }}
-                </p>
-            </div>
-            <div class="header-badges">
-                <StatusBadge v-if="state" :status="transportState" />
-                <span v-if="renderer?.protocol" class="protocol-badge">
-                    {{ renderer.protocol.toUpperCase() }}
-                </span>
-
-                <!-- Badge playlist binding avec tooltip -->
-                <div
-                    v-if="hasPlaylistBinding"
-                    class="playlist-badge"
-                    :title="`Playlist liée\nServeur: ${binding?.server_id}\nContainer: ${binding?.container_id}`"
-                >
-                    <button
-                        class="playlist-badge-btn"
-                        @click="handleDetachPlaylist"
-                        title="Cliquer pour détacher"
-                    >
-                        <Link :size="16" />
-                    </button>
-                </div>
-
-                <span v-if="!isOnline" class="offline-badge">OFFLINE</span>
-            </div>
-        </header>
-
-        <!-- Layout principal -->
+        <!-- Layout principal (header supprimé, infos déplacées dans BottomTabBar) -->
         <div class="renderer-layout" :class="{ 'queue-open': queueDrawerOpen }">
             <!-- Colonne gauche: Contrôles -->
             <div class="controls-column">
@@ -198,114 +144,13 @@ async function handleQueueItemClick(item: QueueItem) {
     overflow: hidden;
 }
 
-/* Header */
-.renderer-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: var(--spacing-md) var(--spacing-lg);
-    background: rgba(255, 255, 255, 0.05);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-    flex-shrink: 0;
-}
-
-.header-info {
-    flex: 1;
-}
-
-.renderer-name {
-    font-size: var(--text-2xl);
-    font-weight: 700;
-    color: var(--color-text);
-    margin: 0;
-}
-
-.renderer-model {
-    font-size: var(--text-sm);
-    color: var(--color-text-secondary);
-    margin: 4px 0 0 0;
-}
-
-.header-badges {
-    display: flex;
-    align-items: center;
-    gap: var(--spacing-sm);
-}
-
-.protocol-badge,
-.offline-badge {
-    padding: 4px 12px;
-    border-radius: var(--radius-sm);
-    font-size: 12px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-
-.protocol-badge {
-    background: rgba(255, 255, 255, 0.1);
-    color: var(--color-text-secondary);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-}
-
-.offline-badge {
-    background: var(--status-offline);
-    color: white;
-}
-
-/* Badge playlist binding compact */
-.playlist-badge {
-    position: relative;
-    display: inline-flex;
-}
-
-.playlist-badge-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    padding: 0;
-    background: rgba(102, 126, 234, 0.2);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border: 1px solid rgba(102, 126, 234, 0.4);
-    border-radius: 50%;
-    cursor: pointer;
-    transition: all 0.3s ease;
-    color: rgba(102, 126, 234, 1);
-}
-
-.playlist-badge-btn:hover {
-    background: rgba(102, 126, 234, 0.3);
-    border-color: rgba(102, 126, 234, 0.6);
-    transform: scale(1.1);
-}
-
-.playlist-badge-btn:active {
-    transform: scale(1);
-}
-
-@media (prefers-color-scheme: dark) {
-    .playlist-badge-btn {
-        background: rgba(102, 126, 234, 0.15);
-        border-color: rgba(102, 126, 234, 0.3);
-    }
-
-    .playlist-badge-btn:hover {
-        background: rgba(102, 126, 234, 0.25);
-        border-color: rgba(102, 126, 234, 0.5);
-    }
-}
-
 /* Layout principal - 800x600 landscape (2 colonnes) */
 .renderer-layout {
     display: grid;
     grid-template-columns: 300px 1fr;
     gap: var(--spacing-lg);
-    padding: var(--spacing-lg);
+    padding: var(--spacing-lg) 0 var(--spacing-lg) var(--spacing-lg);
+    /* padding-right: 0 pour coller la scrollbar au bord */
     flex: 1;
     overflow: hidden;
 }
@@ -316,7 +161,7 @@ async function handleQueueItemClick(item: QueueItem) {
     flex-direction: column;
     gap: var(--spacing-lg);
     overflow-y: auto;
-    padding-right: var(--spacing-sm);
+    padding-right: 16px; /* Dégager la scrollbar */
 }
 
 .current-track-section,
@@ -373,10 +218,8 @@ async function handleQueueItemClick(item: QueueItem) {
     .renderer-layout {
         grid-template-columns: 1fr;
         gap: var(--spacing-md);
-        padding: var(--spacing-md);
-        padding-bottom: var(
-            --spacing-xl
-        ); /* Espace pour éviter que la tab bar cache les contrôles */
+        padding: var(--spacing-md) 0 var(--spacing-xl) var(--spacing-md);
+        /* padding-right: 0 pour coller la scrollbar au bord */
     }
 
     /* Queue drawer visible sur mobile (géré par v-if maintenant) */
@@ -445,7 +288,6 @@ async function handleQueueItemClick(item: QueueItem) {
     }
 
     .controls-column {
-        padding-right: 0;
         padding-bottom: 100px; /* Espace supplémentaire pour éviter que la tab bar (64px) cache le volume */
     }
 }
