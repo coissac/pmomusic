@@ -1,6 +1,15 @@
 <script setup lang="ts">
-import { computed, watch } from "vue";
-import { X, Music2, Circle, Settings, Play, Pause } from "lucide-vue-next";
+import { computed, watch, ref, onUnmounted } from "vue";
+import {
+    X,
+    Music2,
+    Circle,
+    Settings,
+    Play,
+    Pause,
+    MoreVertical,
+    ArrowRightLeft,
+} from "lucide-vue-next";
 import { useRenderers } from "@/composables/useRenderers";
 import { useRouter } from "vue-router";
 import StatusBadge from "@/components/pmocontrol/StatusBadge.vue";
@@ -19,6 +28,39 @@ const emit = defineEmits<{
 
 const { allRenderers, fetchRenderers, getStateById } = useRenderers();
 const router = useRouter();
+
+// Gestion du menu déroulant
+const openMenuId = ref<string | null>(null);
+
+// Gestionnaire pour fermer le menu quand on clique en dehors
+let clickOutsideHandler: ((event: MouseEvent) => void) | null = null;
+
+watch(openMenuId, (newValue) => {
+    if (newValue) {
+        // Ajouter l'écouteur après un petit délai pour éviter la fermeture immédiate
+        setTimeout(() => {
+            clickOutsideHandler = (event: MouseEvent) => {
+                const target = event.target as HTMLElement;
+                if (!target.closest(".action-menu-container")) {
+                    closeMenu();
+                }
+            };
+            document.addEventListener("click", clickOutsideHandler);
+        }, 100);
+    } else {
+        // Retirer l'écouteur
+        if (clickOutsideHandler) {
+            document.removeEventListener("click", clickOutsideHandler);
+            clickOutsideHandler = null;
+        }
+    }
+});
+
+onUnmounted(() => {
+    if (clickOutsideHandler) {
+        document.removeEventListener("click", clickOutsideHandler);
+    }
+});
 
 // Fonction pour obtenir l'état d'un renderer
 function getRendererState(rendererId: string) {
@@ -107,6 +149,45 @@ async function handlePause(event: Event, rendererId: string) {
         await api.pause(rendererId);
     } catch (error) {
         console.error("[RendererDrawer] Error pausing:", error);
+    }
+}
+
+// Gestion du menu déroulant
+function toggleMenu(event: Event, rendererId: string) {
+    event.stopPropagation();
+    openMenuId.value = openMenuId.value === rendererId ? null : rendererId;
+}
+
+function closeMenu() {
+    openMenuId.value = null;
+}
+
+// Transfert de la queue
+async function handleTransferQueue(event: Event, targetRendererId: string) {
+    event.stopPropagation();
+    closeMenu();
+
+    if (!props.selectedRendererId) {
+        console.warn("[RendererDrawer] No source renderer selected");
+        return;
+    }
+
+    if (props.selectedRendererId === targetRendererId) {
+        console.warn("[RendererDrawer] Cannot transfer to the same renderer");
+        return;
+    }
+
+    try {
+        console.log(
+            `[RendererDrawer] Transferring queue from ${props.selectedRendererId} to ${targetRendererId}`,
+        );
+        await api.transferQueue(props.selectedRendererId, targetRendererId);
+
+        // Sélectionner le nouveau renderer et fermer le drawer
+        emit("select-renderer", targetRendererId);
+        close();
+    } catch (error) {
+        console.error("[RendererDrawer] Error transferring queue:", error);
     }
 }
 </script>
@@ -235,6 +316,47 @@ async function handlePause(event: Event, rendererId: string) {
                                         />
                                     </div>
                                 </div>
+
+                                <!-- Menu actions (uniquement si ce n'est pas le renderer sélectionné) -->
+                                <div
+                                    v-if="
+                                        selectedRendererId &&
+                                        renderer.id !== selectedRendererId
+                                    "
+                                    class="action-menu-container"
+                                >
+                                    <button
+                                        class="menu-btn"
+                                        @click="toggleMenu($event, renderer.id)"
+                                        :aria-label="`Actions pour ${renderer.friendly_name}`"
+                                    >
+                                        <MoreVertical :size="18" />
+                                    </button>
+
+                                    <Transition name="menu-fade">
+                                        <div
+                                            v-if="openMenuId === renderer.id"
+                                            class="action-dropdown"
+                                        >
+                                            <button
+                                                class="dropdown-item"
+                                                @click="
+                                                    handleTransferQueue(
+                                                        $event,
+                                                        renderer.id,
+                                                    )
+                                                "
+                                            >
+                                                <ArrowRightLeft :size="16" />
+                                                <span
+                                                    >Transférer la lecture
+                                                    ici</span
+                                                >
+                                            </button>
+                                        </div>
+                                    </Transition>
+                                </div>
+
                                 <div class="renderer-status">
                                     <Circle :size="8" fill="currentColor" />
                                 </div>
@@ -601,6 +723,99 @@ async function handlePause(event: Event, rendererId: string) {
     background: rgba(255, 255, 255, 0.05);
     border-color: rgba(255, 255, 255, 0.1);
     color: var(--color-text-tertiary);
+}
+
+/* Menu actions */
+.action-menu-container {
+    position: relative;
+    flex-shrink: 0;
+}
+
+.menu-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    color: var(--color-text-secondary);
+    transition: all 0.2s ease;
+}
+
+.menu-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--color-text);
+}
+
+.action-dropdown {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 4px);
+    min-width: 200px;
+    background: var(--color-surface-elevated);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    overflow: hidden;
+    z-index: 1000;
+}
+
+@media (prefers-color-scheme: light) {
+    .action-dropdown {
+        background: white;
+        border-color: rgba(0, 0, 0, 0.1);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }
+}
+
+.dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    width: 100%;
+    padding: var(--spacing-sm) var(--spacing-md);
+    background: none;
+    border: none;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+    color: var(--color-text);
+    font-size: var(--text-sm);
+}
+
+.dropdown-item:hover {
+    background: rgba(102, 126, 234, 0.1);
+}
+
+.dropdown-item:active {
+    background: rgba(102, 126, 234, 0.2);
+}
+
+.dropdown-item span {
+    flex: 1;
+}
+
+/* Transitions pour le menu */
+.menu-fade-enter-active {
+    transition: all 0.15s ease-out;
+}
+
+.menu-fade-leave-active {
+    transition: all 0.1s ease-in;
+}
+
+.menu-fade-enter-from {
+    opacity: 0;
+    transform: translateY(-4px);
+}
+
+.menu-fade-leave-to {
+    opacity: 0;
+    transform: translateY(-4px);
 }
 
 .renderer-status {

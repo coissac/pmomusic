@@ -351,6 +351,26 @@ class PMOControlAPI {
     );
   }
 
+  /**
+   * Transfère la queue d'un renderer vers un autre
+   * POST /api/control/renderers/{id}/queue/transfer
+   */
+  async transferQueue(
+    sourceRendererId: string,
+    destinationRendererId: string,
+  ): Promise<SuccessResponse> {
+    const payload = {
+      destination_renderer_id: destinationRendererId,
+    };
+    return this.request<SuccessResponse>(
+      `/renderers/${encodeURIComponent(sourceRendererId)}/queue/transfer`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
+  }
+
   // ============================================================================
   // MEDIA SERVERS
   // ============================================================================

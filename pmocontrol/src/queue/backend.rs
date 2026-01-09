@@ -166,6 +166,7 @@ pub trait QueueBackend {
         let QueueSnapshot {
             items,
             current_index,
+            ..
         } = snapshot;
 
         if items.is_empty() {
@@ -198,6 +199,7 @@ pub trait QueueBackend {
         let QueueSnapshot {
             items,
             current_index,
+            ..
         } = snapshot;
 
         if items.is_empty() {

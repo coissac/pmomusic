@@ -206,10 +206,24 @@ impl MusicRenderer {
 
     /// Get the current queue snapshot.
     pub fn queue_snapshot(&self) -> Result<QueueSnapshot, ControlPointError> {
-        self.queue
+        let mut snapshot = self
+            .queue
             .lock()
             .expect("Queue mutex poisoned")
-            .queue_snapshot()
+            .queue_snapshot()?;
+
+        // Enrich snapshot with playlist_id from binding if available
+        if let Some(binding) = self
+            .playlist_binding
+            .lock()
+            .expect("Binding mutex poisoned")
+            .as_ref()
+        {
+            // Use container_id as the playlist identifier
+            snapshot.playlist_id = Some(binding.container_id.clone());
+        }
+
+        Ok(snapshot)
     }
 
     /// Get the current queue item without advancing.
@@ -495,6 +509,17 @@ impl MusicRenderer {
     pub fn clear_queue(&self) -> Result<(), ControlPointError> {
         let mut queue = self.queue.lock().expect("Queue mutex poisoned");
         queue.clear_queue()
+    }
+
+    /// Replaces the entire queue with new items and sets the current index.
+    /// This is a complete replacement, unlike sync_queue which tries to preserve the current track.
+    pub fn replace_queue(
+        &self,
+        items: Vec<PlaybackItem>,
+        current_index: Option<usize>,
+    ) -> Result<(), ControlPointError> {
+        let mut queue = self.queue.lock().expect("Queue mutex poisoned");
+        queue.replace_queue(items, current_index)
     }
 
     /// Adds a track to the queue.

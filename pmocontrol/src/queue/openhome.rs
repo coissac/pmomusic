@@ -549,6 +549,7 @@ impl QueueBackend for OpenHomeQueue {
         Ok(QueueSnapshot {
             items: items,
             current_index: current_index,
+            playlist_id: None,
         })
     }
 

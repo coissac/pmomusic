@@ -63,7 +63,6 @@ impl PlaybackItem {
     }
 }
 
-
 /// Logical snapshot of a renderer queue.
 ///
 /// This is the canonical view used by the ControlPoint and the REST/API
@@ -76,6 +75,10 @@ pub struct QueueSnapshot {
     /// Index (0-based) of the current item in `items`, or `None` if
     /// no item is currently selected.
     pub current_index: Option<usize>,
+    /// Optional playlist ID if the queue is bound to a specific playlist.
+    /// This allows reconstructing a queue from a snapshot by referencing
+    /// the source playlist, enabling transfer between renderers.
+    pub playlist_id: Option<String>,
 }
 
 impl QueueSnapshot {

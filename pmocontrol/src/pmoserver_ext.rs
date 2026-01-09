@@ -14,7 +14,7 @@ use crate::openapi::{
     AttachPlaylistRequest, AttachedPlaylistInfo, BrowseResponse, ContainerEntry, ErrorResponse,
     FullRendererSnapshot, MediaServerSummary, PlayContentRequest, QueueSnapshot,
     RendererCapabilitiesSummary, RendererProtocolSummary, RendererState, RendererSummary,
-    SeekQueueRequest, SuccessResponse, VolumeSetRequest,
+    SeekQueueRequest, SuccessResponse, TransferQueueRequest, VolumeSetRequest,
 };
 #[cfg(feature = "pmoserver")]
 use crate::queue::PlaybackItem;
@@ -1523,6 +1523,82 @@ async fn add_after_current(
     }))
 }
 
+/// POST /control/renderers/{renderer_id}/queue/transfer - Transfère la queue vers un autre renderer
+#[cfg(feature = "pmoserver")]
+#[utoipa::path(
+    post,
+    path = "/renderers/{renderer_id}/queue/transfer",
+    params(
+        ("renderer_id" = String, Path, description = "ID du renderer source")
+    ),
+    request_body = TransferQueueRequest,
+    responses(
+        (status = 200, description = "Queue transférée avec succès", body = SuccessResponse),
+        (status = 404, description = "Renderer non trouvé", body = ErrorResponse),
+        (status = 500, description = "Erreur lors du transfert", body = ErrorResponse)
+    ),
+    tag = "control"
+)]
+async fn transfer_queue(
+    State(state): State<ControlPointState>,
+    Path(source_renderer_id): Path<String>,
+    Json(req): Json<TransferQueueRequest>,
+) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let source_id = DeviceId(source_renderer_id.clone());
+    let dest_id = DeviceId(req.destination_renderer_id.clone());
+
+    debug!(
+        source = source_renderer_id.as_str(),
+        dest = req.destination_renderer_id.as_str(),
+        "Transferring queue between renderers via HTTP API"
+    );
+
+    let control_point = state.control_point.clone();
+    tokio::task::spawn_blocking(move || control_point.transfer_queue(&source_id, &dest_id))
+        .await
+        .map_err(|e| {
+            warn!(
+                source = source_renderer_id.as_str(),
+                dest = req.destination_renderer_id.as_str(),
+                error = ?e,
+                "Failed to spawn transfer_queue task"
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to spawn transfer task: {}", e),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!(
+                source = source_renderer_id.as_str(),
+                dest = req.destination_renderer_id.as_str(),
+                error = ?e,
+                "Failed to transfer queue"
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to transfer queue: {}", e),
+                }),
+            )
+        })?;
+
+    debug!(
+        source = source_renderer_id.as_str(),
+        dest = req.destination_renderer_id.as_str(),
+        "Queue transferred successfully via HTTP API"
+    );
+
+    Ok(Json(SuccessResponse {
+        message: format!(
+            "Queue transferred from {} to {}",
+            source_renderer_id, req.destination_renderer_id
+        ),
+    }))
+}
+
 // ============================================================================
 // HANDLERS - MEDIA SERVERS
 // ============================================================================
@@ -1843,6 +1919,10 @@ pub fn create_api_router(state: ControlPointState, control_point: Arc<ControlPoi
         .route(
             "/renderers/{renderer_id}/queue/add-after",
             post(add_after_current),
+        )
+        .route(
+            "/renderers/{renderer_id}/queue/transfer",
+            post(transfer_queue),
         )
         // Servers
         .route("/servers", get(list_servers))

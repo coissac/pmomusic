@@ -97,6 +97,7 @@ impl QueueBackend for InternalQueue {
         Ok(QueueSnapshot {
             items,
             current_index: self.current_index,
+            playlist_id: None,
         })
     }
 
