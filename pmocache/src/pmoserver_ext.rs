@@ -90,10 +90,11 @@ async fn get_file<C: CacheConfig + 'static>(
         Option<ParamGenerator<C>>,
     )>,
     Path(pk): Path<String>,
+    request: axum::http::Request<Body>,
 ) -> Response {
     // Utiliser le param par défaut
     let param = C::default_param();
-    serve_file_with_streaming(&cache, &pk, param, content_type, param_generator).await
+    serve_file_with_streaming(&cache, &pk, param, content_type, param_generator, request).await
 }
 
 /// Handler générique pour GET /{cache_name}/{cache_type}/{pk}/{param}
@@ -106,8 +107,9 @@ async fn get_file_with_param<C: CacheConfig + 'static>(
         Option<ParamGenerator<C>>,
     )>,
     Path((pk, param)): Path<(String, String)>,
+    request: axum::http::Request<Body>,
 ) -> Response {
-    serve_file_with_streaming(&cache, &pk, &param, content_type, param_generator).await
+    serve_file_with_streaming(&cache, &pk, &param, content_type, param_generator, request).await
 }
 
 #[cfg(feature = "pmoserver")]
@@ -116,6 +118,7 @@ async fn serve_finalized_pk<C: CacheConfig + 'static>(
     pk: &str,
     param: &str,
     content_type: &'static str,
+    request: axum::http::Request<Body>,
 ) -> Response {
     let qualifier = param.to_string();
     let file_path = cache.get_file_path_with_qualifier(pk, param);
@@ -129,7 +132,8 @@ async fn serve_finalized_pk<C: CacheConfig + 'static>(
     // la lecture pendant le téléchargement tout en préservant la durée/position
     if let Some(download) = cache.get_download(pk).await {
         if !download.finished().await {
-            let response = stream_file_progressive(file_path, download, content_type).await;
+            let response =
+                stream_file_progressive(file_path, download, content_type, request).await;
 
             if response.status().is_success() {
                 cache.notify_broadcast(pk, &qualifier).await;
@@ -140,9 +144,8 @@ async fn serve_finalized_pk<C: CacheConfig + 'static>(
     }
 
     // ROUTE 2 : Fichier complètement téléchargé
-    // Utilise l'ancien système éprouvé qui garantit un passage correct
-    // de toutes les informations (Content-Length automatique, etc.)
-    let response = serve_complete_file(file_path, content_type).await;
+    // Utilise ServeFile avec support des Range requests pour le seek
+    let response = serve_complete_file(file_path, content_type, request).await;
 
     if response.status().is_success() {
         cache.notify_broadcast(pk, &qualifier).await;
@@ -166,6 +169,7 @@ async fn serve_lazy_audio_file<C: CacheConfig + 'static>(
     lazy_pk: &str,
     param: &str,
     content_type: &'static str,
+    request: axum::http::Request<Body>,
 ) -> Response {
     tracing::info!("Lazy download triggered for pk: {}", lazy_pk);
 
@@ -176,7 +180,7 @@ async fn serve_lazy_audio_file<C: CacheConfig + 'static>(
             lazy_pk,
             real_pk
         );
-        return serve_finalized_pk(cache, &real_pk, param, content_type).await;
+        return serve_finalized_pk(cache, &real_pk, param, content_type, request).await;
     }
 
     // 2. Télécharger en résolvant l'URL via la DB ou un provider
@@ -196,7 +200,7 @@ async fn serve_lazy_audio_file<C: CacheConfig + 'static>(
     cache.broadcast_lazy_downloaded(lazy_pk, &real_pk).await;
 
     // 5. Servir directement le fichier téléchargé
-    serve_finalized_pk(cache, &real_pk, param, content_type).await
+    serve_finalized_pk(cache, &real_pk, param, content_type, request).await
 }
 
 /// Fonction utilitaire pour servir un fichier avec streaming progressif
@@ -211,10 +215,11 @@ async fn serve_file_with_streaming<C: CacheConfig + 'static>(
     param: &str,
     content_type: &'static str,
     param_generator: Option<ParamGenerator<C>>,
+    request: axum::http::Request<Body>,
 ) -> Response {
     // LAZY PK SUPPORT: Détecter si c'est un lazy PK
     if crate::cache::is_lazy_pk(pk) {
-        return serve_lazy_audio_file(cache, pk, param, content_type).await;
+        return serve_lazy_audio_file(cache, pk, param, content_type, request).await;
     }
 
     let file_path = cache.get_file_path_with_qualifier(pk, param);
@@ -246,8 +251,9 @@ async fn serve_file_with_streaming<C: CacheConfig + 'static>(
     if let Some(download) = cache.get_download(pk).await {
         // Le fichier est en cours de téléchargement
         if !download.finished().await {
-            // Streaming progressif
-            let response = stream_file_progressive(file_path, download, content_type).await;
+            // Streaming progressif avec support Range
+            let response =
+                stream_file_progressive(file_path, download, content_type, request).await;
 
             if response.status().is_success() {
                 cache.notify_broadcast(pk, &qualifier).await;
@@ -257,8 +263,8 @@ async fn serve_file_with_streaming<C: CacheConfig + 'static>(
         }
     }
 
-    // Fichier terminé ou pas de download en cours, servir normalement
-    let response = serve_complete_file(file_path, content_type).await;
+    // Fichier terminé ou pas de download en cours, servir normalement avec support Range
+    let response = serve_complete_file(file_path, content_type, request).await;
 
     if response.status().is_success() {
         cache.notify_broadcast(pk, &qualifier).await;
@@ -268,13 +274,17 @@ async fn serve_file_with_streaming<C: CacheConfig + 'static>(
 }
 
 /// Stream un fichier en cours de téléchargement de manière progressive
+///
+/// Supporte les Range requests pour permettre le seek même pendant le téléchargement
 #[cfg(feature = "pmoserver")]
 async fn stream_file_progressive(
     file_path: std::path::PathBuf,
     download: Arc<crate::download::Download>,
     content_type: &'static str,
+    request: axum::http::Request<Body>,
 ) -> Response {
     use axum::http::header;
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
     // Attendre qu'au moins 64 KB soient disponibles avant de commencer
     const MIN_SIZE_TO_START: u64 = 64 * 1024;
@@ -291,8 +301,14 @@ async fn stream_file_progressive(
         return (StatusCode::NOT_FOUND, "File not available").into_response();
     }
 
+    // Récupérer la taille attendue du fichier si disponible
+    let expected_size = download.expected_size().await;
+
+    // Vérifier s'il y a un header Range
+    let range_header = request.headers().get(header::RANGE);
+
     // Ouvrir le fichier en lecture
-    let file = match tokio::fs::File::open(&file_path).await {
+    let mut file = match tokio::fs::File::open(&file_path).await {
         Ok(f) => f,
         Err(e) => {
             warn!("Error opening file {:?}: {}", file_path, e);
@@ -300,24 +316,65 @@ async fn stream_file_progressive(
         }
     };
 
-    // Créer un stream à partir du fichier
+    // Parser le Range header si présent
+    if let Some(range_value) = range_header {
+        if let Ok(range_str) = range_value.to_str() {
+            // Format: "bytes=start-end" ou "bytes=start-"
+            if let Some(range_spec) = range_str.strip_prefix("bytes=") {
+                if let Some((start_str, _)) = range_spec.split_once('-') {
+                    if let Ok(start) = start_str.parse::<u64>() {
+                        // Seek vers la position demandée
+                        if let Err(e) = file.seek(std::io::SeekFrom::Start(start)).await {
+                            warn!("Error seeking to position {}: {}", start, e);
+                            return (StatusCode::RANGE_NOT_SATISFIABLE, "Invalid range")
+                                .into_response();
+                        }
+
+                        // Créer un stream à partir de la position
+                        let stream = ReaderStream::new(file);
+                        let body = Body::from_stream(stream);
+
+                        // Calculer la range
+                        let end = expected_size.map(|s| s - 1).unwrap_or(start + 1_000_000);
+                        let content_length = expected_size.map(|s| s - start);
+
+                        // Retourner une réponse 206 Partial Content
+                        let mut response_builder = axum::http::Response::builder()
+                            .status(StatusCode::PARTIAL_CONTENT)
+                            .header(header::CONTENT_TYPE, content_type)
+                            .header(header::ACCEPT_RANGES, "bytes");
+
+                        if let Some(total_size) = expected_size {
+                            response_builder = response_builder.header(
+                                header::CONTENT_RANGE,
+                                format!("bytes {}-{}/{}", start, end, total_size),
+                            );
+                        }
+
+                        if let Some(length) = content_length {
+                            response_builder =
+                                response_builder.header(header::CONTENT_LENGTH, length);
+                        }
+
+                        return response_builder.body(body).unwrap();
+                    }
+                }
+            }
+        }
+    }
+
+    // Pas de Range header : retourner le fichier complet
     let stream = ReaderStream::new(file);
     let body = Body::from_stream(stream);
 
-    // Récupérer la taille attendue du fichier si disponible
-    let expected_size = download.expected_size().await;
-
-    // Construire la réponse avec Content-Length si connu
     let mut response = axum::http::Response::builder()
         .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, content_type);
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::ACCEPT_RANGES, "bytes");
 
     if let Some(size) = expected_size {
-        // Si on connaît la taille finale, l'envoyer au renderer
-        // pour qu'il puisse calculer la durée et afficher la position
         response = response.header(header::CONTENT_LENGTH, size);
     } else {
-        // Sinon, utiliser chunked encoding
         response = response.header(header::TRANSFER_ENCODING, "chunked");
     }
 
@@ -325,21 +382,45 @@ async fn stream_file_progressive(
 }
 
 /// Sert un fichier complet déjà téléchargé
+///
+/// Utilise `tower_http::services::ServeFile` pour bénéficier automatiquement de :
+/// - Support des HTTP Range requests (seek)
+/// - Header `Accept-Ranges: bytes`
+/// - Réponses `206 Partial Content`
+/// - Streaming efficace sans chargement complet en RAM
 #[cfg(feature = "pmoserver")]
 async fn serve_complete_file(
     file_path: std::path::PathBuf,
     content_type: &'static str,
+    request: axum::http::Request<Body>,
 ) -> Response {
+    use axum::http::header;
+    use tower::ServiceExt; // Pour oneshot()
+    use tower_http::services::ServeFile;
+
     if !file_path.exists() {
         warn!("File not found: {:?}", file_path);
         return (StatusCode::NOT_FOUND, "File not found").into_response();
     }
 
-    match tokio::fs::read(&file_path).await {
-        Ok(data) => (StatusCode::OK, [("content-type", content_type)], data).into_response(),
+    // Utiliser ServeFile avec support automatique des Range requests
+    // ServeFile traite automatiquement les headers Range: dans la requête
+    let serve_file = ServeFile::new(file_path);
+
+    match serve_file.oneshot(request).await {
+        Ok(response) => {
+            // Convertir la réponse ServeFile en Response<Body> avec le bon Content-Type
+            let (mut parts, body) = response.into_parts();
+            parts
+                .headers
+                .insert(header::CONTENT_TYPE, content_type.parse().unwrap());
+
+            // Convertir ServeFileSystemResponseBody en Body
+            axum::http::Response::from_parts(parts, Body::new(body))
+        }
         Err(e) => {
-            warn!("Error reading file {:?}: {}", file_path, e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Error reading file").into_response()
+            warn!("Error serving file: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Error serving file").into_response()
         }
     }
 }

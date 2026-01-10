@@ -298,8 +298,24 @@ impl MusicRenderer {
     }
 
     /// Transport control: play
+    ///
+    /// Démarre ou reprend la lecture. Si une queue non vide existe,
+    /// joue le track courant de la queue automatiquement (comportement unifié pour tous les backends).
     pub fn play(&self) -> Result<(), ControlPointError> {
-        self.backend.lock().expect("Backend mutex poisoned").play()
+        // Vérifier si on a une queue non vide
+        let queue = self.queue.lock().expect("Queue mutex poisoned");
+        let queue_not_empty = queue.len().unwrap_or(0) > 0;
+        drop(queue); // Libérer le lock avant l'appel au backend
+
+        if queue_not_empty {
+            // Si on a des items dans la queue, jouer le track courant (ou le premier si aucun n'est sélectionné)
+            // peek_current() initialise automatiquement l'index à 0 si nécessaire
+            // Cela fonctionne pour tous les backends (UPnP interne, OpenHome, etc.)
+            self.play_current_from_queue()
+        } else {
+            // Queue vide : déléguer au backend (reprend la lecture en cours, etc.)
+            self.backend.lock().expect("Backend mutex poisoned").play()
+        }
     }
 
     /// Transport control: pause
@@ -334,6 +350,16 @@ impl MusicRenderer {
             .lock()
             .expect("Backend mutex poisoned")
             .seek_rel_time(hhmmss)
+    }
+
+    /// Seek to a specific position in seconds
+    pub fn seek(&self, seconds: u32) -> Result<(), ControlPointError> {
+        // Convert seconds to HH:MM:SS format
+        let hours = seconds / 3600;
+        let minutes = (seconds % 3600) / 60;
+        let secs = seconds % 60;
+        let hhmmss = format!("{:02}:{:02}:{:02}", hours, minutes, secs);
+        self.seek_rel_time(&hhmmss)
     }
 
     /// Volume control: get current volume
