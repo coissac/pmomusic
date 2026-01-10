@@ -352,6 +352,16 @@ impl MusicRenderer {
             .seek_rel_time(hhmmss)
     }
 
+    /// Seek to a specific position in seconds
+    pub fn seek(&self, seconds: u32) -> Result<(), ControlPointError> {
+        // Convert seconds to HH:MM:SS format
+        let hours = seconds / 3600;
+        let minutes = (seconds % 3600) / 60;
+        let secs = seconds % 60;
+        let hhmmss = format!("{:02}:{:02}:{:02}", hours, minutes, secs);
+        self.seek_rel_time(&hhmmss)
+    }
+
     /// Volume control: get current volume
     pub fn volume(&self) -> Result<u16, ControlPointError> {
         self.backend

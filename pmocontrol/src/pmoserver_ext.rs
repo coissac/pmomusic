@@ -14,7 +14,7 @@ use crate::openapi::{
     AttachPlaylistRequest, AttachedPlaylistInfo, BrowseResponse, ContainerEntry, ErrorResponse,
     FullRendererSnapshot, MediaServerSummary, PlayContentRequest, QueueSnapshot,
     RendererCapabilitiesSummary, RendererProtocolSummary, RendererState, RendererSummary,
-    SeekQueueRequest, SuccessResponse, TransferQueueRequest, VolumeSetRequest,
+    SeekQueueRequest, SeekRequest, SuccessResponse, TransferQueueRequest, VolumeSetRequest,
 };
 #[cfg(feature = "pmoserver")]
 use crate::queue::PlaybackItem;
@@ -715,6 +715,88 @@ async fn seek_queue_index(
 
     Ok(Json(SuccessResponse {
         message: format!("Playing item at index {}", index),
+    }))
+}
+
+/// POST /control/renderers/{renderer_id}/seek - Seek à une position spécifique (en secondes)
+#[cfg(feature = "pmoserver")]
+#[utoipa::path(
+    post,
+    path = "/control/renderers/{renderer_id}/seek",
+    tag = "control",
+    params(
+        ("renderer_id" = String, Path, description = "ID unique du renderer")
+    ),
+    request_body = SeekRequest,
+    responses(
+        (status = 200, description = "Seek effectué avec succès", body = SuccessResponse),
+        (status = 404, description = "Renderer non trouvé", body = ErrorResponse),
+        (status = 504, description = "Timeout lors du seek", body = ErrorResponse),
+        (status = 500, description = "Erreur interne", body = ErrorResponse),
+    )
+)]
+async fn seek_renderer(
+    State(state): State<ControlPointState>,
+    Path(renderer_id): Path<String>,
+    Json(payload): Json<SeekRequest>,
+) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let rid = DeviceId(renderer_id.clone());
+    let renderer = state
+        .control_point
+        .music_renderer_by_id(&rid)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("Renderer {} not found", renderer_id),
+                }),
+            )
+        })?;
+
+    let seconds = payload.seconds;
+    let seek_task = tokio::task::spawn_blocking(move || renderer.seek(seconds));
+
+    time::timeout(TRANSPORT_COMMAND_TIMEOUT, seek_task)
+        .await
+        .map_err(|_| {
+            warn!(
+                "Seek command for renderer {} exceeded {:?}",
+                renderer_id, TRANSPORT_COMMAND_TIMEOUT
+            );
+            (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Seek command timed out after {}s",
+                        TRANSPORT_COMMAND_TIMEOUT.as_secs()
+                    ),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!("Task join error during seek: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Internal task error: {}", e),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!(
+                "Failed to seek to {} seconds for renderer {}: {}",
+                seconds, renderer_id, e
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to seek to {} seconds: {}", seconds, e),
+                }),
+            )
+        })?;
+
+    Ok(Json(SuccessResponse {
+        message: format!("Seeked to {} seconds", seconds),
     }))
 }
 
@@ -1882,6 +1964,7 @@ pub fn create_api_router(state: ControlPointState, control_point: Arc<ControlPoi
         .route("/renderers/{renderer_id}/stop", post(stop_renderer))
         .route("/renderers/{renderer_id}/resume", post(resume_renderer))
         .route("/renderers/{renderer_id}/next", post(next_renderer))
+        .route("/renderers/{renderer_id}/seek", post(seek_renderer))
         // Queue control
         .route(
             "/renderers/{renderer_id}/queue/seek",

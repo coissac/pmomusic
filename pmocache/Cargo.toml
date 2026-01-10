@@ -38,6 +38,8 @@ utoipa = { version = "5.3", optional = true }
 
 # Feature pour pmoserver (extension HTTP)
 axum = { version = "0.8", optional = true }
+tower = { version = "0.5", optional = true }
+tower-http = { version = "0.6", features = ["fs"], optional = true }
 
 # Feature pour pmoconfig (extension de configuration)
 pmoconfig = { path = "../pmoconfig", optional = true }
@@ -49,5 +51,5 @@ tempfile = "3"
 [features]
 default = []
 openapi = ["dep:utoipa"]
-pmoserver = ["dep:axum"]
+pmoserver = ["dep:axum", "dep:tower", "dep:tower-http"]
 pmoconfig = ["dep:pmoconfig", "dep:serde_yaml"]

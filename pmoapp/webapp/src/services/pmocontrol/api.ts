@@ -169,6 +169,20 @@ class PMOControlAPI {
   }
 
   /**
+   * Seek à une position spécifique (en secondes)
+   * POST /api/control/renderers/{id}/seek
+   */
+  async seekTo(id: string, seconds: number): Promise<SuccessResponse> {
+    return this.request<SuccessResponse>(
+      `/renderers/${encodeURIComponent(id)}/seek`,
+      {
+        method: "POST",
+        body: JSON.stringify({ seconds }),
+      },
+    );
+  }
+
+  /**
    * Saute à un index spécifique dans la queue
    * POST /api/control/renderers/{id}/queue/seek
    */

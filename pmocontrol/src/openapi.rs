@@ -266,6 +266,14 @@ pub struct SeekQueueRequest {
     pub index: usize,
 }
 
+/// Requête pour seek à une position spécifique (en secondes)
+#[cfg(feature = "pmoserver")]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct SeekRequest {
+    /// Position en secondes
+    pub seconds: u32,
+}
+
 /// Requête pour transférer une queue d'un renderer vers un autre
 #[cfg(feature = "pmoserver")]
 #[derive(Debug, Clone, Deserialize, ToSchema)]
@@ -412,6 +420,7 @@ GET /control/servers/{server_id}/containers/{container_id}
         crate::pmoserver_ext::stop_renderer,
         crate::pmoserver_ext::resume_renderer,
         crate::pmoserver_ext::next_renderer,
+        crate::pmoserver_ext::seek_renderer,
         crate::pmoserver_ext::seek_queue_index,
         crate::pmoserver_ext::set_renderer_volume,
         crate::pmoserver_ext::volume_up_renderer,
@@ -445,6 +454,7 @@ GET /control/servers/{server_id}/containers/{container_id}
         AttachPlaylistRequest,
         PlayContentRequest,
         SeekQueueRequest,
+        SeekRequest,
         TransferQueueRequest,
         SuccessResponse,
         ErrorResponse,
