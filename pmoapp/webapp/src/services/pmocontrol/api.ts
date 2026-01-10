@@ -12,6 +12,7 @@ import type {
   VolumeSetRequest,
   AttachPlaylistRequest,
   PlayContentRequest,
+  SleepTimerState,
   SuccessResponse,
   ErrorResponse,
 } from "./types";
@@ -407,6 +408,67 @@ class PMOControlAPI {
   ): Promise<BrowseResponse> {
     return this.request<BrowseResponse>(
       `/servers/${encodeURIComponent(serverId)}/containers/${encodeURIComponent(containerId)}`,
+    );
+  }
+
+  // ============================================================================
+  // SLEEP TIMER
+  // ============================================================================
+
+  /**
+   * Récupère l'état du sleep timer
+   * GET /api/control/renderers/{rendererId}/timer
+   */
+  async getSleepTimer(rendererId: string): Promise<SleepTimerState> {
+    return this.request<SleepTimerState>(
+      `/renderers/${encodeURIComponent(rendererId)}/timer`,
+    );
+  }
+
+  /**
+   * Démarre le sleep timer
+   * POST /api/control/renderers/{rendererId}/timer/start
+   */
+  async startSleepTimer(
+    rendererId: string,
+    durationSeconds: number,
+  ): Promise<SleepTimerState> {
+    return this.request<SleepTimerState>(
+      `/renderers/${encodeURIComponent(rendererId)}/timer/start`,
+      {
+        method: "POST",
+        body: JSON.stringify({ duration_seconds: durationSeconds }),
+      },
+    );
+  }
+
+  /**
+   * Met à jour le sleep timer (modifie la durée)
+   * POST /api/control/renderers/{rendererId}/timer/update
+   */
+  async updateSleepTimer(
+    rendererId: string,
+    durationSeconds: number,
+  ): Promise<SleepTimerState> {
+    return this.request<SleepTimerState>(
+      `/renderers/${encodeURIComponent(rendererId)}/timer/update`,
+      {
+        method: "POST",
+        body: JSON.stringify({ duration_seconds: durationSeconds }),
+      },
+    );
+  }
+
+  /**
+   * Annule le sleep timer
+   * POST /api/control/renderers/{rendererId}/timer/cancel
+   */
+  async cancelSleepTimer(rendererId: string): Promise<SuccessResponse> {
+    return this.request<SuccessResponse>(
+      `/renderers/${encodeURIComponent(rendererId)}/timer/cancel`,
+      {
+        method: "POST",
+      },
     );
   }
 }

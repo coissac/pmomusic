@@ -85,6 +85,31 @@ pub enum RendererEventPayload {
         container_id: Option<String>,
         timestamp: chrono::DateTime<chrono::Utc>,
     },
+    TimerStarted {
+        renderer_id: String,
+        duration_seconds: u32,
+        remaining_seconds: u32,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    },
+    TimerUpdated {
+        renderer_id: String,
+        duration_seconds: u32,
+        remaining_seconds: u32,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    },
+    TimerTick {
+        renderer_id: String,
+        remaining_seconds: u32,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    },
+    TimerExpired {
+        renderer_id: String,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    },
+    TimerCancelled {
+        renderer_id: String,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    },
     Online {
         renderer_id: String,
         friendly_name: String,
@@ -270,6 +295,41 @@ pub async fn renderer_events_sse(
                         renderer_id: id.0,
                         server_id: binding.as_ref().map(|b| b.server_id.0.clone()),
                         container_id: binding.as_ref().map(|b| b.container_id.clone()),
+                        timestamp,
+                    }
+                }
+                RendererEvent::TimerStarted { id, duration_seconds, remaining_seconds } => {
+                    RendererEventPayload::TimerStarted {
+                        renderer_id: id.0,
+                        duration_seconds,
+                        remaining_seconds,
+                        timestamp,
+                    }
+                }
+                RendererEvent::TimerUpdated { id, duration_seconds, remaining_seconds } => {
+                    RendererEventPayload::TimerUpdated {
+                        renderer_id: id.0,
+                        duration_seconds,
+                        remaining_seconds,
+                        timestamp,
+                    }
+                }
+                RendererEvent::TimerTick { id, remaining_seconds } => {
+                    RendererEventPayload::TimerTick {
+                        renderer_id: id.0,
+                        remaining_seconds,
+                        timestamp,
+                    }
+                }
+                RendererEvent::TimerExpired { id } => {
+                    RendererEventPayload::TimerExpired {
+                        renderer_id: id.0,
+                        timestamp,
+                    }
+                }
+                RendererEvent::TimerCancelled { id } => {
+                    RendererEventPayload::TimerCancelled {
+                        renderer_id: id.0,
                         timestamp,
                     }
                 }
@@ -644,6 +704,41 @@ pub async fn all_events_sse(State(control_point): State<Arc<ControlPoint>>) -> i
                                 renderer_id: id.0,
                                 server_id: binding.as_ref().map(|b| b.server_id.0.clone()),
                                 container_id: binding.as_ref().map(|b| b.container_id.clone()),
+                                timestamp,
+                            }
+                        }
+                        RendererEvent::TimerStarted { id, duration_seconds, remaining_seconds } => {
+                            RendererEventPayload::TimerStarted {
+                                renderer_id: id.0,
+                                duration_seconds,
+                                remaining_seconds,
+                                timestamp,
+                            }
+                        }
+                        RendererEvent::TimerUpdated { id, duration_seconds, remaining_seconds } => {
+                            RendererEventPayload::TimerUpdated {
+                                renderer_id: id.0,
+                                duration_seconds,
+                                remaining_seconds,
+                                timestamp,
+                            }
+                        }
+                        RendererEvent::TimerTick { id, remaining_seconds } => {
+                            RendererEventPayload::TimerTick {
+                                renderer_id: id.0,
+                                remaining_seconds,
+                                timestamp,
+                            }
+                        }
+                        RendererEvent::TimerExpired { id } => {
+                            RendererEventPayload::TimerExpired {
+                                renderer_id: id.0,
+                                timestamp,
+                            }
+                        }
+                        RendererEvent::TimerCancelled { id } => {
+                            RendererEventPayload::TimerCancelled {
+                                renderer_id: id.0,
                                 timestamp,
                             }
                         }

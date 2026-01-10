@@ -282,6 +282,26 @@ pub struct TransferQueueRequest {
     pub destination_renderer_id: String,
 }
 
+/// Requête pour démarrer ou mettre à jour le sleep timer
+#[cfg(feature = "pmoserver")]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct SleepTimerRequest {
+    /// Durée en secondes (maximum 7200 = 2 heures)
+    pub duration_seconds: u32,
+}
+
+/// État du sleep timer
+#[cfg(feature = "pmoserver")]
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct SleepTimerState {
+    /// Timer actif ou non
+    pub active: bool,
+    /// Durée totale configurée en secondes
+    pub duration_seconds: u32,
+    /// Secondes restantes (None si timer inactif)
+    pub remaining_seconds: Option<u32>,
+}
+
 /// Réponse générique de succès
 #[cfg(feature = "pmoserver")]
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -426,6 +446,10 @@ GET /control/servers/{server_id}/containers/{container_id}
         crate::pmoserver_ext::volume_up_renderer,
         crate::pmoserver_ext::volume_down_renderer,
         crate::pmoserver_ext::toggle_mute_renderer,
+        crate::pmoserver_ext::start_sleep_timer,
+        crate::pmoserver_ext::update_sleep_timer,
+        crate::pmoserver_ext::cancel_sleep_timer,
+        crate::pmoserver_ext::get_sleep_timer_state,
         crate::pmoserver_ext::attach_playlist_binding,
         crate::pmoserver_ext::detach_playlist_binding,
         crate::pmoserver_ext::play_content,
@@ -456,6 +480,8 @@ GET /control/servers/{server_id}/containers/{container_id}
         SeekQueueRequest,
         SeekRequest,
         TransferQueueRequest,
+        SleepTimerRequest,
+        SleepTimerState,
         SuccessResponse,
         ErrorResponse,
     )),

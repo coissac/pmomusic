@@ -1,6 +1,9 @@
+use std::sync::{Arc, Mutex};
+
 use crate::DeviceIdentity;
 use crate::music_renderer::capabilities::{
-    PlaybackPosition, PlaybackPositionInfo, PlaybackStatus, TransportControl, VolumeControl,
+    PlaybackPosition, PlaybackPositionInfo, PlaybackStatus, QueueTransportControl, RendererBackend,
+    TransportControl, VolumeControl,
 };
 use crate::music_renderer::time_utils::{format_hhmmss_u32, parse_time_flexible};
 
@@ -12,6 +15,7 @@ use crate::music_renderer::openhome::{
     build_info_client, build_playlist_client, build_product_client, build_radio_client,
     build_time_client, build_volume_client,
 };
+use crate::queue::{EnqueueMode, MusicQueue, PlaybackItem, QueueBackend, QueueSnapshot};
 use crate::upnp_clients::{
     OPENHOME_PLAYLIST_HEAD_ID, OhInfoClient, OhPlaylistClient, OhProductClient, OhRadioClient,
     OhTimeClient, OhVolumeClient,
@@ -27,6 +31,7 @@ pub struct OpenHomeRenderer {
     product_client: Option<OhProductClient>,
     #[allow(dead_code)]
     radio_client: Option<OhRadioClient>,
+    queue: Arc<Mutex<MusicQueue>>,
 }
 
 impl OpenHomeRenderer {
@@ -37,6 +42,7 @@ impl OpenHomeRenderer {
         volume_client: Option<OhVolumeClient>,
         product_client: Option<OhProductClient>,
         radio_client: Option<OhRadioClient>,
+        queue: Arc<Mutex<MusicQueue>>,
     ) -> Self {
         Self {
             playlist,
@@ -45,6 +51,7 @@ impl OpenHomeRenderer {
             volume_client,
             product_client,
             radio_client,
+            queue,
         }
     }
 
@@ -180,6 +187,9 @@ impl OpenHomeRenderer {
 
 impl RendererFromMediaRendererInfo for OpenHomeRenderer {
     fn from_renderer_info(info: &RendererInfo) -> Result<Self, ControlPointError> {
+        // Create the OpenHome queue
+        let queue = Arc::new(Mutex::new(MusicQueue::from_renderer_info(info)?));
+
         let renderer = OpenHomeRenderer::new(
             build_playlist_client(&info),
             build_info_client(&info),
@@ -187,6 +197,7 @@ impl RendererFromMediaRendererInfo for OpenHomeRenderer {
             build_volume_client(&info),
             build_product_client(&info),
             build_radio_client(&info),
+            queue,
         );
 
         if renderer.has_any_openhome_service() {
@@ -201,6 +212,12 @@ impl RendererFromMediaRendererInfo for OpenHomeRenderer {
 
     fn to_backend(self) -> MusicRendererBackend {
         MusicRendererBackend::OpenHome(self)
+    }
+}
+
+impl RendererBackend for OpenHomeRenderer {
+    fn queue(&self) -> &Arc<Mutex<MusicQueue>> {
+        &self.queue
     }
 }
 
@@ -328,5 +345,135 @@ pub(crate) fn map_openhome_state(raw: &str) -> PlaybackState {
         "STOPPED" => PlaybackState::Stopped,
         "BUFFERING" | "TRANSITIONING" => PlaybackState::Transitioning,
         other => PlaybackState::Unknown(other.to_string()),
+    }
+}
+
+impl QueueTransportControl for OpenHomeRenderer {
+    fn play_from_queue(&self) -> Result<(), ControlPointError> {
+        {
+            let queue = self.queue.lock().unwrap();
+
+            if queue.current_index()?.is_none() {
+                if queue.len()? > 0 {
+                    drop(queue);
+                    let mut queue = self.queue.lock().unwrap();
+                    queue.set_index(Some(0))?;
+                } else {
+                    return Err(ControlPointError::QueueError("Queue is empty".into()));
+                }
+            }
+        }
+
+        let playlist = self.playlist_client_for("play_from_queue")?;
+        playlist.play()
+    }
+
+    fn play_next(&self) -> Result<(), ControlPointError> {
+        {
+            let mut queue = self.queue.lock().unwrap();
+            if !queue.advance()? {
+                return Err(ControlPointError::QueueError("No next track".into()));
+            }
+        }
+
+        self.play_from_queue()
+    }
+
+    fn play_previous(&self) -> Result<(), ControlPointError> {
+        {
+            let mut queue = self.queue.lock().unwrap();
+            if !queue.rewind()? {
+                return Err(ControlPointError::QueueError("No previous track".into()));
+            }
+        }
+
+        self.play_from_queue()
+    }
+
+    fn play_from_index(&self, index: usize) -> Result<(), ControlPointError> {
+        // For OpenHome, we need to convert index to track_id
+        let track_id = {
+            let queue = self.queue.lock().unwrap();
+            queue.position_to_id(index)?
+        };
+
+        // Seek to the track by ID
+        let playlist = self.playlist_client_for("play_from_index")?;
+        playlist.seek_id(track_id)?;
+
+        // Update local queue index
+        {
+            let mut queue = self.queue.lock().unwrap();
+            queue.set_index(Some(index))?;
+        }
+
+        // Start playback
+        playlist.play()?;
+        Ok(())
+    }
+}
+
+impl QueueBackend for OpenHomeRenderer {
+    fn len(&self) -> Result<usize, ControlPointError> {
+        self.queue.lock().unwrap().len()
+    }
+
+    fn track_ids(&self) -> Result<Vec<u32>, ControlPointError> {
+        self.queue.lock().unwrap().track_ids()
+    }
+
+    fn id_to_position(&self, id: u32) -> Result<usize, ControlPointError> {
+        self.queue.lock().unwrap().id_to_position(id)
+    }
+
+    fn position_to_id(&self, id: usize) -> Result<u32, ControlPointError> {
+        self.queue.lock().unwrap().position_to_id(id)
+    }
+
+    fn current_track(&self) -> Result<Option<u32>, ControlPointError> {
+        self.queue.lock().unwrap().current_track()
+    }
+
+    fn current_index(&self) -> Result<Option<usize>, ControlPointError> {
+        self.queue.lock().unwrap().current_index()
+    }
+
+    fn queue_snapshot(&self) -> Result<QueueSnapshot, ControlPointError> {
+        self.queue.lock().unwrap().queue_snapshot()
+    }
+
+    fn set_index(&mut self, index: Option<usize>) -> Result<(), ControlPointError> {
+        self.queue.lock().unwrap().set_index(index)
+    }
+
+    fn replace_queue(
+        &mut self,
+        items: Vec<PlaybackItem>,
+        current_index: Option<usize>,
+    ) -> Result<(), ControlPointError> {
+        self.queue
+            .lock()
+            .unwrap()
+            .replace_queue(items, current_index)
+    }
+
+    fn sync_queue(&mut self, items: Vec<PlaybackItem>) -> Result<(), ControlPointError> {
+        self.queue.lock().unwrap().sync_queue(items)
+    }
+
+    fn get_item(&self, index: usize) -> Result<Option<PlaybackItem>, ControlPointError> {
+        self.queue.lock().unwrap().get_item(index)
+    }
+
+    fn replace_item(&mut self, index: usize, item: PlaybackItem) -> Result<(), ControlPointError> {
+        self.queue.lock().unwrap().replace_item(index, item)
+    }
+
+    fn enqueue_items(
+        &mut self,
+        items: Vec<PlaybackItem>,
+        mode: EnqueueMode,
+    ) -> Result<(), ControlPointError> {
+        self.queue.lock().unwrap().enqueue_items(items, mode)
     }
 }

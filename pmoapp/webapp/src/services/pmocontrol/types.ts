@@ -201,6 +201,36 @@ export type RendererEventPayload =
       timestamp: string;
     }
   | {
+      type: "timer_started";
+      renderer_id: string;
+      duration_seconds: number;
+      remaining_seconds: number;
+      timestamp: string;
+    }
+  | {
+      type: "timer_updated";
+      renderer_id: string;
+      duration_seconds: number;
+      remaining_seconds: number;
+      timestamp: string;
+    }
+  | {
+      type: "timer_tick";
+      renderer_id: string;
+      remaining_seconds: number;
+      timestamp: string;
+    }
+  | {
+      type: "timer_expired";
+      renderer_id: string;
+      timestamp: string;
+    }
+  | {
+      type: "timer_cancelled";
+      renderer_id: string;
+      timestamp: string;
+    }
+  | {
       type: "online";
       renderer_id: string;
       friendly_name: string;
@@ -253,4 +283,18 @@ export interface PositionInfo {
   track: number | null;
   rel_time: string | null; // Format HH:MM:SS
   track_duration: string | null; // Format HH:MM:SS
+}
+
+// ============================================================================
+// SLEEP TIMER
+// ============================================================================
+
+export interface SleepTimerState {
+  active: boolean;
+  duration_seconds: number;
+  remaining_seconds: number | null;
+}
+
+export interface SleepTimerRequest {
+  duration_seconds: number; // 0-7200 (0-2 heures)
 }

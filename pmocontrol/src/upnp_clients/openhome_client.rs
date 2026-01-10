@@ -276,7 +276,8 @@ impl OhPlaylistClient {
 
         let envelope = ensure_success("Id", &call_result)?;
 
-        let response = find_child_with_suffix(&envelope.body.content, "IdResponse").ok_or_else(|| {
+        let response =
+            find_child_with_suffix(&envelope.body.content, "IdResponse").ok_or_else(|| {
                 ControlPointError::OpenHomeError(format!(
                     "Missing ReadResponse element in SOAP body"
                 ))
@@ -316,7 +317,7 @@ impl OhPlaylistClient {
 
     pub fn seek_second_absolute(&self, second: u32) -> Result<(), ControlPointError> {
         let second_str = second.to_string();
-        let args = [("Second", second_str.as_str())];
+        let args = [("Value", second_str.as_str())];
         let call_result = invoke_upnp_action(
             &self.control_url,
             &self.service_type,

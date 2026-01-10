@@ -10,6 +10,7 @@ mod capabilities;
 mod chromecast_renderer;
 
 mod musicrenderer;
+mod sleep_timer;
 pub mod time_utils;
 
 use std::sync::{Arc, Mutex};
@@ -18,6 +19,7 @@ pub use crate::music_renderer::capabilities::{
     PlaybackPosition, PlaybackPositionInfo, PlaybackStatus,
 };
 pub use crate::music_renderer::musicrenderer::{MusicRenderer, PlaylistBinding};
+pub use crate::music_renderer::sleep_timer::SleepTimer;
 use crate::{
     RendererInfo, errors::ControlPointError, music_renderer::musicrenderer::MusicRendererBackend,
 };

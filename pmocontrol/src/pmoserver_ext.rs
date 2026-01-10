@@ -14,7 +14,8 @@ use crate::openapi::{
     AttachPlaylistRequest, AttachedPlaylistInfo, BrowseResponse, ContainerEntry, ErrorResponse,
     FullRendererSnapshot, MediaServerSummary, PlayContentRequest, QueueSnapshot,
     RendererCapabilitiesSummary, RendererProtocolSummary, RendererState, RendererSummary,
-    SeekQueueRequest, SeekRequest, SuccessResponse, TransferQueueRequest, VolumeSetRequest,
+    SeekQueueRequest, SeekRequest, SleepTimerRequest, SleepTimerState, SuccessResponse,
+    TransferQueueRequest, VolumeSetRequest,
 };
 #[cfg(feature = "pmoserver")]
 use crate::queue::PlaybackItem;
@@ -1134,6 +1135,215 @@ async fn toggle_mute_renderer(
 }
 
 // ============================================================================
+// HANDLERS - SLEEP TIMER
+// ============================================================================
+
+/// POST /control/renderers/{renderer_id}/timer/start - Démarre le sleep timer
+#[cfg(feature = "pmoserver")]
+#[utoipa::path(
+    post,
+    path = "/renderers/{renderer_id}/timer/start",
+    params(
+        ("renderer_id" = String, Path, description = "ID unique du renderer")
+    ),
+    request_body = SleepTimerRequest,
+    responses(
+        (status = 200, description = "Timer démarré", body = SleepTimerState),
+        (status = 404, description = "Renderer non trouvé", body = ErrorResponse),
+        (status = 400, description = "Durée invalide", body = ErrorResponse),
+        (status = 500, description = "Erreur lors de l'exécution", body = ErrorResponse)
+    ),
+    tag = "control"
+)]
+async fn start_sleep_timer(
+    State(state): State<ControlPointState>,
+    Path(renderer_id): Path<String>,
+    Json(req): Json<SleepTimerRequest>,
+) -> Result<Json<SleepTimerState>, (StatusCode, Json<ErrorResponse>)> {
+    let rid = DeviceId(renderer_id.clone());
+
+    let renderer = state
+        .control_point
+        .music_renderer_by_id(&rid)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("Renderer {} not found", renderer_id),
+                }),
+            )
+        })?;
+
+    // Start the timer
+    let remaining = renderer
+        .start_sleep_timer(req.duration_seconds)
+        .map_err(|e| {
+            warn!(
+                "Failed to start sleep timer for renderer {}: {}",
+                renderer_id, e
+            );
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!("Failed to start timer: {}", e),
+                }),
+            )
+        })?;
+
+    // Note: TimerStarted event will be emitted by the timer watchdog thread
+
+    Ok(Json(SleepTimerState {
+        active: true,
+        duration_seconds: req.duration_seconds,
+        remaining_seconds: Some(remaining),
+    }))
+}
+
+/// POST /control/renderers/{renderer_id}/timer/update - Met à jour la durée du timer
+#[cfg(feature = "pmoserver")]
+#[utoipa::path(
+    post,
+    path = "/renderers/{renderer_id}/timer/update",
+    params(
+        ("renderer_id" = String, Path, description = "ID unique du renderer")
+    ),
+    request_body = SleepTimerRequest,
+    responses(
+        (status = 200, description = "Timer mis à jour", body = SleepTimerState),
+        (status = 404, description = "Renderer non trouvé", body = ErrorResponse),
+        (status = 400, description = "Durée invalide", body = ErrorResponse),
+        (status = 500, description = "Erreur lors de l'exécution", body = ErrorResponse)
+    ),
+    tag = "control"
+)]
+async fn update_sleep_timer(
+    State(state): State<ControlPointState>,
+    Path(renderer_id): Path<String>,
+    Json(req): Json<SleepTimerRequest>,
+) -> Result<Json<SleepTimerState>, (StatusCode, Json<ErrorResponse>)> {
+    let rid = DeviceId(renderer_id.clone());
+
+    let renderer = state
+        .control_point
+        .music_renderer_by_id(&rid)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("Renderer {} not found", renderer_id),
+                }),
+            )
+        })?;
+
+    // Update the timer
+    let remaining = renderer
+        .update_sleep_timer(req.duration_seconds)
+        .map_err(|e| {
+            warn!(
+                "Failed to update sleep timer for renderer {}: {}",
+                renderer_id, e
+            );
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!("Failed to update timer: {}", e),
+                }),
+            )
+        })?;
+
+    // Note: TimerUpdated event will be emitted by the timer watchdog thread
+
+    Ok(Json(SleepTimerState {
+        active: true,
+        duration_seconds: req.duration_seconds,
+        remaining_seconds: Some(remaining),
+    }))
+}
+
+/// POST /control/renderers/{renderer_id}/timer/cancel - Annule le sleep timer
+#[cfg(feature = "pmoserver")]
+#[utoipa::path(
+    post,
+    path = "/renderers/{renderer_id}/timer/cancel",
+    params(
+        ("renderer_id" = String, Path, description = "ID unique du renderer")
+    ),
+    responses(
+        (status = 200, description = "Timer annulé", body = SuccessResponse),
+        (status = 404, description = "Renderer non trouvé", body = ErrorResponse)
+    ),
+    tag = "control"
+)]
+async fn cancel_sleep_timer(
+    State(state): State<ControlPointState>,
+    Path(renderer_id): Path<String>,
+) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let rid = DeviceId(renderer_id.clone());
+
+    let renderer = state
+        .control_point
+        .music_renderer_by_id(&rid)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("Renderer {} not found", renderer_id),
+                }),
+            )
+        })?;
+
+    // Cancel the timer
+    renderer.cancel_sleep_timer();
+
+    // Note: TimerCancelled event will be emitted by the timer watchdog thread
+
+    Ok(Json(SuccessResponse {
+        message: "Sleep timer cancelled".to_string(),
+    }))
+}
+
+/// GET /control/renderers/{renderer_id}/timer - Récupère l'état du sleep timer
+#[cfg(feature = "pmoserver")]
+#[utoipa::path(
+    get,
+    path = "/renderers/{renderer_id}/timer",
+    params(
+        ("renderer_id" = String, Path, description = "ID unique du renderer")
+    ),
+    responses(
+        (status = 200, description = "État du timer", body = SleepTimerState),
+        (status = 404, description = "Renderer non trouvé", body = ErrorResponse)
+    ),
+    tag = "control"
+)]
+async fn get_sleep_timer_state(
+    State(state): State<ControlPointState>,
+    Path(renderer_id): Path<String>,
+) -> Result<Json<SleepTimerState>, (StatusCode, Json<ErrorResponse>)> {
+    let rid = DeviceId(renderer_id.clone());
+
+    let renderer = state
+        .control_point
+        .music_renderer_by_id(&rid)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("Renderer {} not found", renderer_id),
+                }),
+            )
+        })?;
+
+    let (active, duration_seconds, remaining_seconds) = renderer.sleep_timer_state();
+
+    Ok(Json(SleepTimerState {
+        active,
+        duration_seconds,
+        remaining_seconds,
+    }))
+}
+
+// ============================================================================
 // HANDLERS - BINDING PLAYLIST
 // ============================================================================
 
@@ -1986,6 +2196,20 @@ pub fn create_api_router(state: ControlPointState, control_point: Arc<ControlPoi
         .route(
             "/renderers/{renderer_id}/mute/toggle",
             post(toggle_mute_renderer),
+        )
+        // Sleep timer
+        .route("/renderers/{renderer_id}/timer", get(get_sleep_timer_state))
+        .route(
+            "/renderers/{renderer_id}/timer/start",
+            post(start_sleep_timer),
+        )
+        .route(
+            "/renderers/{renderer_id}/timer/update",
+            post(update_sleep_timer),
+        )
+        .route(
+            "/renderers/{renderer_id}/timer/cancel",
+            post(cancel_sleep_timer),
         )
         // Playlist binding
         .route(

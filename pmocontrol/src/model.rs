@@ -434,6 +434,26 @@ pub enum RendererEvent {
         id: DeviceId,
         binding: Option<PlaylistBinding>,
     },
+    TimerStarted {
+        id: DeviceId,
+        duration_seconds: u32,
+        remaining_seconds: u32,
+    },
+    TimerUpdated {
+        id: DeviceId,
+        duration_seconds: u32,
+        remaining_seconds: u32,
+    },
+    TimerTick {
+        id: DeviceId,
+        remaining_seconds: u32,
+    },
+    TimerExpired {
+        id: DeviceId,
+    },
+    TimerCancelled {
+        id: DeviceId,
+    },
     Online {
         id: DeviceId,
         info: DeviceBasicInfo,
