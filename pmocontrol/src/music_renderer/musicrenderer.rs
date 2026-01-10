@@ -19,6 +19,7 @@ use crate::music_renderer::capabilities::{
 use crate::music_renderer::chromecast_renderer::ChromecastRenderer;
 use crate::music_renderer::linkplay_renderer::LinkPlayRenderer;
 use crate::music_renderer::openhome_renderer::OpenHomeRenderer;
+use crate::music_renderer::sleep_timer::SleepTimer;
 use crate::music_renderer::upnp_renderer::UpnpRenderer;
 use crate::online::DeviceConnectionState;
 use crate::queue::{
@@ -77,6 +78,8 @@ struct MusicRendererState {
     playback_source: PlaybackSource,
     /// Flag to distinguish user-requested stop from automatic events.
     user_stop_requested: bool,
+    /// Sleep timer for auto-stop functionality.
+    sleep_timer: SleepTimer,
 }
 
 #[derive(Debug, Clone)]
@@ -694,6 +697,76 @@ impl MusicRenderer {
         let was_requested = state.user_stop_requested;
         state.user_stop_requested = false;
         was_requested
+    }
+
+    // --- Sleep Timer Management ---
+
+    /// Starts the sleep timer with the given duration in seconds.
+    /// Maximum duration is 2 hours (7200 seconds).
+    ///
+    /// Returns the remaining seconds after starting.
+    ///
+    /// # Errors
+    /// Returns an error if the duration is invalid (0 or > 7200 seconds).
+    pub fn start_sleep_timer(&self, duration_seconds: u32) -> Result<u32, ControlPointError> {
+        let mut state = self.state.lock().unwrap();
+        state
+            .sleep_timer
+            .start(duration_seconds)
+            .map_err(|e| ControlPointError::ControlPoint(e))?;
+
+        Ok(state.sleep_timer.remaining_seconds().unwrap_or(0))
+    }
+
+    /// Updates the sleep timer duration. Resets the timer to the new duration from now.
+    ///
+    /// Returns the new remaining seconds.
+    ///
+    /// # Errors
+    /// Returns an error if the duration is invalid (0 or > 7200 seconds).
+    pub fn update_sleep_timer(&self, duration_seconds: u32) -> Result<u32, ControlPointError> {
+        let mut state = self.state.lock().unwrap();
+        state
+            .sleep_timer
+            .update(duration_seconds)
+            .map_err(|e| ControlPointError::ControlPoint(e))?;
+
+        Ok(state.sleep_timer.remaining_seconds().unwrap_or(0))
+    }
+
+    /// Cancels the sleep timer.
+    pub fn cancel_sleep_timer(&self) {
+        self.state.lock().unwrap().sleep_timer.cancel();
+    }
+
+    /// Returns the remaining seconds of the sleep timer, or None if no timer is active.
+    pub fn sleep_timer_remaining(&self) -> Option<u32> {
+        self.state.lock().unwrap().sleep_timer.remaining_seconds()
+    }
+
+    /// Returns the configured duration of the sleep timer in seconds.
+    pub fn sleep_timer_duration(&self) -> u32 {
+        self.state.lock().unwrap().sleep_timer.duration_seconds()
+    }
+
+    /// Returns true if the sleep timer is active.
+    pub fn is_sleep_timer_active(&self) -> bool {
+        self.state.lock().unwrap().sleep_timer.is_active()
+    }
+
+    /// Returns true if the sleep timer has expired.
+    pub fn is_sleep_timer_expired(&self) -> bool {
+        self.state.lock().unwrap().sleep_timer.is_expired()
+    }
+
+    /// Gets the sleep timer state as a tuple (is_active, duration_seconds, remaining_seconds).
+    pub fn sleep_timer_state(&self) -> (bool, u32, Option<u32>) {
+        let state = self.state.lock().unwrap();
+        (
+            state.sleep_timer.is_active(),
+            state.sleep_timer.duration_seconds(),
+            state.sleep_timer.remaining_seconds(),
+        )
     }
 }
 

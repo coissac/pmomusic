@@ -494,6 +494,92 @@ impl ControlPoint {
                 }
             })?;
 
+        // Thread de surveillance des sleep timers
+        // Vérifie toutes les secondes les timers actifs et émet des événements
+        let registry_for_timer = Arc::clone(&registry);
+        let event_bus_for_timer = event_bus.clone();
+
+        thread::spawn(move || {
+            use std::collections::HashMap;
+
+            // Track last emitted tick for each renderer to avoid spamming events
+            let mut last_tick: HashMap<DeviceId, u32> = HashMap::new();
+
+            loop {
+                thread::sleep(Duration::from_secs(1));
+
+                // Get all renderers with active timers
+                let renderers = {
+                    let reg = registry_for_timer.read().unwrap();
+                    match reg.list_renderers() {
+                        Ok(renderers) => renderers,
+                        Err(err) => {
+                            warn!(error = %err, "Failed to list renderers in timer watchdog");
+                            continue;
+                        }
+                    }
+                };
+
+                for renderer in &renderers {
+                    // Skip renderers without active timers
+                    if !renderer.is_sleep_timer_active() {
+                        continue;
+                    }
+
+                    let renderer_id = renderer.id();
+                    let (is_active, duration, remaining) = renderer.sleep_timer_state();
+
+                    if !is_active {
+                        continue;
+                    }
+
+                    let remaining_seconds = remaining.unwrap_or(0);
+
+                    // Check if timer has expired
+                    if renderer.is_sleep_timer_expired() {
+                        debug!(
+                            renderer = renderer_id.0.as_str(),
+                            "Sleep timer expired, stopping playback"
+                        );
+
+                        // Stop playback
+                        if let Err(err) = renderer.stop() {
+                            warn!(
+                                renderer = renderer_id.0.as_str(),
+                                error = %err,
+                                "Failed to stop renderer when timer expired"
+                            );
+                        }
+
+                        // Cancel the timer
+                        renderer.cancel_sleep_timer();
+
+                        // Emit TimerExpired event
+                        event_bus_for_timer.broadcast(RendererEvent::TimerExpired {
+                            id: renderer_id.clone(),
+                        });
+
+                        // Remove from tick tracking
+                        last_tick.remove(&renderer_id);
+                    } else {
+                        // Emit tick event every second
+                        let should_emit_tick = last_tick
+                            .get(&renderer_id)
+                            .map(|&last| remaining_seconds != last)
+                            .unwrap_or(true);
+
+                        if should_emit_tick {
+                            event_bus_for_timer.broadcast(RendererEvent::TimerTick {
+                                id: renderer_id.clone(),
+                                remaining_seconds,
+                            });
+                            last_tick.insert(renderer_id, remaining_seconds);
+                        }
+                    }
+                }
+            }
+        });
+
         Ok(Self {
             registry,
             // udn_cache,

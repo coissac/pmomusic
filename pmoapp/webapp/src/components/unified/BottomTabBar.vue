@@ -2,6 +2,7 @@
 import { computed } from "vue";
 import { Server, Music2 } from "lucide-vue-next";
 import StatusBadge from "@/components/pmocontrol/StatusBadge.vue";
+import TimerControl from "@/components/pmocontrol/TimerControl.vue";
 import type {
     RendererSummary,
     RendererState,
@@ -110,6 +111,11 @@ function handleRendererDrawerClick() {
             <div v-else class="renderer-info-content empty">
                 <p class="no-renderer">Aucun renderer sélectionné</p>
             </div>
+        </div>
+
+        <!-- Sleep Timer (si un renderer est actif) -->
+        <div v-if="activeRenderer" class="timer-section">
+            <TimerControl :renderer-id="activeRenderer.id" />
         </div>
 
         <!-- Bouton pour ouvrir le drawer des renderers (droite) -->
