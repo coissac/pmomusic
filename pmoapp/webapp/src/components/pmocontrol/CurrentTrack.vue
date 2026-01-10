@@ -356,6 +356,7 @@ async function handleProgressBarClick(event: MouseEvent) {
     display: flex;
     flex-direction: column;
     gap: var(--spacing-xs);
+    padding: 0 10px;
 }
 
 .progress-bar {
