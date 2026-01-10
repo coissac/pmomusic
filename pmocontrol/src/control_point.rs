@@ -1318,8 +1318,17 @@ impl ControlPoint {
             );
         }
 
+        // 5b. Detach playlist binding from source renderer
+        self.detach_queue_playlist(source_renderer_id);
+        tracing::debug!(
+            source = source_renderer_id.0.as_str(),
+            "Detached playlist binding from source renderer"
+        );
+
         // 6. Start playback on destination renderer (if there was a current item)
         if source_snapshot.current_index.is_some() && !source_snapshot.items.is_empty() {
+            // play() détecte automatiquement la queue et joue le track courant
+            // (comportement unifié pour tous les backends)
             if let Err(e) = dest_renderer.play() {
                 tracing::warn!(
                     dest = dest_renderer_id.0.as_str(),
