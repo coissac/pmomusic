@@ -1,3 +1,4 @@
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -13,10 +14,13 @@ use crate::linkplay_client::extract_linkplay_host;
 use crate::model::{PlaybackState, RendererInfo};
 use crate::music_renderer::RendererFromMediaRendererInfo;
 use crate::music_renderer::capabilities::{
-    PlaybackPosition, PlaybackPositionInfo, PlaybackStatus, TransportControl, VolumeControl,
+    PlaybackPosition, PlaybackPositionInfo, PlaybackStatus, QueueTransportControl, RendererBackend,
+    TransportControl, VolumeControl,
 };
 use crate::music_renderer::musicrenderer::MusicRendererBackend;
 use crate::music_renderer::time_utils::{format_hhmmss, ms_to_seconds, parse_hhmmss_strict};
+use crate::queue::MusicQueue;
+use crate::queue::{EnqueueMode, PlaybackItem, QueueBackend, QueueSnapshot};
 
 /// Raw response from Arylic MCU+PINFGET command
 #[derive(Debug, Deserialize)]
@@ -40,6 +44,7 @@ pub struct ArylicTcpRenderer {
     host: String,
     port: u16,
     timeout: Duration,
+    queue: Arc<Mutex<MusicQueue>>,
 }
 
 impl ArylicTcpRenderer {
@@ -111,10 +116,13 @@ impl RendererFromMediaRendererInfo for ArylicTcpRenderer {
             ))
         })?;
 
+        let queue = Arc::new(Mutex::new(MusicQueue::from_renderer_info(info)?));
+
         Ok(Self {
             host,
             port: ARYLIC_TCP_PORT,
             timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
+            queue,
         })
     }
 
@@ -206,6 +214,135 @@ impl PlaybackPosition for ArylicTcpRenderer {
     fn playback_position(&self) -> Result<PlaybackPositionInfo, ControlPointError> {
         let info = self.fetch_playback_info()?;
         Ok(info.position_info())
+    }
+}
+
+impl RendererBackend for ArylicTcpRenderer {
+    fn queue(&self) -> &Arc<Mutex<MusicQueue>> {
+        &self.queue
+    }
+}
+
+impl QueueTransportControl for ArylicTcpRenderer {
+    fn play_from_queue(&self) -> Result<(), ControlPointError> {
+        let mut queue = self.queue.lock().unwrap();
+
+        let current_index = match queue.current_index()? {
+            Some(idx) => idx,
+            None => {
+                if queue.len()? > 0 {
+                    queue.set_index(Some(0))?;
+                    0
+                } else {
+                    return Err(ControlPointError::QueueError("Queue is empty".into()));
+                }
+            }
+        };
+
+        let item = queue
+            .get_item(current_index)?
+            .ok_or_else(|| ControlPointError::QueueError("Current item not found".into()))?;
+
+        let uri = item.uri.clone();
+        drop(queue);
+
+        self.play_uri(&uri, "")
+    }
+
+    fn play_next(&self) -> Result<(), ControlPointError> {
+        {
+            let mut queue = self.queue.lock().unwrap();
+            if !queue.advance()? {
+                return Err(ControlPointError::QueueError("No next track".into()));
+            }
+        }
+
+        self.play_from_queue()
+    }
+
+    fn play_previous(&self) -> Result<(), ControlPointError> {
+        {
+            let mut queue = self.queue.lock().unwrap();
+            if !queue.rewind()? {
+                return Err(ControlPointError::QueueError("No previous track".into()));
+            }
+        }
+
+        self.play_from_queue()
+    }
+
+    fn play_from_index(&self, index: usize) -> Result<(), ControlPointError> {
+        {
+            let mut queue = self.queue.lock().unwrap();
+            queue.set_index(Some(index))?;
+        }
+
+        self.play_from_queue()
+    }
+}
+
+impl QueueBackend for ArylicTcpRenderer {
+    fn len(&self) -> Result<usize, ControlPointError> {
+        self.queue.lock().unwrap().len()
+    }
+
+    fn track_ids(&self) -> Result<Vec<u32>, ControlPointError> {
+        self.queue.lock().unwrap().track_ids()
+    }
+
+    fn id_to_position(&self, id: u32) -> Result<usize, ControlPointError> {
+        self.queue.lock().unwrap().id_to_position(id)
+    }
+
+    fn position_to_id(&self, id: usize) -> Result<u32, ControlPointError> {
+        self.queue.lock().unwrap().position_to_id(id)
+    }
+
+    fn current_track(&self) -> Result<Option<u32>, ControlPointError> {
+        self.queue.lock().unwrap().current_track()
+    }
+
+    fn current_index(&self) -> Result<Option<usize>, ControlPointError> {
+        self.queue.lock().unwrap().current_index()
+    }
+
+    fn queue_snapshot(&self) -> Result<QueueSnapshot, ControlPointError> {
+        self.queue.lock().unwrap().queue_snapshot()
+    }
+
+    fn set_index(&mut self, index: Option<usize>) -> Result<(), ControlPointError> {
+        self.queue.lock().unwrap().set_index(index)
+    }
+
+    fn replace_queue(
+        &mut self,
+        items: Vec<PlaybackItem>,
+        current_index: Option<usize>,
+    ) -> Result<(), ControlPointError> {
+        self.queue
+            .lock()
+            .unwrap()
+            .replace_queue(items, current_index)
+    }
+
+    fn sync_queue(&mut self, items: Vec<PlaybackItem>) -> Result<(), ControlPointError> {
+        self.queue.lock().unwrap().sync_queue(items)
+    }
+
+    fn get_item(&self, index: usize) -> Result<Option<PlaybackItem>, ControlPointError> {
+        self.queue.lock().unwrap().get_item(index)
+    }
+
+    fn replace_item(&mut self, index: usize, item: PlaybackItem) -> Result<(), ControlPointError> {
+        self.queue.lock().unwrap().replace_item(index, item)
+    }
+
+    fn enqueue_items(
+        &mut self,
+        items: Vec<PlaybackItem>,
+        mode: EnqueueMode,
+    ) -> Result<(), ControlPointError> {
+        self.queue.lock().unwrap().enqueue_items(items, mode)
     }
 }
 

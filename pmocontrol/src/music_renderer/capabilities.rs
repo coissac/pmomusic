@@ -1,7 +1,35 @@
 // pmocontrol/src/capabilities.rs
 use anyhow::Result;
+use std::sync::{Arc, Mutex};
 
+use crate::queue::MusicQueue;
 use crate::{errors::ControlPointError, model::PlaybackState};
+
+/// Backend-specific operations for renderers.
+///
+/// This trait provides access to backend-specific resources like the queue.
+pub trait RendererBackend {
+    /// Returns a reference to the queue associated with this backend.
+    fn queue(&self) -> &Arc<Mutex<MusicQueue>>;
+}
+
+/// Queue-aware transport control operations.
+///
+/// These operations combine queue management with transport control,
+/// allowing navigation (next/previous) and track selection from the queue.
+pub trait QueueTransportControl {
+    /// Play the next track from the queue.
+    fn play_next(&self) -> Result<(), ControlPointError>;
+
+    /// Play the previous track from the queue.
+    fn play_previous(&self) -> Result<(), ControlPointError>;
+
+    /// Play from the queue at the current index (or initialize to 0 if not set).
+    fn play_from_queue(&self) -> Result<(), ControlPointError>;
+
+    /// Play from a specific index in the queue.
+    fn play_from_index(&self, index: usize) -> Result<(), ControlPointError>;
+}
 
 /// Logical playback position across backends.
 ///

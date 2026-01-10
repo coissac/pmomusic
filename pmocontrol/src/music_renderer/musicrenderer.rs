@@ -14,7 +14,8 @@ use crate::model::{PlaybackSource, PlaybackState, RendererInfo, RendererProtocol
 use crate::music_renderer::RendererFromMediaRendererInfo;
 use crate::music_renderer::arylic_tcp::ArylicTcpRenderer;
 use crate::music_renderer::capabilities::{
-    PlaybackPosition, PlaybackPositionInfo, PlaybackStatus, TransportControl, VolumeControl,
+    PlaybackPosition, PlaybackPositionInfo, PlaybackStatus, QueueTransportControl, RendererBackend,
+    TransportControl, VolumeControl,
 };
 use crate::music_renderer::chromecast_renderer::ChromecastRenderer;
 use crate::music_renderer::linkplay_renderer::LinkPlayRenderer;
@@ -87,7 +88,6 @@ pub struct MusicRenderer {
     info: RendererInfo,
     connection: Arc<Mutex<DeviceConnectionState>>,
     backend: Arc<Mutex<MusicRendererBackend>>,
-    queue: Arc<Mutex<MusicQueue>>,
     playlist_binding: Arc<Mutex<Option<PlaylistBinding>>>,
     state: Arc<Mutex<MusicRendererState>>,
 }
@@ -96,7 +96,6 @@ impl MusicRenderer {
     pub fn new(
         info: RendererInfo,
         backend: Arc<Mutex<MusicRendererBackend>>,
-        queue: Arc<Mutex<MusicQueue>>,
     ) -> Arc<MusicRenderer> {
         let connection = DeviceConnectionState::new();
 
@@ -104,7 +103,6 @@ impl MusicRenderer {
             info,
             connection: Arc::new(Mutex::new(connection)),
             backend,
-            queue,
             playlist_binding: Arc::new(Mutex::new(None)),
             state: Arc::new(Mutex::new(MusicRendererState::default())),
         };
@@ -115,13 +113,11 @@ impl MusicRenderer {
     pub fn from_renderer_info(info: &RendererInfo) -> Result<MusicRenderer, ControlPointError> {
         let connection = Arc::new(Mutex::new(DeviceConnectionState::new()));
         let backend = MusicRendererBackend::make_from_renderer_info(info)?;
-        let queue = MusicQueue::make_from_renderer_info(info)?;
 
         let renderer = MusicRenderer {
             info: info.clone(),
             connection,
             backend,
-            queue,
             playlist_binding: Arc::new(Mutex::new(None)),
             state: Arc::new(Mutex::new(MusicRendererState::default())),
         };
@@ -187,9 +183,9 @@ impl MusicRenderer {
     /// Prepare the renderer for attaching a new playlist by clearing the queue and stopping playback.
     pub fn clear_for_playlist_attach(&self) -> Result<(), ControlPointError> {
         // Clear the queue first
-        self.queue
+        self.backend
             .lock()
-            .expect("Queue mutex poisoned")
+            .expect("Backend mutex poisoned")
             .clear_queue()?;
 
         // Then stop playback (ignore errors if already stopped)
@@ -210,9 +206,9 @@ impl MusicRenderer {
     /// Get the current queue snapshot.
     pub fn queue_snapshot(&self) -> Result<QueueSnapshot, ControlPointError> {
         let mut snapshot = self
-            .queue
+            .backend
             .lock()
-            .expect("Queue mutex poisoned")
+            .expect("Backend mutex poisoned")
             .queue_snapshot()?;
 
         // Enrich snapshot with playlist_id from binding if available
@@ -232,72 +228,42 @@ impl MusicRenderer {
     /// Get the current queue item without advancing.
     /// Returns the item and count of remaining items after current.
     pub fn peek_current(&self) -> Result<Option<(PlaybackItem, usize)>, ControlPointError> {
-        self.queue
+        self.backend
             .lock()
-            .expect("Queue mutex poisoned")
+            .expect("Backend mutex poisoned")
             .peek_current()
     }
 
     /// Get the count of items remaining after the current index.
     pub fn upcoming_len(&self) -> Result<usize, ControlPointError> {
-        self.queue
+        self.backend
             .lock()
-            .expect("Queue mutex poisoned")
+            .expect("Backend mutex poisoned")
             .upcoming_len()
     }
 
     /// Play the current item from the queue.
     pub fn play_current_from_queue(&self) -> Result<(), ControlPointError> {
-        let mut queue = self.queue.lock().expect("Queue mutex poisoned");
-        let backend = self.backend.lock().expect("Backend mutex poisoned");
-
-        // Get the current item from the queue
-        let (item, _remaining) = queue.peek_current()?.ok_or_else(|| {
-            ControlPointError::QueueError("Queue is empty, cannot play current".to_string())
-        })?;
-
-        // Build DIDL metadata if available
-        let metadata_xml = item
-            .metadata
-            .as_ref()
-            .map(|m| build_didl_lite_metadata(m, &item.uri, &item.protocol_info))
-            .unwrap_or_default();
-
-        // Play the URI using the backend
-        backend.play_uri(&item.uri, &metadata_xml)?;
-
-        Ok(())
+        self.backend
+            .lock()
+            .expect("Backend mutex poisoned")
+            .play_from_queue()
     }
 
     /// Advance to and play the next item from the queue.
     pub fn play_next_from_queue(&self) -> Result<(), ControlPointError> {
-        let mut queue = self.queue.lock().expect("Queue mutex poisoned");
-        let backend = self.backend.lock().expect("Backend mutex poisoned");
-
-        // Dequeue the next item
-        let (item, _remaining) = queue
-            .dequeue_next()?
-            .ok_or_else(|| ControlPointError::QueueError("No next item in queue".to_string()))?;
-
-        // Build DIDL metadata if available
-        let metadata_xml = item
-            .metadata
-            .as_ref()
-            .map(|m| build_didl_lite_metadata(m, &item.uri, &item.protocol_info))
-            .unwrap_or_default();
-
-        // Play the URI using the backend
-        backend.play_uri(&item.uri, &metadata_xml)?;
-
-        Ok(())
-    }
-
-    /// Transport control: play URI with metadata
-    pub fn play_uri(&self, uri: &str, metadata: &str) -> Result<(), ControlPointError> {
         self.backend
             .lock()
             .expect("Backend mutex poisoned")
-            .play_uri(uri, metadata)
+            .play_next()
+    }
+
+    /// Play from a specific index in the queue.
+    pub fn play_from_index(&self, index: usize) -> Result<(), ControlPointError> {
+        self.backend
+            .lock()
+            .expect("Backend mutex poisoned")
+            .play_from_index(index)
     }
 
     /// Transport control: play
@@ -306,18 +272,16 @@ impl MusicRenderer {
     /// joue le track courant de la queue automatiquement (comportement unifié pour tous les backends).
     pub fn play(&self) -> Result<(), ControlPointError> {
         // Vérifier si on a une queue non vide
-        let queue = self.queue.lock().expect("Queue mutex poisoned");
-        let queue_not_empty = queue.len().unwrap_or(0) > 0;
-        drop(queue); // Libérer le lock avant l'appel au backend
+        let backend = self.backend.lock().expect("Backend mutex poisoned");
+        let queue_not_empty = backend.len().unwrap_or(0) > 0;
 
         if queue_not_empty {
             // Si on a des items dans la queue, jouer le track courant (ou le premier si aucun n'est sélectionné)
-            // peek_current() initialise automatiquement l'index à 0 si nécessaire
             // Cela fonctionne pour tous les backends (UPnP interne, OpenHome, etc.)
-            self.play_current_from_queue()
+            backend.play_from_queue()
         } else {
             // Queue vide : déléguer au backend (reprend la lecture en cours, etc.)
-            self.backend.lock().expect("Backend mutex poisoned").play()
+            backend.play()
         }
     }
 
@@ -506,14 +470,20 @@ impl MusicRenderer {
             .unwrap_or(false)
     }
 
+    /// Returns the number of items in the queue.
+    pub fn len(&self) -> Result<usize, ControlPointError> {
+        let backend = self.backend.lock().expect("Backend mutex poisoned");
+        backend.len()
+    }
+
     /// Add items to the queue using the specified enqueue mode.
     pub fn enqueue_items(
         &self,
         items: Vec<PlaybackItem>,
         mode: EnqueueMode,
     ) -> Result<(), ControlPointError> {
-        let mut queue = self.queue.lock().expect("Queue mutex poisoned");
-        queue.enqueue_items(items, mode)
+        let mut backend = self.backend.lock().expect("Backend mutex poisoned");
+        backend.enqueue_items(items, mode)
     }
 
     /// Synchronize the queue with new items while preserving the current track.
@@ -523,21 +493,33 @@ impl MusicRenderer {
     /// - If the current track is NOT in the new items, it's preserved as the first item
     /// - If there's no current track, the queue is simply replaced
     pub fn sync_queue(&self, items: Vec<PlaybackItem>) -> Result<(), ControlPointError> {
-        let mut queue = self.queue.lock().expect("Queue mutex poisoned");
-        queue.sync_queue(items)
+        let mut backend = self.backend.lock().expect("Backend mutex poisoned");
+        backend.sync_queue(items)
     }
 
     /// Set the current queue index (for advanced use).
     /// Note: This does NOT start playback. Use select_queue_track() to play.
     pub fn set_queue_index(&self, index: Option<usize>) -> Result<(), ControlPointError> {
-        let mut queue = self.queue.lock().expect("Queue mutex poisoned");
-        queue.set_index(index)
+        let mut backend = self.backend.lock().expect("Backend mutex poisoned");
+        backend.set_index(index)
     }
 
     /// Clears the renderer's queue using the generic QueueBackend trait.
     pub fn clear_queue(&self) -> Result<(), ControlPointError> {
-        let mut queue = self.queue.lock().expect("Queue mutex poisoned");
-        queue.clear_queue()
+        let mut backend = self.backend.lock().expect("Backend mutex poisoned");
+        backend.clear_queue()
+    }
+
+    /// Dequeues and returns the next item from the queue.
+    pub fn dequeue_next(&self) -> Result<Option<(PlaybackItem, usize)>, ControlPointError> {
+        let mut backend = self.backend.lock().expect("Backend mutex poisoned");
+        backend.dequeue_next()
+    }
+
+    /// Sets the current index in the queue.
+    pub fn set_index(&self, index: Option<usize>) -> Result<(), ControlPointError> {
+        let mut backend = self.backend.lock().expect("Backend mutex poisoned");
+        backend.set_index(index)
     }
 
     /// Replaces the entire queue with new items and sets the current index.
@@ -547,8 +529,8 @@ impl MusicRenderer {
         items: Vec<PlaybackItem>,
         current_index: Option<usize>,
     ) -> Result<(), ControlPointError> {
-        let mut queue = self.queue.lock().expect("Queue mutex poisoned");
-        queue.replace_queue(items, current_index)
+        let mut backend = self.backend.lock().expect("Backend mutex poisoned");
+        backend.replace_queue(items, current_index)
     }
 
     /// Adds a track to the queue.
@@ -578,34 +560,14 @@ impl MusicRenderer {
     /// Converts the track ID to a position using the generic QueueBackend trait,
     /// then plays the track.
     pub fn select_queue_track(&self, track_id: u32) -> Result<(), ControlPointError> {
-        let queue = self.queue.lock().expect("Queue mutex poisoned");
+        // Convert track_id to index
+        let index = {
+            let backend = self.backend.lock().expect("Backend mutex poisoned");
+            backend.id_to_position(track_id)?
+        };
 
-        // Convert track ID to position using generic QueueBackend trait
-        let position = queue.id_to_position(track_id)?;
-        drop(queue);
-
-        // Set the index
-        let mut queue = self.queue.lock().expect("Queue mutex poisoned");
-        queue.set_index(Some(position))?;
-
-        // Get the item to play
-        let item = queue
-            .get_item(position)?
-            .ok_or_else(|| ControlPointError::QueueError("Track not found".to_string()))?;
-        drop(queue);
-
-        // Build metadata XML
-        let metadata_xml = item
-            .metadata
-            .as_ref()
-            .map(|m| build_didl_lite_metadata(m, &item.uri, &item.protocol_info))
-            .unwrap_or_default();
-
-        // Play the item using TransportControl
-        let backend = self.backend.lock().expect("Backend mutex poisoned");
-        backend.play_uri(&item.uri, &metadata_xml)?;
-
-        Ok(())
+        // Play from that index
+        self.play_from_index(index)
     }
 
     /// Synchronizes the queue state with the backend.
@@ -613,9 +575,9 @@ impl MusicRenderer {
     /// For backends with persistent queues (OpenHome), this refreshes the local view.
     /// For others, this is essentially a no-op (just reads the current state).
     pub fn sync_queue_state(&self) -> Result<(), ControlPointError> {
-        let queue = self.queue.lock().expect("Queue mutex poisoned");
+        let backend = self.backend.lock().expect("Backend mutex poisoned");
         // Calling queue_snapshot() triggers a refresh for backends that need it
-        let _ = queue.queue_snapshot()?;
+        let _ = backend.queue_snapshot()?;
         Ok(())
     }
 
@@ -623,29 +585,25 @@ impl MusicRenderer {
     ///
     /// This is primarily for backends with persistent queues (OpenHome).
     pub fn play_current_from_backend_queue(&self) -> Result<(), ControlPointError> {
-        let queue = self.queue.lock().expect("Queue mutex poisoned");
+        let backend = self.backend.lock().expect("Backend mutex poisoned");
 
         // Get current track ID using generic QueueBackend trait
-        let track_id = queue
+        let track_id = backend
             .current_track()?
             .ok_or_else(|| ControlPointError::QueueError("No current track".to_string()))?;
 
-        drop(queue);
+        drop(backend);
 
         // Play it using select_queue_track
         self.select_queue_track(track_id)
     }
 
-    /// Returns a reference to the queue (read-only access via lock).
-    /// This is a convenience method to avoid repetitive `queue.lock().unwrap()` patterns.
-    pub fn get_queue(&self) -> std::sync::MutexGuard<'_, MusicQueue> {
-        self.queue.lock().unwrap()
-    }
-
-    /// Returns a mutable reference to the queue (write access via lock).
-    /// This is a convenience method to avoid repetitive `queue.lock().unwrap()` patterns.
-    pub fn get_queue_mut(&self) -> std::sync::MutexGuard<'_, MusicQueue> {
-        self.queue.lock().unwrap()
+    /// Plays from the queue at the current position.
+    ///
+    /// Uses the backend's play_from_queue which preserves the queue for all backends.
+    pub fn play_from_queue(&self) -> Result<(), ControlPointError> {
+        let backend = self.backend.lock().expect("Backend mutex poisoned");
+        backend.play_from_queue()
     }
 
     // --- Playback State Management ---
@@ -771,7 +729,11 @@ impl MusicRenderer {
 }
 
 /// Helper function to build DIDL-Lite metadata XML from TrackMetadata
-fn build_didl_lite_metadata(metadata: &TrackMetadata, uri: &str, protocol_info: &str) -> String {
+pub(crate) fn build_didl_lite_metadata(
+    metadata: &TrackMetadata,
+    uri: &str,
+    protocol_info: &str,
+) -> String {
     format!(
         r#"<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/">
 <item id="0" parentID="-1" restricted="1">
@@ -1084,6 +1046,220 @@ impl PlaybackPosition for MusicRendererBackend {
             MusicRendererBackend::ArylicTcp(r) => r.playback_position(),
             MusicRendererBackend::Chromecast(cc) => cc.playback_position(),
             MusicRendererBackend::HybridUpnpArylic { arylic, .. } => arylic.playback_position(),
+        }
+    }
+}
+
+impl RendererBackend for MusicRendererBackend {
+    fn queue(&self) -> &Arc<Mutex<MusicQueue>> {
+        match self {
+            MusicRendererBackend::Upnp(r) => r.queue(),
+            MusicRendererBackend::OpenHome(r) => r.queue(),
+            MusicRendererBackend::LinkPlay(r) => r.queue(),
+            MusicRendererBackend::ArylicTcp(r) => r.queue(),
+            MusicRendererBackend::Chromecast(cc) => cc.queue(),
+            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.queue(),
+        }
+    }
+}
+
+impl QueueTransportControl for MusicRendererBackend {
+    fn play_from_queue(&self) -> Result<(), ControlPointError> {
+        match self {
+            MusicRendererBackend::Upnp(r) => r.play_from_queue(),
+            MusicRendererBackend::OpenHome(r) => r.play_from_queue(),
+            MusicRendererBackend::LinkPlay(r) => r.play_from_queue(),
+            MusicRendererBackend::ArylicTcp(r) => r.play_from_queue(),
+            MusicRendererBackend::Chromecast(cc) => cc.play_from_queue(),
+            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.play_from_queue(),
+        }
+    }
+
+    fn play_next(&self) -> Result<(), ControlPointError> {
+        match self {
+            MusicRendererBackend::Upnp(r) => r.play_next(),
+            MusicRendererBackend::OpenHome(r) => r.play_next(),
+            MusicRendererBackend::LinkPlay(r) => r.play_next(),
+            MusicRendererBackend::ArylicTcp(r) => r.play_next(),
+            MusicRendererBackend::Chromecast(cc) => cc.play_next(),
+            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.play_next(),
+        }
+    }
+
+    fn play_previous(&self) -> Result<(), ControlPointError> {
+        match self {
+            MusicRendererBackend::Upnp(r) => r.play_previous(),
+            MusicRendererBackend::OpenHome(r) => r.play_previous(),
+            MusicRendererBackend::LinkPlay(r) => r.play_previous(),
+            MusicRendererBackend::ArylicTcp(r) => r.play_previous(),
+            MusicRendererBackend::Chromecast(cc) => cc.play_previous(),
+            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.play_previous(),
+        }
+    }
+
+    fn play_from_index(&self, index: usize) -> Result<(), ControlPointError> {
+        match self {
+            MusicRendererBackend::Upnp(r) => r.play_from_index(index),
+            MusicRendererBackend::OpenHome(r) => r.play_from_index(index),
+            MusicRendererBackend::LinkPlay(r) => r.play_from_index(index),
+            MusicRendererBackend::ArylicTcp(r) => r.play_from_index(index),
+            MusicRendererBackend::Chromecast(cc) => cc.play_from_index(index),
+            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.play_from_index(index),
+        }
+    }
+}
+
+impl QueueBackend for MusicRendererBackend {
+    fn len(&self) -> Result<usize, ControlPointError> {
+        match self {
+            MusicRendererBackend::Upnp(r) => r.len(),
+            MusicRendererBackend::OpenHome(r) => r.len(),
+            MusicRendererBackend::LinkPlay(r) => r.len(),
+            MusicRendererBackend::ArylicTcp(r) => r.len(),
+            MusicRendererBackend::Chromecast(cc) => cc.len(),
+            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.len(),
+        }
+    }
+
+    fn track_ids(&self) -> Result<Vec<u32>, ControlPointError> {
+        match self {
+            MusicRendererBackend::Upnp(r) => r.track_ids(),
+            MusicRendererBackend::OpenHome(r) => r.track_ids(),
+            MusicRendererBackend::LinkPlay(r) => r.track_ids(),
+            MusicRendererBackend::ArylicTcp(r) => r.track_ids(),
+            MusicRendererBackend::Chromecast(cc) => cc.track_ids(),
+            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.track_ids(),
+        }
+    }
+
+    fn id_to_position(&self, id: u32) -> Result<usize, ControlPointError> {
+        match self {
+            MusicRendererBackend::Upnp(r) => r.id_to_position(id),
+            MusicRendererBackend::OpenHome(r) => r.id_to_position(id),
+            MusicRendererBackend::LinkPlay(r) => r.id_to_position(id),
+            MusicRendererBackend::ArylicTcp(r) => r.id_to_position(id),
+            MusicRendererBackend::Chromecast(cc) => cc.id_to_position(id),
+            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.id_to_position(id),
+        }
+    }
+
+    fn position_to_id(&self, id: usize) -> Result<u32, ControlPointError> {
+        match self {
+            MusicRendererBackend::Upnp(r) => r.position_to_id(id),
+            MusicRendererBackend::OpenHome(r) => r.position_to_id(id),
+            MusicRendererBackend::LinkPlay(r) => r.position_to_id(id),
+            MusicRendererBackend::ArylicTcp(r) => r.position_to_id(id),
+            MusicRendererBackend::Chromecast(cc) => cc.position_to_id(id),
+            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.position_to_id(id),
+        }
+    }
+
+    fn current_track(&self) -> Result<Option<u32>, ControlPointError> {
+        match self {
+            MusicRendererBackend::Upnp(r) => r.current_track(),
+            MusicRendererBackend::OpenHome(r) => r.current_track(),
+            MusicRendererBackend::LinkPlay(r) => r.current_track(),
+            MusicRendererBackend::ArylicTcp(r) => r.current_track(),
+            MusicRendererBackend::Chromecast(cc) => cc.current_track(),
+            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.current_track(),
+        }
+    }
+
+    fn current_index(&self) -> Result<Option<usize>, ControlPointError> {
+        match self {
+            MusicRendererBackend::Upnp(r) => r.current_index(),
+            MusicRendererBackend::OpenHome(r) => r.current_index(),
+            MusicRendererBackend::LinkPlay(r) => r.current_index(),
+            MusicRendererBackend::ArylicTcp(r) => r.current_index(),
+            MusicRendererBackend::Chromecast(cc) => cc.current_index(),
+            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.current_index(),
+        }
+    }
+
+    fn queue_snapshot(&self) -> Result<QueueSnapshot, ControlPointError> {
+        match self {
+            MusicRendererBackend::Upnp(r) => r.queue_snapshot(),
+            MusicRendererBackend::OpenHome(r) => r.queue_snapshot(),
+            MusicRendererBackend::LinkPlay(r) => r.queue_snapshot(),
+            MusicRendererBackend::ArylicTcp(r) => r.queue_snapshot(),
+            MusicRendererBackend::Chromecast(cc) => cc.queue_snapshot(),
+            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.queue_snapshot(),
+        }
+    }
+
+    fn set_index(&mut self, index: Option<usize>) -> Result<(), ControlPointError> {
+        match self {
+            MusicRendererBackend::Upnp(r) => r.set_index(index),
+            MusicRendererBackend::OpenHome(r) => r.set_index(index),
+            MusicRendererBackend::LinkPlay(r) => r.set_index(index),
+            MusicRendererBackend::ArylicTcp(r) => r.set_index(index),
+            MusicRendererBackend::Chromecast(cc) => cc.set_index(index),
+            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.set_index(index),
+        }
+    }
+
+    fn replace_queue(
+        &mut self,
+        items: Vec<PlaybackItem>,
+        current_index: Option<usize>,
+    ) -> Result<(), ControlPointError> {
+        match self {
+            MusicRendererBackend::Upnp(r) => r.replace_queue(items, current_index),
+            MusicRendererBackend::OpenHome(r) => r.replace_queue(items, current_index),
+            MusicRendererBackend::LinkPlay(r) => r.replace_queue(items, current_index),
+            MusicRendererBackend::ArylicTcp(r) => r.replace_queue(items, current_index),
+            MusicRendererBackend::Chromecast(cc) => cc.replace_queue(items, current_index),
+            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => {
+                upnp.replace_queue(items, current_index)
+            }
+        }
+    }
+
+    fn sync_queue(&mut self, items: Vec<PlaybackItem>) -> Result<(), ControlPointError> {
+        match self {
+            MusicRendererBackend::Upnp(r) => r.sync_queue(items),
+            MusicRendererBackend::OpenHome(r) => r.sync_queue(items),
+            MusicRendererBackend::LinkPlay(r) => r.sync_queue(items),
+            MusicRendererBackend::ArylicTcp(r) => r.sync_queue(items),
+            MusicRendererBackend::Chromecast(cc) => cc.sync_queue(items),
+            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.sync_queue(items),
+        }
+    }
+
+    fn get_item(&self, index: usize) -> Result<Option<PlaybackItem>, ControlPointError> {
+        match self {
+            MusicRendererBackend::Upnp(r) => r.get_item(index),
+            MusicRendererBackend::OpenHome(r) => r.get_item(index),
+            MusicRendererBackend::LinkPlay(r) => r.get_item(index),
+            MusicRendererBackend::ArylicTcp(r) => r.get_item(index),
+            MusicRendererBackend::Chromecast(cc) => cc.get_item(index),
+            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.get_item(index),
+        }
+    }
+
+    fn replace_item(&mut self, index: usize, item: PlaybackItem) -> Result<(), ControlPointError> {
+        match self {
+            MusicRendererBackend::Upnp(r) => r.replace_item(index, item),
+            MusicRendererBackend::OpenHome(r) => r.replace_item(index, item),
+            MusicRendererBackend::LinkPlay(r) => r.replace_item(index, item),
+            MusicRendererBackend::ArylicTcp(r) => r.replace_item(index, item),
+            MusicRendererBackend::Chromecast(cc) => cc.replace_item(index, item),
+            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.replace_item(index, item),
+        }
+    }
+
+    fn enqueue_items(
+        &mut self,
+        items: Vec<PlaybackItem>,
+        mode: EnqueueMode,
+    ) -> Result<(), ControlPointError> {
+        match self {
+            MusicRendererBackend::Upnp(r) => r.enqueue_items(items, mode),
+            MusicRendererBackend::OpenHome(r) => r.enqueue_items(items, mode),
+            MusicRendererBackend::LinkPlay(r) => r.enqueue_items(items, mode),
+            MusicRendererBackend::ArylicTcp(r) => r.enqueue_items(items, mode),
+            MusicRendererBackend::Chromecast(cc) => cc.enqueue_items(items, mode),
+            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.enqueue_items(items, mode),
         }
     }
 }

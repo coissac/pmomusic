@@ -640,7 +640,7 @@ impl ControlPoint {
         })?;
 
         // Get queue length before clearing
-        let removed = renderer.get_queue().upcoming_len().unwrap_or(0);
+        let removed = renderer.upcoming_len().unwrap_or(0);
 
         renderer.clear_queue()?;
 
@@ -697,11 +697,8 @@ impl ControlPoint {
             ControlPointError::SnapshotError(format!("Renderer {} not found", renderer_id.0))
         })?;
 
-        let new_len = {
-            let mut queue = renderer.get_queue_mut();
-            queue.enqueue_items(items, mode)?;
-            queue.upcoming_len()?
-        };
+        renderer.enqueue_items(items, mode)?;
+        let new_len = renderer.upcoming_len()?;
 
         debug!(
             renderer = renderer_id.0.as_str(),
@@ -789,7 +786,6 @@ impl ControlPoint {
 
         // Get queue from renderer (works for all backends)
         let queue_snapshot = renderer
-            .get_queue()
             .queue_snapshot()
             .map_err(|e| anyhow!("Failed to get queue snapshot: {}", e))?;
 
@@ -955,7 +951,7 @@ impl ControlPoint {
         })?;
 
         // Use generic queue access (works for all backends)
-        let Some((item, remaining)) = renderer.get_queue_mut().peek_current()? else {
+        let Some((item, remaining)) = renderer.peek_current()? else {
             debug!(
                 renderer = renderer_id.0.as_str(),
                 "play_current_from_queue: queue is empty or no current item"
@@ -975,9 +971,8 @@ impl ControlPoint {
         // when renderer sends Stopped event during SetAVTransportURI
         renderer.set_playback_source(PlaybackSource::None);
 
-        // Start playback
-        let didl_metadata = playback_item_to_didl(&item);
-        if let Err(err) = renderer.play_uri(&item.uri, &didl_metadata) {
+        // Start playback using play_from_queue which preserves the queue
+        if let Err(err) = renderer.play_from_queue() {
             error!(
                 renderer = renderer_id.0.as_str(),
                 error = %err,
@@ -1008,61 +1003,50 @@ impl ControlPoint {
             ControlPointError::SnapshotError(format!("Renderer {} not found", renderer_id.0))
         })?;
 
-        // Dequeue next item
-        let Some((item, remaining_after)) = renderer.get_queue_mut().dequeue_next()? else {
+        // Check if queue is empty before trying to play next
+        if renderer.len()? == 0 {
             debug!(
                 renderer = renderer_id.0.as_str(),
                 "play_next_from_queue: queue is empty"
             );
             renderer.set_playback_source(PlaybackSource::None);
             return Ok(());
-        };
-
-        debug!(
-            renderer = renderer_id.0.as_str(),
-            queue_after = remaining_after,
-            uri = item.uri.as_str(),
-            "Dequeued next playback item"
-        );
+        }
 
         // Temporarily disable auto-advance to prevent race condition
-        // when renderer sends Stopped event during SetAVTransportURI
         renderer.set_playback_source(PlaybackSource::None);
 
-        // Start playback
-        let didl_metadata = playback_item_to_didl(&item);
-        if let Err(err) = renderer.play_uri(&item.uri, &didl_metadata) {
+        // Use the backend's play_next which handles queue advancement correctly for each backend type
+        if let Err(err) = renderer.play_next_from_queue() {
             error!(
                 renderer = renderer_id.0.as_str(),
                 error = %err,
-                "Failed to start playback for queued item"
+                "Failed to play next item from queue"
             );
-            // Try to requeue the item
-            let _ = renderer
-                .get_queue_mut()
-                .enqueue_items(vec![item.clone()], EnqueueMode::InsertAfterCurrent);
             renderer.set_playback_source(PlaybackSource::None);
             return Err(err);
         }
 
-        // Save metadata for current track
-        let metadata = playback_item_track_metadata(&item);
-        renderer.set_last_metadata(Some(metadata));
+        // Get current item metadata for tracking
+        if let Some((item, _)) = renderer.peek_current()? {
+            let metadata = playback_item_track_metadata(&item);
+            renderer.set_last_metadata(Some(metadata));
+        }
 
         renderer.set_playback_source(PlaybackSource::FromQueue);
         debug!(
             renderer = renderer_id.0.as_str(),
-            queue_len = remaining_after,
-            "Started playback from queue"
+            "Playing next item from queue"
         );
 
         // Prefetch next track if supported
         self.prefetch_next_track(&renderer, renderer_id);
 
         // Emit QueueUpdated event
+        let queue_length = renderer.len().unwrap_or(0);
         self.emit_renderer_event(RendererEvent::QueueUpdated {
             id: renderer_id.clone(),
-            queue_length: remaining_after,
+            queue_length,
         });
 
         Ok(())
@@ -1076,7 +1060,7 @@ impl ControlPoint {
         }
 
         // Get the next item from the queue using peek_current
-        let Ok(Some((_, remaining))) = renderer.get_queue_mut().peek_current() else {
+        let Ok(Some((_, remaining))) = renderer.peek_current() else {
             return;
         };
 
@@ -1084,7 +1068,7 @@ impl ControlPoint {
             return;
         }
 
-        let queue_snapshot = match renderer.get_queue().queue_snapshot() {
+        let queue_snapshot = match renderer.queue_snapshot() {
             Ok(snapshot) => snapshot,
             Err(_) => return,
         };
@@ -1119,37 +1103,26 @@ impl ControlPoint {
             ControlPointError::SnapshotError(format!("Renderer {} not found", renderer_id.0))
         })?;
 
-        // Set queue index
-        renderer.get_queue_mut().set_index(Some(index))?;
-
-        let Some((item, remaining)) = renderer.get_queue_mut().peek_current()? else {
+        // Check if index is valid
+        if index >= renderer.len()? {
             debug!(
                 renderer = renderer_id.0.as_str(),
-                index, "play_queue_index: no item at index"
+                index, "play_queue_index: index out of bounds"
             );
             renderer.set_playback_source(PlaybackSource::None);
             return Ok(());
-        };
-
-        debug!(
-            renderer = renderer_id.0.as_str(),
-            index,
-            queue_len = remaining + 1,
-            uri = item.uri.as_str(),
-            "Playing item at index from queue"
-        );
+        }
 
         // Temporarily disable auto-advance to prevent race condition
         renderer.set_playback_source(PlaybackSource::None);
 
-        // Start playback
-        let didl_metadata = playback_item_to_didl(&item);
-        if let Err(err) = renderer.play_uri(&item.uri, &didl_metadata) {
+        // Use the backend's play_from_index which handles everything correctly
+        if let Err(err) = renderer.play_from_index(index) {
             error!(
                 renderer = renderer_id.0.as_str(),
                 index,
                 error = %err,
-                "Failed to start playback for queued item at index"
+                "Failed to play from queue index"
             );
             renderer.set_playback_source(PlaybackSource::None);
             return Err(err);
@@ -1157,14 +1130,14 @@ impl ControlPoint {
 
         info!(
             renderer = renderer_id.0.as_str(),
-            index,
-            uri = item.uri.as_str(),
-            "Queue playback started at index"
+            index, "Queue playback started at index"
         );
 
-        // Save metadata
-        let metadata = playback_item_track_metadata(&item);
-        renderer.set_last_metadata(Some(metadata));
+        // Get current item metadata for tracking
+        if let Some((item, _)) = renderer.peek_current()? {
+            let metadata = playback_item_track_metadata(&item);
+            renderer.set_last_metadata(Some(metadata));
+        }
 
         renderer.set_playback_source(PlaybackSource::FromQueue);
         Ok(())
@@ -1270,7 +1243,7 @@ impl ControlPoint {
 
         // Clear the local queue (detach binding + clear runtime queue structure)
         self.detach_playlist_binding(renderer_id, "attach_new_playlist");
-        renderer.get_queue_mut().clear_queue()?;
+        renderer.clear_queue()?;
 
         debug!(
             renderer = renderer_id.0.as_str(),
