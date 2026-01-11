@@ -542,6 +542,9 @@ impl ControlPoint {
                             "Sleep timer expired, stopping playback"
                         );
 
+                        // Mark this as a user-requested stop to prevent auto-advance
+                        renderer.mark_user_stop_requested();
+
                         // Stop playback
                         if let Err(err) = renderer.stop() {
                             warn!(
