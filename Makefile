@@ -206,8 +206,15 @@ bump-version:
 	new_version="$$major.$$minor.$$new_patch"; \
 	echo "  Nouvelle version: $$new_version"; \
 	sed -i.bak "s/^version = \"$$current\"/version = \"$$new_version\"/" PMOMusic/Cargo.toml && \
-	rm PMOMusic/Cargo.toml.bak
-	@echo "$(GREEN)✓ Version mise à jour dans PMOMusic/Cargo.toml$(NC)"
+	rm PMOMusic/Cargo.toml.bak && \
+	echo "$$new_version" > version.txt
+	@echo "$(GREEN)✓ Version mise à jour dans PMOMusic/Cargo.toml et version.txt$(NC)"
+
+## sync-version: Synchronise version.txt depuis PMOMusic/Cargo.toml
+sync-version:
+	@echo "$(YELLOW)→ Synchronisation de version.txt...$(NC)"
+	@grep '^version = ' PMOMusic/Cargo.toml | head -n 1 | sed 's/version = "\(.*\)"/\1/' > version.txt
+	@echo "$(GREEN)✓ version.txt synchronisé: $$(cat version.txt)$(NC)"
 
 ## bench: Exécute les benchmarks
 bench:
