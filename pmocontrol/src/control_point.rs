@@ -112,8 +112,8 @@ impl ControlPoint {
             ];
 
             loop {
-                // Attendre 60 secondes avant le prochain cycle
-                thread::sleep(Duration::from_secs(60));
+                // Attendre 10 secondes avant le prochain cycle pour découverte rapide
+                thread::sleep(Duration::from_secs(10));
 
                 debug!("Sending periodic M-SEARCH for device discovery");
 
@@ -303,9 +303,9 @@ impl ControlPoint {
                         new_snapshot.state = Some(logical_state);
                     }
 
-                    // Poll volume and mute less frequently (every 3 seconds)
-                    // to reduce SOAP overhead without impacting UI responsiveness
-                    if tick % 3 == 0 {
+                    // Poll volume and mute every second (every 2 ticks at 500ms)
+                    // for responsive volume control feedback
+                    if tick % 2 == 0 {
                         if let Ok(volume) = renderer.volume() {
                             if prev_snapshot.last_volume != Some(volume) {
                                 polling_cp.emit_renderer_event(RendererEvent::VolumeChanged {
@@ -334,8 +334,8 @@ impl ControlPoint {
                 }
 
                 tick = tick.wrapping_add(1);
-                // Keep 1 second polling for smooth position updates
-                thread::sleep(Duration::from_secs(1));
+                // 500ms polling for smoother position updates and progress bar
+                thread::sleep(Duration::from_millis(500));
             }
         });
 

@@ -1497,87 +1497,79 @@ async fn play_content(
         })?;
 
     let control_point = Arc::clone(&state.control_point);
+    let rid_for_log = rid.clone();
+    let object_id_for_log = object_id.clone();
+    let object_id_for_debug = object_id_for_log.clone();
 
-    // Spawn blocking task for content loading
-    let play_task = tokio::task::spawn_blocking(move || {
-        // Fetch playback items from server
-        let items = fetch_playback_items(&control_point, &sid, &object_id)?;
+    // Launch the command in background and return immediately
+    // The UI will be updated via SSE events when playback starts
+    tokio::task::spawn(async move {
+        let result = tokio::task::spawn_blocking(move || {
+            // Fetch playback items from server
+            let items = fetch_playback_items(&control_point, &sid, &object_id)?;
 
-        if items.is_empty() {
-            return Err(anyhow::anyhow!("No playable content found"));
+            if items.is_empty() {
+                return Err(anyhow::anyhow!("No playable content found"));
+            }
+
+            if items.len() > 1 {
+                debug!(
+                    renderer = rid.0.as_str(),
+                    server = sid.0.as_str(),
+                    object = object_id.as_str(),
+                    item_count = items.len(),
+                    "Auto-binding playlist to renderer queue (auto_play = true)"
+                );
+                control_point.attach_queue_to_playlist_with_options(
+                    &rid,
+                    sid.clone(),
+                    object_id.clone(),
+                    true,
+                )?;
+                return Ok(());
+            }
+
+            // Clear queue
+            control_point.clear_queue(&rid)?;
+
+            // Enqueue items
+            control_point.enqueue_items(&rid, items)?;
+
+            // Start playback
+            // Pour les renderers OpenHome, play_current_from_queue() va gérer automatiquement
+            // la lecture depuis la playlist native si elle existe
+            control_point.play_current_from_queue(&rid)?;
+
+            Ok::<(), anyhow::Error>(())
+        })
+        .await;
+
+        match result {
+            Ok(Ok(())) => {
+                debug!(
+                    "Successfully started playing content {} on renderer {}",
+                    object_id_for_log, rid_for_log.0
+                );
+            }
+            Ok(Err(e)) => {
+                warn!(
+                    "Failed to play content on renderer {}: {}",
+                    rid_for_log.0, e
+                );
+            }
+            Err(e) => {
+                warn!(
+                    "Task join error during play content for renderer {}: {}",
+                    rid_for_log.0, e
+                );
+            }
         }
-
-        if items.len() > 1 {
-            debug!(
-                renderer = rid.0.as_str(),
-                server = sid.0.as_str(),
-                object = object_id.as_str(),
-                item_count = items.len(),
-                "Auto-binding playlist to renderer queue (auto_play = true)"
-            );
-            control_point.attach_queue_to_playlist_with_options(
-                &rid,
-                sid.clone(),
-                object_id.clone(),
-                true,
-            )?;
-            return Ok(());
-        }
-
-        // Clear queue
-        control_point.clear_queue(&rid)?;
-
-        // Enqueue items
-        control_point.enqueue_items(&rid, items)?;
-
-        // Start playback
-        // Pour les renderers OpenHome, play_current_from_queue() va gérer automatiquement
-        // la lecture depuis la playlist native si elle existe
-        control_point.play_current_from_queue(&rid)?;
-
-        Ok::<(), anyhow::Error>(())
     });
-
-    time::timeout(QUEUE_COMMAND_TIMEOUT, play_task)
-        .await
-        .map_err(|_| {
-            warn!(
-                "Play content command for renderer {} exceeded {:?}",
-                renderer_id, QUEUE_COMMAND_TIMEOUT
-            );
-            (
-                StatusCode::GATEWAY_TIMEOUT,
-                Json(ErrorResponse {
-                    error: format!(
-                        "Play content timed out after {}s",
-                        QUEUE_COMMAND_TIMEOUT.as_secs()
-                    ),
-                }),
-            )
-        })?
-        .map_err(|e| {
-            warn!("Task join error during play content: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Internal task error: {}", e),
-                }),
-            )
-        })?
-        .map_err(|e| {
-            warn!("Failed to play content on renderer {}: {}", renderer_id, e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Failed to play content: {}", e),
-                }),
-            )
-        })?;
 
     debug!(
         renderer = renderer_id.as_str(),
         server = req.server_id.as_str(),
-        object = object_id_for_log.as_str(),
+        object = object_id_for_debug.as_str(),
         "Content playing via HTTP API"
     );
 
@@ -1626,65 +1618,54 @@ async fn add_to_queue(
         })?;
 
     let control_point = Arc::clone(&state.control_point);
+    let rid_for_log = rid.clone();
+    let object_id_for_log = object_id.clone();
+    let object_id_for_debug = object_id_for_log.clone();
 
-    // Spawn blocking task for content loading
-    let add_task = tokio::task::spawn_blocking(move || {
-        // Fetch playback items from server
-        let items = fetch_playback_items(&control_point, &sid, &object_id)?;
+    // Launch the command in background and return immediately
+    // The UI will be updated via SSE events when the queue changes
+    tokio::task::spawn(async move {
+        let result = tokio::task::spawn_blocking(move || {
+            // Fetch playback items from server
+            let items = fetch_playback_items(&control_point, &sid, &object_id)?;
 
-        if items.is_empty() {
-            return Err(anyhow::anyhow!("No playable content found"));
+            if items.is_empty() {
+                return Err(anyhow::anyhow!("No playable content found"));
+            }
+
+            // Enqueue items
+            control_point.enqueue_items(&rid, items)?;
+
+            Ok::<(), anyhow::Error>(())
+        })
+        .await;
+
+        match result {
+            Ok(Ok(())) => {
+                debug!(
+                    "Successfully added content {} to queue for renderer {}",
+                    object_id_for_log, rid_for_log.0
+                );
+            }
+            Ok(Err(e)) => {
+                warn!(
+                    "Failed to add content to queue for renderer {}: {}",
+                    rid_for_log.0, e
+                );
+            }
+            Err(e) => {
+                warn!(
+                    "Task join error during add to queue for renderer {}: {}",
+                    rid_for_log.0, e
+                );
+            }
         }
-
-        // Enqueue items
-        control_point.enqueue_items(&rid, items)?;
-
-        Ok::<(), anyhow::Error>(())
     });
-
-    time::timeout(QUEUE_COMMAND_TIMEOUT, add_task)
-        .await
-        .map_err(|_| {
-            warn!(
-                "Add to queue command for renderer {} exceeded {:?}",
-                renderer_id, QUEUE_COMMAND_TIMEOUT
-            );
-            (
-                StatusCode::GATEWAY_TIMEOUT,
-                Json(ErrorResponse {
-                    error: format!(
-                        "Add to queue timed out after {}s",
-                        QUEUE_COMMAND_TIMEOUT.as_secs()
-                    ),
-                }),
-            )
-        })?
-        .map_err(|e| {
-            warn!("Task join error during add to queue: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Internal task error: {}", e),
-                }),
-            )
-        })?
-        .map_err(|e| {
-            warn!(
-                "Failed to add content to queue for renderer {}: {}",
-                renderer_id, e
-            );
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Failed to add to queue: {}", e),
-                }),
-            )
-        })?;
 
     debug!(
         renderer = renderer_id.as_str(),
         server = req.server_id.as_str(),
-        object = object_id_for_log.as_str(),
+        object = object_id_for_debug.as_str(),
         "Content added to queue via HTTP API"
     );
 
@@ -1734,69 +1715,58 @@ async fn add_after_current(
         })?;
 
     let control_point = Arc::clone(&state.control_point);
+    let rid_for_log = rid.clone();
+    let object_id_for_log = object_id.clone();
+    let object_id_for_debug = object_id_for_log.clone();
 
-    // Spawn blocking task for content loading
-    let add_task = tokio::task::spawn_blocking(move || {
-        // Fetch playback items from server
-        let items = fetch_playback_items(&control_point, &sid, &object_id)?;
+    // Launch the command in background and return immediately
+    // The UI will be updated via SSE events when the queue changes
+    tokio::task::spawn(async move {
+        let result = tokio::task::spawn_blocking(move || {
+            // Fetch playback items from server
+            let items = fetch_playback_items(&control_point, &sid, &object_id)?;
 
-        if items.is_empty() {
-            return Err(anyhow::anyhow!("No playable content found"));
+            if items.is_empty() {
+                return Err(anyhow::anyhow!("No playable content found"));
+            }
+
+            // Insert items after current using the new method
+            control_point.enqueue_items_with_mode(
+                &rid,
+                items,
+                crate::queue::EnqueueMode::InsertAfterCurrent,
+            )?;
+
+            Ok::<(), anyhow::Error>(())
+        })
+        .await;
+
+        match result {
+            Ok(Ok(())) => {
+                debug!(
+                    "Successfully added content {} after current for renderer {}",
+                    object_id_for_log, rid_for_log.0
+                );
+            }
+            Ok(Err(e)) => {
+                warn!(
+                    "Failed to add content after current for renderer {}: {}",
+                    rid_for_log.0, e
+                );
+            }
+            Err(e) => {
+                warn!(
+                    "Task join error during add after current for renderer {}: {}",
+                    rid_for_log.0, e
+                );
+            }
         }
-
-        // Insert items after current using the new method
-        control_point.enqueue_items_with_mode(
-            &rid,
-            items,
-            crate::queue::EnqueueMode::InsertAfterCurrent,
-        )?;
-
-        Ok::<(), anyhow::Error>(())
     });
-
-    time::timeout(QUEUE_COMMAND_TIMEOUT, add_task)
-        .await
-        .map_err(|_| {
-            warn!(
-                "Add after current command for renderer {} exceeded {:?}",
-                renderer_id, QUEUE_COMMAND_TIMEOUT
-            );
-            (
-                StatusCode::GATEWAY_TIMEOUT,
-                Json(ErrorResponse {
-                    error: format!(
-                        "Add after current timed out after {}s",
-                        QUEUE_COMMAND_TIMEOUT.as_secs()
-                    ),
-                }),
-            )
-        })?
-        .map_err(|e| {
-            warn!("Task join error during add after current: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Internal task error: {}", e),
-                }),
-            )
-        })?
-        .map_err(|e| {
-            warn!(
-                "Failed to add content after current for renderer {}: {}",
-                renderer_id, e
-            );
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Failed to add after current: {}", e),
-                }),
-            )
-        })?;
 
     debug!(
         renderer = renderer_id.as_str(),
         server = req.server_id.as_str(),
-        object = object_id_for_log.as_str(),
+        object = object_id_for_debug.as_str(),
         "Content added after current via HTTP API"
     );
 
