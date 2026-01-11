@@ -1519,10 +1519,22 @@ impl ControlPoint {
 #[cfg(feature = "pmoserver")]
 fn convert_runtime_position(position: Option<&PlaybackPositionInfo>) -> (Option<u64>, Option<u64>) {
     match position {
-        Some(info) => (
-            parse_hms_to_ms(info.rel_time.as_deref()),
-            parse_hms_to_ms(info.track_duration.as_deref()),
-        ),
+        Some(info) => {
+            let position_ms = parse_hms_to_ms(info.rel_time.as_deref());
+            let duration_ms = parse_hms_to_ms(info.track_duration.as_deref());
+
+            // Validate that position doesn't exceed duration
+            // If position > duration, the renderer is reporting invalid data
+            // (common during track initialization on some UPNP renderers)
+            match (position_ms, duration_ms) {
+                (Some(pos), Some(dur)) if pos > dur => {
+                    // Position exceeds duration - invalid state during initialization
+                    // Return None for position to avoid showing bogus timestamps
+                    (None, duration_ms)
+                }
+                _ => (position_ms, duration_ms),
+            }
+        }
         None => (None, None),
     }
 }
