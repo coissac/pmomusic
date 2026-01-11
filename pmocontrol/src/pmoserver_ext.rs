@@ -672,47 +672,37 @@ async fn seek_queue_index(
     let control_point = Arc::clone(&state.control_point);
     let rid_for_task = rid.clone();
     let index = payload.index;
-    let seek_task =
-        tokio::task::spawn_blocking(move || control_point.play_queue_index(&rid_for_task, index));
 
-    time::timeout(TRANSPORT_COMMAND_TIMEOUT, seek_task)
-        .await
-        .map_err(|_| {
-            warn!(
-                "Seek queue command for renderer {} exceeded {:?}",
-                renderer_id, TRANSPORT_COMMAND_TIMEOUT
-            );
-            (
-                StatusCode::GATEWAY_TIMEOUT,
-                Json(ErrorResponse {
-                    error: format!(
-                        "Seek command timed out after {}s",
-                        TRANSPORT_COMMAND_TIMEOUT.as_secs()
-                    ),
-                }),
-            )
-        })?
-        .map_err(|e| {
-            warn!("Task join error during queue seek: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Internal task error: {}", e),
-                }),
-            )
-        })?
-        .map_err(|e| {
-            warn!(
-                "Failed to seek to index {} for renderer {}: {}",
-                index, renderer_id, e
-            );
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Failed to seek to index {}: {}", index, e),
-                }),
-            )
-        })?;
+    // Launch the command in background and return immediately
+    // The UI will be updated via SSE events when the state changes
+    tokio::task::spawn(async move {
+        let rid_for_log = rid_for_task.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            control_point.play_queue_index(&rid_for_task, index)
+        })
+        .await;
+
+        match result {
+            Ok(Ok(())) => {
+                debug!(
+                    "Successfully started playback at index {} for renderer {}",
+                    index, rid_for_log.0
+                );
+            }
+            Ok(Err(e)) => {
+                warn!(
+                    "Failed to seek to index {} for renderer {}: {}",
+                    index, rid_for_log.0, e
+                );
+            }
+            Err(e) => {
+                warn!(
+                    "Task join error during queue seek for renderer {}: {}",
+                    rid_for_log.0, e
+                );
+            }
+        }
+    });
 
     Ok(Json(SuccessResponse {
         message: format!("Playing item at index {}", index),
