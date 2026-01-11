@@ -211,7 +211,7 @@ bump-version:
 	@echo "$(GREEN)✓ Version mise à jour dans PMOMusic/Cargo.toml et version.txt$(NC)"
 
 ## sync-version: Synchronise version.txt depuis PMOMusic/Cargo.toml
-sync-version:
+version.txt: PMOMusic/Cargo.toml
 	@echo "$(YELLOW)→ Synchronisation de version.txt...$(NC)"
 	@grep '^version = ' PMOMusic/Cargo.toml | head -n 1 | sed 's/version = "\(.*\)"/\1/' > version.txt
 	@echo "$(GREEN)✓ version.txt synchronisé: $$(cat version.txt)$(NC)"
@@ -237,7 +237,9 @@ jjnew:
 
 jjpush: bump-version
 	@echo "$(YELLOW)→ Push du commit sur le dépôt...$(NC)"
+	@echo "$(BLUE)→ Documentation du commit courrant...$(NC)"
 	@jj auto-describe
+	@echo "$(BLUE)→ C'est fait.$(NC)"
 	@jj git push --change @
 	@echo "$(GREEN)✓ Commit pushé sur le dépôt$(NC)"
 
