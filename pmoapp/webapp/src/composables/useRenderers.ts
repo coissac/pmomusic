@@ -105,12 +105,103 @@ function ensureSSEConnected() {
       return;
     }
 
-    // Pour les autres événements, comportement existant
+    // Pour les autres événements, mettre à jour le snapshot local directement
     snapshotState.lastEventAt.set(rendererId, timestamp);
-    const lastSnapshot = snapshotState.lastSnapshotAt.get(rendererId) ?? 0;
-    if (!snapshotState.snapshots.has(rendererId) || timestamp > lastSnapshot) {
+
+    const snapshot = snapshotState.snapshots.get(rendererId);
+
+    // Si pas de snapshot, on doit fetch
+    if (!snapshot) {
       void fetchRendererSnapshot(rendererId, { force: true });
+      return;
     }
+
+    // Sinon, mettre à jour le snapshot localement selon le type d'événement
+    switch (event.type) {
+      case "state_changed":
+        snapshot.state.transport_state = event.state as any;
+        break;
+
+      case "position_changed":
+        // Convertir rel_time (HH:MM:SS) en millisecondes
+        if (event.rel_time) {
+          const parts = event.rel_time.split(":").map(Number);
+          if (parts.length === 3) {
+            snapshot.state.position_ms =
+              ((parts[0] ?? 0) * 3600 +
+                (parts[1] ?? 0) * 60 +
+                (parts[2] ?? 0)) *
+              1000;
+          }
+        }
+        // Convertir track_duration (HH:MM:SS) en millisecondes
+        if (event.track_duration) {
+          const parts = event.track_duration.split(":").map(Number);
+          if (parts.length === 3) {
+            snapshot.state.duration_ms =
+              ((parts[0] ?? 0) * 3600 +
+                (parts[1] ?? 0) * 60 +
+                (parts[2] ?? 0)) *
+              1000;
+          }
+        }
+        break;
+
+      case "volume_changed":
+        snapshot.state.volume = event.volume;
+        break;
+
+      case "mute_changed":
+        snapshot.state.mute = event.mute;
+        break;
+
+      case "metadata_changed":
+        if (!snapshot.state.current_track) {
+          snapshot.state.current_track = {
+            title: null,
+            artist: null,
+            album: null,
+            album_art_uri: null,
+          };
+        }
+        snapshot.state.current_track.title = event.title;
+        snapshot.state.current_track.artist = event.artist;
+        snapshot.state.current_track.album = event.album;
+        snapshot.state.current_track.album_art_uri = event.album_art_uri;
+        break;
+
+      case "queue_updated":
+        snapshot.state.queue_len = event.queue_length;
+        // Pour la queue complète, on doit refetch
+        void fetchRendererSnapshot(rendererId, { force: true });
+        break;
+
+      case "binding_changed":
+        if (event.server_id && event.container_id) {
+          snapshot.binding = {
+            server_id: event.server_id,
+            container_id: event.container_id,
+            has_seen_update: false,
+          };
+          snapshot.state.attached_playlist = snapshot.binding;
+        } else {
+          snapshot.binding = null;
+          snapshot.state.attached_playlist = null;
+        }
+        break;
+
+      case "timer_started":
+      case "timer_updated":
+      case "timer_tick":
+      case "timer_expired":
+      case "timer_cancelled":
+        // Les événements de timer ne modifient pas le snapshot renderer
+        // (le timer state est géré séparément)
+        break;
+    }
+
+    // Trigger reactivity
+    snapshotState.snapshots.set(rendererId, snapshot);
   });
 
   sseConnected = true;

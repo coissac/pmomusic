@@ -334,8 +334,8 @@ impl ControlPoint {
                 }
 
                 tick = tick.wrapping_add(1);
-                // 500ms polling for smoother position updates and progress bar
-                thread::sleep(Duration::from_millis(500));
+                // 250ms polling for smoother UI updates and fluid progress bar
+                thread::sleep(Duration::from_millis(250));
             }
         });
 
