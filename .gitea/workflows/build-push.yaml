@@ -3,8 +3,7 @@ name: Build and Push Docker Image
 on:
   push:
     branches:
-      - main  # Changez cela si votre branche principale a un autre nom
-    
+      - main # Changez cela si votre branche principale a un autre nom
 
 jobs:
   build:
@@ -15,7 +14,13 @@ jobs:
         uses: actions/cache@v3
         with:
           path: ~/.npm
-          key: dont-cache-${{ github.run_id }}        
+          key: dont-cache-${{ github.run_id }}
+
+      - name: Extract version from Cargo.toml
+        run: |
+          grep '^version = ' PMOMusic/Cargo.toml | head -n 1 | sed 's/version = "\(.*\)"/\1/' > version.txt
+          echo "Version extracted: $(cat version.txt)"
+
       - name: Build and push image
         uses: https://gargoton.petite-maison-orange.fr/pmo-actions/build-push-image@main
         with:
@@ -24,6 +29,3 @@ jobs:
           no_cache: true
           version_file: version.txt
           check_uuid: 82a30d23-b3bd-4199-9237-776965831d20
-
-
-  

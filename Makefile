@@ -13,6 +13,7 @@ BINARY_NAME = PMOMusic
 # Couleurs pour l'affichage
 GREEN = \033[0;32m
 YELLOW = \033[1;33m
+BLUE = \033[1;34m
 RED = \033[0;31m
 NC = \033[0m # No Color
 
@@ -193,6 +194,21 @@ update:
 	cd $(WEBAPP_DIR) && $(NPM) update
 	@echo "$(GREEN)✓ Dépendances mises à jour$(NC)"
 
+## bump-version: Incrémente le numéro de version patch (x.y.z -> x.y.z+1)
+bump-version:
+	@echo "$(YELLOW)→ Incrémentation de la version...$(NC)"
+	@current=$$(grep '^version = ' PMOMusic/Cargo.toml | head -n 1 | sed 's/version = "\(.*\)"/\1/'); \
+	echo "  Version actuelle: $$current"; \
+	major=$$(echo $$current | cut -d. -f1); \
+	minor=$$(echo $$current | cut -d. -f2); \
+	patch=$$(echo $$current | cut -d. -f3); \
+	new_patch=$$((patch + 1)); \
+	new_version="$$major.$$minor.$$new_patch"; \
+	echo "  Nouvelle version: $$new_version"; \
+	sed -i.bak "s/^version = \"$$current\"/version = \"$$new_version\"/" PMOMusic/Cargo.toml && \
+	rm PMOMusic/Cargo.toml.bak
+	@echo "$(GREEN)✓ Version mise à jour dans PMOMusic/Cargo.toml$(NC)"
+
 ## bench: Exécute les benchmarks
 bench:
 	@echo "$(YELLOW)→ Exécution des benchmarks...$(NC)"
@@ -203,4 +219,23 @@ coverage:
 	@echo "$(YELLOW)→ Génération du rapport de couverture...$(NC)"
 	$(CARGO) tarpaulin --out Html --output-dir target/coverage
 	@echo "$(GREEN)✓ Rapport disponible dans target/coverage/index.html$(NC)"
-	
+
+jjnew:
+	@echo "$(YELLOW)→ Création d'un nouveau commit...$(NC)"
+	@echo "$(BLUE)→ Documentation du commit courrant...$(NC)"
+	@jj auto-describe
+	@echo "$(BLUE)→ C'est fait.$(NC)"
+	@jj new
+	@echo "$(GREEN)✓ nouveau commit créé$(NC)"
+
+jjpush: bump-version
+	@echo "$(YELLOW)→ Push du commit sur le dépôt...$(NC)"
+	@jj auto-describe
+	@jj git push --change @
+	@echo "$(GREEN)✓ Commit pushé sur le dépôt$(NC)"
+
+jjfetch:
+	@echo "$(YELLOW)→ Pull des derniers commits...$(NC)"
+	@jj git fetch
+	@jj new main@origin
+	@echo "$(GREEN)✓ Derniers commits pullés$(NC)"
