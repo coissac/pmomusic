@@ -25,11 +25,8 @@ const { playContent, addToQueue, attachAndPlayPlaylist, attachPlaylist } =
     useRenderers();
 const uiStore = useUIStore();
 
-// Flags pour gérer le rechargement automatique avec debounce et cooldown
+// Flag pour gérer le rechargement automatique
 const isRefreshing = ref(false);
-const refreshTimeoutId = ref<number | null>(null);
-const lastRefreshTime = ref<number>(0);
-const REFRESH_COOLDOWN_MS = 2000; // Ne pas recharger plus d'une fois toutes les 2 secondes
 
 const browseData = computed(() =>
     getBrowseCached(props.serverId, props.containerId),
@@ -57,46 +54,24 @@ watch(
 // Recharger automatiquement si le cache est invalidé (ex: après un ContainersUpdated SSE)
 // Cela se produit notamment quand on clique sur "Lire maintenant" sur une playlist,
 // ce qui déclenche un événement ContainersUpdated qui invalide le cache
-// Utilise un debounce de 3 secondes pour regrouper les multiples invalidations
-// et un cooldown de 5 secondes pour éviter les rechargements successifs
+// Le serveur contrôle déjà le flux SSE, pas besoin de debouncing côté client
 watch(
     () => browseData.value,
-    (data) => {
+    async (data) => {
         // Si browseData devient undefined alors que containerId est présent,
-        // et qu'on n'est pas déjà en train de charger, planifier un rechargement
-        if (!data && props.containerId && !loading.value) {
-            // Vérifier le cooldown: ignorer si on a rechargé il y a moins de 5 secondes
-            const timeSinceLastRefresh = Date.now() - lastRefreshTime.value;
-            if (timeSinceLastRefresh < REFRESH_COOLDOWN_MS) {
-                console.log(
-                    `[MediaBrowser] Cache invalidé mais cooldown actif (${Math.round((REFRESH_COOLDOWN_MS - timeSinceLastRefresh) / 1000)}s restantes), rechargement ignoré`,
-                );
-                return;
-            }
-
-            // Annuler tout timeout en cours
-            if (refreshTimeoutId.value !== null) {
-                clearTimeout(refreshTimeoutId.value);
-            }
-
-            // Planifier le rechargement après 200ms
-            // Cela permet de dédupliquer les événements SSE dans le même batch (polling 500ms)
-            refreshTimeoutId.value = window.setTimeout(async () => {
-                if (!isRefreshing.value) {
-                    console.log(
-                        `[MediaBrowser] Cache invalidé pour ${props.serverId}/${props.containerId}, rechargement après debounce...`,
-                    );
-                    isRefreshing.value = true;
-                    await browseContainer(
-                        props.serverId,
-                        props.containerId,
-                        false,
-                    );
-                    lastRefreshTime.value = Date.now(); // Enregistrer le moment du rechargement
-                    isRefreshing.value = false;
-                    refreshTimeoutId.value = null;
-                }
-            }, 200);
+        // et qu'on n'est pas déjà en train de charger, recharger immédiatement
+        if (
+            !data &&
+            props.containerId &&
+            !loading.value &&
+            !isRefreshing.value
+        ) {
+            console.log(
+                `[MediaBrowser] Cache invalidé pour ${props.serverId}/${props.containerId}, rechargement...`,
+            );
+            isRefreshing.value = true;
+            await browseContainer(props.serverId, props.containerId, false);
+            isRefreshing.value = false;
         }
     },
 );
