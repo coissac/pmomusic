@@ -36,7 +36,7 @@ Blackboard
 
 - `ToThinkAbout`: Contient les tâches à réfléchir pour le projet.
 
-Les documents dans le répertoire `ToThinkAbout` sont des fichiers contenant des idées et des questions à réfléchir pour le projet. Ils sont utilisés à terme pour générer les documents de tâche qui seront placés dans le répertoire `Todo`.
+Les documents dans le répertoire `ToThinkAbout` sont des fichiers contenant des idées et des questions à réfléchir pour le projet. Ils sont utilisés à terme pour générer les documents de tâche qui seront placés dans le répertoire `Todo`. Les fichiers de ce répertoire sont au format Markdown et sont écrits en collaboration entre l'humain et le LLM. Les deux ont le droit de modifier les fichiers.
 
 ### Les quatres répertoires de base pour le workflow de développement.
 - `Todo`: Contient les tâches à faire pour le projet.
@@ -44,7 +44,9 @@ Les documents dans le répertoire `ToThinkAbout` sont des fichiers contenant des
 - `ToDiscuss`: Contient les tâches à discuter pour le projet.
 - `Done`: Contient les tâches terminées pour le projet.
 
-Les tâches à faire sont décrites dans des fichiers présents dans le répertoire `Todo`. Leur réalisation conduit à la rédaction d'un rapport à placer dans le répertoire `Report`. Le rapport d'une tâche doit avoir le même nom de fichier que la tâche originale. À la suite du rapport, deux issues sont possibles. Soit la tâche est considérée comme achevée. Dans ce cas, elle est déplacée dans le répertoire `Done`. Soit la tâche est considérée comme incomplète. Dans ce cas, elle est déplacée dans le répertoire `ToDiscuss`. 
+Les tâches à faire sont décrites dans des fichiers présents dans le répertoire `Todo`. Leur réalisation conduit à la rédaction d'un rapport à placer dans le répertoire `Report`. Le rapport d'une tâche doit avoir le même nom de fichier que la tâche originale. Aucun autre rapport détaillé ne devra être produit à la fin de la tache dans le fil de la discussion. Juste une liste des documents créés ou midifiés sera donné.
+
+À la suite du rapport, deux issues sont possibles. Soit la tâche est considérée comme achevée. Dans ce cas, elle est déplacée dans le répertoire `Done`. Soit la tâche est considérée comme incomplète. Dans ce cas, elle est déplacée dans le répertoire `ToDiscuss`. 
 
 C'est l'humain qui décide quand une tâche peut être considérée comme *done* ou *to discuss*. En aucun cas, l'assistant peut décider de classifier une tâche après la rédaction du rapport.
 
