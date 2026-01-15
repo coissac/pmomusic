@@ -155,7 +155,10 @@ pub use lazy::{lazy_prefix_from_pk, LazyEntryRemoteData, LazyProvider};
 pub use pmoserver_ext::{create_api_router, create_file_router, GenericCacheExt};
 
 #[cfg(all(feature = "pmoserver", feature = "openapi"))]
-pub use api::{AddItemRequest, AddItemResponse, DeleteItemResponse, DownloadStatus, ErrorResponse};
+pub use api::{
+    AddItemRequest, AddItemResponse, DeleteItemResponse, DownloadStatus, ErrorResponse,
+    PinResponse, PinStatus, SetTtlRequest,
+};
 
 #[cfg(feature = "pmoconfig")]
 pub use config_ext::CacheConfigExt;

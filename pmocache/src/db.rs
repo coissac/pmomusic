@@ -39,6 +39,12 @@ pub struct CacheEntry {
     /// Date/heure du dernier accès (RFC3339)
     #[cfg_attr(feature = "openapi", schema(example = "2025-01-15T10:30:00Z"))]
     pub last_used: Option<String>,
+    /// Indique si l'élément est épinglé (ne peut pas être supprimé par LRU)
+    #[cfg_attr(feature = "openapi", schema(example = false))]
+    pub pinned: bool,
+    /// Date/heure d'expiration du TTL (RFC3339), incompatible avec pinned=true
+    #[cfg_attr(feature = "openapi", schema(example = "2025-01-20T10:30:00Z"))]
+    pub ttl_expires_at: Option<String>,
     /// Métadonnées JSON optionnelles (ex: métadonnées audio, EXIF images, etc.)
     #[cfg_attr(
         feature = "openapi",
@@ -123,7 +129,9 @@ impl DB {
                 id TEXT,
                 hits INTEGER DEFAULT 0,
                 last_used TEXT,
-                lazy_pk TEXT
+                lazy_pk TEXT,
+                pinned INTEGER DEFAULT 0 CHECK (pinned IN (0, 1)),
+                ttl_expires_at TEXT
             )",
             [],
         )?;
@@ -141,14 +149,14 @@ impl DB {
 
         // Créer un index sur la collection pour les requêtes rapides
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_asset_collection 
+            "CREATE INDEX IF NOT EXISTS idx_asset_collection
                              ON ASSET (collection)",
             [],
         )?;
 
         // Créer un index composite pour optimiser la politique LRU (get_oldest)
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_asset_lru 
+            "CREATE INDEX IF NOT EXISTS idx_asset_lru
                              ON asset (last_used ASC, hits ASC)",
             [],
         )?;
@@ -489,7 +497,7 @@ impl DB {
         let mut entry = {
             let conn = self.lock_conn("get");
             conn.query_row(
-                "SELECT pk, lazy_pk, id, collection, hits, last_used \
+                "SELECT pk, lazy_pk, id, collection, hits, last_used, pinned, ttl_expires_at \
                  FROM asset \
                  WHERE pk = ?1",
                 [pk],
@@ -501,6 +509,8 @@ impl DB {
                         collection: row.get(3)?,
                         hits: row.get(4)?,
                         last_used: row.get(5)?,
+                        pinned: row.get::<_, i32>(6)? != 0,
+                        ttl_expires_at: row.get::<_, Option<String>>(7)?,
                         metadata: None,
                     })
                 },
@@ -530,7 +540,7 @@ impl DB {
         let mut entry = {
             let conn = self.lock_conn("get_from_id");
             conn.query_row(
-                "SELECT pk, lazy_pk, id, collection, hits, last_used \
+                "SELECT pk, lazy_pk, id, collection, hits, last_used, pinned, ttl_expires_at \
              FROM asset \
              WHERE collection = ?1 AND id = ?2",
                 params![collection, id],
@@ -542,6 +552,8 @@ impl DB {
                         collection: row.get(3)?,
                         hits: row.get(4)?,
                         last_used: row.get(5)?,
+                        pinned: row.get::<_, i32>(6)? != 0,
+                        ttl_expires_at: row.get::<_, Option<String>>(7)?,
                         metadata: None,
                     })
                 },
@@ -606,8 +618,8 @@ impl DB {
         let conn = self.lock_conn("update_hit");
 
         conn.execute(
-            &"UPDATE asset 
-                            SET hits = hits + 1, last_used = ?1 
+            &"UPDATE asset
+                            SET hits = hits + 1, last_used = ?1
                             WHERE pk = ?2",
             params![Utc::now().to_rfc3339(), pk],
         )?;
@@ -632,8 +644,8 @@ impl DB {
             let conn = self.lock_conn("get_all");
 
             let mut stmt = conn.prepare(
-                "SELECT pk, lazy_pk, id, collection, hits, last_used 
-                 FROM asset 
+                "SELECT pk, lazy_pk, id, collection, hits, last_used, pinned, ttl_expires_at
+                 FROM asset
                  ORDER BY hits DESC",
             )?;
 
@@ -645,6 +657,8 @@ impl DB {
                     collection: row.get(3)?,
                     hits: row.get(4)?,
                     last_used: row.get(5)?,
+                    pinned: row.get::<_, i32>(6)? != 0,
+                    ttl_expires_at: row.get::<_, Option<String>>(7)?,
                     metadata: None,
                 })
             })?;
@@ -676,8 +690,8 @@ impl DB {
             let conn = self.lock_conn("get_by_collection");
 
             let mut stmt = conn.prepare(
-                "SELECT pk, lazy_pk, id, collection, hits, last_used 
-                  FROM asset 
+                "SELECT pk, lazy_pk, id, collection, hits, last_used, pinned, ttl_expires_at
+                  FROM asset
                   WHERE collection = ?1 ORDER BY hits DESC",
             )?;
             let rows = stmt.query_map([collection], |row| {
@@ -688,6 +702,8 @@ impl DB {
                     collection: row.get(3)?,
                     hits: row.get(4)?,
                     last_used: row.get(5)?,
+                    pinned: row.get::<_, i32>(6)? != 0,
+                    ttl_expires_at: row.get::<_, Option<String>>(7)?,
                     metadata: None,
                 })
             })?;
@@ -732,10 +748,190 @@ impl DB {
         Ok(count as usize)
     }
 
+    /// Compte le nombre d'entrées non épinglées dans le cache
+    ///
+    /// Les items épinglés ne comptent pas dans la limite du cache.
+    ///
+    /// # Returns
+    ///
+    /// Le nombre d'entrées non épinglées
+    pub fn count_unpinned(&self) -> rusqlite::Result<usize> {
+        let conn = self.lock_conn("count_unpinned");
+        let count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM asset WHERE pinned = 0", [], |row| {
+                row.get(0)
+            })?;
+        Ok(count as usize)
+    }
+
+    /// Épingle un item pour le protéger de l'éviction LRU
+    ///
+    /// Un item épinglé ne peut pas être supprimé automatiquement par la politique LRU
+    /// et ne compte pas dans la limite du cache.
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Clé primaire de l'item à épingler
+    ///
+    /// # Errors
+    ///
+    /// Retourne une erreur si l'item a un TTL défini (incompatibilité métier)
+    pub fn pin(&self, pk: &str) -> rusqlite::Result<()> {
+        let conn = self.lock_conn("pin");
+
+        // Vérifier que l'item n'a pas de TTL
+        let has_ttl: bool = conn
+            .query_row(
+                "SELECT ttl_expires_at IS NOT NULL FROM asset WHERE pk = ?1",
+                [pk],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or(false);
+
+        if has_ttl {
+            return Err(Error::InvalidParameterName(
+                "Cannot pin an item with TTL set".to_owned(),
+            ));
+        }
+
+        let updated = conn.execute("UPDATE asset SET pinned = 1 WHERE pk = ?1", [pk])?;
+
+        if updated == 0 {
+            return Err(Error::QueryReturnedNoRows);
+        }
+
+        Ok(())
+    }
+
+    /// Désépingle un item pour le rendre à nouveau éligible à l'éviction LRU
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Clé primaire de l'item à désépingler
+    pub fn unpin(&self, pk: &str) -> rusqlite::Result<()> {
+        let conn = self.lock_conn("unpin");
+        let updated = conn.execute("UPDATE asset SET pinned = 0 WHERE pk = ?1", [pk])?;
+
+        if updated == 0 {
+            return Err(Error::QueryReturnedNoRows);
+        }
+
+        Ok(())
+    }
+
+    /// Vérifie si un item est épinglé
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Clé primaire de l'item
+    ///
+    /// # Returns
+    ///
+    /// `true` si l'item est épinglé, `false` sinon
+    pub fn is_pinned(&self, pk: &str) -> rusqlite::Result<bool> {
+        let conn = self.lock_conn("is_pinned");
+        let pinned: i32 =
+            conn.query_row("SELECT pinned FROM asset WHERE pk = ?1", [pk], |row| {
+                row.get(0)
+            })?;
+        Ok(pinned != 0)
+    }
+
+    /// Définit le TTL (Time To Live) d'un item
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Clé primaire de l'item
+    /// * `expires_at` - Date/heure d'expiration au format RFC3339
+    ///
+    /// # Errors
+    ///
+    /// Retourne une erreur si l'item est épinglé (incompatibilité métier)
+    pub fn set_ttl(&self, pk: &str, expires_at: &str) -> rusqlite::Result<()> {
+        let conn = self.lock_conn("set_ttl");
+
+        // Vérifier que l'item n'est pas épinglé
+        let is_pinned: bool = conn
+            .query_row("SELECT pinned != 0 FROM asset WHERE pk = ?1", [pk], |row| {
+                row.get(0)
+            })
+            .optional()?
+            .unwrap_or(false);
+
+        if is_pinned {
+            return Err(Error::InvalidParameterName(
+                "Cannot set TTL on a pinned item".to_owned(),
+            ));
+        }
+
+        let updated = conn.execute(
+            "UPDATE asset SET ttl_expires_at = ?2 WHERE pk = ?1",
+            params![pk, expires_at],
+        )?;
+
+        if updated == 0 {
+            return Err(Error::QueryReturnedNoRows);
+        }
+
+        Ok(())
+    }
+
+    /// Supprime le TTL d'un item
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Clé primaire de l'item
+    pub fn clear_ttl(&self, pk: &str) -> rusqlite::Result<()> {
+        let conn = self.lock_conn("clear_ttl");
+        let updated = conn.execute("UPDATE asset SET ttl_expires_at = NULL WHERE pk = ?1", [pk])?;
+
+        if updated == 0 {
+            return Err(Error::QueryReturnedNoRows);
+        }
+
+        Ok(())
+    }
+
+    /// Récupère les items expirés (TTL dépassé)
+    ///
+    /// # Returns
+    ///
+    /// Liste des entrées dont le TTL est dépassé
+    pub fn get_expired(&self) -> rusqlite::Result<Vec<CacheEntry>> {
+        let conn = self.lock_conn("get_expired");
+        let now = Utc::now().to_rfc3339();
+
+        let mut stmt = conn.prepare(
+            "SELECT pk, lazy_pk, id, collection, hits, last_used, pinned, ttl_expires_at
+             FROM asset
+             WHERE ttl_expires_at IS NOT NULL AND ttl_expires_at < ?1",
+        )?;
+
+        let entries = stmt
+            .query_map([now], |row| {
+                Ok(CacheEntry {
+                    pk: row.get(0)?,
+                    lazy_pk: row.get::<_, Option<String>>(1)?,
+                    id: row.get::<_, Option<String>>(2)?,
+                    collection: row.get(3)?,
+                    hits: row.get(4)?,
+                    last_used: row.get(5)?,
+                    pinned: row.get::<_, i32>(6)? != 0,
+                    ttl_expires_at: row.get::<_, Option<String>>(7)?,
+                    metadata: None,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(entries)
+    }
+
     /// Récupère les N entrées les plus anciennes (LRU - Least Recently Used)
     ///
     /// Trie par last_used (les plus anciens en premier), puis par hits (les moins utilisés).
     /// Utile pour implémenter une politique d'éviction LRU.
+    /// Les items épinglés sont EXCLUS de cette liste (ils ne peuvent pas être évincés).
     ///
     /// # Arguments
     ///
@@ -743,13 +939,14 @@ impl DB {
     ///
     /// # Returns
     ///
-    /// Liste des entrées les plus anciennes, triées par last_used ASC
+    /// Liste des entrées les plus anciennes (non épinglées), triées par last_used ASC
     pub fn get_oldest(&self, limit: usize) -> rusqlite::Result<Vec<CacheEntry>> {
         let conn = self.lock_conn("get_oldest");
 
         let mut stmt = conn.prepare(
-            "SELECT pk, lazy_pk, id, collection, hits, last_used
+            "SELECT pk, lazy_pk, id, collection, hits, last_used, pinned, ttl_expires_at
              FROM asset
+             WHERE pinned = 0
              ORDER BY last_used ASC, hits ASC
              LIMIT ?1",
         )?;
@@ -763,6 +960,8 @@ impl DB {
                     collection: row.get(3)?,
                     hits: row.get(4)?,
                     last_used: row.get(5)?,
+                    pinned: row.get::<_, i32>(6)? != 0,
+                    ttl_expires_at: row.get::<_, Option<String>>(7)?,
                     metadata: None,
                 })
             })?

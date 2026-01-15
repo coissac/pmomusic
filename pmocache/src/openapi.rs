@@ -31,6 +31,11 @@ macro_rules! create_cache_openapi {
                 $crate::api::delete_item::<Self>,
                 $crate::api::purge_cache::<Self>,
                 $crate::api::consolidate_cache::<Self>,
+                $crate::api::get_pin_status::<Self>,
+                $crate::api::pin_item::<Self>,
+                $crate::api::unpin_item::<Self>,
+                $crate::api::set_item_ttl::<Self>,
+                $crate::api::clear_item_ttl::<Self>,
             ),
             components(
                 schemas(
@@ -40,6 +45,9 @@ macro_rules! create_cache_openapi {
                     $crate::api::AddItemResponse,
                     $crate::api::DeleteItemResponse,
                     $crate::api::ErrorResponse,
+                    $crate::api::PinStatus,
+                    $crate::api::PinResponse,
+                    $crate::api::SetTtlRequest,
                 )
             ),
             tags(
