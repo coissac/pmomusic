@@ -1057,6 +1057,67 @@ impl<C: CacheConfig + 'static> Cache<C> {
         Ok(())
     }
 
+    /// Épingle un item pour le protéger de l'éviction LRU
+    ///
+    /// Un item épinglé ne peut pas être supprimé automatiquement par la politique LRU
+    /// et ne compte pas dans la limite du cache.
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Clé primaire de l'item à épingler
+    ///
+    /// # Errors
+    ///
+    /// Retourne une erreur si l'item a un TTL défini (incompatibilité métier)
+    pub async fn pin(&self, pk: &str) -> Result<()> {
+        self.db.pin(pk).map_err(|e| anyhow!(e))
+    }
+
+    /// Désépingle un item pour le rendre à nouveau éligible à l'éviction LRU
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Clé primaire de l'item à désépingler
+    pub async fn unpin(&self, pk: &str) -> Result<()> {
+        self.db.unpin(pk).map_err(|e| anyhow!(e))
+    }
+
+    /// Vérifie si un item est épinglé
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Clé primaire de l'item
+    ///
+    /// # Returns
+    ///
+    /// `true` si l'item est épinglé, `false` sinon
+    pub async fn is_pinned(&self, pk: &str) -> Result<bool> {
+        self.db.is_pinned(pk).map_err(|e| anyhow!(e))
+    }
+
+    /// Définit le TTL (Time To Live) d'un item
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Clé primaire de l'item
+    /// * `expires_at` - Date/heure d'expiration au format RFC3339
+    ///
+    /// # Errors
+    ///
+    /// Retourne une erreur si l'item est épinglé (incompatibilité métier)
+    pub async fn set_ttl(&self, pk: &str, expires_at: &str) -> Result<()> {
+        self.db.set_ttl(pk, expires_at).map_err(|e| anyhow!(e))
+    }
+
+    /// Supprime le TTL d'un item
+    ///
+    /// # Arguments
+    ///
+    /// * `pk` - Clé primaire de l'item
+    pub async fn clear_ttl(&self, pk: &str) -> Result<()> {
+        self.db.clear_ttl(pk).map_err(|e| anyhow!(e))
+    }
+
     /// Récupère tous les fichiers d'une collection
     ///
     /// # Arguments
@@ -1386,28 +1447,59 @@ impl<C: CacheConfig + 'static> Cache<C> {
 
     /// Applique la politique d'éviction LRU (Least Recently Used)
     ///
-    /// Si le nombre d'entrées dépasse la limite configurée, supprime
+    /// Si le nombre d'entrées non épinglées dépasse la limite configurée, supprime
     /// les entrées les plus anciennes (moins récemment utilisées).
     ///
+    /// Les items épinglés sont exclus du comptage et ne peuvent pas être supprimés.
+    ///
     /// Cette méthode :
-    /// 1. Compte le nombre total d'entrées
-    /// 2. Si > limit, récupère les N entrées les plus anciennes
+    /// 1. Compte le nombre d'entrées non épinglées
+    /// 2. Si > limit, récupère les N entrées les plus anciennes (non épinglées)
     /// 3. Supprime ces entrées de la DB et leurs fichiers du disque
+    /// 4. Supprime également les items expirés (TTL dépassé)
     ///
     /// # Returns
     ///
     /// Le nombre d'entrées supprimées
     pub async fn enforce_limit(&self) -> Result<usize> {
-        let count = self.db.count()?;
+        let mut total_removed = 0;
 
-        if count <= self.limit {
-            return Ok(0);
+        // 1. Supprimer d'abord les items expirés (TTL dépassé)
+        let expired_entries = self.db.get_expired()?;
+        for entry in expired_entries {
+            if let Ok(paths) = self.get_file_paths(&entry.pk) {
+                for path in paths {
+                    let _ = tokio::fs::remove_file(path).await;
+                }
+            }
+
+            if let Err(e) = self.db.delete(&entry.pk) {
+                tracing::warn!("Error deleting expired entry {} from DB: {}", entry.pk, e);
+            } else {
+                total_removed += 1;
+                tracing::debug!(
+                    "Removed expired item {} (TTL: {:?})",
+                    entry.pk,
+                    entry.ttl_expires_at
+                );
+            }
         }
 
+        // 2. Compter seulement les items non épinglés
+        let count = self.db.count_unpinned()?;
+
+        if count <= self.limit {
+            if total_removed > 0 {
+                tracing::info!("Cache cleanup: removed {} expired entries", total_removed);
+            }
+            return Ok(total_removed);
+        }
+
+        // 3. Supprimer les plus vieux items non épinglés si nécessaire
         let to_remove = count - self.limit;
         let old_entries = self.db.get_oldest(to_remove)?;
 
-        let mut removed = 0;
+        let mut lru_removed = 0;
         for entry in old_entries {
             // Utiliser get_file_paths() pour obtenir tous les fichiers de cette entrée
             if let Ok(paths) = self.get_file_paths(&entry.pk) {
@@ -1420,20 +1512,22 @@ impl<C: CacheConfig + 'static> Cache<C> {
             if let Err(e) = self.db.delete(&entry.pk) {
                 tracing::warn!("Error deleting entry {} from DB: {}", entry.pk, e);
             } else {
-                removed += 1;
+                lru_removed += 1;
             }
         }
 
-        if removed > 0 {
+        total_removed += lru_removed;
+
+        if total_removed > 0 {
             tracing::info!(
-                "LRU eviction: removed {} old entries (cache size: {} -> {})",
-                removed,
+                "LRU eviction: removed {} old entries (unpinned cache size: {} -> {})",
+                lru_removed,
                 count,
-                count - removed
+                count - lru_removed
             );
         }
 
-        Ok(removed)
+        Ok(total_removed)
     }
 
     // ============================================================================

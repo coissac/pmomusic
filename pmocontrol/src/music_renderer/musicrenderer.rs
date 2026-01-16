@@ -10,6 +10,8 @@ use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use crate::errors::ControlPointError;
+use crate::events::RendererEventBus;
+use crate::model::RendererEvent;
 use crate::model::{PlaybackSource, PlaybackState, RendererInfo, RendererProtocol, TrackMetadata};
 use crate::music_renderer::RendererFromMediaRendererInfo;
 use crate::music_renderer::arylic_tcp::ArylicTcpRenderer;
@@ -83,13 +85,31 @@ struct MusicRendererState {
     sleep_timer: SleepTimer,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct MusicRenderer {
     info: RendererInfo,
     connection: Arc<Mutex<DeviceConnectionState>>,
     backend: Arc<Mutex<MusicRendererBackend>>,
     playlist_binding: Arc<Mutex<Option<PlaylistBinding>>>,
     state: Arc<Mutex<MusicRendererState>>,
+    /// Optional event bus for emitting queue change events.
+    event_bus: Option<RendererEventBus>,
+}
+
+impl std::fmt::Debug for MusicRenderer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MusicRenderer")
+            .field("info", &self.info)
+            .field("connection", &self.connection)
+            .field("backend", &self.backend)
+            .field("playlist_binding", &self.playlist_binding)
+            .field("state", &self.state)
+            .field(
+                "event_bus",
+                &self.event_bus.as_ref().map(|_| "RendererEventBus"),
+            )
+            .finish()
+    }
 }
 
 impl MusicRenderer {
@@ -105,12 +125,20 @@ impl MusicRenderer {
             backend,
             playlist_binding: Arc::new(Mutex::new(None)),
             state: Arc::new(Mutex::new(MusicRendererState::default())),
+            event_bus: None,
         };
 
         Arc::new(renderer)
     }
 
     pub fn from_renderer_info(info: &RendererInfo) -> Result<MusicRenderer, ControlPointError> {
+        Self::from_renderer_info_with_bus(info, None)
+    }
+
+    pub fn from_renderer_info_with_bus(
+        info: &RendererInfo,
+        event_bus: Option<RendererEventBus>,
+    ) -> Result<MusicRenderer, ControlPointError> {
         let connection = Arc::new(Mutex::new(DeviceConnectionState::new()));
         let backend = MusicRendererBackend::make_from_renderer_info(info)?;
 
@@ -120,8 +148,20 @@ impl MusicRenderer {
             backend,
             playlist_binding: Arc::new(Mutex::new(None)),
             state: Arc::new(Mutex::new(MusicRendererState::default())),
+            event_bus,
         };
         Ok(renderer)
+    }
+
+    /// Helper method to emit a QueueUpdated event if an event bus is available.
+    fn emit_queue_updated(&self) {
+        if let Some(ref bus) = self.event_bus {
+            let queue_length = self.len().unwrap_or(0);
+            bus.broadcast(RendererEvent::QueueUpdated {
+                id: self.id(),
+                queue_length,
+            });
+        }
     }
 
     pub fn info(&self) -> &RendererInfo {
@@ -255,7 +295,9 @@ impl MusicRenderer {
         self.backend
             .lock()
             .expect("Backend mutex poisoned")
-            .play_next()
+            .play_next()?;
+        self.emit_queue_updated();
+        Ok(())
     }
 
     /// Play from a specific index in the queue.
@@ -263,7 +305,9 @@ impl MusicRenderer {
         self.backend
             .lock()
             .expect("Backend mutex poisoned")
-            .play_from_index(index)
+            .play_from_index(index)?;
+        self.emit_queue_updated();
+        Ok(())
     }
 
     /// Transport control: play
@@ -375,11 +419,24 @@ impl MusicRenderer {
     }
 
     /// Sets the playlist binding for this renderer.
+    /// Emits a `BindingChanged` event only if the binding actually changes.
     pub fn set_playlist_binding(&self, binding: Option<PlaylistBinding>) {
-        *self
+        let mut guard = self
             .playlist_binding
             .lock()
-            .expect("Playlist binding mutex poisoned") = binding;
+            .expect("Playlist binding mutex poisoned");
+
+        // Check if there's an actual change (both None, or different Some values)
+        let old_is_some = guard.is_some();
+        let new_is_some = binding.is_some();
+        let has_changed = old_is_some != new_is_some || (old_is_some && new_is_some);
+
+        *guard = binding.clone();
+        drop(guard);
+
+        if has_changed {
+            self.emit_binding_changed(binding);
+        }
     }
 
     /// Gets the current playlist binding, if any.
@@ -391,11 +448,30 @@ impl MusicRenderer {
     }
 
     /// Clears the playlist binding.
+    /// Emits a `BindingChanged` event with `None` only if there was a binding to clear.
     pub fn clear_playlist_binding(&self) {
-        *self
+        let mut guard = self
             .playlist_binding
             .lock()
-            .expect("Playlist binding mutex poisoned") = None;
+            .expect("Playlist binding mutex poisoned");
+
+        let had_binding = guard.is_some();
+        *guard = None;
+        drop(guard);
+
+        if had_binding {
+            self.emit_binding_changed(None);
+        }
+    }
+
+    /// Helper method to emit a BindingChanged event if an event bus is available.
+    fn emit_binding_changed(&self, binding: Option<PlaylistBinding>) {
+        if let Some(ref bus) = self.event_bus {
+            bus.broadcast(RendererEvent::BindingChanged {
+                id: self.id(),
+                binding,
+            });
+        }
     }
 
     /// Marks the current playlist binding for refresh if it matches the given server and container.
@@ -483,7 +559,10 @@ impl MusicRenderer {
         mode: EnqueueMode,
     ) -> Result<(), ControlPointError> {
         let mut backend = self.backend.lock().expect("Backend mutex poisoned");
-        backend.enqueue_items(items, mode)
+        backend.enqueue_items(items, mode)?;
+        drop(backend);
+        self.emit_queue_updated();
+        Ok(())
     }
 
     /// Synchronize the queue with new items while preserving the current track.
@@ -494,7 +573,10 @@ impl MusicRenderer {
     /// - If there's no current track, the queue is simply replaced
     pub fn sync_queue(&self, items: Vec<PlaybackItem>) -> Result<(), ControlPointError> {
         let mut backend = self.backend.lock().expect("Backend mutex poisoned");
-        backend.sync_queue(items)
+        backend.sync_queue(items)?;
+        drop(backend);
+        self.emit_queue_updated();
+        Ok(())
     }
 
     /// Set the current queue index (for advanced use).
@@ -507,7 +589,10 @@ impl MusicRenderer {
     /// Clears the renderer's queue using the generic QueueBackend trait.
     pub fn clear_queue(&self) -> Result<(), ControlPointError> {
         let mut backend = self.backend.lock().expect("Backend mutex poisoned");
-        backend.clear_queue()
+        backend.clear_queue()?;
+        drop(backend);
+        self.emit_queue_updated();
+        Ok(())
     }
 
     /// Dequeues and returns the next item from the queue.
@@ -530,7 +615,10 @@ impl MusicRenderer {
         current_index: Option<usize>,
     ) -> Result<(), ControlPointError> {
         let mut backend = self.backend.lock().expect("Backend mutex poisoned");
-        backend.replace_queue(items, current_index)
+        backend.replace_queue(items, current_index)?;
+        drop(backend);
+        self.emit_queue_updated();
+        Ok(())
     }
 
     /// Adds a track to the queue.
@@ -725,6 +813,53 @@ impl MusicRenderer {
             state.sleep_timer.duration_seconds(),
             state.sleep_timer.remaining_seconds(),
         )
+    }
+
+    // --- Queue Shuffle ---
+
+    /// Shuffles the current queue and restarts playback from the first track.
+    ///
+    /// This method:
+    /// 1. Detaches the queue from any attached playlist
+    /// 2. Stops playback
+    /// 3. Takes a snapshot of the current queue
+    /// 4. Randomizes the order of tracks
+    /// 5. Replaces the queue with the shuffled items
+    /// 6. Starts playback from the first track
+    ///
+    /// # Errors
+    /// Returns an error if the queue is empty or if any backend operation fails.
+    pub fn shuffle_queue(&self) -> Result<(), ControlPointError> {
+        use rand::seq::SliceRandom;
+        use rand::thread_rng;
+
+        // 1. Clear the playlist binding (detach from playlist)
+        self.clear_playlist_binding();
+
+        // 2. Stop playback (ignore errors if already stopped)
+        let _ = self.stop();
+
+        // 3. Get a snapshot of the current queue
+        let snapshot = self.queue_snapshot()?;
+
+        if snapshot.items.is_empty() {
+            return Err(ControlPointError::QueueError(
+                "Cannot shuffle an empty queue".to_string(),
+            ));
+        }
+
+        // 4. Shuffle the items
+        let mut shuffled_items = snapshot.items;
+        let mut rng = thread_rng();
+        shuffled_items.shuffle(&mut rng);
+
+        // 5. Replace the queue with shuffled items, starting at index 0
+        self.replace_queue(shuffled_items, Some(0))?;
+
+        // 6. Start playback from the first track
+        self.play_from_index(0)?;
+
+        Ok(())
     }
 }
 

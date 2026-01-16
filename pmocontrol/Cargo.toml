@@ -25,6 +25,7 @@ futures-util = "0.3"
 smol = "2.0"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+rand = { workspace = true }
 
 # pmoserver extension support (optional)
 pmoserver = { path = "../pmoserver", optional = true }

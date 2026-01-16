@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pinnable_cache_item</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/github-markdown-css@5/github-markdown.min.css">
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({startOnLoad: true, theme: "default"});
+</script>
+<style>
+  .markdown-body {
+    box-sizing: border-box;
+    min-width: 200px;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 45px;
+  }
+  .back-link {
+    margin-bottom: 20px;
+    display: block;
+  }
+  pre.mermaid {
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 10px;
+  }
+</style>
+</head>
+<body>
+<article class="markdown-body">
+<p class="back-link"><a href="index.html">← Retour à l'index</a></p>
+<h1
+id="rapport-implémentation-des-items-épinglables-dans-pmocache">Rapport
+: Implémentation des items épinglables dans PMOcache</h1>
+<h2 id="résumé">Résumé</h2>
+<p>Implémentation réussie de la fonctionnalité d’items épinglables dans
+la crate PMOcache, permettant de protéger certains items de l’éviction
+automatique par la politique LRU. Cette fonctionnalité inclut également
+un système de TTL (Time To Live) avec une règle métier empêchant qu’un
+item soit à la fois épinglé et avec un TTL.</p>
+<h2 id="modifications-apportées">Modifications apportées</h2>
+<h3 id="structure-de-la-base-de-données-pmocachesrcdb.rs">1. Structure
+de la base de données (<code>pmocache/src/db.rs</code>)</h3>
+<h4 id="modification-du-schéma-de-la-table-asset">Modification du schéma
+de la table <code>asset</code></h4>
+<p>Ajout de deux nouvelles colonnes :</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode sql"><code class="sourceCode sql"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">CREATE</span> <span class="kw">TABLE</span> <span class="cf">IF</span> <span class="kw">NOT</span> <span class="kw">EXISTS</span> asset (</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>    pk TEXT <span class="kw">PRIMARY</span> <span class="kw">KEY</span>,</span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>    collection TEXT,</span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">id</span> TEXT,</span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>    hits <span class="dt">INTEGER</span> <span class="kw">DEFAULT</span> <span class="dv">0</span>,</span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>    last_used TEXT,</span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>    lazy_pk TEXT,</span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>    pinned <span class="dt">INTEGER</span> <span class="kw">DEFAULT</span> <span class="dv">0</span> <span class="kw">CHECK</span> (pinned <span class="kw">IN</span> (<span class="dv">0</span>, <span class="dv">1</span>)),</span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>    ttl_expires_at TEXT</span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a>)</span></pre></div>
+<ul>
+<li><strong><code>pinned</code></strong> : Booléen (0 ou 1) indiquant si
+l’item est épinglé</li>
+<li><strong><code>ttl_expires_at</code></strong> : Date/heure
+d’expiration au format RFC3339 (optionnel)</li>
+</ul>
+<h4 id="mise-à-jour-de-la-structure-cacheentry">Mise à jour de la
+structure <code>CacheEntry</code></h4>
+<p>Ajout des champs correspondants :</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> CacheEntry <span class="op">{</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ... champs existants ...</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> pinned<span class="op">:</span> <span class="dt">bool</span><span class="op">,</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> ttl_expires_at<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>    <span class="co">// ...</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h4 id="nouvelles-méthodes-dans-db">Nouvelles méthodes dans
+<code>DB</code></h4>
+<h5 id="gestion-du-comptage">Gestion du comptage</h5>
+<ul>
+<li><strong><code>count_unpinned()</code></strong> : Compte uniquement
+les items non épinglés
+<ul>
+<li>Les items épinglés ne comptent pas dans la limite du cache</li>
+</ul></li>
+</ul>
+<h5 id="gestion-du-pinning">Gestion du pinning</h5>
+<ul>
+<li><p><strong><code>pin(pk: &amp;str)</code></strong> : Épingle un
+item</p>
+<ul>
+<li>Vérifie que l’item n’a pas de TTL défini (règle métier)</li>
+<li>Retourne une erreur si le TTL est déjà défini</li>
+</ul></li>
+<li><p><strong><code>unpin(pk: &amp;str)</code></strong> : Désépingle un
+item</p></li>
+<li><p><strong><code>is_pinned(pk: &amp;str)</code></strong> : Vérifie
+si un item est épinglé</p></li>
+</ul>
+<h5 id="gestion-du-ttl">Gestion du TTL</h5>
+<ul>
+<li><p><strong><code>set_ttl(pk: &amp;str, expires_at: &amp;str)</code></strong>
+: Définit le TTL d’un item</p>
+<ul>
+<li>Vérifie que l’item n’est pas épinglé (règle métier)</li>
+<li>Retourne une erreur si l’item est épinglé</li>
+</ul></li>
+<li><p><strong><code>clear_ttl(pk: &amp;str)</code></strong> : Supprime
+le TTL d’un item</p></li>
+<li><p><strong><code>get_expired()</code></strong> : Récupère tous les
+items dont le TTL est dépassé</p></li>
+</ul>
+<h5 id="modification-de-get_oldest">Modification de
+<code>get_oldest()</code></h5>
+<p>La requête SQL exclut maintenant les items épinglés :</p>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode sql"><code class="sourceCode sql"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">SELECT</span> <span class="op">..</span>. <span class="kw">FROM</span> asset</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="kw">WHERE</span> pinned <span class="op">=</span> <span class="dv">0</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="kw">ORDER</span> <span class="kw">BY</span> last_used <span class="kw">ASC</span>, hits <span class="kw">ASC</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="kw">LIMIT</span> ?<span class="dv">1</span></span></pre></div>
+<h3 id="logique-du-cache-pmocachesrccache.rs">2. Logique du cache
+(<code>pmocache/src/cache.rs</code>)</h3>
+<h4 id="méthodes-publiques-ajoutées">Méthodes publiques ajoutées</h4>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">async</span> <span class="kw">fn</span> pin(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> pk<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">async</span> <span class="kw">fn</span> unpin(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> pk<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">async</span> <span class="kw">fn</span> is_pinned(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> pk<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">bool</span><span class="op">&gt;</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">async</span> <span class="kw">fn</span> set_ttl(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> pk<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span><span class="op">,</span> expires_at<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">async</span> <span class="kw">fn</span> clear_ttl(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> pk<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span></span></pre></div>
+<h4 id="modification-de-enforce_limit">Modification de
+<code>enforce_limit()</code></h4>
+<p>La politique d’éviction a été améliorée :</p>
+<ol type="1">
+<li><strong>Suppression prioritaire des items expirés</strong> : Les
+items dont le TTL est dépassé sont supprimés en premier</li>
+<li><strong>Comptage des items non épinglés</strong> : Utilise
+<code>count_unpinned()</code> au lieu de <code>count()</code></li>
+<li><strong>Protection des items épinglés</strong> : Ils ne peuvent pas
+être évincés par LRU</li>
+<li><strong>Logging amélioré</strong> : Messages distincts pour les
+items expirés et l’éviction LRU</li>
+</ol>
+<h3 id="tests-pmocacheteststest_pinnable.rs">3. Tests
+(<code>pmocache/tests/test_pinnable.rs</code>)</h3>
+<p>Création d’une suite complète de tests (9 tests, tous passants) :</p>
+<ol type="1">
+<li><strong><code>test_pin_unpin</code></strong> : Vérifie l’épinglage
+et le désépinglage basiques</li>
+<li><strong><code>test_pinned_excluded_from_lru</code></strong> :
+Vérifie que les items épinglés ne sont pas évincés</li>
+<li><strong><code>test_pinned_count_separately</code></strong> : Vérifie
+le comptage séparé des items épinglés</li>
+<li><strong><code>test_cannot_pin_with_ttl</code></strong> : Vérifie la
+règle métier TTL → pas de pinning</li>
+<li><strong><code>test_cannot_set_ttl_when_pinned</code></strong> :
+Vérifie la règle métier pinned → pas de TTL</li>
+<li><strong><code>test_ttl_expiration</code></strong> : Vérifie la
+suppression automatique des items expirés</li>
+<li><strong><code>test_clear_ttl</code></strong> : Vérifie la
+suppression du TTL</li>
+<li><strong><code>test_get_expired</code></strong> : Vérifie la
+récupération des items expirés</li>
+<li><strong><code>test_cache_entry_fields</code></strong> : Vérifie les
+valeurs des champs dans <code>CacheEntry</code></li>
+</ol>
+<h2 id="règles-métier-implémentées">Règles métier implémentées</h2>
+<h3 id="incompatibilité-ttl-pinned">Incompatibilité TTL ↔︎ Pinned</h3>
+<p>Un item ne peut pas être à la fois épinglé ET avoir un TTL :</p>
+<ul>
+<li><strong>Si TTL défini</strong> : <code>pin()</code> retourne une
+erreur</li>
+<li><strong>Si épinglé</strong> : <code>set_ttl()</code> retourne une
+erreur</li>
+</ul>
+<p>Cette règle garantit une sémantique claire : -
+<strong>Épinglé</strong> = permanent, protégé de l’éviction -
+<strong>TTL</strong> = temporaire, sera supprimé à expiration</p>
+<h3 id="comptage-des-items">Comptage des items</h3>
+<p>Les items épinglés sont <strong>exclus</strong> du comptage de la
+limite du cache :</p>
+<ul>
+<li>Un cache de limite 100 peut contenir 100 items non épinglés + N
+items épinglés</li>
+<li>Seuls les items non épinglés sont pris en compte pour l’éviction
+LRU</li>
+</ul>
+<h3 id="ordre-de-suppression-lors-de-enforce_limit">Ordre de suppression
+lors de <code>enforce_limit()</code></h3>
+<ol type="1">
+<li><strong>Items expirés (TTL dépassé)</strong> : supprimés en
+priorité</li>
+<li><strong>Items LRU</strong> : si la limite est toujours dépassée,
+suppression des plus vieux items <strong>non épinglés</strong></li>
+</ol>
+<h2 id="compatibilité">Compatibilité</h2>
+<h3 id="migration-de-base-de-données">Migration de base de données</h3>
+<p><strong>Aucune migration nécessaire</strong> : Les colonnes
+<code>pinned</code> et <code>ttl_expires_at</code> ont des valeurs par
+défaut : - <code>pinned = 0</code> (non épinglé) -
+<code>ttl_expires_at = NULL</code> (pas de TTL)</p>
+<p>Les bases existantes seront automatiquement mises à jour au prochain
+démarrage via le <code>CREATE TABLE IF NOT EXISTS</code> avec les
+nouvelles colonnes.</p>
+<h3 id="rétrocompatibilité-du-code">Rétrocompatibilité du code</h3>
+<p>Toutes les méthodes existantes continuent de fonctionner sans
+modification : - Les items existants ne sont pas épinglés par défaut -
+Le comportement LRU standard reste identique pour les items non
+épinglés</p>
+<h2 id="exemples-dutilisation">Exemples d’utilisation</h2>
+<h3 id="utilisation-programmatique-rust">Utilisation programmatique
+(Rust)</h3>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">pmocache::</span><span class="op">{</span>Cache<span class="op">,</span> CacheConfig<span class="op">};</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">chrono::</span><span class="op">{</span>Duration<span class="op">,</span> Utc<span class="op">};</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="co">// Créer un cache</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> cache <span class="op">=</span> <span class="pp">Cache::</span><span class="op">&lt;</span>MyConfig<span class="op">&gt;</span><span class="pp">::</span>new(<span class="st">&quot;./cache&quot;</span><span class="op">,</span> <span class="dv">100</span>)<span class="op">.</span>unwrap()<span class="op">;</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a><span class="co">// Ajouter un fichier</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> pk <span class="op">=</span> cache<span class="op">.</span>add_from_url(<span class="st">&quot;https://example.com/file.dat&quot;</span><span class="op">,</span> <span class="cn">None</span>)<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a><span class="co">// Épingler pour protéger de l&#39;éviction</span></span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>cache<span class="op">.</span>pin(<span class="op">&amp;</span>pk)<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a><span class="co">// Ou définir un TTL de 24 heures</span></span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> expires_at <span class="op">=</span> (<span class="pp">Utc::</span>now() <span class="op">+</span> <span class="pp">Duration::</span>hours(<span class="dv">24</span>))<span class="op">.</span>to_rfc3339()<span class="op">;</span></span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a>cache<span class="op">.</span>set_ttl(<span class="op">&amp;</span>pk2<span class="op">,</span> <span class="op">&amp;</span>expires_at)<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a><span class="co">// Vérifier le statut</span></span>
+<span id="cb5-18"><a href="#cb5-18" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> cache<span class="op">.</span>is_pinned(<span class="op">&amp;</span>pk)<span class="op">.</span><span class="kw">await</span><span class="op">?</span> <span class="op">{</span></span>
+<span id="cb5-19"><a href="#cb5-19" aria-hidden="true" tabindex="-1"></a>    <span class="pp">println!</span>(<span class="st">&quot;Fichier protégé&quot;</span>)<span class="op">;</span></span>
+<span id="cb5-20"><a href="#cb5-20" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h3 id="utilisation-via-lapi-rest">Utilisation via l’API REST</h3>
+<h4 id="récupérer-le-statut-de-pinning">Récupérer le statut de
+pinning</h4>
+<div class="sourceCode" id="cb6"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="ex">GET</span> /api/cache/{pk}/pin</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="ex">Response</span> 200 OK:</span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a><span class="kw">{</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;pk&quot;</span><span class="ex">:</span> <span class="st">&quot;1a2b3c4d5e6f7a8b&quot;</span>,</span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;pinned&quot;</span><span class="ex">:</span> false,</span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;ttl_expires_at&quot;</span><span class="ex">:</span> null</span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a><span class="kw">}</span></span></pre></div>
+<h4 id="épingler-un-item">Épingler un item</h4>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="ex">POST</span> /api/cache/{pk}/pin</span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="ex">Response</span> 200 OK:</span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a><span class="kw">{</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;pk&quot;</span><span class="ex">:</span> <span class="st">&quot;1a2b3c4d5e6f7a8b&quot;</span>,</span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;message&quot;</span><span class="ex">:</span> <span class="st">&quot;Item &#39;1a2b3c4d5e6f7a8b&#39; pinned successfully&quot;</span></span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a><span class="kw">}</span></span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a><span class="ex">Response</span> 409 CONFLICT <span class="er">(</span><span class="ex">si</span> TTL défini<span class="kw">)</span><span class="bu">:</span></span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a><span class="kw">{</span></span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;error&quot;</span><span class="ex">:</span> <span class="st">&quot;CONFLICT&quot;</span>,</span>
+<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;message&quot;</span><span class="ex">:</span> <span class="st">&quot;Cannot pin an item with TTL set. Clear TTL first.&quot;</span></span>
+<span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a><span class="kw">}</span></span></pre></div>
+<h4 id="désépingler-un-item">Désépingler un item</h4>
+<div class="sourceCode" id="cb8"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="ex">DELETE</span> /api/cache/{pk}/pin</span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="ex">Response</span> 200 OK:</span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a><span class="kw">{</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;pk&quot;</span><span class="ex">:</span> <span class="st">&quot;1a2b3c4d5e6f7a8b&quot;</span>,</span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;message&quot;</span><span class="ex">:</span> <span class="st">&quot;Item &#39;1a2b3c4d5e6f7a8b&#39; unpinned successfully&quot;</span></span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a><span class="kw">}</span></span></pre></div>
+<h4 id="définir-un-ttl">Définir un TTL</h4>
+<div class="sourceCode" id="cb9"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="ex">POST</span> /api/cache/{pk}/ttl</span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="ex">Content-Type:</span> application/json</span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a><span class="kw">{</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;expires_at&quot;</span><span class="ex">:</span> <span class="st">&quot;2025-01-20T10:30:00Z&quot;</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a><span class="kw">}</span></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a><span class="ex">Response</span> 200 OK:</span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a><span class="kw">{</span></span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;pk&quot;</span><span class="ex">:</span> <span class="st">&quot;1a2b3c4d5e6f7a8b&quot;</span>,</span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;message&quot;</span><span class="ex">:</span> <span class="st">&quot;TTL set successfully for item &#39;1a2b3c4d5e6f7a8b&#39;&quot;</span></span>
+<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a><span class="kw">}</span></span>
+<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-14"><a href="#cb9-14" aria-hidden="true" tabindex="-1"></a><span class="ex">Response</span> 409 CONFLICT <span class="er">(</span><span class="ex">si</span> épinglé<span class="kw">)</span><span class="bu">:</span></span>
+<span id="cb9-15"><a href="#cb9-15" aria-hidden="true" tabindex="-1"></a><span class="kw">{</span></span>
+<span id="cb9-16"><a href="#cb9-16" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;error&quot;</span><span class="ex">:</span> <span class="st">&quot;CONFLICT&quot;</span>,</span>
+<span id="cb9-17"><a href="#cb9-17" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;message&quot;</span><span class="ex">:</span> <span class="st">&quot;Cannot set TTL on a pinned item. Unpin first.&quot;</span></span>
+<span id="cb9-18"><a href="#cb9-18" aria-hidden="true" tabindex="-1"></a><span class="kw">}</span></span>
+<span id="cb9-19"><a href="#cb9-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-20"><a href="#cb9-20" aria-hidden="true" tabindex="-1"></a><span class="ex">Response</span> 400 BAD REQUEST <span class="er">(</span><span class="ex">format</span> invalide<span class="kw">)</span><span class="bu">:</span></span>
+<span id="cb9-21"><a href="#cb9-21" aria-hidden="true" tabindex="-1"></a><span class="kw">{</span></span>
+<span id="cb9-22"><a href="#cb9-22" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;error&quot;</span><span class="ex">:</span> <span class="st">&quot;INVALID_DATE&quot;</span>,</span>
+<span id="cb9-23"><a href="#cb9-23" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;message&quot;</span><span class="ex">:</span> <span class="st">&quot;Invalid RFC3339 date format&quot;</span></span>
+<span id="cb9-24"><a href="#cb9-24" aria-hidden="true" tabindex="-1"></a><span class="kw">}</span></span></pre></div>
+<h4 id="supprimer-un-ttl">Supprimer un TTL</h4>
+<div class="sourceCode" id="cb10"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="ex">DELETE</span> /api/cache/{pk}/ttl</span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="ex">Response</span> 200 OK:</span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a><span class="kw">{</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;pk&quot;</span><span class="ex">:</span> <span class="st">&quot;1a2b3c4d5e6f7a8b&quot;</span>,</span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;message&quot;</span><span class="ex">:</span> <span class="st">&quot;TTL cleared successfully for item &#39;1a2b3c4d5e6f7a8b&#39;&quot;</span></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a><span class="kw">}</span></span></pre></div>
+<h2 id="fichiers-modifiés">Fichiers modifiés</h2>
+<h3 id="phase-1-implémentation-de-base">Phase 1 : Implémentation de
+base</h3>
+<ol type="1">
+<li><strong><code>pmocache/src/db.rs</code></strong> :
+<ul>
+<li>Modification du schéma SQL</li>
+<li>Ajout de champs dans <code>CacheEntry</code></li>
+<li>Ajout de 8 nouvelles méthodes</li>
+<li>Modification de <code>get_oldest()</code>, <code>get()</code>,
+<code>get_from_id()</code>, <code>get_all()</code>,
+<code>get_by_collection()</code></li>
+</ul></li>
+<li><strong><code>pmocache/src/cache.rs</code></strong> :
+<ul>
+<li>Ajout de 5 méthodes publiques</li>
+<li>Modification de <code>enforce_limit()</code></li>
+</ul></li>
+<li><strong><code>pmocache/tests/test_pinnable.rs</code></strong> :
+<ul>
+<li>Nouveau fichier de tests (9 tests)</li>
+</ul></li>
+</ol>
+<h3 id="phase-2-enrichissement-de-lapi-rest">Phase 2 : Enrichissement de
+l’API REST</h3>
+<ol start="4" type="1">
+<li><strong><code>pmocache/src/api.rs</code></strong> :
+<ul>
+<li>Ajout de 3 nouvelles structures de données :
+<code>SetTtlRequest</code>, <code>PinResponse</code>,
+<code>PinStatus</code></li>
+<li>Ajout de 5 nouveaux handlers d’API :
+<ul>
+<li><code>get_pin_status()</code> : Récupération du statut de
+pinning</li>
+<li><code>pin_item()</code> : Épinglage d’un item</li>
+<li><code>unpin_item()</code> : Désépinglage d’un item</li>
+<li><code>set_item_ttl()</code> : Définition du TTL</li>
+<li><code>clear_item_ttl()</code> : Suppression du TTL</li>
+</ul></li>
+</ul></li>
+<li><strong><code>pmocache/src/pmoserver_ext.rs</code></strong> :
+<ul>
+<li>Ajout de 4 nouvelles routes dans <code>create_api_router()</code> :
+<ul>
+<li><code>GET /{pk}/pin</code> : Statut de pinning</li>
+<li><code>POST /{pk}/pin</code> : Épingler</li>
+<li><code>DELETE /{pk}/pin</code> : Désépingler</li>
+<li><code>POST /{pk}/ttl</code> : Définir TTL</li>
+<li><code>DELETE /{pk}/ttl</code> : Supprimer TTL</li>
+</ul></li>
+</ul></li>
+<li><strong><code>pmocache/src/openapi.rs</code></strong> :
+<ul>
+<li>Mise à jour de la macro <code>create_cache_openapi!</code> pour
+inclure :
+<ul>
+<li>Les 5 nouveaux endpoints dans la documentation</li>
+<li>Les 3 nouvelles structures dans les schémas OpenAPI</li>
+</ul></li>
+</ul></li>
+<li><strong><code>pmocache/src/lib.rs</code></strong> :
+<ul>
+<li>Export des nouvelles structures publiques pour l’API</li>
+</ul></li>
+</ol>
+<h2 id="api-rest-et-documentation-openapi">API REST et Documentation
+OpenAPI</h2>
+<h3 id="routes-disponibles">Routes disponibles</h3>
+<p>Toutes les routes sont préfixées par <code>/api/{cache_name}/</code>
+(ex: <code>/api/covers/</code>, <code>/api/audio/</code>).</p>
+<table>
+<colgroup>
+<col style="width: 31%" />
+<col style="width: 24%" />
+<col style="width: 44%" />
+</colgroup>
+<thead>
+<tr>
+<th>Méthode</th>
+<th>Route</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET</code></td>
+<td><code>/{pk}/pin</code></td>
+<td>Récupère le statut de pinning d’un item</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/{pk}/pin</code></td>
+<td>Épingle un item (le protège de l’éviction LRU)</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/{pk}/pin</code></td>
+<td>Désépingle un item</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/{pk}/ttl</code></td>
+<td>Définit le TTL d’un item (expiration automatique)</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/{pk}/ttl</code></td>
+<td>Supprime le TTL d’un item</td>
+</tr>
+</tbody>
+</table>
+<h3 id="codes-de-statut-http">Codes de statut HTTP</h3>
+<table>
+<colgroup>
+<col style="width: 18%" />
+<col style="width: 42%" />
+<col style="width: 39%" />
+</colgroup>
+<thead>
+<tr>
+<th>Code</th>
+<th>Signification</th>
+<th>Cas d’usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>200 OK</code></td>
+<td>Opération réussie</td>
+<td>Tous les cas de succès</td>
+</tr>
+<tr>
+<td><code>400 BAD REQUEST</code></td>
+<td>Requête invalide</td>
+<td>Format de date TTL invalide</td>
+</tr>
+<tr>
+<td><code>404 NOT FOUND</code></td>
+<td>Item non trouvé</td>
+<td>PK inexistant dans le cache</td>
+</tr>
+<tr>
+<td><code>409 CONFLICT</code></td>
+<td>Conflit de règle métier</td>
+<td>Tentative de pin avec TTL ou vice-versa</td>
+</tr>
+<tr>
+<td><code>500 INTERNAL SERVER ERROR</code></td>
+<td>Erreur serveur</td>
+<td>Erreur de base de données</td>
+</tr>
+</tbody>
+</table>
+<h3 id="documentation-openapiswagger">Documentation OpenAPI/Swagger</h3>
+<p>La documentation OpenAPI est automatiquement générée et inclut :</p>
+<ul>
+<li><strong>Schémas de données</strong> :
+<ul>
+<li><code>PinStatus</code> : Statut de pinning (pinned,
+ttl_expires_at)</li>
+<li><code>PinResponse</code> : Réponse d’opération de pinning</li>
+<li><code>SetTtlRequest</code> : Requête de définition de TTL</li>
+<li><code>CacheEntry</code> : Mis à jour avec les champs
+<code>pinned</code> et <code>ttl_expires_at</code></li>
+</ul></li>
+<li><strong>Endpoints documentés</strong> :
+<ul>
+<li>Description détaillée de chaque route</li>
+<li>Exemples de requêtes et réponses</li>
+<li>Codes d’erreur possibles</li>
+</ul></li>
+<li><strong>Interface Swagger UI</strong> :
+<ul>
+<li>Accessible à <code>/swagger-ui/{cache_name}</code></li>
+<li>Permet de tester l’API directement depuis le navigateur</li>
+</ul></li>
+</ul>
+<h3 id="gestion-des-erreurs">Gestion des erreurs</h3>
+<p>L’API suit une structure d’erreur cohérente :</p>
+<div class="sourceCode" id="cb11"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;error&quot;</span><span class="fu">:</span> <span class="st">&quot;CODE_ERREUR&quot;</span><span class="fu">,</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;message&quot;</span><span class="fu">:</span> <span class="st">&quot;Description lisible de l&#39;erreur&quot;</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></pre></div>
+<p>Les règles métier sont appliquées strictement : - <strong>409
+CONFLICT</strong> si tentative de pin avec TTL défini - <strong>409
+CONFLICT</strong> si tentative de set TTL sur item épinglé - Messages
+d’erreur explicites guidant l’utilisateur</p>
+<h2 id="tests">Tests</h2>
+<ul>
+<li><strong>Suite de tests dédiée</strong> : 9 tests, tous passants</li>
+<li><strong>Tests existants</strong> : Tous les tests de
+<code>test_cache.rs</code> passent toujours</li>
+<li><strong>Couverture</strong> : Toutes les nouvelles fonctionnalités
+sont testées</li>
+<li><strong>Compilation</strong> : Aucune erreur, tous les modules
+compilent correctement</li>
+</ul>
+<h2 id="résultat">Résultat</h2>
+<p>✅ <strong>Implémentation complète et fonctionnelle</strong> des
+items épinglables avec TTL<br />
+✅ <strong>Règle métier</strong> TTL ↔︎ Pinned correctement
+implémentée<br />
+✅ <strong>Tests exhaustifs</strong> validant tous les cas d’usage<br />
+✅ <strong>Compatibilité</strong> avec les bases de données
+existantes<br />
+✅ <strong>Pas de régression</strong> sur les tests existants<br />
+✅ <strong>API REST complète</strong> avec 5 nouveaux endpoints<br />
+✅ <strong>Documentation OpenAPI</strong> automatiquement générée<br />
+✅ <strong>Gestion d’erreurs cohérente</strong> avec codes HTTP
+appropriés</p>
+</article>
+</body>
+</html>

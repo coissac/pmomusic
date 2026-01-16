@@ -197,6 +197,19 @@ class PMOControlAPI {
     );
   }
 
+  /**
+   * Mélange la queue de lecture et démarre au premier morceau
+   * POST /api/control/renderers/{id}/queue/shuffle
+   */
+  async shuffleQueue(id: string): Promise<SuccessResponse> {
+    return this.request<SuccessResponse>(
+      `/renderers/${encodeURIComponent(id)}/queue/shuffle`,
+      {
+        method: "POST",
+      },
+    );
+  }
+
   // ============================================================================
   // CONTRÔLE VOLUME
   // ============================================================================

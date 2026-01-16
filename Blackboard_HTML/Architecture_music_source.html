@@ -1,0 +1,934 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>music_source</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/github-markdown-css@5/github-markdown.min.css">
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({startOnLoad: true, theme: "default"});
+</script>
+<style>
+  .markdown-body {
+    box-sizing: border-box;
+    min-width: 200px;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 45px;
+  }
+  .back-link {
+    margin-bottom: 20px;
+    display: block;
+  }
+  pre.mermaid {
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 10px;
+  }
+</style>
+</head>
+<body>
+<article class="markdown-body">
+<p class="back-link"><a href="index.html">← Retour à l'index</a></p>
+<h1 id="guide-dimplémentation-dune-nouvelle-musicsource">Guide
+d’implémentation d’une nouvelle MusicSource</h1>
+<p>Ce document décrit comment implémenter une nouvelle source musicale
+dans l’écosystème PMOMusic en suivant le trait <code>MusicSource</code>
+défini dans le crate <code>pmosource</code>.</p>
+<h2 id="table-des-matières">Table des matières</h2>
+<ol type="1">
+<li><a href="#vue-densemble">Vue d’ensemble</a></li>
+<li><a href="#structure-dune-musicsource">Structure d’une
+MusicSource</a></li>
+<li><a href="#implémentation-du-trait-musicsource">Implémentation du
+trait MusicSource</a></li>
+<li><a href="#patterns-dimplémentation">Patterns
+d’implémentation</a></li>
+<li><a href="#intégration-avec-lécosystème-pmomusic">Intégration avec
+l’écosystème PMOMusic</a></li>
+<li><a href="#checklist-de-mise-en-œuvre">Checklist de mise en
+œuvre</a></li>
+<li><a href="#exemples-de-référence">Exemples de référence</a></li>
+</ol>
+<h2 id="vue-densemble">Vue d’ensemble</h2>
+<p>Une <code>MusicSource</code> est une abstraction qui représente une
+source de contenu musical dans PMOMusic. Elle peut être :</p>
+<ul>
+<li><strong>Dynamique (FIFO)</strong> : Radio Paradise, streaming radio,
+playlists live</li>
+<li><strong>Statique</strong> : Albums Qobuz, bibliothèque locale,
+playlists fixes</li>
+</ul>
+<p>Le trait <code>MusicSource</code> définit une interface unifiée pour
+: - La navigation UPnP ContentDirectory (browse) - La résolution d’URI
+audio (avec cache) - La gestion de playlists FIFO (pour les sources
+dynamiques) - Le suivi des changements (update_id, last_change)</p>
+<h2 id="structure-dune-musicsource">Structure d’une MusicSource</h2>
+<h3 id="organisation-du-code">Organisation du code</h3>
+<pre><code>pmo&lt;votre-source&gt;/
+├── src/
+│   ├── lib.rs              # Exports publics
+│   ├── source.rs           # Implémentation MusicSource
+│   ├── client.rs           # Client API (optionnel)
+│   ├── models.rs           # Structures de données
+│   ├── config.rs           # Configuration
+│   └── didl.rs             # Conversion DIDL-Lite (optionnel)
+├── assets/
+│   └── default.webp        # Logo 300x300px
+├── Cargo.toml
+└── README.md</pre>
+<h3 id="dépendances-principales">Dépendances principales</h3>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode toml"><code class="sourceCode toml"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">[dependencies]</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="dt">pmosource</span> <span class="op">=</span> <span class="op">{ </span><span class="dt">path</span><span class="op"> =</span> <span class="st">&quot;../pmosource&quot;</span><span class="op"> }</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="dt">pmodidl</span> <span class="op">=</span> <span class="op">{ </span><span class="dt">path</span><span class="op"> =</span> <span class="st">&quot;../pmodidl&quot;</span><span class="op"> }</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="dt">pmoplaylist</span> <span class="op">=</span> <span class="op">{ </span><span class="dt">path</span><span class="op"> =</span> <span class="st">&quot;../pmoplaylist&quot;</span><span class="op">, </span><span class="dt">optional</span><span class="op"> =</span> <span class="cn">true</span><span class="op"> }</span>  <span class="co"># Si FIFO</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="dt">pmoaudiocache</span> <span class="op">=</span> <span class="op">{ </span><span class="dt">path</span><span class="op"> =</span> <span class="st">&quot;../pmoaudiocache&quot;</span><span class="op">, </span><span class="dt">optional</span><span class="op"> =</span> <span class="cn">true</span><span class="op"> }</span>  <span class="co"># Si cache</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a><span class="dt">pmocovers</span> <span class="op">=</span> <span class="op">{ </span><span class="dt">path</span><span class="op"> =</span> <span class="st">&quot;../pmocovers&quot;</span><span class="op">, </span><span class="dt">optional</span><span class="op"> =</span> <span class="cn">true</span><span class="op"> }</span>  <span class="co"># Si cache</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a><span class="dt">async-trait</span> <span class="op">=</span> <span class="st">&quot;0.1&quot;</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a><span class="dt">tokio</span> <span class="op">=</span> <span class="op">{ </span><span class="dt">version</span><span class="op"> =</span> <span class="st">&quot;1&quot;</span><span class="op">, </span><span class="dt">features</span><span class="op"> =</span> <span class="op">[</span><span class="st">&quot;sync&quot;</span><span class="op">] }</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a><span class="dt">serde</span> <span class="op">=</span> <span class="op">{ </span><span class="dt">version</span><span class="op"> =</span> <span class="st">&quot;1&quot;</span><span class="op">, </span><span class="dt">features</span><span class="op"> =</span> <span class="op">[</span><span class="st">&quot;derive&quot;</span><span class="op">] }</span></span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a><span class="kw">[features]</span></span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a><span class="dt">default</span> <span class="op">=</span> <span class="op">[</span><span class="st">&quot;cache&quot;</span><span class="op">]</span></span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a><span class="dt">cache</span> <span class="op">=</span> <span class="op">[</span><span class="st">&quot;pmoaudiocache&quot;</span><span class="op">,</span> <span class="st">&quot;pmocovers&quot;</span><span class="op">]</span></span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a><span class="dt">playlist</span> <span class="op">=</span> <span class="op">[</span><span class="st">&quot;pmoplaylist&quot;</span><span class="op">]</span></span></pre></div>
+<h2 id="implémentation-du-trait-musicsource">Implémentation du trait
+MusicSource</h2>
+<h3 id="informations-de-base">1. Informations de base</h3>
+<p>Chaque source doit fournir :</p>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">pmosource::</span><span class="op">{</span>async_trait<span class="op">,</span> MusicSource<span class="op">};</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>derive<span class="at">(</span><span class="bu">Clone</span><span class="op">,</span> <span class="bu">Debug</span><span class="at">)]</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> MyMusicSource <span class="op">{</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Champs internes</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>async_trait<span class="at">]</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> MusicSource <span class="cf">for</span> MyMusicSource <span class="op">{</span></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> name(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="op">&amp;</span><span class="dt">str</span> <span class="op">{</span></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;Ma Source Musicale&quot;</span>  <span class="co">// Nom affiché dans l&#39;UI</span></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> id(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="op">&amp;</span><span class="dt">str</span> <span class="op">{</span></span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;my-music-source&quot;</span>  <span class="co">// ID unique (format: lowercase-kebab-case)</span></span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> default_image(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="op">&amp;</span>[<span class="dt">u8</span>] <span class="op">{</span></span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Logo WebP 300x300px inclus dans le binaire</span></span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>        <span class="pp">include_bytes!</span>(<span class="st">&quot;../assets/default.webp&quot;</span>)</span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> default_image_mime_type(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="op">&amp;</span><span class="dt">str</span> <span class="op">{</span></span>
+<span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;image/webp&quot;</span>  <span class="co">// Toujours WebP</span></span>
+<span id="cb3-25"><a href="#cb3-25" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb3-26"><a href="#cb3-26" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<p><strong>Règles :</strong> - <code>id()</code> doit être unique parmi
+toutes les sources - <code>id()</code> doit être en lowercase-kebab-case
+- <code>default_image()</code> doit être un WebP 300x300px</p>
+<h3 id="navigation-contentdirectory">2. Navigation ContentDirectory</h3>
+<h4 id="container-racine">2.1 Container racine</h4>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">async</span> <span class="kw">fn</span> root_container(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>Container<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>    <span class="cn">Ok</span>(Container <span class="op">{</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>        id<span class="op">:</span> <span class="kw">self</span><span class="op">.</span>id()<span class="op">.</span>to_string()<span class="op">,</span>  <span class="co">// &quot;my-music-source&quot;</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>        parent_id<span class="op">:</span> <span class="st">&quot;0&quot;</span><span class="op">.</span>to_string()<span class="op">,</span>  <span class="co">// Toujours &quot;0&quot; pour la racine</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>        restricted<span class="op">:</span> <span class="cn">Some</span>(<span class="st">&quot;1&quot;</span><span class="op">.</span>to_string())<span class="op">,</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>        child_count<span class="op">:</span> <span class="cn">None</span><span class="op">,</span>  <span class="co">// Optionnel</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>        searchable<span class="op">:</span> <span class="cn">Some</span>(<span class="st">&quot;1&quot;</span><span class="op">.</span>to_string())<span class="op">,</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>        title<span class="op">:</span> <span class="kw">self</span><span class="op">.</span>name()<span class="op">.</span>to_string()<span class="op">,</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>        class<span class="op">:</span> <span class="st">&quot;object.container&quot;</span><span class="op">.</span>to_string()<span class="op">,</span></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>        artist<span class="op">:</span> <span class="cn">None</span><span class="op">,</span></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>        album_art<span class="op">:</span> <span class="cn">None</span><span class="op">,</span></span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>        containers<span class="op">:</span> <span class="pp">vec!</span>[]<span class="op">,</span></span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>        items<span class="op">:</span> <span class="pp">vec!</span>[]<span class="op">,</span></span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span>)</span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h4 id="browse">2.2 Browse</h4>
+<p>La méthode <code>browse()</code> est le cœur de la navigation :</p>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">async</span> <span class="kw">fn</span> browse(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> object_id<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>BrowseResult<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">match</span> <span class="kw">self</span><span class="op">.</span>parse_object_id(object_id) <span class="op">{</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>        <span class="pp">ObjectIdType::</span>Root <span class="op">=&gt;</span> <span class="op">{</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>            <span class="co">// Retourner les sous-containers principaux</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>            <span class="kw">let</span> containers <span class="op">=</span> <span class="pp">vec!</span>[</span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>                <span class="kw">self</span><span class="op">.</span>build_albums_container()<span class="op">,</span></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>                <span class="kw">self</span><span class="op">.</span>build_playlists_container()<span class="op">,</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>                <span class="kw">self</span><span class="op">.</span>build_favorites_container()<span class="op">,</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>            ]<span class="op">;</span></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>            <span class="cn">Ok</span>(<span class="pp">BrowseResult::</span>Containers(containers))</span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>        <span class="pp">ObjectIdType::</span>Album <span class="op">{</span> album_id <span class="op">}</span> <span class="op">=&gt;</span> <span class="op">{</span></span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>            <span class="co">// Retourner le container + ses tracks</span></span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a>            <span class="kw">let</span> album_container <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>build_album_container(<span class="op">&amp;</span>album_id)<span class="op">;</span></span>
+<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a>            <span class="kw">let</span> tracks <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>get_album_tracks(<span class="op">&amp;</span>album_id)<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a>            <span class="cn">Ok</span>(<span class="pp">BrowseResult::</span>Mixed <span class="op">{</span></span>
+<span id="cb5-18"><a href="#cb5-18" aria-hidden="true" tabindex="-1"></a>                containers<span class="op">:</span> <span class="pp">vec!</span>[album_container]<span class="op">,</span></span>
+<span id="cb5-19"><a href="#cb5-19" aria-hidden="true" tabindex="-1"></a>                items<span class="op">:</span> tracks<span class="op">,</span></span>
+<span id="cb5-20"><a href="#cb5-20" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span>)</span>
+<span id="cb5-21"><a href="#cb5-21" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb5-22"><a href="#cb5-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-23"><a href="#cb5-23" aria-hidden="true" tabindex="-1"></a>        <span class="pp">ObjectIdType::</span>Track <span class="op">{</span> track_id <span class="op">}</span> <span class="op">=&gt;</span> <span class="op">{</span></span>
+<span id="cb5-24"><a href="#cb5-24" aria-hidden="true" tabindex="-1"></a>            <span class="co">// Retourner les détails d&#39;un track</span></span>
+<span id="cb5-25"><a href="#cb5-25" aria-hidden="true" tabindex="-1"></a>            <span class="kw">let</span> track <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>get_track_item(<span class="op">&amp;</span>track_id)<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb5-26"><a href="#cb5-26" aria-hidden="true" tabindex="-1"></a>            <span class="cn">Ok</span>(<span class="pp">BrowseResult::</span>Items(<span class="pp">vec!</span>[track]))</span>
+<span id="cb5-27"><a href="#cb5-27" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb5-28"><a href="#cb5-28" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-29"><a href="#cb5-29" aria-hidden="true" tabindex="-1"></a>        _ <span class="op">=&gt;</span> <span class="cn">Err</span>(<span class="pp">MusicSourceError::</span>ObjectNotFound(</span>
+<span id="cb5-30"><a href="#cb5-30" aria-hidden="true" tabindex="-1"></a>            <span class="pp">format!</span>(<span class="st">&quot;Unknown object: {}&quot;</span><span class="op">,</span> object_id)</span>
+<span id="cb5-31"><a href="#cb5-31" aria-hidden="true" tabindex="-1"></a>        ))</span>
+<span id="cb5-32"><a href="#cb5-32" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb5-33"><a href="#cb5-33" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<p><strong>Schema d’Object ID recommandé :</strong></p>
+<pre><code>&lt;source-id&gt;                              # Racine
+&lt;source-id&gt;:albums                       # Container albums
+&lt;source-id&gt;:album:&lt;album_id&gt;             # Album spécifique
+&lt;source-id&gt;:track:&lt;track_id&gt;             # Track spécifique
+&lt;source-id&gt;:playlist:&lt;playlist_id&gt;       # Playlist spécifique</pre>
+<p><strong>Types de BrowseResult :</strong> -
+<code>Containers(Vec&lt;Container&gt;)</code> : Liste de containers
+(navigation) - <code>Items(Vec&lt;Item&gt;)</code> : Liste de tracks
+(lecture) - <code>Mixed { containers, items }</code> : Les deux (album
+avec tracks)</p>
+<h4 id="résolution-duri">2.3 Résolution d’URI</h4>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">async</span> <span class="kw">fn</span> resolve_uri(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> object_id<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Étape 1 : Vérifier le cache audio</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Some</span>(cached_pk) <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>get_cached_audio_pk(object_id)<span class="op">.</span><span class="kw">await</span> <span class="op">{</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="cn">Ok</span>(<span class="pp">format!</span>(<span class="st">&quot;{}/audio/flac/{}&quot;</span><span class="op">,</span> <span class="kw">self</span><span class="op">.</span>base_url<span class="op">,</span> cached_pk))<span class="op">;</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Étape 2 : Retourner l&#39;URI originale</span></span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">match</span> <span class="kw">self</span><span class="op">.</span>parse_object_id(object_id) <span class="op">{</span></span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a>        <span class="pp">ObjectIdType::</span>Track <span class="op">{</span> track_id <span class="op">}</span> <span class="op">=&gt;</span> <span class="op">{</span></span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a>            <span class="kw">let</span> stream_url <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>get_stream_url(<span class="op">&amp;</span>track_id)<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a>            <span class="cn">Ok</span>(stream_url)</span>
+<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a>        _ <span class="op">=&gt;</span> <span class="cn">Err</span>(<span class="pp">MusicSourceError::</span>UriResolutionError(</span>
+<span id="cb7-14"><a href="#cb7-14" aria-hidden="true" tabindex="-1"></a>            <span class="pp">format!</span>(<span class="st">&quot;Cannot resolve URI for: {}&quot;</span><span class="op">,</span> object_id)</span>
+<span id="cb7-15"><a href="#cb7-15" aria-hidden="true" tabindex="-1"></a>        ))</span>
+<span id="cb7-16"><a href="#cb7-16" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb7-17"><a href="#cb7-17" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<p><strong>Ordre de résolution :</strong> 1. Cache audio local (si
+disponible) 2. URI originale (API streaming, fichier local, etc.)</p>
+<h3 id="support-fifo-sources-dynamiques">3. Support FIFO (sources
+dynamiques)</h3>
+<p>Si votre source est dynamique (radio, streaming live) :</p>
+<div class="sourceCode" id="cb8"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">pmoplaylist::</span>PlaylistManager<span class="op">;</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">std::sync::</span>Arc<span class="op">;</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">tokio::sync::</span>RwLock<span class="op">;</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>derive<span class="at">(</span><span class="bu">Clone</span><span class="at">)]</span></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> RadioSource <span class="op">{</span></span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a>    playlist_id<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a>    update_counter<span class="op">:</span> Arc<span class="op">&lt;</span>RwLock<span class="op">&lt;</span><span class="dt">u32</span><span class="op">&gt;&gt;,</span></span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a>    last_change<span class="op">:</span> Arc<span class="op">&lt;</span>RwLock<span class="op">&lt;</span>SystemTime<span class="op">&gt;&gt;,</span></span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>async_trait<span class="at">]</span></span>
+<span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> MusicSource <span class="cf">for</span> RadioSource <span class="op">{</span></span>
+<span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> supports_fifo(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">bool</span> <span class="op">{</span></span>
+<span id="cb8-15"><a href="#cb8-15" aria-hidden="true" tabindex="-1"></a>        <span class="cn">true</span>  <span class="co">// Cette source utilise une FIFO</span></span>
+<span id="cb8-16"><a href="#cb8-16" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb8-17"><a href="#cb8-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-18"><a href="#cb8-18" aria-hidden="true" tabindex="-1"></a>    <span class="kw">async</span> <span class="kw">fn</span> append_track(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> track<span class="op">:</span> Item) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb8-19"><a href="#cb8-19" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Récupérer le gestionnaire de playlist</span></span>
+<span id="cb8-20"><a href="#cb8-20" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> manager <span class="op">=</span> PlaylistManager()<span class="op">;</span></span>
+<span id="cb8-21"><a href="#cb8-21" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> writer <span class="op">=</span> manager</span>
+<span id="cb8-22"><a href="#cb8-22" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>get_persistent_write_handle(<span class="kw">self</span><span class="op">.</span>playlist_id<span class="op">.</span>clone())</span>
+<span id="cb8-23"><a href="#cb8-23" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span><span class="kw">await</span></span>
+<span id="cb8-24"><a href="#cb8-24" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>map_err(<span class="op">|</span>e<span class="op">|</span> <span class="pp">MusicSourceError::</span>PlaylistError(e<span class="op">.</span>to_string()))<span class="op">?;</span></span>
+<span id="cb8-25"><a href="#cb8-25" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-26"><a href="#cb8-26" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Extraire le PK depuis l&#39;URI du track</span></span>
+<span id="cb8-27"><a href="#cb8-27" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> pk <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>extract_pk_from_item(<span class="op">&amp;</span>track)<span class="op">?;</span></span>
+<span id="cb8-28"><a href="#cb8-28" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-29"><a href="#cb8-29" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Ajouter à la playlist</span></span>
+<span id="cb8-30"><a href="#cb8-30" aria-hidden="true" tabindex="-1"></a>        writer</span>
+<span id="cb8-31"><a href="#cb8-31" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>push_lazy(pk)</span>
+<span id="cb8-32"><a href="#cb8-32" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span><span class="kw">await</span></span>
+<span id="cb8-33"><a href="#cb8-33" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>map_err(<span class="op">|</span>e<span class="op">|</span> <span class="pp">MusicSourceError::</span>PlaylistError(e<span class="op">.</span>to_string()))<span class="op">?;</span></span>
+<span id="cb8-34"><a href="#cb8-34" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-35"><a href="#cb8-35" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Incrémenter update_id</span></span>
+<span id="cb8-36"><a href="#cb8-36" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>bump_update_counter()<span class="op">.</span><span class="kw">await</span><span class="op">;</span></span>
+<span id="cb8-37"><a href="#cb8-37" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-38"><a href="#cb8-38" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Ok</span>(())</span>
+<span id="cb8-39"><a href="#cb8-39" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb8-40"><a href="#cb8-40" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-41"><a href="#cb8-41" aria-hidden="true" tabindex="-1"></a>    <span class="kw">async</span> <span class="kw">fn</span> remove_oldest(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">Option</span><span class="op">&lt;</span>Item<span class="op">&gt;&gt;</span> <span class="op">{</span></span>
+<span id="cb8-42"><a href="#cb8-42" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> manager <span class="op">=</span> PlaylistManager()<span class="op">;</span></span>
+<span id="cb8-43"><a href="#cb8-43" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> reader <span class="op">=</span> manager</span>
+<span id="cb8-44"><a href="#cb8-44" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>get_read_handle(<span class="op">&amp;</span><span class="kw">self</span><span class="op">.</span>playlist_id)</span>
+<span id="cb8-45"><a href="#cb8-45" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span><span class="kw">await</span></span>
+<span id="cb8-46"><a href="#cb8-46" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>map_err(<span class="op">|</span>e<span class="op">|</span> <span class="pp">MusicSourceError::</span>PlaylistError(e<span class="op">.</span>to_string()))<span class="op">?;</span></span>
+<span id="cb8-47"><a href="#cb8-47" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-48"><a href="#cb8-48" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Récupérer le plus ancien</span></span>
+<span id="cb8-49"><a href="#cb8-49" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> items <span class="op">=</span> reader<span class="op">.</span>to_items(<span class="dv">1</span>)<span class="op">.</span><span class="kw">await</span></span>
+<span id="cb8-50"><a href="#cb8-50" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>map_err(<span class="op">|</span>e<span class="op">|</span> <span class="pp">MusicSourceError::</span>PlaylistError(e<span class="op">.</span>to_string()))<span class="op">?;</span></span>
+<span id="cb8-51"><a href="#cb8-51" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-52"><a href="#cb8-52" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Some</span>(item) <span class="op">=</span> items<span class="op">.</span>first() <span class="op">{</span></span>
+<span id="cb8-53"><a href="#cb8-53" aria-hidden="true" tabindex="-1"></a>            <span class="co">// Adapter l&#39;item au schéma de la source</span></span>
+<span id="cb8-54"><a href="#cb8-54" aria-hidden="true" tabindex="-1"></a>            <span class="kw">let</span> adapted <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>adapt_item_to_schema(item<span class="op">.</span>clone())<span class="op">;</span></span>
+<span id="cb8-55"><a href="#cb8-55" aria-hidden="true" tabindex="-1"></a>            <span class="kw">self</span><span class="op">.</span>bump_update_counter()<span class="op">.</span><span class="kw">await</span><span class="op">;</span></span>
+<span id="cb8-56"><a href="#cb8-56" aria-hidden="true" tabindex="-1"></a>            <span class="cn">Ok</span>(<span class="cn">Some</span>(adapted))</span>
+<span id="cb8-57"><a href="#cb8-57" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span> <span class="cf">else</span> <span class="op">{</span></span>
+<span id="cb8-58"><a href="#cb8-58" aria-hidden="true" tabindex="-1"></a>            <span class="cn">Ok</span>(<span class="cn">None</span>)</span>
+<span id="cb8-59"><a href="#cb8-59" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb8-60"><a href="#cb8-60" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb8-61"><a href="#cb8-61" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-62"><a href="#cb8-62" aria-hidden="true" tabindex="-1"></a>    <span class="kw">async</span> <span class="kw">fn</span> update_id(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">u32</span> <span class="op">{</span></span>
+<span id="cb8-63"><a href="#cb8-63" aria-hidden="true" tabindex="-1"></a>        <span class="op">*</span><span class="kw">self</span><span class="op">.</span>update_counter<span class="op">.</span>read()<span class="op">.</span><span class="kw">await</span></span>
+<span id="cb8-64"><a href="#cb8-64" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb8-65"><a href="#cb8-65" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-66"><a href="#cb8-66" aria-hidden="true" tabindex="-1"></a>    <span class="kw">async</span> <span class="kw">fn</span> last_change(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Option</span><span class="op">&lt;</span>SystemTime<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb8-67"><a href="#cb8-67" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Some</span>(<span class="op">*</span><span class="kw">self</span><span class="op">.</span>last_change<span class="op">.</span>read()<span class="op">.</span><span class="kw">await</span>)</span>
+<span id="cb8-68"><a href="#cb8-68" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb8-69"><a href="#cb8-69" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-70"><a href="#cb8-70" aria-hidden="true" tabindex="-1"></a>    <span class="kw">async</span> <span class="kw">fn</span> get_items(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> offset<span class="op">:</span> <span class="dt">usize</span><span class="op">,</span> count<span class="op">:</span> <span class="dt">usize</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">Vec</span><span class="op">&lt;</span>Item<span class="op">&gt;&gt;</span> <span class="op">{</span></span>
+<span id="cb8-71"><a href="#cb8-71" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> manager <span class="op">=</span> PlaylistManager()<span class="op">;</span></span>
+<span id="cb8-72"><a href="#cb8-72" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> reader <span class="op">=</span> manager</span>
+<span id="cb8-73"><a href="#cb8-73" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>get_read_handle(<span class="op">&amp;</span><span class="kw">self</span><span class="op">.</span>playlist_id)</span>
+<span id="cb8-74"><a href="#cb8-74" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span><span class="kw">await</span></span>
+<span id="cb8-75"><a href="#cb8-75" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>map_err(<span class="op">|</span>e<span class="op">|</span> <span class="pp">MusicSourceError::</span>PlaylistError(e<span class="op">.</span>to_string()))<span class="op">?;</span></span>
+<span id="cb8-76"><a href="#cb8-76" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-77"><a href="#cb8-77" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Récupérer les items</span></span>
+<span id="cb8-78"><a href="#cb8-78" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> items <span class="op">=</span> reader</span>
+<span id="cb8-79"><a href="#cb8-79" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>to_items(count)</span>
+<span id="cb8-80"><a href="#cb8-80" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span><span class="kw">await</span></span>
+<span id="cb8-81"><a href="#cb8-81" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>map_err(<span class="op">|</span>e<span class="op">|</span> <span class="pp">MusicSourceError::</span>PlaylistError(e<span class="op">.</span>to_string()))<span class="op">?;</span></span>
+<span id="cb8-82"><a href="#cb8-82" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-83"><a href="#cb8-83" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Adapter au schéma de la source</span></span>
+<span id="cb8-84"><a href="#cb8-84" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> adapted <span class="op">=</span> items<span class="op">.</span>into_iter()</span>
+<span id="cb8-85"><a href="#cb8-85" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>map(<span class="op">|</span>item<span class="op">|</span> <span class="kw">self</span><span class="op">.</span>adapt_item_to_schema(item))</span>
+<span id="cb8-86"><a href="#cb8-86" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>collect()<span class="op">;</span></span>
+<span id="cb8-87"><a href="#cb8-87" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-88"><a href="#cb8-88" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Ok</span>(adapted)</span>
+<span id="cb8-89"><a href="#cb8-89" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb8-90"><a href="#cb8-90" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb8-91"><a href="#cb8-91" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-92"><a href="#cb8-92" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> RadioSource <span class="op">{</span></span>
+<span id="cb8-93"><a href="#cb8-93" aria-hidden="true" tabindex="-1"></a>    <span class="kw">async</span> <span class="kw">fn</span> bump_update_counter(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">{</span></span>
+<span id="cb8-94"><a href="#cb8-94" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> <span class="kw">mut</span> counter <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>update_counter<span class="op">.</span>write()<span class="op">.</span><span class="kw">await</span><span class="op">;</span></span>
+<span id="cb8-95"><a href="#cb8-95" aria-hidden="true" tabindex="-1"></a>        <span class="op">*</span>counter <span class="op">=</span> counter<span class="op">.</span>wrapping_add(<span class="dv">1</span>)<span class="op">.</span>max(<span class="dv">1</span>)<span class="op">;</span></span>
+<span id="cb8-96"><a href="#cb8-96" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> <span class="kw">mut</span> last <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>last_change<span class="op">.</span>write()<span class="op">.</span><span class="kw">await</span><span class="op">;</span></span>
+<span id="cb8-97"><a href="#cb8-97" aria-hidden="true" tabindex="-1"></a>        <span class="op">*</span>last <span class="op">=</span> <span class="pp">SystemTime::</span>now()<span class="op">;</span></span>
+<span id="cb8-98"><a href="#cb8-98" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb8-99"><a href="#cb8-99" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<p><strong>Points clés :</strong> - Utiliser
+<code>pmoplaylist::PlaylistManager</code> singleton - Incrémenter
+<code>update_id</code> à chaque modification - Mettre à jour
+<code>last_change</code> à chaque modification - Adapter les IDs des
+items au schéma de la source</p>
+<h3 id="support-statique-albums-bibliothèques">4. Support statique
+(albums, bibliothèques)</h3>
+<p>Si votre source est statique (catalogue, albums) :</p>
+<div class="sourceCode" id="cb9"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>async_trait<span class="at">]</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> MusicSource <span class="cf">for</span> CatalogSource <span class="op">{</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> supports_fifo(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">bool</span> <span class="op">{</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>        <span class="cn">false</span>  <span class="co">// Pas de FIFO</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">async</span> <span class="kw">fn</span> append_track(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> _track<span class="op">:</span> Item) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Err</span>(<span class="pp">MusicSourceError::</span>NotSupported(</span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>            <span class="st">&quot;This source is read-only&quot;</span><span class="op">.</span>to_string()</span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a>        ))</span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a>    <span class="kw">async</span> <span class="kw">fn</span> remove_oldest(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">Option</span><span class="op">&lt;</span>Item<span class="op">&gt;&gt;</span> <span class="op">{</span></span>
+<span id="cb9-14"><a href="#cb9-14" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Ok</span>(<span class="cn">None</span>)  <span class="co">// Pas de suppression</span></span>
+<span id="cb9-15"><a href="#cb9-15" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb9-16"><a href="#cb9-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-17"><a href="#cb9-17" aria-hidden="true" tabindex="-1"></a>    <span class="kw">async</span> <span class="kw">fn</span> update_id(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">u32</span> <span class="op">{</span></span>
+<span id="cb9-18"><a href="#cb9-18" aria-hidden="true" tabindex="-1"></a>        <span class="dv">0</span>  <span class="co">// Jamais de changement</span></span>
+<span id="cb9-19"><a href="#cb9-19" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb9-20"><a href="#cb9-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-21"><a href="#cb9-21" aria-hidden="true" tabindex="-1"></a>    <span class="kw">async</span> <span class="kw">fn</span> last_change(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Option</span><span class="op">&lt;</span>SystemTime<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb9-22"><a href="#cb9-22" aria-hidden="true" tabindex="-1"></a>        <span class="cn">None</span>  <span class="co">// Pas de suivi des changements</span></span>
+<span id="cb9-23"><a href="#cb9-23" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb9-24"><a href="#cb9-24" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-25"><a href="#cb9-25" aria-hidden="true" tabindex="-1"></a>    <span class="kw">async</span> <span class="kw">fn</span> get_items(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> offset<span class="op">:</span> <span class="dt">usize</span><span class="op">,</span> count<span class="op">:</span> <span class="dt">usize</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">Vec</span><span class="op">&lt;</span>Item<span class="op">&gt;&gt;</span> <span class="op">{</span></span>
+<span id="cb9-26"><a href="#cb9-26" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Retourner une liste paginée depuis le catalogue</span></span>
+<span id="cb9-27"><a href="#cb9-27" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>get_catalog_items(offset<span class="op">,</span> count)<span class="op">.</span><span class="kw">await</span></span>
+<span id="cb9-28"><a href="#cb9-28" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb9-29"><a href="#cb9-29" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h2 id="patterns-dimplémentation">Patterns d’implémentation</h2>
+<h3 id="pattern-1-source-dynamique-avec-fifo-radio-paradise">Pattern 1 :
+Source dynamique avec FIFO (Radio Paradise)</h3>
+<p><strong>Caractéristiques :</strong> - Flux continu de tracks -
+Capacité limitée (50-100 tracks) - Suppression automatique des plus
+anciens - <code>supports_fifo() = true</code></p>
+<p><strong>Structure :</strong></p>
+<div class="sourceCode" id="cb10"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>derive<span class="at">(</span><span class="bu">Clone</span><span class="at">)]</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> RadioParadiseSource <span class="op">{</span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>    base_url<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>    update_counter<span class="op">:</span> Arc<span class="op">&lt;</span>RwLock<span class="op">&lt;</span><span class="dt">u32</span><span class="op">&gt;&gt;,</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>    last_change<span class="op">:</span> Arc<span class="op">&lt;</span>RwLock<span class="op">&lt;</span>SystemTime<span class="op">&gt;&gt;,</span></span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>    callback_tokens<span class="op">:</span> Arc<span class="op">&lt;</span><span class="pp">std::sync::</span>Mutex<span class="op">&lt;</span><span class="dt">Vec</span><span class="op">&lt;</span><span class="dt">u64</span><span class="op">&gt;&gt;&gt;,</span></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>    container_notifier<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span>Arc<span class="op">&lt;</span><span class="kw">dyn</span> <span class="bu">Fn</span>(<span class="op">&amp;</span>[<span class="dt">String</span>]) <span class="op">+</span> <span class="bu">Send</span> <span class="op">+</span> <span class="bu">Sync</span><span class="op">&gt;&gt;,</span></span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> RadioParadiseSource <span class="op">{</span></span>
+<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Enregistrer des callbacks sur les playlists pour notifier les changements</span></span>
+<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> <span class="kw">fn</span> attach_playlist_callbacks(<span class="kw">self</span><span class="op">:</span> <span class="op">&amp;</span>Arc<span class="op">&lt;</span><span class="dt">Self</span><span class="op">&gt;</span>) <span class="op">{</span></span>
+<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> playlist_ids <span class="op">=</span> <span class="pp">vec!</span>[</span>
+<span id="cb10-14"><a href="#cb10-14" aria-hidden="true" tabindex="-1"></a>            <span class="kw">self</span><span class="op">.</span>live_playlist_id()<span class="op">,</span></span>
+<span id="cb10-15"><a href="#cb10-15" aria-hidden="true" tabindex="-1"></a>            <span class="kw">self</span><span class="op">.</span>history_playlist_id()<span class="op">,</span></span>
+<span id="cb10-16"><a href="#cb10-16" aria-hidden="true" tabindex="-1"></a>        ]<span class="op">;</span></span>
+<span id="cb10-17"><a href="#cb10-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-18"><a href="#cb10-18" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> manager <span class="op">=</span> PlaylistManager()<span class="op">;</span></span>
+<span id="cb10-19"><a href="#cb10-19" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> <span class="kw">mut</span> tokens <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>callback_tokens<span class="op">.</span>lock()<span class="op">.</span>unwrap()<span class="op">;</span></span>
+<span id="cb10-20"><a href="#cb10-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-21"><a href="#cb10-21" aria-hidden="true" tabindex="-1"></a>        <span class="cf">for</span> pid <span class="kw">in</span> playlist_ids <span class="op">{</span></span>
+<span id="cb10-22"><a href="#cb10-22" aria-hidden="true" tabindex="-1"></a>            <span class="kw">let</span> weak <span class="op">=</span> <span class="pp">Arc::</span>downgrade(<span class="kw">self</span>)<span class="op">;</span></span>
+<span id="cb10-23"><a href="#cb10-23" aria-hidden="true" tabindex="-1"></a>            <span class="kw">let</span> pid_clone <span class="op">=</span> pid<span class="op">.</span>clone()<span class="op">;</span></span>
+<span id="cb10-24"><a href="#cb10-24" aria-hidden="true" tabindex="-1"></a>            <span class="kw">let</span> token <span class="op">=</span> manager<span class="op">.</span>register_callback(<span class="kw">move</span> <span class="op">|</span>event<span class="op">|</span> <span class="op">{</span></span>
+<span id="cb10-25"><a href="#cb10-25" aria-hidden="true" tabindex="-1"></a>                <span class="cf">if</span> event<span class="op">.</span>playlist_id <span class="op">==</span> pid_clone <span class="op">{</span></span>
+<span id="cb10-26"><a href="#cb10-26" aria-hidden="true" tabindex="-1"></a>                    <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Some</span>(strong) <span class="op">=</span> weak<span class="op">.</span>upgrade() <span class="op">{</span></span>
+<span id="cb10-27"><a href="#cb10-27" aria-hidden="true" tabindex="-1"></a>                        <span class="pp">tokio::</span>spawn(<span class="kw">async</span> <span class="kw">move</span> <span class="op">{</span></span>
+<span id="cb10-28"><a href="#cb10-28" aria-hidden="true" tabindex="-1"></a>                            strong<span class="op">.</span>bump_update_counter()<span class="op">.</span><span class="kw">await</span><span class="op">;</span></span>
+<span id="cb10-29"><a href="#cb10-29" aria-hidden="true" tabindex="-1"></a>                            <span class="co">// Notifier ContentDirectory</span></span>
+<span id="cb10-30"><a href="#cb10-30" aria-hidden="true" tabindex="-1"></a>                            <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Some</span>(notifier) <span class="op">=</span> strong<span class="op">.</span>container_notifier<span class="op">.</span>as_ref() <span class="op">{</span></span>
+<span id="cb10-31"><a href="#cb10-31" aria-hidden="true" tabindex="-1"></a>                                notifier(<span class="op">&amp;</span>[<span class="pp">format!</span>(<span class="st">&quot;radio-paradise:history&quot;</span>)])<span class="op">;</span></span>
+<span id="cb10-32"><a href="#cb10-32" aria-hidden="true" tabindex="-1"></a>                            <span class="op">}</span></span>
+<span id="cb10-33"><a href="#cb10-33" aria-hidden="true" tabindex="-1"></a>                        <span class="op">}</span>)<span class="op">;</span></span>
+<span id="cb10-34"><a href="#cb10-34" aria-hidden="true" tabindex="-1"></a>                    <span class="op">}</span></span>
+<span id="cb10-35"><a href="#cb10-35" aria-hidden="true" tabindex="-1"></a>                <span class="op">}</span></span>
+<span id="cb10-36"><a href="#cb10-36" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span>)<span class="op">;</span></span>
+<span id="cb10-37"><a href="#cb10-37" aria-hidden="true" tabindex="-1"></a>            tokens<span class="op">.</span>push(token)<span class="op">;</span></span>
+<span id="cb10-38"><a href="#cb10-38" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb10-39"><a href="#cb10-39" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb10-40"><a href="#cb10-40" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<p><strong>Points clés :</strong> - Callbacks sur
+<code>pmoplaylist</code> pour détecter les changements - Notification du
+ContentDirectory via un notifier injecté - <code>update_counter</code>
+partagé via <code>Arc&lt;RwLock&lt;u32&gt;&gt;</code></p>
+<h3 id="pattern-2-source-catalogue-avec-playlists-lazy-qobuz">Pattern 2
+: Source catalogue avec playlists lazy (Qobuz)</h3>
+<p><strong>Caractéristiques :</strong> - Catalogue vaste (millions de
+tracks) - Playlists créées à la demande - Cache lazy (cover eager, audio
+lazy) - <code>supports_fifo() = false</code></p>
+<p><strong>Structure :</strong></p>
+<div class="sourceCode" id="cb11"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>derive<span class="at">(</span><span class="bu">Clone</span><span class="at">)]</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> QobuzSource <span class="op">{</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>    inner<span class="op">:</span> Arc<span class="op">&lt;</span>QobuzSourceInner<span class="op">&gt;,</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> QobuzSourceInner <span class="op">{</span></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>    client<span class="op">:</span> Arc<span class="op">&lt;</span>QobuzClient<span class="op">&gt;,</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a>    cache_manager<span class="op">:</span> SourceCacheManager<span class="op">,</span></span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a>    base_url<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a>    update_counter<span class="op">:</span> <span class="pp">tokio::sync::</span>RwLock<span class="op">&lt;</span><span class="dt">u32</span><span class="op">&gt;,</span></span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a>    last_change<span class="op">:</span> <span class="pp">tokio::sync::</span>RwLock<span class="op">&lt;</span>SystemTime<span class="op">&gt;,</span></span>
+<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-14"><a href="#cb11-14" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> QobuzSource <span class="op">{</span></span>
+<span id="cb11-15"><a href="#cb11-15" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Ajouter un track avec cache lazy</span></span>
+<span id="cb11-16"><a href="#cb11-16" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> <span class="kw">async</span> <span class="kw">fn</span> add_track_lazy(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> track<span class="op">:</span> <span class="op">&amp;</span>Track) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>(<span class="dt">String</span><span class="op">,</span> <span class="dt">String</span>)<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb11-17"><a href="#cb11-17" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> track_id <span class="op">=</span> <span class="pp">format!</span>(<span class="st">&quot;qobuz://track/{}&quot;</span><span class="op">,</span> track<span class="op">.</span>id)<span class="op">;</span></span>
+<span id="cb11-18"><a href="#cb11-18" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> lazy_pk <span class="op">=</span> <span class="pp">format!</span>(<span class="st">&quot;QOBUZ:{}&quot;</span><span class="op">,</span> track<span class="op">.</span>id)<span class="op">;</span></span>
+<span id="cb11-19"><a href="#cb11-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-20"><a href="#cb11-20" aria-hidden="true" tabindex="-1"></a>        <span class="co">// 1. Cache cover EAGERLY (petit, UI en a besoin)</span></span>
+<span id="cb11-21"><a href="#cb11-21" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> cached_cover_pk <span class="op">=</span> <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Some</span>(<span class="kw">ref</span> image_url) <span class="op">=</span> track<span class="op">.</span>album<span class="op">.</span>as_ref()</span>
+<span id="cb11-22"><a href="#cb11-22" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>and_then(<span class="op">|</span>a<span class="op">|</span> a<span class="op">.</span>image<span class="op">.</span>as_ref()) <span class="op">{</span></span>
+<span id="cb11-23"><a href="#cb11-23" aria-hidden="true" tabindex="-1"></a>            <span class="kw">self</span><span class="op">.</span>inner<span class="op">.</span>cache_manager<span class="op">.</span>cache_cover(image_url)<span class="op">.</span><span class="kw">await</span><span class="op">.</span>ok()</span>
+<span id="cb11-24"><a href="#cb11-24" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span> <span class="cf">else</span> <span class="op">{</span></span>
+<span id="cb11-25"><a href="#cb11-25" aria-hidden="true" tabindex="-1"></a>            <span class="cn">None</span></span>
+<span id="cb11-26"><a href="#cb11-26" aria-hidden="true" tabindex="-1"></a>        <span class="op">};</span></span>
+<span id="cb11-27"><a href="#cb11-27" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-28"><a href="#cb11-28" aria-hidden="true" tabindex="-1"></a>        <span class="co">// 2. Préparer metadata</span></span>
+<span id="cb11-29"><a href="#cb11-29" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> metadata <span class="op">=</span> AudioMetadata <span class="op">{</span></span>
+<span id="cb11-30"><a href="#cb11-30" aria-hidden="true" tabindex="-1"></a>            title<span class="op">:</span> <span class="cn">Some</span>(track<span class="op">.</span>title<span class="op">.</span>clone())<span class="op">,</span></span>
+<span id="cb11-31"><a href="#cb11-31" aria-hidden="true" tabindex="-1"></a>            artist<span class="op">:</span> track<span class="op">.</span>performer<span class="op">.</span>as_ref()<span class="op">.</span>map(<span class="op">|</span>p<span class="op">|</span> p<span class="op">.</span>name<span class="op">.</span>clone())<span class="op">,</span></span>
+<span id="cb11-32"><a href="#cb11-32" aria-hidden="true" tabindex="-1"></a>            album<span class="op">:</span> track<span class="op">.</span>album<span class="op">.</span>as_ref()<span class="op">.</span>map(<span class="op">|</span>a<span class="op">|</span> a<span class="op">.</span>title<span class="op">.</span>clone())<span class="op">,</span></span>
+<span id="cb11-33"><a href="#cb11-33" aria-hidden="true" tabindex="-1"></a>            duration_secs<span class="op">:</span> <span class="cn">Some</span>(track<span class="op">.</span>duration <span class="kw">as</span> <span class="dt">u64</span>)<span class="op">,</span></span>
+<span id="cb11-34"><a href="#cb11-34" aria-hidden="true" tabindex="-1"></a>            <span class="co">// ... autres champs</span></span>
+<span id="cb11-35"><a href="#cb11-35" aria-hidden="true" tabindex="-1"></a>        <span class="op">};</span></span>
+<span id="cb11-36"><a href="#cb11-36" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-37"><a href="#cb11-37" aria-hidden="true" tabindex="-1"></a>        <span class="co">// 3. Cache audio LAZILY (grand, téléchargé à la demande)</span></span>
+<span id="cb11-38"><a href="#cb11-38" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> cached_audio_pk <span class="op">=</span> <span class="kw">self</span></span>
+<span id="cb11-39"><a href="#cb11-39" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>inner</span>
+<span id="cb11-40"><a href="#cb11-40" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>cache_manager</span>
+<span id="cb11-41"><a href="#cb11-41" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>cache_audio_lazy_with_provider(</span>
+<span id="cb11-42"><a href="#cb11-42" aria-hidden="true" tabindex="-1"></a>                <span class="op">&amp;</span>lazy_pk<span class="op">,</span></span>
+<span id="cb11-43"><a href="#cb11-43" aria-hidden="true" tabindex="-1"></a>                <span class="cn">Some</span>(metadata<span class="op">.</span>clone())<span class="op">,</span></span>
+<span id="cb11-44"><a href="#cb11-44" aria-hidden="true" tabindex="-1"></a>                cached_cover_pk<span class="op">.</span>clone()<span class="op">,</span></span>
+<span id="cb11-45"><a href="#cb11-45" aria-hidden="true" tabindex="-1"></a>            )</span>
+<span id="cb11-46"><a href="#cb11-46" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb11-47"><a href="#cb11-47" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-48"><a href="#cb11-48" aria-hidden="true" tabindex="-1"></a>        <span class="co">// 4. Stocker metadata</span></span>
+<span id="cb11-49"><a href="#cb11-49" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>inner<span class="op">.</span>cache_manager<span class="op">.</span>update_metadata(</span>
+<span id="cb11-50"><a href="#cb11-50" aria-hidden="true" tabindex="-1"></a>            track_id<span class="op">.</span>clone()<span class="op">,</span></span>
+<span id="cb11-51"><a href="#cb11-51" aria-hidden="true" tabindex="-1"></a>            <span class="pp">pmosource::</span>TrackMetadata <span class="op">{</span></span>
+<span id="cb11-52"><a href="#cb11-52" aria-hidden="true" tabindex="-1"></a>                original_uri<span class="op">:</span> stream_url<span class="op">,</span></span>
+<span id="cb11-53"><a href="#cb11-53" aria-hidden="true" tabindex="-1"></a>                cached_audio_pk<span class="op">:</span> <span class="cn">Some</span>(cached_audio_pk<span class="op">.</span>clone())<span class="op">,</span></span>
+<span id="cb11-54"><a href="#cb11-54" aria-hidden="true" tabindex="-1"></a>                cached_cover_pk<span class="op">,</span></span>
+<span id="cb11-55"><a href="#cb11-55" aria-hidden="true" tabindex="-1"></a>            <span class="op">},</span></span>
+<span id="cb11-56"><a href="#cb11-56" aria-hidden="true" tabindex="-1"></a>        )<span class="op">.</span><span class="kw">await</span><span class="op">;</span></span>
+<span id="cb11-57"><a href="#cb11-57" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-58"><a href="#cb11-58" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Ok</span>((track_id<span class="op">,</span> cached_audio_pk))</span>
+<span id="cb11-59"><a href="#cb11-59" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb11-60"><a href="#cb11-60" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-61"><a href="#cb11-61" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Créer une playlist d&#39;album avec TTL</span></span>
+<span id="cb11-62"><a href="#cb11-62" aria-hidden="true" tabindex="-1"></a>    <span class="kw">async</span> <span class="kw">fn</span> get_or_create_album_playlist_items(</span>
+<span id="cb11-63"><a href="#cb11-63" aria-hidden="true" tabindex="-1"></a>        <span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span></span>
+<span id="cb11-64"><a href="#cb11-64" aria-hidden="true" tabindex="-1"></a>        album_id<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span><span class="op">,</span></span>
+<span id="cb11-65"><a href="#cb11-65" aria-hidden="true" tabindex="-1"></a>        limit<span class="op">:</span> <span class="dt">usize</span><span class="op">,</span></span>
+<span id="cb11-66"><a href="#cb11-66" aria-hidden="true" tabindex="-1"></a>    ) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">Vec</span><span class="op">&lt;</span>Item<span class="op">&gt;&gt;</span> <span class="op">{</span></span>
+<span id="cb11-67"><a href="#cb11-67" aria-hidden="true" tabindex="-1"></a>        <span class="kw">const</span> ALBUM_PLAYLIST_TTL<span class="op">:</span> Duration <span class="op">=</span> <span class="pp">Duration::</span>from_secs(<span class="dv">7</span> <span class="op">*</span> <span class="dv">24</span> <span class="op">*</span> <span class="dv">3600</span>)<span class="op">;</span></span>
+<span id="cb11-68"><a href="#cb11-68" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-69"><a href="#cb11-69" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> playlist_id <span class="op">=</span> <span class="pp">format!</span>(<span class="st">&quot;qobuz-album-{}&quot;</span><span class="op">,</span> album_id)<span class="op">;</span></span>
+<span id="cb11-70"><a href="#cb11-70" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> playlist_manager <span class="op">=</span> PlaylistManager()<span class="op">;</span></span>
+<span id="cb11-71"><a href="#cb11-71" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-72"><a href="#cb11-72" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Vérifier validité (existe ET non expirée ET non vide)</span></span>
+<span id="cb11-73"><a href="#cb11-73" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> is_valid <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>is_album_playlist_valid(<span class="op">&amp;</span>playlist_id)<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb11-74"><a href="#cb11-74" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-75"><a href="#cb11-75" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> is_valid <span class="op">{</span></span>
+<span id="cb11-76"><a href="#cb11-76" aria-hidden="true" tabindex="-1"></a>            <span class="co">// Récupérer depuis playlist existante</span></span>
+<span id="cb11-77"><a href="#cb11-77" aria-hidden="true" tabindex="-1"></a>            <span class="kw">let</span> reader <span class="op">=</span> playlist_manager<span class="op">.</span>get_read_handle(<span class="op">&amp;</span>playlist_id)<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb11-78"><a href="#cb11-78" aria-hidden="true" tabindex="-1"></a>            <span class="kw">let</span> items <span class="op">=</span> reader<span class="op">.</span>to_items(limit)<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb11-79"><a href="#cb11-79" aria-hidden="true" tabindex="-1"></a>            <span class="cf">return</span> <span class="kw">self</span><span class="op">.</span>adapt_playlist_items_to_qobuz(items<span class="op">,</span> album_id)<span class="op">.</span><span class="kw">await</span><span class="op">;</span></span>
+<span id="cb11-80"><a href="#cb11-80" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb11-81"><a href="#cb11-81" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-82"><a href="#cb11-82" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Créer nouvelle playlist</span></span>
+<span id="cb11-83"><a href="#cb11-83" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> writer <span class="op">=</span> playlist_manager</span>
+<span id="cb11-84"><a href="#cb11-84" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>create_persistent_playlist_with_role(</span>
+<span id="cb11-85"><a href="#cb11-85" aria-hidden="true" tabindex="-1"></a>                playlist_id<span class="op">.</span>clone()<span class="op">,</span></span>
+<span id="cb11-86"><a href="#cb11-86" aria-hidden="true" tabindex="-1"></a>                <span class="pp">pmoplaylist::PlaylistRole::</span>Album<span class="op">,</span></span>
+<span id="cb11-87"><a href="#cb11-87" aria-hidden="true" tabindex="-1"></a>            )</span>
+<span id="cb11-88"><a href="#cb11-88" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb11-89"><a href="#cb11-89" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-90"><a href="#cb11-90" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Ajouter tracks avec cache lazy</span></span>
+<span id="cb11-91"><a href="#cb11-91" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>add_album_to_playlist(<span class="op">&amp;</span>playlist_id<span class="op">,</span> album_id)<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb11-92"><a href="#cb11-92" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-93"><a href="#cb11-93" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Récupérer items</span></span>
+<span id="cb11-94"><a href="#cb11-94" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> reader <span class="op">=</span> playlist_manager<span class="op">.</span>get_read_handle(<span class="op">&amp;</span>playlist_id)<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb11-95"><a href="#cb11-95" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> items <span class="op">=</span> reader<span class="op">.</span>to_items(limit)<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb11-96"><a href="#cb11-96" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>adapt_playlist_items_to_qobuz(items<span class="op">,</span> album_id)<span class="op">.</span><span class="kw">await</span></span>
+<span id="cb11-97"><a href="#cb11-97" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb11-98"><a href="#cb11-98" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<p><strong>Points clés :</strong> - Cache lazy pour l’audio (téléchargé
+à la demande) - Cache eager pour les covers (petit, UI en a besoin) -
+Playlists avec TTL (7 jours) - <code>LazyProvider</code> pour
+télécharger l’audio lors de la lecture</p>
+<h3 id="pattern-3-adaptation-des-ids-entre-playlist-et-source">Pattern 3
+: Adaptation des IDs entre playlist et source</h3>
+<p>Lorsqu’une source utilise <code>pmoplaylist</code>, les items
+retournés ont des IDs génériques. Il faut les adapter au schéma de la
+source :</p>
+<div class="sourceCode" id="cb12"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="kw">async</span> <span class="kw">fn</span> adapt_playlist_items_to_source(</span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>    <span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>    items<span class="op">:</span> <span class="dt">Vec</span><span class="op">&lt;</span>Item<span class="op">&gt;,</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>    parent_id<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span><span class="op">,</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">Vec</span><span class="op">&lt;</span>Item<span class="op">&gt;&gt;</span> <span class="op">{</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> <span class="kw">mut</span> adapted <span class="op">=</span> <span class="dt">Vec</span><span class="pp">::</span>with_capacity(items<span class="op">.</span>len())<span class="op">;</span></span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> <span class="kw">mut</span> item <span class="kw">in</span> items <span class="op">{</span></span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Extraire cache_pk depuis l&#39;URL du resource</span></span>
+<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> cache_pk <span class="op">=</span> <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Some</span>(resource) <span class="op">=</span> item<span class="op">.</span>resources<span class="op">.</span>first() <span class="op">{</span></span>
+<span id="cb12-11"><a href="#cb12-11" aria-hidden="true" tabindex="-1"></a>            resource</span>
+<span id="cb12-12"><a href="#cb12-12" aria-hidden="true" tabindex="-1"></a>                <span class="op">.</span>url</span>
+<span id="cb12-13"><a href="#cb12-13" aria-hidden="true" tabindex="-1"></a>                <span class="op">.</span>strip_prefix(<span class="st">&quot;/audio/flac/&quot;</span>)</span>
+<span id="cb12-14"><a href="#cb12-14" aria-hidden="true" tabindex="-1"></a>                <span class="op">.</span>map(<span class="op">|</span>s<span class="op">|</span> s<span class="op">.</span>to_string())</span>
+<span id="cb12-15"><a href="#cb12-15" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span> <span class="cf">else</span> <span class="op">{</span></span>
+<span id="cb12-16"><a href="#cb12-16" aria-hidden="true" tabindex="-1"></a>            <span class="cn">None</span></span>
+<span id="cb12-17"><a href="#cb12-17" aria-hidden="true" tabindex="-1"></a>        <span class="op">};</span></span>
+<span id="cb12-18"><a href="#cb12-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-19"><a href="#cb12-19" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Some</span>(pk) <span class="op">=</span> cache_pk <span class="op">{</span></span>
+<span id="cb12-20"><a href="#cb12-20" aria-hidden="true" tabindex="-1"></a>            <span class="co">// Récupérer source_track_id depuis metadata</span></span>
+<span id="cb12-21"><a href="#cb12-21" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Ok</span>(<span class="cn">Some</span>(track_id_value)) <span class="op">=</span> <span class="kw">self</span></span>
+<span id="cb12-22"><a href="#cb12-22" aria-hidden="true" tabindex="-1"></a>                <span class="op">.</span>cache_manager</span>
+<span id="cb12-23"><a href="#cb12-23" aria-hidden="true" tabindex="-1"></a>                <span class="op">.</span>get_audio_metadata(<span class="op">&amp;</span>pk<span class="op">,</span> <span class="st">&quot;source_track_id&quot;</span>)</span>
+<span id="cb12-24"><a href="#cb12-24" aria-hidden="true" tabindex="-1"></a>            <span class="op">{</span></span>
+<span id="cb12-25"><a href="#cb12-25" aria-hidden="true" tabindex="-1"></a>                <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Some</span>(track_id) <span class="op">=</span> track_id_value<span class="op">.</span>as_str() <span class="op">{</span></span>
+<span id="cb12-26"><a href="#cb12-26" aria-hidden="true" tabindex="-1"></a>                    item<span class="op">.</span>id <span class="op">=</span> <span class="pp">format!</span>(<span class="st">&quot;my-source:track:{}&quot;</span><span class="op">,</span> track_id)<span class="op">;</span></span>
+<span id="cb12-27"><a href="#cb12-27" aria-hidden="true" tabindex="-1"></a>                <span class="op">}</span></span>
+<span id="cb12-28"><a href="#cb12-28" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
+<span id="cb12-29"><a href="#cb12-29" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-30"><a href="#cb12-30" aria-hidden="true" tabindex="-1"></a>            <span class="co">// Convertir URL relative en absolue</span></span>
+<span id="cb12-31"><a href="#cb12-31" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Some</span>(resource) <span class="op">=</span> item<span class="op">.</span>resources<span class="op">.</span>first_mut() <span class="op">{</span></span>
+<span id="cb12-32"><a href="#cb12-32" aria-hidden="true" tabindex="-1"></a>                <span class="cf">if</span> resource<span class="op">.</span>url<span class="op">.</span>starts_with(<span class="ch">&#39;/&#39;</span>) <span class="op">{</span></span>
+<span id="cb12-33"><a href="#cb12-33" aria-hidden="true" tabindex="-1"></a>                    resource<span class="op">.</span>url <span class="op">=</span> <span class="pp">format!</span>(<span class="st">&quot;{}{}&quot;</span><span class="op">,</span> <span class="kw">self</span><span class="op">.</span>base_url<span class="op">,</span> resource<span class="op">.</span>url)<span class="op">;</span></span>
+<span id="cb12-34"><a href="#cb12-34" aria-hidden="true" tabindex="-1"></a>                <span class="op">}</span></span>
+<span id="cb12-35"><a href="#cb12-35" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
+<span id="cb12-36"><a href="#cb12-36" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb12-37"><a href="#cb12-37" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-38"><a href="#cb12-38" aria-hidden="true" tabindex="-1"></a>        item<span class="op">.</span>parent_id <span class="op">=</span> parent_id<span class="op">.</span>to_string()<span class="op">;</span></span>
+<span id="cb12-39"><a href="#cb12-39" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-40"><a href="#cb12-40" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Normaliser album art</span></span>
+<span id="cb12-41"><a href="#cb12-41" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Some</span>(art) <span class="op">=</span> item<span class="op">.</span>album_art<span class="op">.</span>as_mut() <span class="op">{</span></span>
+<span id="cb12-42"><a href="#cb12-42" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> art<span class="op">.</span>starts_with(<span class="ch">&#39;/&#39;</span>) <span class="op">{</span></span>
+<span id="cb12-43"><a href="#cb12-43" aria-hidden="true" tabindex="-1"></a>                <span class="op">*</span>art <span class="op">=</span> <span class="pp">format!</span>(<span class="st">&quot;{}{}&quot;</span><span class="op">,</span> <span class="kw">self</span><span class="op">.</span>base_url<span class="op">,</span> art)<span class="op">;</span></span>
+<span id="cb12-44"><a href="#cb12-44" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
+<span id="cb12-45"><a href="#cb12-45" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span> <span class="cf">else</span> <span class="op">{</span></span>
+<span id="cb12-46"><a href="#cb12-46" aria-hidden="true" tabindex="-1"></a>            item<span class="op">.</span>album_art <span class="op">=</span> <span class="cn">Some</span>(<span class="kw">self</span><span class="op">.</span>default_cover_url())<span class="op">;</span></span>
+<span id="cb12-47"><a href="#cb12-47" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb12-48"><a href="#cb12-48" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-49"><a href="#cb12-49" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Ajouter genre par défaut si absent (requis par certains clients)</span></span>
+<span id="cb12-50"><a href="#cb12-50" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> item<span class="op">.</span>genre<span class="op">.</span>is_none() <span class="op">{</span></span>
+<span id="cb12-51"><a href="#cb12-51" aria-hidden="true" tabindex="-1"></a>            item<span class="op">.</span>genre <span class="op">=</span> <span class="cn">Some</span>(<span class="st">&quot;Music&quot;</span><span class="op">.</span>to_string())<span class="op">;</span></span>
+<span id="cb12-52"><a href="#cb12-52" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb12-53"><a href="#cb12-53" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-54"><a href="#cb12-54" aria-hidden="true" tabindex="-1"></a>        adapted<span class="op">.</span>push(item)<span class="op">;</span></span>
+<span id="cb12-55"><a href="#cb12-55" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb12-56"><a href="#cb12-56" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-57"><a href="#cb12-57" aria-hidden="true" tabindex="-1"></a>    <span class="cn">Ok</span>(adapted)</span>
+<span id="cb12-58"><a href="#cb12-58" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<p><strong>Points clés :</strong> - Stocker <code>source_track_id</code>
+dans les metadata du cache audio - Reconstituer l’ID correct lors de la
+récupération depuis playlist - Normaliser URLs (relatives → absolues) -
+Ajouter champs requis par certains clients UPnP</p>
+<h2 id="intégration-avec-lécosystème-pmomusic">Intégration avec
+l’écosystème PMOMusic</h2>
+<h3 id="avec-pmoplaylist">Avec pmoplaylist</h3>
+<p>Pour les sources dynamiques et les catalogues :</p>
+<div class="sourceCode" id="cb13"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">pmoplaylist::</span><span class="op">{</span>PlaylistManager<span class="op">,</span> PlaylistRole<span class="op">};</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="co">// Créer une playlist persistante</span></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> manager <span class="op">=</span> PlaylistManager()<span class="op">;</span></span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> writer <span class="op">=</span> manager</span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>    <span class="op">.</span>create_persistent_playlist_with_role(</span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;my-source-album-123&quot;</span><span class="op">.</span>to_string()<span class="op">,</span></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a>        <span class="pp">PlaylistRole::</span>Album<span class="op">,</span></span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a>    )</span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a>    <span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a><span class="co">// Configurer metadata</span></span>
+<span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a>writer<span class="op">.</span>set_title(<span class="st">&quot;Album Title&quot;</span><span class="op">.</span>to_string())<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb13-14"><a href="#cb13-14" aria-hidden="true" tabindex="-1"></a>writer<span class="op">.</span>set_artist(<span class="cn">Some</span>(<span class="st">&quot;Artist Name&quot;</span><span class="op">.</span>to_string()))<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb13-15"><a href="#cb13-15" aria-hidden="true" tabindex="-1"></a>writer<span class="op">.</span>set_cover_pk(<span class="cn">Some</span>(<span class="st">&quot;cover-pk&quot;</span><span class="op">.</span>to_string()))<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb13-16"><a href="#cb13-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-17"><a href="#cb13-17" aria-hidden="true" tabindex="-1"></a><span class="co">// Ajouter tracks avec cache lazy</span></span>
+<span id="cb13-18"><a href="#cb13-18" aria-hidden="true" tabindex="-1"></a>writer<span class="op">.</span>push_lazy_batch(<span class="pp">vec!</span>[<span class="st">&quot;pk1&quot;</span><span class="op">,</span> <span class="st">&quot;pk2&quot;</span><span class="op">,</span> <span class="st">&quot;pk3&quot;</span>])<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb13-19"><a href="#cb13-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-20"><a href="#cb13-20" aria-hidden="true" tabindex="-1"></a><span class="co">// Activer mode lazy (lookahead 2 tracks)</span></span>
+<span id="cb13-21"><a href="#cb13-21" aria-hidden="true" tabindex="-1"></a>manager<span class="op">.</span>enable_lazy_mode(<span class="st">&quot;my-source-album-123&quot;</span><span class="op">,</span> <span class="dv">2</span>)<span class="op">;</span></span></pre></div>
+<h3 id="avec-pmoaudiocache-et-pmocovers-via-sourcecachemanager">Avec
+pmoaudiocache et pmocovers (via SourceCacheManager)</h3>
+<div class="sourceCode" id="cb14"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">pmosource::</span>SourceCacheManager<span class="op">;</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a><span class="co">// Créer le manager centralisé</span></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> cache_manager <span class="op">=</span> <span class="pp">SourceCacheManager::</span>from_registry(<span class="st">&quot;my-source&quot;</span><span class="op">.</span>to_string())<span class="op">?;</span></span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a><span class="co">// Enregistrer un LazyProvider</span></span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a>cache_manager<span class="op">.</span>register_lazy_provider(<span class="pp">Arc::</span>new(<span class="pp">MyLazyProvider::</span>new(client)))<span class="op">;</span></span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a><span class="co">// Cache eager (cover)</span></span>
+<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> cover_pk <span class="op">=</span> cache_manager<span class="op">.</span>cache_cover(<span class="st">&quot;https://example.com/cover.jpg&quot;</span>)<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a><span class="co">// Cache lazy (audio)</span></span>
+<span id="cb14-13"><a href="#cb14-13" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> audio_pk <span class="op">=</span> cache_manager</span>
+<span id="cb14-14"><a href="#cb14-14" aria-hidden="true" tabindex="-1"></a>    <span class="op">.</span>cache_audio_lazy_with_provider(</span>
+<span id="cb14-15"><a href="#cb14-15" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;MY-SOURCE:123&quot;</span><span class="op">,</span>  <span class="co">// Lazy PK</span></span>
+<span id="cb14-16"><a href="#cb14-16" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Some</span>(metadata)<span class="op">,</span></span>
+<span id="cb14-17"><a href="#cb14-17" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Some</span>(cover_pk)<span class="op">,</span></span>
+<span id="cb14-18"><a href="#cb14-18" aria-hidden="true" tabindex="-1"></a>    )</span>
+<span id="cb14-19"><a href="#cb14-19" aria-hidden="true" tabindex="-1"></a>    <span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb14-20"><a href="#cb14-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-21"><a href="#cb14-21" aria-hidden="true" tabindex="-1"></a><span class="co">// Récupérer metadata</span></span>
+<span id="cb14-22"><a href="#cb14-22" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> value <span class="op">=</span> cache_manager<span class="op">.</span>get_audio_metadata(<span class="op">&amp;</span>audio_pk<span class="op">,</span> <span class="st">&quot;key&quot;</span>)<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span></pre></div>
+<p><strong>LazyProvider personnalisé :</strong></p>
+<div class="sourceCode" id="cb15"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">pmoaudiocache::</span><span class="op">{</span>LazyProvider<span class="op">,</span> LazyProviderError<span class="op">};</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> MyLazyProvider <span class="op">{</span></span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>    client<span class="op">:</span> Arc<span class="op">&lt;</span>MyClient<span class="op">&gt;,</span></span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>async_trait<span class="at">]</span></span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> LazyProvider <span class="cf">for</span> MyLazyProvider <span class="op">{</span></span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">async</span> <span class="kw">fn</span> fetch_audio(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> lazy_pk<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">Vec</span><span class="op">&lt;</span><span class="dt">u8</span><span class="op">&gt;,</span> LazyProviderError<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Extraire l&#39;ID depuis le lazy_pk</span></span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> id <span class="op">=</span> lazy_pk</span>
+<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>strip_prefix(<span class="st">&quot;MY-SOURCE:&quot;</span>)</span>
+<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>ok_or_else(<span class="op">||</span> <span class="pp">LazyProviderError::</span>InvalidKey)<span class="op">?;</span></span>
+<span id="cb15-14"><a href="#cb15-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-15"><a href="#cb15-15" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Récupérer l&#39;URL de streaming</span></span>
+<span id="cb15-16"><a href="#cb15-16" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> stream_url <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>client<span class="op">.</span>get_stream_url(id)<span class="op">.</span><span class="kw">await</span></span>
+<span id="cb15-17"><a href="#cb15-17" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>map_err(<span class="op">|</span>e<span class="op">|</span> <span class="pp">LazyProviderError::</span>FetchFailed(e<span class="op">.</span>to_string()))<span class="op">?;</span></span>
+<span id="cb15-18"><a href="#cb15-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-19"><a href="#cb15-19" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Télécharger l&#39;audio</span></span>
+<span id="cb15-20"><a href="#cb15-20" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> response <span class="op">=</span> <span class="pp">reqwest::</span>get(<span class="op">&amp;</span>stream_url)<span class="op">.</span><span class="kw">await</span></span>
+<span id="cb15-21"><a href="#cb15-21" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>map_err(<span class="op">|</span>e<span class="op">|</span> <span class="pp">LazyProviderError::</span>FetchFailed(e<span class="op">.</span>to_string()))<span class="op">?;</span></span>
+<span id="cb15-22"><a href="#cb15-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-23"><a href="#cb15-23" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> bytes <span class="op">=</span> response<span class="op">.</span>bytes()<span class="op">.</span><span class="kw">await</span></span>
+<span id="cb15-24"><a href="#cb15-24" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>map_err(<span class="op">|</span>e<span class="op">|</span> <span class="pp">LazyProviderError::</span>FetchFailed(e<span class="op">.</span>to_string()))<span class="op">?;</span></span>
+<span id="cb15-25"><a href="#cb15-25" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-26"><a href="#cb15-26" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Ok</span>(bytes<span class="op">.</span>to_vec())</span>
+<span id="cb15-27"><a href="#cb15-27" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb15-28"><a href="#cb15-28" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h3 id="avec-pmodidl">Avec pmodidl</h3>
+<p>Conversion de vos structures en DIDL-Lite :</p>
+<div class="sourceCode" id="cb16"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">pmodidl::</span><span class="op">{</span>Container<span class="op">,</span> Item<span class="op">,</span> Resource<span class="op">};</span></span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a><span class="co">// Container</span></span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">trait</span> ToDIDLContainer <span class="op">{</span></span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> to_didl_container(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> parent_id<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>Container<span class="op">&gt;;</span></span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-8"><a href="#cb16-8" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> ToDIDLContainer <span class="cf">for</span> MyAlbum <span class="op">{</span></span>
+<span id="cb16-9"><a href="#cb16-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> to_didl_container(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> parent_id<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>Container<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb16-10"><a href="#cb16-10" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Ok</span>(Container <span class="op">{</span></span>
+<span id="cb16-11"><a href="#cb16-11" aria-hidden="true" tabindex="-1"></a>            id<span class="op">:</span> <span class="pp">format!</span>(<span class="st">&quot;my-source:album:{}&quot;</span><span class="op">,</span> <span class="kw">self</span><span class="op">.</span>id)<span class="op">,</span></span>
+<span id="cb16-12"><a href="#cb16-12" aria-hidden="true" tabindex="-1"></a>            parent_id<span class="op">:</span> parent_id<span class="op">.</span>to_string()<span class="op">,</span></span>
+<span id="cb16-13"><a href="#cb16-13" aria-hidden="true" tabindex="-1"></a>            restricted<span class="op">:</span> <span class="cn">Some</span>(<span class="st">&quot;1&quot;</span><span class="op">.</span>to_string())<span class="op">,</span></span>
+<span id="cb16-14"><a href="#cb16-14" aria-hidden="true" tabindex="-1"></a>            child_count<span class="op">:</span> <span class="kw">self</span><span class="op">.</span>tracks_count<span class="op">.</span>map(<span class="op">|</span>c<span class="op">|</span> c<span class="op">.</span>to_string())<span class="op">,</span></span>
+<span id="cb16-15"><a href="#cb16-15" aria-hidden="true" tabindex="-1"></a>            searchable<span class="op">:</span> <span class="cn">Some</span>(<span class="st">&quot;1&quot;</span><span class="op">.</span>to_string())<span class="op">,</span></span>
+<span id="cb16-16"><a href="#cb16-16" aria-hidden="true" tabindex="-1"></a>            title<span class="op">:</span> <span class="kw">self</span><span class="op">.</span>title<span class="op">.</span>clone()<span class="op">,</span></span>
+<span id="cb16-17"><a href="#cb16-17" aria-hidden="true" tabindex="-1"></a>            class<span class="op">:</span> <span class="st">&quot;object.container.album.musicAlbum&quot;</span><span class="op">.</span>to_string()<span class="op">,</span></span>
+<span id="cb16-18"><a href="#cb16-18" aria-hidden="true" tabindex="-1"></a>            artist<span class="op">:</span> <span class="cn">Some</span>(<span class="kw">self</span><span class="op">.</span>artist<span class="op">.</span>name<span class="op">.</span>clone())<span class="op">,</span></span>
+<span id="cb16-19"><a href="#cb16-19" aria-hidden="true" tabindex="-1"></a>            album_art<span class="op">:</span> <span class="kw">self</span><span class="op">.</span>cover_url<span class="op">.</span>clone()<span class="op">,</span></span>
+<span id="cb16-20"><a href="#cb16-20" aria-hidden="true" tabindex="-1"></a>            containers<span class="op">:</span> <span class="pp">vec!</span>[]<span class="op">,</span></span>
+<span id="cb16-21"><a href="#cb16-21" aria-hidden="true" tabindex="-1"></a>            items<span class="op">:</span> <span class="pp">vec!</span>[]<span class="op">,</span></span>
+<span id="cb16-22"><a href="#cb16-22" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span>)</span>
+<span id="cb16-23"><a href="#cb16-23" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb16-24"><a href="#cb16-24" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb16-25"><a href="#cb16-25" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-26"><a href="#cb16-26" aria-hidden="true" tabindex="-1"></a><span class="co">// Item</span></span>
+<span id="cb16-27"><a href="#cb16-27" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">trait</span> ToDIDLItem <span class="op">{</span></span>
+<span id="cb16-28"><a href="#cb16-28" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> to_didl_item(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> parent_id<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>Item<span class="op">&gt;;</span></span>
+<span id="cb16-29"><a href="#cb16-29" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb16-30"><a href="#cb16-30" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-31"><a href="#cb16-31" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> ToDIDLItem <span class="cf">for</span> MyTrack <span class="op">{</span></span>
+<span id="cb16-32"><a href="#cb16-32" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> to_didl_item(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> parent_id<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>Item<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb16-33"><a href="#cb16-33" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Ok</span>(Item <span class="op">{</span></span>
+<span id="cb16-34"><a href="#cb16-34" aria-hidden="true" tabindex="-1"></a>            id<span class="op">:</span> <span class="pp">format!</span>(<span class="st">&quot;my-source:track:{}&quot;</span><span class="op">,</span> <span class="kw">self</span><span class="op">.</span>id)<span class="op">,</span></span>
+<span id="cb16-35"><a href="#cb16-35" aria-hidden="true" tabindex="-1"></a>            parent_id<span class="op">:</span> parent_id<span class="op">.</span>to_string()<span class="op">,</span></span>
+<span id="cb16-36"><a href="#cb16-36" aria-hidden="true" tabindex="-1"></a>            restricted<span class="op">:</span> <span class="cn">Some</span>(<span class="st">&quot;1&quot;</span><span class="op">.</span>to_string())<span class="op">,</span></span>
+<span id="cb16-37"><a href="#cb16-37" aria-hidden="true" tabindex="-1"></a>            title<span class="op">:</span> <span class="kw">self</span><span class="op">.</span>title<span class="op">.</span>clone()<span class="op">,</span></span>
+<span id="cb16-38"><a href="#cb16-38" aria-hidden="true" tabindex="-1"></a>            creator<span class="op">:</span> <span class="kw">self</span><span class="op">.</span>artist<span class="op">.</span>as_ref()<span class="op">.</span>map(<span class="op">|</span>a<span class="op">|</span> a<span class="op">.</span>name<span class="op">.</span>clone())<span class="op">,</span></span>
+<span id="cb16-39"><a href="#cb16-39" aria-hidden="true" tabindex="-1"></a>            class<span class="op">:</span> <span class="st">&quot;object.item.audioItem.musicTrack&quot;</span><span class="op">.</span>to_string()<span class="op">,</span></span>
+<span id="cb16-40"><a href="#cb16-40" aria-hidden="true" tabindex="-1"></a>            artist<span class="op">:</span> <span class="kw">self</span><span class="op">.</span>artist<span class="op">.</span>as_ref()<span class="op">.</span>map(<span class="op">|</span>a<span class="op">|</span> a<span class="op">.</span>name<span class="op">.</span>clone())<span class="op">,</span></span>
+<span id="cb16-41"><a href="#cb16-41" aria-hidden="true" tabindex="-1"></a>            album<span class="op">:</span> <span class="kw">self</span><span class="op">.</span>album<span class="op">.</span>as_ref()<span class="op">.</span>map(<span class="op">|</span>a<span class="op">|</span> a<span class="op">.</span>title<span class="op">.</span>clone())<span class="op">,</span></span>
+<span id="cb16-42"><a href="#cb16-42" aria-hidden="true" tabindex="-1"></a>            genre<span class="op">:</span> <span class="cn">Some</span>(<span class="st">&quot;Music&quot;</span><span class="op">.</span>to_string())<span class="op">,</span></span>
+<span id="cb16-43"><a href="#cb16-43" aria-hidden="true" tabindex="-1"></a>            album_art<span class="op">:</span> <span class="kw">self</span><span class="op">.</span>cover_url<span class="op">.</span>clone()<span class="op">,</span></span>
+<span id="cb16-44"><a href="#cb16-44" aria-hidden="true" tabindex="-1"></a>            album_art_pk<span class="op">:</span> <span class="kw">self</span><span class="op">.</span>cover_pk<span class="op">.</span>clone()<span class="op">,</span></span>
+<span id="cb16-45"><a href="#cb16-45" aria-hidden="true" tabindex="-1"></a>            date<span class="op">:</span> <span class="kw">self</span><span class="op">.</span>release_date<span class="op">.</span>clone()<span class="op">,</span></span>
+<span id="cb16-46"><a href="#cb16-46" aria-hidden="true" tabindex="-1"></a>            original_track_number<span class="op">:</span> <span class="cn">Some</span>(<span class="kw">self</span><span class="op">.</span>track_number)<span class="op">,</span></span>
+<span id="cb16-47"><a href="#cb16-47" aria-hidden="true" tabindex="-1"></a>            resources<span class="op">:</span> <span class="pp">vec!</span>[Resource <span class="op">{</span></span>
+<span id="cb16-48"><a href="#cb16-48" aria-hidden="true" tabindex="-1"></a>                protocol_info<span class="op">:</span> <span class="st">&quot;http-get:*:audio/flac:*&quot;</span><span class="op">.</span>to_string()<span class="op">,</span></span>
+<span id="cb16-49"><a href="#cb16-49" aria-hidden="true" tabindex="-1"></a>                bits_per_sample<span class="op">:</span> <span class="kw">self</span><span class="op">.</span>bit_depth<span class="op">.</span>map(<span class="op">|</span>b<span class="op">|</span> b<span class="op">.</span>to_string())<span class="op">,</span></span>
+<span id="cb16-50"><a href="#cb16-50" aria-hidden="true" tabindex="-1"></a>                sample_frequency<span class="op">:</span> <span class="kw">self</span><span class="op">.</span>sample_rate<span class="op">.</span>map(<span class="op">|</span>s<span class="op">|</span> s<span class="op">.</span>to_string())<span class="op">,</span></span>
+<span id="cb16-51"><a href="#cb16-51" aria-hidden="true" tabindex="-1"></a>                nr_audio_channels<span class="op">:</span> <span class="cn">Some</span>(<span class="st">&quot;2&quot;</span><span class="op">.</span>to_string())<span class="op">,</span></span>
+<span id="cb16-52"><a href="#cb16-52" aria-hidden="true" tabindex="-1"></a>                duration<span class="op">:</span> <span class="kw">self</span><span class="op">.</span>duration_as_upnp_format()<span class="op">,</span></span>
+<span id="cb16-53"><a href="#cb16-53" aria-hidden="true" tabindex="-1"></a>                url<span class="op">:</span> <span class="pp">format!</span>(<span class="st">&quot;/audio/flac/{}&quot;</span><span class="op">,</span> <span class="kw">self</span><span class="op">.</span>cache_pk)<span class="op">,</span></span>
+<span id="cb16-54"><a href="#cb16-54" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span>]<span class="op">,</span></span>
+<span id="cb16-55"><a href="#cb16-55" aria-hidden="true" tabindex="-1"></a>            descriptions<span class="op">:</span> <span class="pp">vec!</span>[]<span class="op">,</span></span>
+<span id="cb16-56"><a href="#cb16-56" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span>)</span>
+<span id="cb16-57"><a href="#cb16-57" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb16-58"><a href="#cb16-58" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h2 id="checklist-de-mise-en-œuvre">Checklist de mise en œuvre</h2>
+<h3 id="phase-1-structure-de-base">Phase 1 : Structure de base</h3>
+<ul class="task-list">
+<li><label><input type="checkbox" />Créer le crate
+<code>pmo&lt;votre-source&gt;</code></label></li>
+<li><label><input type="checkbox" />Ajouter les dépendances dans
+<code>Cargo.toml</code></label></li>
+<li><label><input type="checkbox" />Créer le logo WebP 300x300px dans
+<code>assets/</code></label></li>
+<li><label><input type="checkbox" />Définir la structure
+principale</label></li>
+<li><label><input type="checkbox" />Implémenter <code>name()</code>,
+<code>id()</code>, <code>default_image()</code></label></li>
+</ul>
+<h3 id="phase-2-navigation-contentdirectory">Phase 2 : Navigation
+ContentDirectory</h3>
+<ul class="task-list">
+<li><label><input type="checkbox" />Définir le schéma d’Object
+ID</label></li>
+<li><label><input type="checkbox" />Implémenter
+<code>root_container()</code></label></li>
+<li><label><input type="checkbox" />Implémenter <code>browse()</code>
+pour la racine</label></li>
+<li><label><input type="checkbox" />Implémenter <code>browse()</code>
+pour les sous-containers</label></li>
+<li><label><input type="checkbox" />Implémenter <code>browse()</code>
+pour les items</label></li>
+<li><label><input type="checkbox" />Tester la navigation avec un client
+UPnP</label></li>
+</ul>
+<h3 id="phase-3-résolution-duri">Phase 3 : Résolution d’URI</h3>
+<ul class="task-list">
+<li><label><input type="checkbox" />Implémenter
+<code>resolve_uri()</code> avec fallback</label></li>
+<li><label><input type="checkbox" />Intégrer avec
+<code>SourceCacheManager</code></label></li>
+<li><label><input type="checkbox" />Implémenter
+<code>LazyProvider</code> si cache lazy</label></li>
+<li><label><input type="checkbox" />Tester la lecture audio</label></li>
+</ul>
+<h3 id="phase-4-support-fifo-si-dynamique">Phase 4 : Support FIFO (si
+dynamique)</h3>
+<ul class="task-list">
+<li><label><input type="checkbox" />Décider de la stratégie
+FIFO</label></li>
+<li><label><input type="checkbox" />Implémenter
+<code>supports_fifo() = true</code></label></li>
+<li><label><input type="checkbox" />Implémenter
+<code>append_track()</code></label></li>
+<li><label><input type="checkbox" />Implémenter
+<code>remove_oldest()</code></label></li>
+<li><label><input type="checkbox" />Implémenter <code>update_id()</code>
+et <code>last_change()</code></label></li>
+<li><label><input type="checkbox" />Enregistrer callbacks sur
+playlists</label></li>
+<li><label><input type="checkbox" />Tester ajout/suppression de
+tracks</label></li>
+</ul>
+<h3 id="phase-5-support-statique-si-catalogue">Phase 5 : Support
+statique (si catalogue)</h3>
+<ul class="task-list">
+<li><label><input type="checkbox" />Implémenter
+<code>supports_fifo() = false</code></label></li>
+<li><label><input type="checkbox" />Implémenter <code>get_items()</code>
+avec pagination</label></li>
+<li><label><input type="checkbox" />Implémenter <code>search()</code> si
+applicable</label></li>
+<li><label><input type="checkbox" />Tester browsing du
+catalogue</label></li>
+</ul>
+<h3 id="phase-6-intégration-avancée">Phase 6 : Intégration avancée</h3>
+<ul class="task-list">
+<li><label><input type="checkbox" />Implémenter <code>get_item()</code>
+pour metadata</label></li>
+<li><label><input type="checkbox" />Implémenter
+<code>capabilities()</code></label></li>
+<li><label><input type="checkbox" />Implémenter
+<code>get_available_formats()</code></label></li>
+<li><label><input type="checkbox" />Ajouter gestion d’erreurs
+robuste</label></li>
+<li><label><input type="checkbox" />Documenter le code</label></li>
+</ul>
+<h3 id="phase-7-tests-et-validation">Phase 7 : Tests et validation</h3>
+<ul class="task-list">
+<li><label><input type="checkbox" />Écrire tests unitaires</label></li>
+<li><label><input type="checkbox" />Écrire tests
+d’intégration</label></li>
+<li><label><input type="checkbox" />Tester avec différents clients
+UPnP</label></li>
+<li><label><input type="checkbox" />Valider les
+performances</label></li>
+<li><label><input type="checkbox" />Documenter les
+limitations</label></li>
+</ul>
+<h2 id="exemples-de-référence">Exemples de référence</h2>
+<h3 id="radio-paradise-source-dynamique-fifo">Radio Paradise (source
+dynamique FIFO)</h3>
+<p><strong>Fichier :</strong> <code>pmoparadise/src/source.rs</code></p>
+<p><strong>Points d’intérêt :</strong> - Structure avec
+<code>Arc&lt;RwLock&lt;&gt;&gt;</code> pour l’état partagé - Callbacks
+sur playlists pour détecter les changements - Notifier injecté pour
+ContentDirectory - Adaptation des IDs playlist → Radio Paradise -
+Support de 4 canaux avec sous-containers</p>
+<p><strong>Schema d’Object ID :</strong></p>
+<pre><code>radio-paradise                                    # Racine
+radio-paradise:channel:{slug}                     # Canal (main, mellow, rock, eclectic)
+radio-paradise:channel:{slug}:live                # Stream live
+radio-paradise:channel:{slug}:liveplaylist        # Playlist live (queue)
+radio-paradise:channel:{slug}:liveplaylist:track:{pk}  # Track dans queue
+radio-paradise:channel:{slug}:history             # Historique
+radio-paradise:channel:{slug}:history:track:{pk}  # Track dans historique</pre>
+<h3 id="qobuz-source-catalogue-avec-playlists-lazy">Qobuz (source
+catalogue avec playlists lazy)</h3>
+<p><strong>Fichier :</strong> <code>pmoqobuz/src/source.rs</code></p>
+<p><strong>Points d’intérêt :</strong> - <code>SourceCacheManager</code>
+centralisé - Cache lazy pour audio, eager pour covers -
+<code>LazyProvider</code> personnalisé - Playlists d’albums avec TTL (7
+jours) - Adaptation IDs playlist → Qobuz - Navigation hiérarchique
+complexe (Discover, Genres, Favorites)</p>
+<p><strong>Schema d’Object ID :</strong></p>
+<pre><code>qobuz                                    # Racine
+qobuz:discover                           # Discover Catalog
+qobuz:discover:albums:ideal              # Albums (Ideal Discography)
+qobuz:discover:artists                   # Artistes Featured
+qobuz:genres                             # Discover Genres
+qobuz:genre:{id}                         # Genre spécifique
+qobuz:genre:{id}:new-releases            # Nouveautés du genre
+qobuz:favorites                          # My Music
+qobuz:favorites:albums                   # Albums favoris
+qobuz:album:{id}                         # Album spécifique
+qobuz:track:{id}                         # Track spécifique
+qobuz:playlist:{id}                      # Playlist spécifique
+qobuz:artist:{id}                        # Artiste spécifique</pre>
+<h2 id="conseils-dimplémentation">Conseils d’implémentation</h2>
+<h3 id="performance">Performance</h3>
+<ol type="1">
+<li><strong>Cache agressif</strong> : Utilisez
+<code>SourceCacheManager</code> pour tout</li>
+<li><strong>Pagination</strong> : Limitez le nombre d’items retournés
+(max 100)</li>
+<li><strong>Lazy loading</strong> : Ne chargez que ce qui est
+demandé</li>
+<li><strong>Rate limiting</strong> : Respectez les limites API de la
+source</li>
+<li><strong>Arc&lt;&gt;</strong> : Partagez les données coûteuses</li>
+</ol>
+<h3 id="compatibilité-upnp">Compatibilité UPnP</h3>
+<ol type="1">
+<li><strong>Genre obligatoire</strong> : Certains clients (gupnp-av-cp)
+requièrent <code>&lt;upnp:genre&gt;</code></li>
+<li><strong>URLs absolues</strong> : Toujours retourner des URLs
+complètes (pas de chemins relatifs)</li>
+<li><strong>Protocol Info</strong> : Utilisez
+<code>http-get:*:audio/flac:*</code> pour FLAC</li>
+<li><strong>Duration</strong> : Format <code>H:MM:SS</code> (ex:
+<code>0:03:45</code>)</li>
+<li><strong>childCount</strong> : Optionnel mais recommandé pour
+l’UI</li>
+</ol>
+<h3 id="gestion-derreurs">Gestion d’erreurs</h3>
+<ol type="1">
+<li><strong>ObjectNotFound</strong> : ID invalide</li>
+<li><strong>BrowseError</strong> : Erreur générique de navigation</li>
+<li><strong>UriResolutionError</strong> : Impossible de résoudre
+l’URI</li>
+<li><strong>PlaylistError</strong> : Erreur d’interaction avec
+pmoplaylist</li>
+<li><strong>CacheError</strong> : Erreur de cache</li>
+</ol>
+<h3 id="thread-safety">Thread Safety</h3>
+<ol type="1">
+<li><strong>Arc&lt;RwLock&lt;&gt;&gt;</strong> : Pour l’état mutable
+partagé</li>
+<li><strong>tokio::sync::RwLock</strong> : Pour l’async</li>
+<li><strong>Éviter Rc&lt;&gt;</strong> : Pas thread-safe</li>
+<li><strong>Clone</strong> : Implémentez <code>Clone</code> pour
+<code>Arc&lt;&gt;</code></li>
+</ol>
+<h2 id="conclusion">Conclusion</h2>
+<p>L’implémentation d’une nouvelle <code>MusicSource</code> suit ces
+étapes :</p>
+<ol type="1">
+<li><strong>Définir le schéma d’Object ID</strong> : Hiérarchie claire
+et cohérente</li>
+<li><strong>Implémenter la navigation</strong> : <code>browse()</code>
+pour tous les niveaux</li>
+<li><strong>Résoudre les URIs</strong> : Cache local d’abord, puis
+original</li>
+<li><strong>Gérer le cache</strong> : <code>SourceCacheManager</code> +
+<code>LazyProvider</code></li>
+<li><strong>Adapter les IDs</strong> : Playlist → Schema de la
+source</li>
+<li><strong>Notifier les changements</strong> : <code>update_id</code> +
+callbacks</li>
+</ol>
+<p>Les exemples Radio Paradise et Qobuz couvrent les deux patterns
+principaux : - <strong>Dynamique FIFO</strong> : Radio Paradise -
+<strong>Catalogue lazy</strong> : Qobuz</p>
+<p>En suivant ces patterns, vous obtiendrez une source musicale
+performante, compatible UPnP, et bien intégrée dans l’écosystème
+PMOMusic.</p>
+</article>
+</body>
+</html>

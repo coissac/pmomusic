@@ -1,0 +1,929 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pmoserver_ext</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/github-markdown-css@5/github-markdown.min.css">
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({startOnLoad: true, theme: "default"});
+</script>
+<style>
+  .markdown-body {
+    box-sizing: border-box;
+    min-width: 200px;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 45px;
+  }
+  .back-link {
+    margin-bottom: 20px;
+    display: block;
+  }
+  pre.mermaid {
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 10px;
+  }
+</style>
+</head>
+<body>
+<article class="markdown-body">
+<p class="back-link"><a href="index.html">← Retour à l'index</a></p>
+<h1 id="pattern-dextension-pmoserver-pmoserver_ext">Pattern d’extension
+PMOServer (<code>pmoserver_ext</code>)</h1>
+<h2 id="vue-densemble">Vue d’ensemble</h2>
+<p>Le pattern <code>pmoserver_ext</code> permet d’étendre les
+fonctionnalités du serveur HTTP <code>pmoserver</code> de manière
+modulaire et découplée. Chaque crate spécialisée peut ajouter ses
+propres routes HTTP sans que <code>pmoserver</code> ne dépende de ces
+crates.</p>
+<p><strong>Principe</strong> : Définir un trait d’extension que
+<code>pmoserver::Server</code> implémente via une feature Cargo.</p>
+<h2 id="anatomie-dune-extension">Anatomie d’une extension</h2>
+<h3 id="structure-du-module">1. Structure du module</h3>
+<p>Créer un module <code>pmoserver_ext.rs</code> dans la crate :</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co">// pmoXXX/src/pmoserver_ext.rs</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>cfg<span class="at">(</span>feature <span class="op">=</span> <span class="st">&quot;pmoserver&quot;</span><span class="at">)]</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="kw">crate</span><span class="pp">::</span><span class="op">{</span><span class="co">/* types internes de la crate */</span><span class="op">};</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>cfg<span class="at">(</span>feature <span class="op">=</span> <span class="st">&quot;pmoserver&quot;</span><span class="at">)]</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">async_trait::</span>async_trait<span class="op">;</span></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>cfg<span class="at">(</span>feature <span class="op">=</span> <span class="st">&quot;pmoserver&quot;</span><span class="at">)]</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">axum::</span><span class="op">{</span>Router<span class="op">,</span> <span class="pp">routing::</span>get<span class="op">,</span> Json<span class="op">,</span> <span class="pp">extract::</span><span class="op">{</span>State<span class="op">,</span> <span class="dt">Path</span><span class="op">}};</span></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>cfg<span class="at">(</span>feature <span class="op">=</span> <span class="st">&quot;pmoserver&quot;</span><span class="at">)]</span></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">std::sync::</span>Arc<span class="op">;</span></span></pre></div>
+<p>Déclarer le module dans <code>lib.rs</code> :</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co">// pmoXXX/src/lib.rs</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>cfg<span class="at">(</span>feature <span class="op">=</span> <span class="st">&quot;pmoserver&quot;</span><span class="at">)]</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">mod</span> pmoserver_ext<span class="op">;</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>cfg<span class="at">(</span>feature <span class="op">=</span> <span class="st">&quot;pmoserver&quot;</span><span class="at">)]</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">use</span> <span class="pp">pmoserver_ext::</span>XXXExt<span class="op">;</span></span></pre></div>
+<p>Ajouter la feature dans <code>Cargo.toml</code> :</p>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode toml"><code class="sourceCode toml"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">[features]</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="dt">pmoserver</span> <span class="op">=</span> <span class="op">[</span><span class="st">&quot;dep:axum&quot;</span><span class="op">,</span> <span class="st">&quot;dep:async-trait&quot;</span><span class="op">]</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="kw">[dependencies]</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="dt">axum</span> <span class="op">=</span> <span class="op">{ </span><span class="dt">version</span><span class="op"> =</span> <span class="st">&quot;0.8&quot;</span><span class="op">, </span><span class="dt">optional</span><span class="op"> =</span> <span class="cn">true</span><span class="op"> }</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="dt">async-trait</span> <span class="op">=</span> <span class="op">{ </span><span class="dt">version</span><span class="op"> =</span> <span class="st">&quot;0.1&quot;</span><span class="op">, </span><span class="dt">optional</span><span class="op"> =</span> <span class="cn">true</span><span class="op"> }</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="dt">pmoserver</span> <span class="op">=</span> <span class="op">{ </span><span class="dt">path</span><span class="op"> =</span> <span class="st">&quot;../pmoserver&quot;</span><span class="op"> }</span></span></pre></div>
+<h3 id="définir-le-trait-dextension">2. Définir le trait
+d’extension</h3>
+<p><strong>Convention de nommage</strong> : <code>{Domaine}Ext</code>
+avec méthodes préfixées <code>init_*</code></p>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co">/// Trait pour étendre pmoserver avec les fonctionnalités XXX</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>cfg<span class="at">(</span>feature <span class="op">=</span> <span class="st">&quot;pmoserver&quot;</span><span class="at">)]</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>async_trait<span class="at">]</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">trait</span> XXXExt <span class="op">{</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// Initialise l&#39;extension XXX et enregistre les routes HTTP</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>    <span class="co">///</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// # Arguments</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// * `param1` - Description du paramètre</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>    <span class="co">///</span></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// # Returns</span></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// Instance partagée de la ressource créée</span></span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>    <span class="co">///</span></span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// # Exemple</span></span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// ```ignore</span></span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// use pmoserver::ServerBuilder;</span></span>
+<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// use pmoXXX::XXXExt;</span></span>
+<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a>    <span class="co">///</span></span>
+<span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// let mut server = ServerBuilder::new(...).build();</span></span>
+<span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// let resource = server.init_xxx(param1).await?;</span></span>
+<span id="cb4-20"><a href="#cb4-20" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// ```</span></span>
+<span id="cb4-21"><a href="#cb4-21" aria-hidden="true" tabindex="-1"></a>    <span class="kw">async</span> <span class="kw">fn</span> init_xxx(<span class="op">&amp;</span><span class="kw">mut</span> <span class="kw">self</span><span class="op">,</span> param1<span class="op">:</span> <span class="dt">String</span>) <span class="op">-&gt;</span> <span class="pp">anyhow::</span><span class="dt">Result</span><span class="op">&lt;</span>Arc<span class="op">&lt;</span>Resource<span class="op">&gt;&gt;;</span></span>
+<span id="cb4-22"><a href="#cb4-22" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h3 id="implémenter-le-trait">3. Implémenter le trait</h3>
+<p>Implémenter le trait pour <code>pmoserver::Server</code> :</p>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>cfg<span class="at">(</span>feature <span class="op">=</span> <span class="st">&quot;pmoserver&quot;</span><span class="at">)]</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>async_trait<span class="at">]</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> XXXExt <span class="cf">for</span> <span class="pp">pmoserver::</span>Server <span class="op">{</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">async</span> <span class="kw">fn</span> init_xxx(<span class="op">&amp;</span><span class="kw">mut</span> <span class="kw">self</span><span class="op">,</span> param1<span class="op">:</span> <span class="dt">String</span>) <span class="op">-&gt;</span> <span class="pp">anyhow::</span><span class="dt">Result</span><span class="op">&lt;</span>Arc<span class="op">&lt;</span>Resource<span class="op">&gt;&gt;</span> <span class="op">{</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>        <span class="co">// 1. Créer la ressource interne</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> resource <span class="op">=</span> <span class="pp">Arc::</span>new(<span class="pp">Resource::</span>new(param1)<span class="op">?</span>)<span class="op">;</span></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>        </span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>        <span class="co">// 2. Créer l&#39;état partagé pour les handlers</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> state <span class="op">=</span> <span class="pp">XxxState::</span>new(resource<span class="op">.</span>clone())<span class="op">;</span></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>        </span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>        <span class="co">// 3. Créer le router avec les routes</span></span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> router <span class="op">=</span> create_xxx_router(state)<span class="op">;</span></span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>        </span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>        <span class="co">// 4. Enregistrer le router sur le serveur</span></span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>add_router(<span class="st">&quot;/api/xxx&quot;</span><span class="op">,</span> router)<span class="op">.</span><span class="kw">await</span><span class="op">;</span></span>
+<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a>        </span>
+<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a>        <span class="co">// 5. Retourner la ressource pour usage ultérieur</span></span>
+<span id="cb5-18"><a href="#cb5-18" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Ok</span>(resource)</span>
+<span id="cb5-19"><a href="#cb5-19" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb5-20"><a href="#cb5-20" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h3 id="état-partagé-state">4. État partagé (State)</h3>
+<p>Créer une structure d’état cloneable pour les handlers :</p>
+<div class="sourceCode" id="cb6"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="co">/// État partagé pour les handlers XXX</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>derive<span class="at">(</span><span class="bu">Clone</span><span class="at">)]</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> XxxState <span class="op">{</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>    resource<span class="op">:</span> Arc<span class="op">&lt;</span>Resource<span class="op">&gt;,</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> XxxState <span class="op">{</span></span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> <span class="kw">fn</span> new(resource<span class="op">:</span> Arc<span class="op">&lt;</span>Resource<span class="op">&gt;</span>) <span class="op">-&gt;</span> <span class="dt">Self</span> <span class="op">{</span></span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a>        <span class="dt">Self</span> <span class="op">{</span> resource <span class="op">}</span></span>
+<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h3 id="créer-le-router">5. Créer le router</h3>
+<p>Définir les routes et handlers :</p>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="co">/// Crée le router pour l&#39;API XXX</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> create_xxx_router(state<span class="op">:</span> XxxState) <span class="op">-&gt;</span> Router <span class="op">{</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>    <span class="pp">Router::</span>new()</span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>route(<span class="st">&quot;/items&quot;</span><span class="op">,</span> get(list_items)<span class="op">.</span>post(create_item))</span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>route(<span class="st">&quot;/items/{id}&quot;</span><span class="op">,</span> get(get_item)<span class="op">.</span>delete(delete_item))</span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>with_state(state)</span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a><span class="co">// Handlers</span></span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a><span class="kw">async</span> <span class="kw">fn</span> list_items(</span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a>    State(state)<span class="op">:</span> State<span class="op">&lt;</span>XxxState<span class="op">&gt;</span></span>
+<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> Json<span class="op">&lt;</span><span class="dt">Vec</span><span class="op">&lt;</span>ItemSummary<span class="op">&gt;&gt;</span> <span class="op">{</span></span>
+<span id="cb7-13"><a href="#cb7-13" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> items <span class="op">=</span> state<span class="op">.</span>resource<span class="op">.</span>list_items()<span class="op">;</span></span>
+<span id="cb7-14"><a href="#cb7-14" aria-hidden="true" tabindex="-1"></a>    Json(items)</span>
+<span id="cb7-15"><a href="#cb7-15" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb7-16"><a href="#cb7-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-17"><a href="#cb7-17" aria-hidden="true" tabindex="-1"></a><span class="kw">async</span> <span class="kw">fn</span> get_item(</span>
+<span id="cb7-18"><a href="#cb7-18" aria-hidden="true" tabindex="-1"></a>    State(state)<span class="op">:</span> State<span class="op">&lt;</span>XxxState<span class="op">&gt;,</span></span>
+<span id="cb7-19"><a href="#cb7-19" aria-hidden="true" tabindex="-1"></a>    <span class="dt">Path</span>(id)<span class="op">:</span> <span class="dt">Path</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb7-20"><a href="#cb7-20" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>Json<span class="op">&lt;</span>Item<span class="op">&gt;,</span> StatusCode<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb7-21"><a href="#cb7-21" aria-hidden="true" tabindex="-1"></a>    state<span class="op">.</span>resource<span class="op">.</span>get_item(<span class="op">&amp;</span>id)</span>
+<span id="cb7-22"><a href="#cb7-22" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>ok_or(<span class="pp">StatusCode::</span>NOT_FOUND)</span>
+<span id="cb7-23"><a href="#cb7-23" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>map(Json)</span>
+<span id="cb7-24"><a href="#cb7-24" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h2 id="méthodes-disponibles-du-serveur">Méthodes disponibles du
+serveur</h2>
+<p><code>pmoserver::Server</code> expose ces méthodes pour enregistrer
+des routes :</p>
+<table>
+<colgroup>
+<col style="width: 56%" />
+<col style="width: 43%" />
+</colgroup>
+<thead>
+<tr>
+<th>Méthode</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>add_handler(path, handler)</code></td>
+<td>Ajoute un handler simple sans état</td>
+</tr>
+<tr>
+<td><code>add_handler_with_state(path, handler, state)</code></td>
+<td>Ajoute un handler avec état partagé</td>
+</tr>
+<tr>
+<td><code>add_router(path, router)</code></td>
+<td>Monte un sous-router Axum</td>
+</tr>
+<tr>
+<td><code>add_openapi(router, doc, tag)</code></td>
+<td>Enregistre une API avec documentation OpenAPI</td>
+</tr>
+<tr>
+<td><code>add_spa::&lt;W&gt;(path)</code></td>
+<td>Sert une Single Page Application (RustEmbed)</td>
+</tr>
+<tr>
+<td><code>base_url()</code></td>
+<td>Récupère l’URL de base du serveur</td>
+</tr>
+</tbody>
+</table>
+<h2 id="documentation-openapi-avec-utoipa">Documentation OpenAPI avec
+utoipa</h2>
+<p>La documentation OpenAPI est essentielle pour une extension
+<code>pmoserver</code>. Elle génère automatiquement une interface
+Swagger UI et documente les endpoints de l’API.</p>
+<h3 id="configuration-de-base">Configuration de base</h3>
+<p>Ajouter <code>utoipa</code> dans <code>Cargo.toml</code> :</p>
+<div class="sourceCode" id="cb8"><pre
+class="sourceCode toml"><code class="sourceCode toml"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="kw">[dependencies]</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="dt">utoipa</span> <span class="op">=</span> <span class="op">{ </span><span class="dt">version</span><span class="op"> =</span> <span class="st">&quot;5&quot;</span><span class="op">, </span><span class="dt">features</span><span class="op"> =</span> <span class="op">[</span><span class="st">&quot;axum_extras&quot;</span><span class="op">] }</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="dt">serde</span> <span class="op">=</span> <span class="op">{ </span><span class="dt">version</span><span class="op"> =</span> <span class="st">&quot;1&quot;</span><span class="op">, </span><span class="dt">features</span><span class="op"> =</span> <span class="op">[</span><span class="st">&quot;derive&quot;</span><span class="op">] }</span></span></pre></div>
+<h3 id="définir-les-schémas-de-données">1. Définir les schémas de
+données</h3>
+<p>Annoter les structures de réponse/requête avec
+<code>#[derive(ToSchema)]</code> :</p>
+<div class="sourceCode" id="cb9"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">serde::</span><span class="op">{</span>Serialize<span class="op">,</span> Deserialize<span class="op">};</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">utoipa::</span>ToSchema<span class="op">;</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a><span class="co">/// Information sur un item</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>derive<span class="at">(</span><span class="bu">Debug</span><span class="op">,</span> <span class="bu">Clone</span><span class="op">,</span> Serialize<span class="op">,</span> Deserialize<span class="op">,</span> ToSchema<span class="at">)]</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> ItemInfo <span class="op">{</span></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// ID unique de l&#39;item</span></span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>schema<span class="at">(</span>example <span class="op">=</span> <span class="st">&quot;item-123&quot;</span><span class="at">)]</span></span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> id<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// Nom de l&#39;item</span></span>
+<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>schema<span class="at">(</span>example <span class="op">=</span> <span class="st">&quot;Mon Item&quot;</span><span class="at">)]</span></span>
+<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> name<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb9-14"><a href="#cb9-14" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb9-15"><a href="#cb9-15" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// Description optionnelle</span></span>
+<span id="cb9-16"><a href="#cb9-16" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>schema<span class="at">(</span>example <span class="op">=</span> <span class="st">&quot;Une description détaillée&quot;</span><span class="at">)]</span></span>
+<span id="cb9-17"><a href="#cb9-17" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> description<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb9-18"><a href="#cb9-18" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb9-19"><a href="#cb9-19" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// Timestamp de création (millisecondes)</span></span>
+<span id="cb9-20"><a href="#cb9-20" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>schema<span class="at">(</span>example <span class="op">=</span> <span class="dv">1234567890</span><span class="at">)]</span></span>
+<span id="cb9-21"><a href="#cb9-21" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> created_at<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span></span>
+<span id="cb9-22"><a href="#cb9-22" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb9-23"><a href="#cb9-23" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-24"><a href="#cb9-24" aria-hidden="true" tabindex="-1"></a><span class="co">/// Liste d&#39;items</span></span>
+<span id="cb9-25"><a href="#cb9-25" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>derive<span class="at">(</span><span class="bu">Debug</span><span class="op">,</span> <span class="bu">Clone</span><span class="op">,</span> Serialize<span class="op">,</span> ToSchema<span class="at">)]</span></span>
+<span id="cb9-26"><a href="#cb9-26" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> ItemList <span class="op">{</span></span>
+<span id="cb9-27"><a href="#cb9-27" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// Nombre total d&#39;items</span></span>
+<span id="cb9-28"><a href="#cb9-28" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> total<span class="op">:</span> <span class="dt">usize</span><span class="op">,</span></span>
+<span id="cb9-29"><a href="#cb9-29" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb9-30"><a href="#cb9-30" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// Items de la page courante</span></span>
+<span id="cb9-31"><a href="#cb9-31" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> items<span class="op">:</span> <span class="dt">Vec</span><span class="op">&lt;</span>ItemInfo<span class="op">&gt;,</span></span>
+<span id="cb9-32"><a href="#cb9-32" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb9-33"><a href="#cb9-33" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-34"><a href="#cb9-34" aria-hidden="true" tabindex="-1"></a><span class="co">/// Requête de création d&#39;item</span></span>
+<span id="cb9-35"><a href="#cb9-35" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>derive<span class="at">(</span><span class="bu">Debug</span><span class="op">,</span> <span class="bu">Clone</span><span class="op">,</span> Deserialize<span class="op">,</span> ToSchema<span class="at">)]</span></span>
+<span id="cb9-36"><a href="#cb9-36" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> CreateItemRequest <span class="op">{</span></span>
+<span id="cb9-37"><a href="#cb9-37" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// Nom de l&#39;item à créer</span></span>
+<span id="cb9-38"><a href="#cb9-38" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>schema<span class="at">(</span>example <span class="op">=</span> <span class="st">&quot;Nouvel Item&quot;</span><span class="at">)]</span></span>
+<span id="cb9-39"><a href="#cb9-39" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> name<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb9-40"><a href="#cb9-40" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb9-41"><a href="#cb9-41" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// Description optionnelle</span></span>
+<span id="cb9-42"><a href="#cb9-42" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> description<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb9-43"><a href="#cb9-43" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb9-44"><a href="#cb9-44" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-45"><a href="#cb9-45" aria-hidden="true" tabindex="-1"></a><span class="co">/// Réponse d&#39;erreur standard</span></span>
+<span id="cb9-46"><a href="#cb9-46" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>derive<span class="at">(</span><span class="bu">Debug</span><span class="op">,</span> <span class="bu">Clone</span><span class="op">,</span> Serialize<span class="op">,</span> ToSchema<span class="at">)]</span></span>
+<span id="cb9-47"><a href="#cb9-47" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> ErrorResponse <span class="op">{</span></span>
+<span id="cb9-48"><a href="#cb9-48" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// Message d&#39;erreur</span></span>
+<span id="cb9-49"><a href="#cb9-49" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>schema<span class="at">(</span>example <span class="op">=</span> <span class="st">&quot;Item not found&quot;</span><span class="at">)]</span></span>
+<span id="cb9-50"><a href="#cb9-50" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> error<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb9-51"><a href="#cb9-51" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<p><strong>Points clés</strong> : -
+<code>#[schema(example = "...")]</code> : Fournit des exemples pour la
+doc Swagger - Documenter chaque champ avec <code>///</code> pour
+apparaître dans l’API - Utiliser <code>Option&lt;T&gt;</code> pour les
+champs optionnels</p>
+<h3 id="annoter-les-handlers">2. Annoter les handlers</h3>
+<p>Utiliser <code>#[utoipa::path(...)]</code> pour documenter chaque
+endpoint :</p>
+<div class="sourceCode" id="cb10"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="co">/// GET /items - Liste tous les items</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span><span class="pp">utoipa::</span>path<span class="at">(</span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>    get<span class="op">,</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>    path <span class="op">=</span> <span class="st">&quot;/items&quot;</span><span class="op">,</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>    params<span class="at">(</span></span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>        <span class="at">(</span><span class="st">&quot;limit&quot;</span> <span class="op">=</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">u32</span><span class="op">&gt;,</span> Query<span class="op">,</span> description <span class="op">=</span> <span class="st">&quot;Nombre max d&#39;items à retourner&quot;</span><span class="at">)</span><span class="op">,</span></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>        <span class="at">(</span><span class="st">&quot;offset&quot;</span> <span class="op">=</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">u32</span><span class="op">&gt;,</span> Query<span class="op">,</span> description <span class="op">=</span> <span class="st">&quot;Offset pour la pagination&quot;</span><span class="at">)</span></span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a>    <span class="at">)</span><span class="op">,</span></span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a>    responses<span class="at">(</span></span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a>        <span class="at">(</span>status <span class="op">=</span> <span class="dv">200</span><span class="op">,</span> description <span class="op">=</span> <span class="st">&quot;Liste des items&quot;</span><span class="op">,</span> body <span class="op">=</span> ItemList<span class="at">)</span><span class="op">,</span></span>
+<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a>        <span class="at">(</span>status <span class="op">=</span> <span class="dv">500</span><span class="op">,</span> description <span class="op">=</span> <span class="st">&quot;Erreur serveur&quot;</span><span class="op">,</span> body <span class="op">=</span> ErrorResponse<span class="at">)</span></span>
+<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a>    <span class="at">)</span><span class="op">,</span></span>
+<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a>    tag <span class="op">=</span> <span class="st">&quot;items&quot;</span></span>
+<span id="cb10-14"><a href="#cb10-14" aria-hidden="true" tabindex="-1"></a><span class="at">)]</span></span>
+<span id="cb10-15"><a href="#cb10-15" aria-hidden="true" tabindex="-1"></a><span class="kw">async</span> <span class="kw">fn</span> list_items(</span>
+<span id="cb10-16"><a href="#cb10-16" aria-hidden="true" tabindex="-1"></a>    State(state)<span class="op">:</span> State<span class="op">&lt;</span>XxxState<span class="op">&gt;,</span></span>
+<span id="cb10-17"><a href="#cb10-17" aria-hidden="true" tabindex="-1"></a>    Query(params)<span class="op">:</span> Query<span class="op">&lt;</span>ListParams<span class="op">&gt;,</span></span>
+<span id="cb10-18"><a href="#cb10-18" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>Json<span class="op">&lt;</span>ItemList<span class="op">&gt;,</span> (StatusCode<span class="op">,</span> Json<span class="op">&lt;</span>ErrorResponse<span class="op">&gt;</span>)<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb10-19"><a href="#cb10-19" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> items <span class="op">=</span> state<span class="op">.</span>resource<span class="op">.</span>list_items(params<span class="op">.</span>limit<span class="op">,</span> params<span class="op">.</span>offset)</span>
+<span id="cb10-20"><a href="#cb10-20" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>map_err(<span class="op">|</span>e<span class="op">|</span> (</span>
+<span id="cb10-21"><a href="#cb10-21" aria-hidden="true" tabindex="-1"></a>            <span class="pp">StatusCode::</span>INTERNAL_SERVER_ERROR<span class="op">,</span></span>
+<span id="cb10-22"><a href="#cb10-22" aria-hidden="true" tabindex="-1"></a>            Json(ErrorResponse <span class="op">{</span> error<span class="op">:</span> e<span class="op">.</span>to_string() <span class="op">}</span>)</span>
+<span id="cb10-23"><a href="#cb10-23" aria-hidden="true" tabindex="-1"></a>        ))<span class="op">?;</span></span>
+<span id="cb10-24"><a href="#cb10-24" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb10-25"><a href="#cb10-25" aria-hidden="true" tabindex="-1"></a>    <span class="cn">Ok</span>(Json(ItemList <span class="op">{</span></span>
+<span id="cb10-26"><a href="#cb10-26" aria-hidden="true" tabindex="-1"></a>        total<span class="op">:</span> items<span class="op">.</span>len()<span class="op">,</span></span>
+<span id="cb10-27"><a href="#cb10-27" aria-hidden="true" tabindex="-1"></a>        items<span class="op">,</span></span>
+<span id="cb10-28"><a href="#cb10-28" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span>))</span>
+<span id="cb10-29"><a href="#cb10-29" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb10-30"><a href="#cb10-30" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-31"><a href="#cb10-31" aria-hidden="true" tabindex="-1"></a><span class="co">/// GET /items/{id} - Récupère un item spécifique</span></span>
+<span id="cb10-32"><a href="#cb10-32" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span><span class="pp">utoipa::</span>path<span class="at">(</span></span>
+<span id="cb10-33"><a href="#cb10-33" aria-hidden="true" tabindex="-1"></a>    get<span class="op">,</span></span>
+<span id="cb10-34"><a href="#cb10-34" aria-hidden="true" tabindex="-1"></a>    path <span class="op">=</span> <span class="st">&quot;/items/{id}&quot;</span><span class="op">,</span></span>
+<span id="cb10-35"><a href="#cb10-35" aria-hidden="true" tabindex="-1"></a>    params<span class="at">(</span></span>
+<span id="cb10-36"><a href="#cb10-36" aria-hidden="true" tabindex="-1"></a>        <span class="at">(</span><span class="st">&quot;id&quot;</span> <span class="op">=</span> <span class="dt">String</span><span class="op">,</span> <span class="dt">Path</span><span class="op">,</span> description <span class="op">=</span> <span class="st">&quot;ID unique de l&#39;item&quot;</span><span class="at">)</span></span>
+<span id="cb10-37"><a href="#cb10-37" aria-hidden="true" tabindex="-1"></a>    <span class="at">)</span><span class="op">,</span></span>
+<span id="cb10-38"><a href="#cb10-38" aria-hidden="true" tabindex="-1"></a>    responses<span class="at">(</span></span>
+<span id="cb10-39"><a href="#cb10-39" aria-hidden="true" tabindex="-1"></a>        <span class="at">(</span>status <span class="op">=</span> <span class="dv">200</span><span class="op">,</span> description <span class="op">=</span> <span class="st">&quot;Item trouvé&quot;</span><span class="op">,</span> body <span class="op">=</span> ItemInfo<span class="at">)</span><span class="op">,</span></span>
+<span id="cb10-40"><a href="#cb10-40" aria-hidden="true" tabindex="-1"></a>        <span class="at">(</span>status <span class="op">=</span> <span class="dv">404</span><span class="op">,</span> description <span class="op">=</span> <span class="st">&quot;Item non trouvé&quot;</span><span class="op">,</span> body <span class="op">=</span> ErrorResponse<span class="at">)</span><span class="op">,</span></span>
+<span id="cb10-41"><a href="#cb10-41" aria-hidden="true" tabindex="-1"></a>        <span class="at">(</span>status <span class="op">=</span> <span class="dv">500</span><span class="op">,</span> description <span class="op">=</span> <span class="st">&quot;Erreur serveur&quot;</span><span class="op">,</span> body <span class="op">=</span> ErrorResponse<span class="at">)</span></span>
+<span id="cb10-42"><a href="#cb10-42" aria-hidden="true" tabindex="-1"></a>    <span class="at">)</span><span class="op">,</span></span>
+<span id="cb10-43"><a href="#cb10-43" aria-hidden="true" tabindex="-1"></a>    tag <span class="op">=</span> <span class="st">&quot;items&quot;</span></span>
+<span id="cb10-44"><a href="#cb10-44" aria-hidden="true" tabindex="-1"></a><span class="at">)]</span></span>
+<span id="cb10-45"><a href="#cb10-45" aria-hidden="true" tabindex="-1"></a><span class="kw">async</span> <span class="kw">fn</span> get_item(</span>
+<span id="cb10-46"><a href="#cb10-46" aria-hidden="true" tabindex="-1"></a>    State(state)<span class="op">:</span> State<span class="op">&lt;</span>XxxState<span class="op">&gt;,</span></span>
+<span id="cb10-47"><a href="#cb10-47" aria-hidden="true" tabindex="-1"></a>    <span class="dt">Path</span>(id)<span class="op">:</span> <span class="dt">Path</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb10-48"><a href="#cb10-48" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>Json<span class="op">&lt;</span>ItemInfo<span class="op">&gt;,</span> (StatusCode<span class="op">,</span> Json<span class="op">&lt;</span>ErrorResponse<span class="op">&gt;</span>)<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb10-49"><a href="#cb10-49" aria-hidden="true" tabindex="-1"></a>    state<span class="op">.</span>resource<span class="op">.</span>get_item(<span class="op">&amp;</span>id)</span>
+<span id="cb10-50"><a href="#cb10-50" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>ok_or_else(<span class="op">||</span> (</span>
+<span id="cb10-51"><a href="#cb10-51" aria-hidden="true" tabindex="-1"></a>            <span class="pp">StatusCode::</span>NOT_FOUND<span class="op">,</span></span>
+<span id="cb10-52"><a href="#cb10-52" aria-hidden="true" tabindex="-1"></a>            Json(ErrorResponse <span class="op">{</span></span>
+<span id="cb10-53"><a href="#cb10-53" aria-hidden="true" tabindex="-1"></a>                error<span class="op">:</span> <span class="pp">format!</span>(<span class="st">&quot;Item {} not found&quot;</span><span class="op">,</span> id)</span>
+<span id="cb10-54"><a href="#cb10-54" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span>)</span>
+<span id="cb10-55"><a href="#cb10-55" aria-hidden="true" tabindex="-1"></a>        ))</span>
+<span id="cb10-56"><a href="#cb10-56" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>map(Json)</span>
+<span id="cb10-57"><a href="#cb10-57" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb10-58"><a href="#cb10-58" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-59"><a href="#cb10-59" aria-hidden="true" tabindex="-1"></a><span class="co">/// POST /items - Crée un nouvel item</span></span>
+<span id="cb10-60"><a href="#cb10-60" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span><span class="pp">utoipa::</span>path<span class="at">(</span></span>
+<span id="cb10-61"><a href="#cb10-61" aria-hidden="true" tabindex="-1"></a>    post<span class="op">,</span></span>
+<span id="cb10-62"><a href="#cb10-62" aria-hidden="true" tabindex="-1"></a>    path <span class="op">=</span> <span class="st">&quot;/items&quot;</span><span class="op">,</span></span>
+<span id="cb10-63"><a href="#cb10-63" aria-hidden="true" tabindex="-1"></a>    request_body <span class="op">=</span> CreateItemRequest<span class="op">,</span></span>
+<span id="cb10-64"><a href="#cb10-64" aria-hidden="true" tabindex="-1"></a>    responses<span class="at">(</span></span>
+<span id="cb10-65"><a href="#cb10-65" aria-hidden="true" tabindex="-1"></a>        <span class="at">(</span>status <span class="op">=</span> <span class="dv">201</span><span class="op">,</span> description <span class="op">=</span> <span class="st">&quot;Item créé&quot;</span><span class="op">,</span> body <span class="op">=</span> ItemInfo<span class="at">)</span><span class="op">,</span></span>
+<span id="cb10-66"><a href="#cb10-66" aria-hidden="true" tabindex="-1"></a>        <span class="at">(</span>status <span class="op">=</span> <span class="dv">400</span><span class="op">,</span> description <span class="op">=</span> <span class="st">&quot;Requête invalide&quot;</span><span class="op">,</span> body <span class="op">=</span> ErrorResponse<span class="at">)</span><span class="op">,</span></span>
+<span id="cb10-67"><a href="#cb10-67" aria-hidden="true" tabindex="-1"></a>        <span class="at">(</span>status <span class="op">=</span> <span class="dv">500</span><span class="op">,</span> description <span class="op">=</span> <span class="st">&quot;Erreur serveur&quot;</span><span class="op">,</span> body <span class="op">=</span> ErrorResponse<span class="at">)</span></span>
+<span id="cb10-68"><a href="#cb10-68" aria-hidden="true" tabindex="-1"></a>    <span class="at">)</span><span class="op">,</span></span>
+<span id="cb10-69"><a href="#cb10-69" aria-hidden="true" tabindex="-1"></a>    tag <span class="op">=</span> <span class="st">&quot;items&quot;</span></span>
+<span id="cb10-70"><a href="#cb10-70" aria-hidden="true" tabindex="-1"></a><span class="at">)]</span></span>
+<span id="cb10-71"><a href="#cb10-71" aria-hidden="true" tabindex="-1"></a><span class="kw">async</span> <span class="kw">fn</span> create_item(</span>
+<span id="cb10-72"><a href="#cb10-72" aria-hidden="true" tabindex="-1"></a>    State(state)<span class="op">:</span> State<span class="op">&lt;</span>XxxState<span class="op">&gt;,</span></span>
+<span id="cb10-73"><a href="#cb10-73" aria-hidden="true" tabindex="-1"></a>    Json(req)<span class="op">:</span> Json<span class="op">&lt;</span>CreateItemRequest<span class="op">&gt;,</span></span>
+<span id="cb10-74"><a href="#cb10-74" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>(StatusCode<span class="op">,</span> Json<span class="op">&lt;</span>ItemInfo<span class="op">&gt;</span>)<span class="op">,</span> (StatusCode<span class="op">,</span> Json<span class="op">&lt;</span>ErrorResponse<span class="op">&gt;</span>)<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb10-75"><a href="#cb10-75" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> item <span class="op">=</span> state<span class="op">.</span>resource<span class="op">.</span>create_item(req<span class="op">.</span>name<span class="op">,</span> req<span class="op">.</span>description)</span>
+<span id="cb10-76"><a href="#cb10-76" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>map_err(<span class="op">|</span>e<span class="op">|</span> (</span>
+<span id="cb10-77"><a href="#cb10-77" aria-hidden="true" tabindex="-1"></a>            <span class="pp">StatusCode::</span>INTERNAL_SERVER_ERROR<span class="op">,</span></span>
+<span id="cb10-78"><a href="#cb10-78" aria-hidden="true" tabindex="-1"></a>            Json(ErrorResponse <span class="op">{</span> error<span class="op">:</span> e<span class="op">.</span>to_string() <span class="op">}</span>)</span>
+<span id="cb10-79"><a href="#cb10-79" aria-hidden="true" tabindex="-1"></a>        ))<span class="op">?;</span></span>
+<span id="cb10-80"><a href="#cb10-80" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb10-81"><a href="#cb10-81" aria-hidden="true" tabindex="-1"></a>    <span class="cn">Ok</span>((<span class="pp">StatusCode::</span>CREATED<span class="op">,</span> Json(item)))</span>
+<span id="cb10-82"><a href="#cb10-82" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb10-83"><a href="#cb10-83" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-84"><a href="#cb10-84" aria-hidden="true" tabindex="-1"></a><span class="co">/// DELETE /items/{id} - Supprime un item</span></span>
+<span id="cb10-85"><a href="#cb10-85" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span><span class="pp">utoipa::</span>path<span class="at">(</span></span>
+<span id="cb10-86"><a href="#cb10-86" aria-hidden="true" tabindex="-1"></a>    delete<span class="op">,</span></span>
+<span id="cb10-87"><a href="#cb10-87" aria-hidden="true" tabindex="-1"></a>    path <span class="op">=</span> <span class="st">&quot;/items/{id}&quot;</span><span class="op">,</span></span>
+<span id="cb10-88"><a href="#cb10-88" aria-hidden="true" tabindex="-1"></a>    params<span class="at">(</span></span>
+<span id="cb10-89"><a href="#cb10-89" aria-hidden="true" tabindex="-1"></a>        <span class="at">(</span><span class="st">&quot;id&quot;</span> <span class="op">=</span> <span class="dt">String</span><span class="op">,</span> <span class="dt">Path</span><span class="op">,</span> description <span class="op">=</span> <span class="st">&quot;ID unique de l&#39;item&quot;</span><span class="at">)</span></span>
+<span id="cb10-90"><a href="#cb10-90" aria-hidden="true" tabindex="-1"></a>    <span class="at">)</span><span class="op">,</span></span>
+<span id="cb10-91"><a href="#cb10-91" aria-hidden="true" tabindex="-1"></a>    responses<span class="at">(</span></span>
+<span id="cb10-92"><a href="#cb10-92" aria-hidden="true" tabindex="-1"></a>        <span class="at">(</span>status <span class="op">=</span> <span class="dv">204</span><span class="op">,</span> description <span class="op">=</span> <span class="st">&quot;Item supprimé&quot;</span><span class="at">)</span><span class="op">,</span></span>
+<span id="cb10-93"><a href="#cb10-93" aria-hidden="true" tabindex="-1"></a>        <span class="at">(</span>status <span class="op">=</span> <span class="dv">404</span><span class="op">,</span> description <span class="op">=</span> <span class="st">&quot;Item non trouvé&quot;</span><span class="op">,</span> body <span class="op">=</span> ErrorResponse<span class="at">)</span><span class="op">,</span></span>
+<span id="cb10-94"><a href="#cb10-94" aria-hidden="true" tabindex="-1"></a>        <span class="at">(</span>status <span class="op">=</span> <span class="dv">500</span><span class="op">,</span> description <span class="op">=</span> <span class="st">&quot;Erreur serveur&quot;</span><span class="op">,</span> body <span class="op">=</span> ErrorResponse<span class="at">)</span></span>
+<span id="cb10-95"><a href="#cb10-95" aria-hidden="true" tabindex="-1"></a>    <span class="at">)</span><span class="op">,</span></span>
+<span id="cb10-96"><a href="#cb10-96" aria-hidden="true" tabindex="-1"></a>    tag <span class="op">=</span> <span class="st">&quot;items&quot;</span></span>
+<span id="cb10-97"><a href="#cb10-97" aria-hidden="true" tabindex="-1"></a><span class="at">)]</span></span>
+<span id="cb10-98"><a href="#cb10-98" aria-hidden="true" tabindex="-1"></a><span class="kw">async</span> <span class="kw">fn</span> delete_item(</span>
+<span id="cb10-99"><a href="#cb10-99" aria-hidden="true" tabindex="-1"></a>    State(state)<span class="op">:</span> State<span class="op">&lt;</span>XxxState<span class="op">&gt;,</span></span>
+<span id="cb10-100"><a href="#cb10-100" aria-hidden="true" tabindex="-1"></a>    <span class="dt">Path</span>(id)<span class="op">:</span> <span class="dt">Path</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb10-101"><a href="#cb10-101" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>StatusCode<span class="op">,</span> (StatusCode<span class="op">,</span> Json<span class="op">&lt;</span>ErrorResponse<span class="op">&gt;</span>)<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb10-102"><a href="#cb10-102" aria-hidden="true" tabindex="-1"></a>    state<span class="op">.</span>resource<span class="op">.</span>delete_item(<span class="op">&amp;</span>id)</span>
+<span id="cb10-103"><a href="#cb10-103" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>map_err(<span class="op">|</span>e<span class="op">|</span> (</span>
+<span id="cb10-104"><a href="#cb10-104" aria-hidden="true" tabindex="-1"></a>            <span class="pp">StatusCode::</span>INTERNAL_SERVER_ERROR<span class="op">,</span></span>
+<span id="cb10-105"><a href="#cb10-105" aria-hidden="true" tabindex="-1"></a>            Json(ErrorResponse <span class="op">{</span> error<span class="op">:</span> e<span class="op">.</span>to_string() <span class="op">}</span>)</span>
+<span id="cb10-106"><a href="#cb10-106" aria-hidden="true" tabindex="-1"></a>        ))<span class="op">?;</span></span>
+<span id="cb10-107"><a href="#cb10-107" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb10-108"><a href="#cb10-108" aria-hidden="true" tabindex="-1"></a>    <span class="cn">Ok</span>(<span class="pp">StatusCode::</span>NO_CONTENT)</span>
+<span id="cb10-109"><a href="#cb10-109" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<p><strong>Structure de <code>#[utoipa::path]</code></strong> : -
+<strong>Méthode HTTP</strong> : <code>get</code>, <code>post</code>,
+<code>put</code>, <code>delete</code>, <code>patch</code> -
+<strong><code>path</code></strong> : Chemin de l’endpoint (doit
+correspondre au router) - <strong><code>params</code></strong> :
+Paramètres Path ou Query avec description -
+<strong><code>request_body</code></strong> : Type du body pour POST/PUT
+- <strong><code>responses</code></strong> : Liste des réponses possibles
+avec codes HTTP - <strong><code>tag</code></strong> : Groupe d’endpoints
+dans Swagger UI</p>
+<h3 id="créer-la-structure-openapi">3. Créer la structure OpenAPI</h3>
+<p>Définir une structure avec <code>#[derive(OpenApi)]</code> :</p>
+<div class="sourceCode" id="cb11"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">utoipa::</span>OpenApi<span class="op">;</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a><span class="co">/// Documentation OpenAPI pour l&#39;API XXX</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>derive<span class="at">(</span>OpenApi<span class="at">)]</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>openapi<span class="at">(</span></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>    info<span class="at">(</span></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>        title <span class="op">=</span> <span class="st">&quot;XXX API&quot;</span><span class="op">,</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a>        version <span class="op">=</span> <span class="st">&quot;1.0.0&quot;</span><span class="op">,</span></span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a>        description <span class="op">=</span> <span class="st">r#&quot;</span></span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a><span class="st"># API REST pour XXX</span></span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a><span class="st">Cette API permet de gérer les items XXX avec les fonctionnalités suivantes :</span></span>
+<span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-14"><a href="#cb11-14" aria-hidden="true" tabindex="-1"></a><span class="st">## Fonctionnalités</span></span>
+<span id="cb11-15"><a href="#cb11-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-16"><a href="#cb11-16" aria-hidden="true" tabindex="-1"></a><span class="st">- **CRUD complet** : Création, lecture, mise à jour et suppression d&#39;items</span></span>
+<span id="cb11-17"><a href="#cb11-17" aria-hidden="true" tabindex="-1"></a><span class="st">- **Pagination** : Support de limit/offset pour les listes</span></span>
+<span id="cb11-18"><a href="#cb11-18" aria-hidden="true" tabindex="-1"></a><span class="st">- **Filtrage** : Recherche par critères multiples</span></span>
+<span id="cb11-19"><a href="#cb11-19" aria-hidden="true" tabindex="-1"></a><span class="st">- **Validation** : Vérification automatique des données</span></span>
+<span id="cb11-20"><a href="#cb11-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-21"><a href="#cb11-21" aria-hidden="true" tabindex="-1"></a><span class="st">## Exemples d&#39;utilisation</span></span>
+<span id="cb11-22"><a href="#cb11-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-23"><a href="#cb11-23" aria-hidden="true" tabindex="-1"></a><span class="st">### Lister les items</span></span></pre></div>
+<p>GET /api/xxx/items?limit=10&amp;offset=0</p>
+<pre><code>
+### Créer un item</pre>
+<p>POST /api/xxx/items Content-Type: application/json</p>
+<p>{ “name”: “Mon Item”, “description”: “Description détaillée” }</p>
+<pre><code>
+### Récupérer un item</pre>
+<p>GET /api/xxx/items/item-123</p>
+<pre><code>
+### Supprimer un item</pre>
+<p>DELETE /api/xxx/items/item-123</p>
+<pre><code>        &quot;#
+    ),
+    paths(
+        list_items,
+        get_item,
+        create_item,
+        delete_item,
+    ),
+    components(schemas(
+        ItemInfo,
+        ItemList,
+        CreateItemRequest,
+        ErrorResponse,
+    )),
+    tags(
+        (name = &quot;items&quot;, description = &quot;Opérations sur les items&quot;)
+    )
+)]
+pub struct ApiDoc;</pre>
+<p><strong>Sections importantes</strong> : -
+<strong><code>info</code></strong> : Titre, version et description
+Markdown de l’API - <strong><code>paths</code></strong> : Liste des
+fonctions handler annotées -
+<strong><code>components(schemas(...))</code></strong> : Liste des
+structures <code>ToSchema</code> - <strong><code>tags</code></strong> :
+Organisation des endpoints en groupes</p>
+<h3 id="enregistrer-lapi-avec-openapi">4. Enregistrer l’API avec
+OpenAPI</h3>
+<p>Dans l’implémentation du trait d’extension :</p>
+<div class="sourceCode" id="cb16"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>async_trait<span class="at">]</span></span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> XxxExt <span class="cf">for</span> <span class="pp">pmoserver::</span>Server <span class="op">{</span></span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">async</span> <span class="kw">fn</span> init_xxx(<span class="op">&amp;</span><span class="kw">mut</span> <span class="kw">self</span>) <span class="op">-&gt;</span> <span class="pp">anyhow::</span><span class="dt">Result</span><span class="op">&lt;</span>Arc<span class="op">&lt;</span>Resource<span class="op">&gt;&gt;</span> <span class="op">{</span></span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> resource <span class="op">=</span> <span class="pp">Arc::</span>new(<span class="pp">Resource::</span>new()<span class="op">?</span>)<span class="op">;</span></span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> state <span class="op">=</span> XxxState <span class="op">{</span> resource<span class="op">:</span> resource<span class="op">.</span>clone() <span class="op">};</span></span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a>        </span>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Créer le router avec les routes</span></span>
+<span id="cb16-8"><a href="#cb16-8" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> router <span class="op">=</span> <span class="pp">Router::</span>new()</span>
+<span id="cb16-9"><a href="#cb16-9" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>route(<span class="st">&quot;/items&quot;</span><span class="op">,</span> get(list_items)<span class="op">.</span>post(create_item))</span>
+<span id="cb16-10"><a href="#cb16-10" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>route(<span class="st">&quot;/items/{id}&quot;</span><span class="op">,</span> get(get_item)<span class="op">.</span>delete(delete_item))</span>
+<span id="cb16-11"><a href="#cb16-11" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>with_state(state)<span class="op">;</span></span>
+<span id="cb16-12"><a href="#cb16-12" aria-hidden="true" tabindex="-1"></a>        </span>
+<span id="cb16-13"><a href="#cb16-13" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Enregistrer avec OpenAPI (génère aussi /swagger-ui/xxx)</span></span>
+<span id="cb16-14"><a href="#cb16-14" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> openapi <span class="op">=</span> <span class="pp">ApiDoc::</span>openapi()<span class="op">;</span></span>
+<span id="cb16-15"><a href="#cb16-15" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>add_openapi(router<span class="op">,</span> openapi<span class="op">,</span> <span class="st">&quot;xxx&quot;</span>)<span class="op">.</span><span class="kw">await</span><span class="op">;</span></span>
+<span id="cb16-16"><a href="#cb16-16" aria-hidden="true" tabindex="-1"></a>        </span>
+<span id="cb16-17"><a href="#cb16-17" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Ok</span>(resource)</span>
+<span id="cb16-18"><a href="#cb16-18" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb16-19"><a href="#cb16-19" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<p><strong>Ce que fait <code>add_openapi</code></strong> : - Monte le
+router sur <code>/api/{tag}/</code> - Génère la spec OpenAPI JSON sur
+<code>/api/{tag}/openapi.json</code> - Crée une UI Swagger sur
+<code>/swagger-ui/{tag}/</code></p>
+<h3 id="exemple-complet-radio-paradise">5. Exemple complet : Radio
+Paradise</h3>
+<p><strong>Extrait de</strong>
+<code>pmoparadise/src/pmoserver_ext.rs:93-315</code></p>
+<div class="sourceCode" id="cb17"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="co">/// Information sur un morceau</span></span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>derive<span class="at">(</span><span class="bu">Debug</span><span class="op">,</span> <span class="bu">Clone</span><span class="op">,</span> Serialize<span class="op">,</span> ToSchema<span class="at">)]</span></span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> SongInfo <span class="op">{</span></span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// Index dans le block</span></span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> index<span class="op">:</span> <span class="dt">usize</span><span class="op">,</span></span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// Artiste</span></span>
+<span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> artist<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb17-8"><a href="#cb17-8" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// Titre</span></span>
+<span id="cb17-9"><a href="#cb17-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> title<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb17-10"><a href="#cb17-10" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// Album</span></span>
+<span id="cb17-11"><a href="#cb17-11" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> album<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb17-12"><a href="#cb17-12" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// Année</span></span>
+<span id="cb17-13"><a href="#cb17-13" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> year<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">u32</span><span class="op">&gt;,</span></span>
+<span id="cb17-14"><a href="#cb17-14" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// Temps écoulé depuis le début du block (ms)</span></span>
+<span id="cb17-15"><a href="#cb17-15" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> elapsed_ms<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span></span>
+<span id="cb17-16"><a href="#cb17-16" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// Durée du morceau (ms)</span></span>
+<span id="cb17-17"><a href="#cb17-17" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> duration_ms<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span></span>
+<span id="cb17-18"><a href="#cb17-18" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// URL de la pochette</span></span>
+<span id="cb17-19"><a href="#cb17-19" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> cover_url<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb17-20"><a href="#cb17-20" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb17-21"><a href="#cb17-21" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-22"><a href="#cb17-22" aria-hidden="true" tabindex="-1"></a><span class="co">/// Réponse pour l&#39;URL de streaming</span></span>
+<span id="cb17-23"><a href="#cb17-23" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>derive<span class="at">(</span><span class="bu">Debug</span><span class="op">,</span> <span class="bu">Clone</span><span class="op">,</span> Serialize<span class="op">,</span> ToSchema<span class="at">)]</span></span>
+<span id="cb17-24"><a href="#cb17-24" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> StreamUrlResponse <span class="op">{</span></span>
+<span id="cb17-25"><a href="#cb17-25" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// Event ID du block</span></span>
+<span id="cb17-26"><a href="#cb17-26" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>schema<span class="at">(</span>example <span class="op">=</span> <span class="dv">1234567</span><span class="at">)]</span></span>
+<span id="cb17-27"><a href="#cb17-27" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> event<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span></span>
+<span id="cb17-28"><a href="#cb17-28" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// URL de streaming FLAC</span></span>
+<span id="cb17-29"><a href="#cb17-29" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>schema<span class="at">(</span>example <span class="op">=</span> <span class="st">&quot;https://apps.radioparadise.com/blocks/chan/0/4/1234567-1234580.flac&quot;</span><span class="at">)]</span></span>
+<span id="cb17-30"><a href="#cb17-30" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> stream_url<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb17-31"><a href="#cb17-31" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// Durée totale (ms)</span></span>
+<span id="cb17-32"><a href="#cb17-32" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>schema<span class="at">(</span>example <span class="op">=</span> <span class="dv">900000</span><span class="at">)]</span></span>
+<span id="cb17-33"><a href="#cb17-33" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> length_ms<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span></span>
+<span id="cb17-34"><a href="#cb17-34" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb17-35"><a href="#cb17-35" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-36"><a href="#cb17-36" aria-hidden="true" tabindex="-1"></a><span class="co">/// GET /stream-url/{event_id} - Récupère l&#39;URL de streaming</span></span>
+<span id="cb17-37"><a href="#cb17-37" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span><span class="pp">utoipa::</span>path<span class="at">(</span></span>
+<span id="cb17-38"><a href="#cb17-38" aria-hidden="true" tabindex="-1"></a>    get<span class="op">,</span></span>
+<span id="cb17-39"><a href="#cb17-39" aria-hidden="true" tabindex="-1"></a>    path <span class="op">=</span> <span class="st">&quot;/stream-url/{event_id}&quot;</span><span class="op">,</span></span>
+<span id="cb17-40"><a href="#cb17-40" aria-hidden="true" tabindex="-1"></a>    params<span class="at">(</span></span>
+<span id="cb17-41"><a href="#cb17-41" aria-hidden="true" tabindex="-1"></a>        <span class="at">(</span><span class="st">&quot;event_id&quot;</span> <span class="op">=</span> <span class="dt">u64</span><span class="op">,</span> <span class="dt">Path</span><span class="op">,</span> description <span class="op">=</span> <span class="st">&quot;Event ID du block&quot;</span><span class="at">)</span><span class="op">,</span></span>
+<span id="cb17-42"><a href="#cb17-42" aria-hidden="true" tabindex="-1"></a>        <span class="at">(</span><span class="st">&quot;channel&quot;</span> <span class="op">=</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">u8</span><span class="op">&gt;,</span> Query<span class="op">,</span> description <span class="op">=</span> <span class="st">&quot;Channel ID (0-3)&quot;</span><span class="at">)</span></span>
+<span id="cb17-43"><a href="#cb17-43" aria-hidden="true" tabindex="-1"></a>    <span class="at">)</span><span class="op">,</span></span>
+<span id="cb17-44"><a href="#cb17-44" aria-hidden="true" tabindex="-1"></a>    responses<span class="at">(</span></span>
+<span id="cb17-45"><a href="#cb17-45" aria-hidden="true" tabindex="-1"></a>        <span class="at">(</span>status <span class="op">=</span> <span class="dv">200</span><span class="op">,</span> description <span class="op">=</span> <span class="st">&quot;URL de streaming&quot;</span><span class="op">,</span> body <span class="op">=</span> StreamUrlResponse<span class="at">)</span><span class="op">,</span></span>
+<span id="cb17-46"><a href="#cb17-46" aria-hidden="true" tabindex="-1"></a>        <span class="at">(</span>status <span class="op">=</span> <span class="dv">500</span><span class="op">,</span> description <span class="op">=</span> <span class="st">&quot;Erreur serveur&quot;</span><span class="at">)</span></span>
+<span id="cb17-47"><a href="#cb17-47" aria-hidden="true" tabindex="-1"></a>    <span class="at">)</span><span class="op">,</span></span>
+<span id="cb17-48"><a href="#cb17-48" aria-hidden="true" tabindex="-1"></a>    tag <span class="op">=</span> <span class="st">&quot;Radio Paradise&quot;</span></span>
+<span id="cb17-49"><a href="#cb17-49" aria-hidden="true" tabindex="-1"></a><span class="at">)]</span></span>
+<span id="cb17-50"><a href="#cb17-50" aria-hidden="true" tabindex="-1"></a><span class="kw">async</span> <span class="kw">fn</span> get_stream_url(</span>
+<span id="cb17-51"><a href="#cb17-51" aria-hidden="true" tabindex="-1"></a>    State(state)<span class="op">:</span> State<span class="op">&lt;</span>RadioParadiseState<span class="op">&gt;,</span></span>
+<span id="cb17-52"><a href="#cb17-52" aria-hidden="true" tabindex="-1"></a>    <span class="dt">Path</span>(event_id)<span class="op">:</span> <span class="dt">Path</span><span class="op">&lt;</span><span class="dt">u64</span><span class="op">&gt;,</span></span>
+<span id="cb17-53"><a href="#cb17-53" aria-hidden="true" tabindex="-1"></a>    Query(params)<span class="op">:</span> Query<span class="op">&lt;</span>ParadiseQuery<span class="op">&gt;,</span></span>
+<span id="cb17-54"><a href="#cb17-54" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>Json<span class="op">&lt;</span>StreamUrlResponse<span class="op">&gt;,</span> StatusCode<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb17-55"><a href="#cb17-55" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> client <span class="op">=</span> state<span class="op">.</span>client_for_params(<span class="op">&amp;</span>params)<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb17-56"><a href="#cb17-56" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> block <span class="op">=</span> client<span class="op">.</span>get_block(<span class="cn">Some</span>(event_id))<span class="op">.</span><span class="kw">await</span><span class="op">.</span>map_err(<span class="op">|</span>e<span class="op">|</span> <span class="op">{</span></span>
+<span id="cb17-57"><a href="#cb17-57" aria-hidden="true" tabindex="-1"></a>        <span class="pp">tracing::error!</span>(<span class="st">&quot;Failed to fetch block {}: {}&quot;</span><span class="op">,</span> event_id<span class="op">,</span> e)<span class="op">;</span></span>
+<span id="cb17-58"><a href="#cb17-58" aria-hidden="true" tabindex="-1"></a>        <span class="pp">StatusCode::</span>INTERNAL_SERVER_ERROR</span>
+<span id="cb17-59"><a href="#cb17-59" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span>)<span class="op">?;</span></span>
+<span id="cb17-60"><a href="#cb17-60" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-61"><a href="#cb17-61" aria-hidden="true" tabindex="-1"></a>    <span class="cn">Ok</span>(Json(StreamUrlResponse <span class="op">{</span></span>
+<span id="cb17-62"><a href="#cb17-62" aria-hidden="true" tabindex="-1"></a>        event<span class="op">:</span> block<span class="op">.</span>event<span class="op">,</span></span>
+<span id="cb17-63"><a href="#cb17-63" aria-hidden="true" tabindex="-1"></a>        stream_url<span class="op">:</span> block<span class="op">.</span>url<span class="op">,</span></span>
+<span id="cb17-64"><a href="#cb17-64" aria-hidden="true" tabindex="-1"></a>        length_ms<span class="op">:</span> block<span class="op">.</span>length<span class="op">,</span></span>
+<span id="cb17-65"><a href="#cb17-65" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span>))</span>
+<span id="cb17-66"><a href="#cb17-66" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb17-67"><a href="#cb17-67" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-68"><a href="#cb17-68" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>derive<span class="at">(</span>OpenApi<span class="at">)]</span></span>
+<span id="cb17-69"><a href="#cb17-69" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>openapi<span class="at">(</span></span>
+<span id="cb17-70"><a href="#cb17-70" aria-hidden="true" tabindex="-1"></a>    info<span class="at">(</span></span>
+<span id="cb17-71"><a href="#cb17-71" aria-hidden="true" tabindex="-1"></a>        title <span class="op">=</span> <span class="st">&quot;Radio Paradise API&quot;</span><span class="op">,</span></span>
+<span id="cb17-72"><a href="#cb17-72" aria-hidden="true" tabindex="-1"></a>        version <span class="op">=</span> <span class="st">&quot;1.0.0&quot;</span><span class="op">,</span></span>
+<span id="cb17-73"><a href="#cb17-73" aria-hidden="true" tabindex="-1"></a>        description <span class="op">=</span> <span class="st">&quot;API REST pour accéder aux métadonnées Radio Paradise&quot;</span></span>
+<span id="cb17-74"><a href="#cb17-74" aria-hidden="true" tabindex="-1"></a>    <span class="at">)</span><span class="op">,</span></span>
+<span id="cb17-75"><a href="#cb17-75" aria-hidden="true" tabindex="-1"></a>    paths<span class="at">(</span></span>
+<span id="cb17-76"><a href="#cb17-76" aria-hidden="true" tabindex="-1"></a>        get_now_playing<span class="op">,</span></span>
+<span id="cb17-77"><a href="#cb17-77" aria-hidden="true" tabindex="-1"></a>        get_current_block<span class="op">,</span></span>
+<span id="cb17-78"><a href="#cb17-78" aria-hidden="true" tabindex="-1"></a>        get_stream_url<span class="op">,</span></span>
+<span id="cb17-79"><a href="#cb17-79" aria-hidden="true" tabindex="-1"></a>    <span class="at">)</span><span class="op">,</span></span>
+<span id="cb17-80"><a href="#cb17-80" aria-hidden="true" tabindex="-1"></a>    components<span class="at">(</span>schemas<span class="at">(</span></span>
+<span id="cb17-81"><a href="#cb17-81" aria-hidden="true" tabindex="-1"></a>        SongInfo<span class="op">,</span></span>
+<span id="cb17-82"><a href="#cb17-82" aria-hidden="true" tabindex="-1"></a>        StreamUrlResponse<span class="op">,</span></span>
+<span id="cb17-83"><a href="#cb17-83" aria-hidden="true" tabindex="-1"></a>    <span class="at">))</span><span class="op">,</span></span>
+<span id="cb17-84"><a href="#cb17-84" aria-hidden="true" tabindex="-1"></a>    tags<span class="at">(</span></span>
+<span id="cb17-85"><a href="#cb17-85" aria-hidden="true" tabindex="-1"></a>        <span class="at">(</span>name <span class="op">=</span> <span class="st">&quot;Radio Paradise&quot;</span><span class="op">,</span> description <span class="op">=</span> <span class="st">&quot;Endpoints Radio Paradise&quot;</span><span class="at">)</span></span>
+<span id="cb17-86"><a href="#cb17-86" aria-hidden="true" tabindex="-1"></a>    <span class="at">)</span></span>
+<span id="cb17-87"><a href="#cb17-87" aria-hidden="true" tabindex="-1"></a><span class="at">)]</span></span>
+<span id="cb17-88"><a href="#cb17-88" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> RadioParadiseApiDoc<span class="op">;</span></span></pre></div>
+<h3 id="résultat-interface-swagger">Résultat : Interface Swagger</h3>
+<p>Après avoir appelé <code>init_xxx()</code>, l’API est accessible
+:</p>
+<ul>
+<li><strong>API JSON</strong> :
+<code>http://localhost:8080/api/xxx/</code></li>
+<li><strong>Spec OpenAPI</strong> :
+<code>http://localhost:8080/api/xxx/openapi.json</code></li>
+<li><strong>Swagger UI</strong> :
+<code>http://localhost:8080/swagger-ui/xxx/</code></li>
+</ul>
+<p>L’interface Swagger permet : - Parcourir tous les endpoints avec leur
+documentation - Tester les requêtes directement depuis le navigateur -
+Voir les schémas de données avec exemples - Consulter les codes de
+réponse HTTP possibles</p>
+<h2 id="patterns-courants">Patterns courants</h2>
+<h3 id="pattern-1-extension-simple-avec-router">Pattern 1 : Extension
+simple avec router</h3>
+<p><strong>Exemple</strong> : <code>pmoparadise</code>
+(pmoparadise/src/pmoserver_ext.rs:367-392)</p>
+<div class="sourceCode" id="cb18"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>async_trait<span class="at">]</span></span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> RadioParadiseExt <span class="cf">for</span> <span class="pp">pmoserver::</span>Server <span class="op">{</span></span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">async</span> <span class="kw">fn</span> init_radioparadise(<span class="op">&amp;</span><span class="kw">mut</span> <span class="kw">self</span>) <span class="op">-&gt;</span> <span class="pp">anyhow::</span><span class="dt">Result</span><span class="op">&lt;</span>State<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> state <span class="op">=</span> <span class="pp">RadioParadiseState::</span>new()<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a>        </span>
+<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Créer le router API</span></span>
+<span id="cb18-7"><a href="#cb18-7" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> api_router <span class="op">=</span> create_api_router(state<span class="op">.</span>clone())<span class="op">;</span></span>
+<span id="cb18-8"><a href="#cb18-8" aria-hidden="true" tabindex="-1"></a>        </span>
+<span id="cb18-9"><a href="#cb18-9" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Enregistrer avec OpenAPI</span></span>
+<span id="cb18-10"><a href="#cb18-10" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>add_openapi(api_router<span class="op">,</span> <span class="pp">ApiDoc::</span>openapi()<span class="op">,</span> <span class="st">&quot;radioparadise&quot;</span>)</span>
+<span id="cb18-11"><a href="#cb18-11" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span><span class="kw">await</span><span class="op">;</span></span>
+<span id="cb18-12"><a href="#cb18-12" aria-hidden="true" tabindex="-1"></a>        </span>
+<span id="cb18-13"><a href="#cb18-13" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Ok</span>(state)</span>
+<span id="cb18-14"><a href="#cb18-14" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb18-15"><a href="#cb18-15" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h3 id="pattern-2-extension-avec-cache-et-fichiers">Pattern 2 :
+Extension avec cache et fichiers</h3>
+<p><strong>Exemple</strong> : <code>pmoaudiocache</code>
+(pmoaudiocache/src/lib.rs:225-260)</p>
+<div class="sourceCode" id="cb19"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>async_trait<span class="at">]</span></span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> AudioCacheExt <span class="cf">for</span> <span class="pp">pmoserver::</span>Server <span class="op">{</span></span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">async</span> <span class="kw">fn</span> init_audio_cache(</span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a>        <span class="op">&amp;</span><span class="kw">mut</span> <span class="kw">self</span><span class="op">,</span></span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>        cache_dir<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span><span class="op">,</span></span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a>        limit<span class="op">:</span> <span class="dt">usize</span><span class="op">,</span></span>
+<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a>    ) <span class="op">-&gt;</span> <span class="pp">anyhow::</span><span class="dt">Result</span><span class="op">&lt;</span>Arc<span class="op">&lt;</span>Cache<span class="op">&gt;&gt;</span> <span class="op">{</span></span>
+<span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> cache <span class="op">=</span> <span class="pp">Arc::</span>new(new_cache(cache_dir<span class="op">,</span> limit)<span class="op">?</span>)<span class="op">;</span></span>
+<span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a>        </span>
+<span id="cb19-10"><a href="#cb19-10" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Router pour servir les fichiers FLAC</span></span>
+<span id="cb19-11"><a href="#cb19-11" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> file_router <span class="op">=</span> create_file_router(cache<span class="op">.</span>clone()<span class="op">,</span> <span class="st">&quot;audio/flac&quot;</span>)<span class="op">;</span></span>
+<span id="cb19-12"><a href="#cb19-12" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>add_router(<span class="st">&quot;/&quot;</span><span class="op">,</span> file_router)<span class="op">.</span><span class="kw">await</span><span class="op">;</span></span>
+<span id="cb19-13"><a href="#cb19-13" aria-hidden="true" tabindex="-1"></a>        </span>
+<span id="cb19-14"><a href="#cb19-14" aria-hidden="true" tabindex="-1"></a>        <span class="co">// API REST</span></span>
+<span id="cb19-15"><a href="#cb19-15" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> api_router <span class="op">=</span> <span class="pp">Router::</span>new()</span>
+<span id="cb19-16"><a href="#cb19-16" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>route(<span class="st">&quot;/&quot;</span><span class="op">,</span> get(list)<span class="op">.</span>post(add))</span>
+<span id="cb19-17"><a href="#cb19-17" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>route(<span class="st">&quot;/{pk}&quot;</span><span class="op">,</span> get(get_info)<span class="op">.</span>delete(delete))</span>
+<span id="cb19-18"><a href="#cb19-18" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>with_state(cache<span class="op">.</span>clone())<span class="op">;</span></span>
+<span id="cb19-19"><a href="#cb19-19" aria-hidden="true" tabindex="-1"></a>        </span>
+<span id="cb19-20"><a href="#cb19-20" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>add_openapi(api_router<span class="op">,</span> <span class="pp">ApiDoc::</span>openapi()<span class="op">,</span> <span class="st">&quot;audio&quot;</span>)<span class="op">.</span><span class="kw">await</span><span class="op">;</span></span>
+<span id="cb19-21"><a href="#cb19-21" aria-hidden="true" tabindex="-1"></a>        </span>
+<span id="cb19-22"><a href="#cb19-22" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Ok</span>(cache)</span>
+<span id="cb19-23"><a href="#cb19-23" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb19-24"><a href="#cb19-24" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h3 id="pattern-3-extension-avec-routes-dynamiques">Pattern 3 :
+Extension avec routes dynamiques</h3>
+<p><strong>Exemple</strong> : <code>pmomediaserver</code>
+(pmomediaserver/src/paradise_streaming.rs:70-148)</p>
+<div class="sourceCode" id="cb20"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>async_trait<span class="at">]</span></span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> ParadiseStreamingExt <span class="cf">for</span> <span class="pp">pmoserver::</span>Server <span class="op">{</span></span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">async</span> <span class="kw">fn</span> init_paradise_streaming(<span class="op">&amp;</span><span class="kw">mut</span> <span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>Arc<span class="op">&lt;</span>Manager<span class="op">&gt;&gt;</span> <span class="op">{</span></span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a>        <span class="co">// 1. Récupérer/créer les ressources partagées</span></span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> audio_cache <span class="op">=</span> get_or_init_audio_cache(<span class="kw">self</span>)<span class="op">.</span><span class="kw">await</span><span class="op">?;</span></span>
+<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> manager <span class="op">=</span> <span class="pp">Arc::</span>new(<span class="pp">Manager::</span>new(audio_cache)<span class="op">.</span><span class="kw">await</span><span class="op">?</span>)<span class="op">;</span></span>
+<span id="cb20-7"><a href="#cb20-7" aria-hidden="true" tabindex="-1"></a>        </span>
+<span id="cb20-8"><a href="#cb20-8" aria-hidden="true" tabindex="-1"></a>        <span class="co">// 2. Créer l&#39;état partagé</span></span>
+<span id="cb20-9"><a href="#cb20-9" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> state <span class="op">=</span> <span class="pp">Arc::</span>new(StreamingState <span class="op">{</span> manager<span class="op">:</span> manager<span class="op">.</span>clone() <span class="op">}</span>)<span class="op">;</span></span>
+<span id="cb20-10"><a href="#cb20-10" aria-hidden="true" tabindex="-1"></a>        </span>
+<span id="cb20-11"><a href="#cb20-11" aria-hidden="true" tabindex="-1"></a>        <span class="co">// 3. Enregistrer les routes pour chaque canal</span></span>
+<span id="cb20-12"><a href="#cb20-12" aria-hidden="true" tabindex="-1"></a>        <span class="cf">for</span> descriptor <span class="kw">in</span> ALL_CHANNELS<span class="op">.</span>iter() <span class="op">{</span></span>
+<span id="cb20-13"><a href="#cb20-13" aria-hidden="true" tabindex="-1"></a>            <span class="kw">let</span> slug <span class="op">=</span> descriptor<span class="op">.</span>slug<span class="op">;</span></span>
+<span id="cb20-14"><a href="#cb20-14" aria-hidden="true" tabindex="-1"></a>            </span>
+<span id="cb20-15"><a href="#cb20-15" aria-hidden="true" tabindex="-1"></a>            <span class="co">// Route streaming FLAC</span></span>
+<span id="cb20-16"><a href="#cb20-16" aria-hidden="true" tabindex="-1"></a>            <span class="kw">let</span> path <span class="op">=</span> <span class="pp">format!</span>(<span class="st">&quot;/stream/{}/flac&quot;</span><span class="op">,</span> slug)<span class="op">;</span></span>
+<span id="cb20-17"><a href="#cb20-17" aria-hidden="true" tabindex="-1"></a>            <span class="kw">self</span><span class="op">.</span>add_handler_with_state(</span>
+<span id="cb20-18"><a href="#cb20-18" aria-hidden="true" tabindex="-1"></a>                <span class="op">&amp;</span>path<span class="op">,</span></span>
+<span id="cb20-19"><a href="#cb20-19" aria-hidden="true" tabindex="-1"></a>                <span class="kw">move</span> <span class="op">|</span>State(s)<span class="op">:</span> State<span class="op">&lt;</span>Arc<span class="op">&lt;</span>StreamingState<span class="op">&gt;&gt;|</span> <span class="kw">async</span> <span class="kw">move</span> <span class="op">{</span></span>
+<span id="cb20-20"><a href="#cb20-20" aria-hidden="true" tabindex="-1"></a>                    stream_flac(s<span class="op">.</span>manager<span class="op">.</span>clone()<span class="op">,</span> descriptor<span class="op">.</span>id)<span class="op">.</span><span class="kw">await</span></span>
+<span id="cb20-21"><a href="#cb20-21" aria-hidden="true" tabindex="-1"></a>                <span class="op">},</span></span>
+<span id="cb20-22"><a href="#cb20-22" aria-hidden="true" tabindex="-1"></a>                state<span class="op">.</span>clone()<span class="op">,</span></span>
+<span id="cb20-23"><a href="#cb20-23" aria-hidden="true" tabindex="-1"></a>            )<span class="op">.</span><span class="kw">await</span><span class="op">;</span></span>
+<span id="cb20-24"><a href="#cb20-24" aria-hidden="true" tabindex="-1"></a>            </span>
+<span id="cb20-25"><a href="#cb20-25" aria-hidden="true" tabindex="-1"></a>            <span class="co">// Route streaming OGG</span></span>
+<span id="cb20-26"><a href="#cb20-26" aria-hidden="true" tabindex="-1"></a>            <span class="kw">let</span> path <span class="op">=</span> <span class="pp">format!</span>(<span class="st">&quot;/stream/{}/ogg&quot;</span><span class="op">,</span> slug)<span class="op">;</span></span>
+<span id="cb20-27"><a href="#cb20-27" aria-hidden="true" tabindex="-1"></a>            <span class="kw">self</span><span class="op">.</span>add_handler_with_state(</span>
+<span id="cb20-28"><a href="#cb20-28" aria-hidden="true" tabindex="-1"></a>                <span class="op">&amp;</span>path<span class="op">,</span></span>
+<span id="cb20-29"><a href="#cb20-29" aria-hidden="true" tabindex="-1"></a>                <span class="kw">move</span> <span class="op">|</span>State(s)<span class="op">:</span> State<span class="op">&lt;</span>Arc<span class="op">&lt;</span>StreamingState<span class="op">&gt;&gt;|</span> <span class="kw">async</span> <span class="kw">move</span> <span class="op">{</span></span>
+<span id="cb20-30"><a href="#cb20-30" aria-hidden="true" tabindex="-1"></a>                    stream_ogg(s<span class="op">.</span>manager<span class="op">.</span>clone()<span class="op">,</span> descriptor<span class="op">.</span>id)<span class="op">.</span><span class="kw">await</span></span>
+<span id="cb20-31"><a href="#cb20-31" aria-hidden="true" tabindex="-1"></a>                <span class="op">},</span></span>
+<span id="cb20-32"><a href="#cb20-32" aria-hidden="true" tabindex="-1"></a>                state<span class="op">.</span>clone()<span class="op">,</span></span>
+<span id="cb20-33"><a href="#cb20-33" aria-hidden="true" tabindex="-1"></a>            )<span class="op">.</span><span class="kw">await</span><span class="op">;</span></span>
+<span id="cb20-34"><a href="#cb20-34" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb20-35"><a href="#cb20-35" aria-hidden="true" tabindex="-1"></a>        </span>
+<span id="cb20-36"><a href="#cb20-36" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Ok</span>(manager)</span>
+<span id="cb20-37"><a href="#cb20-37" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb20-38"><a href="#cb20-38" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h2 id="gestion-des-opérations-longues">Gestion des opérations
+longues</h2>
+<h3 id="utiliser-spawn_blocking-pour-le-code-synchrone">Utiliser
+<code>spawn_blocking</code> pour le code synchrone</h3>
+<p>Pour éviter de bloquer le runtime Tokio avec du code synchrone :</p>
+<div class="sourceCode" id="cb21"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="kw">async</span> <span class="kw">fn</span> list_renderers(</span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>    State(state)<span class="op">:</span> State<span class="op">&lt;</span>ControlPointState<span class="op">&gt;</span></span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> Json<span class="op">&lt;</span><span class="dt">Vec</span><span class="op">&lt;</span>Summary<span class="op">&gt;&gt;</span> <span class="op">{</span></span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> control_point <span class="op">=</span> state<span class="op">.</span>control_point<span class="op">.</span>clone()<span class="op">;</span></span>
+<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> summaries <span class="op">=</span> <span class="pp">tokio::task::</span>spawn_blocking(<span class="kw">move</span> <span class="op">||</span> <span class="op">{</span></span>
+<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> renderers <span class="op">=</span> control_point<span class="op">.</span>list_music_renderers()<span class="op">;</span></span>
+<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a>        renderers<span class="op">.</span>into_iter()</span>
+<span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>map(<span class="op">|</span>r<span class="op">|</span> <span class="pp">Summary::</span>from(<span class="op">&amp;</span>r))</span>
+<span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>collect()</span>
+<span id="cb21-11"><a href="#cb21-11" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span>)</span>
+<span id="cb21-12"><a href="#cb21-12" aria-hidden="true" tabindex="-1"></a>    <span class="op">.</span><span class="kw">await</span></span>
+<span id="cb21-13"><a href="#cb21-13" aria-hidden="true" tabindex="-1"></a>    <span class="op">.</span>unwrap_or_default()<span class="op">;</span></span>
+<span id="cb21-14"><a href="#cb21-14" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb21-15"><a href="#cb21-15" aria-hidden="true" tabindex="-1"></a>    Json(summaries)</span>
+<span id="cb21-16"><a href="#cb21-16" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h3 id="ajouter-des-timeouts-pour-les-opérations-réseau">Ajouter des
+timeouts pour les opérations réseau</h3>
+<div class="sourceCode" id="cb22"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> COMMAND_TIMEOUT<span class="op">:</span> Duration <span class="op">=</span> <span class="pp">Duration::</span>from_secs(<span class="dv">5</span>)<span class="op">;</span></span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a><span class="kw">async</span> <span class="kw">fn</span> play_renderer(</span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a>    State(state)<span class="op">:</span> State<span class="op">&lt;</span>ControlPointState<span class="op">&gt;,</span></span>
+<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">Path</span>(id)<span class="op">:</span> <span class="dt">Path</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>Json<span class="op">&lt;</span>Response<span class="op">&gt;,</span> (StatusCode<span class="op">,</span> Json<span class="op">&lt;</span><span class="bu">Error</span><span class="op">&gt;</span>)<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb22-7"><a href="#cb22-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> renderer <span class="op">=</span> state<span class="op">.</span>get_renderer(<span class="op">&amp;</span>id)</span>
+<span id="cb22-8"><a href="#cb22-8" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>ok_or((<span class="pp">StatusCode::</span>NOT_FOUND<span class="op">,</span> Json(<span class="bu">Error</span><span class="pp">::</span>not_found())))<span class="op">?;</span></span>
+<span id="cb22-9"><a href="#cb22-9" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb22-10"><a href="#cb22-10" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> play_task <span class="op">=</span> <span class="pp">tokio::task::</span>spawn_blocking(<span class="kw">move</span> <span class="op">||</span> renderer<span class="op">.</span>play())<span class="op">;</span></span>
+<span id="cb22-11"><a href="#cb22-11" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb22-12"><a href="#cb22-12" aria-hidden="true" tabindex="-1"></a>    <span class="pp">time::</span>timeout(COMMAND_TIMEOUT<span class="op">,</span> play_task)</span>
+<span id="cb22-13"><a href="#cb22-13" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span><span class="kw">await</span></span>
+<span id="cb22-14"><a href="#cb22-14" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>map_err(<span class="op">|</span>_<span class="op">|</span> (</span>
+<span id="cb22-15"><a href="#cb22-15" aria-hidden="true" tabindex="-1"></a>            <span class="pp">StatusCode::</span>GATEWAY_TIMEOUT<span class="op">,</span></span>
+<span id="cb22-16"><a href="#cb22-16" aria-hidden="true" tabindex="-1"></a>            Json(<span class="bu">Error</span><span class="pp">::</span>timeout())</span>
+<span id="cb22-17"><a href="#cb22-17" aria-hidden="true" tabindex="-1"></a>        ))<span class="op">?</span></span>
+<span id="cb22-18"><a href="#cb22-18" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>map_err(<span class="op">|</span>e<span class="op">|</span> (</span>
+<span id="cb22-19"><a href="#cb22-19" aria-hidden="true" tabindex="-1"></a>            <span class="pp">StatusCode::</span>INTERNAL_SERVER_ERROR<span class="op">,</span></span>
+<span id="cb22-20"><a href="#cb22-20" aria-hidden="true" tabindex="-1"></a>            Json(<span class="bu">Error</span><span class="pp">::</span>internal(e))</span>
+<span id="cb22-21"><a href="#cb22-21" aria-hidden="true" tabindex="-1"></a>        ))<span class="op">??;</span></span>
+<span id="cb22-22"><a href="#cb22-22" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb22-23"><a href="#cb22-23" aria-hidden="true" tabindex="-1"></a>    <span class="cn">Ok</span>(Json(<span class="pp">Response::</span>success()))</span>
+<span id="cb22-24"><a href="#cb22-24" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h3 id="utiliser-spawn-pour-les-tâches-en-arrière-plan">Utiliser
+<code>spawn</code> pour les tâches en arrière-plan</h3>
+<p>Pour les opérations qui ne nécessitent pas d’attendre le résultat
+:</p>
+<div class="sourceCode" id="cb23"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="kw">async</span> <span class="kw">fn</span> trigger_action(</span>
+<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a>    State(state)<span class="op">:</span> State<span class="op">&lt;</span>XxxState<span class="op">&gt;,</span></span>
+<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a>    Json(req)<span class="op">:</span> Json<span class="op">&lt;</span>Request<span class="op">&gt;,</span></span>
+<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> Json<span class="op">&lt;</span>Response<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Valider la requête</span></span>
+<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a>    state<span class="op">.</span>validate(<span class="op">&amp;</span>req)<span class="op">?;</span></span>
+<span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb23-8"><a href="#cb23-8" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Lancer l&#39;action en arrière-plan</span></span>
+<span id="cb23-9"><a href="#cb23-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> state_clone <span class="op">=</span> state<span class="op">.</span>clone()<span class="op">;</span></span>
+<span id="cb23-10"><a href="#cb23-10" aria-hidden="true" tabindex="-1"></a>    <span class="pp">tokio::task::</span>spawn(<span class="kw">async</span> <span class="kw">move</span> <span class="op">{</span></span>
+<span id="cb23-11"><a href="#cb23-11" aria-hidden="true" tabindex="-1"></a>        <span class="cf">match</span> state_clone<span class="op">.</span>perform_action(req)<span class="op">.</span><span class="kw">await</span> <span class="op">{</span></span>
+<span id="cb23-12"><a href="#cb23-12" aria-hidden="true" tabindex="-1"></a>            <span class="cn">Ok</span>(_) <span class="op">=&gt;</span> <span class="pp">debug!</span>(<span class="st">&quot;Action completed&quot;</span>)<span class="op">,</span></span>
+<span id="cb23-13"><a href="#cb23-13" aria-hidden="true" tabindex="-1"></a>            <span class="cn">Err</span>(e) <span class="op">=&gt;</span> <span class="pp">warn!</span>(<span class="st">&quot;Action failed: {}&quot;</span><span class="op">,</span> e)<span class="op">,</span></span>
+<span id="cb23-14"><a href="#cb23-14" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb23-15"><a href="#cb23-15" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span>)<span class="op">;</span></span>
+<span id="cb23-16"><a href="#cb23-16" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb23-17"><a href="#cb23-17" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Retourner immédiatement</span></span>
+<span id="cb23-18"><a href="#cb23-18" aria-hidden="true" tabindex="-1"></a>    Json(<span class="pp">Response::</span>accepted())</span>
+<span id="cb23-19"><a href="#cb23-19" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h2 id="checklist-dimplémentation">Checklist d’implémentation</h2>
+<h3 id="configuration-de-base-1">Configuration de base</h3>
+<ul class="task-list">
+<li><label><input type="checkbox" />Créer le module
+<code>pmoserver_ext.rs</code> avec
+<code>#[cfg(feature = "pmoserver")]</code></label></li>
+<li><label><input type="checkbox" />Ajouter la feature
+<code>pmoserver</code> dans <code>Cargo.toml</code> avec dépendances
+optionnelles</label></li>
+<li><label><input type="checkbox" />Re-exporter le trait dans
+<code>lib.rs</code></label></li>
+</ul>
+<h3 id="définition-du-trait">Définition du trait</h3>
+<ul class="task-list">
+<li><label><input type="checkbox" />Définir le trait
+<code>{Domaine}Ext</code> avec méthode <code>init_*</code></label></li>
+<li><label><input type="checkbox" />Créer la structure
+<code>{Domaine}State</code> avec
+<code>#[derive(Clone)]</code></label></li>
+<li><label><input type="checkbox" />Implémenter le trait pour
+<code>pmoserver::Server</code></label></li>
+</ul>
+<h3 id="documentation-openapi">Documentation OpenAPI</h3>
+<ul class="task-list">
+<li><label><input type="checkbox" />Ajouter <code>utoipa</code> dans les
+dépendances</label></li>
+<li><label><input type="checkbox" />Définir les schémas de
+réponse/requête avec <code>#[derive(ToSchema)]</code></label></li>
+<li><label><input type="checkbox" />Ajouter des exemples avec
+<code>#[schema(example = "...")]</code></label></li>
+<li><label><input type="checkbox" />Annoter chaque handler avec
+<code>#[utoipa::path(...)]</code></label></li>
+<li><label><input type="checkbox" />Créer la structure
+<code>#[derive(OpenApi)]</code> avec documentation complète</label></li>
+<li><label><input type="checkbox" />Lister tous les paths et schemas
+dans <code>#[openapi(...)]</code></label></li>
+</ul>
+<h3 id="handlers-et-routes">Handlers et routes</h3>
+<ul class="task-list">
+<li><label><input type="checkbox" />Créer les handlers avec les
+extracteurs Axum appropriés</label></li>
+<li><label><input type="checkbox" />Gérer les erreurs avec des codes
+HTTP sémantiques</label></li>
+<li><label><input type="checkbox" />Créer le router et l’enregistrer
+avec <code>add_openapi()</code></label></li>
+<li><label><input type="checkbox" />Ajouter des logs (debug, info, warn,
+error)</label></li>
+</ul>
+<h3 id="performance-et-robustesse">Performance et robustesse</h3>
+<ul class="task-list">
+<li><label><input type="checkbox" />Utiliser <code>spawn_blocking</code>
+pour le code synchrone</label></li>
+<li><label><input type="checkbox" />Ajouter des timeouts pour les
+opérations réseau</label></li>
+<li><label><input type="checkbox" />Utiliser <code>spawn</code> pour les
+tâches en arrière-plan si nécessaire</label></li>
+</ul>
+<h2 id="exemple-complet-minimal">Exemple complet minimal</h2>
+<div class="sourceCode" id="cb24"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="co">// pmoexample/src/pmoserver_ext.rs</span></span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>cfg<span class="at">(</span>feature <span class="op">=</span> <span class="st">&quot;pmoserver&quot;</span><span class="at">)]</span></span>
+<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">async_trait::</span>async_trait<span class="op">;</span></span>
+<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>cfg<span class="at">(</span>feature <span class="op">=</span> <span class="st">&quot;pmoserver&quot;</span><span class="at">)]</span></span>
+<span id="cb24-6"><a href="#cb24-6" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">axum::</span><span class="op">{</span>Router<span class="op">,</span> <span class="pp">routing::</span>get<span class="op">,</span> Json<span class="op">,</span> <span class="pp">extract::</span>State<span class="op">};</span></span>
+<span id="cb24-7"><a href="#cb24-7" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>cfg<span class="at">(</span>feature <span class="op">=</span> <span class="st">&quot;pmoserver&quot;</span><span class="at">)]</span></span>
+<span id="cb24-8"><a href="#cb24-8" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">std::sync::</span>Arc<span class="op">;</span></span>
+<span id="cb24-9"><a href="#cb24-9" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>cfg<span class="at">(</span>feature <span class="op">=</span> <span class="st">&quot;pmoserver&quot;</span><span class="at">)]</span></span>
+<span id="cb24-10"><a href="#cb24-10" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="kw">crate</span><span class="pp">::</span>ExampleResource<span class="op">;</span></span>
+<span id="cb24-11"><a href="#cb24-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-12"><a href="#cb24-12" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>cfg<span class="at">(</span>feature <span class="op">=</span> <span class="st">&quot;pmoserver&quot;</span><span class="at">)]</span></span>
+<span id="cb24-13"><a href="#cb24-13" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>derive<span class="at">(</span><span class="bu">Clone</span><span class="at">)]</span></span>
+<span id="cb24-14"><a href="#cb24-14" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> ExampleState <span class="op">{</span></span>
+<span id="cb24-15"><a href="#cb24-15" aria-hidden="true" tabindex="-1"></a>    resource<span class="op">:</span> Arc<span class="op">&lt;</span>ExampleResource<span class="op">&gt;,</span></span>
+<span id="cb24-16"><a href="#cb24-16" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb24-17"><a href="#cb24-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-18"><a href="#cb24-18" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>cfg<span class="at">(</span>feature <span class="op">=</span> <span class="st">&quot;pmoserver&quot;</span><span class="at">)]</span></span>
+<span id="cb24-19"><a href="#cb24-19" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>async_trait<span class="at">]</span></span>
+<span id="cb24-20"><a href="#cb24-20" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">trait</span> ExampleExt <span class="op">{</span></span>
+<span id="cb24-21"><a href="#cb24-21" aria-hidden="true" tabindex="-1"></a>    <span class="kw">async</span> <span class="kw">fn</span> init_example(<span class="op">&amp;</span><span class="kw">mut</span> <span class="kw">self</span>) <span class="op">-&gt;</span> <span class="pp">anyhow::</span><span class="dt">Result</span><span class="op">&lt;</span>Arc<span class="op">&lt;</span>ExampleResource<span class="op">&gt;&gt;;</span></span>
+<span id="cb24-22"><a href="#cb24-22" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb24-23"><a href="#cb24-23" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-24"><a href="#cb24-24" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>cfg<span class="at">(</span>feature <span class="op">=</span> <span class="st">&quot;pmoserver&quot;</span><span class="at">)]</span></span>
+<span id="cb24-25"><a href="#cb24-25" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>async_trait<span class="at">]</span></span>
+<span id="cb24-26"><a href="#cb24-26" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> ExampleExt <span class="cf">for</span> <span class="pp">pmoserver::</span>Server <span class="op">{</span></span>
+<span id="cb24-27"><a href="#cb24-27" aria-hidden="true" tabindex="-1"></a>    <span class="kw">async</span> <span class="kw">fn</span> init_example(<span class="op">&amp;</span><span class="kw">mut</span> <span class="kw">self</span>) <span class="op">-&gt;</span> <span class="pp">anyhow::</span><span class="dt">Result</span><span class="op">&lt;</span>Arc<span class="op">&lt;</span>ExampleResource<span class="op">&gt;&gt;</span> <span class="op">{</span></span>
+<span id="cb24-28"><a href="#cb24-28" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> resource <span class="op">=</span> <span class="pp">Arc::</span>new(<span class="pp">ExampleResource::</span>new())<span class="op">;</span></span>
+<span id="cb24-29"><a href="#cb24-29" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> state <span class="op">=</span> ExampleState <span class="op">{</span> resource<span class="op">:</span> resource<span class="op">.</span>clone() <span class="op">};</span></span>
+<span id="cb24-30"><a href="#cb24-30" aria-hidden="true" tabindex="-1"></a>        </span>
+<span id="cb24-31"><a href="#cb24-31" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> router <span class="op">=</span> <span class="pp">Router::</span>new()</span>
+<span id="cb24-32"><a href="#cb24-32" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>route(<span class="st">&quot;/items&quot;</span><span class="op">,</span> get(list_items))</span>
+<span id="cb24-33"><a href="#cb24-33" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>with_state(state)<span class="op">;</span></span>
+<span id="cb24-34"><a href="#cb24-34" aria-hidden="true" tabindex="-1"></a>        </span>
+<span id="cb24-35"><a href="#cb24-35" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>add_router(<span class="st">&quot;/api/example&quot;</span><span class="op">,</span> router)<span class="op">.</span><span class="kw">await</span><span class="op">;</span></span>
+<span id="cb24-36"><a href="#cb24-36" aria-hidden="true" tabindex="-1"></a>        </span>
+<span id="cb24-37"><a href="#cb24-37" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Ok</span>(resource)</span>
+<span id="cb24-38"><a href="#cb24-38" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb24-39"><a href="#cb24-39" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb24-40"><a href="#cb24-40" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-41"><a href="#cb24-41" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>cfg<span class="at">(</span>feature <span class="op">=</span> <span class="st">&quot;pmoserver&quot;</span><span class="at">)]</span></span>
+<span id="cb24-42"><a href="#cb24-42" aria-hidden="true" tabindex="-1"></a><span class="kw">async</span> <span class="kw">fn</span> list_items(State(state)<span class="op">:</span> State<span class="op">&lt;</span>ExampleState<span class="op">&gt;</span>) <span class="op">-&gt;</span> Json<span class="op">&lt;</span><span class="dt">Vec</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;&gt;</span> <span class="op">{</span></span>
+<span id="cb24-43"><a href="#cb24-43" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> items <span class="op">=</span> state<span class="op">.</span>resource<span class="op">.</span>list()<span class="op">;</span></span>
+<span id="cb24-44"><a href="#cb24-44" aria-hidden="true" tabindex="-1"></a>    Json(items)</span>
+<span id="cb24-45"><a href="#cb24-45" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h2 id="références">Références</h2>
+<h3 id="exemples-dans-le-codebase">Exemples dans le codebase</h3>
+<table>
+<colgroup>
+<col style="width: 28%" />
+<col style="width: 36%" />
+<col style="width: 36%" />
+</colgroup>
+<thead>
+<tr>
+<th>Crate</th>
+<th>Fichier</th>
+<th>Pattern</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pmoparadise</code></td>
+<td><code>src/pmoserver_ext.rs:367-392</code></td>
+<td>Extension simple avec OpenAPI</td>
+</tr>
+<tr>
+<td><code>pmoaudiocache</code></td>
+<td><code>src/lib.rs:225-260</code></td>
+<td>Extension avec cache et fichiers</td>
+</tr>
+<tr>
+<td><code>pmomediaserver</code></td>
+<td><code>src/paradise_streaming.rs:70-148</code></td>
+<td>Extension avec routes dynamiques</td>
+</tr>
+<tr>
+<td><code>pmocontrol</code></td>
+<td><code>src/pmoserver_ext.rs:68-92</code></td>
+<td>Handlers avec <code>spawn_blocking</code></td>
+</tr>
+<tr>
+<td><code>pmoapp</code></td>
+<td><code>src/lib.rs:145-165</code></td>
+<td>Extension SPA avec RustEmbed</td>
+</tr>
+</tbody>
+</table>
+<h3 id="dépendances-communes">Dépendances communes</h3>
+<ul>
+<li><code>axum</code> : Framework HTTP (Router, handlers,
+extracteurs)</li>
+<li><code>async-trait</code> : Support des traits async</li>
+<li><code>tokio</code> : Runtime async (spawn, spawn_blocking,
+timeout)</li>
+<li><code>anyhow</code> : Gestion d’erreurs pour init</li>
+<li><code>tracing</code> : Logging structuré</li>
+<li><code>utoipa</code> : Documentation OpenAPI/Swagger</li>
+<li><code>serde</code> : Sérialisation JSON</li>
+</ul>
+</article>
+</body>
+</html>

@@ -389,6 +389,11 @@ POST /control/renderers/{renderer_id}/queue/seek
   Body: {"index": 5}
 ```
 
+### Mélanger la queue
+```
+POST /control/renderers/{renderer_id}/queue/shuffle
+```
+
 ### Contrôler le volume
 ```
 POST /control/renderers/{renderer_id}/volume/set
@@ -442,6 +447,7 @@ GET /control/servers/{server_id}/containers/{container_id}
         crate::pmoserver_ext::next_renderer,
         crate::pmoserver_ext::seek_renderer,
         crate::pmoserver_ext::seek_queue_index,
+        crate::pmoserver_ext::shuffle_queue,
         crate::pmoserver_ext::set_renderer_volume,
         crate::pmoserver_ext::volume_up_renderer,
         crate::pmoserver_ext::volume_down_renderer,

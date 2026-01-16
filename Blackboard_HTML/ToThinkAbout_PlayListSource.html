@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PlayListSource</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/github-markdown-css@5/github-markdown.min.css">
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({startOnLoad: true, theme: "default"});
+</script>
+<style>
+  .markdown-body {
+    box-sizing: border-box;
+    min-width: 200px;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 45px;
+  }
+  .back-link {
+    margin-bottom: 20px;
+    display: block;
+  }
+  pre.mermaid {
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 10px;
+  }
+</style>
+</head>
+<body>
+<article class="markdown-body">
+<p class="back-link"><a href="index.html">← Retour à l'index</a></p>
+<p><strong>Il faut suivre les instructions générales placées dans le
+fichier : Blackboard/Rules.md</strong></p>
+<h1 id="playlistsource-musicsource-pour-playlists">PlaylistSource :
+MusicSource pour playlists</h1>
+<p>Implémenter une source PMOMusic capable de servir un catalogue de
+playlists hiérarchisé via UPnP.</p>
+<hr />
+<h2 id="décisions-de-conception">📋 Décisions de conception</h2>
+<h3 id="format-pivot-jspf-json">Format pivot : JSPF (JSON)</h3>
+<p><strong>Choix</strong> : JSPF comme format interne central -
+Métadonnées riches (title, creator, album, annotation, image, duration,
+etc.) - JSON natif avec serde (Rust-friendly) - Standard ouvert
+(Xiph.Org) - Extensible via champ <code>meta</code></p>
+<p><strong>Formats supportés</strong> : - ✅ <strong>JSPF</strong>
+(.jspf) - JSON, format natif - ✅ <strong>XSPF</strong> (.xspf) - XML,
+conversion vers JSPF - ✅ <strong>M3U8</strong> (.m3u8) - Texte,
+métadonnées limitées - ✅ <strong>PLS</strong> (.pls) - INI-like, très
+basique</p>
+<p><strong>Architecture</strong> : 1 Writer (JSPF) + 4 Readers (JSPF,
+XSPF, M3U8, PLS) → Structure JSPF centrale</p>
+<pre class="mermaid">flowchart LR
+    JSPF[JSPF JSON] --&gt; JR[JspfReader]
+    XSPF[XSPF XML] --&gt; XR[XspfReader]
+    M3U8[M3U8 Text] --&gt; MR[M3uReader]
+    PLS[PLS INI] --&gt; PR[PlsReader]
+    
+    JR --&gt; CORE[JSPF Structure]
+    XR --&gt; CORE
+    MR --&gt; CORE
+    PR --&gt; CORE
+    
+    CORE --&gt; W[JspfWriter]
+    W --&gt; OUT[.jspf]</pre>
+<hr />
+<h2 id="structure-du-répertoire">🗂️ Structure du répertoire</h2>
+<pre><code>playlists/
+├── metadata.json              # Métadonnées du conteneur racine
+├── Jazz/
+│   ├── metadata.json          # Métadonnées catégorie Jazz
+│   ├── standards.jspf
+│   ├── bebop.jspf
+│   └── covers/
+│       └── standards.webp
+├── Classical/
+│   ├── metadata.json
+│   ├── baroque.jspf
+│   └── romantic.jspf
+└── Rock/
+    ├── metadata.json
+    └── 70s.jspf</pre>
+<h3 id="fichier-metadata.json-conteneur">Fichier
+<code>metadata.json</code> (conteneur)</h3>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;container&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;title&quot;</span><span class="fu">:</span> <span class="st">&quot;Collection Jazz&quot;</span><span class="fu">,</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;description&quot;</span><span class="fu">:</span> <span class="st">&quot;Mes playlists jazz favorites&quot;</span><span class="fu">,</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;creator&quot;</span><span class="fu">:</span> <span class="st">&quot;John Doe&quot;</span><span class="fu">,</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;image&quot;</span><span class="fu">:</span> <span class="st">&quot;covers/jazz-collection.webp&quot;</span><span class="fu">,</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;date&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-01-15&quot;</span><span class="fu">,</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;meta&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>      <span class="fu">{</span><span class="dt">&quot;rel&quot;</span><span class="fu">:</span> <span class="st">&quot;genre&quot;</span><span class="fu">,</span> <span class="dt">&quot;content&quot;</span><span class="fu">:</span> <span class="st">&quot;Jazz&quot;</span><span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>      <span class="fu">{</span><span class="dt">&quot;rel&quot;</span><span class="fu">:</span> <span class="st">&quot;mood&quot;</span><span class="fu">,</span> <span class="dt">&quot;content&quot;</span><span class="fu">:</span> <span class="st">&quot;Relaxing&quot;</span><span class="fu">}</span></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>    <span class="ot">]</span></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></pre></div>
+<hr />
+<h2 id="composants-à-implémenter">🏗️ Composants à implémenter</h2>
+<h3 id="crate-pmojspf-parsing-playlists">1. Crate <code>pmojspf</code>
+(parsing playlists)</h3>
+<p><strong>Responsabilité</strong> : Parser différents formats de
+playlist vers structure JSPF unifiée</p>
+<h4 id="structure">Structure</h4>
+<pre><code>pmojspf/
+├── Cargo.toml
+├── src/
+│   ├── lib.rs           # API publique
+│   ├── model.rs         # Structures JSPF
+│   ├── writer.rs        # JspfWriter
+│   ├── reader/
+│   │   ├── mod.rs       # Trait PlaylistReader
+│   │   ├── jspf.rs      # Reader JSON natif (serde_json)
+│   │   ├── xspf.rs      # Reader XML (xml-rs)
+│   │   ├── m3u.rs       # Reader M3U8 (parsing ligne par ligne)
+│   │   └── pls.rs       # Reader PLS (format INI-like)
+│   └── error.rs
+└── tests/
+    └── fixtures/</pre>
+<h4 id="modèle-de-données">Modèle de données</h4>
+<p><strong>Inspiré de la crate <a
+href="https://crates.io/crates/xspf">xspf</a> v0.4.2</strong></p>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">serde::</span><span class="op">{</span>Deserialize<span class="op">,</span> Serialize<span class="op">};</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>derive<span class="at">(</span><span class="bu">Debug</span><span class="op">,</span> <span class="bu">Clone</span><span class="op">,</span> Serialize<span class="op">,</span> Deserialize<span class="at">)]</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> Jspf <span class="op">{</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> playlist<span class="op">:</span> JspfPlaylist<span class="op">,</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>derive<span class="at">(</span><span class="bu">Debug</span><span class="op">,</span> <span class="bu">Clone</span><span class="op">,</span> Serialize<span class="op">,</span> Deserialize<span class="op">,</span> <span class="bu">Default</span><span class="at">)]</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>serde<span class="at">(</span>rename_all <span class="op">=</span> <span class="st">&quot;camelCase&quot;</span><span class="at">)]</span></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> JspfPlaylist <span class="op">{</span></span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>serde<span class="at">(</span>skip_serializing_if <span class="op">=</span> <span class="st">&quot;Option::is_none&quot;</span><span class="at">)]</span></span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> title<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>serde<span class="at">(</span>skip_serializing_if <span class="op">=</span> <span class="st">&quot;Option::is_none&quot;</span><span class="at">)]</span></span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> creator<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>serde<span class="at">(</span>skip_serializing_if <span class="op">=</span> <span class="st">&quot;Option::is_none&quot;</span><span class="at">)]</span></span>
+<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> annotation<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>serde<span class="at">(</span>skip_serializing_if <span class="op">=</span> <span class="st">&quot;Option::is_none&quot;</span><span class="at">)]</span></span>
+<span id="cb5-18"><a href="#cb5-18" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> info<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb5-19"><a href="#cb5-19" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>serde<span class="at">(</span>skip_serializing_if <span class="op">=</span> <span class="st">&quot;Option::is_none&quot;</span><span class="at">)]</span></span>
+<span id="cb5-20"><a href="#cb5-20" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> location<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb5-21"><a href="#cb5-21" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>serde<span class="at">(</span>skip_serializing_if <span class="op">=</span> <span class="st">&quot;Option::is_none&quot;</span><span class="at">)]</span></span>
+<span id="cb5-22"><a href="#cb5-22" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> identifier<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb5-23"><a href="#cb5-23" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>serde<span class="at">(</span>skip_serializing_if <span class="op">=</span> <span class="st">&quot;Option::is_none&quot;</span><span class="at">)]</span></span>
+<span id="cb5-24"><a href="#cb5-24" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> image<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb5-25"><a href="#cb5-25" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>serde<span class="at">(</span>skip_serializing_if <span class="op">=</span> <span class="st">&quot;Option::is_none&quot;</span><span class="at">)]</span></span>
+<span id="cb5-26"><a href="#cb5-26" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> date<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb5-27"><a href="#cb5-27" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>serde<span class="at">(</span>skip_serializing_if <span class="op">=</span> <span class="st">&quot;Option::is_none&quot;</span><span class="at">)]</span></span>
+<span id="cb5-28"><a href="#cb5-28" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> license<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb5-29"><a href="#cb5-29" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>serde<span class="at">(</span>skip_serializing_if <span class="op">=</span> <span class="st">&quot;Vec::is_empty&quot;</span><span class="op">,</span> <span class="kw">default</span><span class="at">)]</span></span>
+<span id="cb5-30"><a href="#cb5-30" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> attribution<span class="op">:</span> <span class="dt">Vec</span><span class="op">&lt;</span>JspfAttribution<span class="op">&gt;,</span></span>
+<span id="cb5-31"><a href="#cb5-31" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>serde<span class="at">(</span>skip_serializing_if <span class="op">=</span> <span class="st">&quot;Vec::is_empty&quot;</span><span class="op">,</span> <span class="kw">default</span><span class="at">)]</span></span>
+<span id="cb5-32"><a href="#cb5-32" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> meta<span class="op">:</span> <span class="dt">Vec</span><span class="op">&lt;</span>JspfMeta<span class="op">&gt;,</span></span>
+<span id="cb5-33"><a href="#cb5-33" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>serde<span class="at">(</span><span class="kw">default</span><span class="at">)]</span></span>
+<span id="cb5-34"><a href="#cb5-34" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> track<span class="op">:</span> <span class="dt">Vec</span><span class="op">&lt;</span>JspfTrack<span class="op">&gt;,</span></span>
+<span id="cb5-35"><a href="#cb5-35" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb5-36"><a href="#cb5-36" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-37"><a href="#cb5-37" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>derive<span class="at">(</span><span class="bu">Debug</span><span class="op">,</span> <span class="bu">Clone</span><span class="op">,</span> Serialize<span class="op">,</span> Deserialize<span class="op">,</span> <span class="bu">Default</span><span class="at">)]</span></span>
+<span id="cb5-38"><a href="#cb5-38" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>serde<span class="at">(</span>rename_all <span class="op">=</span> <span class="st">&quot;camelCase&quot;</span><span class="at">)]</span></span>
+<span id="cb5-39"><a href="#cb5-39" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> JspfTrack <span class="op">{</span></span>
+<span id="cb5-40"><a href="#cb5-40" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>serde<span class="at">(</span>skip_serializing_if <span class="op">=</span> <span class="st">&quot;Vec::is_empty&quot;</span><span class="op">,</span> <span class="kw">default</span><span class="at">)]</span></span>
+<span id="cb5-41"><a href="#cb5-41" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> location<span class="op">:</span> <span class="dt">Vec</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb5-42"><a href="#cb5-42" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>serde<span class="at">(</span>skip_serializing_if <span class="op">=</span> <span class="st">&quot;Vec::is_empty&quot;</span><span class="op">,</span> <span class="kw">default</span><span class="at">)]</span></span>
+<span id="cb5-43"><a href="#cb5-43" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> identifier<span class="op">:</span> <span class="dt">Vec</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb5-44"><a href="#cb5-44" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>serde<span class="at">(</span>skip_serializing_if <span class="op">=</span> <span class="st">&quot;Option::is_none&quot;</span><span class="at">)]</span></span>
+<span id="cb5-45"><a href="#cb5-45" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> title<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb5-46"><a href="#cb5-46" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>serde<span class="at">(</span>skip_serializing_if <span class="op">=</span> <span class="st">&quot;Option::is_none&quot;</span><span class="at">)]</span></span>
+<span id="cb5-47"><a href="#cb5-47" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> creator<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb5-48"><a href="#cb5-48" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>serde<span class="at">(</span>skip_serializing_if <span class="op">=</span> <span class="st">&quot;Option::is_none&quot;</span><span class="at">)]</span></span>
+<span id="cb5-49"><a href="#cb5-49" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> annotation<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb5-50"><a href="#cb5-50" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>serde<span class="at">(</span>skip_serializing_if <span class="op">=</span> <span class="st">&quot;Option::is_none&quot;</span><span class="at">)]</span></span>
+<span id="cb5-51"><a href="#cb5-51" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> info<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb5-52"><a href="#cb5-52" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>serde<span class="at">(</span>skip_serializing_if <span class="op">=</span> <span class="st">&quot;Option::is_none&quot;</span><span class="at">)]</span></span>
+<span id="cb5-53"><a href="#cb5-53" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> image<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb5-54"><a href="#cb5-54" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>serde<span class="at">(</span>skip_serializing_if <span class="op">=</span> <span class="st">&quot;Option::is_none&quot;</span><span class="at">)]</span></span>
+<span id="cb5-55"><a href="#cb5-55" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> album<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb5-56"><a href="#cb5-56" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>serde<span class="at">(</span>skip_serializing_if <span class="op">=</span> <span class="st">&quot;Option::is_none&quot;</span><span class="at">)]</span></span>
+<span id="cb5-57"><a href="#cb5-57" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> track_num<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">u32</span><span class="op">&gt;,</span></span>
+<span id="cb5-58"><a href="#cb5-58" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>serde<span class="at">(</span>skip_serializing_if <span class="op">=</span> <span class="st">&quot;Option::is_none&quot;</span><span class="at">)]</span></span>
+<span id="cb5-59"><a href="#cb5-59" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> duration<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">u64</span><span class="op">&gt;,</span>  <span class="co">// millisecondes</span></span>
+<span id="cb5-60"><a href="#cb5-60" aria-hidden="true" tabindex="-1"></a>    <span class="at">#[</span>serde<span class="at">(</span>skip_serializing_if <span class="op">=</span> <span class="st">&quot;Vec::is_empty&quot;</span><span class="op">,</span> <span class="kw">default</span><span class="at">)]</span></span>
+<span id="cb5-61"><a href="#cb5-61" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> meta<span class="op">:</span> <span class="dt">Vec</span><span class="op">&lt;</span>JspfMeta<span class="op">&gt;,</span></span>
+<span id="cb5-62"><a href="#cb5-62" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb5-63"><a href="#cb5-63" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-64"><a href="#cb5-64" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>derive<span class="at">(</span><span class="bu">Debug</span><span class="op">,</span> <span class="bu">Clone</span><span class="op">,</span> Serialize<span class="op">,</span> Deserialize<span class="at">)]</span></span>
+<span id="cb5-65"><a href="#cb5-65" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>serde<span class="at">(</span>untagged<span class="at">)]</span></span>
+<span id="cb5-66"><a href="#cb5-66" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">enum</span> JspfAttribution <span class="op">{</span></span>
+<span id="cb5-67"><a href="#cb5-67" aria-hidden="true" tabindex="-1"></a>    Location <span class="op">{</span> location<span class="op">:</span> <span class="dt">String</span> <span class="op">},</span></span>
+<span id="cb5-68"><a href="#cb5-68" aria-hidden="true" tabindex="-1"></a>    Identifier <span class="op">{</span> identifier<span class="op">:</span> <span class="dt">String</span> <span class="op">},</span></span>
+<span id="cb5-69"><a href="#cb5-69" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb5-70"><a href="#cb5-70" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-71"><a href="#cb5-71" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>derive<span class="at">(</span><span class="bu">Debug</span><span class="op">,</span> <span class="bu">Clone</span><span class="op">,</span> Serialize<span class="op">,</span> Deserialize<span class="at">)]</span></span>
+<span id="cb5-72"><a href="#cb5-72" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> JspfMeta <span class="op">{</span></span>
+<span id="cb5-73"><a href="#cb5-73" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> rel<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb5-74"><a href="#cb5-74" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> content<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb5-75"><a href="#cb5-75" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h4 id="trait-playlistreader">Trait PlaylistReader</h4>
+<div class="sourceCode" id="cb6"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">std::io::</span><span class="bu">Read</span><span class="op">;</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">trait</span> PlaylistReader <span class="op">{</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> read<span class="op">&lt;</span>R<span class="op">:</span> <span class="bu">Read</span><span class="op">&gt;</span>(reader<span class="op">:</span> R) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>Jspf<span class="op">&gt;;</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> from_str(s<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>Jspf<span class="op">&gt;;</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> from_file<span class="op">&lt;</span>P<span class="op">:</span> <span class="bu">AsRef</span><span class="op">&lt;</span><span class="dt">Path</span><span class="op">&gt;&gt;</span>(path<span class="op">:</span> P) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>Jspf<span class="op">&gt;;</span></span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h4 id="implémentations-des-readers">Implémentations des Readers</h4>
+<h5 id="jspfreader-simple---serde_json">JspfReader (✅ Simple -
+serde_json)</h5>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> JspfReader<span class="op">;</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> PlaylistReader <span class="cf">for</span> JspfReader <span class="op">{</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> read<span class="op">&lt;</span>R<span class="op">:</span> <span class="bu">Read</span><span class="op">&gt;</span>(reader<span class="op">:</span> R) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>Jspf<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>        <span class="pp">serde_json::</span>from_reader(reader)</span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>map_err(<span class="op">|</span>e<span class="op">|</span> <span class="bu">Error</span><span class="pp">::</span>ParseError(<span class="pp">format!</span>(<span class="st">&quot;JSON: {}&quot;</span><span class="op">,</span> e)))</span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<p><strong>Dépendances</strong> : <code>serde_json</code></p>
+<h5 id="xspfreader-complexe---xml-rs">XspfReader (⚠️ Complexe -
+xml-rs)</h5>
+<p><strong>Approche</strong> : Machine à états XML pour parser
+<code>&lt;playlist&gt;</code>, <code>&lt;track&gt;</code>, etc.</p>
+<p><strong>Alternative</strong> : Utiliser la crate <code>xspf</code>
+existante puis convertir → JSPF</p>
+<div class="sourceCode" id="cb8"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> XspfReader<span class="op">;</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> PlaylistReader <span class="cf">for</span> XspfReader <span class="op">{</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> read<span class="op">&lt;</span>R<span class="op">:</span> <span class="bu">Read</span><span class="op">&gt;</span>(reader<span class="op">:</span> R) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>Jspf<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Parser XML avec EventReader</span></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>        <span class="co">// État : in_playlist, in_track, current_element</span></span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Mapping: &lt;title&gt; → playlist.title, &lt;track&gt; → JspfTrack</span></span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<p><strong>Dépendances</strong> : <code>xml-rs</code> ou réutiliser
+<code>xspf</code> crate</p>
+<h5 id="m3ureader-modéré---ligne-par-ligne">M3uReader (⚙️ Modéré - ligne
+par ligne)</h5>
+<p><strong>Format</strong> :</p>
+<pre class="m3u"><code>#EXTM3U
+#PLAYLIST:Ma Playlist Jazz
+#EXTINF:284,John Coltrane - Giant Steps
+#EXTART:John Coltrane
+#EXTALB:Giant Steps
+file:///music/coltrane.flac</pre>
+<div class="sourceCode" id="cb10"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> M3uReader<span class="op">;</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> PlaylistReader <span class="cf">for</span> M3uReader <span class="op">{</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> read<span class="op">&lt;</span>R<span class="op">:</span> <span class="bu">Read</span><span class="op">&gt;</span>(reader<span class="op">:</span> R) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>Jspf<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>        <span class="co">// BufReader ligne par ligne</span></span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Parser #EXTINF:duration,artist - title</span></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Gérer extensions non-standard (#EXTART, #EXTALB, #EXTIMG)</span></span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<p><strong>Dépendances</strong> : stdlib uniquement</p>
+<p><strong>Limitations</strong> : Métadonnées pauvres, beaucoup de
+champs <code>None</code></p>
+<h5 id="plsreader-modéré---format-ini">PlsReader (⚙️ Modéré - format
+INI)</h5>
+<p><strong>Format</strong> :</p>
+<div class="sourceCode" id="cb11"><pre
+class="sourceCode ini"><code class="sourceCode ini"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="kw">[playlist]</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="dt">NumberOfEntries</span><span class="ot">=</span><span class="dv">2</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a><span class="dt">File1</span><span class="ot">=</span><span class="st">file:///music/coltrane.flac</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a><span class="dt">Title1</span><span class="ot">=</span><span class="st">John Coltrane - Giant Steps</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a><span class="dt">Length1</span><span class="ot">=</span><span class="dv">284</span></span></pre></div>
+<div class="sourceCode" id="cb12"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> PlsReader<span class="op">;</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> PlaylistReader <span class="cf">for</span> PlsReader <span class="op">{</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> read<span class="op">&lt;</span>R<span class="op">:</span> <span class="bu">Read</span><span class="op">&gt;</span>(reader<span class="op">:</span> R) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>Jspf<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a>        <span class="co">// HashMap&lt;index, (file, title, duration)&gt;</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Parser FileN=..., TitleN=..., LengthN=...</span></span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Trier par index et convertir en JspfTrack</span></span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<p><strong>Dépendances</strong> : stdlib uniquement</p>
+<p><strong>Limitations</strong> : File, Title, Length seulement</p>
+<h4 id="jspfwriter">JspfWriter</h4>
+<div class="sourceCode" id="cb13"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> JspfWriter<span class="op">;</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> JspfWriter <span class="op">{</span></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> <span class="kw">fn</span> write<span class="op">&lt;</span>W<span class="op">:</span> <span class="bu">Write</span><span class="op">&gt;</span>(jspf<span class="op">:</span> <span class="op">&amp;</span>Jspf<span class="op">,</span> writer<span class="op">:</span> W) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;;</span></span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> <span class="kw">fn</span> write_pretty<span class="op">&lt;</span>W<span class="op">:</span> <span class="bu">Write</span><span class="op">&gt;</span>(jspf<span class="op">:</span> <span class="op">&amp;</span>Jspf<span class="op">,</span> writer<span class="op">:</span> W) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;;</span></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> <span class="kw">fn</span> to_string(jspf<span class="op">:</span> <span class="op">&amp;</span>Jspf) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;;</span></span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> <span class="kw">fn</span> to_string_pretty(jspf<span class="op">:</span> <span class="op">&amp;</span>Jspf) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;;</span></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h4 id="api-publique">API publique</h4>
+<div class="sourceCode" id="cb14"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">use</span> <span class="pp">model::</span><span class="op">{</span>Jspf<span class="op">,</span> JspfPlaylist<span class="op">,</span> JspfTrack<span class="op">,</span> JspfMeta<span class="op">,</span> JspfAttribution<span class="op">};</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">use</span> <span class="pp">reader::</span><span class="op">{</span>PlaylistReader<span class="op">,</span> JspfReader<span class="op">,</span> XspfReader<span class="op">,</span> M3uReader<span class="op">,</span> PlsReader<span class="op">};</span></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">use</span> <span class="pp">writer::</span>JspfWriter<span class="op">;</span></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">enum</span> PlaylistFormat <span class="op">{</span></span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a>    Jspf<span class="op">,</span></span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a>    Xspf<span class="op">,</span></span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a>    M3u8<span class="op">,</span></span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a>    Pls<span class="op">,</span></span>
+<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> PlaylistFormat <span class="op">{</span></span>
+<span id="cb14-13"><a href="#cb14-13" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> <span class="kw">fn</span> from_extension(ext<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">Self</span><span class="op">&gt;;</span></span>
+<span id="cb14-14"><a href="#cb14-14" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb14-15"><a href="#cb14-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-16"><a href="#cb14-16" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> read_playlist<span class="op">&lt;</span>R<span class="op">:</span> <span class="bu">Read</span><span class="op">&gt;</span>(reader<span class="op">:</span> R<span class="op">,</span> format<span class="op">:</span> PlaylistFormat) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>Jspf<span class="op">&gt;;</span></span></pre></div>
+<hr />
+<h3 id="crate-pmoplaylists-playlistsource">2. Crate
+<code>pmoplaylists</code> (PlaylistSource)</h3>
+<p><strong>Responsabilité</strong> : Implémenter
+<code>MusicSource</code> pour servir playlists via UPnP</p>
+<h4 id="structures-principales">Structures principales</h4>
+<div class="sourceCode" id="cb15"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> PlaylistSource <span class="op">{</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>    root_path<span class="op">:</span> <span class="dt">PathBuf</span><span class="op">,</span></span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>    playlists<span class="op">:</span> Arc<span class="op">&lt;</span>RwLock<span class="op">&lt;</span>HashMap<span class="op">&lt;</span><span class="dt">String</span><span class="op">,</span> ParsedPlaylist<span class="op">&gt;&gt;&gt;,</span></span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>    containers<span class="op">:</span> Arc<span class="op">&lt;</span>RwLock<span class="op">&lt;</span>HashMap<span class="op">&lt;</span><span class="dt">PathBuf</span><span class="op">,</span> ContainerMetadata<span class="op">&gt;&gt;&gt;,</span></span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>    watcher<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="pp">notify::</span>RecommendedWatcher<span class="op">&gt;,</span></span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a>    base_url<span class="op">:</span> <span class="dt">String</span><span class="op">,</span></span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>    update_counter<span class="op">:</span> Arc<span class="op">&lt;</span>RwLock<span class="op">&lt;</span><span class="dt">u32</span><span class="op">&gt;&gt;,</span></span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>    last_change<span class="op">:</span> Arc<span class="op">&lt;</span>RwLock<span class="op">&lt;</span>SystemTime<span class="op">&gt;&gt;,</span></span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> ParsedPlaylist <span class="op">{</span></span>
+<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> metadata<span class="op">:</span> PlaylistMetadata<span class="op">,</span></span>
+<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> tracks<span class="op">:</span> <span class="dt">Vec</span><span class="op">&lt;</span>PlaylistTrack<span class="op">&gt;,</span></span>
+<span id="cb15-14"><a href="#cb15-14" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> source_path<span class="op">:</span> <span class="dt">PathBuf</span><span class="op">,</span></span>
+<span id="cb15-15"><a href="#cb15-15" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> format<span class="op">:</span> PlaylistFormat<span class="op">,</span></span>
+<span id="cb15-16"><a href="#cb15-16" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb15-17"><a href="#cb15-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-18"><a href="#cb15-18" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> ContainerMetadata <span class="op">{</span></span>
+<span id="cb15-19"><a href="#cb15-19" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> title<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb15-20"><a href="#cb15-20" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> description<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb15-21"><a href="#cb15-21" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> creator<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb15-22"><a href="#cb15-22" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> image<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb15-23"><a href="#cb15-23" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> date<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;,</span></span>
+<span id="cb15-24"><a href="#cb15-24" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> meta<span class="op">:</span> <span class="dt">Vec</span><span class="op">&lt;</span>MetaEntry<span class="op">&gt;,</span></span>
+<span id="cb15-25"><a href="#cb15-25" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb15-26"><a href="#cb15-26" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-27"><a href="#cb15-27" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">struct</span> ContainerMetadataFile <span class="op">{</span></span>
+<span id="cb15-28"><a href="#cb15-28" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> container<span class="op">:</span> ContainerMetadata<span class="op">,</span></span>
+<span id="cb15-29"><a href="#cb15-29" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h4 id="fonctionnalités">Fonctionnalités</h4>
+<ol type="1">
+<li><strong>Scan hiérarchique</strong> : Parser récursivement dossiers +
+<code>metadata.json</code> + playlists</li>
+<li><strong>Cache</strong> : Éviter re-parsing (playlists +
+conteneurs)</li>
+<li><strong>Hot reload</strong> : <code>notify</code> pour détecter
+changements</li>
+<li><strong>Browse UPnP</strong> : Générer DIDL-Lite avec métadonnées
+conteneurs</li>
+<li><strong>Content resolution</strong> : Résoudre URIs via
+<code>SourceCacheManager</code></li>
+<li><strong>Cover art</strong> : Servir images playlists, tracks,
+conteneurs</li>
+</ol>
+<h4 id="object-ids">Object IDs</h4>
+<pre><code>playlists                                # Racine
+playlists:category:{path}                # Catégorie (dossier)
+playlists:playlist:{id}                  # Playlist
+playlists:playlist:{id}:track:{index}    # Track dans playlist</pre>
+<h4 id="gestion-metadata.json">Gestion <code>metadata.json</code></h4>
+<div class="sourceCode" id="cb17"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> load_container_metadata(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> dir_path<span class="op">:</span> <span class="op">&amp;</span><span class="dt">Path</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>ContainerMetadata<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> metadata_path <span class="op">=</span> dir_path<span class="op">.</span>join(<span class="st">&quot;metadata.json&quot;</span>)<span class="op">;</span></span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> metadata_path<span class="op">.</span>exists() <span class="op">{</span></span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> content <span class="op">=</span> <span class="pp">fs::</span>read_to_string(<span class="op">&amp;</span>metadata_path)<span class="op">?;</span></span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> file<span class="op">:</span> ContainerMetadataFile <span class="op">=</span> <span class="pp">serde_json::</span>from_str(<span class="op">&amp;</span>content)<span class="op">?;</span></span>
+<span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Ok</span>(file<span class="op">.</span>container)</span>
+<span id="cb17-8"><a href="#cb17-8" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span> <span class="cf">else</span> <span class="op">{</span></span>
+<span id="cb17-9"><a href="#cb17-9" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Fallback : nom du répertoire</span></span>
+<span id="cb17-10"><a href="#cb17-10" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Ok</span>(ContainerMetadata <span class="op">{</span></span>
+<span id="cb17-11"><a href="#cb17-11" aria-hidden="true" tabindex="-1"></a>            title<span class="op">:</span> <span class="cn">Some</span>(dir_path<span class="op">.</span>file_name()<span class="op">?.</span>to_str()<span class="op">?.</span>to_string())<span class="op">,</span></span>
+<span id="cb17-12"><a href="#cb17-12" aria-hidden="true" tabindex="-1"></a>            <span class="op">..</span><span class="bu">Default</span><span class="pp">::</span><span class="kw">default</span>()</span>
+<span id="cb17-13"><a href="#cb17-13" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span>)</span>
+<span id="cb17-14"><a href="#cb17-14" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb17-15"><a href="#cb17-15" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<hr />
+<h3 id="extension-pmoconfig">3. Extension pmoconfig</h3>
+<p><strong>Fichier</strong> :
+<code>pmoplaylists/src/config_ext.rs</code></p>
+<p><strong>Pattern</strong> : <a
+href="../Architecture/pmoconfig_ext.md">pmoconfig_ext.md</a></p>
+<div class="sourceCode" id="cb18"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">pmoconfig::</span>Config<span class="op">;</span></span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">std::path::</span><span class="op">{</span><span class="dt">Path</span><span class="op">,</span> <span class="dt">PathBuf</span><span class="op">};</span></span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> DEFAULT_PLAYLISTS_DIR<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span> <span class="op">=</span> <span class="st">&quot;playlists&quot;</span><span class="op">;</span></span>
+<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">trait</span> PlaylistSourceConfigExt <span class="op">{</span></span>
+<span id="cb18-7"><a href="#cb18-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_playlists_dir(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">PathBuf</span><span class="op">;</span></span>
+<span id="cb18-8"><a href="#cb18-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_playlists_dir<span class="op">&lt;</span>P<span class="op">:</span> <span class="bu">AsRef</span><span class="op">&lt;</span><span class="dt">Path</span><span class="op">&gt;&gt;</span>(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> path<span class="op">:</span> P) <span class="op">-&gt;</span> <span class="pp">anyhow::</span><span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;;</span></span>
+<span id="cb18-9"><a href="#cb18-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_playlists_enabled(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">bool</span><span class="op">;</span></span>
+<span id="cb18-10"><a href="#cb18-10" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_playlists_enabled(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> enabled<span class="op">:</span> <span class="dt">bool</span>) <span class="op">-&gt;</span> <span class="pp">anyhow::</span><span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;;</span></span>
+<span id="cb18-11"><a href="#cb18-11" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_playlists_supported_formats(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Vec</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;;</span></span>
+<span id="cb18-12"><a href="#cb18-12" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_playlists_supported_formats(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> formats<span class="op">:</span> <span class="dt">Vec</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;</span>) <span class="op">-&gt;</span> <span class="pp">anyhow::</span><span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;;</span></span>
+<span id="cb18-13"><a href="#cb18-13" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb18-14"><a href="#cb18-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-15"><a href="#cb18-15" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> PlaylistSourceConfigExt <span class="cf">for</span> Config <span class="op">{</span></span>
+<span id="cb18-16"><a href="#cb18-16" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_playlists_dir(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">PathBuf</span> <span class="op">{</span></span>
+<span id="cb18-17"><a href="#cb18-17" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>get_managed_dir(<span class="st">&quot;sources.playlists.directory&quot;</span><span class="op">,</span> DEFAULT_PLAYLISTS_DIR)</span>
+<span id="cb18-18"><a href="#cb18-18" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>expect(<span class="st">&quot;Failed to get playlists directory&quot;</span>)</span>
+<span id="cb18-19"><a href="#cb18-19" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb18-20"><a href="#cb18-20" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb18-21"><a href="#cb18-21" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_playlists_dir<span class="op">&lt;</span>P<span class="op">:</span> <span class="bu">AsRef</span><span class="op">&lt;</span><span class="dt">Path</span><span class="op">&gt;&gt;</span>(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> path<span class="op">:</span> P) <span class="op">-&gt;</span> <span class="pp">anyhow::</span><span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb18-22"><a href="#cb18-22" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>set_managed_dir(<span class="st">&quot;sources.playlists.directory&quot;</span><span class="op">,</span> path)</span>
+<span id="cb18-23"><a href="#cb18-23" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb18-24"><a href="#cb18-24" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb18-25"><a href="#cb18-25" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_playlists_enabled(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">bool</span> <span class="op">{</span></span>
+<span id="cb18-26"><a href="#cb18-26" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>get_value(<span class="st">&quot;sources.playlists.enabled&quot;</span>)</span>
+<span id="cb18-27"><a href="#cb18-27" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>unwrap_or_else(<span class="op">|</span>_<span class="op">|</span> <span class="op">{</span></span>
+<span id="cb18-28"><a href="#cb18-28" aria-hidden="true" tabindex="-1"></a>                <span class="kw">let</span> _ <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>set_value(<span class="st">&quot;sources.playlists.enabled&quot;</span><span class="op">,</span> <span class="cn">true</span>)<span class="op">;</span></span>
+<span id="cb18-29"><a href="#cb18-29" aria-hidden="true" tabindex="-1"></a>                <span class="cn">true</span></span>
+<span id="cb18-30"><a href="#cb18-30" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span>)</span>
+<span id="cb18-31"><a href="#cb18-31" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb18-32"><a href="#cb18-32" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb18-33"><a href="#cb18-33" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_playlists_enabled(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> enabled<span class="op">:</span> <span class="dt">bool</span>) <span class="op">-&gt;</span> <span class="pp">anyhow::</span><span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb18-34"><a href="#cb18-34" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>set_value(<span class="st">&quot;sources.playlists.enabled&quot;</span><span class="op">,</span> enabled)</span>
+<span id="cb18-35"><a href="#cb18-35" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb18-36"><a href="#cb18-36" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb18-37"><a href="#cb18-37" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_playlists_supported_formats(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Vec</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb18-38"><a href="#cb18-38" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>get_value(<span class="st">&quot;sources.playlists.formats&quot;</span>)</span>
+<span id="cb18-39"><a href="#cb18-39" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>unwrap_or_else(<span class="op">|</span>_<span class="op">|</span> <span class="op">{</span></span>
+<span id="cb18-40"><a href="#cb18-40" aria-hidden="true" tabindex="-1"></a>                <span class="kw">let</span> <span class="kw">default</span> <span class="op">=</span> <span class="pp">vec!</span>[<span class="st">&quot;jspf&quot;</span><span class="op">.</span>into()<span class="op">,</span> <span class="st">&quot;xspf&quot;</span><span class="op">.</span>into()<span class="op">,</span> <span class="st">&quot;m3u8&quot;</span><span class="op">.</span>into()<span class="op">,</span> <span class="st">&quot;pls&quot;</span><span class="op">.</span>into()]<span class="op">;</span></span>
+<span id="cb18-41"><a href="#cb18-41" aria-hidden="true" tabindex="-1"></a>                <span class="kw">let</span> _ <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>set_value(<span class="st">&quot;sources.playlists.formats&quot;</span><span class="op">,</span> <span class="op">&amp;</span><span class="kw">default</span>)<span class="op">;</span></span>
+<span id="cb18-42"><a href="#cb18-42" aria-hidden="true" tabindex="-1"></a>                <span class="kw">default</span></span>
+<span id="cb18-43"><a href="#cb18-43" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span>)</span>
+<span id="cb18-44"><a href="#cb18-44" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb18-45"><a href="#cb18-45" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb18-46"><a href="#cb18-46" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_playlists_supported_formats(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> formats<span class="op">:</span> <span class="dt">Vec</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;</span>) <span class="op">-&gt;</span> <span class="pp">anyhow::</span><span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb18-47"><a href="#cb18-47" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>set_value(<span class="st">&quot;sources.playlists.formats&quot;</span><span class="op">,</span> formats)</span>
+<span id="cb18-48"><a href="#cb18-48" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb18-49"><a href="#cb18-49" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<p><strong>Config YAML</strong> :</p>
+<div class="sourceCode" id="cb19"><pre
+class="sourceCode yaml"><code class="sourceCode yaml"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sources</span><span class="kw">:</span></span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">playlists</span><span class="kw">:</span></span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="fu">enabled</span><span class="kw">:</span><span class="at"> </span><span class="ch">true</span></span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="fu">directory</span><span class="kw">:</span><span class="at"> </span><span class="st">&quot;playlists&quot;</span></span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="fu">formats</span><span class="kw">:</span></span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="kw">-</span><span class="at"> jspf</span></span>
+<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="kw">-</span><span class="at"> xspf</span></span>
+<span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="kw">-</span><span class="at"> m3u8</span></span>
+<span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="kw">-</span><span class="at"> pls</span></span></pre></div>
+<p><strong>Utilisation</strong> :</p>
+<div class="sourceCode" id="cb20"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">pmoconfig::</span>Config<span class="op">;</span></span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">pmoplaylists::config_ext::</span>PlaylistSourceConfigExt<span class="op">;</span></span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span> config <span class="op">=</span> <span class="pp">Config::</span>load()<span class="op">?;</span></span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> config<span class="op">.</span>get_playlists_enabled() <span class="op">{</span></span>
+<span id="cb20-7"><a href="#cb20-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> playlists_dir <span class="op">=</span> config<span class="op">.</span>get_playlists_dir()<span class="op">;</span></span>
+<span id="cb20-8"><a href="#cb20-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> playlist_source <span class="op">=</span> <span class="pp">PlaylistSource::</span>new(playlists_dir<span class="op">,</span> config<span class="op">.</span>clone())<span class="op">?;</span></span>
+<span id="cb20-9"><a href="#cb20-9" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<hr />
+<h2 id="intégration-musicbrainz-optionnelle---phase-2">🔌 Intégration
+MusicBrainz (optionnelle - Phase 2)</h2>
+<h3 id="crate-recommandée-musicbrainz_rs">Crate recommandée :
+<code>musicbrainz_rs</code></h3>
+<p><a href="https://crates.io/crates/musicbrainz_rs">musicbrainz_rs</a>
+v0.5+ - Client async/blocking - Rate limiting automatique (1 req/sec) -
+Support CoverArt Archive - MSRV: Rust 1.71.1</p>
+<h3 id="cas-dusage">Cas d’usage</h3>
+<ol type="1">
+<li><p><strong>Résolution d’identifiants</strong> :</p>
+<div class="sourceCode" id="cb21"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">&quot;identifier&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="st">&quot;musicbrainz://recording/abc123&quot;</span><span class="ot">]</span><span class="fu">,</span> <span class="dt">&quot;title&quot;</span><span class="fu">:</span> <span class="kw">null</span><span class="fu">}</span></span></pre></div>
+<p>→ Récupérer métadonnées depuis MusicBrainz</p></li>
+<li><p><strong>Enrichissement playlists pauvres</strong> : M3U8/PLS →
+MusicBrainz → métadonnées complètes</p></li>
+<li><p><strong>Cover art</strong> : CoverArt Archive</p></li>
+</ol>
+<h3 id="configuration">Configuration</h3>
+<div class="sourceCode" id="cb22"><pre
+class="sourceCode yaml"><code class="sourceCode yaml"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sources</span><span class="kw">:</span></span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">playlists</span><span class="kw">:</span></span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="fu">musicbrainz</span><span class="kw">:</span></span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="fu">enabled</span><span class="kw">:</span><span class="at"> </span><span class="ch">false</span></span>
+<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="fu">enrich_metadata</span><span class="kw">:</span><span class="at"> </span><span class="ch">false</span></span>
+<span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a><span class="at">      </span><span class="fu">rate_limit_per_sec</span><span class="kw">:</span><span class="at"> </span><span class="dv">1</span></span></pre></div>
+<p><strong>Stratégie</strong> : - <strong>Phase 1 (MVP)</strong> : Ne
+pas implémenter, stocker identifiants tel quel - <strong>Phase
+2</strong> : Dépendance optionnelle, service asynchrone,
+configurable</p>
+<hr />
+<h2 id="prochaines-étapes">📝 Prochaines étapes</h2>
+<ol type="1">
+<li>✅ Choix format : JSPF central</li>
+<li>✅ Modèle données : Structures JSPF</li>
+<li>✅ Extension pmoconfig : Trait défini</li>
+<li>⏳ <strong>Implémenter <code>pmojspf</code></strong> :
+<ul>
+<li><code>JspfReader</code> (serde_json)</li>
+<li><code>XspfReader</code> (xml-rs ou crate xspf)</li>
+<li><code>M3uReader</code> (parsing ligne par ligne)</li>
+<li><code>PlsReader</code> (format INI)</li>
+<li><code>JspfWriter</code> (serde_json)</li>
+</ul></li>
+<li>⏳ <strong>Implémenter <code>pmoplaylists</code></strong> :
+<ul>
+<li><code>PlaylistSource</code> (trait <code>MusicSource</code>)</li>
+<li>Scan hiérarchique + cache</li>
+<li>Hot reload (notify)</li>
+<li>Browse UPnP (DIDL-Lite)</li>
+<li>Gestion <code>metadata.json</code></li>
+</ul></li>
+<li>⏳ Tests avec clients UPnP</li>
+</ol>
+<hr />
+<h2 id="sources">📚 Sources</h2>
+<h3 id="spécifications">Spécifications</h3>
+<ul>
+<li><a href="https://www.xspf.org/spec">XSPF Spec</a></li>
+<li><a href="https://www.xspf.org/jspf">JSPF Spec</a></li>
+<li><a href="https://en.wikipedia.org/wiki/M3U">M3U - Wikipedia</a></li>
+<li><a href="https://en.wikipedia.org/wiki/PLS_(file_format)">PLS -
+Wikipedia</a></li>
+</ul>
+<h3 id="crates-rust">Crates Rust</h3>
+<ul>
+<li><a href="https://crates.io/crates/xspf">xspf</a> - Parser XML
+XSPF</li>
+<li><a href="https://crates.io/crates/musicbrainz_rs">musicbrainz_rs</a>
+- API MusicBrainz</li>
+<li><a href="https://musicbrainz.org/doc/MusicBrainz_API">MusicBrainz
+API Docs</a></li>
+</ul>
+</article>
+</body>
+</html>

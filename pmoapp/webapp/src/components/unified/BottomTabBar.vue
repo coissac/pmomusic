@@ -3,6 +3,7 @@ import { computed } from "vue";
 import { Server, Music2 } from "lucide-vue-next";
 import StatusBadge from "@/components/pmocontrol/StatusBadge.vue";
 import TimerControl from "@/components/pmocontrol/TimerControl.vue";
+import ShuffleControl from "@/components/pmocontrol/ShuffleControl.vue";
 import type {
     RendererSummary,
     RendererState,
@@ -113,8 +114,9 @@ function handleRendererDrawerClick() {
             </div>
         </div>
 
-        <!-- Sleep Timer (si un renderer est actif) -->
-        <div v-if="activeRenderer" class="timer-section">
+        <!-- Shuffle et Sleep Timer (si un renderer est actif) -->
+        <div v-if="activeRenderer" class="controls-section">
+            <ShuffleControl :renderer-id="activeRenderer.id" />
             <TimerControl :renderer-id="activeRenderer.id" />
         </div>
 
@@ -340,6 +342,14 @@ function handleRendererDrawerClick() {
     background-color: rgba(239, 68, 68, 0.15);
     color: #ef4444;
     border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+/* Controls section (shuffle + timer) */
+.controls-section {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    flex-shrink: 0;
 }
 
 /* Mobile responsive */

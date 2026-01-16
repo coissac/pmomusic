@@ -1334,6 +1334,100 @@ async fn get_sleep_timer_state(
 }
 
 // ============================================================================
+// HANDLERS - QUEUE SHUFFLE
+// ============================================================================
+
+/// POST /control/renderers/{renderer_id}/queue/shuffle - Mélange la queue de lecture
+#[cfg(feature = "pmoserver")]
+#[utoipa::path(
+    post,
+    path = "/renderers/{renderer_id}/queue/shuffle",
+    params(
+        ("renderer_id" = String, Path, description = "ID unique du renderer")
+    ),
+    responses(
+        (status = 200, description = "Queue mélangée et lecture démarrée", body = SuccessResponse),
+        (status = 404, description = "Renderer non trouvé", body = ErrorResponse),
+        (status = 400, description = "Queue vide", body = ErrorResponse),
+        (status = 504, description = "Timeout de la commande", body = ErrorResponse),
+        (status = 500, description = "Erreur lors de l'exécution", body = ErrorResponse)
+    ),
+    tag = "control"
+)]
+async fn shuffle_queue(
+    State(state): State<ControlPointState>,
+    Path(renderer_id): Path<String>,
+) -> Result<Json<SuccessResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let rid = DeviceId(renderer_id.clone());
+
+    // Verify renderer exists
+    state
+        .control_point
+        .music_renderer_by_id(&rid)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("Renderer {} not found", renderer_id),
+                }),
+            )
+        })?;
+
+    let control_point = Arc::clone(&state.control_point);
+    let rid_for_task = rid.clone();
+    let shuffle_task =
+        tokio::task::spawn_blocking(move || control_point.shuffle_queue(&rid_for_task));
+
+    time::timeout(QUEUE_COMMAND_TIMEOUT, shuffle_task)
+        .await
+        .map_err(|_| {
+            warn!(
+                "Shuffle command for renderer {} exceeded {:?}",
+                renderer_id, QUEUE_COMMAND_TIMEOUT
+            );
+            (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Shuffle command timed out after {}s",
+                        QUEUE_COMMAND_TIMEOUT.as_secs()
+                    ),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!("Task join error during shuffle: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Internal task error: {}", e),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!(
+                "Failed to shuffle queue for renderer {}: {}",
+                renderer_id, e
+            );
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!("Failed to shuffle queue: {}", e),
+                }),
+            )
+        })?;
+
+    debug!(
+        renderer = renderer_id.as_str(),
+        "Queue shuffled via HTTP API"
+    );
+
+    Ok(Json(SuccessResponse {
+        message: "Queue shuffled and playback started".to_string(),
+    }))
+}
+
+// ============================================================================
 // HANDLERS - BINDING PLAYLIST
 // ============================================================================
 
@@ -2139,6 +2233,10 @@ pub fn create_api_router(state: ControlPointState, control_point: Arc<ControlPoi
         .route(
             "/renderers/{renderer_id}/queue/seek",
             post(seek_queue_index),
+        )
+        .route(
+            "/renderers/{renderer_id}/queue/shuffle",
+            post(shuffle_queue),
         )
         // Volume control
         .route(

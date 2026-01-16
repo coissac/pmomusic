@@ -1,0 +1,1023 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pmoconfig_ext</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/github-markdown-css@5/github-markdown.min.css">
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({startOnLoad: true, theme: "default"});
+</script>
+<style>
+  .markdown-body {
+    box-sizing: border-box;
+    min-width: 200px;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 45px;
+  }
+  .back-link {
+    margin-bottom: 20px;
+    display: block;
+  }
+  pre.mermaid {
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 10px;
+  }
+</style>
+</head>
+<body>
+<article class="markdown-body">
+<p class="back-link"><a href="index.html">← Retour à l'index</a></p>
+<h1 id="pattern-dextension-de-pmoconfigconfig">Pattern d’extension de
+pmoconfig::Config</h1>
+<h2 id="vue-densemble">Vue d’ensemble</h2>
+<p>Ce document décrit le pattern architectural utilisé dans PMOMusic
+pour étendre la configuration centralisée
+(<code>pmoconfig::Config</code>) avec des fonctionnalités spécifiques à
+chaque crate.</p>
+<h3 id="objectif">Objectif</h3>
+<p>Permettre à chaque crate du projet d’ajouter ses propres méthodes de
+configuration sans modifier directement <code>pmoconfig</code>, tout en
+maintenant une interface cohérente et type-safe.</p>
+<h3 id="principe">Principe</h3>
+<p>Chaque crate qui nécessite un accès à la configuration implémente un
+<strong>trait d’extension</strong> pour <code>pmoconfig::Config</code>.
+Ce trait définit des méthodes helpers spécifiques au domaine du crate
+(cache, authentification, UPnP, etc.).</p>
+<h2 id="architecture-du-pattern">Architecture du pattern</h2>
+<h3 id="structure-de-base">Structure de base</h3>
+<pre><code>pmoconfig/              # Crate de configuration centralisée
+  ├── Config            # Struct principale avec get_value/set_value génériques
+  └── encryption        # Module de chiffrement des mots de passe
+
+pmocrate/               # Crate spécialisé (audio, qobuz, upnp, etc.)
+  └── config_ext.rs     # Trait d&#39;extension pour Config
+      ├── DEFAULT_*     # Constantes pour valeurs par défaut
+      ├── XxxConfigExt  # Trait d&#39;extension
+      └── impl          # Implémentation du trait pour Config</pre>
+<h3 id="flux-de-données">Flux de données</h3>
+<pre><code>Application
+    ↓
+Trait d&#39;extension spécialisé (QobuzConfigExt, CacheConfigExt, etc.)
+    ↓
+pmoconfig::Config (get_value/set_value génériques)
+    ↓
+Fichier config.yaml</pre>
+<h2 id="implémentation-dun-trait-dextension">Implémentation d’un trait
+d’extension</h2>
+<h3 id="structure-du-fichier-config_ext.rs">1. Structure du fichier
+config_ext.rs</h3>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co">//! Extension pour intégrer [fonctionnalité] dans pmoconfig</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="co">//!</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="co">//! Ce module fournit le trait `XxxConfigExt` qui permet d&#39;ajouter facilement</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="co">//! des méthodes de gestion de [fonctionnalité] à pmoconfig::Config.</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">anyhow::</span><span class="dt">Result</span><span class="op">;</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">pmoconfig::</span>Config<span class="op">;</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">serde_yaml::</span>Value<span class="op">;</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a><span class="co">// Constantes pour valeurs par défaut</span></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> DEFAULT_XXX_DIR<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span> <span class="op">=</span> <span class="st">&quot;cache_xxx&quot;</span><span class="op">;</span></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> DEFAULT_XXX_SIZE<span class="op">:</span> <span class="dt">usize</span> <span class="op">=</span> <span class="dv">1000</span><span class="op">;</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a><span class="co">/// Trait d&#39;extension pour gérer [fonctionnalité] dans pmoconfig</span></span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a><span class="co">///</span></span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a><span class="co">/// Ce trait étend `pmoconfig::Config` avec des méthodes spécifiques</span></span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a><span class="co">/// à la gestion de [fonctionnalité].</span></span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a><span class="co">///</span></span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a><span class="co">/// # Exemple</span></span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a><span class="co">///</span></span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a><span class="co">/// ```rust,ignore</span></span>
+<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a><span class="co">/// use pmoconfig::get_config;</span></span>
+<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a><span class="co">/// use pmoxxx::XxxConfigExt;</span></span>
+<span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a><span class="co">///</span></span>
+<span id="cb3-25"><a href="#cb3-25" aria-hidden="true" tabindex="-1"></a><span class="co">/// let config = get_config();</span></span>
+<span id="cb3-26"><a href="#cb3-26" aria-hidden="true" tabindex="-1"></a><span class="co">/// let value = config.get_xxx_value()?;</span></span>
+<span id="cb3-27"><a href="#cb3-27" aria-hidden="true" tabindex="-1"></a><span class="co">/// ```</span></span>
+<span id="cb3-28"><a href="#cb3-28" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">trait</span> XxxConfigExt <span class="op">{</span></span>
+<span id="cb3-29"><a href="#cb3-29" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// Documentation de la méthode getter</span></span>
+<span id="cb3-30"><a href="#cb3-30" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_xxx_value(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>Type<span class="op">&gt;;</span></span>
+<span id="cb3-31"><a href="#cb3-31" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb3-32"><a href="#cb3-32" aria-hidden="true" tabindex="-1"></a>    <span class="co">/// Documentation de la méthode setter</span></span>
+<span id="cb3-33"><a href="#cb3-33" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_xxx_value(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> value<span class="op">:</span> Type) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;;</span></span>
+<span id="cb3-34"><a href="#cb3-34" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb3-35"><a href="#cb3-35" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-36"><a href="#cb3-36" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> XxxConfigExt <span class="cf">for</span> Config <span class="op">{</span></span>
+<span id="cb3-37"><a href="#cb3-37" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_xxx_value(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>Type<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb3-38"><a href="#cb3-38" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Implémentation</span></span>
+<span id="cb3-39"><a href="#cb3-39" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb3-40"><a href="#cb3-40" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb3-41"><a href="#cb3-41" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_xxx_value(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> value<span class="op">:</span> Type) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb3-42"><a href="#cb3-42" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Implémentation</span></span>
+<span id="cb3-43"><a href="#cb3-43" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb3-44"><a href="#cb3-44" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h3 id="patterns-de-chemins-yaml">2. Patterns de chemins YAML</h3>
+<p>Les chemins dans la configuration suivent une hiérarchie logique
+:</p>
+<h4 id="configuration-hôtesystème">Configuration hôte/système</h4>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Chemins sous &quot;host&quot;</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="op">&amp;</span>[<span class="st">&quot;host&quot;</span><span class="op">,</span> <span class="st">&quot;cache_type&quot;</span><span class="op">,</span> <span class="st">&quot;directory&quot;</span>]  <span class="co">// Répertoires de cache</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="op">&amp;</span>[<span class="st">&quot;host&quot;</span><span class="op">,</span> <span class="st">&quot;cache_type&quot;</span><span class="op">,</span> <span class="st">&quot;size&quot;</span>]       <span class="co">// Tailles de cache</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="op">&amp;</span>[<span class="st">&quot;host&quot;</span><span class="op">,</span> <span class="st">&quot;upnp&quot;</span><span class="op">,</span> <span class="st">&quot;manufacturer&quot;</span>]     <span class="co">// Configuration UPnP</span></span></pre></div>
+<h4 id="configuration-comptesservices">Configuration
+comptes/services</h4>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Chemins sous &quot;accounts&quot;</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="op">&amp;</span>[<span class="st">&quot;accounts&quot;</span><span class="op">,</span> <span class="st">&quot;service&quot;</span><span class="op">,</span> <span class="st">&quot;username&quot;</span>]</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="op">&amp;</span>[<span class="st">&quot;accounts&quot;</span><span class="op">,</span> <span class="st">&quot;service&quot;</span><span class="op">,</span> <span class="st">&quot;password&quot;</span>]</span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="op">&amp;</span>[<span class="st">&quot;accounts&quot;</span><span class="op">,</span> <span class="st">&quot;service&quot;</span><span class="op">,</span> <span class="st">&quot;auth_token&quot;</span>]</span></pre></div>
+<h4 id="configuration-sources">Configuration sources</h4>
+<div class="sourceCode" id="cb6"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Chemins sous &quot;sources&quot;</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="op">&amp;</span>[<span class="st">&quot;sources&quot;</span><span class="op">,</span> <span class="st">&quot;source_name&quot;</span><span class="op">,</span> <span class="st">&quot;enabled&quot;</span>]</span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="op">&amp;</span>[<span class="st">&quot;sources&quot;</span><span class="op">,</span> <span class="st">&quot;source_name&quot;</span><span class="op">,</span> <span class="st">&quot;default_channel&quot;</span>]</span></pre></div>
+<h3 id="patterns-de-getters">3. Patterns de getters</h3>
+<h4 id="getter-simple-avec-valeur-par-défaut">Getter simple avec valeur
+par défaut</h4>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> get_xxx_value(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>Type<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">match</span> <span class="kw">self</span><span class="op">.</span>get_value(<span class="op">&amp;</span>[<span class="st">&quot;path&quot;</span><span class="op">,</span> <span class="st">&quot;to&quot;</span><span class="op">,</span> <span class="st">&quot;value&quot;</span>]) <span class="op">{</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Ok</span>(<span class="pp">Value::</span>Type(v)) <span class="op">=&gt;</span> <span class="cn">Ok</span>(v)<span class="op">,</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>        _ <span class="op">=&gt;</span> <span class="cn">Ok</span>(DEFAULT_VALUE)<span class="op">,</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h4 id="getter-avec-auto-persistence">Getter avec auto-persistence</h4>
+<p>Pour les valeurs qui doivent être visibles dans le fichier YAML, le
+getter persiste automatiquement la valeur par défaut :</p>
+<div class="sourceCode" id="cb8"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> get_xxx_enabled(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">bool</span><span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">match</span> <span class="kw">self</span><span class="op">.</span>get_value(<span class="op">&amp;</span>[<span class="st">&quot;path&quot;</span><span class="op">,</span> <span class="st">&quot;to&quot;</span><span class="op">,</span> <span class="st">&quot;enabled&quot;</span>]) <span class="op">{</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Ok</span>(<span class="pp">Value::</span>Bool(b)) <span class="op">=&gt;</span> <span class="cn">Ok</span>(b)<span class="op">,</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>        _ <span class="op">=&gt;</span> <span class="op">{</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>            <span class="co">// Auto-persist la valeur par défaut</span></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>            <span class="kw">self</span><span class="op">.</span>set_xxx_enabled(<span class="cn">true</span>)<span class="op">?;</span></span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a>            <span class="cn">Ok</span>(<span class="cn">true</span>)</span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<p><strong>Avantage</strong> : L’utilisateur voit la configuration
+effective dans le YAML et peut la modifier facilement.</p>
+<h4 id="getter-optionnel">Getter optionnel</h4>
+<p>Pour les valeurs vraiment optionnelles (pas de défaut significatif)
+:</p>
+<div class="sourceCode" id="cb9"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> get_xxx_optional(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;&gt;</span> <span class="op">{</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">match</span> <span class="kw">self</span><span class="op">.</span>get_value(<span class="op">&amp;</span>[<span class="st">&quot;path&quot;</span><span class="op">,</span> <span class="st">&quot;to&quot;</span><span class="op">,</span> <span class="st">&quot;optional&quot;</span>]) <span class="op">{</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Ok</span>(<span class="pp">Value::</span><span class="dt">String</span>(s)) <span class="cf">if</span> <span class="op">!</span>s<span class="op">.</span>is_empty() <span class="op">=&gt;</span> <span class="cn">Ok</span>(<span class="cn">Some</span>(s))<span class="op">,</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Ok</span>(<span class="pp">Value::</span><span class="dt">String</span>(_)) <span class="op">=&gt;</span> <span class="cn">Ok</span>(<span class="cn">None</span>)<span class="op">,</span> <span class="co">// String vide</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Ok</span>(_) <span class="op">=&gt;</span> <span class="cn">Ok</span>(<span class="cn">None</span>)<span class="op">,</span>                <span class="co">// Mauvais type</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Err</span>(_) <span class="op">=&gt;</span> <span class="cn">Ok</span>(<span class="cn">None</span>)<span class="op">,</span>               <span class="co">// Non configuré</span></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h4 id="getter-avec-traitement-spécial">Getter avec traitement
+spécial</h4>
+<h5 id="déchiffrement-de-mots-de-passe">Déchiffrement de mots de
+passe</h5>
+<div class="sourceCode" id="cb10"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> get_xxx_password(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">match</span> <span class="kw">self</span><span class="op">.</span>get_value(<span class="op">&amp;</span>[<span class="st">&quot;accounts&quot;</span><span class="op">,</span> <span class="st">&quot;xxx&quot;</span><span class="op">,</span> <span class="st">&quot;password&quot;</span>])<span class="op">?</span> <span class="op">{</span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>        <span class="pp">Value::</span><span class="dt">String</span>(s) <span class="op">=&gt;</span> <span class="op">{</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>            <span class="co">// Déchiffrement automatique si chiffré</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>            <span class="pp">pmoconfig::encryption::</span>get_password(<span class="op">&amp;</span>s)</span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>                <span class="op">.</span>map_err(<span class="op">|</span>e<span class="op">|</span> <span class="pp">anyhow!</span>(<span class="st">&quot;Failed to decrypt password: {}&quot;</span><span class="op">,</span> e))</span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a>        _ <span class="op">=&gt;</span> <span class="cn">Err</span>(<span class="pp">anyhow!</span>(<span class="st">&quot;Password not configured&quot;</span>))<span class="op">,</span></span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h5 id="parsing-avec-fallback">Parsing avec fallback</h5>
+<div class="sourceCode" id="cb11"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> get_xxx_enum_value(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>EnumType<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">match</span> <span class="kw">self</span><span class="op">.</span>get_value(<span class="op">&amp;</span>[<span class="st">&quot;path&quot;</span><span class="op">,</span> <span class="st">&quot;to&quot;</span><span class="op">,</span> <span class="st">&quot;value&quot;</span>]) <span class="op">{</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Ok</span>(<span class="pp">Value::</span><span class="dt">String</span>(s)) <span class="op">=&gt;</span> <span class="op">{</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>            <span class="cf">match</span> s<span class="op">.</span><span class="pp">parse::</span><span class="op">&lt;</span>EnumType<span class="op">&gt;</span>() <span class="op">{</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>                <span class="cn">Ok</span>(kind) <span class="op">=&gt;</span> <span class="cn">Ok</span>(kind)<span class="op">,</span></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>                <span class="cn">Err</span>(_) <span class="op">=&gt;</span> <span class="op">{</span></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>                    <span class="co">// Valeur invalide, utiliser et persister le défaut</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a>                    <span class="kw">self</span><span class="op">.</span>set_xxx_enum_value(DEFAULT_ENUM)<span class="op">?;</span></span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a>                    <span class="cn">Ok</span>(DEFAULT_ENUM)</span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a>                <span class="op">}</span></span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
+<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Ok</span>(<span class="pp">Value::</span>Number(n)) <span class="op">=&gt;</span> <span class="op">{</span></span>
+<span id="cb11-14"><a href="#cb11-14" aria-hidden="true" tabindex="-1"></a>            <span class="co">// Accepter aussi les valeurs numériques</span></span>
+<span id="cb11-15"><a href="#cb11-15" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> <span class="kw">let</span> <span class="cn">Some</span>(id) <span class="op">=</span> n<span class="op">.</span>as_u64() <span class="op">{</span></span>
+<span id="cb11-16"><a href="#cb11-16" aria-hidden="true" tabindex="-1"></a>                <span class="pp">EnumType::</span>from_id(id <span class="kw">as</span> <span class="dt">u8</span>)</span>
+<span id="cb11-17"><a href="#cb11-17" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span> <span class="cf">else</span> <span class="op">{</span></span>
+<span id="cb11-18"><a href="#cb11-18" aria-hidden="true" tabindex="-1"></a>                <span class="kw">self</span><span class="op">.</span>set_xxx_enum_value(DEFAULT_ENUM)<span class="op">?;</span></span>
+<span id="cb11-19"><a href="#cb11-19" aria-hidden="true" tabindex="-1"></a>                <span class="cn">Ok</span>(DEFAULT_ENUM)</span>
+<span id="cb11-20"><a href="#cb11-20" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
+<span id="cb11-21"><a href="#cb11-21" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb11-22"><a href="#cb11-22" aria-hidden="true" tabindex="-1"></a>        _ <span class="op">=&gt;</span> <span class="op">{</span></span>
+<span id="cb11-23"><a href="#cb11-23" aria-hidden="true" tabindex="-1"></a>            <span class="co">// Non configuré, persister le défaut</span></span>
+<span id="cb11-24"><a href="#cb11-24" aria-hidden="true" tabindex="-1"></a>            <span class="kw">self</span><span class="op">.</span>set_xxx_enum_value(DEFAULT_ENUM)<span class="op">?;</span></span>
+<span id="cb11-25"><a href="#cb11-25" aria-hidden="true" tabindex="-1"></a>            <span class="cn">Ok</span>(DEFAULT_ENUM)</span>
+<span id="cb11-26"><a href="#cb11-26" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb11-27"><a href="#cb11-27" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb11-28"><a href="#cb11-28" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h3 id="patterns-de-setters">4. Patterns de setters</h3>
+<h4 id="setter-simple">Setter simple</h4>
+<div class="sourceCode" id="cb12"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> set_xxx_value(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> value<span class="op">:</span> Type) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">self</span><span class="op">.</span>set_value(</span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>        <span class="op">&amp;</span>[<span class="st">&quot;path&quot;</span><span class="op">,</span> <span class="st">&quot;to&quot;</span><span class="op">,</span> <span class="st">&quot;value&quot;</span>]<span class="op">,</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>        <span class="pp">Value::</span>Type(value<span class="op">.</span>into())</span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a>    )</span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h4 id="setter-avec-transformation">Setter avec transformation</h4>
+<div class="sourceCode" id="cb13"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> set_xxx_enum(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> variant<span class="op">:</span> EnumVariant) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Stocker sous forme conviviale (string) plutôt que numérique</span></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> name <span class="op">=</span> variant<span class="op">.</span>as_str()<span class="op">;</span></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">self</span><span class="op">.</span>set_value(</span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>        <span class="op">&amp;</span>[<span class="st">&quot;path&quot;</span><span class="op">,</span> <span class="st">&quot;to&quot;</span><span class="op">,</span> <span class="st">&quot;enum&quot;</span>]<span class="op">,</span></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>        <span class="pp">Value::</span><span class="dt">String</span>(name<span class="op">.</span>to_string())</span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>    )</span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h4 id="setter-multiple-transaction">Setter multiple (transaction)</h4>
+<div class="sourceCode" id="cb14"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> set_xxx_auth_info(</span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>    <span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>    token<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span><span class="op">,</span></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a>    user_id<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span><span class="op">,</span></span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a>    expires_at<span class="op">:</span> <span class="dt">u64</span><span class="op">,</span></span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Grouper les modifications liées</span></span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">self</span><span class="op">.</span>set_value(</span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a>        <span class="op">&amp;</span>[<span class="st">&quot;accounts&quot;</span><span class="op">,</span> <span class="st">&quot;xxx&quot;</span><span class="op">,</span> <span class="st">&quot;auth_token&quot;</span>]<span class="op">,</span></span>
+<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a>        <span class="pp">Value::</span><span class="dt">String</span>(token<span class="op">.</span>to_string())</span>
+<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a>    )<span class="op">?;</span></span>
+<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a>    <span class="kw">self</span><span class="op">.</span>set_value(</span>
+<span id="cb14-13"><a href="#cb14-13" aria-hidden="true" tabindex="-1"></a>        <span class="op">&amp;</span>[<span class="st">&quot;accounts&quot;</span><span class="op">,</span> <span class="st">&quot;xxx&quot;</span><span class="op">,</span> <span class="st">&quot;user_id&quot;</span>]<span class="op">,</span></span>
+<span id="cb14-14"><a href="#cb14-14" aria-hidden="true" tabindex="-1"></a>        <span class="pp">Value::</span><span class="dt">String</span>(user_id<span class="op">.</span>to_string())</span>
+<span id="cb14-15"><a href="#cb14-15" aria-hidden="true" tabindex="-1"></a>    )<span class="op">?;</span></span>
+<span id="cb14-16"><a href="#cb14-16" aria-hidden="true" tabindex="-1"></a>    <span class="kw">self</span><span class="op">.</span>set_value(</span>
+<span id="cb14-17"><a href="#cb14-17" aria-hidden="true" tabindex="-1"></a>        <span class="op">&amp;</span>[<span class="st">&quot;accounts&quot;</span><span class="op">,</span> <span class="st">&quot;xxx&quot;</span><span class="op">,</span> <span class="st">&quot;token_expires_at&quot;</span>]<span class="op">,</span></span>
+<span id="cb14-18"><a href="#cb14-18" aria-hidden="true" tabindex="-1"></a>        <span class="pp">Value::</span>Number(<span class="pp">serde_yaml::Number::</span>from(expires_at))</span>
+<span id="cb14-19"><a href="#cb14-19" aria-hidden="true" tabindex="-1"></a>    )<span class="op">?;</span></span>
+<span id="cb14-20"><a href="#cb14-20" aria-hidden="true" tabindex="-1"></a>    <span class="cn">Ok</span>(())</span>
+<span id="cb14-21"><a href="#cb14-21" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h4 id="setter-de-nettoyage">Setter de nettoyage</h4>
+<div class="sourceCode" id="cb15"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> clear_xxx_info(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Ne pas propager les erreurs (valeurs peuvent ne pas exister)</span></span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> _ <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>set_value(<span class="op">&amp;</span>[<span class="st">&quot;path&quot;</span><span class="op">,</span> <span class="st">&quot;to&quot;</span><span class="op">,</span> <span class="st">&quot;field1&quot;</span>]<span class="op">,</span> <span class="pp">Value::</span><span class="dt">String</span>(<span class="dt">String</span><span class="pp">::</span>new()))<span class="op">;</span></span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> _ <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>set_value(<span class="op">&amp;</span>[<span class="st">&quot;path&quot;</span><span class="op">,</span> <span class="st">&quot;to&quot;</span><span class="op">,</span> <span class="st">&quot;field2&quot;</span>]<span class="op">,</span> <span class="pp">Value::</span>Number(<span class="pp">Number::</span>from(<span class="dv">0</span>)))<span class="op">;</span></span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>    <span class="cn">Ok</span>(())</span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h3 id="helpers-de-haut-niveau">5. Helpers de haut niveau</h3>
+<h4 id="helper-de-validation">Helper de validation</h4>
+<div class="sourceCode" id="cb16"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> is_xxx_valid(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">bool</span> <span class="op">{</span></span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Vérifier plusieurs conditions sans Result</span></span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> has_token <span class="op">=</span> <span class="kw">self</span></span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>get_xxx_token()</span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>ok()</span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>flatten()</span>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>map(<span class="op">|</span>t<span class="op">|</span> <span class="op">!</span>t<span class="op">.</span>is_empty())</span>
+<span id="cb16-8"><a href="#cb16-8" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>unwrap_or(<span class="cn">false</span>)<span class="op">;</span></span>
+<span id="cb16-9"><a href="#cb16-9" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb16-10"><a href="#cb16-10" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> has_user <span class="op">=</span> <span class="kw">self</span></span>
+<span id="cb16-11"><a href="#cb16-11" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>get_xxx_user()</span>
+<span id="cb16-12"><a href="#cb16-12" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>ok()</span>
+<span id="cb16-13"><a href="#cb16-13" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>flatten()</span>
+<span id="cb16-14"><a href="#cb16-14" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>map(<span class="op">|</span>u<span class="op">|</span> <span class="op">!</span>u<span class="op">.</span>is_empty())</span>
+<span id="cb16-15"><a href="#cb16-15" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>unwrap_or(<span class="cn">false</span>)<span class="op">;</span></span>
+<span id="cb16-16"><a href="#cb16-16" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb16-17"><a href="#cb16-17" aria-hidden="true" tabindex="-1"></a>    has_token <span class="op">&amp;&amp;</span> has_user</span>
+<span id="cb16-18"><a href="#cb16-18" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h4 id="factory-method">Factory method</h4>
+<p>Pour les crates qui fournissent des objets complexes configurables
+:</p>
+<div class="sourceCode" id="cb17"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> create_xxx_cache(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>Arc<span class="op">&lt;</span>Cache<span class="op">&gt;&gt;</span> <span class="op">{</span></span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> dir <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>get_xxx_dir()<span class="op">?;</span></span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> size <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>get_xxx_size()<span class="op">?;</span></span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>    <span class="cn">Ok</span>(<span class="pp">Arc::</span>new(<span class="kw">crate</span><span class="pp">::</span>new_cache(<span class="op">&amp;</span>dir<span class="op">,</span> size)<span class="op">?</span>))</span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> create_xxx_client(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>XxxClient<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb17-8"><a href="#cb17-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> (username<span class="op">,</span> password) <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>get_xxx_credentials()<span class="op">?;</span></span>
+<span id="cb17-9"><a href="#cb17-9" aria-hidden="true" tabindex="-1"></a>    <span class="pp">XxxClient::</span>builder()</span>
+<span id="cb17-10"><a href="#cb17-10" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>credentials(username<span class="op">,</span> password)</span>
+<span id="cb17-11"><a href="#cb17-11" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>cache_dir(<span class="kw">self</span><span class="op">.</span>get_xxx_cache_dir()<span class="op">?</span>)</span>
+<span id="cb17-12"><a href="#cb17-12" aria-hidden="true" tabindex="-1"></a>        <span class="op">.</span>build()</span>
+<span id="cb17-13"><a href="#cb17-13" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h4 id="getter-combiné">Getter combiné</h4>
+<div class="sourceCode" id="cb18"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> get_xxx_credentials(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>(<span class="dt">String</span><span class="op">,</span> <span class="dt">String</span>)<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> username <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>get_xxx_username()<span class="op">?;</span></span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> password <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>get_xxx_password()<span class="op">?;</span></span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a>    <span class="cn">Ok</span>((username<span class="op">,</span> password))</span>
+<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h3 id="utilisation-des-méthodes-pmoconfig">6. Utilisation des méthodes
+pmoconfig</h3>
+<h4 id="répertoires-managés">Répertoires managés</h4>
+<p>Pour les répertoires qui doivent être créés automatiquement :</p>
+<div class="sourceCode" id="cb19"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> get_xxx_cache_dir(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">// get_managed_dir crée le répertoire s&#39;il n&#39;existe pas</span></span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">self</span><span class="op">.</span>get_managed_dir(<span class="op">&amp;</span>[<span class="st">&quot;host&quot;</span><span class="op">,</span> <span class="st">&quot;xxx_cache&quot;</span><span class="op">,</span> <span class="st">&quot;directory&quot;</span>]<span class="op">,</span> <span class="st">&quot;cache_xxx&quot;</span>)</span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> set_xxx_cache_dir(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> directory<span class="op">:</span> <span class="dt">String</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">self</span><span class="op">.</span>set_managed_dir(<span class="op">&amp;</span>[<span class="st">&quot;host&quot;</span><span class="op">,</span> <span class="st">&quot;xxx_cache&quot;</span><span class="op">,</span> <span class="st">&quot;directory&quot;</span>]<span class="op">,</span> directory)</span>
+<span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h4 id="méthodes-génériques-de-config-utilisables">Méthodes génériques
+de Config utilisables</h4>
+<div class="sourceCode" id="cb20"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Lecture de valeur générique</span></span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> get_value(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> path<span class="op">:</span> <span class="op">&amp;</span>[<span class="op">&amp;</span><span class="dt">str</span>]) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>Value<span class="op">&gt;</span></span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a><span class="co">// Écriture de valeur générique</span></span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> set_value(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> path<span class="op">:</span> <span class="op">&amp;</span>[<span class="op">&amp;</span><span class="dt">str</span>]<span class="op">,</span> value<span class="op">:</span> Value) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span></span>
+<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb20-7"><a href="#cb20-7" aria-hidden="true" tabindex="-1"></a><span class="co">// Répertoires managés (création auto)</span></span>
+<span id="cb20-8"><a href="#cb20-8" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> get_managed_dir(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> path<span class="op">:</span> <span class="op">&amp;</span>[<span class="op">&amp;</span><span class="dt">str</span>]<span class="op">,</span> <span class="kw">default</span><span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;</span></span>
+<span id="cb20-9"><a href="#cb20-9" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">fn</span> set_managed_dir(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> path<span class="op">:</span> <span class="op">&amp;</span>[<span class="op">&amp;</span><span class="dt">str</span>]<span class="op">,</span> directory<span class="op">:</span> <span class="dt">String</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span></span>
+<span id="cb20-10"><a href="#cb20-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb20-11"><a href="#cb20-11" aria-hidden="true" tabindex="-1"></a><span class="co">// Déchiffrement de mots de passe</span></span>
+<span id="cb20-12"><a href="#cb20-12" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">mod</span> encryption <span class="op">{</span></span>
+<span id="cb20-13"><a href="#cb20-13" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> <span class="kw">fn</span> encrypt_password(password<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;</span></span>
+<span id="cb20-14"><a href="#cb20-14" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> <span class="kw">fn</span> decrypt_password(encrypted<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;</span></span>
+<span id="cb20-15"><a href="#cb20-15" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> <span class="kw">fn</span> get_password(value<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;</span>  <span class="co">// Auto-détection</span></span>
+<span id="cb20-16"><a href="#cb20-16" aria-hidden="true" tabindex="-1"></a>    <span class="kw">pub</span> <span class="kw">fn</span> is_encrypted(value<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">bool</span></span>
+<span id="cb20-17"><a href="#cb20-17" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h2 id="patterns-spécialisés">Patterns spécialisés</h2>
+<h3 id="pattern-cache-pmocache">Pattern cache (pmocache)</h3>
+<p>Le crate <code>pmocache</code> fournit un trait générique
+<code>CacheConfigExt</code> que les autres crates de cache peuvent
+utiliser :</p>
+<div class="sourceCode" id="cb21"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">pmocache::</span>CacheConfigExt<span class="op">;</span></span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> AudioCacheConfigExt <span class="cf">for</span> Config <span class="op">{</span></span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_audiocache_dir(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>get_cache_dir(<span class="st">&quot;audio_cache&quot;</span><span class="op">,</span> DEFAULT_AUDIO_CACHE_DIR)</span>
+<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> create_audio_cache(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>Arc<span class="op">&lt;</span>Cache<span class="op">&gt;&gt;</span> <span class="op">{</span></span>
+<span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> dir <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>get_audiocache_dir()<span class="op">?;</span></span>
+<span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> size <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>get_audiocache_size()<span class="op">?;</span></span>
+<span id="cb21-11"><a href="#cb21-11" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Ok</span>(<span class="pp">Arc::</span>new(<span class="kw">crate</span><span class="pp">::cache::</span>new_cache(<span class="op">&amp;</span>dir<span class="op">,</span> size)<span class="op">?</span>))</span>
+<span id="cb21-12"><a href="#cb21-12" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb21-13"><a href="#cb21-13" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<p><strong>Avantage</strong> : Cohérence entre tous les caches (audio,
+covers, qobuz, etc.)</p>
+<h3 id="pattern-authentification-pmoqobuz">Pattern authentification
+(pmoqobuz)</h3>
+<p>Pour les services nécessitant une authentification :</p>
+<div class="sourceCode" id="cb22"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">trait</span> QobuzConfigExt <span class="op">{</span></span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Credentials de base</span></span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_qobuz_username(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;;</span></span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_qobuz_password(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;;</span>  <span class="co">// Auto-decrypt</span></span>
+<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_qobuz_credentials(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>(<span class="dt">String</span><span class="op">,</span> <span class="dt">String</span>)<span class="op">&gt;;</span></span>
+<span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb22-7"><a href="#cb22-7" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Tokens d&#39;authentification</span></span>
+<span id="cb22-8"><a href="#cb22-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_qobuz_auth_token(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;&gt;;</span></span>
+<span id="cb22-9"><a href="#cb22-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_qobuz_user_id(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;&gt;;</span></span>
+<span id="cb22-10"><a href="#cb22-10" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_qobuz_token_expires_at(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">Option</span><span class="op">&lt;</span><span class="dt">u64</span><span class="op">&gt;&gt;;</span></span>
+<span id="cb22-11"><a href="#cb22-11" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb22-12"><a href="#cb22-12" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Gestion d&#39;authentification groupée</span></span>
+<span id="cb22-13"><a href="#cb22-13" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_qobuz_auth_info(</span>
+<span id="cb22-14"><a href="#cb22-14" aria-hidden="true" tabindex="-1"></a>        <span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> </span>
+<span id="cb22-15"><a href="#cb22-15" aria-hidden="true" tabindex="-1"></a>        token<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span><span class="op">,</span> </span>
+<span id="cb22-16"><a href="#cb22-16" aria-hidden="true" tabindex="-1"></a>        user_id<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span><span class="op">,</span> </span>
+<span id="cb22-17"><a href="#cb22-17" aria-hidden="true" tabindex="-1"></a>        expires_at<span class="op">:</span> <span class="dt">u64</span></span>
+<span id="cb22-18"><a href="#cb22-18" aria-hidden="true" tabindex="-1"></a>    ) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;;</span></span>
+<span id="cb22-19"><a href="#cb22-19" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> clear_qobuz_auth_info(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;;</span></span>
+<span id="cb22-20"><a href="#cb22-20" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb22-21"><a href="#cb22-21" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Validation</span></span>
+<span id="cb22-22"><a href="#cb22-22" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> is_qobuz_auth_valid(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">bool</span><span class="op">;</span></span>
+<span id="cb22-23"><a href="#cb22-23" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h3 id="pattern-rate-limiting-pmoqobuz">Pattern rate limiting
+(pmoqobuz)</h3>
+<p>Pour les services avec rate limiting :</p>
+<div class="sourceCode" id="cb23"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">trait</span> QobuzConfigExt <span class="op">{</span></span>
+<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_qobuz_rate_limit_max_concurrent(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">Option</span><span class="op">&lt;</span><span class="dt">usize</span><span class="op">&gt;&gt;;</span></span>
+<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_qobuz_rate_limit_max_concurrent(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> max<span class="op">:</span> <span class="dt">usize</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;;</span></span>
+<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_qobuz_rate_limit_min_delay_ms(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">Option</span><span class="op">&lt;</span><span class="dt">u64</span><span class="op">&gt;&gt;;</span></span>
+<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_qobuz_rate_limit_min_delay_ms(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> delay_ms<span class="op">:</span> <span class="dt">u64</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;;</span></span>
+<span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb23-8"><a href="#cb23-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> is_qobuz_rate_limiting_enabled(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">bool</span><span class="op">;</span></span>
+<span id="cb23-9"><a href="#cb23-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_qobuz_rate_limiting_enabled(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> enabled<span class="op">:</span> <span class="dt">bool</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;;</span></span>
+<span id="cb23-10"><a href="#cb23-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h3 id="pattern-configuration-minimale-pmoparadise">Pattern
+configuration minimale (pmoparadise)</h3>
+<p>Pour les sources qui nécessitent peu de configuration :</p>
+<div class="sourceCode" id="cb24"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">trait</span> RadioParadiseConfigExt <span class="op">{</span></span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Juste enable/disable</span></span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_paradise_enabled(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">bool</span><span class="op">&gt;;</span></span>
+<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_paradise_enabled(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> enabled<span class="op">:</span> <span class="dt">bool</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;;</span></span>
+<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb24-6"><a href="#cb24-6" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Configuration minimale avec valeurs intelligentes par défaut</span></span>
+<span id="cb24-7"><a href="#cb24-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_paradise_default_channel(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">u8</span><span class="op">&gt;;</span></span>
+<span id="cb24-8"><a href="#cb24-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_paradise_default_channel(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> channel<span class="op">:</span> <span class="dt">u8</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;;</span></span>
+<span id="cb24-9"><a href="#cb24-9" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<p><strong>Philosophie</strong> : Ne configurer que ce qui doit vraiment
+l’être. Éviter la sur-configuration.</p>
+<h3 id="pattern-upnp-pmoupnp">Pattern UPnP (pmoupnp)</h3>
+<p>Pour la configuration des devices UPnP :</p>
+<div class="sourceCode" id="cb25"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">trait</span> UpnpConfigExt <span class="op">{</span></span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_upnp_manufacturer(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;;</span></span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_upnp_manufacturer(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> manufacturer<span class="op">:</span> <span class="dt">String</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;;</span></span>
+<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb25-5"><a href="#cb25-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_upnp_udn_prefix(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;;</span></span>
+<span id="cb25-6"><a href="#cb25-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_upnp_udn_prefix(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> prefix<span class="op">:</span> <span class="dt">String</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;;</span></span>
+<span id="cb25-7"><a href="#cb25-7" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb25-8"><a href="#cb25-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_upnp_model_name_prefix(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;;</span></span>
+<span id="cb25-9"><a href="#cb25-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_upnp_model_name_prefix(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> prefix<span class="op">:</span> <span class="dt">String</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;;</span></span>
+<span id="cb25-10"><a href="#cb25-10" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb25-11"><a href="#cb25-11" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_upnp_friendly_name_prefix(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;;</span></span>
+<span id="cb25-12"><a href="#cb25-12" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_upnp_friendly_name_prefix(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> prefix<span class="op">:</span> <span class="dt">String</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;;</span></span>
+<span id="cb25-13"><a href="#cb25-13" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<p><strong>Usage</strong> : Différencier plusieurs instances du serveur
+(dev, prod, test).</p>
+<h2 id="bonnes-pratiques">Bonnes pratiques</h2>
+<h3 id="nommage-des-méthodes">1. Nommage des méthodes</h3>
+<div class="sourceCode" id="cb26"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="co">// ✅ BON : Préfixer avec le nom du service/composant</span></span>
+<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> get_qobuz_username(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;</span></span>
+<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> get_cache_dir(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> cache_type<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span><span class="op">,</span> <span class="kw">default</span><span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;</span></span>
+<span id="cb26-4"><a href="#cb26-4" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> get_paradise_enabled(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">bool</span><span class="op">&gt;</span></span>
+<span id="cb26-5"><a href="#cb26-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb26-6"><a href="#cb26-6" aria-hidden="true" tabindex="-1"></a><span class="co">// ❌ MAUVAIS : Nom trop générique</span></span>
+<span id="cb26-7"><a href="#cb26-7" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> get_username(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;</span></span>
+<span id="cb26-8"><a href="#cb26-8" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> get_directory(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;</span></span>
+<span id="cb26-9"><a href="#cb26-9" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> is_enabled(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">bool</span></span></pre></div>
+<h3 id="gestion-des-erreurs">2. Gestion des erreurs</h3>
+<div class="sourceCode" id="cb27"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="co">// ✅ BON : Retourner Result pour les valeurs obligatoires</span></span>
+<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> get_xxx_username(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">match</span> <span class="kw">self</span><span class="op">.</span>get_value(<span class="op">&amp;</span>[<span class="st">&quot;accounts&quot;</span><span class="op">,</span> <span class="st">&quot;xxx&quot;</span><span class="op">,</span> <span class="st">&quot;username&quot;</span>])<span class="op">?</span> <span class="op">{</span></span>
+<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a>        <span class="pp">Value::</span><span class="dt">String</span>(s) <span class="op">=&gt;</span> <span class="cn">Ok</span>(s)<span class="op">,</span></span>
+<span id="cb27-5"><a href="#cb27-5" aria-hidden="true" tabindex="-1"></a>        _ <span class="op">=&gt;</span> <span class="cn">Err</span>(<span class="pp">anyhow!</span>(<span class="st">&quot;XXX username not configured&quot;</span>))<span class="op">,</span></span>
+<span id="cb27-6"><a href="#cb27-6" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb27-7"><a href="#cb27-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb27-8"><a href="#cb27-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb27-9"><a href="#cb27-9" aria-hidden="true" tabindex="-1"></a><span class="co">// ✅ BON : Retourner Option pour les valeurs optionnelles</span></span>
+<span id="cb27-10"><a href="#cb27-10" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> get_xxx_token(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;&gt;</span></span>
+<span id="cb27-11"><a href="#cb27-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb27-12"><a href="#cb27-12" aria-hidden="true" tabindex="-1"></a><span class="co">// ✅ BON : Retourner bool pour les checks (sans erreur)</span></span>
+<span id="cb27-13"><a href="#cb27-13" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> is_xxx_valid(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">bool</span></span>
+<span id="cb27-14"><a href="#cb27-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb27-15"><a href="#cb27-15" aria-hidden="true" tabindex="-1"></a><span class="co">// ❌ MAUVAIS : Panic ou unwrap</span></span>
+<span id="cb27-16"><a href="#cb27-16" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> get_xxx_value(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">String</span> <span class="op">{</span></span>
+<span id="cb27-17"><a href="#cb27-17" aria-hidden="true" tabindex="-1"></a>    <span class="kw">self</span><span class="op">.</span>get_value(<span class="op">&amp;</span>[<span class="st">&quot;path&quot;</span>])<span class="op">.</span>unwrap()<span class="op">.</span>as_str()<span class="op">.</span>unwrap()</span>
+<span id="cb27-18"><a href="#cb27-18" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h3 id="valeurs-par-défaut">3. Valeurs par défaut</h3>
+<div class="sourceCode" id="cb28"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="co">// ✅ BON : Constantes en haut du fichier</span></span>
+<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> DEFAULT_CACHE_SIZE<span class="op">:</span> <span class="dt">usize</span> <span class="op">=</span> <span class="dv">500</span><span class="op">;</span></span>
+<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> DEFAULT_CACHE_DIR<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span> <span class="op">=</span> <span class="st">&quot;cache_audio&quot;</span><span class="op">;</span></span>
+<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb28-5"><a href="#cb28-5" aria-hidden="true" tabindex="-1"></a><span class="co">// ✅ BON : Valeurs par défaut documentées</span></span>
+<span id="cb28-6"><a href="#cb28-6" aria-hidden="true" tabindex="-1"></a><span class="co">/// Récupère la taille du cache</span></span>
+<span id="cb28-7"><a href="#cb28-7" aria-hidden="true" tabindex="-1"></a><span class="co">///</span></span>
+<span id="cb28-8"><a href="#cb28-8" aria-hidden="true" tabindex="-1"></a><span class="co">/// # Returns</span></span>
+<span id="cb28-9"><a href="#cb28-9" aria-hidden="true" tabindex="-1"></a><span class="co">///</span></span>
+<span id="cb28-10"><a href="#cb28-10" aria-hidden="true" tabindex="-1"></a><span class="co">/// Le nombre maximal d&#39;éléments (default: 500)</span></span>
+<span id="cb28-11"><a href="#cb28-11" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> get_cache_size(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">usize</span><span class="op">&gt;</span></span>
+<span id="cb28-12"><a href="#cb28-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb28-13"><a href="#cb28-13" aria-hidden="true" tabindex="-1"></a><span class="co">// ❌ MAUVAIS : Magic numbers</span></span>
+<span id="cb28-14"><a href="#cb28-14" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> get_cache_size(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">usize</span><span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb28-15"><a href="#cb28-15" aria-hidden="true" tabindex="-1"></a>    <span class="cf">match</span> <span class="kw">self</span><span class="op">.</span>get_value(<span class="op">&amp;</span>[<span class="st">&quot;cache&quot;</span><span class="op">,</span> <span class="st">&quot;size&quot;</span>]) <span class="op">{</span></span>
+<span id="cb28-16"><a href="#cb28-16" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Ok</span>(<span class="pp">Value::</span>Number(n)) <span class="op">=&gt;</span> <span class="cn">Ok</span>(n<span class="op">.</span>as_u64()<span class="op">.</span>unwrap() <span class="kw">as</span> <span class="dt">usize</span>)<span class="op">,</span></span>
+<span id="cb28-17"><a href="#cb28-17" aria-hidden="true" tabindex="-1"></a>        _ <span class="op">=&gt;</span> <span class="cn">Ok</span>(<span class="dv">500</span>)<span class="op">,</span> <span class="co">// Où vient ce 500 ?</span></span>
+<span id="cb28-18"><a href="#cb28-18" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb28-19"><a href="#cb28-19" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h3 id="documentation">4. Documentation</h3>
+<p>Chaque méthode doit avoir :</p>
+<div class="sourceCode" id="cb29"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a><span class="co">/// Description courte de ce que fait la méthode</span></span>
+<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a><span class="co">///</span></span>
+<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a><span class="co">/// # Arguments (si applicable)</span></span>
+<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a><span class="co">///</span></span>
+<span id="cb29-5"><a href="#cb29-5" aria-hidden="true" tabindex="-1"></a><span class="co">/// * `param` - Description du paramètre</span></span>
+<span id="cb29-6"><a href="#cb29-6" aria-hidden="true" tabindex="-1"></a><span class="co">///</span></span>
+<span id="cb29-7"><a href="#cb29-7" aria-hidden="true" tabindex="-1"></a><span class="co">/// # Returns</span></span>
+<span id="cb29-8"><a href="#cb29-8" aria-hidden="true" tabindex="-1"></a><span class="co">///</span></span>
+<span id="cb29-9"><a href="#cb29-9" aria-hidden="true" tabindex="-1"></a><span class="co">/// Description de ce qui est retourné (avec valeur par défaut si applicable)</span></span>
+<span id="cb29-10"><a href="#cb29-10" aria-hidden="true" tabindex="-1"></a><span class="co">///</span></span>
+<span id="cb29-11"><a href="#cb29-11" aria-hidden="true" tabindex="-1"></a><span class="co">/// # Errors (si Result)</span></span>
+<span id="cb29-12"><a href="#cb29-12" aria-hidden="true" tabindex="-1"></a><span class="co">///</span></span>
+<span id="cb29-13"><a href="#cb29-13" aria-hidden="true" tabindex="-1"></a><span class="co">/// Description des cas d&#39;erreur</span></span>
+<span id="cb29-14"><a href="#cb29-14" aria-hidden="true" tabindex="-1"></a><span class="co">///</span></span>
+<span id="cb29-15"><a href="#cb29-15" aria-hidden="true" tabindex="-1"></a><span class="co">/// # Exemple</span></span>
+<span id="cb29-16"><a href="#cb29-16" aria-hidden="true" tabindex="-1"></a><span class="co">///</span></span>
+<span id="cb29-17"><a href="#cb29-17" aria-hidden="true" tabindex="-1"></a><span class="co">/// ```rust,ignore</span></span>
+<span id="cb29-18"><a href="#cb29-18" aria-hidden="true" tabindex="-1"></a><span class="co">/// use pmoconfig::get_config;</span></span>
+<span id="cb29-19"><a href="#cb29-19" aria-hidden="true" tabindex="-1"></a><span class="co">/// use pmoxxx::XxxConfigExt;</span></span>
+<span id="cb29-20"><a href="#cb29-20" aria-hidden="true" tabindex="-1"></a><span class="co">///</span></span>
+<span id="cb29-21"><a href="#cb29-21" aria-hidden="true" tabindex="-1"></a><span class="co">/// let config = get_config();</span></span>
+<span id="cb29-22"><a href="#cb29-22" aria-hidden="true" tabindex="-1"></a><span class="co">/// let value = config.get_xxx_value()?;</span></span>
+<span id="cb29-23"><a href="#cb29-23" aria-hidden="true" tabindex="-1"></a><span class="co">/// ```</span></span>
+<span id="cb29-24"><a href="#cb29-24" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> get_xxx_value(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>Type<span class="op">&gt;;</span></span></pre></div>
+<h3 id="organisation-du-code">5. Organisation du code</h3>
+<h4 id="structure-du-fichier-config_ext.rs-1">Structure du fichier
+config_ext.rs</h4>
+<div class="sourceCode" id="cb30"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a><span class="co">//! Documentation du module</span></span>
+<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a><span class="co">// Imports</span></span>
+<span id="cb30-4"><a href="#cb30-4" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">anyhow::</span><span class="dt">Result</span><span class="op">;</span></span>
+<span id="cb30-5"><a href="#cb30-5" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">pmoconfig::</span>Config<span class="op">;</span></span>
+<span id="cb30-6"><a href="#cb30-6" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">serde_yaml::</span>Value<span class="op">;</span></span>
+<span id="cb30-7"><a href="#cb30-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb30-8"><a href="#cb30-8" aria-hidden="true" tabindex="-1"></a><span class="co">// Constantes</span></span>
+<span id="cb30-9"><a href="#cb30-9" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> DEFAULT_XXX<span class="op">:</span> Type <span class="op">=</span> value<span class="op">;</span></span>
+<span id="cb30-10"><a href="#cb30-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb30-11"><a href="#cb30-11" aria-hidden="true" tabindex="-1"></a><span class="co">// Trait</span></span>
+<span id="cb30-12"><a href="#cb30-12" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">trait</span> XxxConfigExt <span class="op">{</span></span>
+<span id="cb30-13"><a href="#cb30-13" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Méthodes groupées logiquement</span></span>
+<span id="cb30-14"><a href="#cb30-14" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb30-15"><a href="#cb30-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb30-16"><a href="#cb30-16" aria-hidden="true" tabindex="-1"></a><span class="co">// Implémentation</span></span>
+<span id="cb30-17"><a href="#cb30-17" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> XxxConfigExt <span class="cf">for</span> Config <span class="op">{</span></span>
+<span id="cb30-18"><a href="#cb30-18" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Méthodes dans le même ordre que le trait</span></span>
+<span id="cb30-19"><a href="#cb30-19" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb30-20"><a href="#cb30-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb30-21"><a href="#cb30-21" aria-hidden="true" tabindex="-1"></a><span class="co">// Tests (optionnel)</span></span>
+<span id="cb30-22"><a href="#cb30-22" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>cfg<span class="at">(</span>test<span class="at">)]</span></span>
+<span id="cb30-23"><a href="#cb30-23" aria-hidden="true" tabindex="-1"></a><span class="kw">mod</span> tests <span class="op">{</span></span>
+<span id="cb30-24"><a href="#cb30-24" aria-hidden="true" tabindex="-1"></a>    <span class="kw">use</span> <span class="kw">super</span><span class="pp">::</span><span class="op">*;</span></span>
+<span id="cb30-25"><a href="#cb30-25" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h4 id="ordre-des-méthodes-dans-le-trait">Ordre des méthodes dans le
+trait</h4>
+<ol type="1">
+<li>Getters/setters simples</li>
+<li>Getters/setters combinés</li>
+<li>Helpers de validation</li>
+<li>Factory methods</li>
+<li>Méthodes de nettoyage</li>
+</ol>
+<div class="sourceCode" id="cb31"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">trait</span> QobuzConfigExt <span class="op">{</span></span>
+<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">// 1. Getters/setters simples</span></span>
+<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_qobuz_username(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;;</span></span>
+<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_qobuz_username(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> username<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;;</span></span>
+<span id="cb31-5"><a href="#cb31-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_qobuz_password(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;;</span></span>
+<span id="cb31-6"><a href="#cb31-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_qobuz_password(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> password<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;;</span></span>
+<span id="cb31-7"><a href="#cb31-7" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb31-8"><a href="#cb31-8" aria-hidden="true" tabindex="-1"></a>    <span class="co">// 2. Getters/setters combinés</span></span>
+<span id="cb31-9"><a href="#cb31-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_qobuz_credentials(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>(<span class="dt">String</span><span class="op">,</span> <span class="dt">String</span>)<span class="op">&gt;;</span></span>
+<span id="cb31-10"><a href="#cb31-10" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_qobuz_auth_info(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> <span class="op">...</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;;</span></span>
+<span id="cb31-11"><a href="#cb31-11" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb31-12"><a href="#cb31-12" aria-hidden="true" tabindex="-1"></a>    <span class="co">// 3. Helpers de validation</span></span>
+<span id="cb31-13"><a href="#cb31-13" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> is_qobuz_auth_valid(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">bool</span><span class="op">;</span></span>
+<span id="cb31-14"><a href="#cb31-14" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb31-15"><a href="#cb31-15" aria-hidden="true" tabindex="-1"></a>    <span class="co">// 4. Factory methods</span></span>
+<span id="cb31-16"><a href="#cb31-16" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> create_qobuz_client(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>QobuzClient<span class="op">&gt;;</span></span>
+<span id="cb31-17"><a href="#cb31-17" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb31-18"><a href="#cb31-18" aria-hidden="true" tabindex="-1"></a>    <span class="co">// 5. Méthodes de nettoyage</span></span>
+<span id="cb31-19"><a href="#cb31-19" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> clear_qobuz_auth_info(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;;</span></span>
+<span id="cb31-20"><a href="#cb31-20" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h3 id="types-de-retour">6. Types de retour</h3>
+<div class="sourceCode" id="cb32"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a><span class="co">// ✅ BON : Result&lt;T&gt; pour les opérations qui peuvent échouer</span></span>
+<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> get_xxx_username(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;</span></span>
+<span id="cb32-3"><a href="#cb32-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb32-4"><a href="#cb32-4" aria-hidden="true" tabindex="-1"></a><span class="co">// ✅ BON : Result&lt;Option&lt;T&gt;&gt; pour les valeurs optionnelles</span></span>
+<span id="cb32-5"><a href="#cb32-5" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> get_xxx_token(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;&gt;</span></span>
+<span id="cb32-6"><a href="#cb32-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb32-7"><a href="#cb32-7" aria-hidden="true" tabindex="-1"></a><span class="co">// ✅ BON : bool pour les checks simples</span></span>
+<span id="cb32-8"><a href="#cb32-8" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> is_xxx_enabled(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">bool</span></span>
+<span id="cb32-9"><a href="#cb32-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb32-10"><a href="#cb32-10" aria-hidden="true" tabindex="-1"></a><span class="co">// ✅ BON : Result&lt;(T1, T2)&gt; pour retourner plusieurs valeurs liées</span></span>
+<span id="cb32-11"><a href="#cb32-11" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> get_xxx_credentials(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>(<span class="dt">String</span><span class="op">,</span> <span class="dt">String</span>)<span class="op">&gt;</span></span>
+<span id="cb32-12"><a href="#cb32-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb32-13"><a href="#cb32-13" aria-hidden="true" tabindex="-1"></a><span class="co">// ❌ MAUVAIS : Option&lt;Result&lt;T&gt;&gt; (ordre inversé)</span></span>
+<span id="cb32-14"><a href="#cb32-14" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> get_xxx_value(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Option</span><span class="op">&lt;</span><span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;&gt;</span></span></pre></div>
+<h3 id="conversion-de-types">7. Conversion de types</h3>
+<div class="sourceCode" id="cb33"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a><span class="co">// ✅ BON : Gérer plusieurs types d&#39;entrée</span></span>
+<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> get_xxx_value(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">u64</span><span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb33-3"><a href="#cb33-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">match</span> <span class="kw">self</span><span class="op">.</span>get_value(<span class="op">&amp;</span>[<span class="st">&quot;path&quot;</span><span class="op">,</span> <span class="st">&quot;to&quot;</span><span class="op">,</span> <span class="st">&quot;value&quot;</span>]) <span class="op">{</span></span>
+<span id="cb33-4"><a href="#cb33-4" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Ok</span>(<span class="pp">Value::</span>Number(n)) <span class="cf">if</span> n<span class="op">.</span>is_u64() <span class="op">=&gt;</span> <span class="cn">Ok</span>(n<span class="op">.</span>as_u64()<span class="op">.</span>unwrap())<span class="op">,</span></span>
+<span id="cb33-5"><a href="#cb33-5" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Ok</span>(<span class="pp">Value::</span>Number(n)) <span class="cf">if</span> n<span class="op">.</span>is_i64() <span class="op">=&gt;</span> <span class="cn">Ok</span>(n<span class="op">.</span>as_i64()<span class="op">.</span>unwrap() <span class="kw">as</span> <span class="dt">u64</span>)<span class="op">,</span></span>
+<span id="cb33-6"><a href="#cb33-6" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Ok</span>(<span class="pp">Value::</span><span class="dt">String</span>(s)) <span class="op">=&gt;</span> s<span class="op">.</span><span class="pp">parse::</span><span class="op">&lt;</span><span class="dt">u64</span><span class="op">&gt;</span>()</span>
+<span id="cb33-7"><a href="#cb33-7" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>map_err(<span class="op">|</span>e<span class="op">|</span> <span class="pp">anyhow!</span>(<span class="st">&quot;Invalid number: {}&quot;</span><span class="op">,</span> e))<span class="op">,</span></span>
+<span id="cb33-8"><a href="#cb33-8" aria-hidden="true" tabindex="-1"></a>        _ <span class="op">=&gt;</span> <span class="cn">Err</span>(<span class="pp">anyhow!</span>(<span class="st">&quot;Value not configured&quot;</span>))<span class="op">,</span></span>
+<span id="cb33-9"><a href="#cb33-9" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb33-10"><a href="#cb33-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb33-11"><a href="#cb33-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb33-12"><a href="#cb33-12" aria-hidden="true" tabindex="-1"></a><span class="co">// ✅ BON : Convertir en format convivial pour l&#39;utilisateur</span></span>
+<span id="cb33-13"><a href="#cb33-13" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> set_xxx_channel(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> channel<span class="op">:</span> <span class="dt">u8</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb33-14"><a href="#cb33-14" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Stocker &quot;main&quot; au lieu de &quot;0&quot; dans le YAML</span></span>
+<span id="cb33-15"><a href="#cb33-15" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> name <span class="op">=</span> <span class="cf">match</span> channel <span class="op">{</span></span>
+<span id="cb33-16"><a href="#cb33-16" aria-hidden="true" tabindex="-1"></a>        <span class="dv">0</span> <span class="op">=&gt;</span> <span class="st">&quot;main&quot;</span><span class="op">,</span></span>
+<span id="cb33-17"><a href="#cb33-17" aria-hidden="true" tabindex="-1"></a>        <span class="dv">1</span> <span class="op">=&gt;</span> <span class="st">&quot;mellow&quot;</span><span class="op">,</span></span>
+<span id="cb33-18"><a href="#cb33-18" aria-hidden="true" tabindex="-1"></a>        <span class="dv">2</span> <span class="op">=&gt;</span> <span class="st">&quot;rock&quot;</span><span class="op">,</span></span>
+<span id="cb33-19"><a href="#cb33-19" aria-hidden="true" tabindex="-1"></a>        _ <span class="op">=&gt;</span> <span class="cf">return</span> <span class="cn">Err</span>(<span class="pp">anyhow!</span>(<span class="st">&quot;Invalid channel&quot;</span>))<span class="op">,</span></span>
+<span id="cb33-20"><a href="#cb33-20" aria-hidden="true" tabindex="-1"></a>    <span class="op">};</span></span>
+<span id="cb33-21"><a href="#cb33-21" aria-hidden="true" tabindex="-1"></a>    <span class="kw">self</span><span class="op">.</span>set_value(<span class="op">&amp;</span>[<span class="st">&quot;path&quot;</span>]<span class="op">,</span> <span class="pp">Value::</span><span class="dt">String</span>(name<span class="op">.</span>to_string()))</span>
+<span id="cb33-22"><a href="#cb33-22" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h2 id="exemples-dimplémentation-complète">Exemples d’implémentation
+complète</h2>
+<h3 id="exemple-1-cache-simple-pmocovers">Exemple 1 : Cache simple
+(pmocovers)</h3>
+<div class="sourceCode" id="cb34"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a><span class="co">//! Extension pour intégrer le cache de couvertures dans pmoconfig</span></span>
+<span id="cb34-2"><a href="#cb34-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb34-3"><a href="#cb34-3" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">anyhow::</span><span class="dt">Result</span><span class="op">;</span></span>
+<span id="cb34-4"><a href="#cb34-4" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">pmocache::</span>CacheConfigExt<span class="op">;</span></span>
+<span id="cb34-5"><a href="#cb34-5" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">pmoconfig::</span>Config<span class="op">;</span></span>
+<span id="cb34-6"><a href="#cb34-6" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">std::sync::</span>Arc<span class="op">;</span></span>
+<span id="cb34-7"><a href="#cb34-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb34-8"><a href="#cb34-8" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> DEFAULT_COVER_CACHE_DIR<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span> <span class="op">=</span> <span class="st">&quot;cache_covers&quot;</span><span class="op">;</span></span>
+<span id="cb34-9"><a href="#cb34-9" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> DEFAULT_COVER_CACHE_SIZE<span class="op">:</span> <span class="dt">usize</span> <span class="op">=</span> <span class="dv">2000</span><span class="op">;</span></span>
+<span id="cb34-10"><a href="#cb34-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb34-11"><a href="#cb34-11" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">trait</span> CoverCacheConfigExt <span class="op">{</span></span>
+<span id="cb34-12"><a href="#cb34-12" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_covers_dir(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;;</span></span>
+<span id="cb34-13"><a href="#cb34-13" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_covers_dir(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> directory<span class="op">:</span> <span class="dt">String</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;;</span></span>
+<span id="cb34-14"><a href="#cb34-14" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_covers_size(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">usize</span><span class="op">&gt;;</span></span>
+<span id="cb34-15"><a href="#cb34-15" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_covers_size(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> size<span class="op">:</span> <span class="dt">usize</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;;</span></span>
+<span id="cb34-16"><a href="#cb34-16" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> create_cover_cache(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>Arc<span class="op">&lt;</span><span class="kw">crate</span><span class="pp">::</span>Cache<span class="op">&gt;&gt;;</span></span>
+<span id="cb34-17"><a href="#cb34-17" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb34-18"><a href="#cb34-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb34-19"><a href="#cb34-19" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> CoverCacheConfigExt <span class="cf">for</span> Config <span class="op">{</span></span>
+<span id="cb34-20"><a href="#cb34-20" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_covers_dir(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb34-21"><a href="#cb34-21" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>get_cache_dir(<span class="st">&quot;cover_cache&quot;</span><span class="op">,</span> DEFAULT_COVER_CACHE_DIR)</span>
+<span id="cb34-22"><a href="#cb34-22" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb34-23"><a href="#cb34-23" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb34-24"><a href="#cb34-24" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_covers_dir(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> directory<span class="op">:</span> <span class="dt">String</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb34-25"><a href="#cb34-25" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>set_cache_dir(<span class="st">&quot;cover_cache&quot;</span><span class="op">,</span> directory)</span>
+<span id="cb34-26"><a href="#cb34-26" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb34-27"><a href="#cb34-27" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb34-28"><a href="#cb34-28" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_covers_size(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">usize</span><span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb34-29"><a href="#cb34-29" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>get_cache_size(<span class="st">&quot;cover_cache&quot;</span><span class="op">,</span> DEFAULT_COVER_CACHE_SIZE)</span>
+<span id="cb34-30"><a href="#cb34-30" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb34-31"><a href="#cb34-31" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb34-32"><a href="#cb34-32" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_covers_size(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> size<span class="op">:</span> <span class="dt">usize</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb34-33"><a href="#cb34-33" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>set_cache_size(<span class="st">&quot;cover_cache&quot;</span><span class="op">,</span> size)</span>
+<span id="cb34-34"><a href="#cb34-34" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb34-35"><a href="#cb34-35" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb34-36"><a href="#cb34-36" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> create_cover_cache(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>Arc<span class="op">&lt;</span><span class="kw">crate</span><span class="pp">::</span>Cache<span class="op">&gt;&gt;</span> <span class="op">{</span></span>
+<span id="cb34-37"><a href="#cb34-37" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> dir <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>get_covers_dir()<span class="op">?;</span></span>
+<span id="cb34-38"><a href="#cb34-38" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> size <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>get_covers_size()<span class="op">?;</span></span>
+<span id="cb34-39"><a href="#cb34-39" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Ok</span>(<span class="pp">Arc::</span>new(<span class="kw">crate</span><span class="pp">::cache::</span>new_cache(<span class="op">&amp;</span>dir<span class="op">,</span> size)<span class="op">?</span>))</span>
+<span id="cb34-40"><a href="#cb34-40" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb34-41"><a href="#cb34-41" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h3
+id="exemple-2-service-avec-authentification-pmoqobuz---simplifié">Exemple
+2 : Service avec authentification (pmoqobuz - simplifié)</h3>
+<div class="sourceCode" id="cb35"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a><span class="co">//! Extension pour intégrer la configuration Qobuz dans pmoconfig</span></span>
+<span id="cb35-2"><a href="#cb35-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb35-3"><a href="#cb35-3" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">anyhow::</span><span class="op">{</span>anyhow<span class="op">,</span> <span class="dt">Result</span><span class="op">};</span></span>
+<span id="cb35-4"><a href="#cb35-4" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">pmoconfig::</span>Config<span class="op">;</span></span>
+<span id="cb35-5"><a href="#cb35-5" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">serde_yaml::</span>Value<span class="op">;</span></span>
+<span id="cb35-6"><a href="#cb35-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb35-7"><a href="#cb35-7" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">trait</span> QobuzConfigExt <span class="op">{</span></span>
+<span id="cb35-8"><a href="#cb35-8" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Credentials</span></span>
+<span id="cb35-9"><a href="#cb35-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_qobuz_username(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;;</span></span>
+<span id="cb35-10"><a href="#cb35-10" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_qobuz_username(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> username<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;;</span></span>
+<span id="cb35-11"><a href="#cb35-11" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_qobuz_password(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;;</span></span>
+<span id="cb35-12"><a href="#cb35-12" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_qobuz_password(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> password<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;;</span></span>
+<span id="cb35-13"><a href="#cb35-13" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_qobuz_credentials(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>(<span class="dt">String</span><span class="op">,</span> <span class="dt">String</span>)<span class="op">&gt;;</span></span>
+<span id="cb35-14"><a href="#cb35-14" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb35-15"><a href="#cb35-15" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Authentification</span></span>
+<span id="cb35-16"><a href="#cb35-16" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_qobuz_auth_token(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;&gt;;</span></span>
+<span id="cb35-17"><a href="#cb35-17" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_qobuz_user_id(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;&gt;;</span></span>
+<span id="cb35-18"><a href="#cb35-18" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_qobuz_auth_info(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> token<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span><span class="op">,</span> user_id<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;;</span></span>
+<span id="cb35-19"><a href="#cb35-19" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> clear_qobuz_auth_info(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;;</span></span>
+<span id="cb35-20"><a href="#cb35-20" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> is_qobuz_auth_valid(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">bool</span><span class="op">;</span></span>
+<span id="cb35-21"><a href="#cb35-21" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb35-22"><a href="#cb35-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb35-23"><a href="#cb35-23" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> QobuzConfigExt <span class="cf">for</span> Config <span class="op">{</span></span>
+<span id="cb35-24"><a href="#cb35-24" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_qobuz_username(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb35-25"><a href="#cb35-25" aria-hidden="true" tabindex="-1"></a>        <span class="cf">match</span> <span class="kw">self</span><span class="op">.</span>get_value(<span class="op">&amp;</span>[<span class="st">&quot;accounts&quot;</span><span class="op">,</span> <span class="st">&quot;qobuz&quot;</span><span class="op">,</span> <span class="st">&quot;username&quot;</span>])<span class="op">?</span> <span class="op">{</span></span>
+<span id="cb35-26"><a href="#cb35-26" aria-hidden="true" tabindex="-1"></a>            <span class="pp">Value::</span><span class="dt">String</span>(s) <span class="op">=&gt;</span> <span class="cn">Ok</span>(s)<span class="op">,</span></span>
+<span id="cb35-27"><a href="#cb35-27" aria-hidden="true" tabindex="-1"></a>            _ <span class="op">=&gt;</span> <span class="cn">Err</span>(<span class="pp">anyhow!</span>(<span class="st">&quot;Qobuz username not configured&quot;</span>))<span class="op">,</span></span>
+<span id="cb35-28"><a href="#cb35-28" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb35-29"><a href="#cb35-29" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb35-30"><a href="#cb35-30" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb35-31"><a href="#cb35-31" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_qobuz_username(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> username<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb35-32"><a href="#cb35-32" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>set_value(</span>
+<span id="cb35-33"><a href="#cb35-33" aria-hidden="true" tabindex="-1"></a>            <span class="op">&amp;</span>[<span class="st">&quot;accounts&quot;</span><span class="op">,</span> <span class="st">&quot;qobuz&quot;</span><span class="op">,</span> <span class="st">&quot;username&quot;</span>]<span class="op">,</span></span>
+<span id="cb35-34"><a href="#cb35-34" aria-hidden="true" tabindex="-1"></a>            <span class="pp">Value::</span><span class="dt">String</span>(username<span class="op">.</span>to_string())<span class="op">,</span></span>
+<span id="cb35-35"><a href="#cb35-35" aria-hidden="true" tabindex="-1"></a>        )</span>
+<span id="cb35-36"><a href="#cb35-36" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb35-37"><a href="#cb35-37" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb35-38"><a href="#cb35-38" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_qobuz_password(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb35-39"><a href="#cb35-39" aria-hidden="true" tabindex="-1"></a>        <span class="cf">match</span> <span class="kw">self</span><span class="op">.</span>get_value(<span class="op">&amp;</span>[<span class="st">&quot;accounts&quot;</span><span class="op">,</span> <span class="st">&quot;qobuz&quot;</span><span class="op">,</span> <span class="st">&quot;password&quot;</span>])<span class="op">?</span> <span class="op">{</span></span>
+<span id="cb35-40"><a href="#cb35-40" aria-hidden="true" tabindex="-1"></a>            <span class="pp">Value::</span><span class="dt">String</span>(s) <span class="op">=&gt;</span> <span class="op">{</span></span>
+<span id="cb35-41"><a href="#cb35-41" aria-hidden="true" tabindex="-1"></a>                <span class="co">// Déchiffrement automatique</span></span>
+<span id="cb35-42"><a href="#cb35-42" aria-hidden="true" tabindex="-1"></a>                <span class="pp">pmoconfig::encryption::</span>get_password(<span class="op">&amp;</span>s)</span>
+<span id="cb35-43"><a href="#cb35-43" aria-hidden="true" tabindex="-1"></a>                    <span class="op">.</span>map_err(<span class="op">|</span>e<span class="op">|</span> <span class="pp">anyhow!</span>(<span class="st">&quot;Failed to decrypt password: {}&quot;</span><span class="op">,</span> e))</span>
+<span id="cb35-44"><a href="#cb35-44" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
+<span id="cb35-45"><a href="#cb35-45" aria-hidden="true" tabindex="-1"></a>            _ <span class="op">=&gt;</span> <span class="cn">Err</span>(<span class="pp">anyhow!</span>(<span class="st">&quot;Qobuz password not configured&quot;</span>))<span class="op">,</span></span>
+<span id="cb35-46"><a href="#cb35-46" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb35-47"><a href="#cb35-47" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb35-48"><a href="#cb35-48" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb35-49"><a href="#cb35-49" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_qobuz_password(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> password<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb35-50"><a href="#cb35-50" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>set_value(</span>
+<span id="cb35-51"><a href="#cb35-51" aria-hidden="true" tabindex="-1"></a>            <span class="op">&amp;</span>[<span class="st">&quot;accounts&quot;</span><span class="op">,</span> <span class="st">&quot;qobuz&quot;</span><span class="op">,</span> <span class="st">&quot;password&quot;</span>]<span class="op">,</span></span>
+<span id="cb35-52"><a href="#cb35-52" aria-hidden="true" tabindex="-1"></a>            <span class="pp">Value::</span><span class="dt">String</span>(password<span class="op">.</span>to_string())<span class="op">,</span></span>
+<span id="cb35-53"><a href="#cb35-53" aria-hidden="true" tabindex="-1"></a>        )</span>
+<span id="cb35-54"><a href="#cb35-54" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb35-55"><a href="#cb35-55" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb35-56"><a href="#cb35-56" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_qobuz_credentials(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>(<span class="dt">String</span><span class="op">,</span> <span class="dt">String</span>)<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb35-57"><a href="#cb35-57" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> username <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>get_qobuz_username()<span class="op">?;</span></span>
+<span id="cb35-58"><a href="#cb35-58" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> password <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>get_qobuz_password()<span class="op">?;</span></span>
+<span id="cb35-59"><a href="#cb35-59" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Ok</span>((username<span class="op">,</span> password))</span>
+<span id="cb35-60"><a href="#cb35-60" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb35-61"><a href="#cb35-61" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb35-62"><a href="#cb35-62" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_qobuz_auth_token(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;&gt;</span> <span class="op">{</span></span>
+<span id="cb35-63"><a href="#cb35-63" aria-hidden="true" tabindex="-1"></a>        <span class="cf">match</span> <span class="kw">self</span><span class="op">.</span>get_value(<span class="op">&amp;</span>[<span class="st">&quot;accounts&quot;</span><span class="op">,</span> <span class="st">&quot;qobuz&quot;</span><span class="op">,</span> <span class="st">&quot;auth_token&quot;</span>]) <span class="op">{</span></span>
+<span id="cb35-64"><a href="#cb35-64" aria-hidden="true" tabindex="-1"></a>            <span class="cn">Ok</span>(<span class="pp">Value::</span><span class="dt">String</span>(s)) <span class="cf">if</span> <span class="op">!</span>s<span class="op">.</span>is_empty() <span class="op">=&gt;</span> <span class="cn">Ok</span>(<span class="cn">Some</span>(s))<span class="op">,</span></span>
+<span id="cb35-65"><a href="#cb35-65" aria-hidden="true" tabindex="-1"></a>            _ <span class="op">=&gt;</span> <span class="cn">Ok</span>(<span class="cn">None</span>)<span class="op">,</span></span>
+<span id="cb35-66"><a href="#cb35-66" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb35-67"><a href="#cb35-67" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb35-68"><a href="#cb35-68" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb35-69"><a href="#cb35-69" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_qobuz_user_id(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">Option</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;&gt;</span> <span class="op">{</span></span>
+<span id="cb35-70"><a href="#cb35-70" aria-hidden="true" tabindex="-1"></a>        <span class="cf">match</span> <span class="kw">self</span><span class="op">.</span>get_value(<span class="op">&amp;</span>[<span class="st">&quot;accounts&quot;</span><span class="op">,</span> <span class="st">&quot;qobuz&quot;</span><span class="op">,</span> <span class="st">&quot;user_id&quot;</span>]) <span class="op">{</span></span>
+<span id="cb35-71"><a href="#cb35-71" aria-hidden="true" tabindex="-1"></a>            <span class="cn">Ok</span>(<span class="pp">Value::</span><span class="dt">String</span>(s)) <span class="cf">if</span> <span class="op">!</span>s<span class="op">.</span>is_empty() <span class="op">=&gt;</span> <span class="cn">Ok</span>(<span class="cn">Some</span>(s))<span class="op">,</span></span>
+<span id="cb35-72"><a href="#cb35-72" aria-hidden="true" tabindex="-1"></a>            _ <span class="op">=&gt;</span> <span class="cn">Ok</span>(<span class="cn">None</span>)<span class="op">,</span></span>
+<span id="cb35-73"><a href="#cb35-73" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb35-74"><a href="#cb35-74" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb35-75"><a href="#cb35-75" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb35-76"><a href="#cb35-76" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_qobuz_auth_info(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> token<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span><span class="op">,</span> user_id<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb35-77"><a href="#cb35-77" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>set_value(</span>
+<span id="cb35-78"><a href="#cb35-78" aria-hidden="true" tabindex="-1"></a>            <span class="op">&amp;</span>[<span class="st">&quot;accounts&quot;</span><span class="op">,</span> <span class="st">&quot;qobuz&quot;</span><span class="op">,</span> <span class="st">&quot;auth_token&quot;</span>]<span class="op">,</span></span>
+<span id="cb35-79"><a href="#cb35-79" aria-hidden="true" tabindex="-1"></a>            <span class="pp">Value::</span><span class="dt">String</span>(token<span class="op">.</span>to_string())<span class="op">,</span></span>
+<span id="cb35-80"><a href="#cb35-80" aria-hidden="true" tabindex="-1"></a>        )<span class="op">?;</span></span>
+<span id="cb35-81"><a href="#cb35-81" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>set_value(</span>
+<span id="cb35-82"><a href="#cb35-82" aria-hidden="true" tabindex="-1"></a>            <span class="op">&amp;</span>[<span class="st">&quot;accounts&quot;</span><span class="op">,</span> <span class="st">&quot;qobuz&quot;</span><span class="op">,</span> <span class="st">&quot;user_id&quot;</span>]<span class="op">,</span></span>
+<span id="cb35-83"><a href="#cb35-83" aria-hidden="true" tabindex="-1"></a>            <span class="pp">Value::</span><span class="dt">String</span>(user_id<span class="op">.</span>to_string())<span class="op">,</span></span>
+<span id="cb35-84"><a href="#cb35-84" aria-hidden="true" tabindex="-1"></a>        )<span class="op">?;</span></span>
+<span id="cb35-85"><a href="#cb35-85" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Ok</span>(())</span>
+<span id="cb35-86"><a href="#cb35-86" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb35-87"><a href="#cb35-87" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb35-88"><a href="#cb35-88" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> clear_qobuz_auth_info(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb35-89"><a href="#cb35-89" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> _ <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>set_value(</span>
+<span id="cb35-90"><a href="#cb35-90" aria-hidden="true" tabindex="-1"></a>            <span class="op">&amp;</span>[<span class="st">&quot;accounts&quot;</span><span class="op">,</span> <span class="st">&quot;qobuz&quot;</span><span class="op">,</span> <span class="st">&quot;auth_token&quot;</span>]<span class="op">,</span></span>
+<span id="cb35-91"><a href="#cb35-91" aria-hidden="true" tabindex="-1"></a>            <span class="pp">Value::</span><span class="dt">String</span>(<span class="dt">String</span><span class="pp">::</span>new())<span class="op">,</span></span>
+<span id="cb35-92"><a href="#cb35-92" aria-hidden="true" tabindex="-1"></a>        )<span class="op">;</span></span>
+<span id="cb35-93"><a href="#cb35-93" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> _ <span class="op">=</span> <span class="kw">self</span><span class="op">.</span>set_value(</span>
+<span id="cb35-94"><a href="#cb35-94" aria-hidden="true" tabindex="-1"></a>            <span class="op">&amp;</span>[<span class="st">&quot;accounts&quot;</span><span class="op">,</span> <span class="st">&quot;qobuz&quot;</span><span class="op">,</span> <span class="st">&quot;user_id&quot;</span>]<span class="op">,</span></span>
+<span id="cb35-95"><a href="#cb35-95" aria-hidden="true" tabindex="-1"></a>            <span class="pp">Value::</span><span class="dt">String</span>(<span class="dt">String</span><span class="pp">::</span>new())<span class="op">,</span></span>
+<span id="cb35-96"><a href="#cb35-96" aria-hidden="true" tabindex="-1"></a>        )<span class="op">;</span></span>
+<span id="cb35-97"><a href="#cb35-97" aria-hidden="true" tabindex="-1"></a>        <span class="cn">Ok</span>(())</span>
+<span id="cb35-98"><a href="#cb35-98" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb35-99"><a href="#cb35-99" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb35-100"><a href="#cb35-100" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> is_qobuz_auth_valid(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">bool</span> <span class="op">{</span></span>
+<span id="cb35-101"><a href="#cb35-101" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>get_qobuz_auth_token()</span>
+<span id="cb35-102"><a href="#cb35-102" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>ok()</span>
+<span id="cb35-103"><a href="#cb35-103" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>flatten()</span>
+<span id="cb35-104"><a href="#cb35-104" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>map(<span class="op">|</span>t<span class="op">|</span> <span class="op">!</span>t<span class="op">.</span>is_empty())</span>
+<span id="cb35-105"><a href="#cb35-105" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>unwrap_or(<span class="cn">false</span>)</span>
+<span id="cb35-106"><a href="#cb35-106" aria-hidden="true" tabindex="-1"></a>            <span class="op">&amp;&amp;</span> <span class="kw">self</span></span>
+<span id="cb35-107"><a href="#cb35-107" aria-hidden="true" tabindex="-1"></a>                <span class="op">.</span>get_qobuz_user_id()</span>
+<span id="cb35-108"><a href="#cb35-108" aria-hidden="true" tabindex="-1"></a>                <span class="op">.</span>ok()</span>
+<span id="cb35-109"><a href="#cb35-109" aria-hidden="true" tabindex="-1"></a>                <span class="op">.</span>flatten()</span>
+<span id="cb35-110"><a href="#cb35-110" aria-hidden="true" tabindex="-1"></a>                <span class="op">.</span>map(<span class="op">|</span>u<span class="op">|</span> <span class="op">!</span>u<span class="op">.</span>is_empty())</span>
+<span id="cb35-111"><a href="#cb35-111" aria-hidden="true" tabindex="-1"></a>                <span class="op">.</span>unwrap_or(<span class="cn">false</span>)</span>
+<span id="cb35-112"><a href="#cb35-112" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb35-113"><a href="#cb35-113" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h3 id="exemple-3-configuration-minimale-pmoparadise">Exemple 3 :
+Configuration minimale (pmoparadise)</h3>
+<div class="sourceCode" id="cb36"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb36-1"><a href="#cb36-1" aria-hidden="true" tabindex="-1"></a><span class="co">//! Extension pour intégrer Radio Paradise dans pmoconfig</span></span>
+<span id="cb36-2"><a href="#cb36-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb36-3"><a href="#cb36-3" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">anyhow::</span><span class="dt">Result</span><span class="op">;</span></span>
+<span id="cb36-4"><a href="#cb36-4" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">pmoconfig::</span>Config<span class="op">;</span></span>
+<span id="cb36-5"><a href="#cb36-5" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">serde_yaml::</span>Value<span class="op">;</span></span>
+<span id="cb36-6"><a href="#cb36-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb36-7"><a href="#cb36-7" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">trait</span> RadioParadiseConfigExt <span class="op">{</span></span>
+<span id="cb36-8"><a href="#cb36-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_paradise_enabled(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">bool</span><span class="op">&gt;;</span></span>
+<span id="cb36-9"><a href="#cb36-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_paradise_enabled(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> enabled<span class="op">:</span> <span class="dt">bool</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;;</span></span>
+<span id="cb36-10"><a href="#cb36-10" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_paradise_default_channel(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">u8</span><span class="op">&gt;;</span></span>
+<span id="cb36-11"><a href="#cb36-11" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_paradise_default_channel(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> channel<span class="op">:</span> <span class="dt">u8</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;;</span></span>
+<span id="cb36-12"><a href="#cb36-12" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb36-13"><a href="#cb36-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb36-14"><a href="#cb36-14" aria-hidden="true" tabindex="-1"></a><span class="kw">impl</span> RadioParadiseConfigExt <span class="cf">for</span> Config <span class="op">{</span></span>
+<span id="cb36-15"><a href="#cb36-15" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_paradise_enabled(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">bool</span><span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb36-16"><a href="#cb36-16" aria-hidden="true" tabindex="-1"></a>        <span class="cf">match</span> <span class="kw">self</span><span class="op">.</span>get_value(<span class="op">&amp;</span>[<span class="st">&quot;sources&quot;</span><span class="op">,</span> <span class="st">&quot;radio_paradise&quot;</span><span class="op">,</span> <span class="st">&quot;enabled&quot;</span>]) <span class="op">{</span></span>
+<span id="cb36-17"><a href="#cb36-17" aria-hidden="true" tabindex="-1"></a>            <span class="cn">Ok</span>(<span class="pp">Value::</span>Bool(b)) <span class="op">=&gt;</span> <span class="cn">Ok</span>(b)<span class="op">,</span></span>
+<span id="cb36-18"><a href="#cb36-18" aria-hidden="true" tabindex="-1"></a>            _ <span class="op">=&gt;</span> <span class="op">{</span></span>
+<span id="cb36-19"><a href="#cb36-19" aria-hidden="true" tabindex="-1"></a>                <span class="co">// Auto-persist le défaut</span></span>
+<span id="cb36-20"><a href="#cb36-20" aria-hidden="true" tabindex="-1"></a>                <span class="kw">self</span><span class="op">.</span>set_paradise_enabled(<span class="cn">true</span>)<span class="op">?;</span></span>
+<span id="cb36-21"><a href="#cb36-21" aria-hidden="true" tabindex="-1"></a>                <span class="cn">Ok</span>(<span class="cn">true</span>)</span>
+<span id="cb36-22"><a href="#cb36-22" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
+<span id="cb36-23"><a href="#cb36-23" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb36-24"><a href="#cb36-24" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb36-25"><a href="#cb36-25" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb36-26"><a href="#cb36-26" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_paradise_enabled(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> enabled<span class="op">:</span> <span class="dt">bool</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb36-27"><a href="#cb36-27" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>set_value(</span>
+<span id="cb36-28"><a href="#cb36-28" aria-hidden="true" tabindex="-1"></a>            <span class="op">&amp;</span>[<span class="st">&quot;sources&quot;</span><span class="op">,</span> <span class="st">&quot;radio_paradise&quot;</span><span class="op">,</span> <span class="st">&quot;enabled&quot;</span>]<span class="op">,</span></span>
+<span id="cb36-29"><a href="#cb36-29" aria-hidden="true" tabindex="-1"></a>            <span class="pp">Value::</span>Bool(enabled)<span class="op">,</span></span>
+<span id="cb36-30"><a href="#cb36-30" aria-hidden="true" tabindex="-1"></a>        )</span>
+<span id="cb36-31"><a href="#cb36-31" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb36-32"><a href="#cb36-32" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb36-33"><a href="#cb36-33" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> get_paradise_default_channel(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">u8</span><span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb36-34"><a href="#cb36-34" aria-hidden="true" tabindex="-1"></a>        <span class="cf">match</span> <span class="kw">self</span><span class="op">.</span>get_value(<span class="op">&amp;</span>[<span class="st">&quot;sources&quot;</span><span class="op">,</span> <span class="st">&quot;radio_paradise&quot;</span><span class="op">,</span> <span class="st">&quot;default_channel&quot;</span>]) <span class="op">{</span></span>
+<span id="cb36-35"><a href="#cb36-35" aria-hidden="true" tabindex="-1"></a>            <span class="cn">Ok</span>(<span class="pp">Value::</span><span class="dt">String</span>(s)) <span class="op">=&gt;</span> <span class="op">{</span></span>
+<span id="cb36-36"><a href="#cb36-36" aria-hidden="true" tabindex="-1"></a>                <span class="co">// Accepter les noms conviviaux</span></span>
+<span id="cb36-37"><a href="#cb36-37" aria-hidden="true" tabindex="-1"></a>                <span class="cf">match</span> s<span class="op">.</span>as_str() <span class="op">{</span></span>
+<span id="cb36-38"><a href="#cb36-38" aria-hidden="true" tabindex="-1"></a>                    <span class="st">&quot;main&quot;</span> <span class="op">=&gt;</span> <span class="cn">Ok</span>(<span class="dv">0</span>)<span class="op">,</span></span>
+<span id="cb36-39"><a href="#cb36-39" aria-hidden="true" tabindex="-1"></a>                    <span class="st">&quot;mellow&quot;</span> <span class="op">=&gt;</span> <span class="cn">Ok</span>(<span class="dv">1</span>)<span class="op">,</span></span>
+<span id="cb36-40"><a href="#cb36-40" aria-hidden="true" tabindex="-1"></a>                    <span class="st">&quot;rock&quot;</span> <span class="op">=&gt;</span> <span class="cn">Ok</span>(<span class="dv">2</span>)<span class="op">,</span></span>
+<span id="cb36-41"><a href="#cb36-41" aria-hidden="true" tabindex="-1"></a>                    <span class="st">&quot;eclectic&quot;</span> <span class="op">=&gt;</span> <span class="cn">Ok</span>(<span class="dv">3</span>)<span class="op">,</span></span>
+<span id="cb36-42"><a href="#cb36-42" aria-hidden="true" tabindex="-1"></a>                    _ <span class="op">=&gt;</span> <span class="op">{</span></span>
+<span id="cb36-43"><a href="#cb36-43" aria-hidden="true" tabindex="-1"></a>                        <span class="kw">self</span><span class="op">.</span>set_paradise_default_channel(<span class="dv">0</span>)<span class="op">?;</span></span>
+<span id="cb36-44"><a href="#cb36-44" aria-hidden="true" tabindex="-1"></a>                        <span class="cn">Ok</span>(<span class="dv">0</span>)</span>
+<span id="cb36-45"><a href="#cb36-45" aria-hidden="true" tabindex="-1"></a>                    <span class="op">}</span></span>
+<span id="cb36-46"><a href="#cb36-46" aria-hidden="true" tabindex="-1"></a>                <span class="op">}</span></span>
+<span id="cb36-47"><a href="#cb36-47" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
+<span id="cb36-48"><a href="#cb36-48" aria-hidden="true" tabindex="-1"></a>            <span class="cn">Ok</span>(<span class="pp">Value::</span>Number(n)) <span class="cf">if</span> n<span class="op">.</span>is_u64() <span class="op">=&gt;</span> <span class="op">{</span></span>
+<span id="cb36-49"><a href="#cb36-49" aria-hidden="true" tabindex="-1"></a>                <span class="kw">let</span> ch <span class="op">=</span> n<span class="op">.</span>as_u64()<span class="op">.</span>unwrap()<span class="op">;</span></span>
+<span id="cb36-50"><a href="#cb36-50" aria-hidden="true" tabindex="-1"></a>                <span class="cf">if</span> ch <span class="op">&lt;=</span> <span class="dv">3</span> <span class="op">{</span></span>
+<span id="cb36-51"><a href="#cb36-51" aria-hidden="true" tabindex="-1"></a>                    <span class="cn">Ok</span>(ch <span class="kw">as</span> <span class="dt">u8</span>)</span>
+<span id="cb36-52"><a href="#cb36-52" aria-hidden="true" tabindex="-1"></a>                <span class="op">}</span> <span class="cf">else</span> <span class="op">{</span></span>
+<span id="cb36-53"><a href="#cb36-53" aria-hidden="true" tabindex="-1"></a>                    <span class="kw">self</span><span class="op">.</span>set_paradise_default_channel(<span class="dv">0</span>)<span class="op">?;</span></span>
+<span id="cb36-54"><a href="#cb36-54" aria-hidden="true" tabindex="-1"></a>                    <span class="cn">Ok</span>(<span class="dv">0</span>)</span>
+<span id="cb36-55"><a href="#cb36-55" aria-hidden="true" tabindex="-1"></a>                <span class="op">}</span></span>
+<span id="cb36-56"><a href="#cb36-56" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
+<span id="cb36-57"><a href="#cb36-57" aria-hidden="true" tabindex="-1"></a>            _ <span class="op">=&gt;</span> <span class="op">{</span></span>
+<span id="cb36-58"><a href="#cb36-58" aria-hidden="true" tabindex="-1"></a>                <span class="kw">self</span><span class="op">.</span>set_value(</span>
+<span id="cb36-59"><a href="#cb36-59" aria-hidden="true" tabindex="-1"></a>                    <span class="op">&amp;</span>[<span class="st">&quot;sources&quot;</span><span class="op">,</span> <span class="st">&quot;radio_paradise&quot;</span><span class="op">,</span> <span class="st">&quot;default_channel&quot;</span>]<span class="op">,</span></span>
+<span id="cb36-60"><a href="#cb36-60" aria-hidden="true" tabindex="-1"></a>                    <span class="pp">Value::</span><span class="dt">String</span>(<span class="st">&quot;main&quot;</span><span class="op">.</span>to_string())<span class="op">,</span></span>
+<span id="cb36-61"><a href="#cb36-61" aria-hidden="true" tabindex="-1"></a>                )<span class="op">?;</span></span>
+<span id="cb36-62"><a href="#cb36-62" aria-hidden="true" tabindex="-1"></a>                <span class="cn">Ok</span>(<span class="dv">0</span>)</span>
+<span id="cb36-63"><a href="#cb36-63" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
+<span id="cb36-64"><a href="#cb36-64" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb36-65"><a href="#cb36-65" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb36-66"><a href="#cb36-66" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb36-67"><a href="#cb36-67" aria-hidden="true" tabindex="-1"></a>    <span class="kw">fn</span> set_paradise_default_channel(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> channel<span class="op">:</span> <span class="dt">u8</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb36-68"><a href="#cb36-68" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> name <span class="op">=</span> <span class="cf">match</span> channel <span class="op">{</span></span>
+<span id="cb36-69"><a href="#cb36-69" aria-hidden="true" tabindex="-1"></a>            <span class="dv">0</span> <span class="op">=&gt;</span> <span class="st">&quot;main&quot;</span><span class="op">,</span></span>
+<span id="cb36-70"><a href="#cb36-70" aria-hidden="true" tabindex="-1"></a>            <span class="dv">1</span> <span class="op">=&gt;</span> <span class="st">&quot;mellow&quot;</span><span class="op">,</span></span>
+<span id="cb36-71"><a href="#cb36-71" aria-hidden="true" tabindex="-1"></a>            <span class="dv">2</span> <span class="op">=&gt;</span> <span class="st">&quot;rock&quot;</span><span class="op">,</span></span>
+<span id="cb36-72"><a href="#cb36-72" aria-hidden="true" tabindex="-1"></a>            <span class="dv">3</span> <span class="op">=&gt;</span> <span class="st">&quot;eclectic&quot;</span><span class="op">,</span></span>
+<span id="cb36-73"><a href="#cb36-73" aria-hidden="true" tabindex="-1"></a>            _ <span class="op">=&gt;</span> <span class="cf">return</span> <span class="cn">Err</span>(<span class="pp">anyhow::anyhow!</span>(<span class="st">&quot;Invalid channel ID: {}&quot;</span><span class="op">,</span> channel))<span class="op">,</span></span>
+<span id="cb36-74"><a href="#cb36-74" aria-hidden="true" tabindex="-1"></a>        <span class="op">};</span></span>
+<span id="cb36-75"><a href="#cb36-75" aria-hidden="true" tabindex="-1"></a>        <span class="kw">self</span><span class="op">.</span>set_value(</span>
+<span id="cb36-76"><a href="#cb36-76" aria-hidden="true" tabindex="-1"></a>            <span class="op">&amp;</span>[<span class="st">&quot;sources&quot;</span><span class="op">,</span> <span class="st">&quot;radio_paradise&quot;</span><span class="op">,</span> <span class="st">&quot;default_channel&quot;</span>]<span class="op">,</span></span>
+<span id="cb36-77"><a href="#cb36-77" aria-hidden="true" tabindex="-1"></a>            <span class="pp">Value::</span><span class="dt">String</span>(name<span class="op">.</span>to_string())<span class="op">,</span></span>
+<span id="cb36-78"><a href="#cb36-78" aria-hidden="true" tabindex="-1"></a>        )</span>
+<span id="cb36-79"><a href="#cb36-79" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb36-80"><a href="#cb36-80" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h2 id="intégration-dans-un-crate">Intégration dans un crate</h2>
+<h3 id="structure-recommandée">Structure recommandée</h3>
+<pre><code>pmoxxx/
+├── Cargo.toml
+├── src/
+│   ├── lib.rs         # Exporte le trait d&#39;extension
+│   ├── config_ext.rs  # Implémentation du trait
+│   └── ...           # Reste du code du crate</pre>
+<h3 id="dans-cargo.toml">Dans Cargo.toml</h3>
+<div class="sourceCode" id="cb38"><pre
+class="sourceCode toml"><code class="sourceCode toml"><span id="cb38-1"><a href="#cb38-1" aria-hidden="true" tabindex="-1"></a><span class="kw">[dependencies]</span></span>
+<span id="cb38-2"><a href="#cb38-2" aria-hidden="true" tabindex="-1"></a><span class="dt">pmoconfig</span> <span class="op">=</span> <span class="op">{ </span><span class="dt">path</span><span class="op"> =</span> <span class="st">&quot;../pmoconfig&quot;</span><span class="op"> }</span></span>
+<span id="cb38-3"><a href="#cb38-3" aria-hidden="true" tabindex="-1"></a><span class="dt">anyhow</span> <span class="op">=</span> <span class="st">&quot;1.0&quot;</span></span>
+<span id="cb38-4"><a href="#cb38-4" aria-hidden="true" tabindex="-1"></a><span class="dt">serde_yaml</span> <span class="op">=</span> <span class="st">&quot;0.9&quot;</span></span>
+<span id="cb38-5"><a href="#cb38-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb38-6"><a href="#cb38-6" aria-hidden="true" tabindex="-1"></a><span class="co"># Si c&#39;est un cache, inclure pmocache</span></span>
+<span id="cb38-7"><a href="#cb38-7" aria-hidden="true" tabindex="-1"></a><span class="dt">pmocache</span> <span class="op">=</span> <span class="op">{ </span><span class="dt">path</span><span class="op"> =</span> <span class="st">&quot;../pmocache&quot;</span><span class="op">, </span><span class="dt">optional</span><span class="op"> =</span> <span class="cn">false</span><span class="op"> }</span></span></pre></div>
+<h3 id="dans-lib.rs">Dans lib.rs</h3>
+<div class="sourceCode" id="cb39"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb39-1"><a href="#cb39-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Exporter le trait pour qu&#39;il soit utilisable</span></span>
+<span id="cb39-2"><a href="#cb39-2" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">mod</span> config_ext<span class="op">;</span></span>
+<span id="cb39-3"><a href="#cb39-3" aria-hidden="true" tabindex="-1"></a><span class="kw">pub</span> <span class="kw">use</span> <span class="pp">config_ext::</span>XxxConfigExt<span class="op">;</span></span>
+<span id="cb39-4"><a href="#cb39-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb39-5"><a href="#cb39-5" aria-hidden="true" tabindex="-1"></a><span class="co">// Le reste du code du crate</span></span>
+<span id="cb39-6"><a href="#cb39-6" aria-hidden="true" tabindex="-1"></a><span class="co">// ...</span></span></pre></div>
+<h3 id="utilisation-dans-le-code-applicatif">Utilisation dans le code
+applicatif</h3>
+<div class="sourceCode" id="cb40"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb40-1"><a href="#cb40-1" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">pmoconfig::</span>get_config<span class="op">;</span></span>
+<span id="cb40-2"><a href="#cb40-2" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">pmoxxx::</span>XxxConfigExt<span class="op">;</span></span>
+<span id="cb40-3"><a href="#cb40-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb40-4"><a href="#cb40-4" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> main() <span class="op">-&gt;</span> <span class="pp">anyhow::</span><span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb40-5"><a href="#cb40-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> config <span class="op">=</span> get_config()<span class="op">;</span></span>
+<span id="cb40-6"><a href="#cb40-6" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb40-7"><a href="#cb40-7" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Utiliser les méthodes du trait d&#39;extension</span></span>
+<span id="cb40-8"><a href="#cb40-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> value <span class="op">=</span> config<span class="op">.</span>get_xxx_value()<span class="op">?;</span></span>
+<span id="cb40-9"><a href="#cb40-9" aria-hidden="true" tabindex="-1"></a>    config<span class="op">.</span>set_xxx_value(new_value)<span class="op">?;</span></span>
+<span id="cb40-10"><a href="#cb40-10" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb40-11"><a href="#cb40-11" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Factory method</span></span>
+<span id="cb40-12"><a href="#cb40-12" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> client <span class="op">=</span> config<span class="op">.</span>create_xxx_client()<span class="op">?;</span></span>
+<span id="cb40-13"><a href="#cb40-13" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb40-14"><a href="#cb40-14" aria-hidden="true" tabindex="-1"></a>    <span class="cn">Ok</span>(())</span>
+<span id="cb40-15"><a href="#cb40-15" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<h2 id="checklist-pour-créer-un-nouveau-trait-dextension">Checklist pour
+créer un nouveau trait d’extension</h2>
+<ul class="task-list">
+<li><label><input type="checkbox" />Créer le fichier
+<code>src/config_ext.rs</code> dans le crate</label></li>
+<li><label><input type="checkbox" />Définir les constantes pour les
+valeurs par défaut</label></li>
+<li><label><input type="checkbox" />Créer le trait
+<code>XxxConfigExt</code> avec documentation</label></li>
+<li><label><input type="checkbox" />Implémenter les getters avec gestion
+d’erreur appropriée</label></li>
+<li><label><input type="checkbox" />Implémenter les setters</label></li>
+<li><label><input type="checkbox" />Ajouter les helpers de validation si
+nécessaire</label></li>
+<li><label><input type="checkbox" />Ajouter les factory methods si
+applicable</label></li>
+<li><label><input type="checkbox" />Documenter chaque méthode avec
+exemples</label></li>
+<li><label><input type="checkbox" />Exporter le trait dans
+<code>lib.rs</code></label></li>
+<li><label><input type="checkbox" />Ajouter <code>pmoconfig</code> dans
+<code>Cargo.toml</code></label></li>
+<li><label><input type="checkbox" />Tester l’intégration</label></li>
+</ul>
+<h2 id="philosophie-du-pattern">Philosophie du pattern</h2>
+<h3 id="avantages">Avantages</h3>
+<ol type="1">
+<li><strong>Séparation des préoccupations</strong> : Chaque crate gère
+sa propre configuration</li>
+<li><strong>Type safety</strong> : Les erreurs de type sont détectées à
+la compilation</li>
+<li><strong>Extensibilité</strong> : Facile d’ajouter de nouveaux crates
+sans modifier pmoconfig</li>
+<li><strong>Cohérence</strong> : Pattern uniforme dans tout le
+projet</li>
+<li><strong>Documentation</strong> : Interface self-documenting avec
+exemples</li>
+</ol>
+<h3 id="principes-directeurs">Principes directeurs</h3>
+<ol type="1">
+<li><strong>Minimalisme</strong> : Ne configurer que ce qui doit
+vraiment l’être</li>
+<li><strong>Defaults intelligents</strong> : Valeurs par défaut sensées
+et documentées</li>
+<li><strong>Auto-persistence</strong> : Les valeurs importantes sont
+persistées automatiquement</li>
+<li><strong>User-friendly</strong> : Noms conviviaux dans le YAML
+(strings au lieu de nombres)</li>
+<li><strong>Fail-safe</strong> : Gestion des erreurs gracieuse avec
+fallback sur défauts</li>
+<li><strong>Zero surprise</strong> : Comportement prévisible et
+cohérent</li>
+</ol>
+<h2 id="sécurité-chiffrement-des-mots-de-passe">Sécurité : Chiffrement
+des mots de passe</h2>
+<p>Tous les mots de passe dans la configuration doivent pouvoir être
+chiffrés. Voir <code>pmoconfig/PASSWORD_ENCRYPTION.md</code> pour les
+détails.</p>
+<h3 id="pattern-pour-les-mots-de-passe">Pattern pour les mots de
+passe</h3>
+<div class="sourceCode" id="cb41"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb41-1"><a href="#cb41-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> get_xxx_password(<span class="op">&amp;</span><span class="kw">self</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span><span class="dt">String</span><span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb41-2"><a href="#cb41-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">match</span> <span class="kw">self</span><span class="op">.</span>get_value(<span class="op">&amp;</span>[<span class="st">&quot;accounts&quot;</span><span class="op">,</span> <span class="st">&quot;xxx&quot;</span><span class="op">,</span> <span class="st">&quot;password&quot;</span>])<span class="op">?</span> <span class="op">{</span></span>
+<span id="cb41-3"><a href="#cb41-3" aria-hidden="true" tabindex="-1"></a>        <span class="pp">Value::</span><span class="dt">String</span>(s) <span class="op">=&gt;</span> <span class="op">{</span></span>
+<span id="cb41-4"><a href="#cb41-4" aria-hidden="true" tabindex="-1"></a>            <span class="co">// Déchiffrement automatique</span></span>
+<span id="cb41-5"><a href="#cb41-5" aria-hidden="true" tabindex="-1"></a>            <span class="pp">pmoconfig::encryption::</span>get_password(<span class="op">&amp;</span>s)</span>
+<span id="cb41-6"><a href="#cb41-6" aria-hidden="true" tabindex="-1"></a>                <span class="op">.</span>map_err(<span class="op">|</span>e<span class="op">|</span> <span class="pp">anyhow!</span>(<span class="st">&quot;Failed to decrypt password: {}&quot;</span><span class="op">,</span> e))</span>
+<span id="cb41-7"><a href="#cb41-7" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb41-8"><a href="#cb41-8" aria-hidden="true" tabindex="-1"></a>        _ <span class="op">=&gt;</span> <span class="cn">Err</span>(<span class="pp">anyhow!</span>(<span class="st">&quot;Password not configured&quot;</span>))<span class="op">,</span></span>
+<span id="cb41-9"><a href="#cb41-9" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb41-10"><a href="#cb41-10" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb41-11"><a href="#cb41-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb41-12"><a href="#cb41-12" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> set_xxx_password(<span class="op">&amp;</span><span class="kw">self</span><span class="op">,</span> password<span class="op">:</span> <span class="op">&amp;</span><span class="dt">str</span>) <span class="op">-&gt;</span> <span class="dt">Result</span><span class="op">&lt;</span>()<span class="op">&gt;</span> <span class="op">{</span></span>
+<span id="cb41-13"><a href="#cb41-13" aria-hidden="true" tabindex="-1"></a>    <span class="co">// Le chiffrement est fait manuellement par l&#39;utilisateur avec l&#39;outil</span></span>
+<span id="cb41-14"><a href="#cb41-14" aria-hidden="true" tabindex="-1"></a>    <span class="kw">self</span><span class="op">.</span>set_value(</span>
+<span id="cb41-15"><a href="#cb41-15" aria-hidden="true" tabindex="-1"></a>        <span class="op">&amp;</span>[<span class="st">&quot;accounts&quot;</span><span class="op">,</span> <span class="st">&quot;xxx&quot;</span><span class="op">,</span> <span class="st">&quot;password&quot;</span>]<span class="op">,</span></span>
+<span id="cb41-16"><a href="#cb41-16" aria-hidden="true" tabindex="-1"></a>        <span class="pp">Value::</span><span class="dt">String</span>(password<span class="op">.</span>to_string())<span class="op">,</span></span>
+<span id="cb41-17"><a href="#cb41-17" aria-hidden="true" tabindex="-1"></a>    )</span>
+<span id="cb41-18"><a href="#cb41-18" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></pre></div>
+<p><strong>Important</strong> : Le setter stocke le mot de passe tel
+quel. C’est l’utilisateur qui décide de le chiffrer ou non avec l’outil
+<code>encrypt_password</code>.</p>
+<h2 id="références">Références</h2>
+<h3 id="fichiers-dexemple-à-consulter">Fichiers d’exemple à
+consulter</h3>
+<ul>
+<li><strong>Cache générique</strong> :
+<code>pmocache/src/config_ext.rs</code></li>
+<li><strong>Cache spécialisé</strong> :
+<code>pmocovers/src/config_ext.rs</code> ou
+<code>pmoaudiocache/src/config_ext.rs</code></li>
+<li><strong>Service avec auth</strong> :
+<code>pmoqobuz/src/config_ext.rs</code></li>
+<li><strong>Configuration minimale</strong> :
+<code>pmoparadise/src/config_ext.rs</code></li>
+<li><strong>Configuration UPnP</strong> :
+<code>pmoupnp/src/config_ext.rs</code></li>
+<li><strong>Chiffrement</strong> :
+<code>pmoconfig/PASSWORD_ENCRYPTION.md</code></li>
+</ul>
+<h3 id="documentation-pmoconfig">Documentation pmoconfig</h3>
+<ul>
+<li><code>pmoconfig::Config::get_value()</code></li>
+<li><code>pmoconfig::Config::set_value()</code></li>
+<li><code>pmoconfig::Config::get_managed_dir()</code></li>
+<li><code>pmoconfig::encryption</code> module</li>
+</ul>
+</article>
+</body>
+</html>

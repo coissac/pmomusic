@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pmoserver_ext</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/github-markdown-css@5/github-markdown.min.css">
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({startOnLoad: true, theme: "default"});
+</script>
+<style>
+  .markdown-body {
+    box-sizing: border-box;
+    min-width: 200px;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 45px;
+  }
+  .back-link {
+    margin-bottom: 20px;
+    display: block;
+  }
+  pre.mermaid {
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 10px;
+  }
+</style>
+</head>
+<body>
+<article class="markdown-body">
+<p class="back-link"><a href="index.html">← Retour à l'index</a></p>
+<h1 id="rapport-documentation-du-pattern-pmoserver_ext">Rapport :
+Documentation du pattern pmoserver_ext</h1>
+<h2 id="contexte">Contexte</h2>
+<p>Documentation du pattern d’extension du PMOServer à travers plusieurs
+itérations basées sur les retours utilisateur.</p>
+<h2 id="travail-réalisé">Travail réalisé</h2>
+<h3 id="analyse-des-fichiers-sources">Analyse des fichiers sources</h3>
+<p>Les fichiers suivants ont été analysés pour extraire le pattern :</p>
+<ul>
+<li><code>pmoapp/src/lib.rs</code> : Pattern SPA avec RustEmbed</li>
+<li><code>pmocontrol/src/pmoserver_ext.rs</code> : API REST avec Control
+Point (1506+ lignes)</li>
+<li><code>pmoparadise/src/pmoserver_ext.rs</code> : API REST simple avec
+client externe</li>
+<li><code>pmoaudiocache/src/lib.rs</code> : Extension avec cache et
+fichiers</li>
+<li><code>pmomediaserver/src/paradise_streaming.rs</code> : Extension
+complexe avec streaming</li>
+</ul>
+<h3 id="round-1-document-initial">Round 1 : Document initial</h3>
+<p>Premier jet documentant exhaustivement tous les aspects des
+extensions (~850 lignes).</p>
+<h3 id="round-2-recentrage-sur-le-pattern">Round 2 : Recentrage sur le
+pattern</h3>
+<p><strong>Annotation</strong> : “se recentrer sur le sujet
+principal”</p>
+<p><strong>Actions</strong> : - Réduction de ~850 à ~400 lignes -
+Suppression des digressions (OpenAPI détaillé, handlers spécifiques) -
+Focus sur l’anatomie du pattern en 5 étapes - Ajout d’une checklist et
+d’un exemple minimal</p>
+<p><strong>Résultat</strong> : Document focalisé sur l’implémentation du
+pattern uniquement.</p>
+<h3 id="round-3-réintégration-openapi">Round 3 : Réintégration
+OpenAPI</h3>
+<p><strong>Annotation</strong> : “Je trouve que le fait de devoir
+déclarer et documenter les URL dans OpenAPI / utopia était quelque chose
+d’important. Remets le.”</p>
+<p><strong>Actions</strong> : - Ajout d’une section complète
+“Documentation OpenAPI avec utoipa” (~260 lignes) - 5 sous-sections
+détaillées : 1. Configuration de base (dépendances Cargo) 2. Définition
+des schémas avec <code>#[derive(ToSchema)]</code> 3. Annotation des
+handlers avec <code>#[utoipa::path]</code> 4. Création de la structure
+<code>#[derive(OpenApi)]</code> 5. Exemple complet extrait de Radio
+Paradise - Mise à jour de la checklist avec section “Documentation
+OpenAPI” - Ajout des dépendances <code>utoipa</code> et
+<code>serde</code> dans la section références</p>
+<p><strong>Positionnement</strong> : Section insérée après “Méthodes
+disponibles du serveur” et avant “Patterns courants”, car elle fait
+partie intégrante de l’implémentation.</p>
+<h2 id="structure-finale-du-document">Structure finale du document</h2>
+<ol type="1">
+<li><strong>Vue d’ensemble</strong> : Principe du pattern</li>
+<li><strong>Anatomie d’une extension</strong> : 5 étapes détaillées</li>
+<li><strong>Méthodes disponibles du serveur</strong> : API de
+<code>pmoserver::Server</code></li>
+<li><strong>Documentation OpenAPI avec utoipa</strong> : Guide complet
+en 5 étapes ⭐ <em>Ajouté au Round 3</em></li>
+<li><strong>Patterns courants</strong> : 3 exemples concrets</li>
+<li><strong>Gestion des opérations longues</strong> : spawn_blocking,
+timeouts, background tasks</li>
+<li><strong>Checklist d’implémentation</strong> : Organisée par
+catégories</li>
+<li><strong>Exemple complet minimal</strong> : Code fonctionnel</li>
+<li><strong>Références</strong> : Fichiers sources et dépendances</li>
+</ol>
+<h2 id="résultat-final">Résultat final</h2>
+<p>Le document est maintenant :</p>
+<ul>
+<li><strong>Complet</strong> : Couvre tous les aspects essentiels
+incluant OpenAPI</li>
+<li><strong>Structuré</strong> : Progression logique de la configuration
+à l’implémentation</li>
+<li><strong>Pratique</strong> : Exemples de code concrets extraits du
+codebase</li>
+<li><strong>Actionnable</strong> : Checklist détaillée en 4
+catégories</li>
+</ul>
+<p>Taille finale : ~660 lignes (avec section OpenAPI complète)</p>
+<h2 id="fichiers-modifiés">Fichiers modifiés</h2>
+<ul>
+<li><code>Blackboard/Architecture/pmoserver_ext.md</code> : Document
+complet avec OpenAPI (660 lignes)</li>
+</ul>
+</article>
+</body>
+</html>

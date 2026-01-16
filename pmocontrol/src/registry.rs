@@ -175,7 +175,9 @@ impl DeviceRegistry {
                 return;
             }
             // Entry existe mais pas de renderer -> on l'ajoute
-            if let Ok(new_renderer) = MusicRenderer::from_renderer_info(info) {
+            if let Ok(new_renderer) =
+                MusicRenderer::from_renderer_info_with_bus(info, Some(self.renderer_bus.clone()))
+            {
                 entry.music_renderer = Some(Arc::new(new_renderer));
                 self.udn_index
                     .insert(info.udn().to_ascii_lowercase(), device_id.clone());
@@ -188,7 +190,9 @@ impl DeviceRegistry {
             }
         } else {
             // Entry n'existe pas -> on crée
-            if let Ok(new_renderer) = MusicRenderer::from_renderer_info(info) {
+            if let Ok(new_renderer) =
+                MusicRenderer::from_renderer_info_with_bus(info, Some(self.renderer_bus.clone()))
+            {
                 let new_entry = DeviceItem {
                     music_renderer: Some(Arc::new(new_renderer)),
                     music_server: None,

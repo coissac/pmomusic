@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>music_source</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/github-markdown-css@5/github-markdown.min.css">
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({startOnLoad: true, theme: "default"});
+</script>
+<style>
+  .markdown-body {
+    box-sizing: border-box;
+    min-width: 200px;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 45px;
+  }
+  .back-link {
+    margin-bottom: 20px;
+    display: block;
+  }
+  pre.mermaid {
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 10px;
+  }
+</style>
+</head>
+<body>
+<article class="markdown-body">
+<p class="back-link"><a href="index.html">← Retour à l'index</a></p>
+<h1
+id="rapport-documentation-dimplémentation-dune-nouvelle-musicsource">Rapport
+: Documentation d’implémentation d’une nouvelle MusicSource</h1>
+<h2 id="objectif">Objectif</h2>
+<p>Créer une documentation complète et pratique pour guider
+l’implémentation d’une nouvelle source musicale dans l’écosystème
+PMOMusic.</p>
+<h2 id="travail-réalisé">Travail réalisé</h2>
+<h3 id="analyse-des-sources-existantes">1. Analyse des sources
+existantes</h3>
+<p>J’ai analysé deux implémentations de référence :</p>
+<ul>
+<li><strong>pmoparadise/src/source.rs</strong> : Source dynamique avec
+FIFO (radio streaming)</li>
+<li><strong>pmoqobuz/src/source.rs</strong> : Source catalogue avec
+playlists lazy</li>
+</ul>
+<p>Ainsi que la documentation du trait :</p>
+<ul>
+<li><strong>pmosource/README.md</strong> : Vue d’ensemble du trait
+MusicSource</li>
+<li><strong>pmosource/ARCHITECTURE.md</strong> : Architecture et design
+decisions</li>
+</ul>
+<h3 id="identification-des-patterns-principaux">2. Identification des
+patterns principaux</h3>
+<p>Deux patterns majeurs ont été identifiés :</p>
+<h4 id="pattern-1-source-dynamique-fifo-radio-paradise">Pattern 1 :
+Source dynamique FIFO (Radio Paradise)</h4>
+<p><strong>Caractéristiques :</strong> - Flux continu de tracks avec
+capacité limitée - Suppression automatique des plus anciens - Callbacks
+sur playlists pour détecter les changements - Notification du
+ContentDirectory via notifier injecté - Adaptation des IDs playlist →
+schema source</p>
+<p><strong>Éléments clés :</strong></p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>update_counter<span class="op">:</span> Arc<span class="op">&lt;</span>RwLock<span class="op">&lt;</span><span class="dt">u32</span><span class="op">&gt;&gt;</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>last_change<span class="op">:</span> Arc<span class="op">&lt;</span>RwLock<span class="op">&lt;</span>SystemTime<span class="op">&gt;&gt;</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>callback_tokens<span class="op">:</span> Arc<span class="op">&lt;</span>Mutex<span class="op">&lt;</span><span class="dt">Vec</span><span class="op">&lt;</span><span class="dt">u64</span><span class="op">&gt;&gt;&gt;</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>container_notifier<span class="op">:</span> <span class="dt">Option</span><span class="op">&lt;</span>Arc<span class="op">&lt;</span><span class="kw">dyn</span> <span class="bu">Fn</span>(<span class="op">&amp;</span>[<span class="dt">String</span>]) <span class="op">+</span> <span class="bu">Send</span> <span class="op">+</span> <span class="bu">Sync</span><span class="op">&gt;&gt;</span></span></pre></div>
+<h4 id="pattern-2-source-catalogue-lazy-qobuz">Pattern 2 : Source
+catalogue lazy (Qobuz)</h4>
+<p><strong>Caractéristiques :</strong> - Catalogue vaste avec navigation
+hiérarchique - Cache lazy pour audio, eager pour covers - Playlists
+créées à la demande avec TTL - LazyProvider pour télécharger l’audio à
+la lecture - Métadonnées riches stockées dans le cache</p>
+<p><strong>Éléments clés :</strong></p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode rust"><code class="sourceCode rust"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a>SourceCacheManager centralisé</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>QobuzLazyProvider implémentant LazyProvider</span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>Playlists avec rôle Album et TTL de <span class="dv">7</span> jours</span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>Adaptation IDs avec metadata source_track_id</span></pre></div>
+<h3 id="structure-du-document-créé">3. Structure du document créé</h3>
+<p>Le document <code>Blackboard/Architecture/music_source.md</code>
+contient :</p>
+<h4 id="table-des-matières">Table des matières</h4>
+<ol type="1">
+<li>Vue d’ensemble</li>
+<li>Structure d’une MusicSource</li>
+<li>Implémentation du trait MusicSource</li>
+<li>Patterns d’implémentation</li>
+<li>Intégration avec l’écosystème PMOMusic</li>
+<li>Checklist de mise en œuvre</li>
+<li>Exemples de référence</li>
+</ol>
+<h4 id="sections-détaillées">Sections détaillées</h4>
+<p><strong>Section 1 : Vue d’ensemble</strong> - Définition d’une
+MusicSource - Types de sources (dynamique vs statique) - Capacités du
+trait</p>
+<p><strong>Section 2 : Structure</strong> - Organisation du code -
+Dépendances recommandées - Features Cargo</p>
+<p><strong>Section 3 : Implémentation du trait</strong> - Informations
+de base (name, id, default_image) - Navigation ContentDirectory
+(root_container, browse, resolve_uri) - Support FIFO (append_track,
+remove_oldest, update_id) - Support statique (get_items, search)</p>
+<p><strong>Section 4 : Patterns</strong> - Pattern 1 : Source dynamique
+avec FIFO (code complet) - Pattern 2 : Source catalogue avec playlists
+lazy (code complet) - Pattern 3 : Adaptation des IDs entre playlist et
+source</p>
+<p><strong>Section 5 : Intégration écosystème</strong> - pmoplaylist :
+création et gestion de playlists - pmoaudiocache/pmocovers via
+SourceCacheManager - pmodidl : conversion vers DIDL-Lite - LazyProvider
+personnalisé</p>
+<p><strong>Section 6 : Checklist</strong> - Phase 1 : Structure de base
+- Phase 2 : Navigation ContentDirectory - Phase 3 : Résolution d’URI -
+Phase 4 : Support FIFO (si dynamique) - Phase 5 : Support statique (si
+catalogue) - Phase 6 : Intégration avancée - Phase 7 : Tests et
+validation</p>
+<p><strong>Section 7 : Exemples de référence</strong> - Radio Paradise
+(source dynamique FIFO) - Qobuz (source catalogue lazy) - Schemas
+d’Object ID détaillés</p>
+<h3 id="points-techniques-importants-documentés">4. Points techniques
+importants documentés</h3>
+<h4 id="schema-dobject-id">Schema d’Object ID</h4>
+<p>Format recommandé hiérarchique :</p>
+<pre><code>&lt;source-id&gt;
+&lt;source-id&gt;:albums
+&lt;source-id&gt;:album:&lt;album_id&gt;
+&lt;source-id&gt;:track:&lt;track_id&gt;
+&lt;source-id&gt;:playlist:&lt;playlist_id&gt;</pre>
+<p>Exemples concrets de Radio Paradise et Qobuz fournis.</p>
+<h4 id="adaptation-des-ids">Adaptation des IDs</h4>
+<p>Code complet pour adapter les items de playlist au schema de la
+source : - Extraction du cache_pk depuis l’URL - Récupération du
+source_track_id depuis metadata - Reconstruction de l’ID correct -
+Normalisation des URLs (relatives → absolues) - Ajout de champs requis
+(genre)</p>
+<h4 id="cache-lazy-vs-eager">Cache lazy vs eager</h4>
+<p>Stratégie claire : - <strong>Covers</strong> : Cache eager (petit, UI
+en a besoin immédiatement) - <strong>Audio</strong> : Cache lazy (grand,
+téléchargé à la demande)</p>
+<h4 id="thread-safety">Thread Safety</h4>
+<p>Règles explicites : - <code>Arc&lt;RwLock&lt;&gt;&gt;</code> pour
+état mutable partagé - <code>tokio::sync::RwLock</code> pour async -
+Éviter <code>Rc&lt;&gt;</code>, <code>RefCell</code> (non thread-safe) -
+Implémenter <code>Clone</code> via <code>Arc&lt;&gt;</code></p>
+<h4 id="compatibilité-upnp">Compatibilité UPnP</h4>
+<p>Points de vigilance : - Genre obligatoire pour certains clients
+(gupnp-av-cp) - URLs absolues uniquement - Protocol Info correct pour
+FLAC - Duration au format <code>H:MM:SS</code> - childCount optionnel
+mais recommandé</p>
+<h3 id="code-dexemple-complet">5. Code d’exemple complet</h3>
+<p>Le document contient des exemples de code complets et fonctionnels
+pour :</p>
+<ol type="1">
+<li><strong>Structure de base</strong> : définition de la struct et
+implémentation basique</li>
+<li><strong>Navigation</strong> : root_container et browse avec pattern
+matching</li>
+<li><strong>Résolution URI</strong> : avec fallback cache →
+original</li>
+<li><strong>FIFO</strong> : append_track, remove_oldest, callbacks</li>
+<li><strong>Adaptation IDs</strong> : fonction complète
+d’adaptation</li>
+<li><strong>LazyProvider</strong> : implémentation personnalisée</li>
+<li><strong>Conversion DIDL</strong> : traits ToDIDLContainer et
+ToDIDLItem</li>
+</ol>
+<h2 id="couverture-des-besoins">Couverture des besoins</h2>
+<h3 id="sources-couvertes">Sources couvertes</h3>
+<ul>
+<li>✅ Radio Paradise : source dynamique FIFO</li>
+<li>✅ Qobuz : source catalogue lazy</li>
+<li>✅ Patterns génériques applicables à d’autres sources</li>
+</ul>
+<h3 id="cas-dusage-couverts">Cas d’usage couverts</h3>
+<ul>
+<li>✅ Source radio/streaming live</li>
+<li>✅ Source catalogue de streaming (Spotify, Deezer, etc.)</li>
+<li>✅ Source bibliothèque locale</li>
+<li>✅ Source playlists fixes</li>
+<li>✅ Source avec authentification (via client)</li>
+</ul>
+<h3 id="intégrations-couvertes">Intégrations couvertes</h3>
+<ul>
+<li>✅ pmoplaylist (FIFO et persistant)</li>
+<li>✅ pmoaudiocache (cache audio)</li>
+<li>✅ pmocovers (cache covers)</li>
+<li>✅ SourceCacheManager (centralisé)</li>
+<li>✅ LazyProvider (téléchargement lazy)</li>
+<li>✅ pmodidl (DIDL-Lite)</li>
+</ul>
+<h2 id="limitations-et-améliorations-futures">Limitations et
+améliorations futures</h2>
+<h3 id="limitations-actuelles">Limitations actuelles</h3>
+<ol type="1">
+<li><strong>Search</strong> : Pas d’exemple détaillé de search
+(optionnel dans le trait)</li>
+<li><strong>Authentification</strong> : Mentionné mais pas d’exemple
+complet</li>
+<li><strong>Multi-format</strong> : Pas d’exemple de source supportant
+plusieurs formats</li>
+<li><strong>Offline</strong> : Pas de pattern pour source
+offline/synchronisation</li>
+</ol>
+<h3 id="améliorations-possibles">Améliorations possibles</h3>
+<ol type="1">
+<li>Ajouter un exemple complet de search avec filtres</li>
+<li>Documenter l’intégration avec un système d’auth OAuth</li>
+<li>Ajouter un pattern pour sources multi-formats (FLAC/MP3/AAC)</li>
+<li>Documenter la gestion offline avec synchronisation</li>
+</ol>
+<h2 id="fichiers-créés">Fichiers créés</h2>
+<ul>
+<li><code>Blackboard/Architecture/music_source.md</code> : Documentation
+complète (15 sections, ~800 lignes)</li>
+</ul>
+<h2 id="conclusion">Conclusion</h2>
+<p>Le document créé fournit un guide complet et pratique pour
+implémenter une nouvelle MusicSource. Il combine :</p>
+<ul>
+<li><strong>Théorie</strong> : Architecture, design patterns,
+principes</li>
+<li><strong>Pratique</strong> : Code complet, exemples réels,
+checklist</li>
+<li><strong>Référence</strong> : Schemas d’Object ID, intégrations,
+compatibilité</li>
+</ul>
+<p>Un développeur peut suivre ce guide étape par étape pour créer une
+nouvelle source musicale compatible avec l’écosystème PMOMusic, en
+s’inspirant des patterns éprouvés de Radio Paradise et Qobuz.</p>
+</article>
+</body>
+</html>

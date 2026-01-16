@@ -112,6 +112,41 @@ pub struct ErrorResponse {
     pub message: String,
 }
 
+/// Requête pour définir un TTL
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct SetTtlRequest {
+    /// Date/heure d'expiration au format RFC3339
+    #[cfg_attr(feature = "openapi", schema(example = "2025-01-20T10:30:00Z"))]
+    pub expires_at: String,
+}
+
+/// Réponse pour une opération de pinning/TTL
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct PinResponse {
+    /// Clé primaire de l'item
+    #[cfg_attr(feature = "openapi", schema(example = "1a2b3c4d5e6f7a8b"))]
+    pub pk: String,
+    /// Message de succès
+    #[cfg_attr(feature = "openapi", schema(example = "Item pinned successfully"))]
+    pub message: String,
+}
+
+/// Statut de pinning d'un item
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct PinStatus {
+    /// Clé primaire de l'item
+    #[cfg_attr(feature = "openapi", schema(example = "1a2b3c4d5e6f7a8b"))]
+    pub pk: String,
+    /// Indique si l'item est épinglé
+    pub pinned: bool,
+    /// Date/heure d'expiration du TTL (si défini)
+    #[cfg_attr(feature = "openapi", schema(example = "2025-01-20T10:30:00Z"))]
+    pub ttl_expires_at: Option<String>,
+}
+
 /// Liste tous les items en cache avec leurs statistiques
 ///
 /// Retourne la liste complète des entrées du cache triées par nombre d'accès décroissant.
@@ -436,5 +471,231 @@ pub async fn consolidate_cache<C: CacheConfig + 'static>(
             }),
         )
             .into_response(),
+    }
+}
+
+/// Récupère le statut de pinning d'un item
+///
+/// Retourne si l'item est épinglé et sa date d'expiration TTL (si défini).
+pub async fn get_pin_status<C: CacheConfig + 'static>(
+    State(cache): State<Arc<Cache<C>>>,
+    Path(pk): Path<String>,
+) -> impl IntoResponse {
+    // Vérifier que l'item existe et récupérer ses infos
+    match cache.db.get(&pk, false) {
+        Ok(entry) => (
+            StatusCode::OK,
+            Json(PinStatus {
+                pk,
+                pinned: entry.pinned,
+                ttl_expires_at: entry.ttl_expires_at,
+            }),
+        )
+            .into_response(),
+        Err(_) => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "NOT_FOUND".to_string(),
+                message: format!("Item with pk '{}' not found in cache", pk),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+/// Épingle un item pour le protéger de l'éviction LRU
+///
+/// Un item épinglé ne peut pas être supprimé automatiquement et ne compte pas
+/// dans la limite du cache. Échoue si l'item a un TTL défini.
+pub async fn pin_item<C: CacheConfig + 'static>(
+    State(cache): State<Arc<Cache<C>>>,
+    Path(pk): Path<String>,
+) -> impl IntoResponse {
+    match cache.pin(&pk).await {
+        Ok(_) => (
+            StatusCode::OK,
+            Json(PinResponse {
+                pk: pk.clone(),
+                message: format!("Item '{}' pinned successfully", pk),
+            }),
+        )
+            .into_response(),
+        Err(e) => {
+            let error_msg = e.to_string();
+            if error_msg.contains("TTL") {
+                (
+                    StatusCode::CONFLICT,
+                    Json(ErrorResponse {
+                        error: "CONFLICT".to_string(),
+                        message: "Cannot pin an item with TTL set. Clear TTL first.".to_string(),
+                    }),
+                )
+                    .into_response()
+            } else if error_msg.contains("no rows") {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(ErrorResponse {
+                        error: "NOT_FOUND".to_string(),
+                        message: format!("Item with pk '{}' not found in cache", pk),
+                    }),
+                )
+                    .into_response()
+            } else {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: "PIN_ERROR".to_string(),
+                        message: format!("Cannot pin item: {}", e),
+                    }),
+                )
+                    .into_response()
+            }
+        }
+    }
+}
+
+/// Désépingle un item
+///
+/// Rend l'item à nouveau éligible à l'éviction LRU et le compte dans la limite du cache.
+pub async fn unpin_item<C: CacheConfig + 'static>(
+    State(cache): State<Arc<Cache<C>>>,
+    Path(pk): Path<String>,
+) -> impl IntoResponse {
+    match cache.unpin(&pk).await {
+        Ok(_) => (
+            StatusCode::OK,
+            Json(PinResponse {
+                pk: pk.clone(),
+                message: format!("Item '{}' unpinned successfully", pk),
+            }),
+        )
+            .into_response(),
+        Err(e) => {
+            let error_msg = e.to_string();
+            if error_msg.contains("no rows") {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(ErrorResponse {
+                        error: "NOT_FOUND".to_string(),
+                        message: format!("Item with pk '{}' not found in cache", pk),
+                    }),
+                )
+                    .into_response()
+            } else {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: "UNPIN_ERROR".to_string(),
+                        message: format!("Cannot unpin item: {}", e),
+                    }),
+                )
+                    .into_response()
+            }
+        }
+    }
+}
+
+/// Définit le TTL (Time To Live) d'un item
+///
+/// L'item sera automatiquement supprimé à la date d'expiration.
+/// Échoue si l'item est épinglé.
+pub async fn set_item_ttl<C: CacheConfig + 'static>(
+    State(cache): State<Arc<Cache<C>>>,
+    Path(pk): Path<String>,
+    Json(req): Json<SetTtlRequest>,
+) -> impl IntoResponse {
+    // Valider le format de la date
+    if chrono::DateTime::parse_from_rfc3339(&req.expires_at).is_err() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "INVALID_DATE".to_string(),
+                message: "Invalid RFC3339 date format".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    match cache.set_ttl(&pk, &req.expires_at).await {
+        Ok(_) => (
+            StatusCode::OK,
+            Json(PinResponse {
+                pk: pk.clone(),
+                message: format!("TTL set successfully for item '{}'", pk),
+            }),
+        )
+            .into_response(),
+        Err(e) => {
+            let error_msg = e.to_string();
+            if error_msg.contains("pinned") {
+                (
+                    StatusCode::CONFLICT,
+                    Json(ErrorResponse {
+                        error: "CONFLICT".to_string(),
+                        message: "Cannot set TTL on a pinned item. Unpin first.".to_string(),
+                    }),
+                )
+                    .into_response()
+            } else if error_msg.contains("no rows") {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(ErrorResponse {
+                        error: "NOT_FOUND".to_string(),
+                        message: format!("Item with pk '{}' not found in cache", pk),
+                    }),
+                )
+                    .into_response()
+            } else {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: "TTL_ERROR".to_string(),
+                        message: format!("Cannot set TTL: {}", e),
+                    }),
+                )
+                    .into_response()
+            }
+        }
+    }
+}
+
+/// Supprime le TTL d'un item
+///
+/// L'item ne sera plus supprimé automatiquement.
+pub async fn clear_item_ttl<C: CacheConfig + 'static>(
+    State(cache): State<Arc<Cache<C>>>,
+    Path(pk): Path<String>,
+) -> impl IntoResponse {
+    match cache.clear_ttl(&pk).await {
+        Ok(_) => (
+            StatusCode::OK,
+            Json(PinResponse {
+                pk: pk.clone(),
+                message: format!("TTL cleared successfully for item '{}'", pk),
+            }),
+        )
+            .into_response(),
+        Err(e) => {
+            let error_msg = e.to_string();
+            if error_msg.contains("no rows") {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(ErrorResponse {
+                        error: "NOT_FOUND".to_string(),
+                        message: format!("Item with pk '{}' not found in cache", pk),
+                    }),
+                )
+                    .into_response()
+            } else {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: "TTL_ERROR".to_string(),
+                        message: format!("Cannot clear TTL: {}", e),
+                    }),
+                )
+                    .into_response()
+            }
+        }
     }
 }

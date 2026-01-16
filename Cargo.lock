@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "PMOMusic"
-version = "0.3.1"
+version = "0.3.3"
 dependencies = [
  "axum 0.8.7",
  "console-subscriber",
@@ -3730,6 +3730,7 @@ dependencies = [
  "pmoserver",
  "pmoupnp",
  "quick-xml",
+ "rand 0.9.2",
  "ratatui",
  "rust_cast",
  "rustls",

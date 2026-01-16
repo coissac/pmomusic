@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>config_ext</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/github-markdown-css@5/github-markdown.min.css">
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({startOnLoad: true, theme: "default"});
+</script>
+<style>
+  .markdown-body {
+    box-sizing: border-box;
+    min-width: 200px;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 45px;
+  }
+  .back-link {
+    margin-bottom: 20px;
+    display: block;
+  }
+  pre.mermaid {
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 10px;
+  }
+</style>
+</head>
+<body>
+<article class="markdown-body">
+<p class="back-link"><a href="index.html">← Retour à l'index</a></p>
+<h1 id="rapport-documentation-du-pattern-dextension-pmoconfig">Rapport :
+Documentation du pattern d’extension pmoconfig</h1>
+<h2 id="objectif-de-la-tâche">Objectif de la tâche</h2>
+<p>Créer une fiche descriptive documentant le pattern d’implémentation
+des traits d’extension de <code>pmoconfig::Config</code> en analysant
+les implémentations existantes dans les différents crates du projet.</p>
+<h2 id="travail-réalisé">Travail réalisé</h2>
+<h3 id="analyse-des-fichiers-source">1. Analyse des fichiers source</h3>
+<p>Les fichiers suivants ont été analysés :</p>
+<ul>
+<li><code>pmocovers/src/config_ext.rs</code> - Pattern cache avec
+conversion WebP</li>
+<li><code>pmoaudiocache/src/config_ext.rs</code> - Pattern cache avec
+conversion FLAC</li>
+<li><code>pmoqobuz/src/config_ext.rs</code> - Pattern authentification
+et rate limiting</li>
+<li><code>pmocache/src/config_ext.rs</code> - Trait générique de cache
+et macro</li>
+<li><code>pmoconfig/PASSWORD_ENCRYPTION.md</code> - Documentation du
+chiffrement</li>
+<li><code>pmoupnp/src/config_ext.rs</code> - Pattern configuration
+UPnP</li>
+<li><code>pmoparadise/src/config_ext.rs</code> - Pattern configuration
+minimale</li>
+</ul>
+<h3 id="patterns-identifiés">2. Patterns identifiés</h3>
+<h4 id="pattern-de-base">Pattern de base</h4>
+<p>Tous les traits d’extension suivent la même structure : - Trait
+public avec méthodes getter/setter - Implémentation pour
+<code>pmoconfig::Config</code> - Utilisation de
+<code>get_value</code>/<code>set_value</code> génériques - Constantes
+pour valeurs par défaut</p>
+<h4 id="patterns-spécialisés">Patterns spécialisés</h4>
+<ul>
+<li><strong>Cache</strong> : Utilisation de <code>CacheConfigExt</code>
+et factory methods</li>
+<li><strong>Authentification</strong> : Getters combinés, helpers de
+validation, déchiffrement automatique</li>
+<li><strong>Rate limiting</strong> : Configuration des limites avec
+valeurs par défaut</li>
+<li><strong>Configuration minimale</strong> : Auto-persistence des
+valeurs par défaut</li>
+<li><strong>UPnP</strong> : Configuration des identifiants devices</li>
+</ul>
+<h3 id="structure-de-la-documentation">3. Structure de la
+documentation</h3>
+<p>La documentation créée couvre :</p>
+<ol type="1">
+<li><strong>Vue d’ensemble</strong> : Objectif et principe du
+pattern</li>
+<li><strong>Architecture</strong> : Structure et flux de données</li>
+<li><strong>Implémentation</strong> : Guide détaillé avec patterns de
+code</li>
+<li><strong>Patterns spécialisés</strong> : Exemples pour chaque cas
+d’usage</li>
+<li><strong>Bonnes pratiques</strong> : Nommage, erreurs,
+documentation</li>
+<li><strong>Exemples complets</strong> : 3 implémentations complètes
+commentées</li>
+<li><strong>Checklist</strong> : Liste de vérification pour nouveaux
+traits</li>
+<li><strong>Philosophie</strong> : Principes directeurs et
+avantages</li>
+</ol>
+<h3 id="contenu-clé">4. Contenu clé</h3>
+<h4 id="patterns-de-getters">Patterns de getters</h4>
+<ul>
+<li>Getter simple avec valeur par défaut</li>
+<li>Getter avec auto-persistence</li>
+<li>Getter optionnel</li>
+<li>Getter avec déchiffrement</li>
+<li>Getter avec parsing et fallback</li>
+</ul>
+<h4 id="patterns-de-setters">Patterns de setters</h4>
+<ul>
+<li>Setter simple</li>
+<li>Setter avec transformation</li>
+<li>Setter multiple (transaction)</li>
+<li>Setter de nettoyage</li>
+</ul>
+<h4 id="helpers">Helpers</h4>
+<ul>
+<li>Factory methods</li>
+<li>Getters combinés</li>
+<li>Helpers de validation</li>
+</ul>
+<h3 id="hiérarchie-de-configuration-yaml">5. Hiérarchie de configuration
+YAML</h3>
+<p>Documentation des chemins standards : - <code>host.*</code> :
+Configuration hôte/système - <code>accounts.*</code> : Comptes et
+services - <code>sources.*</code> : Sources de médias</p>
+<h2 id="résultat">Résultat</h2>
+<p>Le document <code>Blackboard/Architecture/pmoconfig_ext.md</code> a
+été créé avec : - 800+ lignes de documentation complète - 3 exemples
+d’implémentation complète - Patterns pour tous les cas d’usage
+identifiés - Bonnes pratiques et anti-patterns - Checklist
+d’implémentation</p>
+<h2 id="fichiers-créés-ou-modifiés">Fichiers créés ou modifiés</h2>
+<ul>
+<li><strong>Créé</strong> :
+<code>Blackboard/Architecture/pmoconfig_ext.md</code> - Documentation
+complète du pattern</li>
+<li><strong>Créé</strong> : <code>Blackboard/Report/config_ext.md</code>
+- Ce rapport</li>
+</ul>
+<h2 id="conformité-avec-rules.md">Conformité avec Rules.md</h2>
+<ul>
+<li>Documentation placée dans <code>Blackboard/Architecture/</code>
+comme demandé</li>
+<li>Rapport créé dans <code>Blackboard/Report/</code> avec le même nom
+de fichier</li>
+<li>Analyse focalisée sur l’objectif principal</li>
+<li>Documentation prête pour classification (Done/ToDiscuss) par
+l’humain</li>
+</ul>
+</article>
+</body>
+</html>

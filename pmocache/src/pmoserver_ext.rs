@@ -536,6 +536,11 @@ pub fn create_file_router_with_generator<C: CacheConfig + 'static>(
 /// - `GET /{pk}/status` - Status du download
 /// - `DELETE /{pk}` - Supprimer un item
 /// - `POST /consolidate` - Consolider le cache
+/// - `GET /{pk}/pin` - Statut de pinning
+/// - `POST /{pk}/pin` - Épingler un item
+/// - `DELETE /{pk}/pin` - Désépingler un item
+/// - `POST /{pk}/ttl` - Définir le TTL
+/// - `DELETE /{pk}/ttl` - Supprimer le TTL
 #[cfg(feature = "pmoserver")]
 pub fn create_api_router<C: CacheConfig + 'static>(cache: Arc<Cache<C>>) -> Router {
     use crate::api;
@@ -552,6 +557,16 @@ pub fn create_api_router<C: CacheConfig + 'static>(cache: Arc<Cache<C>>) -> Rout
             get(api::get_item_info::<C>).delete(api::delete_item::<C>),
         )
         .route("/{pk}/status", get(api::get_download_status::<C>))
+        .route(
+            "/{pk}/pin",
+            get(api::get_pin_status::<C>)
+                .post(api::pin_item::<C>)
+                .delete(api::unpin_item::<C>),
+        )
+        .route(
+            "/{pk}/ttl",
+            post(api::set_item_ttl::<C>).delete(api::clear_item_ttl::<C>),
+        )
         .route("/consolidate", post(api::consolidate_cache::<C>))
         .with_state(cache)
 }
