@@ -1,98 +1,137 @@
-# Règles de développement du projet PMO Musique.
+# Règles de développement PMOMusic
 
-L'application PMO Music est développée en collaboration avec un assistant de type LLM. soit Claude, soit ChatGPT, soit des petits LLM qui tournent en local sur Ollama.
+## Contexte projet
 
-## L'application PMO Music.
+**PMOMusic** : Système audio HiFi basé sur UPnP/DLNA (LossLess/Bit-Perfect uniquement).
 
-L'application PMO Musique est un système de gestion de la musique basé autour d'une architecture UPNP DLNA. A terme, elle contiendra trois composants:
+**Technologies** :
+- Backend : Rust
+- Frontend : Vue.js (TypeScript/JavaScript)
 
-- Un serveur de médias
-- Un point de contrôle
-- Un render de médias.
+**Composants** : Media Server, Control Point, Media Renderer
 
-Les seuls médias considérés sont des médias audio. Les médias vidéo ne sont absolument pas pris en charge. L'objectif est de fournir une architecture HiFi, donc LossLess et si possible Bit-Perfect.
+**Développement** : Collaboration humain-LLM (Claude/ChatGPT/Ollama)
 
-L'application est entièrement développée en Rust. Sauf la couche application web qui est développée en JavaScript/Typescript en se basant sur le framework [Vue](https://vuejs.org/).
+---
 
-## Règles de fonctionnement du Blackboard.
+## Workflow Blackboard
 
-Le Blackboard ou tableau noir est un répertoire nommé `Blackboard` situé à la racine du projet.
-
-L'ensemble des fichiers de ce répertoire sont des textes suivant le format Markdown.
-
-L'arborescence de ce répertoire est la suivante:
+### Structure
 
 ```
-Blackboard
-├── Done
-├── Report
-├── Rules.md
-├── ToDiscuss
-├── ToThinkAbout
-└── Todo
+Blackboard/
+├── ToThinkAbout/    # Réflexion, idées, architecture
+├── Architecture/    # Documentation d'architecture validée
+├── Todo/            # Tâches à réaliser
+├── Report/          # Rapports de tâches réalisées
+├── ToDiscuss/       # Tâches incomplètes nécessitant discussion
+├── Done/            # Tâches terminées (synthèses)
+└── Rules.md         # Ce fichier
 ```
 
-### La phase de réflexion.
+### Cycle de vie d'une tâche
 
-- `ToThinkAbout`: Contient les tâches à réfléchir pour le projet.
-
-Les documents dans le répertoire `ToThinkAbout` sont des fichiers contenant des idées et des questions à réfléchir pour le projet. Ils sont utilisés à terme pour générer les documents de tâche qui seront placés dans le répertoire `Todo`. Les fichiers de ce répertoire sont au format Markdown et sont écrits en collaboration entre l'humain et le LLM. Les deux ont le droit de modifier les fichiers.
-
-### Les quatres répertoires de base pour le workflow de développement.
-- `Todo`: Contient les tâches à faire pour le projet.
-- `Report`: Contient les rapports de travail pour le projet.
-- `ToDiscuss`: Contient les tâches à discuter pour le projet.
-- `Done`: Contient les tâches terminées pour le projet.
-
-Les tâches à faire sont décrites dans des fichiers présents dans le répertoire `Todo`. Leur réalisation conduit à la rédaction d'un rapport à placer dans le répertoire `Report`. Le rapport d'une tâche doit avoir le même nom de fichier que la tâche originale. Aucun autre rapport détaillé ne devra être produit à la fin de la tache dans le fil de la discussion. Juste une liste des documents créés ou midifiés sera donné.
-
-À la suite du rapport, deux issues sont possibles. Soit la tâche est considérée comme achevée. Dans ce cas, elle est déplacée dans le répertoire `Done`. Soit la tâche est considérée comme incomplète. Dans ce cas, elle est déplacée dans le répertoire `ToDiscuss`. 
-
-C'est l'humain qui décide quand une tâche peut être considérée comme *done* ou *to discuss*. En aucun cas, l'assistant peut décider de classifier une tâche après la rédaction du rapport.
-
-Lors du déplacement d'une tâche dans le répertoire `ToDiscuss`, Le document de tâche est complété par les remarques suite à la réalisation de la première étape du travail. La poursuite d'une tâche mise en mode *to discuss* est laissée à la decision de l'humain. Lorsqu'un travail sur cette tâche est réalisé, Le rapport d'analyse correspondant est complété pour expliquer comment les annotations ont été prises en compte.
-
-Lors du déplacement d'une tâche dans le répertoire `Done` une synthèse du document de tâche originale et du rapport est réalisée. C'est ce rapport final qui est placé dans `Done`.
-
-- `Rules.md`: Contient les règles de développement du projet.
-
-## Versioning
-
-### Gestion des versions
-
-- La version du projet est définie dans le fichier `PMOMusic/Cargo.toml`.
-- La version du projet est synchronisée avec le fichier `version.txt`.
-- La version du projet est incrémentée à push vers le dépôt git à jour du projet.
-
-### Système de gestion des versions
-
-- Le logiciel de gestion de versionning utilisé est [jj](https://github.com/jj-vcs/jj).
-- L'URL du repository est: https://gargoton.petite-maison-orange.fr/eric/pmomusic.git
-
-#### Workflow de gestion des versions
-
-- Pour chaque nouveau travail sur le code, un nouveau commit `jj` est créé, par l'appel de la règle `jjnew` du makefile.:
-
-```bash
-make jjnew
+```mermaid
+flowchart LR
+    THINK[ToThinkAbout] -->|Spécification| TODO[Todo]
+    TODO -->|Implémentation| REPORT[Report]
+    REPORT -->|Humain décide| DONE[Done]
+    REPORT -->|Humain décide| DISCUSS[ToDiscuss]
+    DISCUSS -->|Reprise travail| REPORT
 ```
 
-  L'appel de la règle `jjnew` documente le commit en cours à partir de tous les changements du commit, puis appelle la commande `jj new`.
-  
-- Pour pousser une série de commit sur le serveur Git on utilise la règle `jjpush` du makefile.:
+### Règles strictes
 
-```bash
-make jjpush
-``` 
+#### 1. Phase de réflexion (ToThinkAbout)
+- **Collaboration** : Humain et LLM peuvent modifier
+- **But** : Explorer idées, définir architecture
+- **Sortie** : Documents de spécification → `Todo/`
 
-   - L'appel de la règle `jjpush` documente le commit en cours à partir de tous les changements du commit, puis appelle la commande `jj git push --change @`.
-  
-  
-  
-   - Cela provoque la création d'une nouvelle branche sur le serveur Git et d'un pull request. Il faut ensuite valider le pull request pour pouvoir récupérer l'état courant dans la branche de développement sur la machine.
+#### 2. Phase de réalisation (Todo → Report)
+- **Input** : Fichier `Todo/{nom}.md`
+- **Action** : LLM implémente la tâche
+- **Output** : Fichier `Report/{nom}.md` (même nom obligatoire)
+- **Contenu du rapport** :
+  - Résumé du travail effectué
+  - Liste des fichiers créés/modifiés
+  - **INTERDIT** : Rapport détaillé dans la discussion (uniquement dans `Report/`)
 
-- Pour récupérer les dernières modifications du dépôt Git, après avoir validé le pull request, on utilise la règle `jjfetch` du makefile.:
+#### 3. Décision humaine (Report → Done ou ToDiscuss)
 
-```bash
-make jjfetch
-```
+**⚠️ CRITIQUE** : Seul l'humain décide de la destination. Le LLM ne doit JAMAIS déplacer ou classer une tâche.
+
+**Cas 1 : Tâche complète** → `Done/`
+- Humain déplace `Todo/{nom}.md` → `Done/{nom}.md`
+- LLM crée une synthèse (tâche originale + rapport)
+- Contenu final dans `Done/{nom}.md`
+
+**Cas 2 : Tâche incomplète** → `ToDiscuss/`
+- Humain déplace `Todo/{nom}.md` → `ToDiscuss/{nom}.md`
+- Humain ajoute annotations/remarques dans `ToDiscuss/{nom}.md`
+- Lors de la reprise :
+  - LLM lit les annotations
+  - Complète `Report/{nom}.md` avec les modifications
+  - Nouveau cycle de validation
+
+#### 4. Documentation architecture (Architecture/)
+- Contient les documents d'architecture validés et stables
+- Référence pour patterns de code (ex: `pmoconfig_ext.md`, `pmoserver_ext.md`)
+- Ne pas modifier sans validation explicite
+
+---
+
+## Versioning (Jujutsu)
+
+**Système** : [Jujutsu (jj)](https://github.com/jj-vcs/jj)  
+**Repository** : `https://gargoton.petite-maison-orange.fr/eric/pmomusic.git`
+
+### Commandes Makefile
+
+| Commande | Action | Description |
+|----------|--------|-------------|
+| `make jjnew` | Nouveau commit | Documente le commit actuel (`jj auto-describe`) puis `jj new` |
+| `make jjpush` | Push vers Git | Documente le commit puis `jj git push --change @`<br/>→ Crée branche + PR sur le serveur |
+| `make jjfetch` | Récupération | `jj git fetch` puis `jj new main@origin`<br/>→ Après validation du PR |
+
+### Gestion version
+
+- **Source de vérité** : `PMOMusic/Cargo.toml`
+- **Sync** : `version.txt` (généré par Makefile)
+- **Incrémentation** : `make bump-version` (avant `jjpush`)
+
+---
+
+## Checklist LLM
+
+### Avant de commencer une tâche
+- [ ] Lire `Todo/{nom}.md`
+- [ ] Vérifier les références à `Architecture/` si mentionnées
+- [ ] Comprendre les contraintes (HiFi, LossLess, UPnP/DLNA)
+
+### Pendant la réalisation
+- [ ] Suivre les patterns d'architecture existants
+- [ ] Utiliser Rust (backend) ou Vue.js/TypeScript (frontend)
+- [ ] Tester le code si applicable
+
+### Après la réalisation
+- [ ] Créer `Report/{nom}.md` (même nom que la tâche)
+- [ ] Lister fichiers créés/modifiés
+- [ ] **NE PAS** déplacer la tâche
+- [ ] **NE PAS** écrire de rapport détaillé dans la discussion
+- [ ] Attendre la décision humaine
+
+### Si tâche en ToDiscuss
+- [ ] Lire annotations ajoutées par l'humain
+- [ ] Expliquer dans `Report/{nom}.md` comment les remarques sont prises en compte
+- [ ] Reprise du cycle de validation
+
+---
+
+## Diagrammes Mermaid
+
+Tous les diagrammes d'architecture doivent utiliser Mermaid. La commande `make blackboard-html` génère une version HTML consultable avec rendu des diagrammes.
+
+**Syntaxe stricte** :
+- Labels de subgraph : `subgraph Name[Label]` (pas de guillemets doubles)
+- Balises HTML : `Node["Text<br/>Multi"]` (guillemets doubles)
+- Formes spéciales : `DB[("database")]`, `Decision{"Question?"}` (guillemets)
