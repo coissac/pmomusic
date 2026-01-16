@@ -248,3 +248,48 @@ jjfetch:
 	@jj git fetch
 	@jj new main@origin
 	@echo "$(GREEN)✓ Derniers commits pullés$(NC)"
+
+## blackboard-html: Génère les fichiers HTML du Blackboard avec support Mermaid
+blackboard-html:
+	@echo "$(YELLOW)→ Génération des fichiers HTML du Blackboard...$(NC)"
+	@mkdir -p Blackboard_HTML
+	@echo "<!DOCTYPE html>" > Blackboard_HTML/index.html
+	@echo '<html lang="fr"><head><meta charset="utf-8">' >> Blackboard_HTML/index.html
+	@echo "<title>PMOMusic Blackboard</title>" >> Blackboard_HTML/index.html
+	@echo "<style>" >> Blackboard_HTML/index.html
+	@echo "body{font-family:sans-serif;margin:20px;background:#f5f5f5}" >> Blackboard_HTML/index.html
+	@echo "h1{color:#2c3e50}ul{list-style:none;padding:0}" >> Blackboard_HTML/index.html
+	@echo "li{margin:10px 0}a{color:#3498db;text-decoration:none}" >> Blackboard_HTML/index.html
+	@echo "a:hover{text-decoration:underline}.category{margin-top:30px}" >> Blackboard_HTML/index.html
+	@echo ".category h2{color:#e74c3c;border-bottom:2px solid #e74c3c;padding-bottom:5px}" >> Blackboard_HTML/index.html
+	@echo "</style></head><body>" >> Blackboard_HTML/index.html
+	@echo '<h1>📋 PMOMusic Blackboard</h1>' >> Blackboard_HTML/index.html
+	@for category in Architecture ToThinkAbout ToDiscuss Todo Done Report; do \
+		if [ -d "Blackboard/$$category" ]; then \
+			echo "<div class='category'><h2>$$category</h2><ul>" >> Blackboard_HTML/index.html; \
+			find "Blackboard/$$category" -name "*.md" -type f | sort | while read -r file; do \
+				basename=$$(basename "$$file" .md); \
+				relpath=$$(echo "$$file" | sed 's|Blackboard/||'); \
+				htmlfile=$$(echo "$$relpath" | sed 's|/|_|g' | sed 's|\.md$$|.html|'); \
+				echo "<li><a href='$$htmlfile'>$$basename</a></li>" >> Blackboard_HTML/index.html; \
+				echo "  → Conversion: $$relpath → $$htmlfile"; \
+				/opt/homebrew/bin/pandoc "$$file" -o "Blackboard_HTML/$$htmlfile" \
+					--standalone \
+					--template=blackboard-template.html \
+					--metadata title="$$basename" \
+					--from markdown \
+					--to html; \
+				./fix-mermaid.sh "Blackboard_HTML/$$htmlfile"; \
+			done; \
+			echo "</ul></div>" >> Blackboard_HTML/index.html; \
+		fi; \
+	done
+	@echo "</body></html>" >> Blackboard_HTML/index.html
+	@echo "$(GREEN)✓ Fichiers HTML générés dans Blackboard_HTML/$(NC)"
+	@echo "$(BLUE)  Ouvrir: open Blackboard_HTML/index.html$(NC)"
+
+## blackboard-clean: Nettoie les fichiers HTML générés
+blackboard-clean:
+	@echo "$(YELLOW)→ Nettoyage des fichiers HTML du Blackboard...$(NC)"
+	@rm -rf Blackboard_HTML
+	@echo "$(GREEN)✓ Fichiers HTML supprimés$(NC)"

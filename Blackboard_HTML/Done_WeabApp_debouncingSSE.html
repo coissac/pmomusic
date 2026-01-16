@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WeabApp_debouncingSSE</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/github-markdown-css@5/github-markdown.min.css">
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({startOnLoad: true, theme: "default"});
+</script>
+<style>
+  .markdown-body {
+    box-sizing: border-box;
+    min-width: 200px;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 45px;
+  }
+  .back-link {
+    margin-bottom: 20px;
+    display: block;
+  }
+  pre.mermaid {
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 10px;
+  }
+</style>
+</head>
+<body>
+<article class="markdown-body">
+<p class="back-link"><a href="index.html">← Retour à l'index</a></p>
+<h1 id="rapport-suppression-de-la-logique-de-débouncing-sse">Rapport :
+Suppression de la logique de débouncing SSE</h1>
+<p><strong>Date</strong>: 2026-01-12 <strong>Tâche</strong>:
+WeabApp_debouncingSSE.md</p>
+<h2 id="objectif">Objectif</h2>
+<p>Supprimer la logique de débouncing inutile sur le canal SSE de
+l’application web PMOControl, puisque le serveur contrôle déjà le flux
+des événements.</p>
+<h2 id="analyse-préalable">Analyse préalable</h2>
+<p>J’ai identifié trois endroits avec des mécanismes de temporisation
+dans l’application web :</p>
+<h3 id="mediabrowser.vue---débouncing-sse-à-supprimer">1.
+MediaBrowser.vue - Débouncing SSE (À SUPPRIMER ✓)</h3>
+<ul>
+<li><strong>Débouncing</strong>: 200ms après invalidation du cache</li>
+<li><strong>Cooldown</strong>: 2 secondes entre les rechargements</li>
+<li><strong>Justification originale</strong>: “dédupliquer les
+événements SSE dans le même batch (polling 500ms)”</li>
+<li><strong>Problème</strong>: Cette logique est redondante puisque le
+serveur contrôle déjà le flux SSE</li>
+</ul>
+<h3 id="userenderers.ts---smart-fetching-à-conserver">2. useRenderers.ts
+- Smart fetching (À CONSERVER ✓)</h3>
+<ul>
+<li><strong>Mécanisme</strong>: Comparaison des timestamps
+<code>lastEventAt</code> vs <code>lastSnapshotAt</code></li>
+<li><strong>But</strong>: Éviter de refetch un snapshot déjà à jour</li>
+<li><strong>Justification</strong>: Ce n’est PAS du débouncing, c’est
+une optimisation intelligente qui évite des appels API inutiles</li>
+</ul>
+<h3 id="volumecontrol.vue---ui-debouncing-à-conserver">3.
+VolumeControl.vue - UI debouncing (À CONSERVER ✓)</h3>
+<ul>
+<li><strong>Débouncing</strong>: 300ms sur les changements de
+volume</li>
+<li><strong>But</strong>: Réduire les appels API pendant que
+l’utilisateur fait glisser le curseur</li>
+<li><strong>Justification</strong>: Débouncing légitime pour l’interface
+utilisateur</li>
+</ul>
+<h2 id="modifications-effectuées">Modifications effectuées</h2>
+<h3
+id="fichier-modifié-pmoappwebappsrccomponentspmocontrolmediabrowser.vue">Fichier
+modifié:
+<code>pmoapp/webapp/src/components/pmocontrol/MediaBrowser.vue</code></h3>
+<h4 id="suppression-des-variables-de-débouncing-ligne-27">1. Suppression
+des variables de débouncing (ligne ~27)</h4>
+<p><strong>Avant</strong>:</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Flags pour gérer le rechargement automatique avec debounce et cooldown</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> isRefreshing <span class="op">=</span> <span class="fu">ref</span>(<span class="kw">false</span>)<span class="op">;</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> refreshTimeoutId <span class="op">=</span> <span class="fu">ref</span><span class="op">&lt;</span><span class="dt">number</span> <span class="op">|</span> <span class="dt">null</span><span class="op">&gt;</span>(<span class="kw">null</span>)<span class="op">;</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> lastRefreshTime <span class="op">=</span> <span class="fu">ref</span><span class="op">&lt;</span><span class="dt">number</span><span class="op">&gt;</span>(<span class="dv">0</span>)<span class="op">;</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> REFRESH_COOLDOWN_MS <span class="op">=</span> <span class="dv">2000</span><span class="op">;</span> <span class="co">// Ne pas recharger plus d&#39;une fois toutes les 2 secondes</span></span></pre></div>
+<p><strong>Après</strong>:</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Flag pour gérer le rechargement automatique</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> isRefreshing <span class="op">=</span> <span class="fu">ref</span>(<span class="kw">false</span>)<span class="op">;</span></span></pre></div>
+<h4 id="simplification-du-watcher-de-cache-ligne-53">2. Simplification
+du watcher de cache (ligne ~53)</h4>
+<p><strong>Avant</strong>:</p>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Recharger automatiquement si le cache est invalidé (ex: après un ContainersUpdated SSE)</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="co">// Cela se produit notamment quand on clique sur &quot;Lire maintenant&quot; sur une playlist,</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="co">// ce qui déclenche un événement ContainersUpdated qui invalide le cache</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="co">// Utilise un debounce de 3 secondes pour regrouper les multiples invalidations</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="co">// et un cooldown de 5 secondes pour éviter les rechargements successifs</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="fu">watch</span>(</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>    () <span class="kw">=&gt;</span> browseData<span class="op">.</span><span class="at">value</span><span class="op">,</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>    (data) <span class="kw">=&gt;</span> {</span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> (<span class="op">!</span>data <span class="op">&amp;&amp;</span> props<span class="op">.</span><span class="at">containerId</span> <span class="op">&amp;&amp;</span> <span class="op">!</span>loading<span class="op">.</span><span class="at">value</span>) {</span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>            <span class="co">// Vérifier le cooldown: ignorer si on a rechargé il y a moins de 5 secondes</span></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>            <span class="kw">const</span> timeSinceLastRefresh <span class="op">=</span> <span class="bu">Date</span><span class="op">.</span><span class="fu">now</span>() <span class="op">-</span> lastRefreshTime<span class="op">.</span><span class="at">value</span><span class="op">;</span></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> (timeSinceLastRefresh <span class="op">&lt;</span> REFRESH_COOLDOWN_MS) {</span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>                <span class="bu">console</span><span class="op">.</span><span class="fu">log</span>(</span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>                    <span class="vs">`[MediaBrowser] Cache invalidé mais cooldown actif (</span><span class="sc">${</span><span class="bu">Math</span><span class="op">.</span><span class="fu">round</span>((REFRESH_COOLDOWN_MS <span class="op">-</span> timeSinceLastRefresh) <span class="op">/</span> <span class="dv">1000</span>)<span class="sc">}</span><span class="vs">s restantes), rechargement ignoré`</span><span class="op">,</span></span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>                )<span class="op">;</span></span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a>                <span class="cf">return</span><span class="op">;</span></span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>            }</span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>            <span class="co">// Annuler tout timeout en cours</span></span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> (refreshTimeoutId<span class="op">.</span><span class="at">value</span> <span class="op">!==</span> <span class="kw">null</span>) {</span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>                <span class="pp">clearTimeout</span>(refreshTimeoutId<span class="op">.</span><span class="at">value</span>)<span class="op">;</span></span>
+<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a>            }</span>
+<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a>            <span class="co">// Planifier le rechargement après 200ms</span></span>
+<span id="cb3-25"><a href="#cb3-25" aria-hidden="true" tabindex="-1"></a>            refreshTimeoutId<span class="op">.</span><span class="at">value</span> <span class="op">=</span> <span class="bu">window</span><span class="op">.</span><span class="fu">setTimeout</span>(<span class="kw">async</span> () <span class="kw">=&gt;</span> {</span>
+<span id="cb3-26"><a href="#cb3-26" aria-hidden="true" tabindex="-1"></a>                <span class="cf">if</span> (<span class="op">!</span>isRefreshing<span class="op">.</span><span class="at">value</span>) {</span>
+<span id="cb3-27"><a href="#cb3-27" aria-hidden="true" tabindex="-1"></a>                    <span class="bu">console</span><span class="op">.</span><span class="fu">log</span>(</span>
+<span id="cb3-28"><a href="#cb3-28" aria-hidden="true" tabindex="-1"></a>                        <span class="vs">`[MediaBrowser] Cache invalidé pour </span><span class="sc">${</span>props<span class="op">.</span><span class="at">serverId</span><span class="sc">}</span><span class="vs">/</span><span class="sc">${</span>props<span class="op">.</span><span class="at">containerId</span><span class="sc">}</span><span class="vs">, rechargement après debounce...`</span><span class="op">,</span></span>
+<span id="cb3-29"><a href="#cb3-29" aria-hidden="true" tabindex="-1"></a>                    )<span class="op">;</span></span>
+<span id="cb3-30"><a href="#cb3-30" aria-hidden="true" tabindex="-1"></a>                    isRefreshing<span class="op">.</span><span class="at">value</span> <span class="op">=</span> <span class="kw">true</span><span class="op">;</span></span>
+<span id="cb3-31"><a href="#cb3-31" aria-hidden="true" tabindex="-1"></a>                    <span class="cf">await</span> <span class="fu">browseContainer</span>(</span>
+<span id="cb3-32"><a href="#cb3-32" aria-hidden="true" tabindex="-1"></a>                        props<span class="op">.</span><span class="at">serverId</span><span class="op">,</span></span>
+<span id="cb3-33"><a href="#cb3-33" aria-hidden="true" tabindex="-1"></a>                        props<span class="op">.</span><span class="at">containerId</span><span class="op">,</span></span>
+<span id="cb3-34"><a href="#cb3-34" aria-hidden="true" tabindex="-1"></a>                        <span class="kw">false</span><span class="op">,</span></span>
+<span id="cb3-35"><a href="#cb3-35" aria-hidden="true" tabindex="-1"></a>                    )<span class="op">;</span></span>
+<span id="cb3-36"><a href="#cb3-36" aria-hidden="true" tabindex="-1"></a>                    lastRefreshTime<span class="op">.</span><span class="at">value</span> <span class="op">=</span> <span class="bu">Date</span><span class="op">.</span><span class="fu">now</span>()<span class="op">;</span></span>
+<span id="cb3-37"><a href="#cb3-37" aria-hidden="true" tabindex="-1"></a>                    isRefreshing<span class="op">.</span><span class="at">value</span> <span class="op">=</span> <span class="kw">false</span><span class="op">;</span></span>
+<span id="cb3-38"><a href="#cb3-38" aria-hidden="true" tabindex="-1"></a>                    refreshTimeoutId<span class="op">.</span><span class="at">value</span> <span class="op">=</span> <span class="kw">null</span><span class="op">;</span></span>
+<span id="cb3-39"><a href="#cb3-39" aria-hidden="true" tabindex="-1"></a>                }</span>
+<span id="cb3-40"><a href="#cb3-40" aria-hidden="true" tabindex="-1"></a>            }<span class="op">,</span> <span class="dv">200</span>)<span class="op">;</span></span>
+<span id="cb3-41"><a href="#cb3-41" aria-hidden="true" tabindex="-1"></a>        }</span>
+<span id="cb3-42"><a href="#cb3-42" aria-hidden="true" tabindex="-1"></a>    }<span class="op">,</span></span>
+<span id="cb3-43"><a href="#cb3-43" aria-hidden="true" tabindex="-1"></a>)<span class="op">;</span></span></pre></div>
+<p><strong>Après</strong>:</p>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Recharger automatiquement si le cache est invalidé (ex: après un ContainersUpdated SSE)</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="co">// Cela se produit notamment quand on clique sur &quot;Lire maintenant&quot; sur une playlist,</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="co">// ce qui déclenche un événement ContainersUpdated qui invalide le cache</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="co">// Le serveur contrôle déjà le flux SSE, pas besoin de debouncing côté client</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="fu">watch</span>(</span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>    () <span class="kw">=&gt;</span> browseData<span class="op">.</span><span class="at">value</span><span class="op">,</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">async</span> (data) <span class="kw">=&gt;</span> {</span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>        <span class="co">// Si browseData devient undefined alors que containerId est présent,</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>        <span class="co">// et qu&#39;on n&#39;est pas déjà en train de charger, recharger immédiatement</span></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> (<span class="op">!</span>data <span class="op">&amp;&amp;</span> props<span class="op">.</span><span class="at">containerId</span> <span class="op">&amp;&amp;</span> <span class="op">!</span>loading<span class="op">.</span><span class="at">value</span> <span class="op">&amp;&amp;</span> <span class="op">!</span>isRefreshing<span class="op">.</span><span class="at">value</span>) {</span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>            <span class="bu">console</span><span class="op">.</span><span class="fu">log</span>(</span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>                <span class="vs">`[MediaBrowser] Cache invalidé pour </span><span class="sc">${</span>props<span class="op">.</span><span class="at">serverId</span><span class="sc">}</span><span class="vs">/</span><span class="sc">${</span>props<span class="op">.</span><span class="at">containerId</span><span class="sc">}</span><span class="vs">, rechargement...`</span><span class="op">,</span></span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>            )<span class="op">;</span></span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>            isRefreshing<span class="op">.</span><span class="at">value</span> <span class="op">=</span> <span class="kw">true</span><span class="op">;</span></span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>            <span class="cf">await</span> <span class="fu">browseContainer</span>(props<span class="op">.</span><span class="at">serverId</span><span class="op">,</span> props<span class="op">.</span><span class="at">containerId</span><span class="op">,</span> <span class="kw">false</span>)<span class="op">;</span></span>
+<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a>            isRefreshing<span class="op">.</span><span class="at">value</span> <span class="op">=</span> <span class="kw">false</span><span class="op">;</span></span>
+<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a>        }</span>
+<span id="cb4-18"><a href="#cb4-18" aria-hidden="true" tabindex="-1"></a>    }<span class="op">,</span></span>
+<span id="cb4-19"><a href="#cb4-19" aria-hidden="true" tabindex="-1"></a>)<span class="op">;</span></span></pre></div>
+<h2 id="résultats">Résultats</h2>
+<h3 id="changements-de-comportement">Changements de comportement</h3>
+<ul>
+<li><strong>Avant</strong>: Délai de 200ms + cooldown de 2s entre les
+rechargements de cache</li>
+<li><strong>Après</strong>: Rechargement immédiat dès l’invalidation du
+cache</li>
+<li><strong>Impact</strong>: Réactivité améliorée de l’interface, les
+mises à jour apparaissent immédiatement</li>
+</ul>
+<h3 id="réduction-de-complexité">Réduction de complexité</h3>
+<ul>
+<li><strong>3 variables supprimées</strong>:
+<code>refreshTimeoutId</code>, <code>lastRefreshTime</code>,
+<code>REFRESH_COOLDOWN_MS</code></li>
+<li><strong>Logique simplifiée</strong>: De ~40 lignes à ~10 lignes dans
+le watcher</li>
+<li><strong>Code plus lisible</strong>: Intention claire sans mécanismes
+de temporisation complexes</li>
+</ul>
+<h3 id="tests">Tests</h3>
+<ul>
+<li>✓ Le projet compile sans erreurs TypeScript</li>
+<li>✓ Le flag <code>isRefreshing</code> empêche toujours les
+rechargements concurrents</li>
+<li>✓ Les autres composants (useRenderers.ts, VolumeControl.vue)
+conservent leurs optimisations légitimes</li>
+</ul>
+<h2 id="conclusion">Conclusion</h2>
+<p>La suppression du débouncing et du cooldown dans MediaBrowser.vue
+simplifie le code tout en améliorant la réactivité de l’interface.
+Puisque le serveur contrôle déjà le flux SSE, ces mécanismes côté client
+étaient redondants et ajoutaient une latence artificielle.</p>
+<p>Le code est maintenant plus simple, plus réactif, et fait confiance
+au serveur pour contrôler la fréquence des événements SSE.</p>
+<h2 id="fichiers-modifiés">Fichiers modifiés</h2>
+<ul>
+<li><code>pmoapp/webapp/src/components/pmocontrol/MediaBrowser.vue</code></li>
+</ul>
+<h2 id="lignes-de-code">Lignes de code</h2>
+<ul>
+<li><strong>Supprimées</strong>: ~35 lignes (logique de
+débouncing/cooldown)</li>
+<li><strong>Ajoutées</strong>: ~5 lignes (logique simplifiée)</li>
+<li><strong>Net</strong>: -30 lignes</li>
+</ul>
+</article>
+</body>
+</html>

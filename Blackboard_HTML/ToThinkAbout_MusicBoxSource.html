@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MusicBoxSource</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/github-markdown-css@5/github-markdown.min.css">
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({startOnLoad: true, theme: "default"});
+</script>
+<style>
+  .markdown-body {
+    box-sizing: border-box;
+    min-width: 200px;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 45px;
+  }
+  .back-link {
+    margin-bottom: 20px;
+    display: block;
+  }
+  pre.mermaid {
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 10px;
+  }
+</style>
+</head>
+<body>
+<article class="markdown-body">
+<p class="back-link"><a href="index.html">← Retour à l'index</a></p>
+<p><strong>Il faut suivre les instructions générales placées dans le
+fichier : Blackboard/Rules.md</strong></p>
+<h1 id="musicboxsource-bibliothèque-musicale-universelle">MusicBoxSource
+: Bibliothèque musicale universelle</h1>
+<p>Créer une <strong>“boîte à musique”</strong> personnelle : un
+catalogue unifié de morceaux provenant de n’importe quelle source
+(Qobuz, URLs, fichiers locaux, Radio Paradise, etc.), avec taxonomie de
+tags et playlists intelligentes.</p>
+<hr />
+<h2 id="vision">🎯 Vision</h2>
+<h3 id="concept">Concept</h3>
+<p><strong>MusicBoxSource</strong> est une bibliothèque musicale
+curatoriale qui permet de : - <strong>Collecter</strong> : Ajouter des
+morceaux depuis n’importe quelle source PMOMusic ou URL -
+<strong>Organiser</strong> : Classifier avec une taxonomie de tags
+extensible - <strong>Requêter</strong> : Créer des playlists statiques
+et smart playlists (requêtes dynamiques) - <strong>Exposer</strong> :
+Servir via UPnP/DIDL-Lite avec navigation multi-axes</p>
+<h3 id="différence-avec-pmoplaylist">Différence avec
+<code>pmoplaylist</code></h3>
+<ul>
+<li><strong><code>pmoplaylist</code></strong> : Playlists FIFO
+<strong>éphémères</strong> pour sources live (Radio Paradise)</li>
+<li><strong><code>pmomusicbox</code></strong> : Bibliothèque
+<strong>persistante</strong> cross-sources avec métadonnées
+enrichies</li>
+</ul>
+<hr />
+<h2 id="architecture-globale">🏛️ Architecture globale</h2>
+<pre class="mermaid">flowchart TB
+    subgraph Sources[Sources PMOMusic]
+        QOBUZ[pmoqobuz]
+        PARADISE[pmoparadise]
+        LOCAL[pmolocal - à créer]
+        URL[URLs directes]
+    end
+    
+    subgraph Import[Import Layer]
+        IMPORTER[MusicBox Importer]
+        JSPF[pmojspf - Parser playlists]
+        META[pmometadata - Extraction]
+    end
+    
+    subgraph Core[pmomusicbox Core]
+        DB[(SQLite Database)]
+        TAXONOMY[Taxonomie Tags]
+        QUERY[Smart Query Engine]
+    end
+    
+    subgraph Cache[Cache Layer]
+        AUDIO[pmoaudiocache]
+        COVERS[pmocovers]
+    end
+    
+    subgraph Export[Export UPnP]
+        SOURCE[MusicSource Trait]
+        DIDL[DIDL-Lite Generator]
+        BROWSE[Multi-Axis Browser]
+    end
+    
+    Sources --&gt; IMPORTER
+    URL --&gt; IMPORTER
+    JSPF --&gt; IMPORTER
+    META --&gt; IMPORTER
+    
+    IMPORTER --&gt; DB
+    DB --&gt; TAXONOMY
+    DB --&gt; QUERY
+    
+    DB &lt;--&gt; AUDIO
+    DB &lt;--&gt; COVERS
+    
+    DB --&gt; SOURCE
+    TAXONOMY --&gt; BROWSE
+    QUERY --&gt; BROWSE
+    SOURCE --&gt; DIDL
+    BROWSE --&gt; DIDL</pre>
+<hr />
+<h2 id="modèle-de-données-sqlite">🗄️ Modèle de données (SQLite)</h2>
+<h3 id="tables-principales">Tables principales</h3>
+<pre class="mermaid">erDiagram
+    TAG_CATEGORIES ||--o{ TAGS : contient
+    TAG_CATEGORIES ||--o{ TAG_CATEGORIES : parent
+    TAGS ||--o{ ITEM_TAGS : associe
+    MUSIC_ITEMS ||--o{ ITEM_TAGS : a
+    MUSIC_ITEMS ||--o{ PLAYLIST_ITEMS : dans
+    PLAYLISTS ||--o{ PLAYLIST_ITEMS : contient
+    
+    TAG_CATEGORIES {
+        text id PK &quot;Ex: mood, genre&quot;
+        text name &quot;Nom affiché&quot;
+        text parent_id FK &quot;Hiérarchie&quot;
+        text color &quot;Hex color&quot;
+        text icon &quot;Emoji/icon&quot;
+        int display_order
+    }
+    
+    TAGS {
+        text id PK &quot;Ex: mood:energetic&quot;
+        text category_id FK
+        text name &quot;energetic, chill&quot;
+        text description
+        text color &quot;Override&quot;
+    }
+    
+    MUSIC_ITEMS {
+        text id PK &quot;UUID&quot;
+        text source_type &quot;qobuz, url, local&quot;
+        text source_id &quot;ID source&quot;
+        text original_uri &quot;URI source&quot;
+        text cache_audio_pk FK &quot;pmoaudiocache&quot;
+        text cache_cover_pk FK &quot;pmocovers&quot;
+        text title
+        text artist
+        text album
+        int year
+        int rating &quot;1-5 étoiles&quot;
+        int play_count
+    }
+    
+    ITEM_TAGS {
+        text item_id PK,FK
+        text tag_id PK,FK
+        int added_at
+        text source &quot;user, auto&quot;
+    }
+    
+    PLAYLISTS {
+        text id PK
+        text name
+        bool is_smart
+        text smart_query &quot;JSON&quot;
+    }
+    
+    PLAYLIST_ITEMS {
+        text playlist_id PK,FK
+        text item_id FK
+        int position PK
+    }</pre>
+<h3 id="tables-dassociation">Tables d’association</h3>
+<ul>
+<li><strong><code>item_tags</code></strong> : Liens items ↔︎ tags
+(N:M)</li>
+<li><strong><code>playlist_items</code></strong> : Items dans playlists
+statiques (position, ordre)</li>
+<li><strong><code>tag_synonyms</code></strong> : Synonymes pour
+recherche (ex: “jazz” → “swing”)</li>
+</ul>
+<h3 id="index-recherche">Index &amp; Recherche</h3>
+<ul>
+<li><strong>Indexes B-tree</strong> : artist, album, genre, year,
+rating, play_count</li>
+<li><strong>FTS5 (Full-Text Search)</strong> : title, artist, album,
+comment</li>
+<li><strong>Triggers</strong> : Maintien des tables FTS en sync avec
+<code>music_items</code></li>
+</ul>
+<hr />
+<h2 id="taxonomie-par-défaut">🎨 Taxonomie par défaut</h2>
+<p>Catégories préchargées à l’initialisation :</p>
+<table>
+<colgroup>
+<col style="width: 14%" />
+<col style="width: 37%" />
+<col style="width: 48%" />
+</colgroup>
+<thead>
+<tr>
+<th>Catégorie</th>
+<th>Description</th>
+<th>Exemples de tags</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Mood</strong></td>
+<td>État d’esprit, émotion</td>
+<td>energetic, chill, melancholic, happy</td>
+</tr>
+<tr>
+<td><strong>Genre</strong></td>
+<td>Style musical</td>
+<td>rock, jazz, classical, electronic, metal</td>
+</tr>
+<tr>
+<td><strong>Era</strong></td>
+<td>Période, décennie</td>
+<td>60s, 70s, 80s, 90s, contemporary</td>
+</tr>
+<tr>
+<td><strong>Occasion</strong></td>
+<td>Contexte d’écoute</td>
+<td>workout, focus, party, driving, sleep</td>
+</tr>
+<tr>
+<td><strong>Tempo</strong></td>
+<td>Vitesse</td>
+<td>slow, medium, fast</td>
+</tr>
+<tr>
+<td><strong>Instrument</strong></td>
+<td>Instrument dominant</td>
+<td>piano, guitar, vocal, synthesizer</td>
+</tr>
+<tr>
+<td><strong>Quality</strong></td>
+<td>Qualité audio</td>
+<td>lossless, high-res, remastered, live</td>
+</tr>
+<tr>
+<td><strong>Origin</strong></td>
+<td>Origine géographique</td>
+<td>usa, uk, france, japan, latin, africa</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Extensibilité</strong> : L’utilisateur peut créer ses propres
+catégories et tags.</p>
+<hr />
+<h2 id="crates-architecture">📦 Crates architecture</h2>
+<h3 id="pmojspf---parser-de-playlists-utilitaire">1.
+<strong><code>pmojspf</code></strong> - Parser de playlists
+(utilitaire)</h3>
+<p><strong>But</strong> : Parser/écrire différents formats de playlists
+vers/depuis un format pivot JSPF (JSON).</p>
+<pre><code>pmojspf/
+├── model.rs        # Structures JSPF (Playlist, Track, Meta)
+├── reader/
+│   ├── jspf.rs     # JSON natif
+│   ├── xspf.rs     # XML (via quick-xml ou crate xspf)
+│   ├── m3u.rs      # M3U/M3U8 (parsing ligne par ligne)
+│   └── pls.rs      # PLS (format INI-like)
+└── writer.rs       # Export JSPF</pre>
+<p><strong>Dépendances</strong> : <code>serde</code>,
+<code>serde_json</code>, <code>quick-xml</code> (ou <code>xspf</code>
+crate)</p>
+<p><strong>Usage</strong> : Réutilisé par <code>pmomusicbox</code> pour
+import/export</p>
+<hr />
+<h3 id="pmomusicbox---bibliothèque-musicale-core">2.
+<strong><code>pmomusicbox</code></strong> - Bibliothèque musicale
+core</h3>
+<p><strong>Responsabilités</strong> : - Gestion base SQLite (CRUD items,
+tags, playlists) - Import depuis sources PMO (Qobuz, Paradise, Local,
+URLs) - Smart playlists (query builder + exécution SQL) - Implémentation
+<code>MusicSource</code> trait (exposition UPnP) - Intégration caches
+audio/covers</p>
+<pre><code>pmomusicbox/
+├── db/
+│   ├── schema.rs       # DDL SQLite + migrations
+│   ├── items.rs        # CRUD music_items
+│   ├── tags.rs         # CRUD tags + taxonomie
+│   ├── playlists.rs    # CRUD playlists statiques
+│   ├── smart.rs        # Smart playlists
+│   └── search.rs       # Full-text search (FTS5)
+│
+├── import/
+│   ├── url.rs          # Import URL directe
+│   ├── source.rs       # Import depuis MusicSource
+│   ├── local.rs        # Import fichiers locaux (via pmometadata)
+│   └── playlist.rs     # Import JSPF/M3U8 (via pmojspf)
+│
+├── export/
+│   └── playlist.rs     # Export playlists (JSPF, M3U8)
+│
+├── query/
+│   ├── builder.rs      # SmartPlaylistQuery (DSL)
+│   └── executor.rs     # Génération + exécution SQL
+│
+├── didl/
+│   └── generator.rs    # Conversion items → DIDL-Lite
+│
+├── source.rs           # Impl MusicSource trait
+├── taxonomy.rs         # Taxonomie par défaut + CRUD
+└── config_ext.rs       # Extension pmoconfig</pre>
+<p><strong>Dépendances</strong> : - <code>pmosource</code>,
+<code>pmoaudiocache</code>, <code>pmocovers</code>,
+<code>pmodidl</code>, <code>pmometadata</code> - <code>pmojspf</code>
+(import/export playlists) - <code>rusqlite</code> (features:
+<code>bundled</code>, <code>serde_json</code>) - <code>uuid</code>,
+<code>serde</code>, <code>tokio</code>, <code>async-trait</code></p>
+<hr />
+<h3 id="pmolocal---source-fichiers-locaux-à-créer">3.
+<strong><code>pmolocal</code></strong> - Source fichiers locaux (à
+créer)</h3>
+<p><strong>But</strong> : Scanner des répertoires locaux et exposer les
+fichiers audio via <code>MusicSource</code>.</p>
+<pre><code>pmolocal/
+├── scanner.rs      # Scan récursif de répertoires
+├── watcher.rs      # Hot reload (notify)
+├── source.rs       # Impl MusicSource
+└── config_ext.rs   # Extension pmoconfig</pre>
+<p><strong>Workflow</strong> : 1. <code>pmolocal</code> scanne
+<code>/home/user/Music</code> 2. <code>pmomusicbox</code> importe les
+items découverts 3. Tags automatiques basés sur métadonnées (genre,
+année)</p>
+<hr />
+<h2 id="flux-dimport">🔄 Flux d’import</h2>
+<h3 id="import-depuis-une-source-pmo-ex-qobuz">Import depuis une source
+PMO (ex: Qobuz)</h3>
+<pre class="mermaid">sequenceDiagram
+    participant QS as Qobuz Source
+    participant MB as MusicBox Importer
+    participant DB as SQLite DB
+    participant AC as pmoaudiocache
+    participant CC as pmocovers
+    
+    QS-&gt;&gt;MB: get_item(object_id)
+    MB-&gt;&gt;QS: resolve_uri(object_id)
+    
+    Note over MB: 1. Extraire métadonnées DIDL-Lite&lt;br/&gt;2. Générer UUID
+    
+    MB-&gt;&gt;DB: INSERT INTO music_items
+    
+    opt Auto-cache activé
+        MB-&gt;&gt;AC: Cache audio
+        MB-&gt;&gt;CC: Cache cover
+        AC--&gt;&gt;DB: Retourner cache_audio_pk
+        CC--&gt;&gt;DB: Retourner cache_cover_pk
+    end
+    
+    MB--&gt;&gt;QS: item_id (UUID)</pre>
+<h3 id="import-url-directe">Import URL directe</h3>
+<pre class="mermaid">flowchart LR
+    URL[URL simple] --&gt; META[&quot;pmometadata&lt;br/&gt;Extraction&quot;]
+    META --&gt; UUID[Générer UUID]
+    UUID --&gt; DB[(&quot;music_items&quot;)]
+    DB --&gt; CACHE{&quot;Auto-cache?&quot;}
+    CACHE --&gt;|Oui| AC[pmoaudiocache]
+    CACHE --&gt;|Non| END[Fin]
+    AC --&gt; END</pre>
+<h3 id="import-playlist-jspfm3u8">Import playlist JSPF/M3U8</h3>
+<pre class="mermaid">flowchart LR
+    FILE[Fichier playlist] --&gt; JSPF[&quot;pmojspf&lt;br/&gt;Parser&quot;]
+    JSPF --&gt; STRUCT[Structure JSPF]
+    STRUCT --&gt; LOOP{&quot;Pour chaque track&quot;}
+    LOOP --&gt; IMPORT[Import comme URL]
+    IMPORT --&gt; DB[(&quot;music_items&quot;)]
+    DB --&gt; PLAYLIST[Créer playlist statique]
+    PLAYLIST --&gt; LINK[Lier tracks à playlist]</pre>
+<hr />
+<h2 id="smart-playlists-query-dsl">🔍 Smart Playlists (Query DSL)</h2>
+<h3 id="concept-1">Concept</h3>
+<p>Les smart playlists sont des <strong>requêtes sauvegardées</strong>
+qui génèrent dynamiquement une liste de tracks.</p>
+<h3 id="structure-de-requête-json">Structure de requête (JSON)</h3>
+<div class="sourceCode" id="cb9"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;include_all_tags&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="st">&quot;mood:energetic&quot;</span><span class="ot">,</span> <span class="st">&quot;genre:rock&quot;</span><span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;exclude_tags&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="st">&quot;mood:melancholic&quot;</span><span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;year_min&quot;</span><span class="fu">:</span> <span class="dv">1980</span><span class="fu">,</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;year_max&quot;</span><span class="fu">:</span> <span class="dv">1989</span><span class="fu">,</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;min_rating&quot;</span><span class="fu">:</span> <span class="dv">4</span><span class="fu">,</span></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;lossless_only&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;order_by&quot;</span><span class="fu">:</span> <span class="st">&quot;play_count&quot;</span><span class="fu">,</span></span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;order&quot;</span><span class="fu">:</span> <span class="st">&quot;desc&quot;</span><span class="fu">,</span></span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;limit&quot;</span><span class="fu">:</span> <span class="dv">50</span></span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></pre></div>
+<h3 id="traduction-sql">Traduction SQL</h3>
+<div class="sourceCode" id="cb10"><pre
+class="sourceCode sql"><code class="sourceCode sql"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="kw">SELECT</span> <span class="op">*</span> <span class="kw">FROM</span> music_items</span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="kw">WHERE</span> <span class="kw">id</span> <span class="kw">IN</span> (</span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">SELECT</span> item_id <span class="kw">FROM</span> item_tags <span class="kw">WHERE</span> tag_id <span class="kw">IN</span> (<span class="st">&#39;mood:energetic&#39;</span>, <span class="st">&#39;genre:rock&#39;</span>)</span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">GROUP</span> <span class="kw">BY</span> item_id <span class="kw">HAVING</span> <span class="fu">COUNT</span>(<span class="kw">DISTINCT</span> tag_id) <span class="op">=</span> <span class="dv">2</span>  <span class="co">-- ALL tags</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a><span class="kw">AND</span> <span class="kw">id</span> <span class="kw">NOT</span> <span class="kw">IN</span> (</span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">SELECT</span> item_id <span class="kw">FROM</span> item_tags <span class="kw">WHERE</span> tag_id <span class="op">=</span> <span class="st">&#39;mood:melancholic&#39;</span></span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a><span class="kw">AND</span> <span class="dt">year</span> <span class="kw">BETWEEN</span> <span class="dv">1980</span> <span class="kw">AND</span> <span class="dv">1989</span></span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a><span class="kw">AND</span> rating <span class="op">&gt;=</span> <span class="dv">4</span></span>
+<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a><span class="kw">AND</span> codec <span class="kw">IN</span> (<span class="st">&#39;flac&#39;</span>, <span class="st">&#39;alac&#39;</span>)</span>
+<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a><span class="kw">ORDER</span> <span class="kw">BY</span> play_count <span class="kw">DESC</span></span>
+<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a><span class="kw">LIMIT</span> <span class="dv">50</span>;</span></pre></div>
+<hr />
+<h2 id="exposition-upnp-musicsource">🎭 Exposition UPnP
+(MusicSource)</h2>
+<h3 id="structure-de-navigation">Structure de navigation</h3>
+<pre class="mermaid">graph TB
+    ROOT[musicbox/] --&gt; ARTIST[by-artist/]
+    ROOT --&gt; ALBUM[by-album/]
+    ROOT --&gt; GENRE[by-genre/]
+    ROOT --&gt; TAG[by-tag/]
+    ROOT --&gt; PLAYLISTS[playlists/]
+    ROOT --&gt; SMART[smart-playlists/]
+    ROOT --&gt; FAV[favorites/]
+    ROOT --&gt; RECENT[recent/]
+    
+    ARTIST --&gt; PF[Pink Floyd/]
+    ARTIST --&gt; Q[Queen/]
+    PF --&gt; WALL[The Wall/]
+    PF --&gt; WYWH[Wish You Were Here/]
+    WALL --&gt; ITEM1[Another Brick... 🎵]
+    
+    TAG --&gt; MOOD[mood/]
+    TAG --&gt; OCC[occasion/]
+    TAG --&gt; ERA[era/]
+    
+    MOOD --&gt; ENRG[energetic/]
+    MOOD --&gt; CHILL[chill/]
+    ENRG --&gt; ITEMS1[items taggués 🎵]
+    
+    OCC --&gt; WORK[workout/]
+    OCC --&gt; FOCUS[focus/]
+    
+    ERA --&gt; E80[80s/]
+    ERA --&gt; E90[90s/]
+    
+    PLAYLISTS --&gt; PL1[My Favorites/]
+    PLAYLISTS --&gt; PL2[Summer 2024/]
+    
+    SMART --&gt; SP1[80s Rock Workout/]
+    SMART --&gt; SP2[Jazz Dinner/]
+    
+    style ITEM1 fill:#e1f5ff
+    style ITEMS1 fill:#e1f5ff</pre>
+<h3 id="object-ids">Object IDs</h3>
+<pre><code>musicbox:by-artist:{artist_name}
+musicbox:by-album:{album_id}
+musicbox:by-tag:{category}:{tag_name}
+musicbox:playlist:{playlist_id}
+musicbox:smart:{smart_playlist_id}
+musicbox:item:{item_id}</pre>
+<hr />
+<h2 id="intégration-avec-lécosystème-pmomusic">🔌 Intégration avec
+l’écosystème PMOMusic</h2>
+<h3 id="avec-pmoaudiocache">Avec pmoaudiocache</h3>
+<ul>
+<li>Import → Déclencher cache automatique (si
+<code>auto_cache: true</code>)</li>
+<li><code>resolve_uri()</code> → Retourner URI cachée si disponible</li>
+</ul>
+<h3 id="avec-pmocovers">Avec pmocovers</h3>
+<ul>
+<li>Import → Télécharger cover art</li>
+<li>Browse → Inclure <code>album_art</code> dans DIDL-Lite</li>
+</ul>
+<h3 id="avec-pmoserver-feature-server">Avec pmoserver (feature
+<code>server</code>)</h3>
+<ul>
+<li>API REST pour manipulation (CRUD items, tags, playlists)</li>
+<li>SSE pour notifications de changements</li>
+<li>Endpoints OpenAPI (utoipa)</li>
+</ul>
+<hr />
+<h2 id="plan-dimplémentation-phases">📝 Plan d’implémentation
+(Phases)</h2>
+<h3 id="phase-1-fondations">Phase 1 : Fondations</h3>
+<ul>
+<li>Schéma SQLite complet</li>
+<li>Crate <code>pmojspf</code> (parser playlists)</li>
+<li>CRUD basique dans <code>pmomusicbox</code> (items, tags)</li>
+<li>Taxonomie par défaut</li>
+<li>Import URL simple</li>
+<li>Extension pmoconfig</li>
+</ul>
+<h3 id="phase-2-import-cross-sources">Phase 2 : Import
+cross-sources</h3>
+<ul>
+<li>Import depuis MusicSource (Qobuz, Paradise)</li>
+<li>Import playlists (JSPF/M3U8)</li>
+<li>Intégration caches (audio, covers)</li>
+<li>Crate <code>pmolocal</code> (fichiers locaux)</li>
+</ul>
+<h3 id="phase-3-smart-playlists">Phase 3 : Smart Playlists</h3>
+<ul>
+<li>Query builder (DSL)</li>
+<li>Exécuteur SQL</li>
+<li>CRUD smart playlists</li>
+<li>Export JSPF</li>
+</ul>
+<h3 id="phase-4-musicsource-upnp">Phase 4 : MusicSource UPnP</h3>
+<ul>
+<li>Implémentation trait <code>MusicSource</code></li>
+<li>Génération DIDL-Lite</li>
+<li>Browse multi-axes (artist, album, tag)</li>
+<li>Recherche full-text (FTS5)</li>
+</ul>
+<h3 id="phase-5-fonctionnalités-avancées">Phase 5 : Fonctionnalités
+avancées</h3>
+<ul>
+<li>Statistiques d’écoute (play_count, last_played)</li>
+<li>Auto-tagging (genre depuis métadonnées)</li>
+<li>API REST (feature <code>server</code>)</li>
+<li>Recommandations (items similaires)</li>
+</ul>
+<hr />
+<h2 id="cas-dusage">🎯 Cas d’usage</h2>
+<h3 id="workflow-typique">Workflow typique</h3>
+<ol type="1">
+<li><strong>Découverte</strong> : Écouter Radio Paradise, tomber sur un
+morceau génial</li>
+<li><strong>Ajout</strong> :
+<code>musicbox.import_from_source(&amp;paradise, "track-123")</code></li>
+<li><strong>Organisation</strong> : Ajouter tags
+<code>mood:chill</code>, <code>occasion:focus</code></li>
+<li><strong>Playlist</strong> : Smart playlist “Focus Music” avec
+requête <code>mood:chill + occasion:focus</code></li>
+<li><strong>Écoute</strong> : Naviguer dans UPnP →
+<code>musicbox/smart-playlists/Focus Music/</code></li>
+</ol>
+<h3 id="scénario-bibliothèque-mixte">Scénario : Bibliothèque mixte</h3>
+<ul>
+<li>Albums Qobuz haute résolution</li>
+<li>Playlists M3U8 importées depuis iTunes</li>
+<li>Fichiers FLAC locaux scannés</li>
+<li>URLs de SoundCloud</li>
+<li>Tracks Radio Paradise capturés</li>
+</ul>
+<p><strong>Tout unifié dans MusicBox, accessible via UPnP, organisé par
+tags.</strong></p>
+<hr />
+<h2 id="références">📚 Références</h2>
+<h3 id="standards">Standards</h3>
+<ul>
+<li><a href="https://www.xspf.org/jspf">JSPF Spec</a></li>
+<li><a href="https://www.xspf.org/spec">XSPF Spec</a></li>
+<li><a href="https://www.sqlite.org/fts5.html">SQLite FTS5</a></li>
+</ul>
+<h3 id="inspirations">Inspirations</h3>
+<ul>
+<li><a href="https://beets.io/">Beets</a> - Music library manager</li>
+<li><a href="https://www.navidrome.org/">Navidrome</a> - Music
+server</li>
+<li><a href="https://picard.musicbrainz.org/">MusicBrainz Picard</a> -
+Tagger</li>
+</ul>
+</article>
+</body>
+</html>
