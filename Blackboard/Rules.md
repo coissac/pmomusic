@@ -14,6 +14,46 @@
 
 ---
 
+## Règles Rust (Cargo workspace)
+
+### Gestion des dépendances
+
+**⚠️ OBLIGATOIRE** : Les dépendances doivent être ajoutées au niveau **workspace** autant que possible.
+
+1. Ajouter la dépendance dans `Cargo.toml` racine (section `[workspace.dependencies]`)
+2. Référencer avec `{ workspace = true }` dans le `Cargo.toml` de la crate
+
+**Exemple** :
+```toml
+# Cargo.toml (racine workspace)
+[workspace.dependencies]
+rand = "0.9"
+
+# pmocontrol/Cargo.toml
+[dependencies]
+rand = { workspace = true }
+```
+
+**Exceptions** : Dépendances spécifiques à une seule crate avec version très particulière.
+
+---
+
+## Prérequis des tâches
+
+### Spécification des crates cibles
+
+**⚠️ CRITIQUE** : Le LLM doit **REFUSER** d'exécuter une tâche si la ou les crates concernées ne sont pas explicitement spécifiées dans le fichier `Todo/{nom}.md`.
+
+**Informations requises** :
+- Nom de la ou des crates à modifier
+- Chemin relatif si nécessaire (ex: `pmocontrol/src/...`)
+
+**En cas d'absence** :
+- Le LLM demande clarification à l'humain
+- Ne pas deviner ou supposer les crates concernées
+
+---
+
 ## Workflow Blackboard
 
 ### Structure

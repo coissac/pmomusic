@@ -657,11 +657,7 @@ impl ControlPoint {
             "Cleared playback queue"
         );
 
-        // Emit QueueUpdated event
-        self.emit_renderer_event(RendererEvent::QueueUpdated {
-            id: renderer_id.clone(),
-            queue_length: 0,
-        });
+        // Note: QueueUpdated event is emitted automatically by MusicRenderer::clear_queue()
 
         Ok(())
     }
@@ -711,11 +707,34 @@ impl ControlPoint {
             "Enqueued playback items"
         );
 
-        // Emit QueueUpdated event
-        self.emit_renderer_event(RendererEvent::QueueUpdated {
-            id: renderer_id.clone(),
-            queue_length: new_len,
-        });
+        // Note: QueueUpdated event is emitted automatically by MusicRenderer::enqueue_items()
+
+        Ok(())
+    }
+
+    /// Shuffles the queue of a renderer and restarts playback from the first track.
+    ///
+    /// This method:
+    /// 1. Detaches the queue from any attached playlist
+    /// 2. Stops playback
+    /// 3. Randomizes the order of tracks in the queue
+    /// 4. Starts playback from the first track
+    ///
+    /// Note: QueueUpdated event is emitted automatically by MusicRenderer::shuffle_queue()
+    /// via its internal call to replace_queue().
+    pub fn shuffle_queue(&self, renderer_id: &DeviceId) -> Result<(), ControlPointError> {
+        let renderer = self.music_renderer_by_id(renderer_id).ok_or_else(|| {
+            ControlPointError::SnapshotError(format!("Renderer {} not found", renderer_id.0))
+        })?;
+
+        // Perform the shuffle (this also detaches playlist and restarts playback)
+        renderer.shuffle_queue()?;
+
+        debug!(
+            renderer = renderer_id.0.as_str(),
+            queue_len = renderer.len().unwrap_or(0),
+            "Shuffled playback queue"
+        );
 
         Ok(())
     }
@@ -1045,12 +1064,7 @@ impl ControlPoint {
         // Prefetch next track if supported
         self.prefetch_next_track(&renderer, renderer_id);
 
-        // Emit QueueUpdated event
-        let queue_length = renderer.len().unwrap_or(0);
-        self.emit_renderer_event(RendererEvent::QueueUpdated {
-            id: renderer_id.clone(),
-            queue_length,
-        });
+        // Note: QueueUpdated event is emitted automatically by MusicRenderer::play_next_from_queue()
 
         Ok(())
     }
@@ -1265,7 +1279,7 @@ impl ControlPoint {
             ControlPointError::ControlPoint(format!("Renderer {} not found", renderer_id.0))
         })?;
 
-        renderer.set_playlist_binding(Some(binding.clone()));
+        renderer.set_playlist_binding(Some(binding));
         info!(
             renderer = renderer_id.0.as_str(),
             server = server_id.0.as_str(),
@@ -1274,10 +1288,7 @@ impl ControlPoint {
             "Queue attached to playlist container"
         );
 
-        self.emit_renderer_event(RendererEvent::BindingChanged {
-            id: renderer_id.clone(),
-            binding: Some(binding),
-        });
+        // Note: BindingChanged event is emitted automatically by MusicRenderer::set_playlist_binding()
 
         // For initial attach with auto_play, force playback start (don't check if idle)
         let mut auto_start_cb = |rid: &DeviceId| {
@@ -1446,10 +1457,13 @@ impl ControlPoint {
             None => return,
         };
 
-        let removed = renderer.get_playlist_binding();
-        renderer.set_playlist_binding(None);
+        let had_binding = renderer.get_playlist_binding();
+        renderer.clear_playlist_binding();
 
-        if let Some(binding) = removed {
+        // Note: BindingChanged event is emitted automatically by MusicRenderer::clear_playlist_binding()
+        // only if there was a binding to remove
+
+        if let Some(binding) = had_binding {
             info!(
                 renderer = renderer_id.0.as_str(),
                 server = binding.server_id.0.as_str(),
@@ -1457,10 +1471,6 @@ impl ControlPoint {
                 reason = reason,
                 "Playlist binding detached"
             );
-            self.emit_renderer_event(RendererEvent::BindingChanged {
-                id: renderer_id.clone(),
-                binding: None,
-            });
         } else {
             debug!(
                 renderer = renderer_id.0.as_str(),

@@ -3730,6 +3730,7 @@ dependencies = [
  "pmoserver",
  "pmoupnp",
  "quick-xml",
+ "rand 0.9.2",
  "ratatui",
  "rust_cast",
  "rustls",
