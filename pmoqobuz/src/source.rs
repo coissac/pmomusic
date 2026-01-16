@@ -602,6 +602,13 @@ impl QobuzSource {
                 }
             }
 
+            // Convertir l'URL de la cover en URL absolue si elle est relative
+            if let Some(art) = item.album_art.as_mut() {
+                if art.starts_with('/') {
+                    *art = format!("{}{}", self.inner.base_url, art);
+                }
+            }
+
             item.parent_id = parent_id.clone();
             adapted.push(item);
         }
