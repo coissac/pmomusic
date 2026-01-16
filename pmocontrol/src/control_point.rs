@@ -194,150 +194,9 @@ impl ControlPoint {
             });
         });
 
-        let polling_cp = ControlPoint {
-            registry: Arc::clone(&registry),
-            // udn_cache: udn_cache.clone(),
-            event_bus: event_bus.clone(),
-            media_event_bus: media_event_bus.clone(),
-        };
-
-        thread::spawn(move || {
-            use std::collections::HashMap;
-
-            // Local cache for change detection (not a source of truth)
-            let mut polling_cache: HashMap<DeviceId, RendererRuntimeSnapshot> = HashMap::new();
-            let mut tick: u32 = 0;
-
-            loop {
-                // Get renderers directly from registry - they already contain backends
-                let renderers = {
-                    let reg = polling_cp.registry.read().unwrap();
-                    reg.list_renderers().unwrap_or_else(|_| vec![])
-                };
-
-                for renderer in renderers {
-                    if !renderer.is_online() {
-                        continue;
-                    }
-
-                    let renderer_id = renderer.id();
-
-                    // Get previous snapshot from local cache
-                    let prev_snapshot =
-                        polling_cache.get(&renderer_id).cloned().unwrap_or_default();
-                    let mut new_snapshot = prev_snapshot.clone();
-                    let prev_position = prev_snapshot.position.clone();
-
-                    // Poll position every tick (1s) for smooth UI progress
-                    if let Ok(position) = renderer.playback_position() {
-                        let has_changed = match prev_snapshot.position.as_ref() {
-                            Some(prev) => !playback_position_equal(prev, &position),
-                            None => true,
-                        };
-
-                        if has_changed {
-                            polling_cp.emit_renderer_event(RendererEvent::PositionChanged {
-                                id: renderer_id.clone(),
-                                position: position.clone(),
-                            });
-                        }
-
-                        // Extract and emit metadata changes
-                        match extract_track_metadata(&position) {
-                            Some(metadata) => {
-                                let metadata_changed = match prev_snapshot.last_metadata.as_ref() {
-                                    Some(prev) => prev != &metadata,
-                                    None => true,
-                                };
-
-                                if metadata_changed {
-                                    debug!(
-                                        renderer = renderer_id.0.as_str(),
-                                        title = metadata.title.as_deref(),
-                                        artist = metadata.artist.as_deref(),
-                                        "Emitting metadata changed event"
-                                    );
-                                    polling_cp.emit_renderer_event(
-                                        RendererEvent::MetadataChanged {
-                                            id: renderer_id.clone(),
-                                            metadata: metadata.clone(),
-                                        },
-                                    );
-                                    new_snapshot.last_metadata = Some(metadata);
-                                }
-                            }
-                            None => {
-                                debug!(
-                                    renderer = renderer_id.0.as_str(),
-                                    has_track_metadata = position.track_metadata.is_some(),
-                                    "No metadata extracted from position info"
-                                );
-                            }
-                        }
-
-                        new_snapshot.position = Some(position);
-                    }
-
-                    // Poll state every tick to ensure responsive playback control
-                    if let Ok(raw_state) = renderer.playback_state() {
-                        let logical_state = compute_logical_playback_state(
-                            &raw_state,
-                            prev_position.as_ref(),
-                            new_snapshot.position.as_ref(),
-                        );
-
-                        let has_changed = match prev_snapshot.state.as_ref() {
-                            Some(prev) => !playback_state_equal(prev, &logical_state),
-                            None => true,
-                        };
-
-                        // Emit event only for non-transient states to reduce noise
-                        // and avoid overwhelming the renderer during track changes
-                        if has_changed && !matches!(logical_state, PlaybackState::Transitioning) {
-                            polling_cp.emit_renderer_event(RendererEvent::StateChanged {
-                                id: renderer_id.clone(),
-                                state: logical_state.clone(),
-                            });
-                        }
-
-                        new_snapshot.state = Some(logical_state);
-                    }
-
-                    // Poll volume and mute every second (every 2 ticks at 500ms)
-                    // for responsive volume control feedback
-                    if tick % 2 == 0 {
-                        if let Ok(volume) = renderer.volume() {
-                            if prev_snapshot.last_volume != Some(volume) {
-                                polling_cp.emit_renderer_event(RendererEvent::VolumeChanged {
-                                    id: renderer_id.clone(),
-                                    volume,
-                                });
-                            }
-
-                            new_snapshot.last_volume = Some(volume);
-                        }
-
-                        if let Ok(mute) = renderer.mute() {
-                            if prev_snapshot.last_mute != Some(mute) {
-                                polling_cp.emit_renderer_event(RendererEvent::MuteChanged {
-                                    id: renderer_id.clone(),
-                                    mute,
-                                });
-                            }
-
-                            new_snapshot.last_mute = Some(mute);
-                        }
-                    }
-
-                    // Update local cache
-                    polling_cache.insert(renderer_id, new_snapshot);
-                }
-
-                tick = tick.wrapping_add(1);
-                // 250ms polling for smoother UI updates and fluid progress bar
-                thread::sleep(Duration::from_millis(250));
-            }
-        });
+        // Note: Renderer polling is now handled by each MusicRenderer's own watcher thread.
+        // The central polling loop has been removed in favor of per-renderer watchers
+        // that are started/stopped by the Registry when devices come online/offline.
 
         spawn_media_server_event_runtime(
             Arc::clone(&registry),
@@ -1480,50 +1339,9 @@ impl ControlPoint {
         }
     }
 
-    pub(crate) fn emit_renderer_event(&self, event: RendererEvent) {
-        self.handle_renderer_event(&event);
-        self.event_bus.broadcast(event);
-    }
-
-    fn handle_renderer_event(&self, event: &RendererEvent) {
-        if let RendererEvent::StateChanged { id, state } = event {
-            let Some(renderer) = self.music_renderer_by_id(id) else {
-                return;
-            };
-
-            match state {
-                PlaybackState::Stopped => {
-                    // Check if user requested stop (via Stop button in UI)
-                    if renderer.check_and_clear_user_stop_requested() {
-                        debug!(
-                            renderer = id.0.as_str(),
-                            "Renderer stopped by user request; not auto-advancing"
-                        );
-                        renderer.set_playback_source(PlaybackSource::None);
-                    } else if renderer.is_playing_from_queue() {
-                        debug!(
-                            renderer = id.0.as_str(),
-                            "Renderer stopped after queue-driven playback; advancing"
-                        );
-                        if let Err(err) = self.play_next_from_queue(id) {
-                            error!(
-                                renderer = id.0.as_str(),
-                                error = %err,
-                                "Auto-advance failed; clearing queue playback state"
-                            );
-                            renderer.set_playback_source(PlaybackSource::None);
-                        }
-                    } else {
-                        renderer.set_playback_source(PlaybackSource::None);
-                    }
-                }
-                PlaybackState::Playing => {
-                    renderer.mark_external_if_idle();
-                }
-                _ => {}
-            }
-        }
-    }
+    // Note: emit_renderer_event and handle_renderer_event have been removed.
+    // Renderer events are now emitted directly by each MusicRenderer's watcher thread,
+    // and auto-advance logic is handled internally by MusicRenderer::handle_state_change().
 }
 
 #[cfg(feature = "pmoserver")]
@@ -1564,16 +1382,8 @@ fn parse_hms_to_ms(hms: Option<&str>) -> Option<u64> {
     Some((hours * 3600 + minutes * 60 + seconds) * 1000)
 }
 
-/// Snapshot of renderer state used for change detection in the polling thread.
-/// This is a local cache, not a source of truth.
-#[derive(Clone, Default)]
-struct RendererRuntimeSnapshot {
-    state: Option<PlaybackState>,
-    position: Option<PlaybackPositionInfo>,
-    last_volume: Option<u16>,
-    last_mute: Option<bool>,
-    last_metadata: Option<TrackMetadata>,
-}
+// Note: RendererRuntimeSnapshot has been removed.
+// Each MusicRenderer now maintains its own WatchedState for change detection.
 
 /// Internal helper to refresh a renderer's playback queue from its bound
 /// playlist container.
@@ -1866,74 +1676,14 @@ fn playback_item_track_metadata(item: &PlaybackItem) -> TrackMetadata {
     })
 }
 
-fn parse_optional_hms_to_secs(value: &Option<String>) -> Option<u64> {
-    value.as_ref().and_then(|s| parse_hms_to_secs(s))
-}
-
-/// Compute a logical playback state by combining the raw AVTransport state
-/// with previous and current position information.
-///
-/// This is designed to compensate for buggy LinkPlay/Arylic devices that
-/// report:
-///   - STOPPED while the time actually advances,
-///   - NO_MEDIA_PRESENT while track duration is known.
-fn compute_logical_playback_state(
-    raw: &PlaybackState,
-    prev_position: Option<&PlaybackPositionInfo>,
-    current_position: Option<&PlaybackPositionInfo>,
-) -> PlaybackState {
-    // Rule 1: Arylic / LinkPlay sometimes report STOPPED while the stream is
-    // actually playing. If we detect that the relative time advances between
-    // two polls, we treat this as Playing.
-    if let PlaybackState::Stopped = raw {
-        if let (Some(prev), Some(curr)) = (prev_position, current_position) {
-            if let (Some(prev_rel), Some(curr_rel)) = (
-                parse_optional_hms_to_secs(&prev.rel_time),
-                parse_optional_hms_to_secs(&curr.rel_time),
-            ) {
-                if curr_rel > prev_rel {
-                    let delta = curr_rel - prev_rel;
-                    // Our poll loop runs every 1s; accept small jitter in the delta.
-                    if delta <= 5 {
-                        return PlaybackState::Playing;
-                    }
-                }
-            }
-        }
-    }
-
-    // Rule 2: Some devices report NO_MEDIA_PRESENT while exposing a non-zero
-    // track duration. In practice this behaves like a stopped transport with
-    // a loaded track.
-    if let PlaybackState::NoMedia = raw {
-        let duration_secs = current_position
-            .and_then(|p| parse_optional_hms_to_secs(&p.track_duration))
-            .or_else(|| prev_position.and_then(|p| parse_optional_hms_to_secs(&p.track_duration)));
-
-        if matches!(duration_secs, Some(d) if d > 0) {
-            return PlaybackState::Stopped;
-        }
-    }
-
-    // Fallback: keep the raw (already normalized) state.
-    raw.clone()
-}
-
-fn playback_state_equal(a: &PlaybackState, b: &PlaybackState) -> bool {
-    match (a, b) {
-        (PlaybackState::Unknown(lhs), PlaybackState::Unknown(rhs)) => lhs == rhs,
-        _ => std::mem::discriminant(a) == std::mem::discriminant(b),
-    }
-}
-
-fn playback_position_equal(a: &PlaybackPositionInfo, b: &PlaybackPositionInfo) -> bool {
-    a.track == b.track
-        && a.rel_time == b.rel_time
-        && a.abs_time == b.abs_time
-        && a.track_duration == b.track_duration
-        && a.track_metadata == b.track_metadata
-        && a.track_uri == b.track_uri
-}
+// Note: The following helper functions have been moved to music_renderer/watcher.rs:
+// - parse_optional_hms_to_secs
+// - compute_logical_playback_state
+// - playback_state_equal
+// - playback_position_equal
+// - extract_track_metadata
+// - parse_hms_to_secs
+// They are now used by each MusicRenderer's watcher thread for change detection.
 
 #[cfg(feature = "pmoserver")]
 fn current_track_from_playback_item(item: &PlaybackItem) -> CurrentTrackMetadata {
@@ -1944,77 +1694,4 @@ fn current_track_from_playback_item(item: &PlaybackItem) -> CurrentTrackMetadata
         album: meta.and_then(|m| m.album.clone()),
         album_art_uri: meta.and_then(|m| m.album_art_uri.clone()),
     }
-}
-
-/// Extract TrackMetadata from DIDL-Lite XML in PlaybackPositionInfo.
-fn extract_track_metadata(position: &PlaybackPositionInfo) -> Option<TrackMetadata> {
-    let didl_xml = match position.track_metadata.as_ref() {
-        Some(xml) => xml,
-        None => {
-            debug!("Position info has no track_metadata (DIDL-Lite XML)");
-            return None;
-        }
-    };
-
-    // Parse DIDL-Lite XML
-    let didl = match pmodidl::parse_metadata::<pmodidl::DIDLLite>(didl_xml) {
-        Ok(parsed) => parsed.data,
-        Err(err) => {
-            debug!(error = %err, "Failed to parse DIDL-Lite metadata from GetPositionInfo");
-            return None;
-        }
-    };
-
-    // Extract first item metadata
-    let item = match didl.items.first() {
-        Some(item) => item,
-        None => {
-            debug!("DIDL-Lite has no items");
-            return None;
-        }
-    };
-
-    debug!(
-        title = item.title.as_str(),
-        has_album_art = item.album_art.is_some(),
-        album_art_uri = item.album_art.as_deref(),
-        "Extracted metadata from position info"
-    );
-
-    Some(TrackMetadata {
-        title: Some(item.title.clone()),
-        artist: item.artist.clone(),
-        album: item.album.clone(),
-        genre: item.genre.clone(),
-        album_art_uri: item.album_art.clone(),
-        date: item.date.clone(),
-        track_number: item.original_track_number.clone(),
-        creator: item.creator.clone(),
-    })
-}
-
-/// Parse "HH:MM:SS" style time strings to seconds.
-///
-/// Returns None for empty or sentinel values such as "NOT_IMPLEMENTED" or "-:--:--".
-fn parse_hms_to_secs(s: &str) -> Option<u64> {
-    let s = s.trim();
-    if s.is_empty() {
-        return None;
-    }
-
-    // Common sentinel values for "no information" in UPnP implementations.
-    if s == "NOT_IMPLEMENTED" || s == "-:--:--" {
-        return None;
-    }
-
-    let parts: Vec<_> = s.split(':').collect();
-    if parts.len() != 3 {
-        return None;
-    }
-
-    let hours: u64 = parts[0].parse().ok()?;
-    let minutes: u64 = parts[1].parse().ok()?;
-    let seconds: u64 = parts[2].parse().ok()?;
-
-    Some(hours * 3600 + minutes * 60 + seconds)
 }

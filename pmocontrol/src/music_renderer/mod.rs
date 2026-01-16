@@ -12,6 +12,7 @@ mod chromecast_renderer;
 mod musicrenderer;
 mod sleep_timer;
 pub mod time_utils;
+pub mod watcher;
 
 use std::sync::{Arc, Mutex};
 
