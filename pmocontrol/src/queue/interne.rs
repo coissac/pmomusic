@@ -132,24 +132,49 @@ impl QueueBackend for InternalQueue {
     }
 
     fn sync_queue(&mut self, items: Vec<PlaybackItem>) -> Result<(), ControlPointError> {
+        use tracing::debug;
+
         if items.is_empty() {
             return self.replace_queue(Vec::new(), None);
         }
 
         // Récupérer l'item actuel
-        let current = self
-            .current_index
-            .and_then(|idx| self.items.get(idx).map(|item| (idx, item.uri.clone())));
+        let current = self.current_index.and_then(|idx| {
+            self.items
+                .get(idx)
+                .map(|item| (idx, item.uri.clone(), item.didl_id.clone()))
+        });
 
-        if let Some((_current_idx, current_uri)) = current {
-            // Chercher l'item actuel dans la nouvelle liste (par URI)
-            let new_idx = items.iter().position(|item| item.uri == current_uri);
+        if let Some((_current_idx, current_uri, current_didl_id)) = current {
+            // Chercher l'item actuel dans la nouvelle liste (par URI d'abord, puis par didl_id)
+            let new_idx = items
+                .iter()
+                .position(|item| item.uri == current_uri)
+                .or_else(|| {
+                    items
+                        .iter()
+                        .position(|item| item.didl_id == current_didl_id)
+                });
 
             if let Some(new_idx) = new_idx {
                 // Item trouvé dans la nouvelle liste
+                debug!(
+                    renderer = self.renderer_id.0.as_str(),
+                    current_uri = current_uri.as_str(),
+                    new_idx,
+                    "sync_queue: current item found in new playlist"
+                );
                 self.replace_queue(items, Some(new_idx))
             } else {
-                // Item pas trouvé, le garder comme premier
+                // Item pas trouvé - cela ne devrait pas arriver si la playlist n'a pas changé
+                // Loguer pour diagnostic
+                debug!(
+                    renderer = self.renderer_id.0.as_str(),
+                    current_uri = current_uri.as_str(),
+                    current_didl_id = current_didl_id.as_str(),
+                    new_items_count = items.len(),
+                    "sync_queue: current item NOT found in new playlist, preserving as first item"
+                );
                 let current_item = self.items[self.current_index.unwrap()].clone();
                 let mut new_items = Vec::with_capacity(items.len() + 1);
                 new_items.push(current_item);

@@ -444,6 +444,14 @@ fn build_metadata_xml(item: &PlaybackItem) -> String {
     xml
 }
 
+/// Compare two PlaybackItems for equality.
+/// Items are considered equal if they have the same URI OR the same didl_id.
+/// This allows matching items even when the MediaServer returns different URIs
+/// for the same logical track (e.g., with session tokens or different encodings).
+fn items_match(a: &PlaybackItem, b: &PlaybackItem) -> bool {
+    a.uri == b.uri || a.didl_id == b.didl_id
+}
+
 fn lcs_flags(current: &[PlaybackItem], desired: &[PlaybackItem]) -> (Vec<bool>, Vec<bool>) {
     let m = current.len();
     let n = desired.len();
@@ -451,7 +459,7 @@ fn lcs_flags(current: &[PlaybackItem], desired: &[PlaybackItem]) -> (Vec<bool>, 
 
     for i in 0..m {
         for j in 0..n {
-            if current[i].uri == desired[j].uri {
+            if items_match(&current[i], &desired[j]) {
                 dp[i + 1][j + 1] = dp[i][j] + 1;
             } else {
                 dp[i + 1][j + 1] = dp[i + 1][j].max(dp[i][j + 1]);
@@ -464,7 +472,7 @@ fn lcs_flags(current: &[PlaybackItem], desired: &[PlaybackItem]) -> (Vec<bool>, 
     let (mut i, mut j) = (m, n);
 
     while i > 0 && j > 0 {
-        if current[i - 1].uri == desired[j - 1].uri {
+        if items_match(&current[i - 1], &desired[j - 1]) {
             keep_current[i - 1] = true;
             keep_desired[j - 1] = true;
             i -= 1;
@@ -616,6 +624,7 @@ impl QueueBackend for OpenHomeQueue {
                 idx,
                 snapshot.items[idx].backend_id,
                 snapshot.items[idx].uri.clone(),
+                snapshot.items[idx].didl_id.clone(),
             ))
         });
 
@@ -626,9 +635,16 @@ impl QueueBackend for OpenHomeQueue {
             "OpenHome playlist state"
         );
 
-        if let Some((playing_idx, playing_id, playing_uri)) = playing_info {
-            // Find if the currently playing item is in the new playlist (by URI)
-            let new_playing_idx = items.iter().position(|item| item.uri == playing_uri);
+        if let Some((playing_idx, playing_id, playing_uri, playing_didl_id)) = playing_info {
+            // Find if the currently playing item is in the new playlist (by URI first, then by didl_id)
+            let new_playing_idx = items
+                .iter()
+                .position(|item| item.uri == playing_uri)
+                .or_else(|| {
+                    items
+                        .iter()
+                        .position(|item| item.didl_id == playing_didl_id)
+                });
 
             if let Some(pivot_idx) = new_playing_idx {
                 // CASE 2: Currently playing item IS in the new playlist

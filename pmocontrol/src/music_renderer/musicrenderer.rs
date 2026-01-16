@@ -91,6 +91,10 @@ struct MusicRendererState {
     user_stop_requested: bool,
     /// Sleep timer for auto-stop functionality.
     sleep_timer: SleepTimer,
+    /// Flag indicating that a PLAYING state has been observed since the last track start.
+    /// This prevents auto-advance on transient STOPPED states during track initialization.
+    /// Auto-advance is only allowed when this flag is true.
+    has_played_since_track_start: bool,
 }
 
 #[derive(Clone)]
@@ -422,25 +426,39 @@ impl MusicRenderer {
                         "Renderer stopped by user request; not auto-advancing"
                     );
                     self.set_playback_source(PlaybackSource::None);
+                    self.clear_has_played_flag();
                 } else if self.is_playing_from_queue() {
-                    debug!(
-                        renderer = self.info.friendly_name(),
-                        "Renderer stopped after queue-driven playback; advancing"
-                    );
-                    if let Err(err) = self.play_next_from_queue() {
-                        error!(
+                    // Only auto-advance if we have actually seen a PLAYING state
+                    // since the track was started. This prevents auto-advance on
+                    // transient STOPPED states during track initialization.
+                    if self.check_and_clear_has_played_flag() {
+                        debug!(
                             renderer = self.info.friendly_name(),
-                            error = %err,
-                            "Auto-advance failed; clearing queue playback state"
+                            "Renderer stopped after queue-driven playback; advancing"
                         );
-                        self.set_playback_source(PlaybackSource::None);
+                        if let Err(err) = self.play_next_from_queue() {
+                            error!(
+                                renderer = self.info.friendly_name(),
+                                error = %err,
+                                "Auto-advance failed; clearing queue playback state"
+                            );
+                            self.set_playback_source(PlaybackSource::None);
+                        }
+                    } else {
+                        debug!(
+                            renderer = self.info.friendly_name(),
+                            "Renderer stopped but no PLAYING state seen yet; ignoring (likely track initialization)"
+                        );
                     }
                 } else {
                     self.set_playback_source(PlaybackSource::None);
+                    self.clear_has_played_flag();
                 }
             }
             PlaybackState::Playing => {
                 self.mark_external_if_idle();
+                // Mark that we have seen a PLAYING state - auto-advance is now allowed
+                self.set_has_played_flag();
             }
             _ => {}
         }
@@ -566,6 +584,11 @@ impl MusicRenderer {
 
     /// Play the current item from the queue.
     pub fn play_current_from_queue(&self) -> Result<(), ControlPointError> {
+        // Reset the has_played flag before starting playback to prevent
+        // auto-advance on transient STOPPED states during track initialization.
+        // The flag will be set back to true when PLAYING state is detected.
+        self.clear_has_played_flag();
+
         self.backend
             .lock()
             .expect("Backend mutex poisoned")
@@ -574,6 +597,11 @@ impl MusicRenderer {
 
     /// Advance to and play the next item from the queue.
     pub fn play_next_from_queue(&self) -> Result<(), ControlPointError> {
+        // Reset the has_played flag before starting playback to prevent
+        // auto-advance on transient STOPPED states during track initialization.
+        // The flag will be set back to true when PLAYING state is detected.
+        self.clear_has_played_flag();
+
         self.backend
             .lock()
             .expect("Backend mutex poisoned")
@@ -584,6 +612,11 @@ impl MusicRenderer {
 
     /// Play from a specific index in the queue.
     pub fn play_from_index(&self, index: usize) -> Result<(), ControlPointError> {
+        // Reset the has_played flag before starting playback to prevent
+        // auto-advance on transient STOPPED states during track initialization.
+        // The flag will be set back to true when PLAYING state is detected.
+        self.clear_has_played_flag();
+
         self.backend
             .lock()
             .expect("Backend mutex poisoned")
@@ -618,6 +651,12 @@ impl MusicRenderer {
 
     /// Transport control: stop
     pub fn stop(&self) -> Result<(), ControlPointError> {
+        // Reset the has_played flag when stopping playback.
+        // This ensures that if we start a new track, the flag will be false
+        // until PLAYING state is observed, preventing auto-advance on
+        // transient STOPPED states during track initialization.
+        self.clear_has_played_flag();
+
         self.backend.lock().expect("Backend mutex poisoned").stop()
     }
 
@@ -972,6 +1011,11 @@ impl MusicRenderer {
     ///
     /// Uses the backend's play_from_queue which preserves the queue for all backends.
     pub fn play_from_queue(&self) -> Result<(), ControlPointError> {
+        // Reset the has_played flag before starting playback to prevent
+        // auto-advance on transient STOPPED states during track initialization.
+        // The flag will be set back to true when PLAYING state is detected.
+        self.clear_has_played_flag();
+
         let backend = self.backend.lock().expect("Backend mutex poisoned");
         backend.play_from_queue()
     }
@@ -1025,6 +1069,31 @@ impl MusicRenderer {
         let was_requested = state.user_stop_requested;
         state.user_stop_requested = false;
         was_requested
+    }
+
+    // --- Has-Played Flag Management (for auto-advance protection) ---
+
+    /// Sets the has_played_since_track_start flag to true.
+    /// Called when PLAYING state is detected.
+    fn set_has_played_flag(&self) {
+        self.state.lock().unwrap().has_played_since_track_start = true;
+    }
+
+    /// Clears the has_played_since_track_start flag.
+    /// Called when stopping playback or starting a new track.
+    /// This is public so that ControlPoint can reset it when jumping to a new track.
+    pub fn clear_has_played_flag(&self) {
+        self.state.lock().unwrap().has_played_since_track_start = false;
+    }
+
+    /// Checks and clears the has_played_since_track_start flag.
+    /// Returns true if PLAYING was seen since last track start, false otherwise.
+    /// Used to determine if auto-advance should be allowed.
+    fn check_and_clear_has_played_flag(&self) -> bool {
+        let mut state = self.state.lock().unwrap();
+        let has_played = state.has_played_since_track_start;
+        state.has_played_since_track_start = false;
+        has_played
     }
 
     // --- Sleep Timer Management ---
