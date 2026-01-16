@@ -164,6 +164,7 @@ impl DeviceRegistry {
         if let Some(entry) = self.devices.get_mut(&device_id) {
             if let Some(renderer) = &entry.music_renderer {
                 let was_online = renderer.is_online();
+                // has_been_seen_now() automatically calls start_watching() if offline→online
                 renderer.has_been_seen_now(max_age);
 
                 if !was_online {
@@ -175,6 +176,7 @@ impl DeviceRegistry {
                 return;
             }
             // Entry existe mais pas de renderer -> on l'ajoute
+            // Constructor automatically calls start_watching()
             if let Ok(new_renderer) =
                 MusicRenderer::from_renderer_info_with_bus(info, Some(self.renderer_bus.clone()))
             {
@@ -182,7 +184,6 @@ impl DeviceRegistry {
                 self.udn_index
                     .insert(info.udn().to_ascii_lowercase(), device_id.clone());
 
-                // Broadcast sur le bon bus
                 self.renderer_bus.broadcast(RendererEvent::Online {
                     id: device_id.clone(),
                     info: info.basic_info(),
@@ -190,6 +191,7 @@ impl DeviceRegistry {
             }
         } else {
             // Entry n'existe pas -> on crée
+            // Constructor automatically calls start_watching()
             if let Ok(new_renderer) =
                 MusicRenderer::from_renderer_info_with_bus(info, Some(self.renderer_bus.clone()))
             {
@@ -202,7 +204,6 @@ impl DeviceRegistry {
                 self.udn_index
                     .insert(info.udn().to_ascii_lowercase(), device_id.clone());
 
-                // Broadcast sur le bon bus
                 self.renderer_bus.broadcast(RendererEvent::Online {
                     id: device_id,
                     info: info.basic_info(),
@@ -265,15 +266,19 @@ impl DeviceRegistry {
     ///
     /// This is critical for keeping devices online when SSDP Alive messages arrive
     /// more frequently than the UDN cache refresh interval (max_age/2).
+    ///
+    /// Note: has_been_seen_now() automatically calls start_watching() for renderers
+    /// when transitioning from offline to online.
     pub fn refresh_device_presence(&mut self, udn: &str, max_age: u32) {
         let lookup = udn.to_ascii_lowercase();
 
         if let Some(id) = self.udn_index.get(&lookup) {
             if let Some(device) = self.devices.get(id) {
                 let was_online = device.is_online();
+                // has_been_seen_now() automatically calls start_watching() if offline→online
                 device.has_been_seen_now(max_age);
 
-                // If device was offline and came back online, broadcast Online event
+                // Broadcast Online event if device came back online
                 if !was_online {
                     if device.is_a_music_renderer() {
                         if let Ok(renderer) = device.as_music_renderer() {
@@ -301,9 +306,9 @@ impl DeviceRegistry {
 
         if let Some(id) = self.udn_index.get(&lookup) {
             if let Some(device) = self.devices.get(id) {
+                // mark_as_offline() automatically calls stop_watching() for renderers
                 device.mark_as_offline();
 
-                // Broadcast sur le bon bus
                 if device.is_a_music_renderer() {
                     self.renderer_bus
                         .broadcast(RendererEvent::Offline { id: id.clone() });
@@ -323,9 +328,9 @@ impl DeviceRegistry {
         for (id, device) in &self.devices {
             if let Ok(elapsed) = now.duration_since(device.last_seen()) {
                 if elapsed.as_secs() > device.max_age() as u64 {
+                    // mark_as_offline() automatically calls stop_watching() for renderers
                     device.mark_as_offline();
 
-                    // Broadcast sur le bon bus
                     if device.is_a_music_renderer() {
                         self.renderer_bus
                             .broadcast(RendererEvent::Offline { id: id.clone() });

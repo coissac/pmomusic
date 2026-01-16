@@ -6,8 +6,12 @@
 //! renderers through this type so that transport, volume, and state queries
 //! stay backend-neutral.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
 use std::time::SystemTime;
+
+use tracing::{debug, error};
 
 use crate::errors::ControlPointError;
 use crate::events::RendererEventBus;
@@ -24,6 +28,10 @@ use crate::music_renderer::linkplay_renderer::LinkPlayRenderer;
 use crate::music_renderer::openhome_renderer::OpenHomeRenderer;
 use crate::music_renderer::sleep_timer::SleepTimer;
 use crate::music_renderer::upnp_renderer::UpnpRenderer;
+use crate::music_renderer::watcher::{
+    WatchStrategy, WatchedState, compute_logical_playback_state, extract_track_metadata,
+    playback_position_equal, playback_state_equal,
+};
 use crate::online::DeviceConnectionState;
 use crate::queue::{
     EnqueueMode, MusicQueue, PlaybackItem, QueueBackend, QueueFromRendererInfo, QueueSnapshot,
@@ -94,6 +102,12 @@ pub struct MusicRenderer {
     state: Arc<Mutex<MusicRendererState>>,
     /// Optional event bus for emitting queue change events.
     event_bus: Option<RendererEventBus>,
+    /// Cached state from last poll, used for change detection by the watcher.
+    watched_state: Arc<Mutex<WatchedState>>,
+    /// Flag to signal the watcher thread to stop.
+    watcher_stop_flag: Arc<AtomicBool>,
+    /// Handle to the watcher thread, if running.
+    watcher_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
 impl std::fmt::Debug for MusicRenderer {
@@ -108,6 +122,7 @@ impl std::fmt::Debug for MusicRenderer {
                 "event_bus",
                 &self.event_bus.as_ref().map(|_| "RendererEventBus"),
             )
+            .field("is_watching", &self.is_watching())
             .finish()
     }
 }
@@ -126,6 +141,9 @@ impl MusicRenderer {
             playlist_binding: Arc::new(Mutex::new(None)),
             state: Arc::new(Mutex::new(MusicRendererState::default())),
             event_bus: None,
+            watched_state: Arc::new(Mutex::new(WatchedState::default())),
+            watcher_stop_flag: Arc::new(AtomicBool::new(false)),
+            watcher_handle: Arc::new(Mutex::new(None)),
         };
 
         Arc::new(renderer)
@@ -149,7 +167,14 @@ impl MusicRenderer {
             playlist_binding: Arc::new(Mutex::new(None)),
             state: Arc::new(Mutex::new(MusicRendererState::default())),
             event_bus,
+            watched_state: Arc::new(Mutex::new(WatchedState::default())),
+            watcher_stop_flag: Arc::new(AtomicBool::new(false)),
+            watcher_handle: Arc::new(Mutex::new(None)),
         };
+
+        // Start watching immediately since the renderer is created online
+        renderer.start_watching();
+
         Ok(renderer)
     }
 
@@ -161,6 +186,263 @@ impl MusicRenderer {
                 id: self.id(),
                 queue_length,
             });
+        }
+    }
+
+    /// Helper method to emit any RendererEvent if an event bus is available.
+    fn emit_event(&self, event: RendererEvent) {
+        if let Some(ref bus) = self.event_bus {
+            bus.broadcast(event);
+        }
+    }
+
+    // =========================================================================
+    // Watcher Thread Management
+    // =========================================================================
+
+    /// Starts the watcher thread for this renderer.
+    ///
+    /// The watcher thread polls the backend at regular intervals and emits
+    /// events when state changes are detected. This method is idempotent:
+    /// calling it when already watching is a no-op.
+    pub fn start_watching(&self) {
+        let mut handle_guard = self
+            .watcher_handle
+            .lock()
+            .expect("Watcher handle mutex poisoned");
+        if handle_guard.is_some() {
+            return; // Already watching
+        }
+
+        // Reset the stop flag before starting
+        self.watcher_stop_flag.store(false, Ordering::SeqCst);
+
+        // Determine the watch strategy based on backend type
+        let strategy = {
+            let backend = self.backend.lock().expect("Backend mutex poisoned");
+            WatchStrategy::for_backend(&*backend)
+        };
+
+        debug!(
+            renderer = self.info.friendly_name(),
+            strategy = ?strategy,
+            "Starting watcher thread"
+        );
+
+        let handle = self.spawn_watcher_thread(strategy);
+        *handle_guard = Some(handle);
+    }
+
+    /// Stops the watcher thread gracefully.
+    ///
+    /// This method is idempotent: calling it when not watching is a no-op.
+    /// The method will block until the watcher thread terminates.
+    pub fn stop_watching(&self) {
+        // Signal the watcher to stop
+        self.watcher_stop_flag.store(true, Ordering::SeqCst);
+
+        // Take the handle and wait for the thread to finish
+        let mut handle_guard = self
+            .watcher_handle
+            .lock()
+            .expect("Watcher handle mutex poisoned");
+        if let Some(handle) = handle_guard.take() {
+            debug!(
+                renderer = self.info.friendly_name(),
+                "Stopping watcher thread"
+            );
+            // Wait for the thread to finish (ignore join errors)
+            let _ = handle.join();
+        }
+    }
+
+    /// Returns true if the watcher thread is currently running.
+    pub fn is_watching(&self) -> bool {
+        self.watcher_handle
+            .lock()
+            .expect("Watcher handle mutex poisoned")
+            .is_some()
+    }
+
+    /// Spawns the watcher thread with the given strategy.
+    fn spawn_watcher_thread(&self, strategy: WatchStrategy) -> JoinHandle<()> {
+        let renderer = self.clone();
+        let stop_flag = Arc::clone(&self.watcher_stop_flag);
+
+        thread::Builder::new()
+            .name(format!("watcher-{}", self.info.friendly_name()))
+            .spawn(move || {
+                renderer.watcher_loop(strategy, stop_flag);
+            })
+            .expect("Failed to spawn watcher thread")
+    }
+
+    /// Main loop for the watcher thread.
+    fn watcher_loop(&self, strategy: WatchStrategy, stop_flag: Arc<AtomicBool>) {
+        let Some(interval) = strategy.polling_interval() else {
+            // Pure push strategy - no polling needed (future implementation)
+            return;
+        };
+
+        let mut tick: u32 = 0;
+
+        while !stop_flag.load(Ordering::SeqCst) {
+            if self.is_online() {
+                self.poll_and_emit_changes(tick);
+            }
+
+            tick = tick.wrapping_add(1);
+            thread::sleep(interval);
+        }
+
+        debug!(
+            renderer = self.info.friendly_name(),
+            "Watcher thread exiting"
+        );
+    }
+
+    /// Polls the backend and emits events for any detected changes.
+    fn poll_and_emit_changes(&self, tick: u32) {
+        let mut watched = self
+            .watched_state
+            .lock()
+            .expect("WatchedState mutex poisoned");
+        let prev_position = watched.position.clone();
+
+        // Poll position every tick
+        if let Ok(position) = self.playback_position() {
+            let changed = watched
+                .position
+                .as_ref()
+                .map(|prev| !playback_position_equal(prev, &position))
+                .unwrap_or(true);
+
+            if changed {
+                self.emit_event(RendererEvent::PositionChanged {
+                    id: self.id(),
+                    position: position.clone(),
+                });
+            }
+
+            // Extract and emit metadata changes
+            if let Some(metadata) = extract_track_metadata(&position) {
+                let metadata_changed = watched
+                    .metadata
+                    .as_ref()
+                    .map(|prev| prev != &metadata)
+                    .unwrap_or(true);
+
+                if metadata_changed {
+                    debug!(
+                        renderer = self.info.friendly_name(),
+                        title = metadata.title.as_deref(),
+                        artist = metadata.artist.as_deref(),
+                        "Emitting metadata changed event"
+                    );
+                    self.emit_event(RendererEvent::MetadataChanged {
+                        id: self.id(),
+                        metadata: metadata.clone(),
+                    });
+                    watched.metadata = Some(metadata);
+                }
+            }
+
+            watched.position = Some(position);
+        }
+
+        // Poll state every tick
+        if let Ok(raw_state) = self.playback_state() {
+            let logical_state = compute_logical_playback_state(
+                &raw_state,
+                prev_position.as_ref(),
+                watched.position.as_ref(),
+            );
+
+            let changed = watched
+                .state
+                .as_ref()
+                .map(|prev| !playback_state_equal(prev, &logical_state))
+                .unwrap_or(true);
+
+            // Emit event only for non-transient states to reduce noise
+            if changed && !matches!(logical_state, PlaybackState::Transitioning) {
+                self.emit_event(RendererEvent::StateChanged {
+                    id: self.id(),
+                    state: logical_state.clone(),
+                });
+
+                // Handle auto-advance logic internally
+                // Release the lock before calling handle_state_change to avoid deadlock
+                drop(watched);
+                self.handle_state_change(&logical_state);
+                watched = self
+                    .watched_state
+                    .lock()
+                    .expect("WatchedState mutex poisoned");
+            }
+
+            watched.state = Some(logical_state);
+        }
+
+        // Poll volume and mute every other tick (1 second at 500ms interval)
+        if tick % 2 == 0 {
+            if let Ok(volume) = self.volume() {
+                if watched.volume != Some(volume) {
+                    self.emit_event(RendererEvent::VolumeChanged {
+                        id: self.id(),
+                        volume,
+                    });
+                    watched.volume = Some(volume);
+                }
+            }
+
+            if let Ok(mute) = self.mute() {
+                if watched.mute != Some(mute) {
+                    self.emit_event(RendererEvent::MuteChanged {
+                        id: self.id(),
+                        mute,
+                    });
+                    watched.mute = Some(mute);
+                }
+            }
+        }
+    }
+
+    /// Handles playback state changes internally (auto-advance logic).
+    ///
+    /// This method is called by the watcher when a state change is detected.
+    /// It handles the auto-advance behavior when playback stops.
+    fn handle_state_change(&self, state: &PlaybackState) {
+        match state {
+            PlaybackState::Stopped => {
+                // Check if user requested stop (via Stop button in UI)
+                if self.check_and_clear_user_stop_requested() {
+                    debug!(
+                        renderer = self.info.friendly_name(),
+                        "Renderer stopped by user request; not auto-advancing"
+                    );
+                    self.set_playback_source(PlaybackSource::None);
+                } else if self.is_playing_from_queue() {
+                    debug!(
+                        renderer = self.info.friendly_name(),
+                        "Renderer stopped after queue-driven playback; advancing"
+                    );
+                    if let Err(err) = self.play_next_from_queue() {
+                        error!(
+                            renderer = self.info.friendly_name(),
+                            error = %err,
+                            "Auto-advance failed; clearing queue playback state"
+                        );
+                        self.set_playback_source(PlaybackSource::None);
+                    }
+                } else {
+                    self.set_playback_source(PlaybackSource::None);
+                }
+            }
+            PlaybackState::Playing => {
+                self.mark_external_if_idle();
+            }
+            _ => {}
         }
     }
 
@@ -941,13 +1223,21 @@ impl DeviceOnline for MusicRenderer {
     }
 
     fn has_been_seen_now(&self, max_age: u32) {
+        let was_online = self.is_online();
         self.connection
             .lock()
             .expect("Connection mutex poisoned")
-            .has_been_seen_now(max_age)
+            .has_been_seen_now(max_age);
+
+        // Start watching if transitioning from offline to online
+        if !was_online {
+            self.start_watching();
+        }
     }
 
     fn mark_as_offline(&self) {
+        // Stop watching before marking offline
+        self.stop_watching();
         self.connection
             .lock()
             .expect("Connection mutex poisoned")
