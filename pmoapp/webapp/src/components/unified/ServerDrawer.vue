@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from "vue";
+import { ref, computed, watch, reactive } from "vue";
 import { useRouter } from "vue-router";
 import {
     X,
@@ -53,6 +53,29 @@ const isLoading = ref(false);
 // État du menu dropdown (pour chaque item, on stocke si son menu est ouvert)
 const openMenuId = ref<string | null>(null);
 
+// Track image loading state per item
+const imageStates = reactive<Map<string, { loaded: boolean; error: boolean }>>(
+    new Map(),
+);
+
+function getImageState(itemId: string) {
+    if (!imageStates.has(itemId)) {
+        imageStates.set(itemId, { loaded: false, error: false });
+    }
+    return imageStates.get(itemId)!;
+}
+
+function handleImageLoad(itemId: string) {
+    const state = getImageState(itemId);
+    state.loaded = true;
+    state.error = false;
+}
+
+function handleImageError(itemId: string) {
+    const state = getImageState(itemId);
+    state.error = true;
+}
+
 // Rafraîchir la liste quand le drawer s'ouvre
 watch(
     () => props.modelValue,
@@ -65,6 +88,7 @@ watch(
             browseData.value = null;
             clearPath();
             closeMenu();
+            imageStates.clear();
         }
     },
 );
@@ -470,33 +494,25 @@ function handleSettingsClick() {
                                 <!-- Cover avec image ou icône -->
                                 <div class="content-cover">
                                     <img
-                                        v-if="item.album_art_uri"
+                                        v-if="
+                                            item.album_art_uri &&
+                                            !getImageState(item.id).error
+                                        "
+                                        v-show="getImageState(item.id).loaded"
                                         :src="item.album_art_uri"
                                         :alt="item.title"
                                         class="cover-image"
                                         loading="lazy"
-                                        @error="
-                                            (e) => {
-                                                (
-                                                    e.target as HTMLImageElement
-                                                ).style.display = 'none';
-                                                const placeholder = (
-                                                    e.target as HTMLElement
-                                                )
-                                                    .nextElementSibling as HTMLElement;
-                                                if (placeholder)
-                                                    placeholder.style.display =
-                                                        'flex';
-                                            }
-                                        "
+                                        @load="handleImageLoad(item.id)"
+                                        @error="handleImageError(item.id)"
                                     />
                                     <div
+                                        v-if="
+                                            !item.album_art_uri ||
+                                            getImageState(item.id).error ||
+                                            !getImageState(item.id).loaded
+                                        "
                                         class="cover-placeholder"
-                                        :style="{
-                                            display: item.album_art_uri
-                                                ? 'none'
-                                                : 'flex',
-                                        }"
                                     >
                                         <Folder
                                             v-if="item.is_container"

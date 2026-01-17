@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, toRef, ref } from "vue";
+import { computed, toRef, ref, watch } from "vue";
 import { useRenderer } from "@/composables/useRenderers";
 import { useUIStore } from "@/stores/ui";
 import { api } from "@/services/pmocontrol/api";
@@ -20,6 +20,10 @@ const seekTargetMs = ref<number | null>(null);
 // État pour l'overlay de la cover
 const showCoverOverlay = ref(false);
 const showMetadata = ref(false);
+
+// Track image loading state
+const imageLoaded = ref(false);
+const imageError = ref(false);
 
 function openCoverOverlay() {
     if (hasCover.value) {
@@ -88,11 +92,26 @@ function formatTime(ms: number | null | undefined): string {
 const currentTime = computed(() => formatTime(state.value?.position_ms));
 const totalTime = computed(() => formatTime(state.value?.duration_ms));
 
-const hasCover = computed(() => !!metadata.value?.album_art_uri);
+const hasCover = computed(
+    () => !!metadata.value?.album_art_uri && !imageError.value,
+);
 
-function handleImageError(event: Event) {
-    const img = event.target as HTMLImageElement;
-    img.style.display = "none";
+// Reset image state when album_art_uri changes
+watch(
+    () => metadata.value?.album_art_uri,
+    () => {
+        imageLoaded.value = false;
+        imageError.value = false;
+    },
+);
+
+function handleImageLoad() {
+    imageLoaded.value = true;
+    imageError.value = false;
+}
+
+function handleImageError() {
+    imageError.value = true;
 }
 
 // Calculer le pourcentage à partir d'une position X dans la barre
@@ -339,14 +358,19 @@ const swipeOpacity = computed(() => {
             @click="openCoverOverlay"
         >
             <img
-                v-if="hasCover"
-                :src="metadata?.album_art_uri!"
+                v-if="metadata?.album_art_uri && !imageError"
+                v-show="imageLoaded"
+                :src="metadata.album_art_uri"
                 :alt="metadata?.album || 'Album cover'"
                 class="cover-image"
                 loading="lazy"
+                @load="handleImageLoad"
                 @error="handleImageError"
             />
-            <div v-else class="cover-placeholder">
+            <div
+                v-if="!metadata?.album_art_uri || imageError || !imageLoaded"
+                class="cover-placeholder"
+            >
                 <Music :size="64" />
             </div>
         </div>
