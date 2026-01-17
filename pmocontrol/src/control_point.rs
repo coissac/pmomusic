@@ -1117,13 +1117,12 @@ impl ControlPoint {
         // Sync backend state to local cache (backend-agnostic)
         renderer.sync_queue_state()?;
 
-        // Clear the local queue (detach binding + clear runtime queue structure)
+        // Detach any existing binding (local queue will be replaced by sync_queue later)
         self.detach_playlist_binding(renderer_id, "attach_new_playlist");
-        renderer.clear_queue()?;
 
         debug!(
             renderer = renderer_id.0.as_str(),
-            "Cleared renderer and local queue for new playlist"
+            "Prepared renderer for new playlist attachment"
         );
 
         let binding = PlaylistBinding {

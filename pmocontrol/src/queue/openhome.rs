@@ -1,7 +1,7 @@
 use std::usize;
 
 use quick_xml::escape::escape;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::errors::ControlPointError;
 use crate::upnp_clients::{
@@ -619,13 +619,26 @@ impl QueueBackend for OpenHomeQueue {
         // differences. Without this, any drift between our cache and the renderer
         // (e.g., manual edits from another control point) would keep the stale items.
         let snapshot = self.queue_snapshot()?;
+        // Note: current_index may point to an index that doesn't exist in items
+        // if the OpenHome renderer is in an inconsistent state (e.g., IdArray returns
+        // IDs but ReadList returns empty TrackList). We must bounds-check here.
         let playing_info = snapshot.current_index.and_then(|idx| {
-            Some((
-                idx,
-                snapshot.items[idx].backend_id,
-                snapshot.items[idx].uri.clone(),
-                snapshot.items[idx].didl_id.clone(),
-            ))
+            if idx < snapshot.items.len() {
+                Some((
+                    idx,
+                    snapshot.items[idx].backend_id,
+                    snapshot.items[idx].uri.clone(),
+                    snapshot.items[idx].didl_id.clone(),
+                ))
+            } else {
+                warn!(
+                    renderer = self.renderer_id.0.as_str(),
+                    current_index = idx,
+                    items_len = snapshot.items.len(),
+                    "OpenHome renderer in inconsistent state: current_index out of bounds, treating as no current track"
+                );
+                None
+            }
         });
 
         debug!(
