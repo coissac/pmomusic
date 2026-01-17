@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 import type { ContainerEntry } from "@/services/pmocontrol/types";
 import { Folder, Music } from "lucide-vue-next";
 import ActionMenu from "./ActionMenu.vue";
@@ -15,6 +15,19 @@ const emit = defineEmits<{
     playNow: [containerId: string, rendererId: string];
     addToQueue: [containerId: string, rendererId: string];
 }>();
+
+// Track image loading state
+const imageLoaded = ref(false);
+const imageError = ref(false);
+
+// Reset image state when album_art_uri changes
+watch(
+    () => props.entry.album_art_uri,
+    () => {
+        imageLoaded.value = false;
+        imageError.value = false;
+    },
+);
 
 const iconComponent = computed(() => {
     const cls = props.entry.class.toLowerCase();
@@ -49,13 +62,13 @@ function handleAddToQueue(rendererId: string) {
     emit("addToQueue", props.entry.id, rendererId);
 }
 
-function handleImageError(event: Event) {
-    const img = event.target as HTMLImageElement;
-    img.style.display = "none";
-    const placeholder = img.nextElementSibling;
-    if (placeholder && placeholder instanceof HTMLElement) {
-        placeholder.style.display = "flex";
-    }
+function handleImageLoad() {
+    imageLoaded.value = true;
+    imageError.value = false;
+}
+
+function handleImageError() {
+    imageError.value = true;
 }
 </script>
 
@@ -66,18 +79,18 @@ function handleImageError(event: Event) {
             <!-- Cover avec icône de type en overlay -->
             <div class="container-cover">
                 <img
-                    v-if="entry.album_art_uri"
+                    v-if="entry.album_art_uri && !imageError"
+                    v-show="imageLoaded"
                     :src="entry.album_art_uri"
                     :alt="entry.title"
                     class="cover-image"
                     loading="lazy"
+                    @load="handleImageLoad"
                     @error="handleImageError"
                 />
                 <div
+                    v-if="!entry.album_art_uri || imageError || !imageLoaded"
                     class="cover-placeholder"
-                    :style="{
-                        display: entry.album_art_uri ? 'none' : 'flex',
-                    }"
                 >
                     <component :is="iconComponent" :size="28" />
                 </div>

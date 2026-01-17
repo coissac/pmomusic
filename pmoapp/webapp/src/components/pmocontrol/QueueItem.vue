@@ -1,139 +1,170 @@
 <script setup lang="ts">
-import { Music, Play } from 'lucide-vue-next'
-import type { QueueItem } from '@/services/pmocontrol/types'
+import { ref, watch } from "vue";
+import { Music, Play } from "lucide-vue-next";
+import type { QueueItem } from "@/services/pmocontrol/types";
 
-defineProps<{
-  item: QueueItem
-  isCurrent: boolean
-}>()
+const props = defineProps<{
+    item: QueueItem;
+    isCurrent: boolean;
+}>();
 
 const emit = defineEmits<{
-  click: [item: QueueItem]
-}>()
+    click: [item: QueueItem];
+}>();
+
+// Track image loading state
+const imageLoaded = ref(false);
+const imageError = ref(false);
+
+// Reset image state when album_art_uri changes
+watch(
+    () => props.item.album_art_uri,
+    () => {
+        imageLoaded.value = false;
+        imageError.value = false;
+    },
+);
+
+function handleImageLoad() {
+    imageLoaded.value = true;
+    imageError.value = false;
+}
+
+function handleImageError() {
+    imageError.value = true;
+}
 
 function handleClick(item: QueueItem) {
-  console.log('[QueueItem] Click detected on item:', item.index, item.title)
-  emit('click', item)
+    console.log("[QueueItem] Click detected on item:", item.index, item.title);
+    emit("click", item);
 }
 </script>
 
 <template>
-  <div :class="['queue-item', { current: isCurrent }]" @click="handleClick(item)">
-    <!-- Indicateur piste en cours -->
-    <div class="current-indicator" v-if="isCurrent">
-      <Play :size="16" fill="currentColor" />
-    </div>
+    <div
+        :class="['queue-item', { current: isCurrent }]"
+        @click="handleClick(item)"
+    >
+        <!-- Indicateur piste en cours -->
+        <div class="current-indicator" v-if="isCurrent">
+            <Play :size="16" fill="currentColor" />
+        </div>
 
-    <!-- Index (1-based pour l'affichage) -->
-    <span class="item-index">{{ item.index + 1 }}</span>
+        <!-- Index (1-based pour l'affichage) -->
+        <span class="item-index">{{ item.index + 1 }}</span>
 
-    <!-- Cover miniature -->
-    <div class="item-cover">
-      <img
-        v-if="item.album_art_uri"
-        :src="item.album_art_uri"
-        :alt="item.album || 'Album cover'"
-        class="cover-image"
-        loading="lazy"
-        @error="(e: Event) => (e.target as HTMLImageElement).style.display = 'none'"
-      />
-      <Music v-else :size="20" />
-    </div>
+        <!-- Cover miniature -->
+        <div class="item-cover">
+            <img
+                v-if="item.album_art_uri && !imageError"
+                v-show="imageLoaded"
+                :src="item.album_art_uri"
+                :alt="item.album || 'Album cover'"
+                class="cover-image"
+                loading="lazy"
+                @load="handleImageLoad"
+                @error="handleImageError"
+            />
+            <Music
+                v-if="!item.album_art_uri || imageError || !imageLoaded"
+                :size="20"
+            />
+        </div>
 
-    <!-- Métadonnées -->
-    <div class="item-metadata">
-      <div class="item-title">{{ item.title || 'Sans titre' }}</div>
-      <div class="item-artist">
-        {{ item.artist || 'Artiste inconnu' }}
-        <span v-if="item.album"> • {{ item.album }}</span>
-      </div>
+        <!-- Métadonnées -->
+        <div class="item-metadata">
+            <div class="item-title">{{ item.title || "Sans titre" }}</div>
+            <div class="item-artist">
+                {{ item.artist || "Artiste inconnu" }}
+                <span v-if="item.album"> • {{ item.album }}</span>
+            </div>
+        </div>
     </div>
-  </div>
 </template>
 
 <style scoped>
 .queue-item {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-md);
-  padding: var(--spacing-sm);
-  border-radius: var(--radius-md);
-  transition: background-color var(--transition-fast);
-  position: relative;
-  cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    padding: var(--spacing-sm);
+    border-radius: var(--radius-md);
+    transition: background-color var(--transition-fast);
+    position: relative;
+    cursor: pointer;
 }
 
 .queue-item:hover {
-  background-color: var(--color-bg-secondary);
+    background-color: var(--color-bg-secondary);
 }
 
 .queue-item.current {
-  background-color: var(--status-playing-bg);
-  border: 1px solid var(--status-playing);
-  font-weight: 600;
+    background-color: var(--status-playing-bg);
+    border: 1px solid var(--status-playing);
+    font-weight: 600;
 }
 
 .current-indicator {
-  position: absolute;
-  left: var(--spacing-xs);
-  color: var(--status-playing);
-  display: flex;
-  align-items: center;
+    position: absolute;
+    left: var(--spacing-xs);
+    color: var(--status-playing);
+    display: flex;
+    align-items: center;
 }
 
 .item-index {
-  font-size: var(--text-sm);
-  color: var(--color-text-secondary);
-  min-width: 2rem;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
+    font-size: var(--text-sm);
+    color: var(--color-text-secondary);
+    min-width: 2rem;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
 }
 
 .queue-item.current .item-index {
-  margin-left: var(--spacing-lg);
+    margin-left: var(--spacing-lg);
 }
 
 .item-cover {
-  width: 48px;
-  height: 48px;
-  background-color: var(--color-bg-tertiary);
-  border-radius: var(--radius-sm);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--color-text-tertiary);
-  flex-shrink: 0;
-  overflow: hidden;
+    width: 48px;
+    height: 48px;
+    background-color: var(--color-bg-tertiary);
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-text-tertiary);
+    flex-shrink: 0;
+    overflow: hidden;
 }
 
 .cover-image {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
 }
 
 .item-metadata {
-  flex: 1;
-  min-width: 0;
+    flex: 1;
+    min-width: 0;
 }
 
 .item-title {
-  font-size: var(--text-base);
-  color: var(--color-text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+    font-size: var(--text-base);
+    color: var(--color-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .queue-item.current .item-title {
-  color: var(--status-playing);
+    color: var(--status-playing);
 }
 
 .item-artist {
-  font-size: var(--text-sm);
-  color: var(--color-text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+    font-size: var(--text-sm);
+    color: var(--color-text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 </style>
