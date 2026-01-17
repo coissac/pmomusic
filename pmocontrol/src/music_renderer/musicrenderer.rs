@@ -223,7 +223,16 @@ impl MusicRenderer {
 
         // Determine the watch strategy based on backend type
         let strategy = {
-            let backend = self.backend.lock().expect("Backend mutex poisoned");
+            let backend = match self.backend.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    warn!(
+                        renderer = self.info.friendly_name(),
+                        "Backend mutex poisoned when starting watcher, recovering"
+                    );
+                    poisoned.into_inner()
+                }
+            };
             WatchStrategy::for_backend(&*backend)
         };
 
@@ -436,13 +445,28 @@ impl MusicRenderer {
                             renderer = self.info.friendly_name(),
                             "Renderer stopped after queue-driven playback; advancing"
                         );
-                        if let Err(err) = self.play_next_from_queue() {
-                            error!(
-                                renderer = self.info.friendly_name(),
-                                error = %err,
-                                "Auto-advance failed; clearing queue playback state"
-                            );
-                            self.set_playback_source(PlaybackSource::None);
+                        // Use catch_unwind to prevent panics in play_next_from_queue
+                        // from poisoning the backend mutex
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            self.play_next_from_queue()
+                        }));
+                        match result {
+                            Ok(Ok(())) => {}
+                            Ok(Err(err)) => {
+                                error!(
+                                    renderer = self.info.friendly_name(),
+                                    error = %err,
+                                    "Auto-advance failed; clearing queue playback state"
+                                );
+                                self.set_playback_source(PlaybackSource::None);
+                            }
+                            Err(_panic) => {
+                                error!(
+                                    renderer = self.info.friendly_name(),
+                                    "Auto-advance panicked; clearing queue playback state"
+                                );
+                                self.set_playback_source(PlaybackSource::None);
+                            }
                         }
                     } else {
                         debug!(
@@ -464,6 +488,34 @@ impl MusicRenderer {
         }
     }
 
+    /// Acquires the backend mutex, recovering from poisoned state if necessary.
+    ///
+    /// This method handles the case where the mutex was poisoned by a panic in another thread.
+    /// Instead of panicking, it recovers the inner data and logs a warning with context.
+    ///
+    /// # Arguments
+    /// * `context` - A description of the operation attempting to acquire the lock
+    fn lock_backend_for(&self, context: &str) -> std::sync::MutexGuard<'_, MusicRendererBackend> {
+        match self.backend.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                warn!(
+                    renderer = self.info.friendly_name(),
+                    context = context,
+                    "Backend mutex was poisoned, recovering"
+                );
+                poisoned.into_inner()
+            }
+        }
+    }
+
+    /// Acquires the backend mutex with a default context message.
+    ///
+    /// Convenience wrapper around `lock_backend_for` for simple cases.
+    fn lock_backend(&self) -> std::sync::MutexGuard<'_, MusicRendererBackend> {
+        self.lock_backend_for("unknown operation")
+    }
+
     pub fn info(&self) -> &RendererInfo {
         &self.info
     }
@@ -474,42 +526,42 @@ impl MusicRenderer {
     }
 
     pub fn is_upnp(&self) -> bool {
-        match &*self.backend.lock().expect("Backend mutex poisoned") {
+        match &*self.lock_backend_for("is_upnp") {
             MusicRendererBackend::Upnp(_) => true,
             _ => false,
         }
     }
 
     pub fn is_openhome(&self) -> bool {
-        match &*self.backend.lock().expect("Backend mutex poisoned") {
+        match &*self.lock_backend_for("is_openhome") {
             MusicRendererBackend::OpenHome(_) => true,
             _ => false,
         }
     }
 
     pub fn is_linkplay(&self) -> bool {
-        match &*self.backend.lock().expect("Backend mutex poisoned") {
+        match &*self.lock_backend_for("is_linkplay") {
             MusicRendererBackend::LinkPlay(_) => true,
             _ => false,
         }
     }
 
     pub fn is_arylictcp(&self) -> bool {
-        match &*self.backend.lock().expect("Backend mutex poisoned") {
+        match &*self.lock_backend_for("is_arylictcp") {
             MusicRendererBackend::ArylicTcp(_) => true,
             _ => false,
         }
     }
 
     pub fn is_chromecast(&self) -> bool {
-        match &*self.backend.lock().expect("Backend mutex poisoned") {
+        match &*self.lock_backend_for("is_chromecast") {
             MusicRendererBackend::Chromecast(_) => true,
             _ => false,
         }
     }
 
     pub fn is_hybridupnparylic(&self) -> bool {
-        match &*self.backend.lock().expect("Backend mutex poisoned") {
+        match &*self.lock_backend_for("is_hybridupnparylic") {
             MusicRendererBackend::HybridUpnpArylic { .. } => true,
             _ => false,
         }
@@ -522,34 +574,32 @@ impl MusicRenderer {
 
     /// Prepare the renderer for attaching a new playlist by clearing the queue and stopping playback.
     pub fn clear_for_playlist_attach(&self) -> Result<(), ControlPointError> {
-        // Clear the queue first
-        self.backend
-            .lock()
-            .expect("Backend mutex poisoned")
-            .clear_queue()?;
+        let mut backend = self.lock_backend_for("clear_for_playlist_attach");
+
+        // Clear the queue first (ignore errors - queue will be replaced anyway by sync_queue)
+        // Some backends (OpenHome) may reject DeleteAll if currently playing
+        if let Err(err) = backend.clear_queue() {
+            warn!(
+                renderer = self.id().0.as_str(),
+                error = %err,
+                "Clear queue failed when preparing for playlist attach (continuing anyway)"
+            );
+        }
 
         // Then stop playback (ignore errors if already stopped)
-        self.backend
-            .lock()
-            .expect("Backend mutex poisoned")
-            .stop()
-            .or_else(|err| {
-                warn!(
-                    renderer = self.id().0.as_str(),
-                    error = %err,
-                    "Stop failed when preparing for playlist attach (continuing anyway)"
-                );
-                Ok(())
-            })
+        backend.stop().or_else(|err| {
+            warn!(
+                renderer = self.id().0.as_str(),
+                error = %err,
+                "Stop failed when preparing for playlist attach (continuing anyway)"
+            );
+            Ok(())
+        })
     }
 
     /// Get the current queue snapshot.
     pub fn queue_snapshot(&self) -> Result<QueueSnapshot, ControlPointError> {
-        let mut snapshot = self
-            .backend
-            .lock()
-            .expect("Backend mutex poisoned")
-            .queue_snapshot()?;
+        let mut snapshot = self.lock_backend_for("queue_snapshot").queue_snapshot()?;
 
         // Enrich snapshot with playlist_id from binding if available
         if let Some(binding) = self
@@ -568,18 +618,12 @@ impl MusicRenderer {
     /// Get the current queue item without advancing.
     /// Returns the item and count of remaining items after current.
     pub fn peek_current(&self) -> Result<Option<(PlaybackItem, usize)>, ControlPointError> {
-        self.backend
-            .lock()
-            .expect("Backend mutex poisoned")
-            .peek_current()
+        self.lock_backend_for("peek_current").peek_current()
     }
 
     /// Get the count of items remaining after the current index.
     pub fn upcoming_len(&self) -> Result<usize, ControlPointError> {
-        self.backend
-            .lock()
-            .expect("Backend mutex poisoned")
-            .upcoming_len()
+        self.lock_backend_for("upcoming_len").upcoming_len()
     }
 
     /// Play the current item from the queue.
@@ -589,9 +633,7 @@ impl MusicRenderer {
         // The flag will be set back to true when PLAYING state is detected.
         self.clear_has_played_flag();
 
-        self.backend
-            .lock()
-            .expect("Backend mutex poisoned")
+        self.lock_backend_for("play_current_from_queue")
             .play_from_queue()
     }
 
@@ -602,10 +644,7 @@ impl MusicRenderer {
         // The flag will be set back to true when PLAYING state is detected.
         self.clear_has_played_flag();
 
-        self.backend
-            .lock()
-            .expect("Backend mutex poisoned")
-            .play_next()?;
+        self.lock_backend_for("play_next_from_queue").play_next()?;
         self.emit_queue_updated();
         Ok(())
     }
@@ -617,9 +656,7 @@ impl MusicRenderer {
         // The flag will be set back to true when PLAYING state is detected.
         self.clear_has_played_flag();
 
-        self.backend
-            .lock()
-            .expect("Backend mutex poisoned")
+        self.lock_backend_for("play_from_index")
             .play_from_index(index)?;
         self.emit_queue_updated();
         Ok(())
@@ -631,7 +668,7 @@ impl MusicRenderer {
     /// joue le track courant de la queue automatiquement (comportement unifié pour tous les backends).
     pub fn play(&self) -> Result<(), ControlPointError> {
         // Vérifier si on a une queue non vide
-        let backend = self.backend.lock().expect("Backend mutex poisoned");
+        let backend = self.lock_backend_for("play");
         let queue_not_empty = backend.len().unwrap_or(0) > 0;
 
         if queue_not_empty {
@@ -646,7 +683,7 @@ impl MusicRenderer {
 
     /// Transport control: pause
     pub fn pause(&self) -> Result<(), ControlPointError> {
-        self.backend.lock().expect("Backend mutex poisoned").pause()
+        self.lock_backend_for("pause").pause()
     }
 
     /// Transport control: stop
@@ -657,7 +694,7 @@ impl MusicRenderer {
         // transient STOPPED states during track initialization.
         self.clear_has_played_flag();
 
-        self.backend.lock().expect("Backend mutex poisoned").stop()
+        self.lock_backend_for("stop").stop()
     }
 
     /// Set the next URI for gapless playback (UPnP AVTransport only).
@@ -665,7 +702,7 @@ impl MusicRenderer {
     /// Returns Ok if the backend supports this feature and it succeeded.
     /// Returns Err if not supported or if it failed.
     pub fn set_next_uri(&self, uri: &str, metadata: &str) -> Result<(), ControlPointError> {
-        let backend = self.backend.lock().expect("Backend mutex poisoned");
+        let backend = self.lock_backend_for("set_next_uri");
 
         match &*backend {
             MusicRendererBackend::Upnp(upnp) => upnp.set_next_uri(uri, metadata),
@@ -678,10 +715,7 @@ impl MusicRenderer {
 
     /// Transport control: seek to relative time
     pub fn seek_rel_time(&self, hhmmss: &str) -> Result<(), ControlPointError> {
-        self.backend
-            .lock()
-            .expect("Backend mutex poisoned")
-            .seek_rel_time(hhmmss)
+        self.lock_backend_for("seek_rel_time").seek_rel_time(hhmmss)
     }
 
     /// Seek to a specific position in seconds
@@ -696,46 +730,32 @@ impl MusicRenderer {
 
     /// Volume control: get current volume
     pub fn volume(&self) -> Result<u16, ControlPointError> {
-        self.backend
-            .lock()
-            .expect("Backend mutex poisoned")
-            .volume()
+        self.lock_backend_for("volume").volume()
     }
 
     /// Volume control: set volume
     pub fn set_volume(&self, vol: u16) -> Result<(), ControlPointError> {
-        self.backend
-            .lock()
-            .expect("Backend mutex poisoned")
-            .set_volume(vol)
+        self.lock_backend_for("set_volume").set_volume(vol)
     }
 
     /// Volume control: get mute state
     pub fn mute(&self) -> Result<bool, ControlPointError> {
-        self.backend.lock().expect("Backend mutex poisoned").mute()
+        self.lock_backend_for("mute").mute()
     }
 
     /// Volume control: set mute state
     pub fn set_mute(&self, m: bool) -> Result<(), ControlPointError> {
-        self.backend
-            .lock()
-            .expect("Backend mutex poisoned")
-            .set_mute(m)
+        self.lock_backend_for("set_mute").set_mute(m)
     }
 
     /// Get playback state
     pub fn playback_state(&self) -> Result<PlaybackState, ControlPointError> {
-        self.backend
-            .lock()
-            .expect("Backend mutex poisoned")
-            .playback_state()
+        self.lock_backend_for("playback_state").playback_state()
     }
 
     /// Get playback position
     pub fn playback_position(&self) -> Result<PlaybackPositionInfo, ControlPointError> {
-        self.backend
-            .lock()
-            .expect("Backend mutex poisoned")
+        self.lock_backend_for("playback_position")
             .playback_position()
     }
 
@@ -869,8 +889,7 @@ impl MusicRenderer {
 
     /// Returns the number of items in the queue.
     pub fn len(&self) -> Result<usize, ControlPointError> {
-        let backend = self.backend.lock().expect("Backend mutex poisoned");
-        backend.len()
+        self.lock_backend_for("len").len()
     }
 
     /// Add items to the queue using the specified enqueue mode.
@@ -879,7 +898,7 @@ impl MusicRenderer {
         items: Vec<PlaybackItem>,
         mode: EnqueueMode,
     ) -> Result<(), ControlPointError> {
-        let mut backend = self.backend.lock().expect("Backend mutex poisoned");
+        let mut backend = self.lock_backend_for("enqueue_items");
         backend.enqueue_items(items, mode)?;
         drop(backend);
         self.emit_queue_updated();
@@ -893,7 +912,7 @@ impl MusicRenderer {
     /// - If the current track is NOT in the new items, it's preserved as the first item
     /// - If there's no current track, the queue is simply replaced
     pub fn sync_queue(&self, items: Vec<PlaybackItem>) -> Result<(), ControlPointError> {
-        let mut backend = self.backend.lock().expect("Backend mutex poisoned");
+        let mut backend = self.lock_backend_for("sync_queue");
         backend.sync_queue(items)?;
         drop(backend);
         self.emit_queue_updated();
@@ -903,13 +922,12 @@ impl MusicRenderer {
     /// Set the current queue index (for advanced use).
     /// Note: This does NOT start playback. Use select_queue_track() to play.
     pub fn set_queue_index(&self, index: Option<usize>) -> Result<(), ControlPointError> {
-        let mut backend = self.backend.lock().expect("Backend mutex poisoned");
-        backend.set_index(index)
+        self.lock_backend_for("set_queue_index").set_index(index)
     }
 
     /// Clears the renderer's queue using the generic QueueBackend trait.
     pub fn clear_queue(&self) -> Result<(), ControlPointError> {
-        let mut backend = self.backend.lock().expect("Backend mutex poisoned");
+        let mut backend = self.lock_backend_for("clear_queue");
         backend.clear_queue()?;
         drop(backend);
         self.emit_queue_updated();
@@ -918,14 +936,12 @@ impl MusicRenderer {
 
     /// Dequeues and returns the next item from the queue.
     pub fn dequeue_next(&self) -> Result<Option<(PlaybackItem, usize)>, ControlPointError> {
-        let mut backend = self.backend.lock().expect("Backend mutex poisoned");
-        backend.dequeue_next()
+        self.lock_backend_for("dequeue_next").dequeue_next()
     }
 
     /// Sets the current index in the queue.
     pub fn set_index(&self, index: Option<usize>) -> Result<(), ControlPointError> {
-        let mut backend = self.backend.lock().expect("Backend mutex poisoned");
-        backend.set_index(index)
+        self.lock_backend_for("set_index").set_index(index)
     }
 
     /// Replaces the entire queue with new items and sets the current index.
@@ -935,7 +951,7 @@ impl MusicRenderer {
         items: Vec<PlaybackItem>,
         current_index: Option<usize>,
     ) -> Result<(), ControlPointError> {
-        let mut backend = self.backend.lock().expect("Backend mutex poisoned");
+        let mut backend = self.lock_backend_for("replace_queue");
         backend.replace_queue(items, current_index)?;
         drop(backend);
         self.emit_queue_updated();
@@ -967,16 +983,20 @@ impl MusicRenderer {
     /// Selects and plays a specific track from the queue by ID.
     ///
     /// Converts the track ID to a position using the generic QueueBackend trait,
-    /// then plays the track.
+    /// then plays the track. The operation is atomic (single lock).
     pub fn select_queue_track(&self, track_id: u32) -> Result<(), ControlPointError> {
-        // Convert track_id to index
-        let index = {
-            let backend = self.backend.lock().expect("Backend mutex poisoned");
-            backend.id_to_position(track_id)?
-        };
+        // Reset the has_played flag before starting playback
+        self.clear_has_played_flag();
 
-        // Play from that index
-        self.play_from_index(index)
+        let backend = self.lock_backend_for("select_queue_track");
+
+        // Convert track_id to index and play atomically
+        let index = backend.id_to_position(track_id)?;
+        backend.play_from_index(index)?;
+
+        drop(backend);
+        self.emit_queue_updated();
+        Ok(())
     }
 
     /// Synchronizes the queue state with the backend.
@@ -984,9 +1004,8 @@ impl MusicRenderer {
     /// For backends with persistent queues (OpenHome), this refreshes the local view.
     /// For others, this is essentially a no-op (just reads the current state).
     pub fn sync_queue_state(&self) -> Result<(), ControlPointError> {
-        let backend = self.backend.lock().expect("Backend mutex poisoned");
         // Calling queue_snapshot() triggers a refresh for backends that need it
-        let _ = backend.queue_snapshot()?;
+        let _ = self.lock_backend_for("sync_queue_state").queue_snapshot()?;
         Ok(())
     }
 
@@ -994,17 +1013,24 @@ impl MusicRenderer {
     ///
     /// This is primarily for backends with persistent queues (OpenHome).
     pub fn play_current_from_backend_queue(&self) -> Result<(), ControlPointError> {
-        let backend = self.backend.lock().expect("Backend mutex poisoned");
+        // Reset the has_played flag before starting playback
+        self.clear_has_played_flag();
 
-        // Get current track ID using generic QueueBackend trait
+        let backend = self.lock_backend_for("play_current_from_backend_queue");
+
+        // Get current track ID and convert to index atomically
         let track_id = backend
             .current_track()?
             .ok_or_else(|| ControlPointError::QueueError("No current track".to_string()))?;
 
-        drop(backend);
+        let index = backend.id_to_position(track_id)?;
 
-        // Play it using select_queue_track
-        self.select_queue_track(track_id)
+        // Play from that index while still holding the lock
+        backend.play_from_index(index)?;
+
+        drop(backend);
+        self.emit_queue_updated();
+        Ok(())
     }
 
     /// Plays from the queue at the current position.
@@ -1016,8 +1042,7 @@ impl MusicRenderer {
         // The flag will be set back to true when PLAYING state is detected.
         self.clear_has_played_flag();
 
-        let backend = self.backend.lock().expect("Backend mutex poisoned");
-        backend.play_from_queue()
+        self.lock_backend_for("play_from_queue").play_from_queue()
     }
 
     // --- Playback State Management ---

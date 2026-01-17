@@ -351,12 +351,17 @@ pub(crate) fn map_openhome_state(raw: &str) -> PlaybackState {
 impl QueueTransportControl for OpenHomeRenderer {
     fn play_from_queue(&self) -> Result<(), ControlPointError> {
         {
-            let queue = self.queue.lock().unwrap();
+            let queue = self
+                .queue
+                .lock()
+                .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?;
 
             if queue.current_index()?.is_none() {
                 if queue.len()? > 0 {
                     drop(queue);
-                    let mut queue = self.queue.lock().unwrap();
+                    let mut queue = self.queue.lock().map_err(|_| {
+                        ControlPointError::QueueError("Queue mutex poisoned".into())
+                    })?;
                     queue.set_index(Some(0))?;
                 } else {
                     return Err(ControlPointError::QueueError("Queue is empty".into()));
@@ -370,7 +375,10 @@ impl QueueTransportControl for OpenHomeRenderer {
 
     fn play_next(&self) -> Result<(), ControlPointError> {
         {
-            let mut queue = self.queue.lock().unwrap();
+            let mut queue = self
+                .queue
+                .lock()
+                .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?;
             if !queue.advance()? {
                 return Err(ControlPointError::QueueError("No next track".into()));
             }
@@ -381,7 +389,10 @@ impl QueueTransportControl for OpenHomeRenderer {
 
     fn play_previous(&self) -> Result<(), ControlPointError> {
         {
-            let mut queue = self.queue.lock().unwrap();
+            let mut queue = self
+                .queue
+                .lock()
+                .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?;
             if !queue.rewind()? {
                 return Err(ControlPointError::QueueError("No previous track".into()));
             }
@@ -393,7 +404,10 @@ impl QueueTransportControl for OpenHomeRenderer {
     fn play_from_index(&self, index: usize) -> Result<(), ControlPointError> {
         // For OpenHome, we need to convert index to track_id
         let track_id = {
-            let queue = self.queue.lock().unwrap();
+            let queue = self
+                .queue
+                .lock()
+                .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?;
             queue.position_to_id(index)?
         };
 
@@ -403,7 +417,10 @@ impl QueueTransportControl for OpenHomeRenderer {
 
         // Update local queue index
         {
-            let mut queue = self.queue.lock().unwrap();
+            let mut queue = self
+                .queue
+                .lock()
+                .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?;
             queue.set_index(Some(index))?;
         }
 
@@ -415,35 +432,59 @@ impl QueueTransportControl for OpenHomeRenderer {
 
 impl QueueBackend for OpenHomeRenderer {
     fn len(&self) -> Result<usize, ControlPointError> {
-        self.queue.lock().unwrap().len()
+        self.queue
+            .lock()
+            .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?
+            .len()
     }
 
     fn track_ids(&self) -> Result<Vec<u32>, ControlPointError> {
-        self.queue.lock().unwrap().track_ids()
+        self.queue
+            .lock()
+            .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?
+            .track_ids()
     }
 
     fn id_to_position(&self, id: u32) -> Result<usize, ControlPointError> {
-        self.queue.lock().unwrap().id_to_position(id)
+        self.queue
+            .lock()
+            .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?
+            .id_to_position(id)
     }
 
     fn position_to_id(&self, id: usize) -> Result<u32, ControlPointError> {
-        self.queue.lock().unwrap().position_to_id(id)
+        self.queue
+            .lock()
+            .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?
+            .position_to_id(id)
     }
 
     fn current_track(&self) -> Result<Option<u32>, ControlPointError> {
-        self.queue.lock().unwrap().current_track()
+        self.queue
+            .lock()
+            .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?
+            .current_track()
     }
 
     fn current_index(&self) -> Result<Option<usize>, ControlPointError> {
-        self.queue.lock().unwrap().current_index()
+        self.queue
+            .lock()
+            .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?
+            .current_index()
     }
 
     fn queue_snapshot(&self) -> Result<QueueSnapshot, ControlPointError> {
-        self.queue.lock().unwrap().queue_snapshot()
+        self.queue
+            .lock()
+            .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?
+            .queue_snapshot()
     }
 
     fn set_index(&mut self, index: Option<usize>) -> Result<(), ControlPointError> {
-        self.queue.lock().unwrap().set_index(index)
+        self.queue
+            .lock()
+            .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?
+            .set_index(index)
     }
 
     fn replace_queue(
@@ -453,20 +494,29 @@ impl QueueBackend for OpenHomeRenderer {
     ) -> Result<(), ControlPointError> {
         self.queue
             .lock()
-            .unwrap()
+            .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?
             .replace_queue(items, current_index)
     }
 
     fn sync_queue(&mut self, items: Vec<PlaybackItem>) -> Result<(), ControlPointError> {
-        self.queue.lock().unwrap().sync_queue(items)
+        self.queue
+            .lock()
+            .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?
+            .sync_queue(items)
     }
 
     fn get_item(&self, index: usize) -> Result<Option<PlaybackItem>, ControlPointError> {
-        self.queue.lock().unwrap().get_item(index)
+        self.queue
+            .lock()
+            .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?
+            .get_item(index)
     }
 
     fn replace_item(&mut self, index: usize, item: PlaybackItem) -> Result<(), ControlPointError> {
-        self.queue.lock().unwrap().replace_item(index, item)
+        self.queue
+            .lock()
+            .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?
+            .replace_item(index, item)
     }
 
     fn enqueue_items(
@@ -474,6 +524,9 @@ impl QueueBackend for OpenHomeRenderer {
         items: Vec<PlaybackItem>,
         mode: EnqueueMode,
     ) -> Result<(), ControlPointError> {
-        self.queue.lock().unwrap().enqueue_items(items, mode)
+        self.queue
+            .lock()
+            .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?
+            .enqueue_items(items, mode)
     }
 }
