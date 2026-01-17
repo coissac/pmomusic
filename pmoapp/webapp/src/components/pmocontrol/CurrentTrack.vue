@@ -24,7 +24,7 @@ const showMetadata = ref(false);
 function openCoverOverlay() {
     if (hasCover.value) {
         showCoverOverlay.value = true;
-        showMetadata.value = false; // Reset metadata visibility when opening
+        showMetadata.value = true; // Afficher les métadonnées par défaut
     }
 }
 
@@ -186,6 +186,148 @@ async function handleProgressBarClick(event: MouseEvent) {
         isSeeking.value = false;
     }
 }
+
+// Fonctions pour la progress bar de l'overlay (réutilisent la même logique)
+function handleOverlayProgressBarClick(event: MouseEvent) {
+    handleProgressBarClick(event);
+}
+
+function handleOverlayProgressBarMouseDown(event: MouseEvent) {
+    handleProgressBarMouseDown(event);
+}
+
+// Gestion tactile pour la progress bar de l'overlay
+function handleOverlayProgressBarTouchStart(event: TouchEvent) {
+    const duration = state.value?.duration_ms;
+    if (!duration || duration === 0 || isSeeking.value) return;
+
+    const progressBar = event.currentTarget as HTMLElement;
+    const touch = event.touches[0];
+    if (!touch) return;
+
+    isDragging.value = true;
+    dragProgress.value = calculateProgressFromX(touch.clientX, progressBar);
+
+    const handleTouchMove = (e: TouchEvent) => {
+        if (!isDragging.value) return;
+        const moveTouch = e.touches[0];
+        if (!moveTouch) return;
+        dragProgress.value = calculateProgressFromX(
+            moveTouch.clientX,
+            progressBar,
+        );
+    };
+
+    const handleTouchEnd = async (e: TouchEvent) => {
+        if (!isDragging.value) return;
+
+        const endTouch = e.changedTouches[0];
+        if (!endTouch) return;
+
+        const finalPercent = calculateProgressFromX(
+            endTouch.clientX,
+            progressBar,
+        );
+        const newPositionMs = (finalPercent / 100) * duration;
+        const newPositionSeconds = Math.floor(newPositionMs / 1000);
+
+        dragProgress.value = finalPercent;
+        seekTargetMs.value = newPositionMs;
+        isDragging.value = false;
+
+        try {
+            isSeeking.value = true;
+            await api.seekTo(props.rendererId, newPositionSeconds);
+        } catch (error) {
+            uiStore.notifyError(
+                `Impossible de seek: ${error instanceof Error ? error.message : "Erreur inconnue"}`,
+            );
+            seekTargetMs.value = null;
+            dragProgress.value = 0;
+        } finally {
+            isSeeking.value = false;
+        }
+
+        document.removeEventListener("touchmove", handleTouchMove);
+        document.removeEventListener("touchend", handleTouchEnd);
+    };
+
+    document.addEventListener("touchmove", handleTouchMove, { passive: true });
+    document.addEventListener("touchend", handleTouchEnd);
+}
+
+// Gestion du swipe down pour fermer l'overlay
+const swipeStartY = ref(0);
+const swipeCurrentY = ref(0);
+const isSwiping = ref(false);
+const swipeThreshold = 100; // Distance minimale pour fermer
+
+function handleOverlayTouchStart(event: TouchEvent) {
+    const touch = event.touches[0];
+    if (!touch) return;
+    swipeStartY.value = touch.clientY;
+    swipeCurrentY.value = touch.clientY;
+    isSwiping.value = true;
+
+    // Ajouter les listeners sur le document pour capturer tous les mouvements
+    document.addEventListener("touchmove", handleSwipeTouchMove, {
+        passive: true,
+    });
+    document.addEventListener("touchend", handleSwipeTouchEnd);
+    document.addEventListener("touchcancel", handleSwipeTouchEnd);
+}
+
+function handleSwipeTouchMove(event: TouchEvent) {
+    if (!isSwiping.value) return;
+    const touch = event.touches[0];
+    if (!touch) return;
+    swipeCurrentY.value = touch.clientY;
+}
+
+function handleSwipeTouchEnd() {
+    if (!isSwiping.value) return;
+
+    const swipeDistance = swipeCurrentY.value - swipeStartY.value;
+
+    // Si swipe vers le bas suffisant, fermer l'overlay
+    if (swipeDistance > swipeThreshold) {
+        closeCoverOverlay();
+    }
+
+    isSwiping.value = false;
+    swipeStartY.value = 0;
+    swipeCurrentY.value = 0;
+
+    // Retirer les listeners
+    document.removeEventListener("touchmove", handleSwipeTouchMove);
+    document.removeEventListener("touchend", handleSwipeTouchEnd);
+    document.removeEventListener("touchcancel", handleSwipeTouchEnd);
+}
+
+// Ancienne fonction conservée pour compatibilité template (non utilisée)
+function handleOverlayTouchMove(event: TouchEvent) {
+    handleSwipeTouchMove(event);
+}
+
+function handleOverlayTouchEnd() {
+    handleSwipeTouchEnd();
+}
+
+// Calcul du décalage visuel pendant le swipe
+const swipeOffset = computed(() => {
+    if (!isSwiping.value) return 0;
+    const offset = swipeCurrentY.value - swipeStartY.value;
+    // Ne permettre que le swipe vers le bas (positif)
+    return Math.max(0, offset);
+});
+
+// Opacité qui diminue pendant le swipe
+const swipeOpacity = computed(() => {
+    if (!isSwiping.value) return 1;
+    const offset = swipeOffset.value;
+    // Réduire l'opacité progressivement
+    return Math.max(0.3, 1 - offset / 300);
+});
 </script>
 
 <template>
@@ -222,6 +364,7 @@ async function handleProgressBarClick(event: MouseEvent) {
                 class="progress-bar"
                 @click="handleProgressBarClick"
                 @mousedown="handleProgressBarMouseDown"
+                @touchstart="handleOverlayProgressBarTouchStart"
                 :class="{ seeking: isSeeking, dragging: isDragging }"
             >
                 <div
@@ -247,7 +390,15 @@ async function handleProgressBarClick(event: MouseEvent) {
                 >
                     <div
                         class="cover-overlay-content"
+                        :class="{ swiping: isSwiping }"
+                        :style="{
+                            transform: `translateY(${swipeOffset}px)`,
+                            opacity: swipeOpacity,
+                        }"
                         @click.stop="handleOverlayContentClick"
+                        @touchstart="handleOverlayTouchStart"
+                        @touchmove="handleOverlayTouchMove"
+                        @touchend="handleOverlayTouchEnd"
                     >
                         <button
                             class="cover-overlay-close"
@@ -267,11 +418,46 @@ async function handleProgressBarClick(event: MouseEvent) {
                                 v-if="metadata && showMetadata"
                                 class="cover-overlay-metadata"
                             >
-                                <h2>{{ metadata.title }}</h2>
-                                <p class="artist">{{ metadata.artist }}</p>
-                                <p v-if="metadata.album" class="album">
-                                    {{ metadata.album }}
-                                </p>
+                                <div class="overlay-metadata-text">
+                                    <h2>{{ metadata.title }}</h2>
+                                    <p class="artist">{{ metadata.artist }}</p>
+                                    <p v-if="metadata.album" class="album">
+                                        {{ metadata.album }}
+                                    </p>
+                                </div>
+                                <div class="overlay-progress-section">
+                                    <div
+                                        class="overlay-progress-bar"
+                                        @click.stop="
+                                            handleOverlayProgressBarClick
+                                        "
+                                        @mousedown.stop="
+                                            handleOverlayProgressBarMouseDown
+                                        "
+                                        @touchstart.stop="
+                                            handleOverlayProgressBarTouchStart
+                                        "
+                                        :class="{
+                                            seeking: isSeeking,
+                                            dragging: isDragging,
+                                        }"
+                                    >
+                                        <div
+                                            class="overlay-progress-bar-fill"
+                                            :style="{
+                                                width: `${progressPercent}%`,
+                                            }"
+                                        >
+                                            <div
+                                                class="overlay-progress-bar-thumb"
+                                            ></div>
+                                        </div>
+                                    </div>
+                                    <div class="overlay-time-display">
+                                        <span>{{ currentTime }}</span>
+                                        <span>{{ totalTime }}</span>
+                                    </div>
+                                </div>
                             </div>
                         </Transition>
                     </div>
@@ -529,12 +715,15 @@ async function handleProgressBarClick(event: MouseEvent) {
     backdrop-filter: blur(20px) saturate(150%);
     -webkit-backdrop-filter: blur(20px) saturate(150%);
     padding: 16px;
+    /* Empêcher le pull-to-refresh Android de se déclencher */
+    overscroll-behavior: contain;
+    touch-action: none;
 }
 
 .cover-overlay-content {
     position: relative;
     width: calc(100vw - 32px);
-    height: calc(100vh - 32px);
+    height: calc(100dvh - 32px);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -556,7 +745,7 @@ async function handleProgressBarClick(event: MouseEvent) {
     }
 
     .cover-overlay-metadata {
-        background: rgba(0, 0, 0, 0.7);
+        background: rgba(0, 0, 0, 0.4);
     }
 }
 
@@ -603,7 +792,7 @@ async function handleProgressBarClick(event: MouseEvent) {
 
 .cover-overlay-image {
     width: calc(100vw - 64px);
-    height: calc(100vh - 64px);
+    height: calc(100dvh - 64px);
     border-radius: 16px;
     box-shadow:
         0 30px 80px rgba(0, 0, 0, 0.6),
@@ -614,16 +803,16 @@ async function handleProgressBarClick(event: MouseEvent) {
 .cover-overlay-metadata {
     position: absolute;
     bottom: 24px;
-    left: 24px;
-    right: 24px;
+    left: 15%;
+    right: 15%;
     text-align: center;
     padding: var(--spacing-lg);
-    background: rgba(0, 0, 0, 0.6);
+    background: rgba(0, 0, 0, 0.35);
     backdrop-filter: blur(30px) saturate(180%);
     -webkit-backdrop-filter: blur(30px) saturate(180%);
     border-radius: 20px;
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
 }
 
 .cover-overlay-metadata h2 {
@@ -697,13 +886,13 @@ async function handleProgressBarClick(event: MouseEvent) {
 
     .cover-overlay-content {
         width: calc(100vw - 24px);
-        height: calc(100vh - 24px);
+        height: calc(100dvh - 24px);
         border-radius: 16px;
     }
 
     .cover-overlay-image {
         width: calc(100vw - 48px);
-        height: calc(100vh - 48px);
+        height: calc(100dvh - 48px);
     }
 
     .cover-overlay-metadata {
@@ -729,12 +918,12 @@ async function handleProgressBarClick(event: MouseEvent) {
 
     .cover-overlay-content {
         width: calc(100vw - 24px);
-        height: calc(100vh - 24px);
+        height: calc(100dvh - 24px);
     }
 
     .cover-overlay-image {
         width: calc(100vw - 48px);
-        height: calc(100vh - 48px);
+        height: calc(100dvh - 48px);
     }
 
     .cover-overlay-metadata {
@@ -769,5 +958,160 @@ async function handleProgressBarClick(event: MouseEvent) {
 .metadata-fade-leave-from {
     opacity: 1;
     transform: translateY(0);
+}
+
+/* Swipe down pour fermer */
+.cover-overlay-content {
+    transition:
+        transform 0.1s ease-out,
+        opacity 0.1s ease-out;
+}
+
+.cover-overlay-content:not(.swiping) {
+    transition:
+        transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
+        opacity 0.3s ease;
+}
+
+/* Progress bar dans l'overlay - style glassmorphism macOS */
+.overlay-metadata-text {
+    margin-bottom: var(--spacing-md);
+}
+
+.overlay-progress-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-xs);
+    padding-top: var(--spacing-md);
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.overlay-progress-bar {
+    position: relative;
+    width: 100%;
+    height: 8px;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.2s ease;
+    box-shadow:
+        inset 0 1px 3px rgba(0, 0, 0, 0.4),
+        0 1px 0 rgba(255, 255, 255, 0.1);
+    overflow: visible;
+}
+
+.overlay-progress-bar:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.overlay-progress-bar.dragging {
+    cursor: grabbing;
+    background: rgba(255, 255, 255, 0.25);
+}
+
+.overlay-progress-bar.seeking {
+    cursor: wait;
+    opacity: 0.7;
+}
+
+.overlay-progress-bar-fill {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    background: linear-gradient(90deg, #059669 0%, #10b981 50%, #34d399 100%);
+    border-radius: 4px;
+    transition: width 0.1s linear;
+    z-index: 1;
+    box-shadow: 0 0 12px rgba(16, 185, 129, 0.6);
+    overflow: visible;
+}
+
+.overlay-progress-bar.dragging .overlay-progress-bar-fill {
+    transition: width 0s;
+    box-shadow: 0 0 16px rgba(16, 185, 129, 0.9);
+}
+
+.overlay-progress-bar-thumb {
+    position: absolute;
+    right: -12px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 24px;
+    height: 24px;
+    background: rgba(255, 255, 255, 0.95);
+    border: 2px solid rgba(16, 185, 129, 0.8);
+    border-radius: 50%;
+    box-shadow:
+        0 2px 8px rgba(0, 0, 0, 0.5),
+        0 0 12px rgba(16, 185, 129, 0.4),
+        inset 0 1px 2px rgba(255, 255, 255, 0.5);
+    transition: all 0.2s ease;
+    z-index: 2;
+    cursor: grab;
+}
+
+.overlay-progress-bar:hover .overlay-progress-bar-thumb {
+    transform: translateY(-50%) scale(1.15);
+    box-shadow:
+        0 3px 12px rgba(0, 0, 0, 0.6),
+        0 0 16px rgba(16, 185, 129, 0.5),
+        inset 0 1px 2px rgba(255, 255, 255, 0.5);
+}
+
+.overlay-progress-bar.dragging .overlay-progress-bar-thumb {
+    transform: translateY(-50%) scale(1.25);
+    cursor: grabbing;
+    box-shadow:
+        0 4px 16px rgba(0, 0, 0, 0.7),
+        0 0 20px rgba(16, 185, 129, 0.6),
+        inset 0 1px 2px rgba(255, 255, 255, 0.5);
+}
+
+.overlay-time-display {
+    display: flex;
+    justify-content: space-between;
+    font-size: var(--text-sm);
+    color: rgba(255, 255, 255, 0.8);
+    font-variant-numeric: tabular-nums;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+}
+
+/* Responsive progress bar overlay */
+@media (max-width: 768px) {
+    .overlay-progress-bar {
+        height: 10px;
+    }
+
+    .overlay-progress-bar-thumb {
+        width: 28px;
+        height: 28px;
+        right: -14px;
+    }
+
+    .overlay-time-display {
+        font-size: var(--text-base);
+    }
+}
+
+/* Mode kiosque - progress bar overlay */
+@media (max-height: 700px) and (orientation: landscape) {
+    .overlay-progress-section {
+        padding-top: var(--spacing-xs);
+    }
+
+    .overlay-progress-bar {
+        height: 6px;
+    }
+
+    .overlay-progress-bar-thumb {
+        width: 20px;
+        height: 20px;
+        right: -10px;
+    }
+
+    .overlay-time-display {
+        font-size: 11px;
+    }
 }
 </style>
