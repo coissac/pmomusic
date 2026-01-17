@@ -1221,15 +1221,29 @@ impl ControlPoint {
         dest_renderer
             .replace_queue(source_snapshot.items.clone(), source_snapshot.current_index)?;
 
-        // 4. Recreate playlist binding on destination if source had one
-        if let Some((server_id, container_id, _)) = source_binding {
+        // 4. Transfer playlist binding to destination if source had one
+        // IMPORTANT: We transfer the binding directly WITHOUT triggering a refresh.
+        // The queue items have already been copied in step 3, so we just need to
+        // set the binding so future server updates will sync to the destination.
+        // Using attach_queue_to_playlist() would clear the queue and re-fetch from server,
+        // losing the current playback position.
+        if let Some((server_id, container_id, has_seen_update)) = source_binding.clone() {
             tracing::debug!(
                 dest = dest_renderer_id.0.as_str(),
                 server = server_id.0.as_str(),
                 container = container_id.as_str(),
-                "Recreating playlist binding on destination renderer"
+                "Transferring playlist binding to destination renderer (without refresh)"
             );
-            self.attach_queue_to_playlist(dest_renderer_id, server_id, container_id)?;
+
+            // Create binding with pending_refresh=false to avoid re-fetching
+            let binding = PlaylistBinding {
+                server_id,
+                container_id,
+                has_seen_update,
+                pending_refresh: false,
+                auto_play_on_refresh: false,
+            };
+            dest_renderer.set_playlist_binding(Some(binding));
         }
 
         // 5. Stop playback on source renderer
