@@ -4,7 +4,7 @@
 //! providing a complete music catalog browsing and searching experience.
 
 use crate::client::QobuzClient;
-use crate::didl::ToDIDL;
+use crate::didl::{format_duration, ToDIDL};
 use crate::lazy_provider::QobuzLazyProvider;
 use crate::models::Track;
 use pmoaudiocache::{AudioMetadata, Cache as AudioCache};
@@ -1688,6 +1688,88 @@ impl MusicSource for QobuzSource {
             .get_stream_url(track_id)
             .await
             .map_err(|e| MusicSourceError::UriResolutionError(e.to_string()))
+    }
+
+    async fn get_item(&self, object_id: &str) -> Result<Item> {
+        // Parse object_id to extract track ID
+        let track_id = match self.parse_object_id(object_id) {
+            ObjectIdType::Track(id) => id,
+            _ => {
+                return Err(MusicSourceError::ObjectNotFound(format!(
+                    "Not a track: {}",
+                    object_id
+                )))
+            }
+        };
+
+        // Get track from Qobuz API
+        let track = self
+            .inner
+            .client
+            .get_track(&track_id)
+            .await
+            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+        // Register track in cache with lazy loading (same as albums)
+        let (_track_uri, cache_pk) = self.add_track_lazy(&track).await?;
+
+        // Build Item with HTTP URL pointing to cache
+        let parent_id = track
+            .album
+            .as_ref()
+            .map(|a| format!("qobuz:album:{}", a.id))
+            .unwrap_or_else(|| "qobuz".to_string());
+
+        // Get cover URL from cache if available
+        let cover_url = if let Some(ref album) = track.album {
+            if let Some(ref cached) = album.image_cached {
+                Some(format!("{}{}", self.inner.base_url, cached))
+            } else if let Some(ref image) = album.image {
+                // Try to cache it
+                if let Ok(pk) = self.inner.cache_manager.cache_cover(image).await {
+                    Some(format!("{}/covers/jpeg/{}", self.inner.base_url, pk))
+                } else {
+                    Some(image.clone())
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Build the resource with absolute HTTP URL
+        let audio_url = format!("{}/audio/flac/{}", self.inner.base_url, cache_pk);
+
+        let resource = pmodidl::Resource {
+            protocol_info: format!(
+                "http-get:*:{}:*",
+                track.mime_type.as_deref().unwrap_or("audio/flac")
+            ),
+            bits_per_sample: track.bit_depth.map(|b| b.to_string()),
+            sample_frequency: track.sample_rate.map(|r| r.to_string()),
+            nr_audio_channels: track.channels.map(|c| c.to_string()),
+            duration: Some(format_duration(track.duration)),
+            url: audio_url,
+        };
+
+        Ok(Item {
+            id: format!("qobuz:track:{}", track.id),
+            parent_id,
+            restricted: Some("1".to_string()),
+            title: track.title.clone(),
+            creator: track.display_artist().map(|a| a.name.clone()),
+            class: "object.item.audioItem.musicTrack".to_string(),
+            artist: track.display_artist().map(|a| a.name.clone()),
+            album: track.album_name().map(|s| s.to_string()),
+            genre: None,
+            album_art: cover_url,
+            album_art_pk: None,
+            date: track.album.as_ref().and_then(|a| a.release_date.clone()),
+            original_track_number: Some(track.track_number.to_string()),
+            resources: vec![resource],
+            descriptions: Vec::new(),
+        })
     }
 
     fn supports_fifo(&self) -> bool {

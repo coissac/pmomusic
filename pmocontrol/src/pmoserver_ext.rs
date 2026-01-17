@@ -1599,8 +1599,21 @@ async fn play_content(
     // The UI will be updated via SSE events when playback starts
     tokio::task::spawn(async move {
         let result = tokio::task::spawn_blocking(move || {
+            debug!(
+                renderer = rid.0.as_str(),
+                server = sid.0.as_str(),
+                object = object_id.as_str(),
+                "play_content: fetching playback items"
+            );
+
             // Fetch playback items from server
             let items = fetch_playback_items(&control_point, &sid, &object_id)?;
+
+            debug!(
+                renderer = rid.0.as_str(),
+                item_count = items.len(),
+                "play_content: fetched items"
+            );
 
             if items.is_empty() {
                 return Err(anyhow::anyhow!("No playable content found"));
@@ -2144,8 +2157,16 @@ fn fetch_playback_items(
         ));
     }
 
-    // Browse the object to get entries
-    let entries = server.browse_children(object_id, 0, BROWSE_PAGE_SIZE)?;
+    // First, get metadata for the object to determine if it's a container or item
+    let object_metadata = server.browse_object(object_id)?;
+
+    let entries = if object_metadata.is_container {
+        // For containers, browse children to get all items
+        server.browse_children(object_id, 0, BROWSE_PAGE_SIZE)?
+    } else {
+        // For items, use the object itself
+        vec![object_metadata]
+    };
 
     debug!(
         server_id = server_id.0.as_str(),
