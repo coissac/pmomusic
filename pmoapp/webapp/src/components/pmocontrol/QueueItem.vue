@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { ref, watch, onMounted, nextTick } from "vue";
 import { Music, Play } from "lucide-vue-next";
 import type { QueueItem } from "@/services/pmocontrol/types";
 
@@ -16,14 +16,37 @@ const emit = defineEmits<{
 const imageLoaded = ref(false);
 const imageError = ref(false);
 
+// Reference to the image element
+const coverImageRef = ref<HTMLImageElement | null>(null);
+
+// Check if image is already loaded (cached images may load synchronously)
+function checkImageComplete() {
+    nextTick(() => {
+        if (
+            coverImageRef.value?.complete &&
+            coverImageRef.value?.naturalWidth > 0
+        ) {
+            imageLoaded.value = true;
+            imageError.value = false;
+        }
+    });
+}
+
 // Reset image state when album_art_uri changes
 watch(
     () => props.item.album_art_uri,
-    () => {
+    (newUri) => {
         imageLoaded.value = false;
         imageError.value = false;
+        if (newUri) {
+            checkImageComplete();
+        }
     },
 );
+
+onMounted(() => {
+    checkImageComplete();
+});
 
 function handleImageLoad() {
     imageLoaded.value = true;
@@ -56,6 +79,7 @@ function handleClick(item: QueueItem) {
         <!-- Cover miniature -->
         <div class="item-cover">
             <img
+                ref="coverImageRef"
                 v-if="item.album_art_uri && !imageError"
                 v-show="imageLoaded"
                 :src="item.album_art_uri"

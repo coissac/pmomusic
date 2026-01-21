@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { ref, watch, onMounted, nextTick } from "vue";
 import type { ContainerEntry } from "@/services/pmocontrol/types";
 import { Music } from "lucide-vue-next";
 import ActionMenu from "./ActionMenu.vue";
@@ -19,14 +19,37 @@ const emit = defineEmits<{
 const imageLoaded = ref(false);
 const imageError = ref(false);
 
+// Reference to the image element
+const coverImageRef = ref<HTMLImageElement | null>(null);
+
+// Check if image is already loaded (cached images may load synchronously)
+function checkImageComplete() {
+    nextTick(() => {
+        if (
+            coverImageRef.value?.complete &&
+            coverImageRef.value?.naturalWidth > 0
+        ) {
+            imageLoaded.value = true;
+            imageError.value = false;
+        }
+    });
+}
+
 // Reset image state when album_art_uri changes
 watch(
     () => props.entry.album_art_uri,
-    () => {
+    (newUri) => {
         imageLoaded.value = false;
         imageError.value = false;
+        if (newUri) {
+            checkImageComplete();
+        }
     },
 );
+
+onMounted(() => {
+    checkImageComplete();
+});
 
 function handleImageLoad() {
     imageLoaded.value = true;
@@ -51,6 +74,7 @@ function handleAddToQueue(rendererId: string) {
         <!-- Cover miniature -->
         <div class="media-cover">
             <img
+                ref="coverImageRef"
                 v-if="entry.album_art_uri && !imageError"
                 v-show="imageLoaded"
                 :src="entry.album_art_uri"
