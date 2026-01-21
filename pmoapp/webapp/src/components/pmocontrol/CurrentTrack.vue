@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, toRef, ref, watch } from "vue";
+import { computed, toRef, ref, watch, onMounted, nextTick } from "vue";
 import { useRenderer } from "@/composables/useRenderers";
 import { useUIStore } from "@/stores/ui";
 import { api } from "@/services/pmocontrol/api";
@@ -24,6 +24,9 @@ const showMetadata = ref(false);
 // Track image loading state
 const imageLoaded = ref(false);
 const imageError = ref(false);
+
+// Reference to the image element
+const coverImageRef = ref<HTMLImageElement | null>(null);
 
 function openCoverOverlay() {
     if (hasCover.value) {
@@ -96,14 +99,34 @@ const hasCover = computed(
     () => !!metadata.value?.album_art_uri && !imageError.value,
 );
 
+// Check if image is already loaded (cached images may load synchronously)
+function checkImageComplete() {
+    nextTick(() => {
+        if (
+            coverImageRef.value?.complete &&
+            coverImageRef.value?.naturalWidth > 0
+        ) {
+            imageLoaded.value = true;
+            imageError.value = false;
+        }
+    });
+}
+
 // Reset image state when album_art_uri changes
 watch(
     () => metadata.value?.album_art_uri,
-    () => {
+    (newUri) => {
         imageLoaded.value = false;
         imageError.value = false;
+        if (newUri) {
+            checkImageComplete();
+        }
     },
 );
+
+onMounted(() => {
+    checkImageComplete();
+});
 
 function handleImageLoad() {
     imageLoaded.value = true;
@@ -358,6 +381,7 @@ const swipeOpacity = computed(() => {
             @click="openCoverOverlay"
         >
             <img
+                ref="coverImageRef"
                 v-if="metadata?.album_art_uri && !imageError"
                 v-show="imageLoaded"
                 :src="metadata.album_art_uri"
