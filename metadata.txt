@@ -1,0 +1,2559 @@
+==================
+channel 0:
+{
+  "prev": [
+    {
+      "firstLine": "Radio France",
+      "secondLine": null,
+      "cover": "45f36487-b91e-42cd-92e0-87d57ae353be",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "Radio France",
+    "secondLine": null,
+    "cover": "45f36487-b91e-42cd-92e0-87d57ae353be",
+    "favoriteUuid": null,
+    "startTime": null,
+    "endTime": null
+  },
+  "next": [
+    {
+      "firstLine": "Radio France",
+      "secondLine": null,
+      "cover": "45f36487-b91e-42cd-92e0-87d57ae353be",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "delayToRefresh": 10000
+}
+==================
+channel 1:
+{
+  "prev": [
+    {
+      "firstLine": "France Inter",
+      "secondLine": "Le direct de France Inter",
+      "cover": "c6288843-9269-4ca5-ab0e-49454aed8fdc",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "France Inter",
+    "secondLine": "Le direct de France Inter",
+    "cover": "c6288843-9269-4ca5-ab0e-49454aed8fdc",
+    "favoriteUuid": null,
+    "startTime": 1769115900,
+    "endTime": 1769119183
+  },
+  "next": [
+    {
+      "firstLine": "France Inter",
+      "secondLine": "Le direct de France Inter",
+      "cover": "c6288843-9269-4ca5-ab0e-49454aed8fdc",
+      "favoriteUuid": null,
+      "startTime": 1769119200,
+      "endTime": 1769119970
+    }
+  ],
+  "delayToRefresh": 683000
+}
+==================
+channel 2:
+{
+  "prev": [
+    {
+      "firstLine": "franceinfo",
+      "secondLine": "franceinfo : pas juste l'info, l'info juste",
+      "cover": "52bb749e-f832-4dd1-ba0a-8c5d11e0aa3a",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "franceinfo",
+    "secondLine": "franceinfo : pas juste l'info, l'info juste",
+    "cover": "52bb749e-f832-4dd1-ba0a-8c5d11e0aa3a",
+    "favoriteUuid": null,
+    "startTime": 1769112000,
+    "endTime": 1769122800
+  },
+  "next": [
+    {
+      "firstLine": "franceinfo",
+      "secondLine": "franceinfo : pas juste l'info, l'info juste",
+      "cover": "52bb749e-f832-4dd1-ba0a-8c5d11e0aa3a",
+      "favoriteUuid": null,
+      "startTime": 1769119200,
+      "endTime": 1769119740
+    }
+  ],
+  "delayToRefresh": 730000
+}
+==================
+channel 3:
+==================
+channel 4:
+{
+  "prev": [
+    {
+      "firstLine": "France Musique",
+      "secondLine": "Ce monde a besoin de musique",
+      "cover": "df8d1b79-8823-4421-a694-2b7561430b79",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "France Musique",
+    "secondLine": "Ce monde a besoin de musique",
+    "cover": "df8d1b79-8823-4421-a694-2b7561430b79",
+    "favoriteUuid": null,
+    "startTime": 1769117410,
+    "endTime": 1769121000
+  },
+  "next": [
+    {
+      "firstLine": "France Musique",
+      "secondLine": "Ce monde a besoin de musique",
+      "cover": "df8d1b79-8823-4421-a694-2b7561430b79",
+      "favoriteUuid": null,
+      "startTime": 1769121020,
+      "endTime": 1769126330
+    }
+  ],
+  "delayToRefresh": 2500000
+}
+==================
+channel 5:
+{
+  "prev": [
+    {
+      "firstLine": "France Culture",
+      "secondLine": "France Culture, l'esprit d'ouverture",
+      "cover": "9cee7dd1-ee0d-4b88-b764-3cf9b748c266",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "France Culture",
+    "secondLine": "France Culture, l'esprit d'ouverture",
+    "cover": "9cee7dd1-ee0d-4b88-b764-3cf9b748c266",
+    "favoriteUuid": null,
+    "startTime": 1769115600,
+    "endTime": 1769119125
+  },
+  "next": [
+    {
+      "firstLine": "France Culture",
+      "secondLine": "France Culture, l'esprit d'ouverture",
+      "cover": "9cee7dd1-ee0d-4b88-b764-3cf9b748c266",
+      "favoriteUuid": null,
+      "startTime": 1769119200,
+      "endTime": 1769122692
+    }
+  ],
+  "delayToRefresh": 945000
+}
+==================
+channel 6:
+{
+  "prev": [
+    {
+      "firstLine": "Mouv'",
+      "secondLine": "Mouv’",
+      "cover": "13dc5910-3a90-45e8-880d-5e7e31d21a3c",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "Mouv'",
+    "secondLine": "GUY2BEZBAR • La jeunesse dorée (feat. Killa Predator)",
+    "secondLineSongUuid": "ca5a3cb1-b585-4065-bf97-85e552e73779",
+    "cover": "67253cbd-64c3-4a3f-8a12-626163d4c175",
+    "favoriteUuid": "ca5a3cb1-b585-4065-bf97-85e552e73779",
+    "startTime": 1769118104,
+    "endTime": 1769118240
+  },
+  "next": [
+    {
+      "firstLine": "Mouv'",
+      "secondLine": "Mouv’",
+      "cover": "13dc5910-3a90-45e8-880d-5e7e31d21a3c",
+      "favoriteUuid": null,
+      "startTime": 1769116500,
+      "endTime": 1769122799
+    }
+  ],
+  "delayToRefresh": 50000
+}
+==================
+channel 7:
+{
+  "prev": [
+    {
+      "firstLine": "FIP",
+      "secondLine": "La radio la plus éclectique du monde",
+      "cover": "34e98566-058b-428f-a39e-d74bdef1cf77",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "FIP",
+    "secondLine": "Omar Sharif • Amore piccolino",
+    "secondLineSongUuid": "6383183a-2a5a-438f-814d-702c99d9f556",
+    "cover": "94e1f4c7-cf87-4df1-ad17-b1669bb543dc",
+    "favoriteUuid": "6383183a-2a5a-438f-814d-702c99d9f556",
+    "startTime": 1769118424,
+    "endTime": 1769118591
+  },
+  "next": [
+    {
+      "firstLine": "FIP",
+      "secondLine": "La radio la plus éclectique du monde",
+      "cover": "34e98566-058b-428f-a39e-d74bdef1cf77",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "delayToRefresh": 40000
+}
+==================
+channel 8:
+==================
+channel 9:
+==================
+channel 10:
+==================
+channel 11:
+{
+  "prev": [
+    {
+      "firstLine": "ICI RCFM",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "3398334a-8666-4cb2-978a-4853ec7d2583",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI RCFM",
+    "secondLine": "Ici on parle d'ici",
+    "cover": "3398334a-8666-4cb2-978a-4853ec7d2583",
+    "favoriteUuid": null,
+    "startTime": null,
+    "endTime": null
+  },
+  "next": [
+    {
+      "firstLine": "ICI RCFM",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "3398334a-8666-4cb2-978a-4853ec7d2583",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "delayToRefresh": 10000
+}
+==================
+channel 12:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Alsace",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "c57f3937-c855-4c37-bf3d-80dae44fb502",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Alsace",
+    "secondLine": "Francis CABREL • L'encre de tes yeux",
+    "secondLineSongUuid": "e534c051-abda-4043-9a55-bedf2b0e86c3",
+    "cover": "49d147d6-d637-4a2a-be3b-10225f719ab0",
+    "favoriteUuid": "e534c051-abda-4043-9a55-bedf2b0e86c3",
+    "startTime": 1769118234,
+    "endTime": 1769118412
+  },
+  "next": [
+    {
+      "firstLine": "ICI Alsace",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "c57f3937-c855-4c37-bf3d-80dae44fb502",
+      "favoriteUuid": null,
+      "startTime": 1769112000,
+      "endTime": 1769119200
+    }
+  ],
+  "delayToRefresh": 120000
+}
+==================
+channel 13:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Armorique",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "99ac5a26-e5f0-490e-b513-38ee148c7e5a",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Armorique",
+    "secondLine": "Francis CABREL • L'encre de tes yeux",
+    "secondLineSongUuid": "e534c051-abda-4043-9a55-bedf2b0e86c3",
+    "cover": "49d147d6-d637-4a2a-be3b-10225f719ab0",
+    "favoriteUuid": "e534c051-abda-4043-9a55-bedf2b0e86c3",
+    "startTime": 1769118234,
+    "endTime": 1769118412
+  },
+  "next": [
+    {
+      "firstLine": "ICI Armorique",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "99ac5a26-e5f0-490e-b513-38ee148c7e5a",
+      "favoriteUuid": null,
+      "startTime": 1769112000,
+      "endTime": 1769119200
+    }
+  ],
+  "delayToRefresh": 120000
+}
+==================
+channel 14:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Auxerre",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "e2026fb2-4cab-4137-bf1e-0b5324ec2ca4",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Auxerre",
+    "secondLine": "Jeanne GABRIELLE • Bijou (version linée)",
+    "secondLineSongUuid": "0ae2c281-01d8-4590-879f-0953be25b3f3",
+    "cover": "e2026fb2-4cab-4137-bf1e-0b5324ec2ca4",
+    "favoriteUuid": "0ae2c281-01d8-4590-879f-0953be25b3f3",
+    "startTime": 1769118412,
+    "endTime": 1769118575
+  },
+  "next": [
+    {
+      "firstLine": "ICI Auxerre",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "e2026fb2-4cab-4137-bf1e-0b5324ec2ca4",
+      "favoriteUuid": null,
+      "startTime": 1769112000,
+      "endTime": 1769119200
+    }
+  ],
+  "delayToRefresh": 20000
+}
+==================
+channel 15:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Béarn Bigorre",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "ba415434-04bc-4c30-b350-7dcca070b935",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Béarn Bigorre",
+    "secondLine": "Jeanne GABRIELLE • Bijou (version linée)",
+    "secondLineSongUuid": "0ae2c281-01d8-4590-879f-0953be25b3f3",
+    "cover": "ba415434-04bc-4c30-b350-7dcca070b935",
+    "favoriteUuid": "0ae2c281-01d8-4590-879f-0953be25b3f3",
+    "startTime": 1769118412,
+    "endTime": 1769118575
+  },
+  "next": [
+    {
+      "firstLine": "ICI Béarn Bigorre",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "ba415434-04bc-4c30-b350-7dcca070b935",
+      "favoriteUuid": null,
+      "startTime": 1769112000,
+      "endTime": 1769119200
+    }
+  ],
+  "delayToRefresh": 20000
+}
+==================
+channel 16:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Belfort-Montbéliard",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "f3238cc6-2f8a-4565-aa8a-d970bfac7d0a",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Belfort-Montbéliard",
+    "secondLine": "Jeanne GABRIELLE • Bijou (version linée)",
+    "secondLineSongUuid": "0ae2c281-01d8-4590-879f-0953be25b3f3",
+    "cover": "f3238cc6-2f8a-4565-aa8a-d970bfac7d0a",
+    "favoriteUuid": "0ae2c281-01d8-4590-879f-0953be25b3f3",
+    "startTime": 1769118412,
+    "endTime": 1769118575
+  },
+  "next": [
+    {
+      "firstLine": "ICI Belfort-Montbéliard",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "f3238cc6-2f8a-4565-aa8a-d970bfac7d0a",
+      "favoriteUuid": null,
+      "startTime": 1769112000,
+      "endTime": 1769119200
+    }
+  ],
+  "delayToRefresh": 20000
+}
+==================
+channel 17:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Berry",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "06bb2775-63d9-433b-af7b-f8f62f021203",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Berry",
+    "secondLine": "Ici on parle d'ici",
+    "cover": "06bb2775-63d9-433b-af7b-f8f62f021203",
+    "favoriteUuid": null,
+    "startTime": null,
+    "endTime": 1769122800
+  },
+  "next": [
+    {
+      "firstLine": "ICI Berry",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "06bb2775-63d9-433b-af7b-f8f62f021203",
+      "favoriteUuid": null,
+      "startTime": 1769122800,
+      "endTime": 1769130000
+    }
+  ],
+  "delayToRefresh": 3600000
+}
+==================
+channel 18:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Besançon",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "e14152d8-168d-4b44-82e5-86c9c48176aa",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Besançon",
+    "secondLine": "Jeanne GABRIELLE • Bijou (version linée)",
+    "secondLineSongUuid": "0ae2c281-01d8-4590-879f-0953be25b3f3",
+    "cover": "e14152d8-168d-4b44-82e5-86c9c48176aa",
+    "favoriteUuid": "0ae2c281-01d8-4590-879f-0953be25b3f3",
+    "startTime": 1769118412,
+    "endTime": 1769118575
+  },
+  "next": [
+    {
+      "firstLine": "ICI Besançon",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "e14152d8-168d-4b44-82e5-86c9c48176aa",
+      "favoriteUuid": null,
+      "startTime": 1769112000,
+      "endTime": 1769119200
+    }
+  ],
+  "delayToRefresh": 20000
+}
+==================
+channel 19:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Bourgogne",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "4650a9b3-4395-4be8-a89d-73f61806a806",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Bourgogne",
+    "secondLine": "Ici on parle d'ici",
+    "cover": "4650a9b3-4395-4be8-a89d-73f61806a806",
+    "favoriteUuid": null,
+    "startTime": 1769104800,
+    "endTime": 1769122800
+  },
+  "next": [
+    {
+      "firstLine": "ICI Bourgogne",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "4650a9b3-4395-4be8-a89d-73f61806a806",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "delayToRefresh": 10000
+}
+==================
+channel 20:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Breizh Izel",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "269593ab-0229-4dc1-8625-cd19943a299d",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Breizh Izel",
+    "secondLine": "Ici on parle d'ici",
+    "cover": "269593ab-0229-4dc1-8625-cd19943a299d",
+    "favoriteUuid": null,
+    "startTime": null,
+    "endTime": null
+  },
+  "next": [
+    {
+      "firstLine": "ICI Breizh Izel",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "269593ab-0229-4dc1-8625-cd19943a299d",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "delayToRefresh": 10000
+}
+==================
+channel 21:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Champagne-Ardenne",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "b011edaa-d3f5-4489-9a57-eaded51894f9",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Champagne-Ardenne",
+    "secondLine": "Jeanne GABRIELLE • Bijou (version linée)",
+    "secondLineSongUuid": "0ae2c281-01d8-4590-879f-0953be25b3f3",
+    "cover": "b011edaa-d3f5-4489-9a57-eaded51894f9",
+    "favoriteUuid": "0ae2c281-01d8-4590-879f-0953be25b3f3",
+    "startTime": 1769118412,
+    "endTime": 1769118575
+  },
+  "next": [
+    {
+      "firstLine": "ICI Champagne-Ardenne",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "b011edaa-d3f5-4489-9a57-eaded51894f9",
+      "favoriteUuid": null,
+      "startTime": 1769112000,
+      "endTime": 1769119200
+    }
+  ],
+  "delayToRefresh": 20000
+}
+==================
+channel 22:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Cotentin",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "f6ec610c-4ae9-4128-86a5-12ad3f874636",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Cotentin",
+    "secondLine": "Jeanne GABRIELLE • Bijou (version linée)",
+    "secondLineSongUuid": "0ae2c281-01d8-4590-879f-0953be25b3f3",
+    "cover": "f6ec610c-4ae9-4128-86a5-12ad3f874636",
+    "favoriteUuid": "0ae2c281-01d8-4590-879f-0953be25b3f3",
+    "startTime": 1769118412,
+    "endTime": 1769118575
+  },
+  "next": [
+    {
+      "firstLine": "ICI Cotentin",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "f6ec610c-4ae9-4128-86a5-12ad3f874636",
+      "favoriteUuid": null,
+      "startTime": 1769112000,
+      "endTime": 1769119200
+    }
+  ],
+  "delayToRefresh": 20000
+}
+==================
+channel 23:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Creuse",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "4a6c076b-2049-4744-a211-bf5d811a4fe9",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Creuse",
+    "secondLine": "Jeanne GABRIELLE • Bijou (version linée)",
+    "secondLineSongUuid": "0ae2c281-01d8-4590-879f-0953be25b3f3",
+    "cover": "4a6c076b-2049-4744-a211-bf5d811a4fe9",
+    "favoriteUuid": "0ae2c281-01d8-4590-879f-0953be25b3f3",
+    "startTime": 1769118412,
+    "endTime": 1769118575
+  },
+  "next": [
+    {
+      "firstLine": "ICI Creuse",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "4a6c076b-2049-4744-a211-bf5d811a4fe9",
+      "favoriteUuid": null,
+      "startTime": 1769112000,
+      "endTime": 1769119200
+    }
+  ],
+  "delayToRefresh": 20000
+}
+==================
+channel 24:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Drôme Ardèche",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "044ffe9e-28d7-4dd3-960f-299a704ff71b",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Drôme Ardèche",
+    "secondLine": "Jeanne GABRIELLE • Bijou (version linée)",
+    "secondLineSongUuid": "0ae2c281-01d8-4590-879f-0953be25b3f3",
+    "cover": "044ffe9e-28d7-4dd3-960f-299a704ff71b",
+    "favoriteUuid": "0ae2c281-01d8-4590-879f-0953be25b3f3",
+    "startTime": 1769118412,
+    "endTime": 1769118575
+  },
+  "next": [
+    {
+      "firstLine": "ICI Drôme Ardèche",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "044ffe9e-28d7-4dd3-960f-299a704ff71b",
+      "favoriteUuid": null,
+      "startTime": 1769112000,
+      "endTime": 1769119200
+    }
+  ],
+  "delayToRefresh": 20000
+}
+==================
+channel 25:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Gard Lozère",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "06266b7e-38a5-458f-9926-3c3d8db11e4a",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Gard Lozère",
+    "secondLine": "Jeanne GABRIELLE • Bijou (version linée)",
+    "secondLineSongUuid": "0ae2c281-01d8-4590-879f-0953be25b3f3",
+    "cover": "06266b7e-38a5-458f-9926-3c3d8db11e4a",
+    "favoriteUuid": "0ae2c281-01d8-4590-879f-0953be25b3f3",
+    "startTime": 1769118412,
+    "endTime": 1769118575
+  },
+  "next": [
+    {
+      "firstLine": "ICI Gard Lozère",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "06266b7e-38a5-458f-9926-3c3d8db11e4a",
+      "favoriteUuid": null,
+      "startTime": 1769112000,
+      "endTime": 1769119200
+    }
+  ],
+  "delayToRefresh": 20000
+}
+==================
+channel 26:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Gascogne",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "be86fb63-ff3e-4d57-b8e5-e131e05c51d6",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Gascogne",
+    "secondLine": "Jeanne GABRIELLE • Bijou (version linée)",
+    "secondLineSongUuid": "0ae2c281-01d8-4590-879f-0953be25b3f3",
+    "cover": "be86fb63-ff3e-4d57-b8e5-e131e05c51d6",
+    "favoriteUuid": "0ae2c281-01d8-4590-879f-0953be25b3f3",
+    "startTime": 1769118412,
+    "endTime": 1769118575
+  },
+  "next": [
+    {
+      "firstLine": "ICI Gascogne",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "be86fb63-ff3e-4d57-b8e5-e131e05c51d6",
+      "favoriteUuid": null,
+      "startTime": 1769112000,
+      "endTime": 1769119200
+    }
+  ],
+  "delayToRefresh": 20000
+}
+==================
+channel 27:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Gironde",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "e3a6cf54-c830-4466-bf6b-913d9b37322d",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Gironde",
+    "secondLine": "Jeanne GABRIELLE • Bijou (version linée)",
+    "secondLineSongUuid": "0ae2c281-01d8-4590-879f-0953be25b3f3",
+    "cover": "e3a6cf54-c830-4466-bf6b-913d9b37322d",
+    "favoriteUuid": "0ae2c281-01d8-4590-879f-0953be25b3f3",
+    "startTime": 1769118412,
+    "endTime": 1769118575
+  },
+  "next": [
+    {
+      "firstLine": "ICI Gironde",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "e3a6cf54-c830-4466-bf6b-913d9b37322d",
+      "favoriteUuid": null,
+      "startTime": 1769112000,
+      "endTime": 1769119200
+    }
+  ],
+  "delayToRefresh": 20000
+}
+==================
+channel 28:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Hérault",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "536dcf8e-86ac-482a-9a95-8bfa16203a5b",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Hérault",
+    "secondLine": "Jeanne GABRIELLE • Bijou (version linée)",
+    "secondLineSongUuid": "0ae2c281-01d8-4590-879f-0953be25b3f3",
+    "cover": "536dcf8e-86ac-482a-9a95-8bfa16203a5b",
+    "favoriteUuid": "0ae2c281-01d8-4590-879f-0953be25b3f3",
+    "startTime": 1769118412,
+    "endTime": 1769118575
+  },
+  "next": [
+    {
+      "firstLine": "ICI Hérault",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "536dcf8e-86ac-482a-9a95-8bfa16203a5b",
+      "favoriteUuid": null,
+      "startTime": 1769112000,
+      "endTime": 1769119200
+    }
+  ],
+  "delayToRefresh": 20000
+}
+==================
+channel 29:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Isère",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "b862114b-7b80-4f69-9b88-e73a442522ff",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Isère",
+    "secondLine": "Jeanne GABRIELLE • Bijou (version linée)",
+    "secondLineSongUuid": "0ae2c281-01d8-4590-879f-0953be25b3f3",
+    "cover": "b862114b-7b80-4f69-9b88-e73a442522ff",
+    "favoriteUuid": "0ae2c281-01d8-4590-879f-0953be25b3f3",
+    "startTime": 1769118412,
+    "endTime": 1769118578
+  },
+  "next": [
+    {
+      "firstLine": "ICI Isère",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "b862114b-7b80-4f69-9b88-e73a442522ff",
+      "favoriteUuid": null,
+      "startTime": 1769112000,
+      "endTime": 1769119200
+    }
+  ],
+  "delayToRefresh": 20000
+}
+==================
+channel 30:
+{
+  "prev": [
+    {
+      "firstLine": "ICI La Rochelle",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "3094e84d-6b04-478f-be04-73969274e488",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI La Rochelle",
+    "secondLine": "Jeanne GABRIELLE • Bijou (version linée)",
+    "secondLineSongUuid": "0ae2c281-01d8-4590-879f-0953be25b3f3",
+    "cover": "3094e84d-6b04-478f-be04-73969274e488",
+    "favoriteUuid": "0ae2c281-01d8-4590-879f-0953be25b3f3",
+    "startTime": 1769118412,
+    "endTime": 1769118575
+  },
+  "next": [
+    {
+      "firstLine": "ICI La Rochelle",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "3094e84d-6b04-478f-be04-73969274e488",
+      "favoriteUuid": null,
+      "startTime": 1769112000,
+      "endTime": 1769119200
+    }
+  ],
+  "delayToRefresh": 20000
+}
+==================
+channel 31:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Limousin",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "ff4d3086-9902-44ac-98c7-649ae310ad59",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Limousin",
+    "secondLine": "Jeanne GABRIELLE • Bijou (version linée)",
+    "secondLineSongUuid": "0ae2c281-01d8-4590-879f-0953be25b3f3",
+    "cover": "ff4d3086-9902-44ac-98c7-649ae310ad59",
+    "favoriteUuid": "0ae2c281-01d8-4590-879f-0953be25b3f3",
+    "startTime": 1769118412,
+    "endTime": 1769118575
+  },
+  "next": [
+    {
+      "firstLine": "ICI Limousin",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "ff4d3086-9902-44ac-98c7-649ae310ad59",
+      "favoriteUuid": null,
+      "startTime": 1769112000,
+      "endTime": 1769119200
+    }
+  ],
+  "delayToRefresh": 20000
+}
+==================
+channel 32:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Loire Océan",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "54bfa2c2-55e6-4a32-bc8a-c891a08f0626",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Loire Océan",
+    "secondLine": "Ici on parle d'ici",
+    "cover": "54bfa2c2-55e6-4a32-bc8a-c891a08f0626",
+    "favoriteUuid": null,
+    "startTime": 1769112000,
+    "endTime": 1769119200
+  },
+  "next": [
+    {
+      "firstLine": "ICI Loire Océan",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "54bfa2c2-55e6-4a32-bc8a-c891a08f0626",
+      "favoriteUuid": null,
+      "startTime": 1769119200,
+      "endTime": 1769122800
+    }
+  ],
+  "delayToRefresh": 630000
+}
+==================
+channel 33:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Lorraine (Meurthe-et-Moselle et Vosges)",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "d0448ffa-9420-4c1f-8fef-21e0d9f208ab",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Lorraine (Meurthe-et-Moselle et Vosges)",
+    "secondLine": "Ici on parle d'ici",
+    "cover": "d0448ffa-9420-4c1f-8fef-21e0d9f208ab",
+    "favoriteUuid": null,
+    "startTime": 1769112000,
+    "endTime": 1769119200
+  },
+  "next": [
+    {
+      "firstLine": "ICI Lorraine (Meurthe-et-Moselle et Vosges)",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "d0448ffa-9420-4c1f-8fef-21e0d9f208ab",
+      "favoriteUuid": null,
+      "startTime": 1769119200,
+      "endTime": 1769122800
+    }
+  ],
+  "delayToRefresh": 630000
+}
+==================
+channel 34:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Mayenne",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "655cca16-52bf-4eb1-aea7-2114bb6a2b46",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Mayenne",
+    "secondLine": "Ici on parle d'ici",
+    "cover": "655cca16-52bf-4eb1-aea7-2114bb6a2b46",
+    "favoriteUuid": null,
+    "startTime": 1769112000,
+    "endTime": 1769119200
+  },
+  "next": [
+    {
+      "firstLine": "ICI Mayenne",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "655cca16-52bf-4eb1-aea7-2114bb6a2b46",
+      "favoriteUuid": null,
+      "startTime": 1769119200,
+      "endTime": 1769122800
+    }
+  ],
+  "delayToRefresh": 630000
+}
+==================
+channel 35:
+==================
+channel 36:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Nord",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "26b3d826-f907-4c0c-bdc9-08115c3d4152",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Nord",
+    "secondLine": "Ici on parle d'ici",
+    "cover": "26b3d826-f907-4c0c-bdc9-08115c3d4152",
+    "favoriteUuid": null,
+    "startTime": 1769112000,
+    "endTime": 1769121000
+  },
+  "next": [
+    {
+      "firstLine": "ICI Nord",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "26b3d826-f907-4c0c-bdc9-08115c3d4152",
+      "favoriteUuid": null,
+      "startTime": 1769121000,
+      "endTime": 1769122800
+    }
+  ],
+  "delayToRefresh": 2430000
+}
+==================
+channel 37:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Normandie (Calvados - Orne)",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "4b1a9d2d-30d6-4dd7-aacf-a5679ddf65f7",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Normandie (Calvados - Orne)",
+    "secondLine": "Ici on parle d'ici",
+    "cover": "4b1a9d2d-30d6-4dd7-aacf-a5679ddf65f7",
+    "favoriteUuid": null,
+    "startTime": 1769112000,
+    "endTime": 1769119200
+  },
+  "next": [
+    {
+      "firstLine": "ICI Normandie (Calvados - Orne)",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "4b1a9d2d-30d6-4dd7-aacf-a5679ddf65f7",
+      "favoriteUuid": null,
+      "startTime": 1769119200,
+      "endTime": 1769122800
+    }
+  ],
+  "delayToRefresh": 630000
+}
+==================
+channel 38:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Normandie (Seine-Maritime - Eure)",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "4b1a9d2d-30d6-4dd7-aacf-a5679ddf65f7",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Normandie (Seine-Maritime - Eure)",
+    "secondLine": "JANE BIRKIN • Les dessous chics",
+    "secondLineSongUuid": "b489eaa2-3062-48f7-8b1c-0379d509d42b",
+    "cover": "e3c4b79f-9270-4f89-be29-4b98d298e63e",
+    "favoriteUuid": "b489eaa2-3062-48f7-8b1c-0379d509d42b",
+    "startTime": 1769118579,
+    "endTime": 1769118704
+  },
+  "next": [
+    {
+      "firstLine": "ICI Normandie (Seine-Maritime - Eure)",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "4b1a9d2d-30d6-4dd7-aacf-a5679ddf65f7",
+      "favoriteUuid": null,
+      "startTime": 1769112000,
+      "endTime": 1769119200
+    }
+  ],
+  "delayToRefresh": 130000
+}
+==================
+channel 39:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Orléans",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "6ba4f915-c15b-4b75-bbff-00264c473c75",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Orléans",
+    "secondLine": "Ici on parle d'ici",
+    "cover": "6ba4f915-c15b-4b75-bbff-00264c473c75",
+    "favoriteUuid": null,
+    "startTime": null,
+    "endTime": null
+  },
+  "next": [
+    {
+      "firstLine": "ICI Orléans",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "6ba4f915-c15b-4b75-bbff-00264c473c75",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "delayToRefresh": 10000
+}
+==================
+channel 40:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Pays d'Auvergne",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "64d1fb99-9fd7-439b-a1b4-62697ea9e7ff",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Pays d'Auvergne",
+    "secondLine": "Ici on parle d'ici",
+    "cover": "64d1fb99-9fd7-439b-a1b4-62697ea9e7ff",
+    "favoriteUuid": null,
+    "startTime": 1769112000,
+    "endTime": 1769119200
+  },
+  "next": [
+    {
+      "firstLine": "ICI Pays d'Auvergne",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "64d1fb99-9fd7-439b-a1b4-62697ea9e7ff",
+      "favoriteUuid": null,
+      "startTime": 1769119200,
+      "endTime": 1769122800
+    }
+  ],
+  "delayToRefresh": 630000
+}
+==================
+channel 41:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Pays Basque",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "0d62617b-681e-4232-a903-ecdd0a997f3b",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Pays Basque",
+    "secondLine": "JANE BIRKIN • Les dessous chics",
+    "secondLineSongUuid": "b489eaa2-3062-48f7-8b1c-0379d509d42b",
+    "cover": "e3c4b79f-9270-4f89-be29-4b98d298e63e",
+    "favoriteUuid": "b489eaa2-3062-48f7-8b1c-0379d509d42b",
+    "startTime": 1769118579,
+    "endTime": 1769118704
+  },
+  "next": [
+    {
+      "firstLine": "ICI Pays Basque",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "0d62617b-681e-4232-a903-ecdd0a997f3b",
+      "favoriteUuid": null,
+      "startTime": 1769112000,
+      "endTime": 1769119200
+    }
+  ],
+  "delayToRefresh": 130000
+}
+==================
+channel 42:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Pays de Savoie",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "ef0c5a84-ac12-4f70-acd0-5f3b3ad2be4b",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Pays de Savoie",
+    "secondLine": "Ici on parle d'ici",
+    "cover": "ef0c5a84-ac12-4f70-acd0-5f3b3ad2be4b",
+    "favoriteUuid": null,
+    "startTime": 1769112000,
+    "endTime": 1769119200
+  },
+  "next": [
+    {
+      "firstLine": "ICI Pays de Savoie",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "ef0c5a84-ac12-4f70-acd0-5f3b3ad2be4b",
+      "favoriteUuid": null,
+      "startTime": 1769119200,
+      "endTime": 1769122800
+    }
+  ],
+  "delayToRefresh": 630000
+}
+==================
+channel 43:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Périgord",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "b168c741-cd3c-442b-9e2a-bc2095bd4419",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Périgord",
+    "secondLine": "JANE BIRKIN • Les dessous chics",
+    "secondLineSongUuid": "b489eaa2-3062-48f7-8b1c-0379d509d42b",
+    "cover": "e3c4b79f-9270-4f89-be29-4b98d298e63e",
+    "favoriteUuid": "b489eaa2-3062-48f7-8b1c-0379d509d42b",
+    "startTime": 1769118579,
+    "endTime": 1769118704
+  },
+  "next": [
+    {
+      "firstLine": "ICI Périgord",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "b168c741-cd3c-442b-9e2a-bc2095bd4419",
+      "favoriteUuid": null,
+      "startTime": 1769112000,
+      "endTime": 1769119200
+    }
+  ],
+  "delayToRefresh": 130000
+}
+==================
+channel 44:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Picardie",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "8e2f0a62-a424-4f47-aa94-0f1574b005ff",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Picardie",
+    "secondLine": "Ici on parle d'ici",
+    "cover": "8e2f0a62-a424-4f47-aa94-0f1574b005ff",
+    "favoriteUuid": null,
+    "startTime": 1769112000,
+    "endTime": 1769119200
+  },
+  "next": [
+    {
+      "firstLine": "ICI Picardie",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "8e2f0a62-a424-4f47-aa94-0f1574b005ff",
+      "favoriteUuid": null,
+      "startTime": 1769119200,
+      "endTime": 1769122800
+    }
+  ],
+  "delayToRefresh": 630000
+}
+==================
+channel 45:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Provence",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "2e36ab01-c5d5-4c20-9cc3-eebeb9c29d5b",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Provence",
+    "secondLine": "Ici on parle d'ici",
+    "cover": "2e36ab01-c5d5-4c20-9cc3-eebeb9c29d5b",
+    "favoriteUuid": null,
+    "startTime": 1769112000,
+    "endTime": 1769119200
+  },
+  "next": [
+    {
+      "firstLine": "ICI Provence",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "2e36ab01-c5d5-4c20-9cc3-eebeb9c29d5b",
+      "favoriteUuid": null,
+      "startTime": 1769119200,
+      "endTime": 1769122800
+    }
+  ],
+  "delayToRefresh": 630000
+}
+==================
+channel 46:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Roussillon",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "a735ac1b-f89f-471b-b3ee-551b6946c2e2",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Roussillon",
+    "secondLine": "JANE BIRKIN • Les dessous chics",
+    "secondLineSongUuid": "b489eaa2-3062-48f7-8b1c-0379d509d42b",
+    "cover": "e3c4b79f-9270-4f89-be29-4b98d298e63e",
+    "favoriteUuid": "b489eaa2-3062-48f7-8b1c-0379d509d42b",
+    "startTime": 1769118579,
+    "endTime": 1769118704
+  },
+  "next": [
+    {
+      "firstLine": "ICI Roussillon",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "a735ac1b-f89f-471b-b3ee-551b6946c2e2",
+      "favoriteUuid": null,
+      "startTime": 1769112000,
+      "endTime": 1769119200
+    }
+  ],
+  "delayToRefresh": 130000
+}
+==================
+channel 47:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Touraine",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "8bb007f4-d458-4dad-a18c-1902679a5d9a",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Touraine",
+    "secondLine": "Ici on parle d'ici",
+    "cover": "8bb007f4-d458-4dad-a18c-1902679a5d9a",
+    "favoriteUuid": null,
+    "startTime": null,
+    "endTime": null
+  },
+  "next": [
+    {
+      "firstLine": "ICI Touraine",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "8bb007f4-d458-4dad-a18c-1902679a5d9a",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "delayToRefresh": 10000
+}
+==================
+channel 48:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Vaucluse",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "68c80936-8244-4806-bce2-52a17536fb56",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Vaucluse",
+    "secondLine": "JANE BIRKIN • Les dessous chics",
+    "secondLineSongUuid": "b489eaa2-3062-48f7-8b1c-0379d509d42b",
+    "cover": "e3c4b79f-9270-4f89-be29-4b98d298e63e",
+    "favoriteUuid": "b489eaa2-3062-48f7-8b1c-0379d509d42b",
+    "startTime": 1769118579,
+    "endTime": 1769118704
+  },
+  "next": [
+    {
+      "firstLine": "ICI Vaucluse",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "68c80936-8244-4806-bce2-52a17536fb56",
+      "favoriteUuid": null,
+      "startTime": 1769112000,
+      "endTime": 1769119200
+    }
+  ],
+  "delayToRefresh": 130000
+}
+==================
+channel 49:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Azur",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "06460fe8-13db-4ec0-b98b-741c56a146d6",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Azur",
+    "secondLine": "Ici on parle d'ici",
+    "cover": "06460fe8-13db-4ec0-b98b-741c56a146d6",
+    "favoriteUuid": null,
+    "startTime": 1769112000,
+    "endTime": 1769119200
+  },
+  "next": [
+    {
+      "firstLine": "ICI Azur",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "06460fe8-13db-4ec0-b98b-741c56a146d6",
+      "favoriteUuid": null,
+      "startTime": 1769119200,
+      "endTime": 1769122800
+    }
+  ],
+  "delayToRefresh": 630000
+}
+==================
+channel 50:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Lorraine (Moselle et Pays Haut)",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "eafc9a23-a5c8-4988-bbf8-c473f70a04f2",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Lorraine (Moselle et Pays Haut)",
+    "secondLine": "JANE BIRKIN • Les dessous chics",
+    "secondLineSongUuid": "b489eaa2-3062-48f7-8b1c-0379d509d42b",
+    "cover": "e3c4b79f-9270-4f89-be29-4b98d298e63e",
+    "favoriteUuid": "b489eaa2-3062-48f7-8b1c-0379d509d42b",
+    "startTime": 1769118579,
+    "endTime": 1769118704
+  },
+  "next": [
+    {
+      "firstLine": "ICI Lorraine (Moselle et Pays Haut)",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "eafc9a23-a5c8-4988-bbf8-c473f70a04f2",
+      "favoriteUuid": null,
+      "startTime": 1769112000,
+      "endTime": 1769119200
+    }
+  ],
+  "delayToRefresh": 130000
+}
+==================
+channel 51:
+==================
+channel 52:
+==================
+channel 53:
+==================
+channel 54:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Poitou",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "2ef2cf02-387b-4bfb-8a92-87cde963efd9",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Poitou",
+    "secondLine": "Ici on parle d'ici",
+    "cover": "2ef2cf02-387b-4bfb-8a92-87cde963efd9",
+    "favoriteUuid": null,
+    "startTime": 1769112000,
+    "endTime": 1769119200
+  },
+  "next": [
+    {
+      "firstLine": "ICI Poitou",
+      "secondLine": "JANE BIRKIN • Les dessous chics",
+      "secondLineSongUuid": "b489eaa2-3062-48f7-8b1c-0379d509d42b",
+      "cover": "e3c4b79f-9270-4f89-be29-4b98d298e63e",
+      "favoriteUuid": "b489eaa2-3062-48f7-8b1c-0379d509d42b",
+      "startTime": 1769118579,
+      "endTime": 1769118704
+    }
+  ],
+  "delayToRefresh": 10000
+}
+==================
+channel 55:
+==================
+channel 56:
+{
+  "prev": [
+    {
+      "firstLine": "ICI",
+      "secondLine": null,
+      "cover": "68e71e8f-5697-4f74-88e9-868f8a82f3e4",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI",
+    "secondLine": "JANE BIRKIN • Les dessous chics",
+    "secondLineSongUuid": "b489eaa2-3062-48f7-8b1c-0379d509d42b",
+    "cover": "e3c4b79f-9270-4f89-be29-4b98d298e63e",
+    "favoriteUuid": "b489eaa2-3062-48f7-8b1c-0379d509d42b",
+    "startTime": 1769118579,
+    "endTime": 1769118704
+  },
+  "next": [
+    {
+      "firstLine": "ICI",
+      "secondLine": null,
+      "cover": "68e71e8f-5697-4f74-88e9-868f8a82f3e4",
+      "favoriteUuid": null,
+      "startTime": 1769112000,
+      "endTime": 1769119200
+    }
+  ],
+  "delayToRefresh": 130000
+}
+==================
+channel 57:
+==================
+channel 58:
+==================
+channel 59:
+==================
+channel 60:
+==================
+channel 61:
+==================
+channel 62:
+==================
+channel 63:
+==================
+channel 64:
+{
+  "prev": [
+    {
+      "firstLine": "FIP Rock",
+      "secondLine": "De Bowie à Radiohead, de Lou Reed à Miossec, notre mix rock des genres et des générations",
+      "cover": "cda37279-f985-4017-bc03-2dad643c7306",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "FIP Rock",
+    "secondLine": "Cream • Sunshine of your love",
+    "secondLineSongUuid": "461c3fac-1bc8-4020-bade-2f1aed633f54",
+    "cover": "3cf7e317-8d59-4708-a8a8-be09063d7eff",
+    "favoriteUuid": "461c3fac-1bc8-4020-bade-2f1aed633f54",
+    "startTime": 1769118358,
+    "endTime": 1769118605
+  },
+  "next": [
+    {
+      "firstLine": "FIP Rock",
+      "secondLine": "The Bees • Stand",
+      "secondLineSongUuid": "77bd2968-5062-4f35-86da-ac1f856cdf9e",
+      "cover": "21528c73-d494-465d-a9a5-8b14bca8a741",
+      "favoriteUuid": "77bd2968-5062-4f35-86da-ac1f856cdf9e",
+      "startTime": 1769118604,
+      "endTime": 1769118852
+    }
+  ],
+  "delayToRefresh": 30000
+}
+==================
+channel 65:
+{
+  "prev": [
+    {
+      "firstLine": "FIP Jazz",
+      "secondLine": "Bebop, afro jazz, salsa, bossa, blues, tout le jazz, ses cousins et ses cousines",
+      "cover": "2de59c50-9912-401e-9d1f-95a2f0b66567",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "FIP Jazz",
+    "secondLine": "Lionel Hampton • Lullaby of birdland",
+    "secondLineSongUuid": "3100108b-5f86-416a-b713-abd3ed4899f7",
+    "cover": "96cda68f-de7e-4527-aa74-2e226e76fb8f",
+    "favoriteUuid": "3100108b-5f86-416a-b713-abd3ed4899f7",
+    "startTime": 1769118390,
+    "endTime": 1769118796
+  },
+  "next": [
+    {
+      "firstLine": "FIP Jazz",
+      "secondLine": "Christian McBride • The ballad of the little girl dancer",
+      "secondLineSongUuid": "db746672-c397-4c3a-b71b-a51025030202",
+      "cover": "0e888036-b091-47ab-964e-4c80bfb31030",
+      "favoriteUuid": "db746672-c397-4c3a-b71b-a51025030202",
+      "startTime": 1769118795,
+      "endTime": 1769119126
+    }
+  ],
+  "delayToRefresh": 240000
+}
+==================
+channel 66:
+{
+  "prev": [
+    {
+      "firstLine": "FIP Groove",
+      "secondLine": "Gardez le rythme avec notre sélection dance ou Motown, funk, trip-hop, R'n'B et disco",
+      "cover": "95cf76c3-26bc-404e-be1c-b81666188c3f",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "FIP Groove",
+    "secondLine": "Say She She • C'est si bon",
+    "secondLineSongUuid": "1db1f15b-33f4-4511-afbf-6395f00f9968",
+    "cover": "6a5b0ed3-a932-40da-949f-67ee94a44a46",
+    "favoriteUuid": "1db1f15b-33f4-4511-afbf-6395f00f9968",
+    "startTime": 1769118579,
+    "endTime": 1769118811
+  },
+  "next": [
+    {
+      "firstLine": "FIP Groove",
+      "secondLine": "Gardez le rythme avec notre sélection dance ou Motown, funk, trip-hop, R'n'B et disco",
+      "cover": "95cf76c3-26bc-404e-be1c-b81666188c3f",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "delayToRefresh": 240000
+}
+==================
+channel 67:
+==================
+channel 68:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Paris Île-de-France",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "aa396eeb-f9fa-4b9d-84fd-a56f2efeb296",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Paris Île-de-France",
+    "secondLine": "Ici on parle d'ici",
+    "cover": "aa396eeb-f9fa-4b9d-84fd-a56f2efeb296",
+    "favoriteUuid": null,
+    "startTime": 1769112000,
+    "endTime": 1769119200
+  },
+  "next": [
+    {
+      "firstLine": "ICI Paris Île-de-France",
+      "secondLine": "JANE BIRKIN • Les dessous chics",
+      "secondLineSongUuid": "b489eaa2-3062-48f7-8b1c-0379d509d42b",
+      "cover": "e3c4b79f-9270-4f89-be29-4b98d298e63e",
+      "favoriteUuid": "b489eaa2-3062-48f7-8b1c-0379d509d42b",
+      "startTime": 1769118579,
+      "endTime": 1769118704
+    }
+  ],
+  "delayToRefresh": 10000
+}
+==================
+channel 69:
+{
+  "prev": [
+    {
+      "firstLine": "FIP Monde",
+      "secondLine": "Un tour du monde en quelques heures, une épopée musicale qui traverse les continents",
+      "cover": "524fabe1-7645-4847-aa93-932d9835de67",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "FIP Monde",
+    "secondLine": "Leo Blomov • Sob as estrelas",
+    "secondLineSongUuid": "d12d3171-e73e-4604-8abc-139f85965a28",
+    "cover": "ea0415c6-afe2-4eb3-a43c-0370e2ee38b0",
+    "favoriteUuid": "d12d3171-e73e-4604-8abc-139f85965a28",
+    "startTime": 1769118378,
+    "endTime": 1769118583
+  },
+  "next": [
+    {
+      "firstLine": "FIP Monde",
+      "secondLine": "Farhot • Mars",
+      "secondLineSongUuid": "1a9086ff-a932-4d8f-ad9a-75071d7d0925",
+      "cover": "ff6b3a7f-83be-49ed-ac8d-8d5a6a9ec463",
+      "favoriteUuid": "1a9086ff-a932-4d8f-ad9a-75071d7d0925",
+      "startTime": 1769118583,
+      "endTime": 1769118810
+    }
+  ],
+  "delayToRefresh": 30000
+}
+==================
+channel 70:
+{
+  "prev": [
+    {
+      "firstLine": "FIP Nouveautés",
+      "secondLine": "On ne les entend que sur FIP mais demain… Toutes nos découvertes sont ici",
+      "cover": "9f85ac9d-1151-429a-9645-d030e92b441f",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "FIP Nouveautés",
+    "secondLine": "Dijon • Loyal & Marie",
+    "secondLineSongUuid": "58206af8-589b-4dad-b373-11f4233a3b78",
+    "cover": "d5c7a594-680c-4a38-afc1-be55225359e7",
+    "favoriteUuid": "58206af8-589b-4dad-b373-11f4233a3b78",
+    "startTime": 1769118530,
+    "endTime": 1769118683
+  },
+  "next": [
+    {
+      "firstLine": "FIP Nouveautés",
+      "secondLine": "Pinkpantheress • Girl like me (feat. Oklou)",
+      "secondLineSongUuid": "a0bd10b2-8b78-4f71-8cd2-52ad783c836b",
+      "cover": "9f3646bc-9caa-4c91-a476-c07b9cb4a51a",
+      "favoriteUuid": "a0bd10b2-8b78-4f71-8cd2-52ad783c836b",
+      "startTime": 1769118682,
+      "endTime": 1769118841
+    }
+  ],
+  "delayToRefresh": 110000
+}
+==================
+channel 71:
+{
+  "prev": [
+    {
+      "firstLine": "FIP Reggae",
+      "secondLine": "Des Toots à Biga Ranx, des Clash à DJ Vadim, un voyage vers Zion et au-delà",
+      "cover": "a242c7c5-bf1e-468b-9cb9-2154550f8be7",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "FIP Reggae",
+    "secondLine": "Don Drummond • Eastern standard time",
+    "secondLineSongUuid": "05a294f1-b069-4e12-90a2-a13aaed85bbb",
+    "cover": "883da212-c9a0-4582-bf2e-b2d1422180a2",
+    "favoriteUuid": "05a294f1-b069-4e12-90a2-a13aaed85bbb",
+    "startTime": 1769118576,
+    "endTime": 1769118763
+  },
+  "next": [
+    {
+      "firstLine": "FIP Reggae",
+      "secondLine": "Higgs & Wilson • Mighty man",
+      "secondLineSongUuid": "5bef05fe-ba0a-40ff-abcb-aaf5b73bccb9",
+      "cover": "192141a0-3d93-4ae4-95a6-f4df6615acc1",
+      "favoriteUuid": "5bef05fe-ba0a-40ff-abcb-aaf5b73bccb9",
+      "startTime": 1769118762,
+      "endTime": 1769118876
+    }
+  ],
+  "delayToRefresh": 190000
+}
+==================
+channel 72:
+==================
+channel 73:
+{
+  "prev": [
+    {
+      "firstLine": "WR FIP TEST",
+      "secondLine": "tests",
+      "cover": null,
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "WR FIP TEST",
+    "secondLine": "tests",
+    "cover": null,
+    "favoriteUuid": null,
+    "startTime": null,
+    "endTime": null
+  },
+  "next": [
+    {
+      "firstLine": "WR FIP TEST",
+      "secondLine": "tests",
+      "cover": null,
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "delayToRefresh": 10000
+}
+==================
+channel 74:
+{
+  "prev": [
+    {
+      "firstLine": "FIP Electro",
+      "secondLine": "De Air à Soulwax, de Superpoze à Tosca, gardez le kick avec notre sélection électronique",
+      "cover": "bf85964f-395a-4e6a-beb4-6cc0590d20bb",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "FIP Electro",
+    "secondLine": "Paperclip People • The climax",
+    "secondLineSongUuid": "cead6ea6-35ae-4cc8-b8c0-763d0820b876",
+    "cover": "047f85cb-0ba7-4c5b-acb4-ac03cc5215a9",
+    "favoriteUuid": "cead6ea6-35ae-4cc8-b8c0-763d0820b876",
+    "startTime": 1769118418,
+    "endTime": 1769118813
+  },
+  "next": [
+    {
+      "firstLine": "FIP Electro",
+      "secondLine": "Mad Rey • Right time (original mix)",
+      "secondLineSongUuid": "572a155f-cfaa-4849-8705-05b01fbe1748",
+      "cover": "7a3aeccd-62b5-46bf-b1b5-2d4552fceb6f",
+      "favoriteUuid": "572a155f-cfaa-4849-8705-05b01fbe1748",
+      "startTime": 1769118813,
+      "endTime": 1769119254
+    }
+  ],
+  "delayToRefresh": 240000
+}
+==================
+channel 75:
+{
+  "prev": [
+    {
+      "firstLine": "Mouv' 100% Mix",
+      "secondLine": "La radio des meilleurs Mix DJ",
+      "cover": "171dd098-523d-418a-9b2f-d94ad5c5092d",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "Mouv' 100% Mix",
+    "secondLine": "La radio des meilleurs Mix DJ",
+    "cover": "171dd098-523d-418a-9b2f-d94ad5c5092d",
+    "favoriteUuid": null,
+    "startTime": null,
+    "endTime": null
+  },
+  "next": [
+    {
+      "firstLine": "Mouv' 100% Mix",
+      "secondLine": "La radio des meilleurs Mix DJ",
+      "cover": "171dd098-523d-418a-9b2f-d94ad5c5092d",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "delayToRefresh": 10000
+}
+==================
+channel 76:
+==================
+channel 77:
+{
+  "prev": [
+    {
+      "firstLine": "FIP Metal",
+      "secondLine": "Le mix Metal éclectique de Black Sabbath à Deafheaven, de Gojira à Rammstein...",
+      "cover": "a3406ba2-41d4-4a94-89a2-c45470d606ff",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "FIP Metal",
+    "secondLine": "Dear Deceased • River",
+    "secondLineSongUuid": "f501ad5f-920a-4338-b8f0-a31e41642022",
+    "cover": "8dc8c156-962b-4195-874a-28c24c87d449",
+    "favoriteUuid": "f501ad5f-920a-4338-b8f0-a31e41642022",
+    "startTime": 1769118337,
+    "endTime": 1769118574
+  },
+  "next": [
+    {
+      "firstLine": "FIP Metal",
+      "secondLine": "Sarcator • The deep ends",
+      "secondLineSongUuid": "456507a3-c0a9-46ef-8eae-89217e305202",
+      "cover": "32ea32f0-ba2f-41e1-a505-e71c56b44ecf",
+      "favoriteUuid": "456507a3-c0a9-46ef-8eae-89217e305202",
+      "startTime": 1769118574,
+      "endTime": 1769118913
+    }
+  ],
+  "delayToRefresh": 20000
+}
+==================
+channel 78:
+{
+  "prev": [
+    {
+      "firstLine": "FIP Pop",
+      "secondLine": "De l'indie-rock à la synth-wave, de la brit-pop à la scène française",
+      "cover": "867b3aac-d06c-4f79-85a3-fc1565526889",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "FIP Pop",
+    "secondLine": "Evergreen • Voices in your head",
+    "secondLineSongUuid": "b6d6d31f-8130-4115-a6d7-16610259767c",
+    "cover": "064b1692-5019-41f6-bb2d-d630be92d9fb",
+    "favoriteUuid": "b6d6d31f-8130-4115-a6d7-16610259767c",
+    "startTime": 1769118557,
+    "endTime": 1769118808
+  },
+  "next": [
+    {
+      "firstLine": "FIP Pop",
+      "secondLine": "Zombies • Time of the season",
+      "secondLineSongUuid": "e923e1e8-4d6f-41cd-b1e7-d8b694139eff",
+      "cover": "1abec25e-d1f9-4321-af02-781399a664e8",
+      "favoriteUuid": "e923e1e8-4d6f-41cd-b1e7-d8b694139eff",
+      "startTime": 1769118807,
+      "endTime": 1769118998
+    }
+  ],
+  "delayToRefresh": 230000
+}
+==================
+channel 79:
+==================
+channel 80:
+==================
+channel 81:
+==================
+channel 82:
+==================
+channel 83:
+==================
+channel 84:
+==================
+channel 85:
+==================
+channel 86:
+==================
+channel 87:
+==================
+channel 88:
+==================
+channel 89:
+==================
+channel 90:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Elsass",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "303be539-4fe2-4c8c-9b48-f5d0bc7b637f",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Elsass",
+    "secondLine": "Ici on parle d'ici",
+    "cover": "303be539-4fe2-4c8c-9b48-f5d0bc7b637f",
+    "favoriteUuid": null,
+    "startTime": 1769112000,
+    "endTime": 1769119200
+  },
+  "next": [
+    {
+      "firstLine": "ICI Elsass",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "303be539-4fe2-4c8c-9b48-f5d0bc7b637f",
+      "favoriteUuid": null,
+      "startTime": 1769119200,
+      "endTime": 1769122800
+    }
+  ],
+  "delayToRefresh": 630000
+}
+==================
+channel 91:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Maine",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "ea9da570-4e6e-4212-b5fa-2bcd1bdb1e3a",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Maine",
+    "secondLine": "Ici on parle d'ici",
+    "cover": "ea9da570-4e6e-4212-b5fa-2bcd1bdb1e3a",
+    "favoriteUuid": null,
+    "startTime": 1769108400,
+    "endTime": 1769122800
+  },
+  "next": [
+    {
+      "firstLine": "ICI Maine",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "ea9da570-4e6e-4212-b5fa-2bcd1bdb1e3a",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "delayToRefresh": 10000
+}
+==================
+channel 92:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Occitanie",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "84e39c1c-1ade-430d-ba5e-a2cb35a76771",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Occitanie",
+    "secondLine": "JANE BIRKIN • Les dessous chics",
+    "secondLineSongUuid": "b489eaa2-3062-48f7-8b1c-0379d509d42b",
+    "cover": "e3c4b79f-9270-4f89-be29-4b98d298e63e",
+    "favoriteUuid": "b489eaa2-3062-48f7-8b1c-0379d509d42b",
+    "startTime": 1769118579,
+    "endTime": 1769118704
+  },
+  "next": [
+    {
+      "firstLine": "ICI Occitanie",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "84e39c1c-1ade-430d-ba5e-a2cb35a76771",
+      "favoriteUuid": null,
+      "startTime": 1769112000,
+      "endTime": 1769119200
+    }
+  ],
+  "delayToRefresh": 130000
+}
+==================
+channel 93:
+{
+  "prev": [
+    {
+      "firstLine": "ICI Saint-Étienne Loire",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "17f5ec94-e96a-442f-9bf8-6f8c3798605c",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "ICI Saint-Étienne Loire",
+    "secondLine": "JANE BIRKIN • Les dessous chics",
+    "secondLineSongUuid": "b489eaa2-3062-48f7-8b1c-0379d509d42b",
+    "cover": "e3c4b79f-9270-4f89-be29-4b98d298e63e",
+    "favoriteUuid": "b489eaa2-3062-48f7-8b1c-0379d509d42b",
+    "startTime": 1769118579,
+    "endTime": 1769118704
+  },
+  "next": [
+    {
+      "firstLine": "ICI Saint-Étienne Loire",
+      "secondLine": "Ici on parle d'ici",
+      "cover": "17f5ec94-e96a-442f-9bf8-6f8c3798605c",
+      "favoriteUuid": null,
+      "startTime": 1769112000,
+      "endTime": 1769119200
+    }
+  ],
+  "delayToRefresh": 130000
+}
+==================
+channel 94:
+==================
+channel 95:
+{
+  "prev": [
+    {
+      "firstLine": "FIP Hip-Hop",
+      "secondLine": "Écoutez une programmation qui explore le passé, le présent et le futur du hip-hop. Des Last Poets à Little Simz, de Nujabes à Alpha Wann, plongez dans toute la richesse du rap mondial.",
+      "cover": "5c52d959-7ea2-4c9e-b298-5aab893a9b86",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "FIP Hip-Hop",
+    "secondLine": "Nerd • Hypnotize U",
+    "secondLineSongUuid": "97a41423-8d56-4d67-b7e4-b98b84baf098",
+    "cover": "d1a3b0ac-1b85-4a28-893a-5d1572fc7a3c",
+    "favoriteUuid": "97a41423-8d56-4d67-b7e4-b98b84baf098",
+    "startTime": 1769118334,
+    "endTime": 1769118588
+  },
+  "next": [
+    {
+      "firstLine": "FIP Hip-Hop",
+      "secondLine": "Twit One • Chick",
+      "secondLineSongUuid": "a104ec93-16db-412a-b6f8-07de18195cbe",
+      "cover": "b6efeca4-bb00-453d-a1ae-d6c586010712",
+      "favoriteUuid": "a104ec93-16db-412a-b6f8-07de18195cbe",
+      "startTime": 1769118587,
+      "endTime": 1769118721
+    }
+  ],
+  "delayToRefresh": 10000
+}
+==================
+channel 96:
+{
+  "prev": [
+    {
+      "firstLine": "FIP Sacré français !",
+      "secondLine": "La webradio préférée des Francophiles et Anglophobes !",
+      "cover": "1641a25c-e8c8-49f8-b5e1-cffd8b722231",
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "FIP Sacré français !",
+    "secondLine": "Dominique A • La retraite à Miami",
+    "secondLineSongUuid": "bb8fa1e1-e1b6-4095-a094-405e76d81cf5",
+    "cover": "da5afd89-67f6-4bb8-8739-79cef3873b5a",
+    "favoriteUuid": "bb8fa1e1-e1b6-4095-a094-405e76d81cf5",
+    "startTime": 1769118538,
+    "endTime": 1769118753
+  },
+  "next": [
+    {
+      "firstLine": "FIP Sacré français !",
+      "secondLine": "Fredda • Les flots bleus",
+      "secondLineSongUuid": "083f5a21-4d5f-43a2-9b7c-0ad4a0538dfe",
+      "cover": "6a449255-1eef-4a0b-8e46-870117c51716",
+      "favoriteUuid": "083f5a21-4d5f-43a2-9b7c-0ad4a0538dfe",
+      "startTime": 1769118753,
+      "endTime": 1769118951
+    }
+  ],
+  "delayToRefresh": 180000
+}
+==================
+channel 97:
+==================
+channel 98:
+==================
+channel 99:
+{
+  "prev": [
+    {
+      "firstLine": "Formation",
+      "secondLine": null,
+      "cover": null,
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "Formation",
+    "secondLine": null,
+    "cover": null,
+    "favoriteUuid": null,
+    "startTime": null,
+    "endTime": null
+  },
+  "next": [
+    {
+      "firstLine": "Formation",
+      "secondLine": null,
+      "cover": null,
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "delayToRefresh": 10000
+}
+==================
+channel 100:
+{
+  "prev": [
+    {
+      "firstLine": "Station de test",
+      "secondLine": null,
+      "cover": null,
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "now": {
+    "firstLine": "Station de test",
+    "secondLine": null,
+    "cover": null,
+    "favoriteUuid": null,
+    "startTime": null,
+    "endTime": null
+  },
+  "next": [
+    {
+      "firstLine": "Station de test",
+      "secondLine": null,
+      "cover": null,
+      "favoriteUuid": null,
+      "startTime": null,
+      "endTime": null
+    }
+  ],
+  "delayToRefresh": 10000
+}
+==================
+channel 101:
+==================
+channel 102:
+==================
+channel 103:
+==================
+channel 104:
+==================
+channel 105:
+==================
+channel 106:
+==================
+channel 107:
+==================
+channel 108:
+==================
+channel 109:
+==================
+channel 110:
+==================
+channel 111:
+==================
+channel 112:
+==================
+channel 113:
+==================
+channel 114:
+==================
+channel 115:
+==================
+channel 116:
+==================
+channel 117:
+==================
+channel 118:
+==================
+channel 119:
+==================
+channel 120:
+==================
+channel 121:
+==================
+channel 122:
+==================
+channel 123:
+==================
+channel 124:
+==================
+channel 125:
+==================
+channel 126:
+==================
+channel 127:
+==================
+channel 128:
+==================
+channel 129:
+==================
+channel 130:
+==================
+channel 131:
+==================
+channel 132:
+==================
+channel 133:
+==================
+channel 134:
+==================
+channel 135:
+==================
+channel 136:
+==================
+channel 137:
+==================
+channel 138:
+==================
+channel 139:
+==================
+channel 140:
+==================
+channel 141:
+==================
+channel 142:
+==================
+channel 143:
+==================
+channel 144:
+==================
+channel 145:
+==================
+channel 146:
+==================
+channel 147:
+==================
+channel 148:
+==================
+channel 149:
+==================
+channel 150:
+==================
+channel 151:
+==================
+channel 152:
+==================
+channel 153:
+==================
+channel 154:
+==================
+channel 155:
+==================
+channel 156:
+==================
+channel 157:
+==================
+channel 158:
+==================
+channel 159:
+==================
+channel 160:
+==================
+channel 161:
+==================
+channel 162:
+==================
+channel 163:
+==================
+channel 164:
+==================
+channel 165:
+==================
+channel 166:
+==================
+channel 167:
+==================
+channel 168:
+==================
+channel 169:
+==================
+channel 170:
+==================
+channel 171:
+==================
+channel 172:
+==================
+channel 173:
+==================
+channel 174:
+==================
+channel 175:
+==================
+channel 176:
+==================
+channel 177:
+==================
+channel 178:
+==================
+channel 179:
+==================
+channel 180:
+==================
+channel 181:
+==================
+channel 182:
+==================
+channel 183:
+==================
+channel 184:
+==================
+channel 185:
+==================
+channel 186:
+==================
+channel 187:
+==================
+channel 188:
+==================
+channel 189:
+==================
+channel 190:
+==================
+channel 191:
+==================
+channel 192:
+==================
+channel 193:
+==================
+channel 194:
+==================
+channel 195:
+==================
+channel 196:
+==================
+channel 197:
+==================
+channel 198:
+==================
+channel 199:
