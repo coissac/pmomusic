@@ -52,10 +52,12 @@
 //! When the `pmoconfig` feature is enabled, this crate provides a configuration
 //! extension trait for caching station lists:
 //!
-//! ```rust,ignore
+//! ```no_run
 //! use pmoconfig::get_config;
-//! use pmoradiofrance::RadioFranceConfigExt;
+//! use pmoradiofrance::{RadioFranceConfigExt, RadioFranceClient};
 //!
+//! # #[tokio::main]
+//! # async fn main() -> anyhow::Result<()> {
 //! let config = get_config();
 //!
 //! // Check cached stations (default TTL: 7 days)
@@ -67,6 +69,8 @@
 //!     let stations = client.discover_all_stations().await?;
 //!     config.set_radiofrance_cached_stations(&stations)?;
 //! }
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! # API Rate Limiting
@@ -91,6 +95,12 @@ pub mod models;
 #[cfg(feature = "pmoconfig")]
 pub mod config_ext;
 
+#[cfg(feature = "pmoconfig")]
+pub mod stateful_client;
+
+#[cfg(feature = "playlist")]
+pub mod playlist;
+
 // Re-exports
 pub use client::{ClientBuilder, RadioFranceClient};
 pub use error::{Error, Result};
@@ -101,3 +111,9 @@ pub use models::{
 
 #[cfg(feature = "pmoconfig")]
 pub use config_ext::RadioFranceConfigExt;
+
+#[cfg(feature = "pmoconfig")]
+pub use stateful_client::RadioFranceStatefulClient;
+
+#[cfg(feature = "playlist")]
+pub use playlist::{StationGroup, StationGroups, StationPlaylist};

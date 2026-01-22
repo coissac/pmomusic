@@ -11,10 +11,11 @@
 //!
 //! # Exemple
 //!
-//! ```rust,ignore
+//! ```no_run
 //! use pmoconfig::get_config;
 //! use pmoradiofrance::RadioFranceConfigExt;
 //!
+//! # fn main() -> anyhow::Result<()> {
 //! let config = get_config();
 //!
 //! // Check if enabled
@@ -27,6 +28,8 @@
 //! if let Some(cached) = config.get_radiofrance_cached_stations()? {
 //!     println!("Found {} cached stations", cached.stations.len());
 //! }
+//! # Ok(())
+//! # }
 //! ```
 
 use crate::models::{CachedStationList, Station};
@@ -121,7 +124,11 @@ pub trait RadioFranceConfigExt {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```no_run
+    /// # use pmoconfig::get_config;
+    /// # use pmoradiofrance::{RadioFranceConfigExt, RadioFranceClient};
+    /// # #[tokio::main]
+    /// # async fn main() -> anyhow::Result<()> {
     /// let config = get_config();
     /// let stations = if let Some(cached) = config.get_radiofrance_stations_cached()? {
     ///     cached
@@ -131,6 +138,8 @@ pub trait RadioFranceConfigExt {
     ///     config.set_radiofrance_cached_stations(&discovered)?;
     ///     discovered
     /// };
+    /// # Ok(())
+    /// # }
     /// ```
     fn get_radiofrance_stations_cached(&self) -> Result<Option<Vec<Station>>>;
 }

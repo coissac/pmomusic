@@ -42,6 +42,9 @@ regex = "1.11"
 # Common music source traits
 pmosource = { path = "../pmosource" }
 
+# DIDL-Lite structures (for playlist support)
+pmodidl = { path = "../pmodidl", optional = true }
+
 # Configuration support
 pmoconfig = { path = "../pmoconfig", optional = true }
 
@@ -59,7 +62,7 @@ pmoconfig = ["dep:pmoconfig"]
 # Feature for cache support
 cache = ["dep:pmocovers", "dep:pmoaudiocache"]
 # Feature for playlist/FIFO support
-playlist = ["dep:pmoplaylist"]
+playlist = ["dep:pmoplaylist", "dep:pmodidl"]
 # Feature for logging (tracing)
 logging = []
 # Feature for server support (cache registry)

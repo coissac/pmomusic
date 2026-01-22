@@ -50,6 +50,10 @@ pub enum Error {
     #[error("Request timeout")]
     Timeout,
 
+    /// Configuration error (from pmoconfig/anyhow)
+    #[error("Configuration error: {0}")]
+    Config(#[from] anyhow::Error),
+
     /// Generic error
     #[error("{0}")]
     Other(String),
