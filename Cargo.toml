@@ -16,10 +16,12 @@ members = [
     "pmoaudio",
     "pmoqobuz",
     "pmoparadise",
+    "pmoradiofrance",
     "pmosource",
     "pmoplaylist",
     "pmoflac",
-    "pmometadata", "pmocontrol",
+    "pmometadata",
+    "pmocontrol",
 ]
 
 [workspace.dependencies]
