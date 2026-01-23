@@ -53,6 +53,9 @@ pub struct RadioFranceSource {
 
     /// Last change timestamp
     last_change: Arc<RwLock<Option<SystemTime>>>,
+
+    /// Callback for notifying container updates (UPnP GENA)
+    container_notifier: Option<Arc<dyn Fn(&[String]) + Send + Sync + 'static>>,
 }
 
 impl RadioFranceSource {
@@ -87,7 +90,17 @@ impl RadioFranceSource {
             server_base_url: None,
             update_id: Arc::new(RwLock::new(0)),
             last_change: Arc::new(RwLock::new(None)),
+            container_notifier: None,
         })
+    }
+
+    /// Set the container notifier for UPnP GENA events
+    pub fn with_container_notifier(
+        mut self,
+        notifier: Arc<dyn Fn(&[String]) + Send + Sync + 'static>,
+    ) -> Self {
+        self.container_notifier = Some(notifier);
+        self
     }
 
     /// Set the cover cache
@@ -133,6 +146,7 @@ impl RadioFranceSource {
             server_base_url: Some(base_url.into()),
             update_id: Arc::new(RwLock::new(0)),
             last_change: Arc::new(RwLock::new(None)),
+            container_notifier: None,
         })
     }
 
@@ -150,6 +164,7 @@ impl RadioFranceSource {
         let slug = station_slug.to_string();
         let update_id = self.update_id.clone();
         let last_change = self.last_change.clone();
+        let container_notifier = self.container_notifier.clone();
 
         #[cfg(feature = "cache")]
         let cover_cache = self.cover_cache.clone();
@@ -178,6 +193,13 @@ impl RadioFranceSource {
                                 // Update change tracking
                                 *update_id.write().await = update_id.read().await.wrapping_add(1);
                                 *last_change.write().await = Some(SystemTime::now());
+
+                                // Notify UPnP ContentDirectory of the change
+                                if let Some(ref notifier) = container_notifier {
+                                    // Notify the station's stream item container
+                                    let container_id = format!("radiofrance:{}", slug);
+                                    notifier(&[container_id]);
+                                }
                             }
                         }
 
@@ -193,6 +215,13 @@ impl RadioFranceSource {
                                 // Update change tracking
                                 *update_id.write().await = update_id.read().await.wrapping_add(1);
                                 *last_change.write().await = Some(SystemTime::now());
+
+                                // Notify UPnP ContentDirectory of the change
+                                if let Some(ref notifier) = container_notifier {
+                                    // Notify the station's stream item container
+                                    let container_id = format!("radiofrance:{}", slug);
+                                    notifier(&[container_id]);
+                                }
                             }
                         }
 

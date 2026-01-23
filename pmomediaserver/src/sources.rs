@@ -3,6 +3,7 @@
 //! Ce module fournit des helpers pour créer et enregistrer facilement des sources
 //! musicales préconfigurées à partir de la configuration système.
 
+use crate::contentdirectory::state;
 use pmoserver::Server;
 use pmosource::MusicSourceExt;
 use std::sync::Arc;
@@ -261,6 +262,13 @@ impl SourcesExt for Server {
         let source = RadioFranceSource::from_registry(client, base_url).map_err(|e| {
             SourceInitError::RadioFranceError(format!("Failed to create source: {}", e))
         })?;
+
+        // Configurer le notifier pour les événements UPnP GENA
+        let notifier = Arc::new(|containers: &[String]| {
+            let refs: Vec<&str> = containers.iter().map(|s| s.as_str()).collect();
+            state::notify_containers_updated(&refs);
+        });
+        let source = source.with_container_notifier(notifier);
 
         // Enregistrer la source
         self.register_music_source(Arc::new(source)).await;
