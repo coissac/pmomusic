@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 pmoupnp = { path = "../pmoupnp" }
 pmodidl = { path = "../pmodidl" }
+pmoutils = { path = "../pmoutils" }
 quick-xml = { workspace = true }
 thiserror = { workspace = true }
 ureq = "3.1.4"

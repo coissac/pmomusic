@@ -1245,33 +1245,46 @@ pub(crate) fn build_didl_lite_metadata(
     uri: &str,
     protocol_info: &str,
 ) -> String {
-    format!(
-        r#"<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/">
-<item id="0" parentID="-1" restricted="1">
-<dc:title>{}</dc:title>
-<dc:creator>{}</dc:creator>
-<upnp:artist>{}</upnp:artist>
-<upnp:album>{}</upnp:album>
-{}
-<res protocolInfo="{}">{}</res>
-</item>
-</DIDL-Lite>"#,
-        metadata.title.as_deref().unwrap_or("Unknown Title"),
-        metadata
-            .creator
-            .as_deref()
-            .or(metadata.artist.as_deref())
-            .unwrap_or("Unknown Artist"),
-        metadata.artist.as_deref().unwrap_or("Unknown Artist"),
-        metadata.album.as_deref().unwrap_or("Unknown Album"),
-        metadata
-            .album_art_uri
-            .as_ref()
-            .map(|art_uri| format!("<upnp:albumArtURI>{}</upnp:albumArtURI>", art_uri))
-            .unwrap_or_default(),
-        protocol_info,
-        uri
-    )
+    use pmodidl::{DIDLLite, Item, Resource};
+    use pmoutils::ToXmlElement;
+
+    // Construire l'Item DIDL avec toutes les métadonnées
+    let item = Item {
+        id: "0".to_string(),
+        parent_id: "-1".to_string(),
+        restricted: Some("1".to_string()),
+        title: metadata
+            .title
+            .clone()
+            .unwrap_or_else(|| "Unknown Title".to_string()),
+        creator: metadata.creator.clone().or_else(|| metadata.artist.clone()),
+        class: "object.item.audioItem.musicTrack".to_string(),
+        artist: metadata.artist.clone(),
+        album: metadata.album.clone(),
+        genre: metadata.genre.clone(),
+        album_art: metadata.album_art_uri.clone(),
+        album_art_pk: None,
+        date: metadata.date.clone(),
+        original_track_number: metadata.track_number.clone(),
+        resources: vec![Resource {
+            protocol_info: protocol_info.to_string(),
+            bits_per_sample: None,
+            sample_frequency: None,
+            nr_audio_channels: None,
+            duration: metadata.duration.clone(),
+            url: uri.to_string(),
+        }],
+        descriptions: vec![],
+    };
+
+    // Construire le DIDL-Lite complet
+    let didl = DIDLLite {
+        items: vec![item],
+        ..Default::default()
+    };
+
+    // Sérialiser en XML via pmodidl
+    didl.to_xml()
 }
 
 impl DeviceIdentity for MusicRenderer {

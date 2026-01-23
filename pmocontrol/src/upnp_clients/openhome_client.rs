@@ -895,6 +895,7 @@ pub fn parse_track_metadata_from_didl(xml: &str) -> Option<TrackMetadata> {
         date: item.date.clone(),
         track_number: item.original_track_number.clone(),
         creator: item.creator.clone(),
+        duration: item.resources.first().and_then(|r| r.duration.clone()),
     })
 }
 

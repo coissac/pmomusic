@@ -327,15 +327,55 @@ impl PlaybackPosition for OpenHomeRenderer {
             }
         }
 
+        // Get duration from Time service, but fall back to DIDL metadata if duration is 0
+        let track_duration = if time_info.duration_secs == 0 {
+            // Try to extract duration from DIDL metadata
+            track_metadata_xml
+                .as_ref()
+                .and_then(|xml| parse_didl_duration_openhome(xml))
+        } else {
+            Some(format_hhmmss_u32(time_info.duration_secs))
+        };
+
+        tracing::trace!(
+            "OpenHome playback_position: duration_secs={}, track_duration={:?}",
+            time_info.duration_secs,
+            track_duration
+        );
+
         Ok(PlaybackPositionInfo {
             track: track_id,
             rel_time: Some(format_hhmmss_u32(time_info.elapsed_secs)),
             abs_time: None,
-            track_duration: Some(format_hhmmss_u32(time_info.duration_secs)),
+            track_duration,
             track_metadata: track_metadata_xml,
             track_uri,
         })
     }
+}
+
+/// Parse duration from DIDL-Lite metadata XML (OpenHome version)
+fn parse_didl_duration_openhome(didl: &str) -> Option<String> {
+    // Search for duration attribute in <res> element
+    let res_start = didl.find("<res ")?;
+    let after_res = &didl[res_start..];
+    let tag_close = after_res.find('>')?;
+    let tag_attrs = &after_res[..tag_close];
+
+    if let Some(duration_start) = tag_attrs.find("duration=\"") {
+        let duration_offset = duration_start + "duration=\"".len();
+        if let Some(duration_end) = tag_attrs[duration_offset..].find('"') {
+            let duration = &tag_attrs[duration_offset..duration_offset + duration_end];
+            tracing::info!(
+                "OpenHome: Extracted duration from DIDL metadata: {}",
+                duration
+            );
+            return Some(duration.to_string());
+        }
+    }
+
+    tracing::debug!("OpenHome: No duration found in DIDL metadata");
+    None
 }
 
 pub(crate) fn map_openhome_state(raw: &str) -> PlaybackState {

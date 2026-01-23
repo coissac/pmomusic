@@ -436,10 +436,16 @@ fn build_metadata_xml(item: &PlaybackItem) -> String {
     }
 
     let escaped_protocol_info = escape(item.protocol_info.as_str());
-    xml.push_str(&format!(
-        r#"<res protocolInfo="{}">{}</res>"#,
-        escaped_protocol_info, escaped_uri
-    ));
+
+    // Build <res> element with optional duration attribute
+    xml.push_str(&format!(r#"<res protocolInfo="{}""#, escaped_protocol_info));
+    if let Some(meta) = &item.metadata {
+        if let Some(duration) = meta.duration.as_deref() {
+            let escaped_duration = escape(duration);
+            xml.push_str(&format!(r#" duration="{}""#, escaped_duration));
+        }
+    }
+    xml.push_str(&format!(r#">{}</res>"#, escaped_uri));
     xml.push_str(r#"<upnp:class>object.item.audioItem.musicTrack</upnp:class></item></DIDL-Lite>"#);
     xml
 }

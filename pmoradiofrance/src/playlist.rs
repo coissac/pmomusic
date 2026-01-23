@@ -349,7 +349,7 @@ impl StationPlaylist {
         // Construction de la ressource (stream)
         let resource = Self::build_stream_resource(metadata);
 
-        Ok(Item {
+        let item = Item {
             id: format!("radiofrance:{}:stream", station.slug),
             parent_id: format!("radiofrance:{}", station.slug),
             restricted: Some("1".to_string()),
@@ -365,7 +365,19 @@ impl StationPlaylist {
             original_track_number: None,
             resources: vec![resource],
             descriptions: vec![],
-        })
+        };
+
+        #[cfg(feature = "logging")]
+        if let Some(res) = item.resources.first() {
+            tracing::info!(
+                "Item built for {}: title='{}', duration={:?}",
+                station.slug,
+                item.title,
+                res.duration
+            );
+        }
+
+        Ok(item)
     }
 
     /// Construit un Item UPnP depuis les métadonnées live (sans cache async)
@@ -606,6 +618,45 @@ impl StationPlaylist {
 
     /// Construit la ressource stream
     fn build_stream_resource(metadata: &LiveResponse) -> Resource {
+        // Calculer la durée restante (maintenant -> end_time)
+        // Cela permet au curseur de progresser de 0 jusqu'à la fin de l'émission
+        let duration = if let Some(end) = metadata.now.end_time {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+
+            #[cfg(feature = "logging")]
+            tracing::debug!(
+                "Calculating duration: end_time={}, now={}, diff={}",
+                end,
+                now,
+                end.saturating_sub(now)
+            );
+
+            if end > now {
+                let duration_secs = end - now;
+                // Format UPnP: H:MM:SS ou H:MM:SS.F
+                let hours = duration_secs / 3600;
+                let minutes = (duration_secs % 3600) / 60;
+                let seconds = duration_secs % 60;
+                let duration_str = format!("{}:{:02}:{:02}", hours, minutes, seconds);
+
+                #[cfg(feature = "logging")]
+                tracing::info!("Track duration set to: {}", duration_str);
+
+                Some(duration_str)
+            } else {
+                #[cfg(feature = "logging")]
+                tracing::warn!("end_time ({}) is in the past (now={})", end, now);
+                None
+            }
+        } else {
+            #[cfg(feature = "logging")]
+            tracing::debug!("No end_time available in metadata");
+            None
+        };
+
         // Trouver le meilleur stream HiFi
         let best_stream = metadata.now.media.best_hifi_stream();
 
@@ -640,14 +691,27 @@ impl StationPlaylist {
             }
         };
 
-        Resource {
+        let resource = Resource {
             protocol_info,
             bits_per_sample: None,
             sample_frequency,
             nr_audio_channels,
-            duration: None, // Stream live = pas de durée
+            duration: duration.clone(), // Durée calculée depuis start_time/end_time si disponible
             url,
-        }
+        };
+
+        #[cfg(feature = "logging")]
+        tracing::info!(
+            "Built resource with duration: {:?}, url: {}",
+            resource.duration,
+            if resource.url.is_empty() {
+                "<empty>"
+            } else {
+                &resource.url[..resource.url.len().min(50)]
+            }
+        );
+
+        resource
     }
 
     /// Retourne l'URL du stream

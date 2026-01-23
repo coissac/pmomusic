@@ -71,6 +71,15 @@ impl AvTransportClient {
     /// - `uri`  : CurrentURI
     /// - `meta` : CurrentURIMetaData (DIDL-Lite ou chaîne vide)
     pub fn set_av_transport_uri(&self, uri: &str, meta: &str) -> Result<(), ControlPointError> {
+        // Log le DIDL-Lite envoyé (limité pour éviter de polluer les logs)
+        if !meta.is_empty() {
+            tracing::debug!(
+                "SetAVTransportURI - URI: {}, MetaData: {}",
+                &uri[..uri.len().min(80)],
+                &meta[..meta.len().min(500)]
+            );
+        }
+
         let args = [
             ("InstanceID", "0"),
             ("CurrentURI", uri),

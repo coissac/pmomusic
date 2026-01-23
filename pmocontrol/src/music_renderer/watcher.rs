@@ -217,6 +217,7 @@ pub fn extract_track_metadata(position: &PlaybackPositionInfo) -> Option<TrackMe
         date: item.date.clone(),
         track_number: item.original_track_number.clone(),
         creator: item.creator.clone(),
+        duration: item.resources.first().and_then(|r| r.duration.clone()),
     })
 }
 
