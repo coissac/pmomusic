@@ -58,5 +58,6 @@ radiofrance = [
     "api",
     "dep:pmoradiofrance",
     "pmoradiofrance/server",
+    "pmoradiofrance/logging",
     "dep:pmoconfig"
 ]

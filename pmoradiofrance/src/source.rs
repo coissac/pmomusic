@@ -226,26 +226,61 @@ impl RadioFranceSource {
 
     /// Build the UPnP container tree dynamically from station data
     async fn build_container_tree(&self) -> Result<Container> {
+        #[cfg(feature = "logging")]
+        tracing::debug!("Building container tree");
+
         let stations = self.client.get_stations().await?;
         let groups = StationGroups::from_stations(stations);
+
+        #[cfg(feature = "logging")]
+        tracing::debug!(
+            "Groups: {} standalone, {} with webradios, {} local radios",
+            groups.standalone.len(),
+            groups.with_webradios.len(),
+            groups.local_radios.len()
+        );
 
         let mut containers = Vec::new();
         let mut items = Vec::new();
 
         // 1. Standalone stations → direct items (avec appels API)
+        #[cfg(feature = "logging")]
+        tracing::debug!(
+            "Building {} standalone station items",
+            groups.standalone.len()
+        );
+
         for station in &groups.standalone {
             items.push(self.build_station_item(station).await?);
         }
 
         // 2. Stations with webradios → containers
+        #[cfg(feature = "logging")]
+        tracing::debug!("Building {} group containers", groups.with_webradios.len());
+
         for group in &groups.with_webradios {
+            #[cfg(feature = "logging")]
+            tracing::debug!("Building container for group: {}", group.main.name);
             containers.push(self.build_station_container(group).await?);
         }
 
         // 3. Local radios → single "Radios ICI" container
+        #[cfg(feature = "logging")]
+        tracing::debug!(
+            "Building ICI container with {} local radios",
+            groups.local_radios.len()
+        );
+
         if !groups.local_radios.is_empty() {
             containers.push(self.build_ici_container(&groups.local_radios).await?);
         }
+
+        #[cfg(feature = "logging")]
+        tracing::debug!(
+            "Container tree built: {} containers, {} items",
+            containers.len(),
+            items.len()
+        );
 
         Ok(Container {
             id: "radiofrance".to_string(),
@@ -304,10 +339,19 @@ impl RadioFranceSource {
     ///
     /// Fetches live metadata to create a complete item with stream URL.
     async fn build_station_item(&self, station: &Station) -> Result<Item> {
+        #[cfg(feature = "logging")]
+        tracing::debug!(
+            "Building station item for: {} ({})",
+            station.name,
+            station.slug
+        );
+
         let playlists = self.playlists.read().await;
 
         // If we already have this station in cache, use it
         if let Some(existing) = playlists.get(&station.slug) {
+            #[cfg(feature = "logging")]
+            tracing::debug!("Using cached item for: {}", station.slug);
             return Ok(existing.stream_item.clone());
         }
 
@@ -335,8 +379,8 @@ impl RadioFranceSource {
         playlists_write.insert(station.slug.clone(), playlist.clone());
         drop(playlists_write);
 
-        // Start metadata refresh task
-        let _ = self.start_metadata_refresh(&station.slug).await;
+        // Note: We don't start metadata refresh here to avoid blocking during browse.
+        // Refresh will be started in resolve_uri() when the stream is actually played.
 
         Ok(playlist.stream_item)
     }
