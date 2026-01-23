@@ -87,7 +87,11 @@ impl StationGroups {
         for station in stations {
             match &station.station_type {
                 StationType::Main => {
-                    main_stations.insert(station.slug.clone(), station);
+                    // Filtrer France Bleu : ce n'est pas une vraie radio mais le nom générique
+                    // pour toutes les radios locales ICI (ex-France Bleu)
+                    if station.slug != "francebleu" {
+                        main_stations.insert(station.slug.clone(), station);
+                    }
                 }
                 StationType::Webradio { parent_station } => {
                     webradios_by_parent
@@ -235,9 +239,13 @@ impl StationPlaylist {
     }
 
     /// Construit une playlist sans cache de covers
-    pub fn from_live_metadata_no_cache(station: Station, metadata: &LiveResponse) -> Result<Self> {
+    pub fn from_live_metadata_no_cache(
+        station: Station,
+        metadata: &LiveResponse,
+        server_base_url: Option<&str>,
+    ) -> Result<Self> {
         let id = format!("radiofrance:{}", station.slug);
-        let stream_item = Self::build_item_from_metadata_sync(&station, metadata, None)?;
+        let stream_item = Self::build_item_from_metadata_sync(&station, metadata, server_base_url)?;
 
         Ok(Self {
             id,
@@ -285,7 +293,11 @@ impl StationPlaylist {
     }
 
     /// Met à jour les métadonnées sans cache
-    pub fn update_metadata_no_cache(&mut self, metadata: &LiveResponse) -> Result<()> {
+    pub fn update_metadata_no_cache(
+        &mut self,
+        metadata: &LiveResponse,
+        server_base_url: Option<&str>,
+    ) -> Result<()> {
         let old_url = self
             .stream_item
             .resources
@@ -293,7 +305,8 @@ impl StationPlaylist {
             .map(|r| r.url.clone())
             .unwrap_or_default();
 
-        let mut new_item = Self::build_item_from_metadata_sync(&self.station, metadata, None)?;
+        let mut new_item =
+            Self::build_item_from_metadata_sync(&self.station, metadata, server_base_url)?;
 
         if let Some(res) = new_item.resources.first_mut() {
             if !old_url.is_empty() {
@@ -320,7 +333,7 @@ impl StationPlaylist {
         let (album_art, album_art_pk) = if let Some(cache) = cover_cache {
             Self::cache_cover(metadata, cache, server_base_url).await
         } else {
-            Self::extract_cover_url(metadata)
+            Self::extract_cover_url(metadata, server_base_url)
         };
 
         // Construction de la ressource (stream)
@@ -349,12 +362,12 @@ impl StationPlaylist {
     fn build_item_from_metadata_sync(
         station: &Station,
         metadata: &LiveResponse,
-        _cover_url_override: Option<String>,
+        server_base_url: Option<&str>,
     ) -> Result<Item> {
         let (title, creator, artist, album, genre, class) =
             Self::extract_metadata_fields(station, metadata);
 
-        let (album_art, album_art_pk) = Self::extract_cover_url(metadata);
+        let (album_art, album_art_pk) = Self::extract_cover_url(metadata, server_base_url);
         let resource = Self::build_stream_resource(metadata);
 
         Ok(Item {
@@ -410,20 +423,32 @@ impl StationPlaylist {
             let first = now.first_line.title_or_default();
             let second = now.second_line.title_or_default();
 
+            // Construire le titre en évitant les duplications
             let title = if !first.is_empty() && !second.is_empty() {
-                format!("{} • {}", first, second)
+                // Si first contient déjà second, utiliser seulement first
+                if first.contains(second) {
+                    first.to_string()
+                } else {
+                    format!("{} • {}", first, second)
+                }
             } else if !first.is_empty() {
                 first.to_string()
             } else {
                 station.display_name().to_string()
             };
 
-            let creator = now.producer.clone();
-            let artist = now.producer.clone();
+            // Artist/Creator = "{Station} - {Subtitle}"
+            let artist = if !second.is_empty() {
+                Some(format!("{} - {}", station.name, second))
+            } else {
+                Some(station.name.clone())
+            };
+            let creator = artist.clone();
+            // Album = nom de l'émission principale
             let album = if !first.is_empty() {
                 Some(first.to_string())
             } else {
-                None
+                Some(station.name.clone())
             };
             let genre = Some("Talk Radio".to_string());
             let class = "object.item.audioItem.audioBroadcast".to_string();
@@ -433,8 +458,13 @@ impl StationPlaylist {
     }
 
     /// Extrait l'URL de cover depuis les métadonnées (sans cache)
-    fn extract_cover_url(metadata: &LiveResponse) -> (Option<String>, Option<String>) {
-        // Priorité : visual_background > song cover
+    fn extract_cover_url(
+        metadata: &LiveResponse,
+        server_base_url: Option<&str>,
+    ) -> (Option<String>, Option<String>) {
+        // Priorité : visual_background > visuals.card > visuals.player > logo par défaut
+
+        // 1. visual_background
         if let Some(ref visual) = metadata.now.visual_background {
             if let Some(uuid) = visual.extract_uuid() {
                 let url = ImageSize::Large.build_url(&uuid);
@@ -442,7 +472,34 @@ impl StationPlaylist {
             }
         }
 
-        // Pas de cover trouvée
+        // 2. visuals.card
+        if let Some(ref visuals) = metadata.now.visuals {
+            if let Some(ref card) = visuals.card {
+                if let Some(uuid) = card.extract_uuid() {
+                    let url = ImageSize::Large.build_url(&uuid);
+                    return (Some(url), None);
+                }
+            }
+
+            // 3. visuals.player
+            if let Some(ref player) = visuals.player {
+                if let Some(uuid) = player.extract_uuid() {
+                    let url = ImageSize::Large.build_url(&uuid);
+                    return (Some(url), None);
+                }
+            }
+        }
+
+        // Fallback sur le logo par défaut via l'API REST
+        if let Some(base) = server_base_url {
+            let logo_url = format!(
+                "{}/api/radiofrance/default-logo",
+                base.trim_end_matches('/')
+            );
+            return (Some(logo_url), None);
+        }
+
+        // Pas de cover trouvée et pas de serveur configuré
         (None, None)
     }
 
@@ -453,16 +510,35 @@ impl StationPlaylist {
         cache: &Arc<CoverCache>,
         server_base_url: Option<&str>,
     ) -> (Option<String>, Option<String>) {
-        // Extraire l'UUID de la cover
+        // Extraire l'UUID de la cover (priorité : visual_background > visuals.card > visuals.player)
         let uuid = metadata
             .now
             .visual_background
             .as_ref()
-            .and_then(|v| v.extract_uuid());
+            .and_then(|v| v.extract_uuid())
+            .or_else(|| {
+                metadata.now.visuals.as_ref().and_then(|visuals| {
+                    visuals
+                        .card
+                        .as_ref()
+                        .and_then(|c| c.extract_uuid())
+                        .or_else(|| visuals.player.as_ref().and_then(|p| p.extract_uuid()))
+                })
+            });
 
         let uuid = match uuid {
             Some(u) => u,
-            None => return (None, None),
+            None => {
+                // Fallback sur le logo par défaut via l'API REST
+                if let Some(base) = server_base_url {
+                    let logo_url = format!(
+                        "{}/api/radiofrance/default-logo",
+                        base.trim_end_matches('/')
+                    );
+                    return (Some(logo_url), None);
+                }
+                return (None, None);
+            }
         };
 
         // URL haute résolution
@@ -479,7 +555,16 @@ impl StationPlaylist {
             }
             Err(e) => {
                 tracing::warn!("Failed to cache Radio France cover: {}", e);
-                (Some(cover_url), None)
+                // Fallback sur le logo par défaut via l'API REST en cas d'erreur
+                if let Some(base) = server_base_url {
+                    let logo_url = format!(
+                        "{}/api/radiofrance/default-logo",
+                        base.trim_end_matches('/')
+                    );
+                    (Some(logo_url), None)
+                } else {
+                    (Some(cover_url), None)
+                }
             }
         }
     }

@@ -50,6 +50,7 @@ pub fn create_router(state: RadioFranceState) -> Router {
         .route("/stations", get(get_stations))
         .route("/{slug}/metadata", get(get_metadata))
         .route("/{slug}/stream", get(proxy_stream))
+        .route("/default-logo", get(get_default_logo))
         .with_state(state)
 }
 
@@ -123,4 +124,16 @@ async fn proxy_stream(
     let body = Body::from_stream(stream);
 
     Ok((headers, body).into_response())
+}
+
+/// GET /api/radiofrance/default-logo
+/// Returns the default Radio France logo (embedded in binary)
+async fn get_default_logo() -> impl IntoResponse {
+    use crate::source::RADIOFRANCE_DEFAULT_IMAGE;
+
+    let mut headers = HeaderMap::new();
+    headers.insert("Content-Type", "image/webp".parse().unwrap());
+    headers.insert("Cache-Control", "public, max-age=86400".parse().unwrap());
+
+    (headers, RADIOFRANCE_DEFAULT_IMAGE).into_response()
 }

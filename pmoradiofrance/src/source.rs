@@ -22,8 +22,8 @@ use pmocovers::Cache as CoverCache;
 #[cfg(feature = "server")]
 use pmoupnp;
 
-/// Default image for Radio France source
-const RADIOFRANCE_DEFAULT_IMAGE: &[u8] = include_bytes!("../assets/radiofrance-logo.webp");
+/// Default image for Radio France source (embedded in binary)
+pub const RADIOFRANCE_DEFAULT_IMAGE: &[u8] = include_bytes!("../assets/radiofrance-logo.webp");
 
 /// Radio France music source
 ///
@@ -153,7 +153,7 @@ impl RadioFranceSource {
 
         #[cfg(feature = "cache")]
         let cover_cache = self.cover_cache.clone();
-        #[cfg(feature = "cache")]
+
         let server_base_url = self.server_base_url.clone();
 
         let handle = tokio::spawn(async move {
@@ -185,7 +185,10 @@ impl RadioFranceSource {
                         {
                             let mut pls = playlists.write().await;
                             if let Some(playlist) = pls.get_mut(&slug) {
-                                let _: () = playlist.update_metadata_no_cache(&metadata);
+                                let _: Result<()> = playlist.update_metadata_no_cache(
+                                    &metadata,
+                                    server_base_url.as_deref(),
+                                );
 
                                 // Update change tracking
                                 *update_id.write().await = update_id.read().await.wrapping_add(1);
@@ -372,7 +375,11 @@ impl RadioFranceSource {
         .await?;
 
         #[cfg(not(feature = "cache"))]
-        let playlist = StationPlaylist::from_live_metadata_no_cache(station.clone(), &metadata)?;
+        let playlist = StationPlaylist::from_live_metadata_no_cache(
+            station.clone(),
+            &metadata,
+            self.server_base_url.as_deref(),
+        )?;
 
         // Cache it
         let mut playlists_write = self.playlists.write().await;
@@ -381,6 +388,14 @@ impl RadioFranceSource {
 
         // Note: We don't start metadata refresh here to avoid blocking during browse.
         // Refresh will be started in resolve_uri() when the stream is actually played.
+
+        #[cfg(feature = "logging")]
+        tracing::debug!(
+            "Built item for {}: {} resources, album_art: {:?}",
+            station.slug,
+            playlist.stream_item.resources.len(),
+            playlist.stream_item.album_art.is_some()
+        );
 
         Ok(playlist.stream_item)
     }
@@ -568,8 +583,12 @@ impl MusicSource for RadioFranceSource {
             .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
 
             #[cfg(not(feature = "cache"))]
-            let playlist = StationPlaylist::from_live_metadata_no_cache(station.clone(), &metadata)
-                .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+            let playlist = StationPlaylist::from_live_metadata_no_cache(
+                station.clone(),
+                &metadata,
+                self.server_base_url.as_deref(),
+            )
+            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
 
             let mut playlists_write = self.playlists.write().await;
             playlists_write.insert(slug.to_string(), playlist);
