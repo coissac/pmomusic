@@ -33,6 +33,8 @@ use pmodidl::{Item, Resource};
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "cache")]
+use pmocache::cache_trait::FileCache;
+#[cfg(feature = "cache")]
 use pmocovers::Cache as CoverCache;
 #[cfg(feature = "cache")]
 use std::sync::Arc;
@@ -336,6 +338,14 @@ impl StationPlaylist {
             Self::extract_cover_url(metadata, server_base_url)
         };
 
+        #[cfg(feature = "logging")]
+        tracing::debug!(
+            "Cover for {}: album_art={:?}, album_art_pk={:?}",
+            station.slug,
+            album_art,
+            album_art_pk
+        );
+
         // Construction de la ressource (stream)
         let resource = Self::build_stream_resource(metadata);
 
@@ -496,10 +506,14 @@ impl StationPlaylist {
                 "{}/api/radiofrance/default-logo",
                 base.trim_end_matches('/')
             );
+            #[cfg(feature = "logging")]
+            tracing::debug!("Using default Radio France logo: {}", logo_url);
             return (Some(logo_url), None);
         }
 
         // Pas de cover trouvée et pas de serveur configuré
+        #[cfg(feature = "logging")]
+        tracing::warn!("No cover found and no server_base_url configured");
         (None, None)
     }
 
@@ -548,8 +562,13 @@ impl StationPlaylist {
         match cache.add_from_url(&cover_url, Some("radiofrance")).await {
             Ok(pk) => {
                 // Construire l'URL publique si server_base_url est fourni
-                let public_url = server_base_url
-                    .map(|base| format!("{}/covers/{}", base.trim_end_matches('/'), pk));
+                let public_url = server_base_url.map(|base| {
+                    format!(
+                        "{}{}",
+                        base.trim_end_matches('/'),
+                        cache.route_for(&pk, None)
+                    )
+                });
 
                 (public_url.or(Some(cover_url)), Some(pk))
             }

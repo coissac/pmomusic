@@ -4152,6 +4152,7 @@ dependencies = [
  "chrono",
  "futures",
  "pmoaudiocache",
+ "pmocache",
  "pmoconfig",
  "pmocovers",
  "pmodidl",

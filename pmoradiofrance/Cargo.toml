@@ -49,6 +49,7 @@ pmodidl = { path = "../pmodidl", optional = true }
 pmoconfig = { path = "../pmoconfig", optional = true }
 
 # Cache support
+pmocache = { path = "../pmocache", optional = true }
 pmocovers = { path = "../pmocovers", optional = true }
 pmoaudiocache = { path = "../pmoaudiocache", optional = true }
 
@@ -66,7 +67,7 @@ default = ["pmoconfig"]
 # Feature for pmoconfig support
 pmoconfig = ["dep:pmoconfig"]
 # Feature for cache support
-cache = ["dep:pmocovers", "dep:pmoaudiocache"]
+cache = ["dep:pmocache", "dep:pmocovers", "dep:pmoaudiocache"]
 # Feature for playlist/FIFO support
 playlist = ["dep:pmoplaylist", "dep:pmodidl"]
 # Feature for logging (tracing)
