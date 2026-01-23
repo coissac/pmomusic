@@ -305,6 +305,14 @@ impl RadioFranceSource {
     async fn build_station_container(&self, group: &StationGroup) -> Result<Container> {
         let child_count = 1 + group.webradios.len(); // main + webradios
 
+        // Utiliser le logo par défaut si server_base_url est configuré
+        let album_art = self.server_base_url.as_ref().map(|base| {
+            format!(
+                "{}/api/radiofrance/default-logo",
+                base.trim_end_matches('/')
+            )
+        });
+
         Ok(Container {
             id: format!("radiofrance:group:{}", group.main.slug),
             parent_id: "radiofrance".to_string(),
@@ -314,7 +322,7 @@ impl RadioFranceSource {
             title: group.main.name.clone(),
             class: "object.container".to_string(),
             artist: None,
-            album_art: None,
+            album_art,
             containers: vec![],
             items: vec![],
         })
@@ -323,6 +331,14 @@ impl RadioFranceSource {
     /// Build the "Radios ICI" container
     /// Returns an empty container - items will be built when browsing into it
     async fn build_ici_container(&self, local_radios: &[Station]) -> Result<Container> {
+        // Utiliser le logo par défaut si server_base_url est configuré
+        let album_art = self.server_base_url.as_ref().map(|base| {
+            format!(
+                "{}/api/radiofrance/default-logo",
+                base.trim_end_matches('/')
+            )
+        });
+
         Ok(Container {
             id: "radiofrance:ici".to_string(),
             parent_id: "radiofrance".to_string(),
@@ -332,7 +348,7 @@ impl RadioFranceSource {
             title: "Radios ICI".to_string(),
             class: "object.container".to_string(),
             artist: None,
-            album_art: None,
+            album_art,
             containers: vec![],
             items: vec![],
         })

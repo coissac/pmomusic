@@ -243,7 +243,7 @@ impl SourcesExt for Server {
 
     #[cfg(feature = "radiofrance")]
     async fn register_radiofrance(&mut self) -> Result<()> {
-        use pmoradiofrance::{RadioFranceSource, RadioFranceStatefulClient};
+        use pmoradiofrance::{RadioFranceExt, RadioFranceSource, RadioFranceStatefulClient};
 
         tracing::info!("Initializing Radio France source...");
 
@@ -264,6 +264,11 @@ impl SourcesExt for Server {
 
         // Enregistrer la source
         self.register_music_source(Arc::new(source)).await;
+
+        // Initialiser les routes API Radio France
+        self.init_radiofrance().await.map_err(|e| {
+            SourceInitError::RadioFranceError(format!("Failed to init API routes: {}", e))
+        })?;
 
         tracing::info!("✅ Radio France source registered successfully");
 
