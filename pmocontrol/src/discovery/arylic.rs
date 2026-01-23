@@ -7,7 +7,9 @@ use std::{
 use tracing::debug;
 
 use crate::{
-    arylic_client::{ARYLIC_TCP_PORT, send_command_required}, errors::ControlPointError, linkplay_client::extract_linkplay_host
+    arylic_client::{ARYLIC_TCP_PORT, send_command_required},
+    errors::ControlPointError,
+    linkplay_client::extract_linkplay_host,
 };
 
 static DETECTION_CACHE: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();

@@ -63,17 +63,19 @@ pub fn parse_time_flexible(input: &str) -> Result<u32, ControlPointError> {
     let parts: Vec<&str> = input.split(':').collect();
 
     if parts.is_empty() || parts.len() > 3 {
-        return Err(ControlPointError::InvalidTimeFormat(
-            format!("Invalid time format '{}': expected HH:MM:SS, MM:SS, or SS", input)
-        ));
+        return Err(ControlPointError::InvalidTimeFormat(format!(
+            "Invalid time format '{}': expected HH:MM:SS, MM:SS, or SS",
+            input
+        )));
     }
 
     let mut total = 0u32;
     for part in parts {
         let value = part.parse::<u32>().map_err(|_| {
-            ControlPointError::InvalidTimeFormat(
-                format!("Invalid numeric value '{}' in time string '{}'", part, input)
-            )
+            ControlPointError::InvalidTimeFormat(format!(
+                "Invalid numeric value '{}' in time string '{}'",
+                part, input
+            ))
         })?;
         total = total * 60 + value;
     }
@@ -103,33 +105,29 @@ pub fn parse_hhmmss_strict(input: &str) -> Result<u64, ControlPointError> {
     let parts: Vec<&str> = input.split(':').collect();
 
     if parts.len() != 3 {
-        return Err(ControlPointError::InvalidTimeFormat(
-            format!("Invalid time format '{}': expected exactly HH:MM:SS", input)
-        ));
+        return Err(ControlPointError::InvalidTimeFormat(format!(
+            "Invalid time format '{}': expected exactly HH:MM:SS",
+            input
+        )));
     }
 
     let hours: u64 = parts[0].parse().map_err(|_| {
-        ControlPointError::InvalidTimeFormat(
-            format!("Invalid hour component in '{}'", input)
-        )
+        ControlPointError::InvalidTimeFormat(format!("Invalid hour component in '{}'", input))
     })?;
 
     let minutes: u64 = parts[1].parse().map_err(|_| {
-        ControlPointError::InvalidTimeFormat(
-            format!("Invalid minute component in '{}'", input)
-        )
+        ControlPointError::InvalidTimeFormat(format!("Invalid minute component in '{}'", input))
     })?;
 
     let seconds: u64 = parts[2].parse().map_err(|_| {
-        ControlPointError::InvalidTimeFormat(
-            format!("Invalid second component in '{}'", input)
-        )
+        ControlPointError::InvalidTimeFormat(format!("Invalid second component in '{}'", input))
     })?;
 
     if minutes >= 60 || seconds >= 60 {
-        return Err(ControlPointError::InvalidTimeFormat(
-            format!("Invalid time '{}': minutes and seconds must be < 60", input)
-        ));
+        return Err(ControlPointError::InvalidTimeFormat(format!(
+            "Invalid time '{}': minutes and seconds must be < 60",
+            input
+        )));
     }
 
     Ok(hours * 3600 + minutes * 60 + seconds)
@@ -209,7 +207,7 @@ mod tests {
     #[test]
     fn test_ms_conversions() {
         assert_eq!(ms_to_seconds(1000), 1);
-        assert_eq!(ms_to_seconds(1500), 1);  // rounds down
+        assert_eq!(ms_to_seconds(1500), 1); // rounds down
         assert_eq!(ms_to_seconds(999), 0);
 
         assert_eq!(seconds_to_ms(1), 1000);

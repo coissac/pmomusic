@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
 use pmocontrol::{
-    DeviceDescriptionProvider, DiscoveredEndpoint, HttpXmlDescriptionProvider, MusicRendererBackend,
-    RendererInfo,
+    DeviceDescriptionProvider, DiscoveredEndpoint, HttpXmlDescriptionProvider,
+    MusicRendererBackend, RendererInfo,
     control_point::ControlPoint,
     openhome_client::{
         OPENHOME_PLAYLIST_HEAD_ID, OhInfoClient, OhPlaylistClient, OhProductClient, OhRadioClient,

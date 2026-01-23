@@ -1,0 +1,90 @@
+[package]
+name = "pmoradiofrance"
+version = "0.1.0"
+edition = "2021"
+authors = ["PMOMusic Contributors"]
+description = "Rust client for Radio France streaming services"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/yourusername/pmomusic"
+keywords = ["radio", "france", "streaming", "music", "aac"]
+categories = ["multimedia", "api-bindings"]
+
+[dependencies]
+# HTTP client for Radio France API requests
+reqwest = { version = "0.12", features = ["json"] }
+
+# Async runtime
+tokio = { workspace = true }
+
+# Serialization/Deserialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+
+# Helpers
+chrono = { workspace = true }
+async-trait = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# URL manipulation
+url = "2.5"
+
+# HTML scraping for station discovery
+scraper = "0.22"
+regex = "1.11"
+
+# Common music source traits
+pmosource = { path = "../pmosource" }
+
+# DIDL-Lite structures (for playlist support)
+pmodidl = { path = "../pmodidl", optional = true }
+
+# Configuration support
+pmoconfig = { path = "../pmoconfig", optional = true }
+
+# Cache support
+pmocache = { path = "../pmocache", optional = true }
+pmocovers = { path = "../pmocovers", optional = true }
+pmoaudiocache = { path = "../pmoaudiocache", optional = true }
+
+# Playlist management for FIFO support
+pmoplaylist = { path = "../pmoplaylist", optional = true }
+
+# Server integration (optional)
+pmoserver = { path = "../pmoserver", optional = true }
+pmoupnp = { path = "../pmoupnp", optional = true }
+axum = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+
+[features]
+default = ["pmoconfig"]
+# Feature for pmoconfig support
+pmoconfig = ["dep:pmoconfig"]
+# Feature for cache support
+cache = ["dep:pmocache", "dep:pmocovers", "dep:pmoaudiocache"]
+# Feature for playlist/FIFO support
+playlist = ["dep:pmoplaylist", "dep:pmodidl"]
+# Feature for logging (tracing)
+logging = []
+# Feature for server support (MusicSource + HTTP API routes)
+server = ["pmosource/server", "pmoconfig", "cache", "playlist", "dep:pmoserver", "dep:pmoupnp", "dep:axum", "dep:futures"]
+# Full feature set
+full = ["server", "logging"]
+
+[dev-dependencies]
+tokio-test = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[[example]]
+name = "discover_stations"
+path = "examples/discover_stations.rs"
+
+[[example]]
+name = "live_metadata"
+path = "examples/live_metadata.rs"

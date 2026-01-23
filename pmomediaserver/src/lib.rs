@@ -93,3 +93,6 @@ pub use paradise_streaming::ParadiseStreamingExt;
 // Re-export sources when features are enabled
 #[cfg(feature = "qobuz")]
 pub use pmoqobuz;
+
+#[cfg(feature = "radiofrance")]
+pub use pmoradiofrance;

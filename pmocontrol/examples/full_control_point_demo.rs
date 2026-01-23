@@ -19,9 +19,9 @@ use crossterm::terminal::{
 };
 use pmocontrol::model::TrackMetadata;
 use pmocontrol::{
-    ControlPoint, DeviceRegistryRead, MediaBrowser, MediaEntry, MediaServerEvent, UpnpMediaServer,
-    UpnpMediaServer, PlaybackItem, PlaybackPosition, PlaybackPositionInfo, PlaybackStatus,
-    RendererEvent, RendererInfo, TransportControl, VolumeControl,
+    ControlPoint, DeviceRegistryRead, MediaBrowser, MediaEntry, MediaServerEvent, PlaybackItem,
+    PlaybackPosition, PlaybackPositionInfo, PlaybackStatus, RendererEvent, RendererInfo,
+    TransportControl, UpnpMediaServer, UpnpMediaServer, VolumeControl,
 };
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;

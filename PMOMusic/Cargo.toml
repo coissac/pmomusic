@@ -1,13 +1,13 @@
 [package]
 name = "PMOMusic"
-version = "0.3.11"
+version = "0.3.12"
 edition = "2024"
 
 [dependencies]
 pmoconfig = { path = "../pmoconfig" }
 pmoupnp =  { path = "../pmoupnp"}
 pmomediarenderer = { path = "../pmomediarenderer" }
-pmomediaserver = { path = "../pmomediaserver", features = ["qobuz", "paradise", "paradise-api", "api"] }
+pmomediaserver = { path = "../pmomediaserver", features = ["qobuz", "paradise", "paradise-api", "radiofrance", "api"] }
 pmosource = { path = "../pmosource", features = ["server"] }
 pmoserver = { path = "../pmoserver" }
 pmocovers = { path = "../pmocovers", features = ["pmoserver"] }

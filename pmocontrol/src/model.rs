@@ -93,6 +93,7 @@ pub struct TrackMetadata {
     pub date: Option<String>,
     pub track_number: Option<String>,
     pub creator: Option<String>,
+    pub duration: Option<String>,
 }
 
 #[derive(Clone, Debug, Copy)]

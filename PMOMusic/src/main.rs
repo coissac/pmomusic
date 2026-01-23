@@ -54,6 +54,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // Enregistrer la source Radio France (inclut l'initialisation des routes API)
+    info!("📻 Registering Radio France source...");
+    if let Err(e) = server.write().await.register_radiofrance().await {
+        tracing::warn!("⚠️ Failed to register Radio France source: {}", e);
+    }
+
     // Lister toutes les sources enregistrées
     let sources = server.read().await.list_music_sources().await;
     info!("✅ {} music source(s) registered", sources.len());

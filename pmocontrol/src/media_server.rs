@@ -565,6 +565,7 @@ pub fn playback_item_from_entry(
         date: entry.date.clone(),
         track_number: entry.track_number.clone(),
         creator: entry.creator.clone(),
+        duration: resource.duration.clone(),
     };
 
     debug!(

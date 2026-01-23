@@ -1647,7 +1647,7 @@ fn didl_item_from_playback_item(item: &PlaybackItem) -> DidlItem {
             bits_per_sample: None,
             sample_frequency: None,
             nr_audio_channels: None,
-            duration: None,
+            duration: metadata.and_then(|m| m.duration.clone()),
             url: item.uri.clone(),
         }],
         descriptions: Vec::new(),
@@ -1686,6 +1686,7 @@ fn playback_item_track_metadata(item: &PlaybackItem) -> TrackMetadata {
         date: None,
         track_number: None,
         creator: None,
+        duration: None,
     })
 }
 

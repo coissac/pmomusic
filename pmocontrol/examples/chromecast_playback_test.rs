@@ -36,7 +36,7 @@ fn ensure_crypto_provider_initialized() {
 
     INIT.call_once(|| {
         let _ = rustls::crypto::CryptoProvider::install_default(
-            rustls::crypto::aws_lc_rs::default_provider()
+            rustls::crypto::aws_lc_rs::default_provider(),
         );
         println!("✓ Rustls CryptoProvider initialized");
     });
@@ -88,7 +88,10 @@ fn main() {
         eprintln!("Usage: {} <chromecast_ip> [media_url]", args[0]);
         eprintln!("\nExample:");
         eprintln!("  {} 192.168.1.100", args[0]);
-        eprintln!("\nIf no media URL is provided, will use: {}", TEST_MEDIA_URL);
+        eprintln!(
+            "\nIf no media URL is provided, will use: {}",
+            TEST_MEDIA_URL
+        );
         std::process::exit(1);
     }
 
@@ -116,21 +119,25 @@ fn main() {
     // Step 1: Connect to the device
     println!("──────────────────────────────────────────────────────────");
     println!("STEP 1: Connecting to Chromecast...");
-    let cast_device = match CastDevice::connect_without_host_verification(chromecast_ip, DEFAULT_PORT) {
-        Ok(device) => {
-            println!("✓ Connected to Chromecast");
-            device
-        }
-        Err(e) => {
-            eprintln!("✗ Failed to connect: {}", e);
-            std::process::exit(1);
-        }
-    };
+    let cast_device =
+        match CastDevice::connect_without_host_verification(chromecast_ip, DEFAULT_PORT) {
+            Ok(device) => {
+                println!("✓ Connected to Chromecast");
+                device
+            }
+            Err(e) => {
+                eprintln!("✗ Failed to connect: {}", e);
+                std::process::exit(1);
+            }
+        };
 
     // Step 2: Connect to the default receiver channel
     println!();
     println!("STEP 2: Connecting to receiver channel...");
-    if let Err(e) = cast_device.connection.connect(DEFAULT_DESTINATION_ID.to_string()) {
+    if let Err(e) = cast_device
+        .connection
+        .connect(DEFAULT_DESTINATION_ID.to_string())
+    {
         eprintln!("✗ Failed to connect channel: {}", e);
         std::process::exit(1);
     }
@@ -151,7 +158,10 @@ fn main() {
     let status = match cast_device.receiver.get_status() {
         Ok(status) => {
             println!("✓ Receiver status obtained");
-            println!("  - Volume: {:.0}%", status.volume.level.unwrap_or(0.5) * 100.0);
+            println!(
+                "  - Volume: {:.0}%",
+                status.volume.level.unwrap_or(0.5) * 100.0
+            );
             println!("  - Muted: {}", status.volume.muted.unwrap_or(false));
             println!("  - Running apps: {}", status.applications.len());
             status
@@ -165,7 +175,10 @@ fn main() {
     // Step 5: Launch DefaultMediaReceiver
     println!();
     println!("STEP 5: Launching DefaultMediaReceiver app...");
-    let app = match cast_device.receiver.launch_app(&CastDeviceApp::DefaultMediaReceiver) {
+    let app = match cast_device
+        .receiver
+        .launch_app(&CastDeviceApp::DefaultMediaReceiver)
+    {
         Ok(app) => {
             println!("✓ App launched successfully");
             println!("  - App ID: {}", app.app_id);
@@ -201,11 +214,10 @@ fn main() {
         metadata: None,
     };
 
-    match cast_device.media.load(
-        app.transport_id.as_str(),
-        app.session_id.as_str(),
-        &media,
-    ) {
+    match cast_device
+        .media
+        .load(app.transport_id.as_str(), app.session_id.as_str(), &media)
+    {
         Ok(status) => {
             println!("✓ Media loaded successfully!");
             println!("  - Media status entries: {}", status.entries.len());
@@ -241,7 +253,10 @@ fn main() {
             Ok(ChannelMessage::Heartbeat(response)) => {
                 if let HeartbeatResponse::Ping = response {
                     heartbeat_count += 1;
-                    println!("[Heartbeat #{:3}] Received Ping, sending Pong...", heartbeat_count);
+                    println!(
+                        "[Heartbeat #{:3}] Received Ping, sending Pong...",
+                        heartbeat_count
+                    );
 
                     if let Err(e) = cast_device.heartbeat.pong() {
                         eprintln!("✗ Failed to send pong: {}", e);

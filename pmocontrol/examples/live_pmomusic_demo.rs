@@ -10,8 +10,9 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use pmocontrol::model::TrackMetadata;
 use pmocontrol::{
-    ControlPoint, DeviceRegistryRead, MediaBrowser, MediaEntry, MediaServerEvent, UpnpMediaServer,
-    MusicRendererBackend, UpnpMediaServer, PlaybackItem, PlaybackPosition, PlaybackPositionInfo, RendererInfo,
+    ControlPoint, DeviceRegistryRead, MediaBrowser, MediaEntry, MediaServerEvent,
+    MusicRendererBackend, PlaybackItem, PlaybackPosition, PlaybackPositionInfo, RendererInfo,
+    UpnpMediaServer, UpnpMediaServer,
 };
 
 const DEFAULT_TIMEOUT_SECS: u64 = 5;

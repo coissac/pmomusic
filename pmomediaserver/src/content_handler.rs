@@ -32,6 +32,16 @@ fn to_didl_lite(containers: &[Container], items: &[pmodidl::Item]) -> Result<Str
 
     // Retourne uniquement le corps DIDL, sans préfixer une seconde déclaration XML.
     let body = didl.to_xml();
+
+    // Log le DIDL généré pour déboguer (limité aux 500 premiers caractères)
+    if !items.is_empty() {
+        tracing::debug!(
+            "Generated DIDL-Lite with {} items: {}",
+            items.len(),
+            &body[..body.len().min(800)]
+        );
+    }
+
     Ok(body)
 }
 
