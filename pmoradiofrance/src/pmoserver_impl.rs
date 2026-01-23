@@ -38,20 +38,39 @@ impl RadioFranceExt for Server {
     async fn init_radiofrance(&mut self) -> Result<Arc<RadioFranceState>> {
         info!("Initializing Radio France API...");
 
-        // Créer le client stateful
+        // Créer une source dédiée pour l'API (sans enregistrement UPnP)
         let config = pmoconfig::get_config();
-        let client = RadioFranceStatefulClient::new(config)
+        let source = crate::source::RadioFranceSource::new(config)
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to create Radio France client: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to create Radio France source: {}", e))?;
 
-        // Créer l'état partagé (RadioFranceState est Clone et contient déjà un Arc<client>)
-        let state = RadioFranceState::new(client);
+        // Créer l'état partagé
+        let state = RadioFranceState::new(Arc::new(source));
 
         // Créer et enregistrer le router
         let router = create_router(state.clone());
         self.add_router("/api/radiofrance", router).await;
 
         info!("Radio France API initialized");
+        info!("API endpoints available at /api/radiofrance/*");
+
+        Ok(Arc::new(state))
+    }
+
+    async fn init_radiofrance_with_source(
+        &mut self,
+        source: Arc<crate::source::RadioFranceSource>,
+    ) -> Result<Arc<RadioFranceState>> {
+        info!("Initializing Radio France API with existing source...");
+
+        // Créer l'état partagé (simplement une référence à la source)
+        let state = RadioFranceState::new(source);
+
+        // Créer et enregistrer le router
+        let router = create_router(state.clone());
+        self.add_router("/api/radiofrance", router).await;
+
+        info!("Radio France API initialized with source");
         info!("API endpoints available at /api/radiofrance/*");
 
         Ok(Arc::new(state))

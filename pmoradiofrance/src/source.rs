@@ -33,10 +33,7 @@ pub const RADIOFRANCE_DEFAULT_IMAGE: &[u8] = include_bytes!("../assets/radiofran
 /// - Hierarchical organization (standalone, groups, local radios)
 pub struct RadioFranceSource {
     /// Stateful client with automatic caching
-    client: RadioFranceStatefulClient,
-
-    /// Cache of playlists by station slug (volatile metadata)
-    playlists: Arc<RwLock<HashMap<String, StationPlaylist>>>,
+    pub(crate) client: RadioFranceStatefulClient,
 
     /// Background tasks for metadata refresh
     refresh_handles: Arc<RwLock<HashMap<String, JoinHandle<()>>>>,
@@ -83,7 +80,6 @@ impl RadioFranceSource {
 
         Ok(Self {
             client,
-            playlists: Arc::new(RwLock::new(HashMap::new())),
             refresh_handles: Arc::new(RwLock::new(HashMap::new())),
             #[cfg(feature = "cache")]
             cover_cache: None,
@@ -151,7 +147,7 @@ impl RadioFranceSource {
     }
 
     /// Start metadata refresh task for a station
-    async fn start_metadata_refresh(&self, station_slug: &str) -> Result<()> {
+    pub async fn start_metadata_refresh(&self, station_slug: &str) -> Result<()> {
         let mut handles = self.refresh_handles.write().await;
 
         // If already running, do nothing
@@ -160,69 +156,54 @@ impl RadioFranceSource {
         }
 
         let client = self.client.clone();
-        let playlists = self.playlists.clone();
         let slug = station_slug.to_string();
         let update_id = self.update_id.clone();
         let last_change = self.last_change.clone();
         let container_notifier = self.container_notifier.clone();
 
-        #[cfg(feature = "cache")]
-        let cover_cache = self.cover_cache.clone();
-
-        let server_base_url = self.server_base_url.clone();
-
         let handle = tokio::spawn(async move {
             loop {
-                match client.get_live_metadata(&slug).await {
+                // Force refresh metadata (bypass cache to get fresh data)
+                match client.refresh_live_metadata(&slug).await {
                     Ok(metadata) => {
                         let delay = std::time::Duration::from_millis(metadata.delay_to_refresh);
 
-                        // Update the playlist metadata
-                        #[cfg(feature = "cache")]
+                        #[cfg(feature = "logging")]
                         {
-                            let mut pls = playlists.write().await;
-                            if let Some(playlist) = pls.get_mut(&slug) {
-                                let _: Result<()> = playlist
-                                    .update_metadata(
-                                        &metadata,
-                                        cover_cache.as_ref(),
-                                        server_base_url.as_deref(),
-                                    )
-                                    .await;
-
-                                // Update change tracking
-                                *update_id.write().await = update_id.read().await.wrapping_add(1);
-                                *last_change.write().await = Some(SystemTime::now());
-
-                                // Notify UPnP ContentDirectory of the change
-                                if let Some(ref notifier) = container_notifier {
-                                    // Notify the station's stream item container
-                                    let container_id = format!("radiofrance:{}", slug);
-                                    notifier(&[container_id]);
-                                }
-                            }
+                            let artist = metadata
+                                .now
+                                .song
+                                .as_ref()
+                                .and_then(|s| {
+                                    if s.interpreters.is_empty() {
+                                        None
+                                    } else {
+                                        Some(s.artists_display())
+                                    }
+                                })
+                                .unwrap_or_else(|| "".to_string());
+                            tracing::debug!(
+                                "Refreshed metadata for {}: title='{}' artist='{}' delay={}ms",
+                                slug,
+                                metadata.now.first_line.title.as_deref().unwrap_or(""),
+                                artist,
+                                metadata.delay_to_refresh
+                            );
                         }
 
-                        #[cfg(not(feature = "cache"))]
-                        {
-                            let mut pls = playlists.write().await;
-                            if let Some(playlist) = pls.get_mut(&slug) {
-                                let _: Result<()> = playlist.update_metadata_no_cache(
-                                    &metadata,
-                                    server_base_url.as_deref(),
-                                );
+                        // Update change tracking
+                        *update_id.write().await = update_id.read().await.wrapping_add(1);
+                        *last_change.write().await = Some(SystemTime::now());
 
-                                // Update change tracking
-                                *update_id.write().await = update_id.read().await.wrapping_add(1);
-                                *last_change.write().await = Some(SystemTime::now());
+                        // Notify UPnP ContentDirectory of the change
+                        if let Some(ref notifier) = container_notifier {
+                            // Notify the station's stream item container
+                            let container_id = format!("radiofrance:{}", slug);
 
-                                // Notify UPnP ContentDirectory of the change
-                                if let Some(ref notifier) = container_notifier {
-                                    // Notify the station's stream item container
-                                    let container_id = format!("radiofrance:{}", slug);
-                                    notifier(&[container_id]);
-                                }
-                            }
+                            #[cfg(feature = "logging")]
+                            tracing::debug!("Notifying UPnP container update: {}", container_id);
+
+                            notifier(&[container_id]);
                         }
 
                         tokio::time::sleep(delay).await;
@@ -246,7 +227,7 @@ impl RadioFranceSource {
     }
 
     /// Stop metadata refresh task for a station
-    async fn stop_metadata_refresh(&self, station_slug: &str) {
+    pub async fn stop_metadata_refresh(&self, station_slug: &str) {
         let mut handles = self.refresh_handles.write().await;
         if let Some(handle) = handles.remove(station_slug) {
             handle.abort();
@@ -394,25 +375,13 @@ impl RadioFranceSource {
             station.slug
         );
 
-        let playlists = self.playlists.read().await;
-
-        // If we already have this station in cache, use it
-        if let Some(existing) = playlists.get(&station.slug) {
-            #[cfg(feature = "logging")]
-            tracing::debug!("Using cached item for: {}", station.slug);
-            return Ok(existing.stream_item.clone());
-        }
-
-        // Release read lock before fetching metadata
-        drop(playlists);
-
-        // Fetch metadata from API
+        // Fetch metadata from API (cached by RadioFranceStatefulClient)
         let metadata = self.client.get_live_metadata(&station.slug).await?;
 
-        // Create playlist with metadata
+        // Build item from live metadata (no caching here, rely on client cache)
         #[cfg(feature = "cache")]
-        let playlist = StationPlaylist::from_live_metadata(
-            station.clone(),
+        let item = StationPlaylist::build_item_from_metadata(
+            station,
             &metadata,
             self.cover_cache.as_ref(),
             self.server_base_url.as_deref(),
@@ -420,16 +389,11 @@ impl RadioFranceSource {
         .await?;
 
         #[cfg(not(feature = "cache"))]
-        let playlist = StationPlaylist::from_live_metadata_no_cache(
-            station.clone(),
+        let item = StationPlaylist::build_item_from_metadata_sync(
+            station,
             &metadata,
             self.server_base_url.as_deref(),
         )?;
-
-        // Cache it
-        let mut playlists_write = self.playlists.write().await;
-        playlists_write.insert(station.slug.clone(), playlist.clone());
-        drop(playlists_write);
 
         // Note: We don't start metadata refresh here to avoid blocking during browse.
         // Refresh will be started in resolve_uri() when the stream is actually played.
@@ -438,11 +402,11 @@ impl RadioFranceSource {
         tracing::debug!(
             "Built item for {}: {} resources, album_art: {:?}",
             station.slug,
-            playlist.stream_item.resources.len(),
-            playlist.stream_item.album_art.is_some()
+            item.resources.len(),
+            item.album_art.is_some()
         );
 
-        Ok(playlist.stream_item)
+        Ok(item)
     }
 }
 
@@ -535,22 +499,18 @@ impl MusicSource for RadioFranceSource {
                 // Build items for this group only (main + webradios)
                 let group_id = format!("radiofrance:group:{}", slug);
 
-                let mut main_item = self
-                    .build_station_item(&group.main)
-                    .await
-                    .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
-
-                // Fix parent_id to point to the group container
-                main_item.parent_id = group_id.clone();
-                let mut items = vec![main_item];
-
+                // Paralléliser les fetches pour éviter les timeouts
+                let mut futures = vec![self.build_station_item(&group.main)];
                 for webradio in &group.webradios {
-                    let mut item = self
-                        .build_station_item(webradio)
-                        .await
-                        .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+                    futures.push(self.build_station_item(webradio));
+                }
 
-                    // Fix parent_id to point to the group container
+                let results = futures::future::join_all(futures).await;
+
+                let mut items = Vec::new();
+                for result in results {
+                    let mut item =
+                        result.map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
                     item.parent_id = group_id.clone();
                     items.push(item);
                 }

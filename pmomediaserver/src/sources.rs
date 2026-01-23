@@ -270,13 +270,16 @@ impl SourcesExt for Server {
         });
         let source = source.with_container_notifier(notifier);
 
-        // Enregistrer la source
-        self.register_music_source(Arc::new(source)).await;
+        // Enregistrer la source (Arc pour partage avec l'API)
+        let source_arc = Arc::new(source);
+        self.register_music_source(source_arc.clone()).await;
 
-        // Initialiser les routes API Radio France
-        self.init_radiofrance().await.map_err(|e| {
-            SourceInitError::RadioFranceError(format!("Failed to init API routes: {}", e))
-        })?;
+        // Initialiser les routes API Radio France avec la source
+        self.init_radiofrance_with_source(source_arc)
+            .await
+            .map_err(|e| {
+                SourceInitError::RadioFranceError(format!("Failed to init API routes: {}", e))
+            })?;
 
         tracing::info!("✅ Radio France source registered successfully");
 
