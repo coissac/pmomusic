@@ -16,6 +16,7 @@ use axum::{
 };
 use futures::StreamExt;
 use serde_json;
+use std::sync::Arc;
 
 // ============ Gestion des erreurs ============
 
@@ -95,6 +96,25 @@ async fn proxy_stream(
     State(state): State<RadioFranceState>,
     Path(slug): Path<String>,
 ) -> Result<Response, AppError> {
+    // Start metadata refresh when stream is accessed
+    #[cfg(feature = "logging")]
+    tracing::info!("Stream proxy accessed for station: {}", slug);
+
+    if let Some(ref source) = state.source {
+        // Spawn refresh task (non-blocking)
+        let source_clone = Arc::clone(source);
+        let slug_clone = slug.clone();
+        tokio::spawn(async move {
+            if let Err(e) = source_clone.start_metadata_refresh(&slug_clone).await {
+                #[cfg(feature = "logging")]
+                tracing::error!("Failed to start metadata refresh for {}: {}", slug_clone, e);
+            }
+        });
+    } else {
+        #[cfg(feature = "logging")]
+        tracing::warn!("No source available to start metadata refresh");
+    }
+
     // Get the stream URL
     let stream_url = state
         .client
@@ -116,12 +136,48 @@ async fn proxy_stream(
     headers.insert("content-type", "audio/aac".parse().unwrap());
     headers.insert("cache-control", "no-cache".parse().unwrap());
 
-    // Create streaming body
+    // Create streaming body with cleanup on disconnect
     let stream = response
         .bytes_stream()
         .map(|chunk| chunk.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)));
 
-    let body = Body::from_stream(stream);
+    // Wrap the stream to detect when client disconnects
+    let source_for_cleanup = state.source.clone();
+    let slug_for_cleanup = slug.clone();
+    let monitored_stream =
+        futures::stream::unfold((stream, false), move |(mut stream, mut done)| {
+            let source = source_for_cleanup.clone();
+            let slug = slug_for_cleanup.clone();
+            async move {
+                if done {
+                    return None;
+                }
+
+                match stream.next().await {
+                    Some(Ok(chunk)) => Some((Ok(chunk), (stream, false))),
+                    Some(Err(e)) => {
+                        // Error occurred, stop refresh
+                        #[cfg(feature = "logging")]
+                        tracing::info!("Stream error for {}, stopping refresh", slug);
+                        if let Some(src) = source {
+                            src.stop_metadata_refresh(&slug).await;
+                        }
+                        Some((Err(e), (stream, true)))
+                    }
+                    None => {
+                        // Stream ended normally, stop refresh
+                        #[cfg(feature = "logging")]
+                        tracing::info!("Stream ended for {}, stopping refresh", slug);
+                        if let Some(src) = source {
+                            src.stop_metadata_refresh(&slug).await;
+                        }
+                        None
+                    }
+                }
+            }
+        });
+
+    let body = Body::from_stream(monitored_stream);
 
     Ok((headers, body).into_response())
 }

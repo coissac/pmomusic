@@ -151,7 +151,7 @@ impl RadioFranceSource {
     }
 
     /// Start metadata refresh task for a station
-    async fn start_metadata_refresh(&self, station_slug: &str) -> Result<()> {
+    pub async fn start_metadata_refresh(&self, station_slug: &str) -> Result<()> {
         let mut handles = self.refresh_handles.write().await;
 
         // If already running, do nothing
@@ -177,11 +177,51 @@ impl RadioFranceSource {
                     Ok(metadata) => {
                         let delay = std::time::Duration::from_millis(metadata.delay_to_refresh);
 
+                        #[cfg(feature = "logging")]
+                        {
+                            let artist = metadata
+                                .now
+                                .song
+                                .as_ref()
+                                .and_then(|s| {
+                                    if s.interpreters.is_empty() {
+                                        None
+                                    } else {
+                                        Some(s.artists_display())
+                                    }
+                                })
+                                .unwrap_or_else(|| "".to_string());
+                            tracing::debug!(
+                                "Refreshed metadata for {}: title='{}' artist='{}' delay={}ms",
+                                slug,
+                                metadata.now.first_line.title.as_deref().unwrap_or(""),
+                                artist,
+                                metadata.delay_to_refresh
+                            );
+                        }
+
                         // Update the playlist metadata
                         #[cfg(feature = "cache")]
                         {
                             let mut pls = playlists.write().await;
+
+                            #[cfg(feature = "logging")]
+                            tracing::debug!(
+                                "Looking for playlist '{}' in cache, found: {}",
+                                slug,
+                                pls.contains_key(&slug)
+                            );
+
                             if let Some(playlist) = pls.get_mut(&slug) {
+                                let old_title = playlist.stream_item.title.clone();
+
+                                #[cfg(feature = "logging")]
+                                tracing::debug!(
+                                    "Updating playlist for {}: current title = '{}'",
+                                    slug,
+                                    old_title
+                                );
+
                                 let _: Result<()> = playlist
                                     .update_metadata(
                                         &metadata,
@@ -190,6 +230,18 @@ impl RadioFranceSource {
                                     )
                                     .await;
 
+                                let new_title = playlist.stream_item.title.clone();
+
+                                #[cfg(feature = "logging")]
+                                if old_title != new_title {
+                                    tracing::info!(
+                                        "Metadata updated for {}: {} -> {}",
+                                        slug,
+                                        old_title,
+                                        new_title
+                                    );
+                                }
+
                                 // Update change tracking
                                 *update_id.write().await = update_id.read().await.wrapping_add(1);
                                 *last_change.write().await = Some(SystemTime::now());
@@ -198,6 +250,13 @@ impl RadioFranceSource {
                                 if let Some(ref notifier) = container_notifier {
                                     // Notify the station's stream item container
                                     let container_id = format!("radiofrance:{}", slug);
+
+                                    #[cfg(feature = "logging")]
+                                    tracing::info!(
+                                        "Notifying UPnP container update: {}",
+                                        container_id
+                                    );
+
                                     notifier(&[container_id]);
                                 }
                             }
@@ -206,11 +265,40 @@ impl RadioFranceSource {
                         #[cfg(not(feature = "cache"))]
                         {
                             let mut pls = playlists.write().await;
+
+                            #[cfg(feature = "logging")]
+                            tracing::debug!(
+                                "Looking for playlist '{}' in cache, found: {}",
+                                slug,
+                                pls.contains_key(&slug)
+                            );
+
                             if let Some(playlist) = pls.get_mut(&slug) {
+                                let old_title = playlist.stream_item.title.clone();
+
+                                #[cfg(feature = "logging")]
+                                tracing::debug!(
+                                    "Updating playlist for {}: current title = '{}'",
+                                    slug,
+                                    old_title
+                                );
+
                                 let _: Result<()> = playlist.update_metadata_no_cache(
                                     &metadata,
                                     server_base_url.as_deref(),
                                 );
+
+                                let new_title = playlist.stream_item.title.clone();
+
+                                #[cfg(feature = "logging")]
+                                if old_title != new_title {
+                                    tracing::info!(
+                                        "Metadata updated for {}: {} -> {}",
+                                        slug,
+                                        old_title,
+                                        new_title
+                                    );
+                                }
 
                                 // Update change tracking
                                 *update_id.write().await = update_id.read().await.wrapping_add(1);
@@ -220,6 +308,13 @@ impl RadioFranceSource {
                                 if let Some(ref notifier) = container_notifier {
                                     // Notify the station's stream item container
                                     let container_id = format!("radiofrance:{}", slug);
+
+                                    #[cfg(feature = "logging")]
+                                    tracing::info!(
+                                        "Notifying UPnP container update: {}",
+                                        container_id
+                                    );
+
                                     notifier(&[container_id]);
                                 }
                             }
@@ -246,7 +341,7 @@ impl RadioFranceSource {
     }
 
     /// Stop metadata refresh task for a station
-    async fn stop_metadata_refresh(&self, station_slug: &str) {
+    pub async fn stop_metadata_refresh(&self, station_slug: &str) {
         let mut handles = self.refresh_handles.write().await;
         if let Some(handle) = handles.remove(station_slug) {
             handle.abort();

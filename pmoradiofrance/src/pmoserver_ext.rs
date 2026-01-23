@@ -12,13 +12,20 @@ use crate::stateful_client::RadioFranceStatefulClient;
 #[derive(Clone)]
 pub struct RadioFranceState {
     pub client: Arc<RadioFranceStatefulClient>,
+    pub source: Option<Arc<crate::source::RadioFranceSource>>,
 }
 
 impl RadioFranceState {
     pub fn new(client: RadioFranceStatefulClient) -> Self {
         Self {
             client: Arc::new(client),
+            source: None,
         }
+    }
+
+    pub fn with_source(mut self, source: Arc<crate::source::RadioFranceSource>) -> Self {
+        self.source = Some(source);
+        self
     }
 }
 
@@ -80,6 +87,16 @@ pub trait RadioFranceExt {
     /// server.init_radiofrance().await?;
     /// ```
     async fn init_radiofrance(&mut self) -> Result<Arc<RadioFranceState>>;
+
+    /// Initialise l'extension Radio France avec une source existante
+    ///
+    /// Cette méthode est similaire à `init_radiofrance()` mais utilise une source
+    /// déjà créée et enregistrée, permettant de partager la même instance entre
+    /// le MediaServer UPnP et les routes API REST.
+    async fn init_radiofrance_with_source(
+        &mut self,
+        source: Arc<crate::source::RadioFranceSource>,
+    ) -> Result<Arc<RadioFranceState>>;
 }
 
 // L'implémentation du trait sera dans un module séparé (pmoserver_impl.rs)

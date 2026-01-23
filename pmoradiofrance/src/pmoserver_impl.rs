@@ -56,4 +56,29 @@ impl RadioFranceExt for Server {
 
         Ok(Arc::new(state))
     }
+
+    async fn init_radiofrance_with_source(
+        &mut self,
+        source: Arc<crate::source::RadioFranceSource>,
+    ) -> Result<Arc<RadioFranceState>> {
+        info!("Initializing Radio France API with existing source...");
+
+        // Créer le client stateful
+        let config = pmoconfig::get_config();
+        let client = RadioFranceStatefulClient::new(config)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to create Radio France client: {}", e))?;
+
+        // Créer l'état partagé avec la source
+        let state = RadioFranceState::new(client).with_source(source);
+
+        // Créer et enregistrer le router
+        let router = create_router(state.clone());
+        self.add_router("/api/radiofrance", router).await;
+
+        info!("Radio France API initialized with source");
+        info!("API endpoints available at /api/radiofrance/*");
+
+        Ok(Arc::new(state))
+    }
 }
