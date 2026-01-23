@@ -347,7 +347,7 @@ impl StationPlaylist {
         );
 
         // Construction de la ressource (stream)
-        let resource = Self::build_stream_resource(metadata);
+        let resource = Self::build_stream_resource(metadata, &station.slug, server_base_url);
 
         let item = Item {
             id: format!("radiofrance:{}:stream", station.slug),
@@ -390,7 +390,7 @@ impl StationPlaylist {
             Self::extract_metadata_fields(station, metadata);
 
         let (album_art, album_art_pk) = Self::extract_cover_url(metadata, server_base_url);
-        let resource = Self::build_stream_resource(metadata);
+        let resource = Self::build_stream_resource(metadata, &station.slug, server_base_url);
 
         Ok(Item {
             id: format!("radiofrance:{}:stream", station.slug),
@@ -616,8 +616,12 @@ impl StationPlaylist {
         }
     }
 
-    /// Construit la ressource stream
-    fn build_stream_resource(metadata: &LiveResponse) -> Resource {
+    /// Construit la ressource stream avec URL du proxy
+    fn build_stream_resource(
+        metadata: &LiveResponse,
+        station_slug: &str,
+        server_base_url: Option<&str>,
+    ) -> Resource {
         // Calculer la durée restante (maintenant -> end_time)
         // Cela permet au curseur de progresser de 0 jusqu'à la fin de l'émission
         let duration = if let Some(end) = metadata.now.end_time {
@@ -657,10 +661,24 @@ impl StationPlaylist {
             None
         };
 
-        // Trouver le meilleur stream HiFi
+        // Construire l'URL du proxy ou fallback direct
+        let url = if let Some(base_url) = server_base_url {
+            // Utiliser le proxy PMOMusic pour détecter quand le stream est actif
+            format!("{}/api/radiofrance/{}/stream", base_url, station_slug)
+        } else {
+            // Fallback : utiliser l'URL directe si pas de base_url
+            metadata
+                .now
+                .media
+                .best_hifi_stream()
+                .map(|s| s.url.clone())
+                .unwrap_or_default()
+        };
+
+        // Déterminer le protocol_info et caractéristiques audio
         let best_stream = metadata.now.media.best_hifi_stream();
 
-        let (url, protocol_info, sample_frequency, nr_audio_channels) = match best_stream {
+        let (protocol_info, sample_frequency, nr_audio_channels) = match best_stream {
             Some(stream) => {
                 let protocol_info = match stream.format {
                     StreamFormat::Aac => "http-get:*:audio/aac:*".to_string(),
@@ -678,16 +696,11 @@ impl StationPlaylist {
                     _ => None,
                 };
 
-                (stream.url.clone(), protocol_info, sample_freq, channels)
+                (protocol_info, sample_freq, channels)
             }
             None => {
                 // Fallback : pas de stream trouvé
-                (
-                    String::new(),
-                    "http-get:*:audio/aac:*".to_string(),
-                    None,
-                    None,
-                )
+                ("http-get:*:audio/aac:*".to_string(), None, None)
             }
         };
 
