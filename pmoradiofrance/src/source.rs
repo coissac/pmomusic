@@ -488,17 +488,26 @@ impl MusicSource for RadioFranceSource {
                     .ok_or_else(|| MusicSourceError::ObjectNotFound(id.to_string()))?;
 
                 // Build items for this group only (main + webradios)
-                let mut items = vec![self
+                let group_id = format!("radiofrance:group:{}", slug);
+
+                let mut main_item = self
                     .build_station_item(&group.main)
                     .await
-                    .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?];
+                    .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+                // Fix parent_id to point to the group container
+                main_item.parent_id = group_id.clone();
+                let mut items = vec![main_item];
 
                 for webradio in &group.webradios {
-                    items.push(
-                        self.build_station_item(webradio)
-                            .await
-                            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?,
-                    );
+                    let mut item = self
+                        .build_station_item(webradio)
+                        .await
+                        .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+                    // Fix parent_id to point to the group container
+                    item.parent_id = group_id.clone();
+                    items.push(item);
                 }
 
                 Ok(BrowseResult::Items(items))
@@ -514,11 +523,14 @@ impl MusicSource for RadioFranceSource {
                 // Build items for local radios only
                 let mut items = Vec::new();
                 for station in &groups.local_radios {
-                    items.push(
-                        self.build_station_item(station)
-                            .await
-                            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?,
-                    );
+                    let mut item = self
+                        .build_station_item(station)
+                        .await
+                        .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+                    // Fix parent_id to point to the ICI container
+                    item.parent_id = "radiofrance:ici".to_string();
+                    items.push(item);
                 }
 
                 Ok(BrowseResult::Items(items))

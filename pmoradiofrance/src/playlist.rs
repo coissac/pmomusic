@@ -417,13 +417,26 @@ impl StationPlaylist {
         if let Some(ref song) = now.song {
             // Radio musicale avec morceau
             let title = now.first_line.title_or_default().to_string();
-            let artist = if song.interpreters.is_empty() {
+            let song_artist = if song.interpreters.is_empty() {
                 None
             } else {
                 Some(song.artists_display())
             };
+
+            // Artist affiché = "Station - Artiste du morceau" pour identifier la radio
+            // Éviter la duplication si l'artiste est égal au nom de la station
+            let artist = if let Some(ref art) = song_artist {
+                if art != &station.name && art != station.display_name() {
+                    Some(format!("{} - {}", station.display_name(), art))
+                } else {
+                    Some(station.display_name().to_string())
+                }
+            } else {
+                Some(station.display_name().to_string())
+            };
+
             let album = song.release.title.clone();
-            let creator = artist.clone();
+            let creator = song_artist; // Creator reste l'artiste du morceau pour compatibilité
             let genre = Some("Music".to_string());
             let class = "object.item.audioItem.musicTrack".to_string();
 
@@ -448,11 +461,14 @@ impl StationPlaylist {
             };
 
             // Artist/Creator = "{Station} - {Subtitle}"
-            let artist = if !second.is_empty() {
-                Some(format!("{} - {}", station.name, second))
-            } else {
-                Some(station.name.clone())
-            };
+            // Éviter la duplication si subtitle == nom de la station
+            let artist =
+                if !second.is_empty() && second != station.name && second != station.display_name()
+                {
+                    Some(format!("{} - {}", station.name, second))
+                } else {
+                    Some(station.name.clone())
+                };
             let creator = artist.clone();
             // Album = nom de l'émission principale
             let album = if !first.is_empty() {
