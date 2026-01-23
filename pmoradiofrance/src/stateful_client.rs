@@ -123,6 +123,27 @@ impl RadioFranceStatefulClient {
         })
     }
 
+    /// Create a client from global configuration
+    ///
+    /// This is a convenience method that reads the configuration from
+    /// the global config singleton.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use pmoradiofrance::RadioFranceStatefulClient;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let client = RadioFranceStatefulClient::from_config().await?;
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn from_config() -> Result<Self> {
+        let config = pmoconfig::get_config();
+        Self::new(config).await
+    }
+
     /// Create a client with a custom RadioFranceClient
     pub fn with_client(client: RadioFranceClient, config: Arc<Config>) -> Self {
         Self {
@@ -188,11 +209,16 @@ impl RadioFranceStatefulClient {
             return Ok(stations);
         }
 
-        // Cache miss - discover and cache
+        // Cache miss - discover and cache with timeout
         #[cfg(feature = "logging")]
         tracing::info!("Station cache miss - discovering stations");
 
-        let stations = self.client.discover_all_stations().await?;
+        let stations = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            self.client.discover_all_stations(),
+        )
+        .await
+        .map_err(|_| Error::other("Timeout while discovering Radio France stations (10s)"))??;
 
         // Cache the results
         self.config.set_radiofrance_cached_stations(&stations)?;
@@ -281,11 +307,21 @@ impl RadioFranceStatefulClient {
             }
         }
 
-        // Cache miss or expired - fetch fresh data
+        // Cache miss or expired - fetch fresh data with timeout
         #[cfg(feature = "logging")]
         tracing::debug!("Fetching live metadata for {}", station);
 
-        let metadata = self.client.live_metadata(station).await?;
+        let metadata = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.client.live_metadata(station),
+        )
+        .await
+        .map_err(|_| {
+            Error::other(format!(
+                "Timeout while fetching metadata for {} (5s)",
+                station
+            ))
+        })??;
 
         // Update cache
         {

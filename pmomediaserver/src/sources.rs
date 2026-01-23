@@ -18,6 +18,10 @@ pub enum SourceInitError {
     #[error("Failed to initialize Radio Paradise: {0}")]
     ParadiseError(String),
 
+    #[cfg(feature = "radiofrance")]
+    #[error("Failed to initialize Radio France: {0}")]
+    RadioFranceError(String),
+
     #[error("Configuration error: {0}")]
     ConfigError(String),
 
@@ -117,6 +121,25 @@ pub trait SourcesExt {
     /// ```
     #[cfg(feature = "paradise")]
     async fn register_paradise(&mut self) -> Result<()>;
+
+    /// Enregistre la source Radio France
+    ///
+    /// Cette méthode crée automatiquement un `RadioFranceSource` avec cache activé.
+    /// Radio France ne nécessite pas d'authentification.
+    ///
+    /// # Erreurs
+    ///
+    /// Retourne une erreur si :
+    /// - La connexion au client Radio France échoue
+    /// - La feature "radiofrance" n'est pas activée
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// server.register_radiofrance().await?;
+    /// ```
+    #[cfg(feature = "radiofrance")]
+    async fn register_radiofrance(&mut self) -> Result<()>;
 }
 
 #[async_trait::async_trait]
@@ -214,6 +237,35 @@ impl SourcesExt for Server {
                 tracing::info!("✅ Radio Paradise API initialized");
             }
         }
+
+        Ok(())
+    }
+
+    #[cfg(feature = "radiofrance")]
+    async fn register_radiofrance(&mut self) -> Result<()> {
+        use pmoradiofrance::{RadioFranceSource, RadioFranceStatefulClient};
+
+        tracing::info!("Initializing Radio France source...");
+
+        // Obtenir l'URL de base du serveur
+        let base_url = self.base_url();
+
+        // Créer le client stateful depuis la config
+        let client = RadioFranceStatefulClient::from_config()
+            .await
+            .map_err(|e| {
+                SourceInitError::RadioFranceError(format!("Failed to create client: {}", e))
+            })?;
+
+        // Créer la source depuis le registry (avec cache)
+        let source = RadioFranceSource::from_registry(client, base_url).map_err(|e| {
+            SourceInitError::RadioFranceError(format!("Failed to create source: {}", e))
+        })?;
+
+        // Enregistrer la source
+        self.register_music_source(Arc::new(source)).await;
+
+        tracing::info!("✅ Radio France source registered successfully");
 
         Ok(())
     }

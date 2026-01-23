@@ -110,7 +110,7 @@ impl Station {
 // ============================================================================
 
 /// Response from the /api/live? endpoint
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LiveResponse {
     /// Station name (slug)
@@ -134,7 +134,7 @@ impl LiveResponse {
 }
 
 /// Metadata for a show or track currently playing
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ShowMetadata {
     /// Whether to display music program info
@@ -174,7 +174,7 @@ pub struct ShowMetadata {
 }
 
 /// A line of text with optional link
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Line {
     /// Text content
     pub title: Option<String>,
@@ -192,7 +192,7 @@ impl Line {
 }
 
 /// Song information (for music stations)
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Song {
     /// Song UUID
     pub id: String,
@@ -214,7 +214,7 @@ impl Song {
 }
 
 /// Album/release information
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Release {
     /// Record label
     pub label: Option<String>,
@@ -225,7 +225,7 @@ pub struct Release {
 }
 
 /// Available media streams
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Media {
     /// List of available stream sources
     #[serde(default)]
@@ -270,7 +270,7 @@ impl Media {
 }
 
 /// A stream source with URL and format info
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StreamSource {
     /// Stream URL
@@ -284,7 +284,7 @@ pub struct StreamSource {
 }
 
 /// Type of broadcast
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BroadcastType {
     /// Live stream
@@ -294,7 +294,7 @@ pub enum BroadcastType {
 }
 
 /// Stream format
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum StreamFormat {
     /// MP3 format
@@ -317,7 +317,7 @@ impl StreamFormat {
 }
 
 /// An embedded image
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EmbedImage {
     /// Model type (usually "EmbedImage")
@@ -348,7 +348,7 @@ impl EmbedImage {
 }
 
 /// Visual assets for different display contexts
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Visuals {
     /// Card-sized image
     pub card: Option<EmbedImage>,
@@ -357,7 +357,7 @@ pub struct Visuals {
 }
 
 /// A local France Bleu radio station
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalRadio {
     /// Internal ID

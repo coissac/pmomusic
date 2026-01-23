@@ -101,6 +101,18 @@ pub mod stateful_client;
 #[cfg(feature = "playlist")]
 pub mod playlist;
 
+#[cfg(feature = "server")]
+pub mod source;
+
+#[cfg(feature = "server")]
+pub mod pmoserver_ext;
+
+#[cfg(feature = "server")]
+pub mod pmoserver_impl;
+
+#[cfg(feature = "server")]
+pub mod api_rest;
+
 // Re-exports
 pub use client::{ClientBuilder, RadioFranceClient};
 pub use error::{Error, Result};
@@ -117,3 +129,9 @@ pub use stateful_client::RadioFranceStatefulClient;
 
 #[cfg(feature = "playlist")]
 pub use playlist::{StationGroup, StationGroups, StationPlaylist};
+
+#[cfg(feature = "server")]
+pub use source::RadioFranceSource;
+
+#[cfg(feature = "server")]
+pub use pmoserver_ext::{RadioFranceExt, RadioFranceState};

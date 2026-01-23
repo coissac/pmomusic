@@ -65,7 +65,10 @@ impl ChromecastDiscoveryManager {
             .collect();
 
         if addresses.is_empty() {
-            warn!("No IP address found for Chromecast device: {}", service_name);
+            warn!(
+                "No IP address found for Chromecast device: {}",
+                service_name
+            );
             return;
         }
 
@@ -127,22 +130,19 @@ impl ChromecastDiscoveryManager {
 
         // Extract friendly name from TXT record "fn" if available
         // Otherwise, extract from service instance name (PTR record)
-        let friendly_name = txt_records
-            .get("fn")
-            .cloned()
-            .unwrap_or_else(|| {
-                // Fallback: extract from service name, removing the UUID suffix if present
-                service_name
-                    .split("._googlecast._tcp.local")
-                    .next()
-                    .unwrap_or("Unknown Chromecast")
-                    .split('-')
-                    .take_while(|part| part.len() != 32) // Skip 32-char hex UUID
-                    .collect::<Vec<_>>()
-                    .join("-")
-                    .trim()
-                    .to_string()
-            });
+        let friendly_name = txt_records.get("fn").cloned().unwrap_or_else(|| {
+            // Fallback: extract from service name, removing the UUID suffix if present
+            service_name
+                .split("._googlecast._tcp.local")
+                .next()
+                .unwrap_or("Unknown Chromecast")
+                .split('-')
+                .take_while(|part| part.len() != 32) // Skip 32-char hex UUID
+                .collect::<Vec<_>>()
+                .join("-")
+                .trim()
+                .to_string()
+        });
 
         debug!(
             "Discovered Chromecast: {} at {}:{} (UUID: {}, Model: {:?})",

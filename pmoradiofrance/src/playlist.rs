@@ -30,6 +30,7 @@
 use crate::error::Result;
 use crate::models::{ImageSize, LiveResponse, Station, StationType, StreamFormat};
 use pmodidl::{Item, Resource};
+use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "cache")]
 use pmocovers::Cache as CoverCache;
@@ -46,7 +47,7 @@ use std::sync::Arc;
 /// - `standalone` : Stations sans webradios (France Culture, France Inter, France Info, Mouv')
 /// - `with_webradios` : Groupes avec station principale + webradios (FIP, France Musique)
 /// - `local_radios` : Toutes les radios ICI (ex-France Bleu)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StationGroups {
     /// Stations sans webradios associées
     pub standalone: Vec<Station>,
@@ -57,7 +58,7 @@ pub struct StationGroups {
 }
 
 /// Groupe station principale + webradios associées
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StationGroup {
     /// Station principale (ex: FIP)
     pub main: Station,

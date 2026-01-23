@@ -19,7 +19,7 @@ fn ensure_crypto_provider_initialized() {
 
     INIT.call_once(|| {
         let _ = rustls::crypto::CryptoProvider::install_default(
-            rustls::crypto::aws_lc_rs::default_provider()
+            rustls::crypto::aws_lc_rs::default_provider(),
         );
     });
 }
@@ -47,21 +47,25 @@ fn main() {
 
     // Connect to the device
     println!("→ Connecting to {}:{}...", chromecast_ip, DEFAULT_PORT);
-    let cast_device = match CastDevice::connect_without_host_verification(chromecast_ip, DEFAULT_PORT) {
-        Ok(device) => {
-            println!("  ✓ Connected");
-            device
-        }
-        Err(e) => {
-            eprintln!("  ✗ Failed: {}", e);
-            std::process::exit(1);
-        }
-    };
+    let cast_device =
+        match CastDevice::connect_without_host_verification(chromecast_ip, DEFAULT_PORT) {
+            Ok(device) => {
+                println!("  ✓ Connected");
+                device
+            }
+            Err(e) => {
+                eprintln!("  ✗ Failed: {}", e);
+                std::process::exit(1);
+            }
+        };
 
     // Connect to receiver channel
     println!();
     println!("→ Connecting to receiver channel...");
-    if let Err(e) = cast_device.connection.connect(DEFAULT_DESTINATION_ID.to_string()) {
+    if let Err(e) = cast_device
+        .connection
+        .connect(DEFAULT_DESTINATION_ID.to_string())
+    {
         eprintln!("  ✗ Failed: {}", e);
         std::process::exit(1);
     }

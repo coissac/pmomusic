@@ -55,6 +55,12 @@ pmoaudiocache = { path = "../pmoaudiocache", optional = true }
 # Playlist management for FIFO support
 pmoplaylist = { path = "../pmoplaylist", optional = true }
 
+# Server integration (optional)
+pmoserver = { path = "../pmoserver", optional = true }
+pmoupnp = { path = "../pmoupnp", optional = true }
+axum = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+
 [features]
 default = ["pmoconfig"]
 # Feature for pmoconfig support
@@ -65,8 +71,8 @@ cache = ["dep:pmocovers", "dep:pmoaudiocache"]
 playlist = ["dep:pmoplaylist", "dep:pmodidl"]
 # Feature for logging (tracing)
 logging = []
-# Feature for server support (cache registry)
-server = ["pmosource/server", "pmoconfig", "cache", "playlist"]
+# Feature for server support (MusicSource + HTTP API routes)
+server = ["pmosource/server", "pmoconfig", "cache", "playlist", "dep:pmoserver", "dep:pmoupnp", "dep:axum", "dep:futures"]
 # Full feature set
 full = ["server", "logging"]
 

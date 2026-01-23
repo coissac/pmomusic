@@ -274,19 +274,19 @@ pub fn ensure_success_with_envelope<'a>(
         if let Some(env) = &call_result.envelope {
             if let Some(err) = parse_upnp_error(env) {
                 return Err(ControlPointError::SoapUpnpParseError(
-                action.to_string(),
-                err.error_code,
-                err.error_description,
-                call_result.status.as_u16() as u32,
-            ));
+                    action.to_string(),
+                    err.error_code,
+                    err.error_description,
+                    call_result.status.as_u16() as u32,
+                ));
             }
         }
 
         return Err(ControlPointError::SoapActionWrongBody(
-        action.to_string(),
-        call_result.status.as_u16() as u32,
-        call_result.raw_body.clone(),
-    ));
+            action.to_string(),
+            call_result.status.as_u16() as u32,
+            call_result.raw_body.clone(),
+        ));
     }
 
     let envelope = call_result
@@ -295,12 +295,12 @@ pub fn ensure_success_with_envelope<'a>(
         .ok_or_else(|| ControlPointError::SoapNoEnvelop(action.to_string()))?;
 
     if let Some(err) = parse_upnp_error(envelope) {
-         return Err(ControlPointError::SoapUpnpParseError(
-                action.to_string(),
-                err.error_code,
-                err.error_description,
-                call_result.status.as_u16() as u32,
-            ));
+        return Err(ControlPointError::SoapUpnpParseError(
+            action.to_string(),
+            err.error_code,
+            err.error_description,
+            call_result.status.as_u16() as u32,
+        ));
     }
 
     Ok(envelope)
@@ -314,7 +314,10 @@ pub fn handle_action_response(
     ensure_success(action, call_result)
 }
 
-pub fn extract_child_text(parent: &xmltree::Element, suffix: &str) -> Result<String, ControlPointError> {
+pub fn extract_child_text(
+    parent: &xmltree::Element,
+    suffix: &str,
+) -> Result<String, ControlPointError> {
     let child = find_child_with_suffix(parent, suffix)
         .ok_or_else(|| ControlPointError::UpnpMissingReturnValue(suffix.to_string()))?;
 
@@ -327,7 +330,10 @@ pub fn extract_child_text(parent: &xmltree::Element, suffix: &str) -> Result<Str
     Ok(text)
 }
 
-pub fn extract_child_text_allow_empty(parent: &xmltree::Element, suffix: &str) -> Result<String, ControlPointError> {
+pub fn extract_child_text_allow_empty(
+    parent: &xmltree::Element,
+    suffix: &str,
+) -> Result<String, ControlPointError> {
     let child = find_child_with_suffix(parent, suffix)
         .ok_or_else(|| ControlPointError::UpnpMissingReturnValue(suffix.to_string()))?;
 
@@ -368,13 +374,19 @@ pub fn extract_child_text_any(
     ))
 }
 
-pub fn extract_child_text_local(parent: &xmltree::Element, local: &str) -> Result<String, ControlPointError> {
-    let child = find_child_with_local_name(parent, local)
-        .ok_or_else(|| ControlPointError::SoapAction(format!("Missing {local} element in response")))?;
+pub fn extract_child_text_local(
+    parent: &xmltree::Element,
+    local: &str,
+) -> Result<String, ControlPointError> {
+    let child = find_child_with_local_name(parent, local).ok_or_else(|| {
+        ControlPointError::SoapAction(format!("Missing {local} element in response"))
+    })?;
     let text = child
         .get_text()
         .map(|t| t.trim().to_string())
-        .ok_or_else(|| ControlPointError::SoapAction(format!("{local} element missing text in response")))?;
+        .ok_or_else(|| {
+            ControlPointError::SoapAction(format!("{local} element missing text in response"))
+        })?;
     Ok(text)
 }
 
@@ -408,7 +420,6 @@ pub fn parse_bool(value: &str) -> bool {
     value.trim() == "1"
 }
 
-
 pub fn decode_base64(input: &str) -> Result<Vec<u8>, ControlPointError> {
     fn value(byte: u8) -> Option<u8> {
         match byte {
@@ -432,8 +443,9 @@ pub fn decode_base64(input: &str) -> Result<Vec<u8>, ControlPointError> {
         if byte == b'\r' || byte == b'\n' || byte == b' ' || byte == b'\t' {
             continue;
         }
-        let val =
-            value(byte).ok_or_else(|| ControlPointError::ParsingError(format!("Invalid base64 character '{}'", byte as char)))?;
+        let val = value(byte).ok_or_else(|| {
+            ControlPointError::ParsingError(format!("Invalid base64 character '{}'", byte as char))
+        })?;
         buffer = (buffer << 6) | (val as u32);
         bits_collected += 6;
         if bits_collected >= 8 {
@@ -445,7 +457,6 @@ pub fn decode_base64(input: &str) -> Result<Vec<u8>, ControlPointError> {
 
     Ok(output)
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -3,14 +3,14 @@ use std::time::Duration;
 
 use quick_xml::{Error as XmlError, Reader, events::Event};
 use thiserror::Error;
-use tracing::{debug};
+use tracing::debug;
 
 use crate::DeviceId;
 use crate::discovery::arylic::detect_arylic_tcp;
 use crate::linkplay_client::{extract_linkplay_host, fetch_status_for_host};
 use crate::media_server::UpnpMediaServer;
 use crate::model::{RendererCapabilities, RendererInfo, RendererProtocol};
-use crate::upnp_clients::{AvTransportClient,resolve_control_url};
+use crate::upnp_clients::{AvTransportClient, resolve_control_url};
 
 use ureq::Agent;
 
@@ -77,7 +77,6 @@ pub struct ParsedDeviceDescription {
 }
 
 impl ParsedDeviceDescription {
-
     /// Fetch and parse the device description.xml at endpoint.location.
     pub fn new(
         udn: &str,
@@ -108,7 +107,7 @@ impl ParsedDeviceDescription {
         let mut buf = Vec::new();
         let mut parsed = ParsedDeviceDescription::default();
 
-        parsed.timeout_secs=timeout_secs;
+        parsed.timeout_secs = timeout_secs;
         parsed.location = location.to_string();
         parsed.udn = udn.to_string();
         parsed.server_header = server_header.to_string();
@@ -354,9 +353,7 @@ impl ParsedDeviceDescription {
         parsed.require_fields()
     }
 
-    pub fn build_renderer(
-        &self,
-    ) -> Option<RendererInfo> {
+    pub fn build_renderer(&self) -> Option<RendererInfo> {
         let device_type = self.device_type.as_ref()?.to_ascii_lowercase();
         if !device_type.contains("urn:schemas-upnp-org:device:mediarenderer:")
             && !device_type.contains("urn:av-openhome-org:device:mediarenderer:")
@@ -371,10 +368,16 @@ impl ParsedDeviceDescription {
 
         let udn = self.udn.to_ascii_lowercase();
         let mut caps = detect_renderer_capabilities(&self.service_types);
-        if detect_linkplay_http(&self.location, Duration::from_secs(self.timeout_secs.max(1))) {
+        if detect_linkplay_http(
+            &self.location,
+            Duration::from_secs(self.timeout_secs.max(1)),
+        ) {
             caps.has_linkplay_http = true;
         }
-        if detect_arylic_tcp(&self.location, Duration::from_secs(self.timeout_secs.max(1))) {
+        if detect_arylic_tcp(
+            &self.location,
+            Duration::from_secs(self.timeout_secs.max(1)),
+        ) {
             caps.has_arylic_tcp = true;
         }
         let protocol = detect_renderer_protocol(&caps);
@@ -390,68 +393,54 @@ impl ParsedDeviceDescription {
             self.location.clone(),
             self.server_header.clone(),
             self.avtransport_service_type.clone(),
-            self
-                .avtransport_control_url
+            self.avtransport_control_url
                 .as_ref()
                 .map(|ctrl| resolve_control_url(&self.location, ctrl)),
             self.rendering_control_service_type.clone(),
-            self
-                .rendering_control_control_url
+            self.rendering_control_control_url
                 .as_ref()
                 .map(|ctrl| resolve_control_url(&self.location, ctrl)),
             self.connection_manager_service_type.clone(),
-            self
-                .connection_manager_control_url
+            self.connection_manager_control_url
                 .as_ref()
                 .map(|ctrl| resolve_control_url(&self.location, ctrl)),
             self.oh_playlist_service_type.clone(),
-            self
-                .oh_playlist_control_url
+            self.oh_playlist_control_url
                 .as_ref()
                 .map(|ctrl| resolve_control_url(&self.location, ctrl)),
-            self
-                .oh_playlist_event_sub_url
+            self.oh_playlist_event_sub_url
                 .as_ref()
                 .map(|url| resolve_control_url(&self.location, url)),
             self.oh_info_service_type.clone(),
-            self
-                .oh_info_control_url
+            self.oh_info_control_url
                 .as_ref()
                 .map(|ctrl| resolve_control_url(&self.location, ctrl)),
-            self
-                .oh_info_event_sub_url
+            self.oh_info_event_sub_url
                 .as_ref()
                 .map(|url| resolve_control_url(&self.location, url)),
             self.oh_time_service_type.clone(),
-            self
-                .oh_time_control_url
+            self.oh_time_control_url
                 .as_ref()
                 .map(|ctrl| resolve_control_url(&self.location, ctrl)),
-            self
-                .oh_time_event_sub_url
+            self.oh_time_event_sub_url
                 .as_ref()
                 .map(|url| resolve_control_url(&self.location, url)),
             self.oh_volume_service_type.clone(),
-            self
-                .oh_volume_control_url
+            self.oh_volume_control_url
                 .as_ref()
                 .map(|ctrl| resolve_control_url(&self.location, ctrl)),
             self.oh_radio_service_type.clone(),
-            self
-                .oh_radio_control_url
+            self.oh_radio_control_url
                 .as_ref()
                 .map(|ctrl| resolve_control_url(&self.location, ctrl)),
             self.oh_product_service_type.clone(),
-            self
-                .oh_product_control_url
+            self.oh_product_control_url
                 .as_ref()
                 .map(|ctrl| resolve_control_url(&self.location, ctrl)),
         ))
     }
 
-    pub fn build_server(
-        &self,
-    ) -> Option<UpnpMediaServer> {
+    pub fn build_server(&self) -> Option<UpnpMediaServer> {
         let device_type = self.device_type.as_ref()?.to_ascii_lowercase();
         if !device_type.contains("urn:schemas-upnp-org:device:mediaserver:") {
             return None;
@@ -480,14 +469,11 @@ impl ParsedDeviceDescription {
             self.content_directory_service_type.clone(),
             content_directory_control_url,
         ))
-
     }
 
     /// Returns Ok(Some(client)) if an AVTransport service with a controlURL is present,
     /// Ok(None) if no AVTransport service was found.
-    pub fn build_avtransport_client(
-        &self,
-    ) -> Result<Option<AvTransportClient>, DescriptionError> {
+    pub fn build_avtransport_client(&self) -> Result<Option<AvTransportClient>, DescriptionError> {
         let service_type = match &self.avtransport_service_type {
             Some(st) => st.clone(),
             None => return Ok(None),
@@ -677,9 +663,6 @@ fn detect_renderer_protocol(caps: &RendererCapabilities) -> RendererProtocol {
         (false, false) => RendererProtocol::UpnpAvOnly,
     }
 }
-
-
-
 
 /// Detect whether a renderer exposes the LinkPlay HTTP API.
 pub fn detect_linkplay_http(location: &str, timeout: Duration) -> bool {

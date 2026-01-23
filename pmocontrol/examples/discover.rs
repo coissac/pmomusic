@@ -3,7 +3,7 @@ use std::thread;
 use std::time::Duration;
 
 use pmocontrol::RendererProtocol;
-use pmocontrol::{ControlPoint, DeviceRegistryRead, UpnpMediaServer, RendererInfo};
+use pmocontrol::{ControlPoint, DeviceRegistryRead, RendererInfo, UpnpMediaServer};
 
 fn main() -> std::io::Result<()> {
     // Un tout petit logging optionnel

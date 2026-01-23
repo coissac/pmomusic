@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossbeam_channel::RecvTimeoutError;
-use pmocontrol::{ControlPoint, MediaServerEvent, UpnpMediaServer, ServerId};
+use pmocontrol::{ControlPoint, MediaServerEvent, ServerId, UpnpMediaServer};
 
 const DISCOVERY_WAIT_SECS: u64 = 5;
 const MONITOR_DURATION_SECS: u64 = 90;

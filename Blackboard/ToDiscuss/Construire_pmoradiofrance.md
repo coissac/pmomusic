@@ -498,3 +498,787 @@ server = ["pmoconfig", "cache"]
 7. ✅ Tests unitaires et d'intégration
 
 Le Round 5 pourra alors implémenter la `MusicSource` qui utilisera ce client stateful.
+
+---
+
+## Round 5 : Implémentation MusicSource et Intégration Serveur
+
+### Objectif
+
+Implémenter le trait `MusicSource` pour l'intégration UPnP et ajouter les routes serveur REST pour l'accès aux stations Radio France.
+
+### Fichiers à créer
+
+#### 1. `pmoradiofrance/src/source.rs` (NOUVEAU)
+
+Implémentation du trait `MusicSource` pour Radio France.
+
+```rust
+use async_trait::async_trait;
+use pmosource::{MusicSource, SourceMetadata, SourceCapabilities};
+use crate::{RadioFranceStatefulClient, StationGroups, StationPlaylist};
+use pmoconfig::Config;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use std::collections::HashMap;
+
+pub struct RadioFranceSource {
+    /// Client stateful avec cache automatique
+    client: RadioFranceStatefulClient,
+    /// Cache des playlists par station (métadonnées volatiles)
+    playlists: Arc<RwLock<HashMap<String, StationPlaylist>>>,
+    /// Handles des tâches de rafraîchissement
+    refresh_handles: Arc<RwLock<HashMap<String, JoinHandle<()>>>>,
+}
+
+impl RadioFranceSource {
+    /// Créer une nouvelle source Radio France
+    pub async fn new(config: Arc<Config>) -> Result<Self> {
+        let client = RadioFranceStatefulClient::new(config).await?;
+        
+        Ok(Self {
+            client,
+            playlists: Arc::new(RwLock::new(HashMap::new())),
+            refresh_handles: Arc::new(RwLock::new(HashMap::new())),
+        })
+    }
+    
+    /// Démarrer le rafraîchissement des métadonnées pour une station
+    async fn start_metadata_refresh(&self, station_slug: &str) -> Result<()> {
+        let mut handles = self.refresh_handles.write().await;
+        
+        // Si déjà en cours, ne rien faire
+        if handles.contains_key(station_slug) {
+            return Ok(());
+        }
+        
+        let client = self.client.clone();
+        let playlists = self.playlists.clone();
+        let slug = station_slug.to_string();
+        
+        let handle = tokio::spawn(async move {
+            loop {
+                match client.get_live_metadata(&slug).await {
+                    Ok(metadata) => {
+                        let delay = Duration::from_millis(metadata.delay_to_refresh);
+                        
+                        // Mettre à jour la playlist
+                        if let Ok(mut pls) = playlists.write() {
+                            if let Some(playlist) = pls.get_mut(&slug) {
+                                let _ = playlist.update_metadata(&metadata, None, None);
+                            }
+                        }
+                        
+                        tokio::time::sleep(delay).await;
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to refresh metadata for {}: {}", slug, e);
+                        tokio::time::sleep(Duration::from_secs(60)).await;
+                    }
+                }
+            }
+        });
+        
+        handles.insert(station_slug.to_string(), handle);
+        Ok(())
+    }
+    
+    /// Arrêter le rafraîchissement pour une station
+    async fn stop_metadata_refresh(&self, station_slug: &str) {
+        let mut handles = self.refresh_handles.write().await;
+        if let Some(handle) = handles.remove(station_slug) {
+            handle.abort();
+        }
+    }
+    
+    /// Construire l'arborescence UPnP dynamiquement depuis StationGroups
+    async fn build_container_tree(&self) -> Result<Container> {
+        let stations = self.client.get_stations().await?;
+        let groups = StationGroups::from_stations(stations);
+        
+        let mut children = Vec::new();
+        
+        // 1. Stations standalone → Items directs (streamables)
+        for station in &groups.standalone {
+            children.push(ContainerChild::Item(self.build_station_item(station).await?));
+        }
+        
+        // 2. Stations avec webradios → Containers
+        for group in &groups.with_webradios {
+            children.push(ContainerChild::Container(
+                self.build_station_container(group).await?
+            ));
+        }
+        
+        // 3. Radios ICI → Container unique "Radios ICI"
+        if !groups.local_radios.is_empty() {
+            children.push(ContainerChild::Container(
+                self.build_ici_container(&groups.local_radios).await?
+            ));
+        }
+        
+        Ok(Container {
+            id: "radiofrance:root".to_string(),
+            parent_id: "-1".to_string(),
+            title: "Radio France".to_string(),
+            class: "object.container".to_string(),
+            children,
+        })
+    }
+    
+    /// Construire un Container pour une station avec webradios
+    async fn build_station_container(&self, group: &StationGroup) -> Result<Container> {
+        let mut items = vec![
+            self.build_station_item(&group.main).await?  // Station principale en premier
+        ];
+        
+        // Ajouter les webradios
+        for webradio in &group.webradios {
+            items.push(self.build_station_item(webradio).await?);
+        }
+        
+        Ok(Container {
+            id: format!("radiofrance:group:{}", group.main.slug),
+            parent_id: "radiofrance:root".to_string(),
+            title: group.main.name.clone(),
+            class: "object.container".to_string(),
+            children: items.into_iter().map(ContainerChild::Item).collect(),
+        })
+    }
+    
+    /// Construire le Container des radios ICI
+    async fn build_ici_container(&self, local_radios: &[Station]) -> Result<Container> {
+        let mut items = Vec::new();
+        
+        for station in local_radios {
+            items.push(self.build_station_item(station).await?);
+        }
+        
+        Ok(Container {
+            id: "radiofrance:ici".to_string(),
+            parent_id: "radiofrance:root".to_string(),
+            title: "Radios ICI".to_string(),
+            class: "object.container".to_string(),
+            children: items.into_iter().map(ContainerChild::Item).collect(),
+        })
+    }
+    
+    /// Construire un Item UPnP pour une station
+    async fn build_station_item(&self, station: &Station) -> Result<Item> {
+        // Récupérer ou créer la playlist pour cette station
+        let mut playlists = self.playlists.write().await;
+        
+        let playlist = if let Some(existing) = playlists.get(&station.slug) {
+            existing.clone()
+        } else {
+            // Créer la playlist avec métadonnées initiales
+            let metadata = self.client.get_live_metadata(&station.slug).await?;
+            let playlist = StationPlaylist::from_live_metadata_no_cache(
+                station.clone(),
+                &metadata
+            )?;
+            playlists.insert(station.slug.clone(), playlist.clone());
+            
+            // Démarrer le rafraîchissement automatique
+            drop(playlists); // Libérer le lock avant d'appeler start_metadata_refresh
+            self.start_metadata_refresh(&station.slug).await?;
+            
+            playlist
+        };
+        
+        Ok(playlist.stream_item.clone())
+    }
+}
+
+#[async_trait]
+impl MusicSource for RadioFranceSource {
+    fn source_id(&self) -> &str { 
+        "radiofrance" 
+    }
+    
+    fn display_name(&self) -> &str { 
+        "Radio France" 
+    }
+    
+    fn capabilities(&self) -> SourceCapabilities {
+        SourceCapabilities {
+            supports_search: false,     // Pas de recherche
+            supports_playlists: false,   // Streams live uniquement
+            supports_streaming: true,    // Flux audio HiFi
+            is_live: true,              // Contenu live
+        }
+    }
+    
+    async fn get_root_container(&self) -> Result<Container> {
+        self.build_container_tree().await
+    }
+    
+    async fn browse_container(&self, container_id: &str) -> Result<Vec<ContainerChild>> {
+        match container_id {
+            "radiofrance:root" => {
+                let container = self.build_container_tree().await?;
+                Ok(container.children)
+            }
+            id if id.starts_with("radiofrance:group:") => {
+                let slug = id.strip_prefix("radiofrance:group:").unwrap();
+                let stations = self.client.get_stations().await?;
+                let groups = StationGroups::from_stations(stations);
+                
+                if let Some(group) = groups.with_webradios.iter()
+                    .find(|g| g.main.slug == slug) 
+                {
+                    let container = self.build_station_container(group).await?;
+                    Ok(container.children)
+                } else {
+                    Err(Error::other("Container not found"))
+                }
+            }
+            "radiofrance:ici" => {
+                let stations = self.client.get_stations().await?;
+                let groups = StationGroups::from_stations(stations);
+                let container = self.build_ici_container(&groups.local_radios).await?;
+                Ok(container.children)
+            }
+            _ => Err(Error::other("Unknown container"))
+        }
+    }
+    
+    async fn get_item(&self, item_id: &str) -> Result<Item> {
+        // Format: radiofrance:{slug}:stream
+        let slug = item_id
+            .strip_prefix("radiofrance:")
+            .and_then(|s| s.strip_suffix(":stream"))
+            .ok_or_else(|| Error::other("Invalid item ID"))?;
+        
+        let playlists = self.playlists.read().await;
+        playlists.get(slug)
+            .map(|p| p.stream_item.clone())
+            .ok_or_else(|| Error::other("Item not found"))
+    }
+    
+    async fn refresh(&self) -> Result<()> {
+        // Rafraîchir la liste des stations
+        self.client.refresh_stations().await?;
+        
+        // Les métadonnées sont rafraîchies automatiquement par les tâches
+        Ok(())
+    }
+}
+```
+
+**Principe de génération dynamique** :
+
+1. **Récupération des stations** via `client.get_stations()` 
+2. **Groupement automatique** via `StationGroups::from_stations()`
+3. **Arborescence générée** selon la structure des données :
+   - Station sans webradios → Item direct
+   - Station avec webradios → Container (main + webradios)
+   - Radios locales → Container "Radios ICI"
+
+**Exemple d'arborescence générée** :
+
+```
+Radio France/                          (root container)
+├── France Inter (item)                (standalone)
+├── France Info (item)                 (standalone)
+├── France Culture (item)              (standalone)
+├── Mouv' (item)                       (standalone)
+├── FIP/                               (container - has webradios)
+│   ├── FIP (item)                     (main)
+│   ├── FIP Rock (item)                (webradio)
+│   ├── FIP Jazz (item)                (webradio)
+│   └── ...
+├── France Musique/                    (container - has webradios)
+│   ├── France Musique (item)          (main)
+│   ├── France Musique Classique (item)(webradio)
+│   └── ...
+└── Radios ICI/                        (container)
+    ├── ICI Alsace (item)
+    ├── ICI Paris (item)
+    └── ... (~44 radios)
+```
+
+#### 2. `pmoradiofrance/src/server_ext.rs` (NOUVEAU)
+
+Extension pour `pmoserver` : routes REST et cache registry.
+
+```rust
+use axum::{
+    Router, Json, 
+    extract::{Path, State}, 
+    response::{Response, IntoResponse},
+    http::{StatusCode, HeaderMap},
+    body::Body,
+};
+use pmoserver::Server;
+use anyhow::Result;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use std::collections::HashMap;
+use futures::StreamExt;
+
+/// Tracking des connexions streaming actives
+#[derive(Clone)]
+struct ActiveStream {
+    started_at: SystemTime,
+    last_activity: Arc<RwLock<SystemTime>>,
+}
+
+/// État partagé pour le serveur Radio France
+struct RadioFranceServerState {
+    client: Arc<RadioFranceStatefulClient>,
+    active_streams: Arc<RwLock<HashMap<String, Vec<ActiveStream>>>>,
+}
+
+pub trait RadioFranceServerExt {
+    /// Initialiser les routes Radio France
+    async fn init_radiofrance_routes(&mut self) -> Result<()>;
+    
+    /// Enregistrer le cache registry pour les covers
+    fn register_radiofrance_cache(&mut self) -> Result<()>;
+}
+
+impl RadioFranceServerExt for Server {
+    async fn init_radiofrance_routes(&mut self) -> Result<()> {
+        let client = Arc::new(RadioFranceStatefulClient::new(self.config().clone()).await?);
+        let state = Arc::new(RadioFranceServerState {
+            client,
+            active_streams: Arc::new(RwLock::new(HashMap::new())),
+        });
+        
+        let router = Router::new()
+            .route("/radiofrance/stations", get(get_stations))
+            .route("/radiofrance/:slug/metadata", get(get_metadata))
+            .route("/radiofrance/:slug/stream", get(proxy_stream))
+            .with_state(state);
+        
+        self.add_router("/api", router)
+    }
+    
+    fn register_radiofrance_cache(&mut self) -> Result<()> {
+        // Le cache de covers est déjà partagé via le cache registry global
+        // Les playlists utilisent automatiquement pmocovers avec collection "radiofrance"
+        Ok(())
+    }
+}
+
+// === Route Handlers ===
+
+/// GET /api/radiofrance/stations
+/// Retourne la liste groupée des stations
+async fn get_stations(
+    State(state): State<Arc<RadioFranceServerState>>
+) -> Result<Json<StationGroups>, (StatusCode, String)> {
+    let stations = state.client.get_stations().await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    
+    let groups = StationGroups::from_stations(stations);
+    Ok(Json(groups))
+}
+
+/// GET /api/radiofrance/{slug}/metadata
+/// Retourne les métadonnées live pour une station (avec cache)
+async fn get_metadata(
+    Path(slug): Path<String>,
+    State(state): State<Arc<RadioFranceServerState>>
+) -> Result<Json<LiveResponse>, (StatusCode, String)> {
+    let metadata = state.client.get_live_metadata(&slug).await
+        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+    
+    Ok(Json(metadata))
+}
+
+/// GET /api/radiofrance/{slug}/stream
+/// Proxie le flux AAC de Radio France (passthrough sans transcodage)
+/// Permet le tracking des connexions actives et le rafraîchissement des métadonnées
+async fn proxy_stream(
+    Path(slug): Path<String>,
+    State(state): State<Arc<RadioFranceServerState>>
+) -> Result<Response, (StatusCode, String)> {
+    // 1. Récupérer l'URL du stream HiFi
+    let stream_url = state.client.get_stream_url(&slug).await
+        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+    
+    // 2. Démarrer le stream source (reqwest)
+    let response = reqwest::get(&stream_url).await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Failed to connect to Radio France: {}", e)))?;
+    
+    // 3. Enregistrer la connexion active
+    let active_stream = ActiveStream {
+        started_at: SystemTime::now(),
+        last_activity: Arc::new(RwLock::new(SystemTime::now())),
+    };
+    
+    {
+        let mut streams = state.active_streams.write().await;
+        streams.entry(slug.clone())
+            .or_insert_with(Vec::new)
+            .push(active_stream.clone());
+    }
+    
+    // 4. Démarrer le rafraîchissement des métadonnées pour cette station
+    let refresh_state = state.clone();
+    let refresh_slug = slug.clone();
+    tokio::spawn(async move {
+        metadata_refresh_task(refresh_slug, refresh_state).await;
+    });
+    
+    // 5. Créer le stream proxy avec tracking
+    let last_activity = active_stream.last_activity.clone();
+    let byte_stream = response.bytes_stream().map(move |chunk| {
+        // Mettre à jour l'activité à chaque chunk
+        if let Ok(ref _data) = chunk {
+            if let Ok(mut activity) = last_activity.try_write() {
+                *activity = SystemTime::now();
+            }
+        }
+        chunk.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+    });
+    
+    // 6. Construire la réponse HTTP avec headers appropriés
+    let mut headers = HeaderMap::new();
+    headers.insert("Content-Type", "audio/aac".parse().unwrap());
+    headers.insert("Cache-Control", "no-cache".parse().unwrap());
+    headers.insert("Transfer-Encoding", "chunked".parse().unwrap());
+    
+    Ok((headers, Body::from_stream(byte_stream)).into_response())
+}
+
+/// Tâche de rafraîchissement des métadonnées pour une station active
+/// S'arrête automatiquement quand toutes les connexions sont fermées
+async fn metadata_refresh_task(slug: String, state: Arc<RadioFranceServerState>) {
+    tracing::info!("Starting metadata refresh for station: {}", slug);
+    
+    loop {
+        // Vérifier s'il y a encore des connexions actives
+        let has_active_connections = {
+            let mut streams = state.active_streams.write().await;
+            
+            // Nettoyer les connexions inactives (>30s sans activité)
+            if let Some(connections) = streams.get_mut(&slug) {
+                connections.retain(|stream| {
+                    if let Ok(last) = stream.last_activity.try_read() {
+                        last.elapsed().unwrap_or(Duration::MAX) < Duration::from_secs(30)
+                    } else {
+                        true // Garder si on ne peut pas vérifier
+                    }
+                });
+                
+                !connections.is_empty()
+            } else {
+                false
+            }
+        };
+        
+        if !has_active_connections {
+            tracing::info!("No active connections for {}, stopping metadata refresh", slug);
+            break;
+        }
+        
+        // Rafraîchir les métadonnées
+        match state.client.get_live_metadata(&slug).await {
+            Ok(metadata) => {
+                let delay = Duration::from_millis(metadata.delay_to_refresh);
+                tracing::debug!("Refreshed metadata for {}, next refresh in {:?}", slug, delay);
+                tokio::time::sleep(delay).await;
+            }
+            Err(e) => {
+                tracing::warn!("Failed to refresh metadata for {}: {}", slug, e);
+                tokio::time::sleep(Duration::from_secs(60)).await;
+            }
+        }
+    }
+    
+    // Nettoyer l'entrée de la HashMap quand il n'y a plus de connexions
+    state.active_streams.write().await.remove(&slug);
+}
+```
+
+**Routes API** :
+
+| Route | Méthode | Description | Réponse | Cache |
+|-------|---------|-------------|---------|-------|
+| `/api/radiofrance/stations` | GET | Liste groupée des stations | `StationGroups` JSON | 7 jours |
+| `/api/radiofrance/{slug}/metadata` | GET | Métadonnées live | `LiveResponse` JSON | `delayToRefresh` |
+| `/api/radiofrance/{slug}/stream` | GET | Proxy streaming AAC (passthrough) | Stream audio/aac | - |
+| `/covers/{pk}` | GET | Cover depuis cache | Image binaire | Persistant |
+
+**Détails du proxy streaming** :
+
+Le proxy ne fait **aucun transcodage** - il forward les bytes AAC tels quels depuis Radio France. Ses fonctions :
+
+1. **Tracking des connexions** : Maintient un registre des stations en cours d'écoute
+2. **Mise à jour d'activité** : Enregistre un timestamp à chaque chunk reçu
+3. **Déclenchement du refresh** : Lance automatiquement le rafraîchissement des métadonnées
+4. **Nettoyage automatique** : Arrête le refresh quand toutes les connexions sont inactives (>30s)
+
+Pourquoi un proxy plutôt qu'une redirection 302 ?
+- ✅ Tracking précis des stations écoutées
+- ✅ Rafraîchissement intelligent basé sur l'usage réel
+- ✅ Pas de problème de décodage AAC streaming (contrainte technique actuelle)
+- ✅ Consommation CPU minimale (juste forward de bytes)
+- ❌ Bande passante serveur utilisée (mais LAN domestique → non critique)
+
+### Fichiers à modifier
+
+| Fichier | Modification |
+|---------|--------------|
+| `pmoradiofrance/src/lib.rs` | Ajout `#[cfg(feature = "server")] pub mod source;` et `pub mod server_ext;` |
+| `pmoradiofrance/Cargo.toml` | Feature `server` inclut `dep:axum` dans les dépendances |
+
+### Règles métier importantes
+
+1. **Génération dynamique de l'arborescence** :
+   - Utiliser `StationGroups::from_stations()` pour grouper
+   - Pas de hardcoding des containers
+   - La structure suit les données de l'API
+   
+2. **Rafraîchissement des métadonnées** :
+   - Une tâche tokio par station streamée activement
+   - Respecter `delayToRefresh` de l'API (2-5 minutes typiquement)
+   - Arrêter automatiquement quand toutes les connexions proxy sont fermées
+   - Nettoyage périodique des connexions inactives (>30s sans chunk)
+   
+3. **Gestion du cache de covers** :
+   - Collection `"radiofrance"` dans `pmocovers`
+   - URLs servies via `/covers/{pk}` (cache registry global)
+   - Pas besoin d'enregistrement spécial (déjà partagé)
+   
+4. **Proxy streaming** :
+   - Route `/radiofrance/{slug}/stream` proxie le flux AAC (passthrough)
+   - **Aucun transcodage** : forward bytes AAC tels quels
+   - Tracking des connexions actives via `ActiveStream`
+   - Headers appropriés : `Content-Type: audio/aac`, `Transfer-Encoding: chunked`
+   - URL source = flux HiFi AAC 192 kbps (ou HLS en fallback)
+
+5. **Items vs Containers** :
+   - Station **sans** webradios → Item direct (streamable)
+   - Station **avec** webradios → Container contenant main + webradios
+   - Radios ICI → Container unique regroupant toutes les radios locales
+   
+6. **Protocol Info UPnP** :
+   - AAC : `"http-get:*:audio/aac:*"`
+   - HLS : `"http-get:*:application/vnd.apple.mpegurl:*"`
+   - Sample rate : `48000` Hz (AAC), None (HLS)
+   - Channels : `2` (stéréo)
+
+### Tests à ajouter
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    // === Tests unitaires source.rs ===
+    
+    #[tokio::test]
+    async fn test_source_creation() {
+        let config = Arc::new(get_test_config());
+        let source = RadioFranceSource::new(config).await;
+        assert!(source.is_ok());
+    }
+    
+    #[tokio::test]
+    async fn test_build_container_tree_structure() {
+        let source = create_test_source().await;
+        let tree = source.build_container_tree().await.unwrap();
+        
+        assert_eq!(tree.id, "radiofrance:root");
+        assert!(!tree.children.is_empty());
+        
+        // Vérifier qu'on a bien des items et des containers
+        let has_items = tree.children.iter()
+            .any(|c| matches!(c, ContainerChild::Item(_)));
+        let has_containers = tree.children.iter()
+            .any(|c| matches!(c, ContainerChild::Container(_)));
+            
+        assert!(has_items, "Should have standalone station items");
+        assert!(has_containers, "Should have station group containers");
+    }
+    
+    #[tokio::test]
+    async fn test_browse_station_group() {
+        let source = create_test_source().await;
+        
+        // Browse le container FIP
+        let children = source.browse_container("radiofrance:group:fip").await.unwrap();
+        
+        assert!(!children.is_empty());
+        // FIP principal + webradios (rock, jazz, etc.)
+        assert!(children.len() > 1);
+    }
+    
+    #[tokio::test]
+    async fn test_browse_ici_container() {
+        let source = create_test_source().await;
+        
+        let children = source.browse_container("radiofrance:ici").await.unwrap();
+        
+        // Devrait avoir ~40+ radios locales
+        assert!(children.len() >= 30);
+    }
+    
+    #[tokio::test]
+    async fn test_get_station_item() {
+        let source = create_test_source().await;
+        
+        let item = source.get_item("radiofrance:franceculture:stream").await.unwrap();
+        
+        assert_eq!(item.id, "radiofrance:franceculture:stream");
+        assert!(!item.resources.is_empty());
+        assert!(!item.resources[0].url.is_empty());
+    }
+    
+    #[tokio::test]
+    async fn test_metadata_refresh_task() {
+        let source = create_test_source().await;
+        
+        source.start_metadata_refresh("franceculture").await.unwrap();
+        
+        // Vérifier que la tâche tourne
+        let handles = source.refresh_handles.read().await;
+        assert!(handles.contains_key("franceculture"));
+        
+        // Arrêter
+        drop(handles);
+        source.stop_metadata_refresh("franceculture").await;
+        
+        let handles = source.refresh_handles.read().await;
+        assert!(!handles.contains_key("franceculture"));
+    }
+    
+    // === Tests intégration serveur ===
+    
+    #[tokio::test]
+    #[ignore = "Integration test - requires server"]
+    async fn test_api_get_stations() {
+        let response = reqwest::get("http://localhost:8080/api/radiofrance/stations")
+            .await.unwrap();
+        
+        assert_eq!(response.status(), 200);
+        
+        let groups: StationGroups = response.json().await.unwrap();
+        assert!(!groups.standalone.is_empty());
+        assert!(!groups.with_webradios.is_empty());
+        assert!(!groups.local_radios.is_empty());
+    }
+    
+    #[tokio::test]
+    #[ignore = "Integration test - requires server"]
+    async fn test_api_get_metadata() {
+        let response = reqwest::get("http://localhost:8080/api/radiofrance/franceculture/metadata")
+            .await.unwrap();
+        
+        assert_eq!(response.status(), 200);
+        
+        let metadata: LiveResponse = response.json().await.unwrap();
+        assert_eq!(metadata.station_name, "franceculture");
+        assert!(metadata.delay_to_refresh > 0);
+    }
+    
+    #[tokio::test]
+    #[ignore = "Integration test - requires server"]
+    async fn test_api_stream_proxy() {
+        let response = reqwest::get("http://localhost:8080/api/radiofrance/fip/stream")
+            .await.unwrap();
+        
+        assert_eq!(response.status(), 200);
+        assert_eq!(response.headers().get("Content-Type").unwrap(), "audio/aac");
+        
+        // Lire quelques chunks pour vérifier que le stream fonctionne
+        let mut stream = response.bytes_stream();
+        let mut chunks_received = 0;
+        
+        while let Some(chunk) = stream.next().await {
+            assert!(chunk.is_ok());
+            chunks_received += 1;
+            
+            if chunks_received >= 5 {
+                break; // Suffisant pour tester
+            }
+        }
+        
+        assert!(chunks_received >= 5, "Should receive streaming chunks");
+    }
+    
+    #[tokio::test]
+    #[ignore = "Integration test - requires server"]
+    async fn test_metadata_refresh_starts_on_stream() {
+        // Démarrer un stream
+        let mut stream = reqwest::get("http://localhost:8080/api/radiofrance/franceculture/stream")
+            .await.unwrap()
+            .bytes_stream();
+        
+        // Lire quelques chunks
+        for _ in 0..3 {
+            stream.next().await;
+        }
+        
+        // Vérifier que les métadonnées sont rafraîchies
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        
+        let metadata = reqwest::get("http://localhost:8080/api/radiofrance/franceculture/metadata")
+            .await.unwrap()
+            .json::<LiveResponse>()
+            .await.unwrap();
+        
+        assert_eq!(metadata.station_name, "franceculture");
+    }
+}
+```
+
+### Optimisations
+
+1. **Pool de connexions HTTP partagé** :
+   - Le `RadioFranceStatefulClient` utilise déjà un `reqwest::Client` interne
+   - Configuration pool : `pool_max_idle_per_host = 10`
+   - Réutilisation des connexions TCP
+
+2. **Préchargement intelligent** :
+   - Au démarrage serveur, déclencher refresh pour stations populaires
+   - Liste configurable : `["franceinter", "fip", "franceculture", "franceinfo"]`
+   - Charge le cache avant première requête utilisateur
+
+3. **Nettoyage automatique des connexions** :
+   - Vérifier périodiquement les connexions inactives (>30s sans chunk)
+   - Arrêter la tâche de refresh quand toutes les connexions sont fermées
+   - HashMap `active_streams` nettoyée automatiquement
+
+4. **Métriques** :
+   - Compteur hit/miss cache stations
+   - Compteur hit/miss cache métadonnées
+   - Temps moyen de rafraîchissement par station
+   - Nombre de connexions actives par station
+   - Bande passante proxy totale
+
+### Résultat attendu
+
+À la fin du Round 5 :
+
+1. ✅ Trait `MusicSource` implémenté
+2. ✅ Arborescence UPnP générée dynamiquement depuis les données
+3. ✅ Routes API REST complètes et fonctionnelles
+4. ✅ Proxy streaming AAC avec tracking des connexions
+5. ✅ Rafraîchissement automatique des métadonnées basé sur l'usage réel
+6. ✅ Cache multi-niveaux opérationnel
+7. ✅ Tests unitaires et d'intégration
+8. ✅ ~70 stations Radio France accessibles via UPnP et API
+
+Radio France sera alors **pleinement intégré** dans PMOMusic :
+- ✅ Navigation UPnP hiérarchique sur contrôleurs compatibles
+- ✅ API REST pour webapp/clients HTTP
+- ✅ Streaming AAC passthrough (pas de transcodage pour l'instant)
+- ✅ Tracking intelligent : rafraîchissement uniquement des stations écoutées
+- ✅ Cache intelligent (stations 7j + métadonnées dynamique)
+- ✅ Toutes les stations principales, webradios et radios ICI
+
+**Note technique** : Le proxy AAC passthrough est un compromis pragmatique dû aux limitations actuelles du décodage AAC streaming dans `pmoflac`. Si cette capacité est ajoutée à l'avenir, le transcodage vers FLAC pourra être implémenté via une feature flag optionnelle.
+
+## Round 6
+
+Il faut maintenant activer cette nouvelle source.
+Tu peux regarder dans les deux autres sources actuelles comment cette initialisation est réalisée 
+- [@pmoqobuz](file:///Users/coissac/Sync/maison/Petite_maisons/src/pmomusic/pmoqobuz) 
+- [@pmoparadise](file:///Users/coissac/Sync/maison/Petite_maisons/src/pmomusic/pmoparadise) 
+
+Ainsi que dans la crate [@pmoupnp](file:///Users/coissac/Sync/maison/Petite_maisons/src/pmomusic/pmoupnp)

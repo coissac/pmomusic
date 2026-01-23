@@ -1,17 +1,17 @@
-mod openhome_client;
 mod avtransport_client;
-mod rendering_control_client;
 mod connection_manager_client;
-
+mod openhome_client;
+mod rendering_control_client;
 
 pub use crate::upnp_clients::avtransport_client::{AvTransportClient, PositionInfo};
-pub  use crate::upnp_clients::rendering_control_client::RenderingControlClient;
-pub use crate::upnp_clients::connection_manager_client::{ConnectionInfo, ConnectionManagerClient, ProtocolInfo};
-pub use crate::upnp_clients::openhome_client::{
-    OPENHOME_PLAYLIST_HEAD_ID,
-    OhTrackEntry,OhTrack,
-    OhInfoClient, OhPlaylistClient, OhProductClient, OhRadioClient, OhTimeClient, OhVolumeClient,
+pub use crate::upnp_clients::connection_manager_client::{
+    ConnectionInfo, ConnectionManagerClient, ProtocolInfo,
 };
+pub use crate::upnp_clients::openhome_client::{
+    OPENHOME_PLAYLIST_HEAD_ID, OhInfoClient, OhPlaylistClient, OhProductClient, OhRadioClient,
+    OhTimeClient, OhTrack, OhTrackEntry, OhVolumeClient,
+};
+pub use crate::upnp_clients::rendering_control_client::RenderingControlClient;
 
 /// Resolve a possibly relative controlURL against the description URL.
 ///

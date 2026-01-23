@@ -344,7 +344,12 @@ fn dump_renderer_state(renderer: &MusicRendererBackend, label: &str) -> Result<(
     Ok(())
 }
 
-fn progress_monitor(renderer: &MusicRendererBackend, label: &str, iterations: usize, interval_secs: u64) {
+fn progress_monitor(
+    renderer: &MusicRendererBackend,
+    label: &str,
+    iterations: usize,
+    interval_secs: u64,
+) {
     println!(
         "\n[{label}] polling playback state/position {} times (every {} s)...",
         iterations, interval_secs
