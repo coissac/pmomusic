@@ -200,7 +200,7 @@ impl RadioFranceClient {
                 .into_iter()
                 .map(|slug| {
                     let name = Self::slug_to_display_name(&slug);
-                    Station::main(slug, name)
+                    Station::new(slug, name)
                 })
                 .collect());
         }
@@ -211,7 +211,7 @@ impl RadioFranceClient {
 
         Ok(KNOWN_MAIN_STATIONS
             .iter()
-            .map(|(slug, name)| Station::main(*slug, *name))
+            .map(|(slug, name)| Station::new(*slug, *name))
             .collect())
     }
 
@@ -249,7 +249,7 @@ impl RadioFranceClient {
             .into_iter()
             .map(|slug| {
                 let name = Self::slug_to_display_name(&slug);
-                Station::webradio(slug, name, station)
+                Station::new(slug, name)
             })
             .collect())
     }
@@ -267,10 +267,7 @@ impl RadioFranceClient {
             .unwrap_or_default()
             .into_iter()
             .filter(|local| local.is_on_air)
-            .map(|local| {
-                let region = local.title.replace("ICI ", "");
-                Station::local_radio(local.name, local.title, region, local.id)
-            })
+            .map(|local| Station::new(local.name, local.title))
             .collect())
     }
 
@@ -1145,21 +1142,9 @@ mod tests {
         let stations = stations.unwrap();
         assert!(!stations.is_empty(), "Expected stations");
 
-        // Count by type
-        let main_count = stations.iter().filter(|s| s.is_main()).count();
-        let webradio_count = stations.iter().filter(|s| s.is_webradio()).count();
-        let local_count = stations.iter().filter(|s| s.is_local_radio()).count();
+        println!("Discovered {} total stations", stations.len());
 
-        println!("Discovered {} total stations:", stations.len());
-        println!("  - {} main stations", main_count);
-        println!("  - {} webradios", webradio_count);
-        println!("  - {} local radios", local_count);
-
-        // Should have a good mix
-        assert!(main_count >= 5, "Expected at least 5 main stations");
-        assert!(local_count >= 30, "Expected at least 30 local radios");
-
-        // Total should be significant
+        // Should have a significant number of stations
         assert!(
             stations.len() >= 40,
             "Expected at least 40 total stations, got {}",

@@ -28,7 +28,6 @@
 
 use crate::api_rest::create_router;
 use crate::pmoserver_ext::{RadioFranceExt, RadioFranceState};
-use crate::stateful_client::RadioFranceStatefulClient;
 use anyhow::Result;
 use pmoserver::Server;
 use std::sync::Arc;

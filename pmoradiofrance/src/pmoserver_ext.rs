@@ -6,8 +6,6 @@
 use anyhow::Result;
 use std::sync::Arc;
 
-use crate::stateful_client::RadioFranceStatefulClient;
-
 /// État partagé pour les handlers Radio France
 #[derive(Clone)]
 pub struct RadioFranceState {
