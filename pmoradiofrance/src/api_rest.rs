@@ -16,7 +16,6 @@ use axum::{
 };
 use futures::StreamExt;
 use serde_json;
-use std::sync::Arc;
 
 // ============ Gestion des erreurs ============
 
@@ -61,33 +60,26 @@ pub fn create_router(state: RadioFranceState) -> Router {
 
 /// GET /api/radiofrance/stations
 /// Returns the grouped list of stations
-#[axum::debug_handler]
-async fn get_stations(
-    State(state): State<RadioFranceState>,
-) -> Result<Json<StationGroups>, AppError> {
-    let stations = state
-        .client
-        .get_stations()
-        .await
-        .map_err(|e| AppError(e.to_string()))?;
-
-    let groups = StationGroups::from_stations(stations);
-    Ok(Json(groups))
+async fn get_stations(State(state): State<RadioFranceState>) -> impl IntoResponse {
+    match state.source.get_stations().await {
+        Ok(stations) => {
+            let groups = StationGroups::from_stations(stations);
+            Json(groups).into_response()
+        }
+        Err(e) => AppError(e.to_string()).into_response(),
+    }
 }
 
 /// GET /api/radiofrance/{slug}/metadata
-/// Returns live metadata for a station (with caching)
+/// Returns live metadata for a station
 async fn get_metadata(
     State(state): State<RadioFranceState>,
     Path(slug): Path<String>,
-) -> Result<Json<LiveResponse>, AppError> {
-    let metadata = state
-        .client
-        .get_live_metadata(&slug)
-        .await
-        .map_err(|e| AppError(e.to_string()))?;
-
-    Ok(Json(metadata))
+) -> impl IntoResponse {
+    match state.source.get_live_metadata(&slug).await {
+        Ok(metadata) => Json(metadata).into_response(),
+        Err(e) => AppError(e.to_string()).into_response(),
+    }
 }
 
 /// GET /api/radiofrance/{slug}/stream
@@ -95,40 +87,24 @@ async fn get_metadata(
 async fn proxy_stream(
     State(state): State<RadioFranceState>,
     Path(slug): Path<String>,
-) -> Result<Response, AppError> {
-    // Start metadata refresh when stream is accessed
+) -> impl IntoResponse {
     #[cfg(feature = "logging")]
     tracing::info!("Stream proxy accessed for station: {}", slug);
 
-    if let Some(ref source) = state.source {
-        // Spawn refresh task (non-blocking)
-        let source_clone = Arc::clone(source);
-        let slug_clone = slug.clone();
-        tokio::spawn(async move {
-            if let Err(e) = source_clone.start_metadata_refresh(&slug_clone).await {
-                #[cfg(feature = "logging")]
-                tracing::error!("Failed to start metadata refresh for {}: {}", slug_clone, e);
-            }
-        });
-    } else {
-        #[cfg(feature = "logging")]
-        tracing::warn!("No source available to start metadata refresh");
-    }
-
     // Get the stream URL
-    let stream_url = state
-        .client
-        .get_stream_url(&slug)
-        .await
-        .map_err(|e| AppError(format!("Stream not found: {}", e)))?;
+    let stream_url = match state.source.get_stream_url(&slug).await {
+        Ok(url) => url,
+        Err(e) => return AppError(format!("Stream not found: {}", e)).into_response(),
+    };
 
     // Connect to the Radio France stream
-    let response = reqwest::get(&stream_url)
-        .await
-        .map_err(|e| AppError(format!("Failed to connect: {}", e)))?;
+    let response = match reqwest::get(&stream_url).await {
+        Ok(r) => r,
+        Err(e) => return AppError(format!("Failed to connect: {}", e)).into_response(),
+    };
 
     if !response.status().is_success() {
-        return Err(AppError(format!("Upstream returned {}", response.status())));
+        return AppError(format!("Upstream returned {}", response.status())).into_response();
     }
 
     // Build response headers
@@ -136,50 +112,14 @@ async fn proxy_stream(
     headers.insert("content-type", "audio/aac".parse().unwrap());
     headers.insert("cache-control", "no-cache".parse().unwrap());
 
-    // Create streaming body with cleanup on disconnect
+    // Create streaming body
     let stream = response
         .bytes_stream()
         .map(|chunk| chunk.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)));
 
-    // Wrap the stream to detect when client disconnects
-    let source_for_cleanup = state.source.clone();
-    let slug_for_cleanup = slug.clone();
-    let monitored_stream =
-        futures::stream::unfold((stream, false), move |(mut stream, mut done)| {
-            let source = source_for_cleanup.clone();
-            let slug = slug_for_cleanup.clone();
-            async move {
-                if done {
-                    return None;
-                }
+    let body = Body::from_stream(stream);
 
-                match stream.next().await {
-                    Some(Ok(chunk)) => Some((Ok(chunk), (stream, false))),
-                    Some(Err(e)) => {
-                        // Error occurred, stop refresh
-                        #[cfg(feature = "logging")]
-                        tracing::info!("Stream error for {}, stopping refresh", slug);
-                        if let Some(src) = source {
-                            src.stop_metadata_refresh(&slug).await;
-                        }
-                        Some((Err(e), (stream, true)))
-                    }
-                    None => {
-                        // Stream ended normally, stop refresh
-                        #[cfg(feature = "logging")]
-                        tracing::info!("Stream ended for {}, stopping refresh", slug);
-                        if let Some(src) = source {
-                            src.stop_metadata_refresh(&slug).await;
-                        }
-                        None
-                    }
-                }
-            }
-        });
-
-    let body = Body::from_stream(monitored_stream);
-
-    Ok((headers, body).into_response())
+    (headers, body).into_response()
 }
 
 /// GET /api/radiofrance/default-logo

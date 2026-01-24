@@ -50,6 +50,7 @@ COPY pmoaudiocache/ ./pmoaudiocache/
 COPY pmoaudio/ ./pmoaudio/
 COPY pmoqobuz/ ./pmoqobuz/
 COPY pmoparadise/ ./pmoparadise/
+COPY pmoradiofrance/ ./pmoradiofrance/
 COPY pmosource/ ./pmosource/
 COPY pmoplaylist/ ./pmoplaylist/
 COPY pmoflac/ ./pmoflac/

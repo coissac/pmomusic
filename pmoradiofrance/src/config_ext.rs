@@ -32,13 +32,22 @@
 //! # }
 //! ```
 
-use crate::models::{CachedStationList, Station};
+use crate::models::Station;
 use anyhow::Result;
 use pmoconfig::Config;
+use serde::{Deserialize, Serialize};
 use serde_yaml::Value;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Default TTL for station list cache (7 days in seconds)
 pub const DEFAULT_STATION_CACHE_TTL_SECS: u64 = 7 * 24 * 3600;
+
+/// Cached station list (simplifié)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CachedStations {
+    stations: Vec<Station>,
+    last_updated: u64, // Unix timestamp
+}
 
 /// Trait d'extension pour gérer la configuration Radio France dans pmoconfig
 ///
@@ -75,7 +84,7 @@ pub trait RadioFranceConfigExt {
     ///
     /// # Returns
     ///
-    /// - `Some(CachedStationList)` si le cache existe et est valide
+    /// - `Some(Vec<Station>)` si le cache existe et est valide
     /// - `None` si le cache n'existe pas ou est expiré
     ///
     /// # Cache Validation
@@ -83,8 +92,7 @@ pub trait RadioFranceConfigExt {
     /// Le cache est considéré invalide si :
     /// - Il n'existe pas
     /// - Son TTL est dépassé (configurable, défaut 7 jours)
-    /// - Sa version ne correspond pas à la version actuelle de l'algorithme
-    fn get_radiofrance_cached_stations(&self) -> Result<Option<CachedStationList>>;
+    fn get_radiofrance_stations_cached(&self) -> Result<Option<Vec<Station>>>;
 
     /// Enregistre la liste des stations en cache
     ///
@@ -103,45 +111,8 @@ pub trait RadioFranceConfigExt {
     /// Définit le TTL du cache des stations (en secondes)
     fn set_radiofrance_station_cache_ttl(&self, ttl_secs: u64) -> Result<()>;
 
-    /// Vérifie si le cache des stations est valide
-    ///
-    /// Raccourci pour `get_radiofrance_cached_stations()?.is_some()`
-    fn is_radiofrance_station_cache_valid(&self) -> bool;
-
     /// Efface le cache des stations (force re-découverte)
     fn clear_radiofrance_station_cache(&self) -> Result<()>;
-
-    // ========================================================================
-    // High-level helpers
-    // ========================================================================
-
-    /// Récupère les stations, en utilisant le cache si valide
-    ///
-    /// Cette méthode est un helper qui :
-    /// 1. Vérifie le cache
-    /// 2. Si valide, retourne les stations du cache
-    /// 3. Si invalide, retourne None (l'appelant doit découvrir et mettre en cache)
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use pmoconfig::get_config;
-    /// # use pmoradiofrance::{RadioFranceConfigExt, RadioFranceClient};
-    /// # #[tokio::main]
-    /// # async fn main() -> anyhow::Result<()> {
-    /// let config = get_config();
-    /// let stations = if let Some(cached) = config.get_radiofrance_stations_cached()? {
-    ///     cached
-    /// } else {
-    ///     let client = RadioFranceClient::new().await?;
-    ///     let discovered = client.discover_all_stations().await?;
-    ///     config.set_radiofrance_cached_stations(&discovered)?;
-    ///     discovered
-    /// };
-    /// # Ok(())
-    /// # }
-    /// ```
-    fn get_radiofrance_stations_cached(&self) -> Result<Option<Vec<Station>>>;
 }
 
 impl RadioFranceConfigExt for Config {
@@ -160,19 +131,24 @@ impl RadioFranceConfigExt for Config {
         self.set_value(&["sources", "radiofrance", "enabled"], Value::Bool(enabled))
     }
 
-    fn get_radiofrance_cached_stations(&self) -> Result<Option<CachedStationList>> {
+    fn get_radiofrance_stations_cached(&self) -> Result<Option<Vec<Station>>> {
         let ttl = self.get_radiofrance_station_cache_ttl()?;
 
         match self.get_value(&["sources", "radiofrance", "station_cache"]) {
             Ok(value) => {
                 // Try to deserialize the cached data
-                let cached: CachedStationList = serde_yaml::from_value(value)?;
+                let cached: CachedStations = serde_yaml::from_value(value)?;
 
-                // Check validity
-                if cached.is_valid(ttl) {
-                    Ok(Some(cached))
+                // Check validity (TTL)
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs();
+
+                if now - cached.last_updated < ttl {
+                    Ok(Some(cached.stations))
                 } else {
-                    // Cache expired or version mismatch
+                    // Cache expired
                     Ok(None)
                 }
             }
@@ -181,7 +157,16 @@ impl RadioFranceConfigExt for Config {
     }
 
     fn set_radiofrance_cached_stations(&self, stations: &[Station]) -> Result<()> {
-        let cached = CachedStationList::new(stations.to_vec());
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let cached = CachedStations {
+            stations: stations.to_vec(),
+            last_updated: now,
+        };
+
         let value = serde_yaml::to_value(&cached)?;
         self.set_value(&["sources", "radiofrance", "station_cache"], value)
     }
@@ -212,22 +197,9 @@ impl RadioFranceConfigExt for Config {
         )
     }
 
-    fn is_radiofrance_station_cache_valid(&self) -> bool {
-        self.get_radiofrance_cached_stations()
-            .ok()
-            .flatten()
-            .is_some()
-    }
-
     fn clear_radiofrance_station_cache(&self) -> Result<()> {
         // Set to null to clear
         self.set_value(&["sources", "radiofrance", "station_cache"], Value::Null)
-    }
-
-    fn get_radiofrance_stations_cached(&self) -> Result<Option<Vec<Station>>> {
-        Ok(self
-            .get_radiofrance_cached_stations()?
-            .map(|cached| cached.stations))
     }
 }
 

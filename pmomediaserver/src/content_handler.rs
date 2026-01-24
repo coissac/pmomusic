@@ -473,7 +473,7 @@ impl ContentHandler {
     /// Construit le container racine du MediaServer
     async fn build_root_container(&self) -> Container {
         let sources = list_all_sources().await;
-        let child_count = sources.len();
+        let _child_count = sources.len();
 
         Container {
             id: "0".to_string(),

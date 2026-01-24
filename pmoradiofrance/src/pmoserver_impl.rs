@@ -28,7 +28,6 @@
 
 use crate::api_rest::create_router;
 use crate::pmoserver_ext::{RadioFranceExt, RadioFranceState};
-use crate::stateful_client::RadioFranceStatefulClient;
 use anyhow::Result;
 use pmoserver::Server;
 use std::sync::Arc;
@@ -38,14 +37,14 @@ impl RadioFranceExt for Server {
     async fn init_radiofrance(&mut self) -> Result<Arc<RadioFranceState>> {
         info!("Initializing Radio France API...");
 
-        // Créer le client stateful
+        // Créer une source dédiée pour l'API (sans enregistrement UPnP)
         let config = pmoconfig::get_config();
-        let client = RadioFranceStatefulClient::new(config)
+        let source = crate::source::RadioFranceSource::new(config)
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to create Radio France client: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to create Radio France source: {}", e))?;
 
-        // Créer l'état partagé (RadioFranceState est Clone et contient déjà un Arc<client>)
-        let state = RadioFranceState::new(client);
+        // Créer l'état partagé
+        let state = RadioFranceState::new(Arc::new(source));
 
         // Créer et enregistrer le router
         let router = create_router(state.clone());
@@ -63,14 +62,8 @@ impl RadioFranceExt for Server {
     ) -> Result<Arc<RadioFranceState>> {
         info!("Initializing Radio France API with existing source...");
 
-        // Créer le client stateful
-        let config = pmoconfig::get_config();
-        let client = RadioFranceStatefulClient::new(config)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to create Radio France client: {}", e))?;
-
-        // Créer l'état partagé avec la source
-        let state = RadioFranceState::new(client).with_source(source);
+        // Créer l'état partagé (simplement une référence à la source)
+        let state = RadioFranceState::new(source);
 
         // Créer et enregistrer le router
         let router = create_router(state.clone());
