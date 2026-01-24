@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::usize;
 
 use quick_xml::escape::escape;
@@ -21,7 +22,10 @@ pub struct OpenHomeQueue {
     playlist_client: OhPlaylistClient,
     info_client: Option<OhInfoClient>,
     product_client: Option<OhProductClient>,
-    // current_index: Option<usize>,
+    /// Cache des métadonnées par ID OpenHome.
+    /// Permet de maintenir des métadonnées à jour même si le service OpenHome
+    /// ne permet pas de les modifier directement.
+    metadata_cache: HashMap<u32, Option<crate::model::TrackMetadata>>,
 }
 
 impl OpenHomeQueue {
@@ -36,6 +40,7 @@ impl OpenHomeQueue {
             playlist_client: playlist,
             info_client,
             product_client,
+            metadata_cache: HashMap::new(),
         }
     }
 
@@ -60,8 +65,37 @@ impl OpenHomeQueue {
         }
     }
 
+    /// Met à jour les métadonnées d'un item de la queue à l'index spécifié.
+    ///
+    /// Contrairement au service OpenHome qui ne permet pas de modifier les métadonnées,
+    /// cette méthode met à jour le cache local de métadonnées, permettant ainsi au
+    /// control point de maintenir des métadonnées à jour même si le média serveur
+    /// les modifie.
+    ///
+    /// # Arguments
+    /// * `index` - Position de l'item dans la queue (0-based)
+    /// * `metadata` - Nouvelles métadonnées à associer à l'item
+    ///
+    /// # Errors
+    /// Retourne une erreur si l'index est hors limites.
+    pub fn update_item_metadata(
+        &mut self,
+        index: usize,
+        metadata: Option<crate::model::TrackMetadata>,
+    ) -> Result<(), ControlPointError> {
+        let track_id = self.position_to_id(index)?;
+        self.metadata_cache.insert(track_id, metadata);
+        Ok(())
+    }
+
     fn playback_item_from_entry(&self, entry: &OhTrackEntry) -> PlaybackItem {
-        let metadata = entry.metadata();
+        // Utiliser les métadonnées du cache si disponibles, sinon celles de l'entrée
+        let metadata = self
+            .metadata_cache
+            .get(&entry.id)
+            .cloned()
+            .unwrap_or_else(|| entry.metadata());
+
         let didl_id = entry
             .didl_id()
             .unwrap_or_else(|| format!("openhome:{}", entry.id));
@@ -76,12 +110,6 @@ impl OpenHomeQueue {
         }
     }
 
-    fn item_with_openhome_id(&self, mut item: PlaybackItem, track_id: u32) -> PlaybackItem {
-        item.didl_id = format!("openhome:{}", track_id);
-        item.media_server_id = DeviceId(format!("openhome:{}", self.renderer_id.0));
-        item
-    }
-
     fn add_playback_item(
         &mut self,
         item: PlaybackItem,
@@ -92,6 +120,10 @@ impl OpenHomeQueue {
         let new_id = self
             .playlist_client
             .insert(after_id, &item.uri, &metadata_xml)?;
+
+        // Enregistrer les métadonnées dans le cache
+        self.metadata_cache.insert(new_id, item.metadata);
+
         Ok(new_id)
     }
 
@@ -112,6 +144,7 @@ impl OpenHomeQueue {
         for &track_id in current_track_ids.iter().rev() {
             if track_id as usize != playing_id {
                 self.playlist_client.delete_id_if_exists(track_id)?;
+                self.metadata_cache.remove(&track_id);
             }
         }
 
@@ -122,6 +155,10 @@ impl OpenHomeQueue {
             let new_id = self
                 .playlist_client
                 .insert(previous_id, &item.uri, &metadata)?;
+
+            // Enregistrer les métadonnées dans le cache
+            self.metadata_cache.insert(new_id, item.metadata);
+
             previous_id = new_id;
         }
 
@@ -150,6 +187,7 @@ impl OpenHomeQueue {
                     track_id
                 );
                 self.playlist_client.delete_id_if_exists(track_id)?;
+                self.metadata_cache.remove(&track_id);
             }
         }
         Ok(())
@@ -180,6 +218,11 @@ impl OpenHomeQueue {
                 let existing_id = remaining_ids[remaining_idx];
                 remaining_idx += 1;
                 previous_id = existing_id;
+
+                // Mettre à jour les métadonnées de l'item existant conservé
+                self.metadata_cache
+                    .insert(existing_id, item.metadata.clone());
+
                 debug!(
                     renderer = self.renderer_id.0.as_str(),
                     track_id = existing_id,
@@ -192,6 +235,10 @@ impl OpenHomeQueue {
                 let new_id = self
                     .playlist_client
                     .insert(previous_id, &item.uri, &metadata)?;
+
+                // Enregistrer les métadonnées du nouvel item
+                self.metadata_cache.insert(new_id, item.metadata.clone());
+
                 debug!(
                     renderer = self.renderer_id.0.as_str(),
                     after_id = previous_id,
@@ -266,6 +313,11 @@ impl OpenHomeQueue {
 
         // PIVOT keeps its ID and position - it's the anchor point
         let previous_id = pivot_id as u32;
+
+        // Mettre à jour les métadonnées du pivot
+        self.metadata_cache
+            .insert(previous_id, new_items[pivot_idx_new].metadata.clone());
+
         debug!(
             renderer = self.renderer_id.0.as_str(),
             pivot_id,
@@ -328,6 +380,7 @@ impl OpenHomeQueue {
                 "Using delete_all() for complete replacement (more robust for live playlists)"
             );
             self.playlist_client.delete_all()?;
+            self.metadata_cache.clear();
         } else {
             // Selective deletion when keeping some items
             for idx in (0..current_track_ids.len()).rev() {
@@ -336,6 +389,7 @@ impl OpenHomeQueue {
                     // Use delete_id_if_exists() to handle cases where another control point
                     // may have already modified the playlist
                     self.playlist_client.delete_id_if_exists(track_id)?;
+                    self.metadata_cache.remove(&track_id);
                 }
             }
         }
@@ -366,11 +420,18 @@ impl OpenHomeQueue {
                 let existing_id = remaining_ids[remaining_idx];
                 remaining_idx += 1;
                 previous_id = existing_id;
+
+                // Mettre à jour les métadonnées de l'item existant conservé
+                self.metadata_cache.insert(existing_id, item.metadata);
             } else {
                 let metadata = build_metadata_xml(&item);
                 let new_id = self
                     .playlist_client
                     .insert(previous_id, &item.uri, &metadata)?;
+
+                // Enregistrer les métadonnées du nouvel item
+                self.metadata_cache.insert(new_id, item.metadata);
+
                 previous_id = new_id;
             }
         }
@@ -596,6 +657,7 @@ impl QueueBackend for OpenHomeQueue {
 
         self.ensure_playlist_source_selected()?;
         self.playlist_client.delete_all()?;
+        self.metadata_cache.clear();
 
         if items.is_empty() {
             return Ok(());
@@ -608,6 +670,10 @@ impl QueueBackend for OpenHomeQueue {
             let new_id = self
                 .playlist_client
                 .insert(previous_id, &item.uri, &metadata)?;
+
+            // Enregistrer les métadonnées dans le cache
+            self.metadata_cache.insert(new_id, item.metadata);
+
             previous_id = new_id;
         }
 
@@ -618,6 +684,7 @@ impl QueueBackend for OpenHomeQueue {
         self.ensure_playlist_source_selected()?;
         if items.is_empty() {
             self.playlist_client.delete_all()?;
+            self.metadata_cache.clear();
             return Ok(());
         }
 
@@ -743,6 +810,10 @@ impl QueueBackend for OpenHomeQueue {
         let new_id = self
             .playlist_client
             .insert(before_id, &item.uri, &metadata)?;
+
+        // Mettre à jour le cache avec les nouvelles métadonnées
+        self.metadata_cache.remove(&track_id);
+        self.metadata_cache.insert(new_id, item.metadata);
 
         if ci == Some(index) {
             self.playlist_client.seek_id(new_id)?;
