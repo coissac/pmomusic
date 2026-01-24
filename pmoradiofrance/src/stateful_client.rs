@@ -33,6 +33,9 @@ use pmoconfig::Config;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+/// Type de callback pour les notifications de mise à jour de métadonnées
+pub type MetadataUpdateCallback = Arc<dyn Fn(&str) + Send + Sync>;
+
 /// Cache entry for live metadata
 #[derive(Debug, Clone)]
 struct LiveMetadataCache {
@@ -92,6 +95,8 @@ pub struct RadioFranceStatefulClient {
     config: Arc<Config>,
     /// In-memory cache for live metadata (thread-safe)
     metadata_cache: Arc<std::sync::RwLock<std::collections::HashMap<String, LiveMetadataCache>>>,
+    /// Liste des callbacks abonnés aux mises à jour de métadonnées
+    update_callbacks: Arc<std::sync::RwLock<Vec<MetadataUpdateCallback>>>,
 }
 
 impl RadioFranceStatefulClient {
@@ -120,6 +125,7 @@ impl RadioFranceStatefulClient {
             client,
             config,
             metadata_cache: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
+            update_callbacks: Arc::new(std::sync::RwLock::new(Vec::new())),
         })
     }
 
@@ -150,6 +156,7 @@ impl RadioFranceStatefulClient {
             client,
             config,
             metadata_cache: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
+            update_callbacks: Arc::new(std::sync::RwLock::new(Vec::new())),
         }
     }
 
@@ -161,6 +168,34 @@ impl RadioFranceStatefulClient {
     /// Get the configuration
     pub fn config(&self) -> &Arc<Config> {
         &self.config
+    }
+
+    // ========================================================================
+    // Event System (metadata update notifications)
+    // ========================================================================
+
+    /// S'abonner aux mises à jour de métadonnées
+    ///
+    /// Le callback sera appelé avec le slug de la station chaque fois que
+    /// ses métadonnées sont rafraîchies depuis l'API.
+    ///
+    /// # Arguments
+    ///
+    /// * `callback` - Fonction appelée avec le slug de la station mise à jour
+    pub fn subscribe_to_updates(&self, callback: MetadataUpdateCallback) {
+        let mut callbacks = self.update_callbacks.write().unwrap();
+        callbacks.push(callback);
+    }
+
+    /// Notifier tous les abonnés d'une mise à jour de métadonnées
+    ///
+    /// Cette méthode est appelée en interne lorsque les métadonnées
+    /// d'une station sont rafraîchies depuis l'API.
+    fn notify_update(&self, slug: &str) {
+        let callbacks = self.update_callbacks.read().unwrap();
+        for callback in callbacks.iter() {
+            callback(slug);
+        }
     }
 
     // ========================================================================
@@ -332,34 +367,15 @@ impl RadioFranceStatefulClient {
             );
         }
 
+        // Notify subscribers
+        self.notify_update(station);
+
         #[cfg(feature = "logging")]
         tracing::debug!(
             "Cached metadata for {} (TTL: {} ms)",
             station,
             metadata.delay_to_refresh
         );
-
-        Ok(metadata)
-    }
-
-    /// Force refresh of live metadata (bypass cache)
-    ///
-    /// Use this when you need the absolute latest metadata,
-    /// ignoring the cached version.
-    pub async fn refresh_live_metadata(&self, station: &str) -> Result<LiveResponse> {
-        #[cfg(feature = "logging")]
-        tracing::debug!("Force refreshing metadata for {}", station);
-
-        let metadata = self.client.live_metadata(station).await?;
-
-        // Update cache
-        {
-            let mut cache = self.metadata_cache.write().unwrap();
-            cache.insert(
-                station.to_string(),
-                LiveMetadataCache::new(metadata.clone()),
-            );
-        }
 
         Ok(metadata)
     }

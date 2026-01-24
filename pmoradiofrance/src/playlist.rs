@@ -218,111 +218,9 @@ impl StationPlaylist {
     /// - `artist` = producteur
     /// - `album` = nom de l'émission
     ///
-    /// Pour **radios musicales** (FIP, France Musique) :
-    /// - Si morceau en cours : titre, artiste, album du morceau
-    /// - Sinon : fallback sur le mapping radio parlée
-    #[cfg(feature = "cache")]
-    pub async fn from_live_metadata(
-        station: Station,
-        metadata: &LiveResponse,
-        cover_cache: Option<&Arc<CoverCache>>,
-        server_base_url: Option<&str>,
-    ) -> Result<Self> {
-        let id = format!("radiofrance:{}", station.slug);
-        let stream_item =
-            Self::build_item_from_metadata(&station, metadata, cover_cache, server_base_url)
-                .await?;
-
-        Ok(Self {
-            id,
-            station,
-            stream_item,
-        })
-    }
-
-    /// Construit une playlist sans cache de covers
-    pub fn from_live_metadata_no_cache(
-        station: Station,
-        metadata: &LiveResponse,
-        server_base_url: Option<&str>,
-    ) -> Result<Self> {
-        let id = format!("radiofrance:{}", station.slug);
-        let stream_item = Self::build_item_from_metadata_sync(&station, metadata, server_base_url)?;
-
-        Ok(Self {
-            id,
-            station,
-            stream_item,
-        })
-    }
-
-    /// Met à jour les métadonnées volatiles de l'item
-    ///
-    /// Met à jour uniquement les champs volatiles :
-    /// - title, artist, album (depuis nouvelles métadonnées)
-    /// - album_art / album_art_pk (si nouvelle cover)
-    ///
-    /// L'URL du stream (resource.url) ne change JAMAIS.
-    #[cfg(feature = "cache")]
-    pub async fn update_metadata(
-        &mut self,
-        metadata: &LiveResponse,
-        cover_cache: Option<&Arc<CoverCache>>,
-        server_base_url: Option<&str>,
-    ) -> Result<()> {
-        // Reconstruire l'item avec les nouvelles métadonnées
-        // mais conserver l'URL du stream
-        let old_url = self
-            .stream_item
-            .resources
-            .first()
-            .map(|r| r.url.clone())
-            .unwrap_or_default();
-
-        let mut new_item =
-            Self::build_item_from_metadata(&self.station, metadata, cover_cache, server_base_url)
-                .await?;
-
-        // S'assurer que l'URL du stream n'a pas changé
-        if let Some(res) = new_item.resources.first_mut() {
-            if !old_url.is_empty() {
-                res.url = old_url;
-            }
-        }
-
-        self.stream_item = new_item;
-        Ok(())
-    }
-
-    /// Met à jour les métadonnées sans cache
-    pub fn update_metadata_no_cache(
-        &mut self,
-        metadata: &LiveResponse,
-        server_base_url: Option<&str>,
-    ) -> Result<()> {
-        let old_url = self
-            .stream_item
-            .resources
-            .first()
-            .map(|r| r.url.clone())
-            .unwrap_or_default();
-
-        let mut new_item =
-            Self::build_item_from_metadata_sync(&self.station, metadata, server_base_url)?;
-
-        if let Some(res) = new_item.resources.first_mut() {
-            if !old_url.is_empty() {
-                res.url = old_url;
-            }
-        }
-
-        self.stream_item = new_item;
-        Ok(())
-    }
-
     /// Construit un Item UPnP depuis les métadonnées live (avec cache)
     #[cfg(feature = "cache")]
-    async fn build_item_from_metadata(
+    pub async fn build_item_from_metadata(
         station: &Station,
         metadata: &LiveResponse,
         cover_cache: Option<&Arc<CoverCache>>,
@@ -381,7 +279,7 @@ impl StationPlaylist {
     }
 
     /// Construit un Item UPnP depuis les métadonnées live (sans cache async)
-    fn build_item_from_metadata_sync(
+    pub fn build_item_from_metadata_sync(
         station: &Station,
         metadata: &LiveResponse,
         server_base_url: Option<&str>,

@@ -4,7 +4,7 @@
 //! providing UPnP/DLNA integration with dynamic container generation.
 
 use crate::error::Result;
-use crate::models::Station;
+use crate::models::{Station, StationType};
 use crate::playlist::{StationGroup, StationGroups, StationPlaylist};
 use crate::stateful_client::RadioFranceStatefulClient;
 use pmoconfig::Config;
@@ -78,7 +78,7 @@ impl RadioFranceSource {
     pub async fn new(config: Arc<Config>) -> Result<Self> {
         let client = RadioFranceStatefulClient::new(config).await?;
 
-        Ok(Self {
+        let source = Self {
             client,
             refresh_handles: Arc::new(RwLock::new(HashMap::new())),
             #[cfg(feature = "cache")]
@@ -87,7 +87,36 @@ impl RadioFranceSource {
             update_id: Arc::new(RwLock::new(0)),
             last_change: Arc::new(RwLock::new(None)),
             container_notifier: None,
-        })
+        };
+
+        // S'abonner aux événements du cache pour les notifications GENA
+        let container_notifier = source.container_notifier.clone();
+        let update_id = source.update_id.clone();
+        let last_change = source.last_change.clone();
+
+        source
+            .client
+            .subscribe_to_updates(Arc::new(move |slug: &str| {
+                let slug = slug.to_string();
+                let update_id = update_id.clone();
+                let last_change = last_change.clone();
+                let container_notifier = container_notifier.clone();
+
+                // Spawn async task car le callback n'est pas async
+                tokio::spawn(async move {
+                    *update_id.write().await += 1;
+                    *last_change.write().await = Some(SystemTime::now());
+
+                    if let Some(ref notifier) = container_notifier {
+                        // IMPORTANT : Notifier le container de playlist (pas l'item)
+                        // Le Control Point est abonné à "radiofrance:fip" (la playlist)
+                        // et non à "radiofrance:fip:stream" (l'item)
+                        notifier(&[format!("radiofrance:{}", slug)]);
+                    }
+                });
+            }));
+
+        Ok(source)
     }
 
     /// Set the container notifier for UPnP GENA events
@@ -133,9 +162,8 @@ impl RadioFranceSource {
         #[cfg(feature = "cache")]
         let cover_cache = pmoupnp::cache_registry::get_cover_cache();
 
-        Ok(Self {
+        let source = Self {
             client,
-            playlists: Arc::new(RwLock::new(HashMap::new())),
             refresh_handles: Arc::new(RwLock::new(HashMap::new())),
             #[cfg(feature = "cache")]
             cover_cache,
@@ -143,10 +171,40 @@ impl RadioFranceSource {
             update_id: Arc::new(RwLock::new(0)),
             last_change: Arc::new(RwLock::new(None)),
             container_notifier: None,
-        })
+        };
+
+        // S'abonner aux événements du cache pour les notifications GENA
+        let container_notifier = source.container_notifier.clone();
+        let update_id = source.update_id.clone();
+        let last_change = source.last_change.clone();
+
+        source
+            .client
+            .subscribe_to_updates(Arc::new(move |slug: &str| {
+                let slug = slug.to_string();
+                let update_id = update_id.clone();
+                let last_change = last_change.clone();
+                let container_notifier = container_notifier.clone();
+
+                tokio::spawn(async move {
+                    *update_id.write().await += 1;
+                    *last_change.write().await = Some(SystemTime::now());
+
+                    if let Some(ref notifier) = container_notifier {
+                        notifier(&[format!("radiofrance:{}", slug)]);
+                    }
+                });
+            }));
+
+        Ok(source)
     }
 
     /// Start metadata refresh task for a station
+    ///
+    /// Appelée par le proxy du stream audio. Cette méthode lance une tâche
+    /// qui appelle `get_live_metadata()` périodiquement (toutes les secondes).
+    /// Le cache avec TTL gère le refresh réel, et les événements GENA sont
+    /// déclenchés automatiquement par le système d'abonnement.
     pub async fn start_metadata_refresh(&self, station_slug: &str) -> Result<()> {
         let mut handles = self.refresh_handles.write().await;
 
@@ -157,71 +215,26 @@ impl RadioFranceSource {
 
         let client = self.client.clone();
         let slug = station_slug.to_string();
-        let update_id = self.update_id.clone();
-        let last_change = self.last_change.clone();
-        let container_notifier = self.container_notifier.clone();
 
         let handle = tokio::spawn(async move {
             loop {
-                // Force refresh metadata (bypass cache to get fresh data)
-                match client.refresh_live_metadata(&slug).await {
-                    Ok(metadata) => {
-                        let delay = std::time::Duration::from_millis(metadata.delay_to_refresh);
+                // Appeler simplement get_live_metadata
+                // Si le cache est valide, retour immédiat
+                // Si expiré, fetch API + mise à jour cache + notification GENA
+                let _ = client.get_live_metadata(&slug).await;
 
-                        #[cfg(feature = "logging")]
-                        {
-                            let artist = metadata
-                                .now
-                                .song
-                                .as_ref()
-                                .and_then(|s| {
-                                    if s.interpreters.is_empty() {
-                                        None
-                                    } else {
-                                        Some(s.artists_display())
-                                    }
-                                })
-                                .unwrap_or_else(|| "".to_string());
-                            tracing::debug!(
-                                "Refreshed metadata for {}: title='{}' artist='{}' delay={}ms",
-                                slug,
-                                metadata.now.first_line.title.as_deref().unwrap_or(""),
-                                artist,
-                                metadata.delay_to_refresh
-                            );
-                        }
-
-                        // Update change tracking
-                        *update_id.write().await = update_id.read().await.wrapping_add(1);
-                        *last_change.write().await = Some(SystemTime::now());
-
-                        // Notify UPnP ContentDirectory of the change
-                        if let Some(ref notifier) = container_notifier {
-                            // Notify the station's stream item container
-                            let container_id = format!("radiofrance:{}", slug);
-
-                            #[cfg(feature = "logging")]
-                            tracing::debug!("Notifying UPnP container update: {}", container_id);
-
-                            notifier(&[container_id]);
-                        }
-
-                        tokio::time::sleep(delay).await;
-                    }
-                    Err(e) => {
-                        #[cfg(feature = "logging")]
-                        tracing::warn!("Failed to refresh metadata for {}: {}", slug, e);
-
-                        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-                    }
-                }
+                // Attendre 1 seconde avant le prochain check
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             }
         });
 
         handles.insert(station_slug.to_string(), handle);
 
         #[cfg(feature = "logging")]
-        tracing::debug!("Started metadata refresh for station: {}", station_slug);
+        tracing::debug!(
+            "Started metadata refresh polling for station: {}",
+            station_slug
+        );
 
         Ok(())
     }
@@ -254,17 +267,16 @@ impl RadioFranceSource {
         );
 
         let mut containers = Vec::new();
-        let mut items = Vec::new();
 
-        // 1. Standalone stations → direct items (avec appels API)
+        // 1. Standalone stations → playlist containers (plus des items directs)
         #[cfg(feature = "logging")]
         tracing::debug!(
-            "Building {} standalone station items",
+            "Building {} standalone station playlist containers",
             groups.standalone.len()
         );
 
         for station in &groups.standalone {
-            items.push(self.build_station_item(station).await?);
+            containers.push(self.build_station_playlist(station).await?);
         }
 
         // 2. Stations with webradios → containers
@@ -290,23 +302,22 @@ impl RadioFranceSource {
 
         #[cfg(feature = "logging")]
         tracing::debug!(
-            "Container tree built: {} containers, {} items",
-            containers.len(),
-            items.len()
+            "Container tree built: {} containers (all playlists)",
+            containers.len()
         );
 
         Ok(Container {
             id: "radiofrance".to_string(),
             parent_id: "0".to_string(),
             restricted: Some("1".to_string()),
-            child_count: Some((containers.len() + items.len()).to_string()),
+            child_count: Some(containers.len().to_string()),
             searchable: Some("0".to_string()),
             title: "Radio France".to_string(),
             class: "object.container".to_string(),
             artist: None,
             album_art: None,
             containers,
-            items,
+            items: vec![], // Plus d'items directs - tout est dans des playlists
         })
     }
 
@@ -364,23 +375,24 @@ impl RadioFranceSource {
         })
     }
 
-    /// Build a UPnP item for a station
+    /// Construit le container de playlist avec son unique item (métadonnées cohérentes)
     ///
-    /// Fetches live metadata to create a complete item with stream URL.
-    async fn build_station_item(&self, station: &Station) -> Result<Item> {
+    /// Cette méthode crée un container de type `playlistContainer` contenant un seul item.
+    /// Un seul appel au cache garantit la cohérence des métadonnées entre le container et l'item.
+    async fn build_station_playlist(&self, station: &Station) -> Result<Container> {
         #[cfg(feature = "logging")]
         tracing::debug!(
-            "Building station item for: {} ({})",
+            "Building station playlist for: {} ({})",
             station.name,
             station.slug
         );
 
-        // Fetch metadata from API (cached by RadioFranceStatefulClient)
+        // UN SEUL appel au cache - garantit cohérence container/item
         let metadata = self.client.get_live_metadata(&station.slug).await?;
 
-        // Build item from live metadata (no caching here, rely on client cache)
+        // Build l'item de stream avec pmoDidl
         #[cfg(feature = "cache")]
-        let item = StationPlaylist::build_item_from_metadata(
+        let mut item = StationPlaylist::build_item_from_metadata(
             station,
             &metadata,
             self.cover_cache.as_ref(),
@@ -389,24 +401,51 @@ impl RadioFranceSource {
         .await?;
 
         #[cfg(not(feature = "cache"))]
-        let item = StationPlaylist::build_item_from_metadata_sync(
+        let mut item = StationPlaylist::build_item_from_metadata_sync(
             station,
             &metadata,
             self.server_base_url.as_deref(),
         )?;
 
-        // Note: We don't start metadata refresh here to avoid blocking during browse.
-        // Refresh will be started in resolve_uri() when the stream is actually played.
+        // Parent_id de l'item = le container de playlist
+        let playlist_id = format!("radiofrance:{}", station.slug);
+        item.parent_id = playlist_id.clone();
+
+        // Construire le container avec les MÊMES métadonnées que l'item
+        let container = Container {
+            id: playlist_id,
+            parent_id: self.get_parent_id_for_station(station),
+            restricted: Some("1".to_string()),
+            child_count: Some("1".to_string()), // Toujours 1 item
+            searchable: Some("0".to_string()),
+            // Métadonnées identiques à l'item
+            title: item.title.clone(),
+            artist: item.artist.clone(),
+            album_art: item.album_art.clone(),
+            class: "object.container.playlistContainer".to_string(),
+            containers: vec![],
+            items: vec![item], // L'item est inclus dans le container
+        };
 
         #[cfg(feature = "logging")]
         tracing::debug!(
-            "Built item for {}: {} resources, album_art: {:?}",
+            "Built playlist container for {}: {} items",
             station.slug,
-            item.resources.len(),
-            item.album_art.is_some()
+            container.items.len()
         );
 
-        Ok(item)
+        Ok(container)
+    }
+
+    /// Détermine le parent_id selon le type de station
+    fn get_parent_id_for_station(&self, station: &Station) -> String {
+        match &station.station_type {
+            StationType::Webradio { parent_station } => {
+                format!("radiofrance:group:{}", parent_station)
+            }
+            StationType::LocalRadio { .. } => "radiofrance:ici".to_string(),
+            StationType::Main => "radiofrance".to_string(),
+        }
     }
 }
 
@@ -414,7 +453,6 @@ impl std::fmt::Debug for RadioFranceSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RadioFranceSource")
             .field("client", &self.client)
-            .field("playlists_count", &"<locked>")
             .field("refresh_handles_count", &"<locked>")
             .finish()
     }
@@ -473,10 +511,8 @@ impl MusicSource for RadioFranceSource {
                     .await
                     .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
 
-                Ok(BrowseResult::Mixed {
-                    containers: container.containers,
-                    items: container.items,
-                })
+                // Retourne uniquement des containers (playlists + groupes)
+                Ok(BrowseResult::Containers(container.containers))
             }
             id if id.starts_with("radiofrance:group:") => {
                 let slug = id
@@ -496,26 +532,23 @@ impl MusicSource for RadioFranceSource {
                     .find(|g| g.main.slug == slug)
                     .ok_or_else(|| MusicSourceError::ObjectNotFound(id.to_string()))?;
 
-                // Build items for this group only (main + webradios)
-                let group_id = format!("radiofrance:group:{}", slug);
-
+                // Build playlist containers for this group (main + webradios)
                 // Paralléliser les fetches pour éviter les timeouts
-                let mut futures = vec![self.build_station_item(&group.main)];
+                let mut futures = vec![self.build_station_playlist(&group.main)];
                 for webradio in &group.webradios {
-                    futures.push(self.build_station_item(webradio));
+                    futures.push(self.build_station_playlist(webradio));
                 }
 
                 let results = futures::future::join_all(futures).await;
 
-                let mut items = Vec::new();
+                let mut containers = Vec::new();
                 for result in results {
-                    let mut item =
+                    let container =
                         result.map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
-                    item.parent_id = group_id.clone();
-                    items.push(item);
+                    containers.push(container);
                 }
 
-                Ok(BrowseResult::Items(items))
+                Ok(BrowseResult::Containers(containers))
             }
             "radiofrance:ici" => {
                 let stations = self
@@ -525,20 +558,45 @@ impl MusicSource for RadioFranceSource {
                     .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
                 let groups = StationGroups::from_stations(stations);
 
-                // Build items for local radios only
-                let mut items = Vec::new();
+                // Build playlist containers for local radios only
+                let mut containers = Vec::new();
                 for station in &groups.local_radios {
-                    let mut item = self
-                        .build_station_item(station)
+                    let container = self
+                        .build_station_playlist(station)
                         .await
                         .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
 
-                    // Fix parent_id to point to the ICI container
-                    item.parent_id = "radiofrance:ici".to_string();
-                    items.push(item);
+                    containers.push(container);
                 }
 
-                Ok(BrowseResult::Items(items))
+                Ok(BrowseResult::Containers(containers))
+            }
+            id if id.starts_with("radiofrance:") && !id.contains(":stream") => {
+                // Browse d'un container de playlist (ex: radiofrance:fip)
+                // Le container contient déjà son item, on retourne juste le container
+                let slug = id
+                    .strip_prefix("radiofrance:")
+                    .ok_or_else(|| MusicSourceError::ObjectNotFound(id.to_string()))?;
+
+                // Trouver la station correspondante
+                let stations = self
+                    .client
+                    .get_stations()
+                    .await
+                    .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+                let station = stations
+                    .iter()
+                    .find(|s| s.slug == slug)
+                    .ok_or_else(|| MusicSourceError::ObjectNotFound(id.to_string()))?;
+
+                let container = self
+                    .build_station_playlist(station)
+                    .await
+                    .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+                // Retourner le container lui-même (qui contient l'item)
+                Ok(BrowseResult::Containers(vec![container]))
             }
             _ => Err(MusicSourceError::ObjectNotFound(object_id.to_string())),
         }
@@ -551,10 +609,29 @@ impl MusicSource for RadioFranceSource {
             .and_then(|s| s.strip_suffix(":stream"))
             .ok_or_else(|| MusicSourceError::ObjectNotFound(object_id.to_string()))?;
 
-        let playlists = self.playlists.read().await;
-        playlists
-            .get(slug)
-            .map(|p| p.stream_item.clone())
+        // Trouver la station correspondante
+        let stations = self
+            .client
+            .get_stations()
+            .await
+            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+        let station = stations
+            .iter()
+            .find(|s| s.slug == slug)
+            .ok_or_else(|| MusicSourceError::ObjectNotFound(object_id.to_string()))?;
+
+        // Construire le container de playlist et extraire l'item
+        let container = self
+            .build_station_playlist(station)
+            .await
+            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+        // Extraire l'unique item du container
+        container
+            .items
+            .into_iter()
+            .next()
             .ok_or_else(|| MusicSourceError::ObjectNotFound(object_id.to_string()))
     }
 
@@ -565,56 +642,10 @@ impl MusicSource for RadioFranceSource {
             .and_then(|s| s.strip_suffix(":stream"))
             .ok_or_else(|| MusicSourceError::ObjectNotFound(object_id.to_string()))?;
 
-        // Ensure we have metadata for this station
-        let playlists = self.playlists.read().await;
-        let needs_metadata = !playlists.contains_key(slug);
-        drop(playlists);
+        // Start metadata refresh for this station (if not already running)
+        let _ = self.start_metadata_refresh(slug).await;
 
-        if needs_metadata {
-            // Fetch metadata and create playlist
-            let stations = self
-                .client
-                .get_stations()
-                .await
-                .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
-
-            let station = stations
-                .iter()
-                .find(|s| s.slug == slug)
-                .ok_or_else(|| MusicSourceError::ObjectNotFound(slug.to_string()))?;
-
-            let metadata = self
-                .client
-                .get_live_metadata(slug)
-                .await
-                .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
-
-            #[cfg(feature = "cache")]
-            let playlist = StationPlaylist::from_live_metadata(
-                station.clone(),
-                &metadata,
-                self.cover_cache.as_ref(),
-                self.server_base_url.as_deref(),
-            )
-            .await
-            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
-
-            #[cfg(not(feature = "cache"))]
-            let playlist = StationPlaylist::from_live_metadata_no_cache(
-                station.clone(),
-                &metadata,
-                self.server_base_url.as_deref(),
-            )
-            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
-
-            let mut playlists_write = self.playlists.write().await;
-            playlists_write.insert(slug.to_string(), playlist);
-
-            // Start metadata refresh
-            drop(playlists_write);
-            let _ = self.start_metadata_refresh(slug).await;
-        }
-
+        // Get the item to extract the stream URL
         let item = self.get_item(object_id).await?;
         item.resources
             .first()
