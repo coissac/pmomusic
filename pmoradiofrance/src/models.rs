@@ -158,20 +158,21 @@ pub struct Media {
 }
 
 impl Media {
-    /// Find the best HiFi stream (AAC 192 kbps or HLS)
+    /// Find the best HiFi stream (AAC ou MP3, bitrate maximum, jamais HLS)
     pub fn best_hifi_stream(&self) -> Option<&StreamSource> {
-        // Priority: AAC 192 kbps > HLS
+        // Priority: AAC 192 kbps > AAC autre bitrate > MP3 bitrate max > autre
+        // JAMAIS HLS (incompatible avec beaucoup de lecteurs)
         self.sources
             .iter()
-            .find(|s| {
-                s.format == StreamFormat::Aac
-                    && s.broadcast_type == BroadcastType::Live
-                    && s.bitrate == 192
-            })
-            .or_else(|| {
-                self.sources.iter().find(|s| {
-                    s.format == StreamFormat::Hls && s.broadcast_type == BroadcastType::Live
-                })
+            .filter(|s| s.broadcast_type == BroadcastType::Live && s.format != StreamFormat::Hls)
+            .max_by_key(|s| {
+                // Priorité: format puis bitrate
+                let format_priority = match s.format {
+                    StreamFormat::Aac => 1000,
+                    StreamFormat::Mp3 => 500,
+                    StreamFormat::Hls => 0, // Filtré de toute façon
+                };
+                format_priority + s.bitrate
             })
     }
 
