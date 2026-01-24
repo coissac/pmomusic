@@ -60,31 +60,33 @@ impl StationGroups {
         let mut groups: Vec<StationGroup> = groups_map
             .into_iter()
             .map(|(group_key, mut stations)| {
-                // Trier : station principale (sans _) en premier
-                stations.sort_by_key(|s| {
-                    if s.slug == group_key {
-                        0 // Station principale en premier
-                    } else {
-                        1
+                // Trier : station principale en premier, puis webradios par ordre alphabétique
+                stations.sort_by(|a, b| {
+                    let a_is_main = a.slug == group_key;
+                    let b_is_main = b.slug == group_key;
+
+                    match (a_is_main, b_is_main) {
+                        (true, false) => std::cmp::Ordering::Less, // Main avant webradios
+                        (false, true) => std::cmp::Ordering::Greater, // Webradios après main
+                        _ => a.name.cmp(&b.name),                  // Sinon tri alphabétique
                     }
                 });
 
-                StationGroup { stations }
+                StationGroup {
+                    stations,
+                    group_name: None,
+                    group_slug: None,
+                }
             })
             .collect();
 
         // Ajouter le groupe ICI si on a des radios locales
         if !ici_stations.is_empty() {
             ici_stations.sort_by(|a, b| a.name.cmp(&b.name));
-            // Créer une station virtuelle "ici" comme station principale
-            let ici_main = Station {
-                slug: "ici".to_string(),
-                name: "Radios ICI".to_string(),
-            };
-            let mut ici_group_stations = vec![ici_main];
-            ici_group_stations.extend(ici_stations);
             groups.push(StationGroup {
-                stations: ici_group_stations,
+                stations: ici_stations,
+                group_name: Some("Radios ICI".to_string()),
+                group_slug: Some("ici".to_string()),
             });
         }
 
@@ -131,13 +133,27 @@ impl StationGroups {
 
 /// Groupe de stations - Niveau 1
 ///
-/// Index 0 = station principale du groupe (ex: FIP pour le groupe FIP)
+/// Index 0 = première station du groupe (donne le nom/slug par défaut)
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StationGroup {
     pub stations: Vec<Station>,
+    /// Nom personnalisé du groupe (optionnel, sinon utilise le nom de stations[0])
+    pub group_name: Option<String>,
+    /// Slug personnalisé du groupe (optionnel, sinon utilise le slug de stations[0])
+    pub group_slug: Option<String>,
 }
 
 impl StationGroup {
+    /// Retourne le nom du groupe (personnalisé ou nom de la première station)
+    fn name(&self) -> &str {
+        self.group_name.as_deref().unwrap_or(&self.stations[0].name)
+    }
+
+    /// Retourne le slug du groupe (personnalisé ou slug de la première station)
+    fn slug(&self) -> &str {
+        self.group_slug.as_deref().unwrap_or(&self.stations[0].slug)
+    }
+
     /// Niveau 1: to_stub() retourne comment ce groupe apparaît dans la liste de StationGroups
     ///
     /// - Si 1 station: retourne une playlist avec métadonnées (pour avoir titre/artiste à jour)
@@ -154,19 +170,18 @@ impl StationGroup {
                 .await
         } else {
             // Groupe multi-stations : juste le nom, pas de métadonnées
-            let main_station = &self.stations[0];
             let album_art = Some(format!(
                 "{}/api/radiofrance/default-logo",
                 server_base_url.trim_end_matches('/')
             ));
 
             Ok(Container {
-                id: format!("radiofrance:group:{}", main_station.slug),
+                id: format!("radiofrance:group:{}", self.slug()),
                 parent_id: "radiofrance".to_string(),
                 restricted: Some("1".to_string()),
-                child_count: Some(self.stations.len().saturating_sub(1).to_string()),
+                child_count: Some(self.stations.len().to_string()),
                 searchable: Some("0".to_string()),
-                title: main_station.name.clone(),
+                title: self.name().to_string(),
                 class: "object.container".to_string(),
                 artist: None,
                 album_art,
@@ -179,7 +194,7 @@ impl StationGroup {
     /// Niveau 1: to_didl() retourne le container du groupe avec TOUT son contenu
     ///
     /// - Si 1 station: retourne la playlist complète avec l'item stream
-    /// - Si plusieurs: retourne le container avec toutes les playlists des webradios en stub
+    /// - Si plusieurs: retourne le container avec toutes les playlists en stub
     pub async fn to_didl(
         &self,
         metadata_cache: &MetadataCache,
@@ -191,11 +206,10 @@ impl StationGroup {
                 .to_didl(metadata_cache, server_base_url)
                 .await
         } else {
-            // Groupe multi-stations : retourner un container avec les playlists en stub
-            let main_station = &self.stations[0];
+            // Groupe multi-stations : retourner un container avec toutes les playlists en stub
             let mut containers = Vec::new();
 
-            for station in &self.stations[1..] {
+            for station in &self.stations {
                 // Appeler to_stub() sur chaque station
                 let playlist_stub = station.to_stub(metadata_cache, server_base_url).await?;
                 containers.push(playlist_stub);
@@ -207,12 +221,12 @@ impl StationGroup {
             ));
 
             Ok(Container {
-                id: format!("radiofrance:group:{}", main_station.slug),
+                id: format!("radiofrance:group:{}", self.slug()),
                 parent_id: "radiofrance".to_string(),
                 restricted: Some("1".to_string()),
                 child_count: Some(containers.len().to_string()),
                 searchable: Some("0".to_string()),
-                title: main_station.name.clone(),
+                title: self.name().to_string(),
                 class: "object.container".to_string(),
                 artist: None,
                 album_art,
@@ -236,13 +250,13 @@ impl Station {
         metadata_cache: &MetadataCache,
         _server_base_url: &str,
     ) -> Result<Container> {
+        let playlist_id = format!("radiofrance:{}", self.slug);
+        let parent_id = self.compute_parent_id();
+
         // Récupérer les métadonnées du cache
         let cached_metadata = metadata_cache.get(&self.slug).await?;
 
         // Construire juste le container de playlist (sans l'item stream)
-        let playlist_id = format!("radiofrance:{}", self.slug);
-        let parent_id = self.compute_parent_id();
-
         Ok(Container {
             id: playlist_id,
             parent_id,
@@ -278,8 +292,9 @@ impl Station {
 
     /// Calcule le parent_id selon la position de la station
     fn compute_parent_id(&self) -> String {
-        if self.slug == "ici" {
-            "radiofrance".to_string()
+        if self.slug.starts_with("francebleu_") {
+            // Radio locale ICI (ex-France Bleu) : parent = groupe ICI
+            "radiofrance:group:ici".to_string()
         } else if let Some(pos) = self.slug.find('_') {
             // Webradio : parent = groupe
             format!("radiofrance:group:{}", &self.slug[..pos])
