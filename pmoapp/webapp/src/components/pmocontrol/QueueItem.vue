@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, nextTick } from "vue";
+import { computed } from "vue";
 import { Music, Play } from "lucide-vue-next";
 import type { QueueItem } from "@/services/pmocontrol/types";
+import { useCoverImage } from "@/composables/useCoverImage";
 
 const props = defineProps<{
     item: QueueItem;
@@ -12,50 +13,16 @@ const emit = defineEmits<{
     click: [item: QueueItem];
 }>();
 
-// Track image loading state
-const imageLoaded = ref(false);
-const imageError = ref(false);
-
-// Reference to the image element
-const coverImageRef = ref<HTMLImageElement | null>(null);
-
-// Check if image is already loaded (cached images may load synchronously)
-function checkImageComplete() {
-    nextTick(() => {
-        if (
-            coverImageRef.value?.complete &&
-            coverImageRef.value?.naturalWidth > 0
-        ) {
-            imageLoaded.value = true;
-            imageError.value = false;
-        }
-    });
-}
-
-// Reset image state when album_art_uri changes
-watch(
-    () => props.item.album_art_uri,
-    (newUri) => {
-        imageLoaded.value = false;
-        imageError.value = false;
-        if (newUri) {
-            checkImageComplete();
-        }
-    },
-);
-
-onMounted(() => {
-    checkImageComplete();
-});
-
-function handleImageLoad() {
-    imageLoaded.value = true;
-    imageError.value = false;
-}
-
-function handleImageError() {
-    imageError.value = true;
-}
+// Use the new cover image composable
+const albumArtUri = computed(() => props.item.album_art_uri);
+const {
+    imageLoaded,
+    imageError,
+    coverImageRef,
+    cacheBustedUrl,
+    handleImageLoad,
+    handleImageError,
+} = useCoverImage(albumArtUri);
 
 function handleClick(item: QueueItem) {
     console.log("[QueueItem] Click detected on item:", item.index, item.title);
@@ -80,17 +47,26 @@ function handleClick(item: QueueItem) {
         <div class="item-cover">
             <img
                 ref="coverImageRef"
-                v-if="item.album_art_uri && !imageError"
-                v-show="imageLoaded"
-                :src="item.album_art_uri"
+                :style="{
+                    opacity:
+                        cacheBustedUrl && imageLoaded && !imageError ? 1 : 0,
+                    visibility:
+                        cacheBustedUrl && imageLoaded && !imageError
+                            ? 'visible'
+                            : 'hidden',
+                    position:
+                        cacheBustedUrl && imageLoaded && !imageError
+                            ? 'relative'
+                            : 'absolute',
+                }"
+                :src="cacheBustedUrl || ''"
                 :alt="item.album || 'Album cover'"
                 class="cover-image"
-                loading="lazy"
                 @load="handleImageLoad"
                 @error="handleImageError"
             />
             <Music
-                v-if="!item.album_art_uri || imageError || !imageLoaded"
+                v-show="!cacheBustedUrl || imageError || !imageLoaded"
                 :size="20"
             />
         </div>

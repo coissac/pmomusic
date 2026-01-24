@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed } from "vue";
 import type { ContainerEntry } from "@/services/pmocontrol/types";
 import { Folder, Music } from "lucide-vue-next";
 import ActionMenu from "./ActionMenu.vue";
+import { useCoverImage } from "@/composables/useCoverImage";
 
 const props = defineProps<{
     entry: ContainerEntry;
@@ -16,18 +17,16 @@ const emit = defineEmits<{
     addToQueue: [containerId: string, rendererId: string];
 }>();
 
-// Track image loading state
-const imageLoaded = ref(false);
-const imageError = ref(false);
-
-// Reset image state when album_art_uri changes
-watch(
-    () => props.entry.album_art_uri,
-    () => {
-        imageLoaded.value = false;
-        imageError.value = false;
-    },
-);
+// Use the new cover image composable
+const albumArtUri = computed(() => props.entry.album_art_uri);
+const {
+    imageLoaded,
+    imageError,
+    coverImageRef,
+    cacheBustedUrl,
+    handleImageLoad,
+    handleImageError,
+} = useCoverImage(albumArtUri);
 
 const iconComponent = computed(() => {
     const cls = props.entry.class.toLowerCase();
@@ -61,15 +60,6 @@ function handlePlayNow(rendererId: string) {
 function handleAddToQueue(rendererId: string) {
     emit("addToQueue", props.entry.id, rendererId);
 }
-
-function handleImageLoad() {
-    imageLoaded.value = true;
-    imageError.value = false;
-}
-
-function handleImageError() {
-    imageError.value = true;
-}
 </script>
 
 <template>
@@ -79,17 +69,29 @@ function handleImageError() {
             <!-- Cover avec icône de type en overlay -->
             <div class="container-cover">
                 <img
-                    v-if="entry.album_art_uri && !imageError"
-                    v-show="imageLoaded"
-                    :src="entry.album_art_uri"
+                    ref="coverImageRef"
+                    :style="{
+                        opacity:
+                            cacheBustedUrl && imageLoaded && !imageError
+                                ? 1
+                                : 0,
+                        visibility:
+                            cacheBustedUrl && imageLoaded && !imageError
+                                ? 'visible'
+                                : 'hidden',
+                        position:
+                            cacheBustedUrl && imageLoaded && !imageError
+                                ? 'relative'
+                                : 'absolute',
+                    }"
+                    :src="cacheBustedUrl || ''"
                     :alt="entry.title"
                     class="cover-image"
-                    loading="lazy"
                     @load="handleImageLoad"
                     @error="handleImageError"
                 />
                 <div
-                    v-if="!entry.album_art_uri || imageError || !imageLoaded"
+                    v-show="!cacheBustedUrl || imageError || !imageLoaded"
                     class="cover-placeholder"
                 >
                     <component :is="iconComponent" :size="28" />
