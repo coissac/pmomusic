@@ -12,8 +12,10 @@ Refactoring complet pour supprimer la notion de "station virtuelle" et utiliser 
 
 ### Modifications
 
-**Fichier modifié :**
+**Fichiers modifiés :**
 - `pmoradiofrance/src/playlist.rs`
+- `pmoradiofrance/src/source.rs`
+- `pmoradiofrance/src/client.rs`
 
 ### Changements structurels
 
@@ -39,12 +41,23 @@ Refactoring complet pour supprimer la notion de "station virtuelle" et utiliser 
    - Groupe ICI : toutes les stations triées par nom (pas de station principale)
    - Les stations se retrouvent toujours à la même position dans la liste
 
+6. **Chargement parallèle des métadonnées** :
+   - Utilisation de `futures::stream::buffer_unordered(5)` pour charger jusqu'à 5 stations en parallèle
+   - Décalage de 50ms entre chaque requête pour éviter de surcharger l'API Radio France
+   - Amélioration significative du temps de chargement des groupes multi-stations
+
+7. **Filtrage de francebleu générique** :
+   - Application de la règle métier : `francebleu` (sans suffixe) n'est pas une vraie station
+   - Filtrage dans `discover_all_stations()` pour éviter qu'elle soit ajoutée à la liste
+   - Utilisation de `group.slug()` au lieu de `stations[0].slug` dans `source.rs` pour gérer correctement le groupe ICI
+
 ### Résultat
 
 - **Groupes avec radio principale** (FIP, France Inter, etc.) : la radio principale apparaît à l'index 0, suivie des webradios triées alphabétiquement
 - **Groupe ICI** : accessible et affiche toutes les radios locales triées alphabétiquement
 - Code plus simple et sans logique spéciale dispersée
 - Interface prévisible : les stations sont toujours au même endroit
+- **Chargement plus rapide** : les métadonnées sont récupérées en parallèle au lieu de séquentiellement
 
 ## Statut
 

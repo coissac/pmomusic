@@ -134,12 +134,12 @@ impl RadioFranceClient {
         // Note: Skip francebleu because its "webradios" are actually local radios
         // which we get from the API with proper "ICI" names
         for main_station in &main_stations {
-            stations.push(main_station.clone());
-
-            // Skip francebleu - its local radios are discovered via API below
+            // RÈGLE MÉTIER: Filtrer francebleu (portail générique, pas une vraie station)
             if main_station.slug == "francebleu" {
                 continue;
             }
+
+            stations.push(main_station.clone());
 
             // Try to discover webradios (may return empty for some stations)
             if let Ok(webradios) = self.discover_station_webradios(&main_station.slug).await {
@@ -434,10 +434,10 @@ impl RadioFranceClient {
             return ("mouv", Some(slug));
         }
 
-        // France Bleu local radios use their slug directly, no webradio param
-        // e.g., francebleu_alsace → francebleu_alsace/api/live
+        // France Bleu local radios are webradios of francebleu
+        // e.g., francebleu_alsace → francebleu/api/live?webradio=francebleu-alsace
         if slug.starts_with("francebleu_") {
-            return (slug, None);
+            return ("francebleu", Some(slug));
         }
 
         // Main stations

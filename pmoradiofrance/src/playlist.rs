@@ -150,7 +150,7 @@ impl StationGroup {
     }
 
     /// Retourne le slug du groupe (personnalisé ou slug de la première station)
-    fn slug(&self) -> &str {
+    pub fn slug(&self) -> &str {
         self.group_slug.as_deref().unwrap_or(&self.stations[0].slug)
     }
 
@@ -207,13 +207,33 @@ impl StationGroup {
                 .await
         } else {
             // Groupe multi-stations : retourner un container avec toutes les playlists en stub
-            let mut containers = Vec::new();
+            // Chargement en parallèle avec décalage pour éviter de surcharger l'API
+            use futures::stream::{self, StreamExt};
 
-            for station in &self.stations {
-                // Appeler to_stub() sur chaque station
-                let playlist_stub = station.to_stub(metadata_cache, server_base_url).await?;
-                containers.push(playlist_stub);
-            }
+            let futures: Vec<_> = self
+                .stations
+                .iter()
+                .enumerate()
+                .map(|(i, station)| async move {
+                    // Décalage de 50ms entre chaque requête
+                    if i > 0 {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                    }
+                    station.to_stub(metadata_cache, server_base_url).await
+                })
+                .collect();
+
+            let results: Vec<Result<Container>> = stream::iter(futures)
+                .buffer_unordered(5) // Maximum 5 requêtes en parallèle
+                .collect()
+                .await;
+
+            // to_stub() ne devrait plus échouer (utilise des valeurs par défaut)
+            // mais on gère quand même les erreurs par sécurité
+            let containers: Vec<Container> = results
+                .into_iter()
+                .filter_map(|result| result.ok())
+                .collect();
 
             let album_art = Some(format!(
                 "{}/api/radiofrance/default-logo",
@@ -244,17 +264,43 @@ impl StationGroup {
 impl Station {
     /// Niveau 2: to_stub() retourne comment cette station apparaît dans la liste d'un groupe
     ///
-    /// Retourne un container de playlist vide avec métadonnées live
+    /// Retourne un container de playlist vide avec métadonnées live ou par défaut
     pub async fn to_stub(
         &self,
         metadata_cache: &MetadataCache,
-        _server_base_url: &str,
+        server_base_url: &str,
     ) -> Result<Container> {
         let playlist_id = format!("radiofrance:{}", self.slug);
         let parent_id = self.compute_parent_id();
 
-        // Récupérer les métadonnées du cache
-        let cached_metadata = metadata_cache.get(&self.slug).await?;
+        // Essayer de récupérer les métadonnées du cache
+        let (title, artist, album_art) = match metadata_cache.get(&self.slug).await {
+            Ok(cached) => (
+                cached.title.clone(),
+                cached.artist.clone(),
+                cached.album_art.clone(),
+            ),
+            Err(e) => {
+                // Graceful degradation: utiliser des métadonnées par défaut
+                #[cfg(feature = "logging")]
+                tracing::warn!(
+                    "Failed to get metadata for {}, using defaults: {}",
+                    self.slug,
+                    e
+                );
+
+                let default_art = Some(format!(
+                    "{}/api/radiofrance/default-logo",
+                    server_base_url.trim_end_matches('/')
+                ));
+
+                (
+                    self.name.clone(),
+                    Some("Radio France".to_string()),
+                    default_art,
+                )
+            }
+        };
 
         // Construire juste le container de playlist (sans l'item stream)
         Ok(Container {
@@ -263,10 +309,10 @@ impl Station {
             restricted: Some("1".to_string()),
             child_count: Some("1".to_string()),
             searchable: Some("0".to_string()),
-            title: cached_metadata.title.clone(),
+            title,
             class: "object.container.playlistContainer".to_string(),
-            artist: cached_metadata.artist.clone(),
-            album_art: cached_metadata.album_art.clone(),
+            artist,
+            album_art,
             containers: vec![],
             items: vec![],
         })
