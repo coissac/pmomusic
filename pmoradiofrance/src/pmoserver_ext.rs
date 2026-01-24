@@ -6,26 +6,15 @@
 use anyhow::Result;
 use std::sync::Arc;
 
-use crate::stateful_client::RadioFranceStatefulClient;
-
 /// État partagé pour les handlers Radio France
 #[derive(Clone)]
 pub struct RadioFranceState {
-    pub client: Arc<RadioFranceStatefulClient>,
-    pub source: Option<Arc<crate::source::RadioFranceSource>>,
+    pub source: Arc<crate::source::RadioFranceSource>,
 }
 
 impl RadioFranceState {
-    pub fn new(client: RadioFranceStatefulClient) -> Self {
-        Self {
-            client: Arc::new(client),
-            source: None,
-        }
-    }
-
-    pub fn with_source(mut self, source: Arc<crate::source::RadioFranceSource>) -> Self {
-        self.source = Some(source);
-        self
+    pub fn new(source: Arc<crate::source::RadioFranceSource>) -> Self {
+        Self { source }
     }
 }
 

@@ -16,8 +16,8 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use pmoaudiocache::{AudioCacheExt, Cache as AudioCache, get_audio_cache, register_audio_cache};
-use pmocovers::{Cache as CoverCache, CoverCacheExt, get_cover_cache, register_cover_cache};
+use pmoaudiocache::{AudioCacheExt, get_audio_cache, register_audio_cache};
+use pmocovers::{CoverCacheExt, get_cover_cache, register_cover_cache};
 use pmoparadise::{
     ParadiseChannelManager, ParadiseHistoryBuilder,
     channels::{ALL_CHANNELS, ChannelDescriptor},
@@ -91,7 +91,7 @@ impl ParadiseStreamingExt for pmoserver::Server {
             }
         };
 
-        let audio_cache = match get_audio_cache() {
+        let _audio_cache = match get_audio_cache() {
             Some(cache) => {
                 info!("  ✅ Using existing audio cache singleton");
                 // S'assurer qu'il est aussi enregistré dans le playlist manager
@@ -332,7 +332,7 @@ fn spawn_playlist_event_handler(manager: Arc<ParadiseChannelManager>) {
     tokio::spawn(async move {
         let mut rx = pmoplaylist::subscribe_events();
         while let Ok(envelope) = rx.recv().await {
-            if let PlaylistEventKind::TrackPlayed { cache_pk, .. } = envelope.event.kind {
+            if let PlaylistEventKind::TrackPlayed { cache_pk: _, .. } = envelope.event.kind {
                 if let Some(descriptor) = channel_from_live_playlist(&envelope.event.playlist_id) {
                     if let Err(e) = manager.prefetch_until_horizon(descriptor.id).await {
                         tracing::warn!(

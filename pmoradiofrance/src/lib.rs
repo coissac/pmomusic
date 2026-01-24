@@ -96,7 +96,7 @@ pub mod models;
 pub mod config_ext;
 
 #[cfg(feature = "pmoconfig")]
-pub mod stateful_client;
+pub mod metadata_cache;
 
 #[cfg(feature = "playlist")]
 pub mod playlist;
@@ -117,18 +117,18 @@ pub mod api_rest;
 pub use client::{ClientBuilder, RadioFranceClient};
 pub use error::{Error, Result};
 pub use models::{
-    BroadcastType, CachedStationList, EmbedImage, ImageSize, Line, LiveResponse, LocalRadio, Media,
-    Release, ShowMetadata, Song, Station, StationType, StreamFormat, StreamSource, Visuals,
+    BroadcastType, EmbedImage, ImageSize, Line, LiveResponse, LocalRadio, Media, Release,
+    ShowMetadata, Song, Station, StreamFormat, StreamSource, Visuals,
 };
 
 #[cfg(feature = "pmoconfig")]
 pub use config_ext::RadioFranceConfigExt;
 
 #[cfg(feature = "pmoconfig")]
-pub use stateful_client::RadioFranceStatefulClient;
+pub use metadata_cache::{CachedMetadata, MetadataCache, MetadataUpdateCallback};
 
 #[cfg(feature = "playlist")]
-pub use playlist::{StationGroup, StationGroups, StationPlaylist};
+pub use playlist::{StationGroup, StationGroups};
 
 #[cfg(feature = "server")]
 pub use source::RadioFranceSource;

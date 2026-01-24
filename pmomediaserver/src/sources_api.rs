@@ -145,7 +145,7 @@ async fn register_qobuz(Json(creds): Json<QobuzCredentials>) -> impl IntoRespons
     tag = "sources"
 )]
 async fn register_paradise(Json(params): Json<ParadiseParams>) -> impl IntoResponse {
-    use pmoparadise::{RadioParadiseClient, RadioParadiseSource};
+    use pmoparadise::RadioParadiseSource;
     use pmosource::api::register_source;
 
     // Utiliser l'URL de base depuis les params ou une valeur par défaut

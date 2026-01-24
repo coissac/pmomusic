@@ -244,24 +244,20 @@ impl SourcesExt for Server {
 
     #[cfg(feature = "radiofrance")]
     async fn register_radiofrance(&mut self) -> Result<()> {
-        use pmoradiofrance::{RadioFranceExt, RadioFranceSource, RadioFranceStatefulClient};
+        use pmoradiofrance::{RadioFranceExt, RadioFranceSource};
 
         tracing::info!("Initializing Radio France source...");
 
         // Obtenir l'URL de base du serveur
         let base_url = self.base_url();
 
-        // Créer le client stateful depuis la config
-        let client = RadioFranceStatefulClient::from_config()
+        // Créer la source depuis le registry (avec cache)
+        let config = pmoconfig::get_config();
+        let source = RadioFranceSource::from_registry(config, base_url)
             .await
             .map_err(|e| {
-                SourceInitError::RadioFranceError(format!("Failed to create client: {}", e))
+                SourceInitError::RadioFranceError(format!("Failed to create source: {}", e))
             })?;
-
-        // Créer la source depuis le registry (avec cache)
-        let source = RadioFranceSource::from_registry(client, base_url).map_err(|e| {
-            SourceInitError::RadioFranceError(format!("Failed to create source: {}", e))
-        })?;
 
         // Configurer le notifier pour les événements UPnP GENA
         let notifier = Arc::new(|containers: &[String]| {

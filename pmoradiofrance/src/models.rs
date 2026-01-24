@@ -10,97 +10,22 @@ use serde::{Deserialize, Serialize};
 // ============================================================================
 
 /// A discovered Radio France station
+///
+/// Simplifié: juste slug + name, plus de distinction de type
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Station {
     /// Unique slug identifier (e.g., "franceculture", "fip_rock")
     pub slug: String,
     /// Human-readable name (e.g., "France Culture", "FIP Rock")
     pub name: String,
-    /// Type of station
-    pub station_type: StationType,
-}
-
-/// Type of Radio France station
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum StationType {
-    /// Main station (France Inter, France Culture, FIP, etc.)
-    Main,
-    /// Webradio variant of a main station
-    Webradio {
-        /// Parent station slug (e.g., "fip" for "fip_rock")
-        parent_station: String,
-    },
-    /// Local France Bleu radio
-    LocalRadio {
-        /// Region name
-        region: String,
-        /// Internal Radio France ID
-        id: u32,
-    },
 }
 
 impl Station {
-    /// Create a new main station
-    pub fn main(slug: impl Into<String>, name: impl Into<String>) -> Self {
+    /// Create a new station
+    pub fn new(slug: impl Into<String>, name: impl Into<String>) -> Self {
         Self {
             slug: slug.into(),
             name: name.into(),
-            station_type: StationType::Main,
-        }
-    }
-
-    /// Create a new webradio station
-    pub fn webradio(
-        slug: impl Into<String>,
-        name: impl Into<String>,
-        parent: impl Into<String>,
-    ) -> Self {
-        Self {
-            slug: slug.into(),
-            name: name.into(),
-            station_type: StationType::Webradio {
-                parent_station: parent.into(),
-            },
-        }
-    }
-
-    /// Create a new local radio station
-    pub fn local_radio(
-        slug: impl Into<String>,
-        name: impl Into<String>,
-        region: impl Into<String>,
-        id: u32,
-    ) -> Self {
-        Self {
-            slug: slug.into(),
-            name: name.into(),
-            station_type: StationType::LocalRadio {
-                region: region.into(),
-                id,
-            },
-        }
-    }
-
-    /// Check if this is a main station
-    pub fn is_main(&self) -> bool {
-        matches!(self.station_type, StationType::Main)
-    }
-
-    /// Check if this is a webradio
-    pub fn is_webradio(&self) -> bool {
-        matches!(self.station_type, StationType::Webradio { .. })
-    }
-
-    /// Check if this is a local radio
-    pub fn is_local_radio(&self) -> bool {
-        matches!(self.station_type, StationType::LocalRadio { .. })
-    }
-
-    /// Get the parent station for webradios, or the station itself for main stations
-    pub fn base_station(&self) -> &str {
-        match &self.station_type {
-            StationType::Webradio { parent_station } => parent_station,
-            _ => &self.slug,
         }
     }
 }
@@ -415,86 +340,15 @@ impl ImageSize {
     }
 }
 
-// ============================================================================
-// Cached Station List
-// ============================================================================
-
-/// Cached list of discovered stations with timestamp
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CachedStationList {
-    /// List of discovered stations
-    pub stations: Vec<Station>,
-    /// Unix timestamp when the list was last updated
-    pub last_updated: u64,
-    /// Version of the discovery algorithm (for invalidation)
-    pub version: u32,
-}
-
-impl CachedStationList {
-    /// Current version of the discovery algorithm
-    pub const CURRENT_VERSION: u32 = 1;
-
-    /// Default TTL for station list cache (7 days in seconds)
-    pub const DEFAULT_TTL_SECS: u64 = 7 * 24 * 3600;
-
-    /// Create a new cached station list
-    pub fn new(stations: Vec<Station>) -> Self {
-        Self {
-            stations,
-            last_updated: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
-            version: Self::CURRENT_VERSION,
-        }
-    }
-
-    /// Check if the cache is still valid
-    pub fn is_valid(&self, ttl_secs: u64) -> bool {
-        if self.version != Self::CURRENT_VERSION {
-            return false;
-        }
-
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-
-        now.saturating_sub(self.last_updated) < ttl_secs
-    }
-
-    /// Check if cache is valid with default TTL
-    pub fn is_valid_default(&self) -> bool {
-        self.is_valid(Self::DEFAULT_TTL_SECS)
-    }
-
-    /// Get the age of the cache in seconds
-    pub fn age_secs(&self) -> u64 {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-
-        now.saturating_sub(self.last_updated)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_station_creation() {
-        let main = Station::main("franceculture", "France Culture");
-        assert!(main.is_main());
-        assert_eq!(main.base_station(), "franceculture");
-
-        let webradio = Station::webradio("fip_rock", "FIP Rock", "fip");
-        assert!(webradio.is_webradio());
-        assert_eq!(webradio.base_station(), "fip");
-
-        let local = Station::local_radio("francebleu_alsace", "ICI Alsace", "Alsace", 12);
-        assert!(local.is_local_radio());
+        let station = Station::new("franceculture", "France Culture");
+        assert_eq!(station.slug, "franceculture");
+        assert_eq!(station.name, "France Culture");
     }
 
     #[test]
@@ -505,14 +359,5 @@ mod tests {
             url,
             "https://www.radiofrance.fr/pikapi/images/436430f7-5b2b-43f2-9f3c-28f2ad6cae39/200x200"
         );
-    }
-
-    #[test]
-    fn test_cached_station_list_validity() {
-        let stations = vec![Station::main("fip", "FIP")];
-        let cached = CachedStationList::new(stations);
-
-        assert!(cached.is_valid(3600)); // Valid for 1 hour
-        assert!(cached.is_valid_default()); // Valid with default TTL
     }
 }
