@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, toRef, ref, watch, onMounted, nextTick } from "vue";
+import { computed, toRef, ref } from "vue";
 import { useRenderer } from "@/composables/useRenderers";
+import { useCoverImage } from "@/composables/useCoverImage";
 import { useUIStore } from "@/stores/ui";
 import { api } from "@/services/pmocontrol/api";
 import { Music, X } from "lucide-vue-next";
@@ -21,12 +22,16 @@ const seekTargetMs = ref<number | null>(null);
 const showCoverOverlay = ref(false);
 const showMetadata = ref(false);
 
-// Track image loading state
-const imageLoaded = ref(false);
-const imageError = ref(false);
-
-// Reference to the image element
-const coverImageRef = ref<HTMLImageElement | null>(null);
+// Use the new cover image composable
+const albumArtUri = computed(() => metadata.value?.album_art_uri);
+const {
+    imageLoaded,
+    imageError,
+    coverImageRef,
+    cacheBustedUrl,
+    handleImageLoad,
+    handleImageError,
+} = useCoverImage(albumArtUri);
 
 function openCoverOverlay() {
     if (hasCover.value) {
@@ -98,44 +103,6 @@ const totalTime = computed(() => formatTime(state.value?.duration_ms));
 const hasCover = computed(
     () => !!metadata.value?.album_art_uri && !imageError.value,
 );
-
-// Check if image is already loaded (cached images may load synchronously)
-function checkImageComplete() {
-    nextTick(() => {
-        if (
-            coverImageRef.value?.complete &&
-            coverImageRef.value?.naturalWidth > 0
-        ) {
-            imageLoaded.value = true;
-            imageError.value = false;
-        }
-    });
-}
-
-// Reset image state when album_art_uri changes
-watch(
-    () => metadata.value?.album_art_uri,
-    (newUri) => {
-        imageLoaded.value = false;
-        imageError.value = false;
-        if (newUri) {
-            checkImageComplete();
-        }
-    },
-);
-
-onMounted(() => {
-    checkImageComplete();
-});
-
-function handleImageLoad() {
-    imageLoaded.value = true;
-    imageError.value = false;
-}
-
-function handleImageError() {
-    imageError.value = true;
-}
 
 // Calculer le pourcentage à partir d'une position X dans la barre
 function calculateProgressFromX(
@@ -382,17 +349,26 @@ const swipeOpacity = computed(() => {
         >
             <img
                 ref="coverImageRef"
-                v-if="metadata?.album_art_uri && !imageError"
-                v-show="imageLoaded"
-                :src="metadata.album_art_uri"
+                :style="{
+                    opacity:
+                        cacheBustedUrl && imageLoaded && !imageError ? 1 : 0,
+                    visibility:
+                        cacheBustedUrl && imageLoaded && !imageError
+                            ? 'visible'
+                            : 'hidden',
+                    position:
+                        cacheBustedUrl && imageLoaded && !imageError
+                            ? 'relative'
+                            : 'absolute',
+                }"
+                :src="cacheBustedUrl || ''"
                 :alt="metadata?.album || 'Album cover'"
                 class="cover-image"
-                loading="lazy"
                 @load="handleImageLoad"
                 @error="handleImageError"
             />
             <div
-                v-if="!metadata?.album_art_uri || imageError || !imageLoaded"
+                v-show="!cacheBustedUrl || imageError || !imageLoaded"
                 class="cover-placeholder"
             >
                 <Music :size="64" />
@@ -456,8 +432,8 @@ const swipeOpacity = computed(() => {
                             <X :size="24" />
                         </button>
                         <img
-                            v-if="hasCover"
-                            :src="metadata?.album_art_uri!"
+                            v-if="hasCover && cacheBustedUrl"
+                            :src="cacheBustedUrl"
                             :alt="metadata?.album || 'Album cover'"
                             class="cover-overlay-image"
                         />

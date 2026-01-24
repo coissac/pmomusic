@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch, onMounted, nextTick } from "vue";
+import { computed } from "vue";
 import { useRouter } from "vue-router";
 import type {
     RendererCapabilitiesSummary,
@@ -8,6 +8,7 @@ import type {
 } from "@/services/pmocontrol/types";
 import StatusBadge from "./StatusBadge.vue";
 import { Music, Volume2, VolumeX } from "lucide-vue-next";
+import { useCoverImage } from "@/composables/useCoverImage";
 
 const props = defineProps<{
     renderer: RendererSummary;
@@ -19,50 +20,16 @@ const router = useRouter();
 // Métadonnées proviennent directement de l'état du renderer (API + SSE)
 const metadata = computed(() => props.state?.current_track);
 
-// Track image loading state
-const imageLoaded = ref(false);
-const imageError = ref(false);
-
-// Reference to the image element
-const coverImageRef = ref<HTMLImageElement | null>(null);
-
-// Check if image is already loaded (cached images may load synchronously)
-function checkImageComplete() {
-    nextTick(() => {
-        if (
-            coverImageRef.value?.complete &&
-            coverImageRef.value?.naturalWidth > 0
-        ) {
-            imageLoaded.value = true;
-            imageError.value = false;
-        }
-    });
-}
-
-// Reset image state when album_art_uri changes
-watch(
-    () => metadata.value?.album_art_uri,
-    (newUri) => {
-        imageLoaded.value = false;
-        imageError.value = false;
-        if (newUri) {
-            checkImageComplete();
-        }
-    },
-);
-
-onMounted(() => {
-    checkImageComplete();
-});
-
-function handleImageLoad() {
-    imageLoaded.value = true;
-    imageError.value = false;
-}
-
-function handleImageError() {
-    imageError.value = true;
-}
+// Use the new cover image composable
+const albumArtUri = computed(() => metadata.value?.album_art_uri);
+const {
+    imageLoaded,
+    imageError,
+    coverImageRef,
+    cacheBustedUrl,
+    handleImageLoad,
+    handleImageError,
+} = useCoverImage(albumArtUri);
 
 const protocolLabel = computed(() => {
     switch (props.renderer.protocol) {
@@ -148,16 +115,27 @@ function goToRenderer() {
         <div class="card-cover">
             <img
                 ref="coverImageRef"
-                v-if="hasCover"
-                v-show="imageLoaded"
-                :src="metadata?.album_art_uri!"
+                :style="{
+                    opacity: hasCover && cacheBustedUrl && imageLoaded ? 1 : 0,
+                    visibility:
+                        hasCover && cacheBustedUrl && imageLoaded
+                            ? 'visible'
+                            : 'hidden',
+                    position:
+                        hasCover && cacheBustedUrl && imageLoaded
+                            ? 'relative'
+                            : 'absolute',
+                }"
+                :src="cacheBustedUrl || ''"
                 :alt="metadata?.album || 'Album cover'"
                 class="cover-image"
-                loading="lazy"
                 @load="handleImageLoad"
                 @error="handleImageError"
             />
-            <div v-if="!hasCover || !imageLoaded" class="cover-placeholder">
+            <div
+                v-show="!cacheBustedUrl || !imageLoaded"
+                class="cover-placeholder"
+            >
                 <Music :size="48" />
             </div>
         </div>

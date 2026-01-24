@@ -92,9 +92,16 @@ flowchart LR
 - **Action** : LLM implémente la tâche
 - **Output** : Fichier `Report/{nom}.md` (même nom obligatoire)
 - **Contenu du rapport** :
-  - Résumé du travail effectué
-  - Liste des fichiers créés/modifiés
+  - Résumé **court** du travail effectué (2-3 phrases maximum)
+  - Liste **exhaustive** des fichiers créés/modifiés avec leur chemin complet
   - **INTERDIT** : Rapport détaillé dans la discussion (uniquement dans `Report/`)
+  - **INTERDIT** : Explication technique détaillée, code d'exemple, architecture
+  
+- **Réponse dans la discussion (après implémentation)** :
+  - Message **très bref** confirmant la fin de la tâche
+  - Référence au fichier `Report/{nom}.md` pour les détails
+  - **Format attendu** : "Tâche terminée. Voir `Report/{nom}.md` pour la liste des modifications."
+  - **PAS de** : résumé détaillé, explication du code, liste des avantages, etc.
 
 #### 3. Décision humaine (Report → Done ou ToDiscuss)
 
