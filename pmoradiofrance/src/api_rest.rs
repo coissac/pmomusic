@@ -3,7 +3,6 @@
 //! Ce module définit les handlers HTTP pour accéder aux stations Radio France,
 //! leurs métadonnées live et les flux de streaming.
 
-use crate::models::LiveResponse;
 use crate::playlist::StationGroups;
 use crate::pmoserver_ext::RadioFranceState;
 use axum::{
@@ -16,6 +15,7 @@ use axum::{
 };
 use futures::StreamExt;
 use serde_json;
+use tracing::info;
 
 // ============ Gestion des erreurs ============
 
@@ -96,6 +96,11 @@ async fn proxy_stream(
         Ok(url) => url,
         Err(e) => return AppError(format!("Stream not found: {}", e)).into_response(),
     };
+
+    info!(
+        "Proxyfying RadioFrance stream for {} ==> {}",
+        &slug, &stream_url
+    );
 
     // Connect to the Radio France stream
     let response = match reqwest::get(&stream_url).await {

@@ -268,7 +268,7 @@ impl MusicSource for RadioFranceSource {
                 let group = groups
                     .groups
                     .iter()
-                    .find(|g| g.stations[0].slug == slug)
+                    .find(|g| g.slug() == slug)
                     .ok_or_else(|| MusicSourceError::ObjectNotFound(id.to_string()))?;
 
                 let container = group
