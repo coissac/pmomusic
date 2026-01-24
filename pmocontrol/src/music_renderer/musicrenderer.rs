@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::SystemTime;
 
+use pmodidl::{DIDLLite, MediaMetadataParser};
 use tracing::{debug, error};
 
 use crate::errors::ControlPointError;
@@ -755,8 +756,30 @@ impl MusicRenderer {
 
     /// Get playback position
     pub fn playback_position(&self) -> Result<PlaybackPositionInfo, ControlPointError> {
-        self.lock_backend_for("playback_position")
-            .playback_position()
+        let mut position_info = self
+            .lock_backend_for("playback_position")
+            .playback_position()?;
+
+        // Si track_duration est absent ou invalide, essayer de le parser depuis le DIDL metadata
+        let needs_duration_fix = position_info
+            .track_duration
+            .as_ref()
+            .map(|d| d == "00:00:00" || d == "0:00:00")
+            .unwrap_or(true); // None = true
+
+        if needs_duration_fix {
+            if let Some(ref metadata_xml) = position_info.track_metadata {
+                if let Some(duration) = parse_didl_duration(metadata_xml) {
+                    tracing::debug!(
+                        "MusicRenderer: Corrected track_duration from DIDL metadata: {}",
+                        duration
+                    );
+                    position_info.track_duration = Some(duration);
+                }
+            }
+        }
+
+        Ok(position_info)
     }
 
     /// Sets the playlist binding for this renderer.
@@ -1435,6 +1458,36 @@ impl RendererFromMediaRendererInfo for MusicRendererBackend {
     fn to_backend(self) -> MusicRendererBackend {
         self
     }
+}
+
+/// Parse duration from DIDL-Lite metadata XML.
+///
+/// Extracts the duration attribute from the <res> element in DIDL metadata.
+/// This is used as a fallback when the renderer doesn't provide track_duration
+/// in GetPositionInfo or similar calls.
+fn parse_didl_duration(didl_xml: &str) -> Option<String> {
+    // Parse DIDL-Lite XML properly using pmodidl
+    let didl = match DIDLLite::parse(didl_xml) {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::trace!("Failed to parse DIDL metadata: {}", e);
+            return None;
+        }
+    };
+
+    // Extract duration from the first item's first resource
+    let duration = didl.items.first()?.resources.first()?.duration.clone();
+
+    if let Some(ref dur) = duration {
+        tracing::debug!(
+            "MusicRenderer: Extracted duration from DIDL metadata: {}",
+            dur
+        );
+    } else {
+        tracing::trace!("No duration attribute found in DIDL metadata");
+    }
+
+    duration
 }
 
 /// Transport control façade that dispatches to whichever backend can fulfill

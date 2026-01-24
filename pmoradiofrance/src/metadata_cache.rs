@@ -238,17 +238,23 @@ impl CachedMetadata {
         match cache.add_from_url(&cover_url, Some("radiofrance")).await {
             Ok(pk) => {
                 // Construire l'URL publique
-                let public_url = format!(
-                    "{}{}",
-                    server_base_url.trim_end_matches('/'),
-                    cache.route_for(&pk, None)
+                let route = cache.route_for(&pk, None);
+                let public_url = format!("{}{}", server_base_url.trim_end_matches('/'), route);
+
+                #[cfg(feature = "logging")]
+                tracing::debug!(
+                    "Cached cover - UUID: {}, PK: {}, route: {}, public_url: {}",
+                    uuid,
+                    pk,
+                    route,
+                    public_url
                 );
 
                 (Some(public_url), Some(pk))
             }
             Err(e) => {
                 #[cfg(feature = "logging")]
-                tracing::warn!("Failed to cache Radio France cover: {}", e);
+                tracing::warn!("Failed to cache Radio France cover UUID {}: {}", uuid, e);
                 // Fallback sur le logo par défaut en cas d'erreur
                 let logo_url = format!(
                     "{}/api/radiofrance/default-logo",
@@ -344,6 +350,47 @@ impl CachedMetadata {
     ///
     /// La playlist et l'item ont EXACTEMENT les mêmes métadonnées
     pub fn to_didl(&self, playlist_id: &str, parent_id: &str) -> Container {
+        // Calculer la duration dynamiquement (temps restant jusqu'à end_time)
+        let duration = if let Some(end) = self.end_time {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+
+            if end > now {
+                let duration_secs = end - now;
+                let hours = duration_secs / 3600;
+                let minutes = (duration_secs % 3600) / 60;
+                let seconds = duration_secs % 60;
+                let dur = format!("{}:{:02}:{:02}", hours, minutes, seconds);
+
+                #[cfg(feature = "logging")]
+                tracing::debug!(
+                    "Duration calculated for {}: {} (end_time: {}, now: {}, remaining: {}s)",
+                    self.slug,
+                    dur,
+                    end,
+                    now,
+                    duration_secs
+                );
+
+                Some(dur)
+            } else {
+                #[cfg(feature = "logging")]
+                tracing::warn!(
+                    "Duration expired for {}: end_time {} < now {}",
+                    self.slug,
+                    end,
+                    now
+                );
+                None
+            }
+        } else {
+            #[cfg(feature = "logging")]
+            tracing::warn!("No end_time for {}, duration will be None", self.slug);
+            None
+        };
+
         let item = Item {
             id: format!("{}:stream", playlist_id),
             parent_id: playlist_id.to_string(),
@@ -363,7 +410,7 @@ impl CachedMetadata {
                 bits_per_sample: None,
                 sample_frequency: self.sample_frequency.clone(),
                 nr_audio_channels: self.nr_audio_channels.clone(),
-                duration: self.duration.clone(),
+                duration,
                 url: self.stream_url.clone(),
             }],
             descriptions: vec![],
@@ -493,11 +540,21 @@ impl MetadataCache {
             }
         };
 
-        // 3. Parse LiveResponse -> CachedMetadata
+        // 3. Récupérer le nom de la station depuis la liste des stations
+        let station_name = {
+            let stations = self.get_stations().await.unwrap_or_default();
+            stations
+                .iter()
+                .find(|s| s.slug == slug)
+                .map(|s| s.name.clone())
+                .unwrap_or_else(|| slug.to_string())
+        };
+
+        // 4. Parse LiveResponse -> CachedMetadata
         let metadata = CachedMetadata::from_live_response(
             &Station {
                 slug: slug.to_string(),
-                name: slug.to_string(),
+                name: station_name,
             },
             &live_response,
             &self.cover_cache,
