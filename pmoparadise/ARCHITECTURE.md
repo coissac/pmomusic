@@ -14,6 +14,7 @@ Cette crate fournit deux architectures pour accéder à Radio Paradise :
 Au lieu de télécharger un gros bloc FLAC contenant plusieurs chansons et de calculer manuellement les bornes de chaque chanson, cette architecture :
 
 1. Récupère le bloc via l'API `get_block`
+   ==> semble avoir changé en faveur du point REST: `https://api.radioparadise.com/api/play?event=107461&elapsed=1&bitrate=4&action=play&player_id=rp3_c736b87f-3e77-3c4c-761c-ef3ed53af279&info=true&chan=1&episode_id=0&slice_num=6&audio_type=M&source=24`
 2. Filtre les chansons : garde uniquement celles où `sched_time_millis + duration >= now()`
 3. Télécharge chaque chanson individuellement via son `gapless_url`
 4. Stocke les métadonnées (titre, artiste, album, cover) dans le cache audio

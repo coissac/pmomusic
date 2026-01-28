@@ -4,6 +4,7 @@ use crate::error::{Error, Result};
 use crate::models::{Block, EventId, NowPlaying};
 use reqwest::Client;
 use std::time::Duration;
+use tracing::debug;
 use url::Url;
 
 /// Default Radio Paradise API base URL
@@ -135,7 +136,7 @@ impl RadioParadiseClient {
     /// # }
     /// ```
     pub async fn get_block(&self, event: Option<EventId>) -> Result<Block> {
-        let mut url = Url::parse(&format!("{}/get_block", self.api_base))?;
+        let mut url = Url::parse(&format!("{}/play", self.api_base))?;
 
         url.query_pairs_mut()
             .append_pair("bitrate", "4") // FLAC lossless
@@ -148,8 +149,7 @@ impl RadioParadiseClient {
                 .append_pair("event", &event_id.to_string());
         }
 
-        #[cfg(feature = "logging")]
-        tracing::debug!("Fetching block: {}", url);
+        debug!("Fetching block: {}", url);
 
         let response = self
             .client
@@ -177,7 +177,6 @@ impl RadioParadiseClient {
             block.image_base = Some(DEFAULT_IMAGE_BASE.to_string());
         }
 
-        #[cfg(feature = "logging")]
         tracing::debug!(
             "Received block: event={}, songs={}",
             block.event,
