@@ -45,6 +45,8 @@ pub struct ArylicTcpRenderer {
     port: u16,
     timeout: Duration,
     queue: Arc<Mutex<MusicQueue>>,
+    /// Flag indicating if currently playing a continuous stream (radio without duration)
+    continuous_stream: Arc<Mutex<bool>>,
 }
 
 impl ArylicTcpRenderer {
@@ -123,11 +125,19 @@ impl RendererFromMediaRendererInfo for ArylicTcpRenderer {
             port: ARYLIC_TCP_PORT,
             timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
             queue,
+            continuous_stream: Arc::new(Mutex::new(false)),
         })
     }
 
     fn to_backend(self) -> MusicRendererBackend {
         MusicRendererBackend::ArylicTcp(self)
+    }
+}
+
+impl ArylicTcpRenderer {
+    /// Returns true if currently playing a continuous stream (radio without duration)
+    pub fn is_continuous_stream(&self) -> bool {
+        *self.continuous_stream.lock().unwrap()
     }
 }
 

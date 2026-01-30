@@ -59,6 +59,8 @@ pub struct ChromecastRenderer {
     /// Wrapped in Arc<Mutex> to allow cloning and proper thread lifecycle management.
     thread_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
     queue: Arc<Mutex<MusicQueue>>,
+    /// Flag indicating if currently playing a continuous stream (radio without duration)
+    continuous_stream: Arc<Mutex<bool>>,
 }
 
 impl std::fmt::Debug for ChromecastRenderer {
@@ -156,6 +158,7 @@ impl RendererFromMediaRendererInfo for ChromecastRenderer {
             stop_signal,
             thread_handle,
             queue,
+            continuous_stream: Arc::new(Mutex::new(false)),
         })
     }
 
@@ -164,9 +167,25 @@ impl RendererFromMediaRendererInfo for ChromecastRenderer {
     }
 }
 
+impl ChromecastRenderer {
+    /// Returns true if currently playing a continuous stream (radio without duration)
+    pub fn is_continuous_stream(&self) -> bool {
+        *self.continuous_stream.lock().unwrap()
+    }
+}
+
 impl TransportControl for ChromecastRenderer {
     fn play_uri(&self, uri: &str, meta: &str) -> Result<(), ControlPointError> {
         debug!("ChromecastRenderer: play_uri({})", uri);
+
+        // Détecte si l'URL est un flux continu
+        let is_stream = crate::music_renderer::is_continuous_stream_url(uri);
+        *self.continuous_stream.lock().unwrap() = is_stream;
+        tracing::debug!(
+            "ChromecastRenderer play_uri: URI={}, continuous_stream={}",
+            uri,
+            is_stream
+        );
 
         // Signal any existing play thread to stop
         if let Ok(mut stop) = self.stop_signal.lock() {

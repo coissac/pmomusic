@@ -28,6 +28,8 @@ pub struct LinkPlayRenderer {
     host: String,
     timeout: Duration,
     queue: Arc<Mutex<MusicQueue>>,
+    /// Flag indicating if currently playing a continuous stream (radio without duration)
+    continuous_stream: Arc<Mutex<bool>>,
 }
 
 impl fmt::Debug for LinkPlayRenderer {
@@ -77,6 +79,7 @@ impl RendererFromMediaRendererInfo for LinkPlayRenderer {
             host,
             timeout: Duration::from_secs(DEFAULT_HTTP_TIMEOUT_SECS),
             queue,
+            continuous_stream: Arc::new(Mutex::new(false)),
         })
     }
 
@@ -85,8 +88,24 @@ impl RendererFromMediaRendererInfo for LinkPlayRenderer {
     }
 }
 
+impl LinkPlayRenderer {
+    /// Returns true if currently playing a continuous stream (radio without duration)
+    pub fn is_continuous_stream(&self) -> bool {
+        *self.continuous_stream.lock().unwrap()
+    }
+}
+
 impl TransportControl for LinkPlayRenderer {
     fn play_uri(&self, uri: &str, _meta: &str) -> Result<(), ControlPointError> {
+        // Détecte si l'URL est un flux continu
+        let is_stream = crate::music_renderer::is_continuous_stream_url(uri);
+        *self.continuous_stream.lock().unwrap() = is_stream;
+        tracing::debug!(
+            "LinkPlayRenderer play_uri: URI={}, continuous_stream={}",
+            uri,
+            is_stream
+        );
+
         let encoded = percent_encode(uri);
         self.send_player_command(&format!("play:{}", encoded))
     }

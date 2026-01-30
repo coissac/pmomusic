@@ -435,6 +435,10 @@ pub enum RendererEvent {
         id: DeviceId,
         binding: Option<PlaylistBinding>,
     },
+    StreamStateChanged {
+        id: DeviceId,
+        is_stream: bool,
+    },
     TimerStarted {
         id: DeviceId,
         duration_seconds: u32,

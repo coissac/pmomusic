@@ -82,7 +82,7 @@ pub enum MusicRendererBackend {
 }
 
 /// Internal state for tracking playback and control flow.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct MusicRendererState {
     /// Last known track metadata (cached to avoid repeated queries).
     last_metadata: Option<TrackMetadata>,
@@ -96,6 +96,22 @@ struct MusicRendererState {
     /// This prevents auto-advance on transient STOPPED states during track initialization.
     /// Auto-advance is only allowed when this flag is true.
     has_played_since_track_start: bool,
+    /// Timestamp when the current track started playing.
+    /// Used to calculate elapsed time when renderer returns unreliable position info.
+    track_start_time: Option<SystemTime>,
+}
+
+impl Default for MusicRendererState {
+    fn default() -> Self {
+        Self {
+            last_metadata: None,
+            playback_source: PlaybackSource::default(),
+            user_stop_requested: false,
+            sleep_timer: SleepTimer::default(),
+            has_played_since_track_start: false,
+            track_start_time: None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -323,7 +339,72 @@ impl MusicRenderer {
             .expect("WatchedState mutex poisoned");
         let prev_position = watched.position.clone();
 
-        // Poll position every tick
+        // First poll to check for metadata changes BEFORE getting patched position
+        let raw_position = self
+            .lock_backend_for("poll_position")
+            .playback_position()
+            .ok();
+
+        // Detect and handle metadata/track changes FIRST
+        if let Some(ref raw_pos) = raw_position {
+            if let Some(metadata) = extract_track_metadata(raw_pos) {
+                let metadata_changed = watched
+                    .metadata
+                    .as_ref()
+                    .map(|prev| prev != &metadata)
+                    .unwrap_or(true);
+
+                if metadata_changed {
+                    // Check if this is a track change (title/artist/album) to reset track_start_time
+                    // Also initialize track_start_time on first metadata detection
+                    let is_first_metadata = watched.metadata.is_none();
+                    let track_changed = watched
+                        .metadata
+                        .as_ref()
+                        .map(|prev| {
+                            let title_changed = prev.title != metadata.title;
+                            let artist_changed = prev.artist != metadata.artist;
+                            let album_changed = prev.album != metadata.album;
+
+                            if !is_first_metadata {
+                                tracing::info!(
+                                    "MusicRenderer [{}]: Comparing - title_changed={} ({:?} vs {:?}), artist_changed={} ({:?} vs {:?})",
+                                    self.info.friendly_name(),
+                                    title_changed, prev.title, metadata.title,
+                                    artist_changed, prev.artist, metadata.artist
+                                );
+                            }
+
+                            title_changed || artist_changed || album_changed
+                        })
+                        .unwrap_or(false); // Only true if there was previous metadata AND it differs
+
+                    if is_first_metadata || track_changed {
+                        tracing::info!(
+                            "MusicRenderer [{}]: {} ({:?} -> {:?}), resetting track_start_time",
+                            self.info.friendly_name(),
+                            if is_first_metadata {
+                                "First metadata"
+                            } else {
+                                "Track changed"
+                            },
+                            watched.metadata.as_ref().and_then(|m| m.title.as_ref()),
+                            metadata.title
+                        );
+                        // This resets track_start_time BEFORE we calculate position
+                        self.set_last_metadata(Some(metadata.clone()));
+                    }
+
+                    self.emit_event(RendererEvent::MetadataChanged {
+                        id: self.id(),
+                        metadata: metadata.clone(),
+                    });
+                    watched.metadata = Some(metadata);
+                }
+            }
+        }
+
+        // Now get the fully patched position (with correct track_start_time and rel_time)
         if let Ok(position) = self.playback_position() {
             let changed = watched
                 .position
@@ -336,29 +417,6 @@ impl MusicRenderer {
                     id: self.id(),
                     position: position.clone(),
                 });
-            }
-
-            // Extract and emit metadata changes
-            if let Some(metadata) = extract_track_metadata(&position) {
-                let metadata_changed = watched
-                    .metadata
-                    .as_ref()
-                    .map(|prev| prev != &metadata)
-                    .unwrap_or(true);
-
-                if metadata_changed {
-                    debug!(
-                        renderer = self.info.friendly_name(),
-                        title = metadata.title.as_deref(),
-                        artist = metadata.artist.as_deref(),
-                        "Emitting metadata changed event"
-                    );
-                    self.emit_event(RendererEvent::MetadataChanged {
-                        id: self.id(),
-                        metadata: metadata.clone(),
-                    });
-                    watched.metadata = Some(metadata);
-                }
             }
 
             watched.position = Some(position);
@@ -418,6 +476,16 @@ impl MusicRenderer {
                     });
                     watched.mute = Some(mute);
                 }
+            }
+
+            // Check stream state (every other tick to avoid excessive polling)
+            let is_stream = self.is_playing_a_stream();
+            if watched.is_stream != Some(is_stream) {
+                self.emit_event(RendererEvent::StreamStateChanged {
+                    id: self.id(),
+                    is_stream,
+                });
+                watched.is_stream = Some(is_stream);
             }
         }
     }
@@ -571,6 +639,43 @@ impl MusicRenderer {
     /// Returns true if this renderer is known to support SetNextAVTransportURI.
     pub fn supports_set_next(&self) -> bool {
         self.info.capabilities().supports_set_next()
+    }
+
+    /// Returns true if currently playing a continuous stream (radio without duration).
+    ///
+    /// This method queries the backend to determine if the current playback is a continuous
+    /// stream. The detection is based on HTTP headers analysis performed when the URL was
+    /// set via play_uri or when the track changed (for OpenHome).
+    ///
+    /// # Returns
+    ///
+    /// `true` if:
+    /// - The renderer is currently playing AND
+    /// - The current track is a continuous stream (radio, live broadcast, etc.)
+    ///
+    /// `false` otherwise (not playing, or playing a bounded media file)
+    pub fn is_playing_a_stream(&self) -> bool {
+        let backend = self.lock_backend_for("is_playing_a_stream");
+
+        // Check if currently playing
+        let is_playing = match backend.playback_state() {
+            Ok(PlaybackState::Playing) => true,
+            _ => false,
+        };
+
+        if !is_playing {
+            return false;
+        }
+
+        // Query backend for stream status
+        match &*backend {
+            MusicRendererBackend::Upnp(upnp) => upnp.is_continuous_stream(),
+            MusicRendererBackend::OpenHome(oh) => oh.is_continuous_stream(),
+            MusicRendererBackend::LinkPlay(lp) => lp.is_continuous_stream(),
+            MusicRendererBackend::ArylicTcp(ary) => ary.is_continuous_stream(),
+            MusicRendererBackend::Chromecast(cc) => cc.is_continuous_stream(),
+            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.is_continuous_stream(),
+        }
     }
 
     /// Prepare the renderer for attaching a new playlist by clearing the queue and stopping playback.
@@ -755,19 +860,19 @@ impl MusicRenderer {
     }
 
     /// Get playback position
+    ///
+    /// This method patches the position info from the backend:
+    /// - If track_duration is None, try to extract it from DIDL metadata
+    /// - Calculates rel_time from track_start_time (backend values are unreliable)
+    ///
+    /// Note: track_start_time is updated by poll_and_emit_changes when track changes
     pub fn playback_position(&self) -> Result<PlaybackPositionInfo, ControlPointError> {
         let mut position_info = self
             .lock_backend_for("playback_position")
             .playback_position()?;
 
-        // Si track_duration est absent ou invalide, essayer de le parser depuis le DIDL metadata
-        let needs_duration_fix = position_info
-            .track_duration
-            .as_ref()
-            .map(|d| d == "00:00:00" || d == "0:00:00")
-            .unwrap_or(true); // None = true
-
-        if needs_duration_fix {
+        // Si track_duration est absent, essayer de le parser depuis le DIDL metadata
+        if position_info.track_duration.is_none() {
             if let Some(ref metadata_xml) = position_info.track_metadata {
                 if let Some(duration) = parse_didl_duration(metadata_xml) {
                     tracing::debug!(
@@ -777,6 +882,29 @@ impl MusicRenderer {
                     position_info.track_duration = Some(duration);
                 }
             }
+        }
+
+        // Calculate rel_time from track_start_time if available (backend values are unreliable)
+        if let Some(start_time) = self.track_start_time() {
+            if let Ok(elapsed) = start_time.elapsed() {
+                let secs = elapsed.as_secs() as u32;
+                let hours = secs / 3600;
+                let minutes = (secs % 3600) / 60;
+                let seconds = secs % 60;
+                let new_rel_time = format!("{:02}:{:02}:{:02}", hours, minutes, seconds);
+                tracing::info!(
+                    "MusicRenderer: Patching rel_time: backend={:?} -> calculated={} (elapsed={}s)",
+                    position_info.rel_time,
+                    new_rel_time,
+                    secs
+                );
+                position_info.rel_time = Some(new_rel_time);
+            }
+        } else {
+            tracing::info!(
+                "MusicRenderer: No track_start_time, keeping backend rel_time={:?}",
+                position_info.rel_time
+            );
         }
 
         Ok(position_info)
@@ -1076,8 +1204,19 @@ impl MusicRenderer {
     }
 
     /// Sets the last known track metadata.
+    /// Updates track_start_time only if the metadata actually changes.
     pub fn set_last_metadata(&self, metadata: Option<TrackMetadata>) {
-        self.state.lock().unwrap().last_metadata = metadata;
+        let mut state = self.state.lock().unwrap();
+        let metadata_changed = state.last_metadata != metadata;
+        state.last_metadata = metadata;
+        if metadata_changed {
+            state.track_start_time = Some(SystemTime::now());
+        }
+    }
+
+    /// Gets the timestamp when the current track started playing.
+    pub fn track_start_time(&self) -> Option<SystemTime> {
+        self.state.lock().unwrap().track_start_time
     }
 
     /// Gets the current playback source.

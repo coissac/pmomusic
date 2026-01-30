@@ -599,7 +599,6 @@ impl OhTimeClient {
             .map_err(|_| {
                 ControlPointError::UpnpBadReturnValue("Second".to_string(), "".to_string())
             })?;
-
         Ok(OhTimePosition {
             track_count,
             duration_secs,

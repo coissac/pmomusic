@@ -85,6 +85,11 @@ pub enum RendererEventPayload {
         container_id: Option<String>,
         timestamp: chrono::DateTime<chrono::Utc>,
     },
+    StreamStateChanged {
+        renderer_id: String,
+        is_stream: bool,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    },
     TimerStarted {
         renderer_id: String,
         duration_seconds: u32,
@@ -158,6 +163,158 @@ pub enum MediaServerEventPayload {
 pub enum UnifiedEventPayload {
     Renderer(RendererEventPayload),
     MediaServer(MediaServerEventPayload),
+}
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+/// Convertit un RendererEvent en RendererEventPayload pour SSE
+///
+/// Cette fonction centralise la conversion pour éviter la duplication de code
+/// entre les différents streams SSE (renderers-only et all-events).
+#[cfg(feature = "pmoserver")]
+fn renderer_event_to_payload(
+    event: RendererEvent,
+    timestamp: chrono::DateTime<chrono::Utc>,
+) -> RendererEventPayload {
+    match event {
+        RendererEvent::StateChanged { id, state } => RendererEventPayload::StateChanged {
+            renderer_id: id.0,
+            state: state.as_str().to_string(),
+            timestamp,
+        },
+        RendererEvent::PositionChanged { id, position } => RendererEventPayload::PositionChanged {
+            renderer_id: id.0,
+            track: position.track,
+            rel_time: position.rel_time,
+            track_duration: position.track_duration,
+            timestamp,
+        },
+        RendererEvent::VolumeChanged { id, volume } => RendererEventPayload::VolumeChanged {
+            renderer_id: id.0,
+            volume,
+            timestamp,
+        },
+        RendererEvent::MuteChanged { id, mute } => RendererEventPayload::MuteChanged {
+            renderer_id: id.0,
+            mute,
+            timestamp,
+        },
+        RendererEvent::MetadataChanged { id, metadata } => RendererEventPayload::MetadataChanged {
+            renderer_id: id.0,
+            title: metadata.title,
+            artist: metadata.artist,
+            album: metadata.album,
+            album_art_uri: metadata.album_art_uri,
+            timestamp,
+        },
+        RendererEvent::QueueUpdated { id, queue_length } => RendererEventPayload::QueueUpdated {
+            renderer_id: id.0,
+            queue_length,
+            timestamp,
+        },
+        RendererEvent::BindingChanged { id, binding } => RendererEventPayload::BindingChanged {
+            renderer_id: id.0,
+            server_id: binding.as_ref().map(|b| b.server_id.0.clone()),
+            container_id: binding.as_ref().map(|b| b.container_id.clone()),
+            timestamp,
+        },
+        RendererEvent::StreamStateChanged { id, is_stream } => {
+            RendererEventPayload::StreamStateChanged {
+                renderer_id: id.0,
+                is_stream,
+                timestamp,
+            }
+        }
+        RendererEvent::TimerStarted {
+            id,
+            duration_seconds,
+            remaining_seconds,
+        } => RendererEventPayload::TimerStarted {
+            renderer_id: id.0,
+            duration_seconds,
+            remaining_seconds,
+            timestamp,
+        },
+        RendererEvent::TimerUpdated {
+            id,
+            duration_seconds,
+            remaining_seconds,
+        } => RendererEventPayload::TimerUpdated {
+            renderer_id: id.0,
+            duration_seconds,
+            remaining_seconds,
+            timestamp,
+        },
+        RendererEvent::TimerTick {
+            id,
+            remaining_seconds,
+        } => RendererEventPayload::TimerTick {
+            renderer_id: id.0,
+            remaining_seconds,
+            timestamp,
+        },
+        RendererEvent::TimerExpired { id } => RendererEventPayload::TimerExpired {
+            renderer_id: id.0,
+            timestamp,
+        },
+        RendererEvent::TimerCancelled { id } => RendererEventPayload::TimerCancelled {
+            renderer_id: id.0,
+            timestamp,
+        },
+        RendererEvent::Online { id, info } => RendererEventPayload::Online {
+            renderer_id: id.0,
+            friendly_name: info.friendly_name,
+            model_name: info.model_name,
+            manufacturer: info.manufacturer,
+            timestamp,
+        },
+        RendererEvent::Offline { id } => RendererEventPayload::Offline {
+            renderer_id: id.0,
+            timestamp,
+        },
+    }
+}
+
+/// Convertit un MediaServerEvent en MediaServerEventPayload pour SSE
+///
+/// Cette fonction centralise la conversion pour éviter la duplication de code
+/// entre les différents streams SSE (servers-only et all-events).
+#[cfg(feature = "pmoserver")]
+fn media_server_event_to_payload(
+    event: MediaServerEvent,
+    timestamp: chrono::DateTime<chrono::Utc>,
+) -> MediaServerEventPayload {
+    match event {
+        MediaServerEvent::GlobalUpdated {
+            server_id,
+            system_update_id,
+        } => MediaServerEventPayload::GlobalUpdated {
+            server_id: server_id.0,
+            system_update_id,
+            timestamp,
+        },
+        MediaServerEvent::ContainersUpdated {
+            server_id,
+            container_ids,
+        } => MediaServerEventPayload::ContainersUpdated {
+            server_id: server_id.0,
+            container_ids,
+            timestamp,
+        },
+        MediaServerEvent::Online { server_id, info } => MediaServerEventPayload::Online {
+            server_id: server_id.0,
+            friendly_name: info.friendly_name,
+            model_name: info.model_name,
+            manufacturer: info.manufacturer,
+            timestamp,
+        },
+        MediaServerEvent::Offline { server_id } => MediaServerEventPayload::Offline {
+            server_id: server_id.0,
+            timestamp,
+        },
+    }
 }
 
 // ============================================================================
@@ -241,114 +398,7 @@ pub async fn renderer_events_sse(
                 // Regular events from the control point
                 Some(event) = rx_tokio.recv() => {
             let timestamp = chrono::Utc::now();
-
-            let payload = match event {
-                RendererEvent::StateChanged { id, state } => {
-                    RendererEventPayload::StateChanged {
-                        renderer_id: id.0,
-                        state: state.as_str().to_string(),
-                        timestamp,
-                    }
-                }
-                RendererEvent::PositionChanged { id, position } => {
-                    RendererEventPayload::PositionChanged {
-                        renderer_id: id.0,
-                        track: position.track,
-                        rel_time: position.rel_time,
-                        track_duration: position.track_duration,
-                        timestamp,
-                    }
-                }
-                RendererEvent::VolumeChanged { id, volume } => {
-                    RendererEventPayload::VolumeChanged {
-                        renderer_id: id.0,
-                        volume,
-                        timestamp,
-                    }
-                }
-                RendererEvent::MuteChanged { id, mute } => {
-                    RendererEventPayload::MuteChanged {
-                        renderer_id: id.0,
-                        mute,
-                        timestamp,
-                    }
-                }
-                RendererEvent::MetadataChanged { id, metadata } => {
-                    RendererEventPayload::MetadataChanged {
-                        renderer_id: id.0,
-                        title: metadata.title,
-                        artist: metadata.artist,
-                        album: metadata.album,
-                        album_art_uri: metadata.album_art_uri,
-                        timestamp,
-                    }
-                }
-                RendererEvent::QueueUpdated { id, queue_length } => {
-                    RendererEventPayload::QueueUpdated {
-                        renderer_id: id.0,
-                        queue_length,
-                        timestamp,
-                    }
-                }
-                RendererEvent::BindingChanged { id, binding } => {
-                    RendererEventPayload::BindingChanged {
-                        renderer_id: id.0,
-                        server_id: binding.as_ref().map(|b| b.server_id.0.clone()),
-                        container_id: binding.as_ref().map(|b| b.container_id.clone()),
-                        timestamp,
-                    }
-                }
-                RendererEvent::TimerStarted { id, duration_seconds, remaining_seconds } => {
-                    RendererEventPayload::TimerStarted {
-                        renderer_id: id.0,
-                        duration_seconds,
-                        remaining_seconds,
-                        timestamp,
-                    }
-                }
-                RendererEvent::TimerUpdated { id, duration_seconds, remaining_seconds } => {
-                    RendererEventPayload::TimerUpdated {
-                        renderer_id: id.0,
-                        duration_seconds,
-                        remaining_seconds,
-                        timestamp,
-                    }
-                }
-                RendererEvent::TimerTick { id, remaining_seconds } => {
-                    RendererEventPayload::TimerTick {
-                        renderer_id: id.0,
-                        remaining_seconds,
-                        timestamp,
-                    }
-                }
-                RendererEvent::TimerExpired { id } => {
-                    RendererEventPayload::TimerExpired {
-                        renderer_id: id.0,
-                        timestamp,
-                    }
-                }
-                RendererEvent::TimerCancelled { id } => {
-                    RendererEventPayload::TimerCancelled {
-                        renderer_id: id.0,
-                        timestamp,
-                    }
-                }
-                RendererEvent::Online { id, info } => {
-                    RendererEventPayload::Online {
-                        renderer_id: id.0,
-                        friendly_name: info.friendly_name.clone(),
-                        model_name: info.model_name.clone(),
-                        manufacturer: info.manufacturer.clone(),
-                        timestamp,
-                    }
-                }
-                RendererEvent::Offline { id } => {
-                    RendererEventPayload::Offline {
-                        renderer_id: id.0,
-                        timestamp,
-                    }
-                }
-            };
+            let payload = renderer_event_to_payload(event, timestamp);
 
                     if let Ok(json) = serde_json::to_string(&payload) {
                         yield Ok::<_, axum::Error>(Event::default().event("renderer").data(json));
@@ -467,39 +517,8 @@ pub async fn media_server_events_sse(
             tokio::select! {
                 // Regular events from the control point
                 Some(event) = rx_tokio.recv() => {
-            let timestamp = chrono::Utc::now();
-
-            let payload = match event {
-                MediaServerEvent::GlobalUpdated { server_id, system_update_id } => {
-                    MediaServerEventPayload::GlobalUpdated {
-                        server_id: server_id.0,
-                        system_update_id,
-                        timestamp,
-                    }
-                }
-                MediaServerEvent::ContainersUpdated { server_id, container_ids } => {
-                    MediaServerEventPayload::ContainersUpdated {
-                        server_id: server_id.0,
-                        container_ids,
-                        timestamp,
-                    }
-                }
-                MediaServerEvent::Online { server_id, info } => {
-                    MediaServerEventPayload::Online {
-                        server_id: server_id.0,
-                        friendly_name: info.friendly_name.clone(),
-                        model_name: info.model_name.clone(),
-                        manufacturer: info.manufacturer.clone(),
-                        timestamp,
-                    }
-                }
-                MediaServerEvent::Offline { server_id } => {
-                    MediaServerEventPayload::Offline {
-                        server_id: server_id.0,
-                        timestamp,
-                    }
-                }
-            };
+                    let timestamp = chrono::Utc::now();
+                    let payload = media_server_event_to_payload(event, timestamp);
 
                     if let Ok(json) = serde_json::to_string(&payload) {
                         yield Ok::<_, axum::Error>(Event::default().event("media_server").data(json));
@@ -650,114 +669,7 @@ pub async fn all_events_sse(State(control_point): State<Arc<ControlPoint>>) -> i
             tokio::select! {
                 Some(event) = renderer_rx_tokio.recv() => {
                     let timestamp = chrono::Utc::now();
-
-                    let renderer_payload = match event {
-                        RendererEvent::StateChanged { id, state } => {
-                        RendererEventPayload::StateChanged {
-                            renderer_id: id.0,
-                            state: state.as_str().to_string(),
-                            timestamp,
-                        }
-                        }
-                        RendererEvent::PositionChanged { id, position } => {
-                            RendererEventPayload::PositionChanged {
-                                renderer_id: id.0,
-                                track: position.track,
-                                rel_time: position.rel_time,
-                                track_duration: position.track_duration,
-                                timestamp,
-                            }
-                        }
-                        RendererEvent::VolumeChanged { id, volume } => {
-                            RendererEventPayload::VolumeChanged {
-                                renderer_id: id.0,
-                                volume,
-                                timestamp,
-                            }
-                        }
-                        RendererEvent::MuteChanged { id, mute } => {
-                            RendererEventPayload::MuteChanged {
-                                renderer_id: id.0,
-                                mute,
-                                timestamp,
-                            }
-                        }
-                        RendererEvent::MetadataChanged { id, metadata } => {
-                            RendererEventPayload::MetadataChanged {
-                                renderer_id: id.0,
-                                title: metadata.title,
-                                artist: metadata.artist,
-                                album: metadata.album,
-                                album_art_uri: metadata.album_art_uri,
-                                timestamp,
-                            }
-                        }
-                        RendererEvent::QueueUpdated { id, queue_length } => {
-                            RendererEventPayload::QueueUpdated {
-                                renderer_id: id.0,
-                                queue_length,
-                                timestamp,
-                            }
-                        }
-                        RendererEvent::BindingChanged { id, binding } => {
-                            RendererEventPayload::BindingChanged {
-                                renderer_id: id.0,
-                                server_id: binding.as_ref().map(|b| b.server_id.0.clone()),
-                                container_id: binding.as_ref().map(|b| b.container_id.clone()),
-                                timestamp,
-                            }
-                        }
-                        RendererEvent::TimerStarted { id, duration_seconds, remaining_seconds } => {
-                            RendererEventPayload::TimerStarted {
-                                renderer_id: id.0,
-                                duration_seconds,
-                                remaining_seconds,
-                                timestamp,
-                            }
-                        }
-                        RendererEvent::TimerUpdated { id, duration_seconds, remaining_seconds } => {
-                            RendererEventPayload::TimerUpdated {
-                                renderer_id: id.0,
-                                duration_seconds,
-                                remaining_seconds,
-                                timestamp,
-                            }
-                        }
-                        RendererEvent::TimerTick { id, remaining_seconds } => {
-                            RendererEventPayload::TimerTick {
-                                renderer_id: id.0,
-                                remaining_seconds,
-                                timestamp,
-                            }
-                        }
-                        RendererEvent::TimerExpired { id } => {
-                            RendererEventPayload::TimerExpired {
-                                renderer_id: id.0,
-                                timestamp,
-                            }
-                        }
-                        RendererEvent::TimerCancelled { id } => {
-                            RendererEventPayload::TimerCancelled {
-                                renderer_id: id.0,
-                                timestamp,
-                            }
-                        }
-                        RendererEvent::Online { id, info } => {
-                            RendererEventPayload::Online {
-                                renderer_id: id.0,
-                                friendly_name: info.friendly_name.clone(),
-                                model_name: info.model_name.clone(),
-                                manufacturer: info.manufacturer.clone(),
-                                timestamp,
-                            }
-                        }
-                        RendererEvent::Offline { id } => {
-                            RendererEventPayload::Offline {
-                                renderer_id: id.0,
-                                timestamp,
-                            }
-                        }
-                    };
+                    let renderer_payload = renderer_event_to_payload(event, timestamp);
 
                     let payload = UnifiedEventPayload::Renderer(renderer_payload);
 
@@ -767,39 +679,7 @@ pub async fn all_events_sse(State(control_point): State<Arc<ControlPoint>>) -> i
                 }
                 Some(event) = server_rx_tokio.recv() => {
                     let timestamp = chrono::Utc::now();
-
-                    let server_payload = match event {
-                        MediaServerEvent::GlobalUpdated { server_id, system_update_id } => {
-                            MediaServerEventPayload::GlobalUpdated {
-                                server_id: server_id.0,
-                                system_update_id,
-                                timestamp,
-                            }
-                        }
-                        MediaServerEvent::ContainersUpdated { server_id, container_ids } => {
-                            MediaServerEventPayload::ContainersUpdated {
-                                server_id: server_id.0,
-                                container_ids,
-                                timestamp,
-                            }
-                        }
-                        MediaServerEvent::Online { server_id, info } => {
-                            MediaServerEventPayload::Online {
-                                server_id: server_id.0,
-                                friendly_name: info.friendly_name.clone(),
-                                model_name: info.model_name.clone(),
-                                manufacturer: info.manufacturer.clone(),
-                                timestamp,
-                            }
-                        }
-                        MediaServerEvent::Offline { server_id } => {
-                            MediaServerEventPayload::Offline {
-                                server_id: server_id.0,
-                                timestamp,
-                            }
-                        }
-                    };
-
+                    let server_payload = media_server_event_to_payload(event, timestamp);
                     let payload = UnifiedEventPayload::MediaServer(server_payload);
 
                     if let Ok(json) = serde_json::to_string(&payload) {

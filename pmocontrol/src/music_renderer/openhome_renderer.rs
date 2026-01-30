@@ -32,6 +32,10 @@ pub struct OpenHomeRenderer {
     #[allow(dead_code)]
     radio_client: Option<OhRadioClient>,
     queue: Arc<Mutex<MusicQueue>>,
+    /// Flag indicating if currently playing a continuous stream (radio without duration)
+    continuous_stream: Arc<Mutex<bool>>,
+    /// Cached current track URI to detect track changes
+    current_track_uri: Arc<Mutex<Option<String>>>,
 }
 
 impl OpenHomeRenderer {
@@ -52,7 +56,14 @@ impl OpenHomeRenderer {
             product_client,
             radio_client,
             queue,
+            continuous_stream: Arc::new(Mutex::new(false)),
+            current_track_uri: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Returns true if currently playing a continuous stream (radio without duration)
+    pub fn is_continuous_stream(&self) -> bool {
+        *self.continuous_stream.lock().unwrap()
     }
 
     pub fn has_playlist(&self) -> bool {
@@ -316,8 +327,27 @@ impl PlaybackPosition for OpenHomeRenderer {
         if let Some(info_client) = &self.info_client {
             match info_client.track() {
                 Ok(track) => {
-                    track_uri = Some(track.uri);
+                    track_uri = Some(track.uri.clone());
                     track_metadata_xml = track.metadata_xml;
+
+                    // Check if the URI has changed to detect track changes
+                    let mut cached_uri = self.current_track_uri.lock().unwrap();
+                    let uri_changed = cached_uri.as_ref() != Some(&track.uri);
+
+                    if uri_changed {
+                        tracing::debug!(
+                            "OpenHome track URI changed: {:?} -> {:?}",
+                            cached_uri,
+                            track.uri
+                        );
+
+                        // Détecte si la nouvelle URL est un flux continu
+                        let is_stream = crate::music_renderer::is_continuous_stream_url(&track.uri);
+                        *self.continuous_stream.lock().unwrap() = is_stream;
+                        tracing::debug!("OpenHome URI changed, continuous_stream={}", is_stream);
+
+                        *cached_uri = Some(track.uri);
+                    }
                 }
                 Err(err) => debug!(
                 //    renderer = self.info.id.0.as_str(),
@@ -327,12 +357,9 @@ impl PlaybackPosition for OpenHomeRenderer {
             }
         }
 
-        // Get duration from Time service, but fall back to DIDL metadata if duration is 0
+        // Get duration from Time service - duration_secs=0 means stream (no duration)
         let track_duration = if time_info.duration_secs == 0 {
-            // Try to extract duration from DIDL metadata
-            track_metadata_xml
-                .as_ref()
-                .and_then(|xml| parse_didl_duration_openhome(xml))
+            None
         } else {
             Some(format_hhmmss_u32(time_info.duration_secs))
         };
@@ -366,10 +393,6 @@ fn parse_didl_duration_openhome(didl: &str) -> Option<String> {
         let duration_offset = duration_start + "duration=\"".len();
         if let Some(duration_end) = tag_attrs[duration_offset..].find('"') {
             let duration = &tag_attrs[duration_offset..duration_offset + duration_end];
-            tracing::info!(
-                "OpenHome: Extracted duration from DIDL metadata: {}",
-                duration
-            );
             return Some(duration.to_string());
         }
     }

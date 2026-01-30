@@ -89,6 +89,8 @@ pub struct WatchedState {
     pub mute: Option<bool>,
     /// Last known track metadata
     pub metadata: Option<TrackMetadata>,
+    /// Last known stream state (continuous stream vs bounded media)
+    pub is_stream: Option<bool>,
 }
 
 // ============================================================================

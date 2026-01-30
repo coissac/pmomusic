@@ -14,8 +14,8 @@ use crate::openapi::{
     AttachPlaylistRequest, AttachedPlaylistInfo, BrowseResponse, ContainerEntry, ErrorResponse,
     FullRendererSnapshot, MediaServerSummary, PlayContentRequest, QueueSnapshot,
     RendererCapabilitiesSummary, RendererProtocolSummary, RendererState, RendererSummary,
-    SeekQueueRequest, SeekRequest, SleepTimerRequest, SleepTimerState, SuccessResponse,
-    TransferQueueRequest, VolumeSetRequest,
+    SeekQueueRequest, SeekRequest, SleepTimerRequest, SleepTimerState, StreamState,
+    SuccessResponse, TransferQueueRequest, VolumeSetRequest,
 };
 #[cfg(feature = "pmoserver")]
 use crate::queue::PlaybackItem;
@@ -1334,6 +1334,54 @@ async fn get_sleep_timer_state(
 }
 
 // ============================================================================
+// HANDLERS - STREAM STATE
+// ============================================================================
+
+/// GET /control/renderers/{renderer_id}/stream-state - Récupère l'état stream du renderer
+#[cfg(feature = "pmoserver")]
+#[utoipa::path(
+    get,
+    path = "/renderers/{renderer_id}/stream-state",
+    params(
+        ("renderer_id" = String, Path, description = "ID unique du renderer")
+    ),
+    responses(
+        (status = 200, description = "État du flux", body = StreamState),
+        (status = 404, description = "Renderer non trouvé", body = ErrorResponse)
+    ),
+    tag = "control"
+)]
+async fn get_stream_state(
+    State(state): State<ControlPointState>,
+    Path(renderer_id): Path<String>,
+) -> Result<Json<StreamState>, (StatusCode, Json<ErrorResponse>)> {
+    let rid = DeviceId(renderer_id.clone());
+
+    let renderer = state
+        .control_point
+        .music_renderer_by_id(&rid)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("Renderer {} not found", renderer_id),
+                }),
+            )
+        })?;
+
+    let is_stream = renderer.is_playing_a_stream();
+    let is_playing = renderer
+        .playback_state()
+        .map(|s| matches!(s, crate::model::PlaybackState::Playing))
+        .unwrap_or(false);
+
+    Ok(Json(StreamState {
+        is_stream,
+        is_playing,
+    }))
+}
+
+// ============================================================================
 // HANDLERS - QUEUE SHUFFLE
 // ============================================================================
 
@@ -2289,6 +2337,11 @@ pub fn create_api_router(state: ControlPointState, control_point: Arc<ControlPoi
         .route(
             "/renderers/{renderer_id}/timer/cancel",
             post(cancel_sleep_timer),
+        )
+        // Stream state
+        .route(
+            "/renderers/{renderer_id}/stream-state",
+            get(get_stream_state),
         )
         // Playlist binding
         .route(
