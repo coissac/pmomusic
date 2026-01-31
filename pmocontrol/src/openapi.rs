@@ -221,6 +221,7 @@ pub struct FullRendererSnapshot {
     pub state: RendererStateView,
     pub queue: QueueSnapshotView,
     pub binding: Option<RendererBindingView>,
+    pub is_stream: bool,
 }
 
 // ============================================================================

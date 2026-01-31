@@ -481,6 +481,11 @@ impl MusicRenderer {
             // Check stream state (every other tick to avoid excessive polling)
             let is_stream = self.is_playing_a_stream();
             if watched.is_stream != Some(is_stream) {
+                tracing::info!(
+                    "Stream state changed for renderer {}: is_stream={}",
+                    self.id().0,
+                    is_stream
+                );
                 self.emit_event(RendererEvent::StreamStateChanged {
                     id: self.id(),
                     is_stream,

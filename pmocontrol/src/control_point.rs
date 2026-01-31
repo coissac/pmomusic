@@ -764,10 +764,13 @@ impl ControlPoint {
             current_track,
         };
 
+        let is_stream = renderer.is_playing_a_stream();
+
         Ok(FullRendererSnapshot {
             state: state_view,
             queue: queue_view,
             binding,
+            is_stream,
         })
     }
 

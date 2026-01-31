@@ -190,6 +190,10 @@ function ensureSSEConnected() {
         }
         break;
 
+      case "stream_state_changed":
+        snapshot.is_stream = event.is_stream;
+        break;
+
       case "timer_started":
       case "timer_updated":
       case "timer_tick":
@@ -467,6 +471,7 @@ export function useRenderer(rendererId: Ref<string>) {
   const state = computed(() => snapshot.value?.state ?? null);
   const queue = computed(() => snapshot.value?.queue ?? null);
   const binding = computed(() => snapshot.value?.binding ?? null);
+  const isStream = computed(() => snapshot.value?.is_stream ?? false);
 
   async function refresh(force = true) {
     await Promise.all([
@@ -481,6 +486,7 @@ export function useRenderer(rendererId: Ref<string>) {
     state,
     queue,
     binding,
+    isStream,
     refresh,
   };
 }

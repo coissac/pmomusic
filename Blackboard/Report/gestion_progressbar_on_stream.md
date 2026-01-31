@@ -2,99 +2,36 @@
 
 ## Résumé
 
-Implémentation de l'étape 1 de la tâche : création d'une méthode prédicat `is_playing_a_stream()` au niveau de `MusicRenderer` qui détecte si la lecture en cours est un flux continu (radio) en interrogeant directement les serveurs HTTP.
-
-## Fichiers créés
-
-- `pmocontrol/src/music_renderer/stream_detection.rs` - Module utilitaire pour détecter les flux continus via analyse HTTP
+Implémentation complète de l'étape 2 de la tâche : ajout d'un indicateur visuel "Web Radio" dans l'interface web pour signaler la lecture d'un flux continu (webradio). L'indicateur s'affiche automatiquement à côté de l'indicateur "Attachée à une playlist" dans le composant QueueViewer.
 
 ## Fichiers modifiés
 
-### Nouveaux champs `continuous_stream` ajoutés aux backends
+### Backend (pmocontrol)
 
-1. `pmocontrol/src/music_renderer/upnp_renderer.rs`
-   - Ajout du champ `continuous_stream: Arc<Mutex<bool>>`
-   - Méthode `is_continuous_stream() -> bool`
-   - Détection dans `play_uri()` et `play_from_queue()` via `is_continuous_stream_url()`
+1. **pmocontrol/src/openapi.rs**
+   - Ajout du champ `is_stream: bool` dans `struct FullRendererSnapshot`
 
-2. `pmocontrol/src/music_renderer/openhome_renderer.rs`
-   - Ajout des champs `continuous_stream: Arc<Mutex<bool>>` et `current_track_uri: Arc<Mutex<Option<String>>>`
-   - Méthode `is_continuous_stream() -> bool`
-   - Détection dans `playback_position()` uniquement lors du changement d'URL
+2. **pmocontrol/src/control_point.rs**
+   - Modification de la méthode de construction de `FullRendererSnapshot` pour inclure `is_stream` via appel à `renderer.is_playing_a_stream()`
 
-3. `pmocontrol/src/music_renderer/linkplay_renderer.rs`
-   - Ajout du champ `continuous_stream: Arc<Mutex<bool>>`
-   - Méthode `is_continuous_stream() -> bool`
-   - Détection dans `play_uri()` via `is_continuous_stream_url()`
+3. **pmocontrol/src/sse.rs**
+   - Refactorisation : création de la fonction helper `media_server_event_to_payload()` pour éliminer la duplication de code entre les conversions de `MediaServerEvent` vers `MediaServerEventPayload`
+   - Remplacement de deux blocs match dupliqués par des appels à cette fonction helper
 
-4. `pmocontrol/src/music_renderer/arylic_tcp.rs`
-   - Ajout du champ `continuous_stream: Arc<Mutex<bool>>`
-   - Méthode `is_continuous_stream() -> bool`
+### Frontend (webapp)
 
-5. `pmocontrol/src/music_renderer/chromecast_renderer.rs`
-   - Ajout du champ `continuous_stream: Arc<Mutex<bool>>`
-   - Méthode `is_continuous_stream() -> bool`
-   - Détection dans `play_uri()` via `is_continuous_stream_url()`
+4. **pmoapp/webapp/src/services/pmocontrol/types.ts**
+   - Ajout du type d'événement SSE `stream_state_changed` dans `RendererEventPayload`
+   - Ajout du champ `is_stream: boolean` dans `FullRendererSnapshot`
 
-### Méthode publique au niveau MusicRenderer
+5. **pmoapp/webapp/src/composables/useRenderers.ts**
+   - Ajout de la gestion de l'événement `stream_state_changed` dans le switch statement
+   - Ajout du computed `isStream` dans le composable `useRenderer()`
+   - Export de `isStream` dans le retour du composable
 
-6. `pmocontrol/src/music_renderer/musicrenderer.rs`
-   - Ajout de la méthode publique `is_playing_a_stream() -> bool` qui :
-     - Vérifie que le renderer est en état `Playing`
-     - Interroge le backend pour le statut `continuous_stream`
-     - Retourne `false` si non en lecture ou si lecture d'un fichier avec durée
-
-### Export du module
-
-7. `pmocontrol/src/music_renderer/mod.rs`
-   - Déclaration du module `stream_detection`
-   - Export public de `is_continuous_stream_url`
-
-## Approche technique
-
-### Fonction utilitaire centralisée
-
-La fonction `is_continuous_stream_url(url: &str) -> bool` analyse l'URL en deux étapes :
-
-1. **Pattern matching rapide** : Détection de patterns connus (`/stream`, `/live`, `/radio`, ports 8000/8080, etc.)
-
-2. **Analyse HTTP HEAD** : Si pas de pattern connu, requête HTTP HEAD pour analyser les headers :
-   - Headers ICY (Icecast/Shoutcast) → toujours un stream
-   - Absence de `Content-Length` + MIME type audio → stream
-   - `Transfer-Encoding: chunked` sans `Content-Length` → probablement un stream
-   - Présence de `Content-Length` → fichier délimité (non-stream)
-
-### Stratégie par backend
-
-#### Backends sans playlist interne (UPnP, Chromecast, LinkPlay)
-- Détection au moment du `play_uri()` car on connaît l'URL qu'on va jouer
-- Appel de `is_continuous_stream_url(uri)` pour analyser le serveur HTTP
-- Mise à jour du flag `continuous_stream`
-
-#### Backend OpenHome (playlist interne)
-- Détection dans `playback_position()` car on ne contrôle pas directement ce qui est joué
-- **Uniquement lors du changement d'URL** (détecté via `current_track_uri`)
-- Cache l'URL courante pour éviter les vérifications répétées
-- Appel de `is_continuous_stream_url()` seulement quand l'URL change
-
-#### Backend ArylicTcp
-- Pas de support `play_uri()`, donc flag initialisé mais non utilisé pour l'instant
-- Prêt pour extension future si nécessaire
-
-### Points clés de l'implémentation
-
-1. **Détection basée sur le serveur HTTP réel** et non sur les métadonnées DIDL du MediaServer (qui peuvent être segmentées artificiellement)
-
-2. **Optimisation OpenHome** : Vérification uniquement au changement d'URL pour éviter les requêtes HTTP répétées
-
-3. **Timeout de 3 secondes** pour les requêtes HTTP HEAD pour ne pas bloquer
-
-4. **Gestion d'erreur gracieuse** : En cas d'échec de connexion, considère comme non-stream (comportement par défaut sûr)
-
-## Résultat
-
-La méthode `MusicRenderer::is_playing_a_stream()` retourne maintenant `true` si et seulement si :
-- Le renderer est en état `Playing` ET
-- L'URL en cours de lecture est un flux continu (détecté via analyse HTTP)
-
-Cette implémentation pose les bases pour l'étape 2 qui consistera à utiliser ce prédicat pour gérer correctement la barre de progression sur les flux continus segmentés par métadonnées.
+6. **pmoapp/webapp/src/components/pmocontrol/QueueViewer.vue**
+   - Import de l'icône `Radio` depuis lucide-vue-next
+   - Récupération de `isStream` depuis le composable `useRenderer()`
+   - Ajout d'un conteneur `status-indicators` pour wrapper les indicateurs
+   - Ajout de l'indicateur visuel "Web Radio" avec icône Radio
+   - Ajout des styles CSS pour `.stream-indicator` (badge violet) et `.status-indicators`

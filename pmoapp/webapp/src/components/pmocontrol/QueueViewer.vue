@@ -2,7 +2,7 @@
 import { computed, ref, watch, nextTick, toRef } from "vue";
 import { useRenderer } from "@/composables/useRenderers";
 import QueueItem from "./QueueItem.vue";
-import { Link } from "lucide-vue-next";
+import { Link, Radio } from "lucide-vue-next";
 import type { QueueItem as QueueItemType } from "@/services/pmocontrol/types";
 
 const props = defineProps<{
@@ -13,7 +13,7 @@ const emit = defineEmits<{
     clickItem: [item: QueueItemType];
 }>();
 
-const { queue, binding } = useRenderer(toRef(props, "rendererId"));
+const { queue, binding, isStream } = useRenderer(toRef(props, "rendererId"));
 
 const isAttached = computed(() => !!binding.value);
 
@@ -59,10 +59,19 @@ watch(
                 </span>
             </h3>
 
-            <!-- Indicateur playlist attachée -->
-            <div v-if="isAttached" class="binding-indicator">
-                <Link :size="16" />
-                <span class="binding-text"> Attachée à une playlist </span>
+            <!-- Indicateurs de status -->
+            <div class="status-indicators">
+                <!-- Indicateur playlist attachée -->
+                <div v-if="isAttached" class="binding-indicator">
+                    <Link :size="16" />
+                    <span class="binding-text"> Attachée à une playlist </span>
+                </div>
+
+                <!-- Indicateur web radio -->
+                <div v-if="isStream" class="stream-indicator">
+                    <Radio :size="16" />
+                    <span class="stream-text"> Web Radio </span>
+                </div>
             </div>
         </div>
 
@@ -111,6 +120,12 @@ watch(
     color: var(--color-text-secondary);
 }
 
+.status-indicators {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-sm);
+}
+
 .binding-indicator {
     display: inline-flex;
     align-items: center;
@@ -126,6 +141,24 @@ watch(
 }
 
 .binding-text {
+    font-size: var(--text-xs);
+}
+
+.stream-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    padding: var(--spacing-xs) var(--spacing-sm);
+    background-color: rgba(147, 51, 234, 0.1);
+    color: #9333ea;
+    border-radius: var(--radius-md);
+    font-size: var(--text-sm);
+    font-weight: 500;
+    border: 1px solid #9333ea;
+    width: fit-content;
+}
+
+.stream-text {
     font-size: var(--text-xs);
 }
 
