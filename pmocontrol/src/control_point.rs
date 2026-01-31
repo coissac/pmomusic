@@ -1690,6 +1690,7 @@ fn playback_item_track_metadata(item: &PlaybackItem) -> TrackMetadata {
         track_number: None,
         creator: None,
         duration: None,
+        is_continuous_stream: crate::music_renderer::is_continuous_stream_url(&item.uri),
     })
 }
 

@@ -954,6 +954,10 @@ pub fn parse_track_metadata_from_didl(xml: &str) -> Option<TrackMetadata> {
         "Parsed DIDL metadata for track"
     );
 
+    // Déterminer si c'est un stream continu à partir de l'URI
+    let uri = item.resources.first().map(|r| r.url.as_str()).unwrap_or("");
+    let is_continuous_stream = crate::music_renderer::is_continuous_stream_url(uri);
+
     Some(TrackMetadata {
         title: Some(item.title.clone()),
         artist: item.artist.clone(),
@@ -964,6 +968,7 @@ pub fn parse_track_metadata_from_didl(xml: &str) -> Option<TrackMetadata> {
         track_number: item.original_track_number.clone(),
         creator: item.creator.clone(),
         duration: item.resources.first().and_then(|r| r.duration.clone()),
+        is_continuous_stream,
     })
 }
 
