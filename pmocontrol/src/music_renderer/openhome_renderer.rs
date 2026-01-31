@@ -174,16 +174,23 @@ impl OpenHomeRenderer {
     /// Retourne la longueur de la playlist OpenHome sans récupérer toutes les métadonnées.
     /// Plus rapide que snapshot_openhome_playlist() pour juste connaître le nombre de pistes.
     pub(crate) fn openhome_playlist_len(&self) -> Result<usize, ControlPointError> {
-        let playlist = self.playlist_client_for("openhome_playlist_len")?;
-        let ids = playlist.id_array()?;
-        Ok(ids.len())
+        // Use queue.len() which uses cached track_ids() internally
+        let queue = self.queue.lock().unwrap();
+        queue.len()
     }
 
     /// Retourne les IDs des pistes de la playlist OpenHome.
     /// Plus rapide que snapshot_openhome_playlist() car ne récupère pas les métadonnées.
     pub(crate) fn openhome_playlist_ids(&self) -> Result<Vec<u32>, ControlPointError> {
-        let playlist = self.playlist_client_for("openhome_playlist_ids")?;
-        playlist.id_array()
+        // Use the queue's cached track_ids() instead of direct id_array() call
+        let queue = self.queue.lock().unwrap();
+        if let MusicQueue::OpenHome(oh_queue) = &*queue {
+            oh_queue.track_ids()
+        } else {
+            Err(ControlPointError::QueueError(
+                "Not an OpenHome queue".to_string(),
+            ))
+        }
     }
 
     pub(crate) fn clear_openhome_playlist(&self) -> Result<(), ControlPointError> {
@@ -201,11 +208,21 @@ impl OpenHomeRenderer {
         let playlist = self.playlist_client_for("add_track_openhome")?;
         let insert_after = match after_id {
             Some(id) => id,
-            None => playlist
-                .id_array()?
-                .last()
-                .copied()
-                .unwrap_or(OPENHOME_PLAYLIST_HEAD_ID),
+            None => {
+                // Use the queue's cached track_ids() instead of direct id_array() call
+                let queue = self.queue.lock().unwrap();
+                if let MusicQueue::OpenHome(oh_queue) = &*queue {
+                    oh_queue
+                        .track_ids()?
+                        .last()
+                        .copied()
+                        .unwrap_or(OPENHOME_PLAYLIST_HEAD_ID)
+                } else {
+                    return Err(ControlPointError::QueueError(
+                        "Not an OpenHome queue".to_string(),
+                    ));
+                }
+            }
         };
 
         let new_id = playlist.insert(insert_after, uri, metadata)?;
@@ -376,16 +393,18 @@ impl PlaybackPosition for OpenHomeRenderer {
         let mut track_uri = None;
         let mut track_metadata_xml = None;
 
-        // Get track ID from playlist
-        if let Some(playlist_client) = &self.playlist {
-            match playlist_client.id() {
-                Ok(id) => track_id = Some(id),
+        // Get track ID from queue (uses cached data)
+        let queue_guard_for_id = self.queue.lock().unwrap();
+        if let MusicQueue::OpenHome(oh_queue) = &*queue_guard_for_id {
+            match oh_queue.current_track() {
+                Ok(id_opt) => track_id = id_opt,
                 Err(err) => debug!(
                     error = %err,
                     "Failed to read OpenHome track id"
                 ),
             }
         }
+        drop(queue_guard_for_id);
 
         // Use queue API to get current item with cached metadata
         let mut queue_guard = self.queue.lock().unwrap();

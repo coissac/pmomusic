@@ -8,6 +8,8 @@ use crate::soap_client::{
 };
 use anyhow::{Result, anyhow};
 use pmodidl::DIDLLite;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
 use tracing::{debug, info, trace, warn};
 use xmltree::{Element, XMLNode};
 
@@ -728,10 +730,87 @@ impl OhRadioClient {
     }
 }
 
+#[derive(Debug)]
+struct SourceXmlCache {
+    sources: Option<Vec<OhProductSource>>,
+    last_update: Option<SystemTime>,
+}
+
+impl SourceXmlCache {
+    fn new() -> Self {
+        Self {
+            sources: None,
+            last_update: None,
+        }
+    }
+
+    fn is_valid(&self) -> bool {
+        if let (Some(_), Some(last_update)) = (&self.sources, self.last_update) {
+            if let Ok(elapsed) = SystemTime::now().duration_since(last_update) {
+                return elapsed < Duration::from_secs(600); // 10 minutes TTL
+            }
+        }
+        false
+    }
+
+    fn get(&self) -> Option<Vec<OhProductSource>> {
+        if self.is_valid() {
+            self.sources.clone()
+        } else {
+            None
+        }
+    }
+
+    fn set(&mut self, sources: Vec<OhProductSource>) {
+        self.sources = Some(sources);
+        self.last_update = Some(SystemTime::now());
+    }
+}
+
+#[derive(Debug)]
+struct SourceIndexCache {
+    index: Option<u32>,
+    last_update: Option<SystemTime>,
+}
+
+impl SourceIndexCache {
+    fn new() -> Self {
+        Self {
+            index: None,
+            last_update: None,
+        }
+    }
+
+    fn is_valid(&self) -> bool {
+        if let (Some(_), Some(last_update)) = (self.index, self.last_update) {
+            if let Ok(elapsed) = SystemTime::now().duration_since(last_update) {
+                return elapsed < Duration::from_secs(1); // 1 second TTL
+            }
+        }
+        false
+    }
+
+    fn get(&self) -> Option<u32> {
+        if self.is_valid() { self.index } else { None }
+    }
+
+    fn set(&mut self, index: u32) {
+        self.index = Some(index);
+        self.last_update = Some(SystemTime::now());
+    }
+
+    fn invalidate(&mut self) {
+        self.index = None;
+        self.last_update = None;
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct OhProductClient {
     pub control_url: String,
     pub service_type: String,
+    source_xml_cache: Arc<Mutex<SourceXmlCache>>,
+    source_index_cache: Arc<Mutex<SourceIndexCache>>,
 }
 
 impl OhProductClient {
@@ -739,6 +818,8 @@ impl OhProductClient {
         Self {
             control_url,
             service_type,
+            source_xml_cache: Arc::new(Mutex::new(SourceXmlCache::new())),
+            source_index_cache: Arc::new(Mutex::new(SourceIndexCache::new())),
         }
     }
 
@@ -754,16 +835,39 @@ impl OhProductClient {
     }
 
     pub fn source_xml(&self) -> Result<Vec<OhProductSource>> {
+        // Lock the cache for the entire operation to prevent race conditions
+        let mut cache = self.source_xml_cache.lock().unwrap();
+
+        // Check if cache is valid
+        if let Some(cached_sources) = cache.get() {
+            return Ok(cached_sources);
+        }
+
+        // Cache miss or expired - fetch from service (keep lock held to prevent concurrent calls)
         let call_result =
             invoke_upnp_action(&self.control_url, &self.service_type, "SourceXml", &[])?;
         let envelope = ensure_success("SourceXml", &call_result)?;
         let response = find_child_with_suffix(&envelope.body.content, "SourceXmlResponse")
             .ok_or_else(|| anyhow!("Missing SourceXmlResponse element in SOAP body"))?;
         let xml = extract_child_text_any(response, &["SourceXml", "Xml", "Value"])?;
-        parse_product_source_list(&xml)
+        let sources = parse_product_source_list(&xml)?;
+
+        // Update cache before releasing lock
+        cache.set(sources.clone());
+
+        Ok(sources)
     }
 
     pub fn source_index(&self) -> Result<u32, ControlPointError> {
+        // Lock the cache for the entire operation to prevent race conditions
+        let mut cache = self.source_index_cache.lock().unwrap();
+
+        // Check if cache is valid
+        if let Some(cached_index) = cache.get() {
+            return Ok(cached_index);
+        }
+
+        // Cache miss or expired - fetch from service (keep lock held to prevent concurrent calls)
         let call_result =
             invoke_upnp_action(&self.control_url, &self.service_type, "SourceIndex", &[])?;
         let envelope = ensure_success("SourceIndex", &call_result)?;
@@ -773,9 +877,14 @@ impl OhProductClient {
             })?;
 
         let value = extract_child_text_any(response, &["Index", "Value"])?;
-        value
+        let index = value
             .parse::<u32>()
-            .map_err(|_| ControlPointError::UpnpBadReturnValue("volume".to_string(), value))
+            .map_err(|_| ControlPointError::UpnpBadReturnValue("volume".to_string(), value))?;
+
+        // Update cache before releasing lock
+        cache.set(index);
+
+        Ok(index)
     }
 
     pub fn set_source_index(&self, index: u32) -> Result<(), ControlPointError> {
@@ -787,7 +896,15 @@ impl OhProductClient {
             "SetSourceIndex",
             &args,
         )?;
-        handle_action_response("SetSourceIndex", &call_result)
+        let result = handle_action_response("SetSourceIndex", &call_result);
+
+        // Invalidate cache after write operation
+        if result.is_ok() {
+            let mut cache = self.source_index_cache.lock().unwrap();
+            cache.invalidate();
+        }
+
+        result
     }
 
     pub fn ensure_playlist_source_selected(&self) -> Result<(), ControlPointError> {
