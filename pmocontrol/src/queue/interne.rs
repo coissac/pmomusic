@@ -29,7 +29,7 @@ use crate::{
 ///
 /// It does not talk to any remote service. All operations are pure
 /// structural mutations on in-memory data.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct InternalQueue {
     renderer_id: DeviceId,
     items: Vec<PlaybackItem>,

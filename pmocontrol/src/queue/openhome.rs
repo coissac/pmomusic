@@ -4,7 +4,7 @@ use std::time::SystemTime;
 use std::usize;
 
 use quick_xml::escape::escape;
-use tracing::{debug, warn};
+use tracing::{debug, trace, warn};
 
 use crate::errors::ControlPointError;
 use crate::upnp_clients::{
@@ -66,8 +66,57 @@ impl TrackIdsCache {
     }
 }
 
+/// Cache for current track ID to avoid redundant Id SOAP calls
+#[derive(Debug)]
+struct CurrentTrackIdCache {
+    /// Cached current track ID (None means no track playing, id=0)
+    current_id: Option<Option<u32>>,
+    /// Timestamp of last cache update
+    last_update: Option<SystemTime>,
+}
+
+impl CurrentTrackIdCache {
+    fn new() -> Self {
+        Self {
+            current_id: None,
+            last_update: None,
+        }
+    }
+
+    /// Check if cache is valid (not expired and has data)
+    fn is_valid(&self) -> bool {
+        if let (Some(_), Some(last_update)) = (&self.current_id, self.last_update) {
+            if let Ok(elapsed) = SystemTime::now().duration_since(last_update) {
+                return elapsed.as_millis() < 250; // TTL: 250ms
+            }
+        }
+        false
+    }
+
+    /// Get cached current track ID if valid
+    fn get(&self) -> Option<Option<u32>> {
+        if self.is_valid() {
+            self.current_id
+        } else {
+            None
+        }
+    }
+
+    /// Update cache with new current track ID
+    fn set(&mut self, id: Option<u32>) {
+        self.current_id = Some(id);
+        self.last_update = Some(SystemTime::now());
+    }
+
+    /// Invalidate cache (called on write operations)
+    fn invalidate(&mut self) {
+        self.current_id = None;
+        self.last_update = None;
+    }
+}
+
 /// Local mirror of an OpenHome playlist for a single renderer.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct OpenHomeQueue {
     renderer_id: DeviceId,
     playlist_client: OhPlaylistClient,
@@ -79,6 +128,8 @@ pub struct OpenHomeQueue {
     metadata_cache: HashMap<u32, Option<crate::model::TrackMetadata>>,
     /// Cache for track IDs to avoid redundant IdArray SOAP calls
     track_ids_cache: Arc<Mutex<TrackIdsCache>>,
+    /// Cache for current track ID to avoid redundant Id SOAP calls
+    current_track_id_cache: Arc<Mutex<CurrentTrackIdCache>>,
 }
 
 impl OpenHomeQueue {
@@ -95,6 +146,7 @@ impl OpenHomeQueue {
             product_client,
             metadata_cache: HashMap::new(),
             track_ids_cache: Arc::new(Mutex::new(TrackIdsCache::new())),
+            current_track_id_cache: Arc::new(Mutex::new(CurrentTrackIdCache::new())),
         }
     }
 
@@ -667,9 +719,23 @@ impl QueueBackend for OpenHomeQueue {
     }
 
     fn current_track(&self) -> Result<Option<u32>, ControlPointError> {
+        // Hold lock during entire operation to prevent race conditions
+        let mut cache = self.current_track_id_cache.lock().unwrap();
+
+        // Return cached value if valid
+        if let Some(cached_id) = cache.get() {
+            return Ok(cached_id);
+        }
+
+        // Cache miss - fetch from backend
         let id = self.playlist_client.id()?;
         // OpenHome returns 0 when no track is selected/playing
-        if id == 0 { Ok(None) } else { Ok(Some(id)) }
+        let result = if id == 0 { None } else { Some(id) };
+
+        // Update cache
+        cache.set(result);
+
+        Ok(result)
     }
 
     fn current_index(&self) -> Result<Option<usize>, ControlPointError> {
@@ -682,7 +748,40 @@ impl QueueBackend for OpenHomeQueue {
 
     fn queue_snapshot(&self) -> Result<QueueSnapshot, ControlPointError> {
         self.ensure_playlist_source_selected()?;
-        let entries = self.playlist_client.read_all_tracks()?;
+
+        // Use cached track_ids() instead of calling read_all_tracks() which bypasses cache
+        let ids = self.track_ids()?;
+
+        if ids.is_empty() {
+            return Ok(QueueSnapshot {
+                items: Vec::new(),
+                current_index: None,
+                playlist_id: None,
+            });
+        }
+
+        // Read metadata for all tracks (batched)
+        const MAX_BATCH: usize = 64;
+        let mut entries = Vec::with_capacity(ids.len());
+        for chunk in ids.chunks(MAX_BATCH) {
+            match self.playlist_client.read_list(chunk) {
+                Ok(mut batch) => entries.append(&mut batch),
+                Err(err) => {
+                    // If batch fails, try one by one
+                    if chunk.len() > 1 {
+                        for id in chunk {
+                            match self.playlist_client.read_list(&[*id]) {
+                                Ok(mut single) => entries.append(&mut single),
+                                Err(inner_err) => return Err(inner_err),
+                            }
+                        }
+                    } else {
+                        return Err(err);
+                    }
+                }
+            }
+        }
+
         let mut items = Vec::with_capacity(entries.len());
 
         for entry in &entries {
@@ -715,8 +814,9 @@ impl QueueBackend for OpenHomeQueue {
             self.ensure_playlist_source_selected()?;
             self.playlist_client.stop()?;
         }
-        // Invalidate cache (seek_id modifies playlist state)
+        // Invalidate caches (seek_id/stop modifies playlist state and current track)
         self.track_ids_cache.lock().unwrap().invalidate();
+        self.current_track_id_cache.lock().unwrap().invalidate();
         Ok(())
     }
 
@@ -739,8 +839,9 @@ impl QueueBackend for OpenHomeQueue {
         self.playlist_client.delete_all()?;
         self.metadata_cache.clear();
 
-        // Invalidate cache after delete_all
+        // Invalidate caches after delete_all (clears queue and current track)
         self.track_ids_cache.lock().unwrap().invalidate();
+        self.current_track_id_cache.lock().unwrap().invalidate();
 
         if items.is_empty() {
             return Ok(());
@@ -771,8 +872,9 @@ impl QueueBackend for OpenHomeQueue {
         if items.is_empty() {
             self.playlist_client.delete_all()?;
             self.metadata_cache.clear();
-            // Invalidate cache after delete_all
+            // Invalidate caches after delete_all (clears queue and current track)
             self.track_ids_cache.lock().unwrap().invalidate();
+            self.current_track_id_cache.lock().unwrap().invalidate();
             return Ok(());
         }
 
@@ -964,8 +1066,9 @@ impl QueueBackend for OpenHomeQueue {
     fn clear_queue(&mut self) -> Result<(), ControlPointError> {
         self.ensure_playlist_source_selected()?;
         self.playlist_client.delete_all()?;
-        // Invalidate cache after clearing playlist
+        // Invalidate caches after clearing playlist (clears queue and current track)
         self.track_ids_cache.lock().unwrap().invalidate();
+        self.current_track_id_cache.lock().unwrap().invalidate();
         Ok(())
     }
 

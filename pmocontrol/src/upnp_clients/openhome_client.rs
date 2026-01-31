@@ -436,54 +436,6 @@ impl OhPlaylistClient {
         }
         Ok(ids)
     }
-
-    pub fn read_all_tracks(&self) -> Result<Vec<OhTrackEntry>, ControlPointError> {
-        let ids = self.id_array()?;
-        debug!(
-            control_url = self.control_url.as_str(),
-            id_count = ids.len(),
-            "OpenHome Playlist IdArray returned"
-        );
-
-        if ids.is_empty() {
-            info!(
-                control_url = self.control_url.as_str(),
-                "OpenHome Playlist is empty (no track IDs)"
-            );
-            return Ok(Vec::new());
-        }
-
-        const MAX_BATCH: usize = 64;
-        let mut entries = Vec::with_capacity(ids.len());
-        for chunk in ids.chunks(MAX_BATCH) {
-            match self.read_list(chunk) {
-                Ok(mut batch) => entries.append(&mut batch),
-                Err(err) if chunk.len() > 1 && is_invalid_entry_id_error(&err) => {
-                    debug!(
-                        control_url = self.control_url.as_str(),
-                        requested = chunk.len(),
-                        "ReadList chunk failed with invalid entry ids, falling back to per-id requests"
-                    );
-                    for id in chunk {
-                        match self.read_list(&[*id]) {
-                            Ok(mut single) => entries.append(&mut single),
-                            Err(inner_err) => return Err(inner_err),
-                        }
-                    }
-                }
-                Err(err) => return Err(err),
-            }
-        }
-
-        debug!(
-            control_url = self.control_url.as_str(),
-            track_count = entries.len(),
-            expected_count = ids.len(),
-            "OpenHome Playlist tracks read"
-        );
-
-        Ok(entries)
-    }
 }
 
 impl OhInfoClient {
