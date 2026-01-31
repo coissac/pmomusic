@@ -3,42 +3,45 @@
  * Onglets renderer auto-générés depuis la liste des renderers online.
  * Onglets server ouverts manuellement via le drawer (fermables).
  */
-import { reactive, computed, watch, onMounted, type Component } from 'vue'
-import { useMediaQuery } from '@vueuse/core'
-import { Radio, Server } from 'lucide-vue-next'
-import type { RendererSummary, MediaServerSummary } from '../services/pmocontrol/types'
+import { reactive, computed, watch, onMounted, type Component } from "vue";
+import { useMediaQuery } from "@vueuse/core";
+import { Radio, Server } from "lucide-vue-next";
+import type {
+  RendererSummary,
+  MediaServerSummary,
+} from "../services/pmocontrol/types";
 
 export interface Tab {
-  id: string // "renderer-{id}", "server-{id}"
-  type: 'renderer' | 'server'
-  title: string // Nom affiché (tronqué sur mobile)
-  fullTitle: string // Nom complet (pour tooltip)
-  icon: Component
+  id: string; // "renderer-{id}", "server-{id}"
+  type: "renderer" | "server";
+  title: string; // Nom affiché (tronqué sur mobile)
+  fullTitle: string; // Nom complet (pour tooltip)
+  icon: Component;
   metadata?: {
-    rendererId?: string
-    serverId?: string
-  }
-  closeable: boolean // renderer: false (auto-géré), server: true (manuel)
+    rendererId?: string;
+    serverId?: string;
+  };
+  closeable: boolean; // renderer: false (auto-géré), server: true (manuel)
 }
 
 interface TabsState {
-  tabs: Tab[]
-  activeTabId: string
-  tabHistory: string[] // Pour back/forward navigation
+  tabs: Tab[];
+  activeTabId: string;
+  tabHistory: string[]; // Pour back/forward navigation
 }
 
-const MAX_TABS = 12 // Augmenté car onglets auto-générés
-const STORAGE_KEY = 'pmo-tabs-state'
+const MAX_TABS = 12; // Augmenté car onglets auto-générés
+const STORAGE_KEY = "pmo-tabs-state";
 
 // État global partagé entre toutes les instances du composable
 const state = reactive<TabsState>({
   tabs: [],
-  activeTabId: '',
+  activeTabId: "",
   tabHistory: [],
-})
+});
 
 // Flag pour éviter les boucles de sauvegarde
-let isRestoringFromStorage = false
+let isRestoringFromStorage = false;
 
 /**
  * Retourne le titre complet sans troncature
@@ -46,7 +49,7 @@ let isRestoringFromStorage = false
  */
 function truncateTitle(title: string): string {
   // Retourner le titre complet, le CSS gère l'ellipsis de façon stable
-  return title
+  return title;
 }
 
 /**
@@ -54,13 +57,13 @@ function truncateTitle(title: string): string {
  * Note: On ne sauvegarde que les onglets server (les renderer tabs sont auto-générés)
  */
 function saveToLocalStorage() {
-  if (isRestoringFromStorage) return
+  if (isRestoringFromStorage) return;
 
   try {
     const stateToSave = {
       // Sauvegarder uniquement les onglets server (fermables manuellement)
       tabs: state.tabs
-        .filter((tab) => tab.type === 'server')
+        .filter((tab) => tab.type === "server")
         .map((tab) => ({
           ...tab,
           // On ne peut pas sauvegarder les composants Vue, on sauve juste le type
@@ -68,10 +71,10 @@ function saveToLocalStorage() {
         })),
       activeTabId: state.activeTabId,
       tabHistory: state.tabHistory,
-    }
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToSave))
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToSave));
   } catch (error) {
-    console.error('[useTabs] Erreur sauvegarde localStorage:', error)
+    console.error("[useTabs] Erreur sauvegarde localStorage:", error);
   }
 }
 
@@ -81,37 +84,37 @@ function saveToLocalStorage() {
  */
 function restoreFromLocalStorage() {
   try {
-    const saved = localStorage.getItem(STORAGE_KEY)
-    if (!saved) return
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (!saved) return;
 
-    isRestoringFromStorage = true
-    const savedState = JSON.parse(saved)
+    isRestoringFromStorage = true;
+    const savedState = JSON.parse(saved);
 
     // Reconstituer uniquement les tabs server avec les bonnes icônes
     const serverTabs = (savedState.tabs || [])
-      .filter((tab: Tab) => tab.type === 'server')
+      .filter((tab: Tab) => tab.type === "server")
       .map((tab: Tab) => ({
         ...tab,
         icon: Server,
         closeable: true,
         fullTitle: tab.fullTitle || tab.title, // Fallback si fullTitle n'existe pas
-      }))
+      }));
 
     // Ajouter les tabs server restaurés (les renderer tabs seront ajoutés par syncWithRenderers)
-    state.tabs.push(...serverTabs)
+    state.tabs.push(...serverTabs);
 
-    state.activeTabId = savedState.activeTabId || ''
-    state.tabHistory = savedState.tabHistory || []
+    state.activeTabId = savedState.activeTabId || "";
+    state.tabHistory = savedState.tabHistory || [];
 
     // Vérifier que l'onglet actif existe toujours (sera validé après syncWithRenderers)
     if (!state.tabs.find((t) => t.id === state.activeTabId)) {
-      state.activeTabId = ''
+      state.activeTabId = "";
     }
 
-    isRestoringFromStorage = false
+    isRestoringFromStorage = false;
   } catch (error) {
-    console.error('[useTabs] Erreur restauration localStorage:', error)
-    isRestoringFromStorage = false
+    console.error("[useTabs] Erreur restauration localStorage:", error);
+    isRestoringFromStorage = false;
   }
 }
 
@@ -119,31 +122,33 @@ function restoreFromLocalStorage() {
  * Trouve un onglet par son ID
  */
 function findTab(tabId: string): Tab | undefined {
-  return state.tabs.find((t) => t.id === tabId)
+  return state.tabs.find((t) => t.id === tabId);
 }
 
 /**
  * Ouvre un nouvel onglet ou active un onglet existant
  */
-function openTab(newTab: Omit<Tab, 'id' | 'fullTitle'> & { id?: string; fullTitle?: string }): string {
+function openTab(
+  newTab: Omit<Tab, "id" | "fullTitle"> & { id?: string; fullTitle?: string },
+): string {
   // Générer un ID si non fourni
   const tabId =
     newTab.id ||
-    (newTab.type === 'renderer'
+    (newTab.type === "renderer"
       ? `renderer-${newTab.metadata?.rendererId}`
-      : `server-${newTab.metadata?.serverId}`)
+      : `server-${newTab.metadata?.serverId}`);
 
   // Si l'onglet existe déjà, on le sélectionne
-  const existingTab = findTab(tabId)
+  const existingTab = findTab(tabId);
   if (existingTab) {
-    switchTab(tabId)
-    return tabId
+    switchTab(tabId);
+    return tabId;
   }
 
   // Vérifier la limite max
   if (state.tabs.length >= MAX_TABS) {
-    console.warn(`[useTabs] Limite max de ${MAX_TABS} onglets atteinte`)
-    return state.activeTabId
+    console.warn(`[useTabs] Limite max de ${MAX_TABS} onglets atteinte`);
+    return state.activeTabId;
   }
 
   // Créer le nouvel onglet
@@ -155,12 +160,12 @@ function openTab(newTab: Omit<Tab, 'id' | 'fullTitle'> & { id?: string; fullTitl
     icon: newTab.icon,
     metadata: newTab.metadata,
     closeable: newTab.closeable !== false, // true par défaut sauf si explicitement false
-  }
+  };
 
-  state.tabs.push(tab)
-  switchTab(tabId)
+  state.tabs.push(tab);
+  switchTab(tabId);
 
-  return tabId
+  return tabId;
 }
 
 /**
@@ -168,24 +173,26 @@ function openTab(newTab: Omit<Tab, 'id' | 'fullTitle'> & { id?: string; fullTitl
  * Les onglets renderer sont auto-gérés et ne peuvent pas être fermés manuellement
  */
 function closeTab(tabId: string) {
-  const tab = findTab(tabId)
-  if (!tab) return
+  const tab = findTab(tabId);
+  if (!tab) return;
 
   // Ne fermer que les onglets server (closeable = true)
   // Les renderer tabs sont auto-gérés par syncWithRenderers
-  if (!tab.closeable || tab.type === 'renderer') {
-    console.warn('[useTabs] Impossible de fermer un onglet renderer (auto-géré)')
-    return
+  if (!tab.closeable || tab.type === "renderer") {
+    console.warn(
+      "[useTabs] Impossible de fermer un onglet renderer (auto-géré)",
+    );
+    return;
   }
 
-  const tabIndex = state.tabs.findIndex((t) => t.id === tabId)
-  if (tabIndex === -1) return
+  const tabIndex = state.tabs.findIndex((t) => t.id === tabId);
+  if (tabIndex === -1) return;
 
   // Supprimer l'onglet
-  state.tabs.splice(tabIndex, 1)
+  state.tabs.splice(tabIndex, 1);
 
   // Supprimer de l'historique
-  state.tabHistory = state.tabHistory.filter((id) => id !== tabId)
+  state.tabHistory = state.tabHistory.filter((id) => id !== tabId);
 
   // Si c'était l'onglet actif, basculer vers le précédent dans l'historique
   if (state.activeTabId === tabId) {
@@ -193,17 +200,17 @@ function closeTab(tabId: string) {
     const previousTab = state.tabHistory
       .slice()
       .reverse()
-      .find((id) => state.tabs.some((t) => t.id === id))
+      .find((id) => state.tabs.some((t) => t.id === id));
 
     if (previousTab) {
-      switchTab(previousTab)
+      switchTab(previousTab);
     } else {
       // Fallback sur le premier onglet disponible (ou vide)
-      const firstTab = state.tabs[0]
+      const firstTab = state.tabs[0];
       if (firstTab) {
-        switchTab(firstTab.id)
+        switchTab(firstTab.id);
       } else {
-        state.activeTabId = ''
+        state.activeTabId = "";
       }
     }
   }
@@ -213,21 +220,21 @@ function closeTab(tabId: string) {
  * Change l'onglet actif
  */
 function switchTab(tabId: string) {
-  const tab = findTab(tabId)
+  const tab = findTab(tabId);
   if (!tab) {
-    console.warn(`[useTabs] Onglet ${tabId} introuvable`)
-    return
+    console.warn(`[useTabs] Onglet ${tabId} introuvable`);
+    return;
   }
 
-  state.activeTabId = tabId
+  state.activeTabId = tabId;
 
   // Ajouter à l'historique (en évitant les doublons consécutifs)
   if (state.tabHistory[state.tabHistory.length - 1] !== tabId) {
-    state.tabHistory.push(tabId)
+    state.tabHistory.push(tabId);
 
     // Limiter la taille de l'historique
     if (state.tabHistory.length > 20) {
-      state.tabHistory.shift()
+      state.tabHistory.shift();
     }
   }
 }
@@ -236,20 +243,21 @@ function switchTab(tabId: string) {
  * Onglet suivant (pour swipe gesture)
  */
 function nextTab() {
-  const currentIndex = state.tabs.findIndex((t) => t.id === state.activeTabId)
-  const nextIndex = (currentIndex + 1) % state.tabs.length
-  const nextTabObj = state.tabs[nextIndex]
-  if (nextTabObj) switchTab(nextTabObj.id)
+  const currentIndex = state.tabs.findIndex((t) => t.id === state.activeTabId);
+  const nextIndex = (currentIndex + 1) % state.tabs.length;
+  const nextTabObj = state.tabs[nextIndex];
+  if (nextTabObj) switchTab(nextTabObj.id);
 }
 
 /**
  * Onglet précédent (pour swipe gesture)
  */
 function previousTab() {
-  const currentIndex = state.tabs.findIndex((t) => t.id === state.activeTabId)
-  const previousIndex = currentIndex === 0 ? state.tabs.length - 1 : currentIndex - 1
-  const prevTabObj = state.tabs[previousIndex]
-  if (prevTabObj) switchTab(prevTabObj.id)
+  const currentIndex = state.tabs.findIndex((t) => t.id === state.activeTabId);
+  const previousIndex =
+    currentIndex === 0 ? state.tabs.length - 1 : currentIndex - 1;
+  const prevTabObj = state.tabs[previousIndex];
+  if (prevTabObj) switchTab(prevTabObj.id);
 }
 
 /**
@@ -257,56 +265,63 @@ function previousTab() {
  * Les renderer tabs sont automatiquement créés/supprimés selon l'état online
  */
 function syncWithRenderers(renderers: RendererSummary[]) {
-  const onlineRenderers = renderers.filter((r) => r.online)
+  const onlineRenderers = renderers.filter((r) => r.online);
 
   // Extraire les tabs renderer actuels
-  const currentRendererTabs = state.tabs.filter((t) => t.type === 'renderer')
+  const currentRendererTabs = state.tabs.filter((t) => t.type === "renderer");
 
   // IDs des renderers online
-  const onlineRendererIds = new Set(onlineRenderers.map((r) => `renderer-${r.id}`))
+  const onlineRendererIds = new Set(
+    onlineRenderers.map((r) => `renderer-${r.id}`),
+  );
 
   // Supprimer les tabs des renderers qui ne sont plus online
-  const renderersToRemove = currentRendererTabs.filter((t) => !onlineRendererIds.has(t.id))
+  const renderersToRemove = currentRendererTabs.filter(
+    (t) => !onlineRendererIds.has(t.id),
+  );
   renderersToRemove.forEach((tab) => {
-    const index = state.tabs.findIndex((t) => t.id === tab.id)
-    if (index !== -1) state.tabs.splice(index, 1)
-    state.tabHistory = state.tabHistory.filter((id) => id !== tab.id)
-  })
+    const index = state.tabs.findIndex((t) => t.id === tab.id);
+    if (index !== -1) state.tabs.splice(index, 1);
+    state.tabHistory = state.tabHistory.filter((id) => id !== tab.id);
+  });
 
   // Ajouter les nouveaux renderers online
-  const currentRendererIds = new Set(currentRendererTabs.map((t) => t.id))
+  const currentRendererIds = new Set(currentRendererTabs.map((t) => t.id));
   onlineRenderers.forEach((renderer) => {
-    const tabId = `renderer-${renderer.id}`
+    const tabId = `renderer-${renderer.id}`;
     if (!currentRendererIds.has(tabId)) {
       const newTab: Tab = {
         id: tabId,
-        type: 'renderer',
+        type: "renderer",
         title: truncateTitle(renderer.friendly_name),
         fullTitle: renderer.friendly_name,
         icon: Radio,
         metadata: { rendererId: renderer.id },
         closeable: false, // renderer tabs ne sont pas fermables manuellement
-      }
-      state.tabs.unshift(newTab) // Ajouter au début
+      };
+      state.tabs.unshift(newTab); // Ajouter au début
     }
-  })
+  });
 
   // Vérifier que l'onglet actif existe toujours
-  if (state.activeTabId && !state.tabs.find((t) => t.id === state.activeTabId)) {
+  if (
+    state.activeTabId &&
+    !state.tabs.find((t) => t.id === state.activeTabId)
+  ) {
     // Basculer vers le premier onglet disponible
-    const firstTab = state.tabs[0]
+    const firstTab = state.tabs[0];
     if (firstTab) {
-      state.activeTabId = firstTab.id
+      state.activeTabId = firstTab.id;
     } else {
-      state.activeTabId = ''
+      state.activeTabId = "";
     }
   }
 
   // Si aucun onglet actif et qu'il y a des onglets, sélectionner le premier
   if (!state.activeTabId && state.tabs.length > 0) {
-    const firstTab = state.tabs[0]
+    const firstTab = state.tabs[0];
     if (firstTab) {
-      state.activeTabId = firstTab.id
+      state.activeTabId = firstTab.id;
     }
   }
 }
@@ -315,15 +330,15 @@ function syncWithRenderers(renderers: RendererSummary[]) {
  * Ouvre un onglet server (manuel)
  */
 function openServer(server: MediaServerSummary | undefined) {
-  if (!server) return ''
+  if (!server) return "";
 
   return openTab({
-    type: 'server',
+    type: "server",
     title: server.friendly_name,
     icon: Server,
     metadata: { serverId: server.id },
     closeable: true,
-  })
+  });
 }
 
 /**
@@ -334,29 +349,45 @@ export function useTabs() {
   watch(
     () => [state.tabs, state.activeTabId, state.tabHistory],
     () => {
-      saveToLocalStorage()
+      saveToLocalStorage();
     },
     { deep: true },
-  )
+  );
 
   // Restaurer au montage (uniquement les server tabs)
   onMounted(() => {
     // Restaurer seulement si pas déjà fait
-    if (state.tabs.filter((t) => t.type === 'server').length === 0) {
-      restoreFromLocalStorage()
+    if (state.tabs.filter((t) => t.type === "server").length === 0) {
+      restoreFromLocalStorage();
     }
-  })
+  });
 
   // Détection de la largeur d'écran pour le mode compact
   // Mode compact sur les écrans < 900px (tablettes et mobiles)
-  const isNarrowScreen = useMediaQuery('(max-width: 900px)')
+  const isNarrowScreen = useMediaQuery("(max-width: 900px)");
+
+  // Watch activeTabId changes for debugging
+  watch(
+    () => state.activeTabId,
+    (newId, oldId) => {
+      if (newId !== oldId) {
+        const newTab = findTab(newId);
+        const oldTab = findTab(oldId);
+        console.log(
+          `[useTabs] activeTabId changed from ${oldId} (${oldTab?.fullTitle}) to ${newId} (${newTab?.fullTitle})`,
+        );
+      }
+    },
+  );
 
   // Computed properties
-  const activeTab = computed(() => findTab(state.activeTabId) || state.tabs[0] || null)
-  const hasMultipleTabs = computed(() => state.tabs.length > 1)
-  const canAddTab = computed(() => state.tabs.length < MAX_TABS)
-  const isEmpty = computed(() => state.tabs.length === 0)
-  const compactMode = computed(() => isNarrowScreen.value)
+  const activeTab = computed(
+    () => findTab(state.activeTabId) || state.tabs[0] || null,
+  );
+  const hasMultipleTabs = computed(() => state.tabs.length > 1);
+  const canAddTab = computed(() => state.tabs.length < MAX_TABS);
+  const isEmpty = computed(() => state.tabs.length === 0);
+  const compactMode = computed(() => isNarrowScreen.value);
 
   return {
     // State
@@ -378,5 +409,5 @@ export function useTabs() {
     previousTab,
     openServer,
     findTab,
-  }
+  };
 }

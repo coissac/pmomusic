@@ -30,8 +30,8 @@ use crate::music_renderer::openhome_renderer::OpenHomeRenderer;
 use crate::music_renderer::sleep_timer::SleepTimer;
 use crate::music_renderer::upnp_renderer::UpnpRenderer;
 use crate::music_renderer::watcher::{
-    WatchStrategy, WatchedState, compute_logical_playback_state, extract_track_metadata,
-    playback_position_equal, playback_state_equal,
+    WatchStrategy, WatchedState, extract_track_metadata, playback_position_equal,
+    playback_state_equal,
 };
 use crate::online::DeviceConnectionState;
 use crate::queue::{
@@ -541,22 +541,18 @@ impl MusicRenderer {
         }
 
         // Poll state every tick
+        // Note: Device-specific bugs (like Arylic/LinkPlay reporting STOPPED while playing)
+        // should be corrected in the backend's playback_state() method, not here.
         if let Some(raw_state) = raw_state {
-            let logical_state = compute_logical_playback_state(
-                &raw_state,
-                prev_position.as_ref(),
-                watched.position.as_ref(),
-            );
-
             let changed = watched
                 .state
                 .as_ref()
-                .map(|prev| !playback_state_equal(prev, &logical_state))
+                .map(|prev| !playback_state_equal(prev, &raw_state))
                 .unwrap_or(true);
 
             // Emit event only for non-transient states to reduce noise
-            if changed && !matches!(logical_state, PlaybackState::Transitioning) {
-                let state_clone = logical_state.clone();
+            if changed && !matches!(raw_state, PlaybackState::Transitioning) {
+                let state_clone = raw_state.clone();
                 drop(watched);
                 self.emit_event(RendererEvent::StateChanged {
                     id: self.id(),
@@ -572,7 +568,7 @@ impl MusicRenderer {
                     .expect("WatchedState mutex poisoned");
             }
 
-            watched.state = Some(logical_state);
+            watched.state = Some(raw_state);
         }
 
         // Handle volume/mute updates (polled every other tick)
@@ -1014,22 +1010,28 @@ impl MusicRenderer {
 
         // Pour les flux continus uniquement : calculer rel_time depuis track_start_time
         // Pour les fichiers normaux : garder les valeurs du backend
+        // IMPORTANT: Ne calculer le temps que si le lecteur est en PLAYING
         let is_stream = self.is_playing_a_stream();
         if is_stream {
-            if let Some(start_time) = self.track_start_time() {
-                if let Ok(elapsed) = start_time.elapsed() {
-                    let secs = elapsed.as_secs() as u32;
-                    let hours = secs / 3600;
-                    let minutes = (secs % 3600) / 60;
-                    let seconds = secs % 60;
-                    let new_rel_time = format!("{:02}:{:02}:{:02}", hours, minutes, seconds);
-                    tracing::debug!(
-                        "MusicRenderer [{}]: Stream - calculating rel_time from track_start_time: {} (elapsed={}s)",
-                        self.info.friendly_name(),
-                        new_rel_time,
-                        secs
-                    );
-                    position_info.rel_time = Some(new_rel_time);
+            // Vérifier que le lecteur est en lecture avant de calculer le temps écoulé
+            let is_playing = matches!(self.playback_state().ok(), Some(PlaybackState::Playing));
+
+            if is_playing {
+                if let Some(start_time) = self.track_start_time() {
+                    if let Ok(elapsed) = start_time.elapsed() {
+                        let secs = elapsed.as_secs() as u32;
+                        let hours = secs / 3600;
+                        let minutes = (secs % 3600) / 60;
+                        let seconds = secs % 60;
+                        let new_rel_time = format!("{:02}:{:02}:{:02}", hours, minutes, seconds);
+                        tracing::debug!(
+                            "MusicRenderer [{}]: Stream - calculating rel_time from track_start_time: {} (elapsed={}s)",
+                            self.info.friendly_name(),
+                            new_rel_time,
+                            secs
+                        );
+                        position_info.rel_time = Some(new_rel_time);
+                    }
                 }
             }
         }

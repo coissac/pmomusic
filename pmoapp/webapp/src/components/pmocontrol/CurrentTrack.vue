@@ -100,7 +100,14 @@ function formatTime(ms: number | null | undefined): string {
 }
 
 const currentTime = computed(() => formatTime(state.value?.position_ms));
-const totalTime = computed(() => formatTime(state.value?.duration_ms));
+const totalTime = computed(() => {
+    const duration = state.value?.duration_ms;
+    const transport = state.value?.transport_state;
+    console.log(
+        `[CurrentTrack] rendererId=${props.rendererId}, duration_ms=${duration}, transport=${transport}, title=${state.value?.current_track?.title}`,
+    );
+    return formatTime(duration);
+});
 
 const hasCover = computed(
     () => !!metadata.value?.album_art_uri && !imageError.value,

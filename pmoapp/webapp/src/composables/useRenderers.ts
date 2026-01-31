@@ -4,7 +4,7 @@
  * - Les snapshots complets proviennent de /renderers/{id}/full
  * - Les événements SSE ne servent qu'à déclencher un refetch.
  */
-import { ref, reactive, computed, type Ref } from "vue";
+import { ref, reactive, computed, toRaw, type Ref } from "vue";
 import { api } from "../services/pmocontrol/api";
 import { sse } from "../services/pmocontrol/sse";
 import type {
@@ -109,6 +109,9 @@ function ensureSSEConnected() {
     snapshotState.lastEventAt.set(rendererId, timestamp);
 
     const snapshot = snapshotState.snapshots.get(rendererId);
+    console.log(
+      `[SSE Event] type=${event.type}, rendererId=${rendererId}, snapshot exists=${!!snapshot}, transport=${snapshot?.state?.transport_state}`,
+    );
 
     // Si pas de snapshot, on doit fetch
     if (!snapshot) {
@@ -123,6 +126,11 @@ function ensureSSEConnected() {
         break;
 
       case "position_changed":
+        // Debug: log pour tracer les oscillations
+        console.log(
+          `[position_changed] renderer=${rendererId}, duration=${event.track_duration}`,
+        );
+
         // Mettre à jour position et durée de manière atomique pour garantir la cohérence
         // Le backend envoie TOUJOURS les deux valeurs (même si null)
 
@@ -157,9 +165,22 @@ function ensureSSEConnected() {
           snapshot.state.duration_ms = null;
         }
 
-        // Important: Trigger reactivity en réassignant l'objet complet
-        // Cela garantit que position_ms et duration_ms sont mis à jour atomiquement
-        snapshotState.snapshots.set(rendererId, { ...snapshot });
+        // Important: Trigger reactivity en réassignant l'objet complet avec deep copy
+        // Le shallow copy ne suffit pas car snapshot.state est partagé entre renderers
+        // Il faut copier state aussi pour éviter que les modifications d'un renderer
+        // n'affectent les autres renderers
+        // IMPORTANT: Utiliser toRaw() pour obtenir l'objet brut non-réactif avant de copier
+        // sinon Vue copie les getters réactifs qui continuent à pointer vers l'objet d'origine
+        const rawState = toRaw(snapshot.state);
+        const newState = { ...rawState };
+        const newSnapshot = {
+          ...snapshot,
+          state: newState,
+        };
+        console.log(
+          `[position_changed] Setting new snapshot for ${rendererId}, state ref=${Object.prototype.toString.call(newState)}, transport=${newState.transport_state}`,
+        );
+        snapshotState.snapshots.set(rendererId, newSnapshot);
         break;
 
       case "volume_changed":
@@ -183,8 +204,11 @@ function ensureSSEConnected() {
         snapshot.state.current_track.artist = event.artist;
         snapshot.state.current_track.album = event.album;
         snapshot.state.current_track.album_art_uri = event.album_art_uri;
-        // Important: Trigger reactivity en réassignant l'objet complet
-        snapshotState.snapshots.set(rendererId, { ...snapshot });
+        // Important: Trigger reactivity en réassignant l'objet complet avec deep copy
+        snapshotState.snapshots.set(rendererId, {
+          ...snapshot,
+          state: { ...snapshot.state },
+        });
         break;
 
       case "queue_updated":

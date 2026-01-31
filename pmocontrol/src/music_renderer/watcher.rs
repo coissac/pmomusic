@@ -117,60 +117,6 @@ pub fn playback_position_equal(a: &PlaybackPositionInfo, b: &PlaybackPositionInf
         && a.track_uri == b.track_uri
 }
 
-/// Compute a logical playback state by combining the raw AVTransport state
-/// with previous and current position information.
-///
-/// This is designed to compensate for buggy LinkPlay/Arylic devices that
-/// report:
-///   - STOPPED while the time actually advances,
-///   - NO_MEDIA_PRESENT while track duration is known.
-pub fn compute_logical_playback_state(
-    raw: &PlaybackState,
-    prev_position: Option<&PlaybackPositionInfo>,
-    current_position: Option<&PlaybackPositionInfo>,
-) -> PlaybackState {
-    // Rule 1: Arylic / LinkPlay sometimes report STOPPED while the stream is
-    // actually playing. If we detect that the relative time advances between
-    // two polls, we treat this as Playing.
-    if let PlaybackState::Stopped = raw {
-        if let (Some(prev), Some(curr)) = (prev_position, current_position) {
-            if let (Some(prev_rel), Some(curr_rel)) = (
-                parse_optional_hms_to_secs(&prev.rel_time),
-                parse_optional_hms_to_secs(&curr.rel_time),
-            ) {
-                if curr_rel > prev_rel {
-                    let delta = curr_rel - prev_rel;
-                    // Our poll loop runs every 500ms; accept small jitter in the delta.
-                    if delta <= 5 {
-                        return PlaybackState::Playing;
-                    }
-                }
-            }
-        }
-    }
-
-    // Rule 2: Some devices report NO_MEDIA_PRESENT while exposing a non-zero
-    // track duration. In practice this behaves like a stopped transport with
-    // a loaded track.
-    if let PlaybackState::NoMedia = raw {
-        let duration_secs = current_position
-            .and_then(|p| parse_optional_hms_to_secs(&p.track_duration))
-            .or_else(|| prev_position.and_then(|p| parse_optional_hms_to_secs(&p.track_duration)));
-
-        if matches!(duration_secs, Some(d) if d > 0) {
-            return PlaybackState::Stopped;
-        }
-    }
-
-    // Fallback: keep the raw (already normalized) state.
-    raw.clone()
-}
-
-/// Parse an optional HH:MM:SS time string to seconds.
-fn parse_optional_hms_to_secs(value: &Option<String>) -> Option<u64> {
-    value.as_ref().and_then(|s| parse_hms_to_secs(s))
-}
-
 /// Parse "HH:MM:SS" style time strings to seconds.
 ///
 /// Returns None for empty or sentinel values such as "NOT_IMPLEMENTED" or "-:--:--".
