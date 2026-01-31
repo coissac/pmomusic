@@ -195,81 +195,98 @@ impl OpenHomeQueue {
     }
 
     /// Insère ou met à jour les métadonnées dans le cache.
-    /// RÈGLE: Pour une même chanson (même titre ET même artiste), la durée ne peut jamais diminuer.
-    /// Si le titre ou l'artiste change, c'est une nouvelle chanson donc toute durée est acceptée.
+    /// RÈGLE: Pour les streams continus, pour une même chanson (même titre ET même artiste),
+    /// la durée ne peut jamais diminuer. Si le titre ou l'artiste change, c'est une nouvelle
+    /// chanson donc toute durée est acceptée.
+    /// Pour les fichiers normaux (non-streams), les métadonnées sont acceptées telles quelles.
     /// Cette fonction est le SEUL point d'entrée pour modifier le cache.
     fn cache_metadata(&self, track_id: u32, new_metadata: Option<crate::model::TrackMetadata>) {
         let mut cache = self.metadata_cache.lock().unwrap();
 
         // Vérifier s'il y a déjà des métadonnées en cache
         if let Some(cached_meta) = cache.get(&track_id) {
-            // Vérifier si c'est la même chanson (titre ET artiste identiques)
-            let same_title = cached_meta.as_ref().and_then(|m| m.title.as_ref())
-                == new_metadata.as_ref().and_then(|m| m.title.as_ref());
-            let same_artist = cached_meta.as_ref().and_then(|m| m.artist.as_ref())
-                == new_metadata.as_ref().and_then(|m| m.artist.as_ref());
+            // Vérifier si c'est un stream continu
+            let is_stream = new_metadata
+                .as_ref()
+                .map(|m| m.is_continuous_stream)
+                .unwrap_or(false);
 
-            let same_track = same_title && same_artist;
+            if is_stream {
+                // Pour les streams: vérifier si c'est la même chanson (titre ET artiste identiques)
+                let same_title = cached_meta.as_ref().and_then(|m| m.title.as_ref())
+                    == new_metadata.as_ref().and_then(|m| m.title.as_ref());
+                let same_artist = cached_meta.as_ref().and_then(|m| m.artist.as_ref())
+                    == new_metadata.as_ref().and_then(|m| m.artist.as_ref());
 
-            if same_track {
-                // Même chanson: vérifier que la durée n'a pas diminué
-                let should_update = match (
-                    cached_meta.as_ref().and_then(|m| m.duration.as_ref()),
-                    new_metadata.as_ref().and_then(|m| m.duration.as_ref()),
-                ) {
-                    (Some(cached_dur), Some(new_dur)) => {
-                        // Parser les durées (format HH:MM:SS)
-                        let parse_duration = |dur: &str| -> Option<u32> {
-                            let parts: Vec<&str> = dur.split(':').collect();
-                            if parts.len() == 3 {
-                                let h: u32 = parts[0].parse().ok()?;
-                                let m: u32 = parts[1].parse().ok()?;
-                                let s: u32 = parts[2].parse().ok()?;
-                                Some(h * 3600 + m * 60 + s)
-                            } else {
-                                None
-                            }
-                        };
+                let same_track = same_title && same_artist;
 
-                        if let (Some(cached_secs), Some(new_secs)) =
-                            (parse_duration(cached_dur), parse_duration(new_dur))
-                        {
-                            if new_secs < cached_secs {
-                                // Durée a diminué pour la même chanson: refuser
-                                tracing::trace!(
-                                    "OpenHome cache_metadata: track_id={}, REJECTING update (same track, duration decreased): {} -> {}",
-                                    track_id,
-                                    cached_dur,
-                                    new_dur
-                                );
-                                false
-                            } else {
-                                // Durée a augmenté ou est égale: accepter
-                                if new_secs > cached_secs {
-                                    tracing::debug!(
-                                        "OpenHome cache_metadata: track_id={}, same track, duration increased: {} -> {}",
+                if same_track {
+                    // Même chanson: vérifier que la durée n'a pas diminué
+                    let should_update = match (
+                        cached_meta.as_ref().and_then(|m| m.duration.as_ref()),
+                        new_metadata.as_ref().and_then(|m| m.duration.as_ref()),
+                    ) {
+                        (Some(cached_dur), Some(new_dur)) => {
+                            // Parser les durées (format HH:MM:SS)
+                            let parse_duration = |dur: &str| -> Option<u32> {
+                                let parts: Vec<&str> = dur.split(':').collect();
+                                if parts.len() == 3 {
+                                    let h: u32 = parts[0].parse().ok()?;
+                                    let m: u32 = parts[1].parse().ok()?;
+                                    let s: u32 = parts[2].parse().ok()?;
+                                    Some(h * 3600 + m * 60 + s)
+                                } else {
+                                    None
+                                }
+                            };
+
+                            if let (Some(cached_secs), Some(new_secs)) =
+                                (parse_duration(cached_dur), parse_duration(new_dur))
+                            {
+                                if new_secs < cached_secs {
+                                    // Durée a diminué pour la même chanson: refuser
+                                    tracing::trace!(
+                                        "OpenHome cache_metadata: track_id={}, REJECTING update (same track, duration decreased): {} -> {}",
                                         track_id,
                                         cached_dur,
                                         new_dur
                                     );
+                                    false
+                                } else {
+                                    // Durée a augmenté ou est égale: accepter
+                                    if new_secs > cached_secs {
+                                        tracing::debug!(
+                                            "OpenHome cache_metadata: track_id={}, same track, duration increased: {} -> {}",
+                                            track_id,
+                                            cached_dur,
+                                            new_dur
+                                        );
+                                    }
+                                    true
                                 }
+                            } else {
+                                // Impossible de parser: accepter par défaut
                                 true
                             }
-                        } else {
-                            // Impossible de parser: accepter par défaut
-                            true
                         }
-                    }
-                    _ => true, // Pas de durée ou une seule des deux: accepter
-                };
+                        _ => true, // Pas de durée ou une seule des deux: accepter
+                    };
 
-                if should_update {
+                    if should_update {
+                        cache.insert(track_id, new_metadata);
+                    }
+                } else {
+                    // Chanson différente sur un stream: accepter sans vérification
+                    tracing::debug!(
+                        "OpenHome cache_metadata: track_id={}, different stream track (title or artist changed), accepting update",
+                        track_id
+                    );
                     cache.insert(track_id, new_metadata);
                 }
             } else {
-                // Chanson différente: accepter sans vérification
-                tracing::debug!(
-                    "OpenHome cache_metadata: track_id={}, different track (title or artist changed), accepting update",
+                // Fichier normal (non-stream): accepter toute mise à jour
+                tracing::trace!(
+                    "OpenHome cache_metadata: track_id={}, non-stream file, accepting update",
                     track_id
                 );
                 cache.insert(track_id, new_metadata);
@@ -277,9 +294,10 @@ impl OpenHomeQueue {
         } else {
             // Pas dans le cache: insérer directement
             tracing::trace!(
-                "OpenHome cache_metadata: track_id={}, inserting first time, duration={:?}",
+                "OpenHome cache_metadata: track_id={}, inserting first time, duration={:?}, is_stream={:?}",
                 track_id,
-                new_metadata.as_ref().and_then(|m| m.duration.as_ref())
+                new_metadata.as_ref().and_then(|m| m.duration.as_ref()),
+                new_metadata.as_ref().map(|m| m.is_continuous_stream)
             );
             cache.insert(track_id, new_metadata);
         }

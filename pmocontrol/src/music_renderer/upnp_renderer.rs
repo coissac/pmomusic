@@ -470,7 +470,7 @@ impl PlaybackPosition for UpnpRenderer {
         let raw: PositionInfo = avt.get_position_info(0)?;
 
         tracing::trace!(
-            "GetPositionInfo returned: track_duration={:?}, rel_time={:?}",
+            "UPnP GetPositionInfo returned: track_duration={:?}, rel_time={:?}",
             raw.track_duration,
             raw.rel_time
         );
@@ -484,13 +484,40 @@ impl PlaybackPosition for UpnpRenderer {
             }
         });
 
-        // duration=00:00:00 means stream (no duration) - don't fallback to cached DIDL
         let track_duration = normalized_duration;
 
+        // Récupérer les métadonnées depuis la queue (avec protection contre diminution de durée)
+        // plutôt que depuis GetPositionInfo qui peut retourner des métadonnées obsolètes
+        let mut track_metadata_xml = None;
+        let mut track_uri = raw.track_uri.clone();
+
+        let mut queue_guard = self.queue.lock().unwrap();
+
+        // Récupérer l'item courant de la queue
+        // Normalement current_index est toujours Some() si la queue n'est pas vide (règle métier)
+        let queue_item = queue_guard.peek_current().ok().flatten();
+
+        if let Some((current_item, _)) = queue_item {
+            track_uri = Some(current_item.uri.clone());
+
+            // Build DIDL metadata XML from cached/protected TrackMetadata
+            if let Some(ref metadata) = current_item.metadata {
+                track_metadata_xml = Some(
+                    crate::music_renderer::musicrenderer::build_didl_lite_metadata(
+                        metadata,
+                        &current_item.uri,
+                        &current_item.protocol_info,
+                    ),
+                );
+            }
+        }
+        drop(queue_guard);
+
         tracing::trace!(
-            "Final PlaybackPositionInfo: track_duration={:?}, rel_time={:?}",
+            "UPnP playback_position: track_duration={:?}, rel_time={:?}, using_queue_metadata={}",
             track_duration,
-            raw.rel_time
+            raw.rel_time,
+            track_metadata_xml.is_some()
         );
 
         Ok(PlaybackPositionInfo {
@@ -498,8 +525,8 @@ impl PlaybackPosition for UpnpRenderer {
             rel_time: raw.rel_time,
             abs_time: raw.abs_time,
             track_duration,
-            track_metadata: raw.track_metadata,
-            track_uri: raw.track_uri,
+            track_metadata: track_metadata_xml,
+            track_uri,
         })
     }
 }

@@ -54,6 +54,182 @@ impl InternalQueue {
     pub fn items(&self) -> &[PlaybackItem] {
         &self.items
     }
+
+    /// Assure l'invariant : si length > 0 et current_index est None, alors current_index = Some(0)
+    fn ensure_current_index_invariant(&mut self) {
+        if !self.items.is_empty() && self.current_index.is_none() {
+            self.current_index = Some(0);
+        }
+    }
+
+    /// Vérifie si une durée a diminué (format HH:MM:SS).
+    /// Retourne true si new_duration < old_duration.
+    fn duration_decreased(old_duration: &str, new_duration: &str) -> bool {
+        let parse_duration = |dur: &str| -> Option<u32> {
+            let parts: Vec<&str> = dur.split(':').collect();
+            if parts.len() == 3 {
+                let h: u32 = parts[0].parse().ok()?;
+                let m: u32 = parts[1].parse().ok()?;
+                let s: u32 = parts[2].parse().ok()?;
+                Some(h * 3600 + m * 60 + s)
+            } else {
+                None
+            }
+        };
+
+        if let (Some(old_secs), Some(new_secs)) =
+            (parse_duration(old_duration), parse_duration(new_duration))
+        {
+            new_secs < old_secs
+        } else {
+            false // Impossible de parser: considérer que ça n'a pas diminué
+        }
+    }
+
+    /// Protège les durées des streams contre la diminution.
+    /// Pour chaque item de `new_items`, si c'est un stream avec la même URI qu'un item existant,
+    /// et que c'est la même chanson (même titre/artiste), ne met à jour la durée que si elle augmente.
+    fn protect_stream_durations(&self, mut new_items: Vec<PlaybackItem>) -> Vec<PlaybackItem> {
+        use std::collections::HashMap;
+
+        // Construire une HashMap URI -> (durée, titre, artiste) pour les streams de l'ancienne queue
+        let old_stream_metadata: HashMap<String, (String, Option<String>, Option<String>)> = self
+            .items
+            .iter()
+            .filter_map(|item| {
+                if let Some(ref meta) = item.metadata {
+                    if meta.is_continuous_stream {
+                        if let Some(ref duration) = meta.duration {
+                            return Some((
+                                item.uri.clone(),
+                                (duration.clone(), meta.title.clone(), meta.artist.clone()),
+                            ));
+                        }
+                    }
+                }
+                None
+            })
+            .collect();
+
+        // Mettre à jour les durées des nouveaux items streams en protégeant contre la diminution
+        for item in &mut new_items {
+            if let (Some(new_meta), Some((old_duration, old_title, old_artist))) =
+                (&mut item.metadata, old_stream_metadata.get(&item.uri))
+            {
+                if new_meta.is_continuous_stream {
+                    // Vérifier si c'est la même chanson
+                    let same_track = new_meta.title == *old_title && new_meta.artist == *old_artist;
+
+                    if same_track {
+                        // Même chanson: protéger contre la diminution de durée
+                        if let Some(ref new_duration) = new_meta.duration {
+                            if Self::duration_decreased(old_duration, new_duration) {
+                                // Garder l'ancienne durée
+                                tracing::trace!(
+                                    "InternalQueue protect_stream_durations: uri={}, keeping old duration (decreased): {} vs {}",
+                                    item.uri,
+                                    old_duration,
+                                    new_duration
+                                );
+                                new_meta.duration = Some(old_duration.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        new_items
+    }
+
+    /// Fusionne les métadonnées en protégeant les streams contre la diminution de durée.
+    /// Pour les streams continus, si c'est la même chanson (même titre ET même artiste ET même URI),
+    /// la durée ne peut jamais diminuer.
+    fn merge_metadata_protecting_streams(
+        old_metadata: &Option<crate::model::TrackMetadata>,
+        new_metadata: &Option<crate::model::TrackMetadata>,
+        uri: &str,
+    ) -> Option<crate::model::TrackMetadata> {
+        match (old_metadata, new_metadata) {
+            (Some(old_meta), Some(new_meta)) => {
+                // Vérifier si c'est un stream continu
+                if new_meta.is_continuous_stream {
+                    // Vérifier si c'est la même chanson (titre ET artiste identiques)
+                    let same_title = old_meta.title == new_meta.title;
+                    let same_artist = old_meta.artist == new_meta.artist;
+                    let same_track = same_title && same_artist;
+
+                    if same_track {
+                        // Même chanson sur un stream: vérifier que la durée n'a pas diminué
+                        let should_update = match (&old_meta.duration, &new_meta.duration) {
+                            (Some(old_dur), Some(new_dur)) => {
+                                // Parser les durées (format HH:MM:SS)
+                                let parse_duration = |dur: &str| -> Option<u32> {
+                                    let parts: Vec<&str> = dur.split(':').collect();
+                                    if parts.len() == 3 {
+                                        let h: u32 = parts[0].parse().ok()?;
+                                        let m: u32 = parts[1].parse().ok()?;
+                                        let s: u32 = parts[2].parse().ok()?;
+                                        Some(h * 3600 + m * 60 + s)
+                                    } else {
+                                        None
+                                    }
+                                };
+
+                                if let (Some(old_secs), Some(new_secs)) =
+                                    (parse_duration(old_dur), parse_duration(new_dur))
+                                {
+                                    if new_secs < old_secs {
+                                        // Durée a diminué: garder l'ancienne
+                                        tracing::trace!(
+                                            "InternalQueue merge_metadata: uri={}, REJECTING update (same stream track, duration decreased): {} -> {}",
+                                            uri,
+                                            old_dur,
+                                            new_dur
+                                        );
+                                        false
+                                    } else {
+                                        // Durée a augmenté ou est égale: accepter
+                                        if new_secs > old_secs {
+                                            tracing::debug!(
+                                                "InternalQueue merge_metadata: uri={}, same stream track, duration increased: {} -> {}",
+                                                uri,
+                                                old_dur,
+                                                new_dur
+                                            );
+                                        }
+                                        true
+                                    }
+                                } else {
+                                    // Impossible de parser: accepter par défaut
+                                    true
+                                }
+                            }
+                            _ => true, // Pas de durée ou une seule des deux: accepter
+                        };
+
+                        if should_update {
+                            Some(new_meta.clone())
+                        } else {
+                            // Garder l'ancienne durée
+                            Some(old_meta.clone())
+                        }
+                    } else {
+                        // Chanson différente sur un stream: accepter les nouvelles métadonnées
+                        tracing::debug!(
+                            "InternalQueue merge_metadata: uri={}, different stream track (title or artist changed), accepting update",
+                            uri
+                        );
+                        Some(new_meta.clone())
+                    }
+                } else {
+                    // Fichier normal (non-stream): accepter les nouvelles métadonnées
+                    Some(new_meta.clone())
+                }
+            }
+            (_, new_meta) => new_meta.clone(), // Pas d'anciennes métadonnées: utiliser les nouvelles
+        }
+    }
 }
 
 impl QueueBackend for InternalQueue {
@@ -128,6 +304,7 @@ impl QueueBackend for InternalQueue {
     ) -> Result<(), ControlPointError> {
         self.items = items;
         self.current_index = current_index.filter(|&i| i < self.items.len());
+        self.ensure_current_index_invariant();
         Ok(())
     }
 
@@ -138,6 +315,9 @@ impl QueueBackend for InternalQueue {
             return self.replace_queue(Vec::new(), None);
         }
 
+        // Protéger les durées des streams contre la diminution
+        let updated_items = self.protect_stream_durations(items);
+
         // Récupérer l'item actuel
         let current = self.current_index.and_then(|idx| {
             self.items
@@ -147,11 +327,11 @@ impl QueueBackend for InternalQueue {
 
         if let Some((_current_idx, current_uri, current_didl_id)) = current {
             // Chercher l'item actuel dans la nouvelle liste (par URI d'abord, puis par didl_id)
-            let new_idx = items
+            let new_idx = updated_items
                 .iter()
                 .position(|item| item.uri == current_uri)
                 .or_else(|| {
-                    items
+                    updated_items
                         .iter()
                         .position(|item| item.didl_id == current_didl_id)
                 });
@@ -164,7 +344,7 @@ impl QueueBackend for InternalQueue {
                     new_idx,
                     "sync_queue: current item found in new playlist"
                 );
-                self.replace_queue(items, Some(new_idx))
+                self.replace_queue(updated_items, Some(new_idx))
             } else {
                 // Item pas trouvé - cela ne devrait pas arriver si la playlist n'a pas changé
                 // Loguer pour diagnostic
@@ -172,18 +352,18 @@ impl QueueBackend for InternalQueue {
                     renderer = self.renderer_id.0.as_str(),
                     current_uri = current_uri.as_str(),
                     current_didl_id = current_didl_id.as_str(),
-                    new_items_count = items.len(),
+                    new_items_count = updated_items.len(),
                     "sync_queue: current item NOT found in new playlist, preserving as first item"
                 );
                 let current_item = self.items[self.current_index.unwrap()].clone();
-                let mut new_items = Vec::with_capacity(items.len() + 1);
+                let mut new_items = Vec::with_capacity(updated_items.len() + 1);
                 new_items.push(current_item);
-                new_items.extend(items);
+                new_items.extend(updated_items);
                 self.replace_queue(new_items, Some(0))
             }
         } else {
             // Pas d'item actuel
-            self.replace_queue(items, None)
+            self.replace_queue(updated_items, None)
         }
     }
 
@@ -194,9 +374,12 @@ impl QueueBackend for InternalQueue {
     ) -> Result<(), ControlPointError> {
         use crate::queue::EnqueueMode;
 
+        // Protéger les durées des streams contre la diminution
+        let protected_items = self.protect_stream_durations(items);
+
         match mode {
             EnqueueMode::AppendToEnd => {
-                self.items.extend(items);
+                self.items.extend(protected_items);
             }
             EnqueueMode::InsertAfterCurrent => {
                 let insert_pos = self
@@ -204,15 +387,17 @@ impl QueueBackend for InternalQueue {
                     .map(|i| (i + 1).min(self.items.len()))
                     .unwrap_or(0);
 
-                for (offset, item) in items.into_iter().enumerate() {
+                for (offset, item) in protected_items.into_iter().enumerate() {
                     self.items.insert(insert_pos + offset, item);
                 }
             }
             EnqueueMode::ReplaceAll => {
-                self.items = items;
+                self.items = protected_items;
                 self.current_index = None;
             }
         }
+
+        self.ensure_current_index_invariant();
         Ok(())
     }
 
@@ -310,13 +495,10 @@ impl QueueBackend for InternalQueue {
     }
 
     fn append_or_init_index(&mut self, items: Vec<PlaybackItem>) -> Result<(), ControlPointError> {
-        let was_empty = self.items.is_empty();
-        self.items.extend(items);
-
-        if was_empty && !self.items.is_empty() {
-            self.current_index = Some(0);
-        }
-
+        // Protéger les durées des streams contre la diminution
+        let protected_items = self.protect_stream_durations(items);
+        self.items.extend(protected_items);
+        self.ensure_current_index_invariant();
         Ok(())
     }
 
