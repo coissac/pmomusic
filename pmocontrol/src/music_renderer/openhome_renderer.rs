@@ -1,4 +1,5 @@
 use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
 
 use crate::DeviceIdentity;
 use crate::music_renderer::capabilities::{
@@ -22,6 +23,27 @@ use crate::upnp_clients::{
 };
 use tracing::debug;
 
+/// Cache for playback position to avoid redundant SOAP calls
+#[derive(Debug)]
+struct PositionCache {
+    /// Last cached position info
+    last_position: Option<PlaybackPositionInfo>,
+    /// Timestamp of last cache update
+    last_update: Option<SystemTime>,
+    /// Number of calls in the last second (for warning detection)
+    calls_in_last_second: Vec<SystemTime>,
+}
+
+impl PositionCache {
+    fn new() -> Self {
+        Self {
+            last_position: None,
+            last_update: None,
+            calls_in_last_second: Vec::new(),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct OpenHomeRenderer {
     playlist: Option<OhPlaylistClient>,
@@ -36,6 +58,8 @@ pub struct OpenHomeRenderer {
     continuous_stream: Arc<Mutex<bool>>,
     /// Cached current track URI to detect track changes
     current_track_uri: Arc<Mutex<Option<String>>>,
+    /// Position cache to avoid redundant SOAP calls (OpenHome has second-precision only)
+    position_cache: Arc<Mutex<PositionCache>>,
 }
 
 impl OpenHomeRenderer {
@@ -58,6 +82,7 @@ impl OpenHomeRenderer {
             queue,
             continuous_stream: Arc::new(Mutex::new(false)),
             current_track_uri: Arc::new(Mutex::new(None)),
+            position_cache: Arc::new(Mutex::new(PositionCache::new())),
         }
     }
 
@@ -307,6 +332,44 @@ impl PlaybackStatus for OpenHomeRenderer {
 
 impl PlaybackPosition for OpenHomeRenderer {
     fn playback_position(&self) -> Result<PlaybackPositionInfo, ControlPointError> {
+        let now = SystemTime::now();
+
+        // Check cache first
+        {
+            let mut cache = self.position_cache.lock().unwrap();
+
+            // Track calls for warning detection
+            cache.calls_in_last_second.push(now);
+            // Keep only calls from last second
+            cache.calls_in_last_second.retain(|t| {
+                now.duration_since(*t)
+                    .map(|d| d.as_millis() < 1000)
+                    .unwrap_or(false)
+            });
+
+            // Warn if called more than 3 times in last second
+            if cache.calls_in_last_second.len() > 3 {
+                tracing::warn!(
+                    "OpenHome playback_position() called {} times in last second - possible inefficiency",
+                    cache.calls_in_last_second.len()
+                );
+            }
+
+            // Return cached value if it's less than 900ms old (OpenHome has second precision)
+            if let (Some(last_pos), Some(last_update)) = (&cache.last_position, cache.last_update) {
+                if let Ok(elapsed) = now.duration_since(last_update) {
+                    if elapsed.as_millis() < 900 {
+                        tracing::trace!(
+                            "OpenHome playback_position: returning cached value (age={}ms)",
+                            elapsed.as_millis()
+                        );
+                        return Ok(last_pos.clone());
+                    }
+                }
+            }
+        }
+
+        // Cache miss or stale - fetch from backend
         let time_info = self.time_client_for("playback_position")?.position()?;
 
         let mut track_id = None;
@@ -379,14 +442,23 @@ impl PlaybackPosition for OpenHomeRenderer {
             rel_time
         );
 
-        Ok(PlaybackPositionInfo {
+        let position_info = PlaybackPositionInfo {
             track: track_id,
             rel_time: Some(rel_time),
             abs_time: None,
             track_duration,
             track_metadata: track_metadata_xml,
             track_uri,
-        })
+        };
+
+        // Update cache with fresh data
+        {
+            let mut cache = self.position_cache.lock().unwrap();
+            cache.last_position = Some(position_info.clone());
+            cache.last_update = Some(now);
+        }
+
+        Ok(position_info)
     }
 }
 
