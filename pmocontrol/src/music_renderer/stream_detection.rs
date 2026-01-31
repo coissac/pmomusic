@@ -3,9 +3,19 @@
 //! This module provides utilities to detect whether a given URL points to a continuous
 //! stream (like a radio station) or a bounded media file by analyzing HTTP headers.
 
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 use tracing::{debug, trace};
 use ureq::Agent;
+
+/// Cache global des résultats de détection de stream par URL
+static STREAM_CACHE: LazyLock<Arc<Mutex<HashMap<String, bool>>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
+
+/// Set des URLs actuellement en cours de vérification (pour éviter les doublons)
+static PENDING_CHECKS: LazyLock<Arc<Mutex<HashSet<String>>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(HashSet::new())));
 
 /// Default timeout for HTTP HEAD requests when detecting stream type
 const DEFAULT_STREAM_DETECTION_TIMEOUT_SECS: u64 = 3;
@@ -14,6 +24,10 @@ const DEFAULT_STREAM_DETECTION_TIMEOUT_SECS: u64 = 3;
 ///
 /// Cette fonction effectue une requête HTTP HEAD sur l'URL fournie et analyse les headers
 /// de la réponse pour déterminer si c'est un flux continu ou un fichier avec durée définie.
+///
+/// **Optimisation** : Les résultats sont mis en cache pour éviter de refaire la détection
+/// sur la même URL. Si une détection est déjà en cours pour cette URL, la fonction attend
+/// ou retourne false pour ne pas bloquer.
 ///
 /// # Critères de détection d'un flux continu :
 ///
@@ -37,20 +51,67 @@ pub fn is_continuous_stream_url(url: &str) -> bool {
         return true;
     }
 
-    // Make HTTP HEAD request to analyze headers
-    match check_stream_headers(url) {
-        Ok(is_stream) => {
-            trace!("Stream detection for {}: {}", url, is_stream);
-            is_stream
-        }
-        Err(e) => {
-            debug!(
-                "Failed to detect stream type for {}: {}, assuming non-stream",
-                url, e
-            );
-            false
+    // Check cache first
+    {
+        let cache = STREAM_CACHE.lock().unwrap();
+        if let Some(&cached_result) = cache.get(url) {
+            trace!("Cache hit for {}: is_stream={}", url, cached_result);
+            return cached_result;
         }
     }
+
+    // Check if already being verified
+    {
+        let mut pending = PENDING_CHECKS.lock().unwrap();
+        if pending.contains(url) {
+            debug!(
+                "Stream detection already in progress for {}, returning false temporarily",
+                url
+            );
+            return false;
+        }
+        // Mark as pending
+        pending.insert(url.to_string());
+    }
+
+    // Spawn background task for detection
+    let url_owned = url.to_string();
+    std::thread::spawn(move || {
+        let result = match check_stream_headers(&url_owned) {
+            Ok(is_stream) => {
+                trace!("Stream detection for {}: {}", url_owned, is_stream);
+                is_stream
+            }
+            Err(e) => {
+                debug!(
+                    "Failed to detect stream type for {}: {}, assuming non-stream",
+                    url_owned, e
+                );
+                false
+            }
+        };
+
+        // Store in cache
+        {
+            let mut cache = STREAM_CACHE.lock().unwrap();
+            cache.insert(url_owned.clone(), result);
+        }
+
+        // Remove from pending
+        {
+            let mut pending = PENDING_CHECKS.lock().unwrap();
+            pending.remove(&url_owned);
+        }
+
+        debug!(
+            "Stream detection completed for {}: is_stream={}",
+            url_owned, result
+        );
+    });
+
+    // Return false temporarily while detection is in progress
+    // The watcher will pick up the correct value on next poll
+    false
 }
 
 /// Vérifie si l'URL correspond à un pattern connu de streaming
