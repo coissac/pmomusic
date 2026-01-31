@@ -155,7 +155,27 @@ impl PlaybackStatus for LinkPlayRenderer {
 
 impl PlaybackPosition for LinkPlayRenderer {
     fn playback_position(&self) -> Result<PlaybackPositionInfo, ControlPointError> {
-        Ok(self.fetch_status()?.position_info())
+        let mut position_info = self.fetch_status()?.position_info();
+
+        // Use queue metadata instead of direct status metadata to benefit from duration protection
+        let mut queue_guard = self.queue.lock().unwrap();
+        let queue_item = queue_guard.peek_current().ok().flatten();
+
+        if let Some((current_item, _)) = queue_item {
+            if let Some(ref metadata) = current_item.metadata {
+                position_info.track_metadata = Some(
+                    crate::music_renderer::musicrenderer::build_didl_lite_metadata(
+                        metadata,
+                        &current_item.uri,
+                        &current_item.protocol_info,
+                    ),
+                );
+            }
+            position_info.track_uri = Some(current_item.uri.clone());
+        }
+        drop(queue_guard);
+
+        Ok(position_info)
     }
 }
 

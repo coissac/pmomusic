@@ -1685,8 +1685,10 @@ impl RendererFromMediaRendererInfo for MusicRendererBackend {
         if has_arylic && has_avtransport {
             let upnp_backend = UpnpRenderer::build_from_renderer_info(info)?;
             if let MusicRendererBackend::Upnp(upnp) = upnp_backend {
-                match ArylicTcpRenderer::build_from_renderer_info(info) {
-                    Ok(MusicRendererBackend::ArylicTcp(arylic)) => {
+                // Share the UPnP queue with Arylic so metadata is consistent
+                let shared_queue = upnp.queue().clone();
+                match ArylicTcpRenderer::with_shared_queue(info, shared_queue) {
+                    Ok(arylic) => {
                         return Ok(MusicRendererBackend::HybridUpnpArylic { upnp, arylic });
                     }
                     Err(err) => {
