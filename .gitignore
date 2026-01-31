@@ -23,7 +23,8 @@ xxx
 **/.pmomusic_audio/**
 /.pmomusic
 .DS_Store
-target
+/target
+**/target/
 /.pmomusic_covers
 /.pmomusic_audio/**
 C/src/soxr-0.1.3/Release/tests
