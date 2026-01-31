@@ -4,7 +4,7 @@ use crate::queue::{
 };
 use crate::{PlaybackItem, QueueSnapshot, RendererInfo};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum MusicQueue {
     Internal(InternalQueue),
     OpenHome(OpenHomeQueue),

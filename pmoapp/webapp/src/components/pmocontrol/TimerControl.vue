@@ -7,7 +7,7 @@
             :title="buttonTitle"
             ref="buttonRef"
         >
-            <Clock :size="24" />
+            <Clock :size="36" />
             <span
                 v-if="timerState?.active && remainingMinutes !== null"
                 class="timer-badge"

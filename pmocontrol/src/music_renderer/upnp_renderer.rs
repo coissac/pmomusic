@@ -25,6 +25,8 @@ pub struct UpnpRenderer {
     queue: Arc<Mutex<MusicQueue>>,
     /// Durée extraite du DIDL-Lite (fallback si l'ampli ne la retourne pas)
     cached_duration: Arc<Mutex<Option<String>>>,
+    /// Flag indicating if currently playing a continuous stream (radio without duration)
+    continuous_stream: Arc<Mutex<bool>>,
 }
 
 impl UpnpRenderer {
@@ -106,7 +108,13 @@ impl UpnpRenderer {
             has_avtransport_set_next,
             queue,
             cached_duration: Arc::new(Mutex::new(None)),
+            continuous_stream: Arc::new(Mutex::new(false)),
         }
+    }
+
+    /// Returns true if currently playing a continuous stream (radio without duration)
+    pub fn is_continuous_stream(&self) -> bool {
+        *self.continuous_stream.lock().unwrap()
     }
 }
 
@@ -157,6 +165,7 @@ impl RendererFromMediaRendererInfo for UpnpRenderer {
             has_avtransport_set_next: info.capabilities().has_avtransport_set_next(),
             queue,
             cached_duration: Arc::new(Mutex::new(None)),
+            continuous_stream: Arc::new(Mutex::new(false)),
         })
     }
 
@@ -206,15 +215,19 @@ impl QueueTransportControl for UpnpRenderer {
             )
         };
 
-        tracing::info!(
-            "play_from_queue DIDL metadata (first 800 chars):\n{}",
-            &metadata[..metadata.len().min(800)]
+        // Détecte si l'URL est un flux continu en interrogeant le serveur HTTP
+        let is_stream = crate::music_renderer::is_continuous_stream_url(&item.uri);
+        *self.continuous_stream.lock().unwrap() = is_stream;
+        tracing::debug!(
+            "UpnpRenderer play_from_queue: URI={}, continuous_stream={}",
+            item.uri,
+            is_stream
         );
 
-        // Parse et cache la durée du DIDL
+        // Parse et cache la durée du DIDL (fallback pour certains amplis)
         let duration = parse_didl_duration(&metadata);
         if let Some(ref dur) = duration {
-            tracing::info!("Caching duration from queue DIDL: {}", dur);
+            tracing::debug!("Caching duration from queue DIDL: {}", dur);
             *self.cached_duration.lock().unwrap() = Some(dur.clone());
         } else {
             tracing::debug!("No duration to cache from queue DIDL");
@@ -346,7 +359,6 @@ fn parse_didl_duration(didl: &str) -> Option<String> {
             let duration_offset = duration_start + "duration=\"".len();
             if let Some(duration_end) = tag_attrs[duration_offset..].find('"') {
                 let duration = &tag_attrs[duration_offset..duration_offset + duration_end];
-                tracing::info!("Extracted duration from DIDL: {}", duration);
                 return Some(duration.to_string());
             }
         }
@@ -369,15 +381,22 @@ impl TransportControl for UpnpRenderer {
             );
         }
 
-        // Parse le DIDL pour extraire la durée
+        // Détecte si l'URL est un flux continu en interrogeant le serveur HTTP
+        let is_stream = crate::music_renderer::is_continuous_stream_url(uri);
+        *self.continuous_stream.lock().unwrap() = is_stream;
+        tracing::debug!(
+            "UpnpRenderer play_uri: URI={}, continuous_stream={}",
+            uri,
+            is_stream
+        );
+
+        // Parse le DIDL pour extraire la durée (fallback pour certains amplis)
         let duration = parse_didl_duration(meta);
         if let Some(ref dur) = duration {
-            tracing::info!("Caching duration from DIDL: {}", dur);
+            tracing::debug!("Caching duration from DIDL: {}", dur);
             *self.cached_duration.lock().unwrap() = Some(dur.clone());
         } else {
-            tracing::warn!(
-                "No duration to cache from DIDL (this may be expected for streams without duration)"
-            );
+            tracing::debug!("No duration to cache from DIDL");
             *self.cached_duration.lock().unwrap() = None;
         }
 
@@ -451,7 +470,7 @@ impl PlaybackPosition for UpnpRenderer {
         let raw: PositionInfo = avt.get_position_info(0)?;
 
         tracing::trace!(
-            "GetPositionInfo returned: track_duration={:?}, rel_time={:?}",
+            "UPnP GetPositionInfo returned: track_duration={:?}, rel_time={:?}",
             raw.track_duration,
             raw.rel_time
         );
@@ -465,28 +484,40 @@ impl PlaybackPosition for UpnpRenderer {
             }
         });
 
-        // Si l'ampli ne retourne pas de durée, utilise la durée cachée du DIDL
-        let track_duration = if normalized_duration.is_none() {
-            let cached = self.cached_duration.lock().unwrap();
-            if let Some(ref duration) = *cached {
-                tracing::debug!("Using cached duration from DIDL as fallback: {}", duration);
-                Some(duration.clone())
-            } else {
-                tracing::warn!("No track_duration from renderer and no cached duration available!");
-                None
+        let track_duration = normalized_duration;
+
+        // Récupérer les métadonnées depuis la queue (avec protection contre diminution de durée)
+        // plutôt que depuis GetPositionInfo qui peut retourner des métadonnées obsolètes
+        let mut track_metadata_xml = None;
+        let mut track_uri = raw.track_uri.clone();
+
+        let mut queue_guard = self.queue.lock().unwrap();
+
+        // Récupérer l'item courant de la queue
+        // Normalement current_index est toujours Some() si la queue n'est pas vide (règle métier)
+        let queue_item = queue_guard.peek_current().ok().flatten();
+
+        if let Some((current_item, _)) = queue_item {
+            track_uri = Some(current_item.uri.clone());
+
+            // Build DIDL metadata XML from cached/protected TrackMetadata
+            if let Some(ref metadata) = current_item.metadata {
+                track_metadata_xml = Some(
+                    crate::music_renderer::musicrenderer::build_didl_lite_metadata(
+                        metadata,
+                        &current_item.uri,
+                        &current_item.protocol_info,
+                    ),
+                );
             }
-        } else {
-            tracing::debug!(
-                "Using track_duration from renderer: {:?}",
-                normalized_duration
-            );
-            normalized_duration
-        };
+        }
+        drop(queue_guard);
 
         tracing::trace!(
-            "Final PlaybackPositionInfo: track_duration={:?}, rel_time={:?}",
+            "UPnP playback_position: track_duration={:?}, rel_time={:?}, using_queue_metadata={}",
             track_duration,
-            raw.rel_time
+            raw.rel_time,
+            track_metadata_xml.is_some()
         );
 
         Ok(PlaybackPositionInfo {
@@ -494,8 +525,8 @@ impl PlaybackPosition for UpnpRenderer {
             rel_time: raw.rel_time,
             abs_time: raw.abs_time,
             track_duration,
-            track_metadata: raw.track_metadata,
-            track_uri: raw.track_uri,
+            track_metadata: track_metadata_xml,
+            track_uri,
         })
     }
 }

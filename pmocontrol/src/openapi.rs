@@ -221,6 +221,7 @@ pub struct FullRendererSnapshot {
     pub state: RendererStateView,
     pub queue: QueueSnapshotView,
     pub binding: Option<RendererBindingView>,
+    pub is_stream: bool,
 }
 
 // ============================================================================
@@ -300,6 +301,16 @@ pub struct SleepTimerState {
     pub duration_seconds: u32,
     /// Secondes restantes (None si timer inactif)
     pub remaining_seconds: Option<u32>,
+}
+
+/// État du flux (stream vs morceau délimité)
+#[cfg(feature = "pmoserver")]
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct StreamState {
+    /// true si lecture en cours d'un flux continu (radio), false sinon
+    pub is_stream: bool,
+    /// true si actuellement en lecture, false sinon
+    pub is_playing: bool,
 }
 
 /// Réponse générique de succès

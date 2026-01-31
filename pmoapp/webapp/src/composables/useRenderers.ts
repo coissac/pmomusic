@@ -4,7 +4,7 @@
  * - Les snapshots complets proviennent de /renderers/{id}/full
  * - Les événements SSE ne servent qu'à déclencher un refetch.
  */
-import { ref, reactive, computed, type Ref } from "vue";
+import { ref, reactive, computed, toRaw, type Ref } from "vue";
 import { api } from "../services/pmocontrol/api";
 import { sse } from "../services/pmocontrol/sse";
 import type {
@@ -109,6 +109,9 @@ function ensureSSEConnected() {
     snapshotState.lastEventAt.set(rendererId, timestamp);
 
     const snapshot = snapshotState.snapshots.get(rendererId);
+    console.log(
+      `[SSE Event] type=${event.type}, rendererId=${rendererId}, snapshot exists=${!!snapshot}, transport=${snapshot?.state?.transport_state}`,
+    );
 
     // Si pas de snapshot, on doit fetch
     if (!snapshot) {
@@ -123,6 +126,14 @@ function ensureSSEConnected() {
         break;
 
       case "position_changed":
+        // Debug: log pour tracer les oscillations
+        console.log(
+          `[position_changed] renderer=${rendererId}, duration=${event.track_duration}`,
+        );
+
+        // Mettre à jour position et durée de manière atomique pour garantir la cohérence
+        // Le backend envoie TOUJOURS les deux valeurs (même si null)
+
         // Convertir rel_time (HH:MM:SS) en millisecondes
         if (event.rel_time) {
           const parts = event.rel_time.split(":").map(Number);
@@ -133,7 +144,11 @@ function ensureSSEConnected() {
                 (parts[2] ?? 0)) *
               1000;
           }
+        } else {
+          // Si rel_time est null/undefined, mettre position à 0
+          snapshot.state.position_ms = 0;
         }
+
         // Convertir track_duration (HH:MM:SS) en millisecondes
         if (event.track_duration) {
           const parts = event.track_duration.split(":").map(Number);
@@ -144,7 +159,28 @@ function ensureSSEConnected() {
                 (parts[2] ?? 0)) *
               1000;
           }
+        } else {
+          // Si track_duration est null/undefined (flux continu sans durée),
+          // mettre duration_ms à null pour afficher "--:--"
+          snapshot.state.duration_ms = null;
         }
+
+        // Important: Trigger reactivity en réassignant l'objet complet avec deep copy
+        // Le shallow copy ne suffit pas car snapshot.state est partagé entre renderers
+        // Il faut copier state aussi pour éviter que les modifications d'un renderer
+        // n'affectent les autres renderers
+        // IMPORTANT: Utiliser toRaw() pour obtenir l'objet brut non-réactif avant de copier
+        // sinon Vue copie les getters réactifs qui continuent à pointer vers l'objet d'origine
+        const rawState = toRaw(snapshot.state);
+        const newState = { ...rawState };
+        const newSnapshot = {
+          ...snapshot,
+          state: newState,
+        };
+        console.log(
+          `[position_changed] Setting new snapshot for ${rendererId}, state ref=${Object.prototype.toString.call(newState)}, transport=${newState.transport_state}`,
+        );
+        snapshotState.snapshots.set(rendererId, newSnapshot);
         break;
 
       case "volume_changed":
@@ -168,6 +204,11 @@ function ensureSSEConnected() {
         snapshot.state.current_track.artist = event.artist;
         snapshot.state.current_track.album = event.album;
         snapshot.state.current_track.album_art_uri = event.album_art_uri;
+        // Important: Trigger reactivity en réassignant l'objet complet avec deep copy
+        snapshotState.snapshots.set(rendererId, {
+          ...snapshot,
+          state: { ...snapshot.state },
+        });
         break;
 
       case "queue_updated":
@@ -188,6 +229,10 @@ function ensureSSEConnected() {
           snapshot.binding = null;
           snapshot.state.attached_playlist = null;
         }
+        break;
+
+      case "stream_state_changed":
+        snapshot.is_stream = event.is_stream;
         break;
 
       case "timer_started":
@@ -467,6 +512,7 @@ export function useRenderer(rendererId: Ref<string>) {
   const state = computed(() => snapshot.value?.state ?? null);
   const queue = computed(() => snapshot.value?.queue ?? null);
   const binding = computed(() => snapshot.value?.binding ?? null);
+  const isStream = computed(() => snapshot.value?.is_stream ?? false);
 
   async function refresh(force = true) {
     await Promise.all([
@@ -481,6 +527,7 @@ export function useRenderer(rendererId: Ref<string>) {
     state,
     queue,
     binding,
+    isStream,
     refresh,
   };
 }

@@ -1,4 +1,5 @@
 use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
 
 use crate::DeviceIdentity;
 use crate::music_renderer::capabilities::{
@@ -22,6 +23,27 @@ use crate::upnp_clients::{
 };
 use tracing::debug;
 
+/// Cache for playback position to avoid redundant SOAP calls
+#[derive(Debug)]
+struct PositionCache {
+    /// Last cached position info
+    last_position: Option<PlaybackPositionInfo>,
+    /// Timestamp of last cache update
+    last_update: Option<SystemTime>,
+    /// Number of calls in the last second (for warning detection)
+    calls_in_last_second: Vec<SystemTime>,
+}
+
+impl PositionCache {
+    fn new() -> Self {
+        Self {
+            last_position: None,
+            last_update: None,
+            calls_in_last_second: Vec::new(),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct OpenHomeRenderer {
     playlist: Option<OhPlaylistClient>,
@@ -32,6 +54,12 @@ pub struct OpenHomeRenderer {
     #[allow(dead_code)]
     radio_client: Option<OhRadioClient>,
     queue: Arc<Mutex<MusicQueue>>,
+    /// Flag indicating if currently playing a continuous stream (radio without duration)
+    continuous_stream: Arc<Mutex<bool>>,
+    /// Cached current track URI to detect track changes
+    current_track_uri: Arc<Mutex<Option<String>>>,
+    /// Position cache to avoid redundant SOAP calls (OpenHome has second-precision only)
+    position_cache: Arc<Mutex<PositionCache>>,
 }
 
 impl OpenHomeRenderer {
@@ -52,7 +80,15 @@ impl OpenHomeRenderer {
             product_client,
             radio_client,
             queue,
+            continuous_stream: Arc::new(Mutex::new(false)),
+            current_track_uri: Arc::new(Mutex::new(None)),
+            position_cache: Arc::new(Mutex::new(PositionCache::new())),
         }
+    }
+
+    /// Returns true if currently playing a continuous stream (radio without duration)
+    pub fn is_continuous_stream(&self) -> bool {
+        *self.continuous_stream.lock().unwrap()
     }
 
     pub fn has_playlist(&self) -> bool {
@@ -138,16 +174,23 @@ impl OpenHomeRenderer {
     /// Retourne la longueur de la playlist OpenHome sans récupérer toutes les métadonnées.
     /// Plus rapide que snapshot_openhome_playlist() pour juste connaître le nombre de pistes.
     pub(crate) fn openhome_playlist_len(&self) -> Result<usize, ControlPointError> {
-        let playlist = self.playlist_client_for("openhome_playlist_len")?;
-        let ids = playlist.id_array()?;
-        Ok(ids.len())
+        // Use queue.len() which uses cached track_ids() internally
+        let queue = self.queue.lock().unwrap();
+        queue.len()
     }
 
     /// Retourne les IDs des pistes de la playlist OpenHome.
     /// Plus rapide que snapshot_openhome_playlist() car ne récupère pas les métadonnées.
     pub(crate) fn openhome_playlist_ids(&self) -> Result<Vec<u32>, ControlPointError> {
-        let playlist = self.playlist_client_for("openhome_playlist_ids")?;
-        playlist.id_array()
+        // Use the queue's cached track_ids() instead of direct id_array() call
+        let queue = self.queue.lock().unwrap();
+        if let MusicQueue::OpenHome(oh_queue) = &*queue {
+            oh_queue.track_ids()
+        } else {
+            Err(ControlPointError::QueueError(
+                "Not an OpenHome queue".to_string(),
+            ))
+        }
     }
 
     pub(crate) fn clear_openhome_playlist(&self) -> Result<(), ControlPointError> {
@@ -165,11 +208,21 @@ impl OpenHomeRenderer {
         let playlist = self.playlist_client_for("add_track_openhome")?;
         let insert_after = match after_id {
             Some(id) => id,
-            None => playlist
-                .id_array()?
-                .last()
-                .copied()
-                .unwrap_or(OPENHOME_PLAYLIST_HEAD_ID),
+            None => {
+                // Use the queue's cached track_ids() instead of direct id_array() call
+                let queue = self.queue.lock().unwrap();
+                if let MusicQueue::OpenHome(oh_queue) = &*queue {
+                    oh_queue
+                        .track_ids()?
+                        .last()
+                        .copied()
+                        .unwrap_or(OPENHOME_PLAYLIST_HEAD_ID)
+                } else {
+                    return Err(ControlPointError::QueueError(
+                        "Not an OpenHome queue".to_string(),
+                    ));
+                }
+            }
         };
 
         let new_id = playlist.insert(insert_after, uri, metadata)?;
@@ -296,61 +349,135 @@ impl PlaybackStatus for OpenHomeRenderer {
 
 impl PlaybackPosition for OpenHomeRenderer {
     fn playback_position(&self) -> Result<PlaybackPositionInfo, ControlPointError> {
+        let now = SystemTime::now();
+
+        // Check cache first
+        {
+            let mut cache = self.position_cache.lock().unwrap();
+
+            // Track calls for warning detection
+            cache.calls_in_last_second.push(now);
+            // Keep only calls from last second
+            cache.calls_in_last_second.retain(|t| {
+                now.duration_since(*t)
+                    .map(|d| d.as_millis() < 1000)
+                    .unwrap_or(false)
+            });
+
+            // Warn if called more than 3 times in last second
+            if cache.calls_in_last_second.len() > 3 {
+                tracing::warn!(
+                    "OpenHome playback_position() called {} times in last second - possible inefficiency",
+                    cache.calls_in_last_second.len()
+                );
+            }
+
+            // Return cached value if it's less than 900ms old (OpenHome has second precision)
+            if let (Some(last_pos), Some(last_update)) = (&cache.last_position, cache.last_update) {
+                if let Ok(elapsed) = now.duration_since(last_update) {
+                    if elapsed.as_millis() < 900 {
+                        tracing::trace!(
+                            "OpenHome playback_position: returning cached value (age={}ms)",
+                            elapsed.as_millis()
+                        );
+                        return Ok(last_pos.clone());
+                    }
+                }
+            }
+        }
+
+        // Cache miss or stale - fetch from backend
         let time_info = self.time_client_for("playback_position")?.position()?;
 
         let mut track_id = None;
         let mut track_uri = None;
         let mut track_metadata_xml = None;
 
-        if let Some(playlist_client) = &self.playlist {
-            match playlist_client.id() {
-                Ok(id) => track_id = Some(id),
+        // Get track ID from queue (uses cached data)
+        let queue_guard_for_id = self.queue.lock().unwrap();
+        if let MusicQueue::OpenHome(oh_queue) = &*queue_guard_for_id {
+            match oh_queue.current_track() {
+                Ok(id_opt) => track_id = id_opt,
                 Err(err) => debug!(
-                //   renderer = self.info.id.0.as_str(),
                     error = %err,
                     "Failed to read OpenHome track id"
                 ),
             }
         }
+        drop(queue_guard_for_id);
 
-        if let Some(info_client) = &self.info_client {
-            match info_client.track() {
-                Ok(track) => {
-                    track_uri = Some(track.uri);
-                    track_metadata_xml = track.metadata_xml;
-                }
-                Err(err) => debug!(
-                //    renderer = self.info.id.0.as_str(),
-                    error = %err,
-                    "Failed to read OpenHome track metadata"
-                ),
+        // Use queue API to get current item with cached metadata
+        let mut queue_guard = self.queue.lock().unwrap();
+        if let Ok(Some((current_item, _))) = queue_guard.peek_current() {
+            // Use metadata from queue cache (updated via OpenHome events)
+            track_uri = Some(current_item.uri.clone());
+
+            // Build DIDL metadata XML from cached TrackMetadata
+            if let Some(ref metadata) = current_item.metadata {
+                track_metadata_xml = Some(
+                    crate::music_renderer::musicrenderer::build_didl_lite_metadata(
+                        metadata,
+                        &current_item.uri,
+                        &current_item.protocol_info,
+                    ),
+                );
+            }
+
+            // Check if the URI has changed to detect track changes
+            let mut cached_uri = self.current_track_uri.lock().unwrap();
+            let uri_changed = cached_uri.as_ref() != Some(&current_item.uri);
+
+            if uri_changed {
+                tracing::debug!(
+                    "OpenHome track URI changed: {:?} -> {:?}",
+                    cached_uri,
+                    current_item.uri
+                );
+
+                // Détecte si la nouvelle URL est un flux continu
+                let is_stream = crate::music_renderer::is_continuous_stream_url(&current_item.uri);
+                *self.continuous_stream.lock().unwrap() = is_stream;
+                tracing::debug!("OpenHome URI changed, continuous_stream={}", is_stream);
+
+                *cached_uri = Some(current_item.uri.clone());
             }
         }
+        drop(queue_guard);
 
-        // Get duration from Time service, but fall back to DIDL metadata if duration is 0
+        // Get duration from Time service - duration_secs=0 means stream (no duration)
         let track_duration = if time_info.duration_secs == 0 {
-            // Try to extract duration from DIDL metadata
-            track_metadata_xml
-                .as_ref()
-                .and_then(|xml| parse_didl_duration_openhome(xml))
+            None
         } else {
             Some(format_hhmmss_u32(time_info.duration_secs))
         };
 
+        let rel_time = format_hhmmss_u32(time_info.elapsed_secs);
+
         tracing::trace!(
-            "OpenHome playback_position: duration_secs={}, track_duration={:?}",
+            "OpenHome playback_position: duration_secs={}, track_duration={:?}, elapsed_secs={}, rel_time={}",
             time_info.duration_secs,
-            track_duration
+            track_duration,
+            time_info.elapsed_secs,
+            rel_time
         );
 
-        Ok(PlaybackPositionInfo {
+        let position_info = PlaybackPositionInfo {
             track: track_id,
-            rel_time: Some(format_hhmmss_u32(time_info.elapsed_secs)),
+            rel_time: Some(rel_time),
             abs_time: None,
             track_duration,
             track_metadata: track_metadata_xml,
             track_uri,
-        })
+        };
+
+        // Update cache with fresh data
+        {
+            let mut cache = self.position_cache.lock().unwrap();
+            cache.last_position = Some(position_info.clone());
+            cache.last_update = Some(now);
+        }
+
+        Ok(position_info)
     }
 }
 
@@ -366,10 +493,6 @@ fn parse_didl_duration_openhome(didl: &str) -> Option<String> {
         let duration_offset = duration_start + "duration=\"".len();
         if let Some(duration_end) = tag_attrs[duration_offset..].find('"') {
             let duration = &tag_attrs[duration_offset..duration_offset + duration_end];
-            tracing::info!(
-                "OpenHome: Extracted duration from DIDL metadata: {}",
-                duration
-            );
             return Some(duration.to_string());
         }
     }

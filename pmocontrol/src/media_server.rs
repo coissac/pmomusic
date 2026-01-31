@@ -556,6 +556,8 @@ pub fn playback_item_from_entry(
 
     let resource = resource.unwrap();
 
+    let is_continuous_stream = crate::music_renderer::is_continuous_stream_url(&resource.uri);
+
     let metadata = TrackMetadata {
         title: Some(entry.title.clone()),
         artist: entry.artist.clone(),
@@ -566,6 +568,7 @@ pub fn playback_item_from_entry(
         track_number: entry.track_number.clone(),
         creator: entry.creator.clone(),
         duration: resource.duration.clone(),
+        is_continuous_stream,
     };
 
     debug!(

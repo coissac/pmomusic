@@ -83,7 +83,9 @@ const progressPercent = computed(() => {
     const position = state.value?.position_ms;
     const duration = state.value?.duration_ms;
     if (position && duration && duration > 0) {
-        return (position / duration) * 100;
+        // Plafonner à 100% pour éviter que le curseur dépasse en cas de délai de mise à jour
+        const percent = (position / duration) * 100;
+        return Math.min(percent, 100);
     }
     return 0;
 });
@@ -98,7 +100,14 @@ function formatTime(ms: number | null | undefined): string {
 }
 
 const currentTime = computed(() => formatTime(state.value?.position_ms));
-const totalTime = computed(() => formatTime(state.value?.duration_ms));
+const totalTime = computed(() => {
+    const duration = state.value?.duration_ms;
+    const transport = state.value?.transport_state;
+    console.log(
+        `[CurrentTrack] rendererId=${props.rendererId}, duration_ms=${duration}, transport=${transport}, title=${state.value?.current_track?.title}`,
+    );
+    return formatTime(duration);
+});
 
 const hasCover = computed(
     () => !!metadata.value?.album_art_uri && !imageError.value,

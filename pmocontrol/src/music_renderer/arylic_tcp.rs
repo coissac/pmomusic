@@ -45,6 +45,8 @@ pub struct ArylicTcpRenderer {
     port: u16,
     timeout: Duration,
     queue: Arc<Mutex<MusicQueue>>,
+    /// Flag indicating if currently playing a continuous stream (radio without duration)
+    continuous_stream: Arc<Mutex<bool>>,
 }
 
 impl ArylicTcpRenderer {
@@ -123,11 +125,40 @@ impl RendererFromMediaRendererInfo for ArylicTcpRenderer {
             port: ARYLIC_TCP_PORT,
             timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
             queue,
+            continuous_stream: Arc::new(Mutex::new(false)),
         })
     }
 
     fn to_backend(self) -> MusicRendererBackend {
         MusicRendererBackend::ArylicTcp(self)
+    }
+}
+
+impl ArylicTcpRenderer {
+    /// Returns true if currently playing a continuous stream (radio without duration)
+    pub fn is_continuous_stream(&self) -> bool {
+        *self.continuous_stream.lock().unwrap()
+    }
+
+    /// Create an ArylicTcpRenderer with a shared queue (for HybridUpnpArylic)
+    pub fn with_shared_queue(
+        info: &RendererInfo,
+        shared_queue: Arc<Mutex<MusicQueue>>,
+    ) -> Result<Self, ControlPointError> {
+        let host = extract_linkplay_host(info.location()).ok_or_else(|| {
+            ControlPointError::ArilycTcpError(format!(
+                "Renderer {} has no valid LOCATION host",
+                info.udn()
+            ))
+        })?;
+
+        Ok(Self {
+            host,
+            port: ARYLIC_TCP_PORT,
+            timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
+            queue: shared_queue,
+            continuous_stream: Arc::new(Mutex::new(false)),
+        })
     }
 }
 
@@ -212,8 +243,61 @@ impl PlaybackStatus for ArylicTcpRenderer {
 
 impl PlaybackPosition for ArylicTcpRenderer {
     fn playback_position(&self) -> Result<PlaybackPositionInfo, ControlPointError> {
-        let info = self.fetch_playback_info()?;
-        Ok(info.position_info())
+        let info = match self.fetch_playback_info() {
+            Ok(info) => {
+                tracing::debug!("ArylicTcp fetch_playback_info returned: {:?}", info);
+                info
+            }
+            Err(e) => {
+                tracing::warn!("ArylicTcp fetch_playback_info failed: {}", e);
+                return Err(e);
+            }
+        };
+
+        let mut position_info = info.position_info();
+        tracing::debug!(
+            "ArylicTcp position_info: track_duration={:?}, rel_time={:?}, track_metadata={:?}, track_uri={:?}",
+            position_info.track_duration,
+            position_info.rel_time,
+            position_info
+                .track_metadata
+                .as_ref()
+                .map(|s| &s[..s.len().min(100)]),
+            position_info.track_uri
+        );
+
+        // Récupérer les métadonnées depuis la queue (avec protection contre diminution de durée)
+        // Normalement current_index est toujours Some() si la queue n'est pas vide (règle métier)
+        let mut queue_guard = self.queue.lock().unwrap();
+        let queue_item = queue_guard.peek_current().ok().flatten();
+
+        if let Some((current_item, _)) = queue_item {
+            // Build DIDL metadata XML from cached/protected TrackMetadata
+            if let Some(ref metadata) = current_item.metadata {
+                tracing::debug!(
+                    "ArylicTcp playback_position: using queue metadata - title={:?}, artist={:?}, duration={:?}, is_stream={}",
+                    metadata.title,
+                    metadata.artist,
+                    metadata.duration,
+                    metadata.is_continuous_stream
+                );
+                position_info.track_metadata = Some(
+                    crate::music_renderer::musicrenderer::build_didl_lite_metadata(
+                        metadata,
+                        &current_item.uri,
+                        &current_item.protocol_info,
+                    ),
+                );
+            } else {
+                tracing::warn!("ArylicTcp playback_position: queue item has no metadata");
+            }
+            position_info.track_uri = Some(current_item.uri.clone());
+        } else {
+            tracing::warn!("ArylicTcp playback_position: no current queue item");
+        }
+        drop(queue_guard);
+
+        Ok(position_info)
     }
 }
 

@@ -30,8 +30,8 @@ use crate::music_renderer::openhome_renderer::OpenHomeRenderer;
 use crate::music_renderer::sleep_timer::SleepTimer;
 use crate::music_renderer::upnp_renderer::UpnpRenderer;
 use crate::music_renderer::watcher::{
-    WatchStrategy, WatchedState, compute_logical_playback_state, extract_track_metadata,
-    playback_position_equal, playback_state_equal,
+    WatchStrategy, WatchedState, extract_track_metadata, playback_position_equal,
+    playback_state_equal,
 };
 use crate::online::DeviceConnectionState;
 use crate::queue::{
@@ -82,7 +82,7 @@ pub enum MusicRendererBackend {
 }
 
 /// Internal state for tracking playback and control flow.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct MusicRendererState {
     /// Last known track metadata (cached to avoid repeated queries).
     last_metadata: Option<TrackMetadata>,
@@ -96,6 +96,27 @@ struct MusicRendererState {
     /// This prevents auto-advance on transient STOPPED states during track initialization.
     /// Auto-advance is only allowed when this flag is true.
     has_played_since_track_start: bool,
+    /// Timestamp when the current track started playing.
+    /// Used to calculate elapsed time when renderer returns unreliable position info.
+    track_start_time: Option<SystemTime>,
+    /// Current track duration (HH:MM:SS format).
+    /// For continuous streams, this is kept stable and only updated when it increases
+    /// (to avoid decreasing duration updates from radio metadata).
+    current_track_duration: Option<String>,
+}
+
+impl Default for MusicRendererState {
+    fn default() -> Self {
+        Self {
+            last_metadata: None,
+            playback_source: PlaybackSource::default(),
+            user_stop_requested: false,
+            sleep_timer: SleepTimer::default(),
+            has_played_since_track_start: false,
+            track_start_time: None,
+            current_track_duration: None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -299,6 +320,7 @@ impl MusicRenderer {
         };
 
         let mut tick: u32 = 0;
+        let mut next_poll_time = SystemTime::now();
 
         while !stop_flag.load(Ordering::SeqCst) {
             if self.is_online() {
@@ -306,7 +328,21 @@ impl MusicRenderer {
             }
 
             tick = tick.wrapping_add(1);
-            thread::sleep(interval);
+
+            // Calculate next poll time to maintain fixed interval
+            next_poll_time += interval;
+
+            // Sleep until next poll time (or skip if we're already late)
+            if let Ok(sleep_duration) = next_poll_time.duration_since(SystemTime::now()) {
+                thread::sleep(sleep_duration);
+            } else {
+                // We're running late - log a warning and reset the schedule
+                tracing::warn!(
+                    renderer = self.info.friendly_name(),
+                    "Watcher polling is running late, resetting schedule"
+                );
+                next_poll_time = SystemTime::now();
+            }
         }
 
         debug!(
@@ -317,29 +353,40 @@ impl MusicRenderer {
 
     /// Polls the backend and emits events for any detected changes.
     fn poll_and_emit_changes(&self, tick: u32) {
+        // Step 1: Read previous state WITHOUT holding the lock during network calls
+        let prev_position = {
+            let watched = self
+                .watched_state
+                .lock()
+                .expect("WatchedState mutex poisoned");
+            watched.position.clone()
+        };
+
+        // Step 2: Do all network calls WITHOUT holding any locks
+        // This prevents blocking other threads that need to read watched_state
+        let position = self.playback_position().ok();
+        let raw_state = self.playback_state().ok();
+
+        // Poll volume and mute every other tick (1 second at 500ms interval)
+        let (volume, mute, is_stream) = if tick % 2 == 0 {
+            (
+                self.volume().ok(),
+                self.mute().ok(),
+                Some(self.is_playing_a_stream()),
+            )
+        } else {
+            (None, None, None)
+        };
+
+        // Step 3: Now acquire the lock and update state based on polling results
         let mut watched = self
             .watched_state
             .lock()
             .expect("WatchedState mutex poisoned");
-        let prev_position = watched.position.clone();
 
-        // Poll position every tick
-        if let Ok(position) = self.playback_position() {
-            let changed = watched
-                .position
-                .as_ref()
-                .map(|prev| !playback_position_equal(prev, &position))
-                .unwrap_or(true);
-
-            if changed {
-                self.emit_event(RendererEvent::PositionChanged {
-                    id: self.id(),
-                    position: position.clone(),
-                });
-            }
-
-            // Extract and emit metadata changes
-            if let Some(metadata) = extract_track_metadata(&position) {
+        // Detect and handle metadata/track changes FIRST
+        if let Some(ref pos) = position {
+            if let Some(metadata) = extract_track_metadata(pos) {
                 let metadata_changed = watched
                     .metadata
                     .as_ref()
@@ -347,77 +394,232 @@ impl MusicRenderer {
                     .unwrap_or(true);
 
                 if metadata_changed {
-                    debug!(
-                        renderer = self.info.friendly_name(),
-                        title = metadata.title.as_deref(),
-                        artist = metadata.artist.as_deref(),
-                        "Emitting metadata changed event"
-                    );
+                    // Check if this is a track change (title/artist/album) to reset track_start_time
+                    // Also initialize track_start_time on first metadata detection
+                    let is_first_metadata = watched.metadata.is_none();
+                    let track_changed = watched
+                        .metadata
+                        .as_ref()
+                        .map(|prev| {
+                            let title_changed = prev.title != metadata.title;
+                            let artist_changed = prev.artist != metadata.artist;
+                            let album_changed = prev.album != metadata.album;
+
+                            if !is_first_metadata {
+                                tracing::info!(
+                                    "MusicRenderer [{}]: Comparing - title_changed={} ({:?} vs {:?}), artist_changed={} ({:?} vs {:?})",
+                                    self.info.friendly_name(),
+                                    title_changed, prev.title, metadata.title,
+                                    artist_changed, prev.artist, metadata.artist
+                                );
+                            }
+
+                            title_changed || artist_changed || album_changed
+                        })
+                        .unwrap_or(false); // Only true if there was previous metadata AND it differs
+
+                    if is_first_metadata || track_changed {
+                        tracing::info!(
+                            "MusicRenderer [{}]: {} ({:?} -> {:?}), resetting track_start_time",
+                            self.info.friendly_name(),
+                            if is_first_metadata {
+                                "First metadata"
+                            } else {
+                                "Track changed"
+                            },
+                            watched.metadata.as_ref().and_then(|m| m.title.as_ref()),
+                            metadata.title
+                        );
+                        // Drop the lock before calling set_last_metadata to avoid nested locking
+                        drop(watched);
+                        self.set_last_metadata(Some(metadata.clone()));
+                        watched = self
+                            .watched_state
+                            .lock()
+                            .expect("WatchedState mutex poisoned");
+                    }
+
+                    // Emit event without holding watched lock
+                    let metadata_clone = metadata.clone();
+                    drop(watched);
                     self.emit_event(RendererEvent::MetadataChanged {
                         id: self.id(),
-                        metadata: metadata.clone(),
+                        metadata: metadata_clone,
                     });
+                    watched = self
+                        .watched_state
+                        .lock()
+                        .expect("WatchedState mutex poisoned");
                     watched.metadata = Some(metadata);
                 }
             }
-
-            watched.position = Some(position);
         }
 
-        // Poll state every tick
-        if let Ok(raw_state) = self.playback_state() {
-            let logical_state = compute_logical_playback_state(
-                &raw_state,
-                prev_position.as_ref(),
-                watched.position.as_ref(),
-            );
+        // Handle position updates
+        if let Some(mut position) = position {
+            // For continuous streams, manage duration to prevent it from decreasing
+            if let Some(stream_flag) = is_stream {
+                if stream_flag {
+                    if let Some(ref new_duration) = position.track_duration {
+                        let mut state = self.state.lock().unwrap();
+
+                        // Parse durations to compare (HH:MM:SS format)
+                        let parse_duration = |dur_str: &str| -> Option<u32> {
+                            let parts: Vec<&str> = dur_str.split(':').collect();
+                            if parts.len() == 3 {
+                                let h: u32 = parts[0].parse().ok()?;
+                                let m: u32 = parts[1].parse().ok()?;
+                                let s: u32 = parts[2].parse().ok()?;
+                                Some(h * 3600 + m * 60 + s)
+                            } else {
+                                None
+                            }
+                        };
+
+                        match &state.current_track_duration {
+                            Some(stored_duration) => {
+                                // Compare new duration with stored one
+                                if let (Some(stored_secs), Some(new_secs)) = (
+                                    parse_duration(stored_duration),
+                                    parse_duration(new_duration),
+                                ) {
+                                    if new_secs > stored_secs {
+                                        // Duration increased: update stored value and use new one
+                                        tracing::debug!(
+                                            "MusicRenderer [{}]: Stream duration increased: {} -> {}",
+                                            self.info.friendly_name(),
+                                            stored_duration,
+                                            new_duration
+                                        );
+                                        state.current_track_duration = Some(new_duration.clone());
+                                    } else {
+                                        // Duration decreased or equal: keep stored value
+                                        position.track_duration = Some(stored_duration.clone());
+                                    }
+                                }
+                            }
+                            None => {
+                                // First time: store the duration
+                                state.current_track_duration = Some(new_duration.clone());
+                            }
+                        }
+                    }
+                }
+            }
 
             let changed = watched
-                .state
+                .position
                 .as_ref()
-                .map(|prev| !playback_state_equal(prev, &logical_state))
+                .map(|prev| {
+                    let equal = playback_position_equal(prev, &position);
+                    if !equal {
+                        tracing::trace!(
+                            "MusicRenderer [{}]: Position changed - prev_rel_time={:?}, new_rel_time={:?}",
+                            self.info.friendly_name(),
+                            prev.rel_time,
+                            position.rel_time
+                        );
+                    }
+                    !equal
+                })
                 .unwrap_or(true);
 
-            // Emit event only for non-transient states to reduce noise
-            if changed && !matches!(logical_state, PlaybackState::Transitioning) {
-                self.emit_event(RendererEvent::StateChanged {
-                    id: self.id(),
-                    state: logical_state.clone(),
-                });
-
-                // Handle auto-advance logic internally
-                // Release the lock before calling handle_state_change to avoid deadlock
+            if changed {
+                let position_clone = position.clone();
                 drop(watched);
-                self.handle_state_change(&logical_state);
+                self.emit_event(RendererEvent::PositionChanged {
+                    id: self.id(),
+                    position: position_clone,
+                });
                 watched = self
                     .watched_state
                     .lock()
                     .expect("WatchedState mutex poisoned");
             }
 
-            watched.state = Some(logical_state);
+            watched.position = Some(position);
         }
 
-        // Poll volume and mute every other tick (1 second at 500ms interval)
-        if tick % 2 == 0 {
-            if let Ok(volume) = self.volume() {
-                if watched.volume != Some(volume) {
-                    self.emit_event(RendererEvent::VolumeChanged {
-                        id: self.id(),
-                        volume,
-                    });
-                    watched.volume = Some(volume);
-                }
+        // Poll state every tick
+        // Note: Device-specific bugs (like Arylic/LinkPlay reporting STOPPED while playing)
+        // should be corrected in the backend's playback_state() method, not here.
+        if let Some(raw_state) = raw_state {
+            let changed = watched
+                .state
+                .as_ref()
+                .map(|prev| !playback_state_equal(prev, &raw_state))
+                .unwrap_or(true);
+
+            // Emit event only for non-transient states to reduce noise
+            if changed && !matches!(raw_state, PlaybackState::Transitioning) {
+                let state_clone = raw_state.clone();
+                drop(watched);
+                self.emit_event(RendererEvent::StateChanged {
+                    id: self.id(),
+                    state: state_clone.clone(),
+                });
+
+                // Handle auto-advance logic internally
+                self.handle_state_change(&state_clone);
+
+                watched = self
+                    .watched_state
+                    .lock()
+                    .expect("WatchedState mutex poisoned");
             }
 
-            if let Ok(mute) = self.mute() {
-                if watched.mute != Some(mute) {
-                    self.emit_event(RendererEvent::MuteChanged {
-                        id: self.id(),
-                        mute,
-                    });
-                    watched.mute = Some(mute);
-                }
+            watched.state = Some(raw_state);
+        }
+
+        // Handle volume/mute updates (polled every other tick)
+        if let Some(vol) = volume {
+            if watched.volume != Some(vol) {
+                drop(watched);
+                self.emit_event(RendererEvent::VolumeChanged {
+                    id: self.id(),
+                    volume: vol,
+                });
+                watched = self
+                    .watched_state
+                    .lock()
+                    .expect("WatchedState mutex poisoned");
+                watched.volume = Some(vol);
+            }
+        }
+
+        if let Some(m) = mute {
+            if watched.mute != Some(m) {
+                drop(watched);
+                self.emit_event(RendererEvent::MuteChanged {
+                    id: self.id(),
+                    mute: m,
+                });
+                watched = self
+                    .watched_state
+                    .lock()
+                    .expect("WatchedState mutex poisoned");
+                watched.mute = Some(m);
+            }
+        }
+
+        // Check stream state (every other tick to avoid excessive polling)
+        if let Some(stream) = is_stream {
+            if watched.is_stream != Some(stream) {
+                tracing::info!(
+                    "Stream state changed for renderer {}: is_stream={}",
+                    self.id().0,
+                    stream
+                );
+                drop(watched);
+                self.emit_event(RendererEvent::StreamStateChanged {
+                    id: self.id(),
+                    is_stream: stream,
+                });
+                watched = self
+                    .watched_state
+                    .lock()
+                    .expect("WatchedState mutex poisoned");
+                watched.is_stream = Some(stream);
             }
         }
     }
@@ -571,6 +773,33 @@ impl MusicRenderer {
     /// Returns true if this renderer is known to support SetNextAVTransportURI.
     pub fn supports_set_next(&self) -> bool {
         self.info.capabilities().supports_set_next()
+    }
+
+    /// Returns true if the current track is a continuous stream (radio without duration).
+    ///
+    /// This method queries the backend's cached stream detection flag. The detection is based
+    /// on HTTP headers analysis performed when the URL was set via play_uri or when the track
+    /// changed (for OpenHome).
+    ///
+    /// # Returns
+    ///
+    /// `true` if the current track is a continuous stream (radio, live broadcast, etc.)
+    /// `false` if playing a bounded media file or no track loaded
+    ///
+    /// Note: This returns the stream status of the current track regardless of playback state
+    /// (playing, paused, or stopped).
+    pub fn is_playing_a_stream(&self) -> bool {
+        let backend = self.lock_backend_for("is_playing_a_stream");
+
+        // Query backend for stream status (already cached by backends)
+        match &*backend {
+            MusicRendererBackend::Upnp(upnp) => upnp.is_continuous_stream(),
+            MusicRendererBackend::OpenHome(oh) => oh.is_continuous_stream(),
+            MusicRendererBackend::LinkPlay(lp) => lp.is_continuous_stream(),
+            MusicRendererBackend::ArylicTcp(ary) => ary.is_continuous_stream(),
+            MusicRendererBackend::Chromecast(cc) => cc.is_continuous_stream(),
+            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.is_continuous_stream(),
+        }
     }
 
     /// Prepare the renderer for attaching a new playlist by clearing the queue and stopping playback.
@@ -755,19 +984,19 @@ impl MusicRenderer {
     }
 
     /// Get playback position
+    ///
+    /// This method patches the position info from the backend:
+    /// - If track_duration is None, try to extract it from DIDL metadata
+    /// - Calculates rel_time from track_start_time (backend values are unreliable)
+    ///
+    /// Note: track_start_time is updated by poll_and_emit_changes when track changes
     pub fn playback_position(&self) -> Result<PlaybackPositionInfo, ControlPointError> {
         let mut position_info = self
             .lock_backend_for("playback_position")
             .playback_position()?;
 
-        // Si track_duration est absent ou invalide, essayer de le parser depuis le DIDL metadata
-        let needs_duration_fix = position_info
-            .track_duration
-            .as_ref()
-            .map(|d| d == "00:00:00" || d == "0:00:00")
-            .unwrap_or(true); // None = true
-
-        if needs_duration_fix {
+        // Si track_duration est absent, essayer de le parser depuis le DIDL metadata
+        if position_info.track_duration.is_none() {
             if let Some(ref metadata_xml) = position_info.track_metadata {
                 if let Some(duration) = parse_didl_duration(metadata_xml) {
                     tracing::debug!(
@@ -775,6 +1004,34 @@ impl MusicRenderer {
                         duration
                     );
                     position_info.track_duration = Some(duration);
+                }
+            }
+        }
+
+        // Pour les flux continus uniquement : calculer rel_time depuis track_start_time
+        // Pour les fichiers normaux : garder les valeurs du backend
+        // IMPORTANT: Ne calculer le temps que si le lecteur est en PLAYING
+        let is_stream = self.is_playing_a_stream();
+        if is_stream {
+            // Vérifier que le lecteur est en lecture avant de calculer le temps écoulé
+            let is_playing = matches!(self.playback_state().ok(), Some(PlaybackState::Playing));
+
+            if is_playing {
+                if let Some(start_time) = self.track_start_time() {
+                    if let Ok(elapsed) = start_time.elapsed() {
+                        let secs = elapsed.as_secs() as u32;
+                        let hours = secs / 3600;
+                        let minutes = (secs % 3600) / 60;
+                        let seconds = secs % 60;
+                        let new_rel_time = format!("{:02}:{:02}:{:02}", hours, minutes, seconds);
+                        tracing::debug!(
+                            "MusicRenderer [{}]: Stream - calculating rel_time from track_start_time: {} (elapsed={}s)",
+                            self.info.friendly_name(),
+                            new_rel_time,
+                            secs
+                        );
+                        position_info.rel_time = Some(new_rel_time);
+                    }
                 }
             }
         }
@@ -1076,8 +1333,21 @@ impl MusicRenderer {
     }
 
     /// Sets the last known track metadata.
+    /// Updates track_start_time and resets current_track_duration only if the metadata actually changes.
     pub fn set_last_metadata(&self, metadata: Option<TrackMetadata>) {
-        self.state.lock().unwrap().last_metadata = metadata;
+        let mut state = self.state.lock().unwrap();
+        let metadata_changed = state.last_metadata != metadata;
+        state.last_metadata = metadata;
+        if metadata_changed {
+            state.track_start_time = Some(SystemTime::now());
+            // Reset duration cache when track changes (for streams)
+            state.current_track_duration = None;
+        }
+    }
+
+    /// Gets the timestamp when the current track started playing.
+    pub fn track_start_time(&self) -> Option<SystemTime> {
+        self.state.lock().unwrap().track_start_time
     }
 
     /// Gets the current playback source.
@@ -1415,8 +1685,10 @@ impl RendererFromMediaRendererInfo for MusicRendererBackend {
         if has_arylic && has_avtransport {
             let upnp_backend = UpnpRenderer::build_from_renderer_info(info)?;
             if let MusicRendererBackend::Upnp(upnp) = upnp_backend {
-                match ArylicTcpRenderer::build_from_renderer_info(info) {
-                    Ok(MusicRendererBackend::ArylicTcp(arylic)) => {
+                // Share the UPnP queue with Arylic so metadata is consistent
+                let shared_queue = upnp.queue().clone();
+                match ArylicTcpRenderer::with_shared_queue(info, shared_queue) {
+                    Ok(arylic) => {
                         return Ok(MusicRendererBackend::HybridUpnpArylic { upnp, arylic });
                     }
                     Err(err) => {

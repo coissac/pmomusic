@@ -91,6 +91,7 @@ export interface FullRendererSnapshot {
   state: RendererState;
   queue: QueueSnapshot;
   binding: AttachedPlaylistInfo | null;
+  is_stream: boolean;
 }
 
 // ============================================================================
@@ -198,6 +199,12 @@ export type RendererEventPayload =
       renderer_id: string;
       server_id: string | null;
       container_id: string | null;
+      timestamp: string;
+    }
+  | {
+      type: "stream_state_changed";
+      renderer_id: string;
+      is_stream: boolean;
       timestamp: string;
     }
   | {

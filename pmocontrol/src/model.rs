@@ -94,6 +94,9 @@ pub struct TrackMetadata {
     pub track_number: Option<String>,
     pub creator: Option<String>,
     pub duration: Option<String>,
+    /// Indique si cette piste correspond à un flux continu (radio, stream)
+    /// plutôt qu'à un fichier avec une durée fixe
+    pub is_continuous_stream: bool,
 }
 
 #[derive(Clone, Debug, Copy)]
@@ -434,6 +437,10 @@ pub enum RendererEvent {
     BindingChanged {
         id: DeviceId,
         binding: Option<PlaylistBinding>,
+    },
+    StreamStateChanged {
+        id: DeviceId,
+        is_stream: bool,
     },
     TimerStarted {
         id: DeviceId,
