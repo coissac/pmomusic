@@ -369,15 +369,19 @@ impl PlaybackPosition for OpenHomeRenderer {
             Some(format_hhmmss_u32(time_info.duration_secs))
         };
 
+        let rel_time = format_hhmmss_u32(time_info.elapsed_secs);
+
         tracing::trace!(
-            "OpenHome playback_position: duration_secs={}, track_duration={:?}",
+            "OpenHome playback_position: duration_secs={}, track_duration={:?}, elapsed_secs={}, rel_time={}",
             time_info.duration_secs,
-            track_duration
+            track_duration,
+            time_info.elapsed_secs,
+            rel_time
         );
 
         Ok(PlaybackPositionInfo {
             track: track_id,
-            rel_time: Some(format_hhmmss_u32(time_info.elapsed_secs)),
+            rel_time: Some(rel_time),
             abs_time: None,
             track_duration,
             track_metadata: track_metadata_xml,

@@ -183,6 +183,8 @@ function ensureSSEConnected() {
         snapshot.state.current_track.artist = event.artist;
         snapshot.state.current_track.album = event.album;
         snapshot.state.current_track.album_art_uri = event.album_art_uri;
+        // Important: Trigger reactivity en réassignant l'objet complet
+        snapshotState.snapshots.set(rendererId, { ...snapshot });
         break;
 
       case "queue_updated":

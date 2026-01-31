@@ -463,7 +463,18 @@ impl MusicRenderer {
             let changed = watched
                 .position
                 .as_ref()
-                .map(|prev| !playback_position_equal(prev, &position))
+                .map(|prev| {
+                    let equal = playback_position_equal(prev, &position);
+                    if !equal {
+                        tracing::trace!(
+                            "MusicRenderer [{}]: Position changed - prev_rel_time={:?}, new_rel_time={:?}",
+                            self.info.friendly_name(),
+                            prev.rel_time,
+                            position.rel_time
+                        );
+                    }
+                    !equal
+                })
                 .unwrap_or(true);
 
             if changed {
@@ -943,27 +954,26 @@ impl MusicRenderer {
             }
         }
 
-        // Calculate rel_time from track_start_time if available (backend values are unreliable)
-        if let Some(start_time) = self.track_start_time() {
-            if let Ok(elapsed) = start_time.elapsed() {
-                let secs = elapsed.as_secs() as u32;
-                let hours = secs / 3600;
-                let minutes = (secs % 3600) / 60;
-                let seconds = secs % 60;
-                let new_rel_time = format!("{:02}:{:02}:{:02}", hours, minutes, seconds);
-                tracing::info!(
-                    "MusicRenderer: Patching rel_time: backend={:?} -> calculated={} (elapsed={}s)",
-                    position_info.rel_time,
-                    new_rel_time,
-                    secs
-                );
-                position_info.rel_time = Some(new_rel_time);
+        // Pour les flux continus uniquement : calculer rel_time depuis track_start_time
+        // Pour les fichiers normaux : garder les valeurs du backend
+        let is_stream = self.is_playing_a_stream();
+        if is_stream {
+            if let Some(start_time) = self.track_start_time() {
+                if let Ok(elapsed) = start_time.elapsed() {
+                    let secs = elapsed.as_secs() as u32;
+                    let hours = secs / 3600;
+                    let minutes = (secs % 3600) / 60;
+                    let seconds = secs % 60;
+                    let new_rel_time = format!("{:02}:{:02}:{:02}", hours, minutes, seconds);
+                    tracing::debug!(
+                        "MusicRenderer [{}]: Stream - calculating rel_time from track_start_time: {} (elapsed={}s)",
+                        self.info.friendly_name(),
+                        new_rel_time,
+                        secs
+                    );
+                    position_info.rel_time = Some(new_rel_time);
+                }
             }
-        } else {
-            tracing::info!(
-                "MusicRenderer: No track_start_time, keeping backend rel_time={:?}",
-                position_info.rel_time
-            );
         }
 
         Ok(position_info)
