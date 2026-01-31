@@ -123,6 +123,9 @@ function ensureSSEConnected() {
         break;
 
       case "position_changed":
+        // Mettre à jour position et durée de manière atomique pour garantir la cohérence
+        // Le backend envoie TOUJOURS les deux valeurs (même si null)
+
         // Convertir rel_time (HH:MM:SS) en millisecondes
         if (event.rel_time) {
           const parts = event.rel_time.split(":").map(Number);
@@ -133,7 +136,11 @@ function ensureSSEConnected() {
                 (parts[2] ?? 0)) *
               1000;
           }
+        } else {
+          // Si rel_time est null/undefined, mettre position à 0
+          snapshot.state.position_ms = 0;
         }
+
         // Convertir track_duration (HH:MM:SS) en millisecondes
         if (event.track_duration) {
           const parts = event.track_duration.split(":").map(Number);
@@ -144,7 +151,15 @@ function ensureSSEConnected() {
                 (parts[2] ?? 0)) *
               1000;
           }
+        } else {
+          // Si track_duration est null/undefined (flux continu sans durée),
+          // mettre duration_ms à null pour afficher "--:--"
+          snapshot.state.duration_ms = null;
         }
+
+        // Important: Trigger reactivity en réassignant l'objet complet
+        // Cela garantit que position_ms et duration_ms sont mis à jour atomiquement
+        snapshotState.snapshots.set(rendererId, { ...snapshot });
         break;
 
       case "volume_changed":

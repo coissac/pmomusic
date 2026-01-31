@@ -99,6 +99,10 @@ struct MusicRendererState {
     /// Timestamp when the current track started playing.
     /// Used to calculate elapsed time when renderer returns unreliable position info.
     track_start_time: Option<SystemTime>,
+    /// Current track duration (HH:MM:SS format).
+    /// For continuous streams, this is kept stable and only updated when it increases
+    /// (to avoid decreasing duration updates from radio metadata).
+    current_track_duration: Option<String>,
 }
 
 impl Default for MusicRendererState {
@@ -110,6 +114,7 @@ impl Default for MusicRendererState {
             sleep_timer: SleepTimer::default(),
             has_played_since_track_start: false,
             track_start_time: None,
+            current_track_duration: None,
         }
     }
 }
@@ -405,7 +410,56 @@ impl MusicRenderer {
         }
 
         // Now get the fully patched position (with correct track_start_time and rel_time)
-        if let Ok(position) = self.playback_position() {
+        if let Ok(mut position) = self.playback_position() {
+            // For continuous streams, manage duration to prevent it from decreasing
+            let is_stream = self.is_playing_a_stream();
+            if is_stream {
+                if let Some(ref new_duration) = position.track_duration {
+                    let mut state = self.state.lock().unwrap();
+
+                    // Parse durations to compare (HH:MM:SS format)
+                    let parse_duration = |dur_str: &str| -> Option<u32> {
+                        let parts: Vec<&str> = dur_str.split(':').collect();
+                        if parts.len() == 3 {
+                            let h: u32 = parts[0].parse().ok()?;
+                            let m: u32 = parts[1].parse().ok()?;
+                            let s: u32 = parts[2].parse().ok()?;
+                            Some(h * 3600 + m * 60 + s)
+                        } else {
+                            None
+                        }
+                    };
+
+                    match &state.current_track_duration {
+                        Some(stored_duration) => {
+                            // Compare new duration with stored one
+                            if let (Some(stored_secs), Some(new_secs)) = (
+                                parse_duration(stored_duration),
+                                parse_duration(new_duration),
+                            ) {
+                                if new_secs > stored_secs {
+                                    // Duration increased: update stored value and use new one
+                                    tracing::debug!(
+                                        "MusicRenderer [{}]: Stream duration increased: {} -> {}",
+                                        self.info.friendly_name(),
+                                        stored_duration,
+                                        new_duration
+                                    );
+                                    state.current_track_duration = Some(new_duration.clone());
+                                } else {
+                                    // Duration decreased or equal: keep stored value
+                                    position.track_duration = Some(stored_duration.clone());
+                                }
+                            }
+                        }
+                        None => {
+                            // First time: store the duration
+                            state.current_track_duration = Some(new_duration.clone());
+                        }
+                    }
+                }
+            }
+
             let changed = watched
                 .position
                 .as_ref()
@@ -1209,13 +1263,15 @@ impl MusicRenderer {
     }
 
     /// Sets the last known track metadata.
-    /// Updates track_start_time only if the metadata actually changes.
+    /// Updates track_start_time and resets current_track_duration only if the metadata actually changes.
     pub fn set_last_metadata(&self, metadata: Option<TrackMetadata>) {
         let mut state = self.state.lock().unwrap();
         let metadata_changed = state.last_metadata != metadata;
         state.last_metadata = metadata;
         if metadata_changed {
             state.track_start_time = Some(SystemTime::now());
+            // Reset duration cache when track changes (for streams)
+            state.current_track_duration = None;
         }
     }
 

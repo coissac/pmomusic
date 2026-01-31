@@ -313,49 +313,54 @@ impl PlaybackPosition for OpenHomeRenderer {
         let mut track_uri = None;
         let mut track_metadata_xml = None;
 
+        // Get track ID from playlist
         if let Some(playlist_client) = &self.playlist {
             match playlist_client.id() {
                 Ok(id) => track_id = Some(id),
                 Err(err) => debug!(
-                //   renderer = self.info.id.0.as_str(),
                     error = %err,
                     "Failed to read OpenHome track id"
                 ),
             }
         }
 
-        if let Some(info_client) = &self.info_client {
-            match info_client.track() {
-                Ok(track) => {
-                    track_uri = Some(track.uri.clone());
-                    track_metadata_xml = track.metadata_xml;
+        // Use queue API to get current item with cached metadata
+        let mut queue_guard = self.queue.lock().unwrap();
+        if let Ok(Some((current_item, _))) = queue_guard.peek_current() {
+            // Use metadata from queue cache (updated via OpenHome events)
+            track_uri = Some(current_item.uri.clone());
 
-                    // Check if the URI has changed to detect track changes
-                    let mut cached_uri = self.current_track_uri.lock().unwrap();
-                    let uri_changed = cached_uri.as_ref() != Some(&track.uri);
+            // Build DIDL metadata XML from cached TrackMetadata
+            if let Some(ref metadata) = current_item.metadata {
+                track_metadata_xml = Some(
+                    crate::music_renderer::musicrenderer::build_didl_lite_metadata(
+                        metadata,
+                        &current_item.uri,
+                        &current_item.protocol_info,
+                    ),
+                );
+            }
 
-                    if uri_changed {
-                        tracing::debug!(
-                            "OpenHome track URI changed: {:?} -> {:?}",
-                            cached_uri,
-                            track.uri
-                        );
+            // Check if the URI has changed to detect track changes
+            let mut cached_uri = self.current_track_uri.lock().unwrap();
+            let uri_changed = cached_uri.as_ref() != Some(&current_item.uri);
 
-                        // Détecte si la nouvelle URL est un flux continu
-                        let is_stream = crate::music_renderer::is_continuous_stream_url(&track.uri);
-                        *self.continuous_stream.lock().unwrap() = is_stream;
-                        tracing::debug!("OpenHome URI changed, continuous_stream={}", is_stream);
+            if uri_changed {
+                tracing::debug!(
+                    "OpenHome track URI changed: {:?} -> {:?}",
+                    cached_uri,
+                    current_item.uri
+                );
 
-                        *cached_uri = Some(track.uri);
-                    }
-                }
-                Err(err) => debug!(
-                //    renderer = self.info.id.0.as_str(),
-                    error = %err,
-                    "Failed to read OpenHome track metadata"
-                ),
+                // Détecte si la nouvelle URL est un flux continu
+                let is_stream = crate::music_renderer::is_continuous_stream_url(&current_item.uri);
+                *self.continuous_stream.lock().unwrap() = is_stream;
+                tracing::debug!("OpenHome URI changed, continuous_stream={}", is_stream);
+
+                *cached_uri = Some(current_item.uri.clone());
             }
         }
+        drop(queue_guard);
 
         // Get duration from Time service - duration_secs=0 means stream (no duration)
         let track_duration = if time_info.duration_secs == 0 {
