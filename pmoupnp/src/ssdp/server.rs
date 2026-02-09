@@ -15,9 +15,6 @@ pub struct SsdpServer {
 
     /// Socket UDP pour SSDP
     socket: Option<Arc<UdpSocket>>,
-
-    /// Socket dédié pour loopback (quand le réseau bloque le multicast)
-    loopback_socket: Option<Arc<UdpSocket>>,
 }
 
 impl SsdpServer {
@@ -26,7 +23,6 @@ impl SsdpServer {
         Self {
             devices: Arc::new(RwLock::new(HashMap::new())),
             socket: None,
-            loopback_socket: None,
         }
     }
 
@@ -78,93 +74,38 @@ impl SsdpServer {
         let bind_addr: SocketAddr = format!("0.0.0.0:{}", SSDP_PORT).parse().unwrap();
         socket2.bind(&bind_addr.into())?;
 
+        // Configurer l'interface de sortie multicast sur l'IP principale.
+        // Sur macOS, sans cela le kernel peut router les paquets multicast
+        // via une interface bridge/VM qui n'a pas de route, causant
+        // EHOSTUNREACH (errno 65).
+        let local_ip: std::net::Ipv4Addr = pmoutils::guess_local_ip()
+            .parse()
+            .unwrap_or("127.0.0.1".parse().unwrap());
+        socket2.set_multicast_if_v4(&local_ip)?;
+        debug!(
+            "SSDP server: multicast outgoing interface set to {}",
+            local_ip
+        );
+
         // Convertir en UdpSocket standard
         let socket: UdpSocket = socket2.into();
 
-        // Rejoindre le groupe multicast sur toutes les interfaces (y compris loopback)
-        // Ceci est essentiel pour le développement local avec plusieurs instances
-        for iface in get_if_addrs::get_if_addrs()? {
-            if let std::net::IpAddr::V4(ipv4) = iface.ip() {
-                match socket.join_multicast_v4(&SSDP_MULTICAST_ADDR.parse().unwrap(), &ipv4) {
-                    Ok(()) => {
-                        if ipv4.is_loopback() {
-                            debug!(
-                                "SSDP server: joined {} on {} (localhost - dev mode)",
-                                SSDP_MULTICAST_ADDR, ipv4
-                            );
-                        } else {
-                            debug!("SSDP server: joined {} on {}", SSDP_MULTICAST_ADDR, ipv4);
-                        }
-                    }
-                    Err(e) => {
-                        warn!(
-                            "SSDP server: failed to join {} on {}: {}",
-                            SSDP_MULTICAST_ADDR, ipv4, e
-                        );
-                    }
-                }
-            }
-        }
+        // Rejoindre le groupe multicast via INADDR_ANY (l'OS choisit l'interface)
+        socket.join_multicast_v4(
+            &SSDP_MULTICAST_ADDR.parse().unwrap(),
+            &"0.0.0.0".parse().unwrap(),
+        )?;
 
         socket.set_read_timeout(Some(Duration::from_secs(1)))?;
-        socket.set_multicast_loop_v4(true)?; // Important pour dev local
+        socket.set_multicast_loop_v4(true)?; // utile en dev local
 
         let socket = Arc::new(socket);
         self.socket = Some(socket.clone());
 
-        // Create a second socket for loopback multicast (when network blocks multicast)
-        let loopback_socket2 = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
-        loopback_socket2.set_reuse_address(true)?;
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::io::AsRawFd;
-            let fd = loopback_socket2.as_raw_fd();
-            let optval: libc::c_int = 1;
-            unsafe {
-                let result = libc::setsockopt(
-                    fd,
-                    libc::SOL_SOCKET,
-                    libc::SO_REUSEPORT,
-                    &optval as *const _ as *const libc::c_void,
-                    std::mem::size_of_val(&optval) as libc::socklen_t,
-                );
-                if result != 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-            }
-        }
-
-        // Bind on any address with ephemeral port (not on port 1900 to avoid conflicts)
-        let loopback_bind: SocketAddr = "0.0.0.0:0".parse().unwrap();
-        loopback_socket2.bind(&loopback_bind.into())?;
-
-        let loopback_socket: UdpSocket = loopback_socket2.into();
-        loopback_socket.set_multicast_loop_v4(true)?;
-
-        // Join multicast specifically on loopback interface (127.0.0.1)
-        let loopback_addr: std::net::Ipv4Addr = "127.0.0.1".parse().unwrap();
-        if let Err(e) =
-            loopback_socket.join_multicast_v4(&SSDP_MULTICAST_ADDR.parse().unwrap(), &loopback_addr)
-        {
-            warn!(
-                "SSDP server: failed to join multicast on loopback socket: {}",
-                e
-            );
-        } else {
-            debug!(
-                "SSDP loopback server socket: joined {} on 127.0.0.1",
-                SSDP_MULTICAST_ADDR
-            );
-        }
-
-        let loopback_socket = Arc::new(loopback_socket);
-        self.loopback_socket = Some(loopback_socket.clone());
-
         info!("✅ SSDP server started on {}", addr);
 
         // Lancer les goroutines d'annonces périodiques et d'écoute M-SEARCH
-        self.start_periodic_announcements(socket.clone(), loopback_socket.clone());
+        self.start_periodic_announcements(socket.clone());
         self.start_msearch_listener(socket.clone());
 
         Ok(())
@@ -190,10 +131,9 @@ impl SsdpServer {
 
         // Envoyer alive pour tous les NTs
         if let Some(ref socket) = self.socket {
-            let loopback_socket = self.loopback_socket.as_ref();
             let nts = device.get_notification_types();
             for nt in nts.iter() {
-                Self::send_alive(socket, loopback_socket, &device, nt, false);
+                Self::send_alive(socket, &device, nt, false);
                 // Petit délai pour éviter de saturer le buffer UDP sur macOS
                 std::thread::sleep(Duration::from_millis(5));
             }
@@ -222,13 +162,7 @@ impl SsdpServer {
     }
 
     /// Envoie un NOTIFY alive
-    fn send_alive(
-        socket: &UdpSocket,
-        loopback_socket: Option<&Arc<UdpSocket>>,
-        device: &SsdpDevice,
-        nt: &str,
-        is_periodic: bool,
-    ) {
+    fn send_alive(socket: &UdpSocket, device: &SsdpDevice, nt: &str, is_periodic: bool) {
         let usn = if nt.starts_with("uuid:") {
             format!("{}", nt)
         } else {
@@ -248,11 +182,11 @@ impl SsdpServer {
             SSDP_MULTICAST_ADDR, SSDP_PORT, MAX_AGE, device.location, nt, device.server, usn
         );
 
-        let multicast_addr: SocketAddr = format!("{}:{}", SSDP_MULTICAST_ADDR, SSDP_PORT)
+        let addr: SocketAddr = format!("{}:{}", SSDP_MULTICAST_ADDR, SSDP_PORT)
             .parse()
             .unwrap();
 
-        match socket.send_to(msg.as_bytes(), multicast_addr) {
+        match socket.send_to(msg.as_bytes(), addr) {
             Ok(_) => {
                 let label = if is_periodic { " (periodic)" } else { "" };
                 info!("✅ NOTIFY alive{}: {} (NT={})", label, usn, nt);
@@ -261,34 +195,7 @@ impl SsdpServer {
                     label, msg
                 );
             }
-            Err(e) if e.raw_os_error() == Some(65) || e.raw_os_error() == Some(101) => {
-                // Multicast bloqué sur le réseau, envoyer en unicast sur localhost
-                if let Some(loopback_sock) = loopback_socket {
-                    // Send to localhost unicast - local clients will receive
-                    let localhost_addr: SocketAddr =
-                        format!("127.0.0.1:{}", SSDP_PORT).parse().unwrap();
 
-                    match loopback_sock.send_to(msg.as_bytes(), localhost_addr) {
-                        Ok(_) => {
-                            let label = if is_periodic { " (periodic)" } else { "" };
-                            info!("✅ NOTIFY alive{} to localhost: {} (NT={})", label, usn, nt);
-                        }
-                        Err(loopback_err) => {
-                            let label = if is_periodic { "periodic " } else { "" };
-                            warn!(
-                                "❌ Failed to send {}NOTIFY alive to localhost for {}: {}",
-                                label, usn, loopback_err
-                            );
-                        }
-                    }
-                } else {
-                    let label = if is_periodic { "periodic " } else { "" };
-                    warn!(
-                        "❌ Failed to send {}NOTIFY alive for {} (no loopback socket available): {}",
-                        label, usn, e
-                    );
-                }
-            }
             Err(e) => {
                 let label = if is_periodic { "periodic " } else { "" };
                 warn!("❌ Failed to send {}NOTIFY alive for {}: {}", label, usn, e);
@@ -331,11 +238,7 @@ impl SsdpServer {
     }
 
     /// Démarre les annonces périodiques (toutes les MAX_AGE/2 secondes)
-    fn start_periodic_announcements(
-        &self,
-        socket: Arc<UdpSocket>,
-        loopback_socket: Arc<UdpSocket>,
-    ) {
+    fn start_periodic_announcements(&self, socket: Arc<UdpSocket>) {
         let devices = Arc::clone(&self.devices);
         let period = Duration::from_secs((MAX_AGE / 2) as u64);
 
@@ -351,7 +254,7 @@ impl SsdpServer {
                 };
                 for device in &devices_snapshot {
                     for nt in device.get_notification_types() {
-                        Self::send_alive(&socket, Some(&loopback_socket), device, nt, true);
+                        Self::send_alive(&socket, device, nt, true);
                     }
                 }
             }

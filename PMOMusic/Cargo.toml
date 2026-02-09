@@ -15,6 +15,7 @@ pmoaudiocache = { path = "../pmoaudiocache", features = ["pmoserver"]}
 pmoaudio-ext = { path = "../pmoaudio-ext", features = ["all"] }
 pmoapp = { path = "../pmoapp", features = ["pmoserver"] }
 pmocontrol = { path = "../pmocontrol", features = ["pmoserver"] }
+pmowebrenderer = { path = "../pmowebrenderer", features = ["pmoserver"] }
 
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
 tracing = { workspace = true }

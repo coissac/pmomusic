@@ -7,6 +7,7 @@ use pmomediaserver::{
 use pmoserver::Server;
 use pmosource::MusicSourceExt;
 use pmoupnp::UpnpServerExt;
+use pmowebrenderer::WebRendererExt;
 use tracing::info;
 
 #[tokio::main]
@@ -104,12 +105,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Enregistrer le Control Point (découverte renderers/serveurs + API REST + SSE)
     info!("🎛️  Registering Control Point...");
-    let _control_point = server
+    let control_point = server
         .write()
         .await
         .register_control_point(5)
         .await
         .expect("Failed to register Control Point");
+
+    // Enregistrer le WebRenderer (endpoint WebSocket pour renderers navigateur)
+    info!("🌐 Registering WebRenderer...");
+    server
+        .write()
+        .await
+        .register_web_renderer(control_point)
+        .await
+        .expect("Failed to register WebRenderer");
 
     // Ajouter la webapp via le trait WebAppExt
     info!("📡 Registering Web application...");

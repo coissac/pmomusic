@@ -57,7 +57,6 @@ pub enum SsdpEvent {
 #[derive(Clone)]
 pub struct SsdpClient {
     socket: Arc<UdpSocket>,
-    loopback_socket: Arc<UdpSocket>,
 }
 
 impl SsdpClient {
@@ -76,63 +75,32 @@ impl SsdpClient {
         let bind_addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
         socket2.bind(&bind_addr.into())?;
 
+        // Le client SSDP n'a pas besoin de join_multicast_v4 :
+        // il envoie des M-SEARCH et reçoit des réponses unicast.
+        // Le join est seulement utile pour recevoir les NOTIFY multicast,
+        // ce dont le SsdpServer s'occupe.
+        //
+        // On configure uniquement l'interface de sortie multicast sur
+        // l'IP principale pour que send_to vers 239.255.255.250 fonctionne.
+        // Sur macOS, join_multicast_v4 sur des interfaces bridge/VM écrase
+        // IP_MULTICAST_IF et provoque EHOSTUNREACH (errno 65).
+        let local_ip: std::net::Ipv4Addr = pmoutils::guess_local_ip()
+            .parse()
+            .unwrap_or("127.0.0.1".parse().unwrap());
+        socket2.set_multicast_if_v4(&local_ip)?;
+        debug!(
+            "SSDP client: multicast outgoing interface set to {}",
+            local_ip
+        );
+
         let socket: UdpSocket = socket2.into();
         socket.set_read_timeout(Some(Duration::from_secs(1)))?;
         socket.set_multicast_loop_v4(true)?; // utile en dev local
-
-        for iface in get_if_addrs::get_if_addrs()? {
-            if let std::net::IpAddr::V4(ipv4) = iface.ip() {
-                // Join multicast on ALL interfaces, including loopback for local development
-                match socket.join_multicast_v4(&SSDP_MULTICAST_ADDR.parse().unwrap(), &ipv4) {
-                    Ok(()) => {
-                        if ipv4.is_loopback() {
-                            debug!(
-                                "SSDP: joined {} on {} (localhost - dev mode)",
-                                SSDP_MULTICAST_ADDR, ipv4
-                            );
-                        } else {
-                            debug!("SSDP: joined {} on {}", SSDP_MULTICAST_ADDR, ipv4);
-                        }
-                    }
-                    Err(e) => {
-                        warn!(
-                            "SSDP: failed to join {} on {}: {}",
-                            SSDP_MULTICAST_ADDR, ipv4, e
-                        );
-                    }
-                }
-            }
-        }
-
-        // Create a second socket for loopback multicast (when network blocks multicast)
-        let loopback_socket2 = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
-        loopback_socket2.set_reuse_address(true)?;
-
-        // Bind on any address with ephemeral port (like the main socket)
-        let loopback_bind: SocketAddr = "0.0.0.0:0".parse().unwrap();
-        loopback_socket2.bind(&loopback_bind.into())?;
-
-        let loopback_socket: UdpSocket = loopback_socket2.into();
-        loopback_socket.set_multicast_loop_v4(true)?;
-
-        // Join multicast specifically on loopback interface (127.0.0.1)
-        let loopback_addr: std::net::Ipv4Addr = "127.0.0.1".parse().unwrap();
-        if let Err(e) =
-            loopback_socket.join_multicast_v4(&SSDP_MULTICAST_ADDR.parse().unwrap(), &loopback_addr)
-        {
-            warn!("Failed to join multicast on loopback socket: {}", e);
-        } else {
-            debug!(
-                "SSDP loopback socket: joined {} on 127.0.0.1",
-                SSDP_MULTICAST_ADDR
-            );
-        }
 
         info!("✅ SSDP client ready on {}", addr);
 
         Ok(Self {
             socket: Arc::new(socket),
-            loopback_socket: Arc::new(loopback_socket),
         })
     }
 
@@ -150,49 +118,18 @@ impl SsdpClient {
             SSDP_MULTICAST_ADDR, SSDP_PORT, mx, st
         );
 
-        let multicast_addr: SocketAddr = format!("{}:{}", SSDP_MULTICAST_ADDR, SSDP_PORT)
+        let addr: SocketAddr = format!("{}:{}", SSDP_MULTICAST_ADDR, SSDP_PORT)
             .parse()
             .unwrap();
 
-        // Try multicast first
-        match self.socket.send_to(msg.as_bytes(), multicast_addr) {
+        match self.socket.send_to(msg.as_bytes(), addr) {
             Ok(_) => {
-                info!("📤 M-SEARCH sent to multicast (ST={}, MX={})", st, mx);
+                info!("📤 M-SEARCH sent (ST={}, MX={})", st, mx);
                 debug!(
                     "📨 M-SEARCH payload\n<details>\n\n```\n{}\n```\n</details>\n",
                     msg
                 );
                 Ok(())
-            }
-            Err(e) if e.raw_os_error() == Some(65) || e.raw_os_error() == Some(101) => {
-                // Error 65 (EHOSTUNREACH) on macOS, 101 (ENETUNREACH) on Linux
-                // Network blocks multicast (e.g., eduroam) → send to localhost unicast
-                warn!(
-                    "⚠️  Multicast blocked on network ({}), sending to localhost for local devices",
-                    e
-                );
-
-                // Send to localhost unicast (not multicast) - servers on 127.0.0.1:1900 will receive
-                let localhost_addr: SocketAddr =
-                    format!("127.0.0.1:{}", SSDP_PORT).parse().unwrap();
-
-                match self.loopback_socket.send_to(msg.as_bytes(), localhost_addr) {
-                    Ok(_) => {
-                        info!(
-                            "📤 M-SEARCH sent to localhost unicast (ST={}, MX={})",
-                            st, mx
-                        );
-                        debug!(
-                            "📨 M-SEARCH localhost payload\n<details>\n\n```\n{}\n```\n</details>\n",
-                            msg
-                        );
-                        Ok(())
-                    }
-                    Err(loopback_err) => {
-                        warn!("❌ Failed to send M-SEARCH to localhost: {}", loopback_err);
-                        Err(loopback_err)
-                    }
-                }
             }
             Err(e) => {
                 warn!("❌ Failed to send M-SEARCH: {}", e);

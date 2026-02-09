@@ -5,7 +5,7 @@ Parfait. Voici un **schéma fonctionnel minimal** pour un **MediaRenderer UPnP p
 - Le contrôle point est dans : [@pmocontrol](file:///Users/coissac/Sync/maison/Petite_maisons/src/pmomusic/pmocontrol) 
 - Tu implémenteras ce nouveau système de Média Renderer dans la CRATe pmowebrenderer
 
-Tu mettras une version du plan en Markdown dans le répertoire Architecture.
+Tu mettras une version du plan en Markdown dans le répertoire [@Architecture](file:///Users/coissac/Sync/maison/Petite_maisons/src/pmomusic/Blackboard/Architecture) .
 
 ---
 
@@ -136,4 +136,3 @@ ws.onmessage = (evt) => {
 ---
 
 💡 Ce modèle est très proche de ce que font **Mopidy avec Iris**, **Kodi Remote**, ou **Chromecast / local cast** : le device est connu et dédié, pas besoin de découverte réseau.
-
