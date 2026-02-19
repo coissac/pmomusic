@@ -75,27 +75,42 @@ impl SsdpClient {
         let bind_addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
         socket2.bind(&bind_addr.into())?;
 
-        // Le client SSDP n'a pas besoin de join_multicast_v4 :
-        // il envoie des M-SEARCH et reçoit des réponses unicast.
-        // Le join est seulement utile pour recevoir les NOTIFY multicast,
-        // ce dont le SsdpServer s'occupe.
-        //
-        // On configure uniquement l'interface de sortie multicast sur
-        // l'IP principale pour que send_to vers 239.255.255.250 fonctionne.
-        // Sur macOS, join_multicast_v4 sur des interfaces bridge/VM écrase
-        // IP_MULTICAST_IF et provoque EHOSTUNREACH (errno 65).
+        let socket: UdpSocket = socket2.into();
+        socket.set_read_timeout(Some(Duration::from_secs(1)))?;
+        socket.set_multicast_loop_v4(true)?; // utile en dev local
+
+        let multicast_addr = SSDP_MULTICAST_ADDR.parse().unwrap();
+        for iface in get_if_addrs::get_if_addrs()? {
+            if let std::net::IpAddr::V4(ipv4) = iface.ip() {
+                if !ipv4.is_loopback() {
+                    match socket.join_multicast_v4(&multicast_addr, &ipv4) {
+                        Ok(()) => {
+                            debug!("SSDP: joined {} on {}", SSDP_MULTICAST_ADDR, ipv4);
+                        }
+                        Err(e) => {
+                            warn!(
+                                "SSDP: failed to join {} on {}: {}",
+                                SSDP_MULTICAST_ADDR, ipv4, e
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sur macOS, chaque join_multicast_v4 écrase IP_MULTICAST_IF.
+        // On remet explicitement l'interface de sortie sur l'IP principale
+        // pour que send_to vers 239.255.255.250 utilise la bonne interface.
         let local_ip: std::net::Ipv4Addr = pmoutils::guess_local_ip()
             .parse()
-            .unwrap_or("127.0.0.1".parse().unwrap());
+            .unwrap_or("0.0.0.0".parse().unwrap());
+        let socket2 = Socket::from(socket);
         socket2.set_multicast_if_v4(&local_ip)?;
         debug!(
             "SSDP client: multicast outgoing interface set to {}",
             local_ip
         );
-
         let socket: UdpSocket = socket2.into();
-        socket.set_read_timeout(Some(Duration::from_secs(1)))?;
-        socket.set_multicast_loop_v4(true)?; // utile en dev local
 
         info!("✅ SSDP client ready on {}", addr);
 

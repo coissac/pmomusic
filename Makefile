@@ -161,15 +161,17 @@ watch:
 ci: fmt-check clippy test doc-build webapp
 	@echo "$(GREEN)✓ Toutes les vérifications CI passées$(NC)"
 
-## run: Lance le binaire en mode debug
+## run: Compile en debug et lance via Terminal.app (requis pour le multicast sur macOS Sequoia+)
 run: debug
-	@echo "$(YELLOW)→ Lancement de l'application...$(NC)"
-	./target/debug/$(BINARY_NAME)
+	@echo "$(YELLOW)→ Lancement de l'application via Terminal.app...$(NC)"
+	@echo "$(BLUE)  (Terminal.app est nécessaire pour le multicast sur macOS Sequoia+)$(NC)"
+	@osascript -e 'tell application "Terminal" to do script "cd \"$(CURDIR)\" && ./target/debug/$(BINARY_NAME) 2>&1 | tee pmomusic.log; exit"'
 
-## run-release: Lance le binaire en mode release
+## run-release: Compile en release et lance via Terminal.app (requis pour le multicast sur macOS Sequoia+)
 run-release: release
-	@echo "$(YELLOW)→ Lancement de l'application (release)...$(NC)"
-	./$(RUST_TARGET)/$(BINARY_NAME)
+	@echo "$(YELLOW)→ Lancement de l'application (release) via Terminal.app...$(NC)"
+	@echo "$(BLUE)  (Terminal.app est nécessaire pour le multicast sur macOS Sequoia+)$(NC)"
+	@osascript -e 'tell application "Terminal" to do script "cd \"$(CURDIR)\" && ./$(RUST_TARGET)/$(BINARY_NAME) 2>&1 | tee pmomusic.log; exit"'
 
 ## size: Affiche la taille du binaire
 size:

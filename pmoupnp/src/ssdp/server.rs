@@ -74,30 +74,33 @@ impl SsdpServer {
         let bind_addr: SocketAddr = format!("0.0.0.0:{}", SSDP_PORT).parse().unwrap();
         socket2.bind(&bind_addr.into())?;
 
-        // Configurer l'interface de sortie multicast sur l'IP principale.
-        // Sur macOS, sans cela le kernel peut router les paquets multicast
-        // via une interface bridge/VM qui n'a pas de route, causant
-        // EHOSTUNREACH (errno 65).
-        let local_ip: std::net::Ipv4Addr = pmoutils::guess_local_ip()
-            .parse()
-            .unwrap_or("127.0.0.1".parse().unwrap());
-        socket2.set_multicast_if_v4(&local_ip)?;
-        debug!(
-            "SSDP server: multicast outgoing interface set to {}",
-            local_ip
-        );
-
         // Convertir en UdpSocket standard
-        let socket: UdpSocket = socket2.into();
+        let mut socket: UdpSocket = socket2.into();
 
-        // Rejoindre le groupe multicast via INADDR_ANY (l'OS choisit l'interface)
+        // Rejoindre le groupe multicast
         socket.join_multicast_v4(
             &SSDP_MULTICAST_ADDR.parse().unwrap(),
             &"0.0.0.0".parse().unwrap(),
         )?;
 
+        // Sur macOS, join_multicast_v4 peut positionner IP_MULTICAST_IF
+        // sur une interface bridge/VM. On remet explicitement l'interface
+        // de sortie sur l'IP principale.
+        let local_ip: std::net::Ipv4Addr = pmoutils::guess_local_ip()
+            .parse()
+            .unwrap_or("0.0.0.0".parse().unwrap());
+        {
+            let socket2 = Socket::from(socket);
+            socket2.set_multicast_if_v4(&local_ip)?;
+            debug!(
+                "SSDP server: multicast outgoing interface set to {}",
+                local_ip
+            );
+            socket = socket2.into();
+        }
+
         socket.set_read_timeout(Some(Duration::from_secs(1)))?;
-        socket.set_multicast_loop_v4(true)?; // utile en dev local
+        socket.set_multicast_loop_v4(false)?;
 
         let socket = Arc::new(socket);
         self.socket = Some(socket.clone());
