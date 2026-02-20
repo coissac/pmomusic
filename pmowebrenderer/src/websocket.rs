@@ -250,7 +250,8 @@ async fn create_renderer_for_browser(
     #[cfg(not(feature = "pmoserver"))]
     let di = device.create_instance();
 
-    let udn = di.udn().to_string();
+    // Normaliser l'UDN avec le préfixe "uuid:" pour correspondre au format SSDP
+    let udn = format!("uuid:{}", di.udn().to_ascii_lowercase());
 
     let session = Arc::new(WebRendererSession {
         token,
@@ -273,6 +274,8 @@ fn register_with_control_point(
 ) -> Result<(), crate::error::WebRendererError> {
     let base_url = di.base_url().to_string();
     let udn = di.udn().to_ascii_lowercase();
+    // Préfixer avec "uuid:" pour correspondre au format SSDP et éviter les doublons
+    let udn_with_prefix = format!("uuid:{}", udn);
     let device_route = di.route();
     let model = di.get_model();
 
@@ -290,8 +293,8 @@ fn register_with_control_point(
     ));
 
     let renderer_info = pmocontrol::RendererInfo::make(
-        DeviceId(udn.clone()),
-        udn.clone(),
+        DeviceId(udn_with_prefix.clone()),
+        udn_with_prefix.clone(),
         model.friendly_name().to_string(),
         model.model_name().to_string(),
         "PMOMusic".to_string(),
