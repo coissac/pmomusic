@@ -4,6 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useTabs } from "@/composables/useTabs";
 import { useRenderers } from "@/composables/useRenderers";
 import { useMediaServers } from "@/composables/useMediaServers";
+import { useWebRenderer } from "@/composables/useWebRenderer";
 import { useSwipe } from "@vueuse/core";
 
 // Import des composants
@@ -20,6 +21,11 @@ const { tabs, activeTabId, switchTab, activeTab, syncWithRenderers, isEmpty } =
     useTabs();
 const { allRenderers, fetchRenderers, getStateById } = useRenderers();
 const { allServers, fetchServers } = useMediaServers();
+
+// WebRenderer : ce navigateur s'enregistre automatiquement comme renderer UPnP
+const webRenderer = useWebRenderer();
+// Rafraîchir la liste des renderers dès que la session WebRenderer est établie
+webRenderer.onConnected(() => void fetchRenderers(true));
 
 // État des drawers
 const drawerOpen = ref(false);
@@ -97,13 +103,24 @@ function handleRendererSelect(rendererId: string) {
     }
 }
 
+// Filtre la liste des renderers pour exclure les WebRenderers d'autres navigateurs.
+// Seul le WebRenderer créé par ce navigateur (identifié par son UDN) reste visible.
+function filterRenderers(renderers: typeof allRenderers.value) {
+    const myUdn = webRenderer.rendererInfo.value?.udn ?? null;
+    return renderers.filter((r) => {
+        if (r.model_name !== "WebRenderer") return true; // renderer classique : toujours visible
+        if (myUdn === null) return false; // pas encore de session : masquer tous les WebRenderers
+        return r.id === myUdn; // ne garder que le nôtre
+    });
+}
+
 // Sync route query params avec l'état des tabs
 onMounted(async () => {
     // Fetch renderers et servers au montage
     await Promise.all([fetchRenderers(), fetchServers()]);
 
-    // Sync initial des tabs avec les renderers
-    syncWithRenderers(allRenderers.value);
+    // Sync initial des tabs avec les renderers (en excluant les WebRenderers étrangers)
+    syncWithRenderers(filterRenderers(allRenderers.value));
 
     // Restaurer l'onglet actif depuis l'URL
     const urlTabId = route.query.tab as string;
@@ -116,9 +133,17 @@ onMounted(async () => {
 watch(
     () => allRenderers.value,
     (newRenderers) => {
-        syncWithRenderers(newRenderers);
+        syncWithRenderers(filterRenderers(newRenderers));
     },
     { deep: true },
+);
+
+// Watch l'UDN du WebRenderer local : quand il s'établit, resync pour faire apparaître notre onglet
+watch(
+    () => webRenderer.rendererInfo.value?.udn,
+    () => {
+        syncWithRenderers(filterRenderers(allRenderers.value));
+    },
 );
 
 // Watch les changements d'URL pour changer d'onglet

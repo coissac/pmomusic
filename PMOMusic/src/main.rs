@@ -137,8 +137,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("✅ PMOMusic is ready!");
     info!("Press Ctrl+C to stop...");
 
-    // Attendre le signal Ctrl+C et l'arrêt du serveur HTTP
-    server.write().await.wait().await;
+    // Extraire le join_handle AVANT de libérer le write lock,
+    // pour pouvoir l'awaiter sans tenir le write lock du serveur global.
+    // (Tenir le write lock pendant wait() bloquerait register_device() dynamique)
+    let join_handle = server.write().await.take_join_handle();
+    if let Some(h) = join_handle {
+        let _ = h.await;
+    }
 
     // Le serveur HTTP est arrêté, mais des threads (ControlPoint, etc.) peuvent encore tourner
     // Attendre 2 secondes pour laisser le temps aux threads de se terminer

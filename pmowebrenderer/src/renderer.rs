@@ -48,6 +48,23 @@ pub enum FactoryError {
     VariableError(String),
 }
 
+/// Extrait un nom de navigateur court depuis un User-Agent complet.
+fn extract_browser_name(ua: &str) -> &str {
+    if ua.contains("Edg/") || ua.contains("EdgA/") {
+        "Edge"
+    } else if ua.contains("OPR/") || ua.contains("Opera") {
+        "Opera"
+    } else if ua.contains("Chrome/") {
+        "Chrome"
+    } else if ua.contains("Firefox/") {
+        "Firefox"
+    } else if ua.contains("Safari/") {
+        "Safari"
+    } else {
+        "Browser"
+    }
+}
+
 /// Factory pour créer des Device UPnP WebRenderer avec des handlers WebSocket
 pub struct WebRendererFactory;
 
@@ -65,10 +82,11 @@ impl WebRendererFactory {
         let renderingcontrol = Self::build_renderingcontrol(ws_sender.clone(), state.clone())?;
         let connectionmanager = Self::build_connectionmanager()?;
 
+        let short_name = extract_browser_name(browser_name);
         let device = Device::new(
-            format!("WebRenderer"),
+            "WebRenderer".to_string(),
             "MediaRenderer".to_string(),
-            format!("Web Audio - {}", browser_name),
+            format!("Web Audio – {}", short_name),
         );
         device
             .add_service(Arc::new(avtransport))

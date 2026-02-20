@@ -31,6 +31,11 @@ fn avtransporturimetadataparser(value: &str) -> Result<Box<dyn Reflect>, StateVa
 }
 
 fn avtransporturimetadatamarshal(value: &dyn Reflect) -> Result<String, StateVariableError> {
+    // Si c'est déjà une String, on la retourne directement
+    if let Some(s) = value.as_any().downcast_ref::<String>() {
+        return Ok(s.clone());
+    }
+    // Sinon, on essaie de convertir depuis DIDLLite
     let didl = value
         .downcast_ref::<DIDLLite>()
         .ok_or_else(|| StateVariableError::ConversionError("DIDLLite".into()))?;
@@ -45,6 +50,8 @@ pub static AVTRANSPORTURIMETADATA: Lazy<Arc<StateVariable>> =
 
         sv.set_value_parser(Arc::new(avtransporturimetadataparser))
             .expect("Failed to set parser");
+        sv.set_value_marshaler(Arc::new(avtransporturimetadatamarshal))
+            .expect("Failed to set marshaler");
         Arc::new(sv)
     });
 

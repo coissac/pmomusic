@@ -6,8 +6,10 @@
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-use pmoupnp::actions::{ActionData, ActionError, ActionHandler};
+use pmodidl::DIDLLite;
+use pmoupnp::actions::{ActionData, ActionError, ActionHandler, get_value};
 use pmoupnp::{get, set};
+use pmoutils::ToXmlElement;
 
 use crate::messages::{CommandParams, PlaybackState, ServerMessage, TransportAction};
 use crate::state::SharedState;
@@ -118,7 +120,13 @@ pub fn set_uri_handler(
         let state = state.clone();
         Box::pin(async move {
             let uri: String = get!(&data, "CurrentURI", String);
-            let metadata: String = get!(&data, "CurrentURIMetaData", String);
+            // CurrentURIMetaData peut être String ou DIDLLite (après parsing)
+            let metadata: String = get_value::<String>(&data, "CurrentURIMetaData")
+                .or_else(|_| {
+                    get_value::<DIDLLite>(&data, "CurrentURIMetaData")
+                        .map(|didl| didl.to_xml())
+                })
+                .unwrap_or_default();
             let _ = ws.send(ServerMessage::Command {
                 action: TransportAction::SetUri,
                 params: Some(CommandParams {

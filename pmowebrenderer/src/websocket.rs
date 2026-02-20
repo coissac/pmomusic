@@ -40,11 +40,13 @@ pub async fn websocket_handler(
     ws: WebSocketUpgrade,
     State(state): State<WebSocketState>,
 ) -> impl IntoResponse {
+    tracing::info!("WebRenderer WebSocket upgrade request received");
     ws.on_upgrade(move |socket: WebSocket| handle_socket(socket, state))
 }
 
 /// Gestion de la connexion WebSocket
 async fn handle_socket(socket: WebSocket, state: WebSocketState) {
+    tracing::info!("WebRenderer WebSocket connection established");
     let (mut sink, mut stream) = socket.split();
 
     // Canal pour envoyer des messages au navigateur
@@ -68,11 +70,14 @@ async fn handle_socket(socket: WebSocket, state: WebSocketState) {
     while let Some(msg_result) = stream.next().await {
         match msg_result {
             Ok(Message::Text(text)) => {
+                tracing::info!("WebRenderer received text message: {}", &text);
                 match serde_json::from_str::<ClientMessage>(&text) {
                     Ok(ClientMessage::Init { capabilities }) => {
+                        tracing::info!("WebRenderer Init received, creating renderer...");
                         // Créer le renderer UPnP pour ce navigateur
                         match create_renderer_for_browser(&capabilities, tx.clone(), &state).await {
                             Ok(session) => {
+                                tracing::info!("WebRenderer create_renderer_for_browser OK");
                                 let token = session.token.clone();
                                 let udn = session.udn.clone();
 
@@ -106,7 +111,7 @@ async fn handle_socket(socket: WebSocket, state: WebSocketState) {
                                 );
                             }
                             Err(e) => {
-                                tracing::error!("Failed to create WebRenderer: {}", e);
+                                tracing::error!("Failed to create WebRenderer: {:?}", e);
                                 break;
                             }
                         }
@@ -204,12 +209,14 @@ async fn create_renderer_for_browser(
     let token = Uuid::new_v4().to_string();
 
     // Construire le Device model avec les handlers WS
+    tracing::info!("WebRenderer: creating device model...");
     let device = WebRendererFactory::create_device(
         &capabilities.user_agent,
         ws_sender.clone(),
         shared_state.clone(),
     )
     .map_err(|e| crate::error::WebRendererError::DeviceCreationError(e.to_string()))?;
+    tracing::info!("WebRenderer: device model created");
 
     let device = Arc::new(device);
 
@@ -218,19 +225,24 @@ async fn create_renderer_for_browser(
     let di = {
         use pmoupnp::UpnpServerExt;
 
+        tracing::info!("WebRenderer: getting server arc...");
         let server_arc =
             pmoserver::get_server().ok_or(crate::error::WebRendererError::ServerNotAvailable)?;
+        tracing::info!("WebRenderer: got server arc, acquiring write lock...");
 
         let di = {
             let mut server = server_arc.write().await;
+            tracing::info!("WebRenderer: write lock acquired, registering device...");
             server
                 .register_device(device)
                 .await
                 .map_err(|e| crate::error::WebRendererError::RegistrationError(e.to_string()))?
         };
+        tracing::info!("WebRenderer: device registered, registering with ControlPoint...");
 
         // Enregistrer avec le ControlPoint
         register_with_control_point(&di, ws_state)?;
+        tracing::info!("WebRenderer: registered with ControlPoint");
 
         di
     };

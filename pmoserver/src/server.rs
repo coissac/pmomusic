@@ -550,7 +550,6 @@ impl Server {
 
         self.join_handle = Some(tokio::spawn(async move {
             let server_future = async {
-                let r = router.read().await.clone();
                 let listener = match tokio::net::TcpListener::bind(addr).await {
                     Ok(l) => l,
                     Err(e) => {
@@ -559,7 +558,19 @@ impl Server {
                     }
                 };
 
-                axum::serve(listener, r.into_make_service())
+                // Utiliser un router dynamique qui relit le router à chaque requête.
+                // Cela permet d'enregistrer de nouvelles routes après le démarrage du serveur
+                // (ex: WebRenderer dynamique).
+                let dynamic_router = axum::Router::new().fallback(move |req: axum::extract::Request| {
+                    let router = router.clone();
+                    async move {
+                        use tower::ServiceExt;
+                        let r = router.read().await.clone();
+                        r.into_service::<axum::body::Body>().oneshot(req).await
+                    }
+                });
+
+                axum::serve(listener, dynamic_router.into_make_service())
                     .with_graceful_shutdown(async move {
                         let _ = shutdown_rx.await;
                     })
@@ -596,6 +607,12 @@ impl Server {
         if let Some(h) = self.join_handle.take() {
             let _ = h.await;
         }
+    }
+
+    /// Extrait le JoinHandle du serveur HTTP pour pouvoir l'awaiter
+    /// sans tenir le write lock du serveur global.
+    pub fn take_join_handle(&mut self) -> Option<JoinHandle<()>> {
+        self.join_handle.take()
     }
 
     /// Retourne l'URL de base complète du serveur (schéma + hôte + port).
