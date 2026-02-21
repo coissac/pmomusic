@@ -64,6 +64,7 @@ async fn handle_socket(socket: WebSocket, state: WebSocketState) {
     });
 
     let mut session_token: Option<String> = None;
+    #[allow(unused_variables, unused_assignments, unused_mut)]
     let mut device_udn: Option<String> = None;
 
     // Boucle de réception des messages du navigateur
@@ -74,7 +75,7 @@ async fn handle_socket(socket: WebSocket, state: WebSocketState) {
                 match serde_json::from_str::<ClientMessage>(&text) {
                     Ok(ClientMessage::Init { capabilities }) => {
                         tracing::info!("WebRenderer Init received, creating renderer...");
-                        // Créer le renderer UPnP pour ce navigateur
+                        // Créer ou reconnecter le renderer UPnP pour ce navigateur.
                         match create_renderer_for_browser(&capabilities, tx.clone(), &state).await {
                             Ok(session) => {
                                 tracing::info!("WebRenderer create_renderer_for_browser OK");
@@ -98,8 +99,32 @@ async fn handle_socket(socket: WebSocket, state: WebSocketState) {
                                     },
                                 });
 
+                                // Si une URI est déjà chargée (reconnexion en cours de lecture),
+                                // envoyer l'état complet pour que le navigateur puisse reprendre.
+                                {
+                                    let s = session.state.read();
+                                    if s.current_uri.is_some() {
+                                        let _ = tx.send(ServerMessage::StateSync {
+                                            current_uri: s.current_uri.clone(),
+                                            current_metadata: s.current_metadata.clone(),
+                                            next_uri: s.next_uri.clone(),
+                                            next_metadata: s.next_metadata.clone(),
+                                            playback_state: s.playback_state.clone(),
+                                            position: s.position.clone(),
+                                            volume: s.volume,
+                                            mute: s.mute,
+                                        });
+                                        tracing::info!(
+                                            udn = %udn,
+                                            state = ?s.playback_state,
+                                            "WebRenderer: sent StateSync to reconnected browser"
+                                        );
+                                    }
+                                }
+
                                 session_token = Some(token.clone());
-                                device_udn = Some(udn.clone());
+                                #[cfg(feature = "pmoserver")]
+                                { device_udn = Some(udn.clone()); }
 
                                 state.session_manager.add_session(session);
 
@@ -237,7 +262,13 @@ async fn handle_socket(socket: WebSocket, state: WebSocketState) {
                     }
                 }
             }
-            Ok(Message::Close(_)) => break,
+            Ok(Message::Binary(b)) => {
+                tracing::warn!("WebRenderer received binary message ({} bytes)", b.len());
+            }
+            Ok(Message::Close(_)) => {
+                tracing::info!("WebRenderer WebSocket closed by client");
+                break;
+            }
             Err(e) => {
                 tracing::error!("WebSocket error: {}", e);
                 break;
@@ -247,6 +278,7 @@ async fn handle_socket(socket: WebSocket, state: WebSocketState) {
     }
 
     // Cleanup à la déconnexion
+    tracing::info!("WebRenderer WebSocket handler exiting (session_token={:?})", session_token);
     if let Some(token) = session_token {
         state.session_manager.remove_session(&token);
     }
@@ -263,65 +295,145 @@ async fn handle_socket(socket: WebSocket, state: WebSocketState) {
     send_task.abort();
 }
 
-/// Crée un DeviceInstance UPnP et l'enregistre pour un navigateur
+/// Crée ou reconnecte un DeviceInstance UPnP pour un navigateur.
+///
+/// - Première connexion : crée le device, l'enregistre, crée la session.
+/// - Reconnexion (reload) : retrouve la session existante par UDN, met à jour le
+///   `SharedSender` avec le nouveau tx WebSocket (les handlers continuent de fonctionner),
+///   et crée une nouvelle session avec un nouveau token.
 async fn create_renderer_for_browser(
     capabilities: &BrowserCapabilities,
     ws_sender: mpsc::UnboundedSender<ServerMessage>,
     ws_state: &WebSocketState,
 ) -> Result<Arc<WebRendererSession>, crate::error::WebRendererError> {
-    let shared_state: SharedState = Arc::new(RwLock::new(RendererState::default()));
     let token = Uuid::new_v4().to_string();
 
-    // Construire le Device model avec les handlers WS
-    tracing::info!("WebRenderer: creating device model...");
-    let device = WebRendererFactory::create_device(
-        &capabilities.user_agent,
-        ws_sender.clone(),
-        shared_state.clone(),
-    )
-    .map_err(|e| crate::error::WebRendererError::DeviceCreationError(e.to_string()))?;
-    tracing::info!("WebRenderer: device model created");
+    // Persister l'UDN dérivé de l'instance_id dans la config pour que device_instance.rs
+    // le retrouve de façon déterministe. La clé ("MediaRenderer", instance_id) est unique
+    // par onglet/navigateur et stable entre les reloads.
+    let instance_udn = capabilities.instance_id.clone();
+    if let Err(e) = pmoconfig::get_config().set_device_udn(
+        "MediaRenderer",
+        &instance_udn,
+        instance_udn.clone(),
+    ) {
+        tracing::warn!("WebRenderer: failed to persist UDN in config: {:?}", e);
+    }
 
-    let device = Arc::new(device);
+    // UDN normalisé tel que stocké dans le DEVICE_REGISTRY (sans préfixe "uuid:")
+    let candidate_udn = instance_udn.to_ascii_lowercase();
+    // UDN avec préfixe "uuid:" pour le ControlPoint et la session
+    let full_udn = format!("uuid:{}", candidate_udn);
+
+    // ── Reconnexion : session existante par UDN ───────────────────────────────
+    // Si une session avec ce même UDN existe encore dans le SessionManager, on
+    // met à jour son SharedSender (les handlers UPnP enverront vers le nouveau WS).
+    if let Some(existing_session) = ws_state.session_manager.get_session_by_udn(&full_udn) {
+        tracing::info!(udn = %full_udn, "WebRenderer: reconnecting via existing session");
+        existing_session.shared_sender.set(ws_sender.clone());
+
+        #[cfg(feature = "pmoserver")]
+        register_with_control_point(&existing_session.device_instance, ws_state)?;
+
+        // Nouvelle session avec nouveau token, mais même device/state/sender partagés
+        let session = Arc::new(WebRendererSession {
+            token,
+            udn: full_udn,
+            device_instance: existing_session.device_instance.clone(),
+            shared_sender: existing_session.shared_sender.clone(),
+            state: existing_session.state.clone(),
+            created_at: existing_session.created_at,
+            last_activity: existing_session.last_activity.clone(),
+        });
+        return Ok(session);
+    }
+
+    // ── Première connexion : création complète ────────────────────────────────
 
     // Enregistrer le device via UpnpServerExt (gère base_url, register_urls, DEVICE_REGISTRY)
+    // Retourne (DeviceInstance, SharedSender effectif, SharedState effective pour cette session)
     #[cfg(feature = "pmoserver")]
-    let di = {
+    let (di, shared_sender, shared_state) = {
         use pmoupnp::UpnpServerExt;
 
-        tracing::info!("WebRenderer: getting server arc...");
+        tracing::info!("WebRenderer: candidate UDN = {}", candidate_udn);
+
+        // Vérifier si un device avec ce même UDN est déjà dans le DEVICE_REGISTRY
+        // (cas où la session a expiré mais le device est encore enregistré).
         let server_arc =
             pmoserver::get_server().ok_or(crate::error::WebRendererError::ServerNotAvailable)?;
-        tracing::info!("WebRenderer: got server arc, acquiring write lock...");
-
-        let di = {
-            let mut server = server_arc.write().await;
-            tracing::info!("WebRenderer: write lock acquired, registering device...");
-            server
-                .register_device(device)
-                .await
-                .map_err(|e| crate::error::WebRendererError::RegistrationError(e.to_string()))?
+        let existing_di = {
+            let server = server_arc.read().await;
+            server.get_device(&candidate_udn)
         };
-        tracing::info!("WebRenderer: device registered, registering with ControlPoint...");
 
-        // Enregistrer avec le ControlPoint
-        register_with_control_point(&di, ws_state)?;
-        tracing::info!("WebRenderer: registered with ControlPoint");
+        if let Some(di) = existing_di {
+            tracing::info!(udn = %candidate_udn, "WebRenderer: reusing device from registry (session expired)");
+            // Mettre à jour le SharedSender de ce device (session supprimée mais device toujours dans registry).
+            // Le SharedSender et le SharedState sont ceux capturés dans les handlers du di existant.
+            let effective_sender = if let Some(existing_sender) = ws_state.session_manager.get_sender_by_udn(&full_udn) {
+                existing_sender.set(ws_sender);
+                tracing::info!(udn = %full_udn, "WebRenderer: updated SharedSender for reused device");
+                existing_sender
+            } else {
+                // Fallback : ne devrait pas arriver mais on crée un sender neuf
+                tracing::warn!(udn = %full_udn, "WebRenderer: no SharedSender found for reused device");
+                let new_state: SharedState = Arc::new(RwLock::new(RendererState::default()));
+                let (_, new_sender) = WebRendererFactory::create_device_with_name(
+                    &instance_udn, &capabilities.user_agent, ws_sender, new_state.clone(),
+                ).map_err(|e| crate::error::WebRendererError::DeviceCreationError(e.to_string()))?;
+                new_sender
+            };
+            let effective_state = ws_state.session_manager.get_state_by_udn(&full_udn)
+                .unwrap_or_else(|| Arc::new(RwLock::new(RendererState::default())));
+            register_with_control_point(&di, ws_state)?;
+            (di, effective_sender, effective_state)
+        } else {
+            // Véritablement première connexion : créer device + state + sender
+            let new_state: SharedState = Arc::new(RwLock::new(RendererState::default()));
+            tracing::info!("WebRenderer: creating device model...");
+            let (device, new_sender) = WebRendererFactory::create_device_with_name(
+                &instance_udn,
+                &capabilities.user_agent,
+                ws_sender,
+                new_state.clone(),
+            )
+            .map_err(|e| crate::error::WebRendererError::DeviceCreationError(e.to_string()))?;
+            tracing::info!("WebRenderer: device model created");
 
-        di
+            let device = Arc::new(device);
+            tracing::info!("WebRenderer: registering new device...");
+            let di = {
+                let mut server = server_arc.write().await;
+                server
+                    .register_device(device)
+                    .await
+                    .map_err(|e| crate::error::WebRendererError::RegistrationError(e.to_string()))?
+            };
+            tracing::info!("WebRenderer: device registered");
+            register_with_control_point(&di, ws_state)?;
+            (di, new_sender, new_state)
+        }
     };
 
     #[cfg(not(feature = "pmoserver"))]
-    let di = device.create_instance();
-
-    // Normaliser l'UDN avec le préfixe "uuid:" pour correspondre au format SSDP
-    let udn = format!("uuid:{}", di.udn().to_ascii_lowercase());
+    let (di, shared_sender, shared_state) = {
+        let new_state: SharedState = Arc::new(RwLock::new(RendererState::default()));
+        let (device, new_sender) = WebRendererFactory::create_device_with_name(
+            &instance_udn,
+            &capabilities.user_agent,
+            ws_sender,
+            new_state.clone(),
+        )
+        .map_err(|e| crate::error::WebRendererError::DeviceCreationError(e.to_string()))?;
+        (Arc::new(device).create_instance(), new_sender, new_state)
+    };
 
     let session = Arc::new(WebRendererSession {
         token,
-        udn,
+        udn: full_udn,
         device_instance: di,
-        ws_sender,
+        shared_sender,
         state: shared_state,
         created_at: SystemTime::now(),
         last_activity: Arc::new(RwLock::new(SystemTime::now())),

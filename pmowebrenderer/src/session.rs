@@ -4,19 +4,18 @@ use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
-use tokio::sync::mpsc;
 
 use pmoupnp::devices::DeviceInstance;
 
-use crate::messages::ServerMessage;
-use crate::state::SharedState;
+use crate::state::{SharedSender, SharedState};
 
 /// Session WebSocket liée à un MediaRenderer privé
 pub struct WebRendererSession {
     pub token: String,
     pub udn: String,
     pub device_instance: Arc<DeviceInstance>,
-    pub ws_sender: mpsc::UnboundedSender<ServerMessage>,
+    /// Sender partagé : mis à jour à chaque reconnexion WebSocket.
+    pub shared_sender: SharedSender,
     pub state: SharedState,
     pub created_at: SystemTime,
     pub last_activity: Arc<RwLock<SystemTime>>,
@@ -26,6 +25,12 @@ pub struct WebRendererSession {
 #[derive(Clone)]
 pub struct SessionManager {
     sessions: Arc<RwLock<HashMap<String, Arc<WebRendererSession>>>>,
+    /// Map UDN → SharedSender, persiste même après suppression de la session.
+    /// Permet de retrouver et mettre à jour le sender à la reconnexion.
+    senders: Arc<RwLock<HashMap<String, SharedSender>>>,
+    /// Map UDN → SharedState, persiste même après suppression de la session.
+    /// Permet de réutiliser l'état partagé avec les handlers du device existant.
+    states: Arc<RwLock<HashMap<String, SharedState>>>,
     timeout_duration: Duration,
 }
 
@@ -33,6 +38,8 @@ impl SessionManager {
     pub fn new(timeout_duration: Duration) -> Self {
         let manager = Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
+            senders: Arc::new(RwLock::new(HashMap::new())),
+            states: Arc::new(RwLock::new(HashMap::new())),
             timeout_duration,
         };
 
@@ -42,7 +49,12 @@ impl SessionManager {
 
     pub fn add_session(&self, session: Arc<WebRendererSession>) {
         let token = session.token.clone();
+        let udn = session.udn.clone();
+        let sender = session.shared_sender.clone();
+        let state = session.state.clone();
         self.sessions.write().insert(token.clone(), session);
+        self.senders.write().insert(udn.clone(), sender);
+        self.states.write().insert(udn, state);
         tracing::info!(token = %token, "WebRenderer session added");
     }
 
@@ -54,6 +66,22 @@ impl SessionManager {
         } else {
             None
         }
+    }
+
+    /// Retrouve une session par UDN du device (indépendant du token WebSocket).
+    pub fn get_session_by_udn(&self, udn: &str) -> Option<Arc<WebRendererSession>> {
+        let sessions = self.sessions.read();
+        sessions.values().find(|s| s.udn == udn).cloned()
+    }
+
+    /// Retrouve le SharedSender par UDN (persiste même après suppression de session).
+    pub fn get_sender_by_udn(&self, udn: &str) -> Option<SharedSender> {
+        self.senders.read().get(udn).cloned()
+    }
+
+    /// Retrouve le SharedState par UDN (persiste même après suppression de session).
+    pub fn get_state_by_udn(&self, udn: &str) -> Option<SharedState> {
+        self.states.read().get(udn).cloned()
     }
 
     pub fn remove_session(&self, token: &str) -> Option<Arc<WebRendererSession>> {

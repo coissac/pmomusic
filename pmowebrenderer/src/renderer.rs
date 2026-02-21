@@ -13,7 +13,7 @@ use pmoupnp::services::Service;
 
 use crate::handlers;
 use crate::messages::ServerMessage;
-use crate::state::SharedState;
+use crate::state::{SharedSender, SharedState};
 
 // ─── Réimport des variables statiques de pmomediarenderer ───────────────────
 // Variables AVTransport
@@ -71,20 +71,25 @@ pub struct WebRendererFactory;
 impl WebRendererFactory {
     /// Crée un Device model UPnP complet pour un WebRenderer.
     ///
-    /// Le device est construit avec des action handlers qui relaient
-    /// les commandes SOAP vers le navigateur via le `ws_sender`.
-    pub fn create_device(
-        browser_name: &str,
+    /// `device_name` sert de clé pour retrouver l'UDN persistant dans la config.
+    /// `browser_ua` est le User-Agent complet (pour déterminer le nom affiché).
+    ///
+    /// Retourne le Device et le `SharedSender` associé. Le `SharedSender` peut être
+    /// mis à jour à chaque reconnexion WebSocket via `shared_sender.set(new_tx)`.
+    pub fn create_device_with_name(
+        device_name: &str,
+        browser_ua: &str,
         ws_sender: mpsc::UnboundedSender<ServerMessage>,
         state: SharedState,
-    ) -> Result<Device, FactoryError> {
-        let avtransport = Self::build_avtransport(ws_sender.clone(), state.clone())?;
-        let renderingcontrol = Self::build_renderingcontrol(ws_sender.clone(), state.clone())?;
+    ) -> Result<(Device, SharedSender), FactoryError> {
+        let shared_sender = SharedSender::new(ws_sender);
+        let avtransport = Self::build_avtransport(shared_sender.clone(), state.clone())?;
+        let renderingcontrol = Self::build_renderingcontrol(shared_sender.clone(), state.clone())?;
         let connectionmanager = Self::build_connectionmanager()?;
 
-        let short_name = extract_browser_name(browser_name);
+        let short_name = extract_browser_name(browser_ua);
         let device = Device::new(
-            "WebRenderer".to_string(),
+            device_name.to_string(),
             "MediaRenderer".to_string(),
             format!("Web Audio – {}", short_name),
         );
@@ -98,12 +103,12 @@ impl WebRendererFactory {
             .add_service(Arc::new(connectionmanager))
             .map_err(|e| FactoryError::ServiceError(format!("{:?}", e)))?;
 
-        Ok(device)
+        Ok((device, shared_sender))
     }
 
     /// Construit le service AVTransport avec les handlers WebSocket
     fn build_avtransport(
-        ws: mpsc::UnboundedSender<ServerMessage>,
+        ws: SharedSender,
         state: SharedState,
     ) -> Result<Service, FactoryError> {
         let mut svc = Service::new("AVTransport".to_string());
@@ -419,7 +424,7 @@ impl WebRendererFactory {
 
     /// Construit le service RenderingControl avec les handlers WebSocket
     fn build_renderingcontrol(
-        ws: mpsc::UnboundedSender<ServerMessage>,
+        ws: SharedSender,
         state: SharedState,
     ) -> Result<Service, FactoryError> {
         let mut svc = Service::new("RenderingControl".to_string());

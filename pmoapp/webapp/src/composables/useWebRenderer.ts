@@ -22,6 +22,7 @@ import { ref, onMounted, onUnmounted, readonly } from "vue";
 // ─── Types (miroir de messages.rs) ────────────────────────────────────────────
 
 interface BrowserCapabilities {
+    instance_id: string;
     user_agent: string;
     supported_formats: string[];
 }
@@ -41,8 +42,21 @@ interface CommandParams {
     position?: string;
 }
 
+interface StateSyncMessage {
+    type: "state_sync";
+    current_uri?: string;
+    current_metadata?: string;
+    next_uri?: string;
+    next_metadata?: string;
+    playback_state: PlaybackState;
+    position?: string;
+    volume: number;
+    mute: boolean;
+}
+
 type ServerMessage =
     | { type: "session_created"; token: string; renderer_info: RendererInfo }
+    | StateSyncMessage
     | { type: "command"; action: TransportAction; params?: CommandParams }
     | { type: "set_volume"; volume: number }
     | { type: "set_mute"; mute: boolean }
@@ -57,6 +71,44 @@ type ClientMessage =
     | { type: "volume_update"; volume: number; mute: boolean }
     | { type: "track_ended" }
     | { type: "pong" };
+
+// ─── Identifiant stable de l'instance navigateur ─────────────────────────────
+
+const INSTANCE_ID_KEY = "pmomusic_webrenderer_instance_id";
+
+/**
+ * Génère un UUID v4. Utilise crypto.randomUUID() si disponible (HTTPS/localhost),
+ * sinon fallback sur crypto.getRandomValues() (disponible partout, y compris HTTP).
+ */
+function generateUUID(): string {
+    if (typeof crypto.randomUUID === "function") {
+        return crypto.randomUUID();
+    }
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    bytes[6] = (bytes[6]! & 0x0f) | 0x40;
+    bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+    const hex = Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/**
+ * Retourne un UUID stable pour cette instance navigateur.
+ * Généré une fois, persisté en localStorage, réutilisé entre les reloads.
+ */
+function getOrCreateInstanceId(): string {
+    try {
+        let id = localStorage.getItem(INSTANCE_ID_KEY);
+        if (!id) {
+            id = generateUUID();
+            localStorage.setItem(INSTANCE_ID_KEY, id);
+        }
+        return id;
+    } catch {
+        // localStorage unavailable (private mode, etc.) → use a session-scoped UUID
+        return generateUUID();
+    }
+}
 
 // ─── Détection des formats supportés ─────────────────────────────────────────
 
@@ -151,7 +203,41 @@ class GaplessEngine {
     setCurrent(uri: string): void {
         this.nextUri = null;
         this.onStateChange("TRANSITIONING");
+        this._loadCurrent(uri);
 
+        // Si play() est arrivé avant set_uri (race condition), lancer la lecture maintenant
+        if (this.playPending) {
+            this.playPending = false;
+            this.play().catch((e) =>
+                console.error("[GaplessEngine] deferred play() failed:", e),
+            );
+        }
+    }
+
+    /**
+     * Restaure l'état audio après un reload sans notifier le serveur de TRANSITIONING.
+     * Le serveur connaît déjà l'état ; on recharge juste l'audio localement.
+     * Si shouldPlay=true mais que l'autoplay est bloqué, on notifie PAUSED
+     * pour que l'interface puisse proposer un bouton Play fonctionnel.
+     */
+    async syncRestore(currentUri: string, nextUri: string | undefined, shouldPlay: boolean): Promise<void> {
+        this._loadCurrent(currentUri);
+        if (nextUri) {
+            this.setNext(nextUri);
+        }
+        if (shouldPlay) {
+            try {
+                await this.play();
+                // play() a réussi : onStateChange("PLAYING") a déjà été appelé dans play()
+            } catch {
+                // Autoplay bloqué par le navigateur : signaler PAUSED au serveur
+                // L'audio est chargé, un clic Play suffira à démarrer
+                this.onStateChange("PAUSED");
+            }
+        }
+    }
+
+    private _loadCurrent(uri: string): void {
         const el = this.slots[this.currentSlot];
         // Retirer l'écouteur "ended" de l'autre slot si présent
         const otherSlot = (1 - this.currentSlot) as 0 | 1;
@@ -167,14 +253,6 @@ class GaplessEngine {
         el.onloadedmetadata = () => {
             this._duration = el.duration || 0;
         };
-
-        // Si play() est arrivé avant set_uri (race condition), lancer la lecture maintenant
-        if (this.playPending) {
-            this.playPending = false;
-            this.play().catch((e) =>
-                console.error("[GaplessEngine] deferred play() failed:", e),
-            );
-        }
     }
 
     /** Précharge la piste suivante dans l'autre slot. */
@@ -214,8 +292,8 @@ class GaplessEngine {
         try {
             await el.play();
         } catch (e) {
-            console.error("[GaplessEngine] play() failed:", e);
-            return;
+            console.warn("[GaplessEngine] play() failed (autoplay blocked?):", e);
+            throw e;
         }
 
         this.startPositionTimer();
@@ -381,7 +459,9 @@ export function useWebRenderer() {
                 break;
 
             case "play":
-                await engine.play();
+                await engine.play().catch((e) =>
+                    console.warn("[WebRenderer] play() failed:", e),
+                );
                 break;
 
             case "pause":
@@ -418,6 +498,17 @@ export function useWebRenderer() {
                 onConnectedCallback?.();
                 break;
 
+            case "state_sync":
+                if (engine && msg.current_uri) {
+                    engine.setVolume(msg.volume / 100);
+                    engine.setMute(msg.mute);
+                    const shouldPlay = msg.playback_state === "PLAYING" || msg.playback_state === "TRANSITIONING";
+                    // syncRestore recharge l'audio sans notifier le serveur de l'état
+                    // (le serveur connaît déjà l'état ; on évite un aller-retour TRANSITIONING)
+                    engine.syncRestore(msg.current_uri, msg.next_uri, shouldPlay);
+                }
+                break;
+
             case "command":
                 void execCommand(msg.action, msg.params);
                 break;
@@ -449,6 +540,7 @@ export function useWebRenderer() {
             send({
                 type: "init",
                 capabilities: {
+                    instance_id: getOrCreateInstanceId(),
                     user_agent: navigator.userAgent,
                     supported_formats: getSupportedFormats(),
                 },

@@ -10,6 +10,18 @@ pub enum ServerMessage {
         token: String,
         renderer_info: RendererInfo,
     },
+    /// Envoyé après SessionCreated lors d'une reconnexion pour resynchroniser
+    /// l'état audio du navigateur (URI courante, état de lecture, etc.).
+    StateSync {
+        current_uri: Option<String>,
+        current_metadata: Option<String>,
+        next_uri: Option<String>,
+        next_metadata: Option<String>,
+        playback_state: PlaybackState,
+        position: Option<String>,
+        volume: u16,
+        mute: bool,
+    },
     Command {
         action: TransportAction,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -62,6 +74,9 @@ pub enum ClientMessage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrowserCapabilities {
+    /// Identifiant stable de l'instance navigateur (UUID stocké en localStorage).
+    /// Permet de réutiliser le même renderer UPnP après un reload de page.
+    pub instance_id: String,
     pub user_agent: String,
     pub supported_formats: Vec<String>,
 }

@@ -4,7 +4,6 @@
 //! envoyée au navigateur, ou lit l'état partagé pour les requêtes GET.
 
 use std::sync::Arc;
-use tokio::sync::mpsc;
 
 use pmodidl::DIDLLite;
 use pmoupnp::actions::{ActionData, ActionError, ActionHandler, get_value};
@@ -12,19 +11,19 @@ use pmoupnp::{get, set};
 use pmoutils::ToXmlElement;
 
 use crate::messages::{CommandParams, PlaybackState, ServerMessage, TransportAction};
-use crate::state::SharedState;
+use crate::state::{SharedSender, SharedState};
 
 type ActionFuture =
     std::pin::Pin<Box<dyn std::future::Future<Output = Result<ActionData, ActionError>> + Send>>;
 
 // ─── AVTransport Handlers ───────────────────────────────────────────────────
 
-pub fn play_handler(ws: mpsc::UnboundedSender<ServerMessage>, state: SharedState) -> ActionHandler {
+pub fn play_handler(ws: SharedSender, state: SharedState) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
         let ws = ws.clone();
         let state = state.clone();
         Box::pin(async move {
-            let _ = ws.send(ServerMessage::Command {
+            ws.send(ServerMessage::Command {
                 action: TransportAction::Play,
                 params: None,
             });
@@ -34,12 +33,12 @@ pub fn play_handler(ws: mpsc::UnboundedSender<ServerMessage>, state: SharedState
     })
 }
 
-pub fn stop_handler(ws: mpsc::UnboundedSender<ServerMessage>, state: SharedState) -> ActionHandler {
+pub fn stop_handler(ws: SharedSender, state: SharedState) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
         let ws = ws.clone();
         let state = state.clone();
         Box::pin(async move {
-            let _ = ws.send(ServerMessage::Command {
+            ws.send(ServerMessage::Command {
                 action: TransportAction::Stop,
                 params: None,
             });
@@ -49,15 +48,12 @@ pub fn stop_handler(ws: mpsc::UnboundedSender<ServerMessage>, state: SharedState
     })
 }
 
-pub fn pause_handler(
-    ws: mpsc::UnboundedSender<ServerMessage>,
-    state: SharedState,
-) -> ActionHandler {
+pub fn pause_handler(ws: SharedSender, state: SharedState) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
         let ws = ws.clone();
         let state = state.clone();
         Box::pin(async move {
-            let _ = ws.send(ServerMessage::Command {
+            ws.send(ServerMessage::Command {
                 action: TransportAction::Pause,
                 params: None,
             });
@@ -67,11 +63,11 @@ pub fn pause_handler(
     })
 }
 
-pub fn next_handler(ws: mpsc::UnboundedSender<ServerMessage>) -> ActionHandler {
+pub fn next_handler(ws: SharedSender) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
         let ws = ws.clone();
         Box::pin(async move {
-            let _ = ws.send(ServerMessage::Command {
+            ws.send(ServerMessage::Command {
                 action: TransportAction::Play,
                 params: None,
             });
@@ -80,11 +76,11 @@ pub fn next_handler(ws: mpsc::UnboundedSender<ServerMessage>) -> ActionHandler {
     })
 }
 
-pub fn previous_handler(ws: mpsc::UnboundedSender<ServerMessage>) -> ActionHandler {
+pub fn previous_handler(ws: SharedSender) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
         let ws = ws.clone();
         Box::pin(async move {
-            let _ = ws.send(ServerMessage::Command {
+            ws.send(ServerMessage::Command {
                 action: TransportAction::Play,
                 params: None,
             });
@@ -93,12 +89,12 @@ pub fn previous_handler(ws: mpsc::UnboundedSender<ServerMessage>) -> ActionHandl
     })
 }
 
-pub fn seek_handler(ws: mpsc::UnboundedSender<ServerMessage>) -> ActionHandler {
+pub fn seek_handler(ws: SharedSender) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
         let ws = ws.clone();
         Box::pin(async move {
             let target: String = get!(&data, "Target", String);
-            let _ = ws.send(ServerMessage::Command {
+            ws.send(ServerMessage::Command {
                 action: TransportAction::Seek,
                 params: Some(CommandParams {
                     uri: None,
@@ -111,23 +107,19 @@ pub fn seek_handler(ws: mpsc::UnboundedSender<ServerMessage>) -> ActionHandler {
     })
 }
 
-pub fn set_uri_handler(
-    ws: mpsc::UnboundedSender<ServerMessage>,
-    state: SharedState,
-) -> ActionHandler {
+pub fn set_uri_handler(ws: SharedSender, state: SharedState) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
         let ws = ws.clone();
         let state = state.clone();
         Box::pin(async move {
             let uri: String = get!(&data, "CurrentURI", String);
-            // CurrentURIMetaData peut être String ou DIDLLite (après parsing)
             let metadata: String = get_value::<String>(&data, "CurrentURIMetaData")
                 .or_else(|_| {
                     get_value::<DIDLLite>(&data, "CurrentURIMetaData")
                         .map(|didl| didl.to_xml())
                 })
                 .unwrap_or_default();
-            let _ = ws.send(ServerMessage::Command {
+            ws.send(ServerMessage::Command {
                 action: TransportAction::SetUri,
                 params: Some(CommandParams {
                     uri: Some(uri.clone()),
@@ -146,10 +138,7 @@ pub fn set_uri_handler(
     })
 }
 
-pub fn set_next_uri_handler(
-    ws: mpsc::UnboundedSender<ServerMessage>,
-    state: SharedState,
-) -> ActionHandler {
+pub fn set_next_uri_handler(ws: SharedSender, state: SharedState) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
         let ws = ws.clone();
         let state = state.clone();
@@ -161,7 +150,7 @@ pub fn set_next_uri_handler(
                         .map(|didl| didl.to_xml())
                 })
                 .unwrap_or_default();
-            let _ = ws.send(ServerMessage::Command {
+            ws.send(ServerMessage::Command {
                 action: TransportAction::SetNextUri,
                 params: Some(CommandParams {
                     uri: Some(uri.clone()),
@@ -283,16 +272,13 @@ pub fn get_media_info_handler(state: SharedState) -> ActionHandler {
 
 // ─── RenderingControl Handlers ──────────────────────────────────────────────
 
-pub fn set_volume_handler(
-    ws: mpsc::UnboundedSender<ServerMessage>,
-    state: SharedState,
-) -> ActionHandler {
+pub fn set_volume_handler(ws: SharedSender, state: SharedState) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
         let ws = ws.clone();
         let state = state.clone();
         Box::pin(async move {
             let volume: u16 = get!(&data, "DesiredVolume", u16);
-            let _ = ws.send(ServerMessage::SetVolume { volume });
+            ws.send(ServerMessage::SetVolume { volume });
             state.write().volume = volume;
             Ok(data)
         })
@@ -311,16 +297,13 @@ pub fn get_volume_handler(state: SharedState) -> ActionHandler {
     })
 }
 
-pub fn set_mute_handler(
-    ws: mpsc::UnboundedSender<ServerMessage>,
-    state: SharedState,
-) -> ActionHandler {
+pub fn set_mute_handler(ws: SharedSender, state: SharedState) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
         let ws = ws.clone();
         let state = state.clone();
         Box::pin(async move {
             let mute: bool = get!(&data, "DesiredMute", bool);
-            let _ = ws.send(ServerMessage::SetMute { mute });
+            ws.send(ServerMessage::SetMute { mute });
             state.write().mute = mute;
             Ok(data)
         })
