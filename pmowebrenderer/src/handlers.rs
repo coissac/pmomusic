@@ -203,6 +203,7 @@ pub fn get_transport_info_handler(state: SharedState) -> ActionHandler {
         Box::pin(async move {
             let mut data = data;
             let s = state.read();
+            tracing::info!("[WebRenderer] GetTransportInfo handler called, state={:?}", s.playback_state);
             let transport_state = match s.playback_state {
                 PlaybackState::Stopped => "STOPPED",
                 PlaybackState::Playing => "PLAYING",
@@ -215,6 +216,7 @@ pub fn get_transport_info_handler(state: SharedState) -> ActionHandler {
                 transport_state.to_string()
             );
             set!(&mut data, "CurrentTransportStatus", "OK".to_string());
+            set!(&mut data, "CurrentSpeed", "1".to_string());
             Ok(data)
         })
     })

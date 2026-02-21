@@ -332,6 +332,12 @@ impl WebRendererFactory {
                 Arc::clone(&TRANSPORTSTATUS),
             )))
             .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
+        get_info
+            .add_argument(Arc::new(Argument::new_out(
+                "CurrentSpeed".to_string(),
+                Arc::clone(&TRANSPORTPLAYSPEED),
+            )))
+            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
         get_info.set_stateful(false);
         get_info.set_handler(handlers::get_transport_info_handler(state.clone()));
         add_action(&mut svc, Arc::new(get_info))?;
