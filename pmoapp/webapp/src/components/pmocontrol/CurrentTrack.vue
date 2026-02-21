@@ -350,20 +350,14 @@ const swipeOpacity = computed(() => {
             @click="openCoverOverlay"
         >
             <img
+                v-if="cacheBustedUrl"
                 ref="coverImageRef"
                 :style="{
-                    opacity:
-                        cacheBustedUrl && imageLoaded && !imageError ? 1 : 0,
-                    visibility:
-                        cacheBustedUrl && imageLoaded && !imageError
-                            ? 'visible'
-                            : 'hidden',
-                    position:
-                        cacheBustedUrl && imageLoaded && !imageError
-                            ? 'relative'
-                            : 'absolute',
+                    opacity: imageLoaded && !imageError ? 1 : 0,
+                    visibility: imageLoaded && !imageError ? 'visible' : 'hidden',
+                    position: imageLoaded && !imageError ? 'relative' : 'absolute',
                 }"
-                :src="cacheBustedUrl || ''"
+                :src="cacheBustedUrl"
                 :alt="metadata?.album || 'Album cover'"
                 class="cover-image"
                 @load="handleImageLoad"
