@@ -879,6 +879,21 @@ impl MusicRenderer {
         Ok(())
     }
 
+    /// Advance the queue index by one without starting playback.
+    ///
+    /// Used by the WebRenderer gapless path: the browser autonomously transitions
+    /// to the next track, so only the backend queue pointer needs to be updated
+    /// to stay in sync.
+    pub fn advance_queue_index(&self) -> Result<bool, ControlPointError> {
+        let mut backend = self.lock_backend_for("advance_queue_index");
+        let advanced = backend.advance()?;
+        drop(backend);
+        if advanced {
+            self.emit_queue_updated();
+        }
+        Ok(advanced)
+    }
+
     /// Play from a specific index in the queue.
     pub fn play_from_index(&self, index: usize) -> Result<(), ControlPointError> {
         // Reset the has_played flag before starting playback to prevent

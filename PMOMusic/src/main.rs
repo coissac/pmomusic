@@ -7,6 +7,7 @@ use pmomediaserver::{
 use pmoserver::Server;
 use pmosource::MusicSourceExt;
 use pmoupnp::UpnpServerExt;
+use pmowebrenderer::WebRendererExt;
 use tracing::info;
 
 #[tokio::main]
@@ -104,12 +105,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Enregistrer le Control Point (découverte renderers/serveurs + API REST + SSE)
     info!("🎛️  Registering Control Point...");
-    let _control_point = server
+    let control_point = server
         .write()
         .await
         .register_control_point(5)
         .await
         .expect("Failed to register Control Point");
+
+    // Enregistrer le WebRenderer (endpoint WebSocket pour renderers navigateur)
+    info!("🌐 Registering WebRenderer...");
+    server
+        .write()
+        .await
+        .register_web_renderer(control_point)
+        .await
+        .expect("Failed to register WebRenderer");
 
     // Ajouter la webapp via le trait WebAppExt
     info!("📡 Registering Web application...");
@@ -127,8 +137,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("✅ PMOMusic is ready!");
     info!("Press Ctrl+C to stop...");
 
-    // Attendre le signal Ctrl+C et l'arrêt du serveur HTTP
-    server.write().await.wait().await;
+    // Extraire le join_handle AVANT de libérer le write lock,
+    // pour pouvoir l'awaiter sans tenir le write lock du serveur global.
+    // (Tenir le write lock pendant wait() bloquerait register_device() dynamique)
+    let join_handle = server.write().await.take_join_handle();
+    if let Some(h) = join_handle {
+        let _ = h.await;
+    }
 
     // Le serveur HTTP est arrêté, mais des threads (ControlPoint, etc.) peuvent encore tourner
     // Attendre 2 secondes pour laisser le temps aux threads de se terminer

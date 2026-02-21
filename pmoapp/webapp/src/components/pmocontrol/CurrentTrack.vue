@@ -100,14 +100,7 @@ function formatTime(ms: number | null | undefined): string {
 }
 
 const currentTime = computed(() => formatTime(state.value?.position_ms));
-const totalTime = computed(() => {
-    const duration = state.value?.duration_ms;
-    const transport = state.value?.transport_state;
-    console.log(
-        `[CurrentTrack] rendererId=${props.rendererId}, duration_ms=${duration}, transport=${transport}, title=${state.value?.current_track?.title}`,
-    );
-    return formatTime(duration);
-});
+const totalTime = computed(() => formatTime(state.value?.duration_ms));
 
 const hasCover = computed(
     () => !!metadata.value?.album_art_uri && !imageError.value,
@@ -357,20 +350,14 @@ const swipeOpacity = computed(() => {
             @click="openCoverOverlay"
         >
             <img
+                v-if="cacheBustedUrl"
                 ref="coverImageRef"
                 :style="{
-                    opacity:
-                        cacheBustedUrl && imageLoaded && !imageError ? 1 : 0,
-                    visibility:
-                        cacheBustedUrl && imageLoaded && !imageError
-                            ? 'visible'
-                            : 'hidden',
-                    position:
-                        cacheBustedUrl && imageLoaded && !imageError
-                            ? 'relative'
-                            : 'absolute',
+                    opacity: imageLoaded && !imageError ? 1 : 0,
+                    visibility: imageLoaded && !imageError ? 'visible' : 'hidden',
+                    position: imageLoaded && !imageError ? 'relative' : 'absolute',
                 }"
-                :src="cacheBustedUrl || ''"
+                :src="cacheBustedUrl"
                 :alt="metadata?.album || 'Album cover'"
                 class="cover-image"
                 @load="handleImageLoad"

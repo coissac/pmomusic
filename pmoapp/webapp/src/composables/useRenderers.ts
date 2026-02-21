@@ -48,11 +48,6 @@ function ensureSSEConnected() {
 
     // Gérer les événements Online/Offline différemment
     if (event.type === "online") {
-      // Nouveau renderer découvert
-      console.log(
-        `[useRenderers] Renderer ${rendererId} (${event.friendly_name}) est maintenant en ligne`,
-      );
-
       // Ajouter au cache avec les infos disponibles
       // Note: on n'a pas toutes les infos (capabilities, protocol) donc on fetch ensuite
       const renderer: RendererSummary = {
@@ -86,11 +81,6 @@ function ensureSSEConnected() {
     }
 
     if (event.type === "offline") {
-      // Renderer déconnecté
-      console.log(
-        `[useRenderers] Renderer ${rendererId} est maintenant hors ligne`,
-      );
-
       // Marquer comme offline dans le cache
       const renderer = renderersCache.value.get(rendererId);
       if (renderer) {
@@ -109,9 +99,6 @@ function ensureSSEConnected() {
     snapshotState.lastEventAt.set(rendererId, timestamp);
 
     const snapshot = snapshotState.snapshots.get(rendererId);
-    console.log(
-      `[SSE Event] type=${event.type}, rendererId=${rendererId}, snapshot exists=${!!snapshot}, transport=${snapshot?.state?.transport_state}`,
-    );
 
     // Si pas de snapshot, on doit fetch
     if (!snapshot) {
@@ -126,11 +113,6 @@ function ensureSSEConnected() {
         break;
 
       case "position_changed":
-        // Debug: log pour tracer les oscillations
-        console.log(
-          `[position_changed] renderer=${rendererId}, duration=${event.track_duration}`,
-        );
-
         // Mettre à jour position et durée de manière atomique pour garantir la cohérence
         // Le backend envoie TOUJOURS les deux valeurs (même si null)
 
@@ -177,9 +159,6 @@ function ensureSSEConnected() {
           ...snapshot,
           state: newState,
         };
-        console.log(
-          `[position_changed] Setting new snapshot for ${rendererId}, state ref=${Object.prototype.toString.call(newState)}, transport=${newState.transport_state}`,
-        );
         snapshotState.snapshots.set(rendererId, newSnapshot);
         break;
 

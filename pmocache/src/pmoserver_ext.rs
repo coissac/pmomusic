@@ -230,8 +230,11 @@ async fn serve_file_with_streaming<C: CacheConfig + 'static>(
         if let Some(generator) = param_generator {
             if let Some(data) = generator(cache.clone(), pk.to_string(), param.to_string()).await {
                 // Le générateur a créé les données, les servir directement
-                let response =
-                    (StatusCode::OK, [("content-type", content_type)], data).into_response();
+                let response = (
+                    StatusCode::OK,
+                    [("content-type", content_type), ("access-control-allow-origin", "*")],
+                    data,
+                ).into_response();
 
                 if response.status().is_success() {
                     cache.notify_broadcast(pk, &qualifier).await;
@@ -342,7 +345,8 @@ async fn stream_file_progressive(
                         let mut response_builder = axum::http::Response::builder()
                             .status(StatusCode::PARTIAL_CONTENT)
                             .header(header::CONTENT_TYPE, content_type)
-                            .header(header::ACCEPT_RANGES, "bytes");
+                            .header(header::ACCEPT_RANGES, "bytes")
+                            .header("Access-Control-Allow-Origin", "*");
 
                         if let Some(total_size) = expected_size {
                             response_builder = response_builder.header(
@@ -370,7 +374,8 @@ async fn stream_file_progressive(
     let mut response = axum::http::Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, content_type)
-        .header(header::ACCEPT_RANGES, "bytes");
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header("Access-Control-Allow-Origin", "*");
 
     if let Some(size) = expected_size {
         response = response.header(header::CONTENT_LENGTH, size);
@@ -414,6 +419,10 @@ async fn serve_complete_file(
             parts
                 .headers
                 .insert(header::CONTENT_TYPE, content_type.parse().unwrap());
+            parts.headers.insert(
+                "Access-Control-Allow-Origin".parse::<axum::http::HeaderName>().unwrap(),
+                "*".parse().unwrap(),
+            );
 
             // Convertir ServeFileSystemResponseBody en Body
             axum::http::Response::from_parts(parts, Body::new(body))
@@ -515,9 +524,27 @@ pub fn create_file_router_with_generator<C: CacheConfig + 'static>(
     let path_with_param = format!("/{}/{}/{{pk}}/{{param}}", cache_name, cache_type);
     let path_without_param = format!("/{}/{}/{{pk}}", cache_name, cache_type);
 
+    async fn cors_preflight() -> impl IntoResponse {
+        (
+            StatusCode::NO_CONTENT,
+            [
+                ("Access-Control-Allow-Origin", "*"),
+                ("Access-Control-Allow-Methods", "GET, OPTIONS"),
+                ("Access-Control-Allow-Headers", "Range, Content-Type"),
+                ("Access-Control-Max-Age", "86400"),
+            ],
+        )
+    }
+
     Router::new()
-        .route(&path_without_param, get(get_file::<C>))
-        .route(&path_with_param, get(get_file_with_param::<C>))
+        .route(
+            &path_without_param,
+            get(get_file::<C>).options(cors_preflight),
+        )
+        .route(
+            &path_with_param,
+            get(get_file_with_param::<C>).options(cors_preflight),
+        )
         .with_state((cache, content_type, param_generator))
 }
 

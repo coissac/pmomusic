@@ -517,13 +517,11 @@ impl RadioParadiseSource {
             }
 
             // Normaliser l'albumArtURI : rendre absolu si chemin relatif, sinon fallback par défaut
-            if let Some(art) = item.album_art.as_mut() {
-                if art.starts_with('/') {
-                    *art = format!("{}{}", self.base_url, art);
-                }
-            } else {
-                item.album_art = Some(self.default_cover_url());
-            }
+            item.album_art = match item.album_art.take() {
+                Some(art) if art.starts_with('/') => Some(format!("{}{}", self.base_url, art)),
+                Some(_) => Some(self.default_cover_url()), // URL externe brute → fallback local
+                None => Some(self.default_cover_url()),
+            };
         }
 
         Ok(items)
@@ -590,13 +588,11 @@ impl RadioParadiseSource {
                 item.genre = Some("Radio Paradise".to_string());
             }
 
-            if let Some(art) = item.album_art.as_mut() {
-                if art.starts_with('/') {
-                    *art = format!("{}{}", self.base_url, art);
-                }
-            } else {
-                item.album_art = Some(self.default_cover_url());
-            }
+            item.album_art = match item.album_art.take() {
+                Some(art) if art.starts_with('/') => Some(format!("{}{}", self.base_url, art)),
+                Some(_) => Some(self.default_cover_url()),
+                None => Some(self.default_cover_url()),
+            };
         }
 
         Ok(items)
@@ -921,6 +917,13 @@ impl MusicSource for RadioParadiseSource {
                         if item.genre.is_none() {
                             item.genre = Some("Radio Paradise".to_string());
                         }
+                        item.album_art = match item.album_art.take() {
+                            Some(art) if art.starts_with('/') => {
+                                Some(format!("{}{}", self.base_url, art))
+                            }
+                            Some(_) => Some(self.default_cover_url()),
+                            None => Some(self.default_cover_url()),
+                        };
                         adjusted.push(item);
                     }
 
@@ -987,13 +990,13 @@ impl MusicSource for RadioParadiseSource {
                             item.genre = Some("Radio Paradise".to_string());
                         }
 
-                        if let Some(art) = item.album_art.as_mut() {
-                            if art.starts_with('/') {
-                                *art = format!("{}{}", self.base_url, art);
+                        item.album_art = match item.album_art.take() {
+                            Some(art) if art.starts_with('/') => {
+                                Some(format!("{}{}", self.base_url, art))
                             }
-                        } else {
-                            item.album_art = Some(self.default_cover_url());
-                        }
+                            Some(_) => Some(self.default_cover_url()),
+                            None => Some(self.default_cover_url()),
+                        };
 
                         let expected_id =
                             format!("radio-paradise:channel:{}:liveplaylist:track:{}", slug, pk);

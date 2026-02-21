@@ -8,6 +8,7 @@ pmoconfig = { path = "../pmoconfig", features = ["api"] }
 
 anyhow = { workspace = true }
 axum = "0.8.4"
+tower = { version = "0.5", features = ["util"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
 tokio-stream = "0.1"
 tokio-util = "0.7"

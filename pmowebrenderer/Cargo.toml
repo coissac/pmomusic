@@ -1,0 +1,38 @@
+	[package]
+	name = "pmowebrenderer"
+	version = "0.1.0"
+	edition = "2021"
+
+	[dependencies]
+	pmoupnp = { path = "../pmoupnp" }
+	pmomediarenderer = { path = "../pmomediarenderer" }
+	pmoserver = { path = "../pmoserver", optional = true }
+	pmocontrol = { path = "../pmocontrol", optional = true }
+	pmoconfig = { path = "../pmoconfig" }
+
+# Async runtime
+tokio = { workspace = true, features = ["full"] }
+async-trait = { workspace = true }
+
+# WebSocket
+axum = { workspace = true, features = ["ws"] }
+axum-extra = { version = "0.9", features = ["typed-header"] }
+tower-http = { version = "0.6", features = ["fs", "trace"] }
+futures = "0.3"
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Utilities
+uuid = { workspace = true, features = ["v4", "serde"] }
+parking_lot = "0.12"
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+pmodidl = { path = "../pmodidl" }
+pmoutils = { path = "../pmoutils" }
+
+[features]
+default = []
+pmoserver = ["dep:pmoserver", "dep:pmocontrol"]
