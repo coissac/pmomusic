@@ -878,6 +878,10 @@ impl ControlPoint {
         renderer.set_last_metadata(Some(metadata));
 
         renderer.set_playback_source(PlaybackSource::FromQueue);
+
+        // Prefetch next track if supported (gapless playback)
+        self.prefetch_next_track(&renderer, renderer_id);
+
         Ok(())
     }
 
@@ -972,6 +976,51 @@ impl ControlPoint {
         }
     }
 
+    /// Prefetch the next track for a renderer (gapless playback support).
+    ///
+    /// Called by the WebRenderer backend after a TrackEnded event to trigger
+    /// SetNextAVTransportURI for the next-next track (N+2).
+    pub fn prefetch_next_for_renderer(&self, renderer_id: &DeviceId) {
+        if let Some(renderer) = self.music_renderer_by_id(renderer_id) {
+            self.prefetch_next_track(&renderer, renderer_id);
+        }
+    }
+
+    /// Advances the queue index by one for a gapless transition, then prefetches the next-next track.
+    ///
+    /// Called by the WebRenderer backend after a gapless TrackEnded event. In the gapless case,
+    /// the browser has already advanced to the next track autonomously, so the backend queue
+    /// index must be updated to stay in sync. Then we prefetch track N+2 for the next gapless
+    /// transition.
+    pub fn advance_queue_and_prefetch(&self, renderer_id: &DeviceId) {
+        if let Some(renderer) = self.music_renderer_by_id(renderer_id) {
+            // Advance the queue index to match the browser's gapless transition
+            match renderer.advance_queue_index() {
+                Ok(true) => {
+                    debug!(
+                        renderer = renderer_id.0.as_str(),
+                        "advance_queue_and_prefetch: queue index advanced for gapless transition"
+                    );
+                    // Now prefetch the next-next track (N+2)
+                    self.prefetch_next_track(&renderer, renderer_id);
+                }
+                Ok(false) => {
+                    debug!(
+                        renderer = renderer_id.0.as_str(),
+                        "advance_queue_and_prefetch: no next track in queue, skipping prefetch"
+                    );
+                }
+                Err(err) => {
+                    debug!(
+                        renderer = renderer_id.0.as_str(),
+                        error = %err,
+                        "advance_queue_and_prefetch: failed to advance queue index"
+                    );
+                }
+            }
+        }
+    }
+
     /// Jumps to a specific index in the queue and starts playback.
     pub fn play_queue_index(
         &self,
@@ -1019,6 +1068,10 @@ impl ControlPoint {
         }
 
         renderer.set_playback_source(PlaybackSource::FromQueue);
+
+        // Prefetch next track if supported (gapless playback)
+        self.prefetch_next_track(&renderer, renderer_id);
+
         Ok(())
     }
 

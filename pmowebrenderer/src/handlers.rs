@@ -146,11 +146,34 @@ pub fn set_uri_handler(
     })
 }
 
-pub fn set_next_uri_handler(_state: SharedState) -> ActionHandler {
+pub fn set_next_uri_handler(
+    ws: mpsc::UnboundedSender<ServerMessage>,
+    state: SharedState,
+) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
+        let ws = ws.clone();
+        let state = state.clone();
         Box::pin(async move {
-            let _uri: String = get!(&data, "NextURI", String);
-            let _metadata: String = get!(&data, "NextURIMetaData", String);
+            let uri: String = get!(&data, "NextURI", String);
+            let metadata: String = get_value::<String>(&data, "NextURIMetaData")
+                .or_else(|_| {
+                    get_value::<DIDLLite>(&data, "NextURIMetaData")
+                        .map(|didl| didl.to_xml())
+                })
+                .unwrap_or_default();
+            let _ = ws.send(ServerMessage::Command {
+                action: TransportAction::SetNextUri,
+                params: Some(CommandParams {
+                    uri: Some(uri.clone()),
+                    metadata: Some(metadata.clone()),
+                    position: None,
+                }),
+            });
+            {
+                let mut s = state.write();
+                s.next_uri = Some(uri);
+                s.next_metadata = Some(metadata);
+            }
             Ok(data)
         })
     })
@@ -243,8 +266,16 @@ pub fn get_media_info_handler(state: SharedState) -> ActionHandler {
                 "CurrentURIMetaData",
                 s.current_metadata.clone().unwrap_or_default()
             );
-            set!(&mut data, "NextURI", String::new());
-            set!(&mut data, "NextURIMetaData", String::new());
+            set!(
+                &mut data,
+                "NextURI",
+                s.next_uri.clone().unwrap_or_default()
+            );
+            set!(
+                &mut data,
+                "NextURIMetaData",
+                s.next_metadata.clone().unwrap_or_default()
+            );
             Ok(data)
         })
     })

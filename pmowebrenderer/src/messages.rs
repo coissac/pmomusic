@@ -32,6 +32,7 @@ pub enum TransportAction {
     Stop,
     Seek,
     SetUri,
+    SetNextUri,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,6 +54,9 @@ pub enum ClientMessage {
     PositionUpdate { position: String, duration: String },
     MetadataUpdate { metadata: TrackMetadata },
     VolumeUpdate { volume: u16, mute: bool },
+    /// Envoyé quand la piste courante se termine naturellement (gapless).
+    /// Le backend fait avancer current → next dans l'état partagé.
+    TrackEnded,
     Pong,
 }
 

@@ -167,6 +167,70 @@ async fn handle_socket(socket: WebSocket, state: WebSocketState) {
                             }
                         }
                     }
+                    Ok(ClientMessage::TrackEnded) => {
+                        if let Some(ref token) = session_token {
+                            if let Some(session) = state.session_manager.get_session(token) {
+                                let (next_uri, next_metadata, had_next) = {
+                                    let mut s = session.state.write();
+                                    let uri = s.next_uri.take();
+                                    let meta = s.next_metadata.take();
+                                    let had_next = uri.is_some();
+                                    s.current_uri = uri.clone();
+                                    s.current_metadata = meta.clone();
+                                    s.next_uri = None;
+                                    s.next_metadata = None;
+                                    s.position = None;
+                                    s.duration = None;
+                                    // Si on avait une piste suivante (gapless), on reste en Playing.
+                                    // Sinon, on reste en Stopped pour que le watcher déclenche l'auto-advance.
+                                    if had_next {
+                                        s.playback_state = PlaybackState::Playing;
+                                    }
+                                    // Si had_next == false, le navigateur a déjà envoyé state_update:STOPPED,
+                                    // donc s.playback_state est déjà Stopped. On le laisse tel quel.
+                                    (uri, meta, had_next)
+                                };
+                                let new_state = if had_next {
+                                    PlaybackState::Playing
+                                } else {
+                                    PlaybackState::Stopped
+                                };
+                                update_transport_state_var(
+                                    &session.device_instance,
+                                    &new_state,
+                                )
+                                .await;
+                                // Mettre à jour AVTransportURI pour que le ControlPoint
+                                // voie la nouvelle piste courante et envoie SetNextAVTransportURI
+                                update_uri_vars(
+                                    &session.device_instance,
+                                    next_uri.as_deref().unwrap_or(""),
+                                    next_metadata.as_deref().unwrap_or(""),
+                                    "",  // next_uri vide : le ControlPoint le remplira
+                                    "",
+                                )
+                                .await;
+                                // Si c'était une transition gapless (on avait une piste suivante),
+                                // avancer l'index de la queue dans le ControlPoint et prefetch la piste N+2.
+                                // Si pas de piste suivante, le watcher verra STOPPED et déclenchera l'auto-advance.
+                                #[cfg(feature = "pmoserver")]
+                                if had_next {
+                                    let udn = session.udn.clone();
+                                    let cp = state.control_point.clone();
+                                    tokio::spawn(async move {
+                                        cp.advance_queue_and_prefetch(
+                                            &pmocontrol::DeviceId(udn),
+                                        );
+                                    });
+                                }
+                                tracing::debug!(
+                                    uri = ?next_uri,
+                                    had_next,
+                                    "WebRenderer TrackEnded: advanced to next track"
+                                );
+                            }
+                        }
+                    }
                     Ok(ClientMessage::Pong) => {}
                     Err(e) => {
                         tracing::warn!(error = %e, "Failed to parse client message");
@@ -374,6 +438,37 @@ async fn update_position_vars(di: &DeviceInstance, position: &str, duration: &st
         if let Some(var) = service.get_variable("CurrentTrackDuration") {
             let _ = var
                 .set_value(StateValue::String(duration.to_string()))
+                .await;
+        }
+    }
+}
+
+async fn update_uri_vars(
+    di: &DeviceInstance,
+    current_uri: &str,
+    current_metadata: &str,
+    next_uri: &str,
+    next_metadata: &str,
+) {
+    if let Some(service) = di.get_service("AVTransport") {
+        if let Some(var) = service.get_variable("AVTransportURI") {
+            let _ = var
+                .set_value(StateValue::String(current_uri.to_string()))
+                .await;
+        }
+        if let Some(var) = service.get_variable("AVTransportURIMetaData") {
+            let _ = var
+                .set_value(StateValue::String(current_metadata.to_string()))
+                .await;
+        }
+        if let Some(var) = service.get_variable("AVTransportNextURI") {
+            let _ = var
+                .set_value(StateValue::String(next_uri.to_string()))
+                .await;
+        }
+        if let Some(var) = service.get_variable("AVTransportNextURIMetaData") {
+            let _ = var
+                .set_value(StateValue::String(next_metadata.to_string()))
                 .await;
         }
     }

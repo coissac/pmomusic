@@ -5,7 +5,16 @@
  * et se déconnecte proprement au démontage ou à la fermeture de la page.
  *
  * Le navigateur est ainsi vu comme un renderer UPnP par le ControlPoint.
- * Un élément <audio> headless exécute les commandes de transport reçues.
+ * L'audio est géré via deux éléments <audio> en ping-pong connectés à un
+ * AudioContext (MediaElementSourceNode) pour le contrôle du volume/mute.
+ *
+ * ## Flux gapless
+ * 1. SetAVTransportURI(N)     → slotA.src = N, slotA.load()
+ * 2. Play                     → slotA.play()
+ * 3. SetNextAVTransportURI(N+1) → slotB.src = N+1, slotB.load() (préchargement)
+ * 4. slotA "ended"            → currentSlot = B, slotB.play() immédiat
+ *                               → TrackEnded envoyé au backend
+ * 5. Cycle recommence depuis 3 (slotA redevient le "next")
  */
 
 import { ref, onMounted, onUnmounted, readonly } from "vue";
@@ -24,7 +33,7 @@ interface RendererInfo {
     description_url: string;
 }
 
-type TransportAction = "play" | "pause" | "stop" | "seek" | "set_uri";
+type TransportAction = "play" | "pause" | "stop" | "seek" | "set_uri" | "set_next_uri";
 
 interface CommandParams {
     uri?: string;
@@ -46,6 +55,7 @@ type ClientMessage =
     | { type: "state_update"; state: PlaybackState }
     | { type: "position_update"; position: string; duration: string }
     | { type: "volume_update"; volume: number; mute: boolean }
+    | { type: "track_ended" }
     | { type: "pong" };
 
 // ─── Détection des formats supportés ─────────────────────────────────────────
@@ -83,6 +93,210 @@ function upnpTimeToSeconds(t: string): number {
     return (h ?? 0) * 3600 + (m ?? 0) * 60 + (s ?? 0);
 }
 
+// ─── Moteur Audio (HTMLAudioElement + MediaElementSourceNode) ─────────────────
+
+class GaplessEngine {
+    /** Les deux éléments <audio> fixes (ping-pong) */
+    private readonly slots: [HTMLAudioElement, HTMLAudioElement];
+
+    /** Index du slot actuellement en lecture (0 ou 1) */
+    private currentSlot: 0 | 1 = 0;
+    /** URI préchargée dans le slot "next" (l'autre) */
+    private nextUri: string | null = null;
+
+    private volume = 1.0;
+    private muted = false;
+    private paused = false;
+
+    /** Durée de la piste courante (secondes), lue via loadedmetadata */
+    private _duration = 0;
+
+    onStateChange: (state: PlaybackState) => void = () => {};
+    onPosition: (pos: number, dur: number) => void = () => {};
+    onTrackEnded: () => void = () => {};
+
+    private positionInterval: ReturnType<typeof setInterval> | null = null;
+
+    constructor() {
+        this.slots = [
+            this.makeAudioElement(),
+            this.makeAudioElement(),
+        ];
+    }
+
+    // ── Volume / Mute ────────────────────────────────────────────────────────
+
+    setVolume(v: number) {
+        this.volume = v;
+        for (const el of this.slots) {
+            el.volume = this.muted ? 0 : v;
+        }
+    }
+
+    setMute(m: boolean) {
+        this.muted = m;
+        for (const el of this.slots) {
+            el.volume = m ? 0 : this.volume;
+        }
+    }
+
+    // ── Transport ────────────────────────────────────────────────────────────
+
+    /** Charge la piste courante (sans la jouer). */
+    setCurrent(uri: string): void {
+        this.paused = false;
+        this.nextUri = null;
+        this.onStateChange("TRANSITIONING");
+        console.debug(`[GaplessEngine] setCurrent: ${uri}`);
+
+        const el = this.slots[this.currentSlot];
+        // Retirer l'écouteur "ended" de l'autre slot si présent
+        const otherSlot = (1 - this.currentSlot) as 0 | 1;
+        this.slots[otherSlot].onended = null;
+        this.slots[otherSlot].pause();
+
+        el.onended = null;
+        el.pause();
+        el.src = uri;
+        el.load();
+
+        // Récupérer la durée dès que les métadonnées sont disponibles
+        el.onloadedmetadata = () => {
+            this._duration = el.duration || 0;
+            console.debug(`[GaplessEngine] loadedmetadata: duration=${this._duration.toFixed(2)}s`);
+        };
+        // Ne pas émettre STOPPED ici : l'état reste TRANSITIONING jusqu'au play()
+    }
+
+    /** Précharge la piste suivante dans l'autre slot. */
+    setNext(uri: string): void {
+        this.nextUri = uri;
+        const nextSlot = (1 - this.currentSlot) as 0 | 1;
+        const el = this.slots[nextSlot];
+        el.src = uri;
+        el.preload = "auto";
+        el.load();
+        console.debug(`[GaplessEngine] setNext: préchargement de ${uri} dans slot ${nextSlot}`);
+    }
+
+    async play(): Promise<void> {
+        const el = this.slots[this.currentSlot];
+        console.debug(`[GaplessEngine] play(), slot=${this.currentSlot}, src=${el.src}, paused=${this.paused}`);
+
+        el.onended = () => this.onCurrentEnded();
+
+        try {
+            await el.play();
+        } catch (e) {
+            console.error("[GaplessEngine] play() failed:", e);
+            return;
+        }
+
+        this.paused = false;
+        this.startPositionTimer();
+        this.onStateChange("PLAYING");
+    }
+
+    pause(): void {
+        const el = this.slots[this.currentSlot];
+        el.pause();
+        this.paused = true;
+        this.stopPositionTimer();
+        this.onStateChange("PAUSED");
+        this.sendPosition();
+    }
+
+    stop(): void {
+        const el = this.slots[this.currentSlot];
+        el.onended = null;
+        el.pause();
+        el.currentTime = 0;
+        this.paused = false;
+        this.nextUri = null;
+        this.stopPositionTimer();
+        this.onStateChange("STOPPED");
+    }
+
+    seek(toSeconds: number): void {
+        const el = this.slots[this.currentSlot];
+        el.currentTime = toSeconds;
+    }
+
+    destroy(): void {
+        this.stopPositionTimer();
+        for (const el of this.slots) {
+            el.onended = null;
+            el.pause();
+            el.src = "";
+        }
+    }
+
+    // ── Privé ────────────────────────────────────────────────────────────────
+
+    private makeAudioElement(): HTMLAudioElement {
+        const el = document.createElement("audio");
+        el.preload = "auto";
+        return el;
+    }
+
+    private onCurrentEnded(): void {
+        console.debug("[GaplessEngine] onCurrentEnded");
+        const nextSlot = (1 - this.currentSlot) as 0 | 1;
+
+        if (this.nextUri !== null) {
+            // Le slot suivant est préchargé, on bascule
+            this.currentSlot = nextSlot;
+            this.nextUri = null;
+            this._duration = 0;
+
+            const nextEl = this.slots[this.currentSlot];
+            nextEl.onended = () => this.onCurrentEnded();
+
+            // Récupérer la durée de la nouvelle piste courante
+            if (nextEl.duration && isFinite(nextEl.duration)) {
+                this._duration = nextEl.duration;
+            } else {
+                nextEl.onloadedmetadata = () => {
+                    this._duration = nextEl.duration || 0;
+                };
+            }
+
+            // Informer le backend (qui fera le swap current←next côté serveur)
+            this.onTrackEnded();
+
+            // Démarrer immédiatement (le préchargement a eu lieu)
+            nextEl.play().catch((e) =>
+                console.error("[GaplessEngine] next.play() failed:", e),
+            );
+            // L'état reste PLAYING
+        } else {
+            // Pas de suivant : fin de lecture
+            this.stopPositionTimer();
+            this.onStateChange("STOPPED");
+            this.onTrackEnded();
+        }
+    }
+
+    private startPositionTimer(): void {
+        if (this.positionInterval !== null) return;
+        this.positionInterval = setInterval(() => this.sendPosition(), 1000);
+    }
+
+    private stopPositionTimer(): void {
+        if (this.positionInterval !== null) {
+            clearInterval(this.positionInterval);
+            this.positionInterval = null;
+        }
+    }
+
+    private sendPosition(): void {
+        const el = this.slots[this.currentSlot];
+        const pos = el.currentTime || 0;
+        const dur = (el.duration && isFinite(el.duration)) ? el.duration : this._duration;
+        this.onPosition(pos, dur);
+    }
+}
+
 // ─── Composable ───────────────────────────────────────────────────────────────
 
 export function useWebRenderer() {
@@ -90,8 +304,7 @@ export function useWebRenderer() {
     const rendererInfo = ref<RendererInfo | null>(null);
 
     let ws: WebSocket | null = null;
-    let audio: HTMLAudioElement | null = null;
-    let positionTimer: ReturnType<typeof setInterval> | null = null;
+    let engine: GaplessEngine | null = null;
     let onConnectedCallback: (() => void) | null = null;
 
     // ── Envoi d'un message au backend ────────────────────────────────────────
@@ -102,106 +315,64 @@ export function useWebRenderer() {
         }
     }
 
-    // ── Player audio headless ─────────────────────────────────────────────────
+    // ── Initialisation du moteur ──────────────────────────────────────────────
 
-    function sendPosition() {
-        if (!audio) return;
-        const pos = isFinite(audio.currentTime) ? audio.currentTime : 0;
-        const dur = isFinite(audio.duration) ? audio.duration : 0;
-        send({
-            type: "position_update",
-            position: secondsToUpnpTime(pos),
-            duration: secondsToUpnpTime(dur),
-        });
-    }
+    function initEngine(): GaplessEngine {
+        const e = new GaplessEngine();
 
-    function startPositionTimer() {
-        if (positionTimer !== null) return;
-        positionTimer = setInterval(sendPosition, 1000);
-    }
+        e.onStateChange = (state) => {
+            send({ type: "state_update", state });
+        };
 
-    function stopPositionTimer() {
-        if (positionTimer !== null) {
-            clearInterval(positionTimer);
-            positionTimer = null;
-        }
-    }
+        e.onPosition = (pos, dur) => {
+            send({
+                type: "position_update",
+                position: secondsToUpnpTime(pos),
+                duration: secondsToUpnpTime(dur),
+            });
+        };
 
-    function createAudio(): HTMLAudioElement {
-        const el = new Audio();
-        el.preload = "auto";
+        e.onTrackEnded = () => {
+            send({ type: "track_ended" });
+        };
 
-        el.addEventListener("play", () => {
-            send({ type: "state_update", state: "PLAYING" });
-            startPositionTimer();
-        });
-        el.addEventListener("pause", () => {
-            send({ type: "state_update", state: "PAUSED" });
-            stopPositionTimer();
-            sendPosition();
-        });
-        el.addEventListener("ended", () => {
-            send({ type: "state_update", state: "STOPPED" });
-            stopPositionTimer();
-        });
-        el.addEventListener("waiting", () => {
-            send({ type: "state_update", state: "TRANSITIONING" });
-        });
-        el.addEventListener("canplay", () => {
-            if (!el.paused) send({ type: "state_update", state: "PLAYING" });
-        });
-        el.addEventListener("volumechange", () => {
-            const vol = Math.round(el.volume * 100);
-            send({ type: "volume_update", volume: vol, mute: el.muted });
-        });
-        el.addEventListener("error", () => {
-            console.error("[WebRenderer] Erreur audio :", el.error);
-            send({ type: "state_update", state: "STOPPED" });
-            stopPositionTimer();
-        });
-
-        return el;
+        return e;
     }
 
     // ── Exécution des commandes UPnP ──────────────────────────────────────────
 
     async function execCommand(action: TransportAction, params?: CommandParams) {
-        if (!audio) return;
+        if (!engine) return;
         console.debug(`[WebRenderer] Commande: ${action}`, params);
 
         switch (action) {
             case "set_uri":
                 if (params?.uri) {
-                    audio.pause();
-                    audio.src = params.uri;
-                    audio.load();
-                    send({ type: "state_update", state: "STOPPED" });
+                    engine.setCurrent(params.uri);
+                }
+                break;
+
+            case "set_next_uri":
+                if (params?.uri) {
+                    engine.setNext(params.uri);
                 }
                 break;
 
             case "play":
-                if (audio.src) {
-                    try {
-                        await audio.play();
-                    } catch (e) {
-                        console.error("[WebRenderer] play() refusé :", e);
-                    }
-                }
+                await engine.play();
                 break;
 
             case "pause":
-                audio.pause();
+                engine.pause();
                 break;
 
             case "stop":
-                audio.pause();
-                audio.currentTime = 0;
-                send({ type: "state_update", state: "STOPPED" });
+                engine.stop();
                 break;
 
             case "seek":
                 if (params?.position) {
-                    audio.currentTime = upnpTimeToSeconds(params.position);
+                    engine.seek(upnpTimeToSeconds(params.position));
                 }
                 break;
         }
@@ -225,8 +396,6 @@ export function useWebRenderer() {
                 console.info(
                     `[WebRenderer] Session créée — UDN: ${msg.renderer_info.udn}`,
                 );
-                // Notifier le parent pour qu'il rafraîchisse la liste des renderers
-                // L'événement SSE peut arriver avant que le subscriber soit prêt
                 onConnectedCallback?.();
                 break;
 
@@ -235,15 +404,11 @@ export function useWebRenderer() {
                 break;
 
             case "set_volume":
-                if (audio) {
-                    audio.volume = Math.max(0, Math.min(1, msg.volume / 100));
-                }
+                engine?.setVolume(msg.volume / 100);
                 break;
 
             case "set_mute":
-                if (audio) {
-                    audio.muted = msg.mute;
-                }
+                engine?.setMute(msg.mute);
                 break;
 
             case "ping":
@@ -291,11 +456,7 @@ export function useWebRenderer() {
     // ── Déconnexion ───────────────────────────────────────────────────────────
 
     function disconnect() {
-        stopPositionTimer();
-        if (audio) {
-            audio.pause();
-            audio.src = "";
-        }
+        engine?.destroy();
         if (ws) {
             ws.close(1000, "Page unloaded");
             ws = null;
@@ -306,14 +467,14 @@ export function useWebRenderer() {
     // ── Cycle de vie ──────────────────────────────────────────────────────────
 
     onMounted(() => {
-        audio = createAudio();
+        engine = initEngine();
         connect();
         window.addEventListener("beforeunload", disconnect);
     });
 
     onUnmounted(() => {
         disconnect();
-        audio = null;
+        engine = null;
         window.removeEventListener("beforeunload", disconnect);
     });
 

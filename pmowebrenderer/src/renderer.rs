@@ -261,7 +261,7 @@ impl WebRendererFactory {
                 Arc::clone(&AVTRANSPORTNEXTURIMETADATA),
             )))
             .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        set_next_uri.set_handler(handlers::set_next_uri_handler(state.clone()));
+        set_next_uri.set_handler(handlers::set_next_uri_handler(ws.clone(), state.clone()));
         add_action(&mut svc, Arc::new(set_next_uri))?;
 
         // GetPositionInfo
