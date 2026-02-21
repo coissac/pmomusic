@@ -110,6 +110,12 @@ class GaplessEngine {
     /** Durée de la piste courante (secondes), lue via loadedmetadata */
     private _duration = 0;
 
+    /**
+     * Indique qu'un play() a été reçu avant set_uri (race condition).
+     * setCurrent() le détectera et lancera la lecture automatiquement.
+     */
+    private playPending = false;
+
     onStateChange: (state: PlaybackState) => void = () => {};
     onPosition: (pos: number, dur: number) => void = () => {};
     onTrackEnded: () => void = () => {};
@@ -161,7 +167,14 @@ class GaplessEngine {
         el.onloadedmetadata = () => {
             this._duration = el.duration || 0;
         };
-        // Ne pas émettre STOPPED ici : l'état reste TRANSITIONING jusqu'au play()
+
+        // Si play() est arrivé avant set_uri (race condition), lancer la lecture maintenant
+        if (this.playPending) {
+            this.playPending = false;
+            this.play().catch((e) =>
+                console.error("[GaplessEngine] deferred play() failed:", e),
+            );
+        }
     }
 
     /** Précharge la piste suivante dans l'autre slot. */
@@ -177,7 +190,26 @@ class GaplessEngine {
     async play(): Promise<void> {
         const el = this.slots[this.currentSlot];
 
+        // Si pas de source : play() est arrivé avant set_uri (race condition).
+        // On mémorise et setCurrent() déclenchera la lecture dès qu'il sera appelé.
+        if (!el.src || el.src === window.location.href) {
+            this.playPending = true;
+            return;
+        }
+
+        this.playPending = false;
         el.onended = () => this.onCurrentEnded();
+
+        // Si l'élément n'a pas encore de données, attendre canplay.
+        if (el.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
+            await new Promise<void>((resolve) => {
+                const onCanPlay = () => {
+                    el.removeEventListener("canplay", onCanPlay);
+                    resolve();
+                };
+                el.addEventListener("canplay", onCanPlay);
+            });
+        }
 
         try {
             await el.play();
@@ -199,6 +231,7 @@ class GaplessEngine {
     }
 
     stop(): void {
+        this.playPending = false;
         const el = this.slots[this.currentSlot];
         el.onended = null;
         el.pause();
