@@ -31,13 +31,10 @@ export class PMOControlSSE {
       return
     }
 
-    console.log('[SSE] Connexion à /api/control/events...')
-
     try {
       this.eventSource = new EventSource('/api/control/events')
 
       this.eventSource.onopen = () => {
-        console.log('[SSE] Connexion établie')
         this.reconnectAttempts = 0
         this.isConnected = true
         this.notifyConnectionCallbacks(true)
@@ -75,7 +72,6 @@ export class PMOControlSSE {
     }
 
     if (this.eventSource) {
-      console.log('[SSE] Déconnexion')
       this.eventSource.close()
       this.eventSource = null
       this.isConnected = false
@@ -98,8 +94,6 @@ export class PMOControlSSE {
       1000 * Math.pow(2, this.reconnectAttempts - 1),
       this.maxReconnectDelay
     )
-
-    console.log(`[SSE] Reconnexion dans ${delay / 1000}s (tentative ${this.reconnectAttempts})`)
 
     this.reconnectTimer = window.setTimeout(() => {
       this.reconnectTimer = null

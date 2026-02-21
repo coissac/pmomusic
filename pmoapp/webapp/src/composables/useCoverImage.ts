@@ -65,9 +65,6 @@ export function useCoverImage(
 
     if (retryCount.value < maxRetries) {
       retryCount.value++;
-      console.log(
-        `[useCoverImage] Retrying image load (${retryCount.value}/${maxRetries}): ${currentUrl.value}`,
-      );
 
       setTimeout(() => {
         if (!currentUrl.value) return;
@@ -77,7 +74,6 @@ export function useCoverImage(
           currentUrl.value,
           retryCount.value,
         );
-        console.log(`[useCoverImage] Retry URL: ${cacheBustedUrl.value}`);
       }, retryDelay * retryCount.value); // Exponential backoff
     } else {
       console.error(
@@ -89,9 +85,6 @@ export function useCoverImage(
 
   // Handle successful image load
   function handleImageLoad() {
-    console.log(
-      `[useCoverImage] Image loaded successfully: ${currentUrl.value}`,
-    );
     imageLoaded.value = true;
     imageError.value = false;
     retryCount.value = 0;
@@ -119,18 +112,11 @@ export function useCoverImage(
   watch(
     imageUrl,
     (newUri, oldUri) => {
-      console.log(
-        `[useCoverImage] URL changed from "${oldUri}" to "${newUri}"`,
-      );
-
       imageError.value = false;
       retryCount.value = 0;
 
       // Si c'est un changement d'URL (pas l'initialisation)
       if (oldUri && newUri && oldUri !== newUri) {
-        console.log(
-          `[useCoverImage] Changing image, keeping old one visible during load`,
-        );
         isLoadingNewImage.value = true;
         // On garde imageLoaded à true pour garder l'ancienne image visible
       } else if (!newUri) {
@@ -148,9 +134,6 @@ export function useCoverImage(
       if (newUri) {
         // Generate cache-busted URL
         cacheBustedUrl.value = getCacheBustedUrl(newUri, 0);
-        console.log(
-          `[useCoverImage] New cache-busted URL: ${cacheBustedUrl.value}`,
-        );
       } else {
         cacheBustedUrl.value = null;
       }

@@ -34,12 +34,7 @@ const uiStore = useUIStore();
 
 sse.onConnectionChange((connected) => {
   uiStore.setSSEConnected(connected);
-  if (connected) {
-    console.log("[App] SSE connecté");
-  }
 });
 
 // Démarrer la connexion SSE
 sse.connect();
-
-console.log("[App] PMOControl initialisé");

@@ -37,9 +37,6 @@ function ensureSSEConnected() {
 
     switch (event.type) {
       case 'online':
-        // Nouveau serveur découvert
-        console.log(`[useMediaServers] Serveur ${serverId} (${event.friendly_name}) est maintenant en ligne`)
-
         // Ajouter au cache avec les infos disponibles
         const server: MediaServerSummary = {
           id: serverId,
@@ -55,9 +52,6 @@ function ensureSSEConnected() {
         break
 
       case 'offline':
-        // Serveur déconnecté
-        console.log(`[useMediaServers] Serveur ${serverId} est maintenant hors ligne`)
-
         // Marquer comme offline dans le cache
         const existingServer = serversCache.value.get(serverId)
         if (existingServer) {
@@ -77,7 +71,6 @@ function ensureSSEConnected() {
 
       case 'global_updated':
         // Invalider tout le cache de ce serveur
-        console.log(`[useMediaServers] GlobalUpdated pour ${serverId}`)
         const globalKeysToDelete: string[] = []
         browseCache.value.forEach((_, key) => {
           if (key.startsWith(serverId + '/')) {
@@ -89,7 +82,6 @@ function ensureSSEConnected() {
 
       case 'containers_updated':
         // Invalider les containers spécifiques
-        console.log(`[useMediaServers] ContainersUpdated pour ${serverId}:`, event.container_ids)
         event.container_ids.forEach(containerId => {
           const key = `${serverId}/${containerId}`
           browseCache.value.delete(key)

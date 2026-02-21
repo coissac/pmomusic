@@ -106,7 +106,6 @@ class GaplessEngine {
 
     private volume = 1.0;
     private muted = false;
-    private paused = false;
 
     /** Durée de la piste courante (secondes), lue via loadedmetadata */
     private _duration = 0;
@@ -144,10 +143,8 @@ class GaplessEngine {
 
     /** Charge la piste courante (sans la jouer). */
     setCurrent(uri: string): void {
-        this.paused = false;
         this.nextUri = null;
         this.onStateChange("TRANSITIONING");
-        console.debug(`[GaplessEngine] setCurrent: ${uri}`);
 
         const el = this.slots[this.currentSlot];
         // Retirer l'écouteur "ended" de l'autre slot si présent
@@ -163,7 +160,6 @@ class GaplessEngine {
         // Récupérer la durée dès que les métadonnées sont disponibles
         el.onloadedmetadata = () => {
             this._duration = el.duration || 0;
-            console.debug(`[GaplessEngine] loadedmetadata: duration=${this._duration.toFixed(2)}s`);
         };
         // Ne pas émettre STOPPED ici : l'état reste TRANSITIONING jusqu'au play()
     }
@@ -176,12 +172,10 @@ class GaplessEngine {
         el.src = uri;
         el.preload = "auto";
         el.load();
-        console.debug(`[GaplessEngine] setNext: préchargement de ${uri} dans slot ${nextSlot}`);
     }
 
     async play(): Promise<void> {
         const el = this.slots[this.currentSlot];
-        console.debug(`[GaplessEngine] play(), slot=${this.currentSlot}, src=${el.src}, paused=${this.paused}`);
 
         el.onended = () => this.onCurrentEnded();
 
@@ -192,7 +186,6 @@ class GaplessEngine {
             return;
         }
 
-        this.paused = false;
         this.startPositionTimer();
         this.onStateChange("PLAYING");
     }
@@ -200,7 +193,6 @@ class GaplessEngine {
     pause(): void {
         const el = this.slots[this.currentSlot];
         el.pause();
-        this.paused = true;
         this.stopPositionTimer();
         this.onStateChange("PAUSED");
         this.sendPosition();
@@ -211,7 +203,6 @@ class GaplessEngine {
         el.onended = null;
         el.pause();
         el.currentTime = 0;
-        this.paused = false;
         this.nextUri = null;
         this.stopPositionTimer();
         this.onStateChange("STOPPED");
@@ -240,7 +231,6 @@ class GaplessEngine {
     }
 
     private onCurrentEnded(): void {
-        console.debug("[GaplessEngine] onCurrentEnded");
         const nextSlot = (1 - this.currentSlot) as 0 | 1;
 
         if (this.nextUri !== null) {
@@ -343,7 +333,6 @@ export function useWebRenderer() {
 
     async function execCommand(action: TransportAction, params?: CommandParams) {
         if (!engine) return;
-        console.debug(`[WebRenderer] Commande: ${action}`, params);
 
         switch (action) {
             case "set_uri":
@@ -393,9 +382,6 @@ export function useWebRenderer() {
             case "session_created":
                 rendererInfo.value = msg.renderer_info;
                 connected.value = true;
-                console.info(
-                    `[WebRenderer] Session créée — UDN: ${msg.renderer_info.udn}`,
-                );
                 onConnectedCallback?.();
                 break;
 
@@ -424,12 +410,9 @@ export function useWebRenderer() {
 
         const protocol = location.protocol === "https:" ? "wss:" : "ws:";
         const url = `${protocol}//${location.host}/api/webrenderer/ws`;
-        console.info(`[WebRenderer] Connexion à : ${url}`);
-
         ws = new WebSocket(url);
 
         ws.onopen = () => {
-            console.info("[WebRenderer] WebSocket ouvert, envoi Init");
             send({
                 type: "init",
                 capabilities: {
@@ -445,7 +428,6 @@ export function useWebRenderer() {
             connected.value = false;
             rendererInfo.value = null;
             ws = null;
-            console.info("[WebRenderer] Déconnecté");
         };
 
         ws.onerror = (err) => {
