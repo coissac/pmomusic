@@ -44,7 +44,7 @@ use pmoflac::{EncoderOptions, PcmFormat};
 use tokio::io::{AsyncRead, ReadBuf};
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::sinks::byte_stream_reader::{ByteStreamReader, PcmChunk};
 use crate::sinks::chunk_to_pcm::chunk_to_pcm_bytes;
@@ -228,7 +228,11 @@ impl NodeLogic for DirectOggFlacSinkLogic {
                                     duration_sec,
                                 };
                                 if tx.send(pcm_chunk).await.is_err() {
-                                    debug!("DirectOggFlacSink: pcm_tx send failed (client disconnected), clearing pcm_tx");
+                                    warn!(
+                                        ts = seg.timestamp_sec,
+                                        "DirectOggFlacSink: chunk dropped (client disconnected at {:.3}s), waiting for reconnect",
+                                        seg.timestamp_sec,
+                                    );
                                     *self.pcm_tx.lock().await = None;
                                 }
                             }
@@ -348,7 +352,13 @@ async fn run_ogg_encoder(
 
                     let ogg_page = Bytes::from(ogg.create_page(&frame, false, false, false));
                     if pipe_writer.write_all(&ogg_page).await.is_err() {
-                        // Client déconnecté
+                        // Client déconnecté — le pipe HTTP s'est rompu
+                        warn!(
+                            samples = encoded_samples,
+                            "DirectOggFlacSink: OGG pipe broken after {} samples ({:.3}s), client disconnected",
+                            encoded_samples,
+                            encoded_samples as f64 / DIRECT_OGG_FLAC_SAMPLE_RATE as f64,
+                        );
                         return Ok(());
                     }
                 }

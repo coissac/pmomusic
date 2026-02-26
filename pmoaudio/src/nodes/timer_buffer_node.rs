@@ -135,6 +135,14 @@ impl TimerBufferNodeLogic {
                 self.buffer.len()
             );
 
+            if self.buffer.is_empty() && self.buffered_time_sec < self.capacity_sec * 0.1 {
+                tracing::warn!(
+                    "TimerBufferNode: buffer underrun at ts={:.3}s (capacity={:.1}s) — source too slow or stalled",
+                    segment.timestamp_sec,
+                    self.capacity_sec,
+                );
+            }
+
             send_to_children(std::any::type_name::<Self>(), output, segment).await?;
         }
         Ok(())

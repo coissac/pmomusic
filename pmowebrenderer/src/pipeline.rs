@@ -7,9 +7,12 @@
 
 use std::sync::Arc;
 
-use pmoaudio::{AudioSegment, PositionHandle, PositionTrackerNode, ResamplingNode, TimerBufferNode, ToI24Node};
+use pmoaudio::{AudioSegment, PositionTrackerNode, ResamplingNode, ToI24Node};
 use pmometadata::{MemoryTrackMetadata, TrackMetadata};
-use pmoaudio_ext::sinks::{DirectOggFlacHandle, DirectOggFlacSink, DIRECT_OGG_FLAC_SAMPLE_RATE};
+use pmoaudio_ext::sinks::{
+    OggFlacStreamHandle, StreamingOggFlacSink,
+    DIRECT_OGG_FLAC_BITS_PER_SAMPLE, DIRECT_OGG_FLAC_SAMPLE_RATE,
+};
 use pmoaudio_ext::UriSource;
 use pmoflac::EncoderOptions;
 use tokio::sync::mpsc;
@@ -56,10 +59,10 @@ impl PipelineHandle {
 /// Pipeline audio complet pour une instance WebRenderer.
 ///
 /// Créé au `POST /register`. Le flux OGG-FLAC est accessible via `flac_handle`
-/// (un seul client à la fois, reconnectable à chaque Play).
+/// (multi-clients, chaque `subscribe()` retourne un nouveau flux depuis le point courant).
 pub struct InstancePipeline {
-    /// Handle vers le sink OGG-FLAC — clonable, reconnectable à chaque Play.
-    pub flac_handle: DirectOggFlacHandle,
+    /// Handle vers le sink OGG-FLAC — clonable, chaque subscribe() donne un flux live.
+    pub flac_handle: OggFlacStreamHandle,
     pub pipeline_handle: PipelineHandle,
 }
 
@@ -79,21 +82,18 @@ impl InstancePipeline {
         // La backpressure remonte naturellement depuis le pipe duplex jusqu'à la source.
         use pmoaudio::pipeline::AudioPipelineNode;
 
-        let (sink, flac_handle) = DirectOggFlacSink::new(EncoderOptions::default());
+        let (sink, flac_handle) = StreamingOggFlacSink::new(
+            EncoderOptions::default(),
+            DIRECT_OGG_FLAC_BITS_PER_SAMPLE,
+        );
 
-        // Nœud de suivi de position : lit le timestamp des chunks sortant du buffer
+        // Nœud de suivi de position : lit le timestamp des chunks sortant vers le sink
         let (mut position_tracker, position_handle) = PositionTrackerNode::new();
         position_tracker.register(sink.boxed());
 
-        // Nœud de pacing : régule le débit pour éviter les rafales et pertes de segments
-        // 2s de buffer absorbe les irrégularités de la source réseau
-        let mut timer_buffer = TimerBufferNode::new(2.0);
-        timer_buffer.register(position_tracker.boxed());
-
         // Nœud de conversion de profondeur : tout type entier → I24
-        // Placé avant le buffer pour réduire la mémoire utilisée
         let mut to_i24 = ToI24Node::new();
-        to_i24.register(timer_buffer.boxed());
+        to_i24.register(position_tracker.boxed());
 
         // Nœud de rééchantillonnage : n'importe quel sample rate → 96 kHz
         let mut resampler = ResamplingNode::new(DIRECT_OGG_FLAC_SAMPLE_RATE);
