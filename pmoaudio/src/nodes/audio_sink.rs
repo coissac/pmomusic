@@ -547,19 +547,23 @@ impl AudioSink {
         }
     }
 
+    pub fn make() -> Box<dyn AudioPipelineNode> {
+        Self::new().boxed()
+    }
+
     /// Crée un nouveau AudioSink avec une taille de channel personnalisée
-    pub fn with_channel_size(channel_size: usize) -> Self {
+    pub fn with_channel_size(channel_size: usize) -> Box<dyn AudioPipelineNode> {
         Self {
             inner: Node::new_with_input(AudioSinkLogic::new(), channel_size),
-        }
+        }.boxed()
     }
 
     /// Crée un AudioSink avec null output (pour tests sans carte audio)
     /// Consomme les segments audio sans les jouer
-    pub fn with_null_output() -> Self {
+    pub fn with_null_output() -> Box<dyn AudioPipelineNode> {
         Self {
             inner: Node::new_with_input(AudioSinkLogic::with_null_output(), DEFAULT_CHANNEL_SIZE),
-        }
+        }.boxed()
     }
 }
 

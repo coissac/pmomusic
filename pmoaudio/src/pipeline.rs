@@ -82,6 +82,14 @@ pub trait AudioPipelineNode: Send + 'static {
     /// Le parent extrait le tx via `child.get_tx()` avant de stocker le child.
     fn register(&mut self, child: Box<dyn AudioPipelineNode>);
 
+    /// Encapsule ce nœud dans un `Box<dyn AudioPipelineNode>` pour l'utiliser dans un pipeline.
+    fn boxed(self) -> Box<dyn AudioPipelineNode>
+    where
+        Self: Sized + 'static,
+    {
+        Box::new(self)
+    }
+
     /// Lance le nœud et tous ses enfants
     ///
     /// # Arguments

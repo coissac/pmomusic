@@ -117,7 +117,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sink = FlacFileSink::new(&base_path);
 
     // Construire la chaîne: source → sink
-    source.register(Box::new(sink));
+    source.register(sink.boxed());
 
     // Créer un token d'arrêt
     let stop_token = CancellationToken::new();

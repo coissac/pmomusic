@@ -224,18 +224,21 @@ impl FileSource {
     ///
     /// * `path` - chemin du fichier audio à lire
     pub fn new<P: Into<PathBuf>>(path: P) -> Self {
-        Self::with_chunk_size(path, 0) // 0 = auto-calculer
+        let logic = FileSourceLogic::new(path, 0);
+        Self { inner: Node::new_source(logic) }
+    }
+
+    pub fn make<P: Into<PathBuf>>(path: P) -> Box<dyn AudioPipelineNode> {
+        Self::new(path).boxed()
     }
 
     /// Crée une nouvelle source de fichier avec une taille de chunk spécifique.
     ///
     /// * `path` - chemin du fichier audio à lire
     /// * `chunk_frames` - nombre d'échantillons par canal par chunk (0 = auto)
-    pub fn with_chunk_size<P: Into<PathBuf>>(path: P, chunk_frames: usize) -> Self {
+    pub fn with_chunk_size<P: Into<PathBuf>>(path: P, chunk_frames: usize) -> Box<dyn AudioPipelineNode> {
         let logic = FileSourceLogic::new(path, chunk_frames);
-        Self {
-            inner: Node::new_source(logic),
-        }
+        Self { inner: Node::new_source(logic) }.boxed()
     }
 }
 

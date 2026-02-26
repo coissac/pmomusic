@@ -38,7 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sink = FlacFileSink::new(output_path);
 
     // Enregistrer le sink comme enfant de la source
-    source.register(Box::new(sink));
+    source.register(sink.boxed());
 
     // Créer un token d'arrêt pour contrôle manuel si besoin
     let stop_token = CancellationToken::new();

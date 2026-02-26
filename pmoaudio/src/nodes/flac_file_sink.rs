@@ -305,7 +305,12 @@ impl FlacFileSink {
     /// * `base_path` - Chemin de base pour les fichiers FLAC. Si des TrackBoundary sont reçus,
     ///   des fichiers seront créés avec des suffixes (_01, _02, etc.)
     pub fn new<P: Into<PathBuf>>(base_path: P) -> Self {
-        Self::with_channel_size(base_path, DEFAULT_CHANNEL_SIZE)
+        let logic = FlacFileSinkLogic::new(base_path, EncoderOptions::default(), 8);
+        Self { inner: Node::new_with_input(logic, DEFAULT_CHANNEL_SIZE) }
+    }
+
+    pub fn make<P: Into<PathBuf>>(base_path: P) -> Box<dyn AudioPipelineNode> {
+        Self::new(base_path).boxed()
     }
 
     /// Crée un sink FLAC avec une taille de buffer MPSC personnalisée.
@@ -314,8 +319,9 @@ impl FlacFileSink {
     ///
     /// * `base_path` - Chemin de base pour les fichiers FLAC
     /// * `channel_size` - Taille du buffer MPSC (nombre de segments en attente avant backpressure)
-    pub fn with_channel_size<P: Into<PathBuf>>(base_path: P, channel_size: usize) -> Self {
-        Self::with_config(base_path, channel_size, EncoderOptions::default())
+    pub fn with_channel_size<P: Into<PathBuf>>(base_path: P, channel_size: usize) -> Box<dyn AudioPipelineNode> {
+        let logic = FlacFileSinkLogic::new(base_path, EncoderOptions::default(), 8);
+        Self { inner: Node::new_with_input(logic, channel_size) }.boxed()
     }
 
     /// Crée un sink FLAC avec une configuration complète.
@@ -329,11 +335,11 @@ impl FlacFileSink {
         base_path: P,
         channel_size: usize,
         encoder_options: EncoderOptions,
-    ) -> Self {
+    ) -> Box<dyn AudioPipelineNode> {
         let logic = FlacFileSinkLogic::new(base_path, encoder_options, 8);
         Self {
             inner: Node::new_with_input(logic, channel_size),
-        }
+        }.boxed()
     }
 }
 

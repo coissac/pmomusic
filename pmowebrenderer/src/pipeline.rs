@@ -83,21 +83,21 @@ impl InstancePipeline {
 
         // Nœud de suivi de position : lit le timestamp des chunks sortant du buffer
         let (mut position_tracker, position_handle) = PositionTrackerNode::new();
-        position_tracker.register(Box::new(sink));
+        position_tracker.register(sink.boxed());
 
         // Nœud de pacing : régule le débit pour éviter les rafales et pertes de segments
         // 2s de buffer absorbe les irrégularités de la source réseau
         let mut timer_buffer = TimerBufferNode::new(2.0);
-        timer_buffer.register(Box::new(position_tracker));
+        timer_buffer.register(position_tracker.boxed());
 
         // Nœud de conversion de profondeur : tout type entier → I24
         // Placé avant le buffer pour réduire la mémoire utilisée
         let mut to_i24 = ToI24Node::new();
-        to_i24.register(Box::new(timer_buffer));
+        to_i24.register(timer_buffer.boxed());
 
         // Nœud de rééchantillonnage : n'importe quel sample rate → 96 kHz
         let mut resampler = ResamplingNode::new(DIRECT_OGG_FLAC_SAMPLE_RATE);
-        resampler.register(to_i24);
+        resampler.register(to_i24.boxed());
 
         // Le tx d'entrée du resampler est le point d'entrée du pipeline
         let segment_tx = resampler.get_tx().expect("ResamplingNode doit avoir un sender");
@@ -110,7 +110,7 @@ impl InstancePipeline {
         // Lancer la chaîne resampler → to_i24 → sink en background
         let sink_stop = stop_token.clone();
         tokio::spawn(async move {
-            if let Err(e) = resampler.run(sink_stop).await {
+            if let Err(e) = resampler.boxed().run(sink_stop).await {
                 warn!("Audio pipeline error: {:?}", e);
             }
             debug!("Sink task terminated");

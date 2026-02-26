@@ -35,22 +35,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Lecture de: {}", file_path);
     println!("Sample rate cible: {} Hz", target_sample_rate);
 
-    // Créer la source audio
-    let mut source = FileSource::new(file_path).await?;
-
-    // Créer le nœud de resampling
-    let mut resampler = ResamplingNode::new(target_sample_rate);
-
-    // Créer le nœud de conversion vers I24
-    let mut converter = ToI24Node::new();
-
-    // Créer le sink audio avec volume à 80%
-    let sink = AudioSink::with_volume(0.8);
-
     // Construire le pipeline: Source → Resampler → Converter → Sink
-    source.register(Box::new(resampler));
-    resampler.register(Box::new(converter));
-    converter.register(Box::new(sink));
+    let sink = AudioSink::new();
+    let mut converter = ToI24Node::new();
+    converter.register(sink.boxed());
+
+    let mut resampler = ResamplingNode::new(target_sample_rate);
+    resampler.register(converter.boxed());
+
+    let mut source = FileSource::new(file_path);
+    source.register(resampler.boxed());
 
     println!(
         "Pipeline créé: FileSource → Resampling({} Hz) → ToI24 → AudioSink",

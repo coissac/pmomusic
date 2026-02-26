@@ -297,7 +297,12 @@ impl HttpSource {
     /// let source = HttpSource::new("http://example.com/music.flac");
     /// ```
     pub fn new<S: Into<String>>(url: S) -> Self {
-        Self::with_chunk_size(url, 0)
+        let logic = HttpSourceLogic::new(url.into(), 0);
+        Self { inner: Node::new_source(logic) }
+    }
+
+    pub fn make<S: Into<String>>(url: S) -> Box<dyn AudioPipelineNode> {
+        Self::new(url).boxed()
     }
 
     /// Crée une nouvelle source HTTP avec une taille de chunk spécifique.
@@ -315,11 +320,9 @@ impl HttpSource {
     /// // Utiliser des chunks de 2048 frames
     /// let source = HttpSource::with_chunk_size("http://example.com/music.mp3", 2048);
     /// ```
-    pub fn with_chunk_size<S: Into<String>>(url: S, chunk_frames: usize) -> Self {
+    pub fn with_chunk_size<S: Into<String>>(url: S, chunk_frames: usize) -> Box<dyn AudioPipelineNode> {
         let logic = HttpSourceLogic::new(url.into(), chunk_frames);
-        Self {
-            inner: Node::new_source(logic),
-        }
+        Self { inner: Node::new_source(logic) }.boxed()
     }
 
     pub fn get_url(&self) -> String {

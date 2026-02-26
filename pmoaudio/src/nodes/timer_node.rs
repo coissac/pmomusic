@@ -308,7 +308,12 @@ impl TimerNode {
     /// let timer = TimerNode::new(3.0);
     /// ```
     pub fn new(max_lead_time_sec: f64) -> Self {
-        Self::with_channel_size(max_lead_time_sec, DEFAULT_CHANNEL_SIZE)
+        let logic = TimerNodeLogic::new(max_lead_time_sec);
+        Self { inner: Node::new_with_input(logic, DEFAULT_CHANNEL_SIZE) }
+    }
+
+    pub fn make(max_lead_time_sec: f64) -> Box<dyn AudioPipelineNode> {
+        Self::new(max_lead_time_sec).boxed()
     }
 
     /// Crée un TimerNode avec une taille de buffer MPSC personnalisée
@@ -317,11 +322,9 @@ impl TimerNode {
     ///
     /// * `max_lead_time_sec` - Avance maximale en secondes
     /// * `channel_size` - Taille du buffer MPSC (nombre de segments en attente)
-    pub fn with_channel_size(max_lead_time_sec: f64, channel_size: usize) -> Self {
+    pub fn with_channel_size(max_lead_time_sec: f64, channel_size: usize) -> Box<dyn AudioPipelineNode> {
         let logic = TimerNodeLogic::new(max_lead_time_sec);
-        Self {
-            inner: Node::new_with_input(logic, channel_size),
-        }
+        Self { inner: Node::new_with_input(logic, channel_size) }.boxed()
     }
 }
 
