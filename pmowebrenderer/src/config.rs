@@ -2,11 +2,12 @@
 
 #[cfg(feature = "pmoserver")]
 use std::sync::Arc;
-#[cfg(feature = "pmoserver")]
-use std::time::Duration;
 
 #[cfg(feature = "pmoserver")]
 use async_trait::async_trait;
+
+#[cfg(feature = "pmoserver")]
+use axum::{Router, routing::{delete, get, post}};
 
 #[cfg(feature = "pmoserver")]
 use pmocontrol::ControlPoint;
@@ -14,9 +15,11 @@ use pmocontrol::ControlPoint;
 #[cfg(feature = "pmoserver")]
 use crate::error::WebRendererError;
 #[cfg(feature = "pmoserver")]
-use crate::session::SessionManager;
+use crate::register::{register_handler, unregister_handler};
 #[cfg(feature = "pmoserver")]
-use crate::websocket::{websocket_handler, WebSocketState};
+use crate::registry::RendererRegistry;
+#[cfg(feature = "pmoserver")]
+use crate::stream::stream_handler;
 
 /// Trait pour étendre pmoserver::Server avec les routes WebRenderer
 #[cfg(feature = "pmoserver")]
@@ -35,17 +38,27 @@ impl WebRendererExt for pmoserver::Server {
         &mut self,
         control_point: Arc<ControlPoint>,
     ) -> Result<(), WebRendererError> {
-        let session_manager = Arc::new(SessionManager::new(Duration::from_secs(30 * 60)));
+        let registry = Arc::new(RendererRegistry::new(control_point));
 
-        let ws_state = WebSocketState {
-            session_manager,
-            control_point,
-        };
+        // POST /api/webrenderer/register
+        self.add_post_handler_with_state(
+            "/api/webrenderer/register",
+            register_handler,
+            registry.clone(),
+        )
+        .await;
 
-        self.add_any_handler_with_state("/api/webrenderer/ws", websocket_handler, ws_state)
-            .await;
+        // GET /api/webrenderer/{id}/stream  +  DELETE /api/webrenderer/{id}
+        let dynamic_router = Router::new()
+            .route("/{id}/stream", get(stream_handler))
+            .route("/{id}", delete(unregister_handler))
+            .with_state(registry.clone());
+        self.add_router("/api/webrenderer", dynamic_router).await;
 
-        tracing::info!("WebRenderer WebSocket endpoint registered at /api/webrenderer/ws");
+        tracing::info!("WebRenderer server-side streaming endpoints registered");
+        tracing::info!("  POST   /api/webrenderer/register");
+        tracing::info!("  GET    /api/webrenderer/{{id}}/stream");
+        tracing::info!("  DELETE /api/webrenderer/{{id}}");
         Ok(())
     }
 }

@@ -27,6 +27,7 @@ pub mod http_source;
 pub mod resampling_node;
 pub mod timer_buffer_node;
 pub mod timer_node;
+pub mod position_tracker_node;
 
 // Modules temporairement désactivés
 /*

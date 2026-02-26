@@ -5,15 +5,13 @@
 
 use std::sync::Arc;
 use thiserror::Error;
-use tokio::sync::mpsc;
-
 use pmoupnp::actions::{Action, Argument};
 use pmoupnp::devices::Device;
 use pmoupnp::services::Service;
 
 use crate::handlers;
-use crate::messages::ServerMessage;
-use crate::state::{SharedSender, SharedState};
+use crate::pipeline::PipelineHandle;
+use crate::state::SharedState;
 
 // ─── Réimport des variables statiques de pmomediarenderer ───────────────────
 // Variables AVTransport
@@ -65,7 +63,7 @@ fn extract_browser_name(ua: &str) -> &str {
     }
 }
 
-/// Factory pour créer des Device UPnP WebRenderer avec des handlers WebSocket
+/// Factory pour créer des Device UPnP WebRenderer avec un pipeline audio serveur
 pub struct WebRendererFactory;
 
 impl WebRendererFactory {
@@ -73,26 +71,23 @@ impl WebRendererFactory {
     ///
     /// `device_name` sert de clé pour retrouver l'UDN persistant dans la config.
     /// `browser_ua` est le User-Agent complet (pour déterminer le nom affiché).
-    ///
-    /// Retourne le Device et le `SharedSender` associé. Le `SharedSender` peut être
-    /// mis à jour à chaque reconnexion WebSocket via `shared_sender.set(new_tx)`.
-    pub fn create_device_with_name(
+    pub fn create_device_with_pipeline(
         device_name: &str,
         browser_ua: &str,
-        ws_sender: mpsc::UnboundedSender<ServerMessage>,
+        pipeline: PipelineHandle,
         state: SharedState,
-    ) -> Result<(Device, SharedSender), FactoryError> {
-        let shared_sender = SharedSender::new(ws_sender);
-        let avtransport = Self::build_avtransport(shared_sender.clone(), state.clone())?;
-        let renderingcontrol = Self::build_renderingcontrol(shared_sender.clone(), state.clone())?;
+    ) -> Result<Device, FactoryError> {
+        let avtransport = Self::build_avtransport(pipeline.clone(), state.clone())?;
+        let renderingcontrol = Self::build_renderingcontrol(pipeline.clone(), state.clone())?;
         let connectionmanager = Self::build_connectionmanager()?;
 
         let short_name = extract_browser_name(browser_ua);
-        let device = Device::new(
+        let mut device = Device::new(
             device_name.to_string(),
             "MediaRenderer".to_string(),
             format!("Web Audio – {}", short_name),
         );
+        device.set_model_name("WebRenderer".to_string());
         device
             .add_service(Arc::new(avtransport))
             .map_err(|e| FactoryError::ServiceError(format!("{:?}", e)))?;
@@ -103,12 +98,12 @@ impl WebRendererFactory {
             .add_service(Arc::new(connectionmanager))
             .map_err(|e| FactoryError::ServiceError(format!("{:?}", e)))?;
 
-        Ok((device, shared_sender))
+        Ok(device)
     }
 
-    /// Construit le service AVTransport avec les handlers WebSocket
+    /// Construit le service AVTransport avec les handlers pipeline
     fn build_avtransport(
-        ws: SharedSender,
+        pipeline: PipelineHandle,
         state: SharedState,
     ) -> Result<Service, FactoryError> {
         let mut svc = Service::new("AVTransport".to_string());
@@ -158,7 +153,7 @@ impl WebRendererFactory {
             Arc::clone(&TRANSPORTPLAYSPEED),
         )))
         .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        play.set_handler(handlers::play_handler(ws.clone(), state.clone()));
+        play.set_handler(handlers::play_handler(pipeline.clone(), state.clone()));
         add_action(&mut svc, Arc::new(play))?;
 
         // Stop
@@ -168,7 +163,7 @@ impl WebRendererFactory {
             Arc::clone(&AVT_INSTANCE_ID),
         )))
         .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        stop.set_handler(handlers::stop_handler(ws.clone(), state.clone()));
+        stop.set_handler(handlers::stop_handler(pipeline.clone(), state.clone()));
         add_action(&mut svc, Arc::new(stop))?;
 
         // Pause
@@ -179,7 +174,7 @@ impl WebRendererFactory {
                 Arc::clone(&AVT_INSTANCE_ID),
             )))
             .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        pause.set_handler(handlers::pause_handler(ws.clone(), state.clone()));
+        pause.set_handler(handlers::pause_handler(pipeline.clone(), state.clone()));
         add_action(&mut svc, Arc::new(pause))?;
 
         // Next
@@ -189,7 +184,7 @@ impl WebRendererFactory {
             Arc::clone(&AVT_INSTANCE_ID),
         )))
         .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        next.set_handler(handlers::next_handler(ws.clone()));
+        next.set_handler(handlers::next_handler(pipeline.clone()));
         add_action(&mut svc, Arc::new(next))?;
 
         // Previous
@@ -200,7 +195,7 @@ impl WebRendererFactory {
                 Arc::clone(&AVT_INSTANCE_ID),
             )))
             .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        previous.set_handler(handlers::previous_handler(ws.clone()));
+        previous.set_handler(handlers::previous_handler(pipeline.clone()));
         add_action(&mut svc, Arc::new(previous))?;
 
         // Seek
@@ -220,7 +215,7 @@ impl WebRendererFactory {
             Arc::clone(&SEEKMODE),
         )))
         .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        seek.set_handler(handlers::seek_handler(ws.clone()));
+        seek.set_handler(handlers::seek_handler(pipeline.clone()));
         add_action(&mut svc, Arc::new(seek))?;
 
         // SetAVTransportURI
@@ -243,7 +238,7 @@ impl WebRendererFactory {
                 Arc::clone(&AVTRANSPORTURIMETADATA),
             )))
             .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        set_uri.set_handler(handlers::set_uri_handler(ws.clone(), state.clone()));
+        set_uri.set_handler(handlers::set_uri_handler(pipeline.clone(), state.clone()));
         add_action(&mut svc, Arc::new(set_uri))?;
 
         // SetNextAVTransportURI
@@ -266,7 +261,7 @@ impl WebRendererFactory {
                 Arc::clone(&AVTRANSPORTNEXTURIMETADATA),
             )))
             .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        set_next_uri.set_handler(handlers::set_next_uri_handler(ws.clone(), state.clone()));
+        set_next_uri.set_handler(handlers::set_next_uri_handler(pipeline.clone(), state.clone()));
         add_action(&mut svc, Arc::new(set_next_uri))?;
 
         // GetPositionInfo
@@ -422,9 +417,9 @@ impl WebRendererFactory {
         Ok(svc)
     }
 
-    /// Construit le service RenderingControl avec les handlers WebSocket
+    /// Construit le service RenderingControl avec les handlers pipeline
     fn build_renderingcontrol(
-        ws: SharedSender,
+        pipeline: PipelineHandle,
         state: SharedState,
     ) -> Result<Service, FactoryError> {
         let mut svc = Service::new("RenderingControl".to_string());
@@ -458,7 +453,7 @@ impl WebRendererFactory {
                 Arc::clone(&VOLUME),
             )))
             .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        set_vol.set_handler(handlers::set_volume_handler(ws.clone(), state.clone()));
+        set_vol.set_handler(handlers::set_volume_handler(pipeline.clone(), state.clone()));
         svc.add_action(Arc::new(set_vol))
             .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
 
@@ -507,7 +502,7 @@ impl WebRendererFactory {
                 Arc::clone(&MUTE),
             )))
             .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        set_mute.set_handler(handlers::set_mute_handler(ws.clone(), state.clone()));
+        set_mute.set_handler(handlers::set_mute_handler(pipeline.clone(), state.clone()));
         svc.add_action(Arc::new(set_mute))
             .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
 

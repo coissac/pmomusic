@@ -5,7 +5,7 @@
 //! - Drops frames that are late (audio_ts < elapsed)
 //! - Paces broadcast to match audio playback rate
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tracing::trace;
 
 /// Error returned when a frame should be skipped (too late)
@@ -13,7 +13,6 @@ use tracing::trace;
 pub struct SkipFrame;
 
 /// Manages broadcast pacing with TopZeroSync detection
-#[allow(dead_code)]
 pub struct BroadcastPacer {
     /// Start time (reset on TopZeroSync)
     start_time: Instant,
@@ -21,8 +20,6 @@ pub struct BroadcastPacer {
     max_lead_time: f64,
     /// Label for logging (e.g., "FLAC" or "OGG")
     label: String,
-    /// Pending reset flag - will reset timer on next chunk
-    pending_reset: bool,
 }
 
 impl BroadcastPacer {
@@ -37,24 +34,37 @@ impl BroadcastPacer {
             start_time: Instant::now(),
             max_lead_time: max_lead_time.max(0.0),
             label: label.into(),
-            pending_reset: false,
         }
     }
 
-    /// Check timing and apply pacing - NO-OP VERSION
+    /// Reset the pacer clock (call when audio timestamp resets to 0).
+    pub fn reset(&mut self) {
+        self.start_time = Instant::now();
+        trace!("{} broadcaster: pacer reset", self.label);
+    }
+
+    /// Check timing and apply pacing.
     ///
-    /// Pacing is now handled entirely by the expiration-based system in
-    /// TimedBroadcast. This method is kept for backward compatibility
-    /// but always returns Ok(()).
-    ///
-    /// # Returns
-    ///
-    /// - Always returns `Ok(())`
+    /// If the audio is ahead of real time by more than `max_lead_time`, sleeps
+    /// until the lead is within bounds.  Returns `Err(SkipFrame)` if the chunk
+    /// is already late (audio_ts < elapsed - 1s grace).
     pub async fn check_and_pace(&mut self, audio_timestamp: f64) -> Result<(), SkipFrame> {
-        trace!(
-            "{} broadcaster: check_and_pace called with audio_ts={:.3}s (no-op - pacing handled by TimedBroadcast)",
-            self.label, audio_timestamp
-        );
+        if self.max_lead_time <= 0.0 {
+            return Ok(());
+        }
+
+        let elapsed = self.start_time.elapsed().as_secs_f64();
+        let lead = audio_timestamp - elapsed;
+
+        if lead > self.max_lead_time {
+            let sleep_secs = lead - self.max_lead_time;
+            trace!(
+                "{} broadcaster: audio ahead by {:.3}s, sleeping {:.3}s",
+                self.label, lead, sleep_secs
+            );
+            tokio::time::sleep(Duration::from_secs_f64(sleep_secs)).await;
+        }
+
         Ok(())
     }
 }

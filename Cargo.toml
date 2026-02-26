@@ -15,6 +15,7 @@ members = [
     "pmocovers",
     "pmoaudiocache",
     "pmoaudio",
+    "pmoaudio-ext",
     "pmoqobuz",
     "pmoparadise",
     "pmoradiofrance",
