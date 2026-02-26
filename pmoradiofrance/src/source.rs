@@ -69,8 +69,7 @@ impl RadioFranceSource {
         let cover_cache = pmoupnp::cache_registry::get_cover_cache()
             .ok_or_else(|| crate::error::Error::Other("Cover cache not initialized".to_string()))?;
 
-        // TODO: Récupérer server_base_url depuis config
-        let server_base_url = "http://localhost:8080".to_string();
+        let server_base_url = config.get_base_url();
 
         let metadata_cache = Arc::new(MetadataCache::new(
             client,

@@ -106,7 +106,7 @@ function handleRendererSelect(rendererId: string) {
 // Filtre la liste des renderers pour exclure les WebRenderers d'autres navigateurs.
 // Seul le WebRenderer créé par ce navigateur (identifié par son UDN) reste visible.
 function filterRenderers(renderers: typeof allRenderers.value) {
-    const myUdn = webRenderer.rendererInfo.value?.udn ?? null;
+    const myUdn = webRenderer.rendererUdn.value;
     return renderers.filter((r) => {
         if (r.model_name !== "WebRenderer") return true; // renderer classique : toujours visible
         if (myUdn === null) return false; // pas encore de session : masquer tous les WebRenderers
@@ -140,7 +140,7 @@ watch(
 
 // Watch l'UDN du WebRenderer local : quand il s'établit, resync pour faire apparaître notre onglet
 watch(
-    () => webRenderer.rendererInfo.value?.udn,
+    () => webRenderer.rendererUdn.value,
     () => {
         syncWithRenderers(filterRenderers(allRenderers.value));
     },

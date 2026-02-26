@@ -70,8 +70,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sink = FlacFileSink::new(output_path);
 
     // Construire la chaîne: source → converter → sink
-    converter.register(Box::new(sink));
-    source.register(converter);
+    converter.register(sink.boxed());
+    source.register(converter.boxed());
 
     // Créer un token d'arrêt pour contrôle manuel si besoin
     let stop_token = CancellationToken::new();

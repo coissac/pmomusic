@@ -7,6 +7,7 @@ use std::{
 use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
 
 use crate::{
+    aac::{decode_aac_stream, AacDecodedStream, AacError},
     decode_aiff_stream, decode_flac_stream, decode_mp3_stream, decode_ogg_opus_stream,
     decode_ogg_vorbis_stream, decode_wav_stream, pcm::StreamInfo, prefixed_reader::PrefixedReader,
     AiffDecodedStream, AiffError, FlacDecodedStream, FlacError, Mp3DecodedStream, Mp3Error,
@@ -34,6 +35,8 @@ pub enum DecodeAudioError {
     Wav(WavError),
     #[error("AIFF decode error: {0}")]
     Aiff(AiffError),
+    #[error("AAC decode error: {0}")]
+    Aac(AacError),
 }
 
 pub async fn decode_audio_stream<R>(reader: R) -> Result<DecodedAudioStream, DecodeAudioError>
@@ -94,6 +97,12 @@ where
                 .map_err(DecodeAudioError::Aiff)?;
             DecodedAudioStream::Aiff(stream)
         }
+        DetectedFormat::Aac => {
+            let stream = decode_aac_stream(prefixed)
+                .await
+                .map_err(DecodeAudioError::Aac)?;
+            DecodedAudioStream::Aac(stream)
+        }
     };
 
     Ok(stream)
@@ -106,6 +115,7 @@ pub enum DecodedAudioStream {
     OggOpus(OggOpusDecodedStream),
     Wav(WavDecodedStream),
     Aiff(AiffDecodedStream),
+    Aac(AacDecodedStream),
 }
 
 impl DecodedAudioStream {
@@ -117,6 +127,7 @@ impl DecodedAudioStream {
             DecodedAudioStream::OggOpus(inner) => inner.info(),
             DecodedAudioStream::Wav(inner) => inner.info(),
             DecodedAudioStream::Aiff(inner) => inner.info(),
+            DecodedAudioStream::Aac(inner) => inner.info(),
         }
     }
 
@@ -132,6 +143,7 @@ impl DecodedAudioStream {
             }
             DecodedAudioStream::Wav(inner) => inner.wait().await.map_err(DecodeAudioError::Wav),
             DecodedAudioStream::Aiff(inner) => inner.wait().await.map_err(DecodeAudioError::Aiff),
+            DecodedAudioStream::Aac(inner) => inner.wait().await.map_err(DecodeAudioError::Aac),
         }
     }
 
@@ -161,6 +173,10 @@ impl DecodedAudioStream {
                 let (info, reader) = inner.into_parts();
                 (info, DecodedReader::Aiff(reader))
             }
+            DecodedAudioStream::Aac(inner) => {
+                let (info, reader) = inner.into_parts();
+                (info, DecodedReader::Aac(reader))
+            }
         }
     }
 }
@@ -178,6 +194,7 @@ impl AsyncRead for DecodedAudioStream {
             DecodedAudioStream::OggOpus(inner) => Pin::new(inner).poll_read(cx, buf),
             DecodedAudioStream::Wav(inner) => Pin::new(inner).poll_read(cx, buf),
             DecodedAudioStream::Aiff(inner) => Pin::new(inner).poll_read(cx, buf),
+            DecodedAudioStream::Aac(inner) => Pin::new(inner).poll_read(cx, buf),
         }
     }
 }
@@ -189,6 +206,7 @@ pub enum DecodedReader {
     OggOpus(crate::stream::ManagedAsyncReader<OggOpusError>),
     Wav(crate::stream::ManagedAsyncReader<WavError>),
     Aiff(crate::stream::ManagedAsyncReader<AiffError>),
+    Aac(crate::stream::ManagedAsyncReader<AacError>),
 }
 
 impl DecodedReader {
@@ -200,6 +218,7 @@ impl DecodedReader {
             DecodedReader::OggOpus(inner) => inner.wait().await.map_err(DecodeAudioError::Opus),
             DecodedReader::Wav(inner) => inner.wait().await.map_err(DecodeAudioError::Wav),
             DecodedReader::Aiff(inner) => inner.wait().await.map_err(DecodeAudioError::Aiff),
+            DecodedReader::Aac(inner) => inner.wait().await.map_err(DecodeAudioError::Aac),
         }
     }
 }
@@ -217,6 +236,7 @@ impl AsyncRead for DecodedReader {
             DecodedReader::OggOpus(inner) => Pin::new(inner).poll_read(cx, buf),
             DecodedReader::Wav(inner) => Pin::new(inner).poll_read(cx, buf),
             DecodedReader::Aiff(inner) => Pin::new(inner).poll_read(cx, buf),
+            DecodedReader::Aac(inner) => Pin::new(inner).poll_read(cx, buf),
         }
     }
 }
@@ -242,10 +262,27 @@ fn detect_format(bytes: &[u8]) -> Option<DetectedFormat> {
     if let Some(fmt) = detect_ogg(bytes) {
         return Some(fmt);
     }
+    // Tester AAC avant MP3 : ADTS (0xFF 0xF0/0xF8) est un sous-ensemble du syncword MP3
+    // (0xFF 0xEx), donc la détection MP3 absorberait les flux AAC si elle passait en premier.
+    if is_adts_aac(bytes) {
+        return Some(DetectedFormat::Aac);
+    }
     if is_mp3(bytes) {
         return Some(DetectedFormat::Mp3);
     }
     None
+}
+
+/// Détecte un flux AAC ADTS : syncword 0xFFF (12 bits) + layer = 00.
+/// Structure du 2e octet : 1111 VLLL → V=version, L=layer(00 pour AAC), P=protection
+/// MP3 a layer != 00 (01=III, 10=II, 11=I), AAC ADTS a layer == 00.
+fn is_adts_aac(bytes: &[u8]) -> bool {
+    if bytes.len() < 2 {
+        return false;
+    }
+    // syncword = 0xFFF (12 bits) : byte0=0xFF, byte1[7:4]=0xF
+    // layer = byte1[2:1] == 0b00 (distingue AAC de MP3)
+    bytes[0] == 0xFF && (bytes[1] & 0xF6) == 0xF0
 }
 
 fn detect_ogg(bytes: &[u8]) -> Option<DetectedFormat> {
@@ -294,4 +331,5 @@ enum DetectedFormat {
     OggOpus,
     Wav,
     Aiff,
+    Aac,
 }

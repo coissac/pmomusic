@@ -192,6 +192,20 @@ pub fn get_server() -> Option<Arc<RwLock<Server>>> {
 ///     println!("Stream available at: {}", stream_url);
 /// }
 /// ```
+/// Récupère l'URL de base effective pour une requête donnée.
+///
+/// Utilise les headers `X-Forwarded-*` si présents (accès via reverse proxy),
+/// sinon fallback sur l'URL de base configurée (accès local direct).
+pub fn get_request_base_url(headers: &axum::http::HeaderMap) -> Option<String> {
+    GLOBAL_SERVER.get().map(|server| {
+        if let Ok(srv) = server.try_read() {
+            srv.request_base_url(headers)
+        } else {
+            futures::executor::block_on(async { server.read().await.request_base_url(headers) })
+        }
+    })
+}
+
 pub fn get_server_base_url() -> Option<String> {
     GLOBAL_SERVER.get().map(|server| {
         // Utiliser try_read() pour éviter de bloquer

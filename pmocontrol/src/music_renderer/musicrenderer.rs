@@ -550,8 +550,8 @@ impl MusicRenderer {
                 .map(|prev| !playback_state_equal(prev, &raw_state))
                 .unwrap_or(true);
 
-            // Emit event only for non-transient states to reduce noise
-            if changed && !matches!(raw_state, PlaybackState::Transitioning) {
+            // Emit event for all state changes including Transitioning
+            if changed {
                 let state_clone = raw_state.clone();
                 drop(watched);
                 self.emit_event(RendererEvent::StateChanged {

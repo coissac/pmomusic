@@ -1,24 +1,33 @@
-	[package]
-	name = "pmowebrenderer"
-	version = "0.1.0"
-	edition = "2021"
+[package]
+name = "pmowebrenderer"
+version = "0.1.0"
+edition = "2021"
 
-	[dependencies]
-	pmoupnp = { path = "../pmoupnp" }
-	pmomediarenderer = { path = "../pmomediarenderer" }
-	pmoserver = { path = "../pmoserver", optional = true }
-	pmocontrol = { path = "../pmocontrol", optional = true }
-	pmoconfig = { path = "../pmoconfig" }
+[dependencies]
+pmoupnp = { path = "../pmoupnp" }
+pmomediarenderer = { path = "../pmomediarenderer" }
+pmoserver = { path = "../pmoserver", optional = true }
+pmocontrol = { path = "../pmocontrol", optional = true }
+pmoconfig = { path = "../pmoconfig" }
+
+# Audio pipeline (toujours actif — c'est le cœur du renderer)
+pmoaudio-ext = { path = "../pmoaudio-ext", features = ["http-stream"] }
+pmoaudio = { path = "../pmoaudio" }
+pmoflac = { path = "../pmoflac" }
+pmometadata = { path = "../pmometadata" }
 
 # Async runtime
 tokio = { workspace = true, features = ["full"] }
+tokio-util = { workspace = true }
 async-trait = { workspace = true }
 
-# WebSocket
-axum = { workspace = true, features = ["ws"] }
+# HTTP
+axum = { workspace = true }
 axum-extra = { version = "0.9", features = ["typed-header"] }
 tower-http = { version = "0.6", features = ["fs", "trace"] }
 futures = "0.3"
+reqwest = { workspace = true, features = ["stream"] }
+bytes = "1.0"
 
 # Serialization
 serde = { workspace = true }

@@ -1,7 +1,7 @@
-//! Action handlers SOAP → WebSocket pour le WebRenderer
+//! Action handlers SOAP → Pipeline pour le WebRenderer serveur
 //!
-//! Chaque handler bridge une action UPnP vers une commande WebSocket
-//! envoyée au navigateur, ou lit l'état partagé pour les requêtes GET.
+//! Chaque handler bridge une action UPnP vers une commande `PipelineControl`
+//! envoyée au pipeline audio serveur, ou lit l'état partagé pour les requêtes GET.
 
 use std::sync::Arc;
 
@@ -10,106 +10,89 @@ use pmoupnp::actions::{ActionData, ActionError, ActionHandler, get_value};
 use pmoupnp::{get, set};
 use pmoutils::ToXmlElement;
 
-use crate::messages::{CommandParams, PlaybackState, ServerMessage, TransportAction};
-use crate::state::{SharedSender, SharedState};
+use crate::messages::PlaybackState;
+use crate::pipeline::{PipelineControl, PipelineHandle, seconds_to_upnp_time, upnp_time_to_seconds};
+use crate::state::SharedState;
 
 type ActionFuture =
     std::pin::Pin<Box<dyn std::future::Future<Output = Result<ActionData, ActionError>> + Send>>;
 
 // ─── AVTransport Handlers ───────────────────────────────────────────────────
 
-pub fn play_handler(ws: SharedSender, state: SharedState) -> ActionHandler {
+pub fn play_handler(pipeline: PipelineHandle, state: SharedState) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
-        let ws = ws.clone();
+        let pipeline = pipeline.clone();
         let state = state.clone();
         Box::pin(async move {
-            ws.send(ServerMessage::Command {
-                action: TransportAction::Play,
-                params: None,
-            });
-            state.write().playback_state = PlaybackState::Playing;
+            // Ne pas écrire Playing ici : c'est stream_source qui le fera
+            // une fois que les premiers bytes FLAC ont été produits.
+            // Écrire Transitioning pour signaler que la lecture va démarrer.
+            state.write().playback_state = PlaybackState::Transitioning;
+            pipeline.send(PipelineControl::Play).await;
             Ok(data)
         })
     })
 }
 
-pub fn stop_handler(ws: SharedSender, state: SharedState) -> ActionHandler {
+pub fn stop_handler(pipeline: PipelineHandle, state: SharedState) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
-        let ws = ws.clone();
+        let pipeline = pipeline.clone();
         let state = state.clone();
         Box::pin(async move {
-            ws.send(ServerMessage::Command {
-                action: TransportAction::Stop,
-                params: None,
-            });
+            pipeline.send(PipelineControl::Stop).await;
             state.write().playback_state = PlaybackState::Stopped;
             Ok(data)
         })
     })
 }
 
-pub fn pause_handler(ws: SharedSender, state: SharedState) -> ActionHandler {
+pub fn pause_handler(pipeline: PipelineHandle, state: SharedState) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
-        let ws = ws.clone();
+        let pipeline = pipeline.clone();
         let state = state.clone();
         Box::pin(async move {
-            ws.send(ServerMessage::Command {
-                action: TransportAction::Pause,
-                params: None,
-            });
+            pipeline.send(PipelineControl::Pause).await;
             state.write().playback_state = PlaybackState::Paused;
             Ok(data)
         })
     })
 }
 
-pub fn next_handler(ws: SharedSender) -> ActionHandler {
+pub fn next_handler(pipeline: PipelineHandle) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
-        let ws = ws.clone();
+        let pipeline = pipeline.clone();
         Box::pin(async move {
-            ws.send(ServerMessage::Command {
-                action: TransportAction::Play,
-                params: None,
-            });
+            pipeline.send(PipelineControl::Play).await;
             Ok(data)
         })
     })
 }
 
-pub fn previous_handler(ws: SharedSender) -> ActionHandler {
+pub fn previous_handler(pipeline: PipelineHandle) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
-        let ws = ws.clone();
+        let pipeline = pipeline.clone();
         Box::pin(async move {
-            ws.send(ServerMessage::Command {
-                action: TransportAction::Play,
-                params: None,
-            });
+            pipeline.send(PipelineControl::Play).await;
             Ok(data)
         })
     })
 }
 
-pub fn seek_handler(ws: SharedSender) -> ActionHandler {
+pub fn seek_handler(pipeline: PipelineHandle) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
-        let ws = ws.clone();
+        let pipeline = pipeline.clone();
         Box::pin(async move {
             let target: String = get!(&data, "Target", String);
-            ws.send(ServerMessage::Command {
-                action: TransportAction::Seek,
-                params: Some(CommandParams {
-                    uri: None,
-                    metadata: None,
-                    position: Some(target),
-                }),
-            });
+            let pos_sec = upnp_time_to_seconds(&target);
+            pipeline.send(PipelineControl::Seek(pos_sec)).await;
             Ok(data)
         })
     })
 }
 
-pub fn set_uri_handler(ws: SharedSender, state: SharedState) -> ActionHandler {
+pub fn set_uri_handler(pipeline: PipelineHandle, state: SharedState) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
-        let ws = ws.clone();
+        let pipeline = pipeline.clone();
         let state = state.clone();
         Box::pin(async move {
             let uri: String = get!(&data, "CurrentURI", String);
@@ -119,14 +102,10 @@ pub fn set_uri_handler(ws: SharedSender, state: SharedState) -> ActionHandler {
                         .map(|didl| didl.to_xml())
                 })
                 .unwrap_or_default();
-            ws.send(ServerMessage::Command {
-                action: TransportAction::SetUri,
-                params: Some(CommandParams {
-                    uri: Some(uri.clone()),
-                    metadata: Some(metadata.clone()),
-                    position: None,
-                }),
-            });
+
+            // Envoyer l'URI au pipeline serveur (remplace l'envoi WebSocket)
+            pipeline.send(PipelineControl::LoadUri(uri.clone())).await;
+
             {
                 let mut s = state.write();
                 s.current_uri = Some(uri);
@@ -138,9 +117,9 @@ pub fn set_uri_handler(ws: SharedSender, state: SharedState) -> ActionHandler {
     })
 }
 
-pub fn set_next_uri_handler(ws: SharedSender, state: SharedState) -> ActionHandler {
+pub fn set_next_uri_handler(pipeline: PipelineHandle, state: SharedState) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
-        let ws = ws.clone();
+        let pipeline = pipeline.clone();
         let state = state.clone();
         Box::pin(async move {
             let uri: String = get!(&data, "NextURI", String);
@@ -150,14 +129,9 @@ pub fn set_next_uri_handler(ws: SharedSender, state: SharedState) -> ActionHandl
                         .map(|didl| didl.to_xml())
                 })
                 .unwrap_or_default();
-            ws.send(ServerMessage::Command {
-                action: TransportAction::SetNextUri,
-                params: Some(CommandParams {
-                    uri: Some(uri.clone()),
-                    metadata: Some(metadata.clone()),
-                    position: None,
-                }),
-            });
+
+            pipeline.send(PipelineControl::LoadNextUri(uri.clone())).await;
+
             {
                 let mut s = state.write();
                 s.next_uri = Some(uri);
@@ -215,18 +189,14 @@ pub fn get_transport_info_handler(state: SharedState) -> ActionHandler {
         Box::pin(async move {
             let mut data = data;
             let s = state.read();
-            tracing::info!("[WebRenderer] GetTransportInfo handler called, state={:?}", s.playback_state);
+            tracing::info!("[WebRenderer] GetTransportInfo: state={:?}", s.playback_state);
             let transport_state = match s.playback_state {
                 PlaybackState::Stopped => "STOPPED",
                 PlaybackState::Playing => "PLAYING",
                 PlaybackState::Paused => "PAUSED_PLAYBACK",
                 PlaybackState::Transitioning => "TRANSITIONING",
             };
-            set!(
-                &mut data,
-                "CurrentTransportState",
-                transport_state.to_string()
-            );
+            set!(&mut data, "CurrentTransportState", transport_state.to_string());
             set!(&mut data, "CurrentTransportStatus", "OK".to_string());
             set!(&mut data, "CurrentSpeed", "1".to_string());
             Ok(data)
@@ -245,26 +215,10 @@ pub fn get_media_info_handler(state: SharedState) -> ActionHandler {
                 "NrTracks",
                 if s.current_uri.is_some() { 1u32 } else { 0u32 }
             );
-            set!(
-                &mut data,
-                "CurrentURI",
-                s.current_uri.clone().unwrap_or_default()
-            );
-            set!(
-                &mut data,
-                "CurrentURIMetaData",
-                s.current_metadata.clone().unwrap_or_default()
-            );
-            set!(
-                &mut data,
-                "NextURI",
-                s.next_uri.clone().unwrap_or_default()
-            );
-            set!(
-                &mut data,
-                "NextURIMetaData",
-                s.next_metadata.clone().unwrap_or_default()
-            );
+            set!(&mut data, "CurrentURI", s.current_uri.clone().unwrap_or_default());
+            set!(&mut data, "CurrentURIMetaData", s.current_metadata.clone().unwrap_or_default());
+            set!(&mut data, "NextURI", s.next_uri.clone().unwrap_or_default());
+            set!(&mut data, "NextURIMetaData", s.next_metadata.clone().unwrap_or_default());
             Ok(data)
         })
     })
@@ -272,13 +226,13 @@ pub fn get_media_info_handler(state: SharedState) -> ActionHandler {
 
 // ─── RenderingControl Handlers ──────────────────────────────────────────────
 
-pub fn set_volume_handler(ws: SharedSender, state: SharedState) -> ActionHandler {
+pub fn set_volume_handler(pipeline: PipelineHandle, state: SharedState) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
-        let ws = ws.clone();
+        let pipeline = pipeline.clone();
         let state = state.clone();
         Box::pin(async move {
             let volume: u16 = get!(&data, "DesiredVolume", u16);
-            ws.send(ServerMessage::SetVolume { volume });
+            pipeline.send(PipelineControl::SetVolume(volume)).await;
             state.write().volume = volume;
             Ok(data)
         })
@@ -297,13 +251,13 @@ pub fn get_volume_handler(state: SharedState) -> ActionHandler {
     })
 }
 
-pub fn set_mute_handler(ws: SharedSender, state: SharedState) -> ActionHandler {
+pub fn set_mute_handler(pipeline: PipelineHandle, state: SharedState) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
-        let ws = ws.clone();
+        let pipeline = pipeline.clone();
         let state = state.clone();
         Box::pin(async move {
             let mute: bool = get!(&data, "DesiredMute", bool);
-            ws.send(ServerMessage::SetMute { mute });
+            pipeline.send(PipelineControl::SetMute(mute)).await;
             state.write().mute = mute;
             Ok(data)
         })
@@ -329,10 +283,11 @@ pub fn get_protocol_info_handler() -> ActionHandler {
         Box::pin(async move {
             let mut data = data;
             set!(&mut data, "Source", String::new());
+            // Serveur-side streaming : on produit du FLAC uniquement
             set!(
                 &mut data,
                 "Sink",
-                "http-get:*:audio/mpeg:*,http-get:*:audio/mp4:*,http-get:*:audio/ogg:*,http-get:*:audio/flac:*,http-get:*:audio/wav:*,http-get:*:audio/x-flac:*,http-get:*:audio/aac:*,http-get:*:audio/webm:*".to_string()
+                "http-get:*:audio/flac:*,http-get:*:audio/x-flac:*".to_string()
             );
             Ok(data)
         })

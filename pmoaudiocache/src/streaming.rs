@@ -125,6 +125,7 @@ fn codec_to_string(codec: AudioCodec) -> String {
         AudioCodec::OggOpus => "ogg_opus",
         AudioCodec::Wav => "wav",
         AudioCodec::Aiff => "aiff",
+        AudioCodec::Aac => "aac",
     }
     .to_string()
 }

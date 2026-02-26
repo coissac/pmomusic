@@ -126,6 +126,7 @@ pub use nodes::{
     resampling_node::ResamplingNode,
     timer_buffer_node::TimerBufferNode,
     timer_node::TimerNode,
+    position_tracker_node::{PositionHandle, PositionTrackerNode},
     AudioError, AudioNode, TypedAudioNode,
 };
 

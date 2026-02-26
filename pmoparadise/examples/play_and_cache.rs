@@ -217,15 +217,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let audio_sink = if use_null_audio {
         AudioSink::with_null_output()
     } else {
-        AudioSink::new()
+        AudioSink::make()
     };
     tracing::debug!("AudioSink created");
 
     // Connecter timer → audio (AVANT de mettre timer dans une Box)
-    timer.register(Box::new(audio_sink));
+    timer.register(audio_sink);
 
     // Connecter playlist → timer
-    playlist_source.register(Box::new(timer));
+    playlist_source.register(timer.boxed());
     tracing::info!("Playback pipeline connected: PlaylistSource → TimerNode → AudioSink");
 
     // ═══════════════════════════════════════════════════════════════════════════

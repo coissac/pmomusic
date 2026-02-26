@@ -19,6 +19,7 @@ libflac-sys = { version = "0.3.3", default-features = false, features = ["build-
 lofty = "0.22"
 minimp3 = "0.5"
 opus = "0.3"
+fdk-aac = "0.8"
 pmometadata = { path = "../pmometadata" }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "io-util", "fs"] }

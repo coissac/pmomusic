@@ -31,6 +31,7 @@ pub enum AudioCodec {
     OggOpus,
     Wav,
     Aiff,
+    Aac,
 }
 
 /// Options controlling how the transcoder operates.
@@ -194,6 +195,9 @@ where
         }
         DecodedAudioStream::Aiff(stream) => {
             transcode_from_decoded(AudioCodec::Aiff, stream, options.encoder_options).await
+        }
+        DecodedAudioStream::Aac(stream) => {
+            transcode_from_decoded(AudioCodec::Aac, stream, options.encoder_options).await
         }
     }
 }

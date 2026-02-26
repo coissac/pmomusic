@@ -215,7 +215,13 @@ impl AsyncRead for SharedClientStream {
                     self.state = StreamState::Streaming;
                     continue;
                 } else {
-                    self.state = StreamState::Streaming;
+                    // Header not yet available (encoder not yet started): wait and retry
+                    let waker = cx.waker().clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                        waker.wake();
+                    });
+                    return Poll::Pending;
                 }
             }
 

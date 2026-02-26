@@ -615,6 +615,30 @@ impl Server {
         self.join_handle.take()
     }
 
+    /// Retourne l'URL de base vue par le client pour une requête donnée.
+    ///
+    /// Priorité : headers `X-Forwarded-Proto` + `X-Forwarded-Host` (présents
+    /// quand la requête passe par un reverse proxy comme NPM), sinon fallback
+    /// sur `self.base_url()`. Cela permet de générer des URLs correctes aussi
+    /// bien en accès local direct qu'en accès public via proxy.
+    pub fn request_base_url(&self, headers: &axum::http::HeaderMap) -> String {
+        let proto = headers
+            .get("x-forwarded-proto")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.split(',').next())
+            .map(str::trim);
+        let host = headers
+            .get("x-forwarded-host")
+            .or_else(|| headers.get("host"))
+            .and_then(|v| v.to_str().ok())
+            .map(str::trim);
+
+        match (proto, host) {
+            (Some(proto), Some(host)) => format!("{}://{}", proto, host),
+            _ => self.base_url(),
+        }
+    }
+
     /// Retourne l'URL de base complète du serveur (schéma + hôte + port).
     ///
     /// La valeur configurable peut omettre le schéma ou le port ; cette méthode

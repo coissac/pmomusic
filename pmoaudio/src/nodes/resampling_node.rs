@@ -333,8 +333,13 @@ impl ResamplingNode {
     /// Crée un nouveau node de resampling
     ///
     /// * `target_sample_rate` - Sample rate de sortie en Hz (ex: 48000)
-    pub fn new(target_sample_rate: u32) -> Box<dyn AudioPipelineNode> {
-        Self::with_channel_size(target_sample_rate, 16)
+    pub fn new(target_sample_rate: u32) -> Self {
+        let logic = ResamplingLogic::new(target_sample_rate);
+        Self { inner: Node::new_with_input(logic, 16) }
+    }
+
+    pub fn make(target_sample_rate: u32) -> Box<dyn AudioPipelineNode> {
+        Self::new(target_sample_rate).boxed()
     }
 
     /// Crée un nouveau node de resampling avec taille de canal personnalisée
@@ -346,9 +351,7 @@ impl ResamplingNode {
         channel_size: usize,
     ) -> Box<dyn AudioPipelineNode> {
         let logic = ResamplingLogic::new(target_sample_rate);
-        Box::new(Self {
-            inner: Node::new_with_input(logic, channel_size),
-        })
+        Self { inner: Node::new_with_input(logic, channel_size) }.boxed()
     }
 }
 

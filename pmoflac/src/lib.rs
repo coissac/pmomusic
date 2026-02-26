@@ -95,6 +95,7 @@
 //! }
 //! ```
 
+pub mod aac;
 pub mod aiff;
 pub mod autodetect;
 mod common;
@@ -114,6 +115,7 @@ pub mod transcode;
 mod util;
 pub mod wav;
 
+pub use aac::{decode_aac_stream, AacDecodedStream, AacError};
 pub use aiff::{decode_aiff_stream, AiffDecodedStream, AiffError};
 pub use autodetect::{
     decode_audio_stream, is_flac_magic_header, DecodeAudioError, DecodedAudioStream, DecodedReader,

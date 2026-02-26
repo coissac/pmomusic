@@ -135,6 +135,14 @@ impl TimerBufferNodeLogic {
                 self.buffer.len()
             );
 
+            if self.buffer.is_empty() && self.buffered_time_sec < self.capacity_sec * 0.1 {
+                tracing::warn!(
+                    "TimerBufferNode: buffer underrun at ts={:.3}s (capacity={:.1}s) — source too slow or stalled",
+                    segment.timestamp_sec,
+                    self.capacity_sec,
+                );
+            }
+
             send_to_children(std::any::type_name::<Self>(), output, segment).await?;
         }
         Ok(())
@@ -305,7 +313,12 @@ impl TimerBufferNode {
     /// let buffer = TimerBufferNode::new(3.0);
     /// ```
     pub fn new(capacity_sec: f64) -> Self {
-        Self::with_channel_size(capacity_sec, DEFAULT_CHANNEL_SIZE)
+        let logic = TimerBufferNodeLogic::new(capacity_sec);
+        Self { inner: Node::new_with_input(logic, DEFAULT_CHANNEL_SIZE) }
+    }
+
+    pub fn make(capacity_sec: f64) -> Box<dyn AudioPipelineNode> {
+        Self::new(capacity_sec).boxed()
     }
 
     /// Crée un TimerBufferNode avec une taille de buffer MPSC personnalisée
@@ -314,11 +327,9 @@ impl TimerBufferNode {
     ///
     /// * `capacity_sec` - Capacité du buffer en secondes
     /// * `channel_size` - Taille du buffer MPSC (nombre de segments en attente)
-    pub fn with_channel_size(capacity_sec: f64, channel_size: usize) -> Self {
+    pub fn with_channel_size(capacity_sec: f64, channel_size: usize) -> Box<dyn AudioPipelineNode> {
         let logic = TimerBufferNodeLogic::new(capacity_sec);
-        Self {
-            inner: Node::new_with_input(logic, channel_size),
-        }
+        Self { inner: Node::new_with_input(logic, channel_size) }.boxed()
     }
 }
 

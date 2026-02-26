@@ -22,6 +22,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+
 /// Logique de conversion générique
 ///
 /// Cette struct contient la logique pure de conversion d'un type vers un autre.
@@ -112,102 +113,162 @@ where
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Node de conversion vers I16 (16-bit signed integer)
-pub struct ToI16Node;
+pub struct ToI16Node(Node<ConverterLogic<fn(&AudioChunk) -> AudioChunk>>);
 
 impl ToI16Node {
-    pub fn new() -> Box<dyn AudioPipelineNode> {
-        Self::with_channel_size(16)
+    pub fn new() -> Self {
+        Self(Node::new_with_input(ConverterLogic::new(|chunk: &AudioChunk| chunk.to_i16()), 16))
+    }
+
+    pub fn make() -> Box<dyn AudioPipelineNode> {
+        Self::new().boxed()
     }
 
     pub fn with_channel_size(channel_size: usize) -> Box<dyn AudioPipelineNode> {
-        let logic = ConverterLogic::new(|chunk: &AudioChunk| chunk.to_i16());
-        Box::new(Node::new_with_input(logic, channel_size))
+        Self(Node::new_with_input(ConverterLogic::new(|chunk: &AudioChunk| chunk.to_i16()), channel_size)).boxed()
     }
 }
 
 impl Default for ToI16Node {
     fn default() -> Self {
-        Self
+        Self::new()
+    }
+}
+
+#[async_trait::async_trait]
+impl AudioPipelineNode for ToI16Node {
+    fn get_tx(&self) -> Option<mpsc::Sender<Arc<AudioSegment>>> { self.0.get_tx() }
+    fn register(&mut self, child: Box<dyn AudioPipelineNode>) { self.0.register(child) }
+    async fn run(self: Box<Self>, stop_token: CancellationToken) -> Result<(), AudioError> {
+        Box::new(self.0).run(stop_token).await
     }
 }
 
 /// Node de conversion vers I24 (24-bit signed integer)
-pub struct ToI24Node;
+pub struct ToI24Node(Node<ConverterLogic<fn(&AudioChunk) -> AudioChunk>>);
 
 impl ToI24Node {
-    pub fn new() -> Box<dyn AudioPipelineNode> {
-        Self::with_channel_size(16)
+    pub fn new() -> Self {
+        Self(Node::new_with_input(ConverterLogic::new(|chunk: &AudioChunk| chunk.to_i24()), 16))
+    }
+
+    pub fn make() -> Box<dyn AudioPipelineNode> {
+        Self::new().boxed()
     }
 
     pub fn with_channel_size(channel_size: usize) -> Box<dyn AudioPipelineNode> {
-        let logic = ConverterLogic::new(|chunk: &AudioChunk| chunk.to_i24());
-        Box::new(Node::new_with_input(logic, channel_size))
+        Self(Node::new_with_input(ConverterLogic::new(|chunk: &AudioChunk| chunk.to_i24()), channel_size)).boxed()
     }
 }
 
 impl Default for ToI24Node {
     fn default() -> Self {
-        Self
+        Self::new()
+    }
+}
+
+#[async_trait::async_trait]
+impl AudioPipelineNode for ToI24Node {
+    fn get_tx(&self) -> Option<mpsc::Sender<Arc<AudioSegment>>> { self.0.get_tx() }
+    fn register(&mut self, child: Box<dyn AudioPipelineNode>) { self.0.register(child) }
+    async fn run(self: Box<Self>, stop_token: CancellationToken) -> Result<(), AudioError> {
+        Box::new(self.0).run(stop_token).await
     }
 }
 
 /// Node de conversion vers I32 (32-bit signed integer)
-pub struct ToI32Node;
+pub struct ToI32Node(Node<ConverterLogic<fn(&AudioChunk) -> AudioChunk>>);
 
 impl ToI32Node {
-    pub fn new() -> Box<dyn AudioPipelineNode> {
-        Self::with_channel_size(16)
+    pub fn new() -> Self {
+        Self(Node::new_with_input(ConverterLogic::new(|chunk: &AudioChunk| chunk.to_i32()), 16))
+    }
+
+    pub fn make() -> Box<dyn AudioPipelineNode> {
+        Self::new().boxed()
     }
 
     pub fn with_channel_size(channel_size: usize) -> Box<dyn AudioPipelineNode> {
-        let logic = ConverterLogic::new(|chunk: &AudioChunk| chunk.to_i32());
-        Box::new(Node::new_with_input(logic, channel_size))
+        Self(Node::new_with_input(ConverterLogic::new(|chunk: &AudioChunk| chunk.to_i32()), channel_size)).boxed()
     }
 }
 
 impl Default for ToI32Node {
     fn default() -> Self {
-        Self
+        Self::new()
+    }
+}
+
+#[async_trait::async_trait]
+impl AudioPipelineNode for ToI32Node {
+    fn get_tx(&self) -> Option<mpsc::Sender<Arc<AudioSegment>>> { self.0.get_tx() }
+    fn register(&mut self, child: Box<dyn AudioPipelineNode>) { self.0.register(child) }
+    async fn run(self: Box<Self>, stop_token: CancellationToken) -> Result<(), AudioError> {
+        Box::new(self.0).run(stop_token).await
     }
 }
 
 /// Node de conversion vers F32 (32-bit floating point)
-pub struct ToF32Node;
+pub struct ToF32Node(Node<ConverterLogic<fn(&AudioChunk) -> AudioChunk>>);
 
 impl ToF32Node {
-    pub fn new() -> Box<dyn AudioPipelineNode> {
-        Self::with_channel_size(16)
+    pub fn new() -> Self {
+        Self(Node::new_with_input(ConverterLogic::new(|chunk: &AudioChunk| chunk.to_f32()), 16))
+    }
+
+    pub fn make() -> Box<dyn AudioPipelineNode> {
+        Self::new().boxed()
     }
 
     pub fn with_channel_size(channel_size: usize) -> Box<dyn AudioPipelineNode> {
-        let logic = ConverterLogic::new(|chunk: &AudioChunk| chunk.to_f32());
-        Box::new(Node::new_with_input(logic, channel_size))
+        Self(Node::new_with_input(ConverterLogic::new(|chunk: &AudioChunk| chunk.to_f32()), channel_size)).boxed()
     }
 }
 
 impl Default for ToF32Node {
     fn default() -> Self {
-        Self
+        Self::new()
+    }
+}
+
+#[async_trait::async_trait]
+impl AudioPipelineNode for ToF32Node {
+    fn get_tx(&self) -> Option<mpsc::Sender<Arc<AudioSegment>>> { self.0.get_tx() }
+    fn register(&mut self, child: Box<dyn AudioPipelineNode>) { self.0.register(child) }
+    async fn run(self: Box<Self>, stop_token: CancellationToken) -> Result<(), AudioError> {
+        Box::new(self.0).run(stop_token).await
     }
 }
 
 /// Node de conversion vers F64 (64-bit floating point)
-pub struct ToF64Node;
+pub struct ToF64Node(Node<ConverterLogic<fn(&AudioChunk) -> AudioChunk>>);
 
 impl ToF64Node {
-    pub fn new() -> Box<dyn AudioPipelineNode> {
-        Self::with_channel_size(16)
+    pub fn new() -> Self {
+        Self(Node::new_with_input(ConverterLogic::new(|chunk: &AudioChunk| chunk.to_f64()), 16))
+    }
+
+    pub fn make() -> Box<dyn AudioPipelineNode> {
+        Self::new().boxed()
     }
 
     pub fn with_channel_size(channel_size: usize) -> Box<dyn AudioPipelineNode> {
-        let logic = ConverterLogic::new(|chunk: &AudioChunk| chunk.to_f64());
-        Box::new(Node::new_with_input(logic, channel_size))
+        Self(Node::new_with_input(ConverterLogic::new(|chunk: &AudioChunk| chunk.to_f64()), channel_size)).boxed()
     }
 }
 
 impl Default for ToF64Node {
     fn default() -> Self {
-        Self
+        Self::new()
+    }
+}
+
+#[async_trait::async_trait]
+impl AudioPipelineNode for ToF64Node {
+    fn get_tx(&self) -> Option<mpsc::Sender<Arc<AudioSegment>>> { self.0.get_tx() }
+    fn register(&mut self, child: Box<dyn AudioPipelineNode>) { self.0.register(child) }
+    async fn run(self: Box<Self>, stop_token: CancellationToken) -> Result<(), AudioError> {
+        Box::new(self.0).run(stop_token).await
     }
 }
 

@@ -34,7 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sink = AudioSink::new();
 
     // Connecter la source au sink
-    source.register(Box::new(sink));
+    source.register(sink.boxed());
 
     println!("Démarrage de la lecture...");
     println!("Appuyez sur Ctrl+C pour arrêter");

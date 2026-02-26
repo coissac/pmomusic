@@ -24,6 +24,24 @@ mod flac_frame_utils;
 mod timed_broadcast;
 
 #[cfg(feature = "http-stream")]
+mod direct_flac_sink;
+
+#[cfg(feature = "http-stream")]
+pub use direct_flac_sink::{
+    DirectFlacHandle, DirectFlacSink, DirectFlacStream,
+    DIRECT_FLAC_BITS_PER_SAMPLE, DIRECT_FLAC_CHANNELS, DIRECT_FLAC_SAMPLE_RATE,
+};
+
+#[cfg(feature = "http-stream")]
+mod direct_ogg_flac_sink;
+
+#[cfg(feature = "http-stream")]
+pub use direct_ogg_flac_sink::{
+    DirectOggFlacHandle, DirectOggFlacSink, DirectOggFlacStream,
+    DIRECT_OGG_FLAC_BITS_PER_SAMPLE, DIRECT_OGG_FLAC_CHANNELS, DIRECT_OGG_FLAC_SAMPLE_RATE,
+};
+
+#[cfg(feature = "http-stream")]
 mod streaming_flac_sink;
 
 #[cfg(feature = "http-stream")]

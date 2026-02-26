@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "PMOMusic"
-version = "0.3.20"
+version = "0.3.23"
 dependencies = [
  "axum 0.8.7",
  "console-subscriber",
@@ -1698,6 +1698,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e6853b52649d4ac5c0bd02320cddc5ba956bdb407c4b75a2c6b75bf51500f8c"
 dependencies = [
  "simd-adler32",
+]
+
+[[package]]
+name = "fdk-aac"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7bb67e142688083cb9afb63f2424203fc98c4e7afb494bf912b60b55513b177e"
+dependencies = [
+ "fdk-aac-sys",
+]
+
+[[package]]
+name = "fdk-aac-sys"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "24516d2611506d5cb1833555adc75f6baf9fe2706b9c13e6fc33a6b22c51ca83"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
@@ -3863,6 +3881,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bytes",
+ "futures",
  "pmoaudio",
  "pmoaudiocache",
  "pmocache",
@@ -3871,6 +3890,7 @@ dependencies = [
  "pmometadata",
  "pmoplaylist",
  "rand 0.8.5",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",
@@ -4041,6 +4061,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "claxon",
+ "fdk-aac",
  "lewton",
  "libc",
  "libflac-sys",
@@ -4359,19 +4380,26 @@ dependencies = [
  "async-trait",
  "axum 0.8.7",
  "axum-extra",
+ "bytes",
  "futures",
  "parking_lot",
+ "pmoaudio",
+ "pmoaudio-ext",
  "pmoconfig",
  "pmocontrol",
  "pmodidl",
+ "pmoflac",
  "pmomediarenderer",
+ "pmometadata",
  "pmoserver",
  "pmoupnp",
  "pmoutils",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror 2.0.17",
  "tokio",
+ "tokio-util",
  "tower-http",
  "tracing",
  "uuid",
