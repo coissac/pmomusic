@@ -151,6 +151,20 @@ impl RendererRegistry {
             .map(|i| i.device_instance.clone())
     }
 
+    /// Met à jour la position et la durée depuis le navigateur (audio.currentTime).
+    pub fn update_position(&self, instance_id: &str, position_sec: f64, duration_sec: Option<f64>) {
+        let instances = self.instances.read();
+        if let Some(instance) = instances.get(instance_id) {
+            let mut s = instance.state.write();
+            s.position = Some(crate::pipeline::seconds_to_upnp_time(position_sec));
+            if let Some(dur) = duration_sec {
+                if dur > 0.0 {
+                    s.duration = Some(crate::pipeline::seconds_to_upnp_time(dur));
+                }
+            }
+        }
+    }
+
     pub fn schedule_unregister(self: &Arc<Self>, instance_id: &str) {
         use tokio_util::sync::CancellationToken;
 

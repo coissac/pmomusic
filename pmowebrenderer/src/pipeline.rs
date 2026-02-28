@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use pmoaudio::{AudioSegment, PositionTrackerNode, ResamplingNode, ToI24Node};
+use pmoaudio::{AudioSegment, ResamplingNode, ToI24Node};
 use pmometadata::{MemoryTrackMetadata, TrackMetadata};
 use pmoaudio_ext::sinks::{
     DirectOggFlacHandle, DirectOggFlacSink,
@@ -84,13 +84,9 @@ impl InstancePipeline {
 
         let (sink, flac_handle) = DirectOggFlacSink::new(EncoderOptions::default());
 
-        // Nœud de suivi de position : lit le timestamp des chunks sortant vers le sink
-        let (mut position_tracker, position_handle) = PositionTrackerNode::new();
-        position_tracker.register(sink.boxed());
-
         // Nœud de conversion de profondeur : tout type entier → I24
         let mut to_i24 = ToI24Node::new();
-        to_i24.register(position_tracker.boxed());
+        to_i24.register(sink.boxed());
 
         // Nœud de rééchantillonnage : n'importe quel sample rate → 96 kHz
         let mut resampler = ResamplingNode::new(DIRECT_OGG_FLAC_SAMPLE_RATE);
@@ -112,25 +108,6 @@ impl InstancePipeline {
             }
             debug!("Sink task terminated");
         });
-
-        // Task de mise à jour de la position (toutes les secondes)
-        {
-            let state_pos = state.clone();
-            let pos_stop = stop_token.clone();
-            tokio::spawn(async move {
-                loop {
-                    tokio::select! {
-                        _ = pos_stop.cancelled() => break,
-                        _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {
-                            let pos = position_handle.current_position_sec();
-                            if pos > 0.0 {
-                                state_pos.write().position = Some(seconds_to_upnp_time(pos));
-                            }
-                        }
-                    }
-                }
-            });
-        }
 
         // Task pipeline : reçoit les commandes UPnP et pilote les sources
         let stop_token_clone = stop_token.clone();

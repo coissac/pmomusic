@@ -61,6 +61,22 @@ pub async fn register_handler(
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub struct PositionUpdateRequest {
+    pub position_sec: f64,
+    pub duration_sec: Option<f64>,
+}
+
+/// POST /api/webrenderer/{id}/position
+pub async fn position_update_handler(
+    State(registry): State<Arc<RendererRegistry>>,
+    Path(instance_id): Path<String>,
+    Json(req): Json<PositionUpdateRequest>,
+) -> impl IntoResponse {
+    registry.update_position(&instance_id, req.position_sec, req.duration_sec);
+    StatusCode::NO_CONTENT
+}
+
 /// DELETE /api/webrenderer/{id}
 pub async fn unregister_handler(
     State(registry): State<Arc<RendererRegistry>>,

@@ -71,6 +71,30 @@ export function useWebRenderer() {
     let onConnectedCallback: (() => void) | null = null;
     let sseUnsubscribe: (() => void) | null = null;
     let pendingCanPlay: (() => void) | null = null;
+    let positionInterval: ReturnType<typeof setInterval> | null = null;
+
+    // ── Reporting de position ─────────────────────────────────────────────────
+
+    function startPositionReporting(): void {
+        stopPositionReporting();
+        positionInterval = setInterval(() => {
+            if (!audioEl || !instanceId) return;
+            const pos = audioEl.currentTime;
+            const dur = isFinite(audioEl.duration) ? audioEl.duration : null;
+            void fetch(`/api/webrenderer/${instanceId}/position`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ position_sec: pos, duration_sec: dur }),
+            });
+        }, 1000);
+    }
+
+    function stopPositionReporting(): void {
+        if (positionInterval !== null) {
+            clearInterval(positionInterval);
+            positionInterval = null;
+        }
+    }
 
     // ── Connexion / déconnexion du flux audio ─────────────────────────────────
 
@@ -124,6 +148,7 @@ export function useWebRenderer() {
             el.removeEventListener("canplay", onCanPlay);
             el.play().then(() => {
                 console.log("[WebRenderer] play() resolved OK");
+                startPositionReporting();
             }).catch((e: unknown) => {
                 console.warn("[WebRenderer] play() rejected:", e);
             });
@@ -134,6 +159,7 @@ export function useWebRenderer() {
 
     function stopStream(): void {
         console.log("[WebRenderer] stopStream called, readyState=", audioEl?.readyState);
+        stopPositionReporting();
         if (!audioEl) return;
         if (pendingCanPlay) {
             audioEl.removeEventListener("canplay", pendingCanPlay);
@@ -230,6 +256,7 @@ export function useWebRenderer() {
     onUnmounted(() => {
         sseUnsubscribe?.();
         sseUnsubscribe = null;
+        stopPositionReporting();
         stopStream();
         void unregister();
         if (audioEl) {
