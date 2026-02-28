@@ -34,10 +34,10 @@ function generateUUID(): string {
 
 function getOrCreateInstanceId(): string {
     try {
-        let id = localStorage.getItem(INSTANCE_ID_KEY);
+        let id = sessionStorage.getItem(INSTANCE_ID_KEY);
         if (!id) {
             id = generateUUID();
-            localStorage.setItem(INSTANCE_ID_KEY, id);
+            sessionStorage.setItem(INSTANCE_ID_KEY, id);
         }
         return id;
     } catch {

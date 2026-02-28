@@ -116,15 +116,16 @@ impl RendererRegistry {
         Ok((stream_url, udn))
     }
 
-    /// Retourne le DirectOggFlacHandle pour l'endpoint /stream (clonable).
-    pub fn get_flac_handle(
+    /// Retourne un DirectOggFlacStream pour l'endpoint /stream.
+    /// Chaque appel retourne un wrapper sur le même reader persistant.
+    pub fn get_stream(
         &self,
         instance_id: &str,
-    ) -> Option<pmoaudio_ext::sinks::DirectOggFlacHandle> {
+    ) -> Option<pmoaudio_ext::sinks::DirectOggFlacStream> {
         self.instances
             .read()
             .get(instance_id)
-            .map(|i| i.flac_handle.clone())
+            .map(|i| i.flac_handle.get_stream())
     }
 
     /// Retourne le PipelineHandle par UDN (pour les handlers UPnP)
