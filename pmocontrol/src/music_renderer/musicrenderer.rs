@@ -639,6 +639,14 @@ impl MusicRenderer {
                     );
                     self.set_playback_source(PlaybackSource::None);
                     self.clear_has_played_flag();
+                } else if self.is_playing_a_stream() {
+                    // Continuous stream (radio) stopped naturally — never auto-advance
+                    debug!(
+                        renderer = self.info.friendly_name(),
+                        "Renderer stopped during continuous stream; not auto-advancing"
+                    );
+                    self.set_playback_source(PlaybackSource::None);
+                    self.clear_has_played_flag();
                 } else if self.is_playing_from_queue() {
                     // Only auto-advance if we have actually seen a PLAYING state
                     // since the track was started. This prevents auto-advance on
