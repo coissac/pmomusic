@@ -29,8 +29,8 @@ pub struct WebRendererInstance {
     pub udn: String,
     pub device_instance: Arc<DeviceInstance>,
     pub state: SharedState,
-    /// Handle vers le sink OGG-FLAC — clonable, chaque subscribe() donne un flux live.
-    pub flac_handle: pmoaudio_ext::sinks::OggFlacStreamHandle,
+    /// Handle vers le sink OGG-FLAC — clonable, connect() crée un nouveau flux avec backpressure.
+    pub flac_handle: pmoaudio_ext::sinks::DirectOggFlacHandle,
     pub pipeline: PipelineHandle,
     pub created_at: SystemTime,
 }
@@ -116,11 +116,11 @@ impl RendererRegistry {
         Ok((stream_url, udn))
     }
 
-    /// Retourne le OggFlacStreamHandle pour l'endpoint /stream (clonable).
+    /// Retourne le DirectOggFlacHandle pour l'endpoint /stream (clonable).
     pub fn get_flac_handle(
         &self,
         instance_id: &str,
-    ) -> Option<pmoaudio_ext::sinks::OggFlacStreamHandle> {
+    ) -> Option<pmoaudio_ext::sinks::DirectOggFlacHandle> {
         self.instances
             .read()
             .get(instance_id)

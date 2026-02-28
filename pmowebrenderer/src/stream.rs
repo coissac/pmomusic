@@ -44,7 +44,7 @@ pub async fn stream_handler(
         }
     };
 
-    let stream = handle.subscribe();
+    let stream = handle.connect().await;
 
     info!(instance_id = %instance_id, "FLAC stream started");
 

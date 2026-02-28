@@ -10,8 +10,8 @@ use std::sync::Arc;
 use pmoaudio::{AudioSegment, PositionTrackerNode, ResamplingNode, ToI24Node};
 use pmometadata::{MemoryTrackMetadata, TrackMetadata};
 use pmoaudio_ext::sinks::{
-    OggFlacStreamHandle, StreamingOggFlacSink,
-    DIRECT_OGG_FLAC_BITS_PER_SAMPLE, DIRECT_OGG_FLAC_SAMPLE_RATE,
+    DirectOggFlacHandle, DirectOggFlacSink,
+    DIRECT_OGG_FLAC_SAMPLE_RATE,
 };
 use pmoaudio_ext::UriSource;
 use pmoflac::EncoderOptions;
@@ -59,10 +59,10 @@ impl PipelineHandle {
 /// Pipeline audio complet pour une instance WebRenderer.
 ///
 /// Créé au `POST /register`. Le flux OGG-FLAC est accessible via `flac_handle`
-/// (multi-clients, chaque `subscribe()` retourne un nouveau flux depuis le point courant).
+/// (mono-client, chaque `connect()` crée un nouveau flux avec backpressure TCP).
 pub struct InstancePipeline {
-    /// Handle vers le sink OGG-FLAC — clonable, chaque subscribe() donne un flux live.
-    pub flac_handle: OggFlacStreamHandle,
+    /// Handle vers le sink OGG-FLAC — clonable, connect() crée un nouveau flux.
+    pub flac_handle: DirectOggFlacHandle,
     pub pipeline_handle: PipelineHandle,
 }
 
@@ -82,10 +82,7 @@ impl InstancePipeline {
         // La backpressure remonte naturellement depuis le pipe duplex jusqu'à la source.
         use pmoaudio::pipeline::AudioPipelineNode;
 
-        let (sink, flac_handle) = StreamingOggFlacSink::new(
-            EncoderOptions::default(),
-            DIRECT_OGG_FLAC_BITS_PER_SAMPLE,
-        );
+        let (sink, flac_handle) = DirectOggFlacSink::new(EncoderOptions::default());
 
         // Nœud de suivi de position : lit le timestamp des chunks sortant vers le sink
         let (mut position_tracker, position_handle) = PositionTrackerNode::new();
