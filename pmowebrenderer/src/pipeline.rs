@@ -1,55 +1,51 @@
 //! Pipeline audio serveur par instance WebRenderer
 //!
 //! Chaque instance WebRenderer possède un pipeline indépendant :
-//! - Un `StreamingFlacSink` qui encode et diffuse le flux FLAC aux clients HTTP
-//! - Un canal de contrôle `PipelineControl` alimenté par les handlers UPnP
-//! - Une task background qui orchestre sources et sink
+//! - Une `PlayerSource` qui gère le cycle de vie AVTransport (Play/Pause/Stop/Seek/LoadUri)
+//! - Un `StreamingOggFlacSink` qui encode et diffuse le flux OGG-FLAC aux clients HTTP
+//! - Des nœuds de normalisation (resampling → 96 kHz, conversion → I24)
 
 use std::sync::Arc;
 
-use pmoaudio::{AudioSegment, ResamplingNode, ToI24Node};
-use pmometadata::{MemoryTrackMetadata, TrackMetadata};
-use pmoaudio_ext::sinks::{
-    OggFlacStreamHandle, StreamingOggFlacSink,
-};
-use pmoaudio_ext::UriSource;
+use pmoaudio::{AudioPipelineNode, ResamplingNode, ToI24Node};
+use pmoaudio_ext::{PlayerCommand, PlayerHandle, PlayerSource};
+use pmoaudio_ext::sinks::{OggFlacStreamHandle, StreamingOggFlacSink};
 use pmoflac::EncoderOptions;
-use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
-use crate::messages::PlaybackState;
 use crate::state::SharedState;
 
-// ─── Commandes de contrôle ───────────────────────────────────────────────────
+// ─── Ré-export des commandes pour les handlers ────────────────────────────────
 
-/// Commandes envoyées au pipeline audio de l'instance
-#[derive(Debug)]
-pub enum PipelineControl {
-    LoadUri(String),
-    LoadNextUri(String),
-    Play,
-    Pause,
-    Stop,
-    Seek(f64),
-    SetVolume(u16),
-    SetMute(bool),
-    /// Notification interne : la source courante s'est terminée (EOF ou erreur)
-    SourceEnded,
-}
+/// Commandes de transport — alias vers PlayerCommand pour compatibilité handlers
+pub use pmoaudio_ext::PlayerCommand as PipelineControl;
 
 // ─── Handle vers le pipeline ─────────────────────────────────────────────────
 
-/// Handle partageable vers le pipeline audio d'une instance
+/// Handle partageable vers le pipeline audio d'une instance.
+///
+/// Expose le `PlayerHandle` pour les commandes AVTransport et le `CancellationToken`
+/// pour l'arrêt complet du pipeline.
 #[derive(Clone)]
 pub struct PipelineHandle {
-    pub control_tx: mpsc::Sender<PipelineControl>,
+    pub player: PlayerHandle,
     pub stop_token: CancellationToken,
+    /// Volume courant (géré localement, pas dans PlayerSource)
+    state: SharedState,
 }
 
 impl PipelineHandle {
+    /// Envoie une commande de transport. Gère SetVolume/SetMute localement.
     pub async fn send(&self, cmd: PipelineControl) {
-        let _ = self.control_tx.send(cmd).await;
+        match cmd {
+            PlayerCommand::LoadUri(uri) => self.player.load_uri(uri).await,
+            PlayerCommand::LoadNextUri(uri) => self.player.load_next_uri(uri).await,
+            PlayerCommand::Play => self.player.play().await,
+            PlayerCommand::Pause => self.player.pause().await,
+            PlayerCommand::Stop => self.player.stop().await,
+            PlayerCommand::Seek(pos) => self.player.seek(pos).await,
+        }
     }
 }
 
@@ -75,12 +71,10 @@ impl InstancePipeline {
         udn: String,
     ) -> Self {
         let stop_token = CancellationToken::new();
-        let (control_tx, control_rx) = mpsc::channel::<PipelineControl>(32);
 
-        // Chaîne de traitement : ResamplingNode(96kHz) → ToI24Node → StreamingOggFlacSink
-        // Le broadcast pacé à 0.5s max d'avance, chaque subscribe() est indépendant.
         use pmoaudio::pipeline::AudioPipelineNode;
 
+        // Sink broadcast OGG-FLAC (multi-client, pacé à 0.5s max d'avance)
         let (sink, flac_handle) = StreamingOggFlacSink::new(EncoderOptions::default(), 24);
 
         // Nœud de conversion de profondeur : tout type entier → I24
@@ -91,40 +85,40 @@ impl InstancePipeline {
         let mut resampler = ResamplingNode::new(96_000);
         resampler.register(to_i24.boxed());
 
-        // Le tx d'entrée du resampler est le point d'entrée du pipeline
-        let segment_tx = resampler.get_tx().expect("ResamplingNode doit avoir un sender");
+        // Source avec contrôle AVTransport complet
+        let (mut player_source, player_handle) = PlayerSource::new();
+        player_source.register(resampler.boxed());
 
-        let pipeline_handle = PipelineHandle {
-            control_tx,
-            stop_token: stop_token.clone(),
-        };
-
-        // Lancer la chaîne resampler → to_i24 → sink en background
+        // Lancer le pipeline en background
         let sink_stop = stop_token.clone();
         tokio::spawn(async move {
-            if let Err(e) = resampler.boxed().run(sink_stop).await {
+            if let Err(e) = player_source.boxed().run(sink_stop).await {
                 warn!("Audio pipeline error: {:?}", e);
             }
-            debug!("Sink task terminated");
-        });
-
-        // Task pipeline : reçoit les commandes UPnP et pilote les sources
-        let stop_token_clone = stop_token.clone();
-        let control_tx_clone = pipeline_handle.control_tx.clone();
-        tokio::spawn(async move {
-            run_pipeline(
-                segment_tx,
-                control_rx,
-                control_tx_clone,
-                stop_token_clone,
-                state,
-                udn,
-                #[cfg(feature = "pmoserver")]
-                control_point,
-            )
-            .await;
             debug!("Pipeline task terminated");
         });
+
+        // Écouter les événements PlayerSource pour mettre à jour le state UPnP
+        let event_rx = player_handle.subscribe_events();
+        let state_clone = state.clone();
+        let udn_clone = udn.clone();
+        #[cfg(feature = "pmoserver")]
+        let cp_clone = control_point.clone();
+        tokio::spawn(async move {
+            run_event_listener(
+                event_rx,
+                state_clone,
+                udn_clone,
+                #[cfg(feature = "pmoserver")]
+                cp_clone,
+            ).await;
+        });
+
+        let pipeline_handle = PipelineHandle {
+            player: player_handle,
+            stop_token: stop_token.clone(),
+            state,
+        };
 
         Self {
             flac_handle,
@@ -133,279 +127,63 @@ impl InstancePipeline {
     }
 }
 
-// ─── Task principale du pipeline ─────────────────────────────────────────────
+// ─── Listener d'événements ────────────────────────────────────────────────────
 
-async fn run_pipeline(
-    segment_tx: mpsc::Sender<Arc<AudioSegment>>,
-    mut control_rx: mpsc::Receiver<PipelineControl>,
-    control_tx: mpsc::Sender<PipelineControl>,
-    stop_token: CancellationToken,
+async fn run_event_listener(
+    mut event_rx: tokio::sync::broadcast::Receiver<pmoaudio_ext::PlayerEvent>,
     state: SharedState,
     udn: String,
     #[cfg(feature = "pmoserver")]
     control_point: Arc<pmocontrol::ControlPoint>,
 ) {
-    let mut current_source_stop: Option<CancellationToken> = None;
-    let mut current_uri: Option<String> = None;
+    use pmoaudio_ext::PlayerEvent;
+    use crate::messages::PlaybackState;
 
     loop {
-        tokio::select! {
-            _ = stop_token.cancelled() => {
-                info!(udn = %udn, "Pipeline stopping by cancellation");
-                if let Some(src_stop) = current_source_stop.take() {
-                    src_stop.cancel();
+        match event_rx.recv().await {
+            Ok(event) => match event {
+                PlayerEvent::Playing { uri, duration_sec } => {
+                    let mut s = state.write();
+                    s.playback_state = PlaybackState::Playing;
+                    s.current_uri = Some(uri);
+                    s.duration = duration_sec.map(seconds_to_upnp_time);
+                    s.position = None;
+                    // Effacer next_uri/next_metadata : la nouvelle piste est maintenant courante
+                    s.next_uri = None;
+                    s.next_metadata = None;
                 }
-                break;
-            }
-
-            cmd = control_rx.recv() => {
-                match cmd {
-                    None => {
-                        info!(udn = %udn, "Pipeline control channel closed");
-                        break;
-                    }
-
-                    Some(PipelineControl::SourceEnded) => {
-                        // La source s'est terminée (EOF ou erreur) : libérer le slot
-                        debug!(udn = %udn, "Pipeline: SourceEnded — source slot freed");
-                        current_source_stop = None;
-                    }
-
-                    Some(PipelineControl::LoadUri(uri)) => {
-                        info!(udn = %udn, uri = %uri, "Pipeline: LoadUri");
-                        if let Some(src_stop) = current_source_stop.take() {
-                            src_stop.cancel();
-                        }
-                        current_uri = Some(uri.clone());
-                        {
-                            let mut s = state.write();
-                            s.playback_state = PlaybackState::Transitioning;
-                            s.current_uri = Some(uri.clone());
-                            s.position = None;
-                        }
-                        let src_stop = stop_token.child_token();
-                        current_source_stop = Some(src_stop.clone());
-                        let tx = segment_tx.clone();
-                        let notify = control_tx.clone();
-                        let st = state.clone();
-                        let udn_c = udn.clone();
-                        #[cfg(feature = "pmoserver")]
+                PlayerEvent::Paused { position_sec } => {
+                    let mut s = state.write();
+                    s.playback_state = PlaybackState::Paused;
+                    s.position = Some(seconds_to_upnp_time(position_sec));
+                }
+                PlayerEvent::Stopped => {
+                    let mut s = state.write();
+                    s.playback_state = PlaybackState::Stopped;
+                    s.position = None;
+                }
+                PlayerEvent::TrackEnded => {
+                    #[cfg(feature = "pmoserver")]
+                    {
                         let cp = control_point.clone();
+                        let udn_c = udn.clone();
                         tokio::spawn(async move {
-                            stream_source(
-                                uri, 0.0, tx, src_stop, st, udn_c,
-                                #[cfg(feature = "pmoserver")]
-                                cp,
-                            ).await;
-                            let _ = notify.send(PipelineControl::SourceEnded).await;
+                            cp.advance_queue_and_prefetch(&pmocontrol::DeviceId(udn_c));
                         });
                     }
-
-                    Some(PipelineControl::LoadNextUri(uri)) => {
-                        debug!(udn = %udn, uri = %uri, "Pipeline: LoadNextUri");
-                        state.write().next_uri = Some(uri);
-                    }
-
-                    Some(PipelineControl::Play) => {
-                        // Redémarrer la source si elle n'est pas en cours
-                        if current_source_stop.is_none() {
-                            if let Some(uri) = current_uri.clone() {
-                                // Reprendre depuis la position pausée (0.0 si pas de pause)
-                                let seek = state.read().position.as_deref()
-                                    .map(upnp_time_to_seconds)
-                                    .unwrap_or(0.0);
-                                info!(udn = %udn, uri = %uri, seek = seek, "Pipeline: Play — restarting source");
-                                let src_stop = stop_token.child_token();
-                                current_source_stop = Some(src_stop.clone());
-                                let tx = segment_tx.clone();
-                                let notify = control_tx.clone();
-                                let st = state.clone();
-                                let udn_c = udn.clone();
-                                #[cfg(feature = "pmoserver")]
-                                let cp = control_point.clone();
-                                tokio::spawn(async move {
-                                    stream_source(
-                                        uri, seek, tx, src_stop, st, udn_c,
-                                        #[cfg(feature = "pmoserver")]
-                                        cp,
-                                    ).await;
-                                    let _ = notify.send(PipelineControl::SourceEnded).await;
-                                });
-                            } else {
-                                debug!(udn = %udn, "Pipeline: Play — no URI loaded, ignoring");
-                            }
-                        } else {
-                            debug!(udn = %udn, "Pipeline: Play — source already running");
-                        }
-                    }
-
-                    Some(PipelineControl::Pause) => {
-                        info!(udn = %udn, "Pipeline: Pause — stopping source, position preserved");
-                        if let Some(src_stop) = current_source_stop.take() {
-                            src_stop.cancel();
-                        }
-                        state.write().playback_state = PlaybackState::Paused;
-                        // position reste dans state pour la reprise via Play
-                    }
-
-                    Some(PipelineControl::Stop) => {
-                        info!(udn = %udn, "Pipeline: Stop");
-                        if let Some(src_stop) = current_source_stop.take() {
-                            src_stop.cancel();
-                        }
-                        // Conserver current_uri pour permettre un Play ultérieur
-                        let mut s = state.write();
-                        s.playback_state = PlaybackState::Stopped;
-                        s.position = None;
-                    }
-
-                    Some(PipelineControl::Seek(pos_sec)) => {
-                        info!(udn = %udn, pos = pos_sec, "Pipeline: Seek");
-                        if let Some(uri) = current_uri.clone() {
-                            if let Some(src_stop) = current_source_stop.take() {
-                                src_stop.cancel();
-                            }
-                            let src_stop = stop_token.child_token();
-                            current_source_stop = Some(src_stop.clone());
-                            let tx = segment_tx.clone();
-                            let notify = control_tx.clone();
-                            let st = state.clone();
-                            let udn_c = udn.clone();
-                            #[cfg(feature = "pmoserver")]
-                            let cp = control_point.clone();
-                            tokio::spawn(async move {
-                                stream_source(
-                                    uri, pos_sec, tx, src_stop, st, udn_c,
-                                    #[cfg(feature = "pmoserver")]
-                                    cp,
-                                ).await;
-                                let _ = notify.send(PipelineControl::SourceEnded).await;
-                            });
-                        }
-                    }
-
-                    Some(PipelineControl::SetVolume(vol)) => {
-                        state.write().volume = vol;
-                    }
-
-                    Some(PipelineControl::SetMute(mute)) => {
-                        state.write().mute = mute;
-                    }
                 }
-            }
-        }
-    }
-}
-
-// ─── Task source ─────────────────────────────────────────────────────────────
-
-async fn stream_source(
-    uri: String,
-    seek_sec: f64,
-    tx: mpsc::Sender<Arc<AudioSegment>>,
-    stop_token: CancellationToken,
-    state: SharedState,
-    udn: String,
-    #[cfg(feature = "pmoserver")]
-    control_point: Arc<pmocontrol::ControlPoint>,
-) {
-    info!(udn = %udn, uri = %uri, seek = seek_sec, "Source task: opening URI");
-
-    match UriSource::open(&uri, seek_sec, stop_token.clone()).await {
-        Ok(source) => {
-            debug!(udn = %udn, "Source task: URI opened, duration={:?}", source.duration_sec());
-            if let Some(dur) = source.duration_sec() {
-                state.write().duration = Some(seconds_to_upnp_time(dur));
-            }
-
-            // TrackBoundary avec métadonnées minimales
-            let boundary = {
-                let mut meta = MemoryTrackMetadata::new();
-                let _ = meta.set_title(Some(uri.clone())).await;
-                let meta_arc = Arc::new(tokio::sync::RwLock::new(meta));
-                AudioSegment::new_track_boundary(0, seek_sec, meta_arc)
-            };
-            let _ = tx.send(boundary).await;
-
-            // L'URI est ouverte, le flux va commencer à couler.
-            // Le sink bloquera naturellement si aucun client HTTP n'est connecté.
-            {
-                let mut s = state.write();
-                s.playback_state = PlaybackState::Playing;
-                if seek_sec > 0.0 {
-                    s.position = Some(seconds_to_upnp_time(seek_sec));
-                }
-            }
-
-            match source.emit_to_channel(&tx, &stop_token).await {
-                Ok(true) => {
-                    debug!(udn = %udn, "Source task: EOF → TrackEnded");
-                    handle_track_ended(
-                        state, udn, tx, stop_token,
-                        #[cfg(feature = "pmoserver")]
-                        control_point,
-                    ).await;
-                }
-                Ok(false) => {
-                    debug!(udn = %udn, "Source task: cancelled");
-                }
-                Err(e) => {
-                    warn!(udn = %udn, error = %e, "Source task error");
+                PlayerEvent::Error(e) => {
+                    tracing::warn!(udn = %udn, "PlayerSource error: {}", e);
                     state.write().playback_state = PlaybackState::Stopped;
                 }
+            },
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                tracing::warn!(udn = %udn, "Event listener lagged {} events", n);
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                break;
             }
         }
-        Err(e) => {
-            warn!(udn = %udn, error = %e, "Source task: failed to open URI");
-            state.write().playback_state = PlaybackState::Stopped;
-        }
-    }
-}
-
-// ─── TrackEnded : avancer current←next ───────────────────────────────────────
-
-async fn handle_track_ended(
-    state: SharedState,
-    udn: String,
-    tx: mpsc::Sender<Arc<AudioSegment>>,
-    stop_token: CancellationToken,
-    #[cfg(feature = "pmoserver")]
-    control_point: Arc<pmocontrol::ControlPoint>,
-) {
-    let next_uri = {
-        let mut s = state.write();
-        let uri = s.next_uri.take();
-        let meta = s.next_metadata.take();
-        s.current_uri = uri.clone();
-        s.current_metadata = meta;
-        s.next_uri = None;
-        s.next_metadata = None;
-        s.position = None;
-        s.duration = None;
-        if uri.is_some() {
-            s.playback_state = PlaybackState::Playing;
-        } else {
-            s.playback_state = PlaybackState::Stopped;
-        }
-        uri
-    };
-
-    #[cfg(feature = "pmoserver")]
-    if next_uri.is_some() {
-        let cp = control_point.clone();
-        let udn_clone = udn.clone();
-        tokio::spawn(async move {
-            cp.advance_queue_and_prefetch(&pmocontrol::DeviceId(udn_clone));
-        });
-    }
-
-    if let Some(uri) = next_uri {
-        info!(udn = %udn, uri = %uri, "TrackEnded: starting next track");
-        Box::pin(stream_source(
-            uri, 0.0, tx, stop_token, state, udn,
-            #[cfg(feature = "pmoserver")]
-            control_point,
-        )).await;
     }
 }
 

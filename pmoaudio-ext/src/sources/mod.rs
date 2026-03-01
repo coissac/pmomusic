@@ -19,3 +19,9 @@ mod uri_source;
 
 #[cfg(feature = "http-stream")]
 pub use uri_source::UriSource;
+
+#[cfg(feature = "http-stream")]
+mod player_source;
+
+#[cfg(feature = "http-stream")]
+pub use player_source::{PlayerCommand, PlayerEvent, PlayerHandle, PlayerSource};
