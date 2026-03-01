@@ -79,6 +79,8 @@ pub enum PlayerEvent {
     Stopped,
     /// Fin de piste (pour que le ControlPoint avance la queue)
     TrackEnded,
+    /// Position courante (émise ~1/s pendant la lecture)
+    Position { position_sec: f64 },
     /// Erreur lors de l'ouverture ou de la lecture
     Error(String),
 }
@@ -345,6 +347,9 @@ impl PlayerSourceLogic {
         let source_stop = stop_token.child_token();
         let source_stop_clone = source_stop.clone();
 
+        // Dernière seconde entière pour laquelle on a émis un Position
+        let mut last_reported_sec: i64 = -1;
+
         // Spawner l'émission de la source dans une tâche séparée
         let emit_task = tokio::spawn(async move {
             source.emit_to_channel(&chunk_tx, &source_stop_clone).await
@@ -443,6 +448,14 @@ impl PlayerSourceLogic {
                             // Mettre à jour la position courante
                             if seg.is_audio_chunk() {
                                 *paused_at_sec = seg.timestamp_sec;
+                                // Émettre Position ~1/s
+                                let sec = paused_at_sec.floor() as i64;
+                                if sec != last_reported_sec {
+                                    last_reported_sec = sec;
+                                    let _ = self.event_tx.send(PlayerEvent::Position {
+                                        position_sec: *paused_at_sec,
+                                    });
+                                }
                             }
                             // Envoyer au pipeline en aval
                             if let Err(e) = send_to_children("PlayerSource", output, seg).await {

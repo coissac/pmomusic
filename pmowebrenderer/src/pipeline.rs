@@ -162,6 +162,9 @@ async fn run_event_listener(
                     s.playback_state = PlaybackState::Stopped;
                     s.position = None;
                 }
+                PlayerEvent::Position { position_sec } => {
+                    state.write().position = Some(seconds_to_upnp_time(position_sec));
+                }
                 PlayerEvent::TrackEnded => {
                     #[cfg(feature = "pmoserver")]
                     {

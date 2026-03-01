@@ -68,12 +68,14 @@ pub struct PositionUpdateRequest {
 }
 
 /// POST /api/webrenderer/{id}/position
+/// position_sec est ignoré (géré par PlayerEvent::Position côté serveur).
+/// duration_sec est utilisé comme fallback si la source ne connaît pas la durée (flux radio).
 pub async fn position_update_handler(
     State(registry): State<Arc<RendererRegistry>>,
     Path(instance_id): Path<String>,
     Json(req): Json<PositionUpdateRequest>,
 ) -> impl IntoResponse {
-    registry.update_position(&instance_id, req.position_sec, req.duration_sec);
+    registry.update_duration(&instance_id, req.duration_sec);
     StatusCode::NO_CONTENT
 }
 
