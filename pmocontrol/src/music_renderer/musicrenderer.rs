@@ -1562,7 +1562,7 @@ pub(crate) fn build_didl_lite_metadata(
     protocol_info: &str,
 ) -> String {
     use pmodidl::{DIDLLite, Item, Resource};
-    use pmoutils::ToXmlElement;
+    use pmodidl::ToXmlElement;
 
     // Construire l'Item DIDL avec toutes les métadonnées
     let item = Item {

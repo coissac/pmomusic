@@ -7,7 +7,6 @@ members = [
     "pmowebrenderer",
     "pmomediaserver",
     "pmoconfig",
-    "pmoutils",
     "pmodidl",
     "pmoserver",
     "pmoapp",

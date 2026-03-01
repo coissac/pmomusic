@@ -4047,7 +4047,6 @@ version = "0.1.0"
 dependencies = [
  "bevy_reflect",
  "bevy_reflect_derive",
- "pmoutils",
  "quick-xml",
  "serde",
  "utoipa",
@@ -4362,15 +4361,15 @@ dependencies = [
 
 [[package]]
 name = "pmoutils"
-version = "0.1.0"
+version = "0.1.2"
+source = "sparse+https://gargoton.petite-maison-orange.fr/api/packages/pmo/cargo/"
+checksum = "9ed68fb06ffdd1a30fc7792d883dcd6d61ad7705c3a744f54a0a5bcc341fc65e"
 dependencies = [
  "get_if_addrs",
  "netstat2",
  "os_info",
- "quick-xml",
  "sysinfo",
  "users",
- "xmltree 0.10.3",
 ]
 
 [[package]]

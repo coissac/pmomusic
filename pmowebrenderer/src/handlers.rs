@@ -8,7 +8,7 @@ use std::sync::Arc;
 use pmodidl::DIDLLite;
 use pmoupnp::actions::{ActionData, ActionError, ActionHandler, get_value};
 use pmoupnp::{get, set};
-use pmoutils::ToXmlElement;
+use pmodidl::ToXmlElement;
 
 use crate::messages::PlaybackState;
 use crate::pipeline::{PipelineControl, PipelineHandle, seconds_to_upnp_time, upnp_time_to_seconds};

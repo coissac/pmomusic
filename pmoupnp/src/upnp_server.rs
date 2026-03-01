@@ -430,7 +430,7 @@ impl UpnpServerExt for Server {
                 let kind = e.kind();
                 if kind == std::io::ErrorKind::AddrInUse {
                     let port = crate::ssdp::SSDP_PORT;
-                    if let Some(process) = find_process_using_port(port, TransportProtocol::Udp) {
+                    if let Some(process) = find_process_using_port(TransportProtocol::Udp, port) {
                         error!(
                             "❌ SSDP initialization failed: port {} is already in use by \
                             PID {} ({}) owned by {}: {}",
