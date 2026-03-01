@@ -29,8 +29,8 @@ pub struct WebRendererInstance {
     pub udn: String,
     pub device_instance: Arc<DeviceInstance>,
     pub state: SharedState,
-    /// Handle vers le sink OGG-FLAC — clonable, connect() crée un nouveau flux avec backpressure.
-    pub flac_handle: pmoaudio_ext::sinks::DirectOggFlacHandle,
+    /// Handle vers le sink OGG-FLAC — clonable, subscribe() crée un flux indépendant par client.
+    pub flac_handle: pmoaudio_ext::sinks::OggFlacStreamHandle,
     pub pipeline: PipelineHandle,
     pub created_at: SystemTime,
 }
@@ -116,16 +116,16 @@ impl RendererRegistry {
         Ok((stream_url, udn))
     }
 
-    /// Retourne un DirectOggFlacStream pour l'endpoint /stream.
-    /// Chaque appel retourne un wrapper sur le même reader persistant.
+    /// Retourne un OggFlacClientStream indépendant pour l'endpoint /stream.
+    /// Chaque appel crée un nouveau subscriber broadcast — safe pour connexions simultanées.
     pub fn get_stream(
         &self,
         instance_id: &str,
-    ) -> Option<pmoaudio_ext::sinks::DirectOggFlacStream> {
+    ) -> Option<pmoaudio_ext::sinks::OggFlacClientStream> {
         self.instances
             .read()
             .get(instance_id)
-            .map(|i| i.flac_handle.get_stream())
+            .map(|i| i.flac_handle.subscribe())
     }
 
     /// Retourne le PipelineHandle par UDN (pour les handlers UPnP)

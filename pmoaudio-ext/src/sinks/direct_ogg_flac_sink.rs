@@ -50,9 +50,9 @@ pub const DIRECT_OGG_FLAC_SAMPLE_RATE: u32 = 96_000;
 pub const DIRECT_OGG_FLAC_CHANNELS: u8 = 2;
 pub const DIRECT_OGG_FLAC_BITS_PER_SAMPLE: u8 = 24;
 
-/// Capacité du canal OGG → HTTP (en chunks de ~8 KB).
-/// Fournit un petit buffer sans casser la backpressure TCP.
-const OGG_CHANNEL_CAPACITY: usize = 8;
+/// Capacité du canal OGG → HTTP.
+/// Capacité 1 : backpressure stricte, l'encodeur ne produit pas en avance.
+const OGG_CHANNEL_CAPACITY: usize = 1;
 
 // ─── Types partagés ───────────────────────────────────────────────────────────
 
@@ -79,7 +79,7 @@ impl DirectOggFlacHandle {
     /// Retourne le stream OGG-FLAC pour le handler HTTP.
     /// Lance le premier encodeur au premier appel.
     pub fn get_stream(&self) -> DirectOggFlacStream {
-        debug!("DirectOggFlacHandle::get_stream()");
+        tracing::info!(target: "pmoaudio_ext::stream_connect", "get_stream() called — new HTTP client connecting");
         self.client_notify.notify_one();
         DirectOggFlacStream {
             ogg_rx: self.ogg_rx.clone(),
@@ -100,6 +100,12 @@ pub struct DirectOggFlacStream {
     buffer: VecDeque<u8>,
 }
 
+impl Drop for DirectOggFlacStream {
+    fn drop(&mut self) {
+        tracing::info!(target: "pmoaudio_ext::stream_connect", "DirectOggFlacStream dropped — HTTP client disconnected");
+    }
+}
+
 impl AsyncRead for DirectOggFlacStream {
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -118,6 +124,7 @@ impl AsyncRead for DirectOggFlacStream {
         let mut guard = match self.ogg_rx.try_lock() {
             Ok(g) => g,
             Err(_) => {
+                tracing::warn!(target: "pmoaudio_ext::stream_connect", "DirectOggFlacStream: try_lock() FAILED — concurrent access detected!");
                 cx.waker().wake_by_ref();
                 return Poll::Pending;
             }
@@ -126,6 +133,7 @@ impl AsyncRead for DirectOggFlacStream {
         match guard.poll_recv(cx) {
             Poll::Ready(Some(bytes)) => {
                 drop(guard);
+                tracing::info!(target: "pmoaudio_ext::stream_connect", "DirectOggFlacStream: sending {} bytes to HTTP client", bytes.len());
                 let to_copy = bytes.len().min(buf.remaining());
                 buf.put_slice(&bytes[..to_copy]);
                 if to_copy < bytes.len() {
@@ -133,7 +141,10 @@ impl AsyncRead for DirectOggFlacStream {
                 }
                 Poll::Ready(Ok(()))
             }
-            Poll::Ready(None) => Poll::Ready(Ok(())), // EOF
+            Poll::Ready(None) => {
+                tracing::info!(target: "pmoaudio_ext::stream_connect", "DirectOggFlacStream: ogg_rx closed → EOF sent to HTTP client");
+                Poll::Ready(Ok(()))
+            }
             Poll::Pending => Poll::Pending,
         }
     }

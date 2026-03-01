@@ -10,8 +10,7 @@ use std::sync::Arc;
 use pmoaudio::{AudioSegment, ResamplingNode, ToI24Node};
 use pmometadata::{MemoryTrackMetadata, TrackMetadata};
 use pmoaudio_ext::sinks::{
-    DirectOggFlacHandle, DirectOggFlacSink,
-    DIRECT_OGG_FLAC_SAMPLE_RATE,
+    OggFlacStreamHandle, StreamingOggFlacSink,
 };
 use pmoaudio_ext::UriSource;
 use pmoflac::EncoderOptions;
@@ -59,10 +58,10 @@ impl PipelineHandle {
 /// Pipeline audio complet pour une instance WebRenderer.
 ///
 /// Créé au `POST /register`. Le flux OGG-FLAC est accessible via `flac_handle`
-/// (mono-client, chaque `connect()` crée un nouveau flux avec backpressure TCP).
+/// (multi-client broadcast, chaque `subscribe()` crée un flux indépendant).
 pub struct InstancePipeline {
-    /// Handle vers le sink OGG-FLAC — clonable, connect() crée un nouveau flux.
-    pub flac_handle: DirectOggFlacHandle,
+    /// Handle vers le sink OGG-FLAC — clonable, subscribe() crée un flux indépendant par client.
+    pub flac_handle: OggFlacStreamHandle,
     pub pipeline_handle: PipelineHandle,
 }
 
@@ -78,18 +77,18 @@ impl InstancePipeline {
         let stop_token = CancellationToken::new();
         let (control_tx, control_rx) = mpsc::channel::<PipelineControl>(32);
 
-        // Chaîne de traitement : ResamplingNode(96kHz) → ToI24Node → DirectFlacSink
-        // La backpressure remonte naturellement depuis le pipe duplex jusqu'à la source.
+        // Chaîne de traitement : ResamplingNode(96kHz) → ToI24Node → StreamingOggFlacSink
+        // Le broadcast pacé à 0.5s max d'avance, chaque subscribe() est indépendant.
         use pmoaudio::pipeline::AudioPipelineNode;
 
-        let (sink, flac_handle) = DirectOggFlacSink::new(EncoderOptions::default());
+        let (sink, flac_handle) = StreamingOggFlacSink::new(EncoderOptions::default(), 24);
 
         // Nœud de conversion de profondeur : tout type entier → I24
         let mut to_i24 = ToI24Node::new();
         to_i24.register(sink.boxed());
 
         // Nœud de rééchantillonnage : n'importe quel sample rate → 96 kHz
-        let mut resampler = ResamplingNode::new(DIRECT_OGG_FLAC_SAMPLE_RATE);
+        let mut resampler = ResamplingNode::new(96_000);
         resampler.register(to_i24.boxed());
 
         // Le tx d'entrée du resampler est le point d'entrée du pipeline

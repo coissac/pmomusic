@@ -2,16 +2,15 @@
 //!
 //! Sert le flux OGG-FLAC d'une instance WebRenderer.
 //!
-//! Safari fait systématiquement une requête Range: bytes=0-1 avant de jouer.
-//! On répond 206 avec 2 octets factices pour satisfaire la sonde,
-//! puis la vraie requête (sans Range) reçoit le stream persistant.
+//! Safari envoie parfois Range: bytes=0-N avant de jouer.
+//! On ignore ce header et on répond toujours 200 chunked (flux live infini).
 
 use axum::{
     body::Body,
     extract::{Path, State},
     http::{
         HeaderMap, StatusCode,
-        header::{CACHE_CONTROL, CONNECTION, CONTENT_TYPE, CONTENT_RANGE, CONTENT_LENGTH, ACCEPT_RANGES},
+        header::{CACHE_CONTROL, CONNECTION, CONTENT_TYPE, TRANSFER_ENCODING},
     },
     response::{IntoResponse, Response},
 };
@@ -29,20 +28,12 @@ pub async fn stream_handler(
 ) -> impl IntoResponse {
     info!(instance_id = %instance_id, "FLAC stream client connecting");
 
-    // Détecter la sonde Range: bytes=0-1 de Safari
+    // Ignorer le header Range — flux live infini, non seekable.
+    // On ne répond jamais 206 ni 416 : toujours 200 chunked.
+    // Safari (et d'autres clients) envoient parfois Range: bytes=0-N ;
+    // répondre 416 ou 206 leur fait croire à une ressource finie.
     if let Some(range) = headers.get("range") {
-        if range.as_bytes() == b"bytes=0-1" {
-            info!(instance_id = %instance_id, "Safari range probe — responding 206");
-            return Response::builder()
-                .status(StatusCode::PARTIAL_CONTENT)
-                .header(CONTENT_TYPE, "audio/ogg; codecs=flac")
-                .header(ACCEPT_RANGES, "bytes")
-                .header(CONTENT_RANGE, "bytes 0-1/*")
-                .header(CONTENT_LENGTH, "2")
-                .body(Body::from(vec![0u8, 0u8]))
-                .unwrap()
-                .into_response();
-        }
+        info!(instance_id = %instance_id, "Range header ignored (live stream): {:?}", range);
     }
 
     let stream = match registry.get_stream(&instance_id) {
@@ -63,7 +54,7 @@ pub async fn stream_handler(
         .header(CONTENT_TYPE, "audio/ogg; codecs=flac")
         .header(CACHE_CONTROL, "no-store, no-transform")
         .header(CONNECTION, "keep-alive")
-        .header(ACCEPT_RANGES, "bytes")
+        .header(TRANSFER_ENCODING, "chunked")
         .header("X-Content-Type-Options", "nosniff")
         .body(Body::from_stream(ReaderStream::new(stream)))
         .unwrap()
