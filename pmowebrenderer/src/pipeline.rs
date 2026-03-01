@@ -210,7 +210,11 @@ async fn run_pipeline(
                         // Redémarrer la source si elle n'est pas en cours
                         if current_source_stop.is_none() {
                             if let Some(uri) = current_uri.clone() {
-                                info!(udn = %udn, uri = %uri, "Pipeline: Play — restarting source");
+                                // Reprendre depuis la position pausée (0.0 si pas de pause)
+                                let seek = state.read().position.as_deref()
+                                    .map(upnp_time_to_seconds)
+                                    .unwrap_or(0.0);
+                                info!(udn = %udn, uri = %uri, seek = seek, "Pipeline: Play — restarting source");
                                 let src_stop = stop_token.child_token();
                                 current_source_stop = Some(src_stop.clone());
                                 let tx = segment_tx.clone();
@@ -221,7 +225,7 @@ async fn run_pipeline(
                                 let cp = control_point.clone();
                                 tokio::spawn(async move {
                                     stream_source(
-                                        uri, 0.0, tx, src_stop, st, udn_c,
+                                        uri, seek, tx, src_stop, st, udn_c,
                                         #[cfg(feature = "pmoserver")]
                                         cp,
                                     ).await;
@@ -236,7 +240,12 @@ async fn run_pipeline(
                     }
 
                     Some(PipelineControl::Pause) => {
-                        debug!(udn = %udn, "Pipeline: Pause (not supported on live stream)");
+                        info!(udn = %udn, "Pipeline: Pause — stopping source, position preserved");
+                        if let Some(src_stop) = current_source_stop.take() {
+                            src_stop.cancel();
+                        }
+                        state.write().playback_state = PlaybackState::Paused;
+                        // position reste dans state pour la reprise via Play
                     }
 
                     Some(PipelineControl::Stop) => {
