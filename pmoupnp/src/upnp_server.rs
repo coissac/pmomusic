@@ -97,6 +97,7 @@ pub trait UpnpServerExt {
     async fn register_device(
         &mut self,
         device: Arc<Device>,
+        with_ssdp: bool,
     ) -> Result<Arc<DeviceInstance>, DeviceError>;
 
     /// Retourne le nombre de devices enregistrés.
@@ -232,6 +233,7 @@ impl UpnpServerExt for Server {
     async fn register_device(
         &mut self,
         device: Arc<Device>,
+        with_ssdp: bool,
     ) -> Result<Arc<DeviceInstance>, DeviceError> {
         use tracing::info;
 
@@ -259,8 +261,8 @@ impl UpnpServerExt for Server {
             .register(di.clone())
             .map_err(|e| DeviceError::UrlRegistrationError(e))?;
 
-        // Annoncer via SSDP (si initialisé)
-        if self.ssdp_enabled() {
+        // Annoncer via SSDP (si initialisé et demandé)
+        if with_ssdp && self.ssdp_enabled() {
             let ssdp_opt = SSDP_SERVER.read().unwrap();
             if let Some(ref ssdp) = *ssdp_opt {
                 use crate::config_ext::UpnpConfigExt;
@@ -507,7 +509,7 @@ mod tests {
             "Test Renderer".to_string(),
         ));
 
-        let instance = server.register_device(device).await.unwrap();
+        let instance = server.register_device(device, false).await.unwrap();
 
         // Vérifier que le device est dans le registre
         assert_eq!(server.device_count(), 1);

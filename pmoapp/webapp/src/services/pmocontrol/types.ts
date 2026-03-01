@@ -32,6 +32,7 @@ export interface RendererSummary {
   protocol: RendererProtocolSummary;
   capabilities: RendererCapabilitiesSummary;
   online: boolean;
+  server_host?: string;
 }
 
 export interface RendererState {

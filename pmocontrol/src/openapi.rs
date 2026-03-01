@@ -28,6 +28,8 @@ pub struct RendererSummary {
     pub capabilities: RendererCapabilitiesSummary,
     /// Renderer en ligne
     pub online: bool,
+    /// Adresse IP du serveur hébergeant ce renderer (extraite de la location UPnP)
+    pub server_host: Option<String>,
 }
 
 /// Protocole exposé par le renderer

@@ -263,7 +263,7 @@ impl RendererRegistry {
 
                 let mut server = server_arc.write().await;
                 server
-                    .register_device(Arc::new(device))
+                    .register_device(Arc::new(device), false)
                     .await
                     .map_err(|e| WebRendererError::RegistrationError(e.to_string()))?
             };

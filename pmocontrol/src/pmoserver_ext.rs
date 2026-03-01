@@ -102,6 +102,13 @@ async fn list_renderers(State(state): State<ControlPointState>) -> Json<Vec<Rend
             .into_iter()
             .map(|r| {
                 let info = r.info();
+                // Extraire le host depuis la location URL (ex: "http://192.168.1.10:8080/...")
+                let server_host = info.location()
+                    .split("://").nth(1)
+                    .and_then(|s| s.split('/').next())
+                    .and_then(|s| s.split(':').next())
+                    .map(|h| h.to_string())
+                    .filter(|h| !h.is_empty());
                 RendererSummary {
                     id: r.id().0.clone(),
                     friendly_name: r.friendly_name().to_string(),
@@ -109,6 +116,7 @@ async fn list_renderers(State(state): State<ControlPointState>) -> Json<Vec<Rend
                     protocol: protocol_summary(&info.protocol()),
                     capabilities: capability_summary(&info.capabilities()),
                     online: r.is_online(),
+                    server_host,
                 }
             })
             .collect::<Vec<_>>()
