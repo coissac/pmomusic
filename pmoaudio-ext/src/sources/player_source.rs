@@ -469,8 +469,17 @@ impl PlayerSourceLogic {
             }
         }
 
-        // Attendre que la tâche source se termine proprement
-        let _ = emit_task.await;
+        // Vider chunk_rx pour débloquer emit_task si elle est bloquée sur un send
+        // (peut arriver si le pipeline en aval est saturé au moment du cancel)
+        while chunk_rx.try_recv().is_ok() {}
+
+        // Attendre que la tâche source se termine, avec timeout de sécurité
+        tokio::select! {
+            _ = emit_task => {}
+            _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {
+                warn!("PlayerSource: emit_task did not finish in time after cancel");
+            }
+        }
         result
     }
 }
