@@ -39,7 +39,6 @@ pmo_src.txt
 upmpdcli/
 /*.xml
 test_upnp*.cargo/
-.cargo/
 setup-env.sh
 cache
 gupnp-tools
