@@ -1,0 +1,2 @@
+[registries]
+pmo = { index = "sparse+https://gargoton.petite-maison-orange.fr/api/packages/pmo/cargo/" }
