@@ -32,8 +32,9 @@ RUN apt-get update && apt-get install -y \
     cmake \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy Cargo workspace files
+# Copy Cargo workspace files and registry configuration
 COPY Cargo.toml Cargo.lock ./
+COPY .cargo/ ./.cargo/
 
 # Copy all crates
 COPY PMOMusic/ ./PMOMusic/

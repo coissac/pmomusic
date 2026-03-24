@@ -12,6 +12,13 @@ use tracing::{trace, warn};
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::{Mutex, MutexGuard};
+
+/// Version du schéma de la base de données du cache.
+///
+/// Incrémenter cette constante à chaque modification incompatible du schéma.
+/// Cela provoquera la suppression de la DB **et de tous les fichiers du cache**
+/// au prochain démarrage.
+pub const SCHEMA_VERSION: u32 = 1;
 use std::time::Instant;
 
 #[cfg(feature = "openapi")]
@@ -118,7 +125,33 @@ impl DB {
     ///
     /// let db = DB::init(Path::new("cache.db")).unwrap();
     /// ```
-    pub fn init(path: &Path) -> Result<Self, rusqlite::Error> {
+    /// Initialise la DB. Retourne `(db, was_reset)` où `was_reset` indique si la DB
+    /// a été supprimée et recréée suite à un changement de version de schéma.
+    /// Dans ce cas, l'appelant doit aussi effacer les fichiers du cache.
+    pub fn init(path: &Path) -> Result<(Self, bool), rusqlite::Error> {
+        let was_reset = if path.exists() {
+            if let Ok(conn) = Connection::open(path) {
+                let version: u32 = conn
+                    .query_row("PRAGMA user_version", [], |r| r.get(0))
+                    .unwrap_or(0);
+                if version != SCHEMA_VERSION {
+                    drop(conn);
+                    warn!(
+                        "Cache DB schema version mismatch (found {}, expected {}), recreating",
+                        version, SCHEMA_VERSION
+                    );
+                    std::fs::remove_file(path).ok();
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
         let conn = Connection::open(path)?;
         conn.execute("PRAGMA foreign_keys = ON", [])?;
 
@@ -184,9 +217,10 @@ impl DB {
             [],
         )?;
 
-        Ok(Self {
-            conn: Mutex::new(conn),
-        })
+        // Inscrire la version du schéma
+        conn.execute_batch(&format!("PRAGMA user_version = {}", SCHEMA_VERSION))?;
+
+        Ok((Self { conn: Mutex::new(conn) }, was_reset))
     }
 
     /// Ajoute ou met à jour une entrée dans la base de données

@@ -215,6 +215,8 @@ impl PlaylistManager {
                     &role,
                     cover_pk.as_deref(),
                     artist.as_deref(),
+                    None,
+                    None,
                     &core.config,
                     &core.tracks,
                 )
@@ -522,7 +524,7 @@ impl PlaylistManager {
 
         // Pas en mémoire, essayer de charger depuis la DB
         if let Some(persistence) = &self.inner.persistence {
-            if let Some((title, role, config, cover_pk, artist, tracks)) =
+            if let Some((title, role, config, cover_pk, artist, source, source_version, tracks)) =
                 persistence.load_playlist(&id).await?
             {
                 // Reconstruire la playlist
@@ -537,9 +539,15 @@ impl PlaylistManager {
                     cover_pk,
                 ));
 
-                // Restaurer l'artiste si présent
+                // Restaurer les métadonnées optionnelles
                 if let Some(artist_name) = artist {
                     playlist.set_artist(Some(artist_name)).await;
+                }
+                if source.is_some() {
+                    playlist.set_source(source).await;
+                }
+                if source_version.is_some() {
+                    playlist.set_source_version(source_version).await;
                 }
 
                 // Restaurer les tracks
@@ -583,7 +591,7 @@ impl PlaylistManager {
 
         // Pas en m�moire, essayer de ressusciter depuis la DB
         if let Some(persistence) = &self.inner.persistence {
-            if let Some((title, role, config, cover_pk, artist, tracks)) =
+            if let Some((title, role, config, cover_pk, artist, source, source_version, tracks)) =
                 persistence.load_playlist(id).await?
             {
                 // Reconstruire la playlist
@@ -598,9 +606,15 @@ impl PlaylistManager {
                     cover_pk,
                 ));
 
-                // Restaurer l'artiste si présent
+                // Restaurer les métadonnées optionnelles
                 if let Some(artist_name) = artist {
                     playlist.set_artist(Some(artist_name)).await;
+                }
+                if source.is_some() {
+                    playlist.set_source(source).await;
+                }
+                if source_version.is_some() {
+                    playlist.set_source_version(source_version).await;
                 }
 
                 // Restaurer les tracks
@@ -995,6 +1009,8 @@ impl PlaylistManager {
                         let role = playlist.role().await;
                         let cover_pk = playlist.cover_pk().await;
                         let artist = playlist.artist().await;
+                        let source = playlist.source().await;
+                        let source_version = playlist.source_version().await;
                         let core = playlist.core.read().await;
                         let _ = persistence
                             .save_playlist(
@@ -1003,6 +1019,8 @@ impl PlaylistManager {
                                 &role,
                                 cover_pk.as_deref(),
                                 artist.as_deref(),
+                                source.as_deref(),
+                                source_version.as_deref(),
                                 &core.config,
                                 &core.tracks,
                             )

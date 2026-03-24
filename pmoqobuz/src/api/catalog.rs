@@ -32,6 +32,8 @@ pub(crate) struct AlbumResponse {
     #[serde(default)]
     release_date_original: Option<String>,
     #[serde(default)]
+    released_at: Option<i64>,
+    #[serde(default)]
     image: Option<ImageResponse>,
     #[serde(default = "default_streamable")]
     streamable: bool,
@@ -119,6 +121,8 @@ pub(crate) struct PlaylistResponse {
     is_public: bool,
     #[serde(default)]
     owner: Option<OwnerResponse>,
+    #[serde(default)]
+    updated_at: Option<i64>,
     #[serde(default)]
     tracks: Option<PaginatedResponse<TrackResponse>>,
 }
@@ -317,6 +321,16 @@ impl QobuzApi {
             .collect())
     }
 
+    /// Récupère les métadonnées d'une playlist sans les tracks (appel léger)
+    ///
+    /// Utile pour vérifier `updated_at` avant de décider si le cache est valide.
+    pub async fn get_playlist_metadata(&self, playlist_id: &str) -> Result<Playlist> {
+        debug!("Fetching playlist metadata {}", playlist_id);
+        let params = [("playlist_id", playlist_id)];
+        let response: PlaylistResponse = self.get("/playlist/get", &params).await?;
+        Ok(Self::parse_playlist(response))
+    }
+
     /// Récupère les détails d'une playlist
     pub async fn get_playlist(&self, playlist_id: &str) -> Result<Playlist> {
         debug!("Fetching playlist {}", playlist_id);
@@ -328,18 +342,36 @@ impl QobuzApi {
     /// Récupère les tracks d'une playlist
     pub async fn get_playlist_tracks(&self, playlist_id: &str) -> Result<Vec<Track>> {
         debug!("Fetching tracks for playlist {}", playlist_id);
-        let params = [("playlist_id", playlist_id), ("extra", "tracks")];
-        let response: PlaylistResponse = self.get("/playlist/get", &params).await?;
+        const PAGE_SIZE: u32 = 50;
+        let mut all_tracks = Vec::new();
+        let mut offset = 0u32;
 
-        if let Some(tracks) = response.tracks {
-            Ok(tracks
-                .items
-                .into_iter()
-                .map(|t| Self::parse_track(t, None))
-                .collect())
-        } else {
-            Ok(Vec::new())
+        loop {
+            let offset_str = offset.to_string();
+            let limit_str = PAGE_SIZE.to_string();
+            let params = [
+                ("playlist_id", playlist_id),
+                ("extra", "tracks"),
+                ("offset", offset_str.as_str()),
+                ("limit", limit_str.as_str()),
+            ];
+            let response: PlaylistResponse = self.get("/playlist/get", &params).await?;
+
+            if let Some(tracks) = response.tracks {
+                let total = tracks.total.unwrap_or(0);
+                let count = tracks.items.len() as u32;
+                all_tracks.extend(tracks.items.into_iter().map(|t| Self::parse_track(t, None)));
+                offset += count;
+                if count == 0 || offset >= total {
+                    break;
+                }
+            } else {
+                break;
+            }
         }
+
+        debug!("Fetched {} tracks total for playlist {}", all_tracks.len(), playlist_id);
+        Ok(all_tracks)
     }
 
     /// Récupère la liste des genres
@@ -493,6 +525,7 @@ impl QobuzApi {
             tracks_count: response.tracks_count,
             duration: response.duration,
             release_date: response.release_date_original,
+            released_at: response.released_at,
             image: response.image.and_then(|i| i.large),
             image_cached: None,
             streamable: response.streamable,
@@ -547,6 +580,7 @@ impl QobuzApi {
             image: response.images300.and_then(|imgs| imgs.first().cloned()),
             image_cached: None,
             is_public: response.is_public,
+            updated_at: response.updated_at,
             owner: response.owner.map(|o| PlaylistOwner {
                 id: o.id.parse().unwrap_or(0),
                 name: o.name,

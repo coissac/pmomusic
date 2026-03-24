@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, reactive } from "vue";
+import { ref, computed, watch, reactive, onMounted, onBeforeUnmount } from "vue";
 import { useRouter } from "vue-router";
 import {
     X,
@@ -20,7 +20,6 @@ import type {
     MediaServerSummary,
     ContainerEntry,
 } from "@/services/pmocontrol/types";
-import type { BrowseState } from "@/composables/useMediaServers";
 
 const props = defineProps<{
     modelValue: boolean; // v-model pour contrôler l'ouverture
@@ -35,6 +34,10 @@ const {
     allServers,
     fetchServers,
     browseContainer,
+    getBrowseCached,
+    loadMoreBrowse,
+    hasMore,
+    loadingMore,
     currentPath,
     setPath,
     clearPath,
@@ -47,8 +50,50 @@ const router = useRouter();
 
 // État de navigation
 const currentServer = ref<MediaServerSummary | null>(null);
-const browseData = ref<BrowseState | null>(null);
+const currentContainerId = ref<string | null>(null);
+const browseData = computed(() =>
+    currentServer.value && currentContainerId.value
+        ? (getBrowseCached(currentServer.value.id, currentContainerId.value) ?? null)
+        : null,
+);
 const isLoading = ref(false);
+
+// Infinite scroll
+const sentinelRef = ref<HTMLElement | null>(null);
+const drawerContentRef = ref<HTMLElement | null>(null);
+let observer: IntersectionObserver | null = null;
+
+const canLoadMore = computed(() =>
+    currentServer.value && currentContainerId.value
+        ? hasMore(currentServer.value.id, currentContainerId.value)
+        : false,
+);
+
+function setupObserver() {
+    if (observer) observer.disconnect();
+    observer = new IntersectionObserver(
+        (entries) => {
+            if (entries[0]?.isIntersecting && canLoadMore.value && !loadingMore.value) {
+                if (currentServer.value && currentContainerId.value) {
+                    loadMoreBrowse(currentServer.value.id, currentContainerId.value);
+                }
+            }
+        },
+        { root: drawerContentRef.value, threshold: 0.1 },
+    );
+    if (sentinelRef.value) observer.observe(sentinelRef.value);
+}
+
+onMounted(() => setupObserver());
+onBeforeUnmount(() => observer?.disconnect());
+
+watch(sentinelRef, (el) => {
+    if (el) setupObserver();
+});
+
+watch(drawerContentRef, (el) => {
+    if (el) setupObserver();
+});
 
 // État du menu dropdown (pour chaque item, on stocke si son menu est ouvert)
 const openMenuId = ref<string | null>(null);
@@ -85,7 +130,7 @@ watch(
         } else {
             // Reset navigation quand on ferme
             currentServer.value = null;
-            browseData.value = null;
+            currentContainerId.value = null;
             clearPath();
             closeMenu();
             imageStates.clear();
@@ -143,11 +188,12 @@ async function handleServerClick(server: MediaServerSummary) {
 
     try {
         // Browse racine (containerId = "0")
-        browseData.value = await browseContainer(server.id, "0");
+        await browseContainer(server.id, "0");
+        currentContainerId.value = "0";
         setPath([{ id: "0", title: server.friendly_name }]);
     } catch (error) {
         console.error("[ServerDrawer] Erreur browse racine:", error);
-        browseData.value = null;
+        currentContainerId.value = null;
     } finally {
         isLoading.value = false;
     }
@@ -155,7 +201,7 @@ async function handleServerClick(server: MediaServerSummary) {
 
 function goBack() {
     currentServer.value = null;
-    browseData.value = null;
+    currentContainerId.value = null;
     clearPath();
 }
 
@@ -164,10 +210,8 @@ async function handleContainerClick(item: ContainerEntry) {
 
     isLoading.value = true;
     try {
-        browseData.value = await browseContainer(
-            currentServer.value.id,
-            item.id,
-        );
+        await browseContainer(currentServer.value.id, item.id);
+        currentContainerId.value = item.id;
         setPath([...currentPath.value, { id: item.id, title: item.title }]);
     } catch (error) {
         console.error("[ServerDrawer] Erreur browse container:", error);
@@ -185,10 +229,8 @@ async function handleBreadcrumbClick(index: number) {
     isLoading.value = true;
 
     try {
-        browseData.value = await browseContainer(
-            currentServer.value.id,
-            targetCrumb.id,
-        );
+        await browseContainer(currentServer.value.id, targetCrumb.id);
+        currentContainerId.value = targetCrumb.id;
         setPath(currentPath.value.slice(0, index + 1));
     } catch (error) {
         console.error("[ServerDrawer] Erreur breadcrumb navigation:", error);
@@ -386,7 +428,7 @@ function handleSettingsClick() {
                 </nav>
 
                 <!-- Contenu -->
-                <div class="drawer-content">
+                <div ref="drawerContentRef" class="drawer-content">
                     <!-- Liste des serveurs -->
                     <div v-if="!isNavigating">
                         <!-- Servers online -->
@@ -627,8 +669,16 @@ function handleSettingsClick() {
                             </li>
                         </ul>
 
+                        <!-- Sentinel infinite scroll -->
+                        <div v-if="canLoadMore" ref="sentinelRef" class="scroll-sentinel" />
+
+                        <!-- Spinner load more -->
+                        <div v-if="loadingMore" class="load-more-spinner">
+                            <div class="spinner"></div>
+                        </div>
+
                         <!-- Vide -->
-                        <div v-else class="empty-servers">
+                        <div v-else-if="!browseData" class="empty-servers">
                             <Folder :size="48" />
                             <p>Dossier vide</p>
                         </div>
@@ -1255,6 +1305,17 @@ function handleSettingsClick() {
 
 .settings-btn:active {
     transform: translateY(0);
+}
+
+.scroll-sentinel {
+    height: 1px;
+}
+
+.load-more-spinner {
+    display: flex;
+    justify-content: center;
+    padding: var(--spacing-md);
+    color: var(--color-text-secondary);
 }
 
 /* Animations */

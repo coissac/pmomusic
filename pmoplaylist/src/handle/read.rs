@@ -70,6 +70,8 @@ impl ReadHandle {
                         let role = self.playlist.role().await;
                         let cover_pk = self.playlist.cover_pk().await;
                         let artist = self.playlist.artist().await;
+                        let source = self.playlist.source().await;
+                        let source_version = self.playlist.source_version().await;
                         let core = self.playlist.core.read().await;
                         let _ = persistence
                             .save_playlist(
@@ -78,6 +80,8 @@ impl ReadHandle {
                                 &role,
                                 cover_pk.as_deref(),
                                 artist.as_deref(),
+                                source.as_deref(),
+                                source_version.as_deref(),
                                 &core.config,
                                 &core.tracks,
                             )
@@ -170,6 +174,21 @@ impl ReadHandle {
         &self.playlist.id
     }
 
+    /// Nombre total de records (sans validation cache)
+    pub async fn len(&self) -> usize {
+        self.playlist.core.read().await.len()
+    }
+
+    /// Retourne la source externe.
+    pub async fn source(&self) -> Option<String> {
+        self.playlist.source().await
+    }
+
+    /// Retourne la version de la source.
+    pub async fn source_version(&self) -> Option<String> {
+        self.playlist.source_version().await
+    }
+
     /// Génère un Container DIDL-Lite
     pub async fn to_container(&self) -> Result<Container> {
         if !self.playlist.is_alive() {
@@ -197,6 +216,86 @@ impl ReadHandle {
             containers: vec![],
             items: vec![],
         })
+    }
+
+    /// Génère des Items DIDL-Lite avec pagination offset-based (sans déplacer le curseur)
+    ///
+    /// Retourne `(items, total)` où `total` est le nombre total de records dans la playlist.
+    /// Contrairement à `to_items()`, cette méthode ignore le curseur et utilise `offset`.
+    pub async fn to_items_paged(&self, offset: usize, limit: usize) -> Result<(Vec<Item>, usize)> {
+        if !self.playlist.is_alive() {
+            return Err(crate::Error::PlaylistDeleted(self.playlist.id.clone()));
+        }
+
+        let core = self.playlist.core.read().await;
+        let total = core.len();
+        let cache = crate::manager::audio_cache()?;
+
+        let mut items = Vec::new();
+        let mut idx = 0usize;
+
+        for i in offset..core.len() {
+            if items.len() >= limit {
+                break;
+            }
+
+            let record = match core.get(i) {
+                Some(r) => r,
+                None => continue,
+            };
+
+            if !cache.is_valid_pk(&record.cache_pk).await {
+                continue;
+            }
+
+            use pmoaudiocache::metadata_ext::{AudioTrackMetadataExt, TrackMetadataDidlExt};
+            let track_meta = cache.track_metadata(&record.cache_pk);
+            let meta = track_meta.read().await;
+
+            let url = cache.route_for(&record.cache_pk, None);
+            let resource = meta.to_didl_resource(url).await;
+
+            let title = meta
+                .get_title()
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "Unknown".to_string());
+            let artist = meta.get_artist().await.ok().flatten();
+            let album = meta.get_album().await.ok().flatten();
+            let genre = meta.get_genre().await.ok().flatten();
+            let year = meta.get_year().await.ok().flatten();
+            let track_number = meta.get_track_number().await.ok().flatten();
+            let cover_pk = meta.get_cover_pk().await.ok().flatten();
+            let cover_url = if let Some(pk) = cover_pk.as_ref() {
+                Some(pmocache::covers_route_for(pk, None))
+            } else {
+                meta.get_cover_url().await.ok().flatten()
+            };
+
+            let item = Item {
+                id: format!("{}:{}", self.playlist.id, offset + idx),
+                parent_id: self.playlist.id.clone(),
+                restricted: Some("1".to_string()),
+                title: title.clone(),
+                creator: artist.clone(),
+                class: "object.item.audioItem.musicTrack".to_string(),
+                artist,
+                album,
+                genre,
+                album_art: cover_url,
+                album_art_pk: cover_pk,
+                date: year.map(|y| y.to_string()),
+                original_track_number: track_number.map(|n| n.to_string()),
+                resources: vec![resource],
+                descriptions: vec![],
+            };
+
+            items.push(item);
+            idx += 1;
+        }
+
+        Ok((items, total))
     }
 
     /// Génère des Items DIDL-Lite depuis la position actuelle

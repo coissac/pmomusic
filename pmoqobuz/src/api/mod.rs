@@ -17,6 +17,49 @@ use std::sync::RwLock;
 use std::time::Duration;
 use tracing::debug;
 
+/// Si la variable d'environnement `QOBUZ_DEBUG_DIR` est définie, sauvegarde
+/// le JSON brut de chaque réponse API dans ce dossier.
+fn debug_save_response(endpoint: &str, params: &[(&str, &str)], text: &str) {
+    let Ok(dir) = std::env::var("QOBUZ_DEBUG_DIR") else {
+        return;
+    };
+
+    let dir = std::path::Path::new(&dir);
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        debug!("QOBUZ_DEBUG_DIR: cannot create dir: {}", e);
+        return;
+    }
+
+    // Construire un nom de fichier lisible : endpoint + params clés
+    let endpoint_slug = endpoint.trim_start_matches('/').replace('/', "_");
+    let param_slug: String = params
+        .iter()
+        .filter(|(k, _)| !["app_id", "user_auth_token", "request_ts", "request_sig"].contains(k))
+        .map(|(k, v)| format!("{}-{}", k, v.chars().take(20).collect::<String>()))
+        .collect::<Vec<_>>()
+        .join("_");
+
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+
+    let filename = format!("{}_{}_{}.json", endpoint_slug, param_slug, ts);
+    let path = dir.join(&filename);
+
+    // Pretty-print si possible
+    let content = serde_json::from_str::<Value>(text)
+        .ok()
+        .and_then(|v| serde_json::to_string_pretty(&v).ok())
+        .unwrap_or_else(|| text.to_string());
+
+    if let Err(e) = std::fs::write(&path, content) {
+        debug!("QOBUZ_DEBUG_DIR: cannot write {}: {}", filename, e);
+    } else {
+        debug!("QOBUZ_DEBUG_DIR: saved {}", filename);
+    }
+}
+
 pub use spoofer::Spoofer;
 
 /// URL de base de l'API Qobuz
@@ -270,7 +313,7 @@ impl QobuzApi {
 
         // Envoyer la requête
         let response = request.send().await?;
-        self.handle_response(response, endpoint).await
+        self.handle_response(response, endpoint, params).await
     }
 
     /// Traite la réponse HTTP
@@ -278,6 +321,7 @@ impl QobuzApi {
         &self,
         response: Response,
         endpoint: &str,
+        params: &[(&str, &str)],
     ) -> Result<T> {
         let status = response.status();
         let status_code = status.as_u16();
@@ -294,6 +338,7 @@ impl QobuzApi {
         }
 
         let text = response.text().await?;
+        debug_save_response(endpoint, params, &text);
 
         // Vérifier si la réponse contient une erreur Qobuz
         if let Ok(json) = serde_json::from_str::<Value>(&text) {
