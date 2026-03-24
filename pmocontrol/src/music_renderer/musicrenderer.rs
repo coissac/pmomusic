@@ -35,7 +35,7 @@ use crate::music_renderer::watcher::{
 };
 use crate::online::DeviceConnectionState;
 use crate::queue::{
-    EnqueueMode, MusicQueue, PlaybackItem, QueueBackend, QueueFromRendererInfo, QueueSnapshot,
+    EnqueueMode, MusicQueue, PlaybackItem, QueueBackend, QueueSnapshot,
 };
 use crate::{DeviceId, DeviceIdentity, DeviceOnline};
 
@@ -636,6 +636,14 @@ impl MusicRenderer {
                     debug!(
                         renderer = self.info.friendly_name(),
                         "Renderer stopped by user request; not auto-advancing"
+                    );
+                    self.set_playback_source(PlaybackSource::None);
+                    self.clear_has_played_flag();
+                } else if self.is_playing_a_stream() {
+                    // Continuous stream (radio) stopped naturally — never auto-advance
+                    debug!(
+                        renderer = self.info.friendly_name(),
+                        "Renderer stopped during continuous stream; not auto-advancing"
                     );
                     self.set_playback_source(PlaybackSource::None);
                     self.clear_has_played_flag();
@@ -1554,7 +1562,7 @@ pub(crate) fn build_didl_lite_metadata(
     protocol_info: &str,
 ) -> String {
     use pmodidl::{DIDLLite, Item, Resource};
-    use pmoutils::ToXmlElement;
+    use pmodidl::ToXmlElement;
 
     // Construire l'Item DIDL avec toutes les métadonnées
     let item = Item {

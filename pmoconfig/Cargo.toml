@@ -5,7 +5,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-pmoutils ={ path = "../pmoutils" }
+pmoutils = { version = "0.1.2", registry = "pmo" }
 
 serde = { workspace = true }
 serde_yaml = { workspace = true }

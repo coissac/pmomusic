@@ -91,6 +91,16 @@ impl UpnpMediaServer {
         start: u32,
         count: u32,
     ) -> Result<Vec<MediaEntry>, ControlPointError> {
+        Ok(self.browse_with_flag_paged(object_id, browse_flag, start, count)?.entries)
+    }
+
+    fn browse_with_flag_paged(
+        &self,
+        object_id: &str,
+        browse_flag: &str,
+        start: u32,
+        count: u32,
+    ) -> Result<BrowsePage, ControlPointError> {
         let start_str = start.to_string();
         let count_str = count.to_string();
         let args = vec![
@@ -104,10 +114,12 @@ impl UpnpMediaServer {
 
         let response = self.invoke_content_directory("Browse", None, args)?;
         let envelope = response.envelope.ok_or_else(|| {
-            ControlPointError::MediaServerError(format!("Missing SOAP envelope in Browse response"))
+            ControlPointError::MediaServerError("Missing SOAP envelope in Browse response".to_string())
         })?;
+        let total_count = extract_total_matches(&envelope, "BrowseResponse");
         let didl_xml = extract_result_payload(&envelope, "BrowseResponse")?;
-        map_didl_entries(&didl_xml)
+        let entries = map_didl_entries(&didl_xml)?;
+        Ok(BrowsePage { entries, total_count })
     }
 
     fn has_content_directory(&self) -> bool {
@@ -362,6 +374,13 @@ pub struct MediaEntry {
     pub creator: Option<String>,
 }
 
+/// Résultat paginé d'un browse avec total connu.
+#[derive(Debug)]
+pub struct BrowsePage {
+    pub entries: Vec<MediaEntry>,
+    pub total_count: u32,
+}
+
 /// Backend-agnostic media browsing contract.
 pub trait MediaBrowser {
     fn browse_root(&self) -> Result<Vec<MediaEntry>, ControlPointError>;
@@ -371,6 +390,16 @@ pub trait MediaBrowser {
         start: u32,
         count: u32,
     ) -> Result<Vec<MediaEntry>, ControlPointError>;
+    fn browse_children_paged(
+        &self,
+        object_id: &str,
+        start: u32,
+        count: u32,
+    ) -> Result<BrowsePage, ControlPointError> {
+        let entries = self.browse_children(object_id, start, count)?;
+        let total_count = entries.len() as u32 + start;
+        Ok(BrowsePage { entries, total_count })
+    }
     fn browse_object(&self, object_id: &str) -> Result<MediaEntry, ControlPointError>;
     fn search(
         &self,
@@ -485,6 +514,17 @@ impl MediaBrowser for MusicServer {
     ) -> Result<Vec<MediaEntry>, ControlPointError> {
         match self {
             MusicServer::Upnp(upnp) => upnp.browse_children(object_id, start, count),
+        }
+    }
+
+    fn browse_children_paged(
+        &self,
+        object_id: &str,
+        start: u32,
+        count: u32,
+    ) -> Result<BrowsePage, ControlPointError> {
+        match self {
+            MusicServer::Upnp(upnp) => upnp.browse_children_paged(object_id, start, count),
         }
     }
 
@@ -603,6 +643,15 @@ impl MediaBrowser for UpnpMediaServer {
         self.browse_with_flag(object_id, "BrowseDirectChildren", start, count)
     }
 
+    fn browse_children_paged(
+        &self,
+        object_id: &str,
+        start: u32,
+        count: u32,
+    ) -> Result<BrowsePage, ControlPointError> {
+        self.browse_with_flag_paged(object_id, "BrowseDirectChildren", start, count)
+    }
+
     fn browse_object(&self, object_id: &str) -> Result<MediaEntry, ControlPointError> {
         let entries = self.browse_with_flag(object_id, "BrowseMetadata", 0, 1)?;
         entries.into_iter().next().ok_or_else(|| {
@@ -719,6 +768,17 @@ fn extract_result_payload(
         .unwrap_or_default();
 
     Ok(payload)
+}
+
+fn extract_total_matches(envelope: &SoapEnvelope, response_suffix: &str) -> u32 {
+    let response = match find_child_with_suffix(&envelope.body.content, response_suffix) {
+        Some(r) => r,
+        None => return 0,
+    };
+    find_child_with_suffix(response, "TotalMatches")
+        .and_then(|e| e.get_text())
+        .and_then(|t| t.trim().parse::<u32>().ok())
+        .unwrap_or(0)
 }
 
 fn find_child_with_suffix<'a>(parent: &'a Element, suffix: &str) -> Option<&'a Element> {

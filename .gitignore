@@ -16,13 +16,14 @@
 **/*.mp4
 **/*.mp3
 **/*.ogg
+
 xxx
 /dcai/
 **/.pmomusic.yml
 **/.pmomusic_covers/**
 **/.pmomusic_audio/**
 /.pmomusic
-.DS_Store
+**/.DS_Store
 /target
 **/target/
 /.pmomusic_covers

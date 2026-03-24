@@ -1,34 +1,28 @@
 //! DirectOggFlacSink — nœud puits OGG-FLAC pour un seul client HTTP.
 //!
-//! Combine la logique de backpressure/reconnexion de `DirectFlacSink`
-//! avec l'encodage OGG-FLAC de `StreamingOggFlacSink`.
-//!
-//! # Cycle de vie
-//!
-//! - **Play** : le navigateur appelle `GET /stream`. `connect()` crée un nouveau
-//!   canal PCM + pipe duplex + encodeur FLAC + wrapper OGG, installe le sender
-//!   dans le sink, et notifie le sink via `client_notify`. Le flux reste ouvert :
-//!   les morceaux s'enchaînent en gapless.
-//! - **Stop** : le navigateur ferme la connexion. Le pipe se rompt, l'encodeur
-//!   s'arrête. Le sink voit `pcm_tx.send()` échouer, passe le sender à `None`,
-//!   et **bloque** sur `client_notify` jusqu'au prochain Play.
-//! - **Play suivant** : `connect()` → nouveau pipe → `client_notify.notify_one()`
-//!   → le sink se débloque et reprend la consommation des segments.
-//!
 //! # Architecture
 //!
 //! ```text
 //! AudioSegment I24 @ 96 kHz
-//!     ↓ NodeLogic::process()  [bloque si pas de client]
+//!     ↓ NodeLogic::process()
 //! chunk_to_pcm_bytes() → PCM 24-bit LE
-//!     ↓ Arc<Mutex<Option<mpsc::Sender<PcmChunk>>>>
-//! ByteStreamReader (AsyncRead)
-//!     ↓ encode_flac_stream()
-//!     ↓ broadcast_ogg_flac_stream() → wrapping OGG pages
-//!     ↓ tokio::io::duplex pipe (256 KB)
-//!     ↓ DirectOggFlacStream (AsyncRead) → Body HTTP
+//!     ↓ pcm_tx (cap=2)
+//! ByteStreamReader → encode_flac_stream() → OGG pages (Bytes)
+//!     ↓ ogg_tx  mpsc::Sender<Bytes>  (cap=8, backpressure naturelle)
+//! Arc<Mutex<Receiver<Bytes>>> → DirectOggFlacStream (AsyncRead) → HTTP → Safari
 //! ```
+//!
+//! # Backpressure
+//!
+//! Safari lent → ogg_rx plein → ogg_tx.send() bloque → encodeur bloque
+//! → pcm_tx.send() bloque → pipeline audio bloque.
+//!
+//! # OGG chaining (TrackBoundary)
+//!
+//! Fermer pcm_tx → encodeur termine (EOS) → lancer nouvel encodeur.
+//! Le même ogg_tx est réutilisé : le stream HTTP est continu.
 
+use std::collections::VecDeque;
 use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -42,9 +36,10 @@ use pmoaudio::{
 };
 use pmoflac::{EncoderOptions, PcmFormat};
 use tokio::io::{AsyncRead, ReadBuf};
-use tokio::sync::{mpsc, watch, Mutex};
+use tokio::sync::{mpsc, Mutex};
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, warn};
+use tracing::{debug, trace, warn};
 
 use crate::sinks::byte_stream_reader::{ByteStreamReader, PcmChunk};
 use crate::sinks::chunk_to_pcm::chunk_to_pcm_bytes;
@@ -55,95 +50,60 @@ pub const DIRECT_OGG_FLAC_SAMPLE_RATE: u32 = 96_000;
 pub const DIRECT_OGG_FLAC_CHANNELS: u8 = 2;
 pub const DIRECT_OGG_FLAC_BITS_PER_SAMPLE: u8 = 24;
 
-/// Capacité du pipe duplex (~256 KB).
-const PIPE_CAPACITY: usize = 256 * 1024;
+/// Capacité du canal OGG → HTTP.
+/// Capacité 1 : backpressure stricte, l'encodeur ne produit pas en avance.
+const OGG_CHANNEL_CAPACITY: usize = 1;
 
-// ─── Shared state ─────────────────────────────────────────────────────────────
+// ─── Types partagés ───────────────────────────────────────────────────────────
 
 type SharedPcmTx = Arc<Mutex<Option<mpsc::Sender<PcmChunk>>>>;
+type SharedEncoderTask = Arc<Mutex<Option<JoinHandle<()>>>>;
+type SharedOggRx = Arc<Mutex<mpsc::Receiver<Bytes>>>;
 
 // ─── Handle public ────────────────────────────────────────────────────────────
 
-/// Handle vers le sink, cloneable, reconnectable à chaque Play.
 #[derive(Clone)]
 pub struct DirectOggFlacHandle {
     pcm_tx: SharedPcmTx,
-    client_connect_tx: Arc<watch::Sender<u64>>,
-    client_notify_internal: Arc<tokio::sync::Notify>,
-    first_byte_tx: Arc<watch::Sender<bool>>,
+    encoder_task: SharedEncoderTask,
     encoder_options: EncoderOptions,
-    /// Position de lecture courante (mise à jour par ByteStreamReader).
     current_timestamp: Arc<tokio::sync::RwLock<f64>>,
+    /// Canal OGG partagé avec le stream HTTP.
+    ogg_tx: mpsc::Sender<Bytes>,
+    ogg_rx: SharedOggRx,
+    /// Notifié quand get_stream() est appelé (premier client).
+    client_notify: Arc<tokio::sync::Notify>,
 }
 
 impl DirectOggFlacHandle {
-    /// Crée un nouveau pipe OGG-FLAC et retourne le flux côté lecture.
-    /// Débloque le sink s'il attendait un client.
-    pub async fn connect(&self) -> DirectOggFlacStream {
-        let connect_count_before = *self.client_connect_tx.borrow();
-        debug!("DirectOggFlacHandle::connect() called, connect_count={}", connect_count_before);
-
-        let (pcm_tx, pcm_rx) = mpsc::channel::<PcmChunk>(8);
-        // Réinitialiser le timestamp à 0 pour la nouvelle connexion
-        *self.current_timestamp.write().await = 0.0;
-        let current_dur = Arc::new(tokio::sync::RwLock::new(0.0f64));
-        // Partager current_timestamp avec ByteStreamReader : il sera mis à jour
-        // avec le timestamp absolu du segment audio (position dans le fichier source).
-        let pcm_reader = ByteStreamReader::new(pcm_rx, self.current_timestamp.clone(), current_dur);
-
-        let (pipe_writer, pipe_reader) = tokio::io::duplex(PIPE_CAPACITY);
-
-        let _ = self.first_byte_tx.send(false);
-        debug!("DirectOggFlacHandle::connect() first_byte reset to false");
-
-        *self.pcm_tx.lock().await = Some(pcm_tx);
-        debug!("DirectOggFlacHandle::connect() pcm_tx installed");
-
-        let new_count = connect_count_before.wrapping_add(1);
-        let _ = self.client_connect_tx.send(new_count);
-        debug!("DirectOggFlacHandle::connect() client_connect_count -> {}", new_count);
-        self.client_notify_internal.notify_one();
-
-        let options = self.encoder_options.clone();
-        let current_timestamp = self.current_timestamp.clone();
-        tokio::spawn(async move {
-            debug!("DirectOggFlacHandle: encoder+ogg task started");
-            if let Err(e) = run_ogg_encoder(pcm_reader, pipe_writer, options, current_timestamp).await {
-                debug!("DirectOggFlacStream encoder stopped: {}", e);
-            }
-            debug!("DirectOggFlacHandle: encoder+ogg task ended");
-        });
-
-        debug!("DirectOggFlacHandle::connect() returning DirectOggFlacStream");
+    /// Retourne le stream OGG-FLAC pour le handler HTTP.
+    /// Lance le premier encodeur au premier appel.
+    pub fn get_stream(&self) -> DirectOggFlacStream {
+        tracing::info!(target: "pmoaudio_ext::stream_connect", "get_stream() called — new HTTP client connecting");
+        self.client_notify.notify_one();
         DirectOggFlacStream {
-            inner: pipe_reader,
-            first_byte_tx: Some(self.first_byte_tx.clone()),
+            ogg_rx: self.ogg_rx.clone(),
+            buffer: VecDeque::new(),
         }
     }
 
-    pub fn first_byte_ready(&self) -> watch::Receiver<bool> {
-        self.first_byte_tx.subscribe()
-    }
-
-    /// Retourne la position de lecture courante en secondes.
     pub async fn current_position_sec(&self) -> f64 {
         *self.current_timestamp.read().await
-    }
-
-    pub async fn wait_for_client(&self) {
-        let seen = *self.client_connect_tx.borrow();
-        debug!("DirectOggFlacHandle::wait_for_client() called, seen connect_count={}", seen);
-        let mut rx = self.client_connect_tx.subscribe();
-        let _ = rx.wait_for(|v| *v > seen).await;
-        debug!("DirectOggFlacHandle::wait_for_client() unblocked");
     }
 }
 
 // ─── Stream public ────────────────────────────────────────────────────────────
 
+/// AsyncRead sur le canal OGG-FLAC.
 pub struct DirectOggFlacStream {
-    inner: tokio::io::DuplexStream,
-    first_byte_tx: Option<Arc<watch::Sender<bool>>>,
+    ogg_rx: SharedOggRx,
+    buffer: VecDeque<u8>,
+}
+
+impl Drop for DirectOggFlacStream {
+    fn drop(&mut self) {
+        tracing::info!(target: "pmoaudio_ext::stream_connect", "DirectOggFlacStream dropped — HTTP client disconnected");
+    }
 }
 
 impl AsyncRead for DirectOggFlacStream {
@@ -152,18 +112,41 @@ impl AsyncRead for DirectOggFlacStream {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        let filled_before = buf.filled().len();
-        let result = Pin::new(&mut self.inner).poll_read(cx, buf);
-        if let Poll::Ready(Ok(())) = &result {
-            let filled_after = buf.filled().len();
-            if filled_after > filled_before {
-                if let Some(tx) = self.first_byte_tx.take() {
-                    debug!("DirectOggFlacStream: first {} bytes sent to HTTP client", filled_after - filled_before);
-                    let _ = tx.send(true);
-                }
-            }
+        // Vider le buffer interne en premier
+        if !self.buffer.is_empty() {
+            let to_copy = self.buffer.len().min(buf.remaining());
+            let chunk: Vec<u8> = self.buffer.drain(..to_copy).collect();
+            buf.put_slice(&chunk);
+            return Poll::Ready(Ok(()));
         }
-        result
+
+        // Tenter de recevoir le prochain chunk OGG
+        let mut guard = match self.ogg_rx.try_lock() {
+            Ok(g) => g,
+            Err(_) => {
+                tracing::warn!(target: "pmoaudio_ext::stream_connect", "DirectOggFlacStream: try_lock() FAILED — concurrent access detected!");
+                cx.waker().wake_by_ref();
+                return Poll::Pending;
+            }
+        };
+
+        match guard.poll_recv(cx) {
+            Poll::Ready(Some(bytes)) => {
+                drop(guard);
+                tracing::info!(target: "pmoaudio_ext::stream_connect", "DirectOggFlacStream: sending {} bytes to HTTP client", bytes.len());
+                let to_copy = bytes.len().min(buf.remaining());
+                buf.put_slice(&bytes[..to_copy]);
+                if to_copy < bytes.len() {
+                    self.buffer.extend(&bytes[to_copy..]);
+                }
+                Poll::Ready(Ok(()))
+            }
+            Poll::Ready(None) => {
+                tracing::info!(target: "pmoaudio_ext::stream_connect", "DirectOggFlacStream: ogg_rx closed → EOF sent to HTTP client");
+                Poll::Ready(Ok(()))
+            }
+            Poll::Pending => Poll::Pending,
+        }
     }
 }
 
@@ -171,7 +154,12 @@ impl AsyncRead for DirectOggFlacStream {
 
 struct DirectOggFlacSinkLogic {
     pcm_tx: SharedPcmTx,
+    encoder_task: SharedEncoderTask,
+    encoder_options: EncoderOptions,
+    current_timestamp: Arc<tokio::sync::RwLock<f64>>,
+    ogg_tx: mpsc::Sender<Bytes>,
     client_notify: Arc<tokio::sync::Notify>,
+    has_encoded_frames: bool,
 }
 
 #[async_trait]
@@ -185,6 +173,15 @@ impl NodeLogic for DirectOggFlacSinkLogic {
         let mut input = input.ok_or_else(|| {
             AudioError::ProcessingError("DirectOggFlacSink requires an input".into())
         })?;
+
+        // Attendre le premier client Safari avant de démarrer l'encodeur
+        debug!("DirectOggFlacSink: waiting for first client...");
+        tokio::select! {
+            _ = stop_token.cancelled() => return Ok(()),
+            _ = self.client_notify.notified() => {}
+        }
+        debug!("DirectOggFlacSink: first client connected, starting encoder");
+        self.start_encoder().await;
 
         loop {
             tokio::select! {
@@ -201,25 +198,9 @@ impl NodeLogic for DirectOggFlacSinkLogic {
                         }
                         Some(seg) => match &seg.segment {
                             _AudioSegment::Chunk(chunk) => {
-                                // Attendre un client si nécessaire (backpressure quand pas de Play)
-                                loop {
-                                    let tx_opt = self.pcm_tx.lock().await.clone();
-                                    if tx_opt.is_some() {
-                                        break;
-                                    }
-                                    debug!("DirectOggFlacSink: no pcm_tx, waiting for client_notify...");
-                                    tokio::select! {
-                                        _ = stop_token.cancelled() => {
-                                            debug!("DirectOggFlacSink: cancelled while waiting for client");
-                                            return Ok(());
-                                        }
-                                        _ = self.client_notify.notified() => {
-                                            debug!("DirectOggFlacSink: client_notify received, rechecking pcm_tx");
-                                        }
-                                    }
-                                }
+                                let tx = self.pcm_tx.lock().await.clone();
+                                let Some(tx) = tx else { continue; };
 
-                                let tx = self.pcm_tx.lock().await.clone().unwrap();
                                 let pcm_bytes = chunk_to_pcm_bytes(chunk, DIRECT_OGG_FLAC_BITS_PER_SAMPLE)?;
                                 let duration_sec = chunk.len() as f64 / DIRECT_OGG_FLAC_SAMPLE_RATE as f64;
                                 let pcm_chunk = PcmChunk {
@@ -228,17 +209,26 @@ impl NodeLogic for DirectOggFlacSinkLogic {
                                     duration_sec,
                                 };
                                 if tx.send(pcm_chunk).await.is_err() {
-                                    warn!(
-                                        ts = seg.timestamp_sec,
-                                        "DirectOggFlacSink: chunk dropped (client disconnected at {:.3}s), waiting for reconnect",
-                                        seg.timestamp_sec,
-                                    );
+                                    warn!("DirectOggFlacSink: encoder gone at {:.3}s", seg.timestamp_sec);
                                     *self.pcm_tx.lock().await = None;
+                                    self.has_encoded_frames = false;
+                                } else {
+                                    self.has_encoded_frames = true;
                                 }
                             }
                             _AudioSegment::Sync(marker) => match marker.as_ref() {
+                                SyncMarker::TrackBoundary { .. } => {
+                                    if self.has_encoded_frames {
+                                        debug!("DirectOggFlacSink: TrackBoundary — OGG chaining");
+                                        self.has_encoded_frames = false;
+                                        self.do_track_boundary().await;
+                                    } else {
+                                        debug!("DirectOggFlacSink: TrackBoundary ignored (no frames)");
+                                    }
+                                }
                                 SyncMarker::EndOfStream => {
                                     debug!("DirectOggFlacSink: EndOfStream");
+                                    self.stop_encoder().await;
                                 }
                                 _ => {}
                             },
@@ -248,6 +238,7 @@ impl NodeLogic for DirectOggFlacSinkLogic {
             }
         }
 
+        self.stop_encoder().await;
         Ok(())
     }
 
@@ -256,14 +247,57 @@ impl NodeLogic for DirectOggFlacSinkLogic {
     }
 }
 
+impl DirectOggFlacSinkLogic {
+    async fn start_encoder(&mut self) {
+        let (pcm_tx, pcm_rx) = mpsc::channel::<PcmChunk>(2);
+        let current_dur = Arc::new(tokio::sync::RwLock::new(0.0f64));
+        let pcm_reader = ByteStreamReader::new(pcm_rx, self.current_timestamp.clone(), current_dur);
+        *self.pcm_tx.lock().await = Some(pcm_tx);
+
+        let ogg_tx = self.ogg_tx.clone();
+        let options = self.encoder_options.clone();
+        let current_timestamp = self.current_timestamp.clone();
+        let handle = tokio::spawn(async move {
+            debug!("DirectOggFlacSink: encoder task started");
+            if let Err(e) = run_ogg_encoder(pcm_reader, ogg_tx, options, current_timestamp).await {
+                debug!("DirectOggFlacSink: encoder stopped: {}", e);
+            }
+            debug!("DirectOggFlacSink: encoder task ended");
+        });
+        *self.encoder_task.lock().await = Some(handle);
+    }
+
+    async fn stop_encoder(&mut self) {
+        *self.pcm_tx.lock().await = None;
+        if let Some(handle) = self.encoder_task.lock().await.take() {
+            let _ = handle.await;
+        }
+        self.has_encoded_frames = false;
+    }
+
+    async fn do_track_boundary(&mut self) {
+        // Fermer pcm_tx → encodeur écrit EOS, se termine
+        *self.pcm_tx.lock().await = None;
+        if let Some(handle) = self.encoder_task.lock().await.take() {
+            let _ = handle.await;
+            debug!("DirectOggFlacSink: previous encoder joined");
+        }
+        // Démarrer le nouvel encodeur sur le même ogg_tx
+        self.start_encoder().await;
+        debug!("DirectOggFlacSink: OGG chaining complete");
+    }
+}
+
 // ─── Encodeur FLAC + wrapper OGG ─────────────────────────────────────────────
 
 async fn run_ogg_encoder(
     pcm_reader: ByteStreamReader,
-    mut pipe_writer: tokio::io::DuplexStream,
+    ogg_tx: mpsc::Sender<Bytes>,
     options: EncoderOptions,
     _current_timestamp: Arc<tokio::sync::RwLock<f64>>,
 ) -> Result<(), AudioError> {
+    use tokio::io::AsyncReadExt;
+
     let format = PcmFormat {
         sample_rate: DIRECT_OGG_FLAC_SAMPLE_RATE,
         channels: DIRECT_OGG_FLAC_CHANNELS,
@@ -274,56 +308,54 @@ async fn run_ogg_encoder(
         .await
         .map_err(|e| AudioError::ProcessingError(format!("FLAC encoder init: {}", e)))?;
 
-    // Lire le header FLAC et construire les pages OGG d'en-tête
     let flac_header = read_flac_header(&mut flac_stream).await?;
-    let sample_rate = extract_sample_rate_from_streaminfo(&flac_header)?;
+    let _sample_rate = extract_sample_rate_from_streaminfo(&flac_header)?;
 
     let stream_serial: u32 = rand::random();
     let mut ogg = OggPageWriter::new(stream_serial);
 
-    // Page BOS (identification OGG-FLAC)
     let ogg_flac_id = create_ogg_flac_identification(&flac_header)?;
-    let bos_page = Bytes::from(ogg.create_page(&ogg_flac_id, true, false, false));
-
-    // Page Vorbis Comment
+    let bos_page = ogg.create_page(&ogg_flac_id, true, false, false);
     let vorbis_comment = create_empty_vorbis_comment();
-    let comment_page = Bytes::from(ogg.create_page(&vorbis_comment, false, false, false));
+    let comment_page = ogg.create_page(&vorbis_comment, false, false, false);
 
-    pipe_writer.write_all(&bos_page).await
-        .map_err(|e| AudioError::IoError(format!("OGG BOS write: {}", e)))?;
-    pipe_writer.write_all(&comment_page).await
-        .map_err(|e| AudioError::IoError(format!("OGG comment write: {}", e)))?;
+    let mut header = Vec::new();
+    header.extend_from_slice(&bos_page);
+    header.extend_from_slice(&comment_page);
+    if ogg_tx.send(Bytes::from(header)).await.is_err() {
+        debug!("DirectOggFlacSink: ogg_tx closed on headers");
+        return Ok(());
+    }
 
-    // Lire les frames FLAC et les encapsuler dans des pages OGG
-    let sample_rate_f64 = sample_rate as f64;
+    use crate::sinks::flac_frame_utils::{validate_frame_header_crc, parse_flac_block_size};
+
     let mut encoded_samples = 0u64;
-    let mut read_buffer = vec![0u8; 16384];
+    let mut read_buffer = vec![0u8; 65536];
     let mut accumulator: Vec<u8> = Vec::with_capacity(32768);
 
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     loop {
         match flac_stream.read(&mut read_buffer).await {
             Ok(0) => {
-                // EOF : page EOS finale
-                let eos_page = Bytes::from(ogg.create_page(&accumulator, false, true, false));
-                let _ = pipe_writer.write_all(&eos_page).await;
+                trace!(
+                    "OggEncoder: EOF — accum={} B, encoded={:.3}s",
+                    accumulator.len(),
+                    encoded_samples as f64 / DIRECT_OGG_FLAC_SAMPLE_RATE as f64,
+                );
+                let eos_page = ogg.create_page(&accumulator, false, true, false);
+                let _ = ogg_tx.send(Bytes::from(eos_page)).await;
                 break;
             }
             Ok(n) => {
                 accumulator.extend_from_slice(&read_buffer[..n]);
 
                 loop {
-                    if accumulator.len() < 4 {
-                        break;
-                    }
+                    if accumulator.len() < 4 { break; }
 
-                    // Trouver les positions de sync FLAC
                     let mut sync_data: Vec<(usize, u32)> = Vec::new();
                     for i in 0..accumulator.len() - 1 {
                         let b1 = accumulator[i];
                         let b2 = accumulator[i + 1];
                         if b1 == 0xFF && b2 >= 0xF8 && b2 <= 0xFE {
-                            use crate::sinks::flac_frame_utils::{validate_frame_header_crc, parse_flac_block_size};
                             if validate_frame_header_crc(&accumulator, i) {
                                 if let Some(samples) = parse_flac_block_size(&accumulator, i) {
                                     sync_data.push((i, samples));
@@ -332,9 +364,7 @@ async fn run_ogg_encoder(
                         }
                     }
 
-                    if sync_data.len() < 2 {
-                        break;
-                    }
+                    if sync_data.len() < 2 { break; }
 
                     let first_start = sync_data[0].0;
                     let first_samples = sync_data[0].1;
@@ -346,19 +376,19 @@ async fn run_ogg_encoder(
                     }
 
                     let frame: Vec<u8> = accumulator.drain(0..second_start).collect();
-
                     encoded_samples = encoded_samples.saturating_add(first_samples as u64);
                     ogg.add_samples(first_samples as u64);
 
-                    let ogg_page = Bytes::from(ogg.create_page(&frame, false, false, false));
-                    if pipe_writer.write_all(&ogg_page).await.is_err() {
-                        // Client déconnecté — le pipe HTTP s'est rompu
-                        warn!(
-                            samples = encoded_samples,
-                            "DirectOggFlacSink: OGG pipe broken after {} samples ({:.3}s), client disconnected",
-                            encoded_samples,
-                            encoded_samples as f64 / DIRECT_OGG_FLAC_SAMPLE_RATE as f64,
-                        );
+                    trace!(
+                        "OggEncoder: frame {} B, {:.3}s total",
+                        frame.len(),
+                        encoded_samples as f64 / DIRECT_OGG_FLAC_SAMPLE_RATE as f64,
+                    );
+
+                    let ogg_page = ogg.create_page(&frame, false, false, false);
+                    if ogg_tx.send(Bytes::from(ogg_page)).await.is_err() {
+                        warn!("DirectOggFlacSink: ogg_tx closed after {:.3}s",
+                            encoded_samples as f64 / DIRECT_OGG_FLAC_SAMPLE_RATE as f64);
                         return Ok(());
                     }
                 }
@@ -375,7 +405,7 @@ async fn run_ogg_encoder(
     Ok(())
 }
 
-// ─── OGG helpers (copiés de streaming_ogg_flac_sink) ─────────────────────────
+// ─── OGG helpers ─────────────────────────────────────────────────────────────
 
 struct OggPageWriter {
     stream_serial: u32,
@@ -515,16 +545,21 @@ pub struct DirectOggFlacSink {
 impl DirectOggFlacSink {
     pub fn new(encoder_options: EncoderOptions) -> (Self, DirectOggFlacHandle) {
         let pcm_tx: SharedPcmTx = Arc::new(Mutex::new(None));
-        let client_notify_internal = Arc::new(tokio::sync::Notify::new());
-        let (client_connect_tx, _) = watch::channel(0u64);
-        let client_connect_tx = Arc::new(client_connect_tx);
-        let (first_byte_tx, _) = watch::channel(false);
-        let first_byte_tx = Arc::new(first_byte_tx);
+        let encoder_task: SharedEncoderTask = Arc::new(Mutex::new(None));
         let current_timestamp = Arc::new(tokio::sync::RwLock::new(0.0f64));
+        let client_notify = Arc::new(tokio::sync::Notify::new());
+
+        let (ogg_tx, ogg_rx) = mpsc::channel::<Bytes>(OGG_CHANNEL_CAPACITY);
+        let ogg_rx = Arc::new(Mutex::new(ogg_rx));
 
         let logic = DirectOggFlacSinkLogic {
             pcm_tx: pcm_tx.clone(),
-            client_notify: client_notify_internal.clone(),
+            encoder_task: encoder_task.clone(),
+            encoder_options: encoder_options.clone(),
+            current_timestamp: current_timestamp.clone(),
+            ogg_tx: ogg_tx.clone(),
+            client_notify: client_notify.clone(),
+            has_encoded_frames: false,
         };
 
         let sink = Self {
@@ -533,11 +568,12 @@ impl DirectOggFlacSink {
 
         let handle = DirectOggFlacHandle {
             pcm_tx,
-            client_connect_tx,
-            client_notify_internal,
-            first_byte_tx,
+            encoder_task,
             encoder_options,
             current_timestamp,
+            ogg_tx,
+            ogg_rx,
+            client_notify,
         };
 
         (sink, handle)

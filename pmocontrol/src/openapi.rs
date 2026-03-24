@@ -28,6 +28,8 @@ pub struct RendererSummary {
     pub capabilities: RendererCapabilitiesSummary,
     /// Renderer en ligne
     pub online: bool,
+    /// Adresse IP du serveur hébergeant ce renderer (extraite de la location UPnP)
+    pub server_host: Option<String>,
 }
 
 /// Protocole exposé par le renderer
@@ -195,8 +197,12 @@ pub struct ContainerEntry {
 pub struct BrowseResponse {
     /// ID du container browsé
     pub container_id: String,
-    /// Entrées du container
+    /// Entrées du container (page courante)
     pub entries: Vec<ContainerEntry>,
+    /// Nombre total d'entrées dans le container
+    pub total_count: u32,
+    /// Offset de la page courante
+    pub offset: u32,
 }
 
 // ============================================================================

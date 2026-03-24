@@ -32,6 +32,7 @@ export interface RendererSummary {
   protocol: RendererProtocolSummary;
   capabilities: RendererCapabilitiesSummary;
   online: boolean;
+  server_host?: string;
 }
 
 export interface RendererState {
@@ -119,6 +120,8 @@ export interface ContainerEntry {
 export interface BrowseResponse {
   container_id: string;
   entries: ContainerEntry[];
+  total_count: number;
+  offset: number;
 }
 
 // ============================================================================

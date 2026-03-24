@@ -50,6 +50,7 @@ impl RadioFranceState {
 ///     Ok(())
 /// }
 /// ```
+#[allow(async_fn_in_trait)]
 pub trait RadioFranceExt {
     /// Initialise l'extension Radio France et enregistre les routes HTTP
     ///

@@ -8,10 +8,10 @@ use std::sync::Arc;
 use pmodidl::DIDLLite;
 use pmoupnp::actions::{ActionData, ActionError, ActionHandler, get_value};
 use pmoupnp::{get, set};
-use pmoutils::ToXmlElement;
+use pmodidl::ToXmlElement;
 
 use crate::messages::PlaybackState;
-use crate::pipeline::{PipelineControl, PipelineHandle, seconds_to_upnp_time, upnp_time_to_seconds};
+use crate::pipeline::{PipelineControl, PipelineHandle, upnp_time_to_seconds};
 use crate::state::SharedState;
 
 type ActionFuture =
@@ -226,13 +226,11 @@ pub fn get_media_info_handler(state: SharedState) -> ActionHandler {
 
 // ─── RenderingControl Handlers ──────────────────────────────────────────────
 
-pub fn set_volume_handler(pipeline: PipelineHandle, state: SharedState) -> ActionHandler {
+pub fn set_volume_handler(_pipeline: PipelineHandle, state: SharedState) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
-        let pipeline = pipeline.clone();
         let state = state.clone();
         Box::pin(async move {
             let volume: u16 = get!(&data, "DesiredVolume", u16);
-            pipeline.send(PipelineControl::SetVolume(volume)).await;
             state.write().volume = volume;
             Ok(data)
         })
@@ -251,13 +249,11 @@ pub fn get_volume_handler(state: SharedState) -> ActionHandler {
     })
 }
 
-pub fn set_mute_handler(pipeline: PipelineHandle, state: SharedState) -> ActionHandler {
+pub fn set_mute_handler(_pipeline: PipelineHandle, state: SharedState) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
-        let pipeline = pipeline.clone();
         let state = state.clone();
         Box::pin(async move {
             let mute: bool = get!(&data, "DesiredMute", bool);
-            pipeline.send(PipelineControl::SetMute(mute)).await;
             state.write().mute = mute;
             Ok(data)
         })

@@ -116,6 +116,15 @@ const offlineRenderers = computed(() =>
     allRenderers.value.filter((r: RendererSummary) => !r.online),
 );
 
+// Noms de renderers qui apparaissent plus d'une fois (online + offline)
+const duplicateNames = computed(() => {
+    const counts = new Map<string, number>();
+    for (const r of allRenderers.value) {
+        counts.set(r.friendly_name, (counts.get(r.friendly_name) ?? 0) + 1);
+    }
+    return new Set([...counts.entries()].filter(([, n]) => n > 1).map(([name]) => name));
+});
+
 function close() {
     emit("update:modelValue", false);
 }
@@ -296,7 +305,7 @@ async function handleTransferQueue(event: Event, targetRendererId: string) {
                                                 getProtocolLabel(
                                                     renderer.protocol,
                                                 )
-                                            }}
+                                            }}{{ duplicateNames.has(renderer.friendly_name) && renderer.server_host ? ` [${renderer.server_host}]` : '' }}
                                         </span>
                                     </div>
                                     <div class="renderer-details">
@@ -383,7 +392,7 @@ async function handleTransferQueue(event: Event, targetRendererId: string) {
                                 </div>
                                 <div class="renderer-info">
                                     <p class="renderer-name">
-                                        {{ renderer.friendly_name }}
+                                        {{ renderer.friendly_name }}{{ duplicateNames.has(renderer.friendly_name) && renderer.server_host ? ` [${renderer.server_host}]` : '' }}
                                     </p>
                                     <p
                                         v-if="renderer.model_name"

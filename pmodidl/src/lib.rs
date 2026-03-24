@@ -3,14 +3,31 @@
 //! Parser et utilitaires pour le format DIDL-Lite utilisé dans UPnP/DLNA.
 
 use bevy_reflect::Reflect;
-use pmoutils::ToXmlElement;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::fmt::Write;
 use std::io::Cursor;
 use std::time::SystemTime;
-use xmltree::{Element, XMLNode};
+use xmltree::{Element, EmitterConfig, XMLNode};
+
+/// Trait générique pour obtenir un élément XML (xmltree::Element).
+pub trait ToXmlElement {
+    /// Convertit l'objet en élément XML.
+    fn to_xml_element(&self) -> Element;
+
+    /// Sérialise en chaîne XML formatée.
+    fn to_xml(&self) -> String {
+        let elem = self.to_xml_element();
+        let config = EmitterConfig::new()
+            .perform_indent(true)
+            .indent_string("  ");
+        let mut buf = Vec::new();
+        elem.write_with_config(&mut buf, config)
+            .expect("Failed to write XML");
+        String::from_utf8(buf).expect("Invalid UTF-8")
+    }
+}
 
 // ============= Couche d'abstraction générique =============
 

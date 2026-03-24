@@ -114,14 +114,16 @@ impl Server {
     pub fn new(name: impl Into<String>, base_url: impl Into<String>, http_port: u16) -> Self {
         let api_registry = Arc::new(RwLock::new(Vec::new()));
 
+        let base_url = base_url.into();
+
         // Créer le router initial avec l'endpoint de registre
         let registry_route = Router::new()
             .route("/api/registry", get(get_api_registry))
             .with_state(api_registry.clone());
 
-        Self {
+        let server = Self {
             name: name.into(),
-            base_url: base_url.into(),
+            base_url,
             http_port,
             router: Arc::new(RwLock::new(registry_route)),
             api_router: Arc::new(RwLock::new(None)),
@@ -129,7 +131,14 @@ impl Server {
             log_state: None,
             api_registry,
             shutdown_token: CancellationToken::new(),
-        }
+        };
+
+        // Initialiser PMO_SERVER_URL avec l'URL complète (incluant le port).
+        // base_url() normalise l'URL en ajoutant le port si absent.
+        // SAFETY: appelé une seule fois au démarrage du serveur, avant tout thread concurrent.
+        unsafe { std::env::set_var("PMO_SERVER_URL", server.base_url()) };
+
+        server
     }
 
     pub fn new_configured() -> Self {

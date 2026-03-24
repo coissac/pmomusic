@@ -74,7 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let renderer_instance = server
         .write()
         .await
-        .register_device(MEDIA_RENDERER.clone())
+        .register_device(MEDIA_RENDERER.clone(), true)
         .await
         .expect("Failed to register MediaRenderer");
 
@@ -85,7 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server_instance = server
         .write()
         .await
-        .register_device(MEDIA_SERVER.clone())
+        .register_device(MEDIA_SERVER.clone(), true)
         .await
         .expect("Failed to register MediaServer");
 

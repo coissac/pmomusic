@@ -13,7 +13,7 @@
 use pmodidl::{Container, DIDLLite};
 use pmosource::api::{get_source as get_source_from_registry, list_all_sources};
 use pmosource::{BrowseResult, MusicSource, MusicSourceError};
-use pmoutils::ToXmlElement;
+use pmodidl::ToXmlElement;
 use std::collections::HashSet;
 use std::sync::Arc;
 

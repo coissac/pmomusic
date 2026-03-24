@@ -418,9 +418,11 @@ class PMOControlAPI {
   async browseContainer(
     serverId: string,
     containerId: string,
+    offset = 0,
+    limit = 50,
   ): Promise<BrowseResponse> {
     return this.request<BrowseResponse>(
-      `/servers/${encodeURIComponent(serverId)}/containers/${encodeURIComponent(containerId)}`,
+      `/servers/${encodeURIComponent(serverId)}/containers/${encodeURIComponent(containerId)}?offset=${offset}&limit=${limit}`,
     );
   }
 

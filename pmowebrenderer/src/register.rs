@@ -61,6 +61,24 @@ pub async fn register_handler(
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub struct PositionUpdateRequest {
+    pub position_sec: f64,
+    pub duration_sec: Option<f64>,
+}
+
+/// POST /api/webrenderer/{id}/position
+/// position_sec est ignoré (géré par PlayerEvent::Position côté serveur).
+/// duration_sec est utilisé comme fallback si la source ne connaît pas la durée (flux radio).
+pub async fn position_update_handler(
+    State(registry): State<Arc<RendererRegistry>>,
+    Path(instance_id): Path<String>,
+    Json(req): Json<PositionUpdateRequest>,
+) -> impl IntoResponse {
+    registry.update_duration(&instance_id, req.duration_sec);
+    StatusCode::NO_CONTENT
+}
+
 /// DELETE /api/webrenderer/{id}
 pub async fn unregister_handler(
     State(registry): State<Arc<RendererRegistry>>,

@@ -40,7 +40,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 pmodidl = { path = "../pmodidl" }
-pmoutils = { path = "../pmoutils" }
+pmoutils = { version = "0.1.2", registry = "pmo" }
 
 [features]
 default = []

@@ -63,6 +63,7 @@ pmoplaylist = { path = "../pmoplaylist" }
 pmoconfig = { path = "../pmoconfig", optional = true }
 
 # Cache support (OBLIGATOIRE - architecture refactorisée)
+pmocache = { path = "../pmocache" }
 pmocovers = { path = "../pmocovers" }
 pmoaudiocache = { path = "../pmoaudiocache" }
 

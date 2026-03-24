@@ -1,15 +1,16 @@
 //! Handler HTTP GET /api/webrenderer/{id}/stream
 //!
-//! Sert le flux FLAC d'une instance WebRenderer via DirectFlacSink.
+//! Sert le flux OGG-FLAC d'une instance WebRenderer.
 //!
-//! Reconnectable : appelé à chaque Play, crée un nouveau pipe + encodeur.
+//! Safari envoie parfois Range: bytes=0-N avant de jouer.
+//! On ignore ce header et on répond toujours 200 chunked (flux live infini).
 
 use axum::{
     body::Body,
     extract::{Path, State},
     http::{
-        StatusCode,
-        header::{CACHE_CONTROL, CONNECTION, CONTENT_TYPE},
+        HeaderMap, StatusCode,
+        header::{CACHE_CONTROL, CONNECTION, CONTENT_TYPE, TRANSFER_ENCODING},
     },
     response::{IntoResponse, Response},
 };
@@ -20,21 +21,23 @@ use tracing::info;
 use crate::registry::RendererRegistry;
 
 /// GET /api/webrenderer/{id}/stream
-///
-/// Crée un nouveau pipe FLAC à chaque connexion (chaque Play).
-/// Le flux reste ouvert jusqu'à ce que le client se déconnecte (Stop).
-/// Les morceaux s'enchaînent en gapless dans le même flux.
-///
-/// Safari envoie un Range header (bytes=0-) et exige Accept-Ranges: bytes.
-/// On répond 206 Partial Content si un Range header est présent, sinon 200.
 pub async fn stream_handler(
     State(registry): State<Arc<RendererRegistry>>,
     Path(instance_id): Path<String>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
     info!(instance_id = %instance_id, "FLAC stream client connecting");
 
-    let handle = match registry.get_flac_handle(&instance_id) {
-        Some(h) => h,
+    // Ignorer le header Range — flux live infini, non seekable.
+    // On ne répond jamais 206 ni 416 : toujours 200 chunked.
+    // Safari (et d'autres clients) envoient parfois Range: bytes=0-N ;
+    // répondre 416 ou 206 leur fait croire à une ressource finie.
+    if let Some(range) = headers.get("range") {
+        info!(instance_id = %instance_id, "Range header ignored (live stream): {:?}", range);
+    }
+
+    let stream = match registry.get_stream(&instance_id) {
+        Some(s) => s,
         None => {
             return (
                 StatusCode::NOT_FOUND,
@@ -44,18 +47,14 @@ pub async fn stream_handler(
         }
     };
 
-    let stream = handle.subscribe();
-
     info!(instance_id = %instance_id, "FLAC stream started");
 
-    // Toujours 200 OK pour un flux live de taille inconnue.
-    // Les navigateurs (Safari inclus) acceptent 200 pour l'audio streaming.
-    // Un Content-Range invalide (bytes 0-*/*) ferait rejeter le flux.
     Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, "audio/ogg; codecs=flac")
         .header(CACHE_CONTROL, "no-store, no-transform")
         .header(CONNECTION, "keep-alive")
+        .header(TRANSFER_ENCODING, "chunked")
         .header("X-Content-Type-Options", "nosniff")
         .body(Body::from_stream(ReaderStream::new(stream)))
         .unwrap()

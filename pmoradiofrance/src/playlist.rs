@@ -98,18 +98,26 @@ impl StationGroups {
 
     /// Niveau 0: to_didl() retourne le container "radiofrance" avec tous les groupes
     ///
-    /// Appelle to_stub() sur chaque StationGroup
+    /// Appelle to_stub() sur chaque StationGroup en parallèle
     pub async fn to_didl(
         &self,
         metadata_cache: &MetadataCache,
         server_base_url: &str,
     ) -> Result<Container> {
-        let mut containers = Vec::new();
+        use futures::stream::{self, StreamExt};
 
-        for group in &self.groups {
-            let container = group.to_stub(metadata_cache, server_base_url).await?;
-            containers.push(container);
-        }
+        let futures: Vec<_> = self
+            .groups
+            .iter()
+            .map(|group| group.to_stub(metadata_cache, server_base_url))
+            .collect();
+
+        let results: Vec<Result<Container>> = stream::iter(futures)
+            .buffer_unordered(8)
+            .collect()
+            .await;
+
+        let containers: Vec<Container> = results.into_iter().collect::<Result<Vec<_>>>()?;
 
         Ok(Container {
             id: "radiofrance".to_string(),

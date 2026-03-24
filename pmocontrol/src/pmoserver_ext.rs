@@ -27,7 +27,7 @@ use async_trait::async_trait;
 #[cfg(feature = "pmoserver")]
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     routing::{get, post},
 };
@@ -43,7 +43,7 @@ use tracing::{debug, warn};
 use utoipa::OpenApi;
 
 #[cfg(feature = "pmoserver")]
-const BROWSE_PAGE_SIZE: u32 = 100;
+const BROWSE_DEFAULT_LIMIT: u32 = 50;
 #[cfg(feature = "pmoserver")]
 const BROWSE_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -102,6 +102,13 @@ async fn list_renderers(State(state): State<ControlPointState>) -> Json<Vec<Rend
             .into_iter()
             .map(|r| {
                 let info = r.info();
+                // Extraire le host depuis la location URL (ex: "http://192.168.1.10:8080/...")
+                let server_host = info.location()
+                    .split("://").nth(1)
+                    .and_then(|s| s.split('/').next())
+                    .and_then(|s| s.split(':').next())
+                    .map(|h| h.to_string())
+                    .filter(|h| !h.is_empty());
                 RendererSummary {
                     id: r.id().0.clone(),
                     friendly_name: r.friendly_name().to_string(),
@@ -109,6 +116,7 @@ async fn list_renderers(State(state): State<ControlPointState>) -> Json<Vec<Rend
                     protocol: protocol_summary(&info.protocol()),
                     capabilities: capability_summary(&info.capabilities()),
                     online: r.is_online(),
+                    server_host,
                 }
             })
             .collect::<Vec<_>>()
@@ -2042,6 +2050,15 @@ async fn list_servers(State(state): State<ControlPointState>) -> Json<Vec<MediaS
     Json(summaries)
 }
 
+/// Paramètres de pagination pour le browse
+#[cfg(feature = "pmoserver")]
+#[derive(Debug, serde::Deserialize)]
+struct BrowseParams {
+    #[serde(default)]
+    offset: u32,
+    limit: Option<u32>,
+}
+
 /// GET /control/servers/{server_id}/containers/{container_id} - Browse un container
 #[cfg(feature = "pmoserver")]
 #[utoipa::path(
@@ -2049,7 +2066,9 @@ async fn list_servers(State(state): State<ControlPointState>) -> Json<Vec<MediaS
     path = "/servers/{server_id}/containers/{container_id}",
     params(
         ("server_id" = String, Path, description = "ID unique du serveur"),
-        ("container_id" = String, Path, description = "ID du container (use '0' for root)")
+        ("container_id" = String, Path, description = "ID du container (use '0' for root)"),
+        ("offset" = Option<u32>, Query, description = "Index de départ (défaut: 0)"),
+        ("limit" = Option<u32>, Query, description = "Nombre max d'items (défaut: 50)"),
     ),
     responses(
         (status = 200, description = "Contenu du container", body = BrowseResponse),
@@ -2061,6 +2080,7 @@ async fn list_servers(State(state): State<ControlPointState>) -> Json<Vec<MediaS
 async fn browse_container(
     State(state): State<ControlPointState>,
     Path((server_id, container_id)): Path<(String, String)>,
+    Query(params): Query<BrowseParams>,
 ) -> Result<Json<BrowseResponse>, (StatusCode, Json<ErrorResponse>)> {
     let sid = DeviceId(server_id.clone());
 
@@ -2091,14 +2111,17 @@ async fn browse_container(
         ));
     }
 
+    let offset = params.offset;
+    let limit = params.limit.unwrap_or(BROWSE_DEFAULT_LIMIT);
+
     // Use spawn_blocking to avoid blocking the async runtime with synchronous SOAP calls
     let container_id_clone = container_id.clone();
     let server_clone = server.clone();
     let browse_task = tokio::task::spawn_blocking(move || {
-        server_clone.browse_children(&container_id_clone, 0, BROWSE_PAGE_SIZE)
+        server_clone.browse_children_paged(&container_id_clone, offset, limit)
     });
 
-    let entries = time::timeout(BROWSE_REQUEST_TIMEOUT, browse_task)
+    let page = time::timeout(BROWSE_REQUEST_TIMEOUT, browse_task)
         .await
         .map_err(|_| {
             warn!(
@@ -2137,14 +2160,14 @@ async fn browse_container(
             )
         })?;
 
-    let container_entries: Vec<ContainerEntry> = entries
+    let container_entries: Vec<ContainerEntry> = page.entries
         .into_iter()
         .map(|e| ContainerEntry {
             id: e.id,
             title: e.title,
             class: e.class,
             is_container: e.is_container,
-            child_count: None, // Could be extracted from DIDL-Lite if needed
+            child_count: None,
             artist: e.artist,
             album: e.album,
             album_art_uri: e.album_art_uri,
@@ -2154,6 +2177,8 @@ async fn browse_container(
     Ok(Json(BrowseResponse {
         container_id,
         entries: container_entries,
+        total_count: page.total_count,
+        offset,
     }))
 }
 
@@ -2210,7 +2235,7 @@ fn fetch_playback_items(
 
     let entries = if object_metadata.is_container {
         // For containers, browse children to get all items
-        server.browse_children(object_id, 0, BROWSE_PAGE_SIZE)?
+        server.browse_children(object_id, 0, BROWSE_DEFAULT_LIMIT)?
     } else {
         // For items, use the object itself
         vec![object_metadata]

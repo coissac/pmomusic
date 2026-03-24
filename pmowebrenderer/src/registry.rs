@@ -14,7 +14,7 @@ use crate::error::WebRendererError;
 use crate::pipeline::{InstancePipeline, PipelineHandle};
 use crate::renderer::WebRendererFactory;
 use crate::state::{RendererState, SharedState};
-use crate::messages::PlaybackState;
+
 
 #[cfg(feature = "pmoserver")]
 use pmocontrol::{ControlPoint, DeviceId};
@@ -29,7 +29,7 @@ pub struct WebRendererInstance {
     pub udn: String,
     pub device_instance: Arc<DeviceInstance>,
     pub state: SharedState,
-    /// Handle vers le sink OGG-FLAC — clonable, chaque subscribe() donne un flux live.
+    /// Handle vers le sink OGG-FLAC — clonable, subscribe() crée un flux indépendant par client.
     pub flac_handle: pmoaudio_ext::sinks::OggFlacStreamHandle,
     pub pipeline: PipelineHandle,
     pub created_at: SystemTime,
@@ -116,15 +116,16 @@ impl RendererRegistry {
         Ok((stream_url, udn))
     }
 
-    /// Retourne le OggFlacStreamHandle pour l'endpoint /stream (clonable).
-    pub fn get_flac_handle(
+    /// Retourne un OggFlacClientStream indépendant pour l'endpoint /stream.
+    /// Chaque appel crée un nouveau subscriber broadcast — safe pour connexions simultanées.
+    pub fn get_stream(
         &self,
         instance_id: &str,
-    ) -> Option<pmoaudio_ext::sinks::OggFlacStreamHandle> {
+    ) -> Option<pmoaudio_ext::sinks::OggFlacClientStream> {
         self.instances
             .read()
             .get(instance_id)
-            .map(|i| i.flac_handle.clone())
+            .map(|i| i.flac_handle.subscribe())
     }
 
     /// Retourne le PipelineHandle par UDN (pour les handlers UPnP)
@@ -149,6 +150,24 @@ impl RendererRegistry {
             .read()
             .get(udn)
             .map(|i| i.device_instance.clone())
+    }
+
+    /// Met à jour la durée depuis le navigateur.
+    /// La position est gérée par PlayerSource via PlayerEvent::Position.
+    /// On n'utilise duration_sec que si la source ne la connaît pas (flux radio sans durée).
+    pub fn update_duration(&self, instance_id: &str, duration_sec: Option<f64>) {
+        let instances = self.instances.read();
+        if let Some(instance) = instances.get(instance_id) {
+            let mut s = instance.state.write();
+            // N'écraser la durée que si elle n'est pas déjà connue (la source est prioritaire)
+            if s.duration.is_none() {
+                if let Some(dur) = duration_sec {
+                    if dur > 0.0 {
+                        s.duration = Some(crate::pipeline::seconds_to_upnp_time(dur));
+                    }
+                }
+            }
+        }
     }
 
     pub fn schedule_unregister(self: &Arc<Self>, instance_id: &str) {
@@ -248,7 +267,7 @@ impl RendererRegistry {
 
                 let mut server = server_arc.write().await;
                 server
-                    .register_device(Arc::new(device))
+                    .register_device(Arc::new(device), false)
                     .await
                     .map_err(|e| WebRendererError::RegistrationError(e.to_string()))?
             };

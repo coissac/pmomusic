@@ -144,6 +144,22 @@ pub use cache::{
     CacheSubscription,
 };
 pub use cache_trait::{pk_from_content_header, FileCache};
+
+/// Retourne la route relative pour une cover: `/covers/image/{pk}[/{param}]`
+pub fn covers_route_for(pk: &str, param: Option<&str>) -> String {
+    if let Some(p) = param {
+        format!("/covers/image/{}/{}", pk, p)
+    } else {
+        format!("/covers/image/{}", pk)
+    }
+}
+
+/// Retourne l'URL absolue pour une cover via `PMO_SERVER_URL`
+pub fn covers_absolute_url_for(pk: &str, param: Option<&str>) -> String {
+    let base = std::env::var("PMO_SERVER_URL")
+        .unwrap_or_else(|_| "http://localhost:8080".to_string());
+    format!("{}{}", base.trim_end_matches('/'), covers_route_for(pk, param))
+}
 pub use db::{CacheEntry, DB};
 pub use download::{
     download, download_with_transformer, ingest_with_transformer, peek_header, peek_reader_header,

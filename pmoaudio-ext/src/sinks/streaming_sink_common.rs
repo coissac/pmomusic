@@ -490,6 +490,11 @@ impl SharedSinkContext {
 
         debug!("Restarting FLAC encoder for new track");
 
+        // Invalider le header en cache immédiatement : tout nouveau client qui se connecte
+        // pendant le restart attendra (Poll::Pending) jusqu'à ce que le nouveau header OGG
+        // soit prêt, évitant qu'il reçoive l'ancien header suivi des nouvelles données.
+        *self.header.write().await = None;
+
         let last_timestamp = *self.current_timestamp.read().await;
         debug!("Last timestamp before restart: {:.3}s", last_timestamp);
 

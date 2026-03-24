@@ -10,5 +10,4 @@ utoipa-swagger-ui = { version = "9.0.2", features = ["axum"] }
 quick-xml = { workspace = true }
 bevy_reflect = "0.17.1"
 bevy_reflect_derive = "0.17.1"
-pmoutils = { path = "../pmoutils" }
 xmltree = "0.10"

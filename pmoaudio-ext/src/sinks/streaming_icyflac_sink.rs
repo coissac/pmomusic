@@ -88,10 +88,8 @@ impl IcyClientStream {
 
         // Add cover URL if we have a cover_pk
         if let Some(pk) = &meta.cover_pk {
-            // Use relative URL /covers/image/{pk}/256
-            // This works when streaming from the same server that serves covers
-            // VLC and other players will resolve relative URLs correctly
-            metadata_str.push_str(&format!("StreamUrl='/covers/image/{}/256';", pk));
+            let cover_url = pmocache::covers_absolute_url_for(pk, None);
+            metadata_str.push_str(&format!("StreamUrl='{}';", cover_url));
         } else if let Some(url) = &meta.cover_url {
             // Fallback to external cover URL if no local pk
             metadata_str.push_str(&format!("StreamUrl='{}';", url));

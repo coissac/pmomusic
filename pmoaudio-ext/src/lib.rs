@@ -43,3 +43,6 @@ pub use sources::PlaylistSource;
 
 #[cfg(feature = "http-stream")]
 pub use sources::UriSource;
+
+#[cfg(feature = "http-stream")]
+pub use sources::{PlayerCommand, PlayerEvent, PlayerHandle, PlayerSource};

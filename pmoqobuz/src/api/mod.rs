@@ -15,7 +15,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::sync::RwLock;
 use std::time::Duration;
-use tracing::{debug, warn};
+use tracing::debug;
 
 pub use spoofer::Spoofer;
 

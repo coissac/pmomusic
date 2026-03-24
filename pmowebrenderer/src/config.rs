@@ -15,7 +15,7 @@ use pmocontrol::ControlPoint;
 #[cfg(feature = "pmoserver")]
 use crate::error::WebRendererError;
 #[cfg(feature = "pmoserver")]
-use crate::register::{register_handler, unregister_handler};
+use crate::register::{position_update_handler, register_handler, unregister_handler};
 #[cfg(feature = "pmoserver")]
 use crate::registry::RendererRegistry;
 #[cfg(feature = "pmoserver")]
@@ -48,9 +48,10 @@ impl WebRendererExt for pmoserver::Server {
         )
         .await;
 
-        // GET /api/webrenderer/{id}/stream  +  DELETE /api/webrenderer/{id}
+        // GET /api/webrenderer/{id}/stream  +  DELETE /api/webrenderer/{id}  +  POST /api/webrenderer/{id}/position
         let dynamic_router = Router::new()
             .route("/{id}/stream", get(stream_handler))
+            .route("/{id}/position", post(position_update_handler))
             .route("/{id}", delete(unregister_handler))
             .with_state(registry.clone());
         self.add_router("/api/webrenderer", dynamic_router).await;
@@ -58,6 +59,7 @@ impl WebRendererExt for pmoserver::Server {
         tracing::info!("WebRenderer server-side streaming endpoints registered");
         tracing::info!("  POST   /api/webrenderer/register");
         tracing::info!("  GET    /api/webrenderer/{{id}}/stream");
+        tracing::info!("  POST   /api/webrenderer/{{id}}/position");
         tracing::info!("  DELETE /api/webrenderer/{{id}}");
         Ok(())
     }
