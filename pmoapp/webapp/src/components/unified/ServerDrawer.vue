@@ -502,7 +502,6 @@ function handleSettingsClick() {
                                         :src="item.album_art_uri"
                                         :alt="item.title"
                                         class="cover-image"
-                                        loading="lazy"
                                         @load="handleImageLoad(item.id)"
                                         @error="handleImageError(item.id)"
                                     />
