@@ -41,7 +41,6 @@ COPY pmoupnp/ ./pmoupnp/
 COPY pmomediarenderer/ ./pmomediarenderer/
 COPY pmomediaserver/ ./pmomediaserver/
 COPY pmoconfig/ ./pmoconfig/
-COPY pmoutils/ ./pmoutils/
 COPY pmodidl/ ./pmodidl/
 COPY pmoserver/ ./pmoserver/
 COPY pmocache/ ./pmocache/
