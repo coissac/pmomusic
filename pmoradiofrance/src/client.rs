@@ -38,7 +38,6 @@ use scraper::{Html, Selector};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
-use url::Url;
 
 #[cfg(feature = "pmoconfig")]
 use crate::config_ext::StationInfo;

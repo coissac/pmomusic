@@ -919,7 +919,7 @@ async fn stream_source_item_metadata(
     Query(params): Query<ObjectQuery>,
 ) -> impl IntoResponse {
     use axum::response::sse::{Event, KeepAlive, Sse};
-    use futures::stream::{self, Stream};
+    use futures::stream;
     use std::convert::Infallible;
     use std::time::Duration;
     use tokio_stream::StreamExt as _;

@@ -92,9 +92,17 @@ async fn get_file<C: CacheConfig + 'static>(
     Path(pk): Path<String>,
     request: axum::http::Request<Body>,
 ) -> Response {
-    // Utiliser le param par défaut
     let param = C::default_param();
-    serve_file_with_streaming(&cache, &pk, param, content_type, param_generator, request).await
+    tracing::debug!(
+        "[{}] GET /{}/{} param={}",
+        C::cache_name(), C::cache_type(), pk, param
+    );
+    let response = serve_file_with_streaming(&cache, &pk, param, content_type, param_generator, request).await;
+    tracing::debug!(
+        "[{}] GET /{}/{} → {}",
+        C::cache_name(), C::cache_type(), pk, response.status()
+    );
+    response
 }
 
 /// Handler générique pour GET /{cache_name}/{cache_type}/{pk}/{param}
@@ -267,6 +275,16 @@ async fn serve_file_with_streaming<C: CacheConfig + 'static>(
     }
 
     // Fichier terminé ou pas de download en cours, servir normalement avec support Range
+    if !file_path.exists() {
+        // Fichier absent : soit download background pas encore terminé,
+        // soit transformation WebP/variant pas encore écrite sur disque
+        let in_db = cache.db.get(pk, false).is_ok();
+        warn!(
+            "Requested file not on disk yet: pk={} in_db={} path={:?} — client should retry",
+            pk, in_db, file_path
+        );
+    }
+
     let response = serve_complete_file(file_path, content_type, request).await;
 
     if response.status().is_success() {
@@ -287,7 +305,7 @@ async fn stream_file_progressive(
     request: axum::http::Request<Body>,
 ) -> Response {
     use axum::http::header;
-    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+    use tokio::io::AsyncSeekExt;
 
     // Attendre qu'au moins 64 KB soient disponibles avant de commencer
     const MIN_SIZE_TO_START: u64 = 64 * 1024;
@@ -602,6 +620,7 @@ pub fn create_api_router<C: CacheConfig + 'static>(cache: Arc<Cache<C>>) -> Rout
 ///
 /// Permet d'initialiser un cache générique avec routes HTTP complètes
 #[cfg(feature = "pmoserver")]
+#[allow(async_fn_in_trait)]
 pub trait GenericCacheExt {
     /// Initialise un cache générique avec routes complètes
     ///

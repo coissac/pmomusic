@@ -10,7 +10,7 @@ export function useCoverImage(
   imageUrl: Ref<string | null | undefined>,
   options: CoverImageOptions = {},
 ) {
-  const { maxRetries = 3, retryDelay = 1000, forceReload = true } = options;
+  const { maxRetries = 5, retryDelay = 500, forceReload = true } = options;
 
   const imageLoaded = ref(false);
   const imageError = ref(false);
@@ -66,6 +66,9 @@ export function useCoverImage(
     if (retryCount.value < maxRetries) {
       retryCount.value++;
 
+      // Backoff : 500ms, 1s, 2s, 4s, 8s — rapide au début pour les covers
+      // en cours de téléchargement, plus espacé ensuite pour les erreurs réseau
+      const delay = retryDelay * Math.pow(2, retryCount.value - 1);
       setTimeout(() => {
         if (!currentUrl.value) return;
 
@@ -74,7 +77,7 @@ export function useCoverImage(
           currentUrl.value,
           retryCount.value,
         );
-      }, retryDelay * retryCount.value); // Exponential backoff
+      }, delay);
     } else {
       console.error(
         `[useCoverImage] Max retries (${maxRetries}) reached for: ${currentUrl.value}`,
@@ -102,8 +105,15 @@ export function useCoverImage(
 
     // Retry if we haven't reached max retries
     if (retryCount.value < maxRetries) {
+      const delay = retryDelay * Math.pow(2, retryCount.value);
+      console.log(
+        `[useCoverImage] Scheduling retry ${retryCount.value + 1}/${maxRetries} in ${delay}ms for: ${currentUrl.value}`,
+      );
       retryLoad();
     } else {
+      console.error(
+        `[useCoverImage] Giving up after ${maxRetries} retries for: ${currentUrl.value}`,
+      );
       imageError.value = true;
     }
   }

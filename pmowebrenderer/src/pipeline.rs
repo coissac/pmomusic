@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use pmoaudio::{AudioPipelineNode, ResamplingNode, ToI24Node};
+use pmoaudio::{ResamplingNode, ToI24Node};
 use pmoaudio_ext::{PlayerCommand, PlayerHandle, PlayerSource};
 use pmoaudio_ext::sinks::{OggFlacStreamHandle, StreamingOggFlacSink};
 use pmoflac::EncoderOptions;

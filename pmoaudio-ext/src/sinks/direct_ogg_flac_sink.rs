@@ -36,7 +36,7 @@ use pmoaudio::{
 };
 use pmoflac::{EncoderOptions, PcmFormat};
 use tokio::io::{AsyncRead, ReadBuf};
-use tokio::sync::{mpsc, watch, Mutex};
+use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace, warn};

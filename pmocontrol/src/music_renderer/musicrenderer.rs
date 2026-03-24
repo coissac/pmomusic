@@ -35,7 +35,7 @@ use crate::music_renderer::watcher::{
 };
 use crate::online::DeviceConnectionState;
 use crate::queue::{
-    EnqueueMode, MusicQueue, PlaybackItem, QueueBackend, QueueFromRendererInfo, QueueSnapshot,
+    EnqueueMode, MusicQueue, PlaybackItem, QueueBackend, QueueSnapshot,
 };
 use crate::{DeviceId, DeviceIdentity, DeviceOnline};
 

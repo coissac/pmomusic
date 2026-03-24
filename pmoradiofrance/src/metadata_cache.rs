@@ -248,6 +248,9 @@ impl CachedMetadata {
         match cache.add_from_url(&cover_url, Some("radiofrance")).await {
             Ok(pk) => {
                 // Construire l'URL publique
+                // Note: add_from_url() lance le téléchargement complet en arrière-plan.
+                // L'URL est valide immédiatement — si le fichier n'est pas encore prêt,
+                // le client web doit réessayer (retry avec backoff).
                 let route = cache.route_for(&pk, None);
                 let public_url = format!("{}{}", server_base_url.trim_end_matches('/'), route);
 

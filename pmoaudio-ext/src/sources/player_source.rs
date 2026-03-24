@@ -32,7 +32,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use pmometadata::{MemoryTrackMetadata, TrackMetadata};
 use pmoaudio::{
-    AudioSegment, SyncMarker,
+    AudioSegment,
     nodes::AudioError,
     pipeline::{AudioPipelineNode, Node, NodeLogic, send_to_children},
 };

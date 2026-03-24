@@ -9,6 +9,7 @@ use crate::{cache::is_lazy_pk, CacheConfig, DB};
 /// Trait générique pour les caches de fichiers
 ///
 /// Définit l'interface commune pour tous les types de caches (images, audio, etc.)
+#[allow(async_fn_in_trait)]
 pub trait FileCache<C: CacheConfig>: Send + Sync {
     fn get_cache_dir(&self) -> &Path;
     fn get_database(&self) -> Arc<DB>;

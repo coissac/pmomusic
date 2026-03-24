@@ -26,7 +26,7 @@ use crate::openapi::{
     CurrentTrackMetadata, FullRendererSnapshot, QueueItem, QueueSnapshotView, RendererBindingView,
     RendererStateView,
 };
-use crate::queue::{EnqueueMode, PlaybackItem, QueueBackend, QueueSnapshot};
+use crate::queue::{EnqueueMode, PlaybackItem, QueueSnapshot};
 use crate::registry::DeviceRegistry;
 
 /// Control point minimal :

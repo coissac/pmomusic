@@ -116,8 +116,8 @@ use pmoaudio::{
     AudioSegment,
 };
 use pmoaudiocache::Cache as AudioCache;
-use pmoflac::{decode_audio_stream, StreamInfo};
-use pmoplaylist::{PlaylistRole, ReadHandle};
+use pmoflac::decode_audio_stream;
+use pmoplaylist::ReadHandle;
 
 use super::pcm_decode::{bytes_to_segment, validate_stream};
 use std::{path::PathBuf, sync::Arc, time::Duration};

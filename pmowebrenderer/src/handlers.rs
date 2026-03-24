@@ -11,7 +11,7 @@ use pmoupnp::{get, set};
 use pmodidl::ToXmlElement;
 
 use crate::messages::PlaybackState;
-use crate::pipeline::{PipelineControl, PipelineHandle, seconds_to_upnp_time, upnp_time_to_seconds};
+use crate::pipeline::{PipelineControl, PipelineHandle, upnp_time_to_seconds};
 use crate::state::SharedState;
 
 type ActionFuture =
