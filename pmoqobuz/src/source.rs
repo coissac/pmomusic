@@ -853,6 +853,47 @@ impl QobuzSource {
         }
     }
 
+    /// Cache les covers d'une liste d'albums en parallèle.
+    /// Retourne les albums avec `image_cached` mis à jour si la cover a pu être mise en cache.
+    async fn cache_album_covers(&self, albums: Vec<crate::models::Album>) -> Vec<crate::models::Album> {
+        let futs: Vec<_> = albums.into_iter().map(|mut album| {
+            let source = self.clone();
+            async move {
+                if let Some(ref image_url) = album.image.clone() {
+                    if let Ok(pk) = source.inner.cache_manager.cache_cover(image_url).await {
+                        if let Ok(url) = source.inner.cache_manager.cover_url(&pk, None) {
+                            album.image_cached = Some(url);
+                        }
+                    }
+                }
+                album
+            }
+        }).collect();
+        tokio::task::JoinSet::from_iter(futs)
+            .join_all()
+            .await
+    }
+
+    /// Cache les covers d'une liste de playlists en parallèle.
+    async fn cache_playlist_covers(&self, playlists: Vec<crate::models::Playlist>) -> Vec<crate::models::Playlist> {
+        let futs: Vec<_> = playlists.into_iter().map(|mut playlist| {
+            let source = self.clone();
+            async move {
+                if let Some(ref image_url) = playlist.image.clone() {
+                    if let Ok(pk) = source.inner.cache_manager.cache_cover(image_url).await {
+                        if let Ok(url) = source.inner.cache_manager.cover_url(&pk, None) {
+                            playlist.image_cached = Some(url);
+                        }
+                    }
+                }
+                playlist
+            }
+        }).collect();
+        tokio::task::JoinSet::from_iter(futs)
+            .join_all()
+            .await
+    }
+
     /// Browse Favourites - retourne 4 sous-containers
     async fn browse_favourites(&self) -> Result<BrowseResult> {
         let containers = vec![
@@ -873,6 +914,7 @@ impl QobuzSource {
             .await
             .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
 
+        let albums = self.cache_album_covers(albums).await;
         let containers: Vec<Container> = albums
             .into_iter()
             .filter_map(|album| album.to_didl_container("qobuz:favorites:albums").ok())
@@ -939,6 +981,7 @@ impl QobuzSource {
             .await
             .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
 
+        let playlists = self.cache_playlist_covers(playlists).await;
         let containers: Vec<Container> = playlists
             .into_iter()
             .filter_map(|playlist| playlist.to_didl_container("qobuz:favorites:playlists").ok())
@@ -1061,76 +1104,56 @@ impl QobuzSource {
         }
     }
 
-    /// Browse Discover Playlists (all featured playlists)
-    async fn browse_discover_playlists(&self) -> Result<BrowseResult> {
+    /// Helper : récupère des albums featured, cache les covers, retourne des containers DIDL
+    async fn browse_featured_albums(&self, genre_id: Option<&str>, filter: &str, parent_id: &str) -> Result<BrowseResult> {
+        let albums = self
+            .inner
+            .client
+            .get_featured_albums(genre_id, filter)
+            .await
+            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+        let albums = self.cache_album_covers(albums).await;
+        let containers: Vec<Container> = albums
+            .into_iter()
+            .filter_map(|album| album.to_didl_container(parent_id).ok())
+            .collect();
+
+        Ok(BrowseResult::Containers(containers))
+    }
+
+    /// Helper : récupère des playlists featured, cache les covers, retourne des containers DIDL
+    async fn browse_featured_playlists(&self, genre_id: Option<&str>, parent_id: &str) -> Result<BrowseResult> {
         let playlists = self
             .inner
             .client
-            .get_featured_playlists(None, None)
+            .get_featured_playlists(genre_id, None)
             .await
             .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
 
+        let playlists = self.cache_playlist_covers(playlists).await;
         let containers: Vec<Container> = playlists
             .into_iter()
-            .filter_map(|playlist| playlist.to_didl_container("qobuz:discover:playlists").ok())
+            .filter_map(|playlist| playlist.to_didl_container(parent_id).ok())
             .collect();
 
         Ok(BrowseResult::Containers(containers))
     }
 
-    /// Browse Discover Albums (Ideal Discography)
+    async fn browse_discover_playlists(&self) -> Result<BrowseResult> {
+        self.browse_featured_playlists(None, "qobuz:discover:playlists").await
+    }
+
     async fn browse_discover_albums_ideal(&self) -> Result<BrowseResult> {
-        let albums = self
-            .inner
-            .client
-            .get_featured_albums(None, "ideal-discography")
-            .await
-            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
-
-        let containers: Vec<Container> = albums
-            .into_iter()
-            .filter_map(|album| album.to_didl_container("qobuz:discover:albums:ideal").ok())
-            .collect();
-
-        Ok(BrowseResult::Containers(containers))
+        self.browse_featured_albums(None, "ideal-discography", "qobuz:discover:albums:ideal").await
     }
 
-    /// Browse Discover Albums (Qobuzissime)
     async fn browse_discover_albums_qobuzissime(&self) -> Result<BrowseResult> {
-        let albums = self
-            .inner
-            .client
-            .get_featured_albums(None, "qobuzissims")
-            .await
-            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
-
-        let containers: Vec<Container> = albums
-            .into_iter()
-            .filter_map(|album| {
-                album
-                    .to_didl_container("qobuz:discover:albums:qobuzissime")
-                    .ok()
-            })
-            .collect();
-
-        Ok(BrowseResult::Containers(containers))
+        self.browse_featured_albums(None, "qobuzissims", "qobuz:discover:albums:qobuzissime").await
     }
 
-    /// Browse Discover Albums (New Releases)
     async fn browse_discover_albums_new(&self) -> Result<BrowseResult> {
-        let albums = self
-            .inner
-            .client
-            .get_featured_albums(None, "new-releases")
-            .await
-            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
-
-        let containers: Vec<Container> = albums
-            .into_iter()
-            .filter_map(|album| album.to_didl_container("qobuz:discover:albums:new").ok())
-            .collect();
-
-        Ok(BrowseResult::Containers(containers))
+        self.browse_featured_albums(None, "new-releases", "qobuz:discover:albums:new").await
     }
 
     /// Browse Discover Artists (Featured Artists)
@@ -1324,112 +1347,28 @@ impl QobuzSource {
         }
     }
 
-    /// Browse Genre New Releases
     async fn browse_genre_new_releases(&self, genre_id: &str) -> Result<BrowseResult> {
-        let albums = self
-            .inner
-            .client
-            .get_featured_albums(Some(genre_id), "new-releases")
-            .await
-            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
-
-        let parent_id = format!("qobuz:genre:{}:new-releases", genre_id);
-        let containers: Vec<Container> = albums
-            .into_iter()
-            .filter_map(|album| album.to_didl_container(&parent_id).ok())
-            .collect();
-
-        Ok(BrowseResult::Containers(containers))
+        self.browse_featured_albums(Some(genre_id), "new-releases", &format!("qobuz:genre:{}:new-releases", genre_id)).await
     }
 
-    /// Browse Genre Ideal Discography
     async fn browse_genre_ideal_discography(&self, genre_id: &str) -> Result<BrowseResult> {
-        let albums = self
-            .inner
-            .client
-            .get_featured_albums(Some(genre_id), "ideal-discography")
-            .await
-            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
-
-        let parent_id = format!("qobuz:genre:{}:ideal", genre_id);
-        let containers: Vec<Container> = albums
-            .into_iter()
-            .filter_map(|album| album.to_didl_container(&parent_id).ok())
-            .collect();
-
-        Ok(BrowseResult::Containers(containers))
+        self.browse_featured_albums(Some(genre_id), "ideal-discography", &format!("qobuz:genre:{}:ideal", genre_id)).await
     }
 
-    /// Browse Genre Qobuzissime
     async fn browse_genre_qobuzissime(&self, genre_id: &str) -> Result<BrowseResult> {
-        let albums = self
-            .inner
-            .client
-            .get_featured_albums(Some(genre_id), "qobuzissims")
-            .await
-            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
-
-        let parent_id = format!("qobuz:genre:{}:qobuzissime", genre_id);
-        let containers: Vec<Container> = albums
-            .into_iter()
-            .filter_map(|album| album.to_didl_container(&parent_id).ok())
-            .collect();
-
-        Ok(BrowseResult::Containers(containers))
+        self.browse_featured_albums(Some(genre_id), "qobuzissims", &format!("qobuz:genre:{}:qobuzissime", genre_id)).await
     }
 
-    /// Browse Genre Editor Picks
     async fn browse_genre_editor_picks(&self, genre_id: &str) -> Result<BrowseResult> {
-        let albums = self
-            .inner
-            .client
-            .get_featured_albums(Some(genre_id), "editor-picks")
-            .await
-            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
-
-        let parent_id = format!("qobuz:genre:{}:editor-picks", genre_id);
-        let containers: Vec<Container> = albums
-            .into_iter()
-            .filter_map(|album| album.to_didl_container(&parent_id).ok())
-            .collect();
-
-        Ok(BrowseResult::Containers(containers))
+        self.browse_featured_albums(Some(genre_id), "editor-picks", &format!("qobuz:genre:{}:editor-picks", genre_id)).await
     }
 
-    /// Browse Genre Press Awards
     async fn browse_genre_press_awards(&self, genre_id: &str) -> Result<BrowseResult> {
-        let albums = self
-            .inner
-            .client
-            .get_featured_albums(Some(genre_id), "press-awards")
-            .await
-            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
-
-        let parent_id = format!("qobuz:genre:{}:press-awards", genre_id);
-        let containers: Vec<Container> = albums
-            .into_iter()
-            .filter_map(|album| album.to_didl_container(&parent_id).ok())
-            .collect();
-
-        Ok(BrowseResult::Containers(containers))
+        self.browse_featured_albums(Some(genre_id), "press-awards", &format!("qobuz:genre:{}:press-awards", genre_id)).await
     }
 
-    /// Browse Genre Playlists
     async fn browse_genre_playlists(&self, genre_id: &str) -> Result<BrowseResult> {
-        let playlists = self
-            .inner
-            .client
-            .get_featured_playlists(Some(genre_id), None)
-            .await
-            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
-
-        let parent_id = format!("qobuz:genre:{}:playlists", genre_id);
-        let containers: Vec<Container> = playlists
-            .into_iter()
-            .filter_map(|playlist| playlist.to_didl_container(&parent_id).ok())
-            .collect();
-
-        Ok(BrowseResult::Containers(containers))
+        self.browse_featured_playlists(Some(genre_id), &format!("qobuz:genre:{}:playlists", genre_id)).await
     }
 
     /// Parse object_id to determine what to browse
@@ -1722,12 +1661,9 @@ impl MusicSource for QobuzSource {
 
         // Get cover URL from cache if available
         let cover_url = if let Some(ref album) = track.album {
-            if let Some(ref cached) = album.image_cached {
-                Some(format!("{}{}", self.inner.base_url, cached))
-            } else if let Some(ref image) = album.image {
-                // Try to cache it
+            if let Some(ref image) = album.image {
                 if let Ok(pk) = self.inner.cache_manager.cache_cover(image).await {
-                    Some(format!("{}/covers/jpeg/{}", self.inner.base_url, pk))
+                    self.inner.cache_manager.cover_url(&pk, None).ok()
                 } else {
                     Some(image.clone())
                 }
