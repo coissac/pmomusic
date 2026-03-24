@@ -12,9 +12,11 @@
 //! - `MetadataCache` : Gère le cache in-memory + cache persistant + événements
 
 use crate::client::RadioFranceClient;
+use crate::config_ext::{RadioFranceConfigExt, StationInfo};
 use crate::error::Result;
 use crate::models::{ImageSize, LiveResponse, Station};
 use pmoconfig::Config;
+#[cfg(feature = "playlist")]
 use pmodidl::{Container, Item, Resource};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -59,6 +61,9 @@ pub struct CachedMetadata {
 
     // TTL = end_time de l'API Radio France
     pub end_time: Option<u64>, // Unix timestamp
+
+    /// Timestamp de la dernière récupération (pour TTL minimum)
+    pub fetched_at: u64,
 }
 
 impl CachedMetadata {
@@ -89,6 +94,10 @@ impl CachedMetadata {
 
         // 4. TTL = end_time
         let end_time = live.now.end_time;
+        let fetched_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
 
         Ok(Self {
             slug: station.slug.clone(),
@@ -106,6 +115,7 @@ impl CachedMetadata {
             nr_audio_channels,
             duration,
             end_time,
+            fetched_at,
         })
     }
 
@@ -349,6 +359,7 @@ impl CachedMetadata {
     /// Construit un Container DIDL de playlist à un item
     ///
     /// La playlist et l'item ont EXACTEMENT les mêmes métadonnées
+    #[cfg(feature = "playlist")]
     pub fn to_didl(&self, playlist_id: &str, parent_id: &str) -> Container {
         // Calculer la duration dynamiquement (temps restant jusqu'à end_time)
         let duration = if let Some(end) = self.end_time {
@@ -432,17 +443,23 @@ impl CachedMetadata {
         }
     }
 
+    /// TTL minimum quand l'API ne fournit pas de end_time (3 minutes)
+    pub const FALLBACK_TTL_SECS: u64 = 3 * 60;
+
     /// Vérifie si le TTL est dépassé
+    ///
+    /// - Si `end_time` est fourni par l'API : expire exactement quand l'émission se termine
+    /// - Sinon : expire après `FALLBACK_TTL_SECS` depuis le dernier fetch
     pub fn is_expired(&self) -> bool {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
         if let Some(end_time) = self.end_time {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
             now >= end_time
         } else {
-            // Pas de end_time = toujours expiré (refresh systématique)
-            true
+            now >= self.fetched_at + Self::FALLBACK_TTL_SECS
         }
     }
 }
@@ -478,6 +495,9 @@ pub struct MetadataCache {
 
 impl MetadataCache {
     /// Constructeur avec tous les paramètres obligatoires
+    ///
+    /// Charge automatiquement le mapping station depuis pmoconfig (si valide).
+    /// Si le cache est absent ou expiré, utilise les valeurs hardcodées du client.
     #[cfg(feature = "cache")]
     pub fn new(
         client: RadioFranceClient,
@@ -485,6 +505,25 @@ impl MetadataCache {
         server_base_url: String,
         config: Arc<Config>,
     ) -> Self {
+        // Charger le mapping depuis pmoconfig et l'injecter dans le client
+        if let Ok(Some(mapping)) = config.get_radiofrance_station_mapping() {
+            #[cfg(feature = "logging")]
+            tracing::info!(
+                "Loaded station mapping from config ({} entries)",
+                mapping.len()
+            );
+            client.set_station_mapping(mapping);
+        } else {
+            // Pas de cache persistant : persister le mapping par défaut
+            let mapping = client.get_station_mapping();
+            let _ = config.set_radiofrance_station_mapping(&mapping);
+            #[cfg(feature = "logging")]
+            tracing::info!(
+                "Initialized station mapping from defaults ({} entries)",
+                mapping.len()
+            );
+        }
+
         Self {
             cache: Arc::new(RwLock::new(HashMap::new())),
             client,
@@ -525,18 +564,46 @@ impl MetadataCache {
         let live_response = match self.client.live_metadata(slug).await {
             Ok(resp) => resp,
             Err(e) => {
-                // Graceful degradation: retourner les données expirées si API down
-                let cache = self.cache.read().await;
-                if let Some(metadata) = cache.get(slug) {
+                // Si station inconnue → tenter une re-découverte du mapping
+                let is_unknown = e.to_string().contains("Unknown station slug");
+                if is_unknown {
                     #[cfg(feature = "logging")]
-                    tracing::warn!(
-                        "API Radio France down for {}, using expired cache: {}",
-                        slug,
-                        e
-                    );
-                    return Ok(metadata.clone());
+                    tracing::warn!("Unknown station '{}', attempting rediscovery", slug);
+
+                    match self.client.rediscover_station(slug).await {
+                        Ok(_) => {
+                            // Persister le mapping mis à jour
+                            self.persist_station_mapping();
+                            // Réessayer la requête
+                            match self.client.live_metadata(slug).await {
+                                Ok(resp) => resp,
+                                Err(e2) => return Err(e2),
+                            }
+                        }
+                        Err(discover_err) => {
+                            #[cfg(feature = "logging")]
+                            tracing::error!(
+                                "Rediscovery failed for '{}': {}",
+                                slug,
+                                discover_err
+                            );
+                            return Err(e);
+                        }
+                    }
+                } else {
+                    // Graceful degradation: retourner les données expirées si API down
+                    let cache = self.cache.read().await;
+                    if let Some(metadata) = cache.get(slug) {
+                        #[cfg(feature = "logging")]
+                        tracing::warn!(
+                            "API Radio France down for {}, using expired cache: {}",
+                            slug,
+                            e
+                        );
+                        return Ok(metadata.clone());
+                    }
+                    return Err(e);
                 }
-                return Err(e);
             }
         };
 
@@ -575,17 +642,34 @@ impl MetadataCache {
         Ok(metadata)
     }
 
-    /// Récupère la liste des stations (cache persistant via pmoconfig)
+    /// Récupère la liste des stations (cache persistant via pmoconfig, TTL 7 jours)
     ///
     /// # Logique
     ///
-    /// 1. Essaie de lire depuis pmoconfig
-    /// 2. Si cache valide (TTL 1 semaine), retourne
-    /// 3. Sinon, découvre via API et met à jour pmoconfig
+    /// 1. Essaie de lire depuis pmoconfig (cache TTL 7 jours)
+    /// 2. Si cache valide, retourne sans appel réseau
+    /// 3. Sinon, découvre via scraping et met à jour pmoconfig
     pub async fn get_stations(&self) -> Result<Vec<Station>> {
-        // TODO: Implémenter avec config_ext
-        // Pour l'instant, découvre directement
-        self.client.discover_all_stations().await
+        // 1. Essayer le cache persistant
+        if let Ok(Some(stations)) = self.config.get_radiofrance_stations_cached() {
+            #[cfg(feature = "logging")]
+            tracing::debug!("Using cached station list ({} stations)", stations.len());
+            return Ok(stations);
+        }
+
+        // 2. Cache miss : découverte via scraping
+        #[cfg(feature = "logging")]
+        tracing::info!("Station cache miss, discovering via web scraping...");
+
+        let stations = self.client.discover_all_stations().await?;
+
+        // 3. Persister dans pmoconfig
+        if let Err(e) = self.config.set_radiofrance_cached_stations(&stations) {
+            #[cfg(feature = "logging")]
+            tracing::warn!("Failed to cache station list: {}", e);
+        }
+
+        Ok(stations)
     }
 
     /// Récupère les métadonnées live brutes de l'API (sans cache)
@@ -599,6 +683,60 @@ impl MetadataCache {
     /// Récupère l'URL du stream HiFi pour une station
     pub async fn get_stream_url(&self, slug: &str) -> Result<String> {
         self.client.get_hifi_stream_url(slug).await
+    }
+
+    /// Force une re-découverte du mapping pour un slug donné
+    ///
+    /// Utilisé quand un stream retourne une erreur HTTP (404, connexion refusée, etc.)
+    /// Persiste le mapping mis à jour dans pmoconfig.
+    pub async fn handle_stream_failure(&self, slug: &str) {
+        #[cfg(feature = "logging")]
+        tracing::warn!("Stream failure for '{}', triggering rediscovery", slug);
+
+        match self.client.rediscover_station(slug).await {
+            Ok((id, url)) => {
+                #[cfg(feature = "logging")]
+                tracing::info!(
+                    "Re-discovered station '{}': id={}, url={}",
+                    slug,
+                    id,
+                    url
+                );
+                self.persist_station_mapping();
+                // Invalider le cache mémoire pour forcer un refresh des métadonnées
+                let mut cache = self.cache.write().await;
+                cache.remove(slug);
+            }
+            Err(e) => {
+                #[cfg(feature = "logging")]
+                tracing::error!("Rediscovery failed for '{}': {}", slug, e);
+            }
+        }
+    }
+
+    /// Persiste le mapping courant dans pmoconfig
+    fn persist_station_mapping(&self) {
+        let mapping = self.client.get_station_mapping();
+        if let Err(e) = self.config.set_radiofrance_station_mapping(&mapping) {
+            #[cfg(feature = "logging")]
+            tracing::warn!("Failed to persist station mapping: {}", e);
+        }
+    }
+
+    /// Met à jour manuellement le mapping d'une station et le persiste
+    pub fn update_station_mapping(&self, slug: &str, station_id: u32, stream_url: String) {
+        self.client
+            .update_station_entry(slug, station_id, stream_url.clone());
+
+        // Persister dans pmoconfig
+        let info = StationInfo {
+            station_id,
+            stream_url,
+        };
+        if let Err(e) = self.config.upsert_radiofrance_station_info(slug, info) {
+            #[cfg(feature = "logging")]
+            tracing::warn!("Failed to upsert station info for '{}': {}", slug, e);
+        }
     }
 
     /// S'abonner aux changements de métadonnées
@@ -634,7 +772,12 @@ mod tests {
 
     #[test]
     fn test_cached_metadata_is_expired() {
-        let metadata = CachedMetadata {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let base = CachedMetadata {
             slug: "test".to_string(),
             title: "Test".to_string(),
             creator: None,
@@ -650,15 +793,26 @@ mod tests {
             nr_audio_channels: None,
             duration: None,
             end_time: Some(0), // Dans le passé
+            fetched_at: now,
         };
 
-        assert!(metadata.is_expired());
+        // end_time dans le passé → expiré
+        assert!(base.is_expired());
 
-        let metadata_no_end = CachedMetadata {
+        // end_time dans le futur → non expiré
+        let not_expired = CachedMetadata { end_time: Some(now + 3600), ..base.clone() };
+        assert!(!not_expired.is_expired());
+
+        // Pas de end_time, fetched_at récent → non expiré (fallback TTL)
+        let no_end_fresh = CachedMetadata { end_time: None, fetched_at: now, ..base.clone() };
+        assert!(!no_end_fresh.is_expired());
+
+        // Pas de end_time, fetched_at ancien → expiré
+        let no_end_old = CachedMetadata {
             end_time: None,
-            ..metadata
+            fetched_at: now - CachedMetadata::FALLBACK_TTL_SECS - 1,
+            ..base
         };
-
-        assert!(metadata_no_end.is_expired());
+        assert!(no_end_old.is_expired());
     }
 }

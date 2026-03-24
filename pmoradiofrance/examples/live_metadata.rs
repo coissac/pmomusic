@@ -34,12 +34,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if let Some(intro) = &metadata.now.intro {
-        let short_intro = if intro.len() > 100 {
-            format!("{}...", &intro[..100])
-        } else {
-            intro.clone()
-        };
-        println!("  Description: {}", short_intro);
+        let short_intro: String = intro.chars().take(100).collect();
+        let suffix = if intro.chars().count() > 100 { "..." } else { "" };
+        println!("  Description: {}{}", short_intro, suffix);
     }
 
     // Song info (for music stations)

@@ -37,15 +37,36 @@ use anyhow::Result;
 use pmoconfig::Config;
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value;
+use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Default TTL for station list cache (7 days in seconds)
 pub const DEFAULT_STATION_CACHE_TTL_SECS: u64 = 7 * 24 * 3600;
 
+/// Default TTL for station mapping cache (30 days — IDs and stream URLs are very stable)
+pub const DEFAULT_STATION_MAPPING_TTL_SECS: u64 = 30 * 24 * 3600;
+
+/// Informations d'une station : ID numérique et URL du stream HiFi
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StationInfo {
+    /// ID numérique pour l'API livemeta/pull
+    pub station_id: u32,
+    /// URL du stream HiFi (icecast AAC ou MP3)
+    pub stream_url: String,
+}
+
 /// Cached station list (simplifié)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedStations {
     stations: Vec<Station>,
+    last_updated: u64, // Unix timestamp
+}
+
+/// Mapping slug → StationInfo avec timestamp de mise à jour
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CachedStationMapping {
+    /// slug → { station_id, stream_url }
+    mapping: HashMap<String, StationInfo>,
     last_updated: u64, // Unix timestamp
 }
 
@@ -113,6 +134,36 @@ pub trait RadioFranceConfigExt {
 
     /// Efface le cache des stations (force re-découverte)
     fn clear_radiofrance_station_cache(&self) -> Result<()>;
+
+    // ========================================================================
+    // Station Mapping Cache (slug → station_id + stream_url)
+    // ========================================================================
+
+    /// Récupère le mapping slug → StationInfo depuis le cache (si valide)
+    ///
+    /// # Returns
+    ///
+    /// - `Some(HashMap)` si le cache existe et n'est pas expiré
+    /// - `None` si absent ou TTL dépassé → il faut re-découvrir
+    fn get_radiofrance_station_mapping(&self) -> Result<Option<HashMap<String, StationInfo>>>;
+
+    /// Enregistre le mapping slug → StationInfo en cache
+    fn set_radiofrance_station_mapping(&self, mapping: &HashMap<String, StationInfo>)
+        -> Result<()>;
+
+    /// Récupère le TTL du mapping (en secondes, défaut 30 jours)
+    fn get_radiofrance_mapping_ttl(&self) -> Result<u64>;
+
+    /// Définit le TTL du mapping (en secondes)
+    fn set_radiofrance_mapping_ttl(&self, ttl_secs: u64) -> Result<()>;
+
+    /// Efface le cache du mapping (force re-découverte au prochain accès)
+    fn clear_radiofrance_station_mapping(&self) -> Result<()>;
+
+    /// Met à jour une seule entrée dans le mapping (sans invalider tout le cache)
+    ///
+    /// Utilisé pour la mise à jour incrémentale lors d'une re-découverte unitaire.
+    fn upsert_radiofrance_station_info(&self, slug: &str, info: StationInfo) -> Result<()>;
 }
 
 impl RadioFranceConfigExt for Config {
@@ -200,6 +251,90 @@ impl RadioFranceConfigExt for Config {
     fn clear_radiofrance_station_cache(&self) -> Result<()> {
         // Set to null to clear
         self.set_value(&["sources", "radiofrance", "station_cache"], Value::Null)
+    }
+
+    fn get_radiofrance_station_mapping(&self) -> Result<Option<HashMap<String, StationInfo>>> {
+        let ttl = self.get_radiofrance_mapping_ttl()?;
+
+        match self.get_value(&["sources", "radiofrance", "station_mapping"]) {
+            Ok(value) => {
+                let cached: CachedStationMapping = serde_yaml::from_value(value)?;
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs();
+
+                if now - cached.last_updated < ttl {
+                    Ok(Some(cached.mapping))
+                } else {
+                    Ok(None) // Expiré
+                }
+            }
+            Err(_) => Ok(None), // Absent
+        }
+    }
+
+    fn set_radiofrance_station_mapping(
+        &self,
+        mapping: &HashMap<String, StationInfo>,
+    ) -> Result<()> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let cached = CachedStationMapping {
+            mapping: mapping.clone(),
+            last_updated: now,
+        };
+
+        let value = serde_yaml::to_value(&cached)?;
+        self.set_value(&["sources", "radiofrance", "station_mapping"], value)
+    }
+
+    fn get_radiofrance_mapping_ttl(&self) -> Result<u64> {
+        match self.get_value(&["sources", "radiofrance", "station_mapping_ttl_secs"]) {
+            Ok(Value::Number(n)) => {
+                if let Some(ttl) = n.as_u64() {
+                    Ok(ttl)
+                } else {
+                    self.set_radiofrance_mapping_ttl(DEFAULT_STATION_MAPPING_TTL_SECS)?;
+                    Ok(DEFAULT_STATION_MAPPING_TTL_SECS)
+                }
+            }
+            _ => {
+                self.set_radiofrance_mapping_ttl(DEFAULT_STATION_MAPPING_TTL_SECS)?;
+                Ok(DEFAULT_STATION_MAPPING_TTL_SECS)
+            }
+        }
+    }
+
+    fn set_radiofrance_mapping_ttl(&self, ttl_secs: u64) -> Result<()> {
+        self.set_value(
+            &["sources", "radiofrance", "station_mapping_ttl_secs"],
+            Value::Number(serde_yaml::Number::from(ttl_secs)),
+        )
+    }
+
+    fn clear_radiofrance_station_mapping(&self) -> Result<()> {
+        self.set_value(
+            &["sources", "radiofrance", "station_mapping"],
+            Value::Null,
+        )
+    }
+
+    fn upsert_radiofrance_station_info(&self, slug: &str, info: StationInfo) -> Result<()> {
+        // Charger le mapping existant (même expiré) pour mise à jour incrémentale
+        let mut mapping = match self.get_value(&["sources", "radiofrance", "station_mapping"]) {
+            Ok(value) => serde_yaml::from_value::<CachedStationMapping>(value)
+                .map(|c| c.mapping)
+                .unwrap_or_default(),
+            Err(_) => HashMap::new(),
+        };
+
+        mapping.insert(slug.to_string(), info);
+
+        self.set_radiofrance_station_mapping(&mapping)
     }
 }
 

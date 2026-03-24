@@ -28,16 +28,26 @@
 //! ```
 
 use crate::error::{Error, Result};
-use crate::models::{ImageSize, LiveResponse, ShowMetadata, Station, StreamSource};
+use crate::models::{
+    EmbedImage, ImageSize, Line, LiveResponse, Media, PullResponse, ShowMetadata, Song, Station,
+    StreamSource,
+};
 use regex::Regex;
 use reqwest::Client;
 use scraper::{Html, Selector};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use url::Url;
 
+#[cfg(feature = "pmoconfig")]
+use crate::config_ext::StationInfo;
+
 /// Default Radio France base URL
 pub const DEFAULT_BASE_URL: &str = "https://www.radiofrance.fr";
+
+/// Livemeta API base URL (new API since 2026)
+pub const LIVEMETA_API_URL: &str = "https://api.radiofrance.fr/livemeta/pull";
 
 /// Default timeout for HTTP requests (30 seconds)
 pub const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
@@ -56,6 +66,103 @@ pub const KNOWN_MAIN_STATIONS: &[(&str, &str)] = &[
     ("francebleu", "France Bleu"),
 ];
 
+/// Mapping slug → numeric station ID for the livemeta/pull API
+/// IDs extracted from www.radiofrance.fr SvelteKit page data (2026)
+pub const STATION_IDS: &[(&str, u32)] = &[
+    ("franceinter", 1),
+    ("franceinfo", 2),
+    ("francemusique", 4),
+    ("franceculture", 5),
+    ("mouv", 6),
+    ("fip", 7),
+    ("francebleu", 56),
+    // FIP webradios
+    ("fip_rock", 64),
+    ("fip_jazz", 65),
+    ("fip_groove", 66),
+    ("fip_reggae", 71),
+    ("fip_electro", 74),
+    ("fip_metal", 77),
+    ("fip_pop", 78),
+    ("fip_world", 69),
+    ("fip_nouveautes", 70),
+    ("fip_hiphop", 95),
+    ("fip_sacre_francais", 96),
+    ("fip_cultes", 709),
+];
+
+/// Icecast HiFi AAC stream URLs (stable, not from API)
+/// Format: https://icecast.radiofrance.fr/{name}-hifi.aac
+pub const STATION_STREAMS: &[(&str, &str)] = &[
+    (
+        "franceinter",
+        "https://icecast.radiofrance.fr/franceinter-hifi.aac",
+    ),
+    (
+        "franceinfo",
+        "https://icecast.radiofrance.fr/franceinfo-hifi.aac",
+    ),
+    (
+        "franceculture",
+        "https://icecast.radiofrance.fr/franceculture-hifi.aac",
+    ),
+    (
+        "francemusique",
+        "https://icecast.radiofrance.fr/francemusique-hifi.aac",
+    ),
+    ("fip", "https://icecast.radiofrance.fr/fip-hifi.aac"),
+    ("mouv", "https://icecast.radiofrance.fr/mouv-hifi.aac"),
+    // FIP webradios
+    (
+        "fip_rock",
+        "https://icecast.radiofrance.fr/fiprock-hifi.aac",
+    ),
+    (
+        "fip_jazz",
+        "https://icecast.radiofrance.fr/fipjazz-hifi.aac",
+    ),
+    (
+        "fip_groove",
+        "https://icecast.radiofrance.fr/fipgroove-hifi.aac",
+    ),
+    (
+        "fip_reggae",
+        "https://icecast.radiofrance.fr/fipreggae-hifi.aac",
+    ),
+    (
+        "fip_electro",
+        "https://icecast.radiofrance.fr/fipelectro-hifi.aac",
+    ),
+    (
+        "fip_metal",
+        "https://icecast.radiofrance.fr/fipmetal-hifi.aac",
+    ),
+    (
+        "fip_pop",
+        "https://icecast.radiofrance.fr/fippop-hifi.aac",
+    ),
+    (
+        "fip_world",
+        "https://icecast.radiofrance.fr/fipworld-hifi.aac",
+    ),
+    (
+        "fip_nouveautes",
+        "https://icecast.radiofrance.fr/fipnouveautes-hifi.aac",
+    ),
+    (
+        "fip_hiphop",
+        "https://icecast.radiofrance.fr/fiphiphop-hifi.aac",
+    ),
+    (
+        "fip_sacre_francais",
+        "https://icecast.radiofrance.fr/fipsacrefrancais-hifi.aac",
+    ),
+    (
+        "fip_cultes",
+        "https://icecast.radiofrance.fr/fipcultes-hifi.aac",
+    ),
+];
+
 /// Radio France HTTP client
 ///
 /// This client provides access to Radio France's public APIs for:
@@ -63,13 +170,23 @@ pub const KNOWN_MAIN_STATIONS: &[(&str, &str)] = &[
 /// - Live metadata (current show, next show, stream URLs)
 /// - Image URL construction (Pikapi)
 ///
-/// The client is stateless and does not cache responses internally.
-/// Caching should be handled by higher layers (e.g., config extension).
+/// The client holds an in-memory station mapping (slug → numeric ID + stream URL)
+/// seeded from hardcoded constants. Use `with_station_mapping()` to inject a
+/// mapping loaded from persistent storage (pmoconfig).
 #[derive(Debug, Clone)]
 pub struct RadioFranceClient {
     pub(crate) client: Client,
     base_url: String,
     timeout: Duration,
+    /// Mapping slug → { station_id, stream_url } — thread-safe, updatable at runtime
+    station_mapping: Arc<RwLock<HashMap<String, StationMappingEntry>>>,
+}
+
+/// Entry in the station mapping
+#[derive(Debug, Clone)]
+pub struct StationMappingEntry {
+    pub station_id: u32,
+    pub stream_url: String,
 }
 
 impl RadioFranceClient {
@@ -91,6 +208,7 @@ impl RadioFranceClient {
             client,
             base_url: DEFAULT_BASE_URL.to_string(),
             timeout: Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS),
+            station_mapping: Arc::new(RwLock::new(Self::default_station_mapping())),
         }
     }
 
@@ -102,6 +220,89 @@ impl RadioFranceClient {
     /// Get the internal HTTP client
     pub fn http_client(&self) -> &Client {
         &self.client
+    }
+
+    /// Build the default station mapping from hardcoded constants
+    fn default_station_mapping() -> HashMap<String, StationMappingEntry> {
+        // Build a lookup for stream URLs
+        let stream_map: HashMap<&str, &str> = STATION_STREAMS.iter().copied().collect();
+
+        STATION_IDS
+            .iter()
+            .map(|(slug, id)| {
+                let stream_url = stream_map
+                    .get(slug)
+                    .copied()
+                    .unwrap_or_default()
+                    .to_string();
+                (
+                    slug.to_string(),
+                    StationMappingEntry {
+                        station_id: *id,
+                        stream_url,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// Remplace le mapping en mémoire par un mapping chargé depuis le cache persistant
+    ///
+    /// Appelé au démarrage par MetadataCache pour charger le mapping pmoconfig.
+    #[cfg(feature = "pmoconfig")]
+    pub fn set_station_mapping(&self, mapping: HashMap<String, StationInfo>) {
+        let mut m = self.station_mapping.write().unwrap();
+        m.clear();
+        for (slug, info) in mapping {
+            m.insert(
+                slug,
+                StationMappingEntry {
+                    station_id: info.station_id,
+                    stream_url: info.stream_url,
+                },
+            );
+        }
+    }
+
+    /// Récupère l'ensemble du mapping courant (pour persistance dans pmoconfig)
+    #[cfg(feature = "pmoconfig")]
+    pub fn get_station_mapping(&self) -> HashMap<String, StationInfo> {
+        let m = self.station_mapping.read().unwrap();
+        m.iter()
+            .map(|(slug, entry)| {
+                (
+                    slug.clone(),
+                    StationInfo {
+                        station_id: entry.station_id,
+                        stream_url: entry.stream_url.clone(),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// Met à jour une entrée dans le mapping (utilisé après re-découverte unitaire)
+    pub fn update_station_entry(&self, slug: &str, station_id: u32, stream_url: String) {
+        let mut m = self.station_mapping.write().unwrap();
+        m.insert(
+            slug.to_string(),
+            StationMappingEntry {
+                station_id,
+                stream_url,
+            },
+        );
+    }
+
+    /// Retourne l'ID numérique pour un slug, ou None si inconnu
+    pub fn station_id_for_slug(&self, slug: &str) -> Option<u32> {
+        let m = self.station_mapping.read().unwrap();
+        m.get(slug).map(|e| e.station_id)
+    }
+
+    /// Retourne l'URL du stream HiFi pour un slug, ou None si inconnu
+    pub fn stream_url_for_slug(&self, slug: &str) -> Option<String> {
+        let m = self.station_mapping.read().unwrap();
+        m.get(slug).map(|e| e.stream_url.clone())
     }
 
     // ========================================================================
@@ -254,20 +455,71 @@ impl RadioFranceClient {
             .collect())
     }
 
-    /// Discover local France Bleu radios via API
+    /// Discover local France Bleu radios via SvelteKit page data
     ///
-    /// Uses the France Bleu /api/live? endpoint which includes
-    /// a `localRadios` array in the `now` field.
+    /// Scrapes francebleu page for local station slugs and discovers their IDs.
+    /// Met à jour le station_mapping avec les IDs trouvés.
     pub async fn discover_local_radios(&self) -> Result<Vec<Station>> {
-        let response = self.live_metadata("francebleu").await?;
+        let url = format!("{}/francebleu/__data.json", self.base_url);
+        let resp = self
+            .client
+            .get(&url)
+            .timeout(self.timeout)
+            .send()
+            .await?
+            .text()
+            .await?;
 
-        Ok(response
-            .local_radios()
-            .cloned()
-            .unwrap_or_default()
+        // Extraire les slugs "francebleu_xxx" et les paires (slug, id) de la page
+        let re_slug_id = Regex::new(r#""(francebleu_[a-z_]+)","(\d+)""#)?;
+        let mut stations = Vec::new();
+        let mut found_any = false;
+
+        for cap in re_slug_id.captures_iter(&resp) {
+            let slug = cap[1].to_string();
+            if let Ok(id) = cap[2].parse::<u32>() {
+                let stream_url = Self::derive_stream_url(&slug);
+                self.update_station_entry(&slug, id, stream_url);
+                let name = Self::slug_to_display_name(&slug);
+                stations.push(Station::new(slug, name));
+                found_any = true;
+            }
+        }
+
+        if found_any {
+            return Ok(stations);
+        }
+
+        // Fallback : scraper la page HTML pour les noms "ICI ..."
+        let html_url = format!("{}/francebleu", self.base_url);
+        let html = self
+            .client
+            .get(&html_url)
+            .timeout(self.timeout)
+            .send()
+            .await?
+            .text()
+            .await?;
+
+        let re_ici = Regex::new(r#"ICI ([A-Za-z\u00C0-\u017E][A-Za-z\u00C0-\u017E\s-]+)"#)?;
+        let re_slug = Regex::new(r#""(francebleu_[a-z_]+)""#)?;
+
+        let mut slugs: HashSet<String> = HashSet::new();
+        for cap in re_slug.captures_iter(&html) {
+            slugs.insert(cap[1].to_string());
+        }
+
+        let _names: Vec<String> = re_ici
+            .captures_iter(&html)
+            .map(|c| c[1].trim().to_string())
+            .collect();
+
+        Ok(slugs
             .into_iter()
-            .filter(|local| local.is_on_air)
-            .map(|local| Station::new(local.name, local.title))
+            .map(|slug| {
+                let name = Self::slug_to_display_name(&slug);
+                Station::new(slug, name)
+            })
             .collect())
     }
 
@@ -370,28 +622,42 @@ impl RadioFranceClient {
     /// # }
     /// ```
     pub async fn live_metadata(&self, station: &str) -> Result<LiveResponse> {
-        let (base_station, webradio) = Self::parse_station_slug(station);
+        let station_id = self
+            .station_id_for_slug(station)
+            .ok_or_else(|| Error::ApiError(format!("Unknown station slug: {}", station)))?;
 
-        let mut url = Url::parse(&format!("{}/{}/api/live", self.base_url, base_station))?;
-
-        // Add webradio parameter if needed
-        if let Some(wr) = webradio {
-            url.query_pairs_mut().append_pair("webradio", wr);
-        }
+        let url = format!("{}/{}", LIVEMETA_API_URL, station_id);
 
         #[cfg(feature = "logging")]
         tracing::debug!("Fetching live metadata: {}", url);
 
-        let response = self.client.get(url).timeout(self.timeout).send().await?;
+        let response = self.client.get(&url).timeout(self.timeout).send().await?;
 
         if !response.status().is_success() {
             return Err(Error::ApiError(format!(
-                "API returned status: {}",
-                response.status()
+                "livemeta API returned status {} for station {} (id={})",
+                response.status(),
+                station,
+                station_id
             )));
         }
 
-        let live: LiveResponse = response.json().await?;
+        let pull: PullResponse = response.json().await?;
+
+        // Fix 1: Vérifier que l'ID retourné correspond bien à la station demandée.
+        // Si Radio France réassigne les IDs, on déclenche une redécouverte.
+        if pull.station_id != station_id {
+            #[cfg(feature = "logging")]
+            tracing::warn!(
+                "Station ID mismatch for {}: expected {}, API returned {} — triggering rediscovery",
+                station, station_id, pull.station_id
+            );
+            // Mettre à jour le mapping avec le nouvel ID retourné par l'API
+            let stream_url = self.stream_url_for_slug(station).unwrap_or_default();
+            self.update_station_entry(station, pull.station_id, stream_url);
+        }
+
+        let live = self.pull_to_live_response(station, &pull);
 
         #[cfg(feature = "logging")]
         tracing::debug!(
@@ -402,6 +668,268 @@ impl RadioFranceClient {
         );
 
         Ok(live)
+    }
+
+    /// Convertit une PullResponse (nouvelle API) en LiveResponse (format interne)
+    fn pull_to_live_response(&self, station_slug: &str, pull: &PullResponse) -> LiveResponse {
+        let now = if let Some(step) = pull.current_step() {
+            self.step_to_show_metadata(station_slug, step)
+        } else {
+            ShowMetadata::default()
+        };
+
+        // delayToRefresh : on utilise end_time - now comme indicateur (min 30s)
+        let delay_to_refresh = if let Some(end) = now.end_time {
+            let current = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            if end > current {
+                ((end - current) * 1000).min(60_000) // max 60s, en ms
+            } else {
+                30_000
+            }
+        } else {
+            30_000
+        };
+
+        LiveResponse {
+            station_name: station_slug.to_string(),
+            delay_to_refresh,
+            migrated: true,
+            now,
+            next: None,
+        }
+    }
+
+    /// Convertit un PullStep en ShowMetadata
+    fn step_to_show_metadata(&self, station_slug: &str, step: &crate::models::PullStep) -> ShowMetadata {
+        // Stream : injecté depuis le mapping en mémoire
+        let stream_url = self.stream_url_for_slug(station_slug).unwrap_or_default();
+        let sources = if !stream_url.is_empty() {
+            vec![StreamSource {
+                url: stream_url,
+                broadcast_type: crate::models::BroadcastType::Live,
+                format: crate::models::StreamFormat::Aac,
+                bitrate: 192,
+            }]
+        } else {
+            vec![]
+        };
+
+        // Visual : la nouvelle API donne directement l'UUID (pas une URL complète)
+        let visual_background = step.visual.as_deref().map(|uuid| EmbedImage {
+            model: "EmbedImage".to_string(),
+            src: ImageSize::Large.build_url(uuid),
+            width: None,
+            height: None,
+            dominant: None,
+            copyright: None,
+        });
+
+        if step.is_song() {
+            // === Radio musicale ===
+            let artists = step.artists_display();
+            let song = Some(Song {
+                id: step.song_id.clone().unwrap_or_default(),
+                year: step.annee_edition_musique,
+                interpreters: if artists.is_empty() {
+                    vec![]
+                } else {
+                    vec![artists.clone()]
+                },
+                release: crate::models::Release {
+                    label: step.label.clone(),
+                    title: step.titre_album.clone(),
+                    reference: None,
+                },
+            });
+
+            ShowMetadata {
+                start_time: step.start,
+                end_time: step.end,
+                producer: step.disc_jockey.clone(),
+                first_line: Line {
+                    title: Some(step.title.clone()),
+                    id: None,
+                    path: step.path.clone(),
+                },
+                second_line: Line {
+                    title: if artists.is_empty() { None } else { Some(artists) },
+                    id: None,
+                    path: None,
+                },
+                song,
+                media: Media { sources },
+                visual_background,
+                ..ShowMetadata::default()
+            }
+        } else {
+            // === Radio parlée / émission ===
+            let show_title = step.title_concept.as_deref()
+                .unwrap_or(step.title.as_str())
+                .to_string();
+            let episode_title = if step.title_concept.is_some() {
+                step.title.clone()
+            } else {
+                String::new()
+            };
+            let producer = step.disc_jockey.clone()
+                .or_else(|| step.producers.first().map(|p| p.name.clone()));
+
+            ShowMetadata {
+                start_time: step.start,
+                end_time: step.end,
+                producer,
+                first_line: Line {
+                    title: Some(show_title),
+                    id: None,
+                    path: step.path.clone(),
+                },
+                second_line: Line {
+                    title: if episode_title.is_empty() { None } else { Some(episode_title) },
+                    id: None,
+                    path: None,
+                },
+                intro: step.expression_description.clone()
+                    .or_else(|| step.description.clone()),
+                media: Media { sources },
+                visual_background,
+                ..ShowMetadata::default()
+            }
+        }
+    }
+
+    /// Tente de re-découvrir l'ID et l'URL stream d'une station depuis le web
+    ///
+    /// Utilisé quand un stream échoue ou qu'un slug est inconnu.
+    /// Met à jour le mapping en mémoire si la découverte réussit.
+    pub async fn rediscover_station(&self, slug: &str) -> Result<(u32, String)> {
+        #[cfg(feature = "logging")]
+        tracing::warn!("Rediscovering station mapping for: {}", slug);
+
+        // Construire l'URL de la page de la station principale
+        let base_slug = slug.split('_').next().unwrap_or(slug);
+        let page_url = format!("{}/{}/__data.json", self.base_url, base_slug);
+
+        let resp = self
+            .client
+            .get(&page_url)
+            .timeout(self.timeout)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(Error::ApiError(format!(
+                "Cannot rediscover station {}: page returned {}",
+                slug,
+                resp.status()
+            )));
+        }
+
+        let text = resp.text().await?;
+
+        // Fix 2: chercher l'ID spécifique à la station via son brandEnum.
+        // Ex: "fip_rock" → "FIP_ROCK" → cherche `"FIP_ROCK","64"` dans le JSON SvelteKit.
+        // Pour les stations principales, on cherche aussi le pattern `"Brand","<id>"`.
+        let brand_enum = slug.to_uppercase(); // fip_rock → FIP_ROCK
+        let re_enum = Regex::new(&format!(r#""{}","(\d+)""#, regex::escape(&brand_enum)))?;
+        let brand_id: Option<u32> = re_enum
+            .captures_iter(&text)
+            .filter_map(|c| c[1].parse::<u32>().ok())
+            .next();
+
+        // Fallback : premier "Brand","<id>" dans la page (pour stations principales)
+        let brand_id = if brand_id.is_some() {
+            brand_id
+        } else {
+            let re_brand = Regex::new(r#""Brand","(\d+)""#)?;
+            let ids: Vec<u32> = re_brand
+                .captures_iter(&text)
+                .filter_map(|c| c[1].parse::<u32>().ok())
+                .collect();
+            ids.into_iter().next()
+        };
+
+        let station_id = brand_id.ok_or_else(|| {
+            Error::ApiError(format!("Could not find station_id for {} in page data", slug))
+        })?;
+
+        // Dériver l'URL stream depuis le slug (format icecast connu)
+        let stream_url = Self::derive_stream_url(slug);
+
+        self.update_station_entry(slug, station_id, stream_url.clone());
+
+        #[cfg(feature = "logging")]
+        tracing::info!(
+            "Rediscovered station {}: id={}, stream={}",
+            slug,
+            station_id,
+            stream_url
+        );
+
+        Ok((station_id, stream_url))
+    }
+
+    /// Valide qu'une station existe toujours et que son stream est accessible
+    ///
+    /// Vérifie deux choses :
+    /// 1. L'API livemeta répond avec un stationId valide (station connue de Radio France)
+    /// 2. L'URL icecast répond HTTP 200 (stream physiquement disponible)
+    ///
+    /// Retourne Ok(()) si tout est OK, Err si la station est invalide ou le stream mort.
+    pub async fn validate_station(&self, slug: &str) -> Result<()> {
+        // 1. Vérifier que l'API livemeta répond pour cette station
+        let station_id = self
+            .station_id_for_slug(slug)
+            .ok_or_else(|| Error::ApiError(format!("Unknown station slug: {}", slug)))?;
+
+        let url = format!("{}/{}", LIVEMETA_API_URL, station_id);
+        let response = self.client.get(&url).timeout(self.timeout).send().await?;
+
+        if !response.status().is_success() {
+            return Err(Error::ApiError(format!(
+                "Station {} (id={}) no longer exists: livemeta returned {}",
+                slug, station_id, response.status()
+            )));
+        }
+
+        let pull: PullResponse = response.json().await?;
+
+        // Vérifier cohérence de l'ID — si mismatch, la station a peut-être été réassignée
+        if pull.station_id != station_id {
+            return Err(Error::ApiError(format!(
+                "Station {} ID mismatch: stored={}, API returned={} — mapping is stale",
+                slug, station_id, pull.station_id
+            )));
+        }
+
+        // 2. Vérifier que l'URL icecast répond
+        if let Some(stream_url) = self.stream_url_for_slug(slug) {
+            if !stream_url.is_empty() {
+                let stream_resp = self
+                    .client
+                    .head(&stream_url)
+                    .timeout(Duration::from_secs(10))
+                    .send()
+                    .await?;
+                if !stream_resp.status().is_success() {
+                    return Err(Error::ApiError(format!(
+                        "Stream for {} is not accessible: {} returned {}",
+                        slug, stream_url, stream_resp.status()
+                    )));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Dérive l'URL icecast depuis le slug selon le pattern Radio France
+    pub fn derive_stream_url(slug: &str) -> String {
+        // fip_rock → fiprock, fip_sacre_francais → fipsacrefrancais
+        let name = slug.replace('_', "");
+        format!("https://icecast.radiofrance.fr/{}-hifi.aac", name)
     }
 
     /// Get only the current show metadata
@@ -464,13 +992,7 @@ impl RadioFranceClient {
     /// # }
     /// ```
     pub async fn get_hifi_stream_url(&self, station: &str) -> Result<String> {
-        let metadata = self.live_metadata(station).await?;
-
-        metadata
-            .now
-            .media
-            .best_hifi_stream()
-            .map(|s| s.url.clone())
+        self.stream_url_for_slug(station)
             .ok_or_else(|| Error::NoHifiStream(station.to_string()))
     }
 
@@ -619,6 +1141,7 @@ impl ClientBuilder {
             client,
             base_url: self.base_url,
             timeout: self.timeout,
+            station_mapping: Arc::new(RwLock::new(RadioFranceClient::default_station_mapping())),
         })
     }
 }
@@ -644,7 +1167,7 @@ mod tests {
         );
         assert_eq!(
             RadioFranceClient::parse_station_slug("francebleu_alsace"),
-            ("francebleu_alsace", None)
+            ("francebleu", Some("francebleu_alsace"))
         );
         assert_eq!(
             RadioFranceClient::parse_station_slug("franceculture"),

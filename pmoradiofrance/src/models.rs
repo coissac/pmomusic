@@ -31,14 +31,117 @@ impl Station {
 }
 
 // ============================================================================
-// Live API Response Models
+// New livemeta/pull API Models (api.radiofrance.fr)
 // ============================================================================
 
-/// Response from the /api/live? endpoint
+/// Response from https://api.radiofrance.fr/livemeta/pull/{stationId}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullResponse {
+    /// Numeric station ID
+    pub station_id: u32,
+    /// Map of stepId -> step metadata
+    pub steps: std::collections::HashMap<String, PullStep>,
+    /// Ordered levels (depth 1 = current show/song)
+    pub levels: Vec<PullLevel>,
+}
+
+impl PullResponse {
+    /// Get the current step at depth 1 (the "now playing" item)
+    pub fn current_step(&self) -> Option<&PullStep> {
+        // levels[0].items[0] is the current item at depth 1 (most relevant)
+        let level = self.levels.first()?;
+        let step_id = level.items.first()?;
+        self.steps.get(step_id)
+    }
+}
+
+/// A level in the livemeta response (groups steps by depth)
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PullLevel {
+    /// Ordered list of step IDs at this level
+    pub items: Vec<String>,
+    /// Depth (1 = show/song, 2 = sub-item, 3 = deeper)
+    pub position: u32,
+}
+
+/// A step (show, episode, or song) from the livemeta pull API
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullStep {
+    pub uuid: String,
+    pub step_id: String,
+    pub title: String,
+    pub start: Option<u64>,
+    pub end: Option<u64>,
+    pub station_id: u32,
+    pub embed_type: Option<String>, // "song", "expression", "concept"
+    pub depth: u32,
+    pub disc_jockey: Option<String>,
+    /// For songs: authors
+    #[serde(default)]
+    pub authors: serde_json::Value, // can be String or Vec<String>
+    #[serde(default)]
+    pub performers: Option<String>,
+    #[serde(default)]
+    pub highlighted_artists: Vec<String>,
+    pub song_id: Option<String>,
+    pub titre_album: Option<String>,
+    pub label: Option<String>,
+    pub annee_edition_musique: Option<u32>,
+    pub cover_uuid: Option<String>,
+    /// Direct UUID for visual (new API uses UUID directly, not URL)
+    pub visual: Option<String>,
+    /// For shows: concept title (e.g. "La Science, CQFD")
+    pub title_concept: Option<String>,
+    /// For shows: producers list
+    #[serde(default)]
+    pub producers: Vec<PullProducer>,
+    pub path: Option<String>,
+    pub expression_description: Option<String>,
+    pub description: Option<String>,
+}
+
+impl PullStep {
+    /// Returns true if this step is a music track
+    pub fn is_song(&self) -> bool {
+        self.embed_type.as_deref() == Some("song")
+    }
+
+    /// Get artist display string
+    pub fn artists_display(&self) -> String {
+        if !self.highlighted_artists.is_empty() {
+            return self.highlighted_artists.join(", ");
+        }
+        match &self.authors {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Array(arr) => arr
+                .iter()
+                .filter_map(|v| v.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+            _ => String::new(),
+        }
+    }
+}
+
+/// A producer in a PullStep
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PullProducer {
+    pub uuid: String,
+    pub name: String,
+}
+
+// ============================================================================
+// Live API Response Models (internal representation)
+// ============================================================================
+
+/// Internal live metadata representation
+/// Built from PullResponse (new API) or used directly in tests
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LiveResponse {
-    /// Station name (slug)
+    /// Station slug
     pub station_name: String,
     /// Recommended delay before next refresh (milliseconds)
     pub delay_to_refresh: u64,
@@ -59,7 +162,7 @@ impl LiveResponse {
 }
 
 /// Metadata for a show or track currently playing
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ShowMetadata {
     /// Whether to display music program info

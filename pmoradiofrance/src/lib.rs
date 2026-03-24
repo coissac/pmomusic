@@ -122,7 +122,7 @@ pub use models::{
 };
 
 #[cfg(feature = "pmoconfig")]
-pub use config_ext::RadioFranceConfigExt;
+pub use config_ext::{RadioFranceConfigExt, StationInfo};
 
 #[cfg(feature = "pmoconfig")]
 pub use metadata_cache::{CachedMetadata, MetadataCache, MetadataUpdateCallback};
