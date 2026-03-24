@@ -19,6 +19,39 @@ use std::time::{Duration, SystemTime};
 /// TTL pour les playlists d'albums (7 jours)
 const ALBUM_PLAYLIST_TTL: Duration = Duration::from_secs(7 * 24 * 3600);
 
+/// Trait pour les types dont on peut cacher la cover image.
+trait CoverCacheable {
+    fn image_url(&self) -> Option<&str>;
+    fn set_image_cached(&mut self, url: String);
+}
+
+impl CoverCacheable for crate::models::Album {
+    fn image_url(&self) -> Option<&str> { self.image.as_deref() }
+    fn set_image_cached(&mut self, url: String) { self.image_cached = Some(url); }
+}
+
+impl CoverCacheable for crate::models::Playlist {
+    fn image_url(&self) -> Option<&str> { self.image.as_deref() }
+    fn set_image_cached(&mut self, url: String) { self.image_cached = Some(url); }
+}
+
+impl CoverCacheable for crate::models::Artist {
+    fn image_url(&self) -> Option<&str> { self.image.as_deref() }
+    fn set_image_cached(&mut self, url: String) { self.image_cached = Some(url); }
+}
+
+/// Pour Track, la cover est celle de l'album.
+impl CoverCacheable for crate::models::Track {
+    fn image_url(&self) -> Option<&str> {
+        self.album.as_ref()?.image.as_deref()
+    }
+    fn set_image_cached(&mut self, url: String) {
+        if let Some(ref mut album) = self.album {
+            album.image_cached = Some(url);
+        }
+    }
+}
+
 /// Default image for Qobuz (300x300 WebP, embedded in binary)
 const DEFAULT_IMAGE: &[u8] = include_bytes!("../assets/default.webp");
 
@@ -853,20 +886,50 @@ impl QobuzSource {
         }
     }
 
-    /// Cache les covers d'une liste d'albums en parallèle.
-    /// Retourne les albums avec `image_cached` mis à jour si la cover a pu être mise en cache.
-    async fn cache_album_covers(&self, albums: Vec<crate::models::Album>) -> Vec<crate::models::Album> {
-        let futs: Vec<_> = albums.into_iter().map(|mut album| {
+    /// Cache les covers d'une liste d'items en parallèle (générique via `CoverCacheable`).
+    async fn cache_covers<T>(&self, items: Vec<T>) -> Vec<T>
+    where
+        T: CoverCacheable + Send + 'static,
+    {
+        let futs: Vec<_> = items.into_iter().map(|mut item| {
             let source = self.clone();
             async move {
-                if let Some(ref image_url) = album.image.clone() {
-                    if let Ok(pk) = source.inner.cache_manager.cache_cover(image_url).await {
+                if let Some(image_url) = item.image_url().map(str::to_string) {
+                    if let Ok(pk) = source.inner.cache_manager.cache_cover(&image_url).await {
                         if let Ok(url) = source.inner.cache_manager.cover_url(&pk, None) {
-                            album.image_cached = Some(url);
+                            item.set_image_cached(url);
                         }
                     }
                 }
-                album
+                item
+            }
+        }).collect();
+        tokio::task::JoinSet::from_iter(futs).join_all().await
+    }
+
+    async fn cache_album_covers(&self, albums: Vec<crate::models::Album>) -> Vec<crate::models::Album> {
+        self.cache_covers(albums).await
+    }
+
+    async fn cache_playlist_covers(&self, playlists: Vec<crate::models::Playlist>) -> Vec<crate::models::Playlist> {
+        self.cache_covers(playlists).await
+    }
+
+    /// Cache les covers d'une liste de tracks en parallèle (via l'image de l'album).
+    async fn cache_track_covers(&self, tracks: Vec<crate::models::Track>) -> Vec<crate::models::Track> {
+        let futs: Vec<_> = tracks.into_iter().map(|mut track| {
+            let source = self.clone();
+            async move {
+                if let Some(ref mut album) = track.album {
+                    if let Some(ref image_url) = album.image.clone() {
+                        if let Ok(pk) = source.inner.cache_manager.cache_cover(image_url).await {
+                            if let Ok(url) = source.inner.cache_manager.cover_url(&pk, None) {
+                                album.image_cached = Some(url);
+                            }
+                        }
+                    }
+                }
+                track
             }
         }).collect();
         tokio::task::JoinSet::from_iter(futs)
@@ -874,19 +937,19 @@ impl QobuzSource {
             .await
     }
 
-    /// Cache les covers d'une liste de playlists en parallèle.
-    async fn cache_playlist_covers(&self, playlists: Vec<crate::models::Playlist>) -> Vec<crate::models::Playlist> {
-        let futs: Vec<_> = playlists.into_iter().map(|mut playlist| {
+    /// Cache les covers d'une liste d'artistes en parallèle.
+    async fn cache_artist_covers(&self, artists: Vec<crate::models::Artist>) -> Vec<crate::models::Artist> {
+        let futs: Vec<_> = artists.into_iter().map(|mut artist| {
             let source = self.clone();
             async move {
-                if let Some(ref image_url) = playlist.image.clone() {
+                if let Some(ref image_url) = artist.image.clone() {
                     if let Ok(pk) = source.inner.cache_manager.cache_cover(image_url).await {
                         if let Ok(url) = source.inner.cache_manager.cover_url(&pk, None) {
-                            playlist.image_cached = Some(url);
+                            artist.image_cached = Some(url);
                         }
                     }
                 }
-                playlist
+                artist
             }
         }).collect();
         tokio::task::JoinSet::from_iter(futs)
@@ -932,6 +995,7 @@ impl QobuzSource {
             .await
             .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
 
+        let tracks = self.cache_covers(tracks).await;
         let items: Vec<Item> = tracks
             .into_iter()
             .filter_map(|track| track.to_didl_item("qobuz:favorites:tracks").ok())
@@ -949,23 +1013,21 @@ impl QobuzSource {
             .await
             .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
 
+        let artists = self.cache_covers(artists).await;
         let containers: Vec<Container> = artists
             .into_iter()
-            .filter_map(|artist| {
-                // Créer un container pour chaque artiste
-                Some(Container {
-                    id: format!("qobuz:artist:{}", artist.id),
-                    parent_id: "qobuz:favorites:artists".to_string(),
-                    restricted: Some("1".to_string()),
-                    child_count: None,
-                    searchable: Some("1".to_string()),
-                    title: artist.name.clone(),
-                    class: "object.container".to_string(),
-                    artist: Some(artist.name.clone()),
-                    album_art: artist.image_cached.clone().or_else(|| artist.image.clone()),
-                    containers: vec![],
-                    items: vec![],
-                })
+            .map(|artist| Container {
+                id: format!("qobuz:artist:{}", artist.id),
+                parent_id: "qobuz:favorites:artists".to_string(),
+                restricted: Some("1".to_string()),
+                child_count: None,
+                searchable: Some("1".to_string()),
+                title: artist.name.clone(),
+                class: "object.container".to_string(),
+                artist: Some(artist.name.clone()),
+                album_art: artist.image_cached.clone(),
+                containers: vec![],
+                items: vec![],
             })
             .collect();
 
@@ -1165,6 +1227,7 @@ impl QobuzSource {
             .await
             .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
 
+        let artists = self.cache_covers(artists).await;
         let containers: Vec<Container> = artists
             .into_iter()
             .map(|artist| Container {
@@ -1176,7 +1239,7 @@ impl QobuzSource {
                 title: artist.name.clone(),
                 class: "object.container".to_string(),
                 artist: Some(artist.name.clone()),
-                album_art: artist.image_cached.clone().or_else(|| artist.image.clone()),
+                album_art: artist.image_cached.clone(),
                 containers: vec![],
                 items: vec![],
             })
@@ -1194,6 +1257,7 @@ impl QobuzSource {
             .await
             .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
 
+        let playlists = self.cache_covers(playlists).await;
         let parent_id = format!("qobuz:discover:playlists:{}", tag);
         let containers: Vec<Container> = playlists
             .into_iter()
@@ -1559,7 +1623,6 @@ impl MusicSource for QobuzSource {
             }
 
             ObjectIdType::Playlist(playlist_id) => {
-                // Get tracks in playlist
                 let tracks = self
                     .inner
                     .client
@@ -1567,6 +1630,7 @@ impl MusicSource for QobuzSource {
                     .await
                     .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
 
+                let tracks = self.cache_covers(tracks).await;
                 let items: Vec<Item> = tracks
                     .into_iter()
                     .filter_map(|track| {
@@ -1580,7 +1644,6 @@ impl MusicSource for QobuzSource {
             }
 
             ObjectIdType::Artist(artist_id) => {
-                // Get albums by artist
                 let albums = self
                     .inner
                     .client
@@ -1588,6 +1651,7 @@ impl MusicSource for QobuzSource {
                     .await
                     .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
 
+                let albums = self.cache_covers(albums).await;
                 let containers: Vec<Container> = albums
                     .into_iter()
                     .filter_map(|album| {
@@ -1738,6 +1802,7 @@ impl MusicSource for QobuzSource {
             .await
             .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
 
+        let all_tracks = self.cache_covers(all_tracks).await;
         let items: Vec<Item> = all_tracks
             .into_iter()
             .skip(offset)
@@ -1757,15 +1822,16 @@ impl MusicSource for QobuzSource {
             .await
             .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
 
-        // Convert albums to containers and tracks to items
-        let containers: Vec<Container> = results
-            .albums
+        let (albums, tracks) = tokio::join!(
+            self.cache_covers(results.albums),
+            self.cache_covers(results.tracks),
+        );
+        let containers: Vec<Container> = albums
             .into_iter()
             .filter_map(|album| album.to_didl_container("qobuz").ok())
             .collect();
 
-        let items: Vec<Item> = results
-            .tracks
+        let items: Vec<Item> = tracks
             .into_iter()
             .filter_map(|track| track.to_didl_item("qobuz").ok())
             .collect();
@@ -1979,6 +2045,7 @@ impl MusicSource for QobuzSource {
             .await
             .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
 
+        let playlists = self.cache_covers(playlists).await;
         let containers: Vec<Container> = playlists
             .into_iter()
             .filter_map(|playlist| playlist.to_didl_container("qobuz").ok())
@@ -2061,6 +2128,7 @@ impl MusicSource for QobuzSource {
                     .await
                     .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
 
+                let albums = self.cache_covers(albums).await;
                 let containers: Vec<Container> = albums
                     .into_iter()
                     .skip(offset)

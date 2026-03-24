@@ -517,7 +517,7 @@ fn playlist_track_to_response(
 }
 
 fn cover_url_from_pk(pk: &str) -> String {
-    pmocache::covers_absolute_url_for(pk, None)
+    pmocache::covers_route_for(pk, None)
 }
 
 fn normalize_cover_pk(input: Option<String>) -> Option<String> {
