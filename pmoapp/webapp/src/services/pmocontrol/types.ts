@@ -120,6 +120,8 @@ export interface ContainerEntry {
 export interface BrowseResponse {
   container_id: string;
   entries: ContainerEntry[];
+  total_count: number;
+  offset: number;
 }
 
 // ============================================================================

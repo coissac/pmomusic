@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useMediaServers } from "@/composables/useMediaServers";
 import { useRenderers } from "@/composables/useRenderers";
 import { useUIStore } from "@/stores/ui";
@@ -16,8 +16,11 @@ const props = defineProps<{
 const {
     getBrowseCached,
     browseContainer,
+    loadMoreBrowse,
+    hasMore,
     currentPath: breadcrumbPath,
     loading,
+    loadingMore,
     error,
 } = useMediaServers();
 
@@ -25,8 +28,9 @@ const { playContent, addToQueue, attachAndPlayPlaylist, attachPlaylist } =
     useRenderers();
 const uiStore = useUIStore();
 
-// Flag pour gérer le rechargement automatique
 const isRefreshing = ref(false);
+const sentinelRef = ref<HTMLElement | null>(null);
+let observer: IntersectionObserver | null = null;
 
 const browseData = computed(() =>
     getBrowseCached(props.serverId, props.containerId),
@@ -40,6 +44,28 @@ const items = computed(
     () => browseData.value?.entries.filter((e) => !e.is_container) || [],
 );
 
+const canLoadMore = computed(() => hasMore(props.serverId, props.containerId));
+
+function setupObserver() {
+    if (observer) observer.disconnect();
+    observer = new IntersectionObserver(
+        (entries) => {
+            if (entries[0]?.isIntersecting && canLoadMore.value && !loadingMore.value) {
+                loadMoreBrowse(props.serverId, props.containerId);
+            }
+        },
+        { threshold: 0.1 },
+    );
+    if (sentinelRef.value) observer.observe(sentinelRef.value);
+}
+
+onMounted(() => setupObserver());
+onBeforeUnmount(() => observer?.disconnect());
+
+watch(sentinelRef, (el) => {
+    if (el) setupObserver();
+});
+
 // Charger le container au montage et quand containerId change
 watch(
     () => props.containerId,
@@ -51,15 +77,10 @@ watch(
     { immediate: true },
 );
 
-// Recharger automatiquement si le cache est invalidé (ex: après un ContainersUpdated SSE)
-// Cela se produit notamment quand on clique sur "Lire maintenant" sur une playlist,
-// ce qui déclenche un événement ContainersUpdated qui invalide le cache
-// Le serveur contrôle déjà le flux SSE, pas besoin de debouncing côté client
+// Recharger si le cache est invalidé (ContainersUpdated SSE)
 watch(
     () => browseData.value,
     async (data) => {
-        // Si browseData devient undefined alors que containerId est présent,
-        // et qu'on n'est pas déjà en train de charger, recharger immédiatement
         if (
             !data &&
             props.containerId &&
@@ -201,6 +222,14 @@ async function handleQueueItem(itemId: string, rendererId: string) {
             >
                 <p>Ce dossier est vide</p>
             </div>
+
+            <!-- Sentinel infinite scroll -->
+            <div ref="sentinelRef" class="scroll-sentinel" />
+
+            <!-- Spinner load more -->
+            <div v-if="loadingMore" class="load-more-spinner">
+                <Loader2 :size="20" class="spinner" />
+            </div>
         </div>
     </div>
 </template>
@@ -293,6 +322,17 @@ async function handleQueueItem(itemId: string, rendererId: string) {
     color: var(--color-text-tertiary);
     font-size: var(--text-base);
     padding: var(--spacing-xl);
+}
+
+.scroll-sentinel {
+    height: 1px;
+}
+
+.load-more-spinner {
+    display: flex;
+    justify-content: center;
+    padding: var(--spacing-md);
+    color: var(--color-text-secondary);
 }
 
 /* Scrollbar styling */

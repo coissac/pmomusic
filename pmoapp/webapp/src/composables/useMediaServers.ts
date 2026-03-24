@@ -7,7 +7,7 @@ import { api } from '../services/pmocontrol/api'
 import { sse } from '../services/pmocontrol/sse'
 import type {
   MediaServerSummary,
-  BrowseResponse
+  ContainerEntry,
 } from '../services/pmocontrol/types'
 
 export interface BreadcrumbItem {
@@ -15,9 +15,15 @@ export interface BreadcrumbItem {
   title: string
 }
 
+export interface BrowseState {
+  container_id: string
+  entries: ContainerEntry[]
+  total_count: number
+}
+
 // Cache global partagé
 const serversCache = ref<Map<string, MediaServerSummary>>(new Map())
-const browseCache = ref<Map<string, BrowseResponse>>(new Map())
+const browseCache = ref<Map<string, BrowseState>>(new Map())
 const currentPath = ref<BreadcrumbItem[]>([])
 
 // Timestamps
@@ -100,6 +106,7 @@ export function useMediaServers() {
   ensureSSEConnected()
 
   const loading = ref(false)
+  const loadingMore = ref(false)
   const error = ref<string | null>(null)
 
   // Getters computed
@@ -110,7 +117,7 @@ export function useMediaServers() {
   async function fetchServers(force = false) {
     const now = Date.now()
     if (!force && now - lastFetch.servers < CACHE_DURATION_MS) {
-      return // Cache encore valide
+      return
     }
 
     try {
@@ -129,11 +136,10 @@ export function useMediaServers() {
     }
   }
 
-  // Browse container (avec cache automatique)
+  // Charge la première page (remplace le cache)
   async function browseContainer(serverId: string, containerId: string, useCache = true) {
     const key = `${serverId}/${containerId}`
 
-    // Vérifier le cache
     if (useCache && browseCache.value.has(key)) {
       return browseCache.value.get(key)!
     }
@@ -142,18 +148,48 @@ export function useMediaServers() {
       loading.value = true
       error.value = null
 
-      const data = await api.browseContainer(serverId, containerId)
+      const data = await api.browseContainer(serverId, containerId, 0)
 
-      // Mettre en cache
-      browseCache.value.set(key, data)
+      browseCache.value.set(key, {
+        container_id: data.container_id,
+        entries: data.entries,
+        total_count: data.total_count,
+      })
 
-      return data
+      return browseCache.value.get(key)!
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Erreur browse container'
       console.error(`[useMediaServers] Erreur browse ${serverId}/${containerId}:`, e)
       throw e
     } finally {
       loading.value = false
+    }
+  }
+
+  // Charge la page suivante et accumule (infinite scroll)
+  async function loadMoreBrowse(serverId: string, containerId: string) {
+    const key = `${serverId}/${containerId}`
+    const state = browseCache.value.get(key)
+
+    if (!state) return
+    if (state.entries.length >= state.total_count) return
+    if (loadingMore.value) return
+
+    try {
+      loadingMore.value = true
+
+      const offset = state.entries.length
+      const data = await api.browseContainer(serverId, containerId, offset)
+
+      // Accumuler les nouvelles entrées
+      state.entries.push(...data.entries)
+      state.total_count = data.total_count
+      // Forcer la réactivité
+      browseCache.value.set(key, { ...state })
+    } catch (e) {
+      console.error(`[useMediaServers] Erreur load more ${serverId}/${containerId}:`, e)
+    } finally {
+      loadingMore.value = false
     }
   }
 
@@ -165,6 +201,13 @@ export function useMediaServers() {
   function getBrowseCached(serverId: string, containerId: string) {
     const key = `${serverId}/${containerId}`
     return browseCache.value.get(key)
+  }
+
+  function hasMore(serverId: string, containerId: string): boolean {
+    const key = `${serverId}/${containerId}`
+    const state = browseCache.value.get(key)
+    if (!state) return false
+    return state.entries.length < state.total_count
   }
 
   // Breadcrumb path management
@@ -179,11 +222,9 @@ export function useMediaServers() {
   // Invalidation du cache
   function invalidateCache(serverId: string, containerId?: string) {
     if (containerId) {
-      // Invalider un container spécifique
       const key = `${serverId}/${containerId}`
       browseCache.value.delete(key)
     } else {
-      // Invalider tous les containers d'un serveur
       const keysToDelete: string[] = []
       browseCache.value.forEach((_, key) => {
         if (key.startsWith(serverId + '/')) {
@@ -197,6 +238,7 @@ export function useMediaServers() {
   return {
     // État
     loading,
+    loadingMore,
     error,
     currentPath,
     // Getters
@@ -204,9 +246,11 @@ export function useMediaServers() {
     onlineServers,
     getServerById,
     getBrowseCached,
+    hasMore,
     // Actions
     fetchServers,
     browseContainer,
+    loadMoreBrowse,
     setPath,
     clearPath,
     invalidateCache

@@ -18,9 +18,9 @@ import { useMediaServers } from "@/composables/useMediaServers";
 import { useRenderers } from "@/composables/useRenderers";
 import type {
     MediaServerSummary,
-    BrowseResponse,
     ContainerEntry,
 } from "@/services/pmocontrol/types";
+import type { BrowseState } from "@/composables/useMediaServers";
 
 const props = defineProps<{
     modelValue: boolean; // v-model pour contrôler l'ouverture
@@ -47,7 +47,7 @@ const router = useRouter();
 
 // État de navigation
 const currentServer = ref<MediaServerSummary | null>(null);
-const browseData = ref<BrowseResponse | null>(null);
+const browseData = ref<BrowseState | null>(null);
 const isLoading = ref(false);
 
 // État du menu dropdown (pour chaque item, on stocke si son menu est ouvert)
