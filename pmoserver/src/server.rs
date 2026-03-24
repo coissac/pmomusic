@@ -114,6 +114,13 @@ impl Server {
     pub fn new(name: impl Into<String>, base_url: impl Into<String>, http_port: u16) -> Self {
         let api_registry = Arc::new(RwLock::new(Vec::new()));
 
+        let base_url = base_url.into();
+
+        // Initialiser PMO_SERVER_URL pour que tous les caches puissent construire des URLs absolues
+        // sans avoir besoin de propager base_url manuellement.
+        // SAFETY: appelé une seule fois au démarrage du serveur, avant tout thread concurrent.
+        unsafe { std::env::set_var("PMO_SERVER_URL", &base_url) };
+
         // Créer le router initial avec l'endpoint de registre
         let registry_route = Router::new()
             .route("/api/registry", get(get_api_registry))
@@ -121,7 +128,7 @@ impl Server {
 
         Self {
             name: name.into(),
-            base_url: base_url.into(),
+            base_url,
             http_port,
             router: Arc::new(RwLock::new(registry_route)),
             api_router: Arc::new(RwLock::new(None)),

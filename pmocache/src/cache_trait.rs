@@ -69,20 +69,23 @@ pub trait FileCache<C: CacheConfig>: Send + Sync {
 
     /// Retourne la route relative pour accéder à un item du cache
     ///
-    /// # Arguments
-    ///
-    /// * `pk` - Clé primaire de la piste
-    /// * `param` - Paramètre optionnel (ex: "orig", "128k", etc.)
-    ///
-    /// # Returns
-    ///
-    /// Route relative (ex: "/audio/flac/abc123" ou "/audio/tracks/abc123/orig")
+    /// Format: `/{cache_name}/{cache_type}/{pk}[/{param}]`
     fn route_for(&self, pk: &str, param: Option<&str>) -> String {
         if let Some(p) = param {
             format!("/{}/{}/{}/{}", C::cache_name(), C::cache_type(), pk, p)
         } else {
             format!("/{}/{}/{}", C::cache_name(), C::cache_type(), pk)
         }
+    }
+
+    /// Retourne l'URL absolue pour accéder à un item du cache
+    ///
+    /// Utilise la variable d'environnement `PMO_SERVER_URL` comme base,
+    /// avec `http://localhost:8080` comme valeur par défaut.
+    fn absolute_url_for(&self, pk: &str, param: Option<&str>) -> String {
+        let base = std::env::var("PMO_SERVER_URL")
+            .unwrap_or_else(|_| "http://localhost:8080".to_string());
+        format!("{}{}", base.trim_end_matches('/'), self.route_for(pk, param))
     }
 
     /// Télécharge un fichier depuis une URL et l'ajoute au cache

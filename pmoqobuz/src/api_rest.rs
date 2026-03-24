@@ -299,7 +299,7 @@ async fn cache_album_image(mut album: Album, cover_cache: &Arc<pmocovers::Cache>
     if let Some(ref image_url) = album.image {
         match cover_cache.add_from_url(image_url, None).await {
             Ok(pk) => {
-                album.image_cached = Some(format!("/covers/images/{}", pk));
+                album.image_cached = Some(pmocache::covers_absolute_url_for(&pk, None));
             }
             Err(e) => {
                 tracing::warn!("Failed to cache album image: {}", e);

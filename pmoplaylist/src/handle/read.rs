@@ -182,7 +182,7 @@ impl ReadHandle {
         let _remaining = self.remaining().await?;
 
         // Convertir cover_pk en URL si présent
-        let album_art = cover_pk.map(|pk| format!("/cover/{}", pk));
+        let album_art = cover_pk.map(|pk| pmocache::covers_absolute_url_for(&pk, None));
 
         Ok(Container {
             id: self.playlist.id.clone(),
@@ -253,7 +253,7 @@ impl ReadHandle {
             let track_number = meta.get_track_number().await.ok().flatten();
             let cover_pk = meta.get_cover_pk().await.ok().flatten();
             let cover_url = if let Some(pk) = cover_pk.as_ref() {
-                Some(format!("/covers/jpeg/{}/256", pk))
+                Some(pmocache::covers_absolute_url_for(pk, None))
             } else {
                 meta.get_cover_url().await.ok().flatten()
             };

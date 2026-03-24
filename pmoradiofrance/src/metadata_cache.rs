@@ -251,15 +251,13 @@ impl CachedMetadata {
                 // Note: add_from_url() lance le téléchargement complet en arrière-plan.
                 // L'URL est valide immédiatement — si le fichier n'est pas encore prêt,
                 // le client web doit réessayer (retry avec backoff).
-                let route = cache.route_for(&pk, None);
-                let public_url = format!("{}{}", server_base_url.trim_end_matches('/'), route);
+                let public_url = pmocache::covers_absolute_url_for(&pk, None);
 
                 #[cfg(feature = "logging")]
                 tracing::debug!(
-                    "Cached cover - UUID: {}, PK: {}, route: {}, public_url: {}",
+                    "Cached cover - UUID: {}, PK: {}, public_url: {}",
                     uuid,
                     pk,
-                    route,
                     public_url
                 );
 

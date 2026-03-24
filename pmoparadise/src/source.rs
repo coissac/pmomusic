@@ -213,7 +213,7 @@ impl RadioParadiseSource {
                         let cover_pk = json["cover_pk"].as_str().map(|s| s.to_string());
                         let cover_url = cover_pk
                             .as_ref()
-                            .map(|pk| format!("{}/covers/jpeg/{}", self.base_url, pk))
+                            .map(|pk| pmocache::covers_absolute_url_for(pk, None))
                             .or_else(|| json["cover_url"].as_str().map(|s| s.to_string()))
                             .or_else(|| Some(self.default_cover_url()));
 

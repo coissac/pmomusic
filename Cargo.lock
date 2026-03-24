@@ -4147,6 +4147,7 @@ dependencies = [
  "pmoaudio",
  "pmoaudio-ext",
  "pmoaudiocache",
+ "pmocache",
  "pmoconfig",
  "pmocovers",
  "pmoflac",

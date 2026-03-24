@@ -517,7 +517,7 @@ fn playlist_track_to_response(
 }
 
 fn cover_url_from_pk(pk: &str) -> String {
-    format!("/covers/image/{}/256", pk)
+    pmocache::covers_absolute_url_for(pk, None)
 }
 
 fn normalize_cover_pk(input: Option<String>) -> Option<String> {
