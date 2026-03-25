@@ -836,8 +836,7 @@ impl QobuzSource {
                 .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
         }
 
-        let tracks = self.cache_covers(tracks).await;
-        let lazy_pks: Vec<String> = tracks.iter().map(|t| format!("QOBUZ:{}", t.id)).collect();
+        let lazy_pks = self.register_tracks_lazy(&tracks).await;
         writer
             .push_lazy_batch(lazy_pks)
             .await
@@ -1032,6 +1031,84 @@ impl QobuzSource {
         tokio::task::JoinSet::from_iter(futs)
             .join_all()
             .await
+    }
+
+    /// Enregistre une liste de tracks comme lazy entries dans l'audio cache (en parallèle).
+    ///
+    /// Contrairement à `add_track_lazy`, cette méthode ne fait PAS d'appel à `get_stream_url`
+    /// (coûteux pour de grandes playlists). L'URL audio est résolue à la demande via
+    /// `QobuzLazyProvider` lors de la première lecture.
+    ///
+    /// Pour chaque track : cache la cover, enregistre la lazy entry, stocke les métadonnées.
+    /// Retourne la liste des lazy PKs enregistrés avec succès.
+    async fn register_tracks_lazy(&self, tracks: &[crate::models::Track]) -> Vec<String> {
+        // Limite la concurrence pour ne pas saturer l'API Qobuz ni la connexion réseau.
+        // Les covers déjà cachées sont retournées immédiatement (pas d'HTTP), donc même
+        // 600 tracks ne génèrent que ~N_albums_uniques téléchargements réels.
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(16));
+
+        let futs: Vec<_> = tracks.iter().map(|track| {
+            let source = self.clone();
+            let sem = sem.clone();
+            let track_id = track.id.clone();
+            let track_title = track.title.clone();
+            let cover_image_url = track.album.as_ref().and_then(|a| a.image.clone());
+            let metadata = pmoaudiocache::AudioMetadata {
+                title: Some(track.title.clone()),
+                artist: track.performer.as_ref().map(|p| p.name.clone()),
+                album: track.album.as_ref().map(|a| a.title.clone()),
+                duration_secs: Some(track.duration as u64),
+                year: track.album.as_ref().and_then(|a| {
+                    a.release_date.as_ref().and_then(|d| d.split('-').next()?.parse().ok())
+                }),
+                track_number: Some(track.track_number),
+                track_total: track.album.as_ref().and_then(|a| a.tracks_count),
+                disc_number: Some(track.media_number),
+                disc_total: None,
+                genre: track.album.as_ref().and_then(|a| {
+                    if !a.genres.is_empty() { Some(a.genres.join(", ")) } else { None }
+                }),
+                sample_rate: track.sample_rate,
+                channels: track.channels,
+                bitrate: None,
+                conversion: None,
+            };
+            async move {
+                let _permit = sem.acquire().await.ok()?;
+                let lazy_pk = format!("QOBUZ:{}", track_id);
+
+                // 1. Cache cover eagerly
+                let cover_pk = if let Some(ref url) = cover_image_url {
+                    source.inner.cache_manager.cache_cover(url).await.ok()
+                } else {
+                    None
+                };
+
+                // 2. Register lazy entry + set cover_pk + seed metadata
+                match source.inner.cache_manager
+                    .cache_audio_lazy_with_provider(&lazy_pk, Some(metadata), cover_pk)
+                    .await
+                {
+                    Ok(pk) => {
+                        let _ = source.inner.cache_manager.set_audio_metadata(
+                            &pk, "qobuz_track_id", json!(track_id),
+                        );
+                        Some(pk)
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to register lazy track {}: {}", track_title, e);
+                        None
+                    }
+                }
+            }
+        }).collect();
+
+        tokio::task::JoinSet::from_iter(futs)
+            .join_all()
+            .await
+            .into_iter()
+            .flatten()
+            .collect()
     }
 
     /// Cache les covers d'une liste d'artistes en parallèle.
