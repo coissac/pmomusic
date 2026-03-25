@@ -2234,8 +2234,19 @@ fn fetch_playback_items(
     let object_metadata = server.browse_object(object_id)?;
 
     let entries = if object_metadata.is_container {
-        // For containers, browse children to get all items
-        server.browse_children(object_id, 0, BROWSE_DEFAULT_LIMIT)?
+        // For containers, browse all children with pagination
+        let mut all_entries = Vec::new();
+        let mut offset = 0u32;
+        loop {
+            let page = server.browse_children(object_id, offset, BROWSE_DEFAULT_LIMIT)?;
+            let fetched = page.len() as u32;
+            all_entries.extend(page);
+            if fetched < BROWSE_DEFAULT_LIMIT {
+                break;
+            }
+            offset += fetched;
+        }
+        all_entries
     } else {
         // For items, use the object itself
         vec![object_metadata]

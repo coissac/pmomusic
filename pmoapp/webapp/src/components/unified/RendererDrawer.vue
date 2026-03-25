@@ -449,8 +449,7 @@ async function handleTransferQueue(event: Event, targetRendererId: string) {
 
 @media (max-width: 768px) and (orientation: portrait) {
     .drawer-backdrop {
-        right: 0; /* Mobile portrait: backdrop prend tout l'écran */
-        background: rgba(0, 0, 0, 0.4); /* Plus sombre sur mobile */
+        display: none; /* Mobile portrait: le drawer couvre 100vw, pas besoin de backdrop */
     }
 }
 

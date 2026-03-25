@@ -185,11 +185,12 @@ impl OhPlaylistClient {
             return Ok(Vec::new());
         }
 
+        // OpenHome spec: IdList is space-delimited (not comma-delimited)
         let id_list_csv = id_list
             .iter()
             .map(|id| id.to_string())
             .collect::<Vec<_>>()
-            .join(",");
+            .join(" ");
         let args = [("IdList", id_list_csv.as_str())];
 
         let call_result =

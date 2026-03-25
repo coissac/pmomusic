@@ -553,6 +553,50 @@ impl WriteHandle {
 
     // Helpers internes
 
+    /// Met à jour la source externe de la playlist.
+    pub async fn set_source(&self, source: Option<String>) -> Result<()> {
+        if !self.playlist.is_alive() {
+            return Err(crate::Error::PlaylistDeleted(self.playlist.id.clone()));
+        }
+
+        self.playlist.set_source(source).await;
+
+        if self.playlist.persistent {
+            self.save_to_db().await?;
+        }
+
+        crate::manager::PlaylistManager().notify_playlist_changed(&self.playlist.id);
+
+        Ok(())
+    }
+
+    /// Met à jour la version de la source (ex: updated_at).
+    pub async fn set_source_version(&self, version: Option<String>) -> Result<()> {
+        if !self.playlist.is_alive() {
+            return Err(crate::Error::PlaylistDeleted(self.playlist.id.clone()));
+        }
+
+        self.playlist.set_source_version(version).await;
+
+        if self.playlist.persistent {
+            self.save_to_db().await?;
+        }
+
+        crate::manager::PlaylistManager().notify_playlist_changed(&self.playlist.id);
+
+        Ok(())
+    }
+
+    /// Retourne la source externe.
+    pub async fn source(&self) -> Option<String> {
+        self.playlist.source().await
+    }
+
+    /// Retourne la version de la source.
+    pub async fn source_version(&self) -> Option<String> {
+        self.playlist.source_version().await
+    }
+
     async fn save_to_db(&self) -> Result<()> {
         let manager = crate::manager::PlaylistManager();
         let persistence = manager
@@ -567,6 +611,8 @@ impl WriteHandle {
 
         let cover_pk = self.playlist.cover_pk().await;
         let artist = self.playlist.artist().await;
+        let source = self.playlist.source().await;
+        let source_version = self.playlist.source_version().await;
 
         persistence
             .save_playlist(
@@ -575,6 +621,8 @@ impl WriteHandle {
                 &role,
                 cover_pk.as_deref(),
                 artist.as_deref(),
+                source.as_deref(),
+                source_version.as_deref(),
                 config,
                 tracks,
             )

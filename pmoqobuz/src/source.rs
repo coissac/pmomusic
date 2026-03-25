@@ -14,10 +14,9 @@ use pmosource::SourceCacheManager;
 use pmosource::{async_trait, BrowseResult, MusicSource, MusicSourceError, Result};
 use serde_json::json;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 /// TTL pour les playlists d'albums (7 jours)
-const ALBUM_PLAYLIST_TTL: Duration = Duration::from_secs(7 * 24 * 3600);
 
 /// Trait pour les types dont on peut cacher la cover image.
 trait CoverCacheable {
@@ -563,54 +562,41 @@ impl QobuzSource {
     }
 
     /// Vérifie si une playlist d'album existe et est valide (non expirée ET non vide)
-    async fn is_album_playlist_valid(&self, playlist_id: &str) -> Result<bool> {
+    /// Retourne la source_version d'une pmoplaylist si elle existe en mémoire ou en DB.
+    async fn cached_source_version(&self, playlist_id: &str) -> Option<String> {
         let playlist_manager = pmoplaylist::PlaylistManager();
-
         if !playlist_manager.exists(playlist_id).await {
-            return Ok(false);
+            return None;
         }
-
-        // Vérifier l'âge
-        match playlist_manager.get_playlist_age(playlist_id).await {
-            Ok(Some(age)) if age < ALBUM_PLAYLIST_TTL => {
-                // Playlist non expirée, vérifier qu'elle contient des tracks
-                match playlist_manager.get_read_handle(playlist_id).await {
-                    Ok(reader) => {
-                        let count = reader.remaining().await.unwrap_or(0);
-                        Ok(count > 0) // Valide seulement si non vide
-                    }
-                    Err(_) => Ok(false),
-                }
-            }
-            _ => Ok(false),
-        }
+        playlist_manager
+            .get_read_handle(playlist_id)
+            .await
+            .ok()?
+            .source_version()
+            .await
     }
 
-    /// Adapte les Items d'une playlist pour correspondre au schéma UPnP Qobuz
-    async fn adapt_playlist_items_to_qobuz(
+    /// Adapte des Items DIDL issus d'une pmoplaylist pour le schéma UPnP Qobuz.
+    ///
+    /// - Résout l'ID de la track (`qobuz:track:<id>`) depuis les métadonnées cache
+    /// - Rend absolues les URLs relatives (resource + cover)
+    /// - Affecte le `parent_id` fourni
+    async fn adapt_items_to_qobuz(
         &self,
         items: Vec<Item>,
-        album_id: &str,
+        parent_id: &str,
     ) -> Result<Vec<Item>> {
         use tracing::warn;
-
-        let parent_id = format!("qobuz:album:{}", album_id);
 
         let mut adapted = Vec::with_capacity(items.len());
 
         for mut item in items {
-            // Extraire cache_pk depuis l'URL du resource
-            let cache_pk = if let Some(resource) = item.resources.first() {
-                resource
-                    .url
-                    .strip_prefix("/audio/flac/")
-                    .map(|s| s.to_string())
-            } else {
-                None
-            };
+            let cache_pk = item
+                .resources
+                .first()
+                .and_then(|r| r.url.strip_prefix("/audio/flac/").map(|s| s.to_string()));
 
             if let Some(pk) = cache_pk {
-                // Récupérer track_id depuis metadata
                 if let Ok(Some(track_id_value)) = self
                     .inner
                     .cache_manager
@@ -625,9 +611,6 @@ impl QobuzSource {
                     warn!("No qobuz_track_id metadata for {}", pk);
                 }
 
-                // Convertir URL relative en URL absolue
-                // From: /audio/flac/QOBUZ:123
-                // To: http://192.168.0.138:8080/audio/flac/QOBUZ:123
                 if let Some(resource) = item.resources.first_mut() {
                     if resource.url.starts_with('/') {
                         resource.url = format!("{}{}", self.inner.base_url, resource.url);
@@ -635,21 +618,59 @@ impl QobuzSource {
                 }
             }
 
-            // Convertir l'URL de la cover en URL absolue si elle est relative
             if let Some(art) = item.album_art.as_mut() {
                 if art.starts_with('/') {
                     *art = format!("{}{}", self.inner.base_url, art);
                 }
             }
 
-            item.parent_id = parent_id.clone();
+            item.parent_id = parent_id.to_string();
             adapted.push(item);
         }
 
         Ok(adapted)
     }
 
-    /// Récupère ou crée une playlist lazy pour un album
+    /// Ouvre un WriteHandle sur une pmoplaylist persistante, en la créant si absente
+    /// ou en la vidant (flush) si elle existe déjà.
+    async fn get_or_flush_playlist_writer(
+        &self,
+        playlist_id: &str,
+        role: pmoplaylist::PlaylistRole,
+    ) -> Result<pmoplaylist::WriteHandle> {
+        let playlist_manager = pmoplaylist::PlaylistManager();
+
+        if playlist_manager.exists(playlist_id).await {
+            let writer = playlist_manager
+                .get_persistent_write_handle(playlist_id.to_string())
+                .await
+                .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
+            writer
+                .flush()
+                .await
+                .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
+            Ok(writer)
+        } else {
+            playlist_manager
+                .create_persistent_playlist_with_role(playlist_id.to_string(), role)
+                .await
+                .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))
+        }
+    }
+
+    /// Met en cache la cover si l'URL est présente.
+    async fn cache_cover_opt(&self, image_url: Option<&str>) -> Option<String> {
+        self.inner
+            .cache_manager
+            .cache_cover(image_url?)
+            .await
+            .ok()
+    }
+
+    /// Récupère ou crée une playlist lazy pour un album, avec invalidation par version.
+    ///
+    /// `source_version` = `"{released_at}_{tracks_count}"` — change uniquement en cas de
+    /// réédition avec pistes supplémentaires. Cache valide à vie si la version correspond.
     async fn get_or_create_album_playlist_items(
         &self,
         album_id: &str,
@@ -659,30 +680,11 @@ impl QobuzSource {
 
         let playlist_id = format!("qobuz-album-{}", album_id);
         let playlist_manager = pmoplaylist::PlaylistManager();
+        let parent_id = format!("qobuz:album:{}", album_id);
 
-        // Vérifier validité (existe ET non expirée)
-        let is_valid = self.is_album_playlist_valid(&playlist_id).await?;
+        let cached_version = self.cached_source_version(&playlist_id).await;
 
-        if is_valid {
-            debug!("Album playlist {} found and valid", playlist_id);
-
-            let reader = playlist_manager
-                .get_read_handle(&playlist_id)
-                .await
-                .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
-
-            let items = reader
-                .to_items(limit)
-                .await
-                .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
-
-            return self.adapt_playlist_items_to_qobuz(items, album_id).await;
-        }
-
-        // Playlist invalide/inexistante : (re)créer
-        info!("Album playlist {} creating/refreshing", playlist_id);
-
-        // 1. Métadonnées album
+        // Charger les métadonnées album (contient déjà les tracks)
         let album = self
             .inner
             .client
@@ -690,47 +692,49 @@ impl QobuzSource {
             .await
             .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
 
-        // 2. Cache cover
-        let cover_pk = if let Some(ref image_url) = album.image {
-            self.inner.cache_manager.cache_cover(image_url).await.ok()
-        } else {
-            None
-        };
+        let album_version = Some(format!(
+            "{}_{}",
+            album.released_at.unwrap_or(0),
+            album.tracks_count.unwrap_or(0)
+        ));
 
-        // 3. Créer ou récupérer playlist
-        let writer = if playlist_manager.exists(&playlist_id).await {
-            let writer = playlist_manager
-                .get_persistent_write_handle(playlist_id.clone())
+        if cached_version.is_some() && cached_version == album_version {
+            debug!("Album playlist {} cache valid (version {:?})", playlist_id, album_version);
+            let reader = playlist_manager
+                .get_read_handle(&playlist_id)
                 .await
                 .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
-
-            writer
-                .flush()
+            let items = reader
+                .to_items(limit)
                 .await
                 .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
+            return self.adapt_items_to_qobuz(items, &parent_id).await;
+        }
 
-            writer
-        } else {
-            playlist_manager
-                .create_persistent_playlist_with_role(
-                    playlist_id.clone(),
-                    pmoplaylist::PlaylistRole::Album,
-                )
-                .await
-                .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?
-        };
+        info!("Album playlist {} creating/refreshing (version {:?})", playlist_id, album_version);
 
-        // 4. Métadonnées playlist
+        let cover_pk = self.cache_cover_opt(album.image.as_deref()).await;
+
+        let writer = self
+            .get_or_flush_playlist_writer(&playlist_id, pmoplaylist::PlaylistRole::Album)
+            .await?;
+
         writer
             .set_title(album.title.clone())
             .await
             .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
-
         writer
             .set_artist(Some(album.artist.name.clone()))
             .await
             .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
-
+        writer
+            .set_source(Some("qobuz".to_string()))
+            .await
+            .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
+        writer
+            .set_source_version(album_version)
+            .await
+            .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
         if let Some(pk) = cover_pk {
             writer
                 .set_cover_pk(Some(pk))
@@ -741,22 +745,122 @@ impl QobuzSource {
         // IMPORTANT: Libérer le write lock avant d'appeler add_album_to_playlist
         drop(writer);
 
-        // 5. Ajouter tracks (réutilise add_album_to_playlist existant)
         self.add_album_to_playlist(&playlist_id, album_id).await?;
 
-        // 6. Récupérer items
         let reader = playlist_manager
             .get_read_handle(&playlist_id)
             .await
             .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
-
         let items = reader
             .to_items(limit)
             .await
             .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
 
-        // 7. Adapter IDs
-        self.adapt_playlist_items_to_qobuz(items, album_id).await
+        self.adapt_items_to_qobuz(items, &parent_id).await
+    }
+
+    /// Récupère ou crée une pmoplaylist pour une playlist Qobuz, avec invalidation par updated_at.
+    ///
+    /// - Si la playlist est en cache et que `updated_at` n'a pas changé → retourne le cache.
+    /// - Sinon → recharge toutes les tracks depuis Qobuz et reconstruit la pmoplaylist.
+    async fn get_or_create_qobuz_playlist_items(
+        &self,
+        qobuz_playlist_id: &str,
+    ) -> Result<Vec<Item>> {
+        use tracing::{debug, info};
+
+        let pmo_playlist_id = format!("qobuz-playlist-{}", qobuz_playlist_id);
+        let playlist_manager = pmoplaylist::PlaylistManager();
+
+        let cached_version = self.cached_source_version(&pmo_playlist_id).await;
+
+        // Obtenir les métadonnées depuis Qobuz pour comparer updated_at
+        let qobuz_meta: crate::models::Playlist = self
+            .inner
+            .client
+            .get_playlist(qobuz_playlist_id)
+            .await
+            .map_err(|e: crate::error::QobuzError| MusicSourceError::BrowseError(e.to_string()))?;
+
+        let qobuz_version = qobuz_meta.updated_at.map(|t: i64| t.to_string());
+
+        // Cache valide si version correspond
+        let cache_valid = cached_version.is_some() && cached_version == qobuz_version;
+
+        let parent_id = format!("qobuz:playlist:{}", qobuz_playlist_id);
+
+        if cache_valid {
+            debug!("Qobuz playlist {} cache valid (version {:?})", pmo_playlist_id, qobuz_version);
+            let reader = playlist_manager
+                .get_read_handle(&pmo_playlist_id)
+                .await
+                .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
+            let (items, total) = reader
+                .to_items_paged(0, usize::MAX)
+                .await
+                .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
+            // Si des PKs ne sont pas enregistrés dans le cache audio (e.g. playlist créée
+            // avec l'ancien code), on force un refresh pour les ré-enregistrer proprement.
+            if items.len() == total {
+                return self.adapt_items_to_qobuz(items, &parent_id).await;
+            }
+            info!(
+                "Qobuz playlist {} has {}/{} valid items, forcing refresh to repair missing entries",
+                pmo_playlist_id, items.len(), total
+            );
+        }
+
+        info!("Qobuz playlist {} creating/refreshing (version {:?})", pmo_playlist_id, qobuz_version);
+
+        let tracks = self
+            .inner
+            .client
+            .get_playlist_tracks(qobuz_playlist_id)
+            .await
+            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+
+        let cover_pk = self.cache_cover_opt(qobuz_meta.image.as_deref()).await;
+
+        let writer = self
+            .get_or_flush_playlist_writer(&pmo_playlist_id, pmoplaylist::PlaylistRole::Source)
+            .await?;
+
+        writer
+            .set_title(qobuz_meta.name.clone())
+            .await
+            .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
+        writer
+            .set_source(Some("qobuz".to_string()))
+            .await
+            .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
+        writer
+            .set_source_version(qobuz_version)
+            .await
+            .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
+        if let Some(pk) = cover_pk {
+            writer
+                .set_cover_pk(Some(pk))
+                .await
+                .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
+        }
+
+        let lazy_pks = self.register_tracks_lazy(&tracks).await;
+        writer
+            .push_lazy_batch(lazy_pks)
+            .await
+            .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
+        drop(writer);
+
+        let reader = playlist_manager
+            .get_read_handle(&pmo_playlist_id)
+            .await
+            .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
+        let (items, _total) = reader
+            .to_items_paged(0, usize::MAX)
+            .await
+            .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
+
+        self.adapt_items_to_qobuz(items, &parent_id).await
     }
 
     /// Increment update counter (called on catalog changes)
@@ -935,6 +1039,104 @@ impl QobuzSource {
         tokio::task::JoinSet::from_iter(futs)
             .join_all()
             .await
+    }
+
+    /// Enregistre une liste de tracks comme lazy entries dans l'audio cache (en parallèle).
+    ///
+    /// Contrairement à `add_track_lazy`, cette méthode ne fait PAS d'appel à `get_stream_url`
+    /// (coûteux pour de grandes playlists). L'URL audio est résolue à la demande via
+    /// `QobuzLazyProvider` lors de la première lecture.
+    ///
+    /// Pour chaque track : cache la cover, enregistre la lazy entry, stocke les métadonnées.
+    /// Retourne la liste des lazy PKs enregistrés avec succès.
+    async fn register_tracks_lazy(&self, tracks: &[crate::models::Track]) -> Vec<String> {
+        // Limite la concurrence pour ne pas saturer l'API Qobuz ni la connexion réseau.
+        // Les covers déjà cachées sont retournées immédiatement (pas d'HTTP), donc même
+        // 600 tracks ne génèrent que ~N_albums_uniques téléchargements réels.
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(16));
+
+        // On attache l'index original à chaque future pour pouvoir retrier dans l'ordre
+        // d'origine après complétion parallèle (JoinSet retourne dans l'ordre de fin).
+        let futs: Vec<_> = tracks.iter().enumerate().map(|(idx, track)| {
+            let source = self.clone();
+            let sem = sem.clone();
+            let track_id = track.id.clone();
+            let track_title = track.title.clone();
+            let cover_image_url = track.album.as_ref().and_then(|a| a.image.clone());
+            let metadata = pmoaudiocache::AudioMetadata {
+                title: Some(track.title.clone()),
+                artist: track.performer.as_ref().map(|p| p.name.clone()),
+                album: track.album.as_ref().map(|a| a.title.clone()),
+                duration_secs: Some(track.duration as u64),
+                year: track.album.as_ref().and_then(|a| {
+                    a.release_date.as_ref().and_then(|d| d.split('-').next()?.parse().ok())
+                }),
+                track_number: Some(track.track_number),
+                track_total: track.album.as_ref().and_then(|a| a.tracks_count),
+                disc_number: Some(track.media_number),
+                disc_total: None,
+                genre: track.album.as_ref().and_then(|a| {
+                    if !a.genres.is_empty() { Some(a.genres.join(", ")) } else { None }
+                }),
+                sample_rate: track.sample_rate,
+                channels: track.channels,
+                bitrate: None,
+                conversion: None,
+            };
+            async move {
+                let _permit = sem.acquire().await.ok()?;
+                let lazy_pk = format!("QOBUZ:{}", track_id);
+
+                // 1. Cache cover eagerly
+                let cover_pk = if let Some(ref url) = cover_image_url {
+                    source.inner.cache_manager.cache_cover(url).await.ok()
+                } else {
+                    None
+                };
+
+                // 2. Register lazy entry + set cover_pk + seed metadata.
+                // Si le performer est absent (réponse API incomplète), on passe None pour
+                // que le provider appelle get_track et récupère les métadonnées complètes.
+                if metadata.artist.is_none() {
+                    tracing::warn!(
+                        "register_tracks_lazy: no performer for track {} (id={}), will call provider",
+                        track_title, track_id
+                    );
+                }
+                if cover_pk.is_none() && cover_image_url.is_some() {
+                    tracing::warn!(
+                        "register_tracks_lazy: cover download failed for track {} (id={}), will call provider for cover",
+                        track_title, track_id
+                    );
+                }
+                let meta_hint = if metadata.artist.is_some() { Some(metadata) } else { None };
+                match source.inner.cache_manager
+                    .cache_audio_lazy_with_provider(&lazy_pk, meta_hint, cover_pk)
+                    .await
+                {
+                    Ok(pk) => {
+                        let _ = source.inner.cache_manager.set_audio_metadata(
+                            &pk, "qobuz_track_id", json!(track_id),
+                        );
+                        Some((idx, pk))
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to register lazy track {}: {}", track_title, e);
+                        None
+                    }
+                }
+            }
+        }).collect();
+
+        // Retrier par index original pour conserver l'ordre de la playlist Qobuz
+        let mut results: Vec<(usize, String)> = tokio::task::JoinSet::from_iter(futs)
+            .join_all()
+            .await
+            .into_iter()
+            .flatten()
+            .collect();
+        results.sort_unstable_by_key(|(i, _)| *i);
+        results.into_iter().map(|(_, pk)| pk).collect()
     }
 
     /// Cache les covers d'une liste d'artistes en parallèle.
@@ -1623,22 +1825,9 @@ impl MusicSource for QobuzSource {
             }
 
             ObjectIdType::Playlist(playlist_id) => {
-                let tracks = self
-                    .inner
-                    .client
-                    .get_playlist_tracks(&playlist_id)
-                    .await
-                    .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
-
-                let tracks = self.cache_covers(tracks).await;
-                let items: Vec<Item> = tracks
-                    .into_iter()
-                    .filter_map(|track| {
-                        track
-                            .to_didl_item(&format!("qobuz:playlist:{}", playlist_id))
-                            .ok()
-                    })
-                    .collect();
+                let items = self
+                    .get_or_create_qobuz_playlist_items(&playlist_id)
+                    .await?;
 
                 Ok(BrowseResult::Items(items))
             }

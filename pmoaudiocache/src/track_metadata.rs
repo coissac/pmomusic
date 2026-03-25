@@ -20,6 +20,9 @@ fn map_db_err(err: rusqlite::Error) -> MetadataError {
 pub struct AudioCacheTrackMetadata {
     cache: Arc<crate::Cache>,
     pk: String,
+    /// Real pk si le lazy pk a été téléchargé, None sinon.
+    /// Résolu une seule fois à la construction pour éviter N appels DB par champ.
+    real_pk: Option<String>,
 }
 
 impl AudioCacheTrackMetadata {
@@ -28,13 +31,26 @@ impl AudioCacheTrackMetadata {
     /// Le type implémente ensuite toutes les méthodes du trait `pmometadata::TrackMetadata`
     /// en stockant les données dans la base SQLite de `pmocache`.
     pub fn new(cache: Arc<crate::Cache>, pk: impl Into<String>) -> Self {
-        Self {
-            cache,
-            pk: pk.into(),
-        }
+        let pk_str: String = pk.into();
+        // Résolution lazy→real une seule fois à la construction (une seule query DB).
+        let real_pk = if pmocache::is_lazy_pk(&pk_str) {
+            cache.db.get_pk_by_lazy_pk(&pk_str).ok().flatten()
+        } else {
+            None
+        };
+        Self { cache, pk: pk_str, real_pk }
     }
 
     fn read_raw(&self, key: &str) -> Result<Option<Value>, MetadataError> {
+        // Si le lazy pk a été téléchargé, lire d'abord sous le real_pk
+        // (métadonnées écrites par FlacCacheSink), puis fallback sous le lazy_pk
+        // pour les clés semées avant téléchargement (cover_pk, etc.).
+        if let Some(real_pk) = &self.real_pk {
+            if let Ok(Some(v)) = self.cache.db.get_a_metadata(real_pk, key) {
+                return Ok(Some(v));
+            }
+            return self.cache.db.get_a_metadata(&self.pk, key).map_err(map_db_err);
+        }
         self.cache
             .db
             .get_a_metadata(&self.pk, key)

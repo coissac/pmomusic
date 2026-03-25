@@ -328,6 +328,7 @@ impl SourceCacheManager {
             None
         };
 
+        let metadata_is_some = metadata.is_some();
         let mut final_metadata = metadata;
         if final_metadata.is_none() {
             if let Some(data) = provider_data.as_ref() {
@@ -352,10 +353,25 @@ impl SourceCacheManager {
 
         if let Some(meta) = final_metadata.as_ref() {
             self.seed_audio_metadata(lazy_pk, meta);
+        } else {
+            #[cfg(feature = "server")]
+            tracing::warn!(
+                "cache_audio_lazy_with_provider: no metadata to seed for {} \
+                 (meta_hint={}, provider_data={})",
+                lazy_pk,
+                metadata_is_some,
+                provider_data.as_ref().map(|d| d.metadata.is_some()).unwrap_or(false)
+            );
         }
 
         if let Some(cover_pk) = final_cover_pk {
             let _ = self.set_audio_metadata(lazy_pk, "cover_pk", json!(cover_pk));
+        } else {
+            #[cfg(feature = "server")]
+            tracing::debug!(
+                "cache_audio_lazy_with_provider: no cover_pk seeded for {}",
+                lazy_pk
+            );
         }
 
         Ok(lazy_pk.to_string())

@@ -54,6 +54,9 @@ pub struct Album {
     /// Date de sortie (format ISO 8601)
     #[serde(default)]
     pub release_date: Option<String>,
+    /// Timestamp Unix de sortie (released_at)
+    #[serde(default)]
+    pub released_at: Option<i64>,
     /// URL de l'image de couverture
     #[serde(default)]
     pub image: Option<String>,
@@ -141,6 +144,9 @@ pub struct Playlist {
     /// Indique si c'est une playlist publique
     #[serde(default)]
     pub is_public: bool,
+    /// Timestamp de dernière modification (Unix epoch secondes)
+    #[serde(default)]
+    pub updated_at: Option<i64>,
     /// Propriétaire de la playlist
     #[serde(default)]
     pub owner: Option<PlaylistOwner>,

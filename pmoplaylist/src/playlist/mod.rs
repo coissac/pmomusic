@@ -36,6 +36,10 @@ pub struct Playlist {
     role: RwLock<PlaylistRole>,
     cover_pk: RwLock<Option<String>>,
     artist: RwLock<Option<String>>,
+    /// Source externe (ex: "qobuz")
+    source: RwLock<Option<String>>,
+    /// Version de la source (ex: timestamp updated_at de Qobuz)
+    source_version: RwLock<Option<String>>,
     state: Arc<AtomicU8>,
     pub core: Arc<RwLock<PlaylistCore>>,
     pub persistent: bool,
@@ -59,6 +63,8 @@ impl Playlist {
             role: RwLock::new(role),
             cover_pk: RwLock::new(cover_pk),
             artist: RwLock::new(None),
+            source: RwLock::new(None),
+            source_version: RwLock::new(None),
             state: Arc::new(AtomicU8::new(PlaylistState::Active as u8)),
             core: Arc::new(RwLock::new(PlaylistCore::new(config))),
             persistent,
@@ -124,6 +130,28 @@ impl Playlist {
     /// Modifie l'artiste de la playlist.
     pub async fn set_artist(&self, value: Option<String>) {
         *self.artist.write().await = value;
+        self.touch().await;
+    }
+
+    /// Retourne la source externe associée à la playlist.
+    pub async fn source(&self) -> Option<String> {
+        self.source.read().await.clone()
+    }
+
+    /// Modifie la source de la playlist.
+    pub async fn set_source(&self, value: Option<String>) {
+        *self.source.write().await = value;
+        self.touch().await;
+    }
+
+    /// Retourne la version de la source (ex: updated_at timestamp).
+    pub async fn source_version(&self) -> Option<String> {
+        self.source_version.read().await.clone()
+    }
+
+    /// Modifie la version de la source.
+    pub async fn set_source_version(&self, value: Option<String>) {
+        *self.source_version.write().await = value;
         self.touch().await;
     }
 

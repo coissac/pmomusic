@@ -404,7 +404,20 @@ impl<C: CacheConfig + 'static> Cache<C> {
     ) -> Result<Self> {
         let directory = PathBuf::from(dir);
         std::fs::create_dir_all(&directory)?;
-        let db = DB::init(&directory.join("cache.db"))?;
+        let (db, was_reset) = DB::init(&directory.join("cache.db"))?;
+
+        // Si le schéma a changé, effacer tous les fichiers du cache (cohérence DB/fichiers)
+        if was_reset {
+            tracing::warn!("Cache schema changed, clearing all cache files in {:?}", directory);
+            if let Ok(entries) = std::fs::read_dir(&directory) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_file() && path.file_name().map_or(false, |n| n != "cache.db") {
+                        std::fs::remove_file(&path).ok();
+                    }
+                }
+            }
+        }
 
         // Créer un channel pour les events (capacité de 100 events en buffer)
         let (served_tx, _) = broadcast::channel(100);

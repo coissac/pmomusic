@@ -11,6 +11,13 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+/// Version du schéma de la base de données des playlists.
+///
+/// Incrémenter cette constante à chaque modification incompatible du schéma
+/// (ajout/suppression de colonne non nullable, changement de type, etc.).
+/// Cela provoquera la suppression et la recréation automatique de la DB au démarrage.
+const SCHEMA_VERSION: u32 = 1;
+
 /// Gestionnaire de persistance (une base pour toutes les playlists)
 pub struct PersistenceManager {
     conn: Arc<Mutex<Connection>>,
@@ -26,6 +33,26 @@ impl PersistenceManager {
             })?;
         }
 
+        // Vérifier la version du schéma — supprimer la DB si incompatible
+        if db_path.exists() {
+            if let Ok(conn) = Connection::open(db_path) {
+                let version: u32 = conn
+                    .query_row("PRAGMA user_version", [], |r| r.get(0))
+                    .unwrap_or(0);
+                if version != SCHEMA_VERSION {
+                    drop(conn);
+                    tracing::warn!(
+                        "Playlist DB schema version mismatch (found {}, expected {}), recreating",
+                        version,
+                        SCHEMA_VERSION
+                    );
+                    std::fs::remove_file(db_path).map_err(|e| {
+                        crate::Error::PersistenceError(format!("Failed to remove old DB: {}", e))
+                    })?;
+                }
+            }
+        }
+
         let conn = Connection::open(db_path).map_err(|e| {
             crate::Error::PersistenceError(format!("Failed to open database: {}", e))
         })?;
@@ -38,6 +65,8 @@ impl PersistenceManager {
                 role TEXT NOT NULL,
                 cover_pk TEXT,
                 artist TEXT,
+                source TEXT,
+                source_version TEXT,
                 max_size INTEGER,
                 default_ttl_secs INTEGER,
                 created_at INTEGER NOT NULL,
@@ -75,6 +104,12 @@ impl PersistenceManager {
         )
         .map_err(|e| crate::Error::PersistenceError(format!("Failed to create index: {}", e)))?;
 
+        // Inscrire la version du schéma
+        conn.execute_batch(&format!("PRAGMA user_version = {}", SCHEMA_VERSION))
+            .map_err(|e| {
+                crate::Error::PersistenceError(format!("Failed to set schema version: {}", e))
+            })?;
+
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
@@ -88,6 +123,8 @@ impl PersistenceManager {
         role: &PlaylistRole,
         cover_pk: Option<&str>,
         artist: Option<&str>,
+        source: Option<&str>,
+        source_version: Option<&str>,
         config: &PlaylistConfig,
         tracks: &VecDeque<Arc<Record>>,
     ) -> Result<()> {
@@ -100,16 +137,18 @@ impl PersistenceManager {
 
         // Upsert playlist metadata
         conn.execute(
-            "INSERT OR REPLACE INTO playlists (id, title, role, cover_pk, artist, max_size, default_ttl_secs, created_at, last_modified)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7,
-                     COALESCE((SELECT created_at FROM playlists WHERE id = ?1), ?8),
-                     ?8)",
+            "INSERT OR REPLACE INTO playlists (id, title, role, cover_pk, artist, source, source_version, max_size, default_ttl_secs, created_at, last_modified)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
+                     COALESCE((SELECT created_at FROM playlists WHERE id = ?1), ?10),
+                     ?10)",
             params![
                 id,
                 title,
                 role.as_str(),
                 cover_pk,
                 artist,
+                source,
+                source_version,
                 config.max_size.map(|s| s as i64),
                 config.default_ttl.map(|d| d.as_secs() as i64),
                 now_nanos,
@@ -154,6 +193,8 @@ impl PersistenceManager {
             PlaylistConfig,
             Option<String>,
             Option<String>,
+            Option<String>,
+            Option<String>,
             VecDeque<Arc<Record>>,
         )>,
     > {
@@ -161,7 +202,7 @@ impl PersistenceManager {
 
         // Charger les métadonnées
         let mut stmt = conn.prepare(
-            "SELECT title, role, cover_pk, artist, max_size, default_ttl_secs FROM playlists WHERE id = ?1",
+            "SELECT title, role, cover_pk, artist, source, source_version, max_size, default_ttl_secs FROM playlists WHERE id = ?1",
         )
         .map_err(|e| {
             crate::Error::PersistenceError(format!("Failed to prepare statement: {}", e))
@@ -172,8 +213,10 @@ impl PersistenceManager {
             let role_raw: String = row.get(1)?;
             let cover_pk: Option<String> = row.get(2)?;
             let artist: Option<String> = row.get(3)?;
-            let max_size: Option<i64> = row.get(4)?;
-            let default_ttl_secs: Option<i64> = row.get(5)?;
+            let source: Option<String> = row.get(4)?;
+            let source_version: Option<String> = row.get(5)?;
+            let max_size: Option<i64> = row.get(6)?;
+            let default_ttl_secs: Option<i64> = row.get(7)?;
 
             Ok((
                 title,
@@ -185,10 +228,12 @@ impl PersistenceManager {
                 },
                 cover_pk,
                 artist,
+                source,
+                source_version,
             ))
         });
 
-        let (title, role, config, cover_pk, artist) = match result {
+        let (title, role, config, cover_pk, artist, source, source_version) = match result {
             Ok(data) => data,
             Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
             Err(e) => {
@@ -231,7 +276,7 @@ impl PersistenceManager {
             tracks.push_back(Arc::new(record));
         }
 
-        Ok(Some((title, role, config, cover_pk, artist, tracks)))
+        Ok(Some((title, role, config, cover_pk, artist, source, source_version, tracks)))
     }
 
     /// Supprime une playlist
