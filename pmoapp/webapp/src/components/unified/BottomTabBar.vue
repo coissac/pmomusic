@@ -148,18 +148,18 @@ function handleRendererDrawerClick() {
     gap: var(--spacing-md);
     height: 72px;
     padding: 0 var(--spacing-md);
-    background: rgba(255, 255, 255, 0.1);
-    backdrop-filter: blur(30px) saturate(180%);
-    -webkit-backdrop-filter: blur(30px) saturate(180%);
-    border-top: 1px solid rgba(255, 255, 255, 0.2);
-    box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.1);
+    background: rgba(22, 22, 32, 0.96);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.3);
     z-index: 100;
 }
 
-@media (prefers-color-scheme: dark) {
+@media (prefers-color-scheme: light) {
     .bottom-bar {
-        background: rgba(0, 0, 0, 0.25);
-        border-top: 1px solid rgba(255, 255, 255, 0.1);
+        background: rgba(245, 245, 250, 0.97);
+        border-top-color: rgba(0, 0, 0, 0.1);
     }
 }
 
@@ -293,40 +293,7 @@ function handleRendererDrawerClick() {
     margin: 0;
 }
 
-/* Protocol badge */
-.protocol-badge {
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    flex-shrink: 0;
-}
-
-.protocol-upnp {
-    background-color: rgba(59, 130, 246, 0.15);
-    color: #3b82f6;
-    border: 1px solid rgba(59, 130, 246, 0.3);
-}
-
-.protocol-openhome {
-    background-color: rgba(139, 92, 246, 0.15);
-    color: #8b5cf6;
-    border: 1px solid rgba(139, 92, 246, 0.3);
-}
-
-.protocol-hybrid {
-    background-color: rgba(16, 185, 129, 0.15);
-    color: #10b981;
-    border: 1px solid rgba(16, 185, 129, 0.3);
-}
-
-.protocol-chromecast {
-    background-color: rgba(244, 114, 182, 0.15);
-    color: #f472b6;
-    border: 1px solid rgba(244, 114, 182, 0.3);
-}
+/* Protocol badge classes (.protocol-badge, .protocol-upnp, etc.) are now global in pmocontrol.css */
 
 .status-badge {
     flex-shrink: 0;

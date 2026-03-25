@@ -14,6 +14,7 @@ import "./style.css";
 import "./assets/styles/variables.css";
 import "./assets/styles/pmocontrol.css";
 import "./assets/styles/glass-theme.css";
+import "./assets/styles/drawers.css";
 
 // Créer l'application Vue
 const app = createApp(App);

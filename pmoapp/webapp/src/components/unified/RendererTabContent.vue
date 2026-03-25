@@ -228,11 +228,11 @@ async function handleQueueItemClick(item: QueueItem) {
         bottom: 0;
         left: 0;
         right: 0;
-        background: rgba(255, 255, 255, 0.1);
-        backdrop-filter: blur(30px) saturate(180%);
-        -webkit-backdrop-filter: blur(30px) saturate(180%);
-        border-top: 1px solid rgba(255, 255, 255, 0.2);
-        box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.2);
+        background: rgba(22, 22, 32, 0.96);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        border-top: 1px solid rgba(255, 255, 255, 0.12);
+        box-shadow: 0 -4px 32px rgba(0, 0, 0, 0.4);
         /* Fermé: caché sauf le toggle (56px) qui dépasse au-dessus de la BottomTabBar (64px) */
         transform: translateY(calc(100% - 56px - 64px));
         transition: transform 0.3s ease;
@@ -248,6 +248,13 @@ async function handleQueueItemClick(item: QueueItem) {
         /* Ouvert: remonte mais s'arrête à 64px du bas pour laisser la BottomTabBar accessible */
         transform: translateY(64px);
         pointer-events: auto; /* Ouvert: capture les clics */
+    }
+
+    @media (prefers-color-scheme: light) {
+        .queue-drawer {
+            background: rgba(245, 245, 250, 0.97);
+            border-top-color: rgba(0, 0, 0, 0.1);
+        }
     }
 
     .queue-drawer-toggle {

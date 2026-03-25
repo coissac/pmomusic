@@ -253,23 +253,7 @@ function goToRenderer() {
     letter-spacing: 0.05em;
 }
 
-.protocol-upnp {
-    background-color: rgba(59, 130, 246, 0.1);
-    color: #3b82f6;
-    border: 1px solid #3b82f6;
-}
-
-.protocol-openhome {
-    background-color: rgba(139, 92, 246, 0.1);
-    color: #8b5cf6;
-    border: 1px solid #8b5cf6;
-}
-
-.protocol-hybrid {
-    background-color: rgba(16, 185, 129, 0.1);
-    color: #10b981;
-    border: 1px solid #10b981;
-}
+/* Protocol badge colors (.protocol-upnp, .protocol-openhome, etc.) → pmocontrol.css */
 
 /* Cover */
 .card-cover {

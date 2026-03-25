@@ -1412,17 +1412,17 @@ onMounted(() => {
 
 <style scoped>
 .playlist-manager {
-    padding: 1rem;
+    padding: var(--spacing-md);
     width: 100%;
     max-width: 1400px;
     margin: 0 auto;
     box-sizing: border-box;
-    color: #f5f5f5;
+    color: var(--color-text);
 }
 
 @media (max-width: 768px) {
     .playlist-manager {
-        padding: 0.5rem;
+        padding: var(--spacing-sm);
     }
 }
 
@@ -1430,56 +1430,63 @@ onMounted(() => {
     display: flex;
     flex-wrap: wrap;
     justify-content: space-between;
-    gap: 1rem;
-    padding: 1rem;
-    border-radius: 12px;
-    border: 1px solid #2b2b2b;
-    background: #151515;
+    align-items: center;
+    gap: var(--spacing-md);
+    padding: var(--spacing-md);
+    border-radius: var(--radius-lg);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.05);
+    margin-bottom: var(--spacing-md);
 }
 
 .header h2 {
     margin: 0;
-    color: #61dafb;
+    color: var(--color-primary);
+    font-size: var(--text-xl);
 }
 
 .subtitle {
     margin: 0.25rem 0 0;
-    color: #b0b0b0;
+    color: var(--color-text-secondary);
+    font-size: var(--text-sm);
 }
 
 .header-stats {
     display: flex;
-    gap: 0.5rem;
+    gap: var(--spacing-sm);
     flex-wrap: wrap;
 }
 
 .header-stats span {
-    background: #232323;
-    border-radius: 999px;
-    padding: 0.35rem 0.75rem;
-    font-size: 0.85rem;
-    color: #ddd;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: var(--radius-full);
+    padding: 0.25rem 0.75rem;
+    font-size: var(--text-sm);
+    color: var(--color-text-secondary);
 }
 
 .header-actions button {
-    padding: 0.6rem 1.2rem;
-    border-radius: 6px;
+    padding: 0.5rem 1rem;
+    border-radius: var(--radius-md);
     border: none;
-    background: #61dafb;
-    color: #0b0b0b;
+    background: var(--color-primary);
+    color: #fff;
     font-weight: 600;
     cursor: pointer;
+    font-size: var(--text-sm);
+    transition: opacity var(--transition-fast);
 }
 
 .header-actions button:disabled {
-    opacity: 0.6;
+    opacity: 0.5;
     cursor: not-allowed;
 }
 
 .panels {
     display: grid;
-    grid-template-columns: 360px 1fr;
-    gap: 1.5rem;
+    grid-template-columns: 340px 1fr;
+    gap: var(--spacing-md);
     align-items: start;
 }
 
@@ -1490,28 +1497,28 @@ onMounted(() => {
 }
 
 .section-card {
-    background: #1f1f1f;
-    border: 1px solid #2f2f2f;
-    border-radius: 12px;
-    padding: 1rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: var(--radius-lg);
+    padding: var(--spacing-md);
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: var(--spacing-md);
 }
 
 .section-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--spacing-sm);
 }
 
 .empty-state {
-    padding: 1rem;
-    border: 1px dashed #3a3a3a;
-    border-radius: 8px;
+    padding: var(--spacing-md);
+    border: 1px dashed rgba(255, 255, 255, 0.15);
+    border-radius: var(--radius-md);
     text-align: center;
-    color: #a8a8a8;
+    color: var(--color-text-secondary);
 }
 
 .list-section {
@@ -1522,95 +1529,107 @@ onMounted(() => {
 .playlist-list {
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    gap: var(--spacing-sm);
 }
 
 .playlist-card {
-    border: 1px solid #2a2a2a;
-    border-radius: 10px;
-    padding: 0.85rem;
-    background: #242424;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: var(--radius-md);
+    padding: var(--spacing-sm) var(--spacing-md);
+    background: rgba(255, 255, 255, 0.05);
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
+    gap: 0.3rem;
     cursor: pointer;
-    transition:
-        border-color 0.2s,
-        box-shadow 0.2s;
+    transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.playlist-card:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.2);
 }
 
 .playlist-card.selected {
-    border-color: #61dafb;
-    box-shadow: 0 0 0 1px rgba(97, 218, 251, 0.4);
+    border-color: var(--color-primary);
+    background: rgba(102, 126, 234, 0.1);
 }
 
 .card-title {
     display: flex;
     justify-content: space-between;
-    gap: 0.5rem;
+    gap: var(--spacing-sm);
     font-weight: 600;
+    font-size: var(--text-sm);
 }
 
 .card-metrics,
 .card-meta {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.5rem;
-    font-size: 0.85rem;
-    color: #bdbdbd;
+    gap: var(--spacing-sm);
+    font-size: var(--text-xs);
+    color: var(--color-text-secondary);
 }
 
 .card-artist {
-    margin-top: 0.25rem;
+    margin-top: 0.15rem;
 }
 
 .artist-label {
-    font-size: 0.85rem;
-    color: #90caf9;
+    font-size: var(--text-xs);
+    color: var(--color-primary);
     font-style: italic;
 }
 
 .card-actions {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.5rem;
+    gap: var(--spacing-sm);
+    margin-top: 0.25rem;
 }
 
 .detail-card {
-    background: #111;
-    border: 1px solid #2b2b2b;
-    border-radius: 14px;
-    padding: 1.25rem;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: var(--radius-lg);
+    padding: var(--spacing-md);
     min-height: 400px;
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: var(--spacing-md);
 }
 
 .detail-header {
     display: grid;
-    grid-template-columns: 140px 1fr auto;
-    gap: 1rem;
+    grid-template-columns: 100px 1fr auto;
+    gap: var(--spacing-md);
     align-items: center;
+}
+
+.detail-header-main {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
 }
 
 .detail-header-main h3 {
     margin: 0;
     display: flex;
-    gap: 0.5rem;
+    gap: var(--spacing-sm);
     align-items: center;
+    font-size: var(--text-lg);
 }
 
 .detail-cover {
-    width: 120px;
-    height: 120px;
-    border-radius: 10px;
+    width: 100px;
+    height: 100px;
+    border-radius: var(--radius-md);
     overflow: hidden;
-    background: #1a1a1a;
+    background: rgba(255, 255, 255, 0.06);
     display: flex;
     align-items: center;
     justify-content: center;
-    border: 1px solid #2f2f2f;
+    border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .detail-cover img {
@@ -1620,23 +1639,29 @@ onMounted(() => {
 }
 
 .detail-id {
-    margin: 0.2rem 0 0;
-    color: #9c9c9c;
-    font-size: 0.85rem;
+    margin: 0;
+    color: var(--color-text-secondary);
+    font-size: var(--text-xs);
 }
 
 .detail-header-actions button {
-    background: #232323;
-    border: 1px solid #3d3d3d;
-    border-radius: 6px;
-    padding: 0.5rem 0.9rem;
-    color: #f5f5f5;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: var(--radius-md);
+    padding: 0.4rem 0.8rem;
+    color: var(--color-text);
     cursor: pointer;
+    font-size: var(--text-sm);
+    transition: background var(--transition-fast);
+}
+
+.detail-header-actions button:hover {
+    background: rgba(255, 255, 255, 0.14);
 }
 
 @media (max-width: 900px) {
     .detail-header {
-        grid-template-columns: 100px 1fr;
+        grid-template-columns: 80px 1fr;
     }
 
     .detail-header-actions {
@@ -1651,9 +1676,8 @@ onMounted(() => {
     display: flex;
     align-items: center;
     justify-content: center;
-    background: #1b1b1b;
-    color: #666;
-    font-size: 2rem;
+    color: var(--color-text-secondary);
+    font-size: 1.75rem;
 }
 
 .cover-placeholder.small {
@@ -1662,18 +1686,18 @@ onMounted(() => {
 
 .cover-preview-row {
     display: flex;
-    gap: 0.75rem;
+    gap: var(--spacing-sm);
     align-items: center;
     flex-wrap: wrap;
 }
 
 .cover-preview {
-    width: 96px;
-    height: 96px;
-    border-radius: 8px;
+    width: 80px;
+    height: 80px;
+    border-radius: var(--radius-md);
     overflow: hidden;
-    border: 1px solid #2d2d2d;
-    background: #0f0f0f;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.05);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1686,27 +1710,28 @@ onMounted(() => {
 }
 
 .cover-preview.small {
-    width: 72px;
-    height: 72px;
+    width: 60px;
+    height: 60px;
 }
 
 .btn-compact {
-    padding: 0.25rem 0.6rem;
-    font-size: 0.8rem;
+    padding: 0.2rem 0.5rem;
+    font-size: var(--text-xs);
 }
 
 .detail-stats {
     display: flex;
     flex-wrap: wrap;
-    gap: 1rem;
-    font-size: 0.95rem;
+    gap: var(--spacing-md);
+    font-size: var(--text-sm);
 }
 
 .cover-stat code {
-    background: #0f0f0f;
+    background: rgba(255, 255, 255, 0.08);
     padding: 0.15rem 0.4rem;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     margin-right: 0.4rem;
+    font-size: var(--text-xs);
 }
 
 .detail-messages .error,
@@ -1715,32 +1740,34 @@ onMounted(() => {
 }
 
 .section-subcard {
-    background: #181818;
-    border: 1px solid #2b2b2b;
-    border-radius: 10px;
-    padding: 1rem;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: var(--radius-md);
+    padding: var(--spacing-md);
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    gap: var(--spacing-sm);
 }
 
 .section-subcard h4 {
     margin: 0;
-    color: #e7e7e7;
+    color: var(--color-text);
+    font-size: var(--text-sm);
+    font-weight: 600;
 }
 
 form {
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    gap: var(--spacing-sm);
 }
 
 .field,
 .checkbox {
     display: flex;
     flex-direction: column;
-    gap: 0.35rem;
-    font-size: 0.9rem;
+    gap: 0.3rem;
+    font-size: var(--text-sm);
 }
 
 .checkbox {
@@ -1751,11 +1778,12 @@ form {
 .field input,
 .field select,
 .field textarea {
-    background: #0f0f0f;
-    border: 1px solid #3f3f3f;
-    border-radius: 6px;
-    padding: 0.5rem;
-    color: #f5f5f5;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: var(--radius-md);
+    padding: 0.45rem var(--spacing-sm);
+    color: var(--color-text);
+    font-size: var(--text-sm);
 }
 
 .field textarea {
@@ -1764,14 +1792,14 @@ form {
 
 .field-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    gap: 0.75rem;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: var(--spacing-sm);
 }
 
 .field-group {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.75rem;
+    gap: var(--spacing-sm);
 }
 
 .form-messages {
@@ -1779,13 +1807,15 @@ form {
 }
 
 .primary {
-    background: #4b9ed0;
+    background: var(--color-primary);
     color: #fff;
     border: none;
-    padding: 0.6rem 1rem;
-    border-radius: 6px;
+    padding: 0.5rem var(--spacing-md);
+    border-radius: var(--radius-md);
     cursor: pointer;
     font-weight: 600;
+    font-size: var(--text-sm);
+    transition: opacity var(--transition-fast);
 }
 
 .primary:disabled {
@@ -1794,19 +1824,35 @@ form {
 }
 
 button {
-    font-size: 0.9rem;
+    font-size: var(--text-sm);
 }
 
 .btn-secondary {
-    background: #2c2c2c;
-    border: 1px solid #3d3d3d;
-    color: #f5f5f5;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: var(--color-text);
+    border-radius: var(--radius-md);
+    padding: 0.4rem 0.8rem;
+    cursor: pointer;
+    transition: background var(--transition-fast);
+}
+
+.btn-secondary:hover {
+    background: rgba(255, 255, 255, 0.14);
 }
 
 .btn-danger {
-    background: #c0392b;
-    border: 1px solid #d35400;
+    background: rgba(192, 57, 43, 0.8);
+    border: 1px solid rgba(211, 84, 0, 0.6);
     color: #fff;
+    border-radius: var(--radius-md);
+    padding: 0.4rem 0.8rem;
+    cursor: pointer;
+    transition: background var(--transition-fast);
+}
+
+.btn-danger:hover {
+    background: rgba(192, 57, 43, 1);
 }
 
 button:disabled {
@@ -1815,68 +1861,75 @@ button:disabled {
 }
 
 .pill {
-    background: #2f2f2f;
-    border-radius: 999px;
-    padding: 0.15rem 0.6rem;
-    font-size: 0.75rem;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: var(--radius-full);
+    padding: 0.1rem 0.55rem;
+    font-size: var(--text-xs);
 }
 
 .small {
-    font-size: 0.85rem;
-    color: #a5a5a5;
+    font-size: var(--text-sm);
+    color: var(--color-text-secondary);
 }
 
 .muted {
-    color: #8a8a8a;
+    color: var(--color-text-secondary);
 }
 
 .tracks .section-header {
-    margin-bottom: 0.5rem;
+    margin-bottom: var(--spacing-sm);
 }
 
 .track-grid {
     display: flex;
     flex-direction: column;
-    gap: 0.9rem;
+    gap: var(--spacing-sm);
 }
 
 .track-card {
     display: grid;
-    grid-template-columns: 120px 1fr auto;
-    gap: 1rem;
-    padding: 0.9rem;
-    border-radius: 12px;
-    border: 1px solid #2a2a2a;
-    background: #16181f;
+    grid-template-columns: 80px 1fr auto;
+    gap: var(--spacing-md);
+    padding: var(--spacing-sm) var(--spacing-md);
+    border-radius: var(--radius-md);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.04);
     align-items: center;
+    transition: background var(--transition-fast);
+}
+
+.track-card:hover {
+    background: rgba(255, 255, 255, 0.07);
 }
 
 @media (max-width: 900px) {
     .track-card {
-        grid-template-columns: 1fr;
+        grid-template-columns: 80px 1fr;
     }
 
-    .cover-wrapper {
-        width: 100%;
-        height: 220px;
+    .track-actions {
+        grid-column: span 2;
+        flex-direction: row;
     }
 }
 
 .track-card.lazy {
-    border-color: #d4a017;
-    box-shadow: 0 0 0 1px rgba(212, 160, 23, 0.4);
+    border-color: rgba(212, 160, 23, 0.5);
+    background: rgba(212, 160, 23, 0.05);
 }
 
 .cover-wrapper {
-    width: 120px;
-    height: 120px;
-    border-radius: 10px;
+    width: 80px;
+    height: 80px;
+    border-radius: var(--radius-md);
     overflow: hidden;
-    background: #1f1f1f;
+    background: rgba(255, 255, 255, 0.06);
     display: flex;
     align-items: center;
     justify-content: center;
     position: relative;
+    flex-shrink: 0;
 }
 
 .cover-wrapper img {
@@ -1886,90 +1939,101 @@ button:disabled {
 }
 
 .track-card .cover-placeholder {
-    font-size: 2rem;
-    color: #6f6f6f;
+    font-size: 1.5rem;
+    color: var(--color-text-secondary);
 }
 
 .cover-lazy-pill {
     position: absolute;
-    right: 6px;
-    bottom: 6px;
+    right: 4px;
+    bottom: 4px;
     background: #d4a017;
     color: #1a1a1a;
-    padding: 0.15rem 0.5rem;
-    border-radius: 999px;
-    font-size: 0.7rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: var(--radius-full);
+    font-size: 0.65rem;
     font-weight: 600;
 }
 
 .track-info {
     display: flex;
     flex-direction: column;
-    gap: 0.3rem;
+    gap: 0.2rem;
+    min-width: 0;
 }
 
 .track-title {
-    font-size: 1rem;
+    font-size: var(--text-sm);
     font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .track-artist,
 .track-album {
-    font-size: 0.9rem;
-    color: #bbbbbb;
+    font-size: var(--text-xs);
+    color: var(--color-text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .track-meta {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.75rem;
-    font-size: 0.85rem;
-    color: #a0a0a0;
+    gap: var(--spacing-sm);
+    font-size: var(--text-xs);
+    color: var(--color-text-secondary);
+    margin-top: 0.15rem;
 }
 
 .pk-info {
     display: flex;
     flex-direction: column;
-    gap: 0.25rem;
-    font-size: 0.85rem;
-    word-break: break-word;
+    gap: 0.2rem;
+    font-size: var(--text-xs);
+    word-break: break-all;
+    color: var(--color-text-secondary);
+    margin-top: 0.25rem;
 }
 
 .pk-line {
     display: flex;
-    gap: 0.4rem;
+    gap: 0.3rem;
     align-items: center;
 }
 
 .pk-line .label {
-    font-size: 0.75rem;
-    color: #888;
+    font-size: 0.7rem;
+    color: var(--color-text-secondary);
     text-transform: uppercase;
+    flex-shrink: 0;
 }
 
 .pk-line code {
-    background: #0f0f0f;
-    padding: 0.2rem 0.4rem;
-    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.3);
+    padding: 0.1rem 0.35rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.7rem;
 }
 
 .added-info {
-    font-size: 0.8rem;
-    color: #909090;
+    font-size: var(--text-xs);
+    color: var(--color-text-secondary);
 }
 
 .track-actions {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
+    gap: var(--spacing-sm);
 }
 
 .error {
-    color: #ff7a7a;
+    color: var(--status-offline);
 }
 
 .success {
-    color: #6adf8b;
+    color: var(--status-playing);
 }
 </style>
-.detail-header-main { display: flex; flex-direction: column; gap: 0.25rem; }

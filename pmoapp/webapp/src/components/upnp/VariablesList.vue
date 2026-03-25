@@ -215,9 +215,6 @@ watch(editingVar, (newVar) => {
   margin-bottom: 1rem;
 }
 
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
 
 /* Error state */
 .error-state {

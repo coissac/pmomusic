@@ -210,12 +210,24 @@ impl CachedMetadata {
         cache: &Arc<CoverCache>,
         server_base_url: &str,
     ) -> (Option<String>, Option<String>) {
-        // Extraire l'UUID de la cover (priorité : visual_background > visuals.card > visuals.player)
-        let uuid = metadata
+        // Extraire l'URL de la cover — deux stratégies selon la source :
+        // 1. visual_background.src peut être une URL S3 directe ou une URL Pikapi
+        // 2. visuals.card/player contiennent des URLs Pikapi avec UUID extractable
+        let cover_url = metadata
             .now
             .visual_background
             .as_ref()
-            .and_then(|v| v.extract_uuid())
+            .map(|v| {
+                // Si c'est déjà une URL directe (S3, CDN), l'utiliser telle quelle
+                // Sinon essayer d'extraire l'UUID Pikapi pour construire une URL haute-résolution
+                if v.src.starts_with("http") && !v.src.contains("/pikapi/") {
+                    v.src.clone()
+                } else if let Some(uuid) = v.extract_uuid() {
+                    ImageSize::Large.build_url(&uuid)
+                } else {
+                    v.src.clone()
+                }
+            })
             .or_else(|| {
                 metadata.now.visuals.as_ref().and_then(|visuals| {
                     visuals
@@ -223,13 +235,13 @@ impl CachedMetadata {
                         .as_ref()
                         .and_then(|c| c.extract_uuid())
                         .or_else(|| visuals.player.as_ref().and_then(|p| p.extract_uuid()))
+                        .map(|uuid| ImageSize::Large.build_url(&uuid))
                 })
             });
 
-        let uuid = match uuid {
+        let cover_url = match cover_url {
             Some(u) => u,
             None => {
-                // Fallback sur le logo par défaut via l'API REST
                 let logo_url = format!(
                     "{}/api/radiofrance/default-logo",
                     server_base_url.trim_end_matches('/')
@@ -237,9 +249,6 @@ impl CachedMetadata {
                 return (Some(logo_url), None);
             }
         };
-
-        // URL haute résolution
-        let cover_url = ImageSize::Large.build_url(&uuid);
 
         // Tenter de cacher la cover
         match cache.add_from_url(&cover_url, Some("radiofrance")).await {
@@ -252,8 +261,8 @@ impl CachedMetadata {
 
                 #[cfg(feature = "logging")]
                 tracing::debug!(
-                    "Cached cover - UUID: {}, PK: {}, public_url: {}",
-                    uuid,
+                    "Cached cover - url: {}, PK: {}, public_url: {}",
+                    cover_url,
                     pk,
                     public_url
                 );
@@ -262,7 +271,7 @@ impl CachedMetadata {
             }
             Err(e) => {
                 #[cfg(feature = "logging")]
-                tracing::warn!("Failed to cache Radio France cover UUID {}: {}", uuid, e);
+                tracing::warn!("Failed to cache Radio France cover {}: {}", cover_url, e);
                 // Fallback sur le logo par défaut en cas d'erreur
                 let logo_url = format!(
                     "{}/api/radiofrance/default-logo",
@@ -623,14 +632,21 @@ impl MetadataCache {
         )
         .await?;
 
-        // 4. Met à jour le cache
-        {
+        // 4. Met à jour le cache — notifier seulement si le titre a changé (vrai changement de piste)
+        let should_notify = {
             let mut cache = self.cache.write().await;
+            let changed = cache
+                .get(slug)
+                .map(|old| old.title != metadata.title)
+                .unwrap_or(false); // premier fetch → pas de notification
             cache.insert(slug.to_string(), metadata.clone());
-        }
+            changed
+        };
 
-        // 5. Notifie les abonnés (async)
-        self.notify_async(slug).await;
+        // 5. Notifie les abonnés uniquement si la piste a changé
+        if should_notify {
+            self.notify_async(slug).await;
+        }
 
         // 6. Retourne les métadonnées
         Ok(metadata)

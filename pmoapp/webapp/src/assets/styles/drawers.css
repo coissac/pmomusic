@@ -1,0 +1,272 @@
+/**
+ * Styles communs pour les drawers (ServerDrawer, RendererDrawer)
+ *
+ * Chaque drawer ajoute uniquement ce qui le différencie :
+ * - position (left/right)
+ * - border (border-right / border-left)
+ * - box-shadow (direction)
+ * - backdrop spécifique (position)
+ */
+
+/* ========================================
+   BACKDROP
+   ======================================== */
+
+.drawer-backdrop {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.35);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    z-index: 200;
+}
+
+@media (max-width: 768px) and (orientation: portrait) {
+    .drawer-backdrop {
+        display: none;
+    }
+}
+
+/* ========================================
+   PANNEAU DRAWER
+   ======================================== */
+
+.app-drawer {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    width: 50vw;
+    /* Fond opaque — évite la transparence empilée sur d'autres éléments glass */
+    background: rgba(22, 22, 32, 0.96);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    z-index: 201;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+@media (prefers-color-scheme: light) {
+    .app-drawer {
+        background: rgba(245, 245, 250, 0.97);
+    }
+}
+
+@media (max-width: 768px) and (orientation: portrait) {
+    .app-drawer {
+        width: 100vw;
+    }
+}
+
+/* ========================================
+   HEADER
+   ======================================== */
+
+.drawer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-lg);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    flex-shrink: 0;
+}
+
+@media (prefers-color-scheme: light) {
+    .drawer-header {
+        border-bottom-color: rgba(0, 0, 0, 0.1);
+    }
+}
+
+.drawer-title-section {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    color: var(--color-text);
+    flex: 1;
+    min-width: 0;
+}
+
+.drawer-title {
+    font-size: var(--text-xl);
+    font-weight: 700;
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.drawer-title.small {
+    font-size: var(--text-base);
+}
+
+/* Bouton fermer */
+.drawer-close-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    flex-shrink: 0;
+    padding: 0;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 50%;
+    cursor: pointer;
+    transition: all var(--transition-fast) ease;
+    color: var(--color-text);
+}
+
+.drawer-close-btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+    transform: scale(1.1);
+}
+
+.drawer-close-btn:active {
+    transform: scale(0.95);
+}
+
+/* Bouton retour (ServerDrawer navigation) */
+.drawer-back-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    flex-shrink: 0;
+    padding: 0;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 50%;
+    cursor: pointer;
+    transition: all var(--transition-fast) ease;
+    color: var(--color-text);
+}
+
+.drawer-back-btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+    transform: scale(1.05);
+}
+
+/* ========================================
+   CONTENU
+   ======================================== */
+
+/* Add class="scrollbar-thin" on elements needing thin scrollbar (see pmocontrol.css) */
+.drawer-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--spacing-md);
+}
+
+.drawer-section {
+    margin-bottom: var(--spacing-lg);
+}
+
+/* TODO: remplacer par la classe globale .section-title de pmocontrol.css */
+.drawer-section-title {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--color-text-secondary);
+    margin: 0 0 var(--spacing-sm) 0;
+    padding: 0 var(--spacing-sm);
+}
+
+/* Liste d'items générique */
+.drawer-item-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.drawer-item {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    padding: var(--spacing-md);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    transition: all var(--transition-fast) ease;
+}
+
+.drawer-item.clickable {
+    cursor: pointer;
+}
+
+.drawer-item.clickable:hover {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.2);
+}
+
+.drawer-item.clickable:active {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.drawer-item.offline {
+    opacity: var(--opacity-disabled, 0.5);
+    cursor: not-allowed;
+}
+
+/* Icône dans un item */
+.drawer-item-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    flex-shrink: 0;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--color-text-secondary);
+}
+
+/* Info texte dans un item */
+.drawer-item-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.drawer-item-name {
+    font-size: var(--text-base);
+    font-weight: 600;
+    color: var(--color-text);
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.drawer-item-sub {
+    font-size: var(--text-sm);
+    color: var(--color-text-secondary);
+    margin: 2px 0 0 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ========================================
+   FOOTER
+   ======================================== */
+
+.drawer-footer {
+    padding: var(--spacing-md);
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    flex-shrink: 0;
+}
+
+@media (prefers-color-scheme: light) {
+    .drawer-footer {
+        border-top-color: rgba(0, 0, 0, 0.1);
+    }
+}
+
+/* Les animations d'entrée/sortie sont définies dans chaque composant (scoped)
+   car elles diffèrent selon la direction (gauche/droite/bas) */
