@@ -1137,7 +1137,23 @@ impl DB {
             return Err(Error::QueryReturnedNoRows);
         }
 
-        tx.commit()
+        tx.commit()?;
+
+        // Compter les métadonnées encore sous l'ancien lazy_pk (après migration de l'asset)
+        let meta_under_lazy: i64 = {
+            let conn = self.lock_conn("update_lazy_to_downloaded_meta_check");
+            conn.query_row(
+                "SELECT COUNT(*) FROM metadata WHERE pk = ?1",
+                [lazy_pk],
+                |r| r.get(0),
+            ).unwrap_or(0)
+        };
+        tracing::debug!(
+            "update_lazy_to_downloaded: {} → {} ({} metadata rows still under lazy_pk)",
+            lazy_pk, real_pk, meta_under_lazy
+        );
+
+        Ok(())
     }
 
     /// Recherche une entry par son origin_url

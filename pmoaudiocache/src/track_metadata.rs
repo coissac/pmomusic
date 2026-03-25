@@ -35,6 +35,18 @@ impl AudioCacheTrackMetadata {
     }
 
     fn read_raw(&self, key: &str) -> Result<Option<Value>, MetadataError> {
+        // Si le pk est un lazy pk déjà téléchargé (pk != lazy_pk dans l'asset),
+        // lire d'abord sous le real_pk (métadonnées écrites par FlacCacheSink),
+        // puis fallback sous le lazy_pk (cover_pk, qobuz_track_id semés à l'enregistrement).
+        if pmocache::is_lazy_pk(&self.pk) {
+            if let Ok(Some(real_pk)) = self.cache.db.get_pk_by_lazy_pk(&self.pk) {
+                if let Ok(Some(v)) = self.cache.db.get_a_metadata(&real_pk, key) {
+                    return Ok(Some(v));
+                }
+                // Fallback vers lazy_pk pour les clés semées avant téléchargement (cover_pk, etc.)
+                return self.cache.db.get_a_metadata(&self.pk, key).map_err(map_db_err);
+            }
+        }
         self.cache
             .db
             .get_a_metadata(&self.pk, key)

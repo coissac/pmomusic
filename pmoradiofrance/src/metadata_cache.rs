@@ -26,9 +26,6 @@ use tokio::sync::RwLock;
 #[cfg(feature = "cache")]
 use pmocovers::Cache as CoverCache;
 
-#[cfg(feature = "cache")]
-use pmocache::cache_trait::FileCache;
-
 // ============================================================================
 // CachedMetadata
 // ============================================================================
@@ -583,11 +580,7 @@ impl MetadataCache {
                         }
                         Err(discover_err) => {
                             #[cfg(feature = "logging")]
-                            tracing::error!(
-                                "Rediscovery failed for '{}': {}",
-                                slug,
-                                discover_err
-                            );
+                            tracing::error!("Rediscovery failed for '{}': {}", slug, discover_err);
                             return Err(e);
                         }
                     }
@@ -697,12 +690,7 @@ impl MetadataCache {
         match self.client.rediscover_station(slug).await {
             Ok((id, url)) => {
                 #[cfg(feature = "logging")]
-                tracing::info!(
-                    "Re-discovered station '{}': id={}, url={}",
-                    slug,
-                    id,
-                    url
-                );
+                tracing::info!("Re-discovered station '{}': id={}, url={}", slug, id, url);
                 self.persist_station_mapping();
                 // Invalider le cache mémoire pour forcer un refresh des métadonnées
                 let mut cache = self.cache.write().await;
@@ -801,11 +789,18 @@ mod tests {
         assert!(base.is_expired());
 
         // end_time dans le futur → non expiré
-        let not_expired = CachedMetadata { end_time: Some(now + 3600), ..base.clone() };
+        let not_expired = CachedMetadata {
+            end_time: Some(now + 3600),
+            ..base.clone()
+        };
         assert!(!not_expired.is_expired());
 
         // Pas de end_time, fetched_at récent → non expiré (fallback TTL)
-        let no_end_fresh = CachedMetadata { end_time: None, fetched_at: now, ..base.clone() };
+        let no_end_fresh = CachedMetadata {
+            end_time: None,
+            fetched_at: now,
+            ..base.clone()
+        };
         assert!(!no_end_fresh.is_expired());
 
         // Pas de end_time, fetched_at ancien → expiré

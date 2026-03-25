@@ -795,11 +795,19 @@ impl QobuzSource {
                 .get_read_handle(&pmo_playlist_id)
                 .await
                 .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
-            let (items, _total) = reader
+            let (items, total) = reader
                 .to_items_paged(0, usize::MAX)
                 .await
                 .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
-            return self.adapt_items_to_qobuz(items, &parent_id).await;
+            // Si des PKs ne sont pas enregistrés dans le cache audio (e.g. playlist créée
+            // avec l'ancien code), on force un refresh pour les ré-enregistrer proprement.
+            if items.len() == total {
+                return self.adapt_items_to_qobuz(items, &parent_id).await;
+            }
+            info!(
+                "Qobuz playlist {} has {}/{} valid items, forcing refresh to repair missing entries",
+                pmo_playlist_id, items.len(), total
+            );
         }
 
         info!("Qobuz playlist {} creating/refreshing (version {:?})", pmo_playlist_id, qobuz_version);
@@ -1047,7 +1055,9 @@ impl QobuzSource {
         // 600 tracks ne génèrent que ~N_albums_uniques téléchargements réels.
         let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(16));
 
-        let futs: Vec<_> = tracks.iter().map(|track| {
+        // On attache l'index original à chaque future pour pouvoir retrier dans l'ordre
+        // d'origine après complétion parallèle (JoinSet retourne dans l'ordre de fin).
+        let futs: Vec<_> = tracks.iter().enumerate().map(|(idx, track)| {
             let source = self.clone();
             let sem = sem.clone();
             let track_id = track.id.clone();
@@ -1084,16 +1094,31 @@ impl QobuzSource {
                     None
                 };
 
-                // 2. Register lazy entry + set cover_pk + seed metadata
+                // 2. Register lazy entry + set cover_pk + seed metadata.
+                // Si le performer est absent (réponse API incomplète), on passe None pour
+                // que le provider appelle get_track et récupère les métadonnées complètes.
+                if metadata.artist.is_none() {
+                    tracing::warn!(
+                        "register_tracks_lazy: no performer for track {} (id={}), will call provider",
+                        track_title, track_id
+                    );
+                }
+                if cover_pk.is_none() && cover_image_url.is_some() {
+                    tracing::warn!(
+                        "register_tracks_lazy: cover download failed for track {} (id={}), will call provider for cover",
+                        track_title, track_id
+                    );
+                }
+                let meta_hint = if metadata.artist.is_some() { Some(metadata) } else { None };
                 match source.inner.cache_manager
-                    .cache_audio_lazy_with_provider(&lazy_pk, Some(metadata), cover_pk)
+                    .cache_audio_lazy_with_provider(&lazy_pk, meta_hint, cover_pk)
                     .await
                 {
                     Ok(pk) => {
                         let _ = source.inner.cache_manager.set_audio_metadata(
                             &pk, "qobuz_track_id", json!(track_id),
                         );
-                        Some(pk)
+                        Some((idx, pk))
                     }
                     Err(e) => {
                         tracing::warn!("Failed to register lazy track {}: {}", track_title, e);
@@ -1103,12 +1128,15 @@ impl QobuzSource {
             }
         }).collect();
 
-        tokio::task::JoinSet::from_iter(futs)
+        // Retrier par index original pour conserver l'ordre de la playlist Qobuz
+        let mut results: Vec<(usize, String)> = tokio::task::JoinSet::from_iter(futs)
             .join_all()
             .await
             .into_iter()
             .flatten()
-            .collect()
+            .collect();
+        results.sort_unstable_by_key(|(i, _)| *i);
+        results.into_iter().map(|(_, pk)| pk).collect()
     }
 
     /// Cache les covers d'une liste d'artistes en parallèle.
