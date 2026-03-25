@@ -716,8 +716,7 @@ function handleSettingsClick() {
 
 @media (max-width: 768px) and (orientation: portrait) {
     .drawer-backdrop {
-        left: 0; /* Mobile portrait: backdrop commence à gauche car drawer prend 100vw */
-        background: rgba(0, 0, 0, 0.4); /* Plus sombre sur mobile */
+        display: none; /* Mobile portrait: le drawer couvre 100vw, pas besoin de backdrop */
     }
 }
 
