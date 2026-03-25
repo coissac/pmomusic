@@ -332,16 +332,63 @@ impl Station {
     pub async fn to_didl(
         &self,
         metadata_cache: &MetadataCache,
-        _server_base_url: &str,
+        server_base_url: &str,
     ) -> Result<Container> {
-        // Récupérer les métadonnées du cache
-        let cached_metadata = metadata_cache.get(&self.slug).await?;
-
-        // Construire le container de playlist avec l'item via CachedMetadata::to_didl()
         let playlist_id = format!("radiofrance:{}", self.slug);
         let parent_id = self.compute_parent_id();
 
-        Ok(cached_metadata.to_didl(&playlist_id, &parent_id))
+        // Graceful degradation : si l'API échoue, construire un item minimal avec juste l'URL de stream
+        match metadata_cache.get(&self.slug).await {
+            Ok(cached_metadata) => Ok(cached_metadata.to_didl(&playlist_id, &parent_id)),
+            Err(_) => {
+                use pmodidl::{Item, Resource};
+                let stream_url = format!(
+                    "{}/api/radiofrance/{}/stream",
+                    server_base_url.trim_end_matches('/'),
+                    self.slug
+                );
+                let item = Item {
+                    id: format!("{}:stream", playlist_id),
+                    parent_id: playlist_id.clone(),
+                    restricted: Some("1".to_string()),
+                    title: self.name.clone(),
+                    creator: None,
+                    class: "object.item.audioItem.audioBroadcast".to_string(),
+                    artist: Some("Radio France".to_string()),
+                    album: None,
+                    genre: None,
+                    album_art: Some(format!(
+                        "{}/api/radiofrance/default-logo",
+                        server_base_url.trim_end_matches('/')
+                    )),
+                    album_art_pk: None,
+                    date: None,
+                    original_track_number: None,
+                    resources: vec![Resource {
+                        protocol_info: "http-get:*:audio/aac:*".to_string(),
+                        bits_per_sample: None,
+                        sample_frequency: None,
+                        nr_audio_channels: None,
+                        duration: None,
+                        url: stream_url,
+                    }],
+                    descriptions: vec![],
+                };
+                Ok(Container {
+                    id: playlist_id,
+                    parent_id,
+                    restricted: Some("1".to_string()),
+                    child_count: Some("1".to_string()),
+                    searchable: Some("0".to_string()),
+                    title: self.name.clone(),
+                    class: "object.container.playlistContainer".to_string(),
+                    artist: Some("Radio France".to_string()),
+                    album_art: None,
+                    containers: vec![],
+                    items: vec![item],
+                })
+            }
+        }
     }
 
     /// Calcule le parent_id selon la position de la station

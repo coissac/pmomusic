@@ -54,113 +54,9 @@ pub const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 /// Default User-Agent
 pub const DEFAULT_USER_AGENT: &str = "PMOMusic/0.3.10 (pmoradiofrance)";
 
-/// Known main stations (fallback if scraping fails)
-pub const KNOWN_MAIN_STATIONS: &[(&str, &str)] = &[
-    ("franceinter", "France Inter"),
-    ("franceinfo", "France Info"),
-    ("franceculture", "France Culture"),
-    ("francemusique", "France Musique"),
-    ("fip", "FIP"),
-    ("mouv", "Mouv'"),
-    ("francebleu", "France Bleu"),
-];
-
-/// Mapping slug → numeric station ID for the livemeta/pull API
-/// IDs extracted from www.radiofrance.fr SvelteKit page data (2026)
-pub const STATION_IDS: &[(&str, u32)] = &[
-    ("franceinter", 1),
-    ("franceinfo", 2),
-    ("francemusique", 4),
-    ("franceculture", 5),
-    ("mouv", 6),
-    ("fip", 7),
-    ("francebleu", 56),
-    // FIP webradios
-    ("fip_rock", 64),
-    ("fip_jazz", 65),
-    ("fip_groove", 66),
-    ("fip_reggae", 71),
-    ("fip_electro", 74),
-    ("fip_metal", 77),
-    ("fip_pop", 78),
-    ("fip_world", 69),
-    ("fip_nouveautes", 70),
-    ("fip_hiphop", 95),
-    ("fip_sacre_francais", 96),
-    ("fip_cultes", 709),
-];
-
-/// Icecast HiFi AAC stream URLs (stable, not from API)
-/// Format: https://icecast.radiofrance.fr/{name}-hifi.aac
-pub const STATION_STREAMS: &[(&str, &str)] = &[
-    (
-        "franceinter",
-        "https://icecast.radiofrance.fr/franceinter-hifi.aac",
-    ),
-    (
-        "franceinfo",
-        "https://icecast.radiofrance.fr/franceinfo-hifi.aac",
-    ),
-    (
-        "franceculture",
-        "https://icecast.radiofrance.fr/franceculture-hifi.aac",
-    ),
-    (
-        "francemusique",
-        "https://icecast.radiofrance.fr/francemusique-hifi.aac",
-    ),
-    ("fip", "https://icecast.radiofrance.fr/fip-hifi.aac"),
-    ("mouv", "https://icecast.radiofrance.fr/mouv-hifi.aac"),
-    // FIP webradios
-    (
-        "fip_rock",
-        "https://icecast.radiofrance.fr/fiprock-hifi.aac",
-    ),
-    (
-        "fip_jazz",
-        "https://icecast.radiofrance.fr/fipjazz-hifi.aac",
-    ),
-    (
-        "fip_groove",
-        "https://icecast.radiofrance.fr/fipgroove-hifi.aac",
-    ),
-    (
-        "fip_reggae",
-        "https://icecast.radiofrance.fr/fipreggae-hifi.aac",
-    ),
-    (
-        "fip_electro",
-        "https://icecast.radiofrance.fr/fipelectro-hifi.aac",
-    ),
-    (
-        "fip_metal",
-        "https://icecast.radiofrance.fr/fipmetal-hifi.aac",
-    ),
-    (
-        "fip_pop",
-        "https://icecast.radiofrance.fr/fippop-hifi.aac",
-    ),
-    (
-        "fip_world",
-        "https://icecast.radiofrance.fr/fipworld-hifi.aac",
-    ),
-    (
-        "fip_nouveautes",
-        "https://icecast.radiofrance.fr/fipnouveautes-hifi.aac",
-    ),
-    (
-        "fip_hiphop",
-        "https://icecast.radiofrance.fr/fiphiphop-hifi.aac",
-    ),
-    (
-        "fip_sacre_francais",
-        "https://icecast.radiofrance.fr/fipsacrefrancais-hifi.aac",
-    ),
-    (
-        "fip_cultes",
-        "https://icecast.radiofrance.fr/fipcultes-hifi.aac",
-    ),
-];
+// Données des stations — générées par tools/generate_radiofrance_stations.py
+// Pour mettre à jour : python3 tools/generate_radiofrance_stations.py > pmoradiofrance/src/stations_data.rs
+include!("stations_data.rs");
 
 /// Radio France HTTP client
 ///
@@ -454,70 +350,20 @@ impl RadioFranceClient {
             .collect())
     }
 
-    /// Discover local France Bleu radios via SvelteKit page data
+    /// Discover local France Bleu radios
     ///
-    /// Scrapes francebleu page for local station slugs and discovers their IDs.
-    /// Met à jour le station_mapping avec les IDs trouvés.
+    /// Returns the list of France Bleu local radios from the static STATION_IDS mapping.
+    ///
+    /// The IDs in STATION_IDS were discovered via the livemeta/pull API in March 2026 and
+    /// are stable (the API has been consistent since 2019). France Bleu's local radio
+    /// network is essentially fixed, so a static list is sufficient and robust.
     pub async fn discover_local_radios(&self) -> Result<Vec<Station>> {
-        let url = format!("{}/francebleu/__data.json", self.base_url);
-        let resp = self
-            .client
-            .get(&url)
-            .timeout(self.timeout)
-            .send()
-            .await?
-            .text()
-            .await?;
-
-        // Extraire les slugs "francebleu_xxx" et les paires (slug, id) de la page
-        let re_slug_id = Regex::new(r#""(francebleu_[a-z_]+)","(\d+)""#)?;
-        let mut stations = Vec::new();
-        let mut found_any = false;
-
-        for cap in re_slug_id.captures_iter(&resp) {
-            let slug = cap[1].to_string();
-            if let Ok(id) = cap[2].parse::<u32>() {
-                let stream_url = Self::derive_stream_url(&slug);
-                self.update_station_entry(&slug, id, stream_url);
-                let name = Self::slug_to_display_name(&slug);
-                stations.push(Station::new(slug, name));
-                found_any = true;
-            }
-        }
-
-        if found_any {
-            return Ok(stations);
-        }
-
-        // Fallback : scraper la page HTML pour les noms "ICI ..."
-        let html_url = format!("{}/francebleu", self.base_url);
-        let html = self
-            .client
-            .get(&html_url)
-            .timeout(self.timeout)
-            .send()
-            .await?
-            .text()
-            .await?;
-
-        let re_ici = Regex::new(r#"ICI ([A-Za-z\u00C0-\u017E][A-Za-z\u00C0-\u017E\s-]+)"#)?;
-        let re_slug = Regex::new(r#""(francebleu_[a-z_]+)""#)?;
-
-        let mut slugs: HashSet<String> = HashSet::new();
-        for cap in re_slug.captures_iter(&html) {
-            slugs.insert(cap[1].to_string());
-        }
-
-        let _names: Vec<String> = re_ici
-            .captures_iter(&html)
-            .map(|c| c[1].trim().to_string())
-            .collect();
-
-        Ok(slugs
-            .into_iter()
-            .map(|slug| {
-                let name = Self::slug_to_display_name(&slug);
-                Station::new(slug, name)
+        Ok(STATION_IDS
+            .iter()
+            .filter(|(slug, _)| slug.starts_with("francebleu_"))
+            .map(|(slug, _)| {
+                let name = Self::slug_to_display_name(slug);
+                Station::new(slug.to_string(), name)
             })
             .collect())
     }
@@ -716,14 +562,23 @@ impl RadioFranceClient {
             vec![]
         };
 
-        // Visual : la nouvelle API donne directement l'UUID (pas une URL complète)
-        let visual_background = step.visual.as_deref().map(|uuid| EmbedImage {
-            model: "EmbedImage".to_string(),
-            src: ImageSize::Large.build_url(uuid),
-            width: None,
-            height: None,
-            dominant: None,
-            copyright: None,
+        // Visual : l'API peut retourner soit un UUID Pikapi, soit une URL S3/CDN complète
+        let visual_background = step.visual.as_deref().map(|visual| {
+            let src = if visual.starts_with("http") {
+                // URL directe (S3, CDN) — utiliser telle quelle
+                visual.to_string()
+            } else {
+                // UUID Pikapi — construire l'URL
+                ImageSize::Large.build_url(visual)
+            };
+            EmbedImage {
+                model: "EmbedImage".to_string(),
+                src,
+                width: None,
+                height: None,
+                dominant: None,
+                copyright: None,
+            }
         });
 
         if step.is_song() {

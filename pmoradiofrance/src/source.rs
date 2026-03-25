@@ -275,10 +275,10 @@ impl MusicSource for RadioFranceSource {
                     .await
                     .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
 
-                // Si c'est une playlist (1 station), retourner le container lui-même
-                // Sinon retourner ses sous-containers
+                // Si c'est une playlist (1 station), retourner ses items directement
+                // Sinon retourner ses sous-containers (stations du groupe)
                 if container.class == "object.container.playlistContainer" {
-                    Ok(BrowseResult::Containers(vec![container]))
+                    Ok(BrowseResult::Items(container.items))
                 } else {
                     Ok(BrowseResult::Containers(container.containers))
                 }
