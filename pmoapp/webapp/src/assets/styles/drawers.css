@@ -153,6 +153,7 @@
    CONTENU
    ======================================== */
 
+/* Add class="scrollbar-thin" on elements needing thin scrollbar (see pmocontrol.css) */
 .drawer-content {
     flex: 1;
     overflow-y: auto;
@@ -163,6 +164,7 @@
     margin-bottom: var(--spacing-lg);
 }
 
+/* TODO: remplacer par la classe globale .section-title de pmocontrol.css */
 .drawer-section-title {
     font-size: var(--text-sm);
     font-weight: 600;

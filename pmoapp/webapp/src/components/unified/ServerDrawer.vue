@@ -1149,11 +1149,7 @@ function handleSettingsClick() {
     animation: spin 0.8s linear infinite;
 }
 
-@keyframes spin {
-    to {
-        transform: rotate(360deg);
-    }
-}
+/* @keyframes spin is now global in pmocontrol.css */
 
 .loading-state p {
     margin: 0;

@@ -78,6 +78,8 @@
   /* Primary color (brand) */
   --color-primary: #667eea;
   --color-primary-hover: #5568d3;
+  /* Primary color RGB components (for rgba() usage) */
+  --color-primary-rgb: 102, 126, 234;
 
   /* ========================================
      Transitions

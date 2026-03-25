@@ -257,14 +257,7 @@ async function handleQueueItem(itemId: string, rendererId: string) {
     animation: spin 1s linear infinite;
 }
 
-@keyframes spin {
-    from {
-        transform: rotate(0deg);
-    }
-    to {
-        transform: rotate(360deg);
-    }
-}
+/* @keyframes spin is now global in pmocontrol.css */
 
 /* Error */
 .browser-error {

@@ -293,40 +293,7 @@ function handleRendererDrawerClick() {
     margin: 0;
 }
 
-/* Protocol badge */
-.protocol-badge {
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    flex-shrink: 0;
-}
-
-.protocol-upnp {
-    background-color: rgba(59, 130, 246, 0.15);
-    color: #3b82f6;
-    border: 1px solid rgba(59, 130, 246, 0.3);
-}
-
-.protocol-openhome {
-    background-color: rgba(139, 92, 246, 0.15);
-    color: #8b5cf6;
-    border: 1px solid rgba(139, 92, 246, 0.3);
-}
-
-.protocol-hybrid {
-    background-color: rgba(16, 185, 129, 0.15);
-    color: #10b981;
-    border: 1px solid rgba(16, 185, 129, 0.3);
-}
-
-.protocol-chromecast {
-    background-color: rgba(244, 114, 182, 0.15);
-    color: #f472b6;
-    border: 1px solid rgba(244, 114, 182, 0.3);
-}
+/* Protocol badge classes (.protocol-badge, .protocol-upnp, etc.) are now global in pmocontrol.css */
 
 .status-badge {
     flex-shrink: 0;

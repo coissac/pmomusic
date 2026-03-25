@@ -153,14 +153,7 @@ async function handleRefresh() {
   animation: spin 1s linear infinite;
 }
 
-@keyframes spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
+/* @keyframes spin is now global in pmocontrol.css */
 
 /* Responsive mobile */
 @media (max-width: 768px) {
