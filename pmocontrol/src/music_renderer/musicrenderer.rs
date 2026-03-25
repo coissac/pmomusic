@@ -1360,12 +1360,21 @@ impl MusicRenderer {
     pub fn set_last_metadata(&self, metadata: Option<TrackMetadata>) {
         let mut state = self.state.lock().unwrap();
         let metadata_changed = state.last_metadata != metadata;
-        state.last_metadata = metadata;
         if metadata_changed {
-            state.track_start_time = Some(SystemTime::now());
+            // Pour les flux continus: utiliser dc:date comme track_start_time réel de diffusion.
+            // Toute source stream peut encoder son start_time en RFC 3339 dans dc:date.
+            // Fallback sur now() si absent ou non parseable.
+            let start_time = metadata
+                .as_ref()
+                .filter(|m| m.is_continuous_stream)
+                .and_then(|m| m.date.as_deref())
+                .and_then(parse_rfc3339_to_system_time)
+                .unwrap_or_else(SystemTime::now);
+            state.track_start_time = Some(start_time);
             // Reset duration cache when track changes (for streams)
             state.current_track_duration = None;
         }
+        state.last_metadata = metadata;
     }
 
     /// Gets the timestamp when the current track started playing.
@@ -1784,6 +1793,20 @@ fn parse_didl_duration(didl_xml: &str) -> Option<String> {
 
     duration
 }
+
+/// Parse un datetime RFC 3339 en SystemTime.
+///
+/// Utilisé pour calibrer track_start_time sur le début réel de diffusion
+/// d'un segment, encodé dans dc:date du DIDL par la source stream.
+fn parse_rfc3339_to_system_time(s: &str) -> Option<SystemTime> {
+    let dt = chrono::DateTime::parse_from_rfc3339(s).ok()?;
+    let secs = dt.timestamp();
+    if secs < 0 {
+        return None;
+    }
+    Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs as u64))
+}
+
 
 /// Transport control façade that dispatches to whichever backend can fulfill
 /// the request, returning a standardized error if the backend lacks support.

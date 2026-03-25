@@ -54,10 +54,11 @@ pub struct CachedMetadata {
     pub protocol_info: String,
     pub sample_frequency: Option<String>,
     pub nr_audio_channels: Option<String>,
-    pub duration: Option<String>, // Calculé depuis end_time
+    pub duration: Option<String>, // Calculé depuis end_time - start_time
 
-    // TTL = end_time de l'API Radio France
-    pub end_time: Option<u64>, // Unix timestamp
+    // Bornes temporelles de l'émission/morceau courant
+    pub start_time: Option<u64>, // Unix timestamp
+    pub end_time: Option<u64>,   // Unix timestamp (sert aussi de TTL)
 
     /// Timestamp de la dernière récupération (pour TTL minimum)
     pub fetched_at: u64,
@@ -89,7 +90,8 @@ impl CachedMetadata {
         let (stream_url, protocol_info, sample_frequency, nr_audio_channels, duration) =
             Self::build_stream_resource(live, &station.slug, server_base_url);
 
-        // 4. TTL = end_time
+        // 4. Bornes temporelles + TTL
+        let start_time = live.now.start_time;
         let end_time = live.now.end_time;
         let fetched_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -111,6 +113,7 @@ impl CachedMetadata {
             sample_frequency,
             nr_audio_channels,
             duration,
+            start_time,
             end_time,
             fetched_at,
         })
@@ -294,24 +297,16 @@ impl CachedMetadata {
         Option<String>,
         Option<String>,
     ) {
-        // Calculer la durée restante (maintenant -> end_time)
-        let duration = if let Some(end) = metadata.now.end_time {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
-
-            if end > now {
-                let duration_secs = end - now;
+        // Durée totale = end_time - start_time (valeur fixe, indépendante de now)
+        let duration = match (metadata.now.start_time, metadata.now.end_time) {
+            (Some(start), Some(end)) if end > start => {
+                let duration_secs = end - start;
                 let hours = duration_secs / 3600;
                 let minutes = (duration_secs % 3600) / 60;
                 let seconds = duration_secs % 60;
                 Some(format!("{}:{:02}:{:02}", hours, minutes, seconds))
-            } else {
-                None
             }
-        } else {
-            None
+            _ => None,
         };
 
         // URL du proxy PMOMusic
@@ -368,45 +363,29 @@ impl CachedMetadata {
     /// La playlist et l'item ont EXACTEMENT les mêmes métadonnées
     #[cfg(feature = "playlist")]
     pub fn to_didl(&self, playlist_id: &str, parent_id: &str) -> Container {
-        // Calculer la duration dynamiquement (temps restant jusqu'à end_time)
-        let duration = if let Some(end) = self.end_time {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
-
-            if end > now {
-                let duration_secs = end - now;
+        // Durée totale = end_time - start_time (valeur fixe)
+        let duration = match (self.start_time, self.end_time) {
+            (Some(start), Some(end)) if end > start => {
+                let duration_secs = end - start;
                 let hours = duration_secs / 3600;
                 let minutes = (duration_secs % 3600) / 60;
                 let seconds = duration_secs % 60;
                 let dur = format!("{}:{:02}:{:02}", hours, minutes, seconds);
-
                 #[cfg(feature = "logging")]
                 tracing::debug!(
-                    "Duration calculated for {}: {} (end_time: {}, now: {}, remaining: {}s)",
-                    self.slug,
-                    dur,
-                    end,
-                    now,
-                    duration_secs
+                    "Duration for {}: {} (start: {}, end: {}, total: {}s)",
+                    self.slug, dur, start, end, duration_secs
                 );
-
                 Some(dur)
-            } else {
+            }
+            _ => {
                 #[cfg(feature = "logging")]
                 tracing::warn!(
-                    "Duration expired for {}: end_time {} < now {}",
-                    self.slug,
-                    end,
-                    now
+                    "No duration for {}: start_time={:?}, end_time={:?}",
+                    self.slug, self.start_time, self.end_time
                 );
                 None
             }
-        } else {
-            #[cfg(feature = "logging")]
-            tracing::warn!("No end_time for {}, duration will be None", self.slug);
-            None
         };
 
         let item = Item {
@@ -421,7 +400,13 @@ impl CachedMetadata {
             genre: self.genre.clone(),
             album_art: self.album_art.clone(),
             album_art_pk: self.album_art_pk.clone(),
-            date: None,
+            // dc:date: début réel de diffusion du segment en RFC 3339 UTC.
+            // Les timestamps Radio France sont des Unix timestamps UTC.
+            // Pmocontrol utilise cette valeur pour calibrer track_start_time.
+            date: self.start_time.and_then(|start| {
+                chrono::DateTime::from_timestamp(start as i64, 0)
+                    .map(|dt| dt.to_rfc3339())
+            }),
             original_track_number: None,
             resources: vec![Resource {
                 protocol_info: self.protocol_info.clone(),
@@ -797,6 +782,7 @@ mod tests {
             sample_frequency: None,
             nr_audio_channels: None,
             duration: None,
+            start_time: None,
             end_time: Some(0), // Dans le passé
             fetched_at: now,
         };
