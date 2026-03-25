@@ -1542,37 +1542,52 @@ fn refresh_attached_queue_for(
 
     const MAX_BROWSE_ATTEMPTS: usize = 3;
     const BROWSE_RETRY_DELAY_MS: u64 = 200;
-    let mut attempt = 1;
-    let entries = loop {
-        match music_server.browse_children(&container_id, 0, 64) {
-            Ok(e) => break e,
-            Err(err) => {
-                if attempt >= MAX_BROWSE_ATTEMPTS {
-                    warn!(
-                        renderer = renderer_id.0.as_str(),
-                        server = server_id.0.as_str(),
-                        container = container_id.as_str(),
-                        attempts = attempt,
-                        error = %err,
-                        "Failed to browse playlist container for refresh"
-                    );
-                    return Err(err);
-                }
+    const BROWSE_PAGE_SIZE: u32 = 64;
 
-                debug!(
-                    renderer = renderer_id.0.as_str(),
-                    server = server_id.0.as_str(),
-                    container = container_id.as_str(),
-                    attempt,
-                    error = %err,
-                    "Browse attempt failed, retrying"
-                );
-                thread::sleep(Duration::from_millis(
-                    BROWSE_RETRY_DELAY_MS * attempt as u64,
-                ));
-                attempt += 1;
+    // Paginated browse — une playlist peut dépasser BROWSE_PAGE_SIZE items
+    let entries = {
+        let mut all_entries = Vec::new();
+        let mut offset = 0u32;
+        loop {
+            let mut attempt = 1;
+            let page = loop {
+                match music_server.browse_children(&container_id, offset, BROWSE_PAGE_SIZE) {
+                    Ok(e) => break e,
+                    Err(err) => {
+                        if attempt >= MAX_BROWSE_ATTEMPTS {
+                            warn!(
+                                renderer = renderer_id.0.as_str(),
+                                server = server_id.0.as_str(),
+                                container = container_id.as_str(),
+                                attempts = attempt,
+                                error = %err,
+                                "Failed to browse playlist container for refresh"
+                            );
+                            return Err(err);
+                        }
+                        debug!(
+                            renderer = renderer_id.0.as_str(),
+                            server = server_id.0.as_str(),
+                            container = container_id.as_str(),
+                            attempt,
+                            error = %err,
+                            "Browse attempt failed, retrying"
+                        );
+                        thread::sleep(Duration::from_millis(
+                            BROWSE_RETRY_DELAY_MS * attempt as u64,
+                        ));
+                        attempt += 1;
+                    }
+                }
+            };
+            let fetched = page.len() as u32;
+            all_entries.extend(page);
+            if fetched < BROWSE_PAGE_SIZE {
+                break;
             }
+            offset += fetched;
         }
+        all_entries
     };
 
     debug!(
