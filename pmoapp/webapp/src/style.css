@@ -3,6 +3,9 @@
     line-height: 1.5;
     font-weight: 400;
 
+    /* Taille de base légèrement réduite — remplace le zoom: 0.85 global */
+    font-size: 15px;
+
     color-scheme: light dark;
     color: rgba(255, 255, 255, 0.87);
     background-color: #242424;
@@ -68,8 +71,6 @@ button:focus-visible {
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
-    zoom: 0.85;
-    transform-origin: top left;
 }
 
 @media (prefers-color-scheme: light) {

@@ -499,7 +499,13 @@ fn playlist_track_to_response(
         if let Ok(mut entry) = cache.db.get(&track.cache_pk, true) {
             if let Some(lazy_pk) = entry.lazy_pk.take() {
                 if lazy_pk != response.cache_pk {
-                    response.lazy_pk = Some(lazy_pk);
+                    response.lazy_pk = Some(lazy_pk.clone());
+                }
+                // Si l'entrée lazy n'a pas de metadata, essayer l'entrée réelle
+                if entry.metadata.is_none() {
+                    if let Ok(real_entry) = cache.db.get(&lazy_pk, true) {
+                        entry.metadata = real_entry.metadata;
+                    }
                 }
             }
 

@@ -17,6 +17,7 @@ import PlayListManager from "../components/PlayListManager.vue";
 import UpnpExplorer from "../components/UpnpExplorer.vue";
 import APIDashboard from "../components/APIDashboard.vue";
 import RadioParadiseExplorer from "../components/RadioParadiseExplorer.vue";
+import DebugView from "../views/DebugView.vue";
 
 const routes = [
   // PMOControl Unified Interface (nouvelle interface unifiée avec onglets)
@@ -41,6 +42,13 @@ const routes = [
     path: "/legacy/server/:serverId",
     name: "MediaServer",
     component: MediaServerView,
+  },
+
+  // Debug hub
+  {
+    path: "/debug",
+    name: "Debug",
+    component: DebugView,
   },
 
   // Debug menu (anciennes routes déplacées sous /debug)

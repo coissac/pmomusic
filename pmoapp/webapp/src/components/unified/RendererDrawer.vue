@@ -138,7 +138,7 @@ function handleRendererClick(renderer: RendererSummary) {
 }
 
 function handleSettingsClick() {
-    router.push("/debug/api-dashboard");
+    router.push("/debug");
     close();
 }
 
@@ -210,7 +210,7 @@ async function handleTransferQueue(event: Event, targetRendererId: string) {
 
         <!-- Drawer -->
         <Transition name="drawer">
-            <aside v-if="modelValue" class="renderer-drawer">
+            <aside v-if="modelValue" class="app-drawer renderer-drawer">
                 <!-- Header -->
                 <header class="drawer-header">
                     <div class="drawer-title-section">
@@ -453,90 +453,21 @@ async function handleTransferQueue(event: Event, targetRendererId: string) {
     }
 }
 
+/* Positionnement spécifique — le reste est dans drawers.css (.app-drawer) */
 .renderer-drawer {
-    position: fixed;
-    top: 0;
     right: 0;
-    bottom: 0;
-    width: 50vw; /* Desktop/landscape: 50% de l'écran */
-    background: rgba(255, 255, 255, 0.08); /* Plus transparent */
-    backdrop-filter: blur(40px) saturate(180%);
-    -webkit-backdrop-filter: blur(40px) saturate(180%);
-    border-left: 1px solid rgba(255, 255, 255, 0.15);
-    box-shadow: -4px 0 32px rgba(0, 0, 0, 0.25);
-    z-index: 201;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
+    border-left: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: -4px 0 32px rgba(0, 0, 0, 0.4);
 }
 
-@media (prefers-color-scheme: dark) {
+@media (prefers-color-scheme: light) {
     .renderer-drawer {
-        background: rgba(0, 0, 0, 0.4);
-        border-left-color: rgba(255, 255, 255, 0.1);
+        border-left-color: rgba(0, 0, 0, 0.1);
+        box-shadow: -4px 0 32px rgba(0, 0, 0, 0.15);
     }
 }
 
-/* Header */
-.drawer-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--spacing-sm);
-    padding: var(--spacing-lg);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-    flex-shrink: 0;
-}
-
-.drawer-title-section {
-    display: flex;
-    align-items: center;
-    gap: var(--spacing-sm);
-    color: var(--color-text);
-    flex: 1;
-    min-width: 0;
-}
-
-.drawer-title {
-    font-size: var(--text-xl);
-    font-weight: 700;
-    margin: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.drawer-close-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 40px;
-    height: 40px;
-    flex-shrink: 0;
-    padding: 0;
-    background: rgba(255, 255, 255, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    border-radius: 50%;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    color: var(--color-text);
-}
-
-.drawer-close-btn:hover {
-    background: rgba(255, 255, 255, 0.2);
-    transform: scale(1.1);
-}
-
-.drawer-close-btn:active {
-    transform: scale(0.95);
-}
-
-/* Content */
-.drawer-content {
-    flex: 1;
-    overflow-y: auto;
-    padding: var(--spacing-md);
-}
+/* .drawer-header, .drawer-title, .drawer-close-btn, .drawer-content définis dans drawers.css */
 
 .renderer-section {
     margin-bottom: var(--spacing-lg);

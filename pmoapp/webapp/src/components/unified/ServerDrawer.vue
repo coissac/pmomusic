@@ -353,7 +353,7 @@ async function handleAddAfterCurrent(event: Event, item: ContainerEntry) {
 }
 
 function handleSettingsClick() {
-    router.push("/debug/api-dashboard");
+    router.push("/debug");
     close();
 }
 </script>
@@ -367,7 +367,7 @@ function handleSettingsClick() {
 
         <!-- Drawer -->
         <Transition name="drawer">
-            <aside v-if="modelValue" class="server-drawer">
+            <aside v-if="modelValue" class="app-drawer server-drawer">
                 <!-- Header - Liste des serveurs -->
                 <header v-if="!isNavigating" class="drawer-header">
                     <div class="drawer-title-section">
@@ -386,7 +386,7 @@ function handleSettingsClick() {
                 <!-- Header - Navigation dans un serveur -->
                 <header v-else class="drawer-header">
                     <button
-                        class="back-btn"
+                        class="drawer-back-btn"
                         @click="goBack"
                         aria-label="Retour aux serveurs"
                     >
@@ -720,107 +720,18 @@ function handleSettingsClick() {
     }
 }
 
+/* Positionnement spécifique — le reste est dans drawers.css (.app-drawer) */
 .server-drawer {
-    position: fixed;
-    top: 0;
     left: 0;
-    bottom: 0;
-    width: 50vw; /* Desktop/landscape: 50% de l'écran */
-    background: rgba(255, 255, 255, 0.08); /* Plus transparent */
-    backdrop-filter: blur(40px) saturate(180%);
-    -webkit-backdrop-filter: blur(40px) saturate(180%);
-    border-right: 1px solid rgba(255, 255, 255, 0.15);
-    box-shadow: 4px 0 32px rgba(0, 0, 0, 0.25);
-    z-index: 201;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
+    border-right: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 4px 0 32px rgba(0, 0, 0, 0.4);
 }
 
-@media (prefers-color-scheme: dark) {
+@media (prefers-color-scheme: light) {
     .server-drawer {
-        background: rgba(0, 0, 0, 0.4);
-        border-right-color: rgba(255, 255, 255, 0.1);
+        border-right-color: rgba(0, 0, 0, 0.1);
+        box-shadow: 4px 0 32px rgba(0, 0, 0, 0.15);
     }
-}
-
-/* Header */
-.drawer-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--spacing-sm);
-    padding: var(--spacing-lg);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-    flex-shrink: 0;
-}
-
-.drawer-title-section {
-    display: flex;
-    align-items: center;
-    gap: var(--spacing-sm);
-    color: var(--color-text);
-    flex: 1;
-    min-width: 0;
-}
-
-.drawer-title {
-    font-size: var(--text-xl);
-    font-weight: 700;
-    margin: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.drawer-title.small {
-    font-size: var(--text-base);
-}
-
-.back-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 36px;
-    height: 36px;
-    flex-shrink: 0;
-    padding: 0;
-    background: rgba(255, 255, 255, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    border-radius: 50%;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    color: var(--color-text);
-}
-
-.back-btn:hover {
-    background: rgba(255, 255, 255, 0.2);
-    transform: scale(1.05);
-}
-
-.drawer-close-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 40px;
-    height: 40px;
-    flex-shrink: 0;
-    padding: 0;
-    background: rgba(255, 255, 255, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    border-radius: 50%;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    color: var(--color-text);
-}
-
-.drawer-close-btn:hover {
-    background: rgba(255, 255, 255, 0.2);
-    transform: scale(1.1);
-}
-
-.drawer-close-btn:active {
-    transform: scale(0.95);
 }
 
 /* Breadcrumb */
@@ -864,12 +775,7 @@ function handleSettingsClick() {
     background: transparent;
 }
 
-/* Content */
-.drawer-content {
-    flex: 1;
-    overflow-y: auto;
-    padding: var(--spacing-md);
-}
+/* .drawer-content défini dans drawers.css */
 
 .server-section {
     margin-bottom: var(--spacing-lg);
