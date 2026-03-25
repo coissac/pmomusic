@@ -767,7 +767,7 @@ impl QobuzSource {
         &self,
         qobuz_playlist_id: &str,
     ) -> Result<Vec<Item>> {
-        use tracing::{debug, info};
+        use tracing::{debug, info, warn};
 
         let pmo_playlist_id = format!("qobuz-playlist-{}", qobuz_playlist_id);
         let playlist_manager = pmoplaylist::PlaylistManager();
@@ -845,6 +845,18 @@ impl QobuzSource {
         }
 
         let lazy_pks = self.register_tracks_lazy(&tracks).await;
+        let all_registered = lazy_pks.len() == tracks.len();
+        if !all_registered {
+            warn!(
+                "Qobuz playlist {}: only {}/{} tracks registered, will not mark cache as complete",
+                qobuz_playlist_id, lazy_pks.len(), tracks.len()
+            );
+            // Invalider la source_version pour forcer un refresh au prochain accès
+            writer
+                .set_source_version(None)
+                .await
+                .map_err(|e| MusicSourceError::PlaylistError(e.to_string()))?;
+        }
         writer
             .push_lazy_batch(lazy_pks)
             .await

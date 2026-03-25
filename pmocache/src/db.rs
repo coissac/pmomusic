@@ -18,7 +18,7 @@ use std::sync::{Mutex, MutexGuard};
 /// Incrémenter cette constante à chaque modification incompatible du schéma.
 /// Cela provoquera la suppression de la DB **et de tous les fichiers du cache**
 /// au prochain démarrage.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 use std::time::Instant;
 
 #[cfg(feature = "openapi")]
