@@ -148,18 +148,18 @@ function handleRendererDrawerClick() {
     gap: var(--spacing-md);
     height: 72px;
     padding: 0 var(--spacing-md);
-    background: rgba(255, 255, 255, 0.1);
-    backdrop-filter: blur(30px) saturate(180%);
-    -webkit-backdrop-filter: blur(30px) saturate(180%);
-    border-top: 1px solid rgba(255, 255, 255, 0.2);
-    box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.1);
+    background: rgba(22, 22, 32, 0.96);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.3);
     z-index: 100;
 }
 
-@media (prefers-color-scheme: dark) {
+@media (prefers-color-scheme: light) {
     .bottom-bar {
-        background: rgba(0, 0, 0, 0.25);
-        border-top: 1px solid rgba(255, 255, 255, 0.1);
+        background: rgba(245, 245, 250, 0.97);
+        border-top-color: rgba(0, 0, 0, 0.1);
     }
 }
 

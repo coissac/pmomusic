@@ -266,23 +266,5 @@
     }
 }
 
-/* ========================================
-   ANIMATIONS D'ENTRÉE/SORTIE
-   ======================================== */
-
-.drawer-enter-active,
-.drawer-leave-active {
-    transition: transform var(--transition-normal) ease;
-}
-
-/* ServerDrawer : entre par la gauche */
-.drawer-left-enter-from,
-.drawer-left-leave-to {
-    transform: translateX(-100%);
-}
-
-/* RendererDrawer : entre par la droite */
-.drawer-right-enter-from,
-.drawer-right-leave-to {
-    transform: translateX(100%);
-}
+/* Les animations d'entrée/sortie sont définies dans chaque composant (scoped)
+   car elles diffèrent selon la direction (gauche/droite/bas) */

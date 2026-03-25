@@ -695,7 +695,7 @@ async function handleTransferQueue(event: Event, targetRendererId: string) {
     right: 0;
     top: calc(100% + 4px);
     min-width: 200px;
-    background: var(--color-surface-elevated);
+    background: rgba(20, 20, 30, 0.98);
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 8px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
