@@ -1538,7 +1538,13 @@ fn refresh_attached_queue_for(
         return Ok(());
     }
 
-    // Step 3: Browse container
+    // Step 3: Notify UI that the renderer is loading (Transitioning state)
+    event_bus.broadcast(RendererEvent::StateChanged {
+        id: renderer_id.clone(),
+        state: PlaybackState::Transitioning,
+    });
+
+    // Step 4: Browse container (renamed from Step 3 for clarity)
 
     const MAX_BROWSE_ATTEMPTS: usize = 3;
     const BROWSE_RETRY_DELAY_MS: u64 = 200;
