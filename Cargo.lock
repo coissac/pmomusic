@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "PMOMusic"
-version = "0.3.29"
+version = "0.3.30"
 dependencies = [
  "axum 0.8.7",
  "console-subscriber",

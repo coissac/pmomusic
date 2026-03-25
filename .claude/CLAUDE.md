@@ -25,6 +25,14 @@ host:
     friendly_name_prefix: "PMOMusic-Dev1"
 ```
 
+## Méthode de travail
+Avant de modifier quoi que ce soit sur une fonctionnalité non triviale :
+1. Lire et comprendre le flux complet des données concernées, de bout en bout
+2. Identifier précisément où ça casse et pourquoi
+3. Faire une seule modification ciblée
+
+Ne pas avancer par tâtonnements ("vibe programming") — cela produit des allers-retours, des bugs introduits puis annulés, et du code inutilement compliqué.
+
 ## Architecture
 - Projet Rust multi-crates avec workspaces
 - Crates principales : pmoupnp, pmomediaserver, pmomediarenderer, pmoconfig

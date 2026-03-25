@@ -49,10 +49,21 @@ pub struct PullResponse {
 impl PullResponse {
     /// Get the current step at depth 1 (the "now playing" item)
     pub fn current_step(&self) -> Option<&PullStep> {
-        // levels[0].items[0] is the current item at depth 1 (most relevant)
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        // Le niveau liste tous les steps de la session (passés et futurs) dans l'ordre.
+        // On cherche le step dont start <= now < end.
         let level = self.levels.first()?;
-        let step_id = level.items.first()?;
-        self.steps.get(step_id)
+        level.items.iter().find_map(|step_id| {
+            let step = self.steps.get(step_id)?;
+            match (step.start, step.end) {
+                (Some(start), Some(end)) if start <= now && now < end => Some(step),
+                _ => None,
+            }
+        })
     }
 }
 
