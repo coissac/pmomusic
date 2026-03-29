@@ -6,7 +6,7 @@ import { useUIStore } from "@/stores/ui";
 import Breadcrumb from "./Breadcrumb.vue";
 import ContainerItem from "./ContainerItem.vue";
 import MediaItem from "./MediaItem.vue";
-import { Loader2 } from "lucide-vue-next";
+import { Loader2, Search, X } from "lucide-vue-next";
 
 const props = defineProps<{
     serverId: string;
@@ -22,7 +22,26 @@ const {
     loading,
     loadingMore,
     error,
+    searchResults,
+    searchQuery,
+    searchServer,
+    clearSearch,
 } = useMediaServers();
+
+const searchInput = ref('');
+
+async function handleSearch() {
+    if (searchInput.value.trim()) {
+        await searchServer(props.serverId, searchInput.value.trim());
+    }
+}
+
+function handleClearSearch() {
+    searchInput.value = '';
+    clearSearch();
+}
+
+const isSearchMode = computed(() => searchQuery.value !== '');
 
 const { playContent, addToQueue, attachAndPlayPlaylist, attachPlaylist } =
     useRenderers();
@@ -33,7 +52,9 @@ const sentinelRef = ref<HTMLElement | null>(null);
 let observer: IntersectionObserver | null = null;
 
 const browseData = computed(() =>
-    getBrowseCached(props.serverId, props.containerId),
+    isSearchMode.value
+        ? searchResults.value
+        : getBrowseCached(props.serverId, props.containerId),
 );
 
 const containers = computed(
@@ -44,7 +65,7 @@ const items = computed(
     () => browseData.value?.entries.filter((e) => !e.is_container) || [],
 );
 
-const canLoadMore = computed(() => hasMore(props.serverId, props.containerId));
+const canLoadMore = computed(() => !isSearchMode.value && hasMore(props.serverId, props.containerId));
 
 function setupObserver() {
     if (observer) observer.disconnect();
@@ -165,6 +186,31 @@ async function handleQueueItem(itemId: string, rendererId: string) {
             @navigate="handleNavigate"
         />
 
+        <!-- Search bar -->
+        <div class="search-bar">
+            <div class="search-input-wrapper">
+                <Search :size="16" class="search-icon" />
+                <input
+                    v-model="searchInput"
+                    type="text"
+                    class="search-input"
+                    placeholder="Rechercher..."
+                    @keyup.enter="handleSearch"
+                />
+                <button
+                    v-if="searchInput || isSearchMode"
+                    class="search-clear"
+                    @click="handleClearSearch"
+                    title="Effacer"
+                >
+                    <X :size="14" />
+                </button>
+            </div>
+            <button class="btn btn-primary search-btn" @click="handleSearch">
+                Rechercher
+            </button>
+        </div>
+
         <!-- Loading state -->
         <div v-if="loading" class="browser-loading">
             <Loader2 :size="32" class="spinner" />
@@ -220,7 +266,7 @@ async function handleQueueItem(itemId: string, rendererId: string) {
                 v-if="!containers.length && !items.length"
                 class="browser-empty"
             >
-                <p>Ce dossier est vide</p>
+                <p>{{ isSearchMode ? 'Aucun résultat' : 'Ce dossier est vide' }}</p>
             </div>
 
             <!-- Sentinel infinite scroll -->
@@ -326,6 +372,64 @@ async function handleQueueItem(itemId: string, rendererId: string) {
     justify-content: center;
     padding: var(--spacing-md);
     color: var(--color-text-secondary);
+}
+
+/* Search */
+.search-bar {
+    display: flex;
+    gap: var(--spacing-sm);
+    align-items: center;
+}
+
+.search-input-wrapper {
+    flex: 1;
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.search-icon {
+    position: absolute;
+    left: var(--spacing-sm);
+    color: var(--color-text-tertiary);
+    pointer-events: none;
+}
+
+.search-input {
+    width: 100%;
+    padding: var(--spacing-xs) var(--spacing-xl) var(--spacing-xs) calc(var(--spacing-sm) + 20px);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-secondary);
+    color: var(--color-text);
+    font-size: var(--text-sm);
+}
+
+.search-input:focus {
+    outline: none;
+    border-color: var(--color-primary);
+}
+
+.search-clear {
+    position: absolute;
+    right: var(--spacing-xs);
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--color-text-tertiary);
+    display: flex;
+    align-items: center;
+    padding: 2px;
+}
+
+.search-clear:hover {
+    color: var(--color-text);
+}
+
+.search-btn {
+    white-space: nowrap;
+    padding: var(--spacing-xs) var(--spacing-md);
+    font-size: var(--text-sm);
 }
 
 /* Scrollbar styling */

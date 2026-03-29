@@ -25,6 +25,8 @@ export interface BrowseState {
 const serversCache = ref<Map<string, MediaServerSummary>>(new Map())
 const browseCache = ref<Map<string, BrowseState>>(new Map())
 const currentPath = ref<BreadcrumbItem[]>([])
+const searchResults = ref<BrowseState | null>(null)
+const searchQuery = ref<string>('')
 
 // Timestamps
 const lastFetch = {
@@ -193,6 +195,39 @@ export function useMediaServers() {
     }
   }
 
+  // Recherche dans un serveur
+  async function searchServer(serverId: string, query: string) {
+    if (!query.trim()) {
+      searchResults.value = null
+      searchQuery.value = ''
+      return
+    }
+
+    try {
+      loading.value = true
+      error.value = null
+      searchQuery.value = query
+
+      const data = await api.searchServer(serverId, query)
+      searchResults.value = {
+        container_id: 'search',
+        entries: data.entries,
+        total_count: data.total_count,
+      }
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : 'Erreur recherche'
+      console.error(`[useMediaServers] Erreur search ${serverId}:`, e)
+      throw e
+    } finally {
+      loading.value = false
+    }
+  }
+
+  function clearSearch() {
+    searchResults.value = null
+    searchQuery.value = ''
+  }
+
   // Getters
   function getServerById(id: string) {
     return serversCache.value.get(id)
@@ -247,6 +282,11 @@ export function useMediaServers() {
     getServerById,
     getBrowseCached,
     hasMore,
+    // Search
+    searchResults,
+    searchQuery,
+    searchServer,
+    clearSearch,
     // Actions
     fetchServers,
     browseContainer,

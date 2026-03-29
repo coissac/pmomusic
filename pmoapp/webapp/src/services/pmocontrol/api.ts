@@ -426,6 +426,16 @@ class PMOControlAPI {
     );
   }
 
+  /**
+   * Recherche dans un serveur media
+   * GET /api/control/servers/{serverId}/search?q={query}
+   */
+  async searchServer(serverId: string, query: string): Promise<BrowseResponse> {
+    return this.request<BrowseResponse>(
+      `/servers/${encodeURIComponent(serverId)}/search?q=${encodeURIComponent(query)}`,
+    );
+  }
+
   // ============================================================================
   // SLEEP TIMER
   // ============================================================================

@@ -41,7 +41,24 @@ const {
     currentPath,
     setPath,
     clearPath,
+    searchResults,
+    searchQuery,
+    searchServer,
+    clearSearch,
 } = useMediaServers();
+
+const searchInput = ref('');
+const isSearchMode = computed(() => searchQuery.value !== '');
+
+async function handleSearch() {
+    if (!currentServer.value || !searchInput.value.trim()) return;
+    await searchServer(currentServer.value.id, searchInput.value.trim());
+}
+
+function handleClearSearch() {
+    searchInput.value = '';
+    clearSearch();
+}
 
 const { playContent, addToQueue, addAfterCurrent, attachAndPlayPlaylist } =
     useRenderers();
@@ -427,6 +444,28 @@ function handleSettingsClick() {
                     </button>
                 </nav>
 
+                <!-- Search bar (visible en mode navigation) -->
+                <div v-if="isNavigating" class="search-bar">
+                    <input
+                        v-model="searchInput"
+                        type="text"
+                        class="search-input"
+                        placeholder="Rechercher..."
+                        @keyup.enter="handleSearch"
+                    />
+                    <button
+                        v-if="searchInput || isSearchMode"
+                        class="search-clear-btn"
+                        @click="handleClearSearch"
+                        title="Effacer"
+                    >
+                        <X :size="14" />
+                    </button>
+                    <button class="search-btn" @click="handleSearch" title="Rechercher">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                    </button>
+                </div>
+
                 <!-- Contenu -->
                 <div ref="drawerContentRef" class="drawer-content">
                     <!-- Liste des serveurs -->
@@ -518,6 +557,53 @@ function handleSettingsClick() {
                         <div v-if="isLoading" class="loading-state">
                             <div class="spinner"></div>
                             <p>Chargement...</p>
+                        </div>
+
+                        <!-- Résultats de recherche -->
+                        <div v-else-if="isSearchMode && searchResults">
+                            <p v-if="searchResults.entries.length === 0" class="empty-state">Aucun résultat</p>
+                            <ul v-else class="content-list">
+                                <li
+                                    v-for="item in searchResults.entries"
+                                    :key="item.id"
+                                    class="content-item"
+                                    :class="{ navigable: item.is_container }"
+                                    @click="handleItemClick(item)"
+                                >
+                                    <div class="content-cover">
+                                        <img
+                                            v-if="item.album_art_uri && !getImageState(item.id).error"
+                                            :src="item.album_art_uri"
+                                            :alt="item.title"
+                                            class="cover-img"
+                                            :class="{ loaded: getImageState(item.id).loaded }"
+                                            @load="handleImageLoad(item.id)"
+                                            @error="handleImageError(item.id)"
+                                        />
+                                        <div v-else class="cover-placeholder">
+                                            <Folder v-if="item.is_container" :size="24" />
+                                            <Music v-else :size="24" />
+                                        </div>
+                                    </div>
+                                    <div class="content-info">
+                                        <p class="content-title">{{ item.title }}</p>
+                                        <p v-if="item.artist" class="content-subtitle">{{ item.artist }}</p>
+                                    </div>
+                                    <div class="item-actions" @click.stop>
+                                        <button class="action-btn play-btn" @click="handlePlayItem($event, item)" title="Lire">
+                                            <Play :size="14" />
+                                        </button>
+                                        <button class="action-btn" @click="toggleMenu(item.id, $event)" title="Plus">
+                                            <MoreVertical :size="14" />
+                                        </button>
+                                        <div v-if="openMenuId === item.id" class="item-menu">
+                                            <button @click="handleAddToQueue($event, item)"><Plus :size="14" /> Ajouter à la queue</button>
+                                            <button @click="handleAddAfterCurrent($event, item)"><Plus :size="14" /> Après le current</button>
+                                        </div>
+                                    </div>
+                                    <ChevronRight v-if="item.is_container" :size="16" class="content-chevron" />
+                                </li>
+                            </ul>
                         </div>
 
                         <!-- Contenu du serveur -->
@@ -735,6 +821,62 @@ function handleSettingsClick() {
 }
 
 /* Breadcrumb */
+.search-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: var(--spacing-sm) var(--spacing-md);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    flex-shrink: 0;
+}
+
+.search-input {
+    flex: 1;
+    padding: 6px 10px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: var(--radius-md);
+    background: rgba(255, 255, 255, 0.07);
+    color: var(--color-text);
+    font-size: var(--text-sm);
+    min-width: 0;
+}
+
+.search-input:focus {
+    outline: none;
+    border-color: var(--color-primary);
+}
+
+.search-input::placeholder {
+    color: var(--color-text-tertiary);
+}
+
+.search-clear-btn,
+.search-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px;
+    border: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    background: rgba(255, 255, 255, 0.07);
+    color: var(--color-text-secondary);
+    flex-shrink: 0;
+}
+
+.search-clear-btn:hover,
+.search-btn:hover {
+    background: rgba(255, 255, 255, 0.15);
+    color: var(--color-text);
+}
+
+.empty-state {
+    text-align: center;
+    padding: var(--spacing-xl);
+    color: var(--color-text-tertiary);
+    font-size: var(--text-sm);
+}
+
 .breadcrumb {
     display: flex;
     align-items: center;
