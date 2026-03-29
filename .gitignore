@@ -47,3 +47,5 @@ pmo*_[0_9]*.txt
 webapp_[0_9]*.txt
 RF.json
 RF_old.json
+.claude/
+.claude.old
