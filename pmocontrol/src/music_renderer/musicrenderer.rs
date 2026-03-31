@@ -849,6 +849,10 @@ impl MusicRenderer {
         }
 
         // Then stop playback (ignore errors if already stopped)
+        tracing::trace!(
+            renderer = self.id().0.as_str(),
+            "STOP command via clear_for_playlist_attach"
+        );
         backend.stop().or_else(|err| {
             warn!(
                 renderer = self.id().0.as_str(),
@@ -964,6 +968,7 @@ impl MusicRenderer {
     }
 
     /// Transport control: stop
+    #[track_caller]
     pub fn stop(&self) -> Result<(), ControlPointError> {
         // Reset the has_played flag when stopping playback.
         // This ensures that if we start a new track, the flag will be false
@@ -971,6 +976,12 @@ impl MusicRenderer {
         // transient STOPPED states during track initialization.
         self.clear_has_played_flag();
 
+        let caller = std::panic::Location::caller();
+        tracing::trace!(
+            renderer = self.info.friendly_name(),
+            caller = %caller,
+            "STOP command sent to renderer"
+        );
         self.lock_backend_for("stop").stop()
     }
 

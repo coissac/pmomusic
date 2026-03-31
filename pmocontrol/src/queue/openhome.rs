@@ -869,6 +869,13 @@ impl QueueBackend for OpenHomeQueue {
         // Cache miss or expired - fetch from service (keep lock held to prevent concurrent calls)
         let ids = self.playlist_client.id_array()?;
 
+        tracing::trace!(
+            renderer = self.renderer_id.0.as_str(),
+            ids_count = ids.len(),
+            ids = ?ids,
+            "track_ids: cache miss, fetched from Pizzicato"
+        );
+
         // Update cache before releasing lock
         cache.set(ids.clone());
 
@@ -1008,6 +1015,10 @@ impl QueueBackend for OpenHomeQueue {
             self.playlist_client.seek_id(track_id)?;
         } else {
             self.ensure_playlist_source_selected()?;
+            tracing::trace!(
+                renderer = self.renderer_id.0.as_str(),
+                "STOP command via set_index(None) on OpenHome playlist"
+            );
             self.playlist_client.stop()?;
         }
         // Invalidate caches (seek_id/stop modifies playlist state and current track)

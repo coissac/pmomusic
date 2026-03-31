@@ -1157,6 +1157,46 @@ impl ControlPoint {
         container_id: &str,
         auto_play: bool,
     ) -> Result<(), ControlPointError> {
+        // If already bound to the same container on the same server, don't clear the
+        // renderer queue — that would interrupt active playback. Instead, just trigger
+        // a gentle refresh (which uses LCS and preserves the currently playing track).
+        let renderer = self.music_renderer_by_id(renderer_id).ok_or_else(|| {
+            ControlPointError::ControlPoint(format!("Renderer {} not found", renderer_id.0))
+        })?;
+
+        let already_bound = renderer
+            .get_playlist_binding()
+            .map(|b| b.server_id == *server_id && b.container_id == container_id)
+            .unwrap_or(false);
+
+        if already_bound {
+            debug!(
+                renderer = renderer_id.0.as_str(),
+                server = server_id.0.as_str(),
+                container = container_id,
+                auto_play,
+                "Re-attach to same container: skipping clear, triggering gentle refresh"
+            );
+            let mut binding = renderer.get_playlist_binding().unwrap();
+            binding.pending_refresh = true;
+            binding.auto_play_on_refresh = auto_play;
+            renderer.set_playlist_binding(Some(binding));
+
+            let mut auto_start_cb = |rid: &DeviceId| self.play_current_from_queue(rid);
+            let callback: Option<&mut dyn FnMut(&DeviceId) -> Result<(), ControlPointError>> =
+                if auto_play {
+                    Some(&mut auto_start_cb)
+                } else {
+                    None
+                };
+            return refresh_attached_queue_for(
+                &self.registry,
+                renderer_id,
+                &self.event_bus,
+                callback,
+            );
+        }
+
         // CRITICAL: When attaching a new playlist to a renderer, we must UNCONDITIONALLY
         // clear the RENDERER queue first (but NOT the local queue cache, which will be
         // replaced by refresh_attached_queue_for() using replace_entire_playlist()).
@@ -1170,10 +1210,6 @@ impl ControlPoint {
             "Attaching new playlist: clearing renderer queue"
         );
 
-        // Prepare the renderer for the new playlist (backend-agnostic)
-        let renderer = self.music_renderer_by_id(renderer_id).ok_or_else(|| {
-            ControlPointError::ControlPoint(format!("Renderer {} not found", renderer_id.0))
-        })?;
         renderer.clear_for_playlist_attach()?;
 
         // Sync backend state to local cache (backend-agnostic)

@@ -2,8 +2,9 @@ use crate::errors::ControlPointError;
 use crate::model::TrackMetadata;
 use crate::soap_client::{
     decode_base64, ensure_success_with_envelope as ensure_success, extract_child_text,
-    extract_child_text_any, extract_child_text_local, extract_child_text_optional,
-    extract_child_text_optional_local, find_child_with_suffix, handle_action_response,
+    extract_child_text_allow_empty, extract_child_text_any, extract_child_text_local,
+    extract_child_text_optional, extract_child_text_optional_local, find_child_with_suffix,
+    handle_action_response,
     invoke_upnp_action, parse_bool, parse_visible_flag,
 };
 use anyhow::{Result, anyhow};
@@ -270,7 +271,8 @@ impl OhPlaylistClient {
                 ControlPointError::UpnpMissingReturnValue("TransportStateResponse".to_string())
             })?;
 
-        let state = extract_child_text_any(response, &["State", "Value"])?;
+        // upmpdcli returns <Value>, other implementations may use <State>
+        let state = extract_child_text_any(response, &["Value", "State"])?;
         Ok(state)
     }
 
@@ -331,7 +333,10 @@ impl OhPlaylistClient {
         handle_action_response("SeekSecondAbsolute", &call_result)
     }
 
+    #[track_caller]
     pub fn delete_id(&self, id: u32) -> Result<(), ControlPointError> {
+        let caller = std::panic::Location::caller();
+        tracing::trace!(control_url = self.control_url.as_str(), id, caller = %caller, "OpenHome DeleteId");
         let id_str = id.to_string();
         let args = [("Value", id_str.as_str())];
 
@@ -379,7 +384,10 @@ impl OhPlaylistClient {
         }
     }
 
+    #[track_caller]
     pub fn delete_all(&self) -> Result<(), ControlPointError> {
+        let caller = std::panic::Location::caller();
+        tracing::trace!(control_url = self.control_url.as_str(), caller = %caller, "OpenHome DeleteAll");
         let call_result =
             invoke_upnp_action(&self.control_url, &self.service_type, "DeleteAll", &[])?;
         handle_action_response("DeleteAll", &call_result)
@@ -408,6 +416,21 @@ impl OhPlaylistClient {
         let envelope = ensure_success("IdArray", &call_result)?;
         let response = find_child_with_suffix(&envelope.body.content, "IdArrayResponse")
             .ok_or_else(|| ControlPointError::upnp_missing_return_value("IdArrayResponse"))?;
+
+        // Log the raw IdArrayResponse XML for debugging
+        {
+            let raw_children: Vec<String> = response.children.iter()
+                .map(|n: &xmltree::XMLNode| match n {
+                    xmltree::XMLNode::Element(e) => format!("{}={:?}", e.name, e.get_text()),
+                    _ => String::new(),
+                })
+                .filter(|s| !s.is_empty())
+                .collect();
+            tracing::trace!(
+                children = ?raw_children,
+                "id_array: IdArrayResponse children"
+            );
+        }
 
         // Try to extract the array element. If missing, assume empty playlist.
         let array_text = match extract_child_text_any(response, &["Array", "IdArray", "Value"]) {
