@@ -552,6 +552,12 @@ impl MusicRenderer {
 
             // Emit event for all state changes including Transitioning
             if changed {
+                tracing::trace!(
+                    renderer = self.info.friendly_name(),
+                    prev_state = ?watched.state,
+                    new_state = ?raw_state,
+                    "Playback state changed"
+                );
                 let state_clone = raw_state.clone();
                 drop(watched);
                 self.emit_event(RendererEvent::StateChanged {
@@ -631,6 +637,15 @@ impl MusicRenderer {
     fn handle_state_change(&self, state: &PlaybackState) {
         match state {
             PlaybackState::Stopped => {
+                {
+                    let s = self.state.lock().unwrap();
+                    tracing::trace!(
+                        renderer = self.info.friendly_name(),
+                        has_played = s.has_played_since_track_start,
+                        playback_source = ?s.playback_source,
+                        "STOPPED detected — evaluating auto-advance"
+                    );
+                }
                 // Check if user requested stop (via Stop button in UI)
                 if self.check_and_clear_user_stop_requested() {
                     debug!(
@@ -694,6 +709,15 @@ impl MusicRenderer {
                 self.mark_external_if_idle();
                 // Mark that we have seen a PLAYING state - auto-advance is now allowed
                 self.set_has_played_flag();
+            }
+            PlaybackState::Transitioning => {
+                let s = self.state.lock().unwrap();
+                tracing::trace!(
+                    renderer = self.info.friendly_name(),
+                    has_played = s.has_played_since_track_start,
+                    playback_source = ?s.playback_source,
+                    "TRANSITIONING detected"
+                );
             }
             _ => {}
         }

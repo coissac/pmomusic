@@ -892,7 +892,13 @@ impl ControlPoint {
         })?;
 
         // Check if queue is empty before trying to play next
-        if renderer.len()? == 0 {
+        let queue_len = renderer.len()?;
+        tracing::trace!(
+            renderer = renderer_id.0.as_str(),
+            queue_len,
+            "play_next_from_queue: checking queue length"
+        );
+        if queue_len == 0 {
             debug!(
                 renderer = renderer_id.0.as_str(),
                 "play_next_from_queue: queue is empty"
@@ -1510,6 +1516,11 @@ fn refresh_attached_queue_for(
     // Reset the pending_refresh flag and consume auto_play
     renderer.reset_pending_refresh();
     let auto_play = renderer.consume_auto_play();
+    tracing::trace!(
+        renderer = renderer_id.0.as_str(),
+        auto_play,
+        "refresh_attached_queue_for: auto_play flag consumed"
+    );
 
     // Step 2: Get server from registry
     let music_server = {

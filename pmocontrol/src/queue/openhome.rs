@@ -66,6 +66,50 @@ impl TrackIdsCache {
     }
 }
 
+/// Cache for ReadList results to avoid redundant SOAP calls within a short window.
+/// Key: sorted list of requested IDs. TTL: 500ms.
+#[derive(Debug)]
+struct ReadListCache {
+    ids: Option<Vec<u32>>,
+    entries: Option<Vec<OhTrackEntry>>,
+    last_update: Option<SystemTime>,
+}
+
+impl ReadListCache {
+    fn new() -> Self {
+        Self {
+            ids: None,
+            entries: None,
+            last_update: None,
+        }
+    }
+
+    fn get(&self, id_list: &[u32]) -> Option<Vec<OhTrackEntry>> {
+        if let (Some(cached_ids), Some(entries), Some(last_update)) =
+            (&self.ids, &self.entries, self.last_update)
+        {
+            if let Ok(elapsed) = SystemTime::now().duration_since(last_update) {
+                if elapsed.as_millis() < 500 && cached_ids.as_slice() == id_list {
+                    return Some(entries.clone());
+                }
+            }
+        }
+        None
+    }
+
+    fn set(&mut self, ids: Vec<u32>, entries: Vec<OhTrackEntry>) {
+        self.ids = Some(ids);
+        self.entries = Some(entries);
+        self.last_update = Some(SystemTime::now());
+    }
+
+    fn invalidate(&mut self) {
+        self.ids = None;
+        self.entries = None;
+        self.last_update = None;
+    }
+}
+
 /// Cache for current track ID to avoid redundant Id SOAP calls
 #[derive(Debug)]
 struct CurrentTrackIdCache {
@@ -130,6 +174,8 @@ pub struct OpenHomeQueue {
     track_ids_cache: Arc<Mutex<TrackIdsCache>>,
     /// Cache for current track ID to avoid redundant Id SOAP calls
     current_track_id_cache: Arc<Mutex<CurrentTrackIdCache>>,
+    /// Cache for ReadList results (TTL 500ms) to avoid redundant SOAP calls
+    read_list_cache: Arc<Mutex<ReadListCache>>,
 }
 
 impl OpenHomeQueue {
@@ -147,6 +193,7 @@ impl OpenHomeQueue {
             metadata_cache: Mutex::new(HashMap::new()),
             track_ids_cache: Arc::new(Mutex::new(TrackIdsCache::new())),
             current_track_id_cache: Arc::new(Mutex::new(CurrentTrackIdCache::new())),
+            read_list_cache: Arc::new(Mutex::new(ReadListCache::new())),
         }
     }
 
@@ -406,6 +453,7 @@ impl OpenHomeQueue {
 
         // Invalidate cache after playlist modifications
         self.track_ids_cache.lock().unwrap().invalidate();
+        self.read_list_cache.lock().unwrap().invalidate();
 
         Ok(())
     }
@@ -584,6 +632,7 @@ impl OpenHomeQueue {
 
         // Invalidate cache after playlist modifications
         self.track_ids_cache.lock().unwrap().invalidate();
+        self.read_list_cache.lock().unwrap().invalidate();
 
         Ok(())
     }
@@ -686,6 +735,7 @@ impl OpenHomeQueue {
 
         // Invalidate cache after playlist modifications
         self.track_ids_cache.lock().unwrap().invalidate();
+        self.read_list_cache.lock().unwrap().invalidate();
 
         Ok(())
     }
@@ -890,13 +940,28 @@ impl QueueBackend for OpenHomeQueue {
             });
         }
 
-        // Read metadata for all tracks (batched)
-        // playback_item_from_entry() will prioritize cached metadata over entry metadata
+        // Read metadata for all tracks (batched), with 500ms cache to avoid
+        // redundant SOAP calls during sync_queue (which calls queue_snapshot twice).
         const MAX_BATCH: usize = 64;
         let mut entries = Vec::with_capacity(ids.len());
         for chunk in ids.chunks(MAX_BATCH) {
+            if let Some(cached) = self.read_list_cache.lock().unwrap().get(chunk) {
+                trace!(
+                    renderer = self.renderer_id.0.as_str(),
+                    "ReadList cache hit for {} IDs",
+                    chunk.len()
+                );
+                entries.extend(cached);
+                continue;
+            }
             match self.playlist_client.read_list(chunk) {
-                Ok(mut batch) => entries.append(&mut batch),
+                Ok(batch) => {
+                    self.read_list_cache
+                        .lock()
+                        .unwrap()
+                        .set(chunk.to_vec(), batch.clone());
+                    entries.extend(batch);
+                }
                 Err(err) => {
                     // If batch fails, try one by one
                     if chunk.len() > 1 {
@@ -947,6 +1012,7 @@ impl QueueBackend for OpenHomeQueue {
         }
         // Invalidate caches (seek_id/stop modifies playlist state and current track)
         self.track_ids_cache.lock().unwrap().invalidate();
+        self.read_list_cache.lock().unwrap().invalidate();
         self.current_track_id_cache.lock().unwrap().invalidate();
         Ok(())
     }
@@ -972,6 +1038,7 @@ impl QueueBackend for OpenHomeQueue {
 
         // Invalidate caches after delete_all (clears queue and current track)
         self.track_ids_cache.lock().unwrap().invalidate();
+        self.read_list_cache.lock().unwrap().invalidate();
         self.current_track_id_cache.lock().unwrap().invalidate();
 
         if items.is_empty() {
@@ -994,6 +1061,7 @@ impl QueueBackend for OpenHomeQueue {
 
         // Invalidate cache after insertions
         self.track_ids_cache.lock().unwrap().invalidate();
+        self.read_list_cache.lock().unwrap().invalidate();
 
         Ok(())
     }
@@ -1005,6 +1073,7 @@ impl QueueBackend for OpenHomeQueue {
             self.metadata_cache.lock().unwrap().clear();
             // Invalidate caches after delete_all (clears queue and current track)
             self.track_ids_cache.lock().unwrap().invalidate();
+        self.read_list_cache.lock().unwrap().invalidate();
             self.current_track_id_cache.lock().unwrap().invalidate();
             return Ok(());
         }
@@ -1052,6 +1121,15 @@ impl QueueBackend for OpenHomeQueue {
                         .iter()
                         .position(|item| item.didl_id == playing_didl_id)
                 });
+
+            tracing::trace!(
+                renderer = self.renderer_id.0.as_str(),
+                playing_uri = playing_uri.as_str(),
+                playing_didl_id = ?playing_didl_id,
+                pivot_found = new_playing_idx.is_some(),
+                desired_uris = ?items.iter().map(|i| i.uri.as_str()).collect::<Vec<_>>(),
+                "sync_queue: pivot search result"
+            );
 
             if let Some(pivot_idx) = new_playing_idx {
                 // CASE 2: Currently playing item IS in the new playlist
@@ -1142,6 +1220,7 @@ impl QueueBackend for OpenHomeQueue {
 
         // Invalidate cache after playlist modifications
         self.track_ids_cache.lock().unwrap().invalidate();
+        self.read_list_cache.lock().unwrap().invalidate();
 
         Ok(())
     }
@@ -1187,6 +1266,7 @@ impl QueueBackend for OpenHomeQueue {
 
         // Invalidate cache after playlist modifications (except ReplaceAll which already does it)
         self.track_ids_cache.lock().unwrap().invalidate();
+        self.read_list_cache.lock().unwrap().invalidate();
 
         Ok(())
     }
@@ -1199,6 +1279,7 @@ impl QueueBackend for OpenHomeQueue {
         self.playlist_client.delete_all()?;
         // Invalidate caches after clearing playlist (clears queue and current track)
         self.track_ids_cache.lock().unwrap().invalidate();
+        self.read_list_cache.lock().unwrap().invalidate();
         self.current_track_id_cache.lock().unwrap().invalidate();
         Ok(())
     }
