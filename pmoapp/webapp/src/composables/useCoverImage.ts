@@ -9,6 +9,7 @@
  */
 import { ref, watch, computed, type Ref } from "vue";
 import { imageCache, useImageCache } from "./imageCache";
+import { simpleHash } from "../utils/string";
 
 export interface CoverImageOptions {
   maxRetries?: number;
@@ -44,17 +45,6 @@ export function useCoverImage(
   // Computed: synchroniser avec le cache centralisé
   // Note: on garde le controle local du loaded/error pour éviter les effets de bord
   
-  // Fonction de hash simple pour le cache-busting
-  function simpleHash(str: string): string {
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-      const char = str.charCodeAt(i);
-      hash = (hash << 5) - hash + char;
-      hash = hash & hash;
-    }
-    return Math.abs(hash).toString(36);
-  }
-
   // Génère une URL avec cache-busting
   function getCacheBustedUrl(url: string, retry: number): string {
     if (!forceReload && retry === 0) {

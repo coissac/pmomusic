@@ -8,6 +8,7 @@ import { ref, reactive, computed, toRaw, type Ref } from "vue";
 import { api } from "../services/pmocontrol/api";
 import { useSSE } from "./useSSE";
 import { apiCache } from "./apiCache";
+import { parseTimeToMs } from "../utils/time";
 import type {
   RendererSummary,
   RendererState,
@@ -125,35 +126,14 @@ function ensureSSEInitialized() {
         // Le backend envoie TOUJOURS les deux valeurs (même si null)
 
         // Convertir rel_time (HH:MM:SS) en millisecondes
-        if (event.rel_time) {
-          const parts = event.rel_time.split(":").map(Number);
-          if (parts.length === 3) {
-            snapshot.state.position_ms =
-              ((parts[0] ?? 0) * 3600 +
-                (parts[1] ?? 0) * 60 +
-                (parts[2] ?? 0)) *
-              1000;
-          }
-        } else {
-          // Si rel_time est null/undefined, mettre position à 0
-          snapshot.state.position_ms = 0;
-        }
+        const positionMs = parseTimeToMs(event.rel_time ?? null);
+        snapshot.state.position_ms = positionMs ?? 0;
 
         // Convertir track_duration (HH:MM:SS) en millisecondes
-        if (event.track_duration) {
-          const parts = event.track_duration.split(":").map(Number);
-          if (parts.length === 3) {
-            snapshot.state.duration_ms =
-              ((parts[0] ?? 0) * 3600 +
-                (parts[1] ?? 0) * 60 +
-                (parts[2] ?? 0)) *
-              1000;
-          }
-        } else {
-          // Si track_duration est null/undefined (flux continu sans durée),
-          // mettre duration_ms à null pour afficher "--:--"
-          snapshot.state.duration_ms = null;
-        }
+        const durationMs = parseTimeToMs(event.track_duration ?? null);
+        // Si track_duration est null/undefined (flux continu sans durée),
+        // mettre duration_ms à null pour afficher "--:--"
+        snapshot.state.duration_ms = durationMs;
 
         // Important: Trigger reactivity en réassignant l'objet complet avec deep copy
         // Le shallow copy ne suffit pas car snapshot.state est partagé entre renderers
