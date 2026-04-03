@@ -345,6 +345,46 @@ async function fetchRendererSnapshot(
   }
 }
 
+/**
+ * Fetch les snapshots de plusieurs renderers en parallèle controlée.
+ * - Limite le nombre de requêtes simultanées (concurrency)
+ * - Ajoute un délai entre chaque batch pour ne pas saturer le réseau
+ * - Continue même si certaines requêtes échouent
+ */
+async function fetchBatchSnapshots(
+  rendererIds: string[],
+  options: {
+    concurrency?: number;  // Nombre max de requêtes parallèles (défaut: 3)
+    batchDelay?: number;   // Délai entre les batches en ms (défaut: 100ms)
+    force?: boolean;       // Forcer le refetch même en cache
+  } = {}
+): Promise<void> {
+  const { concurrency = 3, batchDelay = 100, force = false } = options;
+  
+  // Filtrer les rendererIds valides
+  const validIds = rendererIds.filter(id => id && typeof id === 'string');
+  
+  if (validIds.length === 0) return;
+
+  // Fonction pour traiter un batch
+  const processBatch = async (batch: string[]): Promise<void> => {
+    await Promise.allSettled(
+      batch.map(id => fetchRendererSnapshot(id, { force }))
+    );
+  };
+
+  // Exécuter par batches avec controlled concurrency
+  for (let i = 0; i < validIds.length; i += concurrency) {
+    const batch = validIds.slice(i, i + concurrency);
+    await processBatch(batch);
+    
+    // Délai entre les batches (sauf pour le dernier)
+    if (i + concurrency < validIds.length) {
+      await new Promise(resolve => setTimeout(resolve, batchDelay));
+    }
+  }
+}
+
 // Transport controls
 async function play(id: string) {
   await api.play(id);
@@ -477,6 +517,7 @@ export function useRenderers() {
     // Fetchers
     fetchRenderers,
     fetchRendererSnapshot,
+    fetchBatchSnapshots,
     // Transport controls
     play,
     resumeOrPlayFromQueue,

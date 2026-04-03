@@ -1,17 +1,17 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRenderers } from '@/composables/useRenderers'
 import { useMediaServers } from '@/composables/useMediaServers'
 import RendererCard from '@/components/pmocontrol/RendererCard.vue'
 import MediaServerCard from '@/components/pmocontrol/MediaServerCard.vue'
-import { Radio, Server } from 'lucide-vue-next'
+import { Radio, Server, Loader2 } from 'lucide-vue-next'
 
 const {
   allRenderers: renderers,
   onlineRenderers,
   getStateById,
   fetchRenderers,
-  fetchRendererSnapshot
+  fetchBatchSnapshots
 } = useRenderers()
 
 const {
@@ -20,15 +20,34 @@ const {
   fetchServers
 } = useMediaServers()
 
+// État de chargement pour l'UI
+const isLoadingSnapshots = ref(false)
+
 // Charger les données au montage
 onMounted(async () => {
-  await fetchRenderers()
-  await fetchServers()
+  // Charger les listes de renderers et servers en parallèle
+  await Promise.all([
+    fetchRenderers(),
+    fetchServers()
+  ])
 
-  for (const renderer of renderers.value) {
-    fetchRendererSnapshot(renderer.id, { force: true })
+  // Charger les snapshots en batch controlé
+  // On récupère les IDs des renderers découverts
+  const rendererIds = renderers.value.map(r => r.id)
+  
+  if (rendererIds.length > 0) {
+    isLoadingSnapshots.value = true
+    
+    // Appel batch avec concurrency controlée
+    await fetchBatchSnapshots(rendererIds, {
+      concurrency: 3,   // Max 3 requêtes simultanées
+      batchDelay: 100,  // 100ms entre chaque batch
+      force: true
+    })
+    
+    isLoadingSnapshots.value = false
   }
-})
+});
 </script>
 
 <template>
@@ -55,6 +74,10 @@ onMounted(async () => {
           <Radio :size="24" />
           <span>Renderers Audio</span>
         </h2>
+        <span v-if="isLoadingSnapshots" class="loading-indicator">
+          <Loader2 :size="16" class="spin" />
+          Chargement...
+        </span>
       </div>
 
       <div v-if="renderers.length" class="renderers-grid">
@@ -173,6 +196,24 @@ onMounted(async () => {
 
 .section-title svg {
   color: var(--color-primary);
+}
+
+/* Loading indicator */
+.loading-indicator {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+.loading-indicator .spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 /* Grids */
