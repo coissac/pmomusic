@@ -2,7 +2,7 @@
 import { computed, ref, watch, nextTick, toRef } from "vue";
 import { useRenderer } from "@/composables/useRenderers";
 import QueueItem from "./QueueItem.vue";
-import { Link, Radio } from "lucide-vue-next";
+import { Link, Radio, RefreshCw } from "lucide-vue-next";
 import type { QueueItem as QueueItemType } from "@/services/pmocontrol/types";
 
 const props = defineProps<{
@@ -13,7 +13,7 @@ const emit = defineEmits<{
     clickItem: [item: QueueItemType];
 }>();
 
-const { queue, binding, isStream } = useRenderer(toRef(props, "rendererId"));
+const { queue, binding, isStream, queueRefreshing } = useRenderer(toRef(props, "rendererId"));
 
 const isAttached = computed(() => !!binding.value);
 
@@ -71,6 +71,12 @@ watch(
                 <div v-if="isStream" class="stream-indicator">
                     <Radio :size="16" />
                     <span class="stream-text"> Web Radio </span>
+                </div>
+
+                <!-- Indicateur de mise à jour de queue -->
+                <div v-if="queueRefreshing" class="refresh-indicator">
+                    <RefreshCw :size="14" class="refresh-icon" />
+                    <span class="refresh-text"> Mise à jour... </span>
                 </div>
             </div>
         </div>
@@ -160,6 +166,33 @@ watch(
 
 .stream-text {
     font-size: var(--text-xs);
+}
+
+.refresh-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    padding: var(--spacing-xs) var(--spacing-sm);
+    background-color: var(--color-bg-secondary);
+    color: var(--color-text-secondary);
+    border-radius: var(--radius-md);
+    font-size: var(--text-sm);
+    font-weight: 500;
+    border: 1px solid var(--color-border);
+    width: fit-content;
+}
+
+.refresh-icon {
+    animation: spin 1s linear infinite;
+}
+
+.refresh-text {
+    font-size: var(--text-xs);
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
 }
 
 .queue-list {

@@ -2015,7 +2015,10 @@ impl MusicSource for QobuzSource {
     }
 
     async fn search(&self, query: &str) -> Result<BrowseResult> {
-        // Search across Qobuz catalog
+        use tracing::debug;
+        debug!(query = %query, "Qobuz search started");
+
+        // Search across Qobuz catalog (albums, tracks, artists, playlists)
         let results = self
             .inner
             .client
@@ -2023,22 +2026,72 @@ impl MusicSource for QobuzSource {
             .await
             .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
 
-        let (albums, tracks) = tokio::join!(
-            self.cache_covers(results.albums),
-            self.cache_covers(results.tracks),
+        debug!(
+            albums = results.albums.len(),
+            artists = results.artists.len(),
+            tracks = results.tracks.len(),
+            playlists = results.playlists.len(),
+            "Qobuz search API results"
         );
-        let containers: Vec<Container> = albums
+
+        // Cache covers in parallel for all types
+        let (albums, tracks, artists, playlists) = tokio::join!(
+            self.cache_album_covers(results.albums),
+            self.cache_track_covers(results.tracks),
+            self.cache_artist_covers(results.artists),
+            self.cache_playlist_covers(results.playlists),
+        );
+
+        // Build containers from albums
+        let album_containers: Vec<Container> = albums
             .into_iter()
-            .filter_map(|album| album.to_didl_container("qobuz").ok())
+            .filter_map(|a| a.to_didl_container("qobuz:search").ok())
             .collect();
 
-        let items: Vec<Item> = tracks
+        // Build containers from artists (manual construction)
+        let artist_containers: Vec<Container> = artists
             .into_iter()
-            .filter_map(|track| track.to_didl_item("qobuz").ok())
+            .map(|artist| Container {
+                id: format!("qobuz:artist:{}", artist.id),
+                parent_id: "qobuz:search".to_string(),
+                restricted: Some("1".to_string()),
+                child_count: None,
+                searchable: Some("1".to_string()),
+                title: artist.name.clone(),
+                class: "object.container".to_string(),
+                artist: Some(artist.name.clone()),
+                album_art: artist.image_cached,
+                containers: vec![],
+                items: vec![],
+            })
             .collect();
 
-        if !containers.is_empty() || !items.is_empty() {
-            Ok(BrowseResult::Mixed { containers, items })
+        // Build containers from playlists
+        let playlist_containers: Vec<Container> = playlists
+            .into_iter()
+            .filter_map(|p| p.to_didl_container("qobuz:search").ok())
+            .collect();
+
+        // Combine all containers
+        let mut all_containers = Vec::new();
+        all_containers.extend(album_containers);
+        all_containers.extend(artist_containers);
+        all_containers.extend(playlist_containers);
+
+        // Build items from tracks
+        let track_items: Vec<Item> = tracks
+            .into_iter()
+            .filter_map(|t| t.to_didl_item("qobuz:search").ok())
+            .collect();
+
+        debug!(
+            containers = all_containers.len(),
+            items = track_items.len(),
+            "Qobuz search done"
+        );
+
+        if !all_containers.is_empty() || !track_items.is_empty() {
+            Ok(BrowseResult::Mixed { containers: all_containers, items: track_items })
         } else {
             Ok(BrowseResult::Items(vec![]))
         }

@@ -79,6 +79,10 @@ pub enum RendererEventPayload {
         queue_length: usize,
         timestamp: chrono::DateTime<chrono::Utc>,
     },
+    QueueRefreshing {
+        renderer_id: String,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    },
     BindingChanged {
         renderer_id: String,
         server_id: Option<String>,
@@ -212,6 +216,10 @@ fn renderer_event_to_payload(
         RendererEvent::QueueUpdated { id, queue_length } => RendererEventPayload::QueueUpdated {
             renderer_id: id.0,
             queue_length,
+            timestamp,
+        },
+        RendererEvent::QueueRefreshing { id } => RendererEventPayload::QueueRefreshing {
+            renderer_id: id.0,
             timestamp,
         },
         RendererEvent::BindingChanged { id, binding } => RendererEventPayload::BindingChanged {

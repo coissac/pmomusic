@@ -4,7 +4,8 @@
  */
 import { ref, computed } from 'vue'
 import { api } from '../services/pmocontrol/api'
-import { sse } from '../services/pmocontrol/sse'
+import { useSSE } from './useSSE'
+import { apiCache } from './apiCache'
 import type {
   MediaServerSummary,
   ContainerEntry,
@@ -25,20 +26,22 @@ export interface BrowseState {
 const serversCache = ref<Map<string, MediaServerSummary>>(new Map())
 const browseCache = ref<Map<string, BrowseState>>(new Map())
 const currentPath = ref<BreadcrumbItem[]>([])
-
-// Timestamps
-const lastFetch = {
-  servers: 0
-}
+const searchResults = ref<BrowseState | null>(null)
+const searchQuery = ref<string>('')
 
 const CACHE_DURATION_MS = 2000
 
-// Connecter SSE une seule fois
-let sseConnected = false
-function ensureSSEConnected() {
-  if (sseConnected) return
+// Initialiser SSE une seule fois via le composable centralisé
+let sseInitialized = false
+function ensureSSEInitialized() {
+  if (sseInitialized) return
 
-  sse.onMediaServerEvent((event) => {
+  const { onMediaServerEvent, connect } = useSSE()
+  
+  // Démarrer la connexion SSE
+  connect()
+
+  onMediaServerEvent((event) => {
     const serverId = event.server_id
 
     switch (event.type) {
@@ -96,14 +99,14 @@ function ensureSSEConnected() {
     }
   })
 
-  sseConnected = true
+  sseInitialized = true
 }
 
 /**
  * Composable principal pour gérer les media servers
  */
 export function useMediaServers() {
-  ensureSSEConnected()
+  ensureSSEInitialized()
 
   const loading = ref(false)
   const loadingMore = ref(false)
@@ -115,19 +118,20 @@ export function useMediaServers() {
 
   // Fetch servers list
   async function fetchServers(force = false) {
-    const now = Date.now()
-    if (!force && now - lastFetch.servers < CACHE_DURATION_MS) {
-      return
-    }
-
     try {
       loading.value = true
       error.value = null
-      const data = await api.getServers()
+
+      // Utiliser le cache API centralisé
+      const data = await apiCache.fetch(
+        '/servers',
+        undefined,
+        () => api.getServers(),
+        { force, ttl: CACHE_DURATION_MS }
+      )
 
       serversCache.value.clear()
       data.forEach(s => serversCache.value.set(s.id, s))
-      lastFetch.servers = now
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Erreur fetch servers'
       console.error('[useMediaServers] Erreur fetch:', e)
@@ -193,6 +197,39 @@ export function useMediaServers() {
     }
   }
 
+  // Recherche dans un serveur
+  async function searchServer(serverId: string, query: string) {
+    if (!query.trim()) {
+      searchResults.value = null
+      searchQuery.value = ''
+      return
+    }
+
+    try {
+      loading.value = true
+      error.value = null
+      searchQuery.value = query
+
+      const data = await api.searchServer(serverId, query)
+      searchResults.value = {
+        container_id: 'search',
+        entries: data.entries,
+        total_count: data.total_count,
+      }
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : 'Erreur recherche'
+      console.error(`[useMediaServers] Erreur search ${serverId}:`, e)
+      throw e
+    } finally {
+      loading.value = false
+    }
+  }
+
+  function clearSearch() {
+    searchResults.value = null
+    searchQuery.value = ''
+  }
+
   // Getters
   function getServerById(id: string) {
     return serversCache.value.get(id)
@@ -247,6 +284,11 @@ export function useMediaServers() {
     getServerById,
     getBrowseCached,
     hasMore,
+    // Search
+    searchResults,
+    searchQuery,
+    searchServer,
+    clearSearch,
     // Actions
     fetchServers,
     browseContainer,

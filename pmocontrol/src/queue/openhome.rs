@@ -8,8 +8,8 @@ use tracing::{debug, trace, warn};
 
 use crate::errors::ControlPointError;
 use crate::upnp_clients::{
-    OPENHOME_PLAYLIST_HEAD_ID, OhInfoClient, OhPlaylistClient, OhProductClient, OhTrack,
-    OhTrackEntry,
+    OhInfoClient, OhPlaylistClient, OhProductClient, OhTrack, OhTrackEntry,
+    OPENHOME_PLAYLIST_HEAD_ID,
 };
 // use crate::openhome_playlist::{OpenHomePlaylistSnapshot, OpenHomePlaylistTrack};
 use crate::queue::{
@@ -62,6 +62,50 @@ impl TrackIdsCache {
     /// Invalidate cache (called on write operations)
     fn invalidate(&mut self) {
         self.ids = None;
+        self.last_update = None;
+    }
+}
+
+/// Cache for ReadList results to avoid redundant SOAP calls within a short window.
+/// Key: sorted list of requested IDs. TTL: 500ms.
+#[derive(Debug)]
+struct ReadListCache {
+    ids: Option<Vec<u32>>,
+    entries: Option<Vec<OhTrackEntry>>,
+    last_update: Option<SystemTime>,
+}
+
+impl ReadListCache {
+    fn new() -> Self {
+        Self {
+            ids: None,
+            entries: None,
+            last_update: None,
+        }
+    }
+
+    fn get(&self, id_list: &[u32]) -> Option<Vec<OhTrackEntry>> {
+        if let (Some(cached_ids), Some(entries), Some(last_update)) =
+            (&self.ids, &self.entries, self.last_update)
+        {
+            if let Ok(elapsed) = SystemTime::now().duration_since(last_update) {
+                if elapsed.as_millis() < 500 && cached_ids.as_slice() == id_list {
+                    return Some(entries.clone());
+                }
+            }
+        }
+        None
+    }
+
+    fn set(&mut self, ids: Vec<u32>, entries: Vec<OhTrackEntry>) {
+        self.ids = Some(ids);
+        self.entries = Some(entries);
+        self.last_update = Some(SystemTime::now());
+    }
+
+    fn invalidate(&mut self) {
+        self.ids = None;
+        self.entries = None;
         self.last_update = None;
     }
 }
@@ -130,6 +174,8 @@ pub struct OpenHomeQueue {
     track_ids_cache: Arc<Mutex<TrackIdsCache>>,
     /// Cache for current track ID to avoid redundant Id SOAP calls
     current_track_id_cache: Arc<Mutex<CurrentTrackIdCache>>,
+    /// Cache for ReadList results (TTL 500ms) to avoid redundant SOAP calls
+    read_list_cache: Arc<Mutex<ReadListCache>>,
 }
 
 impl OpenHomeQueue {
@@ -147,6 +193,7 @@ impl OpenHomeQueue {
             metadata_cache: Mutex::new(HashMap::new()),
             track_ids_cache: Arc::new(Mutex::new(TrackIdsCache::new())),
             current_track_id_cache: Arc::new(Mutex::new(CurrentTrackIdCache::new())),
+            read_list_cache: Arc::new(Mutex::new(ReadListCache::new())),
         }
     }
 
@@ -327,7 +374,7 @@ impl OpenHomeQueue {
                     fresh.as_ref().and_then(|m| m.duration.as_ref())
                 );
                 drop(cache); // Libérer le lock avant d'appeler cache_metadata
-                // Mettre en cache pour éviter les oscillations sur les flux radio
+                             // Mettre en cache pour éviter les oscillations sur les flux radio
                 self.cache_metadata(entry.id, fresh.clone());
                 fresh
             }
@@ -406,6 +453,7 @@ impl OpenHomeQueue {
 
         // Invalidate cache after playlist modifications
         self.track_ids_cache.lock().unwrap().invalidate();
+        self.read_list_cache.lock().unwrap().invalidate();
 
         Ok(())
     }
@@ -584,6 +632,7 @@ impl OpenHomeQueue {
 
         // Invalidate cache after playlist modifications
         self.track_ids_cache.lock().unwrap().invalidate();
+        self.read_list_cache.lock().unwrap().invalidate();
 
         Ok(())
     }
@@ -598,11 +647,22 @@ impl OpenHomeQueue {
         let snapshot = self.queue_snapshot()?;
         let current_track_ids = self.track_ids()?;
 
+        debug!(
+            renderer = self.renderer_id.0.as_str(),
+            current_count = snapshot.items.len(),
+            desired_count = items.len(),
+            current_uris = ?snapshot.items.iter().map(|i| i.uri.as_str()).collect::<Vec<_>>(),
+            current_didl_ids = ?snapshot.items.iter().map(|i| i.didl_id.as_str()).collect::<Vec<_>>(),
+            desired_uris = ?items.iter().map(|i| i.uri.as_str()).collect::<Vec<_>>(),
+            desired_didl_ids = ?items.iter().map(|i| i.didl_id.as_str()).collect::<Vec<_>>(),
+            "LCS input: current vs desired items"
+        );
+
         let (keep_current, keep_desired) = lcs_flags(&snapshot.items, &items);
 
         let items_to_keep = keep_current.iter().filter(|&&k| k).count();
-        let items_to_delete = keep_current.iter().filter(|&&k| !k).count();
-        let items_to_add = keep_desired.iter().filter(|&&k| !k).count();
+        let items_to_delete = keep_current.iter().filter(|&k| !k).count();
+        let items_to_add = keep_desired.iter().filter(|&k| !k).count();
 
         debug!(
             renderer = self.renderer_id.0.as_str(),
@@ -612,16 +672,39 @@ impl OpenHomeQueue {
             "LCS computed: minimizing OpenHome playlist operations"
         );
 
-        // If we're replacing everything (keep=0), use delete_all() instead of
-        // individual delete_id() calls. This is much more robust for live playlists
-        // where track IDs can become invalid between refresh and deletion.
+        // Get current playing track ID BEFORE any modifications
+        let current_track_id = self.playlist_client.id().ok().filter(|&id| id != 0);
+
+        // Check if the currently playing track is in the new playlist
+        // If so, we should NOT use delete_all() - we must preserve it
+        let current_track_in_new_playlist = current_track_id.and_then(|current_id| {
+            items
+                .iter()
+                .position(|item| item.backend_id as u32 == current_id)
+        });
+
+        // If we're replacing everything (keep=0), use delete_all() BUT only if
+        // there's no currently playing track, OR if the current track is not in the new playlist.
+        // If current track IS in new playlist, we must preserve it using insert/delete operations.
         if items_to_keep == 0 && items_to_delete > 0 {
-            debug!(
-                renderer = self.renderer_id.0.as_str(),
-                "Using delete_all() for complete replacement (more robust for live playlists)"
-            );
-            self.playlist_client.delete_all()?;
-            self.metadata_cache.lock().unwrap().clear();
+            if current_track_in_new_playlist.is_some() {
+                // Current track is in new playlist - use insert/delete instead of delete_all
+                // to preserve playback
+                debug!(
+                    renderer = self.renderer_id.0.as_str(),
+                    current_track_in_playlist = true,
+                    "Preserving currently playing track - using insert/delete instead of delete_all"
+                );
+                // Fall through to selective deletion below
+            } else {
+                // No current track or not in new playlist - safe to use delete_all
+                debug!(
+                    renderer = self.renderer_id.0.as_str(),
+                    "Using delete_all() for complete replacement (safe - no current track or not in new playlist)"
+                );
+                self.playlist_client.delete_all()?;
+                self.metadata_cache.lock().unwrap().clear();
+            }
         } else {
             // Selective deletion when keeping some items
             for idx in (0..current_track_ids.len()).rev() {
@@ -686,6 +769,7 @@ impl OpenHomeQueue {
 
         // Invalidate cache after playlist modifications
         self.track_ids_cache.lock().unwrap().invalidate();
+        self.read_list_cache.lock().unwrap().invalidate();
 
         Ok(())
     }
@@ -819,6 +903,13 @@ impl QueueBackend for OpenHomeQueue {
         // Cache miss or expired - fetch from service (keep lock held to prevent concurrent calls)
         let ids = self.playlist_client.id_array()?;
 
+        tracing::trace!(
+            renderer = self.renderer_id.0.as_str(),
+            ids_count = ids.len(),
+            ids = ?ids,
+            "track_ids: cache miss, fetched from Pizzicato"
+        );
+
         // Update cache before releasing lock
         cache.set(ids.clone());
 
@@ -890,13 +981,28 @@ impl QueueBackend for OpenHomeQueue {
             });
         }
 
-        // Read metadata for all tracks (batched)
-        // playback_item_from_entry() will prioritize cached metadata over entry metadata
+        // Read metadata for all tracks (batched), with 500ms cache to avoid
+        // redundant SOAP calls during sync_queue (which calls queue_snapshot twice).
         const MAX_BATCH: usize = 64;
         let mut entries = Vec::with_capacity(ids.len());
         for chunk in ids.chunks(MAX_BATCH) {
+            if let Some(cached) = self.read_list_cache.lock().unwrap().get(chunk) {
+                trace!(
+                    renderer = self.renderer_id.0.as_str(),
+                    "ReadList cache hit for {} IDs",
+                    chunk.len()
+                );
+                entries.extend(cached);
+                continue;
+            }
             match self.playlist_client.read_list(chunk) {
-                Ok(mut batch) => entries.append(&mut batch),
+                Ok(batch) => {
+                    self.read_list_cache
+                        .lock()
+                        .unwrap()
+                        .set(chunk.to_vec(), batch.clone());
+                    entries.extend(batch);
+                }
                 Err(err) => {
                     // If batch fails, try one by one
                     if chunk.len() > 1 {
@@ -943,10 +1049,15 @@ impl QueueBackend for OpenHomeQueue {
             self.playlist_client.seek_id(track_id)?;
         } else {
             self.ensure_playlist_source_selected()?;
+            tracing::trace!(
+                renderer = self.renderer_id.0.as_str(),
+                "STOP command via set_index(None) on OpenHome playlist"
+            );
             self.playlist_client.stop()?;
         }
         // Invalidate caches (seek_id/stop modifies playlist state and current track)
         self.track_ids_cache.lock().unwrap().invalidate();
+        self.read_list_cache.lock().unwrap().invalidate();
         self.current_track_id_cache.lock().unwrap().invalidate();
         Ok(())
     }
@@ -972,6 +1083,7 @@ impl QueueBackend for OpenHomeQueue {
 
         // Invalidate caches after delete_all (clears queue and current track)
         self.track_ids_cache.lock().unwrap().invalidate();
+        self.read_list_cache.lock().unwrap().invalidate();
         self.current_track_id_cache.lock().unwrap().invalidate();
 
         if items.is_empty() {
@@ -994,18 +1106,42 @@ impl QueueBackend for OpenHomeQueue {
 
         // Invalidate cache after insertions
         self.track_ids_cache.lock().unwrap().invalidate();
+        self.read_list_cache.lock().unwrap().invalidate();
 
         Ok(())
     }
 
     fn sync_queue(&mut self, items: Vec<PlaybackItem>) -> Result<(), ControlPointError> {
         self.ensure_playlist_source_selected()?;
+
+        // DIAGNOSTIC: Log current track state before any modifications
+        let pre_current_track = self.playlist_client.id().ok();
+        tracing::warn!(
+            renderer = self.renderer_id.0.as_str(),
+            pre_current_track_id = pre_current_track,
+            pre_items_count = items.len(),
+            "sync_queue: START - current track before modification"
+        );
+
         if items.is_empty() {
+            tracing::warn!(
+                renderer = self.renderer_id.0.as_str(),
+                "sync_queue: Empty playlist - clearing queue with delete_all"
+            );
             self.playlist_client.delete_all()?;
             self.metadata_cache.lock().unwrap().clear();
             // Invalidate caches after delete_all (clears queue and current track)
             self.track_ids_cache.lock().unwrap().invalidate();
+            self.read_list_cache.lock().unwrap().invalidate();
             self.current_track_id_cache.lock().unwrap().invalidate();
+
+            // DIAGNOSTIC: Log state after delete_all
+            let post_current_track = self.playlist_client.id().ok();
+            tracing::warn!(
+                renderer = self.renderer_id.0.as_str(),
+                post_current_track_id = post_current_track,
+                "sync_queue: END - current track after delete_all (should be 0)"
+            );
             return Ok(());
         }
 
@@ -1013,6 +1149,15 @@ impl QueueBackend for OpenHomeQueue {
         // differences. Without this, any drift between our cache and the renderer
         // (e.g., manual edits from another control point) would keep the stale items.
         let snapshot = self.queue_snapshot()?;
+
+        debug!(
+            renderer = self.renderer_id.0.as_str(),
+            snapshot_items_len = snapshot.items.len(),
+            snapshot_current_index = snapshot.current_index,
+            new_items_count = items.len(),
+            "sync_queue: snapshot vs new items comparison"
+        );
+
         // Note: current_index may point to an index that doesn't exist in items
         // if the OpenHome renderer is in an inconsistent state (e.g., IdArray returns
         // IDs but ReadList returns empty TrackList). We must bounds-check here.
@@ -1053,6 +1198,15 @@ impl QueueBackend for OpenHomeQueue {
                         .position(|item| item.didl_id == playing_didl_id)
                 });
 
+            tracing::trace!(
+                renderer = self.renderer_id.0.as_str(),
+                playing_uri = playing_uri.as_str(),
+                playing_didl_id = ?playing_didl_id,
+                pivot_found = new_playing_idx.is_some(),
+                desired_uris = ?items.iter().map(|i| i.uri.as_str()).collect::<Vec<_>>(),
+                "sync_queue: pivot search result"
+            );
+
             if let Some(pivot_idx) = new_playing_idx {
                 // CASE 2: Currently playing item IS in the new playlist
                 // Use gentle double-LCS strategy: preserve the pivot and sync before/after separately
@@ -1078,12 +1232,36 @@ impl QueueBackend for OpenHomeQueue {
             }
         } else {
             // No currently playing item or can't determine it - use standard LCS
+            // BUT first check if this is because the OpenHome device returned empty playlist
+            // This could cause the queue to be cleared incorrectly
+            if snapshot.items.is_empty() && !items.is_empty() {
+                tracing::warn!(
+                    renderer = self.renderer_id.0.as_str(),
+                    snapshot_items = snapshot.items.len(),
+                    new_items = items.len(),
+                    "OpenHome playlist appears empty - possible stale cache or device issue, NOT clearing queue"
+                );
+                // Don't call replace_queue_standard_lcs with empty snapshot - it would clear our queue
+                // Instead, just add the new items without deleting existing ones
+                return self.enqueue_items(items, crate::queue::EnqueueMode::AppendToEnd);
+            }
+
             debug!(
                 renderer = self.renderer_id.0.as_str(),
                 "No currently playing item, using standard LCS sync"
             );
             self.replace_queue_standard_lcs(items, Some(0))?;
         }
+
+        // DIAGNOSTIC: Log state after sync completes
+        let post_current_track = self.playlist_client.id().ok();
+        let post_ids = self.track_ids();
+        tracing::warn!(
+            renderer = self.renderer_id.0.as_str(),
+            post_current_track_id = post_current_track,
+            post_items_count = post_ids.as_ref().map(|v| v.len()).unwrap_or(0),
+            "sync_queue: END - current track after modifications"
+        );
 
         Ok(())
     }
@@ -1142,6 +1320,7 @@ impl QueueBackend for OpenHomeQueue {
 
         // Invalidate cache after playlist modifications
         self.track_ids_cache.lock().unwrap().invalidate();
+        self.read_list_cache.lock().unwrap().invalidate();
 
         Ok(())
     }
@@ -1187,6 +1366,7 @@ impl QueueBackend for OpenHomeQueue {
 
         // Invalidate cache after playlist modifications (except ReplaceAll which already does it)
         self.track_ids_cache.lock().unwrap().invalidate();
+        self.read_list_cache.lock().unwrap().invalidate();
 
         Ok(())
     }
@@ -1199,6 +1379,7 @@ impl QueueBackend for OpenHomeQueue {
         self.playlist_client.delete_all()?;
         // Invalidate caches after clearing playlist (clears queue and current track)
         self.track_ids_cache.lock().unwrap().invalidate();
+        self.read_list_cache.lock().unwrap().invalidate();
         self.current_track_id_cache.lock().unwrap().invalidate();
         Ok(())
     }

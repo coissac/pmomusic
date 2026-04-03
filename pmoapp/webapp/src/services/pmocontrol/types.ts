@@ -198,6 +198,11 @@ export type RendererEventPayload =
       timestamp: string;
     }
   | {
+      type: "queue_refreshing";
+      renderer_id: string;
+      timestamp: string;
+    }
+  | {
       type: "binding_changed";
       renderer_id: string;
       server_id: string | null;

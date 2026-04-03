@@ -2307,6 +2307,132 @@ fn capability_summary(caps: &RendererCapabilities) -> RendererCapabilitiesSummar
     }
 }
 
+/// Paramètres de recherche
+#[cfg(feature = "pmoserver")]
+#[derive(Debug, serde::Deserialize)]
+struct SearchQuery {
+    q: String,
+}
+
+/// GET /control/servers/{server_id}/search?q=<query> - Recherche dans un serveur
+#[cfg(feature = "pmoserver")]
+#[utoipa::path(
+    get,
+    path = "/servers/{server_id}/search",
+    params(
+        ("server_id" = String, Path, description = "ID unique du serveur"),
+        ("q" = String, Query, description = "Requête de recherche"),
+    ),
+    responses(
+        (status = 200, description = "Résultats de recherche", body = BrowseResponse),
+        (status = 404, description = "Serveur non trouvé", body = ErrorResponse),
+        (status = 500, description = "Erreur lors de la recherche", body = ErrorResponse)
+    ),
+    tag = "control"
+)]
+async fn search_server(
+    State(state): State<ControlPointState>,
+    Path(server_id): Path<String>,
+    Query(params): Query<SearchQuery>,
+) -> Result<Json<BrowseResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let sid = DeviceId(server_id.clone());
+
+    let server = state.control_point.media_server(&sid).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Server {} not found", server_id),
+            }),
+        )
+    })?;
+
+    if !server.is_online() {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: format!("Server {} is offline", server_id),
+            }),
+        ));
+    }
+
+    if !server.has_content_directory() {
+        return Err((
+            StatusCode::NOT_IMPLEMENTED,
+            Json(ErrorResponse {
+                error: format!("Server {} does not support ContentDirectory", server_id),
+            }),
+        ));
+    }
+
+    debug!(server_id = %server_id, query = %params.q, "Search request");
+
+    let query = params.q.clone();
+    let server_clone = server.clone();
+    let search_task = tokio::task::spawn_blocking(move || {
+        server_clone.search("0", &query, 0, 200)
+    });
+
+    let entries = time::timeout(BROWSE_REQUEST_TIMEOUT, search_task)
+        .await
+        .map_err(|_| {
+            warn!(
+                "Search request on server {} exceeded {:?}",
+                server_id, BROWSE_REQUEST_TIMEOUT
+            );
+            (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Search request timed out after {}s",
+                        BROWSE_REQUEST_TIMEOUT.as_secs()
+                    ),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!("Task join error during search: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Internal task error: {}", e),
+                }),
+            )
+        })?
+        .map_err(|e| {
+            warn!("Failed to search on server {}: {}", server_id, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to search: {}", e),
+                }),
+            )
+        })?;
+
+    let total_count = entries.len() as u32;
+    debug!(server_id = %server_id, count = total_count, "Search results");
+
+    let container_entries: Vec<ContainerEntry> = entries
+        .into_iter()
+        .map(|e| ContainerEntry {
+            id: e.id,
+            title: e.title,
+            class: e.class,
+            is_container: e.is_container,
+            child_count: None,
+            artist: e.artist,
+            album: e.album,
+            album_art_uri: e.album_art_uri,
+        })
+        .collect();
+
+    Ok(Json(BrowseResponse {
+        container_id: "search".to_string(),
+        entries: container_entries,
+        total_count,
+        offset: 0,
+    }))
+}
+
 // ============================================================================
 // ROUTER & TRAIT
 // ============================================================================
@@ -2405,6 +2531,7 @@ pub fn create_api_router(state: ControlPointState, control_point: Arc<ControlPoi
             "/servers/{server_id}/containers/{container_id}",
             get(browse_container),
         )
+        .route("/servers/{server_id}/search", get(search_server))
         .with_state(state)
         // SSE events - merge the SSE router
         .merge(crate::sse::create_sse_router(control_point))

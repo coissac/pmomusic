@@ -6,7 +6,9 @@
  */
 import { ref, reactive, computed, toRaw, type Ref } from "vue";
 import { api } from "../services/pmocontrol/api";
-import { sse } from "../services/pmocontrol/sse";
+import { useSSE } from "./useSSE";
+import { apiCache } from "./apiCache";
+import { parseTimeToMs } from "../utils/time";
 import type {
   RendererSummary,
   RendererState,
@@ -20,29 +22,36 @@ interface RendererSnapshotState {
   lastSnapshotAt: Map<string, number>;
   lastEventAt: Map<string, number>;
   loadingIds: Set<string>;
+  queueRefreshingIds: Set<string>;
   selectedRendererId: string | null;
 }
 
 const renderersCache = ref<Map<string, RendererSummary>>(new Map());
 const RENDERERS_CACHE_MS = 2000;
-const lastRenderersFetch = ref(0);
 
 const snapshotState = reactive<RendererSnapshotState>({
   snapshots: reactive(new Map<string, FullRendererSnapshot>()),
   lastSnapshotAt: reactive(new Map<string, number>()),
   lastEventAt: reactive(new Map<string, number>()),
   loadingIds: reactive(new Set<string>()),
+  queueRefreshingIds: reactive(new Set<string>()),
   selectedRendererId: null,
 });
 
 const loading = ref(false);
 const error = ref<string | null>(null);
 
-let sseConnected = false;
-function ensureSSEConnected() {
-  if (sseConnected) return;
+// Utiliser le composable SSE centralisé
+let sseInitialized = false;
+function ensureSSEInitialized() {
+  if (sseInitialized) return;
 
-  sse.onRendererEvent((event) => {
+  const { onRendererEvent, connect } = useSSE();
+  
+  // Démarrer la connexion SSE
+  connect();
+
+  onRendererEvent((event) => {
     const rendererId = event.renderer_id;
     const timestamp = Date.parse(event.timestamp ?? "") || Date.now();
 
@@ -117,35 +126,14 @@ function ensureSSEConnected() {
         // Le backend envoie TOUJOURS les deux valeurs (même si null)
 
         // Convertir rel_time (HH:MM:SS) en millisecondes
-        if (event.rel_time) {
-          const parts = event.rel_time.split(":").map(Number);
-          if (parts.length === 3) {
-            snapshot.state.position_ms =
-              ((parts[0] ?? 0) * 3600 +
-                (parts[1] ?? 0) * 60 +
-                (parts[2] ?? 0)) *
-              1000;
-          }
-        } else {
-          // Si rel_time est null/undefined, mettre position à 0
-          snapshot.state.position_ms = 0;
-        }
+        const positionMs = parseTimeToMs(event.rel_time ?? null);
+        snapshot.state.position_ms = positionMs ?? 0;
 
         // Convertir track_duration (HH:MM:SS) en millisecondes
-        if (event.track_duration) {
-          const parts = event.track_duration.split(":").map(Number);
-          if (parts.length === 3) {
-            snapshot.state.duration_ms =
-              ((parts[0] ?? 0) * 3600 +
-                (parts[1] ?? 0) * 60 +
-                (parts[2] ?? 0)) *
-              1000;
-          }
-        } else {
-          // Si track_duration est null/undefined (flux continu sans durée),
-          // mettre duration_ms à null pour afficher "--:--"
-          snapshot.state.duration_ms = null;
-        }
+        const durationMs = parseTimeToMs(event.track_duration ?? null);
+        // Si track_duration est null/undefined (flux continu sans durée),
+        // mettre duration_ms à null pour afficher "--:--"
+        snapshot.state.duration_ms = durationMs;
 
         // Important: Trigger reactivity en réassignant l'objet complet avec deep copy
         // Le shallow copy ne suffit pas car snapshot.state est partagé entre renderers
@@ -190,8 +178,13 @@ function ensureSSEConnected() {
         });
         break;
 
+      case "queue_refreshing":
+        snapshotState.queueRefreshingIds.add(rendererId);
+        break;
+
       case "queue_updated":
         snapshot.state.queue_len = event.queue_length;
+        snapshotState.queueRefreshingIds.delete(rendererId);
         // Pour la queue complète, on doit refetch
         void fetchRendererSnapshot(rendererId, { force: true });
         break;
@@ -228,7 +221,7 @@ function ensureSSEConnected() {
     snapshotState.snapshots.set(rendererId, snapshot);
   });
 
-  sseConnected = true;
+  sseInitialized = true;
 }
 
 const allRenderers = computed(() => Array.from(renderersCache.value.values()));
@@ -268,26 +261,32 @@ function isSnapshotLoading(id: string) {
   return snapshotState.loadingIds.has(id);
 }
 
+function isQueueRefreshing(id: string) {
+  return snapshotState.queueRefreshingIds.has(id);
+}
+
 function selectRenderer(id: string | null) {
   snapshotState.selectedRendererId = id;
 }
 
 async function fetchRenderers(force = false) {
-  ensureSSEConnected();
-
-  const now = Date.now();
-  if (!force && now - lastRenderersFetch.value < RENDERERS_CACHE_MS) {
-    return;
-  }
+  ensureSSEInitialized();
 
   try {
     loading.value = true;
     error.value = null;
-    const data = await api.getRenderers();
+
+    // Utiliser le cache API centralisé
+    const data = await apiCache.fetch(
+      '/renderers',
+      undefined,
+      () => api.getRenderers(),
+      { force, ttl: RENDERERS_CACHE_MS }
+    );
+    
     renderersCache.value = new Map(
       data.map((renderer) => [renderer.id, renderer]),
     );
-    lastRenderersFetch.value = now;
   } catch (err) {
     error.value = err instanceof Error ? err.message : "Erreur fetch renderers";
     console.error("[useRenderers] Erreur fetch:", err);
@@ -300,7 +299,7 @@ async function fetchRendererSnapshot(
   rendererId: string,
   opts?: { force?: boolean },
 ) {
-  ensureSSEConnected();
+  ensureSSEInitialized();
   const force = opts?.force ?? false;
   const hasSnapshot = snapshotState.snapshots.has(rendererId);
 
@@ -325,6 +324,46 @@ async function fetchRendererSnapshot(
     console.error(`[useRenderers] Erreur snapshot ${rendererId}:`, err);
   } finally {
     snapshotState.loadingIds.delete(rendererId);
+  }
+}
+
+/**
+ * Fetch les snapshots de plusieurs renderers en parallèle controlée.
+ * - Limite le nombre de requêtes simultanées (concurrency)
+ * - Ajoute un délai entre chaque batch pour ne pas saturer le réseau
+ * - Continue même si certaines requêtes échouent
+ */
+async function fetchBatchSnapshots(
+  rendererIds: string[],
+  options: {
+    concurrency?: number;  // Nombre max de requêtes parallèles (défaut: 3)
+    batchDelay?: number;   // Délai entre les batches en ms (défaut: 100ms)
+    force?: boolean;       // Forcer le refetch même en cache
+  } = {}
+): Promise<void> {
+  const { concurrency = 3, batchDelay = 100, force = false } = options;
+  
+  // Filtrer les rendererIds valides
+  const validIds = rendererIds.filter(id => id && typeof id === 'string');
+  
+  if (validIds.length === 0) return;
+
+  // Fonction pour traiter un batch
+  const processBatch = async (batch: string[]): Promise<void> => {
+    await Promise.allSettled(
+      batch.map(id => fetchRendererSnapshot(id, { force }))
+    );
+  };
+
+  // Exécuter par batches avec controlled concurrency
+  for (let i = 0; i < validIds.length; i += concurrency) {
+    const batch = validIds.slice(i, i + concurrency);
+    await processBatch(batch);
+    
+    // Délai entre les batches (sauf pour le dernier)
+    if (i + concurrency < validIds.length) {
+      await new Promise(resolve => setTimeout(resolve, batchDelay));
+    }
   }
 }
 
@@ -438,7 +477,7 @@ async function addAfterCurrent(
 }
 
 export function useRenderers() {
-  ensureSSEConnected();
+  ensureSSEInitialized();
 
   return {
     loading,
@@ -454,11 +493,13 @@ export function useRenderers() {
     getQueueById,
     getBindingById,
     isSnapshotLoading,
+    isQueueRefreshing,
     selectRenderer,
     snapshotState,
     // Fetchers
     fetchRenderers,
     fetchRendererSnapshot,
+    fetchBatchSnapshots,
     // Transport controls
     play,
     resumeOrPlayFromQueue,
@@ -482,16 +523,16 @@ export function useRenderers() {
 }
 
 export function useRenderer(rendererId: Ref<string>) {
-  ensureSSEConnected();
+  ensureSSEInitialized();
 
-  const renderer = computed(() => renderersCache.value.get(rendererId.value));
-  const snapshot = computed(
-    () => snapshotState.snapshots.get(rendererId.value) ?? null,
-  );
-  const state = computed(() => snapshot.value?.state ?? null);
-  const queue = computed(() => snapshot.value?.queue ?? null);
-  const binding = computed(() => snapshot.value?.binding ?? null);
+  // Delegates to useRenderers functions - no duplication
+  const renderer = computed(() => getRendererById(rendererId.value));
+  const snapshot = computed(() => getSnapshotById(rendererId.value));
+  const state = computed(() => getStateById(rendererId.value));
+  const queue = computed(() => getQueueById(rendererId.value));
+  const binding = computed(() => getBindingById(rendererId.value));
   const isStream = computed(() => snapshot.value?.is_stream ?? false);
+  const queueRefreshing = computed(() => isQueueRefreshing(rendererId.value));
 
   async function refresh(force = true) {
     await Promise.all([
@@ -507,6 +548,7 @@ export function useRenderer(rendererId: Ref<string>) {
     queue,
     binding,
     isStream,
+    queueRefreshing,
     refresh,
   };
 }

@@ -342,8 +342,26 @@ impl VolumeControl for OpenHomeRenderer {
 impl PlaybackStatus for OpenHomeRenderer {
     fn playback_state(&self) -> Result<PlaybackState, ControlPointError> {
         let client = self.playlist_client_for("playback_state")?;
-        let state = client.transport_state()?;
-        Ok(map_openhome_state(&state))
+        let raw = client.transport_state().map_err(|err| {
+            tracing::warn!(
+                error = %err,
+                "OpenHome transport_state() failed — state change detection disabled"
+            );
+            err
+        })?;
+        let mapped = if raw.is_empty() {
+            tracing::trace!("OpenHome TransportState: empty (device initializing)");
+            PlaybackState::Transitioning
+        } else {
+            let mapped = map_openhome_state(&raw);
+            tracing::trace!(
+                raw_state = raw.as_str(),
+                mapped_state = ?mapped,
+                "OpenHome TransportState"
+            );
+            mapped
+        };
+        Ok(mapped)
     }
 }
 
@@ -542,7 +560,23 @@ impl QueueTransportControl for OpenHomeRenderer {
                 .queue
                 .lock()
                 .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?;
+            let len = queue.len().unwrap_or(0);
+            let current = queue.current_index().ok().flatten();
+            let current_track_id = queue.current_track().ok().flatten();
+            let all_ids = queue.track_ids().ok().unwrap_or_default();
+            tracing::trace!(
+                queue_len = len,
+                current_index = ?current,
+                current_track_id = ?current_track_id,
+                all_track_ids = ?all_ids,
+                "OpenHome play_next: advancing queue"
+            );
             if !queue.advance()? {
+                tracing::trace!(
+                    queue_len = len,
+                    current_index = ?current,
+                    "OpenHome play_next: advance() returned false — no next track"
+                );
                 return Err(ControlPointError::QueueError("No next track".into()));
             }
         }

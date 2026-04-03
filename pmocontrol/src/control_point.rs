@@ -892,7 +892,13 @@ impl ControlPoint {
         })?;
 
         // Check if queue is empty before trying to play next
-        if renderer.len()? == 0 {
+        let queue_len = renderer.len()?;
+        tracing::trace!(
+            renderer = renderer_id.0.as_str(),
+            queue_len,
+            "play_next_from_queue: checking queue length"
+        );
+        if queue_len == 0 {
             debug!(
                 renderer = renderer_id.0.as_str(),
                 "play_next_from_queue: queue is empty"
@@ -1151,6 +1157,46 @@ impl ControlPoint {
         container_id: &str,
         auto_play: bool,
     ) -> Result<(), ControlPointError> {
+        // If already bound to the same container on the same server, don't clear the
+        // renderer queue — that would interrupt active playback. Instead, just trigger
+        // a gentle refresh (which uses LCS and preserves the currently playing track).
+        let renderer = self.music_renderer_by_id(renderer_id).ok_or_else(|| {
+            ControlPointError::ControlPoint(format!("Renderer {} not found", renderer_id.0))
+        })?;
+
+        let already_bound = renderer
+            .get_playlist_binding()
+            .map(|b| b.server_id == *server_id && b.container_id == container_id)
+            .unwrap_or(false);
+
+        if already_bound {
+            debug!(
+                renderer = renderer_id.0.as_str(),
+                server = server_id.0.as_str(),
+                container = container_id,
+                auto_play,
+                "Re-attach to same container: skipping clear, triggering gentle refresh"
+            );
+            let mut binding = renderer.get_playlist_binding().unwrap();
+            binding.pending_refresh = true;
+            binding.auto_play_on_refresh = auto_play;
+            renderer.set_playlist_binding(Some(binding));
+
+            let mut auto_start_cb = |rid: &DeviceId| self.play_current_from_queue(rid);
+            let callback: Option<&mut dyn FnMut(&DeviceId) -> Result<(), ControlPointError>> =
+                if auto_play {
+                    Some(&mut auto_start_cb)
+                } else {
+                    None
+                };
+            return refresh_attached_queue_for(
+                &self.registry,
+                renderer_id,
+                &self.event_bus,
+                callback,
+            );
+        }
+
         // CRITICAL: When attaching a new playlist to a renderer, we must UNCONDITIONALLY
         // clear the RENDERER queue first (but NOT the local queue cache, which will be
         // replaced by refresh_attached_queue_for() using replace_entire_playlist()).
@@ -1164,10 +1210,6 @@ impl ControlPoint {
             "Attaching new playlist: clearing renderer queue"
         );
 
-        // Prepare the renderer for the new playlist (backend-agnostic)
-        let renderer = self.music_renderer_by_id(renderer_id).ok_or_else(|| {
-            ControlPointError::ControlPoint(format!("Renderer {} not found", renderer_id.0))
-        })?;
         renderer.clear_for_playlist_attach()?;
 
         // Sync backend state to local cache (backend-agnostic)
@@ -1510,6 +1552,11 @@ fn refresh_attached_queue_for(
     // Reset the pending_refresh flag and consume auto_play
     renderer.reset_pending_refresh();
     let auto_play = renderer.consume_auto_play();
+    tracing::trace!(
+        renderer = renderer_id.0.as_str(),
+        auto_play,
+        "refresh_attached_queue_for: auto_play flag consumed"
+    );
 
     // Step 2: Get server from registry
     let music_server = {
@@ -1538,10 +1585,9 @@ fn refresh_attached_queue_for(
         return Ok(());
     }
 
-    // Step 3: Notify UI that the renderer is loading (Transitioning state)
-    event_bus.broadcast(RendererEvent::StateChanged {
+    // Step 3: Notify UI that the queue is being refreshed (dedicated event, no state change)
+    event_bus.broadcast(RendererEvent::QueueRefreshing {
         id: renderer_id.clone(),
-        state: PlaybackState::Transitioning,
     });
 
     // Step 4: Browse container (renamed from Step 3 for clarity)
@@ -1549,6 +1595,17 @@ fn refresh_attached_queue_for(
     const MAX_BROWSE_ATTEMPTS: usize = 3;
     const BROWSE_RETRY_DELAY_MS: u64 = 200;
     const BROWSE_PAGE_SIZE: u32 = 64;
+
+    // DIAGNOSTIC: Log the queue state before browsing
+    let pre_snapshot = renderer.queue_snapshot()?;
+    debug!(
+        renderer = renderer_id.0.as_str(),
+        server = server_id.0.as_str(),
+        container = container_id.as_str(),
+        pre_queue_items = pre_snapshot.items.len(),
+        pre_current_index = pre_snapshot.current_index,
+        "refresh_attached_queue_for: queue state BEFORE browse"
+    );
 
     // Paginated browse — une playlist peut dépasser BROWSE_PAGE_SIZE items
     let entries = {
@@ -1644,10 +1701,18 @@ fn refresh_attached_queue_for(
 
     renderer.sync_queue(new_items)?;
 
-    let final_queue_len = {
-        let snapshot = renderer.queue_snapshot()?;
-        snapshot.items.len()
-    };
+    // DIAGNOSTIC: Log the queue state after sync_queue
+    let post_snapshot = renderer.queue_snapshot()?;
+    debug!(
+        renderer = renderer_id.0.as_str(),
+        server = server_id.0.as_str(),
+        container = container_id.as_str(),
+        post_queue_items = post_snapshot.items.len(),
+        post_current_index = post_snapshot.current_index,
+        "refresh_attached_queue_for: queue state AFTER sync_queue"
+    );
+
+    let final_queue_len = post_snapshot.items.len();
 
     // Emit QueueUpdated event
     event_bus.broadcast(RendererEvent::QueueUpdated {
