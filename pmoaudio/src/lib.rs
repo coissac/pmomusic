@@ -78,7 +78,7 @@ async fn main() {
 - **RwLock** : Pour partage concurrent du compteur [`TimerNode`]
 "#]
 #[cfg(feature = "simd")]
-use std::simd::*;
+// use std::simd::*; // Not actually used in this file, modules import their own simd
 
 mod audio_chunk;
 mod audio_segment;

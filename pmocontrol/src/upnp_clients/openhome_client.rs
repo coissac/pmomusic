@@ -2,12 +2,11 @@ use crate::errors::ControlPointError;
 use crate::model::TrackMetadata;
 use crate::soap_client::{
     decode_base64, ensure_success_with_envelope as ensure_success, extract_child_text,
-    extract_child_text_allow_empty, extract_child_text_any, extract_child_text_local,
-    extract_child_text_optional, extract_child_text_optional_local, find_child_with_suffix,
-    handle_action_response,
+    extract_child_text_any, extract_child_text_local, extract_child_text_optional,
+    extract_child_text_optional_local, find_child_with_suffix, handle_action_response,
     invoke_upnp_action, parse_bool, parse_visible_flag,
 };
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use pmodidl::DIDLLite;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
@@ -419,7 +418,9 @@ impl OhPlaylistClient {
 
         // Log the raw IdArrayResponse XML for debugging
         {
-            let raw_children: Vec<String> = response.children.iter()
+            let raw_children: Vec<String> = response
+                .children
+                .iter()
                 .map(|n: &xmltree::XMLNode| match n {
                     xmltree::XMLNode::Element(e) => format!("{}={:?}", e.name, e.get_text()),
                     _ => String::new(),
@@ -767,7 +768,11 @@ impl SourceIndexCache {
     }
 
     fn get(&self) -> Option<u32> {
-        if self.is_valid() { self.index } else { None }
+        if self.is_valid() {
+            self.index
+        } else {
+            None
+        }
     }
 
     fn set(&mut self, index: u32) {
