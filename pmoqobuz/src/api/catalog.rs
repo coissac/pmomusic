@@ -13,9 +13,9 @@ struct PaginatedResponse<T> {
     #[serde(default)]
     total: Option<u32>,
     #[serde(default)]
-    limit: Option<u32>,
+    _limit: Option<u32>,
     #[serde(default)]
-    offset: Option<u32>,
+    _offset: Option<u32>,
 }
 
 /// Réponse de l'endpoint /album/get
@@ -91,7 +91,7 @@ struct ImageResponse {
 
 /// Réponse genre
 #[derive(Debug, Deserialize)]
-struct GenreResponse {
+pub(crate) struct GenreResponse {
     #[serde(default)]
     id: Option<u32>,
     name: String,

@@ -15,7 +15,7 @@ struct PaginatedResponse<T> {
 
 /// Réponse de l'endpoint /favorite/getUserFavorites
 #[derive(Debug, Deserialize)]
-pub(crate) struct FavoritesResponse {
+pub struct FavoritesResponse {
     #[serde(default)]
     albums: Option<PaginatedResponse<AlbumResponse>>,
     #[serde(default)]
