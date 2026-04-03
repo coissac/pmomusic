@@ -4,7 +4,7 @@
  */
 import { ref, computed } from 'vue'
 import { api } from '../services/pmocontrol/api'
-import { sse } from '../services/pmocontrol/sse'
+import { useSSE } from './useSSE'
 import type {
   MediaServerSummary,
   ContainerEntry,
@@ -35,12 +35,17 @@ const lastFetch = {
 
 const CACHE_DURATION_MS = 2000
 
-// Connecter SSE une seule fois
-let sseConnected = false
-function ensureSSEConnected() {
-  if (sseConnected) return
+// Initialiser SSE une seule fois via le composable centralisé
+let sseInitialized = false
+function ensureSSEInitialized() {
+  if (sseInitialized) return
 
-  sse.onMediaServerEvent((event) => {
+  const { onMediaServerEvent, connect } = useSSE()
+  
+  // Démarrer la connexion SSE
+  connect()
+
+  onMediaServerEvent((event) => {
     const serverId = event.server_id
 
     switch (event.type) {
@@ -98,14 +103,14 @@ function ensureSSEConnected() {
     }
   })
 
-  sseConnected = true
+  sseInitialized = true
 }
 
 /**
  * Composable principal pour gérer les media servers
  */
 export function useMediaServers() {
-  ensureSSEConnected()
+  ensureSSEInitialized()
 
   const loading = ref(false)
   const loadingMore = ref(false)

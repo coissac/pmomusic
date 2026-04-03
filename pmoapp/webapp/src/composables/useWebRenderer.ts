@@ -14,7 +14,7 @@
  */
 
 import { ref, onMounted, onUnmounted, readonly } from "vue";
-import { sse } from "../services/pmocontrol/sse";
+import { useSSE } from "./useSSE";
 
 // ─── Identifiant stable de l'instance navigateur ─────────────────────────────
 
@@ -200,10 +200,11 @@ export function useWebRenderer() {
             onConnectedCallback?.();
 
             // S'abonner aux événements SSE du renderer pour piloter la lecture
-            sse.connect();
+            const { connect, onRendererEvent } = useSSE();
+            connect();
             const udn = data.udn;
             sseUnsubscribe?.();
-            sseUnsubscribe = sse.onRendererEvent((event) => {
+            sseUnsubscribe = onRendererEvent((event) => {
                 if (event.renderer_id !== udn) return;
                 if (event.type !== "state_changed") return;
 

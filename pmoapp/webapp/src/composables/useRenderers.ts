@@ -6,7 +6,7 @@
  */
 import { ref, reactive, computed, toRaw, type Ref } from "vue";
 import { api } from "../services/pmocontrol/api";
-import { sse } from "../services/pmocontrol/sse";
+import { useSSE } from "./useSSE";
 import type {
   RendererSummary,
   RendererState,
@@ -40,11 +40,17 @@ const snapshotState = reactive<RendererSnapshotState>({
 const loading = ref(false);
 const error = ref<string | null>(null);
 
-let sseConnected = false;
-function ensureSSEConnected() {
-  if (sseConnected) return;
+// Utiliser le composable SSE centralisé
+let sseInitialized = false;
+function ensureSSEInitialized() {
+  if (sseInitialized) return;
 
-  sse.onRendererEvent((event) => {
+  const { onRendererEvent, connect } = useSSE();
+  
+  // Démarrer la connexion SSE
+  connect();
+
+  onRendererEvent((event) => {
     const rendererId = event.renderer_id;
     const timestamp = Date.parse(event.timestamp ?? "") || Date.now();
 
@@ -235,7 +241,7 @@ function ensureSSEConnected() {
     snapshotState.snapshots.set(rendererId, snapshot);
   });
 
-  sseConnected = true;
+  sseInitialized = true;
 }
 
 const allRenderers = computed(() => Array.from(renderersCache.value.values()));
@@ -284,7 +290,7 @@ function selectRenderer(id: string | null) {
 }
 
 async function fetchRenderers(force = false) {
-  ensureSSEConnected();
+  ensureSSEInitialized();
 
   const now = Date.now();
   if (!force && now - lastRenderersFetch.value < RENDERERS_CACHE_MS) {
@@ -311,7 +317,7 @@ async function fetchRendererSnapshot(
   rendererId: string,
   opts?: { force?: boolean },
 ) {
-  ensureSSEConnected();
+  ensureSSEInitialized();
   const force = opts?.force ?? false;
   const hasSnapshot = snapshotState.snapshots.has(rendererId);
 
@@ -449,7 +455,7 @@ async function addAfterCurrent(
 }
 
 export function useRenderers() {
-  ensureSSEConnected();
+  ensureSSEInitialized();
 
   return {
     loading,
@@ -494,7 +500,7 @@ export function useRenderers() {
 }
 
 export function useRenderer(rendererId: Ref<string>) {
-  ensureSSEConnected();
+  ensureSSEInitialized();
 
   const renderer = computed(() => renderersCache.value.get(rendererId.value));
   const snapshot = computed(
