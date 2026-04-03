@@ -443,7 +443,7 @@ pub trait MusicSource: Debug + Send + Sync {
     /// let item = source.get_item("track-123").await?;
     /// println!("Now playing: {} by {}", item.title, item.artist.unwrap_or_default());
     /// ```
-    async fn get_item(&self, object_id: &str) -> Result<Item> {
+    async fn get_item(&self, _object_id: &str) -> Result<Item> {
         // Default implementation: try to find it in parent's browse result
         // This is inefficient and should be overridden by implementations
         Err(MusicSourceError::NotSupported(

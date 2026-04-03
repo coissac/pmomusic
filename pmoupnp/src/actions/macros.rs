@@ -97,7 +97,6 @@
 /// ```
 ///
 /// # Notes d'implémentation
-///
 /// - Les `Arc<StateVariable>` sont clonés (shallow copy du pointeur)
 /// - Chaque `Argument` est wrappé dans un `Arc`
 /// - L'`Action` finale est wrappée dans un `Arc`
@@ -112,6 +111,7 @@ macro_rules! define_action {
     }
     $(with handler $handler:expr)?
     ) => {
+        #[allow(unused_must_use)]
         pub static $name: once_cell::sync::Lazy<std::sync::Arc<$crate::actions::Action>> =
             once_cell::sync::Lazy::new(|| {
                 let mut ac = $crate::actions::Action::new($action_name.to_string());
@@ -135,6 +135,7 @@ macro_rules! define_action {
     (pub static $name:ident = $action_name:literal stateless
     $(with handler $handler:expr)?
     ) => {
+        #[allow(unused_must_use)]
         pub static $name: once_cell::sync::Lazy<std::sync::Arc<$crate::actions::Action>> =
             once_cell::sync::Lazy::new(|| {
                 let mut ac = $crate::actions::Action::new($action_name.to_string());
@@ -156,6 +157,7 @@ macro_rules! define_action {
     }
     $(with handler $handler:expr)?
     ) => {
+        #[allow(unused_must_use)]
         pub static $name: once_cell::sync::Lazy<std::sync::Arc<$crate::actions::Action>> =
             once_cell::sync::Lazy::new(|| {
                 let mut ac = $crate::actions::Action::new($action_name.to_string());
@@ -178,6 +180,7 @@ macro_rules! define_action {
     (pub static $name:ident = $action_name:literal
     $(with handler $handler:expr)?
     ) => {
+        #[allow(unused_must_use)]
         pub static $name: once_cell::sync::Lazy<std::sync::Arc<$crate::actions::Action>> =
             once_cell::sync::Lazy::new(|| {
                 let mut ac = $crate::actions::Action::new($action_name.to_string());
