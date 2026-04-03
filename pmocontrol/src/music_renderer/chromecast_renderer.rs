@@ -16,28 +16,28 @@ use std::thread::JoinHandle;
 
 use tracing::debug;
 
-use crate::DeviceIdentity;
 use crate::discovery::chromecast_discovery::{
     extract_host_from_location, extract_port_from_location,
 };
 use crate::errors::ControlPointError;
 use crate::model::{PlaybackState, RendererInfo};
-use crate::music_renderer::RendererFromMediaRendererInfo;
 use crate::music_renderer::capabilities::{
     PlaybackPosition, PlaybackPositionInfo, PlaybackStatus, QueueTransportControl, RendererBackend,
     TransportControl, VolumeControl,
 };
 use crate::music_renderer::musicrenderer::MusicRendererBackend;
 use crate::music_renderer::time_utils::{format_hhmmss_f64, parse_hhmmss_strict};
+use crate::music_renderer::RendererFromMediaRendererInfo;
 use crate::queue::{EnqueueMode, MusicQueue, PlaybackItem, QueueBackend, QueueSnapshot};
+use crate::DeviceIdentity;
 
 use rust_cast::{
-    CastDevice, ChannelMessage,
     channels::{
         heartbeat::HeartbeatResponse,
         media::{Media, PlayerState as CastPlayerState, StreamType},
         receiver::CastDeviceApp,
     },
+    CastDevice, ChannelMessage,
 };
 
 const DEFAULT_DESTINATION_ID: &str = "receiver-0";
@@ -172,6 +172,29 @@ impl ChromecastRenderer {
     pub fn is_continuous_stream(&self) -> bool {
         *self.continuous_stream.lock().unwrap()
     }
+
+    /// Connect to the device with retry on connection failures.
+    /// Uses exponential backoff: 200ms, 400ms, 800ms
+    fn connect_with_retry(&self) -> Result<CastDevice<'_>, ControlPointError> {
+        // Try up to 3 times with exponential backoff
+        for attempt in 0..3 {
+            match connect_to_device(&self.host, self.port) {
+                Ok(device) => return Ok(device),
+                Err(e) if attempt < 2 => {
+                    let delay = 200 * 2u64.pow(attempt);
+                    tracing::warn!(
+                        "Chromecast connection failed (attempt {}/3), retrying in {}ms: {}",
+                        attempt + 1,
+                        delay,
+                        e
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(delay));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        unreachable!()
+    }
 }
 
 impl TransportControl for ChromecastRenderer {
@@ -231,7 +254,27 @@ impl TransportControl for ChromecastRenderer {
         let handle = std::thread::spawn(move || {
             tracing::info!("Play thread starting for URI: {}", uri);
 
-            let device = match connect_to_device(&host, port) {
+            // Connect with retry (inlined for thread context)
+            let device =
+                (|| {
+                    for attempt in 0..3 {
+                        match connect_to_device(&host, port) {
+                            Ok(d) => return Ok(d),
+                            Err(e) if attempt < 2 => {
+                                let delay = 200 * 2u64.pow(attempt);
+                                tracing::warn!(
+                                "Chromecast connection failed (attempt {}/3), retrying in {}ms: {}",
+                                attempt + 1, delay, e
+                            );
+                                std::thread::sleep(std::time::Duration::from_millis(delay));
+                            }
+                            Err(e) => return Err(e),
+                        }
+                    }
+                    unreachable!()
+                })();
+
+            let device = match device {
                 Ok(d) => d,
                 Err(e) => {
                     tracing::error!("Failed to connect in play thread: {}", e);
@@ -334,7 +377,7 @@ impl TransportControl for ChromecastRenderer {
     fn play(&self) -> Result<(), ControlPointError> {
         debug!("ChromecastRenderer: play()");
 
-        let device = connect_to_device(&self.host, self.port)?;
+        let device = self.connect_with_retry()?;
 
         // Get receiver status to find the active app
         let status = device.receiver.get_status().map_err(|e| {
@@ -379,7 +422,7 @@ impl TransportControl for ChromecastRenderer {
     fn pause(&self) -> Result<(), ControlPointError> {
         debug!("ChromecastRenderer: pause()");
 
-        let device = connect_to_device(&self.host, self.port)?;
+        let device = self.connect_with_retry()?;
 
         let status = device.receiver.get_status().map_err(|e| {
             ControlPointError::ChromecastError(format!("Failed to get receiver status: {}", e))
@@ -430,7 +473,7 @@ impl TransportControl for ChromecastRenderer {
         // If a new play_uri() is called, it will properly wait for this thread.
 
         // Also send stop command to the device
-        let device = connect_to_device(&self.host, self.port)?;
+        let device = self.connect_with_retry()?;
 
         let status = device.receiver.get_status().map_err(|e| {
             ControlPointError::ChromecastError(format!("Failed to get receiver status: {}", e))
@@ -473,7 +516,7 @@ impl TransportControl for ChromecastRenderer {
 
         let total_seconds = parse_hhmmss_strict(hhmmss)? as f32;
 
-        let device = connect_to_device(&self.host, self.port)?;
+        let device = self.connect_with_retry()?;
 
         let status = device.receiver.get_status().map_err(|e| {
             ControlPointError::ChromecastError(format!("Failed to get receiver status: {}", e))
@@ -519,7 +562,7 @@ impl TransportControl for ChromecastRenderer {
 
 impl PlaybackStatus for ChromecastRenderer {
     fn playback_state(&self) -> Result<PlaybackState, ControlPointError> {
-        let device = connect_to_device(&self.host, self.port)?;
+        let device = self.connect_with_retry()?;
 
         // Get receiver status to find the active app
         let status = device.receiver.get_status().map_err(|e| {
@@ -560,7 +603,7 @@ impl PlaybackStatus for ChromecastRenderer {
 
 impl PlaybackPosition for ChromecastRenderer {
     fn playback_position(&self) -> Result<PlaybackPositionInfo, ControlPointError> {
-        let device = connect_to_device(&self.host, self.port)?;
+        let device = self.connect_with_retry()?;
 
         // Get receiver status to find the active app
         let status = device.receiver.get_status().map_err(|e| {
@@ -680,7 +723,7 @@ fn detect_content_type_from_meta(uri: &str, meta: &str) -> String {
 
 impl VolumeControl for ChromecastRenderer {
     fn volume(&self) -> Result<u16, ControlPointError> {
-        let device = connect_to_device(&self.host, self.port)?;
+        let device = self.connect_with_retry()?;
 
         let status = device.receiver.get_status().map_err(|e| {
             ControlPointError::ChromecastError(format!("Failed to get receiver status: {}", e))
@@ -696,7 +739,7 @@ impl VolumeControl for ChromecastRenderer {
     fn set_volume(&self, volume: u16) -> Result<(), ControlPointError> {
         debug!("ChromecastRenderer: set_volume({})", volume);
 
-        let device = connect_to_device(&self.host, self.port)?;
+        let device = self.connect_with_retry()?;
 
         let level = (volume as f32) / 100.0;
         device.receiver.set_volume(level).map_err(|e| {
@@ -707,7 +750,7 @@ impl VolumeControl for ChromecastRenderer {
     }
 
     fn mute(&self) -> Result<bool, ControlPointError> {
-        let device = connect_to_device(&self.host, self.port)?;
+        let device = self.connect_with_retry()?;
 
         let status = device.receiver.get_status().map_err(|e| {
             ControlPointError::ChromecastError(format!("Failed to get receiver status: {}", e))
@@ -719,7 +762,7 @@ impl VolumeControl for ChromecastRenderer {
     fn set_mute(&self, mute: bool) -> Result<(), ControlPointError> {
         debug!("ChromecastRenderer: set_mute({})", mute);
 
-        let device = connect_to_device(&self.host, self.port)?;
+        let device = self.connect_with_retry()?;
 
         device.receiver.set_volume(mute).map_err(|e| {
             ControlPointError::ChromecastError(format!("Failed to set mute: {}", e))
