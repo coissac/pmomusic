@@ -8,8 +8,8 @@ use tracing::{debug, trace, warn};
 
 use crate::errors::ControlPointError;
 use crate::upnp_clients::{
-    OPENHOME_PLAYLIST_HEAD_ID, OhInfoClient, OhPlaylistClient, OhProductClient, OhTrack,
-    OhTrackEntry,
+    OhInfoClient, OhPlaylistClient, OhProductClient, OhTrack, OhTrackEntry,
+    OPENHOME_PLAYLIST_HEAD_ID,
 };
 // use crate::openhome_playlist::{OpenHomePlaylistSnapshot, OpenHomePlaylistTrack};
 use crate::queue::{
@@ -374,7 +374,7 @@ impl OpenHomeQueue {
                     fresh.as_ref().and_then(|m| m.duration.as_ref())
                 );
                 drop(cache); // Libérer le lock avant d'appeler cache_metadata
-                // Mettre en cache pour éviter les oscillations sur les flux radio
+                             // Mettre en cache pour éviter les oscillations sur les flux radio
                 self.cache_metadata(entry.id, fresh.clone());
                 fresh
             }
@@ -661,8 +661,8 @@ impl OpenHomeQueue {
         let (keep_current, keep_desired) = lcs_flags(&snapshot.items, &items);
 
         let items_to_keep = keep_current.iter().filter(|&&k| k).count();
-        let items_to_delete = keep_current.iter().filter(|&&k| !k).count();
-        let items_to_add = keep_desired.iter().filter(|&&k| !k).count();
+        let items_to_delete = keep_current.iter().filter(|&k| !k).count();
+        let items_to_add = keep_desired.iter().filter(|&k| !k).count();
 
         debug!(
             renderer = self.renderer_id.0.as_str(),
@@ -672,16 +672,39 @@ impl OpenHomeQueue {
             "LCS computed: minimizing OpenHome playlist operations"
         );
 
-        // If we're replacing everything (keep=0), use delete_all() instead of
-        // individual delete_id() calls. This is much more robust for live playlists
-        // where track IDs can become invalid between refresh and deletion.
+        // Get current playing track ID BEFORE any modifications
+        let current_track_id = self.playlist_client.id().ok().filter(|&id| id != 0);
+
+        // Check if the currently playing track is in the new playlist
+        // If so, we should NOT use delete_all() - we must preserve it
+        let current_track_in_new_playlist = current_track_id.and_then(|current_id| {
+            items
+                .iter()
+                .position(|item| item.backend_id as u32 == current_id)
+        });
+
+        // If we're replacing everything (keep=0), use delete_all() BUT only if
+        // there's no currently playing track, OR if the current track is not in the new playlist.
+        // If current track IS in new playlist, we must preserve it using insert/delete operations.
         if items_to_keep == 0 && items_to_delete > 0 {
-            debug!(
-                renderer = self.renderer_id.0.as_str(),
-                "Using delete_all() for complete replacement (more robust for live playlists)"
-            );
-            self.playlist_client.delete_all()?;
-            self.metadata_cache.lock().unwrap().clear();
+            if current_track_in_new_playlist.is_some() {
+                // Current track is in new playlist - use insert/delete instead of delete_all
+                // to preserve playback
+                debug!(
+                    renderer = self.renderer_id.0.as_str(),
+                    current_track_in_playlist = true,
+                    "Preserving currently playing track - using insert/delete instead of delete_all"
+                );
+                // Fall through to selective deletion below
+            } else {
+                // No current track or not in new playlist - safe to use delete_all
+                debug!(
+                    renderer = self.renderer_id.0.as_str(),
+                    "Using delete_all() for complete replacement (safe - no current track or not in new playlist)"
+                );
+                self.playlist_client.delete_all()?;
+                self.metadata_cache.lock().unwrap().clear();
+            }
         } else {
             // Selective deletion when keeping some items
             for idx in (0..current_track_ids.len()).rev() {
@@ -1090,13 +1113,35 @@ impl QueueBackend for OpenHomeQueue {
 
     fn sync_queue(&mut self, items: Vec<PlaybackItem>) -> Result<(), ControlPointError> {
         self.ensure_playlist_source_selected()?;
+
+        // DIAGNOSTIC: Log current track state before any modifications
+        let pre_current_track = self.playlist_client.id().ok();
+        tracing::warn!(
+            renderer = self.renderer_id.0.as_str(),
+            pre_current_track_id = pre_current_track,
+            pre_items_count = items.len(),
+            "sync_queue: START - current track before modification"
+        );
+
         if items.is_empty() {
+            tracing::warn!(
+                renderer = self.renderer_id.0.as_str(),
+                "sync_queue: Empty playlist - clearing queue with delete_all"
+            );
             self.playlist_client.delete_all()?;
             self.metadata_cache.lock().unwrap().clear();
             // Invalidate caches after delete_all (clears queue and current track)
             self.track_ids_cache.lock().unwrap().invalidate();
-        self.read_list_cache.lock().unwrap().invalidate();
+            self.read_list_cache.lock().unwrap().invalidate();
             self.current_track_id_cache.lock().unwrap().invalidate();
+
+            // DIAGNOSTIC: Log state after delete_all
+            let post_current_track = self.playlist_client.id().ok();
+            tracing::warn!(
+                renderer = self.renderer_id.0.as_str(),
+                post_current_track_id = post_current_track,
+                "sync_queue: END - current track after delete_all (should be 0)"
+            );
             return Ok(());
         }
 
@@ -1104,6 +1149,15 @@ impl QueueBackend for OpenHomeQueue {
         // differences. Without this, any drift between our cache and the renderer
         // (e.g., manual edits from another control point) would keep the stale items.
         let snapshot = self.queue_snapshot()?;
+
+        debug!(
+            renderer = self.renderer_id.0.as_str(),
+            snapshot_items_len = snapshot.items.len(),
+            snapshot_current_index = snapshot.current_index,
+            new_items_count = items.len(),
+            "sync_queue: snapshot vs new items comparison"
+        );
+
         // Note: current_index may point to an index that doesn't exist in items
         // if the OpenHome renderer is in an inconsistent state (e.g., IdArray returns
         // IDs but ReadList returns empty TrackList). We must bounds-check here.
@@ -1178,12 +1232,36 @@ impl QueueBackend for OpenHomeQueue {
             }
         } else {
             // No currently playing item or can't determine it - use standard LCS
+            // BUT first check if this is because the OpenHome device returned empty playlist
+            // This could cause the queue to be cleared incorrectly
+            if snapshot.items.is_empty() && !items.is_empty() {
+                tracing::warn!(
+                    renderer = self.renderer_id.0.as_str(),
+                    snapshot_items = snapshot.items.len(),
+                    new_items = items.len(),
+                    "OpenHome playlist appears empty - possible stale cache or device issue, NOT clearing queue"
+                );
+                // Don't call replace_queue_standard_lcs with empty snapshot - it would clear our queue
+                // Instead, just add the new items without deleting existing ones
+                return self.enqueue_items(items, crate::queue::EnqueueMode::AppendToEnd);
+            }
+
             debug!(
                 renderer = self.renderer_id.0.as_str(),
                 "No currently playing item, using standard LCS sync"
             );
             self.replace_queue_standard_lcs(items, Some(0))?;
         }
+
+        // DIAGNOSTIC: Log state after sync completes
+        let post_current_track = self.playlist_client.id().ok();
+        let post_ids = self.track_ids();
+        tracing::warn!(
+            renderer = self.renderer_id.0.as_str(),
+            post_current_track_id = post_current_track,
+            post_items_count = post_ids.as_ref().map(|v| v.len()).unwrap_or(0),
+            "sync_queue: END - current track after modifications"
+        );
 
         Ok(())
     }

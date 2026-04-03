@@ -1596,6 +1596,17 @@ fn refresh_attached_queue_for(
     const BROWSE_RETRY_DELAY_MS: u64 = 200;
     const BROWSE_PAGE_SIZE: u32 = 64;
 
+    // DIAGNOSTIC: Log the queue state before browsing
+    let pre_snapshot = renderer.queue_snapshot()?;
+    debug!(
+        renderer = renderer_id.0.as_str(),
+        server = server_id.0.as_str(),
+        container = container_id.as_str(),
+        pre_queue_items = pre_snapshot.items.len(),
+        pre_current_index = pre_snapshot.current_index,
+        "refresh_attached_queue_for: queue state BEFORE browse"
+    );
+
     // Paginated browse — une playlist peut dépasser BROWSE_PAGE_SIZE items
     let entries = {
         let mut all_entries = Vec::new();
@@ -1690,10 +1701,18 @@ fn refresh_attached_queue_for(
 
     renderer.sync_queue(new_items)?;
 
-    let final_queue_len = {
-        let snapshot = renderer.queue_snapshot()?;
-        snapshot.items.len()
-    };
+    // DIAGNOSTIC: Log the queue state after sync_queue
+    let post_snapshot = renderer.queue_snapshot()?;
+    debug!(
+        renderer = renderer_id.0.as_str(),
+        server = server_id.0.as_str(),
+        container = container_id.as_str(),
+        post_queue_items = post_snapshot.items.len(),
+        post_current_index = post_snapshot.current_index,
+        "refresh_attached_queue_for: queue state AFTER sync_queue"
+    );
+
+    let final_queue_len = post_snapshot.items.len();
 
     // Emit QueueUpdated event
     event_bus.broadcast(RendererEvent::QueueUpdated {

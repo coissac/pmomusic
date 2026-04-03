@@ -16,9 +16,9 @@
 //!   - never starts playback (transport control is handled elsewhere).
 
 use crate::{
-    DeviceId, DeviceIdentity, RendererInfo,
     errors::ControlPointError,
     queue::{MusicQueue, PlaybackItem, QueueBackend, QueueFromRendererInfo, QueueSnapshot},
+    DeviceId, DeviceIdentity, RendererInfo,
 };
 
 /// Internal/local queue implementation.
@@ -374,6 +374,16 @@ impl QueueBackend for InternalQueue {
     ) -> Result<(), ControlPointError> {
         use crate::queue::EnqueueMode;
 
+        // DIAGNOSTIC: Log current queue state before enqueue
+        tracing::warn!(
+            renderer = self.renderer_id.0.as_str(),
+            current_index = self.current_index,
+            items_count_before = self.items.len(),
+            mode = ?mode,
+            items_to_enqueue = items.len(),
+            "enqueue_items: START"
+        );
+
         // Protéger les durées des streams contre la diminution
         let protected_items = self.protect_stream_durations(items);
 
@@ -398,6 +408,15 @@ impl QueueBackend for InternalQueue {
         }
 
         self.ensure_current_index_invariant();
+
+        // DIAGNOSTIC: Log queue state after enqueue
+        tracing::warn!(
+            renderer = self.renderer_id.0.as_str(),
+            current_index = self.current_index,
+            items_count_after = self.items.len(),
+            "enqueue_items: END"
+        );
+
         Ok(())
     }
 
