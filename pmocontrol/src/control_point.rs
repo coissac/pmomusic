@@ -1585,10 +1585,9 @@ fn refresh_attached_queue_for(
         return Ok(());
     }
 
-    // Step 3: Notify UI that the renderer is loading (Transitioning state)
-    event_bus.broadcast(RendererEvent::StateChanged {
+    // Step 3: Notify UI that the queue is being refreshed (dedicated event, no state change)
+    event_bus.broadcast(RendererEvent::QueueRefreshing {
         id: renderer_id.clone(),
-        state: PlaybackState::Transitioning,
     });
 
     // Step 4: Browse container (renamed from Step 3 for clarity)

@@ -434,6 +434,9 @@ pub enum RendererEvent {
         id: DeviceId,
         queue_length: usize,
     },
+    QueueRefreshing {
+        id: DeviceId,
+    },
     BindingChanged {
         id: DeviceId,
         binding: Option<PlaylistBinding>,

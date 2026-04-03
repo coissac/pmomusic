@@ -20,6 +20,7 @@ interface RendererSnapshotState {
   lastSnapshotAt: Map<string, number>;
   lastEventAt: Map<string, number>;
   loadingIds: Set<string>;
+  queueRefreshingIds: Set<string>;
   selectedRendererId: string | null;
 }
 
@@ -32,6 +33,7 @@ const snapshotState = reactive<RendererSnapshotState>({
   lastSnapshotAt: reactive(new Map<string, number>()),
   lastEventAt: reactive(new Map<string, number>()),
   loadingIds: reactive(new Set<string>()),
+  queueRefreshingIds: reactive(new Set<string>()),
   selectedRendererId: null,
 });
 
@@ -190,8 +192,13 @@ function ensureSSEConnected() {
         });
         break;
 
+      case "queue_refreshing":
+        snapshotState.queueRefreshingIds.add(rendererId);
+        break;
+
       case "queue_updated":
         snapshot.state.queue_len = event.queue_length;
+        snapshotState.queueRefreshingIds.delete(rendererId);
         // Pour la queue complète, on doit refetch
         void fetchRendererSnapshot(rendererId, { force: true });
         break;
@@ -266,6 +273,10 @@ function getBindingById(id: string): AttachedPlaylistInfo | null {
 
 function isSnapshotLoading(id: string) {
   return snapshotState.loadingIds.has(id);
+}
+
+function isQueueRefreshing(id: string) {
+  return snapshotState.queueRefreshingIds.has(id);
 }
 
 function selectRenderer(id: string | null) {
@@ -454,6 +465,7 @@ export function useRenderers() {
     getQueueById,
     getBindingById,
     isSnapshotLoading,
+    isQueueRefreshing,
     selectRenderer,
     snapshotState,
     // Fetchers
@@ -492,6 +504,9 @@ export function useRenderer(rendererId: Ref<string>) {
   const queue = computed(() => snapshot.value?.queue ?? null);
   const binding = computed(() => snapshot.value?.binding ?? null);
   const isStream = computed(() => snapshot.value?.is_stream ?? false);
+  const queueRefreshing = computed(() =>
+    snapshotState.queueRefreshingIds.has(rendererId.value),
+  );
 
   async function refresh(force = true) {
     await Promise.all([
@@ -507,6 +522,7 @@ export function useRenderer(rendererId: Ref<string>) {
     queue,
     binding,
     isStream,
+    queueRefreshing,
     refresh,
   };
 }

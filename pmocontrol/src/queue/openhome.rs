@@ -647,6 +647,17 @@ impl OpenHomeQueue {
         let snapshot = self.queue_snapshot()?;
         let current_track_ids = self.track_ids()?;
 
+        debug!(
+            renderer = self.renderer_id.0.as_str(),
+            current_count = snapshot.items.len(),
+            desired_count = items.len(),
+            current_uris = ?snapshot.items.iter().map(|i| i.uri.as_str()).collect::<Vec<_>>(),
+            current_didl_ids = ?snapshot.items.iter().map(|i| i.didl_id.as_str()).collect::<Vec<_>>(),
+            desired_uris = ?items.iter().map(|i| i.uri.as_str()).collect::<Vec<_>>(),
+            desired_didl_ids = ?items.iter().map(|i| i.didl_id.as_str()).collect::<Vec<_>>(),
+            "LCS input: current vs desired items"
+        );
+
         let (keep_current, keep_desired) = lcs_flags(&snapshot.items, &items);
 
         let items_to_keep = keep_current.iter().filter(|&&k| k).count();
