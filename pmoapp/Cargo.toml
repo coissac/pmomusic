@@ -10,6 +10,10 @@ rust-embed = "8.5.0"
 path = "../pmoserver"
 optional = true
 
+[dependencies.async-trait]
+optional = true
+version = "0.1"
+
 [features]
 default = []
-pmoserver = ["dep:pmoserver"]
+pmoserver = ["dep:pmoserver", "dep:async-trait"]
