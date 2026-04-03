@@ -18,7 +18,6 @@ use crate::errors::ControlPointError;
 use crate::events::RendererEventBus;
 use crate::model::RendererEvent;
 use crate::model::{PlaybackSource, PlaybackState, RendererInfo, RendererProtocol, TrackMetadata};
-use crate::music_renderer::RendererFromMediaRendererInfo;
 use crate::music_renderer::arylic_tcp::ArylicTcpRenderer;
 use crate::music_renderer::capabilities::{
     PlaybackPosition, PlaybackPositionInfo, PlaybackStatus, QueueTransportControl, RendererBackend,
@@ -30,13 +29,12 @@ use crate::music_renderer::openhome_renderer::OpenHomeRenderer;
 use crate::music_renderer::sleep_timer::SleepTimer;
 use crate::music_renderer::upnp_renderer::UpnpRenderer;
 use crate::music_renderer::watcher::{
-    WatchStrategy, WatchedState, extract_track_metadata, playback_position_equal,
-    playback_state_equal,
+    extract_track_metadata, playback_position_equal, playback_state_equal, WatchStrategy,
+    WatchedState,
 };
+use crate::music_renderer::RendererFromMediaRendererInfo;
 use crate::online::DeviceConnectionState;
-use crate::queue::{
-    EnqueueMode, MusicQueue, PlaybackItem, QueueBackend, QueueSnapshot,
-};
+use crate::queue::{EnqueueMode, MusicQueue, PlaybackItem, QueueBackend, QueueSnapshot};
 use crate::{DeviceId, DeviceIdentity, DeviceOnline};
 
 use tracing::warn;
@@ -639,10 +637,11 @@ impl MusicRenderer {
             PlaybackState::Stopped => {
                 {
                     let s = self.state.lock().unwrap();
-                    tracing::trace!(
+                    tracing::debug!(
                         renderer = self.info.friendly_name(),
                         has_played = s.has_played_since_track_start,
                         playback_source = ?s.playback_source,
+                        user_stop_requested = s.user_stop_requested,
                         "STOPPED detected — evaluating auto-advance"
                     );
                 }
@@ -698,6 +697,70 @@ impl MusicRenderer {
                         debug!(
                             renderer = self.info.friendly_name(),
                             "Renderer stopped but no PLAYING state seen yet; ignoring (likely track initialization)"
+                        );
+                    }
+                } else {
+                    self.set_playback_source(PlaybackSource::None);
+                    self.clear_has_played_flag();
+                }
+            }
+            PlaybackState::NoMedia => {
+                // Handle end of track (Chromecast returns NoMedia when track ends)
+                // This is equivalent to Stopped for auto-advance purposes
+                let s = self.state.lock().unwrap();
+                let playback_source = s.playback_source;
+                let has_played = s.has_played_since_track_start;
+                let user_stop = s.user_stop_requested;
+                drop(s);
+
+                tracing::debug!(
+                    renderer = self.info.friendly_name(),
+                    has_played = has_played,
+                    playback_source = ?playback_source,
+                    user_stop_requested = user_stop,
+                    "NoMedia detected — evaluating auto-advance"
+                );
+
+                // Check if user requested stop (via Stop button in UI)
+                if self.check_and_clear_user_stop_requested() {
+                    debug!(
+                        renderer = self.info.friendly_name(),
+                        "NoMedia after user request; not auto-advancing"
+                    );
+                    self.set_playback_source(PlaybackSource::None);
+                    self.clear_has_played_flag();
+                } else if matches!(playback_source, PlaybackSource::FromQueue) {
+                    // Auto-advance if we have seen a PLAYING state
+                    if self.check_and_clear_has_played_flag() {
+                        debug!(
+                            renderer = self.info.friendly_name(),
+                            "NoMedia after queue-driven playback; advancing to next track"
+                        );
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            self.play_next_from_queue()
+                        }));
+                        match result {
+                            Ok(Ok(())) => {}
+                            Ok(Err(err)) => {
+                                error!(
+                                    renderer = self.info.friendly_name(),
+                                    error = %err,
+                                    "Auto-advance from NoMedia failed; clearing queue playback state"
+                                );
+                                self.set_playback_source(PlaybackSource::None);
+                            }
+                            Err(_panic) => {
+                                error!(
+                                    renderer = self.info.friendly_name(),
+                                    "Auto-advance from NoMedia panicked; clearing queue playback state"
+                                );
+                                self.set_playback_source(PlaybackSource::None);
+                            }
+                        }
+                    } else {
+                        tracing::debug!(
+                            renderer = self.info.friendly_name(),
+                            "NoMedia but no PLAYING state seen yet; ignoring"
                         );
                     }
                 } else {
@@ -1605,8 +1668,8 @@ pub(crate) fn build_didl_lite_metadata(
     uri: &str,
     protocol_info: &str,
 ) -> String {
-    use pmodidl::{DIDLLite, Item, Resource};
     use pmodidl::ToXmlElement;
+    use pmodidl::{DIDLLite, Item, Resource};
 
     // Construire l'Item DIDL avec toutes les métadonnées
     let item = Item {
@@ -1841,7 +1904,6 @@ fn parse_rfc3339_to_system_time(s: &str) -> Option<SystemTime> {
     }
     Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs as u64))
 }
-
 
 /// Transport control façade that dispatches to whichever backend can fulfill
 /// the request, returning a standardized error if the backend lacks support.

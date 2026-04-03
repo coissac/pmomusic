@@ -569,10 +569,21 @@ impl PlaybackStatus for ChromecastRenderer {
             ControlPointError::ChromecastError(format!("Failed to get receiver status: {}", e))
         })?;
 
+        tracing::debug!(
+            "Chromecast playback_state: {} apps running",
+            status.applications.len()
+        );
+
         // If no app is running, return NoMedia
         let app = match status.applications.first() {
-            Some(app) => app,
-            None => return Ok(PlaybackState::NoMedia),
+            Some(app) => {
+                tracing::debug!("Chromecast playback_state: app={}", app.display_name);
+                app
+            }
+            None => {
+                tracing::debug!("Chromecast playback_state: no apps running, returning NoMedia");
+                return Ok(PlaybackState::NoMedia);
+            }
         };
 
         // Connect to the app
@@ -591,10 +602,25 @@ impl PlaybackStatus for ChromecastRenderer {
                 ControlPointError::ChromecastError(format!("Failed to get media status: {}", e))
             })?;
 
+        tracing::debug!(
+            "Chromecast playback_state: {} media entries",
+            media_status.entries.len()
+        );
+
         // If no media entry, return NoMedia
         let media_entry = match media_status.entries.first() {
-            Some(entry) => entry,
-            None => return Ok(PlaybackState::NoMedia),
+            Some(entry) => {
+                tracing::debug!(
+                    "Chromecast playback_state: player_state={:?}, current_time={:?}",
+                    entry.player_state,
+                    entry.current_time
+                );
+                entry
+            }
+            None => {
+                tracing::debug!("Chromecast playback_state: no media entries, returning NoMedia");
+                return Ok(PlaybackState::NoMedia);
+            }
         };
 
         Ok(map_player_state(&media_entry.player_state))
