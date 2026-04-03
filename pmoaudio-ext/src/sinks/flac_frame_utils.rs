@@ -296,6 +296,7 @@ pub(crate) fn validate_frame_header_crc(data: &[u8], offset: usize) -> bool {
 /// keeping the data from the last sync code onward for the next iteration.
 ///
 /// We need at least 2 validated sync codes to identify one complete frame.
+#[allow(dead_code)]
 pub(crate) fn find_complete_frames_boundary(data: &[u8]) -> usize {
     if data.len() < 4 {
         return 0;

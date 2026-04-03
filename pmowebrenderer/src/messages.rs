@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 /// Messages envoyés du Backend → Navigateur
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[allow(dead_code)]
 pub enum ServerMessage {
     SessionCreated {
         token: String,
@@ -38,6 +39,7 @@ pub enum ServerMessage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[allow(dead_code)]
 pub enum TransportAction {
     Play,
     Pause,
@@ -60,12 +62,25 @@ pub struct CommandParams {
 /// Messages envoyés du Navigateur → Backend
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[allow(dead_code)]
 pub enum ClientMessage {
-    Init { capabilities: BrowserCapabilities },
-    StateUpdate { state: PlaybackState },
-    PositionUpdate { position: String, duration: String },
-    MetadataUpdate { metadata: TrackMetadata },
-    VolumeUpdate { volume: u16, mute: bool },
+    Init {
+        capabilities: BrowserCapabilities,
+    },
+    StateUpdate {
+        state: PlaybackState,
+    },
+    PositionUpdate {
+        position: String,
+        duration: String,
+    },
+    MetadataUpdate {
+        metadata: TrackMetadata,
+    },
+    VolumeUpdate {
+        volume: u16,
+        mute: bool,
+    },
     /// Envoyé quand la piste courante se termine naturellement (gapless).
     /// Le backend fait avancer current → next dans l'état partagé.
     TrackEnded,

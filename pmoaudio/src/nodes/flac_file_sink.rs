@@ -32,6 +32,7 @@ use tokio_util::sync::CancellationToken;
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Signal retourné par pump_segments indiquant pourquoi l'encodage s'est arrêté.
+#[allow(dead_code)]
 enum StopReason {
     TrackBoundary(Arc<tokio::sync::RwLock<dyn pmometadata::TrackMetadata>>),
     EndOfStream,
@@ -418,6 +419,7 @@ async fn wait_for_first_audio_chunk_with_metadata(
 }
 
 /// Pompe les segments pour une seule track (s'arrête au TrackBoundary).
+#[allow(dead_code)]
 async fn pump_track_segments(
     first_segment: Arc<AudioSegment>,
     rx: &mut mpsc::Receiver<Arc<AudioSegment>>,

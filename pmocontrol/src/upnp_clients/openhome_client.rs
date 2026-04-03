@@ -1001,6 +1001,8 @@ pub fn parse_track_metadata_from_didl(xml: &str) -> Option<TrackMetadata> {
     })
 }
 
+/// Extracts the ID from DIDL-Lite XML metadata.
+#[allow(dead_code)]
 pub fn didl_id_from_metadata(xml: &str) -> Option<String> {
     if xml.trim().is_empty() {
         return None;
@@ -1115,6 +1117,8 @@ fn parse_product_source_list(xml: &str) -> Result<Vec<OhProductSource>> {
     Ok(sources)
 }
 
+/// Check if error is an invalid OpenHome entry ID error.
+#[allow(dead_code)]
 fn is_invalid_entry_id_error(err: &ControlPointError) -> bool {
     let msg = format!("{err}");
     msg.contains("Invalid OpenHome Entry Id") || msg.contains("comma-separated IDs")

@@ -38,6 +38,7 @@ impl BroadcastPacer {
     }
 
     /// Reset the pacer clock (call when audio timestamp resets to 0).
+    #[allow(dead_code)]
     pub fn reset(&mut self) {
         self.start_time = Instant::now();
         trace!("{} broadcaster: pacer reset", self.label);

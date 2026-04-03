@@ -120,6 +120,7 @@ pub fn playback_position_equal(a: &PlaybackPositionInfo, b: &PlaybackPositionInf
 /// Parse "HH:MM:SS" style time strings to seconds.
 ///
 /// Returns None for empty or sentinel values such as "NOT_IMPLEMENTED" or "-:--:--".
+#[allow(dead_code)]
 fn parse_hms_to_secs(s: &str) -> Option<u64> {
     let s = s.trim();
     if s.is_empty() {

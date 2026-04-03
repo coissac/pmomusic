@@ -145,6 +145,7 @@ impl InternalQueue {
     /// Fusionne les métadonnées en protégeant les streams contre la diminution de durée.
     /// Pour les streams continus, si c'est la même chanson (même titre ET même artiste ET même URI),
     /// la durée ne peut jamais diminuer.
+    #[allow(dead_code)]
     fn merge_metadata_protecting_streams(
         old_metadata: &Option<crate::model::TrackMetadata>,
         new_metadata: &Option<crate::model::TrackMetadata>,

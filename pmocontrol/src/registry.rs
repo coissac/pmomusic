@@ -13,6 +13,7 @@ use crate::{
 
 const DEFAULT_MAX_AGE: u32 = 1800;
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct DeviceItem {
     music_renderer: Option<Arc<MusicRenderer>>,

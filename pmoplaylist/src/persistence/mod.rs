@@ -333,6 +333,7 @@ impl PersistenceManager {
     }
 
     /// Supprime tous les tracks contenant un cache_pk donné
+    #[allow(dead_code)]
     pub async fn remove_by_cache_pk(&self, cache_pk: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM tracks WHERE cache_pk = ?1", params![cache_pk])
