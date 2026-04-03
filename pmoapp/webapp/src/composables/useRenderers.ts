@@ -545,17 +545,14 @@ export function useRenderers() {
 export function useRenderer(rendererId: Ref<string>) {
   ensureSSEInitialized();
 
-  const renderer = computed(() => renderersCache.value.get(rendererId.value));
-  const snapshot = computed(
-    () => snapshotState.snapshots.get(rendererId.value) ?? null,
-  );
-  const state = computed(() => snapshot.value?.state ?? null);
-  const queue = computed(() => snapshot.value?.queue ?? null);
-  const binding = computed(() => snapshot.value?.binding ?? null);
+  // Delegates to useRenderers functions - no duplication
+  const renderer = computed(() => getRendererById(rendererId.value));
+  const snapshot = computed(() => getSnapshotById(rendererId.value));
+  const state = computed(() => getStateById(rendererId.value));
+  const queue = computed(() => getQueueById(rendererId.value));
+  const binding = computed(() => getBindingById(rendererId.value));
   const isStream = computed(() => snapshot.value?.is_stream ?? false);
-  const queueRefreshing = computed(() =>
-    snapshotState.queueRefreshingIds.has(rendererId.value),
-  );
+  const queueRefreshing = computed(() => isQueueRefreshing(rendererId.value));
 
   async function refresh(force = true) {
     await Promise.all([
