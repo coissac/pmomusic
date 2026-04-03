@@ -7,6 +7,7 @@
 import { ref, reactive, computed, toRaw, type Ref } from "vue";
 import { api } from "../services/pmocontrol/api";
 import { useSSE } from "./useSSE";
+import { apiCache } from "./apiCache";
 import type {
   RendererSummary,
   RendererState,
@@ -26,7 +27,6 @@ interface RendererSnapshotState {
 
 const renderersCache = ref<Map<string, RendererSummary>>(new Map());
 const RENDERERS_CACHE_MS = 2000;
-const lastRenderersFetch = ref(0);
 
 const snapshotState = reactive<RendererSnapshotState>({
   snapshots: reactive(new Map<string, FullRendererSnapshot>()),
@@ -292,19 +292,21 @@ function selectRenderer(id: string | null) {
 async function fetchRenderers(force = false) {
   ensureSSEInitialized();
 
-  const now = Date.now();
-  if (!force && now - lastRenderersFetch.value < RENDERERS_CACHE_MS) {
-    return;
-  }
-
   try {
     loading.value = true;
     error.value = null;
-    const data = await api.getRenderers();
+
+    // Utiliser le cache API centralisé
+    const data = await apiCache.fetch(
+      '/renderers',
+      undefined,
+      () => api.getRenderers(),
+      { force, ttl: RENDERERS_CACHE_MS }
+    );
+    
     renderersCache.value = new Map(
       data.map((renderer) => [renderer.id, renderer]),
     );
-    lastRenderersFetch.value = now;
   } catch (err) {
     error.value = err instanceof Error ? err.message : "Erreur fetch renderers";
     console.error("[useRenderers] Erreur fetch:", err);

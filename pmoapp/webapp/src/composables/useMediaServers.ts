@@ -5,6 +5,7 @@
 import { ref, computed } from 'vue'
 import { api } from '../services/pmocontrol/api'
 import { useSSE } from './useSSE'
+import { apiCache } from './apiCache'
 import type {
   MediaServerSummary,
   ContainerEntry,
@@ -27,11 +28,6 @@ const browseCache = ref<Map<string, BrowseState>>(new Map())
 const currentPath = ref<BreadcrumbItem[]>([])
 const searchResults = ref<BrowseState | null>(null)
 const searchQuery = ref<string>('')
-
-// Timestamps
-const lastFetch = {
-  servers: 0
-}
 
 const CACHE_DURATION_MS = 2000
 
@@ -122,19 +118,20 @@ export function useMediaServers() {
 
   // Fetch servers list
   async function fetchServers(force = false) {
-    const now = Date.now()
-    if (!force && now - lastFetch.servers < CACHE_DURATION_MS) {
-      return
-    }
-
     try {
       loading.value = true
       error.value = null
-      const data = await api.getServers()
+
+      // Utiliser le cache API centralisé
+      const data = await apiCache.fetch(
+        '/servers',
+        undefined,
+        () => api.getServers(),
+        { force, ttl: CACHE_DURATION_MS }
+      )
 
       serversCache.value.clear()
       data.forEach(s => serversCache.value.set(s.id, s))
-      lastFetch.servers = now
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Erreur fetch servers'
       console.error('[useMediaServers] Erreur fetch:', e)
