@@ -230,7 +230,7 @@ async fn get_renderer_queue(
     State(state): State<ControlPointState>,
     Path(renderer_id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<QueueSnapshot>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<crate::openapi::QueueSnapshot>, (StatusCode, Json<ErrorResponse>)> {
     let rid = DeviceId(renderer_id.clone());
     let mut snapshot = state
         .control_point
@@ -243,11 +243,9 @@ async fn get_renderer_queue(
 
     // Transform cover URLs in all queue items
     for item in &mut snapshot.queue.items {
-        if let Some(ref mut metadata) = item.metadata {
-            if let Some(ref album_art) = metadata.album_art_uri {
-                if let Some(transformed) = transform_cover_url(Some(album_art), &base_url).await {
-                    metadata.album_art_uri = Some(transformed);
-                }
+        if let Some(ref album_art) = item.album_art_uri {
+            if let Some(transformed) = transform_cover_url(Some(album_art), &base_url).await {
+                item.album_art_uri = Some(transformed);
             }
         }
     }
