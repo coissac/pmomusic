@@ -810,6 +810,7 @@ impl MusicRenderer {
     /// Acquires the backend mutex with a default context message.
     ///
     /// Convenience wrapper around `lock_backend_for` for simple cases.
+    #[allow(dead_code)]
     fn lock_backend(&self) -> std::sync::MutexGuard<'_, MusicRendererBackend> {
         self.lock_backend_for("unknown operation")
     }

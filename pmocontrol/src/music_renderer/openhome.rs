@@ -16,6 +16,7 @@ pub enum OhServiceKind {
 }
 
 impl OhServiceKind {
+    #[allow(dead_code)]
     pub fn as_str(&self) -> &'static str {
         match self {
             OhServiceKind::Playlist => "playlist",
@@ -60,10 +61,12 @@ pub fn control_url_for(info: &RendererInfo, kind: OhServiceKind) -> Option<Strin
     endpoint_for(info, kind).map(|endpoint| endpoint.control_url)
 }
 
+#[allow(dead_code)]
 pub fn service_type_for(info: &RendererInfo, kind: OhServiceKind) -> Option<String> {
     endpoint_for(info, kind).map(|endpoint| endpoint.service_type)
 }
 
+#[allow(dead_code)]
 pub fn build_playlist_client(info: &RendererInfo) -> Option<OhPlaylistClient> {
     let endpoint = endpoint_for(info, OhServiceKind::Playlist)?;
     Some(OhPlaylistClient::new(
@@ -114,8 +117,8 @@ pub fn build_radio_client(info: &RendererInfo) -> Option<OhRadioClient> {
 mod tests {
     use super::*;
     use crate::{
-        DeviceId,
         model::{RendererCapabilities, RendererInfo, RendererProtocol},
+        DeviceId,
     };
 
     fn sample_renderer_info() -> RendererInfo {

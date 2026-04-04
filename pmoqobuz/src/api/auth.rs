@@ -18,11 +18,11 @@ struct UserInfo {
     #[serde(deserialize_with = "crate::models::deserialize_id")]
     id: String,
     #[serde(default)]
-    email: Option<String>,
+    _email: Option<String>,
     #[serde(default)]
-    firstname: Option<String>,
+    _firstname: Option<String>,
     #[serde(default)]
-    lastname: Option<String>,
+    _lastname: Option<String>,
     credential: CredentialInfo,
 }
 

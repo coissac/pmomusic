@@ -323,37 +323,42 @@ impl AudioSegment {
 
     /// Convertit l'AudioChunk vers F32 si c'est un chunk audio
     pub fn to_f32_chunk(&self) -> Option<AudioChunk> {
-        self.as_chunk().map(|chunk| chunk.to_f32())
+        self.as_chunk()
+            .map(|chunk: &Arc<AudioChunk>| chunk.to_f32())
     }
 
     /// Convertit l'AudioChunk vers I32 si c'est un chunk audio
     pub fn to_i32_chunk(&self) -> Option<AudioChunk> {
-        self.as_chunk().map(|chunk| chunk.to_i32())
+        self.as_chunk()
+            .map(|chunk: &Arc<AudioChunk>| chunk.to_i32())
     }
 
     /// Récupère le sample rate du chunk audio
     pub fn sample_rate(&self) -> Option<u32> {
-        self.as_chunk().map(|chunk| chunk.sample_rate())
+        self.as_chunk()
+            .map(|chunk: &Arc<AudioChunk>| chunk.sample_rate())
     }
 
     /// Récupère le nombre de frames du chunk audio
     pub fn frame_count(&self) -> Option<usize> {
-        self.as_chunk().map(|chunk| chunk.len())
+        self.as_chunk().map(|chunk: &Arc<AudioChunk>| chunk.len())
     }
 
     /// Récupère le gain en dB du chunk audio
     pub fn gain_db(&self) -> Option<f64> {
-        self.as_chunk().map(|chunk| chunk.gain_db())
+        self.as_chunk()
+            .map(|chunk: &Arc<AudioChunk>| chunk.gain_db())
     }
 
     /// Récupère le type du chunk audio (nom du type: "i32", "f32", etc.)
     pub fn chunk_type_name(&self) -> Option<&'static str> {
-        self.as_chunk().map(|chunk| chunk.type_name())
+        self.as_chunk()
+            .map(|chunk: &Arc<AudioChunk>| chunk.type_name())
     }
 
     /// Crée un nouveau segment avec le gain modifié (si c'est un chunk audio)
     pub fn with_gain_db(&self, gain_db: f64) -> Option<Arc<Self>> {
-        self.as_chunk().map(|chunk| {
+        self.as_chunk().map(|chunk: &Arc<AudioChunk>| {
             let new_chunk = chunk.set_gain_db(gain_db);
             Arc::new(Self {
                 order: self.order,
@@ -365,7 +370,7 @@ impl AudioSegment {
 
     /// Crée un nouveau segment avec le gain ajusté (relatif, si c'est un chunk audio)
     pub fn adjust_gain_db(&self, delta_db: f64) -> Option<Arc<Self>> {
-        self.as_chunk().map(|chunk| {
+        self.as_chunk().map(|chunk: &Arc<AudioChunk>| {
             let new_gain = chunk.gain_db() + delta_db;
             let new_chunk = chunk.set_gain_db(new_gain);
             Arc::new(Self {

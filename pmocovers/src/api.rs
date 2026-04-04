@@ -2,8 +2,15 @@
 
 use crate::cache;
 use crate::Cache;
-use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
+use axum::{
+    extract::{Query, State},
+    http::StatusCode,
+    response::IntoResponse,
+    Extension, Json,
+};
 use pmocache::api::{AddItemRequest, AddItemResponse, ErrorResponse};
+use pmocache::covers_route_for;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 #[derive(Clone, Copy)]
@@ -83,4 +90,93 @@ pub async fn add_cover_item(
         )
             .into_response(),
     }
+}
+
+// ============================================================================
+// Proxy pour covers LAN externes
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct CoverProxyParams {
+    url: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CoverProxyResponse {
+    pub cached_url: String,
+    pub pk: String,
+}
+
+/// GET /covers/proxy?url=<encoded_url>
+/// Proxy transparent qui :
+/// 1. Ajoute l'URL au cache (add_from_url gère déduplication)
+/// 2. Retourne l'URL locale du cache
+/// Note: Si l'URL est déjà une cover locale de notre instance, on retourne directement l'URL
+#[cfg(feature = "pmoserver")]
+pub async fn cover_proxy_handler(
+    Query(params): Query<CoverProxyParams>,
+    State(cache): State<Arc<Cache>>,
+    Extension(base_url): Extension<pmoserver::BaseUrl>,
+) -> impl IntoResponse {
+    let external_url = &params.url;
+
+    // Si c'est déjà une URL locale de NOTRE instance pmomusic, la retourner directement
+    if is_local_cover_url(external_url, &base_url) {
+        return (
+            StatusCode::OK,
+            Json(CoverProxyResponse {
+                cached_url: external_url.clone(),
+                pk: String::new(),
+            }),
+        )
+            .into_response();
+    }
+
+    // Ajouter au cache (add_from_url gère la déduplication et le download)
+    match cache.add_from_url(external_url, Some("external-covers")).await {
+        Ok(pk) => {
+            // Retourner l'URL locale
+            let local_url = base_url.url_for(&covers_route_for(&pk, None));
+            (
+                StatusCode::OK,
+                Json(CoverProxyResponse {
+                    cached_url: local_url,
+                    pk,
+                }),
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(ErrorResponse {
+                error: "CACHE_ERROR".to_string(),
+                message: format!("Failed to cache external cover: {}", e),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+/// Vérifie si l'URL est déjà une cover locale de NOTRE instance pmomusic
+/// Note: Les covers d'autres instances pmomusic sur le LAN DEVRAIENT être proxyfiées
+fn is_local_cover_url(url: &str, base_url: &pmoserver::BaseUrl) -> bool {
+    url.starts_with(&base_url.0)
+}
+
+/// Vérifie si l'URL doit être proxyfiée (URL LAN externe)
+fn should_proxy_url(url: &str) -> bool {
+    if let Ok(parsed) = url::Url::parse(url) {
+        if let Some(host) = parsed.host_str() {
+            // Proxy uniquement les URLs LAN (pas les URLs publiques)
+            if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+                return match ip {
+                    std::net::IpAddr::V4(ipv4) => ipv4.is_private() || ipv4.is_loopback(),
+                    std::net::IpAddr::V6(ipv6) => ipv6.is_loopback(),
+                };
+            }
+            // aussi les .local
+            return host.ends_with(".local") || host == "localhost";
+        }
+    }
+    false
 }

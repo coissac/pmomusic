@@ -54,7 +54,7 @@ pub fn get_audio_cache() -> Option<Arc<AudioCache>> {
 /// // url = "http://localhost:8080/covers/images/abc123/300"
 /// ```
 pub fn build_cover_url(pk: &str, size: Option<usize>) -> anyhow::Result<String> {
-    Ok(pmocache::covers_absolute_url_for(
+    Ok(pmocache::covers_absolute_url_for_upnp(
         pk,
         size.map(|s| s.to_string()).as_deref(),
     ))

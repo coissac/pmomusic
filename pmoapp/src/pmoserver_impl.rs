@@ -27,10 +27,14 @@
 //! # }
 //! ```
 
+#[cfg(feature = "pmoserver")]
+use async_trait::async_trait;
 use crate::WebAppExt;
 use pmoserver::Server;
 use rust_embed::RustEmbed;
 
+#[cfg(feature = "pmoserver")]
+#[async_trait]
 impl WebAppExt for Server {
     async fn add_webapp<W>(&mut self, path: &str)
     where

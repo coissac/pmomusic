@@ -1,25 +1,25 @@
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
-use crate::DeviceIdentity;
 use crate::music_renderer::capabilities::{
     PlaybackPosition, PlaybackPositionInfo, PlaybackStatus, QueueTransportControl, RendererBackend,
     TransportControl, VolumeControl,
 };
 use crate::music_renderer::time_utils::{format_hhmmss_u32, parse_time_flexible};
+use crate::DeviceIdentity;
 
 use crate::errors::ControlPointError;
 use crate::model::{PlaybackState, RendererInfo};
-use crate::music_renderer::RendererFromMediaRendererInfo;
 use crate::music_renderer::musicrenderer::MusicRendererBackend;
 use crate::music_renderer::openhome::{
     build_info_client, build_playlist_client, build_product_client, build_radio_client,
     build_time_client, build_volume_client,
 };
+use crate::music_renderer::RendererFromMediaRendererInfo;
 use crate::queue::{EnqueueMode, MusicQueue, PlaybackItem, QueueBackend, QueueSnapshot};
 use crate::upnp_clients::{
-    OPENHOME_PLAYLIST_HEAD_ID, OhInfoClient, OhPlaylistClient, OhProductClient, OhRadioClient,
-    OhTimeClient, OhVolumeClient,
+    OhInfoClient, OhPlaylistClient, OhProductClient, OhRadioClient, OhTimeClient, OhVolumeClient,
+    OPENHOME_PLAYLIST_HEAD_ID,
 };
 use tracing::debug;
 
@@ -500,6 +500,7 @@ impl PlaybackPosition for OpenHomeRenderer {
 }
 
 /// Parse duration from DIDL-Lite metadata XML (OpenHome version)
+#[allow(dead_code)]
 fn parse_didl_duration_openhome(didl: &str) -> Option<String> {
     // Search for duration attribute in <res> element
     let res_start = didl.find("<res ")?;

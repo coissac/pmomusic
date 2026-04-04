@@ -253,34 +253,28 @@ impl CachedMetadata {
             }
         };
 
-        // Tenter de cacher la cover
+        // Tenter de catcher la cover
         match cache.add_from_url(&cover_url, Some("radiofrance")).await {
             Ok(pk) => {
-                // Construire l'URL publique
-                // Note: add_from_url() lance le téléchargement complet en arrière-plan.
-                // L'URL est valide immédiatement — si le fichier n'est pas encore prêt,
-                // le client web doit réessayer (retry avec backoff).
-                let public_url = pmocache::covers_absolute_url_for(&pk, None);
+                // Stocker la route relative (le handler REST appliquera base_url.url_for())
+                let album_art_route = pmocache::covers_route_for(&pk, None);
 
                 #[cfg(feature = "logging")]
                 tracing::debug!(
-                    "Cached cover - url: {}, PK: {}, public_url: {}",
+                    "Cached cover - url: {}, PK: {}, route: {}",
                     cover_url,
                     pk,
-                    public_url
+                    album_art_route
                 );
 
-                (Some(public_url), Some(pk))
+                (Some(album_art_route), Some(pk))
             }
             Err(e) => {
                 #[cfg(feature = "logging")]
                 tracing::warn!("Failed to cache Radio France cover {}: {}", cover_url, e);
-                // Fallback sur le logo par défaut en cas d'erreur
-                let logo_url = format!(
-                    "{}/api/radiofrance/default-logo",
-                    server_base_url.trim_end_matches('/')
-                );
-                (Some(logo_url), None)
+                // Fallback sur le logo par défaut - route relative
+                let logo_route = "/api/radiofrance/default-logo".to_string();
+                (Some(logo_route), None)
             }
         }
     }

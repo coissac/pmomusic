@@ -136,6 +136,77 @@ pub fn get_cover_cache() -> Option<Arc<Cache>> {
 }
 
 // ============================================================================
+// Helper pour proxyfier les URLs de covers externes
+// ============================================================================
+
+/// Transforme une URL de cover externe en URL locale du cache.
+///
+/// Si l'URL est déjà une route locale de notre cache, la retourne directement.
+/// Sinon, ajoute l'URL au cache (download si nécessaire) et retourne l'URL locale.
+///
+/// Usage :
+/// ```rust
+/// let local_url = pmocovers::proxy_cover_url("https://example.com/cover.jpg").await?;
+/// ```
+#[cfg(feature = "pmoserver")]
+pub async fn proxy_cover_url(url: &str, base_url: &pmoserver::BaseUrl) -> anyhow::Result<String> {
+    proxy_cover_url_sync_impl(url, base_url).await
+}
+
+/// Version synchrone de proxy_cover_url.
+/// Utilise un runtime tokio temporaire pour exécuter add_from_url.
+///
+/// Usage :
+/// ```rust
+/// let local_url = pmocovers::proxy_cover_url_sync("https://example.com/cover.jpg", base_url);
+/// ```
+#[cfg(feature = "pmoserver")]
+pub fn proxy_cover_url_sync(url: &str, base_url: &pmoserver::BaseUrl) -> anyhow::Result<String> {
+    // Si c'est déjà une route locale de notre cache, retourner directement
+    if url.starts_with("/covers/") {
+        return Ok(url.to_string());
+    }
+
+    // Si c'est déjà une URL de notre instance, la retourner directement
+    if url.starts_with(&base_url.0) {
+        return Ok(url.to_string());
+    }
+
+    // Ajouter au cache en utilisant un runtime temporaire
+    let cache = get_cover_cache()
+        .ok_or_else(|| anyhow::anyhow!("Cover cache not initialized"))?;
+    
+    let runtime = tokio::runtime::Runtime::new()?;
+    let pk = runtime.block_on(async move {
+        cache.add_from_url(url, Some("external-covers")).await
+    })?;
+    
+    let route = pmocache::covers_route_for(&pk, None);
+    Ok(base_url.url_for(&route))
+}
+
+#[cfg(feature = "pmoserver")]
+async fn proxy_cover_url_sync_impl(url: &str, base_url: &pmoserver::BaseUrl) -> anyhow::Result<String> {
+    // Si c'est déjà une route locale de notre cache, retourner directement
+    if url.starts_with("/covers/") {
+        return Ok(url.to_string());
+    }
+
+    // Si c'est déjà une URL de notre instance, la retourner directement
+    if url.starts_with(&base_url.0) {
+        return Ok(url.to_string());
+    }
+
+    // Ajouter au cache (add_from_url gère déduplication et download)
+    let cache = get_cover_cache()
+        .ok_or_else(|| anyhow::anyhow!("Cover cache not initialized"))?;
+    
+    let pk = cache.add_from_url(url, Some("external-covers")).await?;
+    let route = pmocache::covers_route_for(&pk, None);
+    Ok(base_url.url_for(&route))
+}
+
+// ============================================================================
 // Extension pmoserver
 // ============================================================================
 
@@ -381,6 +452,10 @@ impl CoverCacheExt for pmoserver::Server {
             .route(
                 "/consolidate",
                 axum::routing::post(pmocache::api::consolidate_cache::<CoversConfig>),
+            )
+            .route(
+                "/proxy",
+                axum::routing::get(crate::api::cover_proxy_handler),
             )
             .with_state(cache.clone());
 

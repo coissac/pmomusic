@@ -24,6 +24,7 @@ use async_stream::stream;
 use axum::{
     Router,
     extract::State,
+    http::header::HeaderMap,
     response::IntoResponse,
     response::sse::{Event, KeepAlive, Sse},
 };
@@ -32,8 +33,77 @@ use serde::Serialize;
 #[cfg(feature = "pmoserver")]
 use std::sync::Arc;
 
+#[cfg(feature = "pmoserver")]
+use pmocovers;
+
 use crate::{DeviceIdentity, DeviceOnline};
 use tracing::error;
+
+// ============================================================================
+// HELPERS - Transformation des URLs de covers LAN externes
+// ============================================================================
+
+/// Transforme une URL de cover pour qu'elle soit accessible depuis le client
+///
+/// Si l'URL est une route locale de notre cache (/covers/...), on la transforme en URL absolue.
+/// Sinon, on utilise pmocovers::proxy_cover_url() pour mettre en cache et retourner notre URL.
+#[cfg(feature = "pmoserver")]
+async fn transform_cover_url(url: Option<&str>, base_url: &pmoserver::BaseUrl) -> Option<String> {
+    let url = url?;
+    
+    // Si c'est déjà une route locale de notre cache, la transformer en URL absolue
+    if url.starts_with("/covers/") {
+        return Some(base_url.url_for(url));
+    }
+    
+    // Si c'est une URL de notre instance, la retourner directement
+    if url.starts_with(&base_url.0) {
+        return Some(url.to_string());
+    }
+    
+    // Pour les autres URLs, utiliser le mechanisme de proxy standard
+    match pmocovers::proxy_cover_url(url, base_url).await {
+        Ok(local_url) => Some(local_url),
+        Err(e) => {
+            tracing::warn!("Failed to proxy cover URL {}: {}", url, e);
+            Some(url.to_string())
+        }
+    }
+}
+
+/// Transforme une URL de cover pour qu'elle soit accessible depuis le client (version synchrone)
+///
+/// Utilise un thread séparé avec son propre runtime tokio.
+#[cfg(feature = "pmoserver")]
+fn transform_cover_url_sync(url: Option<&str>, base_url: &pmoserver::BaseUrl) -> Option<String> {
+    let url = url?;
+    
+    // Si c'est déjà une route locale de notre cache, la transformer en URL absolue
+    if url.starts_with("/covers/") {
+        return Some(base_url.url_for(url));
+    }
+    
+    // Si c'est une URL de notre instance, la retourner directement
+    if url.starts_with(&base_url.0) {
+        return Some(url.to_string());
+    }
+    
+    // Pour les autres URLs, utiliser un thread avec runtime
+    let url_owned = url.to_string();
+    let base_url_owned = base_url.0.clone();
+    
+    let result = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async move {
+            pmocovers::proxy_cover_url(&url_owned, &pmoserver::BaseUrl(base_url_owned)).await
+        })
+    }).join();
+    
+    match result {
+        Ok(Ok(local_url)) => Some(local_url),
+        _ => Some(url.to_string())
+    }
+}
 
 // ============================================================================
 // PAYLOADS SSE
@@ -178,9 +248,10 @@ pub enum UnifiedEventPayload {
 /// Cette fonction centralise la conversion pour éviter la duplication de code
 /// entre les différents streams SSE (renderers-only et all-events).
 #[cfg(feature = "pmoserver")]
-fn renderer_event_to_payload(
+async fn renderer_event_to_payload(
     event: RendererEvent,
     timestamp: chrono::DateTime<chrono::Utc>,
+    base_url: &pmoserver::BaseUrl,
 ) -> RendererEventPayload {
     match event {
         RendererEvent::StateChanged { id, state } => RendererEventPayload::StateChanged {
@@ -210,7 +281,7 @@ fn renderer_event_to_payload(
             title: metadata.title,
             artist: metadata.artist,
             album: metadata.album,
-            album_art_uri: metadata.album_art_uri,
+            album_art_uri: transform_cover_url(metadata.album_art_uri.as_deref(), base_url).await,
             timestamp,
         },
         RendererEvent::QueueUpdated { id, queue_length } => RendererEventPayload::QueueUpdated {
@@ -290,7 +361,7 @@ fn renderer_event_to_payload(
 /// Cette fonction centralise la conversion pour éviter la duplication de code
 /// entre les différents streams SSE (servers-only et all-events).
 #[cfg(feature = "pmoserver")]
-fn media_server_event_to_payload(
+async fn media_server_event_to_payload(
     event: MediaServerEvent,
     timestamp: chrono::DateTime<chrono::Utc>,
 ) -> MediaServerEventPayload {
@@ -346,7 +417,10 @@ fn media_server_event_to_payload(
 )]
 pub async fn renderer_events_sse(
     State(control_point): State<Arc<ControlPoint>>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
+    let base_url_str = pmoserver::get_base_url_from_request(&headers);
+    let base_url = pmoserver::BaseUrl(base_url_str);
     // Convert crossbeam channel to tokio channel for async compatibility
     let (tx, mut rx_tokio) = tokio::sync::mpsc::unbounded_channel();
     let rx = control_point.subscribe_events();
@@ -406,7 +480,7 @@ pub async fn renderer_events_sse(
                 // Regular events from the control point
                 Some(event) = rx_tokio.recv() => {
             let timestamp = chrono::Utc::now();
-            let payload = renderer_event_to_payload(event, timestamp);
+            let payload = renderer_event_to_payload(event, timestamp, &base_url).await;
 
                     if let Ok(json) = serde_json::to_string(&payload) {
                         yield Ok::<_, axum::Error>(Event::default().event("renderer").data(json));
@@ -468,7 +542,9 @@ pub async fn renderer_events_sse(
 )]
 pub async fn media_server_events_sse(
     State(control_point): State<Arc<ControlPoint>>,
+    _headers: HeaderMap,
 ) -> impl IntoResponse {
+    // Note: les événements media server n'ont pas de album_art_uri à transformer
     // Convert crossbeam channel to tokio channel for async compatibility
     let (tx, mut rx_tokio) = tokio::sync::mpsc::unbounded_channel();
     let rx = control_point.subscribe_media_server_events();
@@ -526,7 +602,7 @@ pub async fn media_server_events_sse(
                 // Regular events from the control point
                 Some(event) = rx_tokio.recv() => {
                     let timestamp = chrono::Utc::now();
-                    let payload = media_server_event_to_payload(event, timestamp);
+                    let payload = media_server_event_to_payload(event, timestamp).await;
 
                     if let Ok(json) = serde_json::to_string(&payload) {
                         yield Ok::<_, axum::Error>(Event::default().event("media_server").data(json));
@@ -586,7 +662,12 @@ pub async fn media_server_events_sse(
     ),
     tag = "control"
 )]
-pub async fn all_events_sse(State(control_point): State<Arc<ControlPoint>>) -> impl IntoResponse {
+pub async fn all_events_sse(
+    State(control_point): State<Arc<ControlPoint>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let base_url_str = pmoserver::get_base_url_from_request(&headers);
+    let base_url = pmoserver::BaseUrl(base_url_str);
     // Convert crossbeam channels to tokio channels for async compatibility
     let (renderer_tx, mut renderer_rx_tokio) = tokio::sync::mpsc::unbounded_channel();
     let (server_tx, mut server_rx_tokio) = tokio::sync::mpsc::unbounded_channel();
@@ -677,7 +758,7 @@ pub async fn all_events_sse(State(control_point): State<Arc<ControlPoint>>) -> i
             tokio::select! {
                 Some(event) = renderer_rx_tokio.recv() => {
                     let timestamp = chrono::Utc::now();
-                    let renderer_payload = renderer_event_to_payload(event, timestamp);
+                    let renderer_payload = renderer_event_to_payload(event, timestamp, &base_url).await;
 
                     let payload = UnifiedEventPayload::Renderer(renderer_payload);
 
@@ -687,7 +768,7 @@ pub async fn all_events_sse(State(control_point): State<Arc<ControlPoint>>) -> i
                 }
                 Some(event) = server_rx_tokio.recv() => {
                     let timestamp = chrono::Utc::now();
-                    let server_payload = media_server_event_to_payload(event, timestamp);
+                    let server_payload = media_server_event_to_payload(event, timestamp).await;
                     let payload = UnifiedEventPayload::MediaServer(server_payload);
 
                     if let Ok(json) = serde_json::to_string(&payload) {

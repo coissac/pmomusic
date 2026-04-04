@@ -17,11 +17,13 @@ pub trait RendererBackend {
 ///
 /// These operations combine queue management with transport control,
 /// allowing navigation (next/previous) and track selection from the queue.
+#[allow(dead_code)]
 pub trait QueueTransportControl {
     /// Play the next track from the queue.
     fn play_next(&self) -> Result<(), ControlPointError>;
 
     /// Play the previous track from the queue.
+    #[allow(dead_code)]
     fn play_previous(&self) -> Result<(), ControlPointError>;
 
     /// Play from the queue at the current index (or initialize to 0 if not set).

@@ -88,7 +88,7 @@ impl IcyClientStream {
 
         // Add cover URL if we have a cover_pk
         if let Some(pk) = &meta.cover_pk {
-            let cover_url = pmocache::covers_absolute_url_for(pk, None);
+            let cover_url = pmocache::covers_absolute_url_for_upnp(pk, None);
             metadata_str.push_str(&format!("StreamUrl='{}';", cover_url));
         } else if let Some(url) = &meta.cover_url {
             // Fallback to external cover URL if no local pk

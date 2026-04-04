@@ -237,6 +237,8 @@
 //! - [Vue.js Documentation](https://vuejs.org/)
 //! - [Vite Documentation](https://vitejs.dev/)
 
+#[cfg(feature = "pmoserver")]
+use async_trait::async_trait;
 use rust_embed::RustEmbed;
 
 /// Structure représentant l'application web embarquée.
@@ -285,6 +287,8 @@ pub struct Webapp;
 ///     }
 /// }
 /// ```
+#[cfg(feature = "pmoserver")]
+#[async_trait]
 pub trait WebAppExt {
     /// Ajoute une Single Page Application au serveur.
     ///

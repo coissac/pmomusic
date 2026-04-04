@@ -260,7 +260,7 @@ impl QobuzClient {
 
                             // Optimization: Login once with first secret to get auth token
                             // Then test all secrets using the same token
-                            if let Some((_first_timezone, first_secret)) = secrets.first() {
+                            if let Some((first_timezone, first_secret)) = secrets.first() {
                                 if let Ok(temp_api) =
                                     QobuzApi::with_raw_secret(&app_id, first_secret)
                                 {

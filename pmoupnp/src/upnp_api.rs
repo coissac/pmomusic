@@ -17,6 +17,7 @@ use axum::{
     response::{IntoResponse, Json},
     routing::get,
 };
+use async_trait::async_trait;
 use pmoserver::Server;
 use serde_json::json;
 use tracing::info;
@@ -218,6 +219,7 @@ async fn get_service_variables(
 /// Trait d'extension pour enregistrer l'API UPnP sur un serveur.
 ///
 /// Similaire à `WebAppExt` et `CoverCacheExt`.
+#[async_trait]
 pub trait UpnpApiExt {
     /// Enregistre l'API REST d'introspection UPnP.
     ///
@@ -229,6 +231,7 @@ pub trait UpnpApiExt {
     async fn register_upnp_api(&mut self);
 }
 
+#[async_trait]
 impl UpnpApiExt for Server {
     async fn register_upnp_api(&mut self) {
         info!("📡 Registering UPnP introspection API...");
