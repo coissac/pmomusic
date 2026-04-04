@@ -248,7 +248,7 @@ pub enum UnifiedEventPayload {
 /// Cette fonction centralise la conversion pour éviter la duplication de code
 /// entre les différents streams SSE (renderers-only et all-events).
 #[cfg(feature = "pmoserver")]
-fn renderer_event_to_payload(
+async fn renderer_event_to_payload(
     event: RendererEvent,
     timestamp: chrono::DateTime<chrono::Utc>,
     base_url: &pmoserver::BaseUrl,
@@ -281,7 +281,7 @@ fn renderer_event_to_payload(
             title: metadata.title,
             artist: metadata.artist,
             album: metadata.album,
-            album_art_uri: transform_cover_url_sync(metadata.album_art_uri.as_deref(), base_url),
+            album_art_uri: transform_cover_url(metadata.album_art_uri.as_deref(), base_url).await,
             timestamp,
         },
         RendererEvent::QueueUpdated { id, queue_length } => RendererEventPayload::QueueUpdated {
@@ -361,7 +361,7 @@ fn renderer_event_to_payload(
 /// Cette fonction centralise la conversion pour éviter la duplication de code
 /// entre les différents streams SSE (servers-only et all-events).
 #[cfg(feature = "pmoserver")]
-fn media_server_event_to_payload(
+async fn media_server_event_to_payload(
     event: MediaServerEvent,
     timestamp: chrono::DateTime<chrono::Utc>,
 ) -> MediaServerEventPayload {
@@ -480,7 +480,7 @@ pub async fn renderer_events_sse(
                 // Regular events from the control point
                 Some(event) = rx_tokio.recv() => {
             let timestamp = chrono::Utc::now();
-            let payload = renderer_event_to_payload(event, timestamp, &base_url);
+            let payload = renderer_event_to_payload(event, timestamp, &base_url).await;
 
                     if let Ok(json) = serde_json::to_string(&payload) {
                         yield Ok::<_, axum::Error>(Event::default().event("renderer").data(json));
@@ -602,7 +602,7 @@ pub async fn media_server_events_sse(
                 // Regular events from the control point
                 Some(event) = rx_tokio.recv() => {
                     let timestamp = chrono::Utc::now();
-                    let payload = media_server_event_to_payload(event, timestamp);
+                    let payload = media_server_event_to_payload(event, timestamp).await;
 
                     if let Ok(json) = serde_json::to_string(&payload) {
                         yield Ok::<_, axum::Error>(Event::default().event("media_server").data(json));
@@ -758,7 +758,7 @@ pub async fn all_events_sse(
             tokio::select! {
                 Some(event) = renderer_rx_tokio.recv() => {
                     let timestamp = chrono::Utc::now();
-                    let renderer_payload = renderer_event_to_payload(event, timestamp, &base_url);
+                    let renderer_payload = renderer_event_to_payload(event, timestamp, &base_url).await;
 
                     let payload = UnifiedEventPayload::Renderer(renderer_payload);
 
@@ -768,7 +768,7 @@ pub async fn all_events_sse(
                 }
                 Some(event) = server_rx_tokio.recv() => {
                     let timestamp = chrono::Utc::now();
-                    let server_payload = media_server_event_to_payload(event, timestamp);
+                    let server_payload = media_server_event_to_payload(event, timestamp).await;
                     let payload = UnifiedEventPayload::MediaServer(server_payload);
 
                     if let Ok(json) = serde_json::to_string(&payload) {
