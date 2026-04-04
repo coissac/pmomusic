@@ -28,7 +28,7 @@ use async_trait::async_trait;
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{StatusCode, header::HeaderMap},
     routing::{get, post},
 };
 #[cfg(feature = "pmoserver")]
@@ -2081,7 +2081,9 @@ async fn browse_container(
     State(state): State<ControlPointState>,
     Path((server_id, container_id)): Path<(String, String)>,
     Query(params): Query<BrowseParams>,
+    headers: HeaderMap,
 ) -> Result<Json<BrowseResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let base_url = pmoserver::get_base_url_from_request(&headers);
     let sid = DeviceId(server_id.clone());
 
     let server = state.control_point.media_server(&sid).ok_or_else(|| {
@@ -2170,7 +2172,7 @@ async fn browse_container(
             child_count: None,
             artist: e.artist,
             album: e.album,
-            album_art_uri: e.album_art_uri,
+            album_art_uri: transform_cover_url(e.album_art_uri.as_deref(), &base_url),
         })
         .collect();
 
@@ -2202,6 +2204,41 @@ fn map_snapshot_error(
             error: format!("Renderer {} not found", renderer_id),
         }),
     )
+}
+
+/// Transforme une URL de cover externe LAN en URL de proxy local
+fn transform_cover_url(url: Option<&str>, base_url: &str) -> Option<String> {
+    let url = url?;
+    
+    // Si c'est déjà une URL locale de notre instance, ne pas transformer
+    if url.starts_with(base_url) {
+        return Some(url.to_string());
+    }
+    
+    // Vérifier si c'est une URL LAN externe à proxyfier
+    if should_proxy_cover_url(url) {
+        let encoded = urlencoding::encode(url);
+        return Some(format!("/covers/proxy?url={}", encoded));
+    }
+    
+    //URL publique ou autre - laisser telle quelle
+    Some(url.to_string())
+}
+
+/// Vérifie si l'URL doit être proxyfiée (URL LAN externe)
+fn should_proxy_cover_url(url: &str) -> bool {
+    if let Ok(parsed) = url::Url::parse(url) {
+        if let Some(host) = parsed.host_str() {
+            if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+                return match ip {
+                    std::net::IpAddr::V4(ipv4) => ipv4.is_private() || ipv4.is_loopback(),
+                    std::net::IpAddr::V6(ipv6) => ipv6.is_loopback(),
+                };
+            }
+            return host.ends_with(".local") || host == "localhost";
+        }
+    }
+    false
 }
 
 /// Helper to fetch playback items from a media server object (container or item).

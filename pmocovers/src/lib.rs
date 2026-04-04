@@ -382,6 +382,10 @@ impl CoverCacheExt for pmoserver::Server {
                 "/consolidate",
                 axum::routing::post(pmocache::api::consolidate_cache::<CoversConfig>),
             )
+            .route(
+                "/proxy",
+                axum::routing::get(crate::api::cover_proxy_handler),
+            )
             .with_state(cache.clone());
 
         let openapi = crate::ApiDoc::openapi();
