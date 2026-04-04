@@ -73,7 +73,7 @@ async fn transform_cover_url(url: Option<&str>, base_url: &pmoserver::BaseUrl) -
 
 /// Transforme une URL de cover pour qu'elle soit accessible depuis le client (version synchrone)
 ///
-/// Utilise la version sync de proxy_cover_url directement.
+/// Utilise un thread séparé avec son propre runtime tokio.
 #[cfg(feature = "pmoserver")]
 fn transform_cover_url_sync(url: Option<&str>, base_url: &pmoserver::BaseUrl) -> Option<String> {
     let url = url?;
@@ -88,13 +88,20 @@ fn transform_cover_url_sync(url: Option<&str>, base_url: &pmoserver::BaseUrl) ->
         return Some(url.to_string());
     }
     
-    // Pour les autres URLs, utiliser proxy_cover_url_sync
-    match pmocovers::proxy_cover_url_sync(url, base_url) {
-        Ok(local_url) => Some(local_url),
-        Err(e) => {
-            tracing::warn!("Failed to proxy cover URL {}: {}", url, e);
-            Some(url.to_string())
-        }
+    // Pour les autres URLs, utiliser un thread avec runtime
+    let url_owned = url.to_string();
+    let base_url_owned = base_url.0.clone();
+    
+    let result = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async move {
+            pmocovers::proxy_cover_url(&url_owned, &pmoserver::BaseUrl(base_url_owned)).await
+        })
+    }).join();
+    
+    match result {
+        Ok(Ok(local_url)) => Some(local_url),
+        _ => Some(url.to_string())
     }
 }
 

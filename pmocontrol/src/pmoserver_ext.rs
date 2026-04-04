@@ -196,7 +196,7 @@ async fn get_renderer_full_snapshot(
     let base_url_str = pmoserver::get_base_url_from_request(&headers);
     let base_url = pmoserver::BaseUrl(base_url_str);
 
-    // Transform cover URLs in current_track
+    // Transform cover URLs in current_track using async version
     if let Some(ref mut current_track) = snapshot.state.current_track {
         if let Some(ref album_art) = current_track.album_art_uri {
             if let Some(transformed) = transform_cover_url(Some(album_art), &base_url).await {
@@ -241,7 +241,7 @@ async fn get_renderer_queue(
     let base_url_str = pmoserver::get_base_url_from_request(&headers);
     let base_url = pmoserver::BaseUrl(base_url_str);
 
-    // Transform cover URLs in all queue items
+    // Transform cover URLs in all queue items using async version
     for item in &mut snapshot.queue.items {
         if let Some(ref album_art) = item.album_art_uri {
             if let Some(transformed) = transform_cover_url(Some(album_art), &base_url).await {
