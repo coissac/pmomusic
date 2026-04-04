@@ -211,9 +211,10 @@ impl RadioParadiseSource {
                         let year = json["year"].as_u64().map(|y| y as u32);
                         // Préférer l'URL de cache si cover_pk est fourni par le pipeline
                         let cover_pk = json["cover_pk"].as_str().map(|s| s.to_string());
+                        // Stocker la route relative (le handler REST appliquera base_url.url_for())
                         let cover_url = cover_pk
                             .as_ref()
-                            .map(|pk| pmocache::covers_absolute_url_for(pk, None))
+                            .map(|pk| pmocache::covers_route_for(pk, None))
                             .or_else(|| json["cover_url"].as_str().map(|s| s.to_string()))
                             .or_else(|| Some(self.default_cover_url()));
 

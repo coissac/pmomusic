@@ -117,6 +117,7 @@ impl Server {
         let base_url = base_url.into();
 
         // Créer le router initial avec l'endpoint de registre
+        // Note: le base_url_layer est appliqué plus tard via le fallback dynamique
         let registry_route = Router::new()
             .route("/api/registry", get(get_api_registry))
             .with_state(api_registry.clone());

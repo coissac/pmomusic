@@ -155,9 +155,15 @@ pub fn covers_route_for(pk: &str, param: Option<&str>) -> String {
 }
 
 /// Retourne l'URL absolue pour une cover via `PMO_SERVER_URL`
-pub fn covers_absolute_url_for(pk: &str, param: Option<&str>) -> String {
+/// Utilisée uniquement pour les contextes UPnP (LAN)
+pub fn covers_absolute_url_for_upnp(pk: &str, param: Option<&str>) -> String {
     let base = std::env::var("PMO_SERVER_URL")
-        .unwrap_or_else(|_| "http://localhost:8080".to_string());
+        .unwrap_or_else(|_| {
+            panic!(
+                "covers_absolute_url_for_upnp: PMO_SERVER_URL non configuré.\n\
+                Le serveur doit être initialisé avant toute utilisation UPnP."
+            );
+        });
     format!("{}{}", base.trim_end_matches('/'), covers_route_for(pk, param))
 }
 pub use db::{CacheEntry, DB};

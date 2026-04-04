@@ -220,3 +220,36 @@ pub fn get_server_base_url() -> Option<String> {
         }
     })
 }
+
+// ============================================================================
+// BaseUrl pour les handlers
+// ============================================================================
+
+/// URL de base effective pour la requête.
+/// Calculée depuis X-Forwarded-Proto/Host ou Host header.
+/// Les handlers peuvent appeler get_base_url_from_request(headers) pour l'obtenir.
+#[derive(Debug, Clone)]
+pub struct BaseUrl(pub String);
+
+impl BaseUrl {
+    /// Construit une URL absolue en combinant la base URL de la requête avec une route relative.
+    /// Usage : BaseUrl::url_for(&pmocache::covers_route_for(pk, None))
+    pub fn url_for(&self, route: &str) -> String {
+        debug_assert!(route.starts_with('/'), "route must start with '/'");
+        format!("{}{}", self.0.trim_end_matches('/'), route)
+    }
+}
+
+/// Récupère la BaseUrl depuis les headers de la requête.
+/// Calcule la BaseUrl depuis X-Forwarded-*/Host ou utilise le serveur global.
+/// Cette fonction peut être appelée par les handlers qui ont besoin de construire des URLs.
+pub fn get_base_url_from_request(headers: &axum::http::HeaderMap) -> String {
+    get_request_base_url(headers)
+        .or_else(|| get_server_base_url())
+        .unwrap_or_else(|| {
+            panic!(
+                "BaseUrl: impossible de déterminer l'URL de base.\n\
+                Configurer PMO_SERVER_URL ou démarrer le serveur avant les handlers HTTP."
+            );
+        })
+}
