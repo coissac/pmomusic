@@ -178,7 +178,7 @@ impl NodeLogic for HttpSourceLogic {
 
         // Émettre TrackBoundary avec les métadonnées HTTP
         let track_boundary =
-            AudioSegment::new_track_boundary(0, 0.0, Arc::new(tokio::sync::RwLock::new(metadata)), StreamType::Continuous);
+            AudioSegment::new_track_boundary(0, 0.0, Arc::new(tokio::sync::RwLock::new(metadata)), StreamType::Finite);
         send_to_children(std::any::type_name::<Self>(), &output, track_boundary).await?;
 
         // Préparer la lecture des chunks audio

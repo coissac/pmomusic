@@ -49,6 +49,8 @@ pub struct UriSource {
     reader: Box<dyn tokio::io::AsyncRead + Send + Unpin>,
     stream_info: StreamInfo,
     frames_to_skip: u64,
+    /// true si c'est un flux continu (radio, stream) sans durée définie
+    pub is_continuous: bool,
 }
 
 impl UriSource {
@@ -86,6 +88,11 @@ impl UriSource {
             let ratio = output_sample_rate as f64 / info.sample_rate as f64;
             (s as f64 * ratio).round() as u64
         })
+    }
+
+    /// Retourne true si c'est un flux continu (radio, stream) sans durée définie.
+    pub fn is_continuous(&self) -> bool {
+        self.is_continuous
     }
 
     /// Émet les chunks audio vers `tx`.
@@ -201,7 +208,7 @@ impl UriSource {
         );
 
         let (_, reader) = stream.into_reader();
-        Ok(Self { reader: Box::new(reader), stream_info, frames_to_skip })
+        Ok(Self { reader: Box::new(reader), stream_info, frames_to_skip, is_continuous: false })
     }
 
     async fn open_http(
@@ -209,6 +216,9 @@ impl UriSource {
         seek_sec: f64,
         stop_token: &CancellationToken,
     ) -> Result<Self, AudioError> {
+        // Détecter si c'est un flux continu (radio, stream) basé sur l'URL
+        let is_continuous = detect_continuous_stream(url);
+
         let response = tokio::select! {
             _ = stop_token.cancelled() => {
                 return Err(AudioError::IoError("Cancelled before HTTP connect".into()));
@@ -244,11 +254,89 @@ impl UriSource {
         let frames_to_skip = (seek_sec * stream_info.sample_rate as f64) as u64;
 
         info!(
-            "UriSource: opened HTTP {} Hz {} ch {} bps",
-            stream_info.sample_rate, stream_info.channels, stream_info.bits_per_sample,
+            "UriSource: opened HTTP {} Hz {} ch {} bps continuous={}",
+            stream_info.sample_rate, stream_info.channels, stream_info.bits_per_sample, is_continuous,
         );
 
         let (_, reader) = stream.into_reader();
-        Ok(Self { reader: Box::new(reader), stream_info, frames_to_skip })
+        Ok(Self { 
+            reader: Box::new(reader), 
+            stream_info, 
+            frames_to_skip,
+            is_continuous,
+        })
     }
+}
+
+/// Détecte si une URL correspond à un flux continu (radio, stream) sans durée définie.
+///
+/// Cette fonction:
+/// 1. Vérifie les patterns d'URL connus (stream, live, radio, etc.)
+/// 2. Fait une requête HTTP HEAD pour vérifier les headers (Content-Length, ICY, etc.)
+fn detect_continuous_stream(url: &str) -> bool {
+    let url_lower = url.to_lowercase();
+    
+    // 1. Quick check sur les patterns d'URL très explicites
+    // Ces patterns indiquent clairement un stream live
+    if url_lower.contains("/live")
+        || url_lower.contains("/radiolar")
+        || url_lower.contains(".pls")
+        || url_lower.contains(".m3u")
+        || url_lower.contains("icy")
+    {
+        return true;
+    }
+    
+    // 2. Vérification HTTP headers (le plus fiable)
+    if url.starts_with("http://") || url.starts_with("https://") {
+        if let Ok(is_stream) = check_http_stream_headers(url) {
+            if is_stream {
+                return true;
+            }
+        }
+    }
+    
+    false
+}
+
+/// Vérifie les headers HTTP pour déterminer si c'est un stream
+fn check_http_stream_headers(url: &str) -> Result<bool, String> {
+    use std::time::Duration;
+    
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(3))
+        .build();
+    
+    let response = agent
+        .head(url)
+        .call()
+        .map_err(|e| format!("HTTP HEAD failed: {}", e))?;
+    
+    // Headers ICY (Icecast/Shoutcast) = toujours un stream
+    if response.header("icy-name").is_some()
+        || response.header("icy-metaint").is_some()
+    {
+        return Ok(true);
+    }
+    
+    // Pas de Content-Length = stream potentiel
+    let has_content_length = response.header("content-length").is_some();
+    
+    // Transfer-Encoding: chunked = stream potentiel
+    let is_chunked = response
+        .header("transfer-encoding")
+        .map(|v| v.to_lowercase().contains("chunked"))
+        .unwrap_or(false);
+    
+    // Decision: pas de Content-Length + (chunked ou content-type streaming)
+    let content_type = response
+        .header("content-type")
+        .unwrap_or("")
+        .to_lowercase();
+    
+    let is_streaming_mime = content_type.contains("audio/mpeg")
+        || content_type.contains("audio/aac")
+        || content_type.contains("application/ogg");
+    
+    Ok(!has_content_length && (is_streaming_mime || is_chunked))
 }
