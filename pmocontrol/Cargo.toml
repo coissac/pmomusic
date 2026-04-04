@@ -30,6 +30,7 @@ rand = { workspace = true }
 
 # pmoserver extension support (optional)
 pmoserver = { path = "../pmoserver", optional = true }
+pmocovers = { path = "../pmocovers", optional = true }
 utoipa = { version = "5.4.0", optional = true }
 axum = { version = "0.8.4", optional = true }
 tokio = { workspace = true, features = ["sync", "rt"], optional = true }
@@ -47,4 +48,4 @@ percent-encoding = "2.3"
 [features]
 default = []
 # Active l'API REST pmoserver
-pmoserver = ["dep:pmoserver", "dep:utoipa", "dep:axum", "dep:tokio", "dep:tokio-util", "dep:async-trait", "dep:tokio-stream", "dep:async-stream", "dep:url", "dep:urlencoding"]
+pmoserver = ["dep:pmoserver", "dep:pmocovers", "dep:utoipa", "dep:axum", "dep:tokio", "dep:tokio-util", "dep:async-trait", "dep:tokio-stream", "dep:async-stream", "dep:url", "dep:urlencoding"]

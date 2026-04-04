@@ -109,9 +109,9 @@ pub struct CoverProxyResponse {
 
 /// GET /covers/proxy?url=<encoded_url>
 /// Proxy transparent qui :
-/// 1. Détecte si l'URL est une URL LAN externe (pas déjà locale)
-/// 2. Ajoute à cache via add_from_url (déduplication automatique)
-/// 3. Retourne l'URL locale du cache
+/// 1. Ajoute l'URL au cache (add_from_url gère déduplication)
+/// 2. Retourne l'URL locale du cache
+/// Note: Si l'URL est déjà une cover locale de notre instance, on retourne directement l'URL
 #[cfg(feature = "pmoserver")]
 pub async fn cover_proxy_handler(
     Query(params): Query<CoverProxyParams>,
@@ -120,31 +120,19 @@ pub async fn cover_proxy_handler(
 ) -> impl IntoResponse {
     let external_url = &params.url;
 
-    // Ignorer si déjà une URL de NOTRE instance pmomusic (ne pas se cacher soi-même)
+    // Si c'est déjà une URL locale de NOTRE instance pmomusic, la retourner directement
     if is_local_cover_url(external_url, &base_url) {
         return (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "INVALID_REQUEST".to_string(),
-                message: "URL is already a local cover from this instance".to_string(),
+            StatusCode::OK,
+            Json(CoverProxyResponse {
+                cached_url: external_url.clone(),
+                pk: String::new(),
             }),
         )
             .into_response();
     }
 
-    // Vérifier si c'est une URL LAN à proxyfier
-    if !should_proxy_url(external_url) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "INVALID_REQUEST".to_string(),
-                message: "URL is not a LAN URL requiring proxy".to_string(),
-            }),
-        )
-            .into_response();
-    }
-
-    // Ajouter au cache (add_from_url gère la déduplication)
+    // Ajouter au cache (add_from_url gère la déduplication et le download)
     match cache.add_from_url(external_url, Some("external-covers")).await {
         Ok(pk) => {
             // Retourner l'URL locale

@@ -21,6 +21,8 @@ use crate::openapi::{
 use crate::queue::PlaybackItem;
 #[cfg(feature = "pmoserver")]
 use crate::{DeviceId, DeviceIdentity, DeviceOnline};
+#[cfg(feature = "pmoserver")]
+use pmocovers;
 
 #[cfg(feature = "pmoserver")]
 use async_trait::async_trait;
@@ -170,13 +172,14 @@ async fn get_renderer_state(
 async fn get_renderer_full_snapshot(
     State(state): State<ControlPointState>,
     Path(renderer_id): Path<String>,
+    headers: HeaderMap,
 ) -> Result<Json<FullRendererSnapshot>, (StatusCode, Json<ErrorResponse>)> {
     let rid = DeviceId(renderer_id.clone());
 
     // Use spawn_blocking because renderer_full_snapshot does sync UPnP calls
     let control_point = state.control_point.clone();
     let rid_clone = rid.clone();
-    let snapshot =
+    let mut snapshot =
         tokio::task::spawn_blocking(move || control_point.renderer_full_snapshot(&rid_clone))
             .await
             .map_err(|e| {
@@ -188,6 +191,19 @@ async fn get_renderer_full_snapshot(
                 )
             })?
             .map_err(|err| map_snapshot_error(renderer_id, err))?;
+
+    // Get base_url from request headers for transforming cover URLs
+    let base_url_str = pmoserver::get_base_url_from_request(&headers);
+    let base_url = pmoserver::BaseUrl(base_url_str);
+
+    // Transform cover URLs in current_track
+    if let Some(ref mut current_track) = snapshot.state.current_track {
+        if let Some(ref album_art) = current_track.album_art_uri {
+            if let Some(transformed) = transform_cover_url(Some(album_art), &base_url).await {
+                current_track.album_art_uri = Some(transformed);
+            }
+        }
+    }
 
     Ok(Json(snapshot))
 }
@@ -213,12 +229,28 @@ async fn get_renderer_full_snapshot(
 async fn get_renderer_queue(
     State(state): State<ControlPointState>,
     Path(renderer_id): Path<String>,
+    headers: HeaderMap,
 ) -> Result<Json<QueueSnapshot>, (StatusCode, Json<ErrorResponse>)> {
     let rid = DeviceId(renderer_id.clone());
-    let snapshot = state
+    let mut snapshot = state
         .control_point
         .renderer_full_snapshot(&rid)
         .map_err(|err| map_snapshot_error(renderer_id, err))?;
+
+    // Get base_url from request headers
+    let base_url_str = pmoserver::get_base_url_from_request(&headers);
+    let base_url = pmoserver::BaseUrl(base_url_str);
+
+    // Transform cover URLs in all queue items
+    for item in &mut snapshot.queue.items {
+        if let Some(ref mut metadata) = item.metadata {
+            if let Some(ref album_art) = metadata.album_art_uri {
+                if let Some(transformed) = transform_cover_url(Some(album_art), &base_url).await {
+                    metadata.album_art_uri = Some(transformed);
+                }
+            }
+        }
+    }
 
     Ok(Json(snapshot.queue))
 }
@@ -2083,7 +2115,8 @@ async fn browse_container(
     Query(params): Query<BrowseParams>,
     headers: HeaderMap,
 ) -> Result<Json<BrowseResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let base_url = pmoserver::get_base_url_from_request(&headers);
+    let base_url_str = pmoserver::get_base_url_from_request(&headers);
+    let base_url = pmoserver::BaseUrl(base_url_str);
     let sid = DeviceId(server_id.clone());
 
     let server = state.control_point.media_server(&sid).ok_or_else(|| {
@@ -2162,9 +2195,11 @@ async fn browse_container(
             )
         })?;
 
-    let container_entries: Vec<ContainerEntry> = page.entries
-        .into_iter()
-        .map(|e| ContainerEntry {
+    // Transform cover URLs
+    let mut container_entries = Vec::with_capacity(page.entries.len());
+    for e in page.entries {
+        let album_art_uri = transform_cover_url(e.album_art_uri.as_deref(), &base_url).await;
+        container_entries.push(ContainerEntry {
             id: e.id,
             title: e.title,
             class: e.class,
@@ -2172,9 +2207,9 @@ async fn browse_container(
             child_count: None,
             artist: e.artist,
             album: e.album,
-            album_art_uri: transform_cover_url(e.album_art_uri.as_deref(), &base_url),
-        })
-        .collect();
+            album_art_uri,
+        });
+    }
 
     Ok(Json(BrowseResponse {
         container_id,
@@ -2206,39 +2241,32 @@ fn map_snapshot_error(
     )
 }
 
-/// Transforme une URL de cover externe LAN en URL de proxy local
-fn transform_cover_url(url: Option<&str>, base_url: &str) -> Option<String> {
+/// Transforme une URL de cover pour qu'elle soit accessible depuis le client
+///
+/// Si l'URL est une route locale de notre cache (/covers/...), on la transforme en URL absolue.
+/// Sinon, on utilise pmocovers::proxy_cover_url() pour mettre en cache et retourner notre URL.
+/// C'est le même mécanisme que PMO Cache utilise déjà pour Qobuz.
+async fn transform_cover_url(url: Option<&str>, base_url: &pmoserver::BaseUrl) -> Option<String> {
     let url = url?;
     
-    // Si c'est déjà une URL locale de notre instance, ne pas transformer
-    if url.starts_with(base_url) {
+    // Si c'est déjà une route locale de notre cache, la transformer en URL absolue
+    if url.starts_with("/covers/") {
+        return Some(base_url.url_for(url));
+    }
+    
+    // Si c'est une URL de notre instance, la retourner directement
+    if url.starts_with(&base_url.0) {
         return Some(url.to_string());
     }
     
-    // Vérifier si c'est une URL LAN externe à proxyfier
-    if should_proxy_cover_url(url) {
-        let encoded = urlencoding::encode(url);
-        return Some(format!("/covers/proxy?url={}", encoded));
-    }
-    
-    //URL publique ou autre - laisser telle quelle
-    Some(url.to_string())
-}
-
-/// Vérifie si l'URL doit être proxyfiée (URL LAN externe)
-fn should_proxy_cover_url(url: &str) -> bool {
-    if let Ok(parsed) = url::Url::parse(url) {
-        if let Some(host) = parsed.host_str() {
-            if let Ok(ip) = host.parse::<std::net::IpAddr>() {
-                return match ip {
-                    std::net::IpAddr::V4(ipv4) => ipv4.is_private() || ipv4.is_loopback(),
-                    std::net::IpAddr::V6(ipv6) => ipv6.is_loopback(),
-                };
-            }
-            return host.ends_with(".local") || host == "localhost";
+    // Pour les autres URLs, utiliser le mechanisme de proxy standard (comme Qobuz)
+    match pmocovers::proxy_cover_url(url, base_url).await {
+        Ok(local_url) => Some(local_url),
+        Err(e) => {
+            tracing::warn!("Failed to proxy cover URL {}: {}", url, e);
+            Some(url.to_string())
         }
     }
-    false
 }
 
 /// Helper to fetch playback items from a media server object (container or item).

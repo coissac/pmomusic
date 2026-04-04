@@ -3996,6 +3996,7 @@ dependencies = [
  "futures-util",
  "mdns",
  "percent-encoding",
+ "pmocovers",
  "pmodidl",
  "pmoserver",
  "pmoupnp",
