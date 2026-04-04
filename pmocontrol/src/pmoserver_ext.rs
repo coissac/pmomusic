@@ -196,11 +196,20 @@ async fn get_renderer_full_snapshot(
     let base_url_str = pmoserver::get_base_url_from_request(&headers);
     let base_url = pmoserver::BaseUrl(base_url_str);
 
-    // Transform cover URLs in current_track using async version
+    // Transform cover URLs in current_track
     if let Some(ref mut current_track) = snapshot.state.current_track {
         if let Some(ref album_art) = current_track.album_art_uri {
             if let Some(transformed) = transform_cover_url(Some(album_art), &base_url).await {
                 current_track.album_art_uri = Some(transformed);
+            }
+        }
+    }
+
+    // Transform cover URLs in queue items
+    for item in &mut snapshot.queue.items {
+        if let Some(ref album_art) = item.album_art_uri {
+            if let Some(transformed) = transform_cover_url(Some(album_art), &base_url).await {
+                item.album_art_uri = Some(transformed);
             }
         }
     }
@@ -239,7 +248,7 @@ async fn get_renderer_queue(
 
     // Get base_url from request headers
     let base_url_str = pmoserver::get_base_url_from_request(&headers);
-    let base_url = pmoserver::BaseUrl(base_url_str);
+    let base_url = pmoserver::BaseUrl(base_url_str.clone());
 
     // Transform cover URLs in all queue items using async version
     for item in &mut snapshot.queue.items {
@@ -2249,17 +2258,23 @@ async fn transform_cover_url(url: Option<&str>, base_url: &pmoserver::BaseUrl) -
     
     // Si c'est déjà une route locale de notre cache, la transformer en URL absolue
     if url.starts_with("/covers/") {
+        debug!(url = %url, "Already local cover route");
         return Some(base_url.url_for(url));
     }
     
     // Si c'est une URL de notre instance, la retourner directement
     if url.starts_with(&base_url.0) {
+        debug!(url = %url, "Already our instance URL");
         return Some(url.to_string());
     }
     
     // Pour les autres URLs, utiliser le mechanisme de proxy standard (comme Qobuz)
+    debug!(url = %url, "Proxyfying cover URL via pmocovers");
     match pmocovers::proxy_cover_url(url, base_url).await {
-        Ok(local_url) => Some(local_url),
+        Ok(local_url) => {
+            debug!(result = %local_url, "Proxified successfully");
+            Some(local_url)
+        },
         Err(e) => {
             tracing::warn!("Failed to proxy cover URL {}: {}", url, e);
             Some(url.to_string())
