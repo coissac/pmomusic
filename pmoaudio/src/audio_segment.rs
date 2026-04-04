@@ -3,7 +3,7 @@ use tokio::sync::RwLock;
 
 use pmometadata::TrackMetadata;
 
-use crate::{gain_db_from_linear, AudioChunk, AudioChunkData, BitDepth, SyncMarker};
+use crate::{gain_db_from_linear, AudioChunk, AudioChunkData, BitDepth, StreamType, SyncMarker};
 
 pub enum _AudioSegment {
     Chunk(Arc<AudioChunk>),
@@ -160,9 +160,11 @@ impl AudioSegment {
         order: u64,
         timestamp_sec: f64,
         metadata: Arc<RwLock<dyn TrackMetadata>>,
+        stream_type: StreamType,
     ) -> Arc<Self> {
         let marker = Arc::new(SyncMarker::TrackBoundary {
             metadata: Arc::clone(&metadata),
+            stream_type,
         });
         Arc::new(Self {
             order,
@@ -303,7 +305,18 @@ impl AudioSegment {
     pub fn as_track_metadata(&self) -> Option<&Arc<RwLock<dyn TrackMetadata>>> {
         match &self.segment {
             _AudioSegment::Sync(marker) => match &**marker {
-                SyncMarker::TrackBoundary { metadata } => Some(metadata),
+                SyncMarker::TrackBoundary { metadata, .. } => Some(metadata),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Récupère le stream_type si c'est un TrackBoundary
+    pub fn stream_type(&self) -> Option<StreamType> {
+        match &self.segment {
+            _AudioSegment::Sync(marker) => match &**marker {
+                SyncMarker::TrackBoundary { stream_type, .. } => Some(*stream_type),
                 _ => None,
             },
             _ => None,

@@ -35,6 +35,7 @@ use pmoaudio::{
     AudioSegment,
     nodes::AudioError,
     pipeline::{AudioPipelineNode, Node, NodeLogic, send_to_children},
+    StreamType,
 };
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
@@ -505,7 +506,7 @@ async fn send_track_boundary(
         let _ = meta.set_title(Some(u.to_string())).await;
     }
     let meta_arc = Arc::new(tokio::sync::RwLock::new(meta));
-    let boundary = AudioSegment::new_track_boundary(0, timestamp_sec, meta_arc);
+    let boundary = AudioSegment::new_track_boundary(0, timestamp_sec, meta_arc, StreamType::Finite);
 
     send_to_children("PlayerSource", output, boundary).await
 }

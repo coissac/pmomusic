@@ -2,7 +2,7 @@ use crate::{
     nodes::{AudioError, TypedAudioNode, DEFAULT_CHANNEL_SIZE},
     pipeline::{Node, NodeLogic},
     type_constraints::TypeRequirement,
-    AudioChunk, AudioPipelineNode, AudioSegment, SyncMarker,
+    AudioChunk, AudioPipelineNode, AudioSegment, SyncMarker, StreamType,
 };
 use pmoflac::{encode_flac_stream, EncoderOptions, PcmFormat};
 use std::{
@@ -822,6 +822,7 @@ mod tests {
                 0,
                 0.0,
                 std::sync::Arc::new(tokio::sync::RwLock::new(metadata)),
+                crate::StreamType::Finite,
             );
             tx.send(track_boundary).await.unwrap();
 

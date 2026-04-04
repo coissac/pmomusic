@@ -265,7 +265,7 @@ impl NodeLogic for StreamingOggFlacSinkLogic {
 
                                 _AudioSegment::Sync(marker) => {
                                     match marker.as_ref() {
-                                        SyncMarker::TrackBoundary { metadata } => {
+                                        SyncMarker::TrackBoundary { metadata, .. } => {
                                             // Inject per-track metadata and duration into the next FLAC header.
                                             if let Err(e) =
                                                 self.ctx.prepare_encoder_options_for_track(metadata).await

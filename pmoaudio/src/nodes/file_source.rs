@@ -2,7 +2,7 @@ use crate::{
     nodes::{AudioError, TypedAudioNode, DEFAULT_CHUNK_DURATION_MS},
     pipeline::{send_to_children, AudioPipelineNode, Node, NodeLogic},
     type_constraints::TypeRequirement,
-    AudioChunk, AudioChunkData, AudioSegment, I24,
+    AudioChunk, AudioChunkData, AudioSegment, I24, StreamType,
 };
 use pmoflac::{decode_audio_stream, AudioFileMetadata, StreamInfo};
 use pmometadata::{MemoryTrackMetadata, TrackMetadata};
@@ -98,6 +98,7 @@ impl NodeLogic for FileSourceLogic {
                 0,
                 0.0,
                 Arc::new(tokio::sync::RwLock::new(metadata)),
+                StreamType::Finite,
             );
             send_to_children(std::any::type_name::<Self>(), &output, track_boundary).await?;
         }

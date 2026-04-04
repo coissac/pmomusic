@@ -307,7 +307,7 @@ impl NodeLogic for StreamingFlacSinkLogic {
 
                                 _AudioSegment::Sync(marker) => {
                                     match marker.as_ref() {
-                                        SyncMarker::TrackBoundary { metadata } => {
+                                        SyncMarker::TrackBoundary { metadata, .. } => {
                                             // Prepare encoder options (metadata + duration) for the upcoming track.
                                             if let Err(e) =
                                                 self.ctx.prepare_encoder_options_for_track(metadata).await

@@ -88,8 +88,17 @@ impl IcyClientStream {
 
         // Add cover URL if we have a cover_pk
         if let Some(pk) = &meta.cover_pk {
+            #[cfg(feature = "playlist")]
             let cover_url = pmocache::covers_absolute_url_for_upnp(pk, None);
-            metadata_str.push_str(&format!("StreamUrl='{}';", cover_url));
+            #[cfg(feature = "playlist")]
+            {
+                metadata_str.push_str(&format!("StreamUrl='{}';", cover_url));
+            }
+            #[cfg(not(feature = "playlist"))]
+            {
+                // When playlist feature is not enabled, use relative URL
+                metadata_str.push_str(&format!("StreamUrl='/covers/image/{}/256';", pk));
+            }
         } else if let Some(url) = &meta.cover_url {
             // Fallback to external cover URL if no local pk
             metadata_str.push_str(&format!("StreamUrl='{}';", url));
