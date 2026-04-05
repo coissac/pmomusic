@@ -31,7 +31,7 @@ pub use pmoaudio_ext::PlayerCommand as PipelineControl;
 pub struct PipelineHandle {
     pub player: PlayerHandle,
     pub stop_token: CancellationToken,
-    /// Volume courant (géré localement, pas dans PlayerSource)
+    #[allow(dead_code)]
     state: SharedState,
 }
 

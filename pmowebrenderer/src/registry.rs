@@ -3,11 +3,6 @@
 //! Remplace `SessionManager` et `websocket.rs`. La session est maintenant liée
 //! au flux FLAC HTTP, pas à une connexion WebSocket.
 
-use axum::{
-    extract::{Path, State},
-    http::StatusCode,
-    response::IntoResponse,
-};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;

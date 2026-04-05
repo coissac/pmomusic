@@ -46,37 +46,6 @@ pub enum FactoryError {
     VariableError(String),
 }
 
-macro_rules! add_action_arg {
-    ($action:ident, $name:expr, $var:ident, $direction:ident) => {{
-        $action
-            .add_argument(Arc::new(Argument::new_$direction(
-                $name.to_string(),
-                Arc::clone(&$var),
-            )))
-            .map_err(|e| FactoryError::ActionError(e.to_string()))
-    }};
-    ($action:ident, $name:expr, $var:ident, in) => {
-        add_action_arg!($action, $name, $var, in)
-    };
-    ($action:ident, $name:expr, $var:ident, out) => {
-        add_action_arg!($action, $name, $var, out)
-    };
-}
-
-macro_rules! add_action {
-    ($svc:ident, $action:ident) => {{
-        $svc.add_action(Arc::new($action))
-            .map_err(|e| FactoryError::ActionError(e.to_string()))
-    }};
-}
-
-macro_rules! add_var {
-    ($svc:ident, $var:ident) => {{
-        $svc.add_variable(Arc::clone(&$var))
-            .map_err(|e| FactoryError::VariableError(e.to_string()))
-    }};
-}
-
 /// Extrait un nom de navigateur court depuis un User-Agent complet.
 fn extract_browser_name(ua: &str) -> &str {
     if ua.contains("Edg/") || ua.contains("EdgA/") {

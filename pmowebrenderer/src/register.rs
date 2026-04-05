@@ -67,7 +67,7 @@ pub async fn register_handler(
 
 #[derive(Debug, Deserialize)]
 pub struct PositionUpdateRequest {
-    pub position_sec: f64,
+    pub _position_sec: f64,
     pub duration_sec: Option<f64>,
 }
 
@@ -126,18 +126,12 @@ pub async fn pause_handler(
 // ─── Rapports du player ─────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct PlayerStateReport {
     pub position_sec: Option<f64>,
     pub duration_sec: Option<f64>,
     pub state: Option<String>,
     pub ready_state: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct PlayerReport {
-    pub instance_id: String,
-    #[serde(flatten)]
-    pub report: PlayerStateReport,
 }
 
 /// POST /api/webrenderer/{id}/report - recoit rapports position/state du player

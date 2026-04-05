@@ -9,7 +9,6 @@ use async_trait::async_trait;
 #[cfg(feature = "pmoserver")]
 use axum::{
     Router,
-    extract::{Path, State},
     routing::{delete, get, post},
 };
 
