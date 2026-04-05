@@ -5,8 +5,8 @@
 
 use pmodidl::DIDLLite;
 use pmodidl::ToXmlElement;
-use pmoupnp::{action_handler, get, set};
 use pmoupnp::actions::{get_value, ActionHandler};
+use pmoupnp::{action_handler, get, set};
 
 use crate::messages::PlaybackState;
 use crate::pipeline::{upnp_time_to_seconds, PipelineControl, PipelineHandle};
@@ -14,66 +14,83 @@ use crate::state::SharedState;
 
 // ─── AVTransport : commandes de transport ─────────────────────────────────────
 
-pub fn play_handler(pipeline: PipelineHandle, state: SharedState, instance_id: String) -> ActionHandler {
-    action_handler!(captures(pipeline, state, instance_id) |data| {
-        tracing::info!("[WebRenderer] UPnP Play action invoked");
-        let has_uri = {
-            let mut s = state.write();
-            let has = s.current_uri.is_some();
-            s.playback_state = PlaybackState::Transitioning;
-            if has {
-                s.player_command = Some(serde_json::json!({
-                    "type": "stream",
-                    "url": format!("/api/webrenderer/{}/stream", instance_id)
-                }));
+pub fn play_handler(
+    pipeline: PipelineHandle,
+    state: SharedState,
+    instance_id: String,
+) -> ActionHandler {
+    action_handler!(
+        captures(pipeline, state, instance_id) | data | {
+            tracing::info!("[WebRenderer] UPnP Play action invoked");
+            let has_uri = state.read().current_uri.is_some();
+            if !has_uri {
+                tracing::warn!("[WebRenderer] UPnP Play ignored: no URI loaded");
+                return Ok(data);
+            }
+            {
+                let mut s = state.write();
+                s.playback_state = PlaybackState::Transitioning;
+                s.push_command(crate::adapter::DeviceCommand::Stream {
+                    url: format!("/api/webrenderer/{}/stream", instance_id),
+                });
                 tracing::info!("UPnP Play: stored stream command for frontend polling");
             }
-            has
-        };
-        if has_uri {
+            pipeline.flac_handle.resume();
             pipeline.send(PipelineControl::Play).await;
+            Ok(data)
         }
-        Ok(data)
-    })
+    )
 }
 
 pub fn stop_handler(pipeline: PipelineHandle, state: SharedState) -> ActionHandler {
-    action_handler!(captures(pipeline, state) |data| {
-        pipeline.send(PipelineControl::Stop).await;
-        state.write().playback_state = PlaybackState::Stopped;
-        Ok(data)
-    })
+    action_handler!(
+        captures(pipeline, state) | data | {
+            pipeline.send(PipelineControl::Stop).await;
+            pipeline.flac_handle.pause();
+            state.write().playback_state = PlaybackState::Stopped;
+            Ok(data)
+        }
+    )
 }
 
 pub fn pause_handler(pipeline: PipelineHandle, state: SharedState) -> ActionHandler {
-    action_handler!(captures(pipeline, state) |data| {
-        pipeline.send(PipelineControl::Pause).await;
-        state.write().playback_state = PlaybackState::Paused;
-        Ok(data)
-    })
+    action_handler!(
+        captures(pipeline, state) | data | {
+            pipeline.send(PipelineControl::Pause).await;
+            pipeline.flac_handle.pause();
+            state.write().playback_state = PlaybackState::Paused;
+            Ok(data)
+        }
+    )
 }
 
 pub fn next_handler(pipeline: PipelineHandle) -> ActionHandler {
-    action_handler!(captures(pipeline) |data| {
-        pipeline.send(PipelineControl::Play).await;
-        Ok(data)
-    })
+    action_handler!(
+        captures(pipeline) | data | {
+            pipeline.send(PipelineControl::Play).await;
+            Ok(data)
+        }
+    )
 }
 
 pub fn previous_handler(pipeline: PipelineHandle) -> ActionHandler {
-    action_handler!(captures(pipeline) |data| {
-        pipeline.send(PipelineControl::Play).await;
-        Ok(data)
-    })
+    action_handler!(
+        captures(pipeline) | data | {
+            pipeline.send(PipelineControl::Play).await;
+            Ok(data)
+        }
+    )
 }
 
 pub fn seek_handler(pipeline: PipelineHandle) -> ActionHandler {
-    action_handler!(captures(pipeline) |data| {
-        let target: String = get!(&data, "Target", String);
-        let pos_sec = upnp_time_to_seconds(&target);
-        pipeline.send(PipelineControl::Seek(pos_sec)).await;
-        Ok(data)
-    })
+    action_handler!(
+        captures(pipeline) | data | {
+            let target: String = get!(&data, "Target", String);
+            let pos_sec = upnp_time_to_seconds(&target);
+            pipeline.send(PipelineControl::Seek(pos_sec)).await;
+            Ok(data)
+        }
+    )
 }
 
 // ─── AVTransport : chargement de média ────────────────────────────────────────
@@ -164,7 +181,11 @@ pub fn get_media_info_handler(state: SharedState) -> ActionHandler {
 pub fn get_protocol_info_handler() -> ActionHandler {
     action_handler!(|mut data| {
         set!(&mut data, "Source", String::new());
-        set!(&mut data, "Sink", "http-get:*:audio/flac:*,http-get:*:audio/x-flac:*".to_string());
+        set!(
+            &mut data,
+            "Sink",
+            "http-get:*:audio/flac:*,http-get:*:audio/x-flac:*".to_string()
+        );
         Ok(data)
     })
 }

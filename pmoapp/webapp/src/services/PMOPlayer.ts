@@ -36,6 +36,7 @@ export interface TrackInfo {
 export class PMOPlayer {
     private audio: HTMLAudioElement;
     private instanceId: string;
+    private ac: AudioContext | null = null;
 
     private state: PlayerState = 'stopped';
     private positionInterval: number | null = null;
@@ -44,6 +45,9 @@ export class PMOPlayer {
     private debug: boolean = false;
     private pendingPlay = false;
     private unlockListener: (() => void) | null = null;
+    private reconnectAttempts = 0;
+    private readonly MAX_RECONNECT_ATTEMPTS = 5;
+    private reconnectTimeout: number | null = null;
 
     constructor(instanceId: string) {
         this.instanceId = instanceId;
@@ -61,6 +65,33 @@ export class PMOPlayer {
 
         this.setupAudioListeners();
         this.startCommandPolling();
+    }
+
+    private ensureAudioContext(): AudioContext {
+        if (!this.ac) {
+            this.ac = new AudioContext();
+            const source = this.ac.createMediaElementSource(this.audio);
+            source.connect(this.ac.destination);
+        }
+        return this.ac;
+    }
+
+    private scheduleReconnect() {
+        if (this.reconnectAttempts >= this.MAX_RECONNECT_ATTEMPTS) {
+            this.log('max reconnect attempts reached, giving up');
+            this.setState('error');
+            return;
+        }
+        const delayMs = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 16000);
+        this.reconnectAttempts++;
+        this.log(`reconnect attempt ${this.reconnectAttempts} in ${delayMs}ms`);
+        this.reconnectTimeout = window.setTimeout(() => {
+            const url = this.audio.getAttribute('data-stream-url');
+            if (url) {
+                this.stream(url);
+                this.play();
+            }
+        }, delayMs);
     }
 
     private log(...args: unknown[]) {
@@ -120,11 +151,18 @@ export class PMOPlayer {
         });
 
         this.audio.addEventListener('error', () => {
-            // Ignorer l'erreur produite par flush() (removeAttribute('src') + load())
             if (!this.audio.getAttribute('src')) return;
-            this.log('error event', this.audio.error);
-            this.setState('error');
-            this.listeners.error?.(this.audio.error?.message || 'unknown error');
+            const code = this.audio.error?.code;
+            const isNetworkError = code === MediaError.MEDIA_ERR_NETWORK
+                                || code === MediaError.MEDIA_ERR_DECODE;
+            if (isNetworkError && this.state !== 'stopped') {
+                this.log('network error, scheduling reconnect');
+                this.scheduleReconnect();
+            } else {
+                this.log('error event', this.audio.error);
+                this.setState('error');
+                this.listeners.error?.(this.audio.error?.message || 'unknown error');
+            }
         });
 
         this.audio.addEventListener('waiting', () => {
@@ -187,8 +225,9 @@ export class PMOPlayer {
     // ─── Commands from backend ─────────────────────────────────────────────
 
     stream(url: string) {
-        // URL stored in audio.src directly
         this.log('stream:', url);
+        this.audio.setAttribute('data-stream-url', url);
+        this.reconnectAttempts = 0;
         this.audio.src = url;
         this.audio.load();
     }
@@ -200,6 +239,10 @@ export class PMOPlayer {
 
     play() {
         this.log('play()');
+        const ac = this.ensureAudioContext();
+        if (ac.state === 'suspended') {
+            ac.resume().catch(err => this.log('AudioContext resume error', err));
+        }
         this.audio.play().catch(err => {
             if ((err as DOMException).name === 'NotAllowedError') {
                 this.log('autoplay blocked, will retry on user interaction');
@@ -240,6 +283,7 @@ export class PMOPlayer {
         this.audio.pause();
         this.audio.removeAttribute('src');
         this.audio.load();
+        this.ac?.suspend();
         this.listeners.flush?.();
     }
 
@@ -360,6 +404,12 @@ export class PMOPlayer {
             document.removeEventListener('click', this.unlockListener);
             this.unlockListener = null;
         }
+        if (this.reconnectTimeout !== null) {
+            clearTimeout(this.reconnectTimeout);
+            this.reconnectTimeout = null;
+        }
+        this.ac?.close();
+        this.ac = null;
         // Rapport final garanti via sendBeacon (fonctionne pendant beforeunload)
         navigator.sendBeacon(
             `/api/webrenderer/${this.instanceId}/report`,

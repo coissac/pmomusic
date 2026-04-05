@@ -151,6 +151,22 @@ impl RendererRegistry {
             .map(|i| i.pipeline.clone())
     }
 
+    /// Retourne le SharedState par instance_id
+    pub fn get_state(&self, instance_id: &str) -> Option<SharedState> {
+        self.instances
+            .read()
+            .get(instance_id)
+            .map(|i| i.state.clone())
+    }
+
+    /// Retourne le SharedState et udn par instance_id
+    pub fn get_state_and_udn(&self, instance_id: &str) -> Option<(SharedState, String)> {
+        self.instances
+            .read()
+            .get(instance_id)
+            .map(|i| (i.state.clone(), i.udn.clone()))
+    }
+
     /// Retourne le SharedState par UDN
     pub fn get_state_by_udn(&self, udn: &str) -> Option<SharedState> {
         self.by_udn
@@ -233,10 +249,10 @@ impl RendererRegistry {
         if let Some(instance) = instances.get(instance_id) {
             let mut state = instance.state.write();
             if let Some(pos) = report.position_sec {
-                state.position = Some(pos.to_string());
+                state.position = Some(crate::pipeline::seconds_to_upnp_time(pos));
             }
             if let Some(dur) = report.duration_sec {
-                state.duration = Some(dur.to_string());
+                state.duration = Some(crate::pipeline::seconds_to_upnp_time(dur));
             }
             if let Some(s) = &report.state {
                 state.playback_state = match s.as_str() {
@@ -255,16 +271,17 @@ impl RendererRegistry {
         &self,
         instance_id: &str,
     ) -> Option<serde_json::Value> {
-        // Extraire le Arc<SharedState> puis relâcher le read lock du HashMap
-        // avant d'acquérir le write lock sur state (évite double-lock imbriqué).
         let state = self.instances.read().get(instance_id).map(|i| i.state.clone())?;
-        state.write().player_command.take()
+        let cmd = state.write().pop_command()?;
+        serde_json::to_value(cmd).ok()
     }
 
     /// Stocke une commande pour le player (consommée via GET /command)
     pub fn set_player_command(&self, instance_id: &str, command: serde_json::Value) {
         if let Some(instance) = self.instances.read().get(instance_id) {
-            instance.state.write().player_command = Some(command);
+            if let Ok(cmd) = serde_json::from_value(command) {
+                instance.state.write().push_command(cmd);
+            }
         }
     }
     

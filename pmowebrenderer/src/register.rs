@@ -12,6 +12,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+use crate::messages::PlaybackState;
 use crate::registry::RendererRegistry;
 
 #[derive(Debug, Deserialize)]
@@ -190,4 +191,90 @@ pub async fn play_handler(
     registry.send_play_command(&instance_id).await;
     
     (StatusCode::OK, "OK").into_response()
+}
+
+// ─── Metadata endpoints ─────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct NowPlayingResponse {
+    pub state: String,
+    pub current_uri: Option<String>,
+    pub current_metadata: Option<String>,
+    pub position: Option<String>,
+    pub duration: Option<String>,
+    pub volume: u16,
+    pub mute: bool,
+}
+
+#[axum::debug_handler]
+pub async fn nowplaying_handler(
+    State(registry): State<Arc<RendererRegistry>>,
+    Path(instance_id): Path<String>,
+) -> impl IntoResponse {
+    let state = match registry.get_state(&instance_id) {
+        Some(s) => s,
+        None => return StatusCode::NOT_FOUND.into_response(),
+    };
+    let s = state.read();
+    let response = NowPlayingResponse {
+        state: match s.playback_state {
+            PlaybackState::Playing => "PLAYING",
+            PlaybackState::Paused => "PAUSED",
+            PlaybackState::Stopped => "STOPPED",
+            PlaybackState::Transitioning => "TRANSITIONING",
+        }.to_string(),
+        current_uri: s.current_uri.clone(),
+        current_metadata: s.current_metadata.clone(),
+        position: s.position.clone(),
+        duration: s.duration.clone(),
+        volume: s.volume,
+        mute: s.mute,
+    };
+    (StatusCode::OK, Json(response)).into_response()
+}
+
+#[derive(Debug, Serialize)]
+pub struct RendererStateResponse {
+    pub instance_id: String,
+    pub udn: String,
+    pub playback_state: String,
+    pub current_uri: Option<String>,
+    pub current_metadata: Option<String>,
+    pub next_uri: Option<String>,
+    pub next_metadata: Option<String>,
+    pub position: Option<String>,
+    pub duration: Option<String>,
+    pub volume: u16,
+    pub mute: bool,
+}
+
+#[axum::debug_handler]
+pub async fn state_handler(
+    State(registry): State<Arc<RendererRegistry>>,
+    Path(instance_id): Path<String>,
+) -> impl IntoResponse {
+    let (state, udn) = match registry.get_state_and_udn(&instance_id) {
+        Some((s, u)) => (s, u),
+        None => return StatusCode::NOT_FOUND.into_response(),
+    };
+    let s = state.read();
+    let response = RendererStateResponse {
+        instance_id: instance_id.clone(),
+        udn,
+        playback_state: match s.playback_state {
+            PlaybackState::Playing => "PLAYING",
+            PlaybackState::Paused => "PAUSED",
+            PlaybackState::Stopped => "STOPPED",
+            PlaybackState::Transitioning => "TRANSITIONING",
+        }.to_string(),
+        current_uri: s.current_uri.clone(),
+        current_metadata: s.current_metadata.clone(),
+        next_uri: s.next_uri.clone(),
+        next_metadata: s.next_metadata.clone(),
+        position: s.position.clone(),
+        duration: s.duration.clone(),
+        volume: s.volume,
+        mute: s.mute,
+    };
+    (StatusCode::OK, Json(response)).into_response()
 }

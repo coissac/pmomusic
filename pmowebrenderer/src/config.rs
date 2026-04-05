@@ -19,8 +19,8 @@ use pmocontrol::ControlPoint;
 use crate::error::WebRendererError;
 #[cfg(feature = "pmoserver")]
 use crate::register::{
-    pause_handler, play_handler, position_update_handler, register_handler,
-    report_handler, set_uri_handler, unregister_handler,
+    nowplaying_handler, pause_handler, play_handler, position_update_handler,
+    register_handler, report_handler, set_uri_handler, state_handler, unregister_handler,
 };
 #[cfg(feature = "pmoserver")]
 use crate::registry::RendererRegistry;
@@ -67,6 +67,8 @@ impl WebRendererExt for pmoserver::Server {
             .route("/{id}/report", post(report_handler))
             .route("/{id}/command", get(crate::register::command_handler))
             .route("/{id}/position", post(position_update_handler))
+            .route("/{id}/nowplaying", get(nowplaying_handler))
+            .route("/{id}/state", get(state_handler))
             .with_state(registry.clone());
         self.add_router("/api/webrenderer", dynamic_router).await;
 
@@ -74,6 +76,8 @@ impl WebRendererExt for pmoserver::Server {
         tracing::info!("  POST   /api/webrenderer/register");
         tracing::info!("  GET    /api/webrenderer/{{id}}/stream");
         tracing::info!("  DELETE /api/webrenderer/{{id}}");
+        tracing::info!("  GET    /api/webrenderer/{{id}}/nowplaying");
+        tracing::info!("  GET    /api/webrenderer/{{id}}/state");
         Ok(())
     }
 }

@@ -30,6 +30,7 @@ pub use pmoaudio_ext::PlayerCommand as PipelineControl;
 pub struct PipelineHandle {
     pub player: PlayerHandle,
     pub stop_token: CancellationToken,
+    pub flac_handle: pmoaudio_ext::sinks::OggFlacStreamHandle,
     #[allow(dead_code)]
     state: SharedState,
 }
@@ -116,6 +117,7 @@ impl InstancePipeline {
         let pipeline_handle = PipelineHandle {
             player: player_handle,
             stop_token: stop_token.clone(),
+            flac_handle: flac_handle.clone(),
             state,
         };
 
