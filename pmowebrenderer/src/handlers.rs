@@ -14,19 +14,25 @@ use crate::state::SharedState;
 
 // ─── AVTransport : commandes de transport ─────────────────────────────────────
 
-pub fn play_handler(pipeline: PipelineHandle, state: SharedState) -> ActionHandler {
-    action_handler!(captures(pipeline, state) |data| {
+pub fn play_handler(pipeline: PipelineHandle, state: SharedState, instance_id: String) -> ActionHandler {
+    action_handler!(captures(pipeline, state, instance_id) |data| {
         tracing::info!("[WebRenderer] UPnP Play action invoked");
-        let has_uri = state.read().current_uri.is_some();
-        state.write().playback_state = PlaybackState::Transitioning;
+        let has_uri = {
+            let mut s = state.write();
+            let has = s.current_uri.is_some();
+            s.playback_state = PlaybackState::Transitioning;
+            if has {
+                s.player_command = Some(serde_json::json!({
+                    "type": "stream",
+                    "url": format!("/api/webrenderer/{}/stream", instance_id)
+                }));
+                tracing::info!("UPnP Play: stored stream command for frontend polling");
+            }
+            has
+        };
         if has_uri {
-            state.write().player_command = Some(serde_json::json!({
-                "type": "stream",
-                "url": "/api/webrenderer/stream"
-            }));
-            tracing::info!("UPnP Play: stored stream command for frontend polling");
+            pipeline.send(PipelineControl::Play).await;
         }
-        pipeline.send(PipelineControl::Play).await;
         Ok(data)
     })
 }
@@ -81,14 +87,13 @@ pub fn set_uri_handler(pipeline: PipelineHandle, state: SharedState) -> ActionHa
             .unwrap_or_default();
 
         tracing::info!(uri = %uri, "SetAVTransportURI handler called - loading URI into pipeline");
-        pipeline.send(PipelineControl::LoadUri(uri.clone())).await;
-
         {
             let mut s = state.write();
-            s.current_uri = Some(uri);
+            s.current_uri = Some(uri.clone());
             s.current_metadata = Some(metadata);
             s.playback_state = PlaybackState::Transitioning;
         }
+        pipeline.send(PipelineControl::LoadUri(uri)).await;
         Ok(data)
     })
 }
@@ -100,12 +105,12 @@ pub fn set_next_uri_handler(pipeline: PipelineHandle, state: SharedState) -> Act
             .or_else(|_| get_value::<DIDLLite>(&data, "NextURIMetaData").map(|didl| didl.to_xml()))
             .unwrap_or_default();
 
-        pipeline.send(PipelineControl::LoadNextUri(uri.clone())).await;
         {
             let mut s = state.write();
-            s.next_uri = Some(uri);
+            s.next_uri = Some(uri.clone());
             s.next_metadata = Some(metadata);
         }
+        pipeline.send(PipelineControl::LoadNextUri(uri)).await;
         Ok(data)
     })
 }

@@ -165,6 +165,7 @@ async fn run_event_listener(
                     state.write().position = Some(seconds_to_upnp_time(position_sec));
                 }
                 PlayerEvent::TrackEnded => {
+                    state.write().playback_state = PlaybackState::Transitioning;
                     #[cfg(feature = "pmoserver")]
                     {
                         let cp = control_point.clone();

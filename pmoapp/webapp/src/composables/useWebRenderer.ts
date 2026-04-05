@@ -139,14 +139,16 @@ export function useWebRenderer() {
         // PMOPlayer doesn't control mute directly - handled by backend
     }
 
+    const beforeUnloadHandler = () => void unregister();
+
     onMounted(() => {
         void register();
-        window.addEventListener("beforeunload", () => void unregister());
+        window.addEventListener("beforeunload", beforeUnloadHandler);
     });
 
     onUnmounted(() => {
         void unregister();
-        window.removeEventListener("beforeunload", () => void unregister());
+        window.removeEventListener("beforeunload", beforeUnloadHandler);
     });
 
     return {

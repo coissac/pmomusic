@@ -255,10 +255,10 @@ impl RendererRegistry {
         &self,
         instance_id: &str,
     ) -> Option<serde_json::Value> {
-        self.instances
-            .read()
-            .get(instance_id)
-            .and_then(|instance| instance.state.write().player_command.take())
+        // Extraire le Arc<SharedState> puis relâcher le read lock du HashMap
+        // avant d'acquérir le write lock sur state (évite double-lock imbriqué).
+        let state = self.instances.read().get(instance_id).map(|i| i.state.clone())?;
+        state.write().player_command.take()
     }
 
     /// Stocke une commande pour le player (consommée via GET /command)

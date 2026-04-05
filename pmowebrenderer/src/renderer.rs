@@ -117,7 +117,7 @@ impl WebRendererFactory {
         pipeline: PipelineHandle,
         state: SharedState,
     ) -> Result<Device, FactoryError> {
-        let avtransport = Self::build_avtransport(pipeline.clone(), state.clone())?;
+        let avtransport = Self::build_avtransport(pipeline.clone(), state.clone(), device_name)?;
         let renderingcontrol = Self::build_renderingcontrol(state.clone())?;
         let connectionmanager = Self::build_connectionmanager()?;
 
@@ -145,6 +145,7 @@ impl WebRendererFactory {
     fn build_avtransport(
         pipeline: PipelineHandle,
         state: SharedState,
+        instance_id: &str,
     ) -> Result<Service, FactoryError> {
         let mut svc = Service::new("AVTransport".to_string());
 
@@ -176,7 +177,7 @@ impl WebRendererFactory {
         let mut play = Action::new("Play".to_string());
         add_arg_in(&mut play, "InstanceID", &AVT_INSTANCE_ID)?;
         add_arg_in(&mut play, "Speed", &TRANSPORTPLAYSPEED)?;
-        play.set_handler(handlers::play_handler(pipeline.clone(), state.clone()));
+        play.set_handler(handlers::play_handler(pipeline.clone(), state.clone(), instance_id.to_string()));
         add_action(&mut svc, Arc::new(play))?;
 
         // Stop
@@ -345,24 +346,15 @@ impl WebRendererFactory {
     fn build_connectionmanager() -> Result<Service, FactoryError> {
         let mut svc = Service::new("ConnectionManager".to_string());
 
-        svc.add_variable(Arc::clone(&A_ARG_TYPE_CONNECTIONID))
-            .map_err(|e| FactoryError::VariableError(e.to_string()))?;
-        svc.add_variable(Arc::clone(&A_ARG_TYPE_CONNECTIONSTATUS))
-            .map_err(|e| FactoryError::VariableError(e.to_string()))?;
-        svc.add_variable(Arc::clone(&A_ARG_TYPE_DIRECTION))
-            .map_err(|e| FactoryError::VariableError(e.to_string()))?;
-        svc.add_variable(Arc::clone(&A_ARG_TYPE_PROTOCOLINFO))
-            .map_err(|e| FactoryError::VariableError(e.to_string()))?;
-        svc.add_variable(Arc::clone(&A_ARG_TYPE_RCSID))
-            .map_err(|e| FactoryError::VariableError(e.to_string()))?;
-        svc.add_variable(Arc::clone(&A_ARG_TYPE_AVTRANSPORTID))
-            .map_err(|e| FactoryError::VariableError(e.to_string()))?;
-        svc.add_variable(Arc::clone(&CURRENTCONNECTIONIDS))
-            .map_err(|e| FactoryError::VariableError(e.to_string()))?;
-        svc.add_variable(Arc::clone(&SINKPROTOCOLINFO))
-            .map_err(|e| FactoryError::VariableError(e.to_string()))?;
-        svc.add_variable(Arc::clone(&SOURCEPROTOCOLINFO))
-            .map_err(|e| FactoryError::VariableError(e.to_string()))?;
+        add_var(&mut svc, &A_ARG_TYPE_CONNECTIONID)?;
+        add_var(&mut svc, &A_ARG_TYPE_CONNECTIONSTATUS)?;
+        add_var(&mut svc, &A_ARG_TYPE_DIRECTION)?;
+        add_var(&mut svc, &A_ARG_TYPE_PROTOCOLINFO)?;
+        add_var(&mut svc, &A_ARG_TYPE_RCSID)?;
+        add_var(&mut svc, &A_ARG_TYPE_AVTRANSPORTID)?;
+        add_var(&mut svc, &CURRENTCONNECTIONIDS)?;
+        add_var(&mut svc, &SINKPROTOCOLINFO)?;
+        add_var(&mut svc, &SOURCEPROTOCOLINFO)?;
 
         // GetProtocolInfo
         let mut get_proto = Action::new("GetProtocolInfo".to_string());
