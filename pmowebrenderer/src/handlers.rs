@@ -47,6 +47,12 @@ pub fn stop_handler(pipeline: PipelineHandle, state: SharedState) -> ActionHandl
         captures(pipeline, state) | data | {
             pipeline.send(PipelineControl::Stop).await;
             pipeline.flac_handle.pause();
+            pipeline
+                .adapter
+                .deliver(crate::adapter::DeviceCommand::Flush);
+            pipeline
+                .adapter
+                .deliver(crate::adapter::DeviceCommand::Stop);
             state.write().playback_state = PlaybackState::Stopped;
             Ok(data)
         }
@@ -58,6 +64,9 @@ pub fn pause_handler(pipeline: PipelineHandle, state: SharedState) -> ActionHand
         captures(pipeline, state) | data | {
             pipeline.send(PipelineControl::Pause).await;
             pipeline.flac_handle.pause();
+            pipeline
+                .adapter
+                .deliver(crate::adapter::DeviceCommand::Pause);
             state.write().playback_state = PlaybackState::Paused;
             Ok(data)
         }

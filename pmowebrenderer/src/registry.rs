@@ -33,6 +33,8 @@ pub struct WebRendererInstance {
     pub flac_handle: pmoaudio_ext::sinks::OggFlacStreamHandle,
     pub pipeline: PipelineHandle,
     pub created_at: SystemTime,
+    /// Adapter device-spécifique pour la livraison des commandes.
+    pub adapter: Arc<dyn crate::adapter::DeviceAdapter>,
 }
 
 /// Registre global des instances WebRenderer
@@ -151,12 +153,22 @@ impl RendererRegistry {
             .map(|i| i.pipeline.clone())
     }
 
+    /// Retourne l'instance par instance_id
+    pub fn get_instance(&self, instance_id: &str) -> Option<Arc<WebRendererInstance>> {
+        self.instances.read().get(instance_id).cloned()
+    }
+
     /// Retourne le SharedState par instance_id
     pub fn get_state(&self, instance_id: &str) -> Option<SharedState> {
         self.instances
             .read()
             .get(instance_id)
             .map(|i| i.state.clone())
+    }
+
+    /// Retourne le PipelineHandle par instance_id
+    pub fn get_pipeline(&self, instance_id: &str) -> Option<PipelineHandle> {
+        self.instances.read().get(instance_id).map(|i| i.pipeline.clone())
     }
 
     /// Retourne le SharedState et udn par instance_id
@@ -276,56 +288,6 @@ impl RendererRegistry {
         serde_json::to_value(cmd).ok()
     }
 
-    /// Stocke une commande pour le player (consommée via GET /command)
-    pub fn set_player_command(&self, instance_id: &str, command: serde_json::Value) {
-        if let Some(instance) = self.instances.read().get(instance_id) {
-            if let Ok(cmd) = serde_json::from_value(command) {
-                instance.state.write().push_command(cmd);
-            }
-        }
-    }
-    
-    /// Consume and send a command to the pipeline
-    async fn send_pipeline_command(&self, instance_id: &str, cmd: PipelineControl) {
-        let pipeline = self.get_pipeline(instance_id);
-        if let Some(pipeline) = pipeline {
-            pipeline.send(cmd).await;
-        } else {
-            tracing::error!(instance_id = %instance_id, "Instance not found for pipeline command");
-        }
-    }
-
-    fn get_pipeline(&self, instance_id: &str) -> Option<PipelineHandle> {
-        self.instances.read().get(instance_id).map(|i| i.pipeline.clone())
-    }
-
-    /// Charge une URI dans le pipeline et lance la lecture
-    pub async fn load_uri(&self, instance_id: &str, uri: String) {
-        self.send_pipeline_command(instance_id, PipelineControl::LoadUri(uri.clone())).await;
-        self.send_pipeline_command(instance_id, PipelineControl::Play).await;
-        tracing::info!(instance_id = %instance_id, uri = %uri, "loaded URI");
-    }
-    
-    /// Envoie commande play au pipeline
-    pub async fn send_play_command(&self, instance_id: &str) {
-        tracing::info!(instance_id = %instance_id, "send_play_command called");
-        self.send_pipeline_command(instance_id, PipelineControl::Play).await;
-    }
-    
-    /// Envoie commande pause au pipeline
-    pub async fn send_pause_command(&self, instance_id: &str) {
-        self.send_pipeline_command(instance_id, PipelineControl::Pause).await;
-    }
-
-    /// Check if the instance has a current URI loaded
-    pub fn has_current_uri(&self, instance_id: &str) -> bool {
-        self.instances
-            .read()
-            .get(instance_id)
-            .map(|i| i.state.read().current_uri.is_some())
-            .unwrap_or(false)
-    }
-
     // ── Création d'instance ────────────────────────────────────────────────────
 
     async fn create_instance(
@@ -348,6 +310,10 @@ impl RendererRegistry {
 
         let state: SharedState = Arc::new(parking_lot::RwLock::new(RendererState::default()));
 
+        // Créer l'adapter avant le pipeline (sera passé à run_event_listener)
+        let adapter: Arc<dyn crate::adapter::DeviceAdapter> =
+            Arc::new(crate::adapter::BrowserAdapter::new(state.clone()));
+
         #[cfg(feature = "pmoserver")]
         let (device_instance, pipeline) = {
             use pmoupnp::UpnpServerExt;
@@ -355,11 +321,12 @@ impl RendererRegistry {
             let server_arc = pmoserver::get_server()
                 .ok_or(WebRendererError::ServerNotAvailable)?;
 
-            // Créer le pipeline d'abord pour avoir le PipelineHandle
+            // Créer le pipeline avec l'adapter pour le event listener
             let ip = InstancePipeline::start(
                 state.clone(),
                 self.control_point.clone(),
                 full_udn.clone(),
+                adapter.clone(),
             );
             let pipeline = ip.pipeline_handle.clone();
 
@@ -398,7 +365,11 @@ impl RendererRegistry {
         let (device_instance, pipeline) = {
             use pmoupnp::UpnpModel;
 
-            let ip = InstancePipeline::start(state.clone(), full_udn.clone());
+            let ip = InstancePipeline::start(
+                state.clone(),
+                full_udn.clone(),
+                adapter.clone(),
+            );
             let pipeline = ip.pipeline_handle.clone();
 
             let device = WebRendererFactory::create_device_with_pipeline(
@@ -420,6 +391,7 @@ impl RendererRegistry {
             flac_handle: pipeline.flac_handle.clone(),
             pipeline: pipeline.pipeline_handle,
             created_at: SystemTime::now(),
+            adapter,
         })
     }
 

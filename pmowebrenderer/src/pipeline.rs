@@ -31,6 +31,7 @@ pub struct PipelineHandle {
     pub player: PlayerHandle,
     pub stop_token: CancellationToken,
     pub flac_handle: pmoaudio_ext::sinks::OggFlacStreamHandle,
+    pub adapter: Arc<dyn crate::adapter::DeviceAdapter>,
     #[allow(dead_code)]
     state: SharedState,
 }
@@ -69,6 +70,7 @@ impl InstancePipeline {
         #[cfg(feature = "pmoserver")]
         control_point: Arc<pmocontrol::ControlPoint>,
         udn: String,
+        adapter: Arc<dyn crate::adapter::DeviceAdapter>,
     ) -> Self {
         let stop_token = CancellationToken::new();
 
@@ -102,12 +104,14 @@ impl InstancePipeline {
         let event_rx = player_handle.subscribe_events();
         let state_clone = state.clone();
         let udn_clone = udn.clone();
+        let adapter_clone = Arc::downgrade(&adapter);
         #[cfg(feature = "pmoserver")]
         let cp_clone = control_point.clone();
         tokio::spawn(async move {
             run_event_listener(
                 event_rx,
                 state_clone,
+                adapter_clone,
                 udn_clone,
                 #[cfg(feature = "pmoserver")]
                 cp_clone,
@@ -118,6 +122,7 @@ impl InstancePipeline {
             player: player_handle,
             stop_token: stop_token.clone(),
             flac_handle: flac_handle.clone(),
+            adapter,
             state,
         };
 
@@ -133,12 +138,14 @@ impl InstancePipeline {
 async fn run_event_listener(
     mut event_rx: tokio::sync::broadcast::Receiver<pmoaudio_ext::PlayerEvent>,
     state: SharedState,
+    adapter: std::sync::Weak<dyn crate::adapter::DeviceAdapter>,
     udn: String,
     #[cfg(feature = "pmoserver")]
     control_point: Arc<pmocontrol::ControlPoint>,
 ) {
     use pmoaudio_ext::PlayerEvent;
     use crate::messages::PlaybackState;
+    use crate::adapter::DeviceCommand;
 
     loop {
         match event_rx.recv().await {
@@ -168,6 +175,10 @@ async fn run_event_listener(
                 }
                 PlayerEvent::TrackEnded => {
                     state.write().playback_state = PlaybackState::Transitioning;
+                    // Vider le buffer du device avant la nouvelle piste.
+                    if let Some(adapter) = adapter.upgrade() {
+                        adapter.deliver(DeviceCommand::Flush);
+                    }
                     #[cfg(feature = "pmoserver")]
                     {
                         let cp = control_point.clone();

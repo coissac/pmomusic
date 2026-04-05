@@ -795,14 +795,14 @@ cargo check -p pmowebrenderer --features pmoserver
 | **Phase 1.2** — Trait `DeviceAdapter` | ✅ Complet | Dans `src/adapter.rs` |
 | **Phase 1.3** — `VecDeque<DeviceCommand>` dans `RendererState` | ✅ Complet | `push_command`/`pop_command` ok |
 | **Phase 1.4** — `BrowserAdapter` | ✅ Complet | Dans `src/adapter.rs` (pas encore `browser/`) |
-| **Phase 1.5** — `adapter` dans `WebRendererInstance` | ❌ Non fait | Pas de champ `adapter` dans la struct |
-| **Phase 1.6** — Nettoyage méthodes browser dans `RendererRegistry` | ❌ Non fait | `set_player_command`, `get_pending_command`, `has_current_uri`, `send_play_command`, `send_pause_command` toujours présents |
+| **Phase 1.5** — `adapter` dans `WebRendererInstance` | ✅ Complet | `registry.rs:37`, instancié avant le pipeline |
+| **Phase 1.6** — Nettoyage méthodes browser dans `RendererRegistry` | ✅ Complet | `set_player_command`, `has_current_uri`, `send_play_command`, `send_pause_command`, `load_uri` supprimés ; `get_instance()` ajouté |
 | **Phase 2.1** — `flac_handle` dans `PipelineHandle` | ✅ Complet | Exposé dans `PipelineHandle` |
 | **Phase 2.2** — `pause_handler` appelle `flac_handle.pause()` | ✅ Complet | |
-| **Phase 2.3** — `stop_handler` envoie `Flush + Stop` au device | ⚠️ Partiel | Appelle `flac_handle.pause()` mais n'envoie **pas** `Flush`/`Stop` via adapter (adapter non câblé) |
-| **Phase 2.4** — `run_event_listener` avec `Weak<dyn DeviceAdapter>`, `Flush` sur `TrackEnded` | ❌ Non fait | Pas de `Weak<DeviceAdapter>`, pas de `Flush` envoyé au browser sur fin de piste |
+| **Phase 2.3** — `stop_handler` envoie `Flush + Stop` au device | ✅ Complet | `pipeline.adapter.deliver(Flush)` + `deliver(Stop)` |
+| **Phase 2.4** — `run_event_listener` avec `Weak<dyn DeviceAdapter>`, `Flush` sur `TrackEnded` | ✅ Complet | `Weak` via `Arc::downgrade`, `deliver(Flush)` sur `TrackEnded` |
 | **Phase 2.5** — `play_handler` appelle `flac_handle.resume()` | ✅ Complet | |
-| **Phase 2.6** — `build_avtransport` avec paramètre `adapter` | ❌ Non fait | Signature inchangée |
+| **Phase 2.6** — `build_avtransport` avec paramètre `adapter` | ✅ Complet | `adapter` dans `PipelineHandle`, accessible dans les handlers |
 | **Phase 3.1** — `AudioContext` dans `PMOPlayer.ts` | ✅ Complet | `ensureAudioContext()`, `ac?.suspend()` dans `flush()` |
 | **Phase 3.2** — Auto-reconnect avec backoff exponentiel | ✅ Complet | `scheduleReconnect()`, 5 tentatives max |
 | **Phase 3.3** — Unification format position (`seconds_to_upnp_time`) | ✅ Complet | `update_player_state` corrigé |
@@ -815,95 +815,21 @@ cargo check -p pmowebrenderer --features pmoserver
 
 ## Tâches restantes
 
-### T1 — Câbler `adapter` dans `WebRendererInstance` et handlers (Phase 1.5 + 2.6)
+### T1 — Câbler `adapter` dans `WebRendererInstance` et handlers ✅ Réalisé
 
-**Problème** : le `BrowserAdapter` est implémenté mais jamais instancié ni utilisé.
-Les handlers `stop_handler` et `pause_handler` appellent `flac_handle.pause()` mais n'envoient
-pas les commandes `Flush`/`Stop`/`Pause` au browser via l'adapter.
+### T2 — `Flush` sur `TrackEnded` dans `run_event_listener` ✅ Réalisé
 
-**Fichiers** : `registry.rs`, `renderer.rs`, `handlers.rs`
-
-**Étapes** :
-
-1. Dans `WebRendererInstance` (`registry.rs`), ajouter le champ :
-   ```rust
-   pub adapter: Arc<dyn crate::adapter::DeviceAdapter>,
-   ```
-
-2. Dans `create_instance()` (`registry.rs`), construire le `BrowserAdapter` avant la factory :
-   ```rust
-   let adapter: Arc<dyn crate::adapter::DeviceAdapter> =
-       Arc::new(crate::adapter::BrowserAdapter { state: state.clone() });
-   // Passer à la factory, stocker dans WebRendererInstance
-   ```
-
-3. Mettre à jour `WebRendererFactory::create_device_with_pipeline()` et `build_avtransport()`
-   pour accepter `adapter: Arc<dyn DeviceAdapter>` et le passer aux handlers `pause_handler`,
-   `stop_handler`, `play_handler`.
-
-4. Dans `pause_handler` : ajouter `adapter.deliver(DeviceCommand::Pause)`.
-
-5. Dans `stop_handler` : ajouter `adapter.deliver(DeviceCommand::Flush)` puis
-   `adapter.deliver(DeviceCommand::Stop)`.
+### T3 — Nettoyer `RendererRegistry` des méthodes browser-spécifiques ✅ Réalisé
 
 ---
 
-### T2 — `Flush` sur `TrackEnded` dans `run_event_listener` (Phase 2.4)
+### T4 — Phase 5 : Restructuration `core/` vs `browser/` ⏸️ Différé
 
-**Problème** : lors d'un changement de piste automatique, le browser a plusieurs secondes
-d'audio bufférisé. Sans commande `Flush`, la transition de piste a un délai de 3–5 secondes.
-
-**Fichiers** : `pipeline.rs`
-
-**Étapes** :
-
-1. Ajouter `adapter: std::sync::Weak<dyn crate::adapter::DeviceAdapter>` à la signature de
-   `run_event_listener` et à l'appel dans `InstancePipeline::start()`.
-
-2. Dans le bras `PlayerEvent::TrackEnded` :
-   ```rust
-   if let Some(adapter) = adapter.upgrade() {
-       adapter.deliver(crate::adapter::DeviceCommand::Flush);
-   }
-   ```
-
-3. Dans `InstancePipeline::start()`, passer `Arc::downgrade(&instance_adapter)` — nécessite
-   que T1 soit terminé (adapter créé avant `start()`).
-
-**Précaution** : utiliser `Weak` pour éviter le cycle de référence
-`WebRendererInstance → pipeline → event_listener → WebRendererInstance`.
-
----
-
-### T3 — Nettoyer `RendererRegistry` des méthodes browser-spécifiques (Phase 1.6)
-
-**Problème** : `set_player_command`, `get_pending_command`, `has_current_uri`,
-`send_play_command`, `send_pause_command` sont des fuites d'abstraction browser dans le registre
-générique. Tout futur adaptateur (Android Auto…) devrait contourner ou dupliquer ces méthodes.
-
-**Fichiers** : `registry.rs`, `register.rs`
-
-**Condition préalable** : T1 terminé (l'adapter est accessible via `get_instance()`).
-
-**Étapes** :
-
-1. Ajouter `get_instance(&self, instance_id: &str) -> Option<Arc<WebRendererInstance>>`
-   dans `RendererRegistry` (accès générique, remplace les méthodes spécialisées).
-
-2. Déplacer dans `register.rs` la logique actuellement dans les méthodes à supprimer :
-   - `get_pending_command` : `state.write().pop_command()` + sérialisation JSON → déjà fait dans `command_handler`
-   - `set_player_command` : remplacé par `instance.adapter.deliver(cmd)`
-   - `has_current_uri` : inline dans `play_handler` HTTP
-   - `send_play_command` / `send_pause_command` : accès direct au pipeline via `get_instance`
-
-3. Supprimer les 5 méthodes de `RendererRegistry`.
-
-4. `cargo check -p pmowebrenderer` après chaque suppression.
-
----
-
-### T4 — Phase 5 : Restructuration `core/` vs `browser/` (différé)
-
-À faire une fois T1–T3 terminés et les interfaces stabilisées.
+À faire quand les interfaces sont stabilisées.
 Voir la section "Phase 5" du plan ci-dessus pour l'ordre de déplacement.
 Condition : `cargo check -p pmowebrenderer` doit passer à chaque étape.
+
+**Écart mineur à surveiller** : `pause_handler` HTTP (`register.rs`) livre `Pause` au browser
+via l'adapter mais ne suspend pas le pipeline serveur ni n'appelle `flac_handle.pause()`.
+Non bloquant (le browser passe par UPnP pour les vraies pauses), mais à aligner si cet
+endpoint est utilisé directement à l'avenir.

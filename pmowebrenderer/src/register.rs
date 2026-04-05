@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::messages::PlaybackState;
+use crate::pipeline::PipelineControl;
 use crate::registry::RendererRegistry;
 
 #[derive(Debug, Deserialize)]
@@ -109,7 +110,10 @@ pub async fn set_uri_handler(
     Json(req): Json<UriRequest>,
 ) -> impl IntoResponse {
     tracing::info!(instance_id = %instance_id, uri = %req.uri, "WebRenderer: set_uri request");
-    registry.load_uri(&instance_id, req.uri).await;
+    if let Some(pipeline) = registry.get_pipeline(&instance_id) {
+        pipeline.send(PipelineControl::LoadUri(req.uri.clone())).await;
+        pipeline.send(PipelineControl::Play).await;
+    }
     StatusCode::OK
 }
 
@@ -120,7 +124,9 @@ pub async fn pause_handler(
     Path(instance_id): Path<String>,
 ) -> impl IntoResponse {
     tracing::info!(instance_id = %instance_id, "WebRenderer: pause request");
-    registry.send_pause_command(&instance_id).await;
+    if let Some(instance) = registry.get_instance(instance_id.as_str()) {
+        instance.adapter.deliver(crate::adapter::DeviceCommand::Pause);
+    }
     StatusCode::OK
 }
 
@@ -168,7 +174,15 @@ pub async fn play_handler(
     Path(instance_id): Path<String>,
 ) -> impl IntoResponse {
     // Check if there's a valid URI loaded - if not, ignore the play command
-    if !registry.has_current_uri(&instance_id) {
+    let instance = match registry.get_instance(&instance_id) {
+        Some(i) => i,
+        None => {
+            return (StatusCode::NOT_FOUND, "Instance not found").into_response();
+        }
+    };
+    
+    let has_uri = instance.state.read().current_uri.is_some();
+    if !has_uri {
         tracing::warn!(instance_id = %instance_id, "Play command ignored: no URI loaded");
         let mut headers = HeaderMap::new();
         headers.insert(axum::http::header::CONTENT_TYPE, "text/plain".parse().unwrap());
@@ -177,18 +191,12 @@ pub async fn play_handler(
     
     tracing::info!(instance_id = %instance_id, "WebRenderer: play request");
     
-    // Get stream URL and tell player to play it
+    // Send Stream command to the adapter (via pending_commands queue)
     let stream_url = format!("/api/webrenderer/{}/stream", instance_id);
+    instance.adapter.deliver(crate::adapter::DeviceCommand::Stream { url: stream_url });
     
-    // Set command for player to start streaming
-    let command = serde_json::json!({
-        "type": "stream",
-        "url": stream_url
-    });
-    registry.set_player_command(&instance_id, command);
-    
-    // Also tell pipeline to play (if not already) - use existing method
-    registry.send_play_command(&instance_id).await;
+    // Also tell pipeline to play (if not already)
+    instance.pipeline.send(PipelineControl::Play).await;
     
     (StatusCode::OK, "OK").into_response()
 }
