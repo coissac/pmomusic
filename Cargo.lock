@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "PMOMusic"
-version = "0.3.32"
+version = "0.3.35"
 dependencies = [
  "axum 0.8.7",
  "console-subscriber",
@@ -517,7 +517,6 @@ dependencies = [
  "tower 0.5.2",
  "tower-layer",
  "tower-service",
- "tracing",
 ]
 
 [[package]]
@@ -575,7 +574,6 @@ dependencies = [
  "sync_wrapper",
  "tower-layer",
  "tower-service",
- "tracing",
 ]
 
 [[package]]
@@ -598,41 +596,24 @@ dependencies = [
 ]
 
 [[package]]
-name = "axum-embed"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "077959a7f8cf438676af90b483304528eb7e16eadadb7f44e9ada4f9dceb9e62"
-dependencies = [
- "axum-core 0.4.5",
- "chrono",
- "http",
- "mime_guess",
- "rust-embed",
- "tower-service",
-]
-
-[[package]]
 name = "axum-extra"
-version = "0.9.6"
+version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c794b30c904f0a1c2fb7740f7df7f7972dfaa14ef6f57cb6178dc63e5dca2f04"
+checksum = "dbfe9f610fe4e99cf0cfcd03ccf8c63c28c616fe714d80475ef731f3b13dd21b"
 dependencies = [
- "axum 0.7.9",
- "axum-core 0.4.5",
+ "axum 0.8.7",
+ "axum-core 0.5.5",
  "bytes",
- "fastrand",
+ "futures-core",
  "futures-util",
- "headers",
  "http",
  "http-body",
  "http-body-util",
  "mime",
- "multer",
  "pin-project-lite",
- "serde",
- "tower 0.5.2",
  "tower-layer",
  "tower-service",
+ "tracing",
 ]
 
 [[package]]
@@ -701,7 +682,7 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "serde",
- "spin 0.10.0",
+ "spin",
  "wasm-bindgen",
  "wasm-bindgen-futures",
 ]
@@ -2138,30 +2119,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "headers"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3314d5adb5d94bcdf56771f2e50dbbc80bb4bdf88967526706205ac9eff24eb"
-dependencies = [
- "base64 0.22.1",
- "bytes",
- "headers-core",
- "http",
- "httpdate",
- "mime",
- "sha1",
-]
-
-[[package]]
-name = "headers-core"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "54b4a22553d4242c49fddb9ba998a99962b5cc6f22cb5a3482bec22522403ce4"
-dependencies = [
- "http",
-]
-
-[[package]]
 name = "heapless"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3114,23 +3071,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "multer"
-version = "3.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83e87776546dc87511aa5ee218730c92b666d7264ab6ed41f9d215af9cd5224b"
-dependencies = [
- "bytes",
- "encoding_rs",
- "futures-util",
- "http",
- "httparse",
- "memchr",
- "mime",
- "spin 0.9.8",
- "version_check",
-]
-
-[[package]]
 name = "native-tls"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3897,6 +3837,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "ureq 2.12.1",
 ]
 
 [[package]]
@@ -4016,7 +3957,7 @@ dependencies = [
  "tracing",
  "tracing-log 0.1.4",
  "tracing-subscriber",
- "ureq",
+ "ureq 3.1.4",
  "url",
  "urlencoding",
  "utoipa",
@@ -4086,9 +4027,25 @@ dependencies = [
  "bevy_reflect",
  "htmlescape",
  "once_cell",
+ "parking_lot",
+ "pmoaudio",
+ "pmoaudio-ext",
+ "pmoconfig",
+ "pmocontrol",
  "pmodidl",
+ "pmoflac",
+ "pmometadata",
+ "pmoserver",
  "pmoupnp",
+ "pmoutils",
  "quick-xml",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -4279,10 +4236,10 @@ dependencies = [
  "anyhow",
  "async-stream 0.3.6",
  "axum 0.8.7",
- "axum-embed",
  "axum-server",
  "futures",
  "futures-util",
+ "mime_guess",
  "once_cell",
  "pmoconfig",
  "rust-embed",
@@ -4388,26 +4345,16 @@ dependencies = [
  "bytes",
  "futures",
  "parking_lot",
- "pmoaudio",
- "pmoaudio-ext",
  "pmoconfig",
  "pmocontrol",
- "pmodidl",
- "pmoflac",
  "pmomediarenderer",
- "pmometadata",
  "pmoserver",
- "pmoupnp",
- "pmoutils",
- "reqwest",
  "serde",
  "serde_json",
- "thiserror 2.0.17",
  "tokio",
  "tokio-util",
  "tower-http",
  "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -5526,12 +5473,6 @@ dependencies = [
 
 [[package]]
 name = "spin"
-version = "0.9.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
-
-[[package]]
-name = "spin"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d5fe4ccb98d9c292d56fec89a5e07da7fc4cf0dc11e156b41793132775d3e591"
@@ -6515,6 +6456,22 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "ureq"
+version = "2.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02d1a66277ed75f640d608235660df48c8e3c19f3b4edb6a263315626cc3c01d"
+dependencies = [
+ "base64 0.22.1",
+ "flate2",
+ "log",
+ "once_cell",
+ "rustls",
+ "rustls-pki-types",
+ "url",
+ "webpki-roots 0.26.11",
+]
+
+[[package]]
+name = "ureq"
 version = "3.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d39cb1dbab692d82a977c0392ffac19e188bd9186a9f32806f0aaa859d75585a"
@@ -6527,7 +6484,7 @@ dependencies = [
  "rustls-pki-types",
  "ureq-proto",
  "utf-8",
- "webpki-roots",
+ "webpki-roots 1.0.4",
 ]
 
 [[package]]
@@ -6818,6 +6775,15 @@ checksum = "c071456adef4aca59bf6a583c46b90ff5eb0b4f758fc347cea81290288f37ce1"
 dependencies = [
  "image",
  "libwebp-sys",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "0.26.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
+dependencies = [
+ "webpki-roots 1.0.4",
 ]
 
 [[package]]

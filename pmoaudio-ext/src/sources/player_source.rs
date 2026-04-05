@@ -35,6 +35,7 @@ use pmoaudio::{
     AudioSegment,
     nodes::AudioError,
     pipeline::{AudioPipelineNode, Node, NodeLogic, send_to_children},
+    StreamType,
 };
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
@@ -164,6 +165,7 @@ impl NodeLogic for PlayerSourceLogic {
         let mut current_uri: Option<String> = None;
         let mut next_uri: Option<String> = None;
         let mut paused_at_sec: f64 = 0.0;
+        let mut is_continuous: bool = false;
 
         info!("PlayerSource: started");
 
@@ -181,7 +183,7 @@ impl NodeLogic for PlayerSourceLogic {
                                 None => break,
                                 Some(cmd) => {
                                     self.handle_command(
-                                        cmd, &mut state, &mut current_uri,
+                                        cmd, is_continuous, &mut state, &mut current_uri,
                                         &mut next_uri, &mut paused_at_sec,
                                         &output, &stop_token,
                                     ).await?;
@@ -212,15 +214,17 @@ impl NodeLogic for PlayerSourceLogic {
                     };
 
                     let duration_sec = source.duration_sec();
+                    let is_continuous = source.is_continuous();
                     let _ = self.event_tx.send(PlayerEvent::Playing {
                         uri: uri.clone(),
                         duration_sec,
                     });
-                    info!("PlayerSource: playing {:?} from {:.1}s", uri, paused_at_sec);
+                    info!("PlayerSource: playing {:?} from {:.1}s continuous={}", uri, paused_at_sec, is_continuous);
 
                     // Pompe audio — s'arrête sur EOF, Pause, Stop, ou commande
                     let result = self.pump(
                         source,
+                        is_continuous,
                         &mut state,
                         &mut current_uri,
                         &mut next_uri,
@@ -255,6 +259,7 @@ impl PlayerSourceLogic {
     async fn handle_command(
         &mut self,
         cmd: PlayerCommand,
+        is_continuous: bool,
         state: &mut TransportState,
         current_uri: &mut Option<String>,
         next_uri: &mut Option<String>,
@@ -281,14 +286,16 @@ impl PlayerSourceLogic {
                     TransportState::Paused => {
                         info!("PlayerSource: Play (resume from {:.1}s)", paused_at_sec);
                         // Injecter un TrackBoundary pour EOS + nouveau BOS OGG propre
-                        send_track_boundary(current_uri.as_deref(), output, *paused_at_sec, stop_token).await?;
+                        let stream_type = if is_continuous { StreamType::Continuous } else { StreamType::Finite };
+                        send_track_boundary(current_uri.as_deref(), output, *paused_at_sec, stream_type, stop_token).await?;
                         *state = TransportState::Playing;
                     }
                     TransportState::Loaded => {
                         info!("PlayerSource: Play (start)");
                         *paused_at_sec = 0.0;
                         // TrackBoundary initial pour le premier BOS OGG
-                        send_track_boundary(current_uri.as_deref(), output, 0.0, stop_token).await?;
+                        let stream_type = if is_continuous { StreamType::Continuous } else { StreamType::Finite };
+                        send_track_boundary(current_uri.as_deref(), output, 0.0, stream_type, stop_token).await?;
                         *state = TransportState::Playing;
                     }
                     TransportState::Idle => {
@@ -320,7 +327,8 @@ impl PlayerSourceLogic {
                 if current_uri.is_some() {
                     info!("PlayerSource: Seek to {:.1}s", pos);
                     *paused_at_sec = pos;
-                    send_track_boundary(current_uri.as_deref(), output, pos, stop_token).await?;
+                    let stream_type = if is_continuous { StreamType::Continuous } else { StreamType::Finite };
+                    send_track_boundary(current_uri.as_deref(), output, pos, stream_type, stop_token).await?;
                     *state = TransportState::Playing;
                 }
             }
@@ -335,6 +343,7 @@ impl PlayerSourceLogic {
     async fn pump(
         &mut self,
         source: UriSource,
+        is_continuous: bool,
         state: &mut TransportState,
         current_uri: &mut Option<String>,
         next_uri: &mut Option<String>,
@@ -394,7 +403,8 @@ impl PlayerSourceLogic {
                             *next_uri = None;
                             *paused_at_sec = 0.0;
                             // TrackBoundary pour clore le bitstream OGG proprement
-                            if let Err(e) = send_track_boundary(current_uri.as_deref(), output, 0.0, stop_token).await {
+                            let stream_type = if is_continuous { StreamType::Continuous } else { StreamType::Finite };
+                            if let Err(e) = send_track_boundary(current_uri.as_deref(), output, 0.0, stream_type, stop_token).await {
                                 result = Err(e);
                             }
                             *state = TransportState::Playing;
@@ -408,7 +418,8 @@ impl PlayerSourceLogic {
                             info!("PlayerSource: Seek to {:.1}s", pos);
                             source_stop.cancel();
                             *paused_at_sec = pos;
-                            if let Err(e) = send_track_boundary(current_uri.as_deref(), output, pos, stop_token).await {
+                            let stream_type = if is_continuous { StreamType::Continuous } else { StreamType::Finite };
+                            if let Err(e) = send_track_boundary(current_uri.as_deref(), output, pos, stream_type, stop_token).await {
                                 result = Err(e);
                                 break;
                             }
@@ -434,7 +445,8 @@ impl PlayerSourceLogic {
                                 info!("PlayerSource: gapless transition to {:?}", next);
                                 *current_uri = Some(next);
                                 *paused_at_sec = 0.0;
-                                if let Err(e) = send_track_boundary(current_uri.as_deref(), output, 0.0, stop_token).await {
+                                let stream_type = if is_continuous { StreamType::Continuous } else { StreamType::Finite };
+                                if let Err(e) = send_track_boundary(current_uri.as_deref(), output, 0.0, stream_type, stop_token).await {
                                     result = Err(e);
                                 }
                                 *state = TransportState::Playing;
@@ -494,6 +506,7 @@ async fn send_track_boundary(
     uri: Option<&str>,
     output: &[mpsc::Sender<Arc<AudioSegment>>],
     timestamp_sec: f64,
+    stream_type: StreamType,
     stop_token: &CancellationToken,
 ) -> Result<(), AudioError> {
     if output.is_empty() || stop_token.is_cancelled() {
@@ -505,7 +518,7 @@ async fn send_track_boundary(
         let _ = meta.set_title(Some(u.to_string())).await;
     }
     let meta_arc = Arc::new(tokio::sync::RwLock::new(meta));
-    let boundary = AudioSegment::new_track_boundary(0, timestamp_sec, meta_arc);
+    let boundary = AudioSegment::new_track_boundary(0, timestamp_sec, meta_arc, stream_type);
 
     send_to_children("PlayerSource", output, boundary).await
 }

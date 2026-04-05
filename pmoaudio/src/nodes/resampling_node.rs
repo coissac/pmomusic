@@ -33,7 +33,7 @@ use crate::{
     nodes::{AudioError, TypedAudioNode},
     pipeline::{send_to_children, AudioPipelineNode, Node, NodeLogic},
     type_constraints::TypeRequirement,
-    AudioChunk, AudioChunkData, AudioSegment, BitDepth, I24,
+    AudioChunk, AudioChunkData, AudioSegment, BitDepth, I24, StreamType,
 };
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -495,7 +495,7 @@ mod tests {
         let metadata = Arc::new(tokio::sync::RwLock::new(
             pmometadata::MemoryTrackMetadata::new(),
         ));
-        let boundary = AudioSegment::new_track_boundary(0, 0.0, metadata);
+        let boundary = AudioSegment::new_track_boundary(0, 0.0, metadata, StreamType::Finite);
 
         // Envoyer le boundary
         input_tx.send(boundary.clone()).await.unwrap();

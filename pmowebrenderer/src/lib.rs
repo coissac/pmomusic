@@ -5,25 +5,14 @@
 //! - Le navigateur lit un flux FLAC via GET /api/webrenderer/{id}/stream
 //! - Les commandes UPnP sont relayées vers le pipeline audio via PipelineControl
 
-mod error;
-mod handlers;
-mod messages;
-mod pipeline;
+mod adapter;
 mod register;
-mod registry;
-mod renderer;
-mod state;
 mod stream;
 
 #[cfg(feature = "pmoserver")]
 mod config;
 
-pub use error::WebRendererError;
-pub use messages::PlaybackState;
-pub use pipeline::{PipelineControl, PipelineHandle};
-pub use registry::{RendererRegistry, WebRendererInstance};
-pub use renderer::{FactoryError, WebRendererFactory};
-pub use state::{RendererState, SharedState};
+pub use adapter::BrowserAdapter;
 
 #[cfg(feature = "pmoserver")]
 pub use config::WebRendererExt;

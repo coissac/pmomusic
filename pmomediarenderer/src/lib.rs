@@ -11,25 +11,23 @@
 //! - **AVTransport** : Contrôle de la lecture (play, pause, stop, seek, etc.)
 //! - **RenderingControl** : Contrôle du volume et du mute
 //! - **ConnectionManager** : Gestion des connexions et des protocoles supportés
-//!
-//! # Device UPnP
-//!
-//! - Type : `urn:schemas-upnp-org:device:MediaRenderer:1`
-//! - Services : AVTransport:1, RenderingControl:1, ConnectionManager:1
-//!
-//! # Utilisation
-//!
-//! ```ignore
-//! use pmomediarenderer::MEDIA_RENDERER;
-//!
-//! // Le device est déjà configuré avec tous ses services
-//! let renderer = MEDIA_RENDERER.clone();
-//! let instance = renderer.create_instance();
-//! ```
 
+pub mod adapter;
 pub mod avtransport;
 pub mod connectionmanager;
-pub mod device;
+pub mod error;
+pub mod handlers;
+pub mod messages;
+pub mod pipeline;
+pub mod registry;
 pub mod renderingcontrol;
+pub mod renderer;
+pub mod state;
 
-pub use device::MEDIA_RENDERER;
+pub use error::MediaRendererError;
+pub use handlers::*;
+pub use messages::PlaybackState;
+pub use pipeline::{PipelineControl, PipelineHandle, seconds_to_upnp_time, upnp_time_to_seconds, InstancePipeline};
+pub use registry::{MediaRendererInstance, MediaRendererRegistry};
+pub use state::{RendererState, SharedState};
+pub use adapter::{DeviceAdapter, DeviceCommand, DevicePlaybackState, DeviceStateReport};

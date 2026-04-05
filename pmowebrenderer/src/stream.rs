@@ -9,45 +9,46 @@ use axum::{
     body::Body,
     extract::{Path, State},
     http::{
-        HeaderMap, StatusCode,
         header::{CACHE_CONTROL, CONNECTION, CONTENT_TYPE, TRANSFER_ENCODING},
+        HeaderMap, StatusCode,
     },
     response::{IntoResponse, Response},
 };
 use std::sync::Arc;
 use tokio_util::io::ReaderStream;
-use tracing::info;
+use tracing::{error, info};
 
-use crate::registry::RendererRegistry;
+use pmomediarenderer::MediaRendererRegistry;
 
 /// GET /api/webrenderer/{id}/stream
 pub async fn stream_handler(
-    State(registry): State<Arc<RendererRegistry>>,
+    State(registry): State<Arc<MediaRendererRegistry>>,
     Path(instance_id): Path<String>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
     info!(instance_id = %instance_id, "FLAC stream client connecting");
 
     // Ignorer le header Range — flux live infini, non seekable.
-    // On ne répond jamais 206 ni 416 : toujours 200 chunked.
-    // Safari (et d'autres clients) envoient parfois Range: bytes=0-N ;
-    // répondre 416 ou 206 leur fait croire à une ressource finie.
     if let Some(range) = headers.get("range") {
-        info!(instance_id = %instance_id, "Range header ignored (live stream): {:?}", range);
+        info!(instance_id = %instance_id, "Range header ignored: {:?}", range);
     }
 
     let stream = match registry.get_stream(&instance_id) {
-        Some(s) => s,
+        Some(s) => {
+            info!(instance_id = %instance_id, "Found instance, getting stream");
+            s
+        }
         None => {
+            error!(instance_id = %instance_id, "No WebRenderer instance found!");
             return (
                 StatusCode::NOT_FOUND,
                 format!("No WebRenderer instance for id={}", instance_id),
             )
-                .into_response()
+                .into_response();
         }
     };
 
-    info!(instance_id = %instance_id, "FLAC stream started");
+    info!(instance_id = %instance_id, "FLAC stream started - returning OGG-FLAC");
 
     Response::builder()
         .status(StatusCode::OK)

@@ -11,6 +11,7 @@ import {
     ArrowRightLeft,
 } from "lucide-vue-next";
 import { useRenderers } from "@/composables/useRenderers";
+import { useWebRenderer } from "@/composables/useWebRenderer";
 import { useRouter } from "vue-router";
 import StatusBadge from "@/components/pmocontrol/StatusBadge.vue";
 import type { RendererSummary } from "@/services/pmocontrol/types";
@@ -27,7 +28,20 @@ const emit = defineEmits<{
 }>();
 
 const { allRenderers, fetchRenderers, getStateById } = useRenderers();
+const webRenderer = useWebRenderer();
 const router = useRouter();
+
+// Filtre pour n'afficher que notre WebRenderer (pas les autres onglets/navigateurs)
+const myUdn = computed(() => webRenderer.rendererUdn.value);
+
+const filteredRenderers = computed(() => {
+    const udn = myUdn.value;
+    return allRenderers.value.filter((r: RendererSummary) => {
+        if (r.model_name !== "WebRenderer") return true;
+        if (udn === null) return false;
+        return r.id === udn;
+    });
+});
 
 // Gestion du menu déroulant
 const openMenuId = ref<string | null>(null);
@@ -110,16 +124,16 @@ watch(
 );
 
 const onlineRenderers = computed(() =>
-    allRenderers.value.filter((r: RendererSummary) => r.online),
+    filteredRenderers.value.filter((r: RendererSummary) => r.online),
 );
 const offlineRenderers = computed(() =>
-    allRenderers.value.filter((r: RendererSummary) => !r.online),
+    filteredRenderers.value.filter((r: RendererSummary) => !r.online),
 );
 
 // Noms de renderers qui apparaissent plus d'une fois (online + offline)
 const duplicateNames = computed(() => {
     const counts = new Map<string, number>();
-    for (const r of allRenderers.value) {
+    for (const r of filteredRenderers.value) {
         counts.set(r.friendly_name, (counts.get(r.friendly_name) ?? 0) + 1);
     }
     return new Set([...counts.entries()].filter(([, n]) => n > 1).map(([name]) => name));

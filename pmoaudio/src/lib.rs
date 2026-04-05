@@ -95,7 +95,7 @@ pub mod bit_depth;
 pub mod dsp;
 
 pub use audio_segment::{AudioSegment, _AudioSegment};
-pub use sync_marker::SyncMarker;
+pub use sync_marker::{StreamType, SyncMarker};
 
 pub use audio_chunk::{
     gain_db_from_linear, gain_linear_from_db, AudioChunk, AudioChunkData, AudioFloatChunk,

@@ -13,7 +13,7 @@ use pmoaudio::{
     nodes::{AudioError, TypedAudioNode, DEFAULT_CHUNK_DURATION_MS},
     pipeline::{send_to_children, send_to_children_with_timing, Node, NodeLogic},
     type_constraints::TypeRequirement,
-    AudioPipelineNode, AudioSegment, SyncMarker, I24,
+    AudioPipelineNode, AudioSegment, SyncMarker, I24, StreamType,
 };
 use pmoflac::decode_audio_stream;
 use pmometadata::{MemoryTrackMetadata, TrackMetadata};
@@ -243,6 +243,7 @@ impl RadioParadiseStreamSourceLogic {
             let track_boundary = AudioSegment::new_track_boundary(
                 *order, 0.0, // timestamp = 0 au début du stream
                 metadata,
+                StreamType::Continuous,
             );
             self.send_to_children(output, track_boundary).await?;
             song_index = 1;
@@ -336,7 +337,7 @@ impl RadioParadiseStreamSourceLogic {
                     let metadata = song_to_metadata(song, block).await;
                     let timestamp_sec = total_samples as f64 / sample_rate as f64;
                     let track_boundary =
-                        AudioSegment::new_track_boundary(*order, timestamp_sec, metadata);
+                        AudioSegment::new_track_boundary(*order, timestamp_sec, metadata, StreamType::Continuous);
                     self.send_to_children(output, track_boundary).await?;
 
                     // Passer à la song suivante

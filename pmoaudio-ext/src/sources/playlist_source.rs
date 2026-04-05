@@ -113,7 +113,7 @@ use pmoaudio::{
     nodes::{AudioError, TypedAudioNode, DEFAULT_CHUNK_DURATION_MS},
     pipeline::{send_to_children, AudioPipelineNode, Node, NodeLogic},
     type_constraints::TypeRequirement,
-    AudioSegment,
+    AudioSegment, StreamType,
 };
 use pmoaudiocache::Cache as AudioCache;
 use pmoflac::decode_audio_stream;
@@ -279,7 +279,7 @@ impl NodeLogic for PlaylistSourceLogic {
             let track_start = std::time::Instant::now();
             tracing::debug!("PlaylistSourceLogic: emitting TrackBoundary");
             let metadata_for_boundary = metadata.clone();
-            let boundary = AudioSegment::new_track_boundary(0, 0.0, metadata_for_boundary);
+            let boundary = AudioSegment::new_track_boundary(0, 0.0, metadata_for_boundary, StreamType::Finite);
             send_to_children(node_name, &output, boundary).await?;
 
             // Obtenir le chemin du fichier

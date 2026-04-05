@@ -1,6 +1,5 @@
 use pmoapp::{WebAppExt, Webapp};
 use pmocontrol::ControlPointExt;
-use pmomediarenderer::MEDIA_RENDERER;
 use pmomediaserver::{
     MEDIA_SERVER, MediaServerDeviceExt, ParadiseStreamingExt, sources::SourcesExt,
 };
@@ -70,17 +69,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Enregistrer les devices UPnP (HTTP + SSDP automatique)
     info!("📡 Registering UPnP devices...");
-
-    let renderer_instance = server
-        .write()
-        .await
-        .register_device(MEDIA_RENDERER.clone(), true)
-        .await
-        .expect("Failed to register MediaRenderer");
-
-    let base_url = renderer_instance.base_url();
-    let desc_route = renderer_instance.description_route();
-    info!("✅ MediaRenderer ready at {}{}", base_url, desc_route);
 
     let server_instance = server
         .write()

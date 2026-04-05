@@ -1,7 +1,7 @@
 [package]
 name = "pmomediarenderer"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
 pmoupnp = { path = "../pmoupnp" }
@@ -11,3 +11,28 @@ once_cell = "1.20"
 bevy_reflect = "0.17.1"
 htmlescape = "0.3"
 quick-xml = { workspace = true }
+
+pmoaudio-ext = { path = "../pmoaudio-ext", features = ["http-stream"] }
+pmoaudio = { path = "../pmoaudio" }
+pmoflac = { path = "../pmoflac" }
+pmoconfig = { path = "../pmoconfig" }
+pmometadata = { path = "../pmometadata" }
+pmoutils = { version = "0.1.2", registry = "pmo" }
+
+tokio = { workspace = true, features = ["full"] }
+tokio-util = { workspace = true }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+uuid = { workspace = true, features = ["v4", "serde"] }
+parking_lot = "0.12"
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+pmoserver = { path = "../pmoserver", optional = true }
+pmocontrol = { path = "../pmocontrol", optional = true }
+
+[features]
+default = []
+pmoserver = ["dep:pmoserver", "dep:pmocontrol"]

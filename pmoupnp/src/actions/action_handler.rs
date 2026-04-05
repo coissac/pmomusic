@@ -177,110 +177,27 @@ pub type ActionHandler = Arc<dyn Fn(ActionData) -> ActionFuture + Send + Sync>;
 
 /// Macro pour créer facilement un ActionHandler.
 ///
-/// Cette macro simplifie la création d'handlers asynchrones en cachant
-/// la complexité de `Arc`, `Box::pin`, et `async move`.
+/// Deux formes disponibles :
 ///
-/// # Syntaxe
+/// ## Forme simple (sans captures)
 ///
 /// ```ignore
-/// action_handler!(|data| {
-///     // votre logique async avec ActionData
-///     // Modifier les données et les retourner
-///     Ok(data)
-/// })
+/// action_handler!(|data| { Ok(data) })
 /// ```
 ///
-/// # Arguments
+/// ## Forme avec captures (clonées automatiquement à chaque appel)
 ///
-/// - `data` : Paramètre de type [`ActionData`] - HashMap contenant les valeurs des arguments
-/// - Le corps du bloc peut contenir du code asynchrone (`.await`)
-///
-/// # Type de retour
-///
-/// La macro retourne un [`ActionHandler`] prêt à l'emploi.
-///
-/// # Examples
-///
-/// ## Exemple 1 : Handler simple (retourne les données telles quelles)
+/// Pour capturer un état partagé ou un handle, utilisez `captures(...)`.
+/// Chaque variable listée est clonée une fois par invocation du handler,
+/// ce qui satisfait la contrainte `Fn` (et non `FnOnce`).
 ///
 /// ```ignore
-/// use pmoupnp::action_handler;
+/// let state: SharedState = ...;
+/// let pipeline: PipelineHandle = ...;
 ///
-/// let handler = action_handler!(|data| {
-///     Ok(data) // Retourne les données non modifiées
-/// });
-/// ```
-///
-/// ## Exemple 2 : Handler qui calcule et modifie les données
-///
-/// ```ignore
-/// use pmoupnp::{action_handler, get, set};
-/// use pmoupnp::actions::ActionError;
-///
-/// let handler = action_handler!(|mut data| {
-///     // Extraire les valeurs avec la macro get!
-///     let celsius: f64 = get!(data, "Celsius", f64);
-///
-///     // Calculer
-///     let fahrenheit = celsius * 9.0 / 5.0 + 32.0;
-///
-///     // Insérer avec la macro set!
-///     set!(data, "Fahrenheit", fahrenheit);
-///
-///     Ok(data) // Retourner les données modifiées
-/// });
-/// ```
-///
-/// ## Exemple 3 : Handler avec logique métier asynchrone
-///
-/// ```ignore
-/// use pmoupnp::{action_handler, get, set};
-/// use pmoupnp::actions::ActionError;
-///
-/// let handler = action_handler!(|mut data| {
-///     // Lire l'URI
-///     let uri: String = get!(data, "URI", String);
-///
-///     // Appel asynchrone à un service externe
-///     let metadata = external_service::fetch_metadata(&uri).await
-///         .map_err(|e| ActionError::ExternalError(e.to_string()))?;
-///
-///     // Mettre à jour les données
-///     set!(data, "Metadata", metadata);
-///
-///     Ok(data)
-/// });
-/// ```
-///
-/// ## Exemple 4 : Handler avec capture de contexte
-///
-/// ```ignore
-/// use pmoupnp::{action_handler, get, set};
-/// use pmoupnp::actions::ActionError;
-/// use std::sync::Arc;
-/// use tokio::sync::Mutex;
-///
-/// // Contexte partagé
-/// let player_state = Arc::new(Mutex::new(PlayerState::Stopped));
-///
-/// let handler = action_handler!(|mut data| {
-///     // Vérifier l'état
-///     {
-///         let state = player_state.lock().await;
-///         if *state == PlayerState::Error {
-///             return Err(ActionError::InvalidState("Player in error state".into()));
-///         }
-///     }
-///
-///     // Modifier l'état
-///     {
-///         let mut state = player_state.lock().await;
-///         *state = PlayerState::Playing;
-///     }
-///
-///     // Mettre à jour les données
-///     set!(data, "TransportState", "PLAYING".to_string());
-///
+/// let handler = action_handler!(captures(state, pipeline) |mut data| {
+///     pipeline.send(PipelineControl::Play).await;
+///     state.write().playback_state = PlaybackState::Playing;
 ///     Ok(data)
 /// });
 /// ```
@@ -288,13 +205,40 @@ pub type ActionHandler = Arc<dyn Fn(ActionData) -> ActionFuture + Send + Sync>;
 /// # Notes d'implémentation
 ///
 /// - Le bloc est automatiquement wrappé dans `async move`
-/// - Les captures de variables sont déplacées (`move`)
+/// - Avec `captures(...)`, chaque variable capturée doit implémenter `Clone`
 /// - Le résultat est automatiquement boxé et arcé
-/// - Utilisez les macros `get!` et `set!` pour manipuler facilement les données
 #[macro_export]
 macro_rules! action_handler {
+    // ── Formes simples (sans captures externes) ──────────────────────────────
+
     (|$data:ident| $body:block) => {
         std::sync::Arc::new(|$data: $crate::actions::ActionData| {
+            Box::pin(async move $body)
+        })
+    };
+
+    (|mut $data:ident| $body:block) => {
+        std::sync::Arc::new(|mut $data: $crate::actions::ActionData| {
+            Box::pin(async move $body)
+        })
+    };
+
+    // ── Formes avec captures (clonées automatiquement à chaque appel) ────────
+    //
+    // Chaque variable listée dans captures(...) est clonée avant chaque appel,
+    // ce qui satisfait la contrainte `Fn` (vs `FnOnce`).
+    // Les variables capturées doivent implémenter `Clone + Send + Sync + 'static`.
+
+    (captures($($cap:ident),+ $(,)?) |$data:ident| $body:block) => {
+        std::sync::Arc::new(move |$data: $crate::actions::ActionData| {
+            $(let $cap = $cap.clone();)+
+            Box::pin(async move $body)
+        })
+    };
+
+    (captures($($cap:ident),+ $(,)?) |mut $data:ident| $body:block) => {
+        std::sync::Arc::new(move |mut $data: $crate::actions::ActionData| {
+            $(let $cap = $cap.clone();)+
             Box::pin(async move $body)
         })
     };

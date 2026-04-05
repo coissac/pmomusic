@@ -118,6 +118,10 @@ pub struct SharedStreamHandleInner {
     pub stop_token: CancellationToken,
     pub header: Arc<RwLock<Option<Bytes>>>,
     pub auto_stop: Arc<AtomicBool>,
+    /// Pause state - true if paused, false if playing
+    pub is_paused: Arc<AtomicBool>,
+    /// Stream type (Continuous for radio, Finite for tracks)
+    pub stream_type: Arc<RwLock<pmoaudio::StreamType>>,
 }
 
 impl SharedStreamHandleInner {
@@ -135,6 +139,8 @@ impl SharedStreamHandleInner {
             stop_token,
             header,
             auto_stop,
+            is_paused: Arc::new(AtomicBool::new(false)),
+            stream_type: Arc::new(RwLock::new(pmoaudio::StreamType::Finite)),
         }
     }
 
@@ -294,6 +300,12 @@ pub struct SharedSinkContext {
     pub current_timestamp: Arc<RwLock<f64>>,
     pub pending_track_duration: Option<Duration>,
     pub pending_total_samples: Option<u64>,
+    /// Pause state - true if paused, false if playing
+    pub is_paused: Arc<AtomicBool>,
+    /// Stream type (Continuous for radio, Finite for tracks)
+    pub stream_type: Arc<RwLock<pmoaudio::StreamType>>,
+    /// Last TrackBoundary metadata received (for pause/resume)
+    pub last_track_metadata: Arc<RwLock<Option<Arc<RwLock<dyn TrackMetadata>>>>>,
 }
 
 impl SharedSinkContext {

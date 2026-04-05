@@ -2,7 +2,7 @@ use crate::{
     nodes::{AudioError, TypedAudioNode, DEFAULT_CHUNK_DURATION_MS},
     pipeline::{send_to_children, Node, NodeLogic},
     type_constraints::TypeRequirement,
-    AudioChunk, AudioChunkData, AudioPipelineNode, AudioSegment, I24,
+    AudioChunk, AudioChunkData, AudioPipelineNode, AudioSegment, I24, StreamType,
 };
 use futures_util::StreamExt;
 use pmoflac::{decode_audio_stream, StreamInfo};
@@ -178,7 +178,7 @@ impl NodeLogic for HttpSourceLogic {
 
         // Émettre TrackBoundary avec les métadonnées HTTP
         let track_boundary =
-            AudioSegment::new_track_boundary(0, 0.0, Arc::new(tokio::sync::RwLock::new(metadata)));
+            AudioSegment::new_track_boundary(0, 0.0, Arc::new(tokio::sync::RwLock::new(metadata)), StreamType::Finite);
         send_to_children(std::any::type_name::<Self>(), &output, track_boundary).await?;
 
         // Préparer la lecture des chunks audio

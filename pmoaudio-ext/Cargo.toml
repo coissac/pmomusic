@@ -1,7 +1,7 @@
 [package]
 name = "pmoaudio-ext"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 # Core audio types
@@ -32,10 +32,11 @@ serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 reqwest = { workspace = true, features = ["stream"], optional = true }
 futures = { version = "0.3", optional = true }
+ureq = { version = "2", optional = true }
 
 [features]
 default = []
 cache-sink = ["dep:pmoaudiocache", "dep:pmoflac", "dep:pmometadata", "dep:serde_json"]
 playlist = ["cache-sink", "dep:pmoplaylist", "dep:pmocache"]
-http-stream = ["dep:pmoflac", "dep:pmometadata", "dep:bytes", "dep:serde", "dep:reqwest", "dep:futures"]
+http-stream = ["dep:pmoflac", "dep:pmometadata", "dep:bytes", "dep:serde", "dep:reqwest", "dep:futures", "dep:ureq"]
 all = ["cache-sink", "playlist", "http-stream"]

@@ -307,7 +307,7 @@ impl NodeLogic for StreamingFlacSinkLogic {
 
                                 _AudioSegment::Sync(marker) => {
                                     match marker.as_ref() {
-                                        SyncMarker::TrackBoundary { metadata } => {
+                                        SyncMarker::TrackBoundary { metadata, .. } => {
                                             // Prepare encoder options (metadata + duration) for the upcoming track.
                                             if let Err(e) =
                                                 self.ctx.prepare_encoder_options_for_track(metadata).await
@@ -533,6 +533,9 @@ impl StreamingFlacSink {
                 current_timestamp: Arc::new(RwLock::new(0.0)),
                 pending_track_duration: None,
                 pending_total_samples: None,
+                is_paused: Arc::new(AtomicBool::new(false)),
+                stream_type: Arc::new(RwLock::new(pmoaudio::StreamType::Finite)),
+                last_track_metadata: Arc::new(RwLock::new(None)),
             },
         };
 

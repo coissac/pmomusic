@@ -1,24 +1,13 @@
 /**
  * Composable pour gérer le WebRenderer navigateur.
  *
- * S'enregistre via POST /api/webrenderer/register au montage
- * et diffuse l'audio via un élément <audio> pointant sur
- * /api/webrenderer/{id}/stream (flux FLAC encodé côté serveur).
- *
- * Le navigateur est vu comme un renderer UPnP par le ControlPoint.
- * Le gapless est géré côté serveur : le navigateur lit un flux continu.
- *
- * Cycle de vie du flux audio :
- * - PLAYING/TRANSITIONING → src = stream_url + play()  (nouvelle connexion HTTP)
- * - PAUSED/STOPPED        → pause() + src = ""          (déconnexion HTTP)
+ * Utilise PMOPlayer pour le controle remote.
+ * S'enregistre via POST /api/webrenderer/register
+ * Utilise polling HTTP pour les commands
  */
 
 import { ref, onMounted, onUnmounted, readonly } from "vue";
-import { useSSE } from "./useSSE";
-
-// ─── Identifiant stable de l'instance navigateur ─────────────────────────────
-
-const INSTANCE_ID_KEY = "pmomusic_webrenderer_instance_id";
+import { PMOPlayer } from "@/services/PMOPlayer";
 
 function generateUUID(): string {
     if (typeof crypto.randomUUID === "function") {
@@ -31,6 +20,18 @@ function generateUUID(): string {
     const hex = Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
+
+const INSTANCE_ID_KEY = "pmomusic_webrenderer_instance_id";
+
+// Module-level singleton for PMOPlayer to prevent duplicate instances
+let globalPlayer: PMOPlayer | null = null;
+let globalInstanceId: string | null = null;
+let registering = false;
+
+// Module-level reactive state shared across all composable invocations
+const sharedConnected = ref(false);
+const sharedStreamUrl = ref<string | null>(null);
+const sharedRendererUdn = ref<string | null>(null);
 
 function getOrCreateInstanceId(): string {
     try {
@@ -45,146 +46,36 @@ function getOrCreateInstanceId(): string {
     }
 }
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-interface RegisterRequest {
-    instance_id: string;
-    user_agent: string;
-}
-
-interface RegisterResponse {
-    stream_url: string;
-    udn: string;
-}
-
-// ─── Composable ───────────────────────────────────────────────────────────────
-
 export function useWebRenderer() {
-    const connected = ref(false);
-    const streamUrl = ref<string | null>(null);
-    /** UDN du device UPnP créé côté serveur pour ce navigateur */
-    const rendererUdn = ref<string | null>(null);
+    const connected = sharedConnected;
+    const streamUrl = sharedStreamUrl;
+    const rendererUdn = sharedRendererUdn;
 
-    let audioEl: HTMLAudioElement | null = null;
-    let instanceId: string | null = null;
-    let currentStreamUrl: string | null = null;
+    let player: PMOPlayer | null = null;
     let onConnectedCallback: (() => void) | null = null;
-    let sseUnsubscribe: (() => void) | null = null;
-    let pendingCanPlay: (() => void) | null = null;
-    let positionInterval: ReturnType<typeof setInterval> | null = null;
-
-    // ── Reporting de position ─────────────────────────────────────────────────
-
-    function startPositionReporting(): void {
-        stopPositionReporting();
-        positionInterval = setInterval(() => {
-            if (!audioEl || !instanceId) return;
-            const pos = audioEl.currentTime;
-            const dur = isFinite(audioEl.duration) ? audioEl.duration : null;
-            void fetch(`/api/webrenderer/${instanceId}/position`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ position_sec: pos, duration_sec: dur }),
-            });
-        }, 1000);
-    }
-
-    function stopPositionReporting(): void {
-        if (positionInterval !== null) {
-            clearInterval(positionInterval);
-            positionInterval = null;
-        }
-    }
-
-    // ── Connexion / déconnexion du flux audio ─────────────────────────────────
-
-    function startStream(): void {
-        console.log("[WebRenderer] startStream called, audioEl=", !!audioEl, "currentStreamUrl=", currentStreamUrl);
-        if (!audioEl || !currentStreamUrl) return;
-        const el = audioEl;
-        // Si le stream est en erreur (networkState=3), réinitialiser avant de réessayer
-        if (el.networkState === 3 /* NETWORK_NO_SOURCE */ && !pendingCanPlay) {
-            console.log("[WebRenderer] startStream: networkState=3, resetting before retry");
-            el.removeAttribute("src");
-            el.load();
-        }
-        // Si le stream est déjà chargé/en cours, ne pas réouvrir la connexion HTTP.
-        // (évite que PLAYING après TRANSITIONING ne crée un nouveau pipe)
-        if (el.hasAttribute("src") && (el.readyState > 0 || pendingCanPlay)) {
-            console.log("[WebRenderer] startStream: stream already open, ignoring (readyState=", el.readyState, ")");
-            return;
-        }
-        // Sur Safari, play() échoue avec NotSupportedError si appelé avant que
-        // l'élément audio ait reçu assez de données (readyState < HAVE_FUTURE_DATA).
-        // On attend canplay avant d'appeler play().
-        if (pendingCanPlay) {
-            el.removeEventListener("canplay", pendingCanPlay);
-        }
-        el.src = currentStreamUrl;
-        console.log("[WebRenderer] src set, readyState=", el.readyState, "networkState=", el.networkState);
-
-        el.addEventListener("error", () => {
-            console.error("[WebRenderer] event:error code=", el.error?.code, el.error?.message,
-                "readyState=", el.readyState, "networkState=", el.networkState);
-            // Nettoyer pendingCanPlay pour permettre un retry au prochain PLAYING/TRANSITIONING
-            if (pendingCanPlay) {
-                el.removeEventListener("canplay", pendingCanPlay);
-                pendingCanPlay = null;
-            }
-        }, { once: true });
-        el.addEventListener("loadstart",      () => console.debug("[WebRenderer] event:loadstart readyState=", el.readyState), { once: true });
-        el.addEventListener("loadedmetadata", () => console.debug("[WebRenderer] event:loadedmetadata readyState=", el.readyState), { once: true });
-        el.addEventListener("loadeddata",     () => console.debug("[WebRenderer] event:loadeddata readyState=", el.readyState), { once: true });
-        el.addEventListener("progress",       () => console.debug("[WebRenderer] event:progress readyState=", el.readyState), { once: true });
-        el.addEventListener("stalled",        () => console.warn("[WebRenderer] event:stalled readyState=", el.readyState, "networkState=", el.networkState));
-        el.addEventListener("waiting",        () => console.warn("[WebRenderer] event:waiting readyState=", el.readyState));
-        el.addEventListener("suspend",        () => console.debug("[WebRenderer] event:suspend readyState=", el.readyState, "networkState=", el.networkState), { once: true });
-        el.addEventListener("abort",          () => console.warn("[WebRenderer] event:abort"), { once: true });
-        el.addEventListener("emptied",        () => console.warn("[WebRenderer] event:emptied"), { once: true });
-
-        const onCanPlay = () => {
-            console.log("[WebRenderer] event:canplay readyState=", el.readyState, "calling play()");
-            pendingCanPlay = null;
-            el.removeEventListener("canplay", onCanPlay);
-            el.play().then(() => {
-                console.log("[WebRenderer] play() resolved OK");
-                startPositionReporting();
-            }).catch((e: unknown) => {
-                console.warn("[WebRenderer] play() rejected:", e);
-            });
-        };
-        pendingCanPlay = onCanPlay;
-        el.addEventListener("canplay", onCanPlay);
-    }
-
-    function stopStream(): void {
-        console.log("[WebRenderer] stopStream called, readyState=", audioEl?.readyState);
-        stopPositionReporting();
-        if (!audioEl) return;
-        if (pendingCanPlay) {
-            audioEl.removeEventListener("canplay", pendingCanPlay);
-            pendingCanPlay = null;
-        }
-        audioEl.pause();
-        audioEl.removeAttribute("src");  // ferme la connexion HTTP (src="" résolu comme URL de page sur Safari)
-        audioEl.load();  // force le reset de l'état réseau
-    }
-
-    // ── Enregistrement ────────────────────────────────────────────────────────
 
     async function register(): Promise<void> {
-        instanceId = getOrCreateInstanceId();
+        // Prevent concurrent registrations (race condition → double player)
+        if (globalPlayer || registering) {
+            if (globalPlayer) {
+                player = globalPlayer;
+                connected.value = true;
+            }
+            return;
+        }
+        registering = true;
 
-        const body: RegisterRequest = {
-            instance_id: instanceId,
-            user_agent: navigator.userAgent,
-        };
+        const instanceId = getOrCreateInstanceId();
+        console.log('[WebRenderer] registering with instanceId:', instanceId);
 
         try {
             const resp = await fetch("/api/webrenderer/register", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(body),
+                body: JSON.stringify({
+                    instance_id: instanceId,
+                    user_agent: navigator.userAgent,
+                }),
             });
 
             if (!resp.ok) {
@@ -192,94 +83,78 @@ export function useWebRenderer() {
                 return;
             }
 
-            const data = (await resp.json()) as RegisterResponse;
+            const data = await resp.json();
             streamUrl.value = data.stream_url;
-            currentStreamUrl = data.stream_url;
             rendererUdn.value = data.udn;
+
+            player = new PMOPlayer(instanceId);
+            globalPlayer = player;
+            globalInstanceId = instanceId;
+            player.setDebug(true);
+
+            player.on('play', () => console.log('[WebRenderer] playing'));
+            player.on('pause', () => console.log('[WebRenderer] paused'));
+
+            // Si le backend est déjà en lecture (reconnexion après reload), démarrer immédiatement
+            if (data.should_play && data.stream_url) {
+                console.log('[WebRenderer] backend already playing, starting stream');
+                player.playStream(data.stream_url);
+            }
+
             connected.value = true;
             onConnectedCallback?.();
-
-            // S'abonner aux événements SSE du renderer pour piloter la lecture
-            const { connect, onRendererEvent } = useSSE();
-            connect();
-            const udn = data.udn;
-            sseUnsubscribe?.();
-            sseUnsubscribe = onRendererEvent((event) => {
-                if (event.renderer_id !== udn) return;
-                if (event.type !== "state_changed") return;
-
-                const state = event.state;
-                console.log("[WebRenderer] SSE state_changed →", state, "| event.renderer_id=", event.renderer_id, "udn=", udn, "| audioEl.src=", audioEl?.src, "readyState=", audioEl?.readyState, "networkState=", audioEl?.networkState, "pendingCanPlay=", !!pendingCanPlay);
-                if (state === "PLAYING" || state === "TRANSITIONING") {
-                    startStream();
-                } else if (state === "PAUSED" || state === "STOPPED") {
-                    stopStream();
-                }
-            });
         } catch (e) {
             console.error("[WebRenderer] register error:", e);
+        } finally {
+            registering = false;
         }
     }
 
-    // ── Désenregistrement ─────────────────────────────────────────────────────
-
     async function unregister(): Promise<void> {
-        if (!instanceId) return;
+        // Only unregister if this is the global player - prevent duplicate unregister calls
+        if (player !== globalPlayer || !player) {
+            return;
+        }
+        
+        const instanceId = globalInstanceId || getOrCreateInstanceId();
+        
+        // Clear global first to prevent other components from using it
+        globalPlayer = null;
+        globalInstanceId = null;
+        
         try {
             await fetch(`/api/webrenderer/${instanceId}`, { method: "DELETE" });
         } catch {
-            // Ignoré lors du déchargement de page
+            // Ignored
         }
-        instanceId = null;
+        player?.destroy();
+        player = null;
     }
 
-    // ── Volume / Mute ─────────────────────────────────────────────────────────
-
-    function setVolume(v: number): void {
-        if (audioEl) audioEl.volume = v;
+    function setVolume(_v: number): void {
+        // PMOPlayer doesn't control volume directly - handled by backend
     }
 
-    function setMute(m: boolean): void {
-        if (audioEl) audioEl.muted = m;
+    function setMute(_m: boolean): void {
+        // PMOPlayer doesn't control mute directly - handled by backend
     }
 
-    // ── Cycle de vie ──────────────────────────────────────────────────────────
+    const beforeUnloadHandler = () => void unregister();
 
     onMounted(() => {
-        audioEl = document.createElement("audio");
-        audioEl.preload = "auto";
-        document.body.appendChild(audioEl);
-
         void register();
-        window.addEventListener("beforeunload", () => void unregister());
+        window.addEventListener("beforeunload", beforeUnloadHandler);
     });
 
     onUnmounted(() => {
-        sseUnsubscribe?.();
-        sseUnsubscribe = null;
-        stopPositionReporting();
-        stopStream();
         void unregister();
-        if (audioEl) {
-            audioEl.remove();
-            audioEl = null;
-        }
-        connected.value = false;
-        streamUrl.value = null;
-        rendererUdn.value = null;
-        window.removeEventListener("beforeunload", () => void unregister());
+        window.removeEventListener("beforeunload", beforeUnloadHandler);
     });
 
-    // ── API publique ──────────────────────────────────────────────────────────
-
     return {
-        /** true quand l'instance est enregistrée sur le serveur */
         connected: readonly(connected),
-        /** URL du flux FLAC servi par le serveur */
         streamUrl: readonly(streamUrl),
-        /** UDN du device UPnP créé pour ce navigateur (null avant enregistrement) */
         rendererUdn: readonly(rendererUdn),
-        /** Callback appelé quand l'enregistrement est confirmé */
         onConnected(fn: () => void) {
             onConnectedCallback = fn;
         },

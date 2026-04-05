@@ -233,7 +233,7 @@ impl NodeLogic for FlacCacheSinkLogic {
                                         }
                                     }
                                     _AudioSegment::Sync(marker) => match &**marker {
-                                        SyncMarker::TrackBoundary { metadata } => {
+                                        SyncMarker::TrackBoundary { metadata, .. } => {
                                             // TrackBoundary pendant le prebuffer - track courte (< 512KB)
                                             tracing::warn!(
                                                 "FlacCacheSink: TrackBoundary received before prebuffer complete - track shorter than 512KB, closing pump and waiting for ingestion"
@@ -589,7 +589,7 @@ impl NodeLogic for FlacCacheSinkLogic {
                         // Si pump_closed, ignorer silencieusement le chunk
                     }
                     _AudioSegment::Sync(marker) => match &**marker {
-                        SyncMarker::TrackBoundary { metadata } => {
+                        SyncMarker::TrackBoundary { metadata, .. } => {
                             // Nouveau morceau - fermer le pump si pas déjà fermé
                             tracing::debug!("FlacCacheSink: TrackBoundary received, closing pump and storing metadata for next track");
                             // Stocker les métadonnées pour la prochaine track
