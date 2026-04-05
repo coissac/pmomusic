@@ -63,8 +63,9 @@ impl MediaRendererRegistry {
     pub async fn register_or_reconnect(
         &self,
         instance_id: &str,
-        user_agent: &str,
-        adapter: Arc<dyn DeviceAdapter>,
+        stream_url_base: &str,
+        renderer_name: &str,
+        adapter_fn: impl FnOnce(SharedState) -> Arc<dyn DeviceAdapter>,
     ) -> Result<(String, String, bool), MediaRendererError> {
         if let Some(cancel) = self.pending_unregister.write().remove(instance_id) {
             tracing::info!(instance_id = %instance_id, "MediaRenderer: cancelled pending unregister (page reload)");
@@ -76,8 +77,8 @@ impl MediaRendererRegistry {
             if let Some(existing) = instances.get(instance_id) {
                 tracing::info!(instance_id = %instance_id, "MediaRenderer: reconnecting existing instance");
                 #[cfg(feature = "pmoserver")]
-                self.register_with_control_point(&existing.device_instance)?;
-                let stream_url = format!("/api/webrenderer/{}/stream", instance_id);
+                self.register_with_control_point(&existing.device_instance, renderer_name)?;
+                let stream_url = format!("{}/{}/stream", stream_url_base, instance_id);
                 let should_play = {
                     let s = existing.state.read();
                     s.current_uri.is_some() && matches!(
@@ -89,9 +90,9 @@ impl MediaRendererRegistry {
             }
         }
 
-        let instance = self.create_instance_with_adapter(instance_id, user_agent, adapter).await?;
+        let instance = self.create_instance_with_adapter(instance_id, stream_url_base, renderer_name, adapter_fn).await?;
         let instance = Arc::new(instance);
-        let stream_url = format!("/api/webrenderer/{}/stream", instance_id);
+        let stream_url = format!("{}/{}/stream", stream_url_base, instance_id);
         let udn = instance.udn.clone();
 
         {
@@ -223,47 +224,14 @@ impl MediaRendererRegistry {
         });
     }
 
-    pub async fn update_player_state(
-        &self,
-        instance_id: &str,
-        report: crate::messages::PlayerStateReport,
-    ) {
-        let instances = self.instances.read();
-        if let Some(instance) = instances.get(instance_id) {
-            let mut state = instance.state.write();
-            if let Some(pos) = report.position_sec {
-                state.position = Some(crate::pipeline::seconds_to_upnp_time(pos));
-            }
-            if let Some(dur) = report.duration_sec {
-                state.duration = Some(crate::pipeline::seconds_to_upnp_time(dur));
-            }
-            if let Some(s) = &report.state {
-                state.playback_state = match s.as_str() {
-                    "playing" => crate::messages::PlaybackState::Playing,
-                    "paused" => crate::messages::PlaybackState::Paused,
-                    "stopped" => crate::messages::PlaybackState::Stopped,
-                    _ => state.playback_state.clone(),
-                };
-            }
-            tracing::debug!(instance_id = %instance_id, position = ?state.position, "player state updated");
-        }
-    }
-
-    pub async fn get_pending_command(
-        &self,
-        instance_id: &str,
-    ) -> Option<serde_json::Value> {
-        let state = self.instances.read().get(instance_id).map(|i| i.state.clone())?;
-        let cmd = state.write().pop_command()?;
-        serde_json::to_value(cmd).ok()
-    }
-
-    /// Créer une nouvelle instance avec un adapter fourni (permet à l'appelant de créer BrowserAdapter)
+    /// Créer une nouvelle instance avec un adapter fourni via une factory closure.
+    /// La closure reçoit le SharedState de l'instance afin que l'adapter partage le même état.
     pub async fn create_instance_with_adapter(
         &self,
         instance_id: &str,
-        user_agent: &str,
-        adapter: Arc<dyn DeviceAdapter>,
+        stream_url_base: &str,
+        renderer_name: &str,
+        adapter_fn: impl FnOnce(SharedState) -> Arc<dyn DeviceAdapter>,
     ) -> Result<MediaRendererInstance, MediaRendererError> {
         let candidate_udn = instance_id.to_ascii_lowercase();
         let full_udn = format!("uuid:{}", candidate_udn);
@@ -277,6 +245,7 @@ impl MediaRendererRegistry {
         }
 
         let state: SharedState = Arc::new(parking_lot::RwLock::new(RendererState::default()));
+        let adapter = adapter_fn(state.clone());
 
         #[cfg(feature = "pmoserver")]
         let (device_instance, pipeline) = {
@@ -306,9 +275,10 @@ impl MediaRendererRegistry {
                 let device = MediaRendererFactory::create_device_with_pipeline(
                     instance_id,
                     "MediaRenderer",
-                    user_agent,
+                    "WebRenderer",
                     pipeline.clone(),
                     state.clone(),
+                    stream_url_base,
                 )
                 .map_err(|e| MediaRendererError::DeviceCreationError(e.to_string()))?;
 
@@ -319,7 +289,7 @@ impl MediaRendererRegistry {
                     .map_err(|e| MediaRendererError::RegistrationError(e.to_string()))?
             };
 
-            self.register_with_control_point(&di)?;
+            self.register_with_control_point(&di, renderer_name)?;
             (di, ip)
         };
 
@@ -337,9 +307,10 @@ impl MediaRendererRegistry {
             let device = MediaRendererFactory::create_device_with_pipeline(
                 instance_id,
                 "MediaRenderer",
-                user_agent,
+                "WebRenderer",
                 pipeline.clone(),
                 state.clone(),
+                stream_url_base,
             )
             .map_err(|e| MediaRendererError::DeviceCreationError(e.to_string()))?;
 
@@ -362,6 +333,7 @@ impl MediaRendererRegistry {
     fn register_with_control_point(
         &self,
         di: &Arc<DeviceInstance>,
+        renderer_name: &str,
     ) -> Result<(), MediaRendererError> {
         let base_url = di.base_url().to_string();
         let udn = di.udn().to_ascii_lowercase();
@@ -397,7 +369,7 @@ impl MediaRendererRegistry {
                 ..Default::default()
             },
             format!("{}{}", base_url, di.description_route()),
-            "PMOMusic WebRenderer/2.0".to_string(),
+            renderer_name.to_string(),
             Some("urn:schemas-upnp-org:service:AVTransport:1".to_string()),
             avtransport_control_url,
             Some("urn:schemas-upnp-org:service:RenderingControl:1".to_string()),

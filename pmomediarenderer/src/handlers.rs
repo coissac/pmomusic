@@ -18,9 +18,10 @@ pub fn play_handler(
     pipeline: PipelineHandle,
     state: SharedState,
     instance_id: String,
+    stream_url_base: String,
 ) -> ActionHandler {
     action_handler!(
-        captures(pipeline, state, instance_id) | data | {
+        captures(pipeline, state, instance_id, stream_url_base) | data | {
             tracing::info!("[MediaRenderer] UPnP Play action invoked");
             let has_uri = state.read().current_uri.is_some();
             if !has_uri {
@@ -31,7 +32,7 @@ pub fn play_handler(
                 let mut s = state.write();
                 s.playback_state = PlaybackState::Transitioning;
                 s.push_command(crate::adapter::DeviceCommand::Stream {
-                    url: format!("/api/webrenderer/{}/stream", instance_id),
+                    url: format!("{}/{}/stream", stream_url_base, instance_id),
                 });
             }
             pipeline.flac_handle.resume();

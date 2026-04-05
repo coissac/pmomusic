@@ -14,9 +14,18 @@ use std::sync::Arc;
 
 use pmomediarenderer::PlaybackState;
 use pmomediarenderer::PipelineControl;
-use pmomediarenderer::{DeviceAdapter, DeviceCommand, MediaRendererRegistry, PlayerStateReport, SharedState};
+use pmomediarenderer::{DeviceCommand, MediaRendererRegistry};
 
 use crate::adapter::BrowserAdapter;
+
+#[derive(Debug, serde::Deserialize)]
+pub struct PlayerStateReport {
+    pub position_sec: Option<f64>,
+    pub duration_sec: Option<f64>,
+    pub state: Option<String>,
+    #[allow(dead_code)]
+    pub ready_state: Option<String>,
+}
 
 #[derive(Debug, Deserialize)]
 pub struct RegisterRequest {
@@ -42,13 +51,13 @@ pub async fn register_handler(
         "WebRenderer: register request"
     );
 
-    let state: SharedState = Arc::new(parking_lot::RwLock::new(
-        pmomediarenderer::RendererState::default()
-    ));
-    let adapter: Arc<dyn DeviceAdapter> = Arc::new(BrowserAdapter::new(state));
-
     match registry
-        .register_or_reconnect(&req.instance_id, &req.user_agent, adapter)
+        .register_or_reconnect(
+            &req.instance_id,
+            "/api/webrenderer",
+            "PMOMusic WebRenderer/2.0",
+            |state| Arc::new(BrowserAdapter::new(state)),
+        )
         .await
     {
         Ok((stream_url, udn, should_play)) => {
@@ -135,8 +144,27 @@ pub async fn report_handler(
     Path(instance_id): Path<String>,
     Json(report): Json<PlayerStateReport>,
 ) -> impl IntoResponse {
-    registry.update_player_state(&instance_id, report).await;
-    StatusCode::OK
+    let instance = match registry.get_instance(&instance_id) {
+        Some(i) => i,
+        None => return StatusCode::NOT_FOUND.into_response(),
+    };
+    let mut state = instance.state.write();
+    if let Some(pos) = report.position_sec {
+        state.position = Some(pmomediarenderer::seconds_to_upnp_time(pos));
+    }
+    if let Some(dur) = report.duration_sec {
+        state.duration = Some(pmomediarenderer::seconds_to_upnp_time(dur));
+    }
+    if let Some(s) = &report.state {
+        state.playback_state = match s.as_str() {
+            "playing" => PlaybackState::Playing,
+            "paused" => PlaybackState::Paused,
+            "stopped" => PlaybackState::Stopped,
+            _ => state.playback_state.clone(),
+        };
+    }
+    tracing::debug!(instance_id = %instance_id, position = ?state.position, "player state updated");
+    StatusCode::OK.into_response()
 }
 
 #[axum::debug_handler]
@@ -144,8 +172,12 @@ pub async fn command_handler(
     State(registry): State<Arc<MediaRendererRegistry>>,
     Path(instance_id): Path<String>,
 ) -> impl IntoResponse {
-    match registry.get_pending_command(&instance_id).await {
-        Some(cmd) => (StatusCode::OK, Json(cmd)).into_response(),
+    let Some(instance) = registry.get_instance(&instance_id) else {
+        return StatusCode::NO_CONTENT.into_response();
+    };
+    let cmd = instance.state.write().pop_command();
+    match cmd.and_then(|c| serde_json::to_value(c).ok()) {
+        Some(v) => (StatusCode::OK, Json(v)).into_response(),
         None => StatusCode::NO_CONTENT.into_response(),
     }
 }

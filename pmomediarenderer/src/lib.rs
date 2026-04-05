@@ -26,7 +26,7 @@ pub mod state;
 
 pub use error::MediaRendererError;
 pub use handlers::*;
-pub use messages::{PlaybackState, PlayerStateReport};
+pub use messages::PlaybackState;
 pub use pipeline::{PipelineControl, PipelineHandle, seconds_to_upnp_time, upnp_time_to_seconds, InstancePipeline};
 pub use registry::{MediaRendererInstance, MediaRendererRegistry};
 pub use state::{RendererState, SharedState};
