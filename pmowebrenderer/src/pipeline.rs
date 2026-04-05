@@ -6,7 +6,6 @@
 //! - Des nœuds de normalisation (resampling → 96 kHz, conversion → I24)
 
 use std::sync::Arc;
-
 use pmoaudio::{ResamplingNode, ToI24Node};
 use pmoaudio_ext::{PlayerCommand, PlayerHandle, PlayerSource};
 use pmoaudio_ext::sinks::{OggFlacStreamHandle, StreamingOggFlacSink};
