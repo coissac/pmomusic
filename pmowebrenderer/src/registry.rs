@@ -16,7 +16,7 @@ use std::time::SystemTime;
 use pmoupnp::devices::DeviceInstance;
 
 use crate::error::WebRendererError;
-use crate::pipeline::{InstancePipeline, PipelineHandle};
+use crate::pipeline::{InstancePipeline, PipelineControl, PipelineHandle};
 use crate::renderer::WebRendererFactory;
 use crate::state::{RendererState, SharedState};
 
@@ -273,41 +273,36 @@ impl RendererRegistry {
         }
     }
     
-    /// Charge une URI dans le pipeline
-    pub async fn load_uri(&self, instance_id: &str, uri: String) {
-        // Get pipeline handle before async call to avoid holding lock across await
-        let pipeline = self.instances.read().get(instance_id).map(|i| i.pipeline.clone());
+    /// Consume and send a command to the pipeline
+    async fn send_pipeline_command(&self, instance_id: &str, cmd: PipelineControl) {
+        let pipeline = self.get_pipeline(instance_id);
         if let Some(pipeline) = pipeline {
-            use pmoaudio_ext::PlayerCommand;
-            pipeline.send(PlayerCommand::LoadUri(uri.clone())).await;
-            pipeline.send(PlayerCommand::Play).await;
-            tracing::info!(instance_id = %instance_id, uri = %uri, "loaded URI");
+            pipeline.send(cmd).await;
+        } else {
+            tracing::error!(instance_id = %instance_id, "Instance not found for pipeline command");
         }
+    }
+
+    fn get_pipeline(&self, instance_id: &str) -> Option<PipelineHandle> {
+        self.instances.read().get(instance_id).map(|i| i.pipeline.clone())
+    }
+
+    /// Charge une URI dans le pipeline et lance la lecture
+    pub async fn load_uri(&self, instance_id: &str, uri: String) {
+        self.send_pipeline_command(instance_id, PipelineControl::LoadUri(uri.clone())).await;
+        self.send_pipeline_command(instance_id, PipelineControl::Play).await;
+        tracing::info!(instance_id = %instance_id, uri = %uri, "loaded URI");
     }
     
     /// Envoie commande play au pipeline
     pub async fn send_play_command(&self, instance_id: &str) {
         tracing::info!(instance_id = %instance_id, "send_play_command called");
-        // Get pipeline handle before async call to avoid holding lock across await
-        let pipeline = self.instances.read().get(instance_id).map(|i| i.pipeline.clone());
-        if let Some(pipeline) = pipeline {
-            tracing::info!(instance_id = %instance_id, "Instance found, sending PlayerCommand::Play");
-            use pmoaudio_ext::PlayerCommand;
-            pipeline.send(PlayerCommand::Play).await;
-            tracing::info!(instance_id = %instance_id, "PlayerCommand::Play sent");
-        } else {
-            tracing::error!(instance_id = %instance_id, "Instance not found in send_play_command!");
-        }
+        self.send_pipeline_command(instance_id, PipelineControl::Play).await;
     }
     
     /// Envoie commande pause au pipeline
     pub async fn send_pause_command(&self, instance_id: &str) {
-        // Get pipeline handle before async call to avoid holding lock across await
-        let pipeline = self.instances.read().get(instance_id).map(|i| i.pipeline.clone());
-        if let Some(pipeline) = pipeline {
-            use pmoaudio_ext::PlayerCommand;
-            pipeline.send(PlayerCommand::Pause).await;
-        }
+        self.send_pipeline_command(instance_id, PipelineControl::Pause).await;
     }
 
     /// Check if the instance has a current URI loaded

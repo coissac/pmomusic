@@ -19,41 +19,32 @@ type ActionFuture =
 
 // ─── AVTransport Handlers ───────────────────────────────────────────────────
 
+/// Handler pour l'action UPnP "Play" - lance la lecture du flux audio
 pub fn play_handler(pipeline: PipelineHandle, state: SharedState) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
         let pipeline = pipeline.clone();
         let state = state.clone();
         Box::pin(async move {
             tracing::info!("[WebRenderer] UPnP Play action invoked");
-            // Ne pas écrire Playing ici : c'est stream_source qui le fera
-            // une fois que les premiers bytes FLAC ont été produits.
-            // Écrire Transitioning pour signaler que la lecture va démarrer.
-            
-            // Check if URI is loaded FIRST, then write state
             let has_uri = state.read().current_uri.is_some();
-            
-            // Single write to update playback_state - avoid holding read lock
             {
                 let mut s = state.write();
                 s.playback_state = PlaybackState::Transitioning;
             }
-            
-            // Tell frontend to start streaming - include the stream URL
             if has_uri {
-                // Use a single write to set player_command
                 state.write().player_command = Some(serde_json::json!({
                     "type": "stream",
-                    "url": "/api/webrenderer/stream"  // Frontend will prefix with instance ID
+                    "url": "/api/webrenderer/stream"
                 }));
                 tracing::info!("UPnP Play: stored stream command for frontend polling");
             }
-            
             pipeline.send(PipelineControl::Play).await;
             Ok(data)
         })
     })
 }
 
+/// Handler pour l'action UPnP "Stop" - arrête la lecture
 pub fn stop_handler(pipeline: PipelineHandle, state: SharedState) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
         let pipeline = pipeline.clone();
@@ -66,6 +57,7 @@ pub fn stop_handler(pipeline: PipelineHandle, state: SharedState) -> ActionHandl
     })
 }
 
+/// Handler pour l'action UPnP "Pause" - met en pause la lecture
 pub fn pause_handler(pipeline: PipelineHandle, state: SharedState) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
         let pipeline = pipeline.clone();
@@ -78,7 +70,9 @@ pub fn pause_handler(pipeline: PipelineHandle, state: SharedState) -> ActionHand
     })
 }
 
+/// Handler pour l'action UPnP "Next" - passe à la piste suivante
 pub fn next_handler(pipeline: PipelineHandle) -> ActionHandler {
+    let pipeline = pipeline.clone();
     Arc::new(move |data: ActionData| -> ActionFuture {
         let pipeline = pipeline.clone();
         Box::pin(async move {
@@ -88,7 +82,9 @@ pub fn next_handler(pipeline: PipelineHandle) -> ActionHandler {
     })
 }
 
+/// Handler pour l'action UPnP "Previous" - retourne au début de la piste actuelle
 pub fn previous_handler(pipeline: PipelineHandle) -> ActionHandler {
+    let pipeline = pipeline.clone();
     Arc::new(move |data: ActionData| -> ActionFuture {
         let pipeline = pipeline.clone();
         Box::pin(async move {
@@ -98,6 +94,7 @@ pub fn previous_handler(pipeline: PipelineHandle) -> ActionHandler {
     })
 }
 
+/// Handler pour l'action UPnP "Seek" - seek à une position donnée
 pub fn seek_handler(pipeline: PipelineHandle) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
         let pipeline = pipeline.clone();
@@ -110,6 +107,7 @@ pub fn seek_handler(pipeline: PipelineHandle) -> ActionHandler {
     })
 }
 
+/// Handler pour l'action UPnP "SetAVTransportURI" - définit l'URI à jouer
 pub fn set_uri_handler(pipeline: PipelineHandle, state: SharedState) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
         let pipeline = pipeline.clone();
@@ -125,8 +123,6 @@ pub fn set_uri_handler(pipeline: PipelineHandle, state: SharedState) -> ActionHa
                 .unwrap_or_default();
 
             tracing::info!(uri = %uri, "SetAVTransportURI handler called - loading URI into pipeline");
-
-            // Envoyer l'URI au pipeline serveur (remplace l'envoi WebSocket)
             pipeline.send(PipelineControl::LoadUri(uri.clone())).await;
 
             {
@@ -140,6 +136,7 @@ pub fn set_uri_handler(pipeline: PipelineHandle, state: SharedState) -> ActionHa
     })
 }
 
+/// Handler pour l'action UPnP "SetNextAVTransportURI" - définit l'URI suivante (gapless)
 pub fn set_next_uri_handler(pipeline: PipelineHandle, state: SharedState) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
         let pipeline = pipeline.clone();
@@ -165,6 +162,7 @@ pub fn set_next_uri_handler(pipeline: PipelineHandle, state: SharedState) -> Act
     })
 }
 
+/// Handler pour l'action UPnP "GetPositionInfo" - retourne la position actuelle
 pub fn get_position_info_handler(state: SharedState) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
         let state = state.clone();
@@ -206,6 +204,7 @@ pub fn get_position_info_handler(state: SharedState) -> ActionHandler {
     })
 }
 
+/// Handler pour l'action UPnP "GetTransportInfo" - retourne l'état du transport
 pub fn get_transport_info_handler(state: SharedState) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
         let state = state.clone();
@@ -227,6 +226,7 @@ pub fn get_transport_info_handler(state: SharedState) -> ActionHandler {
     })
 }
 
+/// Handler pour l'action UPnP "GetMediaInfo" - retourne les infos du média
 pub fn get_media_info_handler(state: SharedState) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
         let state = state.clone();
@@ -249,6 +249,7 @@ pub fn get_media_info_handler(state: SharedState) -> ActionHandler {
 
 // ─── RenderingControl Handlers ──────────────────────────────────────────────
 
+/// Handler pour l'action UPnP "SetVolume" - définit le volume
 pub fn set_volume_handler(_pipeline: PipelineHandle, state: SharedState) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
         let state = state.clone();
@@ -260,6 +261,7 @@ pub fn set_volume_handler(_pipeline: PipelineHandle, state: SharedState) -> Acti
     })
 }
 
+/// Handler pour l'action UPnP "GetVolume" - retourne le volume actuel
 pub fn get_volume_handler(state: SharedState) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
         let state = state.clone();
@@ -272,6 +274,7 @@ pub fn get_volume_handler(state: SharedState) -> ActionHandler {
     })
 }
 
+/// Handler pour l'action UPnP "SetMute" - définit le mute
 pub fn set_mute_handler(_pipeline: PipelineHandle, state: SharedState) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
         let state = state.clone();
@@ -283,6 +286,7 @@ pub fn set_mute_handler(_pipeline: PipelineHandle, state: SharedState) -> Action
     })
 }
 
+/// Handler pour l'action UPnP "GetMute" - retourne l'état mute
 pub fn get_mute_handler(state: SharedState) -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
         let state = state.clone();
@@ -297,12 +301,12 @@ pub fn get_mute_handler(state: SharedState) -> ActionHandler {
 
 // ─── ConnectionManager Handlers ─────────────────────────────────────────────
 
+/// Handler pour l'action UPnP "GetProtocolInfo" - retourne les protocoles supportés
 pub fn get_protocol_info_handler() -> ActionHandler {
     Arc::new(move |data: ActionData| -> ActionFuture {
         Box::pin(async move {
             let mut data = data;
             set!(&mut data, "Source", String::new());
-            // Serveur-side streaming : on produit du FLAC uniquement
             set!(
                 &mut data,
                 "Sink",

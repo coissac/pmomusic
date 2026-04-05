@@ -3,11 +3,11 @@
 //! Construit des Device/Service models UPnP dynamiques avec des action handlers
 //! qui relaient les commandes SOAP vers le navigateur via WebSocket.
 
-use std::sync::Arc;
-use thiserror::Error;
 use pmoupnp::actions::{Action, Argument};
 use pmoupnp::devices::Device;
 use pmoupnp::services::Service;
+use std::sync::Arc;
+use thiserror::Error;
 
 use crate::handlers;
 use crate::pipeline::PipelineHandle;
@@ -44,6 +44,37 @@ pub enum FactoryError {
     ActionError(String),
     #[error("Failed to add variable to service: {0}")]
     VariableError(String),
+}
+
+macro_rules! add_action_arg {
+    ($action:ident, $name:expr, $var:ident, $direction:ident) => {{
+        $action
+            .add_argument(Arc::new(Argument::new_$direction(
+                $name.to_string(),
+                Arc::clone(&$var),
+            )))
+            .map_err(|e| FactoryError::ActionError(e.to_string()))
+    }};
+    ($action:ident, $name:expr, $var:ident, in) => {
+        add_action_arg!($action, $name, $var, in)
+    };
+    ($action:ident, $name:expr, $var:ident, out) => {
+        add_action_arg!($action, $name, $var, out)
+    };
+}
+
+macro_rules! add_action {
+    ($svc:ident, $action:ident) => {{
+        $svc.add_action(Arc::new($action))
+            .map_err(|e| FactoryError::ActionError(e.to_string()))
+    }};
+}
+
+macro_rules! add_var {
+    ($svc:ident, $var:ident) => {{
+        $svc.add_variable(Arc::clone(&$var))
+            .map_err(|e| FactoryError::VariableError(e.to_string()))
+    }};
 }
 
 /// Extrait un nom de navigateur court depuis un User-Agent complet.
@@ -261,7 +292,10 @@ impl WebRendererFactory {
                 Arc::clone(&AVTRANSPORTNEXTURIMETADATA),
             )))
             .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        set_next_uri.set_handler(handlers::set_next_uri_handler(pipeline.clone(), state.clone()));
+        set_next_uri.set_handler(handlers::set_next_uri_handler(
+            pipeline.clone(),
+            state.clone(),
+        ));
         add_action(&mut svc, Arc::new(set_next_uri))?;
 
         // GetPositionInfo
@@ -453,7 +487,10 @@ impl WebRendererFactory {
                 Arc::clone(&VOLUME),
             )))
             .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        set_vol.set_handler(handlers::set_volume_handler(pipeline.clone(), state.clone()));
+        set_vol.set_handler(handlers::set_volume_handler(
+            pipeline.clone(),
+            state.clone(),
+        ));
         svc.add_action(Arc::new(set_vol))
             .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
 
