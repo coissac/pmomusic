@@ -36,10 +36,16 @@ const myUdn = computed(() => webRenderer.rendererUdn.value);
 
 const filteredRenderers = computed(() => {
     const udn = myUdn.value;
+    const normalizedUdn = udn?.replace(/^uuid:/, '') ?? null;
     return allRenderers.value.filter((r: RendererSummary) => {
-        if (r.model_name !== "WebRenderer") return true;
-        if (udn === null) return false;
-        return r.id === udn;
+        // WebRenderers have "Web Audio – " as friendly_name prefix
+        const isWebRenderer = r.friendly_name?.startsWith("Web Audio – ") ?? false;
+        if (isWebRenderer) {
+            if (normalizedUdn === null) return false;
+            const normalizedId = r.id.replace(/^uuid:/, '');
+            return normalizedId === normalizedUdn;
+        }
+        return true;
     });
 });
 

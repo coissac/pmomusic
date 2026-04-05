@@ -22,6 +22,24 @@ function generateUUID(): string {
 }
 
 const INSTANCE_ID_KEY = "pmomusic_webrenderer_instance_id";
+const RENDERER_UDN_KEY = "pmomusic_webrenderer_udn";
+
+// Load persisted UDN on module load
+function loadPersistedUdn(): string | null {
+    try {
+        return sessionStorage.getItem(RENDERER_UDN_KEY);
+    } catch {
+        return null;
+    }
+}
+
+function savePersistedUdn(udn: string) {
+    try {
+        sessionStorage.setItem(RENDERER_UDN_KEY, udn);
+    } catch {
+        // ignore storage errors
+    }
+}
 
 // Module-level singleton for PMOPlayer to prevent duplicate instances
 let globalPlayer: PMOPlayer | null = null;
@@ -31,7 +49,7 @@ let registering = false;
 // Module-level reactive state shared across all composable invocations
 const sharedConnected = ref(false);
 const sharedStreamUrl = ref<string | null>(null);
-const sharedRendererUdn = ref<string | null>(null);
+const sharedRendererUdn = ref<string | null>(loadPersistedUdn());
 
 function getOrCreateInstanceId(): string {
     try {
@@ -55,17 +73,41 @@ export function useWebRenderer() {
     let onConnectedCallback: (() => void) | null = null;
 
     async function register(): Promise<void> {
-        // Prevent concurrent registrations (race condition → double player)
-        if (globalPlayer || registering) {
+        // Allow re-registration if we have a stale player but no connection
+        if (globalPlayer && !connected.value) {
+            console.log('[WebRenderer] stale globalPlayer, clearing');
+            globalPlayer = null;
+        }
+        
+        if (globalPlayer) {
+            player = globalPlayer;
+            connected.value = true;
+            console.log('[WebRenderer] reusing existing player');
+            return;
+        }
+
+        if (registering) {
+            console.log('[WebRenderer] already registering, waiting...');
+            // Wait a bit and try once
+            await new Promise(r => setTimeout(r, 1000));
             if (globalPlayer) {
                 player = globalPlayer;
                 connected.value = true;
+                return;
             }
-            return;
         }
+        
         registering = true;
 
-        const instanceId = getOrCreateInstanceId();
+        let instanceId;
+        try {
+            instanceId = getOrCreateInstanceId();
+        } catch (e) {
+            console.error('[WebRenderer] failed to get instanceId:', e);
+            registering = false;
+            return;
+        }
+        
         console.log('[WebRenderer] registering with instanceId:', instanceId);
 
         try {
@@ -86,6 +128,7 @@ export function useWebRenderer() {
             const data = await resp.json();
             streamUrl.value = data.stream_url;
             rendererUdn.value = data.udn;
+            savePersistedUdn(data.udn);
 
             player = new PMOPlayer(instanceId);
             globalPlayer = player;
@@ -103,6 +146,13 @@ export function useWebRenderer() {
 
             connected.value = true;
             onConnectedCallback?.();
+            
+            // Force refresh renderers list after registration
+            // The SSE might miss the initial event
+            setTimeout(() => {
+                console.log('[WebRenderer] forcing renderers refresh');
+                window.dispatchEvent(new CustomEvent('webrenderer-registered'));
+            }, 500);
         } catch (e) {
             console.error("[WebRenderer] register error:", e);
         } finally {

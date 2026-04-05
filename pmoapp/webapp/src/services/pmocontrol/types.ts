@@ -29,6 +29,7 @@ export interface RendererSummary {
   id: string;
   friendly_name: string;
   model_name: string;
+  manufacturer?: string;
   protocol: RendererProtocolSummary;
   capabilities: RendererCapabilitiesSummary;
   online: boolean;

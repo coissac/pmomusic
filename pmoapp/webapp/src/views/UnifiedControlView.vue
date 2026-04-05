@@ -77,9 +77,9 @@ const onlineServersCount = computed(
     () => allServers.value.filter((s) => s.online).length,
 );
 
-// Nombre de renderers online pour afficher dans le badge
+// Nombre de renderers online (filtrés) pour afficher dans le badge
 const onlineRenderersCount = computed(
-    () => allRenderers.value.filter((r) => r.online).length,
+    () => filterRenderers(allRenderers.value).filter((r) => r.online).length,
 );
 
 // Gestion de l'ouverture du drawer depuis le bouton
@@ -103,14 +103,19 @@ function handleRendererSelect(rendererId: string) {
     }
 }
 
-// Filtre la liste des renderers pour exclure les WebRenderers d'autres navigateurs.
-// Seul le WebRenderer créé par ce navigateur (identifié par son UDN) reste visible.
+// Filter to show only our own WebRenderer based on UDN match
 function filterRenderers(renderers: typeof allRenderers.value) {
     const myUdn = webRenderer.rendererUdn.value;
+    const normalizedUdn = myUdn?.replace(/^uuid:/, '') ?? null;
     return renderers.filter((r) => {
-        if (r.model_name !== "WebRenderer") return true; // renderer classique : toujours visible
-        if (myUdn === null) return false; // pas encore de session : masquer tous les WebRenderers
-        return r.id === myUdn; // ne garder que le nôtre
+        // WebRenderers have "Web Audio – " as friendly_name prefix
+        const isWebRenderer = r.friendly_name?.startsWith("Web Audio – ") ?? false;
+        if (isWebRenderer) {
+            if (normalizedUdn === null) return false;
+            const normalizedId = r.id.replace(/^uuid:/, '');
+            return normalizedId === normalizedUdn;
+        }
+        return true;
     });
 }
 

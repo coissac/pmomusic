@@ -65,6 +65,7 @@ impl MediaRendererRegistry {
         instance_id: &str,
         stream_url_base: &str,
         renderer_name: &str,
+        friendly_name: &str,
         adapter_fn: impl FnOnce(SharedState) -> Arc<dyn DeviceAdapter>,
     ) -> Result<(String, String, bool), MediaRendererError> {
         if let Some(cancel) = self.pending_unregister.write().remove(instance_id) {
@@ -77,7 +78,7 @@ impl MediaRendererRegistry {
             if let Some(existing) = instances.get(instance_id) {
                 tracing::info!(instance_id = %instance_id, "MediaRenderer: reconnecting existing instance");
                 #[cfg(feature = "pmoserver")]
-                self.register_with_control_point(&existing.device_instance, renderer_name)?;
+                self.register_with_control_point(&existing.device_instance, renderer_name, &existing.udn)?;
                 let stream_url = format!("{}/{}/stream", stream_url_base, instance_id);
                 let should_play = {
                     let s = existing.state.read();
@@ -90,7 +91,7 @@ impl MediaRendererRegistry {
             }
         }
 
-        let instance = self.create_instance_with_adapter(instance_id, stream_url_base, renderer_name, adapter_fn).await?;
+        let instance = self.create_instance_with_adapter(instance_id, stream_url_base, renderer_name, friendly_name, adapter_fn).await?;
         let instance = Arc::new(instance);
         let stream_url = format!("{}/{}/stream", stream_url_base, instance_id);
         let udn = instance.udn.clone();
@@ -231,18 +232,14 @@ impl MediaRendererRegistry {
         instance_id: &str,
         stream_url_base: &str,
         renderer_name: &str,
+        friendly_name: &str,
         adapter_fn: impl FnOnce(SharedState) -> Arc<dyn DeviceAdapter>,
     ) -> Result<MediaRendererInstance, MediaRendererError> {
         let candidate_udn = instance_id.to_ascii_lowercase();
         let full_udn = format!("uuid:{}", candidate_udn);
 
-        if let Err(e) = pmoconfig::get_config().set_device_udn(
-            "MediaRenderer",
-            instance_id,
-            candidate_udn.clone(),
-        ) {
-            tracing::warn!("MediaRenderer: failed to persist UDN: {:?}", e);
-        }
+        // Note: WebRenderers don't need to persist UDN to config since they're tied to browser tabs
+        // (instance_id comes from sessionStorage, not a persistent device)
 
         let state: SharedState = Arc::new(parking_lot::RwLock::new(RendererState::default()));
         let adapter = adapter_fn(state.clone());
@@ -275,7 +272,7 @@ impl MediaRendererRegistry {
                 let device = MediaRendererFactory::create_device_with_pipeline(
                     instance_id,
                     "MediaRenderer",
-                    "WebRenderer",
+                    friendly_name,
                     pipeline.clone(),
                     state.clone(),
                     stream_url_base,
@@ -289,7 +286,7 @@ impl MediaRendererRegistry {
                     .map_err(|e| MediaRendererError::RegistrationError(e.to_string()))?
             };
 
-            self.register_with_control_point(&di, renderer_name)?;
+            self.register_with_control_point(&di, renderer_name, &full_udn)?;
             (di, ip)
         };
 
@@ -307,7 +304,7 @@ impl MediaRendererRegistry {
             let device = MediaRendererFactory::create_device_with_pipeline(
                 instance_id,
                 "MediaRenderer",
-                "WebRenderer",
+                friendly_name,
                 pipeline.clone(),
                 state.clone(),
                 stream_url_base,
@@ -334,9 +331,11 @@ impl MediaRendererRegistry {
         &self,
         di: &Arc<DeviceInstance>,
         renderer_name: &str,
+        instance_udn: &str,
     ) -> Result<(), MediaRendererError> {
         let base_url = di.base_url().to_string();
-        let udn = di.udn().to_ascii_lowercase();
+        // Use the instance's UDN, not the device's stored UDN
+        let udn = instance_udn.trim_start_matches("uuid:").to_ascii_lowercase();
         let udn_with_prefix = format!("uuid:{}", udn);
         let device_route = di.route();
         let model = di.get_model();
@@ -359,7 +358,7 @@ impl MediaRendererRegistry {
             udn_with_prefix.clone(),
             model.friendly_name().to_string(),
             model.model_name().to_string(),
-            "PMOMusic".to_string(),
+            "PMOMusic-WebRenderer".to_string(),
             RendererProtocol::UpnpAvOnly,
             RendererCapabilities {
                 has_avtransport: true,

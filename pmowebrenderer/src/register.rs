@@ -17,6 +17,7 @@ use pmomediarenderer::PipelineControl;
 use pmomediarenderer::{DeviceCommand, MediaRendererRegistry};
 
 use crate::adapter::BrowserAdapter;
+use crate::helpers::extract_browser_name;
 
 #[derive(Debug, serde::Deserialize)]
 pub struct PlayerStateReport {
@@ -51,11 +52,15 @@ pub async fn register_handler(
         "WebRenderer: register request"
     );
 
+    let browser_name = extract_browser_name(&req.user_agent);
+    let friendly_name = format!("Web Audio – {}", browser_name);
+
     match registry
         .register_or_reconnect(
             &req.instance_id,
             "/api/webrenderer",
             "PMOMusic WebRenderer/2.0",
+            &friendly_name,
             |state| Arc::new(BrowserAdapter::new(state)),
         )
         .await
