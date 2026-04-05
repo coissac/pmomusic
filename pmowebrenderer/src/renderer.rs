@@ -13,27 +13,44 @@ use crate::handlers;
 use crate::pipeline::PipelineHandle;
 use crate::state::SharedState;
 
-// ─── Macro helper pour simplifier l'ajout d'arguments UPnP ───────────────────
-macro_rules! add_arg_in {
-    ($action:expr, $name:literal, $var:expr) => {
-        $action
-            .add_argument(Arc::new(Argument::new_in(
-                $name.to_string(),
-                Arc::clone($var),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-    };
+// ─── Helper functions pour l'ajout d'arguments UPnP ───────────────────────
+fn add_arg_in(
+    action: &mut Action,
+    name: &str,
+    var: &Arc<pmoupnp::state_variables::StateVariable>,
+) -> Result<(), FactoryError> {
+    action
+        .add_argument(Arc::new(Argument::new_in(
+            name.to_string(),
+            Arc::clone(var),
+        )))
+        .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))
 }
 
-macro_rules! add_arg_out {
-    ($action:expr, $name:literal, $var:expr) => {
-        $action
-            .add_argument(Arc::new(Argument::new_out(
-                $name.to_string(),
-                Arc::clone($var),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-    };
+fn add_arg_out(
+    action: &mut Action,
+    name: &str,
+    var: &Arc<pmoupnp::state_variables::StateVariable>,
+) -> Result<(), FactoryError> {
+    action
+        .add_argument(Arc::new(Argument::new_out(
+            name.to_string(),
+            Arc::clone(var),
+        )))
+        .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))
+}
+
+fn add_var(
+    svc: &mut Service,
+    var: &Arc<pmoupnp::state_variables::StateVariable>,
+) -> Result<(), FactoryError> {
+    svc.add_variable(Arc::clone(var))
+        .map_err(|e| FactoryError::VariableError(e.to_string()))
+}
+
+fn add_action(svc: &mut Service, action: Arc<Action>) -> Result<(), FactoryError> {
+    svc.add_action(action)
+        .map_err(|e| FactoryError::ActionError(e.to_string()))
 }
 
 // ─── Réimport des variables statiques de pmomediarenderer ───────────────────
@@ -166,56 +183,60 @@ impl WebRendererFactory {
 
         // Play
         let mut play = Action::new("Play".to_string());
-        add_arg_in!(play, "InstanceID", &AVT_INSTANCE_ID);
-        add_arg_in!(play, "Speed", &TRANSPORTPLAYSPEED);
+        add_arg_in(&mut play, "InstanceID", &AVT_INSTANCE_ID)?;
+        add_arg_in(&mut play, "Speed", &TRANSPORTPLAYSPEED)?;
         play.set_handler(handlers::play_handler(pipeline.clone(), state.clone()));
         add_action(&mut svc, Arc::new(play))?;
 
         // Stop
         let mut stop = Action::new("Stop".to_string());
-        add_arg_in!(stop, "InstanceID", &AVT_INSTANCE_ID);
+        add_arg_in(&mut stop, "InstanceID", &AVT_INSTANCE_ID)?;
         stop.set_handler(handlers::stop_handler(pipeline.clone(), state.clone()));
         add_action(&mut svc, Arc::new(stop))?;
 
         // Pause
         let mut pause = Action::new("Pause".to_string());
-        add_arg_in!(pause, "InstanceID", &AVT_INSTANCE_ID);
+        add_arg_in(&mut pause, "InstanceID", &AVT_INSTANCE_ID)?;
         pause.set_handler(handlers::pause_handler(pipeline.clone(), state.clone()));
         add_action(&mut svc, Arc::new(pause))?;
 
         // Next
         let mut next = Action::new("Next".to_string());
-        add_arg_in!(next, "InstanceID", &AVT_INSTANCE_ID);
+        add_arg_in(&mut next, "InstanceID", &AVT_INSTANCE_ID)?;
         next.set_handler(handlers::next_handler(pipeline.clone()));
         add_action(&mut svc, Arc::new(next))?;
 
         // Previous
         let mut previous = Action::new("Previous".to_string());
-        add_arg_in!(previous, "InstanceID", &AVT_INSTANCE_ID);
+        add_arg_in(&mut previous, "InstanceID", &AVT_INSTANCE_ID)?;
         previous.set_handler(handlers::previous_handler(pipeline.clone()));
         add_action(&mut svc, Arc::new(previous))?;
 
         // Seek
         let mut seek = Action::new("Seek".to_string());
-        add_arg_in!(seek, "InstanceID", &AVT_INSTANCE_ID);
-        add_arg_in!(seek, "Unit", &A_ARG_TYPE_SEEKMODE);
-        add_arg_in!(seek, "Target", &SEEKMODE);
+        add_arg_in(&mut seek, "InstanceID", &AVT_INSTANCE_ID)?;
+        add_arg_in(&mut seek, "Unit", &A_ARG_TYPE_SEEKMODE)?;
+        add_arg_in(&mut seek, "Target", &SEEKMODE)?;
         seek.set_handler(handlers::seek_handler(pipeline.clone()));
         add_action(&mut svc, Arc::new(seek))?;
 
         // SetAVTransportURI
         let mut set_uri = Action::new("SetAVTransportURI".to_string());
-        add_arg_in!(set_uri, "InstanceID", &AVT_INSTANCE_ID);
-        add_arg_in!(set_uri, "CurrentURI", &AVTRANSPORTURI);
-        add_arg_in!(set_uri, "CurrentURIMetaData", &AVTRANSPORTURIMETADATA);
+        add_arg_in(&mut set_uri, "InstanceID", &AVT_INSTANCE_ID)?;
+        add_arg_in(&mut set_uri, "CurrentURI", &AVTRANSPORTURI)?;
+        add_arg_in(&mut set_uri, "CurrentURIMetaData", &AVTRANSPORTURIMETADATA)?;
         set_uri.set_handler(handlers::set_uri_handler(pipeline.clone(), state.clone()));
         add_action(&mut svc, Arc::new(set_uri))?;
 
         // SetNextAVTransportURI
         let mut set_next_uri = Action::new("SetNextAVTransportURI".to_string());
-        add_arg_in!(set_next_uri, "InstanceID", &AVT_INSTANCE_ID);
-        add_arg_in!(set_next_uri, "NextURI", &AVTRANSPORTNEXTURI);
-        add_arg_in!(set_next_uri, "NextURIMetaData", &AVTRANSPORTNEXTURIMETADATA);
+        add_arg_in(&mut set_next_uri, "InstanceID", &AVT_INSTANCE_ID)?;
+        add_arg_in(&mut set_next_uri, "NextURI", &AVTRANSPORTNEXTURI)?;
+        add_arg_in(
+            &mut set_next_uri,
+            "NextURIMetaData",
+            &AVTRANSPORTNEXTURIMETADATA,
+        )?;
         set_next_uri.set_handler(handlers::set_next_uri_handler(
             pipeline.clone(),
             state.clone(),
@@ -224,97 +245,60 @@ impl WebRendererFactory {
 
         // GetPositionInfo
         let mut get_pos = Action::new("GetPositionInfo".to_string());
-        add_arg_in!(get_pos, "InstanceID", &AVT_INSTANCE_ID);
-        add_arg_out!(get_pos, "Track", &CURRENTTRACK);
-        add_arg_out!(get_pos, "TrackDuration", &CURRENTTRACKDURATION);
-        add_arg_out!(get_pos, "TrackURI", &CURRENTTRACKURI);
-        add_arg_out!(get_pos, "TrackMetaData", &CURRENTTRACKMETADATA);
-        add_arg_out!(get_pos, "RelTime", &RELATIVETIMEPOSITION);
-        add_arg_out!(get_pos, "AbsTime", &ABSOLUTETIMEPOSITION);
+        add_arg_in(&mut get_pos, "InstanceID", &AVT_INSTANCE_ID)?;
+        add_arg_out(&mut get_pos, "Track", &CURRENTTRACK)?;
+        add_arg_out(&mut get_pos, "TrackDuration", &CURRENTTRACKDURATION)?;
+        add_arg_out(&mut get_pos, "TrackURI", &CURRENTTRACKURI)?;
+        add_arg_out(&mut get_pos, "TrackMetaData", &CURRENTTRACKMETADATA)?;
+        add_arg_out(&mut get_pos, "RelTime", &RELATIVETIMEPOSITION)?;
+        add_arg_out(&mut get_pos, "AbsTime", &ABSOLUTETIMEPOSITION)?;
         get_pos.set_stateful(false);
         get_pos.set_handler(handlers::get_position_info_handler(state.clone()));
         add_action(&mut svc, Arc::new(get_pos))?;
 
         // GetTransportInfo
         let mut get_info = Action::new("GetTransportInfo".to_string());
-        add_arg_in!(get_info, "InstanceID", &AVT_INSTANCE_ID);
-        add_arg_out!(get_info, "CurrentTransportState", &TRANSPORTSTATE);
-        add_arg_out!(get_info, "CurrentTransportStatus", &TRANSPORTSTATUS);
-        add_arg_out!(get_info, "CurrentSpeed", &TRANSPORTPLAYSPEED);
+        add_arg_in(&mut get_info, "InstanceID", &AVT_INSTANCE_ID)?;
+        add_arg_out(&mut get_info, "CurrentTransportState", &TRANSPORTSTATE)?;
+        add_arg_out(&mut get_info, "CurrentTransportStatus", &TRANSPORTSTATUS)?;
+        add_arg_out(&mut get_info, "CurrentSpeed", &TRANSPORTPLAYSPEED)?;
         get_info.set_stateful(false);
         get_info.set_handler(handlers::get_transport_info_handler(state.clone()));
         add_action(&mut svc, Arc::new(get_info))?;
 
         // GetMediaInfo
         let mut get_media = Action::new("GetMediaInfo".to_string());
-        get_media
-            .add_argument(Arc::new(Argument::new_in(
-                "InstanceID".to_string(),
-                Arc::clone(&AVT_INSTANCE_ID),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        get_media
-            .add_argument(Arc::new(Argument::new_out(
-                "NrTracks".to_string(),
-                Arc::clone(&NUMBEROFTRACKS),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        get_media
-            .add_argument(Arc::new(Argument::new_out(
-                "CurrentURI".to_string(),
-                Arc::clone(&AVTRANSPORTURI),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        get_media
-            .add_argument(Arc::new(Argument::new_out(
-                "CurrentURIMetaData".to_string(),
-                Arc::clone(&AVTRANSPORTURIMETADATA),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        get_media
-            .add_argument(Arc::new(Argument::new_out(
-                "NextURI".to_string(),
-                Arc::clone(&AVTRANSPORTNEXTURI),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        get_media
-            .add_argument(Arc::new(Argument::new_out(
-                "NextURIMetaData".to_string(),
-                Arc::clone(&AVTRANSPORTNEXTURIMETADATA),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
+        add_arg_in(&mut get_media, "InstanceID", &AVT_INSTANCE_ID)?;
+        add_arg_out(&mut get_media, "NrTracks", &NUMBEROFTRACKS)?;
+        add_arg_out(&mut get_media, "CurrentURI", &AVTRANSPORTURI)?;
+        add_arg_out(
+            &mut get_media,
+            "CurrentURIMetaData",
+            &AVTRANSPORTURIMETADATA,
+        )?;
+        add_arg_out(&mut get_media, "NextURI", &AVTRANSPORTNEXTURI)?;
+        add_arg_out(
+            &mut get_media,
+            "NextURIMetaData",
+            &AVTRANSPORTNEXTURIMETADATA,
+        )?;
         get_media.set_stateful(false);
         get_media.set_handler(handlers::get_media_info_handler(state.clone()));
         add_action(&mut svc, Arc::new(get_media))?;
 
         // GetTransportSettings (passthrough)
         let mut get_settings = Action::new("GetTransportSettings".to_string());
-        get_settings
-            .add_argument(Arc::new(Argument::new_in(
-                "InstanceID".to_string(),
-                Arc::clone(&AVT_INSTANCE_ID),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
+        add_arg_in(&mut get_settings, "InstanceID", &AVT_INSTANCE_ID)?;
         add_action(&mut svc, Arc::new(get_settings))?;
 
         // GetDeviceCapabilities (passthrough)
         let mut get_caps = Action::new("GetDeviceCapabilities".to_string());
-        get_caps
-            .add_argument(Arc::new(Argument::new_in(
-                "InstanceID".to_string(),
-                Arc::clone(&AVT_INSTANCE_ID),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
+        add_arg_in(&mut get_caps, "InstanceID", &AVT_INSTANCE_ID)?;
         add_action(&mut svc, Arc::new(get_caps))?;
 
         // GetCurrentTransportActions (passthrough)
         let mut get_actions = Action::new("GetCurrentTransportActions".to_string());
-        get_actions
-            .add_argument(Arc::new(Argument::new_in(
-                "InstanceID".to_string(),
-                Arc::clone(&AVT_INSTANCE_ID),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
+        add_arg_in(&mut get_actions, "InstanceID", &AVT_INSTANCE_ID)?;
         add_action(&mut svc, Arc::new(get_actions))?;
 
         Ok(svc)
@@ -338,100 +322,37 @@ impl WebRendererFactory {
 
         // SetVolume
         let mut set_vol = Action::new("SetVolume".to_string());
-        set_vol
-            .add_argument(Arc::new(Argument::new_in(
-                "InstanceID".to_string(),
-                Arc::clone(&RC_INSTANCE_ID),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        set_vol
-            .add_argument(Arc::new(Argument::new_in(
-                "Channel".to_string(),
-                Arc::clone(&A_ARG_TYPE_CHANNEL),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        set_vol
-            .add_argument(Arc::new(Argument::new_in(
-                "DesiredVolume".to_string(),
-                Arc::clone(&VOLUME),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
+        add_arg_in(&mut set_vol, "InstanceID", &RC_INSTANCE_ID)?;
+        add_arg_in(&mut set_vol, "Channel", &A_ARG_TYPE_CHANNEL)?;
+        add_arg_in(&mut set_vol, "DesiredVolume", &VOLUME)?;
         set_vol.set_handler(handlers::set_volume_handler(
             pipeline.clone(),
             state.clone(),
         ));
-        svc.add_action(Arc::new(set_vol))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
+        add_action(&mut svc, Arc::new(set_vol))?;
 
         // GetVolume
         let mut get_vol = Action::new("GetVolume".to_string());
-        get_vol
-            .add_argument(Arc::new(Argument::new_in(
-                "InstanceID".to_string(),
-                Arc::clone(&RC_INSTANCE_ID),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        get_vol
-            .add_argument(Arc::new(Argument::new_in(
-                "Channel".to_string(),
-                Arc::clone(&A_ARG_TYPE_CHANNEL),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        get_vol
-            .add_argument(Arc::new(Argument::new_out(
-                "CurrentVolume".to_string(),
-                Arc::clone(&VOLUME),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
+        add_arg_in(&mut get_vol, "InstanceID", &RC_INSTANCE_ID)?;
+        add_arg_in(&mut get_vol, "Channel", &A_ARG_TYPE_CHANNEL)?;
+        add_arg_out(&mut get_vol, "CurrentVolume", &VOLUME)?;
         get_vol.set_stateful(false);
         get_vol.set_handler(handlers::get_volume_handler(state.clone()));
-        svc.add_action(Arc::new(get_vol))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
+        add_action(&mut svc, Arc::new(get_vol))?;
 
         // SetMute
         let mut set_mute = Action::new("SetMute".to_string());
-        set_mute
-            .add_argument(Arc::new(Argument::new_in(
-                "InstanceID".to_string(),
-                Arc::clone(&RC_INSTANCE_ID),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        set_mute
-            .add_argument(Arc::new(Argument::new_in(
-                "Channel".to_string(),
-                Arc::clone(&A_ARG_TYPE_CHANNEL),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        set_mute
-            .add_argument(Arc::new(Argument::new_in(
-                "DesiredMute".to_string(),
-                Arc::clone(&MUTE),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
+        add_arg_in(&mut set_mute, "InstanceID", &RC_INSTANCE_ID)?;
+        add_arg_in(&mut set_mute, "Channel", &A_ARG_TYPE_CHANNEL)?;
+        add_arg_in(&mut set_mute, "DesiredMute", &MUTE)?;
         set_mute.set_handler(handlers::set_mute_handler(pipeline.clone(), state.clone()));
-        svc.add_action(Arc::new(set_mute))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
+        add_action(&mut svc, Arc::new(set_mute))?;
 
         // GetMute
         let mut get_mute = Action::new("GetMute".to_string());
-        get_mute
-            .add_argument(Arc::new(Argument::new_in(
-                "InstanceID".to_string(),
-                Arc::clone(&RC_INSTANCE_ID),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        get_mute
-            .add_argument(Arc::new(Argument::new_in(
-                "Channel".to_string(),
-                Arc::clone(&A_ARG_TYPE_CHANNEL),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        get_mute
-            .add_argument(Arc::new(Argument::new_out(
-                "CurrentMute".to_string(),
-                Arc::clone(&MUTE),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
+        add_arg_in(&mut get_mute, "InstanceID", &RC_INSTANCE_ID)?;
+        add_arg_in(&mut get_mute, "Channel", &A_ARG_TYPE_CHANNEL)?;
+        add_arg_out(&mut get_mute, "CurrentMute", &MUTE)?;
         get_mute.set_stateful(false);
         get_mute.set_handler(handlers::get_mute_handler(state.clone()));
         svc.add_action(Arc::new(get_mute))
@@ -465,86 +386,32 @@ impl WebRendererFactory {
 
         // GetProtocolInfo
         let mut get_proto = Action::new("GetProtocolInfo".to_string());
-        get_proto
-            .add_argument(Arc::new(Argument::new_out(
-                "Source".to_string(),
-                Arc::clone(&SOURCEPROTOCOLINFO),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        get_proto
-            .add_argument(Arc::new(Argument::new_out(
-                "Sink".to_string(),
-                Arc::clone(&SINKPROTOCOLINFO),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
+        add_arg_out(&mut get_proto, "Source", &SOURCEPROTOCOLINFO)?;
+        add_arg_out(&mut get_proto, "Sink", &SINKPROTOCOLINFO)?;
         get_proto.set_stateful(false);
         get_proto.set_handler(handlers::get_protocol_info_handler());
-        svc.add_action(Arc::new(get_proto))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
+        add_action(&mut svc, Arc::new(get_proto))?;
 
         // GetCurrentConnectionIDs
         let mut get_ids = Action::new("GetCurrentConnectionIDs".to_string());
-        get_ids
-            .add_argument(Arc::new(Argument::new_out(
-                "ConnectionIDs".to_string(),
-                Arc::clone(&CURRENTCONNECTIONIDS),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        svc.add_action(Arc::new(get_ids))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
+        add_arg_out(&mut get_ids, "ConnectionIDs", &CURRENTCONNECTIONIDS)?;
+        add_action(&mut svc, Arc::new(get_ids))?;
 
         // GetCurrentConnectionInfo
         let mut get_conn = Action::new("GetCurrentConnectionInfo".to_string());
-        get_conn
-            .add_argument(Arc::new(Argument::new_in(
-                "ConnectionID".to_string(),
-                Arc::clone(&A_ARG_TYPE_CONNECTIONID),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        get_conn
-            .add_argument(Arc::new(Argument::new_out(
-                "RcsID".to_string(),
-                Arc::clone(&A_ARG_TYPE_RCSID),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        get_conn
-            .add_argument(Arc::new(Argument::new_out(
-                "AVTransportID".to_string(),
-                Arc::clone(&A_ARG_TYPE_AVTRANSPORTID),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        get_conn
-            .add_argument(Arc::new(Argument::new_out(
-                "ProtocolInfo".to_string(),
-                Arc::clone(&A_ARG_TYPE_PROTOCOLINFO),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        get_conn
-            .add_argument(Arc::new(Argument::new_out(
-                "PeerConnectionManager".to_string(),
-                Arc::clone(&A_ARG_TYPE_PROTOCOLINFO),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        get_conn
-            .add_argument(Arc::new(Argument::new_out(
-                "PeerConnectionID".to_string(),
-                Arc::clone(&A_ARG_TYPE_CONNECTIONID),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        get_conn
-            .add_argument(Arc::new(Argument::new_out(
-                "Direction".to_string(),
-                Arc::clone(&A_ARG_TYPE_DIRECTION),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        get_conn
-            .add_argument(Arc::new(Argument::new_out(
-                "Status".to_string(),
-                Arc::clone(&A_ARG_TYPE_CONNECTIONSTATUS),
-            )))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
-        svc.add_action(Arc::new(get_conn))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
+        add_arg_in(&mut get_conn, "ConnectionID", &A_ARG_TYPE_CONNECTIONID)?;
+        add_arg_out(&mut get_conn, "RcsID", &A_ARG_TYPE_RCSID)?;
+        add_arg_out(&mut get_conn, "AVTransportID", &A_ARG_TYPE_AVTRANSPORTID)?;
+        add_arg_out(&mut get_conn, "ProtocolInfo", &A_ARG_TYPE_PROTOCOLINFO)?;
+        add_arg_out(
+            &mut get_conn,
+            "PeerConnectionManager",
+            &A_ARG_TYPE_PROTOCOLINFO,
+        )?;
+        add_arg_out(&mut get_conn, "PeerConnectionID", &A_ARG_TYPE_CONNECTIONID)?;
+        add_arg_out(&mut get_conn, "Direction", &A_ARG_TYPE_DIRECTION)?;
+        add_arg_out(&mut get_conn, "Status", &A_ARG_TYPE_CONNECTIONSTATUS)?;
+        add_action(&mut svc, Arc::new(get_conn))?;
 
         Ok(svc)
     }
