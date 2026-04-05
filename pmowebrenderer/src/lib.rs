@@ -6,6 +6,7 @@
 //! - Les commandes UPnP sont relayées vers le pipeline audio via PipelineControl
 
 mod adapter;
+mod helpers;
 mod register;
 mod stream;
 
@@ -13,6 +14,7 @@ mod stream;
 mod config;
 
 pub use adapter::BrowserAdapter;
+pub use helpers::extract_browser_name;
 
 #[cfg(feature = "pmoserver")]
 pub use config::WebRendererExt;

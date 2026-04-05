@@ -37,9 +37,13 @@ const myUdn = computed(() => webRenderer.rendererUdn.value);
 const filteredRenderers = computed(() => {
     const udn = myUdn.value;
     return allRenderers.value.filter((r: RendererSummary) => {
-        if (r.model_name !== "WebRenderer") return true;
-        if (udn === null) return false;
-        return r.id === udn;
+        // Show only our own WebRenderer based on UDN match
+        const isWebRenderer = r.model_name?.includes("WebRenderer") ?? false;
+        if (isWebRenderer) {
+            if (udn === null) return false;
+            return r.id === udn;
+        }
+        return true;
     });
 });
 

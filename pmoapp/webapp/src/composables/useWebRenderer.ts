@@ -22,6 +22,24 @@ function generateUUID(): string {
 }
 
 const INSTANCE_ID_KEY = "pmomusic_webrenderer_instance_id";
+const RENDERER_UDN_KEY = "pmomusic_webrenderer_udn";
+
+// Load persisted UDN on module load
+function loadPersistedUdn(): string | null {
+    try {
+        return sessionStorage.getItem(RENDERER_UDN_KEY);
+    } catch {
+        return null;
+    }
+}
+
+function savePersistedUdn(udn: string) {
+    try {
+        sessionStorage.setItem(RENDERER_UDN_KEY, udn);
+    } catch {
+        // ignore storage errors
+    }
+}
 
 // Module-level singleton for PMOPlayer to prevent duplicate instances
 let globalPlayer: PMOPlayer | null = null;
@@ -31,7 +49,7 @@ let registering = false;
 // Module-level reactive state shared across all composable invocations
 const sharedConnected = ref(false);
 const sharedStreamUrl = ref<string | null>(null);
-const sharedRendererUdn = ref<string | null>(null);
+const sharedRendererUdn = ref<string | null>(loadPersistedUdn());
 
 function getOrCreateInstanceId(): string {
     try {
@@ -86,6 +104,7 @@ export function useWebRenderer() {
             const data = await resp.json();
             streamUrl.value = data.stream_url;
             rendererUdn.value = data.udn;
+            savePersistedUdn(data.udn);
 
             player = new PMOPlayer(instanceId);
             globalPlayer = player;

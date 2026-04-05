@@ -103,14 +103,16 @@ function handleRendererSelect(rendererId: string) {
     }
 }
 
-// Filtre la liste des renderers pour exclure les WebRenderers d'autres navigateurs.
-// Seul le WebRenderer créé par ce navigateur (identifié par son UDN) reste visible.
+// Filter to show only our own WebRenderer based on UDN match
 function filterRenderers(renderers: typeof allRenderers.value) {
     const myUdn = webRenderer.rendererUdn.value;
     return renderers.filter((r) => {
-        if (r.model_name !== "WebRenderer") return true; // renderer classique : toujours visible
-        if (myUdn === null) return false; // pas encore de session : masquer tous les WebRenderers
-        return r.id === myUdn; // ne garder que le nôtre
+        const isWebRenderer = r.model_name?.includes("WebRenderer") ?? false;
+        if (isWebRenderer) {
+            if (myUdn === null) return false;
+            return r.id === myUdn;
+        }
+        return true;
     });
 }
 

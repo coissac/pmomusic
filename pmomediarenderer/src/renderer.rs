@@ -87,19 +87,24 @@ impl MediaRendererFactory {
     pub fn create_device_with_pipeline(
         device_name: &str,
         device_type: &str,
-        friendly_name_suffix: &str,
+        friendly_name: &str,
         pipeline: PipelineHandle,
         state: SharedState,
         stream_url_base: &str,
     ) -> Result<Device, FactoryError> {
-        let avtransport = Self::build_avtransport(pipeline.clone(), state.clone(), device_name, stream_url_base)?;
+        let avtransport = Self::build_avtransport(
+            pipeline.clone(),
+            state.clone(),
+            device_name,
+            stream_url_base,
+        )?;
         let renderingcontrol = Self::build_renderingcontrol(state.clone())?;
         let connectionmanager = Self::build_connectionmanager()?;
 
-        let device = Device::new_from_config(
+        let device = Device::new(
             device_name.to_string(),
             device_type.to_string(),
-            friendly_name_suffix.to_string(),
+            friendly_name.to_string(),
         );
         device
             .add_service(Arc::new(avtransport))
