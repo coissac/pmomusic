@@ -1,7 +1,4 @@
-//! Factory pour créer des instances WebRenderer privées
-//!
-//! Construit des Device/Service models UPnP dynamiques avec des action handlers
-//! qui relaient les commandes SOAP vers le navigateur via WebSocket.
+//! Factory pour créer des instances MediaRenderer privées
 
 use pmoupnp::actions::{Action, Argument};
 use pmoupnp::devices::Device;
@@ -54,8 +51,7 @@ fn add_action(svc: &mut Service, action: Arc<Action>) -> Result<(), FactoryError
 }
 
 // ─── Réimport des variables statiques de pmomediarenderer ───────────────────
-// Variables AVTransport
-use pmomediarenderer::avtransport::variables::{
+use crate::avtransport::variables::{
     ABSOLUTETIMEPOSITION, AVTRANSPORTNEXTURI, AVTRANSPORTNEXTURIMETADATA, AVTRANSPORTURI,
     AVTRANSPORTURIMETADATA, A_ARG_TYPE_INSTANCE_ID as AVT_INSTANCE_ID, A_ARG_TYPE_PLAY_SPEED,
     A_ARG_TYPE_SEEKMODE, CURRENTMEDIADURATION, CURRENTPLAYMODE, CURRENTTRACK, CURRENTTRACKDURATION,
@@ -64,13 +60,11 @@ use pmomediarenderer::avtransport::variables::{
     TRANSPORTSTATE, TRANSPORTSTATUS,
 };
 
-// Variables RenderingControl
-use pmomediarenderer::renderingcontrol::variables::{
+use crate::renderingcontrol::variables::{
     A_ARG_TYPE_CHANNEL, A_ARG_TYPE_INSTANCE_ID as RC_INSTANCE_ID, MUTE, VOLUME,
 };
 
-// Variables ConnectionManager
-use pmomediarenderer::connectionmanager::variables::{
+use crate::connectionmanager::variables::{
     A_ARG_TYPE_AVTRANSPORTID, A_ARG_TYPE_CONNECTIONID, A_ARG_TYPE_CONNECTIONSTATUS,
     A_ARG_TYPE_DIRECTION, A_ARG_TYPE_PROTOCOLINFO, A_ARG_TYPE_RCSID, CURRENTCONNECTIONIDS,
     SINKPROTOCOLINFO, SOURCEPROTOCOLINFO,
@@ -86,34 +80,14 @@ pub enum FactoryError {
     VariableError(String),
 }
 
-/// Extrait un nom de navigateur court depuis un User-Agent complet.
-fn extract_browser_name(ua: &str) -> &str {
-    if ua.contains("Edg/") || ua.contains("EdgA/") {
-        "Edge"
-    } else if ua.contains("OPR/") || ua.contains("Opera") {
-        "Opera"
-    } else if ua.contains("Chrome/") {
-        "Chrome"
-    } else if ua.contains("Firefox/") {
-        "Firefox"
-    } else if ua.contains("Safari/") {
-        "Safari"
-    } else {
-        "Browser"
-    }
-}
+/// Factory pour créer des Device UPnP MediaRenderer avec un pipeline audio serveur
+pub struct MediaRendererFactory;
 
-/// Factory pour créer des Device UPnP WebRenderer avec un pipeline audio serveur
-pub struct WebRendererFactory;
-
-impl WebRendererFactory {
-    /// Crée un Device model UPnP complet pour un WebRenderer.
-    ///
-    /// `device_name` sert de clé pour retrouver l'UDN persistant dans la config.
-    /// `browser_ua` est le User-Agent complet (pour déterminer le nom affiché).
+impl MediaRendererFactory {
     pub fn create_device_with_pipeline(
         device_name: &str,
-        browser_ua: &str,
+        device_type: &str,
+        device_ua: &str,
         pipeline: PipelineHandle,
         state: SharedState,
     ) -> Result<Device, FactoryError> {
@@ -121,13 +95,12 @@ impl WebRendererFactory {
         let renderingcontrol = Self::build_renderingcontrol(state.clone())?;
         let connectionmanager = Self::build_connectionmanager()?;
 
-        let short_name = extract_browser_name(browser_ua);
         let mut device = Device::new(
             device_name.to_string(),
-            "MediaRenderer".to_string(),
-            format!("Web Audio – {}", short_name),
+            device_type.to_string(),
+            device_ua.to_string(),
         );
-        device.set_model_name("WebRenderer".to_string());
+        device.set_model_name("MediaRenderer".to_string());
         device
             .add_service(Arc::new(avtransport))
             .map_err(|e| FactoryError::ServiceError(format!("{:?}", e)))?;
@@ -141,7 +114,6 @@ impl WebRendererFactory {
         Ok(device)
     }
 
-    /// Construit le service AVTransport avec les handlers pipeline
     fn build_avtransport(
         pipeline: PipelineHandle,
         state: SharedState,
@@ -149,7 +121,6 @@ impl WebRendererFactory {
     ) -> Result<Service, FactoryError> {
         let mut svc = Service::new("AVTransport".to_string());
 
-        // Ajouter toutes les variables d'état
         add_var(&mut svc, &AVT_INSTANCE_ID)?;
         add_var(&mut svc, &A_ARG_TYPE_PLAY_SPEED)?;
         add_var(&mut svc, &A_ARG_TYPE_SEEKMODE)?;
@@ -173,38 +144,36 @@ impl WebRendererFactory {
         add_var(&mut svc, &TRANSPORTSTATE)?;
         add_var(&mut svc, &TRANSPORTSTATUS)?;
 
-        // Play
         let mut play = Action::new("Play".to_string());
         add_arg_in(&mut play, "InstanceID", &AVT_INSTANCE_ID)?;
         add_arg_in(&mut play, "Speed", &TRANSPORTPLAYSPEED)?;
-        play.set_handler(handlers::play_handler(pipeline.clone(), state.clone(), instance_id.to_string()));
+        play.set_handler(handlers::play_handler(
+            pipeline.clone(),
+            state.clone(),
+            instance_id.to_string(),
+        ));
         add_action(&mut svc, Arc::new(play))?;
 
-        // Stop
         let mut stop = Action::new("Stop".to_string());
         add_arg_in(&mut stop, "InstanceID", &AVT_INSTANCE_ID)?;
         stop.set_handler(handlers::stop_handler(pipeline.clone(), state.clone()));
         add_action(&mut svc, Arc::new(stop))?;
 
-        // Pause
         let mut pause = Action::new("Pause".to_string());
         add_arg_in(&mut pause, "InstanceID", &AVT_INSTANCE_ID)?;
         pause.set_handler(handlers::pause_handler(pipeline.clone(), state.clone()));
         add_action(&mut svc, Arc::new(pause))?;
 
-        // Next
         let mut next = Action::new("Next".to_string());
         add_arg_in(&mut next, "InstanceID", &AVT_INSTANCE_ID)?;
         next.set_handler(handlers::next_handler(pipeline.clone()));
         add_action(&mut svc, Arc::new(next))?;
 
-        // Previous
         let mut previous = Action::new("Previous".to_string());
         add_arg_in(&mut previous, "InstanceID", &AVT_INSTANCE_ID)?;
         previous.set_handler(handlers::previous_handler(pipeline.clone()));
         add_action(&mut svc, Arc::new(previous))?;
 
-        // Seek
         let mut seek = Action::new("Seek".to_string());
         add_arg_in(&mut seek, "InstanceID", &AVT_INSTANCE_ID)?;
         add_arg_in(&mut seek, "Unit", &A_ARG_TYPE_SEEKMODE)?;
@@ -212,7 +181,6 @@ impl WebRendererFactory {
         seek.set_handler(handlers::seek_handler(pipeline.clone()));
         add_action(&mut svc, Arc::new(seek))?;
 
-        // SetAVTransportURI
         let mut set_uri = Action::new("SetAVTransportURI".to_string());
         add_arg_in(&mut set_uri, "InstanceID", &AVT_INSTANCE_ID)?;
         add_arg_in(&mut set_uri, "CurrentURI", &AVTRANSPORTURI)?;
@@ -220,7 +188,6 @@ impl WebRendererFactory {
         set_uri.set_handler(handlers::set_uri_handler(pipeline.clone(), state.clone()));
         add_action(&mut svc, Arc::new(set_uri))?;
 
-        // SetNextAVTransportURI
         let mut set_next_uri = Action::new("SetNextAVTransportURI".to_string());
         add_arg_in(&mut set_next_uri, "InstanceID", &AVT_INSTANCE_ID)?;
         add_arg_in(&mut set_next_uri, "NextURI", &AVTRANSPORTNEXTURI)?;
@@ -235,7 +202,6 @@ impl WebRendererFactory {
         ));
         add_action(&mut svc, Arc::new(set_next_uri))?;
 
-        // GetPositionInfo
         let mut get_pos = Action::new("GetPositionInfo".to_string());
         add_arg_in(&mut get_pos, "InstanceID", &AVT_INSTANCE_ID)?;
         add_arg_out(&mut get_pos, "Track", &CURRENTTRACK)?;
@@ -248,7 +214,6 @@ impl WebRendererFactory {
         get_pos.set_handler(handlers::get_position_info_handler(state.clone()));
         add_action(&mut svc, Arc::new(get_pos))?;
 
-        // GetTransportInfo
         let mut get_info = Action::new("GetTransportInfo".to_string());
         add_arg_in(&mut get_info, "InstanceID", &AVT_INSTANCE_ID)?;
         add_arg_out(&mut get_info, "CurrentTransportState", &TRANSPORTSTATE)?;
@@ -258,7 +223,6 @@ impl WebRendererFactory {
         get_info.set_handler(handlers::get_transport_info_handler(state.clone()));
         add_action(&mut svc, Arc::new(get_info))?;
 
-        // GetMediaInfo
         let mut get_media = Action::new("GetMediaInfo".to_string());
         add_arg_in(&mut get_media, "InstanceID", &AVT_INSTANCE_ID)?;
         add_arg_out(&mut get_media, "NrTracks", &NUMBEROFTRACKS)?;
@@ -278,17 +242,14 @@ impl WebRendererFactory {
         get_media.set_handler(handlers::get_media_info_handler(state.clone()));
         add_action(&mut svc, Arc::new(get_media))?;
 
-        // GetTransportSettings (passthrough)
         let mut get_settings = Action::new("GetTransportSettings".to_string());
         add_arg_in(&mut get_settings, "InstanceID", &AVT_INSTANCE_ID)?;
         add_action(&mut svc, Arc::new(get_settings))?;
 
-        // GetDeviceCapabilities (passthrough)
         let mut get_caps = Action::new("GetDeviceCapabilities".to_string());
         add_arg_in(&mut get_caps, "InstanceID", &AVT_INSTANCE_ID)?;
         add_action(&mut svc, Arc::new(get_caps))?;
 
-        // GetCurrentTransportActions (passthrough)
         let mut get_actions = Action::new("GetCurrentTransportActions".to_string());
         add_arg_in(&mut get_actions, "InstanceID", &AVT_INSTANCE_ID)?;
         add_action(&mut svc, Arc::new(get_actions))?;
@@ -296,7 +257,6 @@ impl WebRendererFactory {
         Ok(svc)
     }
 
-    /// Construit le service RenderingControl
     fn build_renderingcontrol(state: SharedState) -> Result<Service, FactoryError> {
         let mut svc = Service::new("RenderingControl".to_string());
 
@@ -305,7 +265,6 @@ impl WebRendererFactory {
         add_var(&mut svc, &VOLUME)?;
         add_var(&mut svc, &MUTE)?;
 
-        // SetVolume
         let mut set_vol = Action::new("SetVolume".to_string());
         add_arg_in(&mut set_vol, "InstanceID", &RC_INSTANCE_ID)?;
         add_arg_in(&mut set_vol, "Channel", &A_ARG_TYPE_CHANNEL)?;
@@ -313,7 +272,6 @@ impl WebRendererFactory {
         set_vol.set_handler(handlers::set_volume_handler(state.clone()));
         add_action(&mut svc, Arc::new(set_vol))?;
 
-        // GetVolume
         let mut get_vol = Action::new("GetVolume".to_string());
         add_arg_in(&mut get_vol, "InstanceID", &RC_INSTANCE_ID)?;
         add_arg_in(&mut get_vol, "Channel", &A_ARG_TYPE_CHANNEL)?;
@@ -322,7 +280,6 @@ impl WebRendererFactory {
         get_vol.set_handler(handlers::get_volume_handler(state.clone()));
         add_action(&mut svc, Arc::new(get_vol))?;
 
-        // SetMute
         let mut set_mute = Action::new("SetMute".to_string());
         add_arg_in(&mut set_mute, "InstanceID", &RC_INSTANCE_ID)?;
         add_arg_in(&mut set_mute, "Channel", &A_ARG_TYPE_CHANNEL)?;
@@ -330,7 +287,6 @@ impl WebRendererFactory {
         set_mute.set_handler(handlers::set_mute_handler(state.clone()));
         add_action(&mut svc, Arc::new(set_mute))?;
 
-        // GetMute
         let mut get_mute = Action::new("GetMute".to_string());
         add_arg_in(&mut get_mute, "InstanceID", &RC_INSTANCE_ID)?;
         add_arg_in(&mut get_mute, "Channel", &A_ARG_TYPE_CHANNEL)?;
@@ -342,7 +298,6 @@ impl WebRendererFactory {
         Ok(svc)
     }
 
-    /// Construit le service ConnectionManager
     fn build_connectionmanager() -> Result<Service, FactoryError> {
         let mut svc = Service::new("ConnectionManager".to_string());
 
@@ -356,7 +311,6 @@ impl WebRendererFactory {
         add_var(&mut svc, &SINKPROTOCOLINFO)?;
         add_var(&mut svc, &SOURCEPROTOCOLINFO)?;
 
-        // GetProtocolInfo
         let mut get_proto = Action::new("GetProtocolInfo".to_string());
         add_arg_out(&mut get_proto, "Source", &SOURCEPROTOCOLINFO)?;
         add_arg_out(&mut get_proto, "Sink", &SINKPROTOCOLINFO)?;
@@ -364,12 +318,10 @@ impl WebRendererFactory {
         get_proto.set_handler(handlers::get_protocol_info_handler());
         add_action(&mut svc, Arc::new(get_proto))?;
 
-        // GetCurrentConnectionIDs
         let mut get_ids = Action::new("GetCurrentConnectionIDs".to_string());
         add_arg_out(&mut get_ids, "ConnectionIDs", &CURRENTCONNECTIONIDS)?;
         add_action(&mut svc, Arc::new(get_ids))?;
 
-        // GetCurrentConnectionInfo
         let mut get_conn = Action::new("GetCurrentConnectionInfo".to_string());
         add_arg_in(&mut get_conn, "ConnectionID", &A_ARG_TYPE_CONNECTIONID)?;
         add_arg_out(&mut get_conn, "RcsID", &A_ARG_TYPE_RCSID)?;

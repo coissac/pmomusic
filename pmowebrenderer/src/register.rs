@@ -12,9 +12,11 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::messages::PlaybackState;
-use crate::pipeline::PipelineControl;
-use crate::registry::RendererRegistry;
+use pmomediarenderer::PlaybackState;
+use pmomediarenderer::PipelineControl;
+use pmomediarenderer::{DeviceAdapter, DeviceCommand, MediaRendererRegistry, PlayerStateReport, SharedState};
+
+use crate::adapter::BrowserAdapter;
 
 #[derive(Debug, Deserialize)]
 pub struct RegisterRequest {
@@ -26,14 +28,12 @@ pub struct RegisterRequest {
 pub struct RegisterResponse {
     pub stream_url: String,
     pub udn: String,
-    /// true si le backend est déjà en lecture — le frontend doit démarrer immédiatement
     pub should_play: bool,
 }
 
-/// POST /api/webrenderer/register
 #[axum::debug_handler]
 pub async fn register_handler(
-    State(registry): State<Arc<RendererRegistry>>,
+    State(registry): State<Arc<MediaRendererRegistry>>,
     Json(req): Json<RegisterRequest>,
 ) -> impl IntoResponse {
     tracing::info!(
@@ -42,8 +42,13 @@ pub async fn register_handler(
         "WebRenderer: register request"
     );
 
+    let state: SharedState = Arc::new(parking_lot::RwLock::new(
+        pmomediarenderer::RendererState::default()
+    ));
+    let adapter: Arc<dyn DeviceAdapter> = Arc::new(BrowserAdapter::new(state));
+
     match registry
-        .register_or_reconnect(&req.instance_id, &req.user_agent)
+        .register_or_reconnect(&req.instance_id, &req.user_agent, adapter)
         .await
     {
         Ok((stream_url, udn, should_play)) => {
@@ -73,12 +78,9 @@ pub struct PositionUpdateRequest {
     pub duration_sec: Option<f64>,
 }
 
-/// POST /api/webrenderer/{id}/position
-/// position_sec est ignoré (géré par PlayerEvent::Position côté serveur).
-/// duration_sec est utilisé comme fallback si la source ne connaît pas la durée (flux radio).
 #[axum::debug_handler]
 pub async fn position_update_handler(
-    State(registry): State<Arc<RendererRegistry>>,
+    State(registry): State<Arc<MediaRendererRegistry>>,
     Path(instance_id): Path<String>,
     Json(req): Json<PositionUpdateRequest>,
 ) -> impl IntoResponse {
@@ -86,10 +88,9 @@ pub async fn position_update_handler(
     StatusCode::NO_CONTENT
 }
 
-/// DELETE /api/webrenderer/{id}
 #[axum::debug_handler]
 pub async fn unregister_handler(
-    State(registry): State<Arc<RendererRegistry>>,
+    State(registry): State<Arc<MediaRendererRegistry>>,
     Path(instance_id): Path<String>,
 ) -> impl IntoResponse {
     tracing::info!(instance_id = %instance_id, "WebRenderer: explicit unregister");
@@ -102,10 +103,9 @@ pub struct UriRequest {
     pub uri: String,
 }
 
-/// POST /api/webrenderer/{id}/set_uri - charge une URI et joue
 #[axum::debug_handler]
 pub async fn set_uri_handler(
-    State(registry): State<Arc<RendererRegistry>>,
+    State(registry): State<Arc<MediaRendererRegistry>>,
     Path(instance_id): Path<String>,
     Json(req): Json<UriRequest>,
 ) -> impl IntoResponse {
@@ -117,48 +117,31 @@ pub async fn set_uri_handler(
     StatusCode::OK
 }
 
-/// POST /api/webrenderer/{id}/pause
 #[axum::debug_handler]
 pub async fn pause_handler(
-    State(registry): State<Arc<RendererRegistry>>,
+    State(registry): State<Arc<MediaRendererRegistry>>,
     Path(instance_id): Path<String>,
 ) -> impl IntoResponse {
     tracing::info!(instance_id = %instance_id, "WebRenderer: pause request");
     if let Some(instance) = registry.get_instance(instance_id.as_str()) {
-        instance.adapter.deliver(crate::adapter::DeviceCommand::Pause);
+        instance.adapter.deliver(DeviceCommand::Pause);
     }
     StatusCode::OK
 }
 
-// ─── Rapports du player ─────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct PlayerStateReport {
-    pub position_sec: Option<f64>,
-    pub duration_sec: Option<f64>,
-    pub state: Option<String>,
-    pub ready_state: Option<String>,
-}
-
-/// POST /api/webrenderer/{id}/report - recoit rapports position/state du player
 #[axum::debug_handler]
 pub async fn report_handler(
-    State(registry): State<Arc<RendererRegistry>>,
+    State(registry): State<Arc<MediaRendererRegistry>>,
     Path(instance_id): Path<String>,
     Json(report): Json<PlayerStateReport>,
 ) -> impl IntoResponse {
-    // Registry met à jour l'état avec les rapports du player
     registry.update_player_state(&instance_id, report).await;
     StatusCode::OK
 }
 
-// ─── Commandes vers le player ─────────────────────────────────
-
-/// GET /api/webrenderer/{id}/command - recupere commande pending pour le player
 #[axum::debug_handler]
 pub async fn command_handler(
-    State(registry): State<Arc<RendererRegistry>>,
+    State(registry): State<Arc<MediaRendererRegistry>>,
     Path(instance_id): Path<String>,
 ) -> impl IntoResponse {
     match registry.get_pending_command(&instance_id).await {
@@ -167,13 +150,11 @@ pub async fn command_handler(
     }
 }
 
-/// POST /api/webrenderer/{id}/play - tell player to stream and play
 #[axum::debug_handler]
 pub async fn play_handler(
-    State(registry): State<Arc<RendererRegistry>>,
+    State(registry): State<Arc<MediaRendererRegistry>>,
     Path(instance_id): Path<String>,
 ) -> impl IntoResponse {
-    // Check if there's a valid URI loaded - if not, ignore the play command
     let instance = match registry.get_instance(&instance_id) {
         Some(i) => i,
         None => {
@@ -191,17 +172,13 @@ pub async fn play_handler(
     
     tracing::info!(instance_id = %instance_id, "WebRenderer: play request");
     
-    // Send Stream command to the adapter (via pending_commands queue)
     let stream_url = format!("/api/webrenderer/{}/stream", instance_id);
-    instance.adapter.deliver(crate::adapter::DeviceCommand::Stream { url: stream_url });
+    instance.adapter.deliver(DeviceCommand::Stream { url: stream_url });
     
-    // Also tell pipeline to play (if not already)
     instance.pipeline.send(PipelineControl::Play).await;
     
     (StatusCode::OK, "OK").into_response()
 }
-
-// ─── Metadata endpoints ─────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
 pub struct NowPlayingResponse {
@@ -216,7 +193,7 @@ pub struct NowPlayingResponse {
 
 #[axum::debug_handler]
 pub async fn nowplaying_handler(
-    State(registry): State<Arc<RendererRegistry>>,
+    State(registry): State<Arc<MediaRendererRegistry>>,
     Path(instance_id): Path<String>,
 ) -> impl IntoResponse {
     let state = match registry.get_state(&instance_id) {
@@ -258,7 +235,7 @@ pub struct RendererStateResponse {
 
 #[axum::debug_handler]
 pub async fn state_handler(
-    State(registry): State<Arc<RendererRegistry>>,
+    State(registry): State<Arc<MediaRendererRegistry>>,
     Path(instance_id): Path<String>,
 ) -> impl IntoResponse {
     let (state, udn) = match registry.get_state_and_udn(&instance_id) {

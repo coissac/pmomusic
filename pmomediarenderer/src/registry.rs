@@ -1,7 +1,4 @@
-//! Registre des instances WebRenderer actives.
-//!
-//! Remplace `SessionManager` et `websocket.rs`. La session est maintenant liée
-//! au flux FLAC HTTP, pas à une connexion WebSocket.
+//! Registre des instances MediaRenderer actives.
 
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -10,10 +7,11 @@ use std::time::SystemTime;
 
 use pmoupnp::devices::DeviceInstance;
 
-use crate::error::WebRendererError;
-use crate::pipeline::{InstancePipeline, PipelineControl, PipelineHandle};
-use crate::renderer::WebRendererFactory;
+use crate::error::MediaRendererError;
+use crate::pipeline::{InstancePipeline, PipelineHandle};
+use crate::renderer::MediaRendererFactory;
 use crate::state::{RendererState, SharedState};
+use super::adapter::DeviceAdapter;
 
 
 #[cfg(feature = "pmoserver")]
@@ -23,33 +21,26 @@ use pmocontrol::model::{RendererCapabilities, RendererProtocol};
 #[cfg(feature = "pmoserver")]
 use pmoupnp::UpnpTypedInstance;
 
-/// Une instance WebRenderer côté serveur
-pub struct WebRendererInstance {
+pub struct MediaRendererInstance {
     pub instance_id: String,
     pub udn: String,
     pub device_instance: Arc<DeviceInstance>,
     pub state: SharedState,
-    /// Handle vers le sink OGG-FLAC — clonable, subscribe() crée un flux indépendant par client.
     pub flac_handle: pmoaudio_ext::sinks::OggFlacStreamHandle,
     pub pipeline: PipelineHandle,
     pub created_at: SystemTime,
-    /// Adapter device-spécifique pour la livraison des commandes.
-    pub adapter: Arc<dyn crate::adapter::DeviceAdapter>,
+    pub adapter: Arc<dyn DeviceAdapter>,
 }
 
-/// Registre global des instances WebRenderer
-pub struct RendererRegistry {
-    /// Map instance_id → instance
-    instances: RwLock<HashMap<String, Arc<WebRendererInstance>>>,
-    /// Map udn → instance (pour retrouver depuis les handlers UPnP)
-    by_udn: RwLock<HashMap<String, Arc<WebRendererInstance>>>,
-    /// Tokens d'annulation des unregister différés (instance_id → token)
+pub struct MediaRendererRegistry {
+    instances: RwLock<HashMap<String, Arc<MediaRendererInstance>>>,
+    by_udn: RwLock<HashMap<String, Arc<MediaRendererInstance>>>,
     pending_unregister: RwLock<HashMap<String, tokio_util::sync::CancellationToken>>,
     #[cfg(feature = "pmoserver")]
     control_point: Arc<ControlPoint>,
 }
 
-impl RendererRegistry {
+impl MediaRendererRegistry {
     #[cfg(feature = "pmoserver")]
     pub fn new(control_point: Arc<ControlPoint>) -> Self {
         Self {
@@ -69,25 +60,21 @@ impl RendererRegistry {
         }
     }
 
-    /// Enregistre ou reconnecte une instance.
-    /// Retourne `(stream_url, udn, should_play)`.
-    /// `should_play` est true si le backend est déjà en lecture : le frontend doit démarrer immédiatement.
     pub async fn register_or_reconnect(
         &self,
         instance_id: &str,
         user_agent: &str,
-    ) -> Result<(String, String, bool), WebRendererError> {
-        // Annuler tout unregister différé pour cet instance_id
+        adapter: Arc<dyn DeviceAdapter>,
+    ) -> Result<(String, String, bool), MediaRendererError> {
         if let Some(cancel) = self.pending_unregister.write().remove(instance_id) {
-            tracing::info!(instance_id = %instance_id, "WebRenderer: cancelled pending unregister (page reload)");
+            tracing::info!(instance_id = %instance_id, "MediaRenderer: cancelled pending unregister (page reload)");
             cancel.cancel();
         }
 
-        // Reconnexion : l'instance existe déjà (ou vient d'être conservée)
         {
             let instances = self.instances.read();
             if let Some(existing) = instances.get(instance_id) {
-                tracing::info!(instance_id = %instance_id, "WebRenderer: reconnecting existing instance");
+                tracing::info!(instance_id = %instance_id, "MediaRenderer: reconnecting existing instance");
                 #[cfg(feature = "pmoserver")]
                 self.register_with_control_point(&existing.device_instance)?;
                 let stream_url = format!("/api/webrenderer/{}/stream", instance_id);
@@ -102,8 +89,7 @@ impl RendererRegistry {
             }
         }
 
-        // Première connexion : créer device UPnP + pipeline
-        let instance = self.create_instance(instance_id, user_agent).await?;
+        let instance = self.create_instance_with_adapter(instance_id, user_agent, adapter).await?;
         let instance = Arc::new(instance);
         let stream_url = format!("/api/webrenderer/{}/stream", instance_id);
         let udn = instance.udn.clone();
@@ -120,14 +106,12 @@ impl RendererRegistry {
         tracing::info!(
             instance_id = %instance_id,
             udn = %udn,
-            "WebRenderer: new instance registered"
+            "MediaRenderer: new instance registered"
         );
 
         Ok((stream_url, udn, false))
     }
 
-    /// Retourne un OggFlacClientStream indépendant pour l'endpoint /stream.
-    /// Chaque appel crée un nouveau subscriber broadcast — safe pour connexions simultanées.
     pub fn get_stream(
         &self,
         instance_id: &str,
@@ -145,7 +129,6 @@ impl RendererRegistry {
         }
     }
 
-    /// Retourne le PipelineHandle par UDN (pour les handlers UPnP)
     pub fn get_pipeline_by_udn(&self, udn: &str) -> Option<PipelineHandle> {
         self.by_udn
             .read()
@@ -153,12 +136,10 @@ impl RendererRegistry {
             .map(|i| i.pipeline.clone())
     }
 
-    /// Retourne l'instance par instance_id
-    pub fn get_instance(&self, instance_id: &str) -> Option<Arc<WebRendererInstance>> {
+    pub fn get_instance(&self, instance_id: &str) -> Option<Arc<MediaRendererInstance>> {
         self.instances.read().get(instance_id).cloned()
     }
 
-    /// Retourne le SharedState par instance_id
     pub fn get_state(&self, instance_id: &str) -> Option<SharedState> {
         self.instances
             .read()
@@ -166,12 +147,10 @@ impl RendererRegistry {
             .map(|i| i.state.clone())
     }
 
-    /// Retourne le PipelineHandle par instance_id
     pub fn get_pipeline(&self, instance_id: &str) -> Option<PipelineHandle> {
         self.instances.read().get(instance_id).map(|i| i.pipeline.clone())
     }
 
-    /// Retourne le SharedState et udn par instance_id
     pub fn get_state_and_udn(&self, instance_id: &str) -> Option<(SharedState, String)> {
         self.instances
             .read()
@@ -179,7 +158,6 @@ impl RendererRegistry {
             .map(|i| (i.state.clone(), i.udn.clone()))
     }
 
-    /// Retourne le SharedState par UDN
     pub fn get_state_by_udn(&self, udn: &str) -> Option<SharedState> {
         self.by_udn
             .read()
@@ -187,7 +165,6 @@ impl RendererRegistry {
             .map(|i| i.state.clone())
     }
 
-    /// Retourne le DeviceInstance par UDN
     pub fn get_device_by_udn(&self, udn: &str) -> Option<Arc<DeviceInstance>> {
         self.by_udn
             .read()
@@ -195,14 +172,10 @@ impl RendererRegistry {
             .map(|i| i.device_instance.clone())
     }
 
-    /// Met à jour la durée depuis le navigateur.
-    /// La position est gérée par PlayerSource via PlayerEvent::Position.
-    /// On n'utilise duration_sec que si la source ne la connaît pas (flux radio sans durée).
     pub fn update_duration(&self, instance_id: &str, duration_sec: Option<f64>) {
         let instances = self.instances.read();
         if let Some(instance) = instances.get(instance_id) {
             let mut s = instance.state.write();
-            // N'écraser la durée que si elle n'est pas déjà connue (la source est prioritaire)
             if s.duration.is_none() {
                 if let Some(dur) = duration_sec {
                     if dur > 0.0 {
@@ -216,19 +189,18 @@ impl RendererRegistry {
     pub fn schedule_unregister(self: &Arc<Self>, instance_id: &str) {
         use tokio_util::sync::CancellationToken;
 
-        // Ne pas détruire immédiatement : attendre 5s au cas où la page se recharge
         let cancel = CancellationToken::new();
         self.pending_unregister.write().insert(instance_id.to_string(), cancel.clone());
 
         let instance_id_owned = instance_id.to_string();
         let registry = Arc::clone(self);
 
-        tracing::info!(instance_id = %instance_id, "WebRenderer: unregister scheduled (5s grace period)");
+        tracing::info!(instance_id = %instance_id, "MediaRenderer: unregister scheduled (5s grace period)");
 
         tokio::spawn(async move {
             tokio::select! {
                 _ = cancel.cancelled() => {
-                    tracing::info!(instance_id = %instance_id_owned, "WebRenderer: deferred unregister cancelled (page reload)");
+                    tracing::info!(instance_id = %instance_id_owned, "MediaRenderer: deferred unregister cancelled (page reload)");
                 }
                 _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
                     registry.pending_unregister.write().remove(&instance_id_owned);
@@ -243,7 +215,7 @@ impl RendererRegistry {
                         tracing::info!(
                             instance_id = %instance_id_owned,
                             udn = %instance.udn,
-                            "WebRenderer: instance unregistered"
+                            "MediaRenderer: instance unregistered"
                         );
                     }
                 }
@@ -251,11 +223,10 @@ impl RendererRegistry {
         });
     }
 
-    /// Met à jour l'état avec les rapports du player
     pub async fn update_player_state(
         &self,
         instance_id: &str,
-        report: crate::register::PlayerStateReport,
+        report: crate::messages::PlayerStateReport,
     ) {
         let instances = self.instances.read();
         if let Some(instance) = instances.get(instance_id) {
@@ -278,7 +249,6 @@ impl RendererRegistry {
         }
     }
 
-    /// Récupère et consomme la commande en attente pour le player
     pub async fn get_pending_command(
         &self,
         instance_id: &str,
@@ -288,40 +258,33 @@ impl RendererRegistry {
         serde_json::to_value(cmd).ok()
     }
 
-    // ── Création d'instance ────────────────────────────────────────────────────
-
-    async fn create_instance(
+    /// Créer une nouvelle instance avec un adapter fourni (permet à l'appelant de créer BrowserAdapter)
+    pub async fn create_instance_with_adapter(
         &self,
         instance_id: &str,
         user_agent: &str,
-    ) -> Result<WebRendererInstance, WebRendererError> {
-        // UDN stable dérivé de l'instance_id
+        adapter: Arc<dyn DeviceAdapter>,
+    ) -> Result<MediaRendererInstance, MediaRendererError> {
         let candidate_udn = instance_id.to_ascii_lowercase();
         let full_udn = format!("uuid:{}", candidate_udn);
 
-        // Persister l'UDN dans la config (pour que device_instance.rs le retrouve)
         if let Err(e) = pmoconfig::get_config().set_device_udn(
             "MediaRenderer",
             instance_id,
             candidate_udn.clone(),
         ) {
-            tracing::warn!("WebRenderer: failed to persist UDN: {:?}", e);
+            tracing::warn!("MediaRenderer: failed to persist UDN: {:?}", e);
         }
 
         let state: SharedState = Arc::new(parking_lot::RwLock::new(RendererState::default()));
-
-        // Créer l'adapter avant le pipeline (sera passé à run_event_listener)
-        let adapter: Arc<dyn crate::adapter::DeviceAdapter> =
-            Arc::new(crate::adapter::BrowserAdapter::new(state.clone()));
 
         #[cfg(feature = "pmoserver")]
         let (device_instance, pipeline) = {
             use pmoupnp::UpnpServerExt;
 
             let server_arc = pmoserver::get_server()
-                .ok_or(WebRendererError::ServerNotAvailable)?;
+                .ok_or(MediaRendererError::ServerNotAvailable)?;
 
-            // Créer le pipeline avec l'adapter pour le event listener
             let ip = InstancePipeline::start(
                 state.clone(),
                 self.control_point.clone(),
@@ -330,31 +293,30 @@ impl RendererRegistry {
             );
             let pipeline = ip.pipeline_handle.clone();
 
-            // Vérifier si un device avec ce même UDN existe déjà
             let existing_di = {
                 let server = server_arc.read().await;
                 server.get_device(&candidate_udn)
             };
 
             let di = if let Some(di) = existing_di {
-                tracing::info!(udn = %candidate_udn, "WebRenderer: reusing device from registry");
+                tracing::info!(udn = %candidate_udn, "MediaRenderer: reusing device from registry");
                 di
             } else {
-                // Créer le device UPnP
-                tracing::info!(udn = %candidate_udn, "WebRenderer: creating new device");
-                let device = WebRendererFactory::create_device_with_pipeline(
+                tracing::info!(udn = %candidate_udn, "MediaRenderer: creating new device");
+                let device = MediaRendererFactory::create_device_with_pipeline(
                     instance_id,
+                    "MediaRenderer",
                     user_agent,
                     pipeline.clone(),
                     state.clone(),
                 )
-                .map_err(|e| WebRendererError::DeviceCreationError(e.to_string()))?;
+                .map_err(|e| MediaRendererError::DeviceCreationError(e.to_string()))?;
 
                 let mut server = server_arc.write().await;
                 server
                     .register_device(Arc::new(device), false)
                     .await
-                    .map_err(|e| WebRendererError::RegistrationError(e.to_string()))?
+                    .map_err(|e| MediaRendererError::RegistrationError(e.to_string()))?
             };
 
             self.register_with_control_point(&di)?;
@@ -372,18 +334,19 @@ impl RendererRegistry {
             );
             let pipeline = ip.pipeline_handle.clone();
 
-            let device = WebRendererFactory::create_device_with_pipeline(
+            let device = MediaRendererFactory::create_device_with_pipeline(
                 instance_id,
+                "MediaRenderer",
                 user_agent,
                 pipeline.clone(),
                 state.clone(),
             )
-            .map_err(|e| WebRendererError::DeviceCreationError(e.to_string()))?;
+            .map_err(|e| MediaRendererError::DeviceCreationError(e.to_string()))?;
 
             (Arc::new(device).create_instance(), ip)
         };
 
-        Ok(WebRendererInstance {
+        Ok(MediaRendererInstance {
             instance_id: instance_id.to_string(),
             udn: full_udn,
             device_instance,
@@ -395,12 +358,11 @@ impl RendererRegistry {
         })
     }
 
-    /// Enregistre le device dans le ControlPoint
     #[cfg(feature = "pmoserver")]
     fn register_with_control_point(
         &self,
         di: &Arc<DeviceInstance>,
-    ) -> Result<(), WebRendererError> {
+    ) -> Result<(), MediaRendererError> {
         let base_url = di.base_url().to_string();
         let udn = di.udn().to_ascii_lowercase();
         let udn_with_prefix = format!("uuid:{}", udn);
@@ -449,7 +411,7 @@ impl RendererRegistry {
             registry.push_renderer(&renderer_info, 86400);
         }
 
-        tracing::info!(udn = %udn, "WebRenderer: registered with ControlPoint");
+        tracing::info!(udn = %udn, "MediaRenderer: registered with ControlPoint");
         Ok(())
     }
 }

@@ -4,17 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-pmoupnp = { path = "../pmoupnp" }
 pmomediarenderer = { path = "../pmomediarenderer" }
 pmoserver = { path = "../pmoserver", optional = true }
 pmocontrol = { path = "../pmocontrol", optional = true }
 pmoconfig = { path = "../pmoconfig" }
-
-# Audio pipeline (toujours actif — c'est le cœur du renderer)
-pmoaudio-ext = { path = "../pmoaudio-ext", features = ["http-stream"] }
-pmoaudio = { path = "../pmoaudio" }
-pmoflac = { path = "../pmoflac" }
-pmometadata = { path = "../pmometadata" }
 
 # Async runtime
 tokio = { workspace = true, features = ["full"] }
@@ -26,25 +19,16 @@ axum = "0.8.4"
 axum-extra = "0.12"
 tower-http = "0.6"
 futures = "0.3"
-reqwest = { workspace = true, features = ["stream"] }
 bytes = "1.0"
-
-# OpenAPI
-utoipa = { version = "5.3", features = ["axum_extras"] }
 
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
 
 # Utilities
-uuid = { workspace = true, features = ["v4", "serde"] }
 parking_lot = "0.12"
-thiserror = { workspace = true }
 tracing = { workspace = true }
-
-pmodidl = { path = "../pmodidl" }
-pmoutils = { version = "0.1.2", registry = "pmo" }
 
 [features]
 default = []
-pmoserver = ["dep:pmoserver", "dep:pmocontrol"]
+pmoserver = ["dep:pmoserver", "dep:pmocontrol", "pmomediarenderer/pmoserver"]

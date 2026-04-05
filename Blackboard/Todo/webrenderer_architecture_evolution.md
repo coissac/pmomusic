@@ -823,13 +823,334 @@ cargo check -p pmowebrenderer --features pmoserver
 
 ---
 
-### T4 — Phase 5 : Restructuration `core/` vs `browser/` ⏸️ Différé
+### T4 — Phase 5 : Restructuration `core/` vs `browser/` ✅ Remplacé et réalisé via T5
 
-À faire quand les interfaces sont stabilisées.
-Voir la section "Phase 5" du plan ci-dessus pour l'ordre de déplacement.
-Condition : `cargo check -p pmowebrenderer` doit passer à chaque étape.
+Cette phase est **remplacée et amplifiée** par T5 ci-dessous : au lieu de créer des
+sous-répertoires `core/` et `browser/` dans `pmowebrenderer`, on va séparer les deux
+niveaux en crates distinctes.
 
 **Écart mineur à surveiller** : `pause_handler` HTTP (`register.rs`) livre `Pause` au browser
 via l'adapter mais ne suspend pas le pipeline serveur ni n'appelle `flac_handle.pause()`.
 Non bloquant (le browser passe par UPnP pour les vraies pauses), mais à aligner si cet
 endpoint est utilisé directement à l'avenir.
+
+---
+
+## Plan T5 — Séparation crates : core dans `pmomediarenderer`, adapter browser dans `pmowebrenderer`
+
+### Contexte
+
+La phase 5 originale (sous-répertoires `core/` vs `browser/`) est insuffisante. La vraie
+séparation architecturale est au niveau des **crates** :
+
+- `pmomediarenderer` : déjà le bon endroit pour la logique générique d'un MediaRenderer UPnP
+  (pipeline audio, handlers UPnP, registry d'instances, factory de devices). Actuellement
+  réduite à des définitions déclaratives (variables, actions, device statique sans handler).
+- `pmowebrenderer` : doit devenir un **adaptateur pur** pour le rendu dans un navigateur.
+  HTTP polling, streaming OGG-FLAC, enregistrement — tout ce qui est spécifique au browser.
+
+Ajouter Android Auto = créer `pmomandroidrenderer` qui dépend de `pmomediarenderer`
+(core), sans toucher ni à `pmomediarenderer` ni à `pmowebrenderer`.
+
+### État actuel des crates
+
+```
+pmomediarenderer (déclaratif uniquement, ~64 fichiers)
+  avtransport/          ← définitions de variables UPnP (conservées)
+  renderingcontrol/     ← définitions de variables UPnP (conservées)
+  connectionmanager/    ← définitions de variables UPnP (conservées)
+  device.rs             ← MEDIA_RENDERER statique sans handler → À SUPPRIMER
+  Cargo.toml            ← dépendances : pmoupnp, pmodidl, once_cell
+
+pmowebrenderer (core + adapter mélangés, ~1900 lignes)
+  adapter.rs            ← DeviceAdapter trait + DeviceCommand + BrowserAdapter
+  handlers.rs           ← handlers UPnP AVTransport/RenderingControl → DÉPLACER
+  pipeline.rs           ← pipeline audio PlayerSource + OggFlac → DÉPLACER
+  renderer.rs           ← WebRendererFactory (crée devices UPnP) → DÉPLACER
+  registry.rs           ← RendererRegistry + instances → DÉPLACER
+  state.rs              ← RendererState → DÉPLACER
+  messages.rs           ← PlaybackState → DÉPLACER
+  error.rs              ← WebRendererError → DÉPLACER
+  register.rs           ← HTTP endpoints (register/command/report...) → CONSERVER
+  stream.rs             ← GET /stream → CONSERVER
+  config.rs             ← WebRendererExt (pmoserver) → CONSERVER
+```
+
+### Architecture cible
+
+```
+pmomediarenderer/src/
+  lib.rs                ← exports publics du core
+  avtransport/          ← CONSERVÉ (variables statiques réutilisées par renderer.rs)
+  renderingcontrol/     ← CONSERVÉ
+  connectionmanager/    ← CONSERVÉ
+  device.rs             ← SUPPRIMÉ (MEDIA_RENDERER sans handler n'est plus utile)
+  adapter.rs            ← NOUVEAU : DeviceAdapter trait + DeviceCommand (ex pmowebrenderer)
+  handlers.rs           ← NOUVEAU : handlers UPnP → pipeline
+  pipeline.rs           ← NOUVEAU : pipeline audio + run_event_listener
+  renderer.rs           ← NOUVEAU : MediaRendererFactory (ex WebRendererFactory)
+  registry.rs           ← NOUVEAU : MediaRendererRegistry + MediaRendererInstance
+  state.rs              ← NOUVEAU : RendererState + SharedState
+  messages.rs           ← NOUVEAU : PlaybackState
+  error.rs              ← NOUVEAU : MediaRendererError (ex WebRendererError)
+
+pmowebrenderer/src/
+  lib.rs                ← exports : BrowserAdapter + WebRendererExt
+  adapter.rs            ← RÉDUIT : BrowserAdapter uniquement
+                           (DeviceAdapter/DeviceCommand importés de pmomediarenderer)
+  register.rs           ← CONSERVÉ (HTTP endpoints, imports depuis pmomediarenderer)
+  stream.rs             ← CONSERVÉ
+  config.rs             ← CONSERVÉ (WebRendererExt, feature pmoserver)
+```
+
+### Renommages
+
+| Avant (pmowebrenderer) | Après (pmomediarenderer) |
+|---|---|
+| `WebRendererFactory` | `MediaRendererFactory` |
+| `WebRendererInstance` | `MediaRendererInstance` |
+| `WebRendererError` | `MediaRendererError` |
+| `RendererRegistry` | `MediaRendererRegistry` |
+
+### Dépendances après refactoring
+
+```toml
+# pmomediarenderer/Cargo.toml — NOUVELLES dépendances à ajouter
+pmoaudio-ext = { path = "../pmoaudio-ext", features = ["http-stream"] }
+pmoaudio = { path = "../pmoaudio" }
+pmoflac = { path = "../pmoflac" }
+pmoconfig = { path = "../pmoconfig" }
+tokio = { workspace = true, features = ["full"] }
+tokio-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+parking_lot = "0.12"
+thiserror = { workspace = true }
+tracing = { workspace = true }
+pmoutils = { version = "0.1.2", registry = "pmo" }
+# Optionnelles
+pmoserver = { path = "../pmoserver", optional = true }
+pmocontrol = { path = "../pmocontrol", optional = true }
+
+[features]
+default = []
+pmoserver = ["dep:pmoserver", "dep:pmocontrol"]
+
+# pmowebrenderer/Cargo.toml — APRÈS refactoring
+# Supprimer : pmoaudio, pmoaudio-ext, pmoflac, pmometadata, tokio-util, parking_lot,
+#             thiserror, uuid, pmodidl, pmoutils
+# Ajouter   : pmomediarenderer = { path = "../pmomediarenderer", features = [] }
+# Conserver : axum, axum-extra, tower-http, futures, reqwest, bytes, utoipa, serde,
+#             serde_json, tokio, pmoserver(opt), pmocontrol(opt), pmoconfig
+```
+
+### Plan d'exécution
+
+#### Étape 5.1 — Mettre à jour `pmomediarenderer/Cargo.toml`
+
+Ajouter toutes les nouvelles dépendances listées ci-dessus. Ajouter `[features]` avec `pmoserver`.
+`cargo check -p pmomediarenderer` doit toujours compiler (pas encore de nouveau code).
+
+#### Étape 5.2 — Déplacer les modules "socle" (pas de dépendances internes)
+
+Dans l'ordre (du moins couplé au plus couplé) :
+
+1. `messages.rs` → `pmomediarenderer/src/messages.rs` (dépend de : serde seul)
+2. `error.rs` → `pmomediarenderer/src/error.rs` (renommer `WebRendererError` → `MediaRendererError`)
+3. `state.rs` → `pmomediarenderer/src/state.rs` (dépend de : messages, adapter)
+4. `adapter.rs` (trait + enum) → `pmomediarenderer/src/adapter.rs`
+
+Mettre à jour `pmomediarenderer/src/lib.rs` à chaque fichier ajouté.
+`cargo check -p pmomediarenderer` à chaque étape.
+
+#### Étape 5.3 — Déplacer `pipeline.rs`
+
+Dépend de : state, messages, pmoaudio-ext, pmoflac, tokio.
+Adapter les imports `crate::` → rester valides dans le nouveau contexte.
+Garder `#[cfg(feature = "pmoserver")]` sur la section `ControlPoint`.
+`cargo check -p pmomediarenderer`.
+
+#### Étape 5.4 — Déplacer `handlers.rs`
+
+Dépend de : messages, pipeline, state, pmodidl, pmoupnp.
+Adapter les imports. Pas de renommage de fonctions à ce stade.
+`cargo check -p pmomediarenderer`.
+
+#### Étape 5.5 — Déplacer `renderer.rs` et renommer
+
+- Déplacer vers `pmomediarenderer/src/renderer.rs`
+- Renommer `WebRendererFactory` → `MediaRendererFactory`
+- Mettre à jour les imports (variables UPnP maintenant dans `crate::avtransport::*` — déjà le même module)
+- `cargo check -p pmomediarenderer`
+
+#### Étape 5.6 — Déplacer `registry.rs` et renommer
+
+- Déplacer vers `pmomediarenderer/src/registry.rs`
+- Renommer `RendererRegistry` → `MediaRendererRegistry`, `WebRendererInstance` → `MediaRendererInstance`
+- Mettre à jour les appels à `WebRendererFactory` → `MediaRendererFactory`
+- `cargo check -p pmomediarenderer`
+
+#### Étape 5.7 — Supprimer `device.rs` de `pmomediarenderer`
+
+Vérifier que PMOMusic n'utilise `MEDIA_RENDERER` que comme point d'entrée obsolète.
+Chercher tous les usages de `MEDIA_RENDERER` et `pmomediarenderer::MEDIA_RENDERER` dans le workspace.
+Si PMOMusic l'utilise, adapter `PMOMusic/src/main.rs` pour utiliser `MediaRendererRegistry` à la place.
+Supprimer `device.rs` et son export dans `lib.rs`.
+`cargo check --workspace`.
+
+#### Étape 5.8 — Réduire `pmowebrenderer`
+
+1. Réduire `adapter.rs` à `BrowserAdapter` seul :
+   ```rust
+   use pmomediarenderer::adapter::{DeviceAdapter, DeviceCommand, DeviceStateReport};
+   pub struct BrowserAdapter { pub state: pmomediarenderer::state::SharedState }
+   impl DeviceAdapter for BrowserAdapter { ... }
+   ```
+
+2. Mettre à jour `register.rs` : remplacer `crate::registry::RendererRegistry` →
+   `pmomediarenderer::registry::MediaRendererRegistry`, idem pour les autres types.
+
+3. Mettre à jour `stream.rs` : imports depuis pmomediarenderer.
+
+4. Mettre à jour `config.rs` : imports depuis pmomediarenderer.
+
+5. Mettre à jour `pmowebrenderer/Cargo.toml` : supprimer les dépendances migrées, ajouter
+   `pmomediarenderer`.
+
+6. Mettre à jour `lib.rs` pour ne plus exporter que les types browser-spécifiques.
+
+`cargo check -p pmowebrenderer`.
+
+#### Étape 5.9 — Vérification finale workspace
+
+```bash
+cargo check --workspace
+cargo check --workspace --features pmoserver
+# Test fonctionnel : BubbleUPnP → SetAVTransportURI → Play → stream browser OK
+```
+
+### Points d'attention
+
+**`pmoserver` feature propagation** : `pmowebrenderer` active `pmoserver` via
+`features = ["pmoserver"]` sur la dépendance `pmomediarenderer`. Les deux crates auront leur
+propre feature flag `pmoserver`, mais `WebRendererExt` dans `pmowebrenderer` dépend du
+feature activé dans `pmomediarenderer`.
+
+**Chemins de types publics** : tout code client qui importe
+`pmowebrenderer::{RendererRegistry, WebRendererFactory, ...}` devra mettre à jour ses imports
+vers `pmomediarenderer::registry::MediaRendererRegistry` etc. Vérifier `PMOMusic/src/main.rs`
+en priorité.
+
+**`pmoutils` / `pmometadata`** : vérifier si utilisés dans les fichiers déplacés. Si oui,
+ajouter à `pmomediarenderer/Cargo.toml`.
+
+### Vérification finale
+
+```bash
+# 1. Compilation
+cargo check -p pmomediarenderer
+cargo check -p pmomediarenderer --features pmoserver
+cargo check -p pmowebrenderer --features pmoserver
+cargo check --workspace --features pmoserver
+
+# 2. Test fonctionnel (inchangé par rapport au plan précédent)
+# BubbleUPnP → SetAVTransportURI + Play → stream OGG-FLAC dans le navigateur
+# Pause / Stop / Next (transitions de piste < 1s)
+# Reconnexion navigateur (reload page)
+# GET /api/webrenderer/{id}/nowplaying et /state
+```
+
+---
+
+## Rapport d'exécution T5 (2026-04-05)
+
+### Ce qui a été réalisé ✅
+
+La migration est **structurellement complète** :
+
+| Élément | Statut | Notes |
+|---------|--------|-------|
+| `pmomediarenderer/src/adapter.rs` | ✅ | `DeviceAdapter` trait + `DeviceCommand` enum + `DeviceStateReport` |
+| `pmomediarenderer/src/handlers.rs` | ✅ | Handlers UPnP AVTransport / RenderingControl |
+| `pmomediarenderer/src/pipeline.rs` | ✅ | Pipeline audio + `run_event_listener` avec `Weak<dyn DeviceAdapter>` |
+| `pmomediarenderer/src/renderer.rs` | ✅ | `MediaRendererFactory` (ex `WebRendererFactory`) |
+| `pmomediarenderer/src/registry.rs` | ✅ | `MediaRendererRegistry` + `MediaRendererInstance` (renommés) |
+| `pmomediarenderer/src/state.rs` | ✅ | `RendererState` + `SharedState` |
+| `pmomediarenderer/src/messages.rs` | ✅ | `PlaybackState` |
+| `pmomediarenderer/src/error.rs` | ✅ | `MediaRendererError` (ex `WebRendererError`) |
+| `pmomediarenderer/Cargo.toml` | ✅ | Toutes les nouvelles dépendances ajoutées, feature `pmoserver` |
+| `pmomediarenderer/src/device.rs` | ✅ | Supprimé |
+| `pmowebrenderer/src/lib.rs` | ✅ | Réduit à `adapter`, `register`, `stream`, `config` |
+| `pmowebrenderer/src/adapter.rs` | ✅ | `BrowserAdapter` uniquement, imports depuis `pmomediarenderer` |
+| `pmowebrenderer/src/register.rs` | ✅ | Imports depuis `pmomediarenderer` |
+| `pmowebrenderer/src/stream.rs` | ✅ | Imports depuis `pmomediarenderer` |
+| `pmowebrenderer/src/config.rs` | ✅ | Imports depuis `pmomediarenderer` |
+
+### Ce qui reste à faire → T6
+
+---
+
+## T6 — Nettoyage post-migration
+
+### T6.1 — Supprimer les fichiers orphelins de `pmowebrenderer/src/`
+
+Les anciens fichiers du core sont toujours présents dans `pmowebrenderer/src/` mais ne sont
+**plus déclarés dans `lib.rs`** — ils sont invisibles au compilateur mais polluent le dépôt.
+rust-analyzer émet un warning "unlinked-file" sur chacun.
+
+**Fichiers à supprimer** :
+```
+pmowebrenderer/src/messages.rs
+pmowebrenderer/src/error.rs
+pmowebrenderer/src/state.rs
+pmowebrenderer/src/pipeline.rs
+pmowebrenderer/src/handlers.rs
+pmowebrenderer/src/renderer.rs
+pmowebrenderer/src/registry.rs
+```
+
+```bash
+# Vérifier qu'aucun n'est importé depuis l'extérieur avant de supprimer
+cargo check -p pmowebrenderer --features pmoserver
+# Puis supprimer et vérifier
+cargo check -p pmowebrenderer --features pmoserver
+```
+
+### T6.2 — Nettoyer `pmowebrenderer/Cargo.toml`
+
+Les dépendances suivantes n'ont plus d'utilisateurs dans `pmowebrenderer` après la migration
+et peuvent être supprimées (elles sont maintenant des dépendances de `pmomediarenderer`) :
+
+```toml
+# À SUPPRIMER de pmowebrenderer/Cargo.toml :
+pmoaudio-ext     # plus utilisé dans register.rs/stream.rs/adapter.rs/config.rs
+pmoaudio         # idem
+pmoflac          # idem
+pmometadata      # idem
+parking_lot      # idem
+uuid             # idem
+thiserror        # idem
+pmodidl          # idem
+pmoutils         # idem
+# pmoupnp        # à vérifier : plus utilisé directement ?
+# async-trait    # utilisé dans config.rs → CONSERVER
+# tokio-util     # utilisé dans stream.rs (ReaderStream) → CONSERVER
+```
+
+Procédure : supprimer une dépendance à la fois, `cargo check -p pmowebrenderer` après chaque.
+
+### T6.3 — Corriger l'import inutilisé dans `pmomediarenderer/src/adapter.rs`
+
+```
+⚠ unused import: `std::collections::VecDeque` (ligne 2)
+```
+
+Supprimer la ligne `use std::collections::VecDeque;`.
+
+### Vérification T6
+
+```bash
+cargo check --workspace --features pmoserver
+# Zéro warning "unlinked-file", zéro warning "unused import" dans les deux crates
+```

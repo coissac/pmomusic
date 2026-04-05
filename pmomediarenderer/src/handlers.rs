@@ -1,4 +1,4 @@
-//! Action handlers SOAP → Pipeline pour le WebRenderer serveur
+//! Action handlers SOAP → Pipeline pour le MediaRenderer
 //!
 //! Chaque handler bridge une action UPnP vers une commande `PipelineControl`
 //! envoyée au pipeline audio serveur, ou lit l'état partagé pour les requêtes GET.
@@ -21,10 +21,10 @@ pub fn play_handler(
 ) -> ActionHandler {
     action_handler!(
         captures(pipeline, state, instance_id) | data | {
-            tracing::info!("[WebRenderer] UPnP Play action invoked");
+            tracing::info!("[MediaRenderer] UPnP Play action invoked");
             let has_uri = state.read().current_uri.is_some();
             if !has_uri {
-                tracing::warn!("[WebRenderer] UPnP Play ignored: no URI loaded");
+                tracing::warn!("[MediaRenderer] UPnP Play ignored: no URI loaded");
                 return Ok(data);
             }
             {
@@ -33,7 +33,6 @@ pub fn play_handler(
                 s.push_command(crate::adapter::DeviceCommand::Stream {
                     url: format!("/api/webrenderer/{}/stream", instance_id),
                 });
-                tracing::info!("UPnP Play: stored stream command for frontend polling");
             }
             pipeline.flac_handle.resume();
             pipeline.send(PipelineControl::Play).await;
@@ -106,7 +105,7 @@ pub fn seek_handler(pipeline: PipelineHandle) -> ActionHandler {
 
 pub fn set_uri_handler(pipeline: PipelineHandle, state: SharedState) -> ActionHandler {
     action_handler!(captures(pipeline, state) |mut data| {
-        tracing::info!("[WebRenderer] UPnP SetAVTransportURI action invoked");
+        tracing::info!("[MediaRenderer] UPnP SetAVTransportURI action invoked");
         let uri: String = get!(&data, "CurrentURI", String);
         let metadata: String = get_value::<String>(&data, "CurrentURIMetaData")
             .or_else(|_| get_value::<DIDLLite>(&data, "CurrentURIMetaData").map(|didl| didl.to_xml()))
@@ -159,7 +158,6 @@ pub fn get_position_info_handler(state: SharedState) -> ActionHandler {
 pub fn get_transport_info_handler(state: SharedState) -> ActionHandler {
     action_handler!(captures(state) |mut data| {
         let s = state.read();
-        tracing::info!("[WebRenderer] GetTransportInfo: state={:?}", s.playback_state);
         let transport_state = match s.playback_state {
             PlaybackState::Stopped => "STOPPED",
             PlaybackState::Playing => "PLAYING",

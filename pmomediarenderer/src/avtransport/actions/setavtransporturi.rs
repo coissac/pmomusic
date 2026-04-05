@@ -1,5 +1,5 @@
 use crate::avtransport::variables::{
-    A_ARG_TYPE_INSTANCE_ID, AVTRANSPORTURI, AVTRANSPORTURIMETADATA,
+    AVTRANSPORTURI, AVTRANSPORTURIMETADATA, A_ARG_TYPE_INSTANCE_ID,
 };
 use pmoupnp::define_action;
 

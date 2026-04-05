@@ -18,11 +18,11 @@ use std::sync::Arc;
 use tokio_util::io::ReaderStream;
 use tracing::{error, info};
 
-use crate::registry::RendererRegistry;
+use pmomediarenderer::MediaRendererRegistry;
 
 /// GET /api/webrenderer/{id}/stream
 pub async fn stream_handler(
-    State(registry): State<Arc<RendererRegistry>>,
+    State(registry): State<Arc<MediaRendererRegistry>>,
     Path(instance_id): Path<String>,
     headers: HeaderMap,
 ) -> impl IntoResponse {

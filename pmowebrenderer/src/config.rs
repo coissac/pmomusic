@@ -16,14 +16,14 @@ use axum::{
 use pmocontrol::ControlPoint;
 
 #[cfg(feature = "pmoserver")]
-use crate::error::WebRendererError;
+use pmomediarenderer::MediaRendererError;
 #[cfg(feature = "pmoserver")]
 use crate::register::{
     nowplaying_handler, pause_handler, play_handler, position_update_handler,
     register_handler, report_handler, set_uri_handler, state_handler, unregister_handler,
 };
 #[cfg(feature = "pmoserver")]
-use crate::registry::RendererRegistry;
+use pmomediarenderer::MediaRendererRegistry;
 #[cfg(feature = "pmoserver")]
 use crate::stream::stream_handler;
 
@@ -34,7 +34,7 @@ pub trait WebRendererExt {
     async fn register_web_renderer(
         &mut self,
         control_point: Arc<ControlPoint>,
-    ) -> Result<(), WebRendererError>;
+    ) -> Result<(), MediaRendererError>;
 }
 
 #[cfg(feature = "pmoserver")]
@@ -43,8 +43,8 @@ impl WebRendererExt for pmoserver::Server {
     async fn register_web_renderer(
         &mut self,
         control_point: Arc<ControlPoint>,
-    ) -> Result<(), WebRendererError> {
-        let registry = Arc::new(RendererRegistry::new(control_point));
+    ) -> Result<(), MediaRendererError> {
+        let registry = Arc::new(MediaRendererRegistry::new(control_point));
 
         // POST /api/webrenderer/register
         self.add_post_handler_with_state(

@@ -1,9 +1,9 @@
-//! Erreurs liées au WebRenderer
+//! Erreurs liées au MediaRenderer
 
 use thiserror::Error;
 
 #[derive(Error, Debug)]
-pub enum WebRendererError {
+pub enum MediaRendererError {
     #[error("Invalid argument: {0}")]
     InvalidArgument(String),
 
