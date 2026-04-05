@@ -270,30 +270,40 @@ function selectRenderer(id: string | null) {
   snapshotState.selectedRendererId = id;
 }
 
-async function fetchRenderers(force = false) {
+async function fetchRenderers(force = false, retries = 2) {
   ensureSSEInitialized();
 
-  try {
-    loading.value = true;
-    error.value = null;
+  let lastError: Error | null = null;
+  
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      loading.value = true;
+      error.value = null;
 
-    // Utiliser le cache API centralisé
-    const data = await apiCache.fetch(
-      '/renderers',
-      undefined,
-      () => api.getRenderers(),
-      { force, ttl: RENDERERS_CACHE_MS }
-    );
-    
-    renderersCache.value = new Map(
-      data.map((renderer) => [renderer.id, renderer]),
-    );
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : "Erreur fetch renderers";
-    console.error("[useRenderers] Erreur fetch:", err);
-  } finally {
-    loading.value = false;
+      // Utiliser le cache API centralisé
+      const data = await apiCache.fetch(
+        '/renderers',
+        undefined,
+        () => api.getRenderers(),
+        { force, ttl: RENDERERS_CACHE_MS }
+      );
+      
+      renderersCache.value = new Map(
+        data.map((renderer) => [renderer.id, renderer]),
+      );
+      return;
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error("Erreur fetch renderers");
+      console.error("[useRenderers] Erreur fetch (attempt " + (attempt + 1) + "):", lastError);
+      if (attempt < retries) {
+        await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+      }
+    } finally {
+      loading.value = false;
+    }
   }
+  
+  error.value = lastError?.message ?? "Erreur fetch renderers";
 }
 
 async function fetchRendererSnapshot(
