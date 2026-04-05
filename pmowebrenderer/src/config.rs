@@ -7,7 +7,11 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 #[cfg(feature = "pmoserver")]
-use axum::{Router, routing::{delete, get, post}};
+use axum::{
+    Router,
+    extract::{Path, State},
+    routing::{delete, get, post},
+};
 
 #[cfg(feature = "pmoserver")]
 use pmocontrol::ControlPoint;
@@ -15,7 +19,10 @@ use pmocontrol::ControlPoint;
 #[cfg(feature = "pmoserver")]
 use crate::error::WebRendererError;
 #[cfg(feature = "pmoserver")]
-use crate::register::{position_update_handler, register_handler, unregister_handler};
+use crate::register::{
+    pause_handler, play_handler, position_update_handler, register_handler,
+    report_handler, set_uri_handler, unregister_handler,
+};
 #[cfg(feature = "pmoserver")]
 use crate::registry::RendererRegistry;
 #[cfg(feature = "pmoserver")]
@@ -48,18 +55,25 @@ impl WebRendererExt for pmoserver::Server {
         )
         .await;
 
-        // GET /api/webrenderer/{id}/stream  +  DELETE /api/webrenderer/{id}  +  POST /api/webrenderer/{id}/position
+        // GET /api/webrenderer/{id}/stream  +  DELETE /api/webrenderer/{id}
+        // POST /api/webrenderer/{id}/play -> tell player to start streaming
+        // POST /api/webrenderer/{id}/pause, /set_uri, /report
+        // GET /api/webrenderer/{id}/command, /position
         let dynamic_router = Router::new()
             .route("/{id}/stream", get(stream_handler))
-            .route("/{id}/position", post(position_update_handler))
             .route("/{id}", delete(unregister_handler))
+            .route("/{id}/play", post(play_handler))
+            .route("/{id}/pause", post(pause_handler))
+            .route("/{id}/set_uri", post(set_uri_handler))
+            .route("/{id}/report", post(report_handler))
+            .route("/{id}/command", get(crate::register::command_handler))
+            .route("/{id}/position", post(position_update_handler))
             .with_state(registry.clone());
         self.add_router("/api/webrenderer", dynamic_router).await;
 
         tracing::info!("WebRenderer server-side streaming endpoints registered");
         tracing::info!("  POST   /api/webrenderer/register");
         tracing::info!("  GET    /api/webrenderer/{{id}}/stream");
-        tracing::info!("  POST   /api/webrenderer/{{id}}/position");
         tracing::info!("  DELETE /api/webrenderer/{{id}}");
         Ok(())
     }

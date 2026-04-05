@@ -19,7 +19,7 @@ use axum::handler::Handler;
 use axum::response::Redirect;
 use axum::routing::{any, get, post};
 use axum::{Json, Router};
-use axum_embed::ServeEmbed;
+use crate::serve_embed::ServeEmbed;
 use pmoconfig::get_config;
 use rust_embed::RustEmbed;
 use serde::Serialize;
@@ -340,11 +340,7 @@ impl Server {
     where
         E: RustEmbed + Clone + Send + Sync + 'static,
     {
-        let serve = ServeEmbed::<E>::with_parameters(
-            Some("index.html".to_string()),
-            axum_embed::FallbackBehavior::Ok,
-            Some("index.html".to_string()),
-        );
+        let serve = ServeEmbed::<E>::with_spa_fallback("index.html".to_string());
 
         let mut r = self.router.write().await;
 

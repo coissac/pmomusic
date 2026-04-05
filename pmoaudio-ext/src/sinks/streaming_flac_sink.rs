@@ -533,6 +533,9 @@ impl StreamingFlacSink {
                 current_timestamp: Arc::new(RwLock::new(0.0)),
                 pending_track_duration: None,
                 pending_total_samples: None,
+                is_paused: Arc::new(AtomicBool::new(false)),
+                stream_type: Arc::new(RwLock::new(pmoaudio::StreamType::Finite)),
+                last_track_metadata: Arc::new(RwLock::new(None)),
             },
         };
 

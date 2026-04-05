@@ -1,6 +1,7 @@
 //! État partagé du renderer (backend ↔ pipeline)
 
 use parking_lot::RwLock;
+use serde_json::Value;
 use std::sync::Arc;
 
 use crate::messages::PlaybackState;
@@ -17,6 +18,8 @@ pub struct RendererState {
     pub duration: Option<String>,
     pub volume: u16,
     pub mute: bool,
+    /// Commande en attente pour le player frontend (polled via /command)
+    pub player_command: Option<Value>,
 }
 
 impl Default for RendererState {
@@ -31,6 +34,7 @@ impl Default for RendererState {
             duration: None,
             volume: 100,
             mute: false,
+            player_command: None,
         }
     }
 }

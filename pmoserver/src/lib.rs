@@ -71,6 +71,7 @@
 pub mod config_ext;
 pub mod logs;
 pub mod server;
+mod serve_embed;
 
 pub use config_ext::ConfigExt;
 pub use logs::{

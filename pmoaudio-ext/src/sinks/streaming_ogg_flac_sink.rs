@@ -61,7 +61,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use pmoaudio::{
     pipeline::{AudioPipelineNode, Node, NodeLogic, PipelineHandle, StopReason},
-    AudioError, AudioSegment, SyncMarker, TypeRequirement, TypedAudioNode, _AudioSegment,
+    AudioChunk, AudioError, AudioSegment, SyncMarker, TypeRequirement, TypedAudioNode, _AudioSegment,
 };
 use pmoflac::{EncoderOptions, FlacEncodedStream};
 use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
@@ -108,6 +108,23 @@ impl OggFlacStreamHandle {
 
     pub fn set_auto_stop(&self, enabled: bool) {
         self.inner.auto_stop.store(enabled, Ordering::SeqCst);
+    }
+
+    /// Pause playback - sends silence (zeros) to maintain client connections
+    pub fn pause(&self) {
+        self.inner.is_paused.store(true, Ordering::SeqCst);
+        debug!("StreamingOggFlacSink paused");
+    }
+
+    /// Resume playback - continues sending actual audio
+    pub fn resume(&self) {
+        self.inner.is_paused.store(false, Ordering::SeqCst);
+        debug!("StreamingOggFlacSink resumed");
+    }
+
+    /// Check if currently paused
+    pub fn is_paused(&self) -> bool {
+        self.inner.is_paused.load(Ordering::SeqCst)
     }
 }
 
@@ -163,14 +180,96 @@ impl NodeLogic for StreamingOggFlacSinkLogic {
 
         debug!("StreamingOggFlacSink started");
 
-        // TODO: Implement OGG-FLAC encoding logic
-        // For now, just process segments without encoding
+        let mut was_paused = false;
+        let mut silence_timestamp: f64 = 0.0;
 
         loop {
+            // Check pause state BEFORE select to avoid receiving chunks when Finite + paused
+            {
+                let is_paused = self.ctx.is_paused.load(Ordering::SeqCst);
+                let stream_type = *self.ctx.stream_type.read().await;
+
+                // For Finite + paused: loop WITHOUT receiving chunks
+                if is_paused && stream_type == pmoaudio::StreamType::Finite {
+                    if self.ctx.sample_rate.is_none() {
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        continue;
+                    }
+
+                    let sample_rate = self.ctx.sample_rate.unwrap();
+                    let frames_per_50ms = (sample_rate as f64 * 0.05) as usize;
+
+                    // Create proper silence chunk using AudioChunk::silence
+                    let silence_chunk = AudioChunk::silence(frames_per_50ms, sample_rate);
+                    let pcm_bytes = chunk_to_pcm_bytes(&silence_chunk, self.ctx.bits_per_sample)?;
+
+                    trace!("Sending silence during pause (finite) - no recv");
+                    let pcm_chunk = PcmChunk {
+                        bytes: pcm_bytes,
+                        timestamp_sec: silence_timestamp,
+                        duration_sec: 0.05,
+                    };
+
+                    if let Some(tx) = &self.ctx.pcm_tx {
+                        let _ = tx.send(pcm_chunk).await;
+                    }
+                    silence_timestamp += 0.05;
+
+                    continue; // Loop again WITHOUT going to select
+                }
+            }
+
             tokio::select! {
                 _ = stop_token.cancelled() => {
                     debug!("StreamingOggFlacSink stopped by cancellation");
                     break;
+                }
+
+                // Check for pause state changes periodically
+                _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {
+                    let is_paused = self.ctx.is_paused.load(Ordering::SeqCst);
+                    
+                    if is_paused != was_paused {
+                        if is_paused {
+                            // Entering pause - restart encoder to close OGG segment
+                            debug!("StreamingOggFlacSink: entering pause - restarting encoder");
+                            let metadata = self.ctx.last_track_metadata.read().await.clone();
+                            if let Some(ref meta) = metadata {
+                                if let Err(e) = self.ctx.prepare_encoder_options_for_track(meta).await {
+                                    error!("Failed to prepare encoder options for pause: {}", e);
+                                }
+                            }
+                            if self.ctx.encoder_state.is_some() {
+                                if let Err(e) = self.ctx.restart_encoder_for_new_track(
+                                    |flac_stream, broadcast, header, current_timestamp, current_duration, max_lead, _sample_rate, timestamp_offset_sec| {
+                                        broadcast_ogg_flac_stream(flac_stream, broadcast, header, current_timestamp, current_duration, max_lead, timestamp_offset_sec)
+                                    },
+                                ).await {
+                                    warn!("Failed to restart encoder on pause: {}", e);
+                                }
+                            }
+                        } else {
+                            // Exiting pause - restart encoder to open new OGG segment
+                            debug!("StreamingOggFlacSink: exiting pause - restarting encoder");
+                            let metadata = self.ctx.last_track_metadata.read().await.clone();
+                            if let Some(ref meta) = metadata {
+                                if let Err(e) = self.ctx.prepare_encoder_options_for_track(meta).await {
+                                    error!("Failed to prepare encoder options for resume: {}", e);
+                                }
+                            }
+                            if self.ctx.encoder_state.is_some() {
+                                if let Err(e) = self.ctx.restart_encoder_for_new_track(
+                                    |flac_stream, broadcast, header, current_timestamp, current_duration, max_lead, _sample_rate, timestamp_offset_sec| {
+                                        broadcast_ogg_flac_stream(flac_stream, broadcast, header, current_timestamp, current_duration, max_lead, timestamp_offset_sec)
+                                    },
+                                ).await {
+                                    warn!("Failed to restart encoder on resume: {}", e);
+                                }
+                            }
+                        }
+                        was_paused = is_paused;
+                    }
+                    continue; // Skip processing - this is just a check
                 }
 
                 segment = input.recv() => {
@@ -241,7 +340,33 @@ impl NodeLogic for StreamingOggFlacSinkLogic {
                                         duration_sec
                                     );
 
-                                    // Send to FLAC encoder with timestamp and duration
+                                    // Check pause state
+                                    let was_paused = self.ctx.is_paused.load(Ordering::SeqCst);
+                                    
+                                    // Get stream type
+                                    let stream_type = *self.ctx.stream_type.read().await;
+                                    
+                                    // Handle pause:
+                                    // - Always send silence to hear something
+                                    // - Continuous: receive chunks but drop them
+                                    // - Finite: don't receive chunks (backpressure)
+                                    if was_paused {
+                                        trace!("StreamingOggFlacSink: sending silence during pause ({})", 
+                                            if stream_type == pmoaudio::StreamType::Continuous { "continuous" } else { "finite" });
+                                        let silence_bytes = vec![0u8; pcm_bytes.len()];
+                                        let silence_chunk = PcmChunk {
+                                            bytes: silence_bytes,
+                                            timestamp_sec: seg.timestamp_sec,
+                                            duration_sec,
+                                        };
+                                        if let Some(tx) = &self.ctx.pcm_tx {
+                                            let _ = tx.send(silence_chunk).await;
+                                        }
+                                        // Always continue (skip sending real audio)
+                                        continue;
+                                    }
+
+                                    // Normal case: send PCM to encoder
                                     let pcm_chunk = PcmChunk {
                                         bytes: pcm_bytes,
                                         timestamp_sec: seg.timestamp_sec,
@@ -265,7 +390,13 @@ impl NodeLogic for StreamingOggFlacSinkLogic {
 
                                 _AudioSegment::Sync(marker) => {
                                     match marker.as_ref() {
-                                        SyncMarker::TrackBoundary { metadata, .. } => {
+                                        SyncMarker::TrackBoundary { metadata, stream_type } => {
+                                            // Store the last TrackBoundary metadata for pause/resume
+                                            *self.ctx.last_track_metadata.write().await = Some(metadata.clone());
+                                            
+                                            // Update stream type
+                                            *self.ctx.stream_type.write().await = *stream_type;
+                                            
                                             // Inject per-track metadata and duration into the next FLAC header.
                                             if let Err(e) =
                                                 self.ctx.prepare_encoder_options_for_track(metadata).await
@@ -442,30 +573,33 @@ impl StreamingOggFlacSink {
 
         let logic = StreamingOggFlacSinkLogic {
             ctx: SharedSinkContext {
-                encoder_options,
-                bits_per_sample,
-                enable_total_samples: options.enable_total_samples,
-                restart_encoder_on_track_boundary: options.restart_encoder_on_track_boundary,
-                default_title: options.default_title.clone(),
-                default_artist: options.default_artist.clone(),
-                use_only_default_metadata: options.use_only_default_metadata,
-                pcm_tx: Some(pcm_tx),
-                pcm_rx: Some(pcm_rx),
-                metadata,
-                broadcast,
-                header,
-                encoder_state: None,
-                sample_rate: None,
-                broadcast_max_lead_time: broadcast_max_lead_time.max(0.0),
-                first_chunk_timestamp_checked: false,
-                timestamp_offset_sec: 0.0,
-                current_timestamp: Arc::new(RwLock::new(0.0)),
-                pending_track_duration: None,
-                pending_total_samples: None,
-            },
+                    encoder_options,
+                    bits_per_sample,
+                    enable_total_samples: options.enable_total_samples,
+                    restart_encoder_on_track_boundary: options.restart_encoder_on_track_boundary,
+                    default_title: options.default_title.clone(),
+                    default_artist: options.default_artist.clone(),
+                    use_only_default_metadata: options.use_only_default_metadata,
+                    pcm_tx: Some(pcm_tx),
+                    pcm_rx: Some(pcm_rx),
+                    metadata,
+                    broadcast,
+                    header,
+                    encoder_state: None,
+                    sample_rate: None,
+                    broadcast_max_lead_time: broadcast_max_lead_time.max(0.0),
+                    first_chunk_timestamp_checked: false,
+                    timestamp_offset_sec: 0.0,
+                    current_timestamp: Arc::new(RwLock::new(0.0)),
+                    pending_track_duration: None,
+                    pending_total_samples: None,
+                    is_paused: Arc::new(AtomicBool::new(false)),
+                    stream_type: Arc::new(RwLock::new(pmoaudio::StreamType::Finite)),
+                    last_track_metadata: Arc::new(RwLock::new(None)),
+                },
         };
 
-        let sink = Self {
+        let sink = StreamingOggFlacSink {
             inner: Node::new_with_input(logic, 16),
         };
 

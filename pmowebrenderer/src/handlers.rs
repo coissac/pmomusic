@@ -24,10 +24,30 @@ pub fn play_handler(pipeline: PipelineHandle, state: SharedState) -> ActionHandl
         let pipeline = pipeline.clone();
         let state = state.clone();
         Box::pin(async move {
+            tracing::info!("[WebRenderer] UPnP Play action invoked");
             // Ne pas écrire Playing ici : c'est stream_source qui le fera
             // une fois que les premiers bytes FLAC ont été produits.
             // Écrire Transitioning pour signaler que la lecture va démarrer.
-            state.write().playback_state = PlaybackState::Transitioning;
+            
+            // Check if URI is loaded FIRST, then write state
+            let has_uri = state.read().current_uri.is_some();
+            
+            // Single write to update playback_state - avoid holding read lock
+            {
+                let mut s = state.write();
+                s.playback_state = PlaybackState::Transitioning;
+            }
+            
+            // Tell frontend to start streaming - include the stream URL
+            if has_uri {
+                // Use a single write to set player_command
+                state.write().player_command = Some(serde_json::json!({
+                    "type": "stream",
+                    "url": "/api/webrenderer/stream"  // Frontend will prefix with instance ID
+                }));
+                tracing::info!("UPnP Play: stored stream command for frontend polling");
+            }
+            
             pipeline.send(PipelineControl::Play).await;
             Ok(data)
         })
@@ -95,6 +115,7 @@ pub fn set_uri_handler(pipeline: PipelineHandle, state: SharedState) -> ActionHa
         let pipeline = pipeline.clone();
         let state = state.clone();
         Box::pin(async move {
+            tracing::info!("[WebRenderer] UPnP SetAVTransportURI action invoked");
             let uri: String = get!(&data, "CurrentURI", String);
             let metadata: String = get_value::<String>(&data, "CurrentURIMetaData")
                 .or_else(|_| {
@@ -102,6 +123,8 @@ pub fn set_uri_handler(pipeline: PipelineHandle, state: SharedState) -> ActionHa
                         .map(|didl| didl.to_xml())
                 })
                 .unwrap_or_default();
+
+            tracing::info!(uri = %uri, "SetAVTransportURI handler called - loading URI into pipeline");
 
             // Envoyer l'URI au pipeline serveur (remplace l'envoi WebSocket)
             pipeline.send(PipelineControl::LoadUri(uri.clone())).await;

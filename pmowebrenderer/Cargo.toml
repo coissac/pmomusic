@@ -22,12 +22,15 @@ tokio-util = { workspace = true }
 async-trait = { workspace = true }
 
 # HTTP
-axum = { workspace = true }
-axum-extra = { version = "0.9", features = ["typed-header"] }
-tower-http = { version = "0.6", features = ["fs", "trace"] }
+axum = "0.8.4"
+axum-extra = "0.12"
+tower-http = "0.6"
 futures = "0.3"
 reqwest = { workspace = true, features = ["stream"] }
 bytes = "1.0"
+
+# OpenAPI
+utoipa = { version = "5.3", features = ["axum_extras"] }
 
 # Serialization
 serde = { workspace = true }

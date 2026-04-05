@@ -3,6 +3,11 @@
 //! Remplace `SessionManager` et `websocket.rs`. La session est maintenant liée
 //! au flux FLAC HTTP, pas à une connexion WebSocket.
 
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    response::IntoResponse,
+};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -68,12 +73,13 @@ impl RendererRegistry {
     }
 
     /// Enregistre ou reconnecte une instance.
-    /// Retourne `(stream_url, udn)`.
+    /// Retourne `(stream_url, udn, should_play)`.
+    /// `should_play` est true si le backend est déjà en lecture : le frontend doit démarrer immédiatement.
     pub async fn register_or_reconnect(
         &self,
         instance_id: &str,
         user_agent: &str,
-    ) -> Result<(String, String), WebRendererError> {
+    ) -> Result<(String, String, bool), WebRendererError> {
         // Annuler tout unregister différé pour cet instance_id
         if let Some(cancel) = self.pending_unregister.write().remove(instance_id) {
             tracing::info!(instance_id = %instance_id, "WebRenderer: cancelled pending unregister (page reload)");
@@ -88,7 +94,14 @@ impl RendererRegistry {
                 #[cfg(feature = "pmoserver")]
                 self.register_with_control_point(&existing.device_instance)?;
                 let stream_url = format!("/api/webrenderer/{}/stream", instance_id);
-                return Ok((stream_url, existing.udn.clone()));
+                let should_play = {
+                    let s = existing.state.read();
+                    s.current_uri.is_some() && matches!(
+                        s.playback_state,
+                        crate::messages::PlaybackState::Playing | crate::messages::PlaybackState::Transitioning
+                    )
+                };
+                return Ok((stream_url, existing.udn.clone(), should_play));
             }
         }
 
@@ -113,7 +126,7 @@ impl RendererRegistry {
             "WebRenderer: new instance registered"
         );
 
-        Ok((stream_url, udn))
+        Ok((stream_url, udn, false))
     }
 
     /// Retourne un OggFlacClientStream indépendant pour l'endpoint /stream.
@@ -122,10 +135,17 @@ impl RendererRegistry {
         &self,
         instance_id: &str,
     ) -> Option<pmoaudio_ext::sinks::OggFlacClientStream> {
-        self.instances
-            .read()
-            .get(instance_id)
-            .map(|i| i.flac_handle.subscribe())
+        let instances = self.instances.read();
+        match instances.get(instance_id) {
+            Some(i) => {
+                tracing::debug!(instance_id = %instance_id, "Found instance, getting flac_handle");
+                Some(i.flac_handle.subscribe())
+            }
+            None => {
+                tracing::error!(instance_id = %instance_id, "Instance not found in registry!");
+                None
+            }
+        }
     }
 
     /// Retourne le PipelineHandle par UDN (pour les handlers UPnP)
@@ -206,6 +226,97 @@ impl RendererRegistry {
                 }
             }
         });
+    }
+
+    /// Met à jour l'état avec les rapports du player
+    pub async fn update_player_state(
+        &self,
+        instance_id: &str,
+        report: crate::register::PlayerStateReport,
+    ) {
+        let instances = self.instances.read();
+        if let Some(instance) = instances.get(instance_id) {
+            let mut state = instance.state.write();
+            if let Some(pos) = report.position_sec {
+                state.position = Some(pos.to_string());
+            }
+            if let Some(dur) = report.duration_sec {
+                state.duration = Some(dur.to_string());
+            }
+            if let Some(s) = &report.state {
+                state.playback_state = match s.as_str() {
+                    "playing" => crate::messages::PlaybackState::Playing,
+                    "paused" => crate::messages::PlaybackState::Paused,
+                    "stopped" => crate::messages::PlaybackState::Stopped,
+                    _ => state.playback_state.clone(),
+                };
+            }
+            tracing::debug!(instance_id = %instance_id, position = ?state.position, "player state updated");
+        }
+    }
+
+    /// Récupère et consomme la commande en attente pour le player
+    pub async fn get_pending_command(
+        &self,
+        instance_id: &str,
+    ) -> Option<serde_json::Value> {
+        self.instances
+            .read()
+            .get(instance_id)
+            .and_then(|instance| instance.state.write().player_command.take())
+    }
+
+    /// Stocke une commande pour le player (consommée via GET /command)
+    pub fn set_player_command(&self, instance_id: &str, command: serde_json::Value) {
+        if let Some(instance) = self.instances.read().get(instance_id) {
+            instance.state.write().player_command = Some(command);
+        }
+    }
+    
+    /// Charge une URI dans le pipeline
+    pub async fn load_uri(&self, instance_id: &str, uri: String) {
+        // Get pipeline handle before async call to avoid holding lock across await
+        let pipeline = self.instances.read().get(instance_id).map(|i| i.pipeline.clone());
+        if let Some(pipeline) = pipeline {
+            use pmoaudio_ext::PlayerCommand;
+            pipeline.send(PlayerCommand::LoadUri(uri.clone())).await;
+            pipeline.send(PlayerCommand::Play).await;
+            tracing::info!(instance_id = %instance_id, uri = %uri, "loaded URI");
+        }
+    }
+    
+    /// Envoie commande play au pipeline
+    pub async fn send_play_command(&self, instance_id: &str) {
+        tracing::info!(instance_id = %instance_id, "send_play_command called");
+        // Get pipeline handle before async call to avoid holding lock across await
+        let pipeline = self.instances.read().get(instance_id).map(|i| i.pipeline.clone());
+        if let Some(pipeline) = pipeline {
+            tracing::info!(instance_id = %instance_id, "Instance found, sending PlayerCommand::Play");
+            use pmoaudio_ext::PlayerCommand;
+            pipeline.send(PlayerCommand::Play).await;
+            tracing::info!(instance_id = %instance_id, "PlayerCommand::Play sent");
+        } else {
+            tracing::error!(instance_id = %instance_id, "Instance not found in send_play_command!");
+        }
+    }
+    
+    /// Envoie commande pause au pipeline
+    pub async fn send_pause_command(&self, instance_id: &str) {
+        // Get pipeline handle before async call to avoid holding lock across await
+        let pipeline = self.instances.read().get(instance_id).map(|i| i.pipeline.clone());
+        if let Some(pipeline) = pipeline {
+            use pmoaudio_ext::PlayerCommand;
+            pipeline.send(PlayerCommand::Pause).await;
+        }
+    }
+
+    /// Check if the instance has a current URI loaded
+    pub fn has_current_uri(&self, instance_id: &str) -> bool {
+        self.instances
+            .read()
+            .get(instance_id)
+            .map(|i| i.state.read().current_uri.is_some())
+            .unwrap_or(false)
     }
 
     // ── Création d'instance ────────────────────────────────────────────────────

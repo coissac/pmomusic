@@ -91,6 +91,25 @@ impl<T: Sample> AudioChunkData<T> {
         })
     }
 
+    /// Crée un chunk de silence
+    ///
+    /// # Arguments
+    ///
+    /// * `frames` - Nombre de frames (échantillons par canal)
+    /// * `sample_rate` - Taux d'échantillonnage en Hz
+    ///
+    /// # Exemples
+    ///
+    /// ```
+    /// use pmoaudio::AudioChunkData;
+    ///
+    /// let silence = AudioChunkData::<i32>::silence(48000, 48000);
+    /// assert_eq!(silence.len(), 48000);
+    /// ```
+    pub fn silence(frames: usize, sample_rate: u32) -> Arc<Self> {
+        Self::new(vec![[T::ZERO; 2]; frames], sample_rate, 0.0)
+    }
+
     /// Retourne le nombre d'échantillons par canal (frames)
     #[inline]
     pub fn len(&self) -> usize {
@@ -317,6 +336,11 @@ pub enum AudioChunk {
 }
 
 impl AudioChunk {
+    /// Crée un chunk de silence (I32 par défaut)
+    pub fn silence(frames: usize, sample_rate: u32) -> Self {
+        AudioChunk::I32(AudioChunkData::<i32>::silence(frames, sample_rate))
+    }
+
     /// Retourne le nombre de frames du chunk
     pub fn len(&self) -> usize {
         match self {

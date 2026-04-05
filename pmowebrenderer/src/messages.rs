@@ -47,6 +47,8 @@ pub enum TransportAction {
     Seek,
     SetUri,
     SetNextUri,
+    /// Flush buffer immediatement - pour reponse rapide
+    Flush,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,6 +86,11 @@ pub enum ClientMessage {
     /// Envoyé quand la piste courante se termine naturellement (gapless).
     /// Le backend fait avancer current → next dans l'état partagé.
     TrackEnded,
+    /// Ready state du player HTML5 audio
+    /// have_nothing, have_metadata, have_current_data, have_future_data, can_play, can_play_through
+    ReadyStateUpdate {
+        ready_state: String,
+    },
     Pong,
 }
 

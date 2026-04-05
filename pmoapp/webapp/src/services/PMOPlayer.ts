@@ -1,0 +1,369 @@
+/**
+ * PMOPlayer - Invisible remote-controlled audio player for browser
+ * 
+ * Receives commands from Web Media Renderer (backend)
+ * Reports position/state back to backend via HTTP
+ * 
+ * Usage:
+ *   const player = new PMOPlayer('my-instance-id');
+ *   player.on('play', () => console.log('playing'));
+ */
+
+export type PlayerState = 'playing' | 'paused' | 'stopped' | 'buffering' | 'error';
+export type ReadyState = 'have_nothing' | 'have_metadata' | 'have_current_data' | 'have_future_data' | 'can_play' | 'can_play_through';
+
+export interface PlayerEvents {
+    play: () => void;
+    pause: () => void;
+    stop: () => void;
+    flush: () => void;
+    positionchange: (position_sec: number) => void;
+    durationchange: (duration_sec: number) => void;
+    statechange: (state: PlayerState) => void;
+    trackchange: (track: TrackInfo) => void;
+    readychange: (ready: ReadyState) => void;
+    error: (error: string) => void;
+}
+
+export interface TrackInfo {
+    id: string;
+    title: string;
+    artist: string;
+    album?: string;
+    cover?: string;
+}
+
+export class PMOPlayer {
+    private audio: HTMLAudioElement;
+    private ac: AudioContext | null = null;
+    private instanceId: string;
+    
+    private state: PlayerState = 'stopped';
+    private positionInterval: number | null = null;
+    private commandInterval: number | null = null;
+    private listeners: Partial<PlayerEvents> = {};
+    private debug: boolean = false;
+    private pendingPlay = false;
+    private unlockListener: (() => void) | null = null;
+    
+    constructor(instanceId: string) {
+        this.instanceId = instanceId;
+        console.log('[PMOPlayer] constructor called for:', instanceId);
+        this.audio = new Audio();
+
+        this.audio.preload = 'auto';
+        this.audio.style.display = 'none';
+        this.audio.style.visibility = 'hidden';
+        this.audio.style.position = 'absolute';
+        this.audio.style.width = '0';
+        this.audio.style.height = '0';
+        this.audio.style.overflow = 'hidden';
+        document.body.appendChild(this.audio);
+        
+        this.setupAudioListeners();
+        this.startCommandPolling();
+    }
+    
+    private log(...args: unknown[]) {
+        if (this.debug) {
+            console.log('[PMOPlayer]', ...args);
+        }
+    }
+    
+    private async fetchCommand() {
+        try {
+            const resp = await fetch(`/api/webrenderer/${this.instanceId}/command`);
+            if (resp.status === 204) {
+                // No command pending
+                return;
+            }
+            if (resp.ok) {
+                const text = await resp.text();
+                if (text) {
+                    const cmd = JSON.parse(text);
+                    if (cmd && cmd.type) {
+                        this.log('fetched command', cmd);
+                        this.handleCommand(cmd);
+                    }
+                }
+            }
+        } catch (err) {
+            this.log('fetch command error', err);
+        }
+    }
+    
+    private startCommandPolling() {
+        this.commandInterval = window.setInterval(() => {
+            this.fetchCommand();
+        }, 500);
+    }
+    
+    private setupAudioListeners() {
+        this.audio.addEventListener('play', () => {
+            this.log('play event');
+            this.setState('playing');
+            this.startPositionReporting();
+        });
+        
+        this.audio.addEventListener('pause', () => {
+            this.log('pause event');
+            this.setState('paused');
+        });
+        
+        this.audio.addEventListener('ended', () => {
+            this.log('ended event');
+            this.setState('stopped');
+            this.stopPositionReporting();
+        });
+        
+        this.audio.addEventListener('error', () => {
+            // Ignorer l'erreur produite par flush() (removeAttribute('src') + load())
+            if (!this.audio.getAttribute('src')) return;
+            this.log('error event', this.audio.error);
+            this.setState('error');
+            this.listeners.error?.(this.audio.error?.message || 'unknown error');
+        });
+        
+        this.audio.addEventListener('waiting', () => {
+            this.log('waiting event');
+            this.setState('buffering');
+        });
+        
+        this.audio.addEventListener('canplay', () => {
+            this.log('canplay event');
+            this.reportReadyState('can_play');
+        });
+        
+        this.audio.addEventListener('durationchange', () => {
+            const dur = this.audio.duration;
+            if (isFinite(dur)) {
+                this.log('durationchange', dur);
+                this.reportDuration(dur);
+            }
+        });
+        
+        this.audio.addEventListener('loadedmetadata', () => {
+            this.log('loadedmetadata', this.audio.duration);
+            this.reportReadyState('have_metadata');
+        });
+        
+        this.audio.addEventListener('loadeddata', () => {
+            this.log('loadeddata');
+            this.reportReadyState('have_current_data');
+        });
+    }
+    
+    private handleCommand(msg: Record<string, unknown>) {
+        const type = msg.type as string;
+
+        switch (type) {
+            case 'stream': {
+                let url = msg.url as string;
+                if (url.startsWith('/api/webrenderer/stream')) {
+                    url = `/api/webrenderer/${this.instanceId}/stream`;
+                }
+                this.playStream(url);
+                break;
+            }
+            case 'play': {
+                const streamUrl = `/api/webrenderer/${this.instanceId}/stream`;
+                this.playStream(streamUrl);
+                break;
+            }
+            case 'pause':
+                this.pause();
+                break;
+            case 'seek':
+                this.seek(msg.timestamp as number);
+                break;
+            case 'flush':
+                this.flush();
+                break;
+            case 'stop':
+                this.stop();
+                break;
+        }
+    }
+    
+    // ─── Commands from backend ─────────────────────────────────────────────
+    
+    stream(url: string) {
+        // URL stored in audio.src directly
+        this.log('stream:', url);
+        this.audio.src = url;
+        this.audio.load();
+    }
+    
+    playStream(url: string) {
+        this.stream(url);
+        this.play();
+    }
+    
+    play() {
+        this.log('play()');
+        this.audio.play().catch(err => {
+            if ((err as DOMException).name === 'NotAllowedError') {
+                this.log('autoplay blocked, will retry on user interaction');
+                this.pendingPlay = true;
+                this.setupAutoplayUnlock();
+            } else {
+                this.log('play error', err);
+            }
+        });
+    }
+
+    private setupAutoplayUnlock() {
+        if (this.unlockListener) return;
+        this.unlockListener = () => {
+            if (this.pendingPlay) {
+                this.pendingPlay = false;
+                this.log('retrying play after user interaction');
+                this.audio.play().catch(err => this.log('play retry error', err));
+            }
+            document.removeEventListener('click', this.unlockListener!);
+            this.unlockListener = null;
+        };
+        document.addEventListener('click', this.unlockListener);
+    }
+    
+    pause() {
+        this.log('pause()');
+        this.audio.pause();
+    }
+    
+    seek(timestamp: number) {
+        this.log('seek:', timestamp);
+        this.audio.currentTime = timestamp;
+    }
+    
+    flush() {
+        this.log('flush()');
+        this.audio.pause();
+        this.audio.removeAttribute('src');
+        this.audio.load();
+        this.ac?.suspend();
+        this.listeners.flush?.();
+    }
+    
+    stop() {
+        this.log('stop()');
+        this.flush();
+        this.setState('stopped');
+    }
+    
+    // ─── Reports to backend ──────────────────────────────────────────
+    
+    private setState(state: PlayerState) {
+        if (this.state !== state) {
+            this.state = state;
+            this.log('state:', state);
+            this.listeners.statechange?.(state);
+            
+            this.httpReport('report', {
+                state: state,
+            });
+        }
+    }
+    
+    private reportPosition() {
+        const pos = this.audio.currentTime;
+        const dur = isFinite(this.audio.duration) ? this.audio.duration : null;
+        
+        this.listeners.positionchange?.(pos);
+        
+this.httpReport('report', {
+                position_sec: pos,
+                duration_sec: dur,
+                state: this.state,
+            });
+    }
+    
+    private reportDuration(dur: number) {
+        this.listeners.durationchange?.(dur);
+    }
+    
+    private reportReadyState(ready: ReadyState) {
+        this.log('ready_state:', ready);
+        this.listeners.readychange?.(ready);
+        
+this.httpReport('report', {
+                ready_state: ready,
+            });
+    }
+    
+    private async httpReport(endpoint: string, data: Record<string, unknown>) {
+        try {
+            await fetch(`/api/webrenderer/${this.instanceId}/${endpoint}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data),
+            });
+        } catch (err) {
+            this.log('http report error', err);
+        }
+    }
+    
+    private startPositionReporting() {
+        this.stopPositionReporting();
+        this.positionInterval = window.setInterval(() => {
+            if (this.state === 'playing') {
+                this.reportPosition();
+            }
+        }, 1000);
+    }
+    
+    private stopPositionReporting() {
+        if (this.positionInterval !== null) {
+            clearInterval(this.positionInterval);
+            this.positionInterval = null;
+        }
+    }
+    
+    // ─── Public API ───────────────────────────────────────────────────────────
+    
+    on<K extends keyof PlayerEvents>(event: K, fn: PlayerEvents[K]) {
+        this.listeners[event] = fn;
+    }
+    
+    off<K extends keyof PlayerEvents>(event: K) {
+        delete this.listeners[event];
+    }
+    
+    getState(): PlayerState {
+        return this.state;
+    }
+    
+    getPosition(): number {
+        return this.audio.currentTime;
+    }
+    
+    getDuration(): number | null {
+        const dur = this.audio.duration;
+        return isFinite(dur) ? dur : null;
+    }
+    
+    // Track info from backend - not implemented yet
+    getTrack(): null {
+        return null;
+    }
+    
+    setDebug(enabled: boolean) {
+        this.debug = enabled;
+    }
+    
+    destroy() {
+        this.log('destroy()');
+        this.stop();
+        this.stopPositionReporting();
+        if (this.commandInterval !== null) {
+            clearInterval(this.commandInterval);
+            this.commandInterval = null;
+        }
+        if (this.unlockListener) {
+            document.removeEventListener('click', this.unlockListener);
+            this.unlockListener = null;
+        }
+        this.audio.remove();
+        this.ac?.close();
+    }
+}
