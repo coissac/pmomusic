@@ -358,7 +358,7 @@ impl MediaRendererRegistry {
             udn_with_prefix.clone(),
             model.friendly_name().to_string(),
             model.model_name().to_string(),
-            "PMOMusic".to_string(),
+            "PMOMusic-WebRenderer".to_string(),
             RendererProtocol::UpnpAvOnly,
             RendererCapabilities {
                 has_avtransport: true,

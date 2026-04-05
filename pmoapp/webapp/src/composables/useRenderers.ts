@@ -63,6 +63,7 @@ function ensureSSEInitialized() {
         id: rendererId,
         friendly_name: event.friendly_name,
         model_name: event.model_name,
+        manufacturer: event.manufacturer,
         protocol: "upnp", // Valeur par défaut, sera mise à jour par le fetch
         capabilities: {
           has_avtransport: false,
