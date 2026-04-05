@@ -118,7 +118,7 @@ impl WebRendererFactory {
         state: SharedState,
     ) -> Result<Device, FactoryError> {
         let avtransport = Self::build_avtransport(pipeline.clone(), state.clone())?;
-        let renderingcontrol = Self::build_renderingcontrol(pipeline.clone(), state.clone())?;
+        let renderingcontrol = Self::build_renderingcontrol(state.clone())?;
         let connectionmanager = Self::build_connectionmanager()?;
 
         let short_name = extract_browser_name(browser_ua);
@@ -147,10 +147,6 @@ impl WebRendererFactory {
         state: SharedState,
     ) -> Result<Service, FactoryError> {
         let mut svc = Service::new("AVTransport".to_string());
-        let add_var = |svc: &mut Service, var: &Arc<pmoupnp::state_variables::StateVariable>| {
-            svc.add_variable(Arc::clone(var))
-                .map_err(|e| FactoryError::VariableError(e.to_string()))
-        };
 
         // Ajouter toutes les variables d'état
         add_var(&mut svc, &AVT_INSTANCE_ID)?;
@@ -175,11 +171,6 @@ impl WebRendererFactory {
         add_var(&mut svc, &TRANSPORTPLAYSPEED)?;
         add_var(&mut svc, &TRANSPORTSTATE)?;
         add_var(&mut svc, &TRANSPORTSTATUS)?;
-
-        let add_action = |svc: &mut Service, action: Arc<Action>| {
-            svc.add_action(action)
-                .map_err(|e| FactoryError::ActionError(e.to_string()))
-        };
 
         // Play
         let mut play = Action::new("Play".to_string());
@@ -304,31 +295,21 @@ impl WebRendererFactory {
         Ok(svc)
     }
 
-    /// Construit le service RenderingControl avec les handlers pipeline
-    fn build_renderingcontrol(
-        pipeline: PipelineHandle,
-        state: SharedState,
-    ) -> Result<Service, FactoryError> {
+    /// Construit le service RenderingControl
+    fn build_renderingcontrol(state: SharedState) -> Result<Service, FactoryError> {
         let mut svc = Service::new("RenderingControl".to_string());
 
-        svc.add_variable(Arc::clone(&RC_INSTANCE_ID))
-            .map_err(|e| FactoryError::VariableError(e.to_string()))?;
-        svc.add_variable(Arc::clone(&A_ARG_TYPE_CHANNEL))
-            .map_err(|e| FactoryError::VariableError(e.to_string()))?;
-        svc.add_variable(Arc::clone(&VOLUME))
-            .map_err(|e| FactoryError::VariableError(e.to_string()))?;
-        svc.add_variable(Arc::clone(&MUTE))
-            .map_err(|e| FactoryError::VariableError(e.to_string()))?;
+        add_var(&mut svc, &RC_INSTANCE_ID)?;
+        add_var(&mut svc, &A_ARG_TYPE_CHANNEL)?;
+        add_var(&mut svc, &VOLUME)?;
+        add_var(&mut svc, &MUTE)?;
 
         // SetVolume
         let mut set_vol = Action::new("SetVolume".to_string());
         add_arg_in(&mut set_vol, "InstanceID", &RC_INSTANCE_ID)?;
         add_arg_in(&mut set_vol, "Channel", &A_ARG_TYPE_CHANNEL)?;
         add_arg_in(&mut set_vol, "DesiredVolume", &VOLUME)?;
-        set_vol.set_handler(handlers::set_volume_handler(
-            pipeline.clone(),
-            state.clone(),
-        ));
+        set_vol.set_handler(handlers::set_volume_handler(state.clone()));
         add_action(&mut svc, Arc::new(set_vol))?;
 
         // GetVolume
@@ -345,7 +326,7 @@ impl WebRendererFactory {
         add_arg_in(&mut set_mute, "InstanceID", &RC_INSTANCE_ID)?;
         add_arg_in(&mut set_mute, "Channel", &A_ARG_TYPE_CHANNEL)?;
         add_arg_in(&mut set_mute, "DesiredMute", &MUTE)?;
-        set_mute.set_handler(handlers::set_mute_handler(pipeline.clone(), state.clone()));
+        set_mute.set_handler(handlers::set_mute_handler(state.clone()));
         add_action(&mut svc, Arc::new(set_mute))?;
 
         // GetMute
@@ -355,8 +336,7 @@ impl WebRendererFactory {
         add_arg_out(&mut get_mute, "CurrentMute", &MUTE)?;
         get_mute.set_stateful(false);
         get_mute.set_handler(handlers::get_mute_handler(state.clone()));
-        svc.add_action(Arc::new(get_mute))
-            .map_err(|e| FactoryError::ActionError(format!("{:?}", e)))?;
+        add_action(&mut svc, Arc::new(get_mute))?;
 
         Ok(svc)
     }

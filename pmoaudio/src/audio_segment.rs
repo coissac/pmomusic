@@ -422,7 +422,7 @@ impl<'a> TryInto<&'a Arc<AudioChunk>> for &'a AudioSegment {
 
     fn try_into(self) -> Result<&'a Arc<AudioChunk>, Self::Error> {
         match &self.segment {
-            _AudioSegment::Chunk(ref chunk) => Ok(chunk),
+            _AudioSegment::Chunk(chunk) => Ok(chunk),
             _ => Err(()),
         }
     }
@@ -433,7 +433,7 @@ impl<'a> TryInto<&'a Arc<SyncMarker>> for &'a AudioSegment {
 
     fn try_into(self) -> Result<&'a Arc<SyncMarker>, Self::Error> {
         match &self.segment {
-            _AudioSegment::Sync(ref marker) => Ok(marker),
+            _AudioSegment::Sync(marker) => Ok(marker),
             _ => Err(()),
         }
     }

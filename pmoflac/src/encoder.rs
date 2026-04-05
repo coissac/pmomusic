@@ -467,7 +467,7 @@ unsafe fn setup_metadata(
         append_comment("TRACKNUMBER", &track_number.to_string())?;
     }
     // Construct cover URL: use cover_pk with server_base_url if available, fallback to cover_url
-    if let (Some(ref pk), Some(ref base_url)) = (&metadata.cover_pk, &metadata.server_base_url) {
+    if let (Some(pk), Some(base_url)) = (&metadata.cover_pk, &metadata.server_base_url) {
         let cover_url = format!("{}/covers/image/{}", base_url, pk);
         append_comment("COVERART", &cover_url)?;
     } else if let Some(cover_url) = &metadata.cover_url {

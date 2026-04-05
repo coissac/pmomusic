@@ -252,7 +252,7 @@ impl QobuzSource {
             .await
             .ok();
 
-        if let (Some(ref audio_pk), Some(ref cover_pk)) = (&cached_audio_pk, &cached_cover_pk) {
+        if let (Some(audio_pk), Some(cover_pk)) = (&cached_audio_pk, &cached_cover_pk) {
             let _ =
                 self.inner
                     .cache_manager
