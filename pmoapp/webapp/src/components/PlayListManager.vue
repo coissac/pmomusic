@@ -559,12 +559,24 @@
                                         >
                                     </span>
                                 </div>
+                                <!-- Pagination controls -->
+                                <div v-if="totalPages > 1" class="pagination-controls">
+                                    <button @click="prevPage" :disabled="currentPage === 0">
+                                        &larr; Previous
+                                    </button>
+                                    <span class="page-info">
+                                        Page {{ currentPage + 1 }} of {{ totalPages }}
+                                    </span>
+                                    <button @click="nextPage" :disabled="currentPage >= totalPages - 1">
+                                        Next &rarr;
+                                    </button>
+                                </div>
                                 <div
                                     class="track-grid"
-                                    v-if="sortedTracks.length > 0"
+                                    v-if="paginatedTracks.length > 0"
                                 >
                                     <article
-                                        v-for="track in sortedTracks"
+                                        v-for="track in paginatedTracks"
                                         :key="`${track.cache_pk}-${track.added_at}`"
                                         class="track-card"
                                         :class="{ lazy: isLazyTrack(track) }"
@@ -880,20 +892,51 @@ const sortedPlaylists = computed(() => {
     );
 });
 
+const PAGE_SIZE = 100;
+const currentPage = ref(0);
+const sortedTracksCache = new Map<string, PlaylistTrack[]>();
+
 const sortedTracks = computed(() => {
     const detail = selectedPlaylist.value;
     if (!detail) return [];
-    return [...detail.tracks].sort(
+    const playlistId = detail.summary.id;
+    const cached = sortedTracksCache.get(playlistId);
+    if (cached && cached.length === detail.tracks.length) return cached;
+    const sorted = [...detail.tracks].sort(
         (a, b) =>
             new Date(b.added_at).getTime() - new Date(a.added_at).getTime(),
     );
+    sortedTracksCache.set(playlistId, sorted);
+    return sorted;
+});
+
+const paginatedTracks = computed(() =>
+    sortedTracks.value.slice(
+        currentPage.value * PAGE_SIZE,
+        (currentPage.value + 1) * PAGE_SIZE
+    )
+);
+
+const totalPages = computed(() => Math.ceil(sortedTracks.value.length / PAGE_SIZE));
+
+function nextPage() {
+    if (currentPage.value < totalPages.value - 1) {
+        currentPage.value++;
+    }
+}
+
+function prevPage() {
+    if (currentPage.value > 0) {
+        currentPage.value--;
+    }
+}
+
+watch(sortedTracks, () => {
+    currentPage.value = 0;
 });
 
 const lazyTracksCount = computed(() =>
-    selectedPlaylist.value
-        ? selectedPlaylist.value.tracks.filter((track) => isLazyTrack(track))
-              .length
-        : 0,
+    sortedTracks.value.filter((track) => isLazyTrack(track)).length
 );
 
 const updateCoverPreview = computed(
@@ -1879,6 +1922,40 @@ button:disabled {
 
 .tracks .section-header {
     margin-bottom: var(--spacing-sm);
+}
+
+.pagination-controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--spacing-md);
+    padding: var(--spacing-md);
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--spacing-md);
+}
+
+.pagination-controls button {
+    padding: var(--spacing-sm) var(--spacing-md);
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    color: var(--color-text);
+    cursor: pointer;
+}
+
+.pagination-controls button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.pagination-controls button:hover:not(:disabled) {
+    background: var(--color-bg-tertiary);
+}
+
+.page-info {
+    font-size: var(--text-sm);
+    color: var(--color-text-secondary);
 }
 
 .track-grid {

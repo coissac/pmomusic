@@ -142,6 +142,7 @@ async function handleQueueItemClick(item: QueueItem) {
     width: 100%;
     height: 100%;
     overflow: hidden;
+    min-width: 0;
 }
 
 /* Layout principal - 800x600 landscape (2 colonnes) */
@@ -153,6 +154,7 @@ async function handleQueueItemClick(item: QueueItem) {
     /* padding-right: 0 pour coller la scrollbar au bord */
     flex: 1;
     overflow: hidden;
+    min-width: 0;
 }
 
 /* Colonne gauche - Contrôles */
@@ -185,11 +187,14 @@ async function handleQueueItemClick(item: QueueItem) {
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    padding-bottom: 80px;
+    min-width: 0;
 }
 
 .queue-viewer {
     flex: 1;
     overflow-y: auto;
+    min-width: 0;
 }
 
 /* Queue drawer - masqué sur desktop, visible uniquement sur mobile portrait */
@@ -349,8 +354,6 @@ async function handleQueueItemClick(item: QueueItem) {
 @media (min-width: 1200px) {
     .renderer-layout {
         grid-template-columns: 350px 1fr;
-        max-width: 1400px;
-        margin: 0 auto;
     }
 }
 

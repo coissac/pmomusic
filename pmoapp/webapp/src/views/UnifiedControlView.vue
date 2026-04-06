@@ -270,6 +270,7 @@ const currentTabProps = computed(() => {
     height: 100vh;
     overflow: hidden;
     background: var(--color-bg);
+    min-width: 0;
 }
 
 .content-area {
@@ -278,6 +279,7 @@ const currentTabProps = computed(() => {
     overflow-x: hidden;
     padding: 0;
     position: relative;
+    min-width: 0;
 }
 
 /* Placeholder temporaire */

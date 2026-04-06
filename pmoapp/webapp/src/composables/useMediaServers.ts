@@ -36,6 +36,7 @@ const searchResults = ref<BrowseState | null>(null)
 const searchQuery = ref<string>('')
 
 const CACHE_DURATION_MS = 2000
+const BROWSE_WINDOW_SIZE = 200
 
 // Initialiser SSE une seule fois via le composable centralisé
 let sseInitialized = false
@@ -197,11 +198,13 @@ export function useMediaServers() {
       const offset = state.currentOffset ?? state.entries.length
       const data = await api.browseContainer(serverId, containerId, offset)
 
-      // Accumuler les nouvelles entrées
-      state.entries.push(...data.entries)
+      // Accumuler les nouvelles entrées avec fenêtre glissante
+      const combined = [...state.entries, ...data.entries]
+      // Ne garder que les últimos BROWSE_WINDOW_SIZE items
+      state.entries = combined.slice(-BROWSE_WINDOW_SIZE)
       state.total_count = data.total_count
-      state.currentOffset = state.entries.length
-      state.hasMore = state.entries.length < state.total_count
+      state.currentOffset = (state.currentOffset ?? 0) + data.entries.length
+      state.hasMore = state.currentOffset < state.total_count
       // Forcer la réactivité
       browseCache.value.set(key, { ...state })
     } catch (e) {

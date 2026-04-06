@@ -187,8 +187,6 @@ onMounted(async () => {
 /* Large desktop */
 @media (min-width: 1200px) {
   .browser-section {
-    max-width: 1400px;
-    margin: 0 auto;
     width: 100%;
   }
 }
