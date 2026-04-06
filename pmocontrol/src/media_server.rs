@@ -2,8 +2,8 @@ use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use pmodidl::DIDLLite;
-use pmoupnp::soap::SoapEnvelope;
 use pmoupnp::soap::error_codes;
+use pmoupnp::soap::SoapEnvelope;
 use tracing::{debug, warn};
 use xmltree::{Element, XMLNode};
 
@@ -11,8 +11,8 @@ use crate::errors::ControlPointError;
 use crate::model::TrackMetadata;
 use crate::online::{DeviceConnectionState, DeviceOnline};
 use crate::queue::PlaybackItem;
-use crate::soap_client::{SoapCallResult, invoke_upnp_action_with_timeout};
-use crate::{DEFAULT_HTTP_TIMEOUT, DeviceId, DeviceIdentity};
+use crate::soap_client::{invoke_upnp_action_with_timeout, SoapCallResult};
+use crate::{DeviceId, DeviceIdentity, DEFAULT_HTTP_TIMEOUT};
 
 /// Snapshot of a media server discovered through UPnP SSDP.
 #[derive(Clone, Debug)]
@@ -91,7 +91,9 @@ impl UpnpMediaServer {
         start: u32,
         count: u32,
     ) -> Result<Vec<MediaEntry>, ControlPointError> {
-        Ok(self.browse_with_flag_paged(object_id, browse_flag, start, count)?.entries)
+        Ok(self
+            .browse_with_flag_paged(object_id, browse_flag, start, count)?
+            .entries)
     }
 
     fn browse_with_flag_paged(
@@ -109,17 +111,23 @@ impl UpnpMediaServer {
             ("Filter", "*".to_string()),
             ("StartingIndex", start_str),
             ("RequestedCount", count_str),
-            ("SortCriteria", String::new()),
+            // Tri par titre (alphabétique croissant) pour avoir un ordre déterministe
+            ("SortCriteria", "+dc:title".to_string()),
         ];
 
         let response = self.invoke_content_directory("Browse", None, args)?;
         let envelope = response.envelope.ok_or_else(|| {
-            ControlPointError::MediaServerError("Missing SOAP envelope in Browse response".to_string())
+            ControlPointError::MediaServerError(
+                "Missing SOAP envelope in Browse response".to_string(),
+            )
         })?;
         let total_count = extract_total_matches(&envelope, "BrowseResponse");
         let didl_xml = extract_result_payload(&envelope, "BrowseResponse")?;
         let entries = map_didl_entries(&didl_xml)?;
-        Ok(BrowsePage { entries, total_count })
+        Ok(BrowsePage {
+            entries,
+            total_count,
+        })
     }
 
     fn has_content_directory(&self) -> bool {
@@ -398,7 +406,10 @@ pub trait MediaBrowser {
     ) -> Result<BrowsePage, ControlPointError> {
         let entries = self.browse_children(object_id, start, count)?;
         let total_count = entries.len() as u32 + start;
-        Ok(BrowsePage { entries, total_count })
+        Ok(BrowsePage {
+            entries,
+            total_count,
+        })
     }
     fn browse_object(&self, object_id: &str) -> Result<MediaEntry, ControlPointError>;
     fn search(

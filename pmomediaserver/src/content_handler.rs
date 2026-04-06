@@ -432,6 +432,12 @@ impl ContentHandler {
             items.len()
         );
 
+        // Trier les containers par titre pour ordre déterministe (alphabétique, insensible à la casse)
+        // Les HashMap/HashSet utilisés pour la déduplication ne garantissent pas l'ordre,
+        // et les APIs externes peuvent renvoyer dans un ordre non-déterministe
+        // On NE trie PAS les items (pistes) car l'ordre original (numéro de piste) est important
+        containers.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+
         // Calculer le total avant pagination
         let total = (containers.len() + items.len()) as u32;
 
