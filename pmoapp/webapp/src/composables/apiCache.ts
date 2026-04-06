@@ -11,6 +11,7 @@
 export interface CacheEntry<T> {
   data: T;
   timestamp: number;
+  ttl?: number;
   etag?: string;
 }
 
@@ -51,7 +52,9 @@ class ApiCacheService {
   private isFresh(key: string): boolean {
     const entry = this.cache.get(key);
     if (!entry) return false;
-    return Date.now() - entry.timestamp < this.options.ttl;
+    // Lire le TTL de l'entrée, sinon utiliser le TTL global par défaut
+    const ttl = entry.ttl ?? this.options.ttl;
+    return Date.now() - entry.timestamp < ttl;
   }
 
   get<T>(endpoint: string, params?: Record<string, string | number | boolean>): T | null {
@@ -66,12 +69,13 @@ class ApiCacheService {
     return entry.data;
   }
 
-  set<T>(endpoint: string, data: T, params?: Record<string, string | number | boolean>, etag?: string): void {
+  set<T>(endpoint: string, data: T, params?: Record<string, string | number | boolean>, etag?: string, ttl?: number): void {
     const key = this.makeKey(endpoint, params);
     
     this.cache.set(key, {
       data,
       timestamp: Date.now(),
+      ttl,
       etag,
     });
 
@@ -127,14 +131,9 @@ class ApiCacheService {
     try {
       const data = await fetcher();
       
-      if (ttl) {
-        const originalTtl = this.options.ttl;
-        this.options.ttl = ttl;
-        this.set(endpoint, data, params);
-        this.options.ttl = originalTtl;
-      } else {
-        this.set(endpoint, data, params);
-      }
+      // Passer le TTL directement à set() pour éviter les problèmes de race condition
+      // avec la modification globale de this.options.ttl
+      this.set(endpoint, data, params, undefined, ttl);
 
       resolvePromise(data);
       
@@ -196,7 +195,8 @@ class ApiCacheService {
 
     keysToDelete.forEach(key => {
       this.cache.delete(key);
-      this.subscriptions.delete(key);
+      // NE PAS supprimer this.subscriptions.get(key)
+      // Les abonnés seront notifiés lors du prochain set() après un refetch
     });
   }
 

@@ -65,6 +65,7 @@ async function handleToggleMute() {
             class="btn btn-icon"
             @click="handleToggleMute"
             :title="state?.mute ? 'Réactiver le son' : 'Couper le son'"
+            :aria-label="state?.mute ? 'Réactiver le son' : 'Couper le son'"
         >
             <VolumeX v-if="state?.mute" :size="20" />
             <Volume2 v-else :size="20" />
@@ -78,6 +79,7 @@ async function handleToggleMute() {
             @input="handleVolumeChange"
             class="volume-slider"
             :disabled="state?.mute ?? false"
+            aria-label="Volume"
         />
 
         <span class="volume-value">{{ localVolume }}</span>

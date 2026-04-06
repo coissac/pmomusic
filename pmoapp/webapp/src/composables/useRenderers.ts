@@ -4,11 +4,12 @@
  * - Les snapshots complets proviennent de /renderers/{id}/full
  * - Les événements SSE ne servent qu'à déclencher un refetch.
  */
-import { ref, reactive, computed, toRaw, type Ref } from "vue";
+import { ref, shallowRef, computed, toRaw, type Ref, onUnmounted } from "vue";
 import { api } from "../services/pmocontrol/api";
 import { useSSE } from "./useSSE";
 import { apiCache } from "./apiCache";
 import { parseTimeToMs } from "../utils/time";
+import { useUIStore } from "@/stores/ui";
 import type {
   RendererSummary,
   RendererState,
@@ -16,33 +17,43 @@ import type {
   AttachedPlaylistInfo,
   FullRendererSnapshot,
 } from "../services/pmocontrol/types";
+import { isTransportState } from "../services/pmocontrol/types";
 
-interface RendererSnapshotState {
-  snapshots: Map<string, FullRendererSnapshot>;
-  lastSnapshotAt: Map<string, number>;
-  lastEventAt: Map<string, number>;
-  loadingIds: Set<string>;
-  queueRefreshingIds: Set<string>;
-  selectedRendererId: string | null;
-}
+// État global des snapshots avec shallowRef pour éviter les problèmes de réactivité avec les Maps
+const snapshots = shallowRef(new Map<string, FullRendererSnapshot>());
+const lastSnapshotAt = shallowRef(new Map<string, number>());
+const lastEventAt = shallowRef(new Map<string, number>());
+const loadingIds = shallowRef(new Set<string>());
+const queueRefreshingIds = shallowRef(new Set<string>());
+const selectedRendererId = ref<string | null>(null);
 
+// Cache des renderers (summary)
 const renderersCache = ref<Map<string, RendererSummary>>(new Map());
 const RENDERERS_CACHE_MS = 2000;
 
-const snapshotState = reactive<RendererSnapshotState>({
-  snapshots: reactive(new Map<string, FullRendererSnapshot>()),
-  lastSnapshotAt: reactive(new Map<string, number>()),
-  lastEventAt: reactive(new Map<string, number>()),
-  loadingIds: reactive(new Set<string>()),
-  queueRefreshingIds: reactive(new Set<string>()),
-  selectedRendererId: null,
-});
+// Helper pour déclencher la réactivité après mutation des Maps
+function triggerSnapshotReactivity() {
+  // Créer une nouvelle référence pour déclencher la réactivité
+  snapshots.value = new Map(snapshots.value);
+}
+
+function triggerLoadingReactivity() {
+  loadingIds.value = new Set(loadingIds.value);
+}
 
 const loading = ref(false);
 const error = ref<string | null>(null);
 
 // Utiliser le composable SSE centralisé
 let sseInitialized = false;
+
+/**
+ * Réinitialise le flag SSE pour permettre une nouvelle connexion après reconnexion
+ */
+function resetSSE() {
+  sseInitialized = false;
+}
+
 function ensureSSEInitialized() {
   if (sseInitialized) return;
 
@@ -99,16 +110,17 @@ function ensureSSEInitialized() {
       }
 
       // Supprimer le snapshot (il n'est plus valide)
-      snapshotState.snapshots.delete(rendererId);
-      snapshotState.lastSnapshotAt.delete(rendererId);
-      snapshotState.lastEventAt.delete(rendererId);
+      snapshots.value.delete(rendererId);
+      triggerSnapshotReactivity();
+      lastSnapshotAt.value.delete(rendererId);
+      lastEventAt.value.delete(rendererId);
       return;
     }
 
     // Pour les autres événements, mettre à jour le snapshot local directement
-    snapshotState.lastEventAt.set(rendererId, timestamp);
+    lastEventAt.value.set(rendererId, timestamp);
 
-    const snapshot = snapshotState.snapshots.get(rendererId);
+    const snapshot = snapshots.value.get(rendererId);
 
     // Si pas de snapshot, on doit fetch
     if (!snapshot) {
@@ -119,7 +131,12 @@ function ensureSSEInitialized() {
     // Sinon, mettre à jour le snapshot localement selon le type d'événement
     switch (event.type) {
       case "state_changed":
-        snapshot.state.transport_state = event.state as any;
+        // Utiliser le guard de type pour valider le transport_state
+        if (isTransportState(event.state)) {
+          snapshot.state.transport_state = event.state;
+        } else {
+          console.warn(`[useRenderers] transport_state inconnu: ${event.state}`);
+        }
         break;
 
       case "position_changed":
@@ -148,15 +165,23 @@ function ensureSSEInitialized() {
           ...snapshot,
           state: newState,
         };
-        snapshotState.snapshots.set(rendererId, newSnapshot);
+        snapshots.value.set(rendererId, newSnapshot);
         break;
 
       case "volume_changed":
-        snapshot.state.volume = event.volume;
+        // Créer un nouvel objet pour déclencher la réactivité
+        snapshots.value.set(rendererId, {
+          ...snapshot,
+          state: { ...snapshot.state, volume: event.volume },
+        });
         break;
 
       case "mute_changed":
-        snapshot.state.mute = event.mute;
+        // Créer un nouvel objet pour déclencher la réactivité
+        snapshots.value.set(rendererId, {
+          ...snapshot,
+          state: { ...snapshot.state, mute: event.mute },
+        });
         break;
 
       case "metadata_changed":
@@ -173,19 +198,19 @@ function ensureSSEInitialized() {
         snapshot.state.current_track.album = event.album;
         snapshot.state.current_track.album_art_uri = event.album_art_uri;
         // Important: Trigger reactivity en réassignant l'objet complet avec deep copy
-        snapshotState.snapshots.set(rendererId, {
+        snapshots.value.set(rendererId, {
           ...snapshot,
           state: { ...snapshot.state },
         });
         break;
 
       case "queue_refreshing":
-        snapshotState.queueRefreshingIds.add(rendererId);
+        queueRefreshingIds.value.add(rendererId);
         break;
 
       case "queue_updated":
         snapshot.state.queue_len = event.queue_length;
-        snapshotState.queueRefreshingIds.delete(rendererId);
+        queueRefreshingIds.value.delete(rendererId);
         // Pour la queue complète, on doit refetch
         void fetchRendererSnapshot(rendererId, { force: true });
         break;
@@ -202,10 +227,17 @@ function ensureSSEInitialized() {
           snapshot.binding = null;
           snapshot.state.attached_playlist = null;
         }
+        // Créer un nouvel objet pour déclencher la réactivité
+        snapshots.value.set(rendererId, {
+          ...snapshot,
+          state: { ...snapshot.state },
+        });
         break;
 
       case "stream_state_changed":
         snapshot.is_stream = event.is_stream;
+        // Créer un nouvel objet pour déclencher la réactivité
+        snapshots.value.set(rendererId, { ...snapshot });
         break;
 
       case "timer_started":
@@ -218,8 +250,8 @@ function ensureSSEInitialized() {
         break;
     }
 
-    // Trigger reactivity
-    snapshotState.snapshots.set(rendererId, snapshot);
+    // Note: chaque case est maintenant responsable de stocker le snapshot dans la Map
+    // Plus de réassignation finale après le switch
   });
 
   sseInitialized = true;
@@ -230,7 +262,7 @@ const onlineRenderers = computed(() =>
   allRenderers.value.filter((r) => r.online),
 );
 const allSnapshots = computed(() =>
-  Array.from(snapshotState.snapshots.values()),
+  Array.from(snapshots.value.values()),
 );
 const playingRenderers = computed(() =>
   allSnapshots.value
@@ -243,35 +275,38 @@ function getRendererById(id: string) {
 }
 
 function getSnapshotById(id: string) {
-  return snapshotState.snapshots.get(id) ?? null;
+  return snapshots.value.get(id) ?? null;
 }
 
 function getStateById(id: string): RendererState | null {
-  return snapshotState.snapshots.get(id)?.state ?? null;
+  return snapshots.value.get(id)?.state ?? null;
 }
 
 function getQueueById(id: string): QueueSnapshot | null {
-  return snapshotState.snapshots.get(id)?.queue ?? null;
+  return snapshots.value.get(id)?.queue ?? null;
 }
 
 function getBindingById(id: string): AttachedPlaylistInfo | null {
-  return snapshotState.snapshots.get(id)?.binding ?? null;
+  return snapshots.value.get(id)?.binding ?? null;
 }
 
 function isSnapshotLoading(id: string) {
-  return snapshotState.loadingIds.has(id);
+  return loadingIds.value.has(id);
 }
 
 function isQueueRefreshing(id: string) {
-  return snapshotState.queueRefreshingIds.has(id);
+  return queueRefreshingIds.value.has(id);
 }
 
 function selectRenderer(id: string | null) {
-  snapshotState.selectedRendererId = id;
+  selectedRendererId.value = id;
 }
 
 async function fetchRenderers(force = false, retries = 2) {
   ensureSSEInitialized();
+  
+  // Créer le store UI pour les notifications (lazy import pour éviter les effets de bord)
+  const uiStore = useUIStore();
 
   let lastError: Error | null = null;
   
@@ -304,6 +339,9 @@ async function fetchRenderers(force = false, retries = 2) {
   }
   
   error.value = lastError?.message ?? "Erreur fetch renderers";
+  
+  // Notifier l'utilisateur en cas d'erreur finale
+  uiStore.notifyError("Impossible de rafraîchir la liste des renderers");
 }
 
 async function fetchRendererSnapshot(
@@ -312,33 +350,43 @@ async function fetchRendererSnapshot(
 ) {
   ensureSSEInitialized();
   const force = opts?.force ?? false;
-  const hasSnapshot = snapshotState.snapshots.has(rendererId);
+  const hasSnapshot = snapshots.value.has(rendererId);
 
   if (!force && hasSnapshot) {
-    const lastSnapshot = snapshotState.lastSnapshotAt.get(rendererId) ?? 0;
-    const lastEvent = snapshotState.lastEventAt.get(rendererId) ?? 0;
+    const lastSnapshot = lastSnapshotAt.value.get(rendererId) ?? 0;
+    const lastEvent = lastEventAt.value.get(rendererId) ?? 0;
     if (lastEvent <= lastSnapshot) {
       return;
     }
   }
 
   // Éviter les requêtes multiples simultanées pour le même renderer
-  if (snapshotState.loadingIds.has(rendererId)) {
+  if (loadingIds.value.has(rendererId)) {
     return;
   }
 
-  snapshotState.loadingIds.add(rendererId);
+  loadingIds.value.add(rendererId);
+  triggerLoadingReactivity();
+  
+  // Lazy load UI store pour les notifications
+  const uiStore = useUIStore();
+  
   try {
     const snapshot = await api.getRendererFullSnapshot(rendererId);
-    snapshotState.snapshots.set(rendererId, snapshot);
-    snapshotState.lastSnapshotAt.set(rendererId, Date.now());
+    snapshots.value.set(rendererId, snapshot);
+    lastSnapshotAt.value.set(rendererId, Date.now());
+    triggerSnapshotReactivity();
   } catch (err) {
     console.error(`[useRenderers] Erreur snapshot ${rendererId}:`, err);
     // En cas d'erreur, on supprime le snapshot pour permettre une nouvelle tentative
-    snapshotState.snapshots.delete(rendererId);
+    snapshots.value.delete(rendererId);
+    triggerSnapshotReactivity();
+    // Notifier l'utilisateur
+    uiStore.notifyError(`Impossible de récupérer l'état du renderer`);
   } finally {
     // Toujours nettoyer le flag de chargement
-    snapshotState.loadingIds.delete(rendererId);
+    loadingIds.value.delete(rendererId);
+    triggerLoadingReactivity();
   }
 }
 
@@ -388,7 +436,7 @@ async function play(id: string) {
 }
 
 async function resumeOrPlayFromQueue(id: string) {
-  const snapshot = snapshotState.snapshots.get(id);
+  const snapshot = snapshots.value.get(id);
   if (!snapshot) {
     throw new Error(`Renderer ${id} non trouvé`);
   }
@@ -510,7 +558,6 @@ export function useRenderers() {
     isSnapshotLoading,
     isQueueRefreshing,
     selectRenderer,
-    snapshotState,
     // Fetchers
     fetchRenderers,
     fetchRendererSnapshot,
@@ -534,6 +581,8 @@ export function useRenderers() {
     playContent,
     addToQueue,
     addAfterCurrent,
+    // SSE
+    resetSSE,
   };
 }
 
@@ -552,6 +601,14 @@ export function useRenderer(rendererId: Ref<string>) {
   // Debounce pour éviter les refreshs multiples trop fréquents
   let refreshDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   const REFRESH_DEBOUNCE_MS = 500;
+
+  // Nettoyer le timer debounce si le composant est démonté
+  onUnmounted(() => {
+    if (refreshDebounceTimer !== null) {
+      clearTimeout(refreshDebounceTimer);
+      refreshDebounceTimer = null;
+    }
+  });
 
   async function refresh(force = true) {
     const currentRendererId = rendererId.value;

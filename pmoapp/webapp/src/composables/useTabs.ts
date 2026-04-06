@@ -346,12 +346,18 @@ function openServer(server: MediaServerSummary | undefined) {
  */
 export function useTabs() {
   // Watch pour sauvegarde automatique (uniquement les server tabs)
+  // Watch séparés sans deep pour éviter la sérialisation complète à chaque mutation
+  watch(() => state.activeTabId, () => {
+    saveToLocalStorage();
+  });
+  watch(() => state.tabHistory.length, () => {
+    saveToLocalStorage();
+  });
   watch(
-    () => [state.tabs, state.activeTabId, state.tabHistory],
+    () => state.tabs.map(t => t.id + t.type + (t.metadata?.rendererId ?? '') + (t.metadata?.serverId ?? '')).join('|'),
     () => {
       saveToLocalStorage();
     },
-    { deep: true },
   );
 
   // Restaurer au montage (uniquement les server tabs)

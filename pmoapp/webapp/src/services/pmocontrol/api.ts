@@ -47,7 +47,11 @@ class PMOControlAPI {
       throw new Error(error.error);
     }
 
-    return response.json();
+    const data = await response.json();
+    if (import.meta.env.DEV && data == null) {
+      console.warn(`[PMOControlAPI] Réponse vide pour ${path}`);
+    }
+    return data;
   }
 
   // ============================================================================
