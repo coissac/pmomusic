@@ -322,6 +322,7 @@ async function fetchRendererSnapshot(
     }
   }
 
+  // Éviter les requêtes multiples simultanées pour le même renderer
   if (snapshotState.loadingIds.has(rendererId)) {
     return;
   }
@@ -333,7 +334,10 @@ async function fetchRendererSnapshot(
     snapshotState.lastSnapshotAt.set(rendererId, Date.now());
   } catch (err) {
     console.error(`[useRenderers] Erreur snapshot ${rendererId}:`, err);
+    // En cas d'erreur, on supprime le snapshot pour permettre une nouvelle tentative
+    snapshotState.snapshots.delete(rendererId);
   } finally {
+    // Toujours nettoyer le flag de chargement
     snapshotState.loadingIds.delete(rendererId);
   }
 }
@@ -545,10 +549,25 @@ export function useRenderer(rendererId: Ref<string>) {
   const isStream = computed(() => snapshot.value?.is_stream ?? false);
   const queueRefreshing = computed(() => isQueueRefreshing(rendererId.value));
 
+  // Debounce pour éviter les refreshs multiples trop fréquents
+  let refreshDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  const REFRESH_DEBOUNCE_MS = 500;
+
   async function refresh(force = true) {
+    const currentRendererId = rendererId.value;
+    
+    // Debounce: ignorer si un refresh est en cours pour ce renderer
+    if (refreshDebounceTimer !== null) {
+      return;
+    }
+    
+    refreshDebounceTimer = setTimeout(() => {
+      refreshDebounceTimer = null;
+    }, REFRESH_DEBOUNCE_MS);
+
     await Promise.all([
       fetchRenderers(force),
-      fetchRendererSnapshot(rendererId.value, { force: true }),
+      fetchRendererSnapshot(currentRendererId, { force: true }),
     ]);
   }
 

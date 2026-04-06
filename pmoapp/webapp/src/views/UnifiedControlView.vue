@@ -135,12 +135,18 @@ onMounted(async () => {
 });
 
 // Watch renderers pour sync automatique des tabs
+// Note: on watch la taille du tableau + les IDs pour éviter un deep watch coûteux
 watch(
-    () => allRenderers.value,
-    (newRenderers) => {
-        syncWithRenderers(filterRenderers(newRenderers));
+    () => ({
+        length: allRenderers.value.length,
+        ids: allRenderers.value.map(r => r.id).join(','),
+    }),
+    (newVal, oldVal) => {
+        // Re-sync uniquement si le nombre ou les IDs ont changé
+        if (newVal.length !== oldVal?.length || newVal.ids !== oldVal?.ids) {
+            syncWithRenderers(filterRenderers(allRenderers.value));
+        }
     },
-    { deep: true },
 );
 
 // Watch l'UDN du WebRenderer local : quand il s'établit, resync pour faire apparaître notre onglet

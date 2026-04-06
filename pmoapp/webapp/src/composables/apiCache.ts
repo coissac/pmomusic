@@ -92,20 +92,34 @@ class ApiCacheService {
       if (cached) return cached;
     }
 
-    const existing = this.pendingRequests.get(key);
-    if (existing) {
-      return existing.promise as Promise<T>;
+    // Utiliser une clé unique pour éviter les problèmes de race condition
+    // avec les requêtes en cours qui peuvent être supprimées avant résolution
+    const requestKey = `request:${key}`;
+    
+    // Récupérer ou créer la requête
+    let pendingRequest = this.pendingRequests.get(requestKey);
+    
+    // Si une requête est en cours et sa promesse n'a pas encore été resolved/rejected
+    // on retourne directement cette promesse
+    if (pendingRequest) {
+      try {
+        // Attendre la résolution pour s'assurer que c'est toujours valide
+        return await pendingRequest.promise as T;
+      } catch (e) {
+        // La requête a échoué, on continue pour faire une nouvelle requête
+        this.pendingRequests.delete(requestKey);
+      }
     }
 
-    let resolvePromise!: (value: unknown) => void;
+    let resolvePromise!: (value: T) => void;
     let rejectPromise!: (reason: unknown) => void;
     
-    const promise = new Promise<unknown>((resolve, reject) => {
+    const promise = new Promise<T>((resolve, reject) => {
       resolvePromise = resolve;
       rejectPromise = reject;
     });
 
-    this.pendingRequests.set(key, {
+    this.pendingRequests.set(requestKey, {
       promise,
       subscribers: new Set(),
     });
@@ -124,7 +138,7 @@ class ApiCacheService {
 
       resolvePromise(data);
       
-      const pending = this.pendingRequests.get(key);
+      const pending = this.pendingRequests.get(requestKey);
       if (pending) {
         pending.subscribers.forEach(cb => cb(data));
       }
@@ -133,10 +147,10 @@ class ApiCacheService {
       rejectPromise(error);
       throw error;
     } finally {
-      this.pendingRequests.delete(key);
+      this.pendingRequests.delete(requestKey);
     }
 
-    return Promise.reject(new Error('Unreachable'));
+    return promise;
   }
 
   subscribe<T>(endpoint: string, params: Record<string, string | number | boolean>, callback: (data: T) => void): () => void {
