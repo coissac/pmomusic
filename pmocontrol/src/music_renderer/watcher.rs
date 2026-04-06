@@ -91,6 +91,8 @@ pub struct WatchedState {
     pub metadata: Option<TrackMetadata>,
     /// Last known stream state (continuous stream vs bounded media)
     pub is_stream: Option<bool>,
+    /// Flag indicating if renderer was active recently (used for adaptive polling)
+    pub is_active: bool,
 }
 
 // ============================================================================

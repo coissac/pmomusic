@@ -15,6 +15,24 @@ pub(crate) use interne::InternalQueue;
 pub(crate) use openhome::OpenHomeQueue;
 
 use crate::{RendererInfo, errors::ControlPointError};
+use crate::music_renderer::time_utils::parse_time_flexible;
+
+/// Returns true if `new_dur` < `old_dur` (both parseable as HH:MM:SS/MM:SS/SS).
+/// Used to protect stream durations from decreasing for the same track.
+pub(super) fn stream_duration_decreased(old_dur: &str, new_dur: &str) -> bool {
+    match (parse_time_flexible(old_dur).ok(), parse_time_flexible(new_dur).ok()) {
+        (Some(old_secs), Some(new_secs)) => new_secs < old_secs,
+        _ => false,
+    }
+}
+
+/// Returns true if `new_dur` > `old_dur` (both parseable as HH:MM:SS/MM:SS/SS).
+pub(super) fn stream_duration_increased(old_dur: &str, new_dur: &str) -> bool {
+    match (parse_time_flexible(old_dur).ok(), parse_time_flexible(new_dur).ok()) {
+        (Some(old_secs), Some(new_secs)) => new_secs > old_secs,
+        _ => false,
+    }
+}
 
 pub trait QueueFromRendererInfo {
     fn from_renderer_info(renderer: &RendererInfo) -> Result<Self, ControlPointError>

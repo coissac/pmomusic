@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, nextTick, toRef } from "vue";
+import { RecycleScroller } from "vue-virtual-scroller";
+import "vue-virtual-scroller/dist/vue-virtual-scroller.css";
 import { useRenderer } from "@/composables/useRenderers";
 import QueueItem from "./QueueItem.vue";
 import { Link, Radio, RefreshCw } from "lucide-vue-next";
@@ -17,7 +19,7 @@ const { queue, binding, isStream, queueRefreshing } = useRenderer(toRef(props, "
 
 const isAttached = computed(() => !!binding.value);
 
-const queueContainer = ref<HTMLElement | null>(null);
+const queueContainer = ref<any>(null);
 
 function handleItemClick(item: QueueItemType) {
     emit("clickItem", item);
@@ -33,15 +35,7 @@ watch(
             queueContainer.value
         ) {
             await nextTick();
-            const currentItem = queueContainer.value.querySelector(
-                ".queue-item.current",
-            );
-            if (currentItem) {
-                currentItem.scrollIntoView({
-                    behavior: "smooth",
-                    block: "nearest",
-                });
-            }
+            queueContainer.value.scrollToItem(currentIndex);
         }
     },
     { immediate: true },
@@ -81,16 +75,23 @@ watch(
             </div>
         </div>
 
-        <!-- Liste des items -->
-        <div v-if="queue?.items.length" class="queue-list" ref="queueContainer">
+        <!-- Liste des items virtualisée -->
+        <RecycleScroller
+            v-if="queue?.items.length"
+            class="queue-list"
+            :items="queue.items"
+            :item-size="64"
+            key-field="index"
+            v-slot="{ item }"
+            ref="queueContainer"
+            :min-item-size="64"
+        >
             <QueueItem
-                v-for="item in queue.items"
-                :key="item.index"
                 :item="item"
                 :is-current="item.index === queue.current_index"
                 @click="handleItemClick"
             />
-        </div>
+        </RecycleScroller>
 
         <!-- État vide -->
         <div v-else class="queue-empty">
@@ -105,6 +106,8 @@ watch(
     flex-direction: column;
     gap: var(--spacing-md);
     height: 100%;
+    width: 100%;
+    min-width: 0;
 }
 
 .queue-header {
@@ -196,20 +199,11 @@ watch(
 }
 
 .queue-list {
+    width: 100%;
     flex: 1;
     overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    gap: var(--spacing-xs);
     padding-right: var(--spacing-xs);
-}
-
-/* Ajoute un espace de scroll en bas pour ne pas cacher les derniers items sous la barre */
-.queue-list::after {
-    content: "";
-    display: block;
-    height: 80px; /* Espace pour la barre fixe en bas */
-    flex-shrink: 0;
+    min-width: 0;
 }
 
 /* Scrollbar styling */
