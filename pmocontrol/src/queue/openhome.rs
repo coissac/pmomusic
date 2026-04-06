@@ -218,6 +218,19 @@ impl OpenHomeQueue {
         }
     }
 
+    /// Invalide les caches track_ids et read_list (après insert/delete sans impact sur la piste courante).
+    fn invalidate_track_caches(&self) {
+        self.track_ids_cache.lock().unwrap().invalidate();
+        self.read_list_cache.lock().unwrap().invalidate();
+    }
+
+    /// Invalide tous les caches (après delete_all, seek, stop — opérations qui changent la piste courante).
+    fn invalidate_all_caches(&self) {
+        self.track_ids_cache.lock().unwrap().invalidate();
+        self.read_list_cache.lock().unwrap().invalidate();
+        self.current_track_id_cache.lock().unwrap().invalidate();
+    }
+
     /// Met à jour les métadonnées d'un item de la queue à l'index spécifié.
     ///
     /// Contrairement au service OpenHome qui ne permet pas de modifier les métadonnées,
@@ -274,45 +287,23 @@ impl OpenHomeQueue {
                         new_metadata.as_ref().and_then(|m| m.duration.as_ref()),
                     ) {
                         (Some(cached_dur), Some(new_dur)) => {
-                            // Parser les durées (format HH:MM:SS)
-                            let parse_duration = |dur: &str| -> Option<u32> {
-                                let parts: Vec<&str> = dur.split(':').collect();
-                                if parts.len() == 3 {
-                                    let h: u32 = parts[0].parse().ok()?;
-                                    let m: u32 = parts[1].parse().ok()?;
-                                    let s: u32 = parts[2].parse().ok()?;
-                                    Some(h * 3600 + m * 60 + s)
-                                } else {
-                                    None
-                                }
-                            };
-
-                            if let (Some(cached_secs), Some(new_secs)) =
-                                (parse_duration(cached_dur), parse_duration(new_dur))
-                            {
-                                if new_secs < cached_secs {
-                                    // Durée a diminué pour la même chanson: refuser
-                                    tracing::trace!(
-                                        "OpenHome cache_metadata: track_id={}, REJECTING update (same track, duration decreased): {} -> {}",
+                            if super::stream_duration_decreased(cached_dur, new_dur) {
+                                tracing::trace!(
+                                    "OpenHome cache_metadata: track_id={}, REJECTING update (same track, duration decreased): {} -> {}",
+                                    track_id,
+                                    cached_dur,
+                                    new_dur
+                                );
+                                false
+                            } else {
+                                if super::stream_duration_increased(cached_dur, new_dur) {
+                                    tracing::debug!(
+                                        "OpenHome cache_metadata: track_id={}, same track, duration increased: {} -> {}",
                                         track_id,
                                         cached_dur,
                                         new_dur
                                     );
-                                    false
-                                } else {
-                                    // Durée a augmenté ou est égale: accepter
-                                    if new_secs > cached_secs {
-                                        tracing::debug!(
-                                            "OpenHome cache_metadata: track_id={}, same track, duration increased: {} -> {}",
-                                            track_id,
-                                            cached_dur,
-                                            new_dur
-                                        );
-                                    }
-                                    true
                                 }
-                            } else {
-                                // Impossible de parser: accepter par défaut
                                 true
                             }
                         }
@@ -452,8 +443,7 @@ impl OpenHomeQueue {
         );
 
         // Invalidate cache after playlist modifications
-        self.track_ids_cache.lock().unwrap().invalidate();
-        self.read_list_cache.lock().unwrap().invalidate();
+        self.invalidate_track_caches();
 
         Ok(())
     }
@@ -550,11 +540,9 @@ impl OpenHomeQueue {
         new_items: Vec<PlaybackItem>,
         pivot_idx_new: usize,
         pivot_id: usize,
+        snapshot: &QueueSnapshot,
+        current_track_ids: &[u32],
     ) -> Result<(), ControlPointError> {
-        // Get current state from OpenHome
-        let snapshot = self.queue_snapshot()?;
-        let current_track_ids = self.track_ids()?;
-
         // Find the pivot index in our current state
         let pivot_idx = current_track_ids
             .iter()
@@ -576,10 +564,10 @@ impl OpenHomeQueue {
         let new_after = &new_items[pivot_idx_new + 1..];
 
         // LCS on the AFTER part (using fresh data from OpenHome)
-        let (keep_old_after, keep_new_after) = lcs_flags(&old_after, new_after);
+        let (keep_old_after, keep_new_after) = lcs_flags_optimized(&old_after, new_after);
 
         // LCS on the BEFORE part (using fresh data from OpenHome)
-        let (keep_old_before, keep_new_before) = lcs_flags(&old_before, new_before);
+        let (keep_old_before, keep_new_before) = lcs_flags_optimized(&old_before, new_before);
 
         // Delete items marked for deletion in AFTER part (reverse order)
         self.delete_marked_items(&old_ids_after, &keep_old_after, "AFTER pivot")?;
@@ -631,8 +619,7 @@ impl OpenHomeQueue {
         );
 
         // Invalidate cache after playlist modifications
-        self.track_ids_cache.lock().unwrap().invalidate();
-        self.read_list_cache.lock().unwrap().invalidate();
+        self.invalidate_track_caches();
 
         Ok(())
     }
@@ -641,12 +628,9 @@ impl OpenHomeQueue {
     fn replace_queue_standard_lcs(
         &mut self,
         items: Vec<PlaybackItem>,
-        _current_index: Option<usize>,
+        snapshot: &QueueSnapshot,
+        current_track_ids: &[u32],
     ) -> Result<(), ControlPointError> {
-        // Get current state from OpenHome
-        let snapshot = self.queue_snapshot()?;
-        let current_track_ids = self.track_ids()?;
-
         debug!(
             renderer = self.renderer_id.0.as_str(),
             current_count = snapshot.items.len(),
@@ -658,7 +642,7 @@ impl OpenHomeQueue {
             "LCS input: current vs desired items"
         );
 
-        let (keep_current, keep_desired) = lcs_flags(&snapshot.items, &items);
+        let (keep_current, keep_desired) = lcs_flags_optimized(&snapshot.items, &items);
 
         let items_to_keep = keep_current.iter().filter(|&&k| k).count();
         let items_to_delete = keep_current.iter().filter(|&k| !k).count();
@@ -768,8 +752,7 @@ impl OpenHomeQueue {
         }
 
         // Invalidate cache after playlist modifications
-        self.track_ids_cache.lock().unwrap().invalidate();
-        self.read_list_cache.lock().unwrap().invalidate();
+        self.invalidate_track_caches();
 
         Ok(())
     }
@@ -883,6 +866,52 @@ fn lcs_flags(current: &[PlaybackItem], desired: &[PlaybackItem]) -> (Vec<bool>, 
     (keep_current, keep_desired)
 }
 
+fn lcs_flags_optimized(
+    current: &[PlaybackItem],
+    desired: &[PlaybackItem],
+) -> (Vec<bool>, Vec<bool>) {
+    if current.is_empty() {
+        return (vec![], vec![true; desired.len()]);
+    }
+    if desired.is_empty() {
+        return (vec![true; current.len()], vec![]);
+    }
+
+    let leading = current
+        .iter()
+        .zip(desired.iter())
+        .take_while(|(c, d)| items_match(c, d))
+        .count();
+
+    let c_tail = &current[leading..];
+    let d_tail = &desired[leading..];
+    let trailing = c_tail
+        .iter()
+        .rev()
+        .zip(d_tail.iter().rev())
+        .take_while(|(c, d)| items_match(c, d))
+        .count();
+
+    let c_mid = &c_tail[..c_tail.len().saturating_sub(trailing)];
+    let d_mid = &d_tail[..d_tail.len().saturating_sub(trailing)];
+
+    if c_mid.is_empty() && d_mid.is_empty() {
+        return (vec![true; current.len()], vec![true; desired.len()]);
+    }
+
+    let (keep_c_mid, keep_d_mid) = lcs_flags(c_mid, d_mid);
+
+    let mut keep_current = vec![true; leading];
+    keep_current.extend(keep_c_mid);
+    keep_current.extend(vec![true; trailing]);
+
+    let mut keep_desired = vec![true; leading];
+    keep_desired.extend(keep_d_mid);
+    keep_desired.extend(vec![true; trailing]);
+
+    (keep_current, keep_desired)
+}
+
 impl QueueBackend for OpenHomeQueue {
     fn len(&self) -> Result<usize, ControlPointError> {
         Ok(self.track_ids()?.len())
@@ -983,7 +1012,7 @@ impl QueueBackend for OpenHomeQueue {
 
         // Read metadata for all tracks (batched), with 500ms cache to avoid
         // redundant SOAP calls during sync_queue (which calls queue_snapshot twice).
-        const MAX_BATCH: usize = 64;
+        const MAX_BATCH: usize = 256;
         let mut entries = Vec::with_capacity(ids.len());
         for chunk in ids.chunks(MAX_BATCH) {
             if let Some(cached) = self.read_list_cache.lock().unwrap().get(chunk) {
@@ -1056,9 +1085,7 @@ impl QueueBackend for OpenHomeQueue {
             self.playlist_client.stop()?;
         }
         // Invalidate caches (seek_id/stop modifies playlist state and current track)
-        self.track_ids_cache.lock().unwrap().invalidate();
-        self.read_list_cache.lock().unwrap().invalidate();
-        self.current_track_id_cache.lock().unwrap().invalidate();
+        self.invalidate_all_caches();
         Ok(())
     }
 
@@ -1082,9 +1109,7 @@ impl QueueBackend for OpenHomeQueue {
         self.metadata_cache.lock().unwrap().clear();
 
         // Invalidate caches after delete_all (clears queue and current track)
-        self.track_ids_cache.lock().unwrap().invalidate();
-        self.read_list_cache.lock().unwrap().invalidate();
-        self.current_track_id_cache.lock().unwrap().invalidate();
+        self.invalidate_all_caches();
 
         if items.is_empty() {
             return Ok(());
@@ -1105,8 +1130,7 @@ impl QueueBackend for OpenHomeQueue {
         }
 
         // Invalidate cache after insertions
-        self.track_ids_cache.lock().unwrap().invalidate();
-        self.read_list_cache.lock().unwrap().invalidate();
+        self.invalidate_track_caches();
 
         Ok(())
     }
@@ -1131,9 +1155,7 @@ impl QueueBackend for OpenHomeQueue {
             self.playlist_client.delete_all()?;
             self.metadata_cache.lock().unwrap().clear();
             // Invalidate caches after delete_all (clears queue and current track)
-            self.track_ids_cache.lock().unwrap().invalidate();
-            self.read_list_cache.lock().unwrap().invalidate();
-            self.current_track_id_cache.lock().unwrap().invalidate();
+            self.invalidate_all_caches();
 
             // DIAGNOSTIC: Log state after delete_all
             let post_current_track = self.playlist_client.id().ok();
@@ -1218,7 +1240,15 @@ impl QueueBackend for OpenHomeQueue {
                     pivot_idx
                 );
 
-                self.replace_queue_with_pivot(items, pivot_idx, playing_id)?;
+                let current_ids_for_pivot: Vec<u32> =
+                    snapshot.items.iter().map(|i| i.backend_id as u32).collect();
+                self.replace_queue_with_pivot(
+                    items,
+                    pivot_idx,
+                    playing_id,
+                    &snapshot,
+                    &current_ids_for_pivot,
+                )?;
             } else {
                 // CASE 1: Currently playing item NOT in the new playlist
                 // Keep it as first item and append the new playlist after it
@@ -1250,7 +1280,9 @@ impl QueueBackend for OpenHomeQueue {
                 renderer = self.renderer_id.0.as_str(),
                 "No currently playing item, using standard LCS sync"
             );
-            self.replace_queue_standard_lcs(items, Some(0))?;
+            let current_ids_for_lcs: Vec<u32> =
+                snapshot.items.iter().map(|i| i.backend_id as u32).collect();
+            self.replace_queue_standard_lcs(items, &snapshot, &current_ids_for_lcs)?;
         }
 
         // DIAGNOSTIC: Log state after sync completes
@@ -1319,8 +1351,7 @@ impl QueueBackend for OpenHomeQueue {
         }
 
         // Invalidate cache after playlist modifications
-        self.track_ids_cache.lock().unwrap().invalidate();
-        self.read_list_cache.lock().unwrap().invalidate();
+        self.invalidate_track_caches();
 
         Ok(())
     }
@@ -1365,8 +1396,7 @@ impl QueueBackend for OpenHomeQueue {
         }
 
         // Invalidate cache after playlist modifications (except ReplaceAll which already does it)
-        self.track_ids_cache.lock().unwrap().invalidate();
-        self.read_list_cache.lock().unwrap().invalidate();
+        self.invalidate_track_caches();
 
         Ok(())
     }
@@ -1378,9 +1408,7 @@ impl QueueBackend for OpenHomeQueue {
         self.ensure_playlist_source_selected()?;
         self.playlist_client.delete_all()?;
         // Invalidate caches after clearing playlist (clears queue and current track)
-        self.track_ids_cache.lock().unwrap().invalidate();
-        self.read_list_cache.lock().unwrap().invalidate();
-        self.current_track_id_cache.lock().unwrap().invalidate();
+        self.invalidate_all_caches();
         Ok(())
     }
 

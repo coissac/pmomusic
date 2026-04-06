@@ -9,7 +9,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use pmodidl::{DIDLLite, MediaMetadataParser};
 use tracing::{debug, error};
@@ -312,17 +312,37 @@ impl MusicRenderer {
 
     /// Main loop for the watcher thread.
     fn watcher_loop(&self, strategy: WatchStrategy, stop_flag: Arc<AtomicBool>) {
-        let Some(interval) = strategy.polling_interval() else {
+        let Some(base_interval) = strategy.polling_interval() else {
             // Pure push strategy - no polling needed (future implementation)
             return;
         };
 
+        let short_interval = base_interval;
+        let long_interval = Duration::from_millis(5_000);
+        let inactivity_threshold = Duration::from_secs(10);
+
         let mut tick: u32 = 0;
         let mut next_poll_time = SystemTime::now();
+        let mut last_activity_time = SystemTime::now();
 
         while !stop_flag.load(Ordering::SeqCst) {
+            let is_active = {
+                let watched = self
+                    .watched_state
+                    .lock()
+                    .expect("WatchedState mutex poisoned");
+                watched.is_active
+            };
+
+            let interval = if is_active {
+                short_interval
+            } else {
+                long_interval
+            };
+
             if self.is_online() {
                 self.poll_and_emit_changes(tick);
+                last_activity_time = SystemTime::now();
             }
 
             tick = tick.wrapping_add(1);
@@ -340,6 +360,17 @@ impl MusicRenderer {
                     "Watcher polling is running late, resetting schedule"
                 );
                 next_poll_time = SystemTime::now();
+            }
+
+            // Reset is_active flag if no activity for threshold
+            if let Ok(elapsed) = SystemTime::now().duration_since(last_activity_time) {
+                if elapsed >= inactivity_threshold {
+                    let mut watched = self
+                        .watched_state
+                        .lock()
+                        .expect("WatchedState mutex poisoned");
+                    watched.is_active = false;
+                }
             }
         }
 
@@ -1012,6 +1043,15 @@ impl MusicRenderer {
     /// Démarre ou reprend la lecture. Si une queue non vide existe,
     /// joue le track courant de la queue automatiquement (comportement unifié pour tous les backends).
     pub fn play(&self) -> Result<(), ControlPointError> {
+        // Mark renderer as active for adaptive polling
+        {
+            let mut watched = self
+                .watched_state
+                .lock()
+                .expect("WatchedState mutex poisoned");
+            watched.is_active = true;
+        }
+
         // Vérifier si on a une queue non vide
         let backend = self.lock_backend_for("play");
         let queue_not_empty = backend.len().unwrap_or(0) > 0;
@@ -1034,6 +1074,15 @@ impl MusicRenderer {
     /// Transport control: stop
     #[track_caller]
     pub fn stop(&self) -> Result<(), ControlPointError> {
+        // Mark renderer as active for adaptive polling
+        {
+            let mut watched = self
+                .watched_state
+                .lock()
+                .expect("WatchedState mutex poisoned");
+            watched.is_active = true;
+        }
+
         // Reset the has_played flag when stopping playback.
         // This ensures that if we start a new track, the flag will be false
         // until PLAYING state is observed, preventing auto-advance on
@@ -1067,6 +1116,15 @@ impl MusicRenderer {
 
     /// Transport control: seek to relative time
     pub fn seek_rel_time(&self, hhmmss: &str) -> Result<(), ControlPointError> {
+        // Mark renderer as active for adaptive polling
+        {
+            let mut watched = self
+                .watched_state
+                .lock()
+                .expect("WatchedState mutex poisoned");
+            watched.is_active = true;
+        }
+
         self.lock_backend_for("seek_rel_time").seek_rel_time(hhmmss)
     }
 
@@ -1314,6 +1372,15 @@ impl MusicRenderer {
     /// - If the current track is NOT in the new items, it's preserved as the first item
     /// - If there's no current track, the queue is simply replaced
     pub fn sync_queue(&self, items: Vec<PlaybackItem>) -> Result<(), ControlPointError> {
+        // Mark renderer as active for adaptive polling
+        {
+            let mut watched = self
+                .watched_state
+                .lock()
+                .expect("WatchedState mutex poisoned");
+            watched.is_active = true;
+        }
+
         let mut backend = self.lock_backend_for("sync_queue");
         backend.sync_queue(items)?;
         drop(backend);

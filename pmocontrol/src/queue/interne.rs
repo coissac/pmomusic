@@ -65,25 +65,7 @@ impl InternalQueue {
     /// Vérifie si une durée a diminué (format HH:MM:SS).
     /// Retourne true si new_duration < old_duration.
     fn duration_decreased(old_duration: &str, new_duration: &str) -> bool {
-        let parse_duration = |dur: &str| -> Option<u32> {
-            let parts: Vec<&str> = dur.split(':').collect();
-            if parts.len() == 3 {
-                let h: u32 = parts[0].parse().ok()?;
-                let m: u32 = parts[1].parse().ok()?;
-                let s: u32 = parts[2].parse().ok()?;
-                Some(h * 3600 + m * 60 + s)
-            } else {
-                None
-            }
-        };
-
-        if let (Some(old_secs), Some(new_secs)) =
-            (parse_duration(old_duration), parse_duration(new_duration))
-        {
-            new_secs < old_secs
-        } else {
-            false // Impossible de parser: considérer que ça n'a pas diminué
-        }
+        super::stream_duration_decreased(old_duration, new_duration)
     }
 
     /// Protège les durées des streams contre la diminution.
@@ -164,45 +146,23 @@ impl InternalQueue {
                         // Même chanson sur un stream: vérifier que la durée n'a pas diminué
                         let should_update = match (&old_meta.duration, &new_meta.duration) {
                             (Some(old_dur), Some(new_dur)) => {
-                                // Parser les durées (format HH:MM:SS)
-                                let parse_duration = |dur: &str| -> Option<u32> {
-                                    let parts: Vec<&str> = dur.split(':').collect();
-                                    if parts.len() == 3 {
-                                        let h: u32 = parts[0].parse().ok()?;
-                                        let m: u32 = parts[1].parse().ok()?;
-                                        let s: u32 = parts[2].parse().ok()?;
-                                        Some(h * 3600 + m * 60 + s)
-                                    } else {
-                                        None
-                                    }
-                                };
-
-                                if let (Some(old_secs), Some(new_secs)) =
-                                    (parse_duration(old_dur), parse_duration(new_dur))
-                                {
-                                    if new_secs < old_secs {
-                                        // Durée a diminué: garder l'ancienne
-                                        tracing::trace!(
-                                            "InternalQueue merge_metadata: uri={}, REJECTING update (same stream track, duration decreased): {} -> {}",
+                                if super::stream_duration_decreased(old_dur, new_dur) {
+                                    tracing::trace!(
+                                        "InternalQueue merge_metadata: uri={}, REJECTING update (same stream track, duration decreased): {} -> {}",
+                                        uri,
+                                        old_dur,
+                                        new_dur
+                                    );
+                                    false
+                                } else {
+                                    if super::stream_duration_increased(old_dur, new_dur) {
+                                        tracing::debug!(
+                                            "InternalQueue merge_metadata: uri={}, same stream track, duration increased: {} -> {}",
                                             uri,
                                             old_dur,
                                             new_dur
                                         );
-                                        false
-                                    } else {
-                                        // Durée a augmenté ou est égale: accepter
-                                        if new_secs > old_secs {
-                                            tracing::debug!(
-                                                "InternalQueue merge_metadata: uri={}, same stream track, duration increased: {} -> {}",
-                                                uri,
-                                                old_dur,
-                                                new_dur
-                                            );
-                                        }
-                                        true
                                     }
-                                } else {
-                                    // Impossible de parser: accepter par défaut
                                     true
                                 }
                             }
