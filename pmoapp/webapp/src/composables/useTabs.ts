@@ -43,6 +43,10 @@ const state = reactive<TabsState>({
 // Flag pour éviter les boucles de sauvegarde
 let isRestoringFromStorage = false;
 
+// Debounce timer pour la sauvegarde localStorage
+let saveDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+const SAVE_DEBOUNCE_MS = 100;
+
 /**
  * Retourne le titre complet sans troncature
  * Note: On laisse le CSS gérer l'overflow avec ellipsis pour un affichage stable
@@ -53,29 +57,38 @@ function truncateTitle(title: string): string {
 }
 
 /**
- * Sauvegarde l'état dans localStorage
+ * Sauvegarde l'état dans localStorage (avec debounce)
  * Note: On ne sauvegarde que les onglets server (les renderer tabs sont auto-générés)
  */
 function saveToLocalStorage() {
   if (isRestoringFromStorage) return;
 
-  try {
-    const stateToSave = {
-      // Sauvegarder uniquement les onglets server (fermables manuellement)
-      tabs: state.tabs
-        .filter((tab) => tab.type === "server")
-        .map((tab) => ({
-          ...tab,
-          // On ne peut pas sauvegarder les composants Vue, on sauve juste le type
-          icon: undefined,
-        })),
-      activeTabId: state.activeTabId,
-      tabHistory: state.tabHistory,
-    };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToSave));
-  } catch (error) {
-    console.error("[useTabs] Erreur sauvegarde localStorage:", error);
+  // Annuler le timer précédent
+  if (saveDebounceTimer !== null) {
+    clearTimeout(saveDebounceTimer);
   }
+
+  // Débouncer pour éviter les écritures multiples
+  saveDebounceTimer = setTimeout(() => {
+    try {
+      const stateToSave = {
+        // Sauvegarder uniquement les onglets server (fermables manuellement)
+        tabs: state.tabs
+          .filter((tab) => tab.type === "server")
+          .map((tab) => ({
+            ...tab,
+            // On ne peut pas sauvegarder les composants Vue, on sauve juste le type
+            icon: undefined,
+          })),
+        activeTabId: state.activeTabId,
+        tabHistory: state.tabHistory,
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToSave));
+    } catch (error) {
+      console.error("[useTabs] Erreur sauvegarde localStorage:", error);
+    }
+    saveDebounceTimer = null;
+  }, SAVE_DEBOUNCE_MS);
 }
 
 /**
@@ -83,11 +96,11 @@ function saveToLocalStorage() {
  * Note: Restaure uniquement les onglets server (les renderer tabs seront auto-générés)
  */
 function restoreFromLocalStorage() {
+  isRestoringFromStorage = true;
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (!saved) return;
 
-    isRestoringFromStorage = true;
     const savedState = JSON.parse(saved);
 
     // Reconstituer uniquement les tabs server avec les bonnes icônes
@@ -110,10 +123,9 @@ function restoreFromLocalStorage() {
     if (!state.tabs.find((t) => t.id === state.activeTabId)) {
       state.activeTabId = "";
     }
-
-    isRestoringFromStorage = false;
   } catch (error) {
     console.error("[useTabs] Erreur restauration localStorage:", error);
+  } finally {
     isRestoringFromStorage = false;
   }
 }

@@ -18,10 +18,43 @@ import type {
 } from "./types";
 
 /**
+ * Fetch avec timeout et AbortController
+ */
+function fetchWithTimeout(
+  url: string,
+  options: RequestInit = {},
+  timeoutMs = 10_000,
+): Promise<Response> {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...options, signal: controller.signal }).finally(
+    () => clearTimeout(id),
+  );
+}
+
+/**
  * Client API REST pour le Control Point PMOMusic
  */
 class PMOControlAPI {
   private readonly baseURL = "/api/control";
+
+  /**
+   * Valide la structure de base d'une réponse
+   * Jette une erreur si la réponse est invalide
+   */
+  private validateResponse<T>(data: unknown, path: string): T {
+    // Vérification basique : null ou undefined
+    if (data == null) {
+      throw new Error(`[PMOControlAPI] Réponse nulle pour ${path}`);
+    }
+
+    // Vérification que c'est un objet
+    if (typeof data !== 'object') {
+      throw new Error(`[PMOControlAPI] Réponse invalide pour ${path}: attendu un objet`);
+    }
+
+    return data as T;
+  }
 
   /**
    * Effectue une requête HTTP générique
@@ -32,7 +65,7 @@ class PMOControlAPI {
   ): Promise<T> {
     const url = `${this.baseURL}${path}`;
 
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       ...options,
       headers: {
         "Content-Type": "application/json",
@@ -48,10 +81,14 @@ class PMOControlAPI {
     }
 
     const data = await response.json();
+    
+    // Validation de la réponse (P5)
+    const validated = this.validateResponse<T>(data, path);
+    
     if (import.meta.env.DEV && data == null) {
       console.warn(`[PMOControlAPI] Réponse vide pour ${path}`);
     }
-    return data;
+    return validated;
   }
 
   // ============================================================================

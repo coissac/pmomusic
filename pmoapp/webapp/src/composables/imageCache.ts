@@ -37,9 +37,20 @@ class ImageCacheService {
   };
 
   private readonly CACHE_CLEANUP_MS = 5 * 60 * 1000;
+  private cleanupIntervalId: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
-    setInterval(() => this.cleanup(), this.CACHE_CLEANUP_MS);
+    this.cleanupIntervalId = setInterval(() => this.cleanup(), this.CACHE_CLEANUP_MS);
+  }
+
+  /**
+   * Nettoie le timer de cleanup. À appeler lors de la destruction de l'application.
+   */
+  destroy(): void {
+    if (this.cleanupIntervalId !== null) {
+      clearInterval(this.cleanupIntervalId);
+      this.cleanupIntervalId = null;
+    }
   }
 
   configure(options: Partial<ImageCacheOptions>) {

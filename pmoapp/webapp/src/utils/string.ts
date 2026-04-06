@@ -45,5 +45,9 @@ export function normalizeUrl(url: string): string {
  */
 export function truncate(str: string, maxLength: number, suffix = '...'): string {
   if (str.length <= maxLength) return str;
+  // Guard: si suffix est plus long que maxLength, retourner juste le suffixe
+  if (suffix.length >= maxLength) {
+    return str.slice(0, maxLength);
+  }
   return str.slice(0, maxLength - suffix.length) + suffix;
 }

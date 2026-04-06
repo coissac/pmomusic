@@ -4,7 +4,7 @@
  * - Les snapshots complets proviennent de /renderers/{id}/full
  * - Les événements SSE ne servent qu'à déclencher un refetch.
  */
-import { ref, shallowRef, computed, type Ref, onUnmounted } from "vue";
+import { ref, reactive, computed, type Ref, onUnmounted } from "vue";
 import { api } from "../services/pmocontrol/api";
 import { useSSE } from "./useSSE";
 import { apiCache } from "./apiCache";
@@ -19,31 +19,19 @@ import type {
 } from "../services/pmocontrol/types";
 import { isTransportState } from "../services/pmocontrol/types";
 
-// État global des snapshots avec shallowRef pour éviter les problèmes de réactivité avec les Maps
-const snapshots = shallowRef(new Map<string, FullRendererSnapshot>());
-const lastSnapshotAt = shallowRef(new Map<string, number>());
-const lastEventAt = shallowRef(new Map<string, number>());
-const loadingIds = shallowRef(new Set<string>());
-const queueRefreshingIds = shallowRef(new Set<string>());
+// État global des snapshots avec reactive pour une réactivité native Vue sur les Maps
+const snapshots = reactive(new Map<string, FullRendererSnapshot>());
+const lastSnapshotAt = reactive(new Map<string, number>());
+const lastEventAt = reactive(new Map<string, number>());
+const loadingIds = reactive(new Set<string>());
+const queueRefreshingIds = reactive(new Set<string>());
 const selectedRendererId = ref<string | null>(null);
 
 // Cache des renderers (summary)
 const renderersCache = ref<Map<string, RendererSummary>>(new Map());
 const RENDERERS_CACHE_MS = 2000;
 
-// Helper pour déclencher la réactivité après mutation des Maps
-function triggerSnapshotReactivity() {
-  // Créer une nouvelle référence pour déclencher la réactivité
-  snapshots.value = new Map(snapshots.value);
-}
-
-function triggerLoadingReactivity() {
-  loadingIds.value = new Set(loadingIds.value);
-}
-
-function triggerQueueReactivity() {
-  queueRefreshingIds.value = new Set(queueRefreshingIds.value);
-}
+// Supprimé : les helpers triggerXXX ne sont plus nécessaires avec reactive
 
 const loading = ref(false);
 const error = ref<string | null>(null);
@@ -114,17 +102,16 @@ function ensureSSEInitialized() {
       }
 
       // Supprimer le snapshot (il n'est plus valide)
-      snapshots.value.delete(rendererId);
-      triggerSnapshotReactivity();
-      lastSnapshotAt.value.delete(rendererId);
-      lastEventAt.value.delete(rendererId);
+      snapshots.delete(rendererId);
+      lastSnapshotAt.delete(rendererId);
+      lastEventAt.delete(rendererId);
       return;
     }
 
     // Pour les autres événements, mettre à jour le snapshot local directement
-    lastEventAt.value.set(rendererId, timestamp);
+    lastEventAt.set(rendererId, timestamp);
 
-    const snapshot = snapshots.value.get(rendererId);
+    const snapshot = snapshots.get(rendererId);
 
     // Si pas de snapshot, on doit fetch
     if (!snapshot) {
@@ -137,11 +124,11 @@ function ensureSSEInitialized() {
       case "state_changed":
         // Créer un nouvel objet pour déclencher la réactivité
         if (isTransportState(event.state)) {
-          snapshots.value.set(rendererId, {
+          snapshots.set(rendererId, {
             ...snapshot,
             state: { ...snapshot.state, transport_state: event.state },
           });
-          triggerSnapshotReactivity();
+          
         } else {
           console.warn(`[useRenderers] transport_state inconnu: ${event.state}`);
         }
@@ -158,7 +145,7 @@ function ensureSSEInitialized() {
         const durationMs = parseTimeToMs(event.track_duration ?? null);
         
         // Créer un nouvel objet pour déclencher la réactivité
-        snapshots.value.set(rendererId, {
+        snapshots.set(rendererId, {
           ...snapshot,
           state: {
             ...snapshot.state,
@@ -166,12 +153,12 @@ function ensureSSEInitialized() {
             duration_ms: durationMs,
           },
         });
-        triggerSnapshotReactivity();
+        
         break;
 
       case "volume_changed":
         // Créer un nouvel objet pour déclencher la réactivité
-        snapshots.value.set(rendererId, {
+        snapshots.set(rendererId, {
           ...snapshot,
           state: { ...snapshot.state, volume: event.volume },
         });
@@ -179,7 +166,7 @@ function ensureSSEInitialized() {
 
       case "mute_changed":
         // Créer un nouvel objet pour déclencher la réactivité
-        snapshots.value.set(rendererId, {
+        snapshots.set(rendererId, {
           ...snapshot,
           state: { ...snapshot.state, mute: event.mute },
         });
@@ -199,21 +186,21 @@ function ensureSSEInitialized() {
         snapshot.state.current_track.album = event.album;
         snapshot.state.current_track.album_art_uri = event.album_art_uri;
         // Important: Trigger reactivity en réassignant l'objet complet avec deep copy
-        snapshots.value.set(rendererId, {
+        snapshots.set(rendererId, {
           ...snapshot,
           state: { ...snapshot.state },
         });
         break;
 
       case "queue_refreshing":
-        queueRefreshingIds.value.add(rendererId);
-        triggerQueueReactivity();
+        queueRefreshingIds.add(rendererId);
+        
         break;
 
       case "queue_updated":
         snapshot.state.queue_len = event.queue_length;
-        queueRefreshingIds.value.delete(rendererId);
-        triggerQueueReactivity();
+        queueRefreshingIds.delete(rendererId);
+        
         // Pour la queue complète, on doit refetch
         void fetchRendererSnapshot(rendererId, { force: true });
         break;
@@ -231,7 +218,7 @@ function ensureSSEInitialized() {
           snapshot.state.attached_playlist = null;
         }
         // Créer un nouvel objet pour déclencher la réactivité
-        snapshots.value.set(rendererId, {
+        snapshots.set(rendererId, {
           ...snapshot,
           state: { ...snapshot.state },
         });
@@ -240,7 +227,7 @@ function ensureSSEInitialized() {
       case "stream_state_changed":
         snapshot.is_stream = event.is_stream;
         // Créer un nouvel objet pour déclencher la réactivité
-        snapshots.value.set(rendererId, { ...snapshot });
+        snapshots.set(rendererId, { ...snapshot });
         break;
 
       case "timer_started":
@@ -265,7 +252,7 @@ const onlineRenderers = computed(() =>
   allRenderers.value.filter((r) => r.online),
 );
 const allSnapshots = computed(() =>
-  Array.from(snapshots.value.values()),
+  Array.from(snapshots.values()),
 );
 const playingRenderers = computed(() =>
   allSnapshots.value
@@ -278,27 +265,27 @@ function getRendererById(id: string) {
 }
 
 function getSnapshotById(id: string) {
-  return snapshots.value.get(id) ?? null;
+  return snapshots.get(id) ?? null;
 }
 
 function getStateById(id: string): RendererState | null {
-  return snapshots.value.get(id)?.state ?? null;
+  return snapshots.get(id)?.state ?? null;
 }
 
 function getQueueById(id: string): QueueSnapshot | null {
-  return snapshots.value.get(id)?.queue ?? null;
+  return snapshots.get(id)?.queue ?? null;
 }
 
 function getBindingById(id: string): AttachedPlaylistInfo | null {
-  return snapshots.value.get(id)?.binding ?? null;
+  return snapshots.get(id)?.binding ?? null;
 }
 
 function isSnapshotLoading(id: string) {
-  return loadingIds.value.has(id);
+  return loadingIds.has(id);
 }
 
 function isQueueRefreshing(id: string) {
-  return queueRefreshingIds.value.has(id);
+  return queueRefreshingIds.has(id);
 }
 
 function selectRenderer(id: string | null) {
@@ -353,43 +340,43 @@ async function fetchRendererSnapshot(
 ) {
   ensureSSEInitialized();
   const force = opts?.force ?? false;
-  const hasSnapshot = snapshots.value.has(rendererId);
+  const hasSnapshot = snapshots.has(rendererId);
 
   if (!force && hasSnapshot) {
-    const lastSnapshot = lastSnapshotAt.value.get(rendererId) ?? 0;
-    const lastEvent = lastEventAt.value.get(rendererId) ?? 0;
+    const lastSnapshot = lastSnapshotAt.get(rendererId) ?? 0;
+    const lastEvent = lastEventAt.get(rendererId) ?? 0;
     if (lastEvent <= lastSnapshot) {
       return;
     }
   }
 
   // Éviter les requêtes multiples simultanées pour le même renderer
-  if (loadingIds.value.has(rendererId)) {
+  if (loadingIds.has(rendererId)) {
     return;
   }
 
-  loadingIds.value.add(rendererId);
-  triggerLoadingReactivity();
+  loadingIds.add(rendererId);
+  
   
   // Lazy load UI store pour les notifications
   const uiStore = useUIStore();
   
   try {
     const snapshot = await api.getRendererFullSnapshot(rendererId);
-    snapshots.value.set(rendererId, snapshot);
-    lastSnapshotAt.value.set(rendererId, Date.now());
-    triggerSnapshotReactivity();
+    snapshots.set(rendererId, snapshot);
+    lastSnapshotAt.set(rendererId, Date.now());
+    
   } catch (err) {
     console.error(`[useRenderers] Erreur snapshot ${rendererId}:`, err);
     // En cas d'erreur, on supprime le snapshot pour permettre une nouvelle tentative
-    snapshots.value.delete(rendererId);
-    triggerSnapshotReactivity();
+    snapshots.delete(rendererId);
+    
     // Notifier l'utilisateur
     uiStore.notifyError(`Impossible de récupérer l'état du renderer`);
   } finally {
     // Toujours nettoyer le flag de chargement
-    loadingIds.value.delete(rendererId);
-    triggerLoadingReactivity();
+    loadingIds.delete(rendererId);
+    
   }
 }
 
@@ -439,7 +426,7 @@ async function play(id: string) {
 }
 
 async function resumeOrPlayFromQueue(id: string) {
-  const snapshot = snapshots.value.get(id);
+  const snapshot = snapshots.get(id);
   if (!snapshot) {
     throw new Error(`Renderer ${id} non trouvé`);
   }

@@ -126,6 +126,7 @@ export interface BrowseResponse {
   entries: ContainerEntry[];
   total_count: number;
   offset: number;
+  hasMore?: boolean; // Client-side flag pour infinite scroll
 }
 
 // ============================================================================

@@ -101,13 +101,15 @@
     font-size: var(--text-base);
 }
 
-/* Bouton fermer */
-.drawer-close-btn {
+/* ========================================
+   ICONS COMMUNS POUR DRAWERS
+   ======================================== */
+
+/* Classe de base pour les boutons icônes des drawers */
+.drawer-icon-btn {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 40px;
-    height: 40px;
     flex-shrink: 0;
     padding: 0;
     background: rgba(255, 255, 255, 0.1);
@@ -118,34 +120,31 @@
     color: var(--color-text);
 }
 
-.drawer-close-btn:hover {
+.drawer-icon-btn:hover {
     background: rgba(255, 255, 255, 0.2);
-    transform: scale(1.1);
 }
 
-.drawer-close-btn:active {
+.drawer-icon-btn:active {
     transform: scale(0.95);
+}
+
+/* Bouton fermer */
+.drawer-close-btn {
+    width: 40px;
+    height: 40px;
+}
+
+.drawer-close-btn:hover {
+    transform: scale(1.1);
 }
 
 /* Bouton retour (ServerDrawer navigation) */
 .drawer-back-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
     width: 36px;
     height: 36px;
-    flex-shrink: 0;
-    padding: 0;
-    background: rgba(255, 255, 255, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    border-radius: 50%;
-    cursor: pointer;
-    transition: all var(--transition-fast) ease;
-    color: var(--color-text);
 }
 
 .drawer-back-btn:hover {
-    background: rgba(255, 255, 255, 0.2);
     transform: scale(1.05);
 }
 

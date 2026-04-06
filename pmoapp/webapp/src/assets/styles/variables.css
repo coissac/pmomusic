@@ -89,13 +89,18 @@
   --transition-base: 300ms ease-in-out;
   --transition-slow: 500ms ease-in-out;
 
-  /* ========================================
-     Z-index layers
-     ======================================== */
+/* ========================================
+      Z-index layers
+      ======================================== */
   --z-dropdown: 100;
   --z-modal: 200;
   --z-toast: 300;
   --z-tooltip: 400;
+
+  /* ========================================
+      Opacity states
+      ======================================== */
+  --opacity-disabled: 0.4;
 }
 
 /* Dark mode support (optionnel pour l'avenir) */

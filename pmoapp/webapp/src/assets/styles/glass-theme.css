@@ -381,24 +381,27 @@
    ANIMATIONS
    ======================================== */
 
-@keyframes glassShimmer {
-  0% {
-    background-position: -200% center;
+/* Respecte prefers-reduced-motion */
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes glassShimmer {
+    0% {
+      background-position: -200% center;
+    }
+    100% {
+      background-position: 200% center;
+    }
   }
-  100% {
-    background-position: 200% center;
-  }
-}
 
-.glass-shimmer {
-  background: linear-gradient(
-    90deg,
-    rgba(255, 255, 255, 0) 0%,
-    rgba(255, 255, 255, 0.1) 50%,
-    rgba(255, 255, 255, 0) 100%
-  );
-  background-size: 200% 100%;
-  animation: glassShimmer 2s ease-in-out infinite;
+  .glass-shimmer {
+    background: linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0) 0%,
+      rgba(255, 255, 255, 0.1) 50%,
+      rgba(255, 255, 255, 0) 100%
+    );
+    background-size: 200% 100%;
+    animation: glassShimmer 2s ease-in-out infinite;
+  }
 }
 
 /* ========================================

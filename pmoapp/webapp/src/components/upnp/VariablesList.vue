@@ -372,7 +372,14 @@ watch(editingVar, (newVar) => {
 
 .event-badge {
   font-size: 1rem;
-  animation: pulse 2s ease-in-out infinite;
+  animation: none;
+}
+
+/* Respect prefers-reduced-motion */
+@media (prefers-reduced-motion: no-preference) {
+  .event-badge {
+    animation: pulse 2s ease-in-out infinite;
+  }
 }
 
 @keyframes pulse {
