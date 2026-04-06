@@ -34,17 +34,19 @@ const rendererDrawerOpen = ref(false);
 // Ref pour le swipe edge detection
 const viewRef = ref<HTMLElement | null>(null);
 
+// Position initiale du swipe pour détecter un swipe depuis le bord gauche
+const swipeStartX = ref(0);
+
 // Swipe depuis le bord gauche pour ouvrir le drawer
 useSwipe(viewRef, {
     threshold: 50,
+    onSwipeStart(e: TouchEvent) {
+        swipeStartX.value = e.touches[0]?.clientX ?? 0;
+    },
     onSwipeEnd(_e: TouchEvent, swipeDirection: string) {
         // Swipe right depuis le bord gauche → ouvrir drawer
-        if (swipeDirection === "right" && !drawerOpen.value) {
-            const touch = _e.changedTouches[0];
-            // Vérifier que le swipe commence depuis le bord gauche (< 50px)
-            if (touch && touch.clientX < 50) {
-                drawerOpen.value = true;
-            }
+        if (swipeDirection === "right" && !drawerOpen.value && swipeStartX.value < 50) {
+            drawerOpen.value = true;
         }
     },
 });
@@ -135,12 +137,18 @@ onMounted(async () => {
 });
 
 // Watch renderers pour sync automatique des tabs
+// Note: on watch la taille du tableau + les IDs pour éviter un deep watch coûteux
 watch(
-    () => allRenderers.value,
-    (newRenderers) => {
-        syncWithRenderers(filterRenderers(newRenderers));
+    () => ({
+        length: allRenderers.value.length,
+        ids: allRenderers.value.map(r => r.id).join(','),
+    }),
+    (newVal, oldVal) => {
+        // Re-sync uniquement si le nombre ou les IDs ont changé
+        if (newVal.length !== oldVal?.length || newVal.ids !== oldVal?.ids) {
+            syncWithRenderers(filterRenderers(allRenderers.value));
+        }
     },
-    { deep: true },
 );
 
 // Watch l'UDN du WebRenderer local : quand il s'établit, resync pour faire apparaître notre onglet

@@ -49,12 +49,3 @@ export function formatMsToTime(ms: number | null): string {
   
   return `${h}${m}${s}`;
 }
-
-/**
- * Convertit des millisecondes en format court (pour l'affichage progress)
- * @param ms - Durée en millisecondes
- * @returns Durée au format "X:XX" ou "X:XX:XX"
- */
-export function formatMsToShortTime(ms: number | null): string {
-  return formatMsToTime(ms);
-}

@@ -33,6 +33,58 @@ export interface TrackInfo {
     cover?: string;
 }
 
+// Types stricts pour les commandes reçues du backend (P6)
+interface StreamCommand {
+    type: 'stream';
+    url: string;
+}
+
+interface PlayCommand {
+    type: 'play';
+}
+
+interface PauseCommand {
+    type: 'pause';
+}
+
+interface SeekCommand {
+    type: 'seek';
+    timestamp: number;
+}
+
+interface FlushCommand {
+    type: 'flush';
+}
+
+interface StopCommand {
+    type: 'stop';
+}
+
+type CommandMessage = StreamCommand | PlayCommand | PauseCommand | SeekCommand | FlushCommand | StopCommand;
+
+function isValidCommand(msg: Record<string, unknown> | unknown): msg is CommandMessage {
+    if (!msg || typeof msg !== 'object') return false;
+    if (!('type' in msg)) return false;
+    
+    const type = (msg as Record<string, unknown>).type;
+    if (typeof type !== 'string') return false;
+    
+    // Valider les champs selon le type
+    switch (type) {
+        case 'stream':
+            return 'url' in msg && typeof (msg as StreamCommand).url === 'string';
+        case 'seek':
+            return 'timestamp' in msg && typeof (msg as SeekCommand).timestamp === 'number';
+        case 'play':
+        case 'pause':
+        case 'flush':
+        case 'stop':
+            return true;
+        default:
+            return false;
+    }
+}
+
 export class PMOPlayer {
     private audio: HTMLAudioElement;
     private instanceId: string;
@@ -195,11 +247,17 @@ export class PMOPlayer {
     }
 
     private handleCommand(msg: Record<string, unknown>) {
-        const type = msg.type as string;
+        // Validate command structure before processing (P6)
+        if (!isValidCommand(msg)) {
+            console.warn('[PMOPlayer] Invalid command received:', msg);
+            return;
+        }
+
+        const type = msg.type;
 
         switch (type) {
             case 'stream': {
-                this.playStream(msg.url as string);
+                this.playStream(msg.url);
                 break;
             }
             case 'play': {
@@ -211,7 +269,7 @@ export class PMOPlayer {
                 this.pause();
                 break;
             case 'seek':
-                this.seek(msg.timestamp as number);
+                this.seek(msg.timestamp);
                 break;
             case 'flush':
                 this.flush();

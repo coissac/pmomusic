@@ -11,6 +11,7 @@
 export interface CacheEntry<T> {
   data: T;
   timestamp: number;
+  ttl?: number;
   etag?: string;
 }
 
@@ -51,7 +52,9 @@ class ApiCacheService {
   private isFresh(key: string): boolean {
     const entry = this.cache.get(key);
     if (!entry) return false;
-    return Date.now() - entry.timestamp < this.options.ttl;
+    // Lire le TTL de l'entrée, sinon utiliser le TTL global par défaut
+    const ttl = entry.ttl ?? this.options.ttl;
+    return Date.now() - entry.timestamp < ttl;
   }
 
   get<T>(endpoint: string, params?: Record<string, string | number | boolean>): T | null {
@@ -66,12 +69,13 @@ class ApiCacheService {
     return entry.data;
   }
 
-  set<T>(endpoint: string, data: T, params?: Record<string, string | number | boolean>, etag?: string): void {
+  set<T>(endpoint: string, data: T, params?: Record<string, string | number | boolean>, etag?: string, ttl?: number): void {
     const key = this.makeKey(endpoint, params);
     
     this.cache.set(key, {
       data,
       timestamp: Date.now(),
+      ttl,
       etag,
     });
 
@@ -92,20 +96,34 @@ class ApiCacheService {
       if (cached) return cached;
     }
 
-    const existing = this.pendingRequests.get(key);
-    if (existing) {
-      return existing.promise as Promise<T>;
+    // Utiliser une clé unique pour éviter les problèmes de race condition
+    // avec les requêtes en cours qui peuvent être supprimées avant résolution
+    const requestKey = `request:${key}`;
+    
+    // Récupérer ou créer la requête
+    let pendingRequest = this.pendingRequests.get(requestKey);
+    
+    // Si une requête est en cours et sa promesse n'a pas encore été resolved/rejected
+    // on retourne directement cette promesse
+    if (pendingRequest) {
+      try {
+        // Attendre la résolution pour s'assurer que c'est toujours valide
+        return await pendingRequest.promise as T;
+      } catch (e) {
+        // La requête a échoué, on continue pour faire une nouvelle requête
+        this.pendingRequests.delete(requestKey);
+      }
     }
 
-    let resolvePromise!: (value: unknown) => void;
+    let resolvePromise!: (value: T) => void;
     let rejectPromise!: (reason: unknown) => void;
     
-    const promise = new Promise<unknown>((resolve, reject) => {
+    const promise = new Promise<T>((resolve, reject) => {
       resolvePromise = resolve;
       rejectPromise = reject;
     });
 
-    this.pendingRequests.set(key, {
+    this.pendingRequests.set(requestKey, {
       promise,
       subscribers: new Set(),
     });
@@ -113,18 +131,13 @@ class ApiCacheService {
     try {
       const data = await fetcher();
       
-      if (ttl) {
-        const originalTtl = this.options.ttl;
-        this.options.ttl = ttl;
-        this.set(endpoint, data, params);
-        this.options.ttl = originalTtl;
-      } else {
-        this.set(endpoint, data, params);
-      }
+      // Passer le TTL directement à set() pour éviter les problèmes de race condition
+      // avec la modification globale de this.options.ttl
+      this.set(endpoint, data, params, undefined, ttl);
 
       resolvePromise(data);
       
-      const pending = this.pendingRequests.get(key);
+      const pending = this.pendingRequests.get(requestKey);
       if (pending) {
         pending.subscribers.forEach(cb => cb(data));
       }
@@ -133,10 +146,10 @@ class ApiCacheService {
       rejectPromise(error);
       throw error;
     } finally {
-      this.pendingRequests.delete(key);
+      this.pendingRequests.delete(requestKey);
     }
 
-    return Promise.reject(new Error('Unreachable'));
+    return promise;
   }
 
   subscribe<T>(endpoint: string, params: Record<string, string | number | boolean>, callback: (data: T) => void): () => void {
@@ -182,7 +195,8 @@ class ApiCacheService {
 
     keysToDelete.forEach(key => {
       this.cache.delete(key);
-      this.subscriptions.delete(key);
+      // NE PAS supprimer this.subscriptions.get(key)
+      // Les abonnés seront notifiés lors du prochain set() après un refetch
     });
   }
 

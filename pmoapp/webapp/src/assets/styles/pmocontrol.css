@@ -79,7 +79,14 @@ body {
   background-color: var(--status-transitioning-bg);
   color: var(--status-transitioning);
   border: 1px solid var(--status-transitioning);
-  animation: pulse 2s infinite;
+  animation: none;
+}
+
+/* Respect prefers-reduced-motion */
+@media (prefers-reduced-motion: no-preference) {
+  .status-badge.transitioning {
+    animation: pulse 2s infinite;
+  }
 }
 
 /* ========================================
@@ -226,52 +233,81 @@ body {
 /* ========================================
    Animations
    ======================================== */
-@keyframes pulse {
-  0%, 100% {
-    opacity: 1;
+
+/* Respecte prefers-reduced-motion */
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes pulse {
+    0%, 100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.7;
+    }
   }
-  50% {
-    opacity: 0.7;
+
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes spin {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  @keyframes slideInRight {
+    from {
+      transform: translateX(100%);
+      opacity: 0;
+    }
+    to {
+      transform: translateX(0);
+      opacity: 1;
+    }
+  }
+
+  @keyframes pulse-opacity {
+    0%, 100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.5;
+    }
+  }
+
+  .status-badge.transitioning {
+    animation: pulse 2s infinite;
+  }
+
+  .shuffle-button.loading {
+    animation: pulse 1s infinite;
+  }
+
+  .event-badge {
+    animation: pulse 2s ease-in-out infinite;
+  }
+
+  .loading-state {
+    animation: pulse 1.5s ease-in-out infinite;
   }
 }
 
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@keyframes slideInRight {
-  from {
-    opacity: 0;
-    transform: translateX(20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-.fade-in {
-  animation: fadeIn var(--transition-base);
-}
-
-.spin {
-  animation: spin 1s linear infinite;
+/* Default state (animations disabled) */
+.status-badge.transitioning,
+.shuffle-button.loading,
+.event-badge,
+.loading-state {
+  animation: none;
 }
 
 /* Reduced motion support */
@@ -546,8 +582,47 @@ input[type="range"]::-moz-range-thumb:hover {
 }
 
 /* ========================================
-   ANIMATIONS
+   ANIMATIONS (Keyframes for no-preference media query)
    ======================================== */
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    transform: translateX(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.fade-in {
+  animation: fadeIn var(--transition-base);
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
 
 @keyframes pulse-opacity {
   0%, 100% { opacity: 1; }

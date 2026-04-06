@@ -68,6 +68,7 @@ async function handleNext() {
             :disabled="isPlaying"
             @click="handlePlay"
             title="Lecture"
+            aria-label="Lecture"
         >
             <Play :size="20" />
         </button>
@@ -77,6 +78,7 @@ async function handleNext() {
             :disabled="isPaused || isStopped"
             @click="handlePause"
             title="Pause"
+            aria-label="Pause"
         >
             <Pause :size="20" />
         </button>
@@ -86,6 +88,7 @@ async function handleNext() {
             :disabled="isStopped"
             @click="handleStop"
             title="Stop"
+            aria-label="Arrêter"
         >
             <Square :size="20" />
         </button>
@@ -95,6 +98,7 @@ async function handleNext() {
             :disabled="!state?.queue_len"
             @click="handleNext"
             title="Suivant"
+            aria-label="Morceau suivant"
         >
             <SkipForward :size="20" />
         </button>

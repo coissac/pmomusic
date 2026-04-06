@@ -981,7 +981,14 @@ button.active {
   padding: 3rem;
   color: #569cd6;
   font-size: 1.1rem;
-  animation: pulse 1.5s ease-in-out infinite;
+  animation: none;
+}
+
+/* Respect prefers-reduced-motion */
+@media (prefers-reduced-motion: no-preference) {
+  .loading-state {
+    animation: pulse 1.5s ease-in-out infinite;
+  }
 }
 
 @keyframes pulse {

@@ -20,11 +20,17 @@ export interface BrowseState {
   container_id: string
   entries: ContainerEntry[]
   total_count: number
+  hasMore?: boolean
+  currentOffset?: number
 }
 
 // Cache global partagé
 const serversCache = ref<Map<string, MediaServerSummary>>(new Map())
 const browseCache = ref<Map<string, BrowseState>>(new Map())
+
+function browseCacheKey(serverId: string, containerId: string): string {
+  return `${encodeURIComponent(serverId)}:${encodeURIComponent(containerId)}`
+}
 const currentPath = ref<BreadcrumbItem[]>([])
 const searchResults = ref<BrowseState | null>(null)
 const searchQuery = ref<string>('')
@@ -69,9 +75,10 @@ function ensureSSEInitialized() {
         }
 
         // Invalider tout le cache browse de ce serveur
+        const encodedServerId = encodeURIComponent(serverId)
         const keysToDelete: string[] = []
         browseCache.value.forEach((_, key) => {
-          if (key.startsWith(serverId + '/')) {
+          if (key.startsWith(encodedServerId + ':')) {
             keysToDelete.push(key)
           }
         })
@@ -80,9 +87,10 @@ function ensureSSEInitialized() {
 
       case 'global_updated':
         // Invalider tout le cache de ce serveur
+        const encodedServerIdGlobal = encodeURIComponent(serverId)
         const globalKeysToDelete: string[] = []
         browseCache.value.forEach((_, key) => {
-          if (key.startsWith(serverId + '/')) {
+          if (key.startsWith(encodedServerIdGlobal + ':')) {
             globalKeysToDelete.push(key)
           }
         })
@@ -92,7 +100,7 @@ function ensureSSEInitialized() {
       case 'containers_updated':
         // Invalider les containers spécifiques
         event.container_ids.forEach(containerId => {
-          const key = `${serverId}/${containerId}`
+          const key = browseCacheKey(serverId, containerId)
           browseCache.value.delete(key)
         })
         break
@@ -142,7 +150,7 @@ export function useMediaServers() {
 
   // Charge la première page (remplace le cache)
   async function browseContainer(serverId: string, containerId: string, useCache = true) {
-    const key = `${serverId}/${containerId}`
+    const key = browseCacheKey(serverId, containerId)
 
     if (useCache && browseCache.value.has(key)) {
       return browseCache.value.get(key)!
@@ -152,12 +160,14 @@ export function useMediaServers() {
       loading.value = true
       error.value = null
 
-      const data = await api.browseContainer(serverId, containerId, 0)
+      const data = await api.browseContainer(serverId, containerId, 0, 50)
 
       browseCache.value.set(key, {
         container_id: data.container_id,
         entries: data.entries,
         total_count: data.total_count,
+        hasMore: data.entries.length < data.total_count,
+        currentOffset: data.entries.length,
       })
 
       return browseCache.value.get(key)!
@@ -172,22 +182,26 @@ export function useMediaServers() {
 
   // Charge la page suivante et accumule (infinite scroll)
   async function loadMoreBrowse(serverId: string, containerId: string) {
-    const key = `${serverId}/${containerId}`
+    const key = browseCacheKey(serverId, containerId)
     const state = browseCache.value.get(key)
 
     if (!state) return
-    if (state.entries.length >= state.total_count) return
+    if (!('hasMore' in state) || !state.hasMore) return
     if (loadingMore.value) return
 
     try {
       loadingMore.value = true
 
-      const offset = state.entries.length
+      // Le type cast est nécessaire car les anciens cached entries n'ont pas hasMore
+      const state = browseCache.value.get(key) as BrowseState & { hasMore?: boolean; currentOffset?: number }
+      const offset = state.currentOffset ?? state.entries.length
       const data = await api.browseContainer(serverId, containerId, offset)
 
       // Accumuler les nouvelles entrées
       state.entries.push(...data.entries)
       state.total_count = data.total_count
+      state.currentOffset = state.entries.length
+      state.hasMore = state.entries.length < state.total_count
       // Forcer la réactivité
       browseCache.value.set(key, { ...state })
     } catch (e) {
@@ -236,12 +250,12 @@ export function useMediaServers() {
   }
 
   function getBrowseCached(serverId: string, containerId: string) {
-    const key = `${serverId}/${containerId}`
+    const key = browseCacheKey(serverId, containerId)
     return browseCache.value.get(key)
   }
 
   function hasMore(serverId: string, containerId: string): boolean {
-    const key = `${serverId}/${containerId}`
+    const key = browseCacheKey(serverId, containerId)
     const state = browseCache.value.get(key)
     if (!state) return false
     return state.entries.length < state.total_count
@@ -259,12 +273,12 @@ export function useMediaServers() {
   // Invalidation du cache
   function invalidateCache(serverId: string, containerId?: string) {
     if (containerId) {
-      const key = `${serverId}/${containerId}`
-      browseCache.value.delete(key)
+      browseCache.value.delete(browseCacheKey(serverId, containerId))
     } else {
+      const encodedServerId = encodeURIComponent(serverId)
       const keysToDelete: string[] = []
       browseCache.value.forEach((_, key) => {
-        if (key.startsWith(serverId + '/')) {
+        if (key.startsWith(encodedServerId + ':')) {
           keysToDelete.push(key)
         }
       })

@@ -17,13 +17,17 @@ import type {
 } from '../services/pmocontrol/types'
 
 // État global partagé
-const connected = ref(sse.isConnectedState())
-const connectionCallbacks: Set<(connected: boolean) => void> = new Set()
+const connected = ref(sse.isConnectedState());
+const connectionCallbacks: Set<(connected: boolean) => void> = new Set();
+
+// Flag pour éviter les double-connexions SSE avec lock
+let connectionLock = false;
 
 // Abonnement à l'état de connexion global
 function setupConnectionListener() {
-  // S'assurer qu'on ne s'abonne qu'une seule fois
-  if (connectionCallbacks.size === 0) {
+  // Vérifier avec lock pour éviter les conditions de course
+  if (connectionCallbacks.size === 0 && !connectionLock) {
+    connectionLock = true;
     sse.onConnectionChange((isConnected) => {
       connected.value = isConnected
       connectionCallbacks.forEach(cb => cb(isConnected))

@@ -39,13 +39,7 @@ export interface RendererSummary {
 export interface RendererState {
   id: string;
   friendly_name: string;
-  transport_state:
-    | "PLAYING"
-    | "PAUSED"
-    | "STOPPED"
-    | "TRANSITIONING"
-    | "NO_MEDIA"
-    | "UNKNOWN";
+  transport_state: TransportState;
   position_ms: number | null;
   duration_ms: number | null;
   volume: number | null; // 0-100
@@ -53,6 +47,15 @@ export interface RendererState {
   queue_len: number;
   attached_playlist: AttachedPlaylistInfo | null;
   current_track: CurrentTrackMetadata | null;
+}
+
+export type TransportState = "PLAYING" | "PAUSED" | "STOPPED" | "TRANSITIONING" | "NO_MEDIA" | "UNKNOWN";
+
+/**
+ * Guard de type pour valider que string est un TransportState valide
+ */
+export function isTransportState(s: string): s is TransportState {
+  return ["PLAYING", "PAUSED", "STOPPED", "TRANSITIONING", "NO_MEDIA", "UNKNOWN"].includes(s);
 }
 
 export interface CurrentTrackMetadata {
@@ -123,6 +126,7 @@ export interface BrowseResponse {
   entries: ContainerEntry[];
   total_count: number;
   offset: number;
+  hasMore?: boolean; // Client-side flag pour infinite scroll
 }
 
 // ============================================================================

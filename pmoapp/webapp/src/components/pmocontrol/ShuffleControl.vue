@@ -76,7 +76,14 @@ async function handleShuffle() {
 }
 
 .shuffle-button.loading {
-    animation: pulse 1s infinite;
+    animation: none;
+}
+
+/* Respect prefers-reduced-motion */
+@media (prefers-reduced-motion: no-preference) {
+    .shuffle-button.loading {
+        animation: pulse 1s infinite;
+    }
 }
 
 @keyframes pulse {

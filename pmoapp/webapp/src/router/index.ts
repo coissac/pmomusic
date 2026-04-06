@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from "vue-router";
+import type { RouteRecordRaw } from "vue-router";
 
 // PMOControl Unified View (nouvelle interface unifiée)
 import UnifiedControlView from "../views/UnifiedControlView.vue";
@@ -8,18 +9,10 @@ import DashboardView from "../views/DashboardView.vue";
 import RendererView from "../views/RendererView.vue";
 import MediaServerView from "../views/MediaServerView.vue";
 
-// Debug Components (anciennes routes)
-import GenericMusicPlayer from "../components/GenericMusicPlayer.vue";
-import LogView from "../components/LogView.vue";
-import CoverCacheManager from "../components/CoverCacheManager.vue";
-import AudioCacheManager from "../components/AudioCacheManager.vue";
-import PlayListManager from "../components/PlayListManager.vue";
-import UpnpExplorer from "../components/UpnpExplorer.vue";
-import APIDashboard from "../components/APIDashboard.vue";
-import RadioParadiseExplorer from "../components/RadioParadiseExplorer.vue";
-import DebugView from "../views/DebugView.vue";
+// Debug Components - lazy loaded uniquement en mode développement (P8)
+const isDev = import.meta.env.DEV;
 
-const routes = [
+const routes: RouteRecordRaw[] = [
   // PMOControl Unified Interface (nouvelle interface unifiée avec onglets)
   {
     path: "/",
@@ -43,56 +36,64 @@ const routes = [
     name: "MediaServer",
     component: MediaServerView,
   },
-
-  // Debug hub
-  {
-    path: "/debug",
-    name: "Debug",
-    component: DebugView,
-  },
-
-  // Debug menu (anciennes routes déplacées sous /debug)
-  {
-    path: "/debug/generic-player",
-    name: "GenericPlayer",
-    component: GenericMusicPlayer,
-  },
-  {
-    path: "/debug/logs",
-    name: "Logs",
-    component: LogView,
-  },
-  {
-    path: "/debug/covers-cache",
-    name: "CoversCache",
-    component: CoverCacheManager,
-  },
-  {
-    path: "/debug/audio-cache",
-    name: "AudioCache",
-    component: AudioCacheManager,
-  },
-  {
-    path: "/debug/playlists",
-    name: "PlaylistsManager",
-    component: PlayListManager,
-  },
-  {
-    path: "/debug/upnp",
-    name: "UpnpExplorer",
-    component: UpnpExplorer,
-  },
-  {
-    path: "/debug/api-dashboard",
-    name: "APIDashboard",
-    component: APIDashboard,
-  },
-  {
-    path: "/debug/radio-paradise",
-    name: "RadioParadise",
-    component: RadioParadiseExplorer,
-  },
 ];
+
+// Ajouter les routes de debug uniquement en développement
+if (isDev) {
+  routes.push(
+    {
+      path: "/debug",
+      name: "Debug",
+      component: () => import("../views/DebugView.vue"),
+    },
+    {
+      path: "/debug/generic-player",
+      name: "GenericPlayer",
+      component: () => import("../components/GenericMusicPlayer.vue"),
+    },
+    {
+      path: "/debug/logs",
+      name: "Logs",
+      component: () => import("../components/LogView.vue"),
+    },
+    {
+      path: "/debug/covers-cache",
+      name: "CoversCache",
+      component: () => import("../components/CoverCacheManager.vue"),
+    },
+    {
+      path: "/debug/audio-cache",
+      name: "AudioCache",
+      component: () => import("../components/AudioCacheManager.vue"),
+    },
+    {
+      path: "/debug/playlists",
+      name: "PlaylistsManager",
+      component: () => import("../components/PlayListManager.vue"),
+    },
+    {
+      path: "/debug/upnp",
+      name: "UpnpExplorer",
+      component: () => import("../components/UpnpExplorer.vue"),
+    },
+    {
+      path: "/debug/api-dashboard",
+      name: "APIDashboard",
+      component: () => import("../components/APIDashboard.vue"),
+    },
+    {
+      path: "/debug/radio-paradise",
+      name: "RadioParadise",
+      component: () => import("../components/RadioParadiseExplorer.vue"),
+    }
+  );
+}
+
+// Wildcard redirect pour les routes inconnues
+routes.push({
+  path: "/:pathMatch(.*)*",
+  redirect: "/",
+});
 
 const router = createRouter({
   // history avec base /app
