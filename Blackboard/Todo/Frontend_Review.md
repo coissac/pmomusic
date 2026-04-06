@@ -525,10 +525,15 @@ fait et ce qui reste à finir.
 
 ---
 
-## Tâches restantes
+## Tâches restantes — ✅ Toutes corrigées (commit 2026-04-06)
 
-Trois problèmes résiduels ont été introduits ou laissés lors de l'implémentation du commit
-ci-dessus. Ils doivent être corrigés.
+| # | Problème résiduel | État |
+|---|-------------------|------|
+| A | `state_changed` — mutation directe sans trigger réactivité | ✅ Corrigé (spread + `triggerSnapshotReactivity()`) |
+| B | `queue_refreshing`/`queue_updated` — `queueRefreshingIds` sans trigger | ✅ Corrigé (`triggerQueueReactivity()` ajoutée et appelée) |
+| C | `toRaw` import obsolète, `position_changed` simplifié | ✅ Corrigé (`toRaw` supprimé de l'import, spread direct) |
+
+---
 
 ### A. `useRenderers.ts` — `state_changed` : mutation directe sans déclenchement de réactivité
 

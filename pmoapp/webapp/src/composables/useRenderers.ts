@@ -4,7 +4,7 @@
  * - Les snapshots complets proviennent de /renderers/{id}/full
  * - Les événements SSE ne servent qu'à déclencher un refetch.
  */
-import { ref, shallowRef, computed, toRaw, type Ref, onUnmounted } from "vue";
+import { ref, shallowRef, computed, type Ref, onUnmounted } from "vue";
 import { api } from "../services/pmocontrol/api";
 import { useSSE } from "./useSSE";
 import { apiCache } from "./apiCache";
@@ -39,6 +39,10 @@ function triggerSnapshotReactivity() {
 
 function triggerLoadingReactivity() {
   loadingIds.value = new Set(loadingIds.value);
+}
+
+function triggerQueueReactivity() {
+  queueRefreshingIds.value = new Set(queueRefreshingIds.value);
 }
 
 const loading = ref(false);
@@ -131,9 +135,13 @@ function ensureSSEInitialized() {
     // Sinon, mettre à jour le snapshot localement selon le type d'événement
     switch (event.type) {
       case "state_changed":
-        // Utiliser le guard de type pour valider le transport_state
+        // Créer un nouvel objet pour déclencher la réactivité
         if (isTransportState(event.state)) {
-          snapshot.state.transport_state = event.state;
+          snapshots.value.set(rendererId, {
+            ...snapshot,
+            state: { ...snapshot.state, transport_state: event.state },
+          });
+          triggerSnapshotReactivity();
         } else {
           console.warn(`[useRenderers] transport_state inconnu: ${event.state}`);
         }
@@ -145,27 +153,20 @@ function ensureSSEInitialized() {
 
         // Convertir rel_time (HH:MM:SS) en millisecondes
         const positionMs = parseTimeToMs(event.rel_time ?? null);
-        snapshot.state.position_ms = positionMs ?? 0;
 
         // Convertir track_duration (HH:MM:SS) en millisecondes
         const durationMs = parseTimeToMs(event.track_duration ?? null);
-        // Si track_duration est null/undefined (flux continu sans durée),
-        // mettre duration_ms à null pour afficher "--:--"
-        snapshot.state.duration_ms = durationMs;
-
-        // Important: Trigger reactivity en réassignant l'objet complet avec deep copy
-        // Le shallow copy ne suffit pas car snapshot.state est partagé entre renderers
-        // Il faut copier state aussi pour éviter que les modifications d'un renderer
-        // n'affectent les autres renderers
-        // IMPORTANT: Utiliser toRaw() pour obtenir l'objet brut non-réactif avant de copier
-        // sinon Vue copie les getters réactifs qui continuent à pointer vers l'objet d'origine
-        const rawState = toRaw(snapshot.state);
-        const newState = { ...rawState };
-        const newSnapshot = {
+        
+        // Créer un nouvel objet pour déclencher la réactivité
+        snapshots.value.set(rendererId, {
           ...snapshot,
-          state: newState,
-        };
-        snapshots.value.set(rendererId, newSnapshot);
+          state: {
+            ...snapshot.state,
+            position_ms: positionMs ?? 0,
+            duration_ms: durationMs,
+          },
+        });
+        triggerSnapshotReactivity();
         break;
 
       case "volume_changed":
@@ -206,11 +207,13 @@ function ensureSSEInitialized() {
 
       case "queue_refreshing":
         queueRefreshingIds.value.add(rendererId);
+        triggerQueueReactivity();
         break;
 
       case "queue_updated":
         snapshot.state.queue_len = event.queue_length;
         queueRefreshingIds.value.delete(rendererId);
+        triggerQueueReactivity();
         // Pour la queue complète, on doit refetch
         void fetchRendererSnapshot(rendererId, { force: true });
         break;
