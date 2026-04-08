@@ -216,6 +216,7 @@ export function useMediaServers() {
 
   // Recherche dans un serveur
   async function searchServer(serverId: string, query: string) {
+    console.log(`[useMediaServers] searchServer called: serverId=${serverId}, query=${query}`);
     if (!query.trim()) {
       searchResults.value = null
       searchQuery.value = ''
@@ -226,8 +227,10 @@ export function useMediaServers() {
       loading.value = true
       error.value = null
       searchQuery.value = query
+      console.log(`[useMediaServers] Calling API searchServer for server ${serverId}`);
 
       const data = await api.searchServer(serverId, query)
+      console.log(`[useMediaServers] Search returned ${data.entries.length} entries, total=${data.total_count}`);
       searchResults.value = {
         container_id: 'search',
         entries: data.entries,
