@@ -26,7 +26,7 @@ use crate::openapi::{
     CurrentTrackMetadata, FullRendererSnapshot, QueueItem, QueueSnapshotView, RendererBindingView,
     RendererStateView,
 };
-use crate::queue::{EnqueueMode, PlaybackItem, QueueSnapshot};
+use crate::queue::{EnqueueMode, PlaybackItem, QueueSnapshot, SyncScheduleOutcome};
 use crate::registry::DeviceRegistry;
 
 /// Control point minimal :
@@ -267,19 +267,12 @@ impl ControlPoint {
                                     "Triggering queue refresh for bound playlist"
                                 );
 
-                                if let Err(err) = refresh_attached_queue_for(
+                                let _ = schedule_queue_refresh_for(
                                     &registry_for_media_worker,
                                     &renderer_id,
                                     &event_bus_for_media_worker,
                                     None,
-                                ) {
-                                    warn!(
-                                        renderer = renderer_id.0.as_str(),
-                                        server = server_id.0.as_str(),
-                                        error = %err,
-                                        "Failed to refresh queue from playlist container"
-                                    );
-                                }
+                                );
                             }
                         }
                         MediaServerEvent::Online { server_id, info } => {
@@ -337,18 +330,12 @@ impl ControlPoint {
                             "Periodic refresh triggered for bound playlist"
                         );
 
-                        if let Err(err) = refresh_attached_queue_for(
+                        let _ = schedule_queue_refresh_for(
                             &registry_for_periodic,
                             &renderer_id,
                             &event_bus_for_periodic,
                             None,
-                        ) {
-                            warn!(
-                                renderer = renderer_id.0.as_str(),
-                                error = %err,
-                                "Periodic refresh failed for bound playlist"
-                            );
-                        }
+                        );
                     }
                 }
             })?;
@@ -1182,19 +1169,25 @@ impl ControlPoint {
             binding.auto_play_on_refresh = auto_play;
             renderer.set_playlist_binding(Some(binding));
 
-            let mut auto_start_cb = |rid: &DeviceId| self.play_current_from_queue(rid);
-            let callback: Option<&mut dyn FnMut(&DeviceId) -> Result<(), ControlPointError>> =
+            let callback: Option<Box<dyn FnOnce(&DeviceId) -> Result<(), ControlPointError> + Send + 'static>> =
                 if auto_play {
-                    Some(&mut auto_start_cb)
+                    let reg = Arc::clone(&self.registry);
+                    Some(Box::new(move |rid: &DeviceId| {
+                        let renderer = reg.read().unwrap().get_renderer(rid).ok_or_else(|| 
+                            ControlPointError::ControlPoint(format!("Renderer {} not found", rid.0))
+                        )?;
+                        renderer.play_current_from_queue()
+                    }))
                 } else {
                     None
                 };
-            return refresh_attached_queue_for(
+            let _ = schedule_queue_refresh_for(
                 &self.registry,
                 renderer_id,
                 &self.event_bus,
                 callback,
             );
+            return Ok(());
         }
 
         // CRITICAL: When attaching a new playlist to a renderer, we must UNCONDITIONALLY
@@ -1247,21 +1240,25 @@ impl ControlPoint {
         // Note: BindingChanged event is emitted automatically by MusicRenderer::set_playlist_binding()
 
         // For initial attach with auto_play, force playback start (don't check if idle)
-        let mut auto_start_cb = |rid: &DeviceId| {
-            debug!(
-                renderer = rid.0.as_str(),
-                "Attach callback: forcing playback start (not checking if idle)"
-            );
-            self.play_current_from_queue(rid)
-        };
-        let callback: Option<&mut dyn FnMut(&DeviceId) -> Result<(), ControlPointError>> =
+        let callback: Option<Box<dyn FnOnce(&DeviceId) -> Result<(), ControlPointError> + Send + 'static>> =
             if auto_play {
-                Some(&mut auto_start_cb)
+                let reg = Arc::clone(&self.registry);
+                Some(Box::new(move |rid: &DeviceId| {
+                    debug!(
+                        renderer = rid.0.as_str(),
+                        "Attach callback: forcing playback start (not checking if idle)"
+                    );
+                    let renderer = reg.read().unwrap().get_renderer(rid).ok_or_else(|| 
+                        ControlPointError::ControlPoint(format!("Renderer {} not found", rid.0))
+                    )?;
+                    renderer.play_current_from_queue()
+                }))
             } else {
                 None
             };
 
-        refresh_attached_queue_for(&self.registry, renderer_id, &self.event_bus, callback)
+        let _ = schedule_queue_refresh_for(&self.registry, renderer_id, &self.event_bus, callback);
+        Ok(())
     }
 
     /// Detach a renderer's queue from its associated playlist container.
@@ -1758,6 +1755,199 @@ fn refresh_attached_queue_for(
     }
 
     Ok(())
+}
+
+fn fetch_queue_items_for(
+    music_server: &Arc<crate::media_server::MusicServer>,
+    container_id: &str,
+) -> Result<Vec<PlaybackItem>, ControlPointError> {
+    const MAX_BROWSE_ATTEMPTS: usize = 3;
+    const BROWSE_RETRY_DELAY_MS: u64 = 200;
+    const BROWSE_PAGE_SIZE: u32 = 64;
+
+    let entries = {
+        let mut all_entries = Vec::new();
+        let mut offset = 0u32;
+        loop {
+            let mut attempt = 1;
+            let page = loop {
+                match music_server.browse_children(container_id, offset, BROWSE_PAGE_SIZE) {
+                    Ok(e) => break e,
+                    Err(err) => {
+                        if attempt >= MAX_BROWSE_ATTEMPTS {
+                            return Err(err);
+                        }
+                        thread::sleep(Duration::from_millis(
+                            BROWSE_RETRY_DELAY_MS * attempt as u64,
+                        ));
+                        attempt += 1;
+                    }
+                }
+            };
+            let fetched = page.len() as u32;
+            all_entries.extend(page);
+            if fetched < BROWSE_PAGE_SIZE {
+                break;
+            }
+            offset += fetched;
+        }
+        all_entries
+    };
+
+    let new_items: Vec<PlaybackItem> = entries
+        .iter()
+        .filter_map(|entry| playback_item_from_entry(music_server.clone(), entry))
+        .collect();
+
+    Ok(new_items)
+}
+
+fn schedule_queue_refresh_for(
+    registry: &Arc<RwLock<DeviceRegistry>>,
+    renderer_id: &DeviceId,
+    event_bus: &RendererEventBus,
+    after_refresh: Option<Box<dyn FnOnce(&DeviceId) -> Result<(), ControlPointError> + Send + 'static>>,
+) -> SyncScheduleOutcome {
+    // Step 1: Get renderer from registry
+    let renderer = {
+        let reg = registry.read().unwrap();
+        reg.get_renderer(renderer_id)
+    };
+
+    let renderer = match renderer {
+        Some(r) => r,
+        None => {
+            debug!(
+                renderer = renderer_id.0.as_str(),
+                "schedule_queue_refresh_for: renderer not found"
+            );
+            return SyncScheduleOutcome::Scheduled;
+        }
+    };
+
+    // Check if there's a binding
+    let (server_id, container_id) = {
+        let binding = match renderer.get_playlist_binding() {
+            Some(b) => b,
+            None => {
+                debug!(
+                    renderer = renderer_id.0.as_str(),
+                    "schedule_queue_refresh_for: no binding present"
+                );
+                return SyncScheduleOutcome::Scheduled;
+            }
+        };
+        (binding.server_id.clone(), binding.container_id.clone())
+    };
+
+    // Step 2: Get server from registry
+    let music_server = {
+        let reg = registry.read().unwrap();
+        reg.get_server(&server_id)
+    };
+
+    let music_server = match music_server {
+        Some(s) => s,
+        None => {
+            warn!(
+                renderer = renderer_id.0.as_str(),
+                server = server_id.0.as_str(),
+                "schedule_queue_refresh_for: server not found in registry"
+            );
+            return SyncScheduleOutcome::Scheduled;
+        }
+    };
+
+    if !music_server.is_online() {
+        debug!(
+            renderer = renderer_id.0.as_str(),
+            server = server_id.0.as_str(),
+            "schedule_queue_refresh_for: server offline, skipping refresh"
+        );
+        return SyncScheduleOutcome::Scheduled;
+    }
+
+    // Emit QueueRefreshing
+    event_bus.broadcast(RendererEvent::QueueRefreshing {
+        id: renderer_id.clone(),
+    });
+
+    // Get the queue Arc
+    let queue_arc = {
+        let reg = registry.read().unwrap();
+        match reg.get_renderer_queue_arc(renderer_id) {
+            Some(q) => q,
+            None => {
+                warn!("schedule_queue_refresh_for: could not get queue arc");
+                return SyncScheduleOutcome::Scheduled;
+            }
+        }
+    };
+
+    // Build the pending_items_fn for re-fetching
+    let registry_clone = Arc::clone(registry);
+    let server_id_clone = server_id.clone();
+    let container_id_clone = container_id.clone();
+    let pending_fn = Box::new(move || {
+        let music_server = {
+            let reg = registry_clone.read().unwrap();
+            reg.get_server(&server_id_clone)
+        };
+        match music_server {
+            Some(s) => fetch_queue_items_for(&s, &container_id_clone),
+            None => Err(ControlPointError::MediaServerError("Server not found".to_string())),
+        }
+    });
+
+    // Build on_ready callback
+    let rid = renderer_id.clone();
+    let bus = event_bus.clone();
+    let after_cb = after_refresh;
+    let on_ready: Option<Box<dyn FnOnce() + Send + 'static>> = Some(Box::new(move || {
+        bus.broadcast(RendererEvent::QueueReadyToPlay { id: rid.clone() });
+        if let Some(cb) = after_cb {
+            if let Err(e) = cb(&rid) {
+                warn!("auto-play callback failed: {}", e);
+            }
+        }
+    }));
+
+    // Build on_complete callback
+    let rid2 = renderer_id.clone();
+    let bus2 = event_bus.clone();
+    let on_complete = Box::new(move |queue_len: usize| {
+        bus2.broadcast(RendererEvent::QueueUpdated {
+            id: rid2.clone(),
+            queue_length: queue_len,
+        });
+    });
+
+    // First fetch
+    let items = match fetch_queue_items_for(&music_server, &container_id) {
+        Ok(items) => items,
+        Err(e) => {
+            warn!("schedule_queue_refresh_for: failed to fetch items: {}", e);
+            return SyncScheduleOutcome::Scheduled;
+        }
+    };
+
+    // Call schedule_sync
+    let outcome = crate::queue::MusicQueue::schedule_sync(
+        &queue_arc,
+        &renderer_id.0,
+        items,
+        pending_fn,
+        on_ready,
+        on_complete,
+    );
+
+    if matches!(outcome, SyncScheduleOutcome::AlreadyRunning) {
+        event_bus.broadcast(RendererEvent::QueueSyncCancelled {
+            id: renderer_id.clone(),
+        });
+    }
+
+    outcome
 }
 
 fn didl_item_from_playback_item(item: &PlaybackItem) -> DidlItem {

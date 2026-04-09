@@ -49,6 +49,8 @@ pub enum ControlPointError {
     SnapshotError(String),
     #[error("Error on ControlPoint: {0}")]
     ControlPoint(String),
+    #[error("Queue sync cancelled (superseded by a newer request)")]
+    SyncCancelled,
 }
 
 impl ControlPointError {

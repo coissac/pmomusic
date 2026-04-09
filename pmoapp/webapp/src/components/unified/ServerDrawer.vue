@@ -51,6 +51,7 @@ const searchInput = ref('');
 const isSearchMode = computed(() => searchQuery.value !== '');
 
 async function handleSearch() {
+    console.log('[ServerDrawer] handleSearch called, currentServer:', currentServer.value?.id, 'searchInput:', searchInput.value);
     if (!currentServer.value || !searchInput.value.trim()) return;
     await searchServer(currentServer.value.id, searchInput.value.trim());
 }

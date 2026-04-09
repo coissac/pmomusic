@@ -153,6 +153,14 @@ pub enum RendererEventPayload {
         renderer_id: String,
         timestamp: chrono::DateTime<chrono::Utc>,
     },
+    QueueReadyToPlay {
+        renderer_id: String,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    },
+    QueueSyncCancelled {
+        renderer_id: String,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    },
     BindingChanged {
         renderer_id: String,
         server_id: Option<String>,
@@ -290,6 +298,14 @@ async fn renderer_event_to_payload(
             timestamp,
         },
         RendererEvent::QueueRefreshing { id } => RendererEventPayload::QueueRefreshing {
+            renderer_id: id.0,
+            timestamp,
+        },
+        RendererEvent::QueueReadyToPlay { id } => RendererEventPayload::QueueReadyToPlay {
+            renderer_id: id.0,
+            timestamp,
+        },
+        RendererEvent::QueueSyncCancelled { id } => RendererEventPayload::QueueSyncCancelled {
             renderer_id: id.0,
             timestamp,
         },

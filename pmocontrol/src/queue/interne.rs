@@ -20,6 +20,7 @@ use crate::{
     queue::{MusicQueue, PlaybackItem, QueueBackend, QueueFromRendererInfo, QueueSnapshot},
     DeviceId, DeviceIdentity, RendererInfo,
 };
+use std::sync::{atomic::AtomicBool, Arc};
 
 /// Internal/local queue implementation.
 ///
@@ -269,25 +270,43 @@ impl QueueBackend for InternalQueue {
         Ok(())
     }
 
-    fn sync_queue(&mut self, items: Vec<PlaybackItem>) -> Result<(), ControlPointError> {
-        use tracing::debug;
+    fn sync_queue(
+        &mut self,
+        items: Vec<PlaybackItem>,
+        cancel_token: &Arc<AtomicBool>,
+        mut on_ready: Option<Box<dyn FnOnce() + Send>>,
+    ) -> Result<(), ControlPointError> {
+        use std::sync::atomic::Ordering::SeqCst;
 
-        if items.is_empty() {
-            return self.replace_queue(Vec::new(), None);
+        if cancel_token.load(SeqCst) {
+            return Err(ControlPointError::SyncCancelled);
         }
 
-        // Protéger les durées des streams contre la diminution
+        let has_current = self.current_index().ok().flatten().is_some();
+        if has_current {
+            if let Some(f) = on_ready.take() {
+                f();
+            }
+        }
+
+        if items.is_empty() {
+            let _ = self.replace_queue(Vec::new(), None);
+            return Ok(());
+        }
+
         let updated_items = self.protect_stream_durations(items);
 
-        // Récupérer l'item actuel
         let current = self.current_index.and_then(|idx| {
             self.items
                 .get(idx)
                 .map(|item| (idx, item.uri.clone(), item.didl_id.clone()))
         });
 
+        if cancel_token.load(SeqCst) {
+            return Err(ControlPointError::SyncCancelled);
+        }
+
         if let Some((_current_idx, current_uri, current_didl_id)) = current {
-            // Chercher l'item actuel dans la nouvelle liste (par URI d'abord, puis par didl_id)
             let new_idx = updated_items
                 .iter()
                 .position(|item| item.uri == current_uri)
@@ -298,34 +317,25 @@ impl QueueBackend for InternalQueue {
                 });
 
             if let Some(new_idx) = new_idx {
-                // Item trouvé dans la nouvelle liste
-                debug!(
-                    renderer = self.renderer_id.0.as_str(),
-                    current_uri = current_uri.as_str(),
-                    new_idx,
-                    "sync_queue: current item found in new playlist"
-                );
-                self.replace_queue(updated_items, Some(new_idx))
+                self.replace_queue(updated_items, Some(new_idx))?;
             } else {
-                // Item pas trouvé - cela ne devrait pas arriver si la playlist n'a pas changé
-                // Loguer pour diagnostic
-                debug!(
-                    renderer = self.renderer_id.0.as_str(),
-                    current_uri = current_uri.as_str(),
-                    current_didl_id = current_didl_id.as_str(),
-                    new_items_count = updated_items.len(),
-                    "sync_queue: current item NOT found in new playlist, preserving as first item"
-                );
                 let current_item = self.items[self.current_index.unwrap()].clone();
                 let mut new_items = Vec::with_capacity(updated_items.len() + 1);
                 new_items.push(current_item);
                 new_items.extend(updated_items);
-                self.replace_queue(new_items, Some(0))
+                self.replace_queue(new_items, Some(0))?;
             }
         } else {
-            // Pas d'item actuel
-            self.replace_queue(updated_items, None)
+            self.replace_queue(updated_items, None)?;
         }
+
+        if !has_current {
+            if let Some(f) = on_ready.take() {
+                f();
+            }
+        }
+
+        Ok(())
     }
 
     fn enqueue_items(
@@ -502,6 +512,6 @@ impl QueueFromRendererInfo for InternalQueue {
     }
 
     fn to_backend(self) -> MusicQueue {
-        MusicQueue::Internal(self)
+        MusicQueue::from_internal(self)
     }
 }

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use std::time::SystemTime;
 use std::usize;
 
@@ -170,12 +170,24 @@ pub struct OpenHomeQueue {
     /// Permet de maintenir des métadonnées à jour même si le service OpenHome
     /// ne permet pas de les modifier directement.
     metadata_cache: Mutex<HashMap<u32, Option<crate::model::TrackMetadata>>>,
+    /// Cache URI by track ID for fast path matching
+    uri_by_id: Mutex<HashMap<u32, String>>,
     /// Cache for track IDs to avoid redundant IdArray SOAP calls
     track_ids_cache: Arc<Mutex<TrackIdsCache>>,
     /// Cache for current track ID to avoid redundant Id SOAP calls
     current_track_id_cache: Arc<Mutex<CurrentTrackIdCache>>,
     /// Cache for ReadList results (TTL 500ms) to avoid redundant SOAP calls
     read_list_cache: Arc<Mutex<ReadListCache>>,
+}
+
+/// Fast path result for queue sync optimization
+enum FastPathResult {
+    /// New items are an append to the current queue
+    AppendOnly { new_items: Vec<PlaybackItem> },
+    /// Items were deleted from the end
+    DeleteFromEnd { delete_ids: Vec<u32> },
+    /// No fast path possible - need full LCS sync
+    NeedFullSync,
 }
 
 impl OpenHomeQueue {
@@ -191,6 +203,7 @@ impl OpenHomeQueue {
             info_client,
             product_client,
             metadata_cache: Mutex::new(HashMap::new()),
+            uri_by_id: Mutex::new(HashMap::new()),
             track_ids_cache: Arc::new(Mutex::new(TrackIdsCache::new())),
             current_track_id_cache: Arc::new(Mutex::new(CurrentTrackIdCache::new())),
             read_list_cache: Arc::new(Mutex::new(ReadListCache::new())),
@@ -229,6 +242,117 @@ impl OpenHomeQueue {
         self.track_ids_cache.lock().unwrap().invalidate();
         self.read_list_cache.lock().unwrap().invalidate();
         self.current_track_id_cache.lock().unwrap().invalidate();
+        self.uri_by_id.lock().unwrap().clear();
+    }
+
+    /// Tries to detect a simple append-only or delete-from-end pattern without ReadList.
+    ///
+    /// This is a fast path optimization that avoids the expensive ReadList calls when:
+    /// 1. New items are an append to existing queue (only inserts needed)
+    /// 2. Items were deleted from the end (only deletes needed)
+    ///
+    /// Returns `FastPathResult::NeedFullSync` if the pattern doesn't match or
+    /// if cache data is insufficient to verify.
+    fn try_fast_path(&self, new_items: &[PlaybackItem]) -> FastPathResult {
+        let current_ids = match self.track_ids() {
+            Ok(ids) => ids,
+            Err(e) => {
+                debug!(
+                    renderer = self.renderer_id.0.as_str(),
+                    error = %e,
+                    "try_fast_path: failed to get current IDs, falling back to full sync"
+                );
+                return FastPathResult::NeedFullSync;
+            }
+        };
+
+        let current_len = current_ids.len();
+        let new_len = new_items.len();
+
+        if new_len > current_len {
+            let prefix_matches = self.check_prefix_matches(&current_ids, &new_items[..current_len]);
+            if prefix_matches {
+                debug!(
+                    renderer = self.renderer_id.0.as_str(),
+                    current_len, new_len, "try_fast_path: detected append-only pattern"
+                );
+                return FastPathResult::AppendOnly {
+                    new_items: new_items[current_len..].to_vec(),
+                };
+            }
+        } else if new_len < current_len {
+            let prefix_matches = self.check_prefix_matches(&current_ids[..new_len], new_items);
+            if prefix_matches {
+                let delete_ids: Vec<u32> = current_ids[new_len..].to_vec();
+                debug!(
+                    renderer = self.renderer_id.0.as_str(),
+                    current_len,
+                    new_len,
+                    delete_count = delete_ids.len(),
+                    "try_fast_path: detected delete-from-end pattern"
+                );
+                return FastPathResult::DeleteFromEnd { delete_ids };
+            }
+        }
+
+        debug!(
+            renderer = self.renderer_id.0.as_str(),
+            current_len, new_len, "try_fast_path: no fast path detected, falling back to full sync"
+        );
+        FastPathResult::NeedFullSync
+    }
+
+    /// Checks if the prefix of the new items matches the current queue items.
+    /// Uses local metadata cache or falls back to URI comparison.
+    fn check_prefix_matches(&self, current_ids: &[u32], new_items: &[PlaybackItem]) -> bool {
+        if current_ids.len() != new_items.len() {
+            return false;
+        }
+
+        let metadata_cache = match self.metadata_cache.lock() {
+            Ok(cache) => cache,
+            Err(_) => return false,
+        };
+
+        let uri_cache = match self.uri_by_id.lock() {
+            Ok(cache) => cache,
+            Err(_) => return false,
+        };
+
+        for (idx, new_item) in new_items.iter().enumerate() {
+            let current_id = current_ids[idx];
+
+            // First check if we have cached metadata for this track_id that matches
+            if let Some(cached_metadata) = metadata_cache.get(&current_id) {
+                if let Some(cached) = cached_metadata {
+                    // Compare using title + artist as identity (for streams)
+                    if let Some(ref new_metadata) = new_item.metadata {
+                        let same_title = cached.title.as_ref() == new_metadata.title.as_ref();
+                        let same_artist = cached.artist.as_ref() == new_metadata.artist.as_ref();
+                        if same_title && same_artist {
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            // No metadata match - fall back to URI comparison using uri_by_id cache
+            if new_item.uri.is_empty() {
+                return false;
+            }
+
+            // Compare against cached URI for this track_id
+            if let Some(cached_uri) = uri_cache.get(&current_id) {
+                if cached_uri == &new_item.uri {
+                    continue;
+                }
+            }
+
+            // No match found - fall back to full sync
+            return false;
+        }
+
+        true
     }
 
     /// Met à jour les métadonnées d'un item de la queue à l'index spécifié.
@@ -250,7 +374,7 @@ impl OpenHomeQueue {
         metadata: Option<crate::model::TrackMetadata>,
     ) -> Result<(), ControlPointError> {
         let track_id = self.position_to_id(index)?;
-        self.cache_metadata(track_id, metadata);
+        self.cache_metadata(track_id, metadata, "");
         Ok(())
     }
 
@@ -260,8 +384,19 @@ impl OpenHomeQueue {
     /// chanson donc toute durée est acceptée.
     /// Pour les fichiers normaux (non-streams), les métadonnées sont acceptées telles quelles.
     /// Cette fonction est le SEUL point d'entrée pour modifier le cache.
-    fn cache_metadata(&self, track_id: u32, new_metadata: Option<crate::model::TrackMetadata>) {
+    fn cache_metadata(
+        &self,
+        track_id: u32,
+        new_metadata: Option<crate::model::TrackMetadata>,
+        uri: &str,
+    ) {
         let mut cache = self.metadata_cache.lock().unwrap();
+        let mut uri_cache = self.uri_by_id.lock().unwrap();
+
+        // Update URI cache
+        if !uri.is_empty() {
+            uri_cache.insert(track_id, uri.to_string());
+        }
 
         // Vérifier s'il y a déjà des métadonnées en cache
         if let Some(cached_meta) = cache.get(&track_id) {
@@ -366,7 +501,7 @@ impl OpenHomeQueue {
                 );
                 drop(cache); // Libérer le lock avant d'appeler cache_metadata
                              // Mettre en cache pour éviter les oscillations sur les flux radio
-                self.cache_metadata(entry.id, fresh.clone());
+                self.cache_metadata(entry.id, fresh.clone(), entry.uri());
                 fresh
             }
         };
@@ -397,7 +532,7 @@ impl OpenHomeQueue {
             .insert(after_id, &item.uri, &metadata_xml)?;
 
         // Enregistrer les métadonnées dans le cache
-        self.cache_metadata(new_id, item.metadata);
+        self.cache_metadata(new_id, item.metadata, &item.uri);
 
         Ok(new_id)
     }
@@ -409,32 +544,44 @@ impl OpenHomeQueue {
         &mut self,
         new_items: Vec<PlaybackItem>,
         playing_id: usize,
+        cancel_token: &Arc<AtomicBool>,
+        on_ready: &mut Option<Box<dyn FnOnce() + Send>>,
     ) -> Result<(), ControlPointError> {
-        // Get current track IDs from OpenHome
+        use std::sync::atomic::Ordering::SeqCst;
+
         let current_track_ids = self.track_ids()?;
 
-        // Delete everything except the currently playing item
-        // Using delete_id_if_exists() to handle cases where another control point
-        // may have already modified the playlist
         for &track_id in current_track_ids.iter().rev() {
+            if cancel_token.load(SeqCst) {
+                return Err(ControlPointError::SyncCancelled);
+            }
             if track_id as usize != playing_id {
                 self.playlist_client.delete_id_if_exists(track_id)?;
                 self.metadata_cache.lock().unwrap().remove(&track_id);
             }
         }
 
-        // Insert new items after the currently playing track
         let mut previous_id = playing_id as u32;
+        let mut first_insert_done = false;
         for item in new_items {
+            if cancel_token.load(SeqCst) {
+                return Err(ControlPointError::SyncCancelled);
+            }
             let metadata = build_metadata_xml(&item);
             let new_id = self
                 .playlist_client
                 .insert(previous_id, &item.uri, &metadata)?;
 
-            // Enregistrer les métadonnées dans le cache
-            self.cache_metadata(new_id, item.metadata);
+            self.cache_metadata(new_id, item.metadata, &item.uri);
 
             previous_id = new_id;
+
+            if !first_insert_done && on_ready.is_some() {
+                first_insert_done = true;
+                if let Some(f) = on_ready.take() {
+                    f();
+                }
+            }
         }
 
         debug!(
@@ -442,7 +589,6 @@ impl OpenHomeQueue {
             "Gentle sync completed: preserved playing track as first item (not in new playlist)"
         );
 
-        // Invalidate cache after playlist modifications
         self.invalidate_track_caches();
 
         Ok(())
@@ -454,8 +600,13 @@ impl OpenHomeQueue {
         old_ids: &[u32],
         keep_flags: &[bool],
         position_label: &str,
+        cancel_token: &Arc<AtomicBool>,
     ) -> Result<(), ControlPointError> {
+        use std::sync::atomic::Ordering::SeqCst;
         for (idx, &track_id) in old_ids.iter().enumerate().rev() {
+            if cancel_token.load(SeqCst) {
+                return Err(ControlPointError::SyncCancelled);
+            }
             if !keep_flags[idx] {
                 debug!(
                     renderer = self.renderer_id.0.as_str(),
@@ -480,8 +631,11 @@ impl OpenHomeQueue {
         keep_old_flags: &[bool],
         mut previous_id: u32,
         position_label: &str,
+        cancel_token: &Arc<AtomicBool>,
+        on_ready: &mut Option<Box<dyn FnOnce() + Send>>,
     ) -> Result<u32, ControlPointError> {
-        // Collect IDs of kept items (in order)
+        use std::sync::atomic::Ordering::SeqCst;
+
         let remaining_ids: Vec<u32> = old_ids
             .iter()
             .enumerate()
@@ -489,16 +643,18 @@ impl OpenHomeQueue {
             .collect();
 
         let mut remaining_idx = 0;
+        let mut first_insert_done = false;
 
-        // Rebuild section
         for (idx, item) in new_items.iter().enumerate() {
+            if cancel_token.load(SeqCst) {
+                return Err(ControlPointError::SyncCancelled);
+            }
             if keep_new_flags[idx] {
                 let existing_id = remaining_ids[remaining_idx];
                 remaining_idx += 1;
                 previous_id = existing_id;
 
-                // Mettre à jour les métadonnées de l'item existant conservé
-                self.cache_metadata(existing_id, item.metadata.clone());
+                self.cache_metadata(existing_id, item.metadata.clone(), &item.uri);
 
                 debug!(
                     renderer = self.renderer_id.0.as_str(),
@@ -513,8 +669,7 @@ impl OpenHomeQueue {
                     .playlist_client
                     .insert(previous_id, &item.uri, &metadata)?;
 
-                // Enregistrer les métadonnées du nouvel item
-                self.cache_metadata(new_id, item.metadata.clone());
+                self.cache_metadata(new_id, item.metadata.clone(), &item.uri);
 
                 debug!(
                     renderer = self.renderer_id.0.as_str(),
@@ -526,6 +681,13 @@ impl OpenHomeQueue {
                     new_id
                 );
                 previous_id = new_id;
+
+                if !first_insert_done && on_ready.is_some() {
+                    first_insert_done = true;
+                    if let Some(f) = on_ready.take() {
+                        f();
+                    }
+                }
             }
         }
 
@@ -542,6 +704,8 @@ impl OpenHomeQueue {
         pivot_id: usize,
         snapshot: &QueueSnapshot,
         current_track_ids: &[u32],
+        cancel_token: &Arc<AtomicBool>,
+        on_ready: &mut Option<Box<dyn FnOnce() + Send>>,
     ) -> Result<(), ControlPointError> {
         // Find the pivot index in our current state
         let pivot_idx = current_track_ids
@@ -570,10 +734,15 @@ impl OpenHomeQueue {
         let (keep_old_before, keep_new_before) = lcs_flags_optimized(&old_before, new_before);
 
         // Delete items marked for deletion in AFTER part (reverse order)
-        self.delete_marked_items(&old_ids_after, &keep_old_after, "AFTER pivot")?;
+        self.delete_marked_items(&old_ids_after, &keep_old_after, "AFTER pivot", cancel_token)?;
 
         // Delete items marked for deletion in BEFORE part (reverse order)
-        self.delete_marked_items(&old_ids_before, &keep_old_before, "BEFORE pivot")?;
+        self.delete_marked_items(
+            &old_ids_before,
+            &keep_old_before,
+            "BEFORE pivot",
+            cancel_token,
+        )?;
 
         // Rebuild the playlist: [BEFORE, PIVOT, AFTER]
         // Rebuild BEFORE part (we don't need the returned previous_id)
@@ -584,13 +753,19 @@ impl OpenHomeQueue {
             &keep_old_before,
             OPENHOME_PLAYLIST_HEAD_ID,
             "BEFORE pivot",
+            cancel_token,
+            on_ready,
         )?;
 
         // PIVOT keeps its ID and position - it's the anchor point
         let previous_id = pivot_id as u32;
 
         // Mettre à jour les métadonnées du pivot
-        self.cache_metadata(previous_id, new_items[pivot_idx_new].metadata.clone());
+        self.cache_metadata(
+            previous_id,
+            new_items[pivot_idx_new].metadata.clone(),
+            &new_items[pivot_idx_new].uri,
+        );
 
         debug!(
             renderer = self.renderer_id.0.as_str(),
@@ -609,6 +784,8 @@ impl OpenHomeQueue {
             &keep_old_after,
             previous_id,
             "AFTER pivot",
+            cancel_token,
+            on_ready,
         )?;
 
         debug!(
@@ -630,7 +807,11 @@ impl OpenHomeQueue {
         items: Vec<PlaybackItem>,
         snapshot: &QueueSnapshot,
         current_track_ids: &[u32],
+        cancel_token: &Arc<AtomicBool>,
+        on_ready: &mut Option<Box<dyn FnOnce() + Send>>,
     ) -> Result<(), ControlPointError> {
+        use std::sync::atomic::Ordering::SeqCst;
+
         debug!(
             renderer = self.renderer_id.0.as_str(),
             current_count = snapshot.items.len(),
@@ -656,32 +837,22 @@ impl OpenHomeQueue {
             "LCS computed: minimizing OpenHome playlist operations"
         );
 
-        // Get current playing track ID BEFORE any modifications
         let current_track_id = self.playlist_client.id().ok().filter(|&id| id != 0);
 
-        // Check if the currently playing track is in the new playlist
-        // If so, we should NOT use delete_all() - we must preserve it
         let current_track_in_new_playlist = current_track_id.and_then(|current_id| {
             items
                 .iter()
                 .position(|item| item.backend_id as u32 == current_id)
         });
 
-        // If we're replacing everything (keep=0), use delete_all() BUT only if
-        // there's no currently playing track, OR if the current track is not in the new playlist.
-        // If current track IS in new playlist, we must preserve it using insert/delete operations.
         if items_to_keep == 0 && items_to_delete > 0 {
             if current_track_in_new_playlist.is_some() {
-                // Current track is in new playlist - use insert/delete instead of delete_all
-                // to preserve playback
                 debug!(
                     renderer = self.renderer_id.0.as_str(),
                     current_track_in_playlist = true,
                     "Preserving currently playing track - using insert/delete instead of delete_all"
                 );
-                // Fall through to selective deletion below
             } else {
-                // No current track or not in new playlist - safe to use delete_all
                 debug!(
                     renderer = self.renderer_id.0.as_str(),
                     "Using delete_all() for complete replacement (safe - no current track or not in new playlist)"
@@ -690,19 +861,18 @@ impl OpenHomeQueue {
                 self.metadata_cache.lock().unwrap().clear();
             }
         } else {
-            // Selective deletion when keeping some items
             for idx in (0..current_track_ids.len()).rev() {
+                if cancel_token.load(SeqCst) {
+                    return Err(ControlPointError::SyncCancelled);
+                }
                 if !keep_current[idx] {
                     let track_id = current_track_ids[idx];
-                    // Use delete_id_if_exists() to handle cases where another control point
-                    // may have already modified the playlist
                     self.playlist_client.delete_id_if_exists(track_id)?;
                     self.metadata_cache.lock().unwrap().remove(&track_id);
                 }
             }
         }
 
-        // Rebuild by inserting new items
         let remaining_ids: Vec<u32> = current_track_ids
             .iter()
             .enumerate()
@@ -717,8 +887,12 @@ impl OpenHomeQueue {
 
         let mut remaining_idx = 0usize;
         let mut previous_id = OPENHOME_PLAYLIST_HEAD_ID;
+        let mut first_insert_done = false;
 
         for (idx, item) in items.into_iter().enumerate() {
+            if cancel_token.load(SeqCst) {
+                return Err(ControlPointError::SyncCancelled);
+            }
             if keep_desired[idx] {
                 if remaining_idx >= remaining_ids.len() {
                     return Err(ControlPointError::OpenHomeError(format!(
@@ -729,19 +903,23 @@ impl OpenHomeQueue {
                 remaining_idx += 1;
                 previous_id = existing_id;
 
-                // Mettre à jour les métadonnées de l'item existant conservé
-                // La fonction cache_metadata gère la protection contre la diminution de durée
-                self.cache_metadata(existing_id, item.metadata);
+                self.cache_metadata(existing_id, item.metadata, &item.uri);
             } else {
                 let metadata = build_metadata_xml(&item);
                 let new_id = self
                     .playlist_client
                     .insert(previous_id, &item.uri, &metadata)?;
 
-                // Enregistrer les métadonnées du nouvel item
-                self.cache_metadata(new_id, item.metadata);
+                self.cache_metadata(new_id, item.metadata, &item.uri);
 
                 previous_id = new_id;
+
+                if !first_insert_done && on_ready.is_some() {
+                    first_insert_done = true;
+                    if let Some(f) = on_ready.take() {
+                        f();
+                    }
+                }
             }
         }
 
@@ -751,7 +929,6 @@ impl OpenHomeQueue {
             )));
         }
 
-        // Invalidate cache after playlist modifications
         self.invalidate_track_caches();
 
         Ok(())
@@ -1124,7 +1301,7 @@ impl QueueBackend for OpenHomeQueue {
                 .insert(previous_id, &item.uri, &metadata)?;
 
             // Enregistrer les métadonnées dans le cache
-            self.cache_metadata(new_id, item.metadata);
+            self.cache_metadata(new_id, item.metadata, &item.uri);
 
             previous_id = new_id;
         }
@@ -1135,10 +1312,20 @@ impl QueueBackend for OpenHomeQueue {
         Ok(())
     }
 
-    fn sync_queue(&mut self, items: Vec<PlaybackItem>) -> Result<(), ControlPointError> {
+    fn sync_queue(
+        &mut self,
+        items: Vec<PlaybackItem>,
+        cancel_token: &Arc<AtomicBool>,
+        mut on_ready: Option<Box<dyn FnOnce() + Send>>,
+    ) -> Result<(), ControlPointError> {
+        use std::sync::atomic::Ordering::SeqCst;
+
         self.ensure_playlist_source_selected()?;
 
-        // DIAGNOSTIC: Log current track state before any modifications
+        if cancel_token.load(SeqCst) {
+            return Err(ControlPointError::SyncCancelled);
+        }
+
         let pre_current_track = self.playlist_client.id().ok();
         tracing::warn!(
             renderer = self.renderer_id.0.as_str(),
@@ -1154,10 +1341,8 @@ impl QueueBackend for OpenHomeQueue {
             );
             self.playlist_client.delete_all()?;
             self.metadata_cache.lock().unwrap().clear();
-            // Invalidate caches after delete_all (clears queue and current track)
             self.invalidate_all_caches();
 
-            // DIAGNOSTIC: Log state after delete_all
             let post_current_track = self.playlist_client.id().ok();
             tracing::warn!(
                 renderer = self.renderer_id.0.as_str(),
@@ -1167,9 +1352,58 @@ impl QueueBackend for OpenHomeQueue {
             return Ok(());
         }
 
-        // Synchronize local state with the actual OpenHome playlist before computing
-        // differences. Without this, any drift between our cache and the renderer
-        // (e.g., manual edits from another control point) would keep the stale items.
+        match self.try_fast_path(&items) {
+            FastPathResult::AppendOnly { new_items } => {
+                debug!(
+                    renderer = self.renderer_id.0.as_str(),
+                    new_items_count = new_items.len(),
+                    "sync_queue: fast path - append-only detected"
+                );
+                let current_ids = self.track_ids()?;
+                let mut after_id = current_ids
+                    .last()
+                    .copied()
+                    .unwrap_or(OPENHOME_PLAYLIST_HEAD_ID);
+                let mut uri_cache = self.uri_by_id.lock().unwrap();
+                for item in &new_items {
+                    if cancel_token.load(SeqCst) {
+                        return Err(ControlPointError::SyncCancelled);
+                    }
+                    let metadata = build_metadata_xml(item);
+                    let uri = item.uri.as_str();
+                    let metadata_xml = metadata.as_str();
+                    after_id = self.playlist_client.insert(after_id, uri, metadata_xml)?;
+                    if !item.uri.is_empty() {
+                        uri_cache.insert(after_id, item.uri.clone());
+                    }
+                }
+                drop(uri_cache);
+                self.invalidate_track_caches();
+                return Ok(());
+            }
+            FastPathResult::DeleteFromEnd { delete_ids } => {
+                debug!(
+                    renderer = self.renderer_id.0.as_str(),
+                    delete_count = delete_ids.len(),
+                    "sync_queue: fast path - delete-from-end detected"
+                );
+                for id in delete_ids.iter().rev() {
+                    if cancel_token.load(SeqCst) {
+                        return Err(ControlPointError::SyncCancelled);
+                    }
+                    self.playlist_client.delete_id(*id)?;
+                }
+                self.invalidate_all_caches();
+                return Ok(());
+            }
+            FastPathResult::NeedFullSync => {
+                debug!(
+                    renderer = self.renderer_id.0.as_str(),
+                    "sync_queue: fast path not applicable, proceeding with full sync"
+                );
+            }
+        }
+
         let snapshot = self.queue_snapshot()?;
 
         debug!(
@@ -1180,9 +1414,6 @@ impl QueueBackend for OpenHomeQueue {
             "sync_queue: snapshot vs new items comparison"
         );
 
-        // Note: current_index may point to an index that doesn't exist in items
-        // if the OpenHome renderer is in an inconsistent state (e.g., IdArray returns
-        // IDs but ReadList returns empty TrackList). We must bounds-check here.
         let playing_info = snapshot.current_index.and_then(|idx| {
             if idx < snapshot.items.len() {
                 Some((
@@ -1209,8 +1440,14 @@ impl QueueBackend for OpenHomeQueue {
             "OpenHome playlist state"
         );
 
+        let has_pivot = playing_info.is_some();
+        if has_pivot {
+            if let Some(f) = on_ready.take() {
+                f();
+            }
+        }
+
         if let Some((playing_idx, playing_id, playing_uri, playing_didl_id)) = playing_info {
-            // Find if the currently playing item is in the new playlist (by URI first, then by didl_id)
             let new_playing_idx = items
                 .iter()
                 .position(|item| item.uri == playing_uri)
@@ -1230,8 +1467,6 @@ impl QueueBackend for OpenHomeQueue {
             );
 
             if let Some(pivot_idx) = new_playing_idx {
-                // CASE 2: Currently playing item IS in the new playlist
-                // Use gentle double-LCS strategy: preserve the pivot and sync before/after separately
                 debug!(
                     renderer = self.renderer_id.0.as_str(),
                     playing_idx,
@@ -1248,22 +1483,24 @@ impl QueueBackend for OpenHomeQueue {
                     playing_id,
                     &snapshot,
                     &current_ids_for_pivot,
+                    cancel_token,
+                    &mut on_ready,
                 )?;
             } else {
-                // CASE 1: Currently playing item NOT in the new playlist
-                // Keep it as first item and append the new playlist after it
                 debug!(
                     renderer = self.renderer_id.0.as_str(),
                     playing_idx,
                     "Gentle sync: currently playing item not in new playlist, preserving as first item"
                 );
 
-                self.replace_queue_preserve_current(items, playing_id)?;
+                self.replace_queue_preserve_current(
+                    items,
+                    playing_id,
+                    cancel_token,
+                    &mut on_ready,
+                )?;
             }
         } else {
-            // No currently playing item or can't determine it - use standard LCS
-            // BUT first check if this is because the OpenHome device returned empty playlist
-            // This could cause the queue to be cleared incorrectly
             if snapshot.items.is_empty() && !items.is_empty() {
                 tracing::warn!(
                     renderer = self.renderer_id.0.as_str(),
@@ -1271,8 +1508,6 @@ impl QueueBackend for OpenHomeQueue {
                     new_items = items.len(),
                     "OpenHome playlist appears empty - possible stale cache or device issue, NOT clearing queue"
                 );
-                // Don't call replace_queue_standard_lcs with empty snapshot - it would clear our queue
-                // Instead, just add the new items without deleting existing ones
                 return self.enqueue_items(items, crate::queue::EnqueueMode::AppendToEnd);
             }
 
@@ -1282,10 +1517,15 @@ impl QueueBackend for OpenHomeQueue {
             );
             let current_ids_for_lcs: Vec<u32> =
                 snapshot.items.iter().map(|i| i.backend_id as u32).collect();
-            self.replace_queue_standard_lcs(items, &snapshot, &current_ids_for_lcs)?;
+            self.replace_queue_standard_lcs(
+                items,
+                &snapshot,
+                &current_ids_for_lcs,
+                cancel_token,
+                &mut on_ready,
+            )?;
         }
 
-        // DIAGNOSTIC: Log state after sync completes
         let post_current_track = self.playlist_client.id().ok();
         let post_ids = self.track_ids();
         tracing::warn!(
@@ -1344,7 +1584,8 @@ impl QueueBackend for OpenHomeQueue {
 
         // Mettre à jour le cache avec les nouvelles métadonnées
         self.metadata_cache.lock().unwrap().remove(&track_id);
-        self.cache_metadata(new_id, item.metadata);
+        self.uri_by_id.lock().unwrap().remove(&track_id);
+        self.cache_metadata(new_id, item.metadata, &item.uri);
 
         if ci == Some(index) {
             self.playlist_client.seek_id(new_id)?;
@@ -1503,6 +1744,6 @@ impl QueueFromRendererInfo for OpenHomeQueue {
     }
 
     fn to_backend(self) -> MusicQueue {
-        MusicQueue::OpenHome(self)
+        MusicQueue::from_openhome(self)
     }
 }
