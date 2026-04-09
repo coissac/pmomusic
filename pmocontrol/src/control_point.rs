@@ -13,7 +13,7 @@ use tracing::{debug, error, info, warn};
 use crate::discovery::manager::UDNRegistry;
 use crate::errors::ControlPointError;
 use crate::events::{MediaServerEventBus, RendererEventBus};
-use crate::media_server::{MediaBrowser, MusicServer, playback_item_from_entry};
+use crate::media_server::{playback_item_from_entry, MediaBrowser, MusicServer};
 use crate::media_server_events::spawn_media_server_event_runtime;
 use crate::model::{MediaServerEvent, RendererEvent};
 use crate::model::{PlaybackState, TrackMetadata};
@@ -147,51 +147,52 @@ impl ControlPoint {
         let udn_cache_for_mdns = Arc::clone(&udn_cache);
         thread::spawn(move || {
             use crate::discovery::ChromecastDiscoveryManager;
-            use futures_util::StreamExt;
+            use mdns_sd::{ServiceDaemon, ServiceEvent};
 
-            // Créer le gestionnaire de découverte UPNP
             let mut discovery_manager =
                 ChromecastDiscoveryManager::new(registry_for_mdns, udn_cache_for_mdns);
 
             debug!("Starting mDNS discovery thread for Chromecast devices");
 
-            const SERVICE_NAME: &str = "_googlecast._tcp.local";
+            const SERVICE_TYPE: &str = "_googlecast._tcp.local.";
 
-            // Run async discovery in a blocking task
-            async_std::task::block_on(async {
-                // Create mDNS discovery stream with 15 second query interval
-                // (shorter interval for faster initial discovery)
-                match mdns::discover::all(SERVICE_NAME, Duration::from_secs(15)) {
-                    Ok(discovery) => {
-                        let stream = discovery.listen();
-                        futures_util::pin_mut!(stream);
-
-                        debug!("mDNS discovery stream started for Chromecast devices");
-
-                        // Listen to mDNS responses
-                        while let Some(result) = stream.next().await {
-                            match result {
-                                Ok(response) => {
-                                    debug!(
-                                        "Received mDNS response with {} records",
-                                        response.records().count()
-                                    );
-
-                                    discovery_manager.handle_mdns_response(response);
-                                }
-                                Err(e) => {
-                                    warn!("mDNS discovery error: {}", e);
-                                }
-                            }
-                        }
-
-                        warn!("mDNS discovery stream ended unexpectedly");
-                    }
-                    Err(e) => {
-                        error!("Failed to start mDNS discovery: {}", e);
-                    }
+            let daemon = match ServiceDaemon::new() {
+                Ok(d) => d,
+                Err(e) => {
+                    error!("Failed to create mDNS daemon: {}", e);
+                    return;
                 }
-            });
+            };
+
+            let receiver = match daemon.browse(SERVICE_TYPE) {
+                Ok(r) => r,
+                Err(e) => {
+                    error!("Failed to start mDNS browse for {}: {}", SERVICE_TYPE, e);
+                    return;
+                }
+            };
+
+            debug!("mDNS discovery started for Chromecast devices");
+
+            while let Ok(event) = receiver.recv() {
+                match event {
+                    ServiceEvent::ServiceResolved(info) => {
+                        debug!(
+                            fullname = info.get_fullname(),
+                            host = info.get_hostname(),
+                            port = info.get_port(),
+                            "mDNS Chromecast service resolved"
+                        );
+                        discovery_manager.handle_service_resolved(&info);
+                    }
+                    ServiceEvent::ServiceRemoved(_service_type, fullname) => {
+                        debug!(fullname = %fullname, "mDNS Chromecast service removed");
+                    }
+                    _ => {}
+                }
+            }
+
+            warn!("mDNS discovery receiver closed");
         });
 
         // Note: Renderer polling is now handled by each MusicRenderer's own watcher thread.
@@ -1169,24 +1170,21 @@ impl ControlPoint {
             binding.auto_play_on_refresh = auto_play;
             renderer.set_playlist_binding(Some(binding));
 
-            let callback: Option<Box<dyn FnOnce(&DeviceId) -> Result<(), ControlPointError> + Send + 'static>> =
-                if auto_play {
-                    let reg = Arc::clone(&self.registry);
-                    Some(Box::new(move |rid: &DeviceId| {
-                        let renderer = reg.read().unwrap().get_renderer(rid).ok_or_else(|| 
-                            ControlPointError::ControlPoint(format!("Renderer {} not found", rid.0))
-                        )?;
-                        renderer.play_current_from_queue()
-                    }))
-                } else {
-                    None
-                };
-            let _ = schedule_queue_refresh_for(
-                &self.registry,
-                renderer_id,
-                &self.event_bus,
-                callback,
-            );
+            let callback: Option<
+                Box<dyn FnOnce(&DeviceId) -> Result<(), ControlPointError> + Send + 'static>,
+            > = if auto_play {
+                let reg = Arc::clone(&self.registry);
+                Some(Box::new(move |rid: &DeviceId| {
+                    let renderer = reg.read().unwrap().get_renderer(rid).ok_or_else(|| {
+                        ControlPointError::ControlPoint(format!("Renderer {} not found", rid.0))
+                    })?;
+                    renderer.play_current_from_queue()
+                }))
+            } else {
+                None
+            };
+            let _ =
+                schedule_queue_refresh_for(&self.registry, renderer_id, &self.event_bus, callback);
             return Ok(());
         }
 
@@ -1240,22 +1238,23 @@ impl ControlPoint {
         // Note: BindingChanged event is emitted automatically by MusicRenderer::set_playlist_binding()
 
         // For initial attach with auto_play, force playback start (don't check if idle)
-        let callback: Option<Box<dyn FnOnce(&DeviceId) -> Result<(), ControlPointError> + Send + 'static>> =
-            if auto_play {
-                let reg = Arc::clone(&self.registry);
-                Some(Box::new(move |rid: &DeviceId| {
-                    debug!(
-                        renderer = rid.0.as_str(),
-                        "Attach callback: forcing playback start (not checking if idle)"
-                    );
-                    let renderer = reg.read().unwrap().get_renderer(rid).ok_or_else(|| 
-                        ControlPointError::ControlPoint(format!("Renderer {} not found", rid.0))
-                    )?;
-                    renderer.play_current_from_queue()
-                }))
-            } else {
-                None
-            };
+        let callback: Option<
+            Box<dyn FnOnce(&DeviceId) -> Result<(), ControlPointError> + Send + 'static>,
+        > = if auto_play {
+            let reg = Arc::clone(&self.registry);
+            Some(Box::new(move |rid: &DeviceId| {
+                debug!(
+                    renderer = rid.0.as_str(),
+                    "Attach callback: forcing playback start (not checking if idle)"
+                );
+                let renderer = reg.read().unwrap().get_renderer(rid).ok_or_else(|| {
+                    ControlPointError::ControlPoint(format!("Renderer {} not found", rid.0))
+                })?;
+                renderer.play_current_from_queue()
+            }))
+        } else {
+            None
+        };
 
         let _ = schedule_queue_refresh_for(&self.registry, renderer_id, &self.event_bus, callback);
         Ok(())
@@ -1806,7 +1805,9 @@ fn schedule_queue_refresh_for(
     registry: &Arc<RwLock<DeviceRegistry>>,
     renderer_id: &DeviceId,
     event_bus: &RendererEventBus,
-    after_refresh: Option<Box<dyn FnOnce(&DeviceId) -> Result<(), ControlPointError> + Send + 'static>>,
+    after_refresh: Option<
+        Box<dyn FnOnce(&DeviceId) -> Result<(), ControlPointError> + Send + 'static>,
+    >,
 ) -> SyncScheduleOutcome {
     // Step 1: Get renderer from registry
     let renderer = {
@@ -1895,7 +1896,9 @@ fn schedule_queue_refresh_for(
         };
         match music_server {
             Some(s) => fetch_queue_items_for(&s, &container_id_clone),
-            None => Err(ControlPointError::MediaServerError("Server not found".to_string())),
+            None => Err(ControlPointError::MediaServerError(
+                "Server not found".to_string(),
+            )),
         }
     });
 

@@ -402,7 +402,7 @@ unsafe fn setup_metadata(
     use libflac_sys::*;
 
     // Create a Vorbis Comment block
-    let meta = FLAC__metadata_object_new(FLAC__METADATA_TYPE_VORBIS_COMMENT);
+    let meta = unsafe { FLAC__metadata_object_new(FLAC__METADATA_TYPE_VORBIS_COMMENT) };
     if meta.is_null() {
         return Err(FlacError::LibFlacInit(
             "Failed to create metadata block".into(),
@@ -420,12 +420,14 @@ unsafe fn setup_metadata(
             FlacError::LibFlacInit("Failed to create CString for field value".into())
         })?;
 
-        let mut entry: FLAC__StreamMetadata_VorbisComment_Entry = std::mem::zeroed();
-        let success = FLAC__metadata_object_vorbiscomment_entry_from_name_value_pair(
-            &mut entry as *mut _,
-            c_field_name.as_ptr(),
-            c_value.as_ptr(),
-        );
+        let mut entry: FLAC__StreamMetadata_VorbisComment_Entry = unsafe { std::mem::zeroed() };
+        let success = unsafe {
+            FLAC__metadata_object_vorbiscomment_entry_from_name_value_pair(
+                &mut entry as *mut _,
+                c_field_name.as_ptr(),
+                c_value.as_ptr(),
+            )
+        };
 
         if success == 0 {
             return Err(FlacError::LibFlacInit(format!(
@@ -435,7 +437,7 @@ unsafe fn setup_metadata(
         }
 
         let append_success =
-            FLAC__metadata_object_vorbiscomment_append_comment(meta, entry, 0 /* copy */);
+            unsafe { FLAC__metadata_object_vorbiscomment_append_comment(meta, entry, 0 /* copy */) };
 
         if append_success == 0 {
             return Err(FlacError::LibFlacInit(format!(
@@ -476,7 +478,7 @@ unsafe fn setup_metadata(
 
     // Set the metadata on the encoder
     let mut metadata_array = [meta];
-    let set_success = FLAC__stream_encoder_set_metadata(encoder, metadata_array.as_mut_ptr(), 1);
+    let set_success = unsafe { FLAC__stream_encoder_set_metadata(encoder, metadata_array.as_mut_ptr(), 1) };
 
     if set_success == 0 {
         return Err(FlacError::LibFlacInit(
@@ -666,8 +668,8 @@ unsafe extern "C" fn write_callback(
     _current_frame: u32,
     client_data: *mut c_void,
 ) -> libflac_sys::FLAC__StreamEncoderWriteStatus {
-    let state = &mut *(client_data as *mut EncoderClientState);
-    let slice = std::slice::from_raw_parts(buffer, bytes);
+    let state = unsafe { &mut *(client_data as *mut EncoderClientState) };
+    let slice = unsafe { std::slice::from_raw_parts(buffer, bytes) };
     match state.tx.blocking_send(Ok(slice.to_vec())) {
         Ok(_) => libflac_sys::FLAC__STREAM_ENCODER_WRITE_STATUS_OK,
         Err(_) => {
