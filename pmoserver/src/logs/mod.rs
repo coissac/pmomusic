@@ -273,13 +273,13 @@ pub fn init_logging() -> LogState {
         Ok(value) => {
             let trimmed = value.trim();
             if let Some(level) = string_to_level(trimmed) {
-                let filter =
-                    EnvFilter::try_new(trimmed).unwrap_or_else(|_| EnvFilter::new("trace"));
+                let filter = build_filter_with_noise_suppressions(trimmed);
                 (filter, level, format!("RUST_LOG ({})", trimmed))
             } else {
+                let filter = build_filter_with_noise_suppressions(trimmed);
                 match EnvFilter::try_new(trimmed) {
-                    Ok(filter) => {
-                        let level_hint = filter
+                    Ok(raw) => {
+                        let level_hint = raw
                             .max_level_hint()
                             .and_then(levelfilter_to_level)
                             .unwrap_or(Level::TRACE);
@@ -295,7 +295,7 @@ pub fn init_logging() -> LogState {
                             .ok()
                             .and_then(|cfg| string_to_level(cfg.trim()))
                             .unwrap_or(Level::TRACE);
-                        let filter = EnvFilter::new(level_to_string(cfg_level));
+                        let filter = build_filter_with_noise_suppressions(&level_to_string(cfg_level));
                         (filter, cfg_level, "config".to_string())
                     }
                 }
@@ -307,7 +307,7 @@ pub fn init_logging() -> LogState {
                 .ok()
                 .and_then(|cfg| string_to_level(cfg.trim()))
                 .unwrap_or(Level::TRACE);
-            let filter = EnvFilter::new(level_to_string(cfg_level));
+            let filter = build_filter_with_noise_suppressions(&level_to_string(cfg_level));
             (filter, cfg_level, "config".to_string())
         }
     };
@@ -444,6 +444,27 @@ pub async fn log_setup_post(
         }),
     )
         .into_response()
+}
+
+/// Construit un `EnvFilter` en ajoutant les suppressions de bruit connues
+/// si la directive correspondante n'est pas déjà présente dans `base`.
+fn build_filter_with_noise_suppressions(base: &str) -> EnvFilter {
+    const NOISE_FILTERS: &[(&str, &str)] = &[];
+
+    let mut directives = base.to_string();
+    for (prefix, directive) in NOISE_FILTERS {
+        // N'ajouter que si l'utilisateur n'a pas déjà configuré cette cible
+        let already_set = base.split(',').any(|part| {
+            let part = part.trim();
+            part == *prefix || part.starts_with(&format!("{}=", prefix))
+        });
+        if !already_set {
+            directives.push(',');
+            directives.push_str(directive);
+        }
+    }
+
+    EnvFilter::try_new(&directives).unwrap_or_else(|_| EnvFilter::new(base))
 }
 
 fn string_to_level(s: &str) -> Option<Level> {

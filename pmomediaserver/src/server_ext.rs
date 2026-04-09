@@ -14,23 +14,6 @@ use std::sync::Arc;
 // Réexporter le trait de base de pmosource
 pub use pmosource::MusicSourceExt;
 
-/// Récupère le registre global de sources (délègue à pmosource)
-///
-/// # Examples
-///
-/// ```ignore
-/// use pmomediaserver::server_ext::get_source_registry;
-///
-/// let sources = pmosource::api::list_all_sources().await;
-/// ```
-#[deprecated(
-    since = "0.2.0",
-    note = "Use pmosource::api::list_all_sources() directly"
-)]
-pub async fn get_source_registry() -> Vec<Arc<dyn MusicSource>> {
-    pmosource::api::list_all_sources().await
-}
-
 /// Trait d'extension pour le serveur MediaServer UPnP
 ///
 /// Ce trait ajoute des méthodes spécifiques au MediaServer UPnP.

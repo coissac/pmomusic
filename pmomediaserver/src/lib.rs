@@ -83,7 +83,7 @@ pub mod paradise_streaming;
 pub use content_handler::ContentHandler;
 pub use device::MEDIA_SERVER;
 pub use device_ext::MediaServerDeviceExt;
-pub use server_ext::{MediaServerExt, MusicSourceExt, get_source_registry};
+pub use server_ext::{MediaServerExt, MusicSourceExt};
 pub use source_registry::SourceRegistry;
 pub use sources::{SourceInitError, SourcesExt};
 

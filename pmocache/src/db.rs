@@ -203,6 +203,14 @@ impl DB {
             [],
         )?;
 
+        // Index sur metadata(key, value) pour rendre get_pk_by_origin_url efficace.
+        // Sans cet index, la requête WHERE key = 'origin_url' AND value = ? fait
+        // un full scan car la PRIMARY KEY est (pk, key).
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_metadata_key_value ON metadata (key, value)",
+            [],
+        )?;
+
         // LAZY PK SUPPORT: Index sur lazy_pk pour lookups rapides (lazy_pk → real pk)
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_asset_lazy_pk ON asset (lazy_pk)",
