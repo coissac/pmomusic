@@ -20,12 +20,14 @@ const isStopped = computed(
         state.value?.transport_state === "NO_MEDIA",
 );
 
+const rendererName = computed(() => state.value?.friendly_name ?? props.rendererId);
+
 async function handlePlay() {
     try {
         await resumeOrPlayFromQueue(props.rendererId);
     } catch (error) {
         uiStore.notifyError(
-            `Impossible de démarrer la lecture: ${error instanceof Error ? error.message : "Erreur inconnue"}`,
+            `« ${rendererName.value} » — impossible de démarrer la lecture: ${error instanceof Error ? error.message : "Erreur inconnue"}`,
         );
     }
 }
@@ -35,7 +37,7 @@ async function handlePause() {
         await pause(props.rendererId);
     } catch (error) {
         uiStore.notifyError(
-            `Impossible de mettre en pause: ${error instanceof Error ? error.message : "Erreur inconnue"}`,
+            `« ${rendererName.value} » — impossible de mettre en pause: ${error instanceof Error ? error.message : "Erreur inconnue"}`,
         );
     }
 }
@@ -45,7 +47,7 @@ async function handleStop() {
         await stop(props.rendererId);
     } catch (error) {
         uiStore.notifyError(
-            `Impossible d'arrêter la lecture: ${error instanceof Error ? error.message : "Erreur inconnue"}`,
+            `« ${rendererName.value} » — impossible d'arrêter la lecture: ${error instanceof Error ? error.message : "Erreur inconnue"}`,
         );
     }
 }
@@ -55,7 +57,7 @@ async function handleNext() {
         await next(props.rendererId);
     } catch (error) {
         uiStore.notifyError(
-            `Impossible de passer au morceau suivant: ${error instanceof Error ? error.message : "Erreur inconnue"}`,
+            `« ${rendererName.value} » — impossible de passer au morceau suivant: ${error instanceof Error ? error.message : "Erreur inconnue"}`,
         );
     }
 }

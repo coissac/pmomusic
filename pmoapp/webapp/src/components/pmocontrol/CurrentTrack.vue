@@ -13,6 +13,7 @@ const props = defineProps<{
 const { state } = useRenderer(toRef(props, "rendererId"));
 const uiStore = useUIStore();
 const metadata = computed(() => state.value?.current_track);
+const rendererName = computed(() => state.value?.friendly_name ?? props.rendererId);
 const isSeeking = ref(false);
 const isDragging = ref(false);
 const dragProgress = ref(0);
@@ -149,7 +150,7 @@ function handleProgressBarMouseDown(event: MouseEvent) {
             await api.seekTo(props.rendererId, newPositionSeconds);
         } catch (error) {
             uiStore.notifyError(
-                `Impossible de seek: ${error instanceof Error ? error.message : "Erreur inconnue"}`,
+                `« ${rendererName.value} » — impossible de changer la position: ${error instanceof Error ? error.message : "Erreur inconnue"}`,
             );
             // En cas d'erreur, réinitialiser
             seekTargetMs.value = null;
@@ -188,7 +189,7 @@ async function handleProgressBarClick(event: MouseEvent) {
         await api.seekTo(props.rendererId, newPositionSeconds);
     } catch (error) {
         uiStore.notifyError(
-            `Impossible de seek: ${error instanceof Error ? error.message : "Erreur inconnue"}`,
+            `« ${rendererName.value} » — impossible de changer la position: ${error instanceof Error ? error.message : "Erreur inconnue"}`,
         );
         // En cas d'erreur, réinitialiser
         seekTargetMs.value = null;
@@ -251,7 +252,7 @@ function handleOverlayProgressBarTouchStart(event: TouchEvent) {
             await api.seekTo(props.rendererId, newPositionSeconds);
         } catch (error) {
             uiStore.notifyError(
-                `Impossible de seek: ${error instanceof Error ? error.message : "Erreur inconnue"}`,
+                `« ${rendererName.value} » — impossible de changer la position: ${error instanceof Error ? error.message : "Erreur inconnue"}`,
             );
             seekTargetMs.value = null;
             dragProgress.value = 0;

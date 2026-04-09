@@ -342,7 +342,7 @@ async function fetchRenderers(force = false, retries = 2) {
   error.value = lastError?.message ?? "Erreur fetch renderers";
   
   // Notifier l'utilisateur en cas d'erreur finale
-  uiStore.notifyError("Impossible de rafraîchir la liste des renderers");
+  uiStore.notifyError("Impossible de rafraîchir la liste des lecteurs audio");
 }
 
 async function fetchRendererSnapshot(
@@ -383,7 +383,8 @@ async function fetchRendererSnapshot(
     snapshots.delete(rendererId);
     
     // Notifier l'utilisateur
-    uiStore.notifyError(`Impossible de récupérer l'état du renderer`);
+    const name = renderersCache.value.get(rendererId)?.friendly_name ?? rendererId;
+    uiStore.notifyError(`Impossible de récupérer l'état de « ${name} »`);
   } finally {
     // Toujours nettoyer le flag de chargement
     loadingIds.delete(rendererId);

@@ -19,6 +19,7 @@ const { renderer, state, queue, refresh } = useRenderer(
     toRef(props, "rendererId"),
 );
 const uiStore = useUIStore();
+const rendererName = computed(() => state.value?.friendly_name ?? props.rendererId);
 
 // Détection mobile portrait pour afficher le drawer au lieu de la colonne
 const isMobilePortrait = useMediaQuery(
@@ -59,7 +60,7 @@ async function handleQueueItemClick(item: QueueItem) {
             error,
         );
         uiStore.notifyError(
-            `Erreur: ${error instanceof Error ? error.message : "Impossible de sauter à cet item"}`,
+            `« ${rendererName.value} » — impossible de lire ce morceau: ${error instanceof Error ? error.message : "Erreur inconnue"}`,
         );
     }
 }
