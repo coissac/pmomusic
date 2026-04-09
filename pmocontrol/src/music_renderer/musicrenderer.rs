@@ -693,14 +693,32 @@ impl MusicRenderer {
                     self.set_playback_source(PlaybackSource::None);
                     self.clear_has_played_flag();
                 } else if self.is_playing_from_queue() {
-                    // Only auto-advance if we have actually seen a PLAYING state
-                    // since the track was started. This prevents auto-advance on
-                    // transient STOPPED states during track initialization.
-                    if self.check_and_clear_has_played_flag() {
-                        debug!(
-                            renderer = self.info.friendly_name(),
-                            "Renderer stopped after queue-driven playback; advancing"
-                        );
+                    let has_played = self.check_and_clear_has_played_flag();
+
+                    // ✅ CORRECTION BUG PRODUCTION: Garde fou contre latence DB
+                    // Si la base de données est saturée (mutex >400ms) on rate parfois l'événement PLAYING.
+                    // On autorise l'auto-avance si:
+                    //   1. On a bien vu PLAYING OU
+                    //   2. Le titre a été lancé depuis plus de 20 secondes
+                    let track_start = self.state.lock().unwrap().track_start_time;
+                    let elapsed = track_start
+                        .and_then(|t| t.elapsed().ok())
+                        .unwrap_or_default();
+                    let force_advance = elapsed.as_secs() > 20;
+
+                    if has_played || force_advance {
+                        if force_advance {
+                            debug!(
+                                renderer = self.info.friendly_name(),
+                                elapsed_sec = elapsed.as_secs(),
+                                "⚠️ On force l'auto-avance: on a raté l'événement PLAYING (latence DB)"
+                            );
+                        } else {
+                            debug!(
+                                renderer = self.info.friendly_name(),
+                                "Renderer stopped after queue-driven playback; advancing"
+                            );
+                        }
                         // Use catch_unwind to prevent panics in play_next_from_queue
                         // from poisoning the backend mutex
                         // Also add retry logic for transient errors from renderer
