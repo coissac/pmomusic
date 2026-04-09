@@ -1,11 +1,29 @@
+use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use pmoupnp::soap::{SoapEnvelope, build_soap_request, parse_soap_envelope};
+use pmoupnp::soap::{build_soap_request, parse_soap_envelope, SoapEnvelope};
 use tracing::{debug, trace, warn};
 use ureq::Agent;
 
 use crate::errors::ControlPointError;
+
+static SOAP_AGENT: OnceLock<Arc<Agent>> = OnceLock::new();
+
+fn get_soap_agent() -> Arc<Agent> {
+    SOAP_AGENT
+        .get_or_init(|| {
+            Arc::new(
+                Agent::config_builder()
+                    .http_status_as_error(false)
+                    .timeout_global(Some(Duration::from_secs(30)))
+                    .build()
+                    .into(),
+            )
+        })
+        .clone()
+}
 
 /// Result of a SOAP call:
 /// - HTTP status code
@@ -62,21 +80,20 @@ pub fn invoke_upnp_action_with_timeout(
 
     trace!(body = body_xml.as_str(), "SOAP request body");
 
-    let mut builder = Agent::config_builder();
-    builder = builder.http_status_as_error(false);
-    if let Some(duration) = timeout {
-        builder = builder.timeout_global(Some(duration));
-    }
+    let request = if let Some(duration) = timeout {
+        let config = Agent::config_builder()
+            .http_status_as_error(false)
+            .timeout_global(Some(duration))
+            .build();
+        let agent: Agent = config.into();
+        agent.post(control_url)
+    } else {
+        get_soap_agent().post(control_url)
+    };
 
-    let config = builder.build();
-    let agent: Agent = config.into();
-
-    // 3. SOAPAction header
     let soap_action_header = format!(r#""{}#{}""#, service_type, action);
 
-    // 4. HTTP POST
-    let mut response = agent
-        .post(control_url)
+    let mut response = request
         .header("Content-Type", r#"text/xml; charset="utf-8""#)
         .header("SOAPAction", &soap_action_header)
         .send(body_xml)

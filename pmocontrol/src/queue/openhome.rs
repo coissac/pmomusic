@@ -170,12 +170,24 @@ pub struct OpenHomeQueue {
     /// Permet de maintenir des métadonnées à jour même si le service OpenHome
     /// ne permet pas de les modifier directement.
     metadata_cache: Mutex<HashMap<u32, Option<crate::model::TrackMetadata>>>,
+    /// Cache URI by track ID for fast path matching
+    uri_by_id: Mutex<HashMap<u32, String>>,
     /// Cache for track IDs to avoid redundant IdArray SOAP calls
     track_ids_cache: Arc<Mutex<TrackIdsCache>>,
     /// Cache for current track ID to avoid redundant Id SOAP calls
     current_track_id_cache: Arc<Mutex<CurrentTrackIdCache>>,
     /// Cache for ReadList results (TTL 500ms) to avoid redundant SOAP calls
     read_list_cache: Arc<Mutex<ReadListCache>>,
+}
+
+/// Fast path result for queue sync optimization
+enum FastPathResult {
+    /// New items are an append to the current queue
+    AppendOnly { new_items: Vec<PlaybackItem> },
+    /// Items were deleted from the end
+    DeleteFromEnd { delete_ids: Vec<u32> },
+    /// No fast path possible - need full LCS sync
+    NeedFullSync,
 }
 
 impl OpenHomeQueue {
@@ -191,6 +203,7 @@ impl OpenHomeQueue {
             info_client,
             product_client,
             metadata_cache: Mutex::new(HashMap::new()),
+            uri_by_id: Mutex::new(HashMap::new()),
             track_ids_cache: Arc::new(Mutex::new(TrackIdsCache::new())),
             current_track_id_cache: Arc::new(Mutex::new(CurrentTrackIdCache::new())),
             read_list_cache: Arc::new(Mutex::new(ReadListCache::new())),
@@ -229,6 +242,117 @@ impl OpenHomeQueue {
         self.track_ids_cache.lock().unwrap().invalidate();
         self.read_list_cache.lock().unwrap().invalidate();
         self.current_track_id_cache.lock().unwrap().invalidate();
+        self.uri_by_id.lock().unwrap().clear();
+    }
+
+    /// Tries to detect a simple append-only or delete-from-end pattern without ReadList.
+    ///
+    /// This is a fast path optimization that avoids the expensive ReadList calls when:
+    /// 1. New items are an append to existing queue (only inserts needed)
+    /// 2. Items were deleted from the end (only deletes needed)
+    ///
+    /// Returns `FastPathResult::NeedFullSync` if the pattern doesn't match or
+    /// if cache data is insufficient to verify.
+    fn try_fast_path(&self, new_items: &[PlaybackItem]) -> FastPathResult {
+        let current_ids = match self.track_ids() {
+            Ok(ids) => ids,
+            Err(e) => {
+                debug!(
+                    renderer = self.renderer_id.0.as_str(),
+                    error = %e,
+                    "try_fast_path: failed to get current IDs, falling back to full sync"
+                );
+                return FastPathResult::NeedFullSync;
+            }
+        };
+
+        let current_len = current_ids.len();
+        let new_len = new_items.len();
+
+        if new_len > current_len {
+            let prefix_matches = self.check_prefix_matches(&current_ids, &new_items[..current_len]);
+            if prefix_matches {
+                debug!(
+                    renderer = self.renderer_id.0.as_str(),
+                    current_len, new_len, "try_fast_path: detected append-only pattern"
+                );
+                return FastPathResult::AppendOnly {
+                    new_items: new_items[current_len..].to_vec(),
+                };
+            }
+        } else if new_len < current_len {
+            let prefix_matches = self.check_prefix_matches(&current_ids[..new_len], new_items);
+            if prefix_matches {
+                let delete_ids: Vec<u32> = current_ids[new_len..].to_vec();
+                debug!(
+                    renderer = self.renderer_id.0.as_str(),
+                    current_len,
+                    new_len,
+                    delete_count = delete_ids.len(),
+                    "try_fast_path: detected delete-from-end pattern"
+                );
+                return FastPathResult::DeleteFromEnd { delete_ids };
+            }
+        }
+
+        debug!(
+            renderer = self.renderer_id.0.as_str(),
+            current_len, new_len, "try_fast_path: no fast path detected, falling back to full sync"
+        );
+        FastPathResult::NeedFullSync
+    }
+
+    /// Checks if the prefix of the new items matches the current queue items.
+    /// Uses local metadata cache or falls back to URI comparison.
+    fn check_prefix_matches(&self, current_ids: &[u32], new_items: &[PlaybackItem]) -> bool {
+        if current_ids.len() != new_items.len() {
+            return false;
+        }
+
+        let metadata_cache = match self.metadata_cache.lock() {
+            Ok(cache) => cache,
+            Err(_) => return false,
+        };
+
+        let uri_cache = match self.uri_by_id.lock() {
+            Ok(cache) => cache,
+            Err(_) => return false,
+        };
+
+        for (idx, new_item) in new_items.iter().enumerate() {
+            let current_id = current_ids[idx];
+
+            // First check if we have cached metadata for this track_id that matches
+            if let Some(cached_metadata) = metadata_cache.get(&current_id) {
+                if let Some(cached) = cached_metadata {
+                    // Compare using title + artist as identity (for streams)
+                    if let Some(ref new_metadata) = new_item.metadata {
+                        let same_title = cached.title.as_ref() == new_metadata.title.as_ref();
+                        let same_artist = cached.artist.as_ref() == new_metadata.artist.as_ref();
+                        if same_title && same_artist {
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            // No metadata match - fall back to URI comparison using uri_by_id cache
+            if new_item.uri.is_empty() {
+                return false;
+            }
+
+            // Compare against cached URI for this track_id
+            if let Some(cached_uri) = uri_cache.get(&current_id) {
+                if cached_uri == &new_item.uri {
+                    continue;
+                }
+            }
+
+            // No match found - fall back to full sync
+            return false;
+        }
+
+        true
     }
 
     /// Met à jour les métadonnées d'un item de la queue à l'index spécifié.
@@ -250,7 +374,7 @@ impl OpenHomeQueue {
         metadata: Option<crate::model::TrackMetadata>,
     ) -> Result<(), ControlPointError> {
         let track_id = self.position_to_id(index)?;
-        self.cache_metadata(track_id, metadata);
+        self.cache_metadata(track_id, metadata, "");
         Ok(())
     }
 
@@ -260,8 +384,19 @@ impl OpenHomeQueue {
     /// chanson donc toute durée est acceptée.
     /// Pour les fichiers normaux (non-streams), les métadonnées sont acceptées telles quelles.
     /// Cette fonction est le SEUL point d'entrée pour modifier le cache.
-    fn cache_metadata(&self, track_id: u32, new_metadata: Option<crate::model::TrackMetadata>) {
+    fn cache_metadata(
+        &self,
+        track_id: u32,
+        new_metadata: Option<crate::model::TrackMetadata>,
+        uri: &str,
+    ) {
         let mut cache = self.metadata_cache.lock().unwrap();
+        let mut uri_cache = self.uri_by_id.lock().unwrap();
+
+        // Update URI cache
+        if !uri.is_empty() {
+            uri_cache.insert(track_id, uri.to_string());
+        }
 
         // Vérifier s'il y a déjà des métadonnées en cache
         if let Some(cached_meta) = cache.get(&track_id) {
@@ -366,7 +501,7 @@ impl OpenHomeQueue {
                 );
                 drop(cache); // Libérer le lock avant d'appeler cache_metadata
                              // Mettre en cache pour éviter les oscillations sur les flux radio
-                self.cache_metadata(entry.id, fresh.clone());
+                self.cache_metadata(entry.id, fresh.clone(), entry.uri());
                 fresh
             }
         };
@@ -397,7 +532,7 @@ impl OpenHomeQueue {
             .insert(after_id, &item.uri, &metadata_xml)?;
 
         // Enregistrer les métadonnées dans le cache
-        self.cache_metadata(new_id, item.metadata);
+        self.cache_metadata(new_id, item.metadata, &item.uri);
 
         Ok(new_id)
     }
@@ -432,7 +567,7 @@ impl OpenHomeQueue {
                 .insert(previous_id, &item.uri, &metadata)?;
 
             // Enregistrer les métadonnées dans le cache
-            self.cache_metadata(new_id, item.metadata);
+            self.cache_metadata(new_id, item.metadata, &item.uri);
 
             previous_id = new_id;
         }
@@ -498,7 +633,7 @@ impl OpenHomeQueue {
                 previous_id = existing_id;
 
                 // Mettre à jour les métadonnées de l'item existant conservé
-                self.cache_metadata(existing_id, item.metadata.clone());
+                self.cache_metadata(existing_id, item.metadata.clone(), &item.uri);
 
                 debug!(
                     renderer = self.renderer_id.0.as_str(),
@@ -514,7 +649,7 @@ impl OpenHomeQueue {
                     .insert(previous_id, &item.uri, &metadata)?;
 
                 // Enregistrer les métadonnées du nouvel item
-                self.cache_metadata(new_id, item.metadata.clone());
+                self.cache_metadata(new_id, item.metadata.clone(), &item.uri);
 
                 debug!(
                     renderer = self.renderer_id.0.as_str(),
@@ -590,7 +725,11 @@ impl OpenHomeQueue {
         let previous_id = pivot_id as u32;
 
         // Mettre à jour les métadonnées du pivot
-        self.cache_metadata(previous_id, new_items[pivot_idx_new].metadata.clone());
+        self.cache_metadata(
+            previous_id,
+            new_items[pivot_idx_new].metadata.clone(),
+            &new_items[pivot_idx_new].uri,
+        );
 
         debug!(
             renderer = self.renderer_id.0.as_str(),
@@ -731,7 +870,7 @@ impl OpenHomeQueue {
 
                 // Mettre à jour les métadonnées de l'item existant conservé
                 // La fonction cache_metadata gère la protection contre la diminution de durée
-                self.cache_metadata(existing_id, item.metadata);
+                self.cache_metadata(existing_id, item.metadata, &item.uri);
             } else {
                 let metadata = build_metadata_xml(&item);
                 let new_id = self
@@ -739,7 +878,7 @@ impl OpenHomeQueue {
                     .insert(previous_id, &item.uri, &metadata)?;
 
                 // Enregistrer les métadonnées du nouvel item
-                self.cache_metadata(new_id, item.metadata);
+                self.cache_metadata(new_id, item.metadata, &item.uri);
 
                 previous_id = new_id;
             }
@@ -1124,7 +1263,7 @@ impl QueueBackend for OpenHomeQueue {
                 .insert(previous_id, &item.uri, &metadata)?;
 
             // Enregistrer les métadonnées dans le cache
-            self.cache_metadata(new_id, item.metadata);
+            self.cache_metadata(new_id, item.metadata, &item.uri);
 
             previous_id = new_id;
         }
@@ -1165,6 +1304,57 @@ impl QueueBackend for OpenHomeQueue {
                 "sync_queue: END - current track after delete_all (should be 0)"
             );
             return Ok(());
+        }
+
+        // Fast path: try to detect simple append-only or delete-from-end patterns
+        // without the expensive ReadList call that queue_snapshot() would trigger
+        match self.try_fast_path(&items) {
+            FastPathResult::AppendOnly { new_items } => {
+                debug!(
+                    renderer = self.renderer_id.0.as_str(),
+                    new_items_count = new_items.len(),
+                    "sync_queue: fast path - append-only detected"
+                );
+                // Insert new items at the end, using the returned new_id as after_id for next insert
+                // Start after the last existing track (cached, no SOAP call needed)
+                let current_ids = self.track_ids()?;
+                let mut after_id = current_ids.last().copied().unwrap_or(OPENHOME_PLAYLIST_HEAD_ID);
+                let mut uri_cache = self.uri_by_id.lock().unwrap();
+                for item in &new_items {
+                    let metadata = build_metadata_xml(item);
+                    let uri = item.uri.as_str();
+                    let metadata_xml = metadata.as_str();
+                    after_id = self.playlist_client.insert(after_id, uri, metadata_xml)?;
+                    // Update URI cache
+                    if !item.uri.is_empty() {
+                        uri_cache.insert(after_id, item.uri.clone());
+                    }
+                }
+                drop(uri_cache);
+                // Invalidate caches after inserts
+                self.invalidate_track_caches();
+                return Ok(());
+            }
+            FastPathResult::DeleteFromEnd { delete_ids } => {
+                debug!(
+                    renderer = self.renderer_id.0.as_str(),
+                    delete_count = delete_ids.len(),
+                    "sync_queue: fast path - delete-from-end detected"
+                );
+                // Delete items from the end
+                for id in delete_ids.iter().rev() {
+                    self.playlist_client.delete_id(*id)?;
+                }
+                // Invalidate caches after deletes
+                self.invalidate_all_caches();
+                return Ok(());
+            }
+            FastPathResult::NeedFullSync => {
+                debug!(
+                    renderer = self.renderer_id.0.as_str(),
+                    "sync_queue: fast path not applicable, proceeding with full sync"
+                );
+            }
         }
 
         // Synchronize local state with the actual OpenHome playlist before computing
@@ -1344,7 +1534,8 @@ impl QueueBackend for OpenHomeQueue {
 
         // Mettre à jour le cache avec les nouvelles métadonnées
         self.metadata_cache.lock().unwrap().remove(&track_id);
-        self.cache_metadata(new_id, item.metadata);
+        self.uri_by_id.lock().unwrap().remove(&track_id);
+        self.cache_metadata(new_id, item.metadata, &item.uri);
 
         if ci == Some(index) {
             self.playlist_client.seek_id(new_id)?;
