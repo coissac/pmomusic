@@ -27,10 +27,6 @@ const loadingIds = reactive(new Set<string>());
 const queueRefreshingIds = reactive(new Set<string>());
 const selectedRendererId = ref<string | null>(null);
 
-// Debounce pour les refetches queue_updated
-const queueUpdateDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const QUEUE_UPDATE_DEBOUNCE_MS = 300;
-
 // Cache des renderers (summary)
 const renderersCache = ref<Map<string, RendererSummary>>(new Map());
 const RENDERERS_CACHE_MS = 2000;
@@ -205,15 +201,10 @@ function ensureSSEInitialized() {
         snapshot.state.queue_len = event.queue_length;
         queueRefreshingIds.delete(rendererId);
         
-        // Annuler le timer précédent pour ce renderer
-        const existingTimer = queueUpdateDebounceTimers.get(rendererId);
-        if (existingTimer) clearTimeout(existingTimer);
-
-        // Programmer un seul fetch après stabilisation
-        queueUpdateDebounceTimers.set(rendererId, setTimeout(() => {
-            queueUpdateDebounceTimers.delete(rendererId);
-            void fetchRendererSnapshot(rendererId, { force: true });
-        }, QUEUE_UPDATE_DEBOUNCE_MS));
+        // Fetch queue items immediately when we get queue_updated
+        // The debounce was causing race conditions where queue_len was updated
+        // but items weren't fetched yet when user clicked play
+        void fetchRendererSnapshot(rendererId, { force: true });
         break;
 
       case "binding_changed":
@@ -448,6 +439,7 @@ async function resumeOrPlayFromQueue(id: string) {
     return play(id);
   }
 
+  // Check if queue has content
   if (
     ["STOPPED", "NO_MEDIA"].includes(state.transport_state) &&
     snapshot.queue.items.length > 0
