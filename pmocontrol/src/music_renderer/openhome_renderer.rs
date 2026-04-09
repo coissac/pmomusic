@@ -701,7 +701,7 @@ impl QueueBackend for OpenHomeRenderer {
 
         // Background worker: charge les métadonnées petit à petit sans bloquer personne
         let queue = self.queue.clone();
-        tokio::task::spawn_blocking(move || {
+        std::thread::spawn(move || {
             debug!("🔄 OpenHome: préchargement métadonnées queue en background");
             if let Ok(mut queue) = queue.lock() {
                 // On ne fait que les 10 prochains titres maintenant, le reste on s'en fout

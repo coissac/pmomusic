@@ -153,33 +153,9 @@ impl DB {
         };
 
         let conn = Connection::open(path)?;
-        conn.execute_batch(
-            "
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
-            PRAGMA cache_size = -32768;
-            PRAGMA temp_store = MEMORY;
-            PRAGMA mmap_size = 268435456;
-        ",
-        )?;
+        conn.execute("PRAGMA foreign_keys = ON", [])?;
 
-        // Index qui MANQUAIT sur les bases existantes:
-        // Ceci s'exécutera TOUT LE TEMPS, pas seulement à la création
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_metadata_key_value ON metadata (key, value)",
-            [],
-        )?;
-
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_asset_last_used ON asset (last_used DESC)",
-            [],
-        )?;
-
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_asset_hits ON asset (hits DESC)",
-            [],
-        )?;
-
+        // 1. CRÉATION DES TABLES EN PREMIER
         conn.execute(
             "CREATE TABLE IF NOT EXISTS asset (
                 pk TEXT PRIMARY KEY,
@@ -205,21 +181,30 @@ impl DB {
             [],
         )?;
 
-        // Créer un index sur la collection pour les requêtes rapides
+        // 2. Optimisations SQLite pour production
+        conn.execute_batch(
+            "
+            PRAGMA journal_mode = WAL;
+            PRAGMA synchronous = NORMAL;
+            PRAGMA cache_size = -32768;
+            PRAGMA temp_store = MEMORY;
+            PRAGMA mmap_size = 268435456;
+        ",
+        )?;
+
+        // 3. CRÉATION DES INDEX APRÈS LES TABLES
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_asset_collection
                              ON ASSET (collection)",
             [],
         )?;
 
-        // Créer un index composite pour optimiser la politique LRU (get_oldest)
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_asset_lru
                              ON asset (last_used ASC, hits ASC)",
             [],
         )?;
 
-        // Crée un index composite pour rendre unique les ids si défini dans une collection
         conn.execute(
             "CREATE UNIQUE INDEX
                              IF NOT EXISTS asset_collection_id_unique
@@ -228,17 +213,29 @@ impl DB {
             [],
         )?;
 
-        // Index sur metadata(key, value) pour rendre get_pk_by_origin_url efficace.
-        // Sans cet index, la requête WHERE key = 'origin_url' AND value = ? fait
-        // un full scan car la PRIMARY KEY est (pk, key).
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_metadata_key_value ON metadata (key, value)",
             [],
         )?;
 
-        // LAZY PK SUPPORT: Index sur lazy_pk pour lookups rapides (lazy_pk → real pk)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_asset_last_used ON asset (last_used DESC)",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_asset_hits ON asset (hits DESC)",
+            [],
+        )?;
+
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_asset_lazy_pk ON asset (lazy_pk)",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_asset_lazy_pk_unique
+             ON asset (lazy_pk) WHERE lazy_pk IS NOT NULL",
             [],
         )?;
 
