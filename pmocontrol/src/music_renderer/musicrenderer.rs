@@ -1000,6 +1000,11 @@ impl MusicRenderer {
         // The flag will be set back to true when PLAYING state is detected.
         self.clear_has_played_flag();
 
+        // Set playback_source to FromQueue BEFORE calling backend
+        // to prevent race condition where watcher sees STOPPED before
+        // source is set, breaking auto-advance
+        self.set_playback_source(PlaybackSource::FromQueue);
+
         self.lock_backend_for("play_current_from_queue")
             .play_from_queue()
     }
@@ -1010,6 +1015,11 @@ impl MusicRenderer {
         // auto-advance on transient STOPPED states during track initialization.
         // The flag will be set back to true when PLAYING state is detected.
         self.clear_has_played_flag();
+
+        // Set playback_source to FromQueue BEFORE calling backend
+        // to prevent race condition where watcher sees STOPPED before
+        // source is set, breaking auto-advance
+        self.set_playback_source(PlaybackSource::FromQueue);
 
         self.lock_backend_for("play_next_from_queue").play_next()?;
         self.emit_queue_updated();
@@ -1583,11 +1593,18 @@ impl MusicRenderer {
         )
     }
 
-    /// Marks playback as external if currently idle (source is None).
+    /// Marks playback as external if currently idle.
+    ///
+    /// Only sets to External if we were already playing from an external source.
+    /// Does NOT change None -> External because that would break queue playback
+    /// (the control_point will set it to FromQueue after play_from_queue succeeds).
     pub fn mark_external_if_idle(&self) {
         let mut state = self.state.lock().unwrap();
-        if matches!(state.playback_source, PlaybackSource::None) {
-            state.playback_source = PlaybackSource::External;
+        if matches!(state.playback_source, PlaybackSource::External) {
+            // Keep External if we were already playing externally
+        } else {
+            // Don't change None -> External - that breaks queue auto-advance!
+            // The control_point will set playback_source to FromQueue after play_from_queue succeeds.
         }
     }
 

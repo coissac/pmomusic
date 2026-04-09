@@ -839,11 +839,17 @@ impl ControlPoint {
             "Playing current playback item from queue"
         );
 
-        // Temporarily disable auto-advance to prevent race condition
-        // when renderer sends Stopped event during SetAVTransportURI
-        renderer.set_playback_source(PlaybackSource::None);
+        // Note: We set playback_source to FromQueue BEFORE calling play_from_queue().
+        // This prevents a race condition where:
+        // 1. play_from_queue() is called
+        // 2. watcher detects STOPPED from track transition (before playback_source is set)
+        // 3. with source=None, is_playing_from_queue() returns false, breaking auto-advance
+        // By setting it BEFORE, even if STOPPED is detected, source will be FromQueue.
+        // Note: We no longer temporarily set playback_source to None (that caused Bug #2).
 
         // Start playback using play_from_queue which preserves the queue
+        // Set source to FromQueue BEFORE calling to prevent race condition
+        renderer.set_playback_source(PlaybackSource::FromQueue);
         if let Err(err) = renderer.play_from_queue() {
             error!(
                 renderer = renderer_id.0.as_str(),
@@ -865,7 +871,7 @@ impl ControlPoint {
         let metadata = playback_item_track_metadata(&item);
         renderer.set_last_metadata(Some(metadata));
 
-        renderer.set_playback_source(PlaybackSource::FromQueue);
+        // Note: playback_source already set to FromQueue above
 
         // Prefetch next track if supported (gapless playback)
         self.prefetch_next_track(&renderer, renderer_id);
@@ -895,8 +901,9 @@ impl ControlPoint {
             return Ok(());
         }
 
-        // Temporarily disable auto-advance to prevent race condition
-        renderer.set_playback_source(PlaybackSource::None);
+        // Note: Same fix as play_current_from_queue - set source BEFORE calling.
+        // Set source to FromQueue BEFORE calling to prevent race condition
+        renderer.set_playback_source(PlaybackSource::FromQueue);
 
         // Use the backend's play_next which handles queue advancement correctly for each backend type
         if let Err(err) = renderer.play_next_from_queue() {
@@ -1035,8 +1042,9 @@ impl ControlPoint {
             return Ok(());
         }
 
-        // Temporarily disable auto-advance to prevent race condition
-        renderer.set_playback_source(PlaybackSource::None);
+        // Note: Same fix as play_current_from_queue - set source BEFORE calling.
+        // Set source to FromQueue BEFORE calling to prevent race condition
+        renderer.set_playback_source(PlaybackSource::FromQueue);
 
         // Use the backend's play_from_index which handles everything correctly
         if let Err(err) = renderer.play_from_index(index) {
