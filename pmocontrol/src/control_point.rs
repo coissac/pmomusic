@@ -1186,7 +1186,8 @@ impl ControlPoint {
                     let renderer = reg.read().unwrap().get_renderer(rid).ok_or_else(|| {
                         ControlPointError::ControlPoint(format!("Renderer {} not found", rid.0))
                     })?;
-                    renderer.play_current_from_queue()
+                    // Use retry version to handle transient renderer errors (like JBL Authentics 300)
+                    renderer.play_current_from_queue_with_retry()
                 }))
             } else {
                 None
@@ -1258,7 +1259,8 @@ impl ControlPoint {
                 let renderer = reg.read().unwrap().get_renderer(rid).ok_or_else(|| {
                     ControlPointError::ControlPoint(format!("Renderer {} not found", rid.0))
                 })?;
-                renderer.play_current_from_queue()
+                // Use retry version to handle transient renderer errors (like JBL Authentics 300)
+                renderer.play_current_from_queue_with_retry()
             }))
         } else {
             None

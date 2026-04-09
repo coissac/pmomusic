@@ -703,8 +703,9 @@ impl MusicRenderer {
                         );
                         // Use catch_unwind to prevent panics in play_next_from_queue
                         // from poisoning the backend mutex
+                        // Also add retry logic for transient errors from renderer
                         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            self.play_next_from_queue()
+                            self.play_next_from_queue_with_retry()
                         }));
                         match result {
                             Ok(Ok(())) => {}
@@ -712,7 +713,7 @@ impl MusicRenderer {
                                 error!(
                                     renderer = self.info.friendly_name(),
                                     error = %err,
-                                    "Auto-advance failed; clearing queue playback state"
+                                    "Auto-advance failed after retries; clearing queue playback state"
                                 );
                                 self.set_playback_source(PlaybackSource::None);
                             }
@@ -993,9 +994,60 @@ impl MusicRenderer {
         self.lock_backend_for("upcoming_len").upcoming_len()
     }
 
+    /// Play the current item from the queue with retry logic for transient renderer errors.
+    ///
+    /// Some renderers (like JBL Authentics 300) may fail the first Play command
+    /// due to timing issues. This method retries with a small delay.
+    pub fn play_current_from_queue_with_retry(&self) -> Result<(), ControlPointError> {
+        const MAX_RETRIES: usize = 3;
+        const RETRY_DELAY_MS: u64 = 200;
+
+        let mut last_error = None;
+
+        for attempt in 0..MAX_RETRIES {
+            // Reset the has_played flag before starting playback to prevent
+            // auto-advance on transient STOPPED states during track initialization.
+            // The flag will be set back to true when PLAYING state is detected.
+            self.clear_has_played_flag();
+
+            // Set playback_source to FromQueue BEFORE calling backend
+            // to prevent race condition where watcher sees STOPPED before
+            // source is set, breaking auto-advance
+            self.set_playback_source(PlaybackSource::FromQueue);
+
+            match self
+                .lock_backend_for("play_current_from_queue_with_retry")
+                .play_from_queue()
+            {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    last_error = Some(e);
+                    if attempt < MAX_RETRIES - 1 {
+                        tracing::warn!(
+                            renderer = self.info.friendly_name(),
+                            attempt = attempt + 1,
+                            error = %last_error.as_ref().unwrap(),
+                            "Initial play attempt failed, retrying..."
+                        );
+                        std::thread::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS));
+                    }
+                }
+            }
+        }
+
+        // All retries failed
+        Err(last_error.unwrap_or_else(|| {
+            ControlPointError::ControlPoint("Unknown error in retry logic".into())
+        }))
+    }
+
     /// Play the current item from the queue.
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use play_current_from_queue_with_retry instead"
+    )]
     pub fn play_current_from_queue(&self) -> Result<(), ControlPointError> {
-        // Reset the has_played flag before starting playback to prevent
+        // Reset the has_played_flag before starting playback to prevent
         // auto-advance on transient STOPPED states during track initialization.
         // The flag will be set back to true when PLAYING state is detected.
         self.clear_has_played_flag();
@@ -1024,6 +1076,40 @@ impl MusicRenderer {
         self.lock_backend_for("play_next_from_queue").play_next()?;
         self.emit_queue_updated();
         Ok(())
+    }
+
+    /// Play next from queue with retry logic for transient renderer errors.
+    ///
+    /// Some renderers (like JBL Authentics 300) may fail the first Play command
+    /// due to timing issues. This method retries with a small delay.
+    pub fn play_next_from_queue_with_retry(&self) -> Result<(), ControlPointError> {
+        const MAX_RETRIES: usize = 3;
+        const RETRY_DELAY_MS: u64 = 200;
+
+        let mut last_error = None;
+
+        for attempt in 0..MAX_RETRIES {
+            match self.play_next_from_queue() {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    last_error = Some(e);
+                    if attempt < MAX_RETRIES - 1 {
+                        tracing::warn!(
+                            renderer = self.info.friendly_name(),
+                            attempt = attempt + 1,
+                            error = %last_error.as_ref().unwrap(),
+                            "Auto-advance attempt failed, retrying..."
+                        );
+                        std::thread::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS));
+                    }
+                }
+            }
+        }
+
+        // All retries failed
+        Err(last_error.unwrap_or_else(|| {
+            ControlPointError::ControlPoint("Unknown error in retry logic".into())
+        }))
     }
 
     /// Advance the queue index by one without starting playback.
