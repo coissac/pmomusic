@@ -1,4 +1,4 @@
-use crate::{DeviceId, model::TrackMetadata};
+use crate::{model::TrackMetadata, DeviceId};
 
 /// Canonical representation of a track in a renderer queue.
 ///

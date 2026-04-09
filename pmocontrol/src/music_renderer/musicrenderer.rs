@@ -976,6 +976,12 @@ impl MusicRenderer {
         Ok(snapshot)
     }
 
+    /// Get a clone of the queue Arc (for async sync operations).
+    pub fn queue(&self) -> Arc<Mutex<MusicQueue>> {
+        let backend = self.lock_backend_for("queue");
+        crate::music_renderer::capabilities::RendererBackend::queue(&*backend).clone()
+    }
+
     /// Get the current queue item without advancing.
     /// Returns the item and count of remaining items after current.
     pub fn peek_current(&self) -> Result<Option<(PlaybackItem, usize)>, ControlPointError> {
@@ -1372,7 +1378,16 @@ impl MusicRenderer {
     /// - If the current track is NOT in the new items, it's preserved as the first item
     /// - If there's no current track, the queue is simply replaced
     pub fn sync_queue(&self, items: Vec<PlaybackItem>) -> Result<(), ControlPointError> {
-        // Mark renderer as active for adaptive polling
+        self.sync_queue_with_callback(items, None, None)
+    }
+
+    /// Synchronize the queue with new items with optional cancel token and on_ready callback.
+    pub fn sync_queue_with_callback(
+        &self,
+        items: Vec<PlaybackItem>,
+        cancel_token: Option<&Arc<AtomicBool>>,
+        on_ready: Option<Box<dyn FnOnce() + Send>>,
+    ) -> Result<(), ControlPointError> {
         {
             let mut watched = self
                 .watched_state
@@ -1382,7 +1397,9 @@ impl MusicRenderer {
         }
 
         let mut backend = self.lock_backend_for("sync_queue");
-        backend.sync_queue(items)?;
+        let dummy_token = Arc::new(AtomicBool::new(false));
+        let token = cancel_token.unwrap_or(&dummy_token);
+        backend.sync_queue(items, token, on_ready)?;
         drop(backend);
         self.emit_queue_updated();
         Ok(())
@@ -2283,14 +2300,21 @@ impl QueueBackend for MusicRendererBackend {
         }
     }
 
-    fn sync_queue(&mut self, items: Vec<PlaybackItem>) -> Result<(), ControlPointError> {
+    fn sync_queue(
+        &mut self,
+        items: Vec<PlaybackItem>,
+        cancel_token: &Arc<AtomicBool>,
+        on_ready: Option<Box<dyn FnOnce() + Send>>,
+    ) -> Result<(), ControlPointError> {
         match self {
-            MusicRendererBackend::Upnp(r) => r.sync_queue(items),
-            MusicRendererBackend::OpenHome(r) => r.sync_queue(items),
-            MusicRendererBackend::LinkPlay(r) => r.sync_queue(items),
-            MusicRendererBackend::ArylicTcp(r) => r.sync_queue(items),
-            MusicRendererBackend::Chromecast(cc) => cc.sync_queue(items),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.sync_queue(items),
+            MusicRendererBackend::Upnp(r) => r.sync_queue(items, cancel_token, on_ready),
+            MusicRendererBackend::OpenHome(r) => r.sync_queue(items, cancel_token, on_ready),
+            MusicRendererBackend::LinkPlay(r) => r.sync_queue(items, cancel_token, on_ready),
+            MusicRendererBackend::ArylicTcp(r) => r.sync_queue(items, cancel_token, on_ready),
+            MusicRendererBackend::Chromecast(cc) => cc.sync_queue(items, cancel_token, on_ready),
+            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => {
+                upnp.sync_queue(items, cancel_token, on_ready)
+            }
         }
     }
 

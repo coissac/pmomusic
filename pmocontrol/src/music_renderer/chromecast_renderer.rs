@@ -11,6 +11,7 @@
 //! are wrapped in sync calls using smol::block_on for compatibility with
 //! the existing sync trait interfaces.
 
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, Once};
 use std::thread::JoinHandle;
 
@@ -906,8 +907,16 @@ impl QueueBackend for ChromecastRenderer {
             .replace_queue(items, current_index)
     }
 
-    fn sync_queue(&mut self, items: Vec<PlaybackItem>) -> Result<(), ControlPointError> {
-        self.queue.lock().unwrap().sync_queue(items)
+    fn sync_queue(
+        &mut self,
+        items: Vec<PlaybackItem>,
+        _cancel_token: &Arc<AtomicBool>,
+        on_ready: Option<Box<dyn FnOnce() + Send>>,
+    ) -> Result<(), ControlPointError> {
+        self.queue
+            .lock()
+            .unwrap()
+            .sync_queue(items, &Arc::new(AtomicBool::new(false)), on_ready)
     }
 
     fn get_item(&self, index: usize) -> Result<Option<PlaybackItem>, ControlPointError> {

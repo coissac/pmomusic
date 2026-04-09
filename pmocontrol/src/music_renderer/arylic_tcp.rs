@@ -1,26 +1,26 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use std::time::Duration;
 
 use serde::Deserialize;
 use tracing::debug;
 
-use crate::DeviceIdentity;
 use crate::arylic_client::{
-    ARYLIC_TCP_PORT, DEFAULT_TIMEOUT_SECS, send_command_no_response, send_command_optional,
-    send_command_required,
+    send_command_no_response, send_command_optional, send_command_required, ARYLIC_TCP_PORT,
+    DEFAULT_TIMEOUT_SECS,
 };
 use crate::errors::ControlPointError;
 use crate::linkplay_client::extract_linkplay_host;
 use crate::model::{PlaybackState, RendererInfo};
-use crate::music_renderer::RendererFromMediaRendererInfo;
 use crate::music_renderer::capabilities::{
     PlaybackPosition, PlaybackPositionInfo, PlaybackStatus, QueueTransportControl, RendererBackend,
     TransportControl, VolumeControl,
 };
 use crate::music_renderer::musicrenderer::MusicRendererBackend;
 use crate::music_renderer::time_utils::{format_hhmmss, ms_to_seconds, parse_hhmmss_strict};
+use crate::music_renderer::RendererFromMediaRendererInfo;
 use crate::queue::MusicQueue;
 use crate::queue::{EnqueueMode, PlaybackItem, QueueBackend, QueueSnapshot};
+use crate::DeviceIdentity;
 
 /// Raw response from Arylic MCU+PINFGET command
 #[derive(Debug, Deserialize)]
@@ -409,8 +409,16 @@ impl QueueBackend for ArylicTcpRenderer {
             .replace_queue(items, current_index)
     }
 
-    fn sync_queue(&mut self, items: Vec<PlaybackItem>) -> Result<(), ControlPointError> {
-        self.queue.lock().unwrap().sync_queue(items)
+    fn sync_queue(
+        &mut self,
+        items: Vec<PlaybackItem>,
+        _cancel_token: &Arc<AtomicBool>,
+        on_ready: Option<Box<dyn FnOnce() + Send>>,
+    ) -> Result<(), ControlPointError> {
+        self.queue
+            .lock()
+            .unwrap()
+            .sync_queue(items, &Arc::new(AtomicBool::new(false)), on_ready)
     }
 
     fn get_item(&self, index: usize) -> Result<Option<PlaybackItem>, ControlPointError> {

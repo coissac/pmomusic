@@ -136,6 +136,14 @@ impl DeviceRegistry {
         self.devices.get(id)?.as_music_renderer().ok()
     }
 
+    pub fn get_renderer_queue_arc(
+        &self,
+        id: &DeviceId,
+    ) -> Option<std::sync::Arc<std::sync::Mutex<crate::queue::MusicQueue>>> {
+        let renderer = self.get_renderer(id)?;
+        Some(renderer.queue())
+    }
+
     pub fn get_server(&self, id: &DeviceId) -> Option<Arc<MusicServer>> {
         self.devices.get(id)?.as_music_server().ok()
     }

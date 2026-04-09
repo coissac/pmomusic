@@ -28,7 +28,8 @@
 //!   - This identity is used by the sync helpers to preserve the current
 //!     track across queue rebuilds when the MediaServer content changes.
 
-use crate::{PlaybackItem, QueueSnapshot, errors::ControlPointError};
+use crate::{errors::ControlPointError, PlaybackItem, QueueSnapshot};
+use std::sync::{atomic::AtomicBool, Arc};
 
 /// High-level enqueue mode.
 ///
@@ -107,7 +108,12 @@ pub trait QueueBackend {
     /// corresponds to the old current index track.
     /// If the old current index track is absent from the new queue,
     /// it is kept as the first item and the new items are appended after it.
-    fn sync_queue(&mut self, items: Vec<PlaybackItem>) -> Result<(), ControlPointError>;
+    fn sync_queue(
+        &mut self,
+        items: Vec<PlaybackItem>,
+        cancel_token: &Arc<AtomicBool>,
+        on_ready: Option<Box<dyn FnOnce() + Send>>,
+    ) -> Result<(), ControlPointError>;
 
     /// Returns the item at `index`, if it exists.
     fn get_item(&self, index: usize) -> Result<Option<PlaybackItem>, ControlPointError>;

@@ -437,6 +437,12 @@ pub enum RendererEvent {
     QueueRefreshing {
         id: DeviceId,
     },
+    QueueReadyToPlay {
+        id: DeviceId,
+    },
+    QueueSyncCancelled {
+        id: DeviceId,
+    },
     BindingChanged {
         id: DeviceId,
         binding: Option<PlaylistBinding>,

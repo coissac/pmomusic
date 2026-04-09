@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use std::time::SystemTime;
 
 use crate::music_renderer::capabilities::{
@@ -182,9 +182,8 @@ impl OpenHomeRenderer {
     /// Retourne les IDs des pistes de la playlist OpenHome.
     /// Plus rapide que snapshot_openhome_playlist() car ne récupère pas les métadonnées.
     pub(crate) fn openhome_playlist_ids(&self) -> Result<Vec<u32>, ControlPointError> {
-        // Use the queue's cached track_ids() instead of direct id_array() call
         let queue = self.queue.lock().unwrap();
-        if let MusicQueue::OpenHome(oh_queue) = &*queue {
+        if let Some(oh_queue) = queue.as_openhome() {
             oh_queue.track_ids()
         } else {
             Err(ControlPointError::QueueError(
@@ -209,9 +208,8 @@ impl OpenHomeRenderer {
         let insert_after = match after_id {
             Some(id) => id,
             None => {
-                // Use the queue's cached track_ids() instead of direct id_array() call
                 let queue = self.queue.lock().unwrap();
-                if let MusicQueue::OpenHome(oh_queue) = &*queue {
+                if let Some(oh_queue) = queue.as_openhome() {
                     oh_queue
                         .track_ids()?
                         .last()
@@ -413,7 +411,7 @@ impl PlaybackPosition for OpenHomeRenderer {
 
         // Get track ID from queue (uses cached data)
         let queue_guard_for_id = self.queue.lock().unwrap();
-        if let MusicQueue::OpenHome(oh_queue) = &*queue_guard_for_id {
+        if let Some(oh_queue) = queue_guard_for_id.as_openhome() {
             match oh_queue.current_track() {
                 Ok(id_opt) => track_id = id_opt,
                 Err(err) => debug!(
@@ -696,11 +694,16 @@ impl QueueBackend for OpenHomeRenderer {
             .replace_queue(items, current_index)
     }
 
-    fn sync_queue(&mut self, items: Vec<PlaybackItem>) -> Result<(), ControlPointError> {
+    fn sync_queue(
+        &mut self,
+        items: Vec<PlaybackItem>,
+        cancel_token: &Arc<AtomicBool>,
+        on_ready: Option<Box<dyn FnOnce() + Send>>,
+    ) -> Result<(), ControlPointError> {
         self.queue
             .lock()
             .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?
-            .sync_queue(items)
+            .sync_queue(items, cancel_token, on_ready)
     }
 
     fn get_item(&self, index: usize) -> Result<Option<PlaybackItem>, ControlPointError> {
