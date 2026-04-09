@@ -218,9 +218,22 @@ impl QueueTransportControl for UpnpRenderer {
         // Détecte si l'URL est un flux continu en interrogeant le serveur HTTP
         let is_stream = crate::music_renderer::is_continuous_stream_url(&item.uri);
         *self.continuous_stream.lock().unwrap() = is_stream;
+
+        // Log current queue state for debugging
+        let queue_state = {
+            let queue = self.queue.lock().unwrap();
+            let idx = queue.current_index().unwrap_or(None);
+            let len = queue.len().unwrap_or(0);
+            let uri = item.uri.clone();
+            let title = item.metadata.as_ref().and_then(|m| m.title.clone());
+            (idx, len, uri, title)
+        };
         tracing::debug!(
-            "UpnpRenderer play_from_queue: URI={}, continuous_stream={}",
-            item.uri,
+            "UpnpRenderer play_from_queue: index={:?}/{}, uri={}, title={:?}, continuous_stream={}",
+            queue_state.0,
+            queue_state.1,
+            queue_state.2,
+            queue_state.3,
             is_stream
         );
 
@@ -243,11 +256,28 @@ impl QueueTransportControl for UpnpRenderer {
     }
 
     fn play_next(&self) -> Result<(), ControlPointError> {
+        let current_idx = {
+            let queue = self.queue.lock().unwrap();
+            let idx = queue.current_index().unwrap_or(None);
+            let len = queue.len().unwrap_or(0);
+            tracing::debug!(
+                current_index = ?idx,
+                queue_len = len,
+                "play_next: attempting to advance"
+            );
+            idx
+        };
         {
             let mut queue = self.queue.lock().unwrap();
             if !queue.advance()? {
                 return Err(ControlPointError::QueueError("No next track".into()));
             }
+            let new_idx = queue.current_index().unwrap_or(None);
+            tracing::debug!(
+                previous_index = ?current_idx,
+                new_index = ?new_idx,
+                "play_next: advanced"
+            );
         }
 
         self.play_from_queue()
@@ -269,6 +299,9 @@ impl QueueTransportControl for UpnpRenderer {
             let mut queue = self.queue.lock().unwrap();
             queue.set_index(Some(index))?;
         }
+        // CORRECTIF: Quand on change l'index manuellement (shuffle, sélection d'un titre)
+        // on logue pour être sûr que c'est bien appelé
+        tracing::debug!(index = index, "✅ SHUFFLE / SEEK: play_from_index appelé");
 
         self.play_from_queue()
     }

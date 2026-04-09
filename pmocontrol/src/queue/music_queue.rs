@@ -178,7 +178,9 @@ impl MusicQueue {
                     };
                     // Queue lock is released here.
                     // Now safe to call on_ready (which may re-lock the queue).
-                    if on_ready_triggered.load(SeqCst) {
+                    // If on_ready was triggered by the proxy, consume and call it.
+                    // If not (cancelled before first insert), keep it to pass to retry.
+                    let carry_on_ready = if on_ready_triggered.load(SeqCst) {
                         tracing::debug!(
                             thread = %std::thread::current().name().unwrap_or("?"),
                             "queue-sync: on_ready triggered, calling callback"
@@ -186,12 +188,16 @@ impl MusicQueue {
                         if let Some(f) = real_on_ready {
                             f();
                         }
-                    } else if real_on_ready.is_some() {
-                        tracing::debug!(
-                            thread = %std::thread::current().name().unwrap_or("?"),
-                            "queue-sync: on_ready not triggered (cancelled or skipped)"
-                        );
-                    }
+                        None
+                    } else {
+                        if real_on_ready.is_some() {
+                            tracing::debug!(
+                                thread = %std::thread::current().name().unwrap_or("?"),
+                                "queue-sync: on_ready not triggered, carrying to next attempt"
+                            );
+                        }
+                        real_on_ready
+                    };
 
                     match result {
                         Err(ControlPointError::SyncCancelled) => {
@@ -222,7 +228,7 @@ impl MusicQueue {
                     match pending_items_fn() {
                         Ok(new_items) => {
                             current_items = new_items;
-                            current_on_ready = Some(None);
+                            current_on_ready = Some(carry_on_ready);
                         }
                         Err(e) => {
                             tracing::warn!("queue-sync pending re-fetch error: {}", e);

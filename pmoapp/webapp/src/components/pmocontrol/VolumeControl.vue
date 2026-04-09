@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, toRef } from "vue";
+import { ref, watch, computed, toRef } from "vue";
 import { useRenderer, useRenderers } from "@/composables/useRenderers";
 import { useUIStore } from "@/stores/ui";
 import { Volume2, VolumeX } from "lucide-vue-next";
@@ -12,6 +12,7 @@ const { state } = useRenderer(toRef(props, "rendererId"));
 const { setVolume, toggleMute } = useRenderers();
 const uiStore = useUIStore();
 
+const rendererName = computed(() => state.value?.friendly_name ?? props.rendererId);
 const localVolume = ref(state.value?.volume ?? 50);
 
 // Synchroniser localVolume avec le state
@@ -41,7 +42,7 @@ function handleVolumeChange(event: Event) {
             await setVolume(props.rendererId, localVolume.value);
         } catch (error) {
             uiStore.notifyError(
-                `Impossible de régler le volume: ${error instanceof Error ? error.message : "Erreur inconnue"}`,
+                `« ${rendererName.value} » — impossible de régler le volume: ${error instanceof Error ? error.message : "Erreur inconnue"}`,
             );
         }
         debounceTimer = null;
@@ -53,7 +54,7 @@ async function handleToggleMute() {
         await toggleMute(props.rendererId);
     } catch (error) {
         uiStore.notifyError(
-            `Impossible de basculer le mode muet: ${error instanceof Error ? error.message : "Erreur inconnue"}`,
+            `« ${rendererName.value} » — impossible de couper/rétablir le son: ${error instanceof Error ? error.message : "Erreur inconnue"}`,
         );
     }
 }

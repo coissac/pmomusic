@@ -703,8 +703,9 @@ impl MusicRenderer {
                         );
                         // Use catch_unwind to prevent panics in play_next_from_queue
                         // from poisoning the backend mutex
+                        // Also add retry logic for transient errors from renderer
                         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            self.play_next_from_queue()
+                            self.play_next_from_queue_with_retry()
                         }));
                         match result {
                             Ok(Ok(())) => {}
@@ -712,7 +713,7 @@ impl MusicRenderer {
                                 error!(
                                     renderer = self.info.friendly_name(),
                                     error = %err,
-                                    "Auto-advance failed; clearing queue playback state"
+                                    "Auto-advance failed after retries; clearing queue playback state"
                                 );
                                 self.set_playback_source(PlaybackSource::None);
                             }
@@ -993,12 +994,68 @@ impl MusicRenderer {
         self.lock_backend_for("upcoming_len").upcoming_len()
     }
 
+    /// Play the current item from the queue with retry logic for transient renderer errors.
+    ///
+    /// Some renderers (like JBL Authentics 300) may fail the first Play command
+    /// due to timing issues. This method retries with a small delay.
+    pub fn play_current_from_queue_with_retry(&self) -> Result<(), ControlPointError> {
+        const MAX_RETRIES: usize = 3;
+        const RETRY_DELAY_MS: u64 = 200;
+
+        let mut last_error = None;
+
+        for attempt in 0..MAX_RETRIES {
+            // Reset the has_played flag before starting playback to prevent
+            // auto-advance on transient STOPPED states during track initialization.
+            // The flag will be set back to true when PLAYING state is detected.
+            self.clear_has_played_flag();
+
+            // Set playback_source to FromQueue BEFORE calling backend
+            // to prevent race condition where watcher sees STOPPED before
+            // source is set, breaking auto-advance
+            self.set_playback_source(PlaybackSource::FromQueue);
+
+            match self
+                .lock_backend_for("play_current_from_queue_with_retry")
+                .play_from_queue()
+            {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    last_error = Some(e);
+                    if attempt < MAX_RETRIES - 1 {
+                        tracing::warn!(
+                            renderer = self.info.friendly_name(),
+                            attempt = attempt + 1,
+                            error = %last_error.as_ref().unwrap(),
+                            "Initial play attempt failed, retrying..."
+                        );
+                        std::thread::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS));
+                    }
+                }
+            }
+        }
+
+        // All retries failed
+        Err(last_error.unwrap_or_else(|| {
+            ControlPointError::ControlPoint("Unknown error in retry logic".into())
+        }))
+    }
+
     /// Play the current item from the queue.
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use play_current_from_queue_with_retry instead"
+    )]
     pub fn play_current_from_queue(&self) -> Result<(), ControlPointError> {
-        // Reset the has_played flag before starting playback to prevent
+        // Reset the has_played_flag before starting playback to prevent
         // auto-advance on transient STOPPED states during track initialization.
         // The flag will be set back to true when PLAYING state is detected.
         self.clear_has_played_flag();
+
+        // Set playback_source to FromQueue BEFORE calling backend
+        // to prevent race condition where watcher sees STOPPED before
+        // source is set, breaking auto-advance
+        self.set_playback_source(PlaybackSource::FromQueue);
 
         self.lock_backend_for("play_current_from_queue")
             .play_from_queue()
@@ -1011,9 +1068,48 @@ impl MusicRenderer {
         // The flag will be set back to true when PLAYING state is detected.
         self.clear_has_played_flag();
 
+        // Set playback_source to FromQueue BEFORE calling backend
+        // to prevent race condition where watcher sees STOPPED before
+        // source is set, breaking auto-advance
+        self.set_playback_source(PlaybackSource::FromQueue);
+
         self.lock_backend_for("play_next_from_queue").play_next()?;
         self.emit_queue_updated();
         Ok(())
+    }
+
+    /// Play next from queue with retry logic for transient renderer errors.
+    ///
+    /// Some renderers (like JBL Authentics 300) may fail the first Play command
+    /// due to timing issues. This method retries with a small delay.
+    pub fn play_next_from_queue_with_retry(&self) -> Result<(), ControlPointError> {
+        const MAX_RETRIES: usize = 3;
+        const RETRY_DELAY_MS: u64 = 200;
+
+        let mut last_error = None;
+
+        for attempt in 0..MAX_RETRIES {
+            match self.play_next_from_queue() {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    last_error = Some(e);
+                    if attempt < MAX_RETRIES - 1 {
+                        tracing::warn!(
+                            renderer = self.info.friendly_name(),
+                            attempt = attempt + 1,
+                            error = %last_error.as_ref().unwrap(),
+                            "Auto-advance attempt failed, retrying..."
+                        );
+                        std::thread::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS));
+                    }
+                }
+            }
+        }
+
+        // All retries failed
+        Err(last_error.unwrap_or_else(|| {
+            ControlPointError::ControlPoint("Unknown error in retry logic".into())
+        }))
     }
 
     /// Advance the queue index by one without starting playback.
@@ -1033,14 +1129,21 @@ impl MusicRenderer {
 
     /// Play from a specific index in the queue.
     pub fn play_from_index(&self, index: usize) -> Result<(), ControlPointError> {
-        // Reset the has_played flag before starting playback to prevent
-        // auto-advance on transient STOPPED states during track initialization.
-        // The flag will be set back to true when PLAYING state is detected.
+        // ✅ CORRECTIF BUG SHUFFLE: Quand on change d'index manuellement
+        // (par exemple shuffle, clique sur un titre), on réinitialise OBLIGATOIREMENT
+        // le flag has_played. Sinon quand le titre se termine l'auto-avance
+        // pense qu'il n'a jamais démarré et s'arrête.
+        tracing::debug!(
+            index = index,
+            renderer = self.info.friendly_name(),
+            "🎯 play_from_index appelé, réinitialisation has_played_flag"
+        );
         self.clear_has_played_flag();
 
         self.lock_backend_for("play_from_index")
             .play_from_index(index)?;
-        self.emit_queue_updated();
+
+        self.set_playback_source(PlaybackSource::FromQueue);
         Ok(())
     }
 
@@ -1063,6 +1166,11 @@ impl MusicRenderer {
         let queue_not_empty = backend.len().unwrap_or(0) > 0;
 
         if queue_not_empty {
+            // Set playback_source to FromQueue BEFORE calling backend
+            // to prevent race condition where watcher sees STOPPED before
+            // source is set, breaking auto-advance
+            self.set_playback_source(PlaybackSource::FromQueue);
+
             // Si on a des items dans la queue, jouer le track courant (ou le premier si aucun n'est sélectionné)
             // Cela fonctionne pour tous les backends (UPnP interne, OpenHome, etc.)
             backend.play_from_queue()
@@ -1528,6 +1636,11 @@ impl MusicRenderer {
         // The flag will be set back to true when PLAYING state is detected.
         self.clear_has_played_flag();
 
+        // Set playback_source to FromQueue BEFORE calling backend
+        // to prevent race condition where watcher sees STOPPED before
+        // source is set, breaking auto-advance
+        self.set_playback_source(PlaybackSource::FromQueue);
+
         self.lock_backend_for("play_from_queue").play_from_queue()
     }
 
@@ -1583,11 +1696,18 @@ impl MusicRenderer {
         )
     }
 
-    /// Marks playback as external if currently idle (source is None).
+    /// Marks playback as external if currently idle.
+    ///
+    /// Only sets to External if we were already playing from an external source.
+    /// Does NOT change None -> External because that would break queue playback
+    /// (the control_point will set it to FromQueue after play_from_queue succeeds).
     pub fn mark_external_if_idle(&self) {
         let mut state = self.state.lock().unwrap();
-        if matches!(state.playback_source, PlaybackSource::None) {
-            state.playback_source = PlaybackSource::External;
+        if matches!(state.playback_source, PlaybackSource::External) {
+            // Keep External if we were already playing externally
+        } else {
+            // Don't change None -> External - that breaks queue auto-advance!
+            // The control_point will set playback_source to FromQueue after play_from_queue succeeds.
         }
     }
 
@@ -1740,8 +1860,9 @@ impl MusicRenderer {
         // 5. Replace the queue with shuffled items, starting at index 0
         self.replace_queue(shuffled_items, Some(0))?;
 
-        // 6. Start playback from the first track
-        self.play_from_index(0)?;
+        // 6. Start playback from the first track with retry for JBL-like renderers
+        // that fail the first Play command due to timing issues
+        self.play_current_from_queue_with_retry()?;
 
         Ok(())
     }
