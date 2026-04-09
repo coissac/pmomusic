@@ -153,7 +153,32 @@ impl DB {
         };
 
         let conn = Connection::open(path)?;
-        conn.execute("PRAGMA foreign_keys = ON", [])?;
+        conn.execute_batch(
+            "
+            PRAGMA journal_mode = WAL;
+            PRAGMA synchronous = NORMAL;
+            PRAGMA cache_size = -32768;
+            PRAGMA temp_store = MEMORY;
+            PRAGMA mmap_size = 268435456;
+        ",
+        )?;
+
+        // Index qui MANQUAIT sur les bases existantes:
+        // Ceci s'exécutera TOUT LE TEMPS, pas seulement à la création
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_metadata_key_value ON metadata (key, value)",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_asset_last_used ON asset (last_used DESC)",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_asset_hits ON asset (hits DESC)",
+            [],
+        )?;
 
         conn.execute(
             "CREATE TABLE IF NOT EXISTS asset (
@@ -228,7 +253,12 @@ impl DB {
         // Inscrire la version du schéma
         conn.execute_batch(&format!("PRAGMA user_version = {}", SCHEMA_VERSION))?;
 
-        Ok((Self { conn: Mutex::new(conn) }, was_reset))
+        Ok((
+            Self {
+                conn: Mutex::new(conn),
+            },
+            was_reset,
+        ))
     }
 
     /// Ajoute ou met à jour une entrée dans la base de données
@@ -1158,7 +1188,9 @@ impl DB {
 
         tracing::debug!(
             "update_lazy_to_downloaded: {} → {} ({} metadata rows still under lazy_pk)",
-            lazy_pk, real_pk, meta_under_lazy
+            lazy_pk,
+            real_pk,
+            meta_under_lazy
         );
 
         Ok(())

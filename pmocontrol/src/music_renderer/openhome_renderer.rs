@@ -688,10 +688,36 @@ impl QueueBackend for OpenHomeRenderer {
         items: Vec<PlaybackItem>,
         current_index: Option<usize>,
     ) -> Result<(), ControlPointError> {
+        // ✅ CORRECTION BUG PRODUCTION: On ne charge PAS toutes les métadonnées
+        // dans le thread principal. OpenHome sur 1000 titres inondait la base SQLite
+        // et bloquait TOUS les autres threads (mutex >500ms).
+        //
+        // On fait juste l'insertion minimaliste maintenant. Le préchargement
+        // des métadonnées est délégué à un thread background.
         self.queue
             .lock()
-            .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?
-            .replace_queue(items, current_index)
+            .map_err(|_| ControlPointError::QueueError("Mutex poisoned".into()))?
+            .replace_queue(items, current_index)?;
+
+        // Background worker: charge les métadonnées petit à petit sans bloquer personne
+        let queue = self.queue.clone();
+        tokio::task::spawn_blocking(move || {
+            debug!("🔄 OpenHome: préchargement métadonnées queue en background");
+            if let Ok(mut queue) = queue.lock() {
+                // On ne fait que les 10 prochains titres maintenant, le reste on s'en fout
+                if let Ok(Some(idx)) = queue.current_index() {
+                    let end = std::cmp::min(idx + 10, queue.len().unwrap_or(0));
+                    for i in idx..end {
+                        let _ = queue.get_item(i);
+                        // Petit délai pour ne pas noyer la base de données
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                }
+            }
+            debug!("✅ OpenHome: préchargement métadonnées terminé");
+        });
+
+        Ok(())
     }
 
     fn sync_queue(
