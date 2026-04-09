@@ -3,12 +3,12 @@ use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use crate::errors::ControlPointError;
 use crate::model::PlaybackState;
 use crate::music_renderer::capabilities::{
-    PlaybackPosition, PlaybackPositionInfo, PlaybackStatus, QueueTransportControl, RendererBackend,
-    TransportControl, VolumeControl,
+    HasContinuousStream, PlaybackPosition, PlaybackPositionInfo, PlaybackStatus,
+    QueueTransportControl, RendererBackend, TransportControl, VolumeControl,
 };
 use crate::music_renderer::musicrenderer::{build_didl_lite_metadata, MusicRendererBackend};
 use crate::music_renderer::RendererFromMediaRendererInfo;
-use crate::queue::{EnqueueMode, MusicQueue, PlaybackItem, QueueBackend, QueueSnapshot};
+use crate::queue::{EnqueueMode, HasQueue, MusicQueue, PlaybackItem, QueueBackend, QueueSnapshot};
 use crate::upnp_clients::{
     AvTransportClient, ConnectionInfo, ConnectionManagerClient, PositionInfo, ProtocolInfo,
     RenderingControlClient,
@@ -307,76 +307,9 @@ impl QueueTransportControl for UpnpRenderer {
     }
 }
 
-impl QueueBackend for UpnpRenderer {
-    fn len(&self) -> Result<usize, ControlPointError> {
-        self.queue.lock().unwrap().len()
-    }
-
-    fn track_ids(&self) -> Result<Vec<u32>, ControlPointError> {
-        self.queue.lock().unwrap().track_ids()
-    }
-
-    fn id_to_position(&self, id: u32) -> Result<usize, ControlPointError> {
-        self.queue.lock().unwrap().id_to_position(id)
-    }
-
-    fn position_to_id(&self, id: usize) -> Result<u32, ControlPointError> {
-        self.queue.lock().unwrap().position_to_id(id)
-    }
-
-    fn current_track(&self) -> Result<Option<u32>, ControlPointError> {
-        self.queue.lock().unwrap().current_track()
-    }
-
-    fn current_index(&self) -> Result<Option<usize>, ControlPointError> {
-        self.queue.lock().unwrap().current_index()
-    }
-
-    fn queue_snapshot(&self) -> Result<QueueSnapshot, ControlPointError> {
-        self.queue.lock().unwrap().queue_snapshot()
-    }
-
-    fn set_index(&mut self, index: Option<usize>) -> Result<(), ControlPointError> {
-        self.queue.lock().unwrap().set_index(index)
-    }
-
-    fn replace_queue(
-        &mut self,
-        items: Vec<PlaybackItem>,
-        current_index: Option<usize>,
-    ) -> Result<(), ControlPointError> {
-        self.queue
-            .lock()
-            .unwrap()
-            .replace_queue(items, current_index)
-    }
-
-    fn sync_queue(
-        &mut self,
-        items: Vec<PlaybackItem>,
-        _cancel_token: &Arc<AtomicBool>,
-        on_ready: Option<Box<dyn FnOnce() + Send>>,
-    ) -> Result<(), ControlPointError> {
-        self.queue
-            .lock()
-            .unwrap()
-            .sync_queue(items, &Arc::new(AtomicBool::new(false)), on_ready)
-    }
-
-    fn get_item(&self, index: usize) -> Result<Option<PlaybackItem>, ControlPointError> {
-        self.queue.lock().unwrap().get_item(index)
-    }
-
-    fn replace_item(&mut self, index: usize, item: PlaybackItem) -> Result<(), ControlPointError> {
-        self.queue.lock().unwrap().replace_item(index, item)
-    }
-
-    fn enqueue_items(
-        &mut self,
-        items: Vec<PlaybackItem>,
-        mode: EnqueueMode,
-    ) -> Result<(), ControlPointError> {
-        self.queue.lock().unwrap().enqueue_items(items, mode)
+impl HasQueue for UpnpRenderer {
+    fn queue(&self) -> &Arc<Mutex<MusicQueue>> {
+        &self.queue
     }
 }
 

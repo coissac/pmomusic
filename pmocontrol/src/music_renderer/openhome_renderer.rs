@@ -16,7 +16,7 @@ use crate::music_renderer::openhome::{
     build_time_client, build_volume_client,
 };
 use crate::music_renderer::RendererFromMediaRendererInfo;
-use crate::queue::{EnqueueMode, MusicQueue, PlaybackItem, QueueBackend, QueueSnapshot};
+use crate::queue::{EnqueueMode, HasQueue, MusicQueue, PlaybackItem, QueueBackend, QueueSnapshot};
 use crate::upnp_clients::{
     OhInfoClient, OhPlaylistClient, OhProductClient, OhRadioClient, OhTimeClient, OhVolumeClient,
     OPENHOME_PLAYLIST_HEAD_ID,
@@ -626,90 +626,31 @@ impl QueueTransportControl for OpenHomeRenderer {
     }
 }
 
-impl QueueBackend for OpenHomeRenderer {
-    fn len(&self) -> Result<usize, ControlPointError> {
-        self.queue
-            .lock()
-            .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?
-            .len()
+impl HasQueue for OpenHomeRenderer {
+    fn queue(&self) -> &Arc<Mutex<MusicQueue>> {
+        &self.queue
     }
+}
 
-    fn track_ids(&self) -> Result<Vec<u32>, ControlPointError> {
-        self.queue
-            .lock()
-            .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?
-            .track_ids()
-    }
-
-    fn id_to_position(&self, id: u32) -> Result<usize, ControlPointError> {
-        self.queue
-            .lock()
-            .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?
-            .id_to_position(id)
-    }
-
-    fn position_to_id(&self, id: usize) -> Result<u32, ControlPointError> {
-        self.queue
-            .lock()
-            .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?
-            .position_to_id(id)
-    }
-
-    fn current_track(&self) -> Result<Option<u32>, ControlPointError> {
-        self.queue
-            .lock()
-            .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?
-            .current_track()
-    }
-
-    fn current_index(&self) -> Result<Option<usize>, ControlPointError> {
-        self.queue
-            .lock()
-            .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?
-            .current_index()
-    }
-
-    fn queue_snapshot(&self) -> Result<QueueSnapshot, ControlPointError> {
-        self.queue
-            .lock()
-            .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?
-            .queue_snapshot()
-    }
-
-    fn set_index(&mut self, index: Option<usize>) -> Result<(), ControlPointError> {
-        self.queue
-            .lock()
-            .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?
-            .set_index(index)
-    }
-
-    fn replace_queue(
+impl OpenHomeRenderer {
+    pub fn replace_queue_with_background(
         &mut self,
         items: Vec<PlaybackItem>,
         current_index: Option<usize>,
     ) -> Result<(), ControlPointError> {
-        // ✅ CORRECTION BUG PRODUCTION: On ne charge PAS toutes les métadonnées
-        // dans le thread principal. OpenHome sur 1000 titres inondait la base SQLite
-        // et bloquait TOUS les autres threads (mutex >500ms).
-        //
-        // On fait juste l'insertion minimaliste maintenant. Le préchargement
-        // des métadonnées est délégué à un thread background.
         self.queue
             .lock()
             .map_err(|_| ControlPointError::QueueError("Mutex poisoned".into()))?
             .replace_queue(items, current_index)?;
 
-        // Background worker: charge les métadonnées petit à petit sans bloquer personne
         let queue = self.queue.clone();
         std::thread::spawn(move || {
             debug!("🔄 OpenHome: préchargement métadonnées queue en background");
             if let Ok(mut queue) = queue.lock() {
-                // On ne fait que les 10 prochains titres maintenant, le reste on s'en fout
                 if let Ok(Some(idx)) = queue.current_index() {
                     let end = std::cmp::min(idx + 10, queue.len().unwrap_or(0));
                     for i in idx..end {
                         let _ = queue.get_item(i);
-                        // Petit délai pour ne pas noyer la base de données
                         std::thread::sleep(std::time::Duration::from_millis(5));
                     }
                 }
@@ -718,42 +659,5 @@ impl QueueBackend for OpenHomeRenderer {
         });
 
         Ok(())
-    }
-
-    fn sync_queue(
-        &mut self,
-        items: Vec<PlaybackItem>,
-        cancel_token: &Arc<AtomicBool>,
-        on_ready: Option<Box<dyn FnOnce() + Send>>,
-    ) -> Result<(), ControlPointError> {
-        self.queue
-            .lock()
-            .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?
-            .sync_queue(items, cancel_token, on_ready)
-    }
-
-    fn get_item(&self, index: usize) -> Result<Option<PlaybackItem>, ControlPointError> {
-        self.queue
-            .lock()
-            .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?
-            .get_item(index)
-    }
-
-    fn replace_item(&mut self, index: usize, item: PlaybackItem) -> Result<(), ControlPointError> {
-        self.queue
-            .lock()
-            .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?
-            .replace_item(index, item)
-    }
-
-    fn enqueue_items(
-        &mut self,
-        items: Vec<PlaybackItem>,
-        mode: EnqueueMode,
-    ) -> Result<(), ControlPointError> {
-        self.queue
-            .lock()
-            .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?
-            .enqueue_items(items, mode)
     }
 }

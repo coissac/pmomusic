@@ -6,7 +6,7 @@ mod snapshot;
 
 use std::sync::{Arc, Mutex};
 
-pub use backend::{EnqueueMode, QueueBackend};
+pub use backend::{EnqueueMode, HasQueue, QueueBackend};
 pub use music_queue::{MusicQueue, SyncScheduleOutcome};
 pub use snapshot::{PlaybackItem, QueueSnapshot};
 

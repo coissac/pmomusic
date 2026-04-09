@@ -1,9 +1,13 @@
 // pmocontrol/src/capabilities.rs
-use anyhow::Result;
 use std::sync::{Arc, Mutex};
 
-use crate::queue::MusicQueue;
-use crate::{errors::ControlPointError, model::PlaybackState};
+use crate::queue::{HasQueue, MusicQueue};
+use crate::{errors::ControlPointError, model::PlaybackState, PlaybackItem};
+
+/// Trait for types that track whether they're playing a continuous stream.
+pub trait HasContinuousStream {
+    fn continuous_stream(&self) -> &Arc<Mutex<bool>>;
+}
 
 /// Backend-specific operations for renderers.
 ///
@@ -18,16 +22,45 @@ pub trait RendererBackend {
 /// These operations combine queue management with transport control,
 /// allowing navigation (next/previous) and track selection from the queue.
 #[allow(dead_code)]
-pub trait QueueTransportControl {
+pub trait QueueTransportControl: HasQueue + HasContinuousStream {
+    /// Play a specific item from the queue (backend-specific implementation).
+    fn play_item(&self, item: &PlaybackItem) -> Result<(), ControlPointError>;
+
+    /// Play from the queue at the current index (or initialize to 0 if not set).
+    /// This is the default implementation that handles queue navigation.
+    fn play_from_queue(&self) -> Result<(), ControlPointError> {
+        let mut queue = self.queue().lock().unwrap();
+
+        let current_index = match queue.current_index()? {
+            Some(idx) => idx,
+            None => {
+                if queue.len()? > 0 {
+                    queue.set_index(Some(0))?;
+                    0
+                } else {
+                    return Err(ControlPointError::QueueError("Queue is empty".into()));
+                }
+            }
+        };
+
+        let item = queue
+            .get_item(current_index)?
+            .ok_or_else(|| ControlPointError::QueueError("Current item not found".into()))?;
+
+        drop(queue);
+
+        let is_stream = crate::music_renderer::is_continuous_stream_url(&item.uri);
+        *self.continuous_stream().lock().unwrap() = is_stream;
+
+        self.play_item(&item)
+    }
+
     /// Play the next track from the queue.
     fn play_next(&self) -> Result<(), ControlPointError>;
 
     /// Play the previous track from the queue.
     #[allow(dead_code)]
     fn play_previous(&self) -> Result<(), ControlPointError>;
-
-    /// Play from the queue at the current index (or initialize to 0 if not set).
-    fn play_from_queue(&self) -> Result<(), ControlPointError>;
 
     /// Play from a specific index in the queue.
     fn play_from_index(&self, index: usize) -> Result<(), ControlPointError>;
