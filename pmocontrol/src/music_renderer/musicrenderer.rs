@@ -1129,14 +1129,21 @@ impl MusicRenderer {
 
     /// Play from a specific index in the queue.
     pub fn play_from_index(&self, index: usize) -> Result<(), ControlPointError> {
-        // Reset the has_played flag before starting playback to prevent
-        // auto-advance on transient STOPPED states during track initialization.
-        // The flag will be set back to true when PLAYING state is detected.
+        // ✅ CORRECTIF BUG SHUFFLE: Quand on change d'index manuellement
+        // (par exemple shuffle, clique sur un titre), on réinitialise OBLIGATOIREMENT
+        // le flag has_played. Sinon quand le titre se termine l'auto-avance
+        // pense qu'il n'a jamais démarré et s'arrête.
+        tracing::debug!(
+            index = index,
+            renderer = self.info.friendly_name(),
+            "🎯 play_from_index appelé, réinitialisation has_played_flag"
+        );
         self.clear_has_played_flag();
 
         self.lock_backend_for("play_from_index")
             .play_from_index(index)?;
-        self.emit_queue_updated();
+
+        self.set_playback_source(PlaybackSource::FromQueue);
         Ok(())
     }
 
@@ -1159,6 +1166,11 @@ impl MusicRenderer {
         let queue_not_empty = backend.len().unwrap_or(0) > 0;
 
         if queue_not_empty {
+            // Set playback_source to FromQueue BEFORE calling backend
+            // to prevent race condition where watcher sees STOPPED before
+            // source is set, breaking auto-advance
+            self.set_playback_source(PlaybackSource::FromQueue);
+
             // Si on a des items dans la queue, jouer le track courant (ou le premier si aucun n'est sélectionné)
             // Cela fonctionne pour tous les backends (UPnP interne, OpenHome, etc.)
             backend.play_from_queue()
@@ -1624,6 +1636,11 @@ impl MusicRenderer {
         // The flag will be set back to true when PLAYING state is detected.
         self.clear_has_played_flag();
 
+        // Set playback_source to FromQueue BEFORE calling backend
+        // to prevent race condition where watcher sees STOPPED before
+        // source is set, breaking auto-advance
+        self.set_playback_source(PlaybackSource::FromQueue);
+
         self.lock_backend_for("play_from_queue").play_from_queue()
     }
 
@@ -1843,8 +1860,9 @@ impl MusicRenderer {
         // 5. Replace the queue with shuffled items, starting at index 0
         self.replace_queue(shuffled_items, Some(0))?;
 
-        // 6. Start playback from the first track
-        self.play_from_index(0)?;
+        // 6. Start playback from the first track with retry for JBL-like renderers
+        // that fail the first Play command due to timing issues
+        self.play_current_from_queue_with_retry()?;
 
         Ok(())
     }
