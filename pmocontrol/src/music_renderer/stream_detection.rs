@@ -195,6 +195,17 @@ fn check_stream_headers(url: &str) -> Result<bool, String> {
     Ok(is_stream)
 }
 
+/// Canonical check: returns `true` if this item should be treated as a continuous stream.
+///
+/// Checks `metadata.is_continuous_stream` first (already computed at ingest time),
+/// then falls back to the URL-based HTTP detection.
+///
+/// Use this function everywhere transport-layer code needs to decide whether playback is
+/// a continuous stream (radio) vs bounded media (file/album track).
+pub fn is_continuous_stream(metadata: Option<&crate::model::TrackMetadata>, uri: &str) -> bool {
+    metadata.map(|m| m.is_continuous_stream).unwrap_or(false) || is_continuous_stream_url(uri)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

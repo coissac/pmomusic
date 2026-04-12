@@ -129,6 +129,14 @@ impl MusicQueue {
         thread::Builder::new()
             .name(thread_name)
             .spawn(move || {
+                // Protocol for the three AtomicBools:
+                //   sync_in_progress : set to true before spawn, cleared on Drop via Guard.
+                //   sync_pending     : set to true by a concurrent caller that arrives while
+                //                      a sync is already running.  The worker re-fetches items
+                //                      and loops when it detects this flag on exit.
+                //   sync_cancel_token: set to true when a new sync request interrupts an
+                //                      in-progress one.  Passed into QueueBackend::sync_queue
+                //                      so it can abort early.
                 struct Guard(Arc<AtomicBool>);
                 impl Drop for Guard {
                     fn drop(&mut self) {
@@ -136,112 +144,132 @@ impl MusicQueue {
                     }
                 }
                 let _guard = Guard(Arc::clone(&sync_in_progress));
-
-                let mut current_items = items;
-                let mut current_on_ready = Some(on_ready);
-                let mut on_complete = Some(on_complete);
-
                 tracing::debug!(thread = %std::thread::current().name().unwrap_or("?"), "queue-sync thread started");
-
-                loop {
-                    sync_pending.store(false, SeqCst);
-                    sync_cancel_token.store(false, SeqCst);
-
-                    // Extract the real on_ready BEFORE locking the queue.
-                    // on_ready may call play_from_queue() which re-locks the queue,
-                    // so we must NOT call it while holding queue_arc.
-                    let real_on_ready = current_on_ready.take().flatten();
-                    let on_ready_triggered = Arc::new(AtomicBool::new(false));
-                    let proxy_on_ready: Option<Box<dyn FnOnce() + Send + 'static>> =
-                        real_on_ready.as_ref().map(|_| {
-                            let flag = Arc::clone(&on_ready_triggered);
-                            Box::new(move || {
-                                flag.store(true, SeqCst);
-                            }) as Box<dyn FnOnce() + Send + 'static>
-                        });
-
-                    tracing::debug!(
-                        thread = %std::thread::current().name().unwrap_or("?"),
-                        items = current_items.len(),
-                        has_on_ready = real_on_ready.is_some(),
-                        "queue-sync: calling sync_queue"
-                    );
-
-                    let result = {
-                        let mut q = queue_arc.lock().unwrap();
-                        <MusicQueue as QueueBackend>::sync_queue(
-                            &mut q,
-                            current_items,
-                            &sync_cancel_token,
-                            proxy_on_ready,
-                        )
-                    };
-                    // Queue lock is released here.
-                    // Now safe to call on_ready (which may re-lock the queue).
-                    // If on_ready was triggered by the proxy, consume and call it.
-                    // If not (cancelled before first insert), keep it to pass to retry.
-                    let carry_on_ready = if on_ready_triggered.load(SeqCst) {
-                        tracing::debug!(
-                            thread = %std::thread::current().name().unwrap_or("?"),
-                            "queue-sync: on_ready triggered, calling callback"
-                        );
-                        if let Some(f) = real_on_ready {
-                            f();
-                        }
-                        None
-                    } else {
-                        if real_on_ready.is_some() {
-                            tracing::debug!(
-                                thread = %std::thread::current().name().unwrap_or("?"),
-                                "queue-sync: on_ready not triggered, carrying to next attempt"
-                            );
-                        }
-                        real_on_ready
-                    };
-
-                    match result {
-                        Err(ControlPointError::SyncCancelled) => {
-                            tracing::debug!(
-                                thread = %std::thread::current().name().unwrap_or("?"),
-                                "queue-sync: cancelled"
-                            );
-                        }
-                        Err(e) => {
-                            tracing::warn!("queue-sync error: {}", e);
-                        }
-                        Ok(()) => {
-                            tracing::debug!(
-                                thread = %std::thread::current().name().unwrap_or("?"),
-                                "queue-sync: completed successfully"
-                            );
-                            if let Some(cb) = on_complete.take() {
-                                let queue_len = queue_arc.lock().unwrap().len().unwrap_or(0);
-                                cb(queue_len);
-                            }
-                        }
-                    }
-
-                    if !sync_pending.load(SeqCst) {
-                        break;
-                    }
-
-                    match pending_items_fn() {
-                        Ok(new_items) => {
-                            current_items = new_items;
-                            current_on_ready = Some(carry_on_ready);
-                        }
-                        Err(e) => {
-                            tracing::warn!("queue-sync pending re-fetch error: {}", e);
-                            break;
-                        }
-                    }
-                }
-
+                Self::sync_worker_loop(
+                    queue_arc,
+                    items,
+                    pending_items_fn,
+                    on_ready,
+                    on_complete,
+                    sync_pending,
+                    sync_cancel_token,
+                );
                 tracing::debug!(thread = %std::thread::current().name().unwrap_or("?"), "queue-sync thread done");
             })
             .expect("Failed to spawn queue-sync thread");
 
         SyncScheduleOutcome::Scheduled
+    }
+
+    /// Inner loop executed by the sync worker thread.
+    ///
+    /// Runs at least once with `initial_items`.  If a new sync request arrives while the
+    /// loop is running (`sync_pending` becomes true), it re-fetches items via
+    /// `pending_items_fn` and iterates again, allowing the latest playlist state to win.
+    fn sync_worker_loop(
+        queue_arc: Arc<Mutex<MusicQueue>>,
+        initial_items: Vec<PlaybackItem>,
+        pending_items_fn: Box<dyn Fn() -> Result<Vec<PlaybackItem>, ControlPointError> + Send>,
+        initial_on_ready: Option<Box<dyn FnOnce() + Send>>,
+        on_complete: Box<dyn Fn(usize) + Send>,
+        sync_pending: Arc<AtomicBool>,
+        sync_cancel_token: Arc<AtomicBool>,
+    ) {
+        let mut current_items = initial_items;
+        let mut current_on_ready = Some(initial_on_ready);
+        let mut on_complete = Some(on_complete);
+
+        loop {
+            sync_pending.store(false, SeqCst);
+            sync_cancel_token.store(false, SeqCst);
+
+            // Extract the real on_ready BEFORE locking the queue.
+            // on_ready may call play_from_queue() which re-locks the queue,
+            // so we must NOT call it while holding queue_arc.
+            let real_on_ready = current_on_ready.take().flatten();
+            let on_ready_triggered = Arc::new(AtomicBool::new(false));
+            let proxy_on_ready: Option<Box<dyn FnOnce() + Send + 'static>> =
+                real_on_ready.as_ref().map(|_| {
+                    let flag = Arc::clone(&on_ready_triggered);
+                    Box::new(move || {
+                        flag.store(true, SeqCst);
+                    }) as Box<dyn FnOnce() + Send + 'static>
+                });
+
+            tracing::debug!(
+                thread = %std::thread::current().name().unwrap_or("?"),
+                items = current_items.len(),
+                has_on_ready = real_on_ready.is_some(),
+                "queue-sync: calling sync_queue"
+            );
+
+            let result = {
+                let mut q = queue_arc.lock().unwrap();
+                <MusicQueue as QueueBackend>::sync_queue(
+                    &mut q,
+                    current_items,
+                    &sync_cancel_token,
+                    proxy_on_ready,
+                )
+            };
+            // Queue lock is released here.
+            // Now safe to call on_ready (which may re-lock the queue).
+            let carry_on_ready = if on_ready_triggered.load(SeqCst) {
+                tracing::debug!(
+                    thread = %std::thread::current().name().unwrap_or("?"),
+                    "queue-sync: on_ready triggered, calling callback"
+                );
+                if let Some(f) = real_on_ready {
+                    f();
+                }
+                None
+            } else {
+                if real_on_ready.is_some() {
+                    tracing::debug!(
+                        thread = %std::thread::current().name().unwrap_or("?"),
+                        "queue-sync: on_ready not triggered, carrying to next attempt"
+                    );
+                }
+                real_on_ready
+            };
+
+            match result {
+                Err(ControlPointError::SyncCancelled) => {
+                    tracing::debug!(
+                        thread = %std::thread::current().name().unwrap_or("?"),
+                        "queue-sync: cancelled"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("queue-sync error: {}", e);
+                }
+                Ok(()) => {
+                    tracing::debug!(
+                        thread = %std::thread::current().name().unwrap_or("?"),
+                        "queue-sync: completed successfully"
+                    );
+                    if let Some(cb) = on_complete.take() {
+                        let queue_len = queue_arc.lock().unwrap().len().unwrap_or(0);
+                        cb(queue_len);
+                    }
+                }
+            }
+
+            if !sync_pending.load(SeqCst) {
+                break;
+            }
+
+            match pending_items_fn() {
+                Ok(new_items) => {
+                    current_items = new_items;
+                    current_on_ready = Some(carry_on_ready);
+                }
+                Err(e) => {
+                    tracing::warn!("queue-sync pending re-fetch error: {}", e);
+                    break;
+                }
+            }
+        }
     }
 }
 

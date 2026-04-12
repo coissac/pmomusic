@@ -23,7 +23,7 @@ pub use crate::music_renderer::capabilities::{
 };
 pub use crate::music_renderer::musicrenderer::{MusicRenderer, PlaylistBinding};
 pub use crate::music_renderer::sleep_timer::SleepTimer;
-pub use crate::music_renderer::stream_detection::is_continuous_stream_url;
+pub use crate::music_renderer::stream_detection::{is_continuous_stream, is_continuous_stream_url};
 use crate::{
     errors::ControlPointError, music_renderer::musicrenderer::MusicRendererBackend, RendererInfo,
 };

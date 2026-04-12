@@ -19,7 +19,7 @@ use crate::{errors::ControlPointError, RendererInfo};
 
 /// Returns true if `new_dur` < `old_dur` (both parseable as HH:MM:SS/MM:SS/SS).
 /// Used to protect stream durations from decreasing for the same track.
-pub(super) fn stream_duration_decreased(old_dur: &str, new_dur: &str) -> bool {
+pub(crate) fn stream_duration_decreased(old_dur: &str, new_dur: &str) -> bool {
     match (
         parse_time_flexible(old_dur).ok(),
         parse_time_flexible(new_dur).ok(),
@@ -30,7 +30,7 @@ pub(super) fn stream_duration_decreased(old_dur: &str, new_dur: &str) -> bool {
 }
 
 /// Returns true if `new_dur` > `old_dur` (both parseable as HH:MM:SS/MM:SS/SS).
-pub(super) fn stream_duration_increased(old_dur: &str, new_dur: &str) -> bool {
+pub(crate) fn stream_duration_increased(old_dur: &str, new_dur: &str) -> bool {
     match (
         parse_time_flexible(old_dur).ok(),
         parse_time_flexible(new_dur).ok(),

@@ -46,7 +46,7 @@ pub trait QueueTransportControl: HasQueue + HasContinuousStream {
 
         drop(queue);
 
-        let is_stream = crate::music_renderer::is_continuous_stream_url(&item.uri);
+        let is_stream = crate::music_renderer::is_continuous_stream(item.metadata.as_ref(), &item.uri);
         *self.continuous_stream().lock().unwrap() = is_stream;
 
         self.play_item(&item)

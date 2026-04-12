@@ -492,39 +492,19 @@ impl MusicRenderer {
                     if let Some(ref new_duration) = position.track_duration {
                         let mut state = self.state.lock().unwrap();
 
-                        // Parse durations to compare (HH:MM:SS format)
-                        let parse_duration = |dur_str: &str| -> Option<u32> {
-                            let parts: Vec<&str> = dur_str.split(':').collect();
-                            if parts.len() == 3 {
-                                let h: u32 = parts[0].parse().ok()?;
-                                let m: u32 = parts[1].parse().ok()?;
-                                let s: u32 = parts[2].parse().ok()?;
-                                Some(h * 3600 + m * 60 + s)
-                            } else {
-                                None
-                            }
-                        };
-
                         match &state.current_track_duration {
                             Some(stored_duration) => {
-                                // Compare new duration with stored one
-                                if let (Some(stored_secs), Some(new_secs)) = (
-                                    parse_duration(stored_duration),
-                                    parse_duration(new_duration),
-                                ) {
-                                    if new_secs > stored_secs {
-                                        // Duration increased: update stored value and use new one
-                                        tracing::debug!(
-                                            "MusicRenderer [{}]: Stream duration increased: {} -> {}",
-                                            self.info.friendly_name(),
-                                            stored_duration,
-                                            new_duration
-                                        );
-                                        state.current_track_duration = Some(new_duration.clone());
-                                    } else {
-                                        // Duration decreased or equal: keep stored value
-                                        position.track_duration = Some(stored_duration.clone());
-                                    }
+                                if crate::queue::stream_duration_increased(stored_duration, new_duration) {
+                                    tracing::debug!(
+                                        "MusicRenderer [{}]: Stream duration increased: {} -> {}",
+                                        self.info.friendly_name(),
+                                        stored_duration,
+                                        new_duration
+                                    );
+                                    state.current_track_duration = Some(new_duration.clone());
+                                } else if crate::queue::stream_duration_decreased(stored_duration, new_duration) {
+                                    // Duration decreased: keep stored value
+                                    position.track_duration = Some(stored_duration.clone());
                                 }
                             }
                             None => {
