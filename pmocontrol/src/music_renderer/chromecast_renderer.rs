@@ -23,11 +23,12 @@ use crate::discovery::chromecast_discovery::{
 use crate::errors::ControlPointError;
 use crate::model::{PlaybackState, RendererInfo};
 use crate::music_renderer::capabilities::{
-    PlaybackPosition, PlaybackPositionInfo, PlaybackStatus, QueueTransportControl, RendererBackend,
-    TransportControl, VolumeControl,
+    HasContinuousStream, PlaybackPosition, PlaybackPositionInfo, PlaybackStatus,
+    QueueTransportControl, TransportControl, VolumeControl,
 };
 use crate::music_renderer::musicrenderer::MusicRendererBackend;
 use crate::music_renderer::time_utils::{format_hhmmss_f64, parse_hhmmss_strict};
+use crate::music_renderer::HasQueue;
 use crate::music_renderer::RendererFromMediaRendererInfo;
 use crate::queue::{EnqueueMode, MusicQueue, PlaybackItem, QueueBackend, QueueSnapshot};
 use crate::DeviceIdentity;
@@ -171,7 +172,7 @@ impl RendererFromMediaRendererInfo for ChromecastRenderer {
 impl ChromecastRenderer {
     /// Returns true if currently playing a continuous stream (radio without duration)
     pub fn is_continuous_stream(&self) -> bool {
-        *self.continuous_stream.lock().unwrap()
+        *self.continuous_stream.lock().expect("continuous_stream mutex poisoned")
     }
 
     /// Connect to the device with retry on connection failures.
@@ -204,7 +205,7 @@ impl TransportControl for ChromecastRenderer {
 
         // Détecte si l'URL est un flux continu
         let is_stream = crate::music_renderer::is_continuous_stream_url(uri);
-        *self.continuous_stream.lock().unwrap() = is_stream;
+        *self.continuous_stream.lock().expect("continuous_stream mutex poisoned") = is_stream;
         tracing::debug!(
             "ChromecastRenderer play_uri: URI={}, continuous_stream={}",
             uri,
@@ -799,139 +800,22 @@ impl VolumeControl for ChromecastRenderer {
     }
 }
 
-impl RendererBackend for ChromecastRenderer {
+
+impl QueueTransportControl for ChromecastRenderer {
+    fn play_item(&self, item: &PlaybackItem) -> Result<(), ControlPointError> {
+        self.play_uri(&item.uri, "")
+    }
+
+}
+
+impl HasQueue for ChromecastRenderer {
     fn queue(&self) -> &Arc<Mutex<MusicQueue>> {
         &self.queue
     }
 }
 
-impl QueueTransportControl for ChromecastRenderer {
-    fn play_from_queue(&self) -> Result<(), ControlPointError> {
-        let mut queue = self.queue.lock().unwrap();
-
-        let current_index = match queue.current_index()? {
-            Some(idx) => idx,
-            None => {
-                if queue.len()? > 0 {
-                    queue.set_index(Some(0))?;
-                    0
-                } else {
-                    return Err(ControlPointError::QueueError("Queue is empty".into()));
-                }
-            }
-        };
-
-        let item = queue
-            .get_item(current_index)?
-            .ok_or_else(|| ControlPointError::QueueError("Current item not found".into()))?;
-
-        let uri = item.uri.clone();
-        drop(queue);
-
-        self.play_uri(&uri, "")
-    }
-
-    fn play_next(&self) -> Result<(), ControlPointError> {
-        {
-            let mut queue = self.queue.lock().unwrap();
-            if !queue.advance()? {
-                return Err(ControlPointError::QueueError("No next track".into()));
-            }
-        }
-
-        self.play_from_queue()
-    }
-
-    fn play_previous(&self) -> Result<(), ControlPointError> {
-        {
-            let mut queue = self.queue.lock().unwrap();
-            if !queue.rewind()? {
-                return Err(ControlPointError::QueueError("No previous track".into()));
-            }
-        }
-
-        self.play_from_queue()
-    }
-
-    fn play_from_index(&self, index: usize) -> Result<(), ControlPointError> {
-        {
-            let mut queue = self.queue.lock().unwrap();
-            queue.set_index(Some(index))?;
-        }
-
-        self.play_from_queue()
-    }
-}
-
-impl QueueBackend for ChromecastRenderer {
-    fn len(&self) -> Result<usize, ControlPointError> {
-        self.queue.lock().unwrap().len()
-    }
-
-    fn track_ids(&self) -> Result<Vec<u32>, ControlPointError> {
-        self.queue.lock().unwrap().track_ids()
-    }
-
-    fn id_to_position(&self, id: u32) -> Result<usize, ControlPointError> {
-        self.queue.lock().unwrap().id_to_position(id)
-    }
-
-    fn position_to_id(&self, id: usize) -> Result<u32, ControlPointError> {
-        self.queue.lock().unwrap().position_to_id(id)
-    }
-
-    fn current_track(&self) -> Result<Option<u32>, ControlPointError> {
-        self.queue.lock().unwrap().current_track()
-    }
-
-    fn current_index(&self) -> Result<Option<usize>, ControlPointError> {
-        self.queue.lock().unwrap().current_index()
-    }
-
-    fn queue_snapshot(&self) -> Result<QueueSnapshot, ControlPointError> {
-        self.queue.lock().unwrap().queue_snapshot()
-    }
-
-    fn set_index(&mut self, index: Option<usize>) -> Result<(), ControlPointError> {
-        self.queue.lock().unwrap().set_index(index)
-    }
-
-    fn replace_queue(
-        &mut self,
-        items: Vec<PlaybackItem>,
-        current_index: Option<usize>,
-    ) -> Result<(), ControlPointError> {
-        self.queue
-            .lock()
-            .unwrap()
-            .replace_queue(items, current_index)
-    }
-
-    fn sync_queue(
-        &mut self,
-        items: Vec<PlaybackItem>,
-        _cancel_token: &Arc<AtomicBool>,
-        on_ready: Option<Box<dyn FnOnce() + Send>>,
-    ) -> Result<(), ControlPointError> {
-        self.queue
-            .lock()
-            .unwrap()
-            .sync_queue(items, &Arc::new(AtomicBool::new(false)), on_ready)
-    }
-
-    fn get_item(&self, index: usize) -> Result<Option<PlaybackItem>, ControlPointError> {
-        self.queue.lock().unwrap().get_item(index)
-    }
-
-    fn replace_item(&mut self, index: usize, item: PlaybackItem) -> Result<(), ControlPointError> {
-        self.queue.lock().unwrap().replace_item(index, item)
-    }
-
-    fn enqueue_items(
-        &mut self,
-        items: Vec<PlaybackItem>,
-        mode: EnqueueMode,
-    ) -> Result<(), ControlPointError> {
-        self.queue.lock().unwrap().enqueue_items(items, mode)
+impl HasContinuousStream for ChromecastRenderer {
+    fn continuous_stream(&self) -> &Arc<Mutex<bool>> {
+        &self.continuous_stream
     }
 }

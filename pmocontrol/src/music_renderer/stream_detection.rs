@@ -53,7 +53,7 @@ pub fn is_continuous_stream_url(url: &str) -> bool {
 
     // Check cache first
     {
-        let cache = STREAM_CACHE.lock().unwrap();
+        let cache = STREAM_CACHE.lock().expect("stream cache mutex poisoned");
         if let Some(&cached_result) = cache.get(url) {
             trace!("Cache hit for {}: is_stream={}", url, cached_result);
             return cached_result;
@@ -62,7 +62,7 @@ pub fn is_continuous_stream_url(url: &str) -> bool {
 
     // Check if already being verified
     {
-        let mut pending = PENDING_CHECKS.lock().unwrap();
+        let mut pending = PENDING_CHECKS.lock().expect("pending checks mutex poisoned");
         if pending.contains(url) {
             debug!(
                 "Stream detection already in progress for {}, returning false temporarily",
@@ -93,13 +93,13 @@ pub fn is_continuous_stream_url(url: &str) -> bool {
 
         // Store in cache
         {
-            let mut cache = STREAM_CACHE.lock().unwrap();
+            let mut cache = STREAM_CACHE.lock().expect("stream cache mutex poisoned");
             cache.insert(url_owned.clone(), result);
         }
 
         // Remove from pending
         {
-            let mut pending = PENDING_CHECKS.lock().unwrap();
+            let mut pending = PENDING_CHECKS.lock().expect("pending checks mutex poisoned");
             pending.remove(&url_owned);
         }
 
@@ -185,10 +185,25 @@ fn check_stream_headers(url: &str) -> Result<bool, String> {
 
     trace!(
         "Stream detection for {}: content-length={}, chunked={}, streaming_mime={}, is_stream={}",
-        url, has_content_length, is_chunked, is_streaming_mime, is_stream
+        url,
+        has_content_length,
+        is_chunked,
+        is_streaming_mime,
+        is_stream
     );
 
     Ok(is_stream)
+}
+
+/// Canonical check: returns `true` if this item should be treated as a continuous stream.
+///
+/// Checks `metadata.is_continuous_stream` first (already computed at ingest time),
+/// then falls back to the URL-based HTTP detection.
+///
+/// Use this function everywhere transport-layer code needs to decide whether playback is
+/// a continuous stream (radio) vs bounded media (file/album track).
+pub fn is_continuous_stream(metadata: Option<&crate::model::TrackMetadata>, uri: &str) -> bool {
+    metadata.map(|m| m.is_continuous_stream).unwrap_or(false) || is_continuous_stream_url(uri)
 }
 
 #[cfg(test)]

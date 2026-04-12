@@ -19,10 +19,6 @@ use crate::events::RendererEventBus;
 use crate::model::RendererEvent;
 use crate::model::{PlaybackSource, PlaybackState, RendererInfo, RendererProtocol, TrackMetadata};
 use crate::music_renderer::arylic_tcp::ArylicTcpRenderer;
-use crate::music_renderer::capabilities::{
-    PlaybackPosition, PlaybackPositionInfo, PlaybackStatus, QueueTransportControl, RendererBackend,
-    TransportControl, VolumeControl,
-};
 use crate::music_renderer::chromecast_renderer::ChromecastRenderer;
 use crate::music_renderer::linkplay_renderer::LinkPlayRenderer;
 use crate::music_renderer::openhome_renderer::OpenHomeRenderer;
@@ -33,6 +29,10 @@ use crate::music_renderer::watcher::{
     WatchedState,
 };
 use crate::music_renderer::RendererFromMediaRendererInfo;
+use crate::music_renderer::{
+    HasContinuousStream, HasQueue, PlaybackPosition, PlaybackPositionInfo, PlaybackStatus,
+    QueueTransportControl, TransportControl, VolumeControl,
+};
 use crate::online::DeviceConnectionState;
 use crate::queue::{EnqueueMode, MusicQueue, PlaybackItem, QueueBackend, QueueSnapshot};
 use crate::{DeviceId, DeviceIdentity, DeviceOnline};
@@ -46,9 +46,9 @@ use tracing::warn;
 #[derive(Clone, Debug)]
 pub struct PlaylistBinding {
     /// MediaServer that owns the playlist container.
-    pub server_id: DeviceId,
+    pub(crate) server_id: DeviceId,
     /// DIDL-Lite object id of the playlist container.
-    pub container_id: String,
+    pub(crate) container_id: String,
     /// True once at least one ContainerUpdateIDs notification has been seen.
     pub(crate) has_seen_update: bool,
     /// Flag used internally to signal that the queue should be refreshed
@@ -56,6 +56,18 @@ pub struct PlaylistBinding {
     pub(crate) pending_refresh: bool,
     /// Whether the next refresh should auto-start playback if the renderer is idle.
     pub(crate) auto_play_on_refresh: bool,
+}
+
+impl PlaylistBinding {
+    /// Returns the ID of the MediaServer that owns this playlist container.
+    pub fn server_id(&self) -> &DeviceId {
+        &self.server_id
+    }
+
+    /// Returns the DIDL-Lite object ID of the playlist container.
+    pub fn container_id(&self) -> &str {
+        &self.container_id
+    }
 }
 
 /// Backend-agnostic façade exposing transport, volume, and status contracts.
@@ -311,6 +323,14 @@ impl MusicRenderer {
     }
 
     /// Main loop for the watcher thread.
+    ///
+    /// # Error policy
+    ///
+    /// The watcher thread runs for the lifetime of the renderer and never restarts
+    /// automatically. Network/device errors during polling are logged at `debug` level
+    /// and ignored — they are transient and expected when a device is temporarily
+    /// unreachable. Panics inside `poll_and_emit_changes` are caught and logged at
+    /// `error` level so they do not kill the watcher thread.
     fn watcher_loop(&self, strategy: WatchStrategy, stop_flag: Arc<AtomicBool>) {
         let Some(base_interval) = strategy.polling_interval() else {
             // Pure push strategy - no polling needed (future implementation)
@@ -341,7 +361,16 @@ impl MusicRenderer {
             };
 
             if self.is_online() {
-                self.poll_and_emit_changes(tick);
+                // Wrap in catch_unwind so a panic in poll logic does not terminate the watcher.
+                let poll_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    self.poll_and_emit_changes(tick);
+                }));
+                if let Err(_panic) = poll_result {
+                    error!(
+                        renderer = self.info.friendly_name(),
+                        "poll_and_emit_changes panicked; watcher continues"
+                    );
+                }
                 last_activity_time = SystemTime::now();
             }
 
@@ -393,14 +422,19 @@ impl MusicRenderer {
 
         // Step 2: Do all network calls WITHOUT holding any locks
         // This prevents blocking other threads that need to read watched_state
-        let position = self.playback_position().ok();
-        let raw_state = self.playback_state().ok();
+        // Errors are logged at trace level — device temporarily unreachable is expected.
+        let position = self.playback_position()
+            .inspect_err(|e| tracing::trace!(renderer = self.info.friendly_name(), error = %e, "playback_position failed"))
+            .ok();
+        let raw_state = self.playback_state()
+            .inspect_err(|e| tracing::trace!(renderer = self.info.friendly_name(), error = %e, "playback_state failed"))
+            .ok();
 
         // Poll volume and mute every other tick (1 second at 500ms interval)
         let (volume, mute, is_stream) = if tick % 2 == 0 {
             (
-                self.volume().ok(),
-                self.mute().ok(),
+                self.volume().inspect_err(|e| tracing::trace!(renderer = self.info.friendly_name(), error = %e, "volume poll failed")).ok(),
+                self.mute().inspect_err(|e| tracing::trace!(renderer = self.info.friendly_name(), error = %e, "mute poll failed")).ok(),
                 Some(self.is_playing_a_stream()),
             )
         } else {
@@ -490,41 +524,21 @@ impl MusicRenderer {
             if let Some(stream_flag) = is_stream {
                 if stream_flag {
                     if let Some(ref new_duration) = position.track_duration {
-                        let mut state = self.state.lock().unwrap();
-
-                        // Parse durations to compare (HH:MM:SS format)
-                        let parse_duration = |dur_str: &str| -> Option<u32> {
-                            let parts: Vec<&str> = dur_str.split(':').collect();
-                            if parts.len() == 3 {
-                                let h: u32 = parts[0].parse().ok()?;
-                                let m: u32 = parts[1].parse().ok()?;
-                                let s: u32 = parts[2].parse().ok()?;
-                                Some(h * 3600 + m * 60 + s)
-                            } else {
-                                None
-                            }
-                        };
+                        let mut state = self.state.lock().expect("RendererState mutex poisoned");
 
                         match &state.current_track_duration {
                             Some(stored_duration) => {
-                                // Compare new duration with stored one
-                                if let (Some(stored_secs), Some(new_secs)) = (
-                                    parse_duration(stored_duration),
-                                    parse_duration(new_duration),
-                                ) {
-                                    if new_secs > stored_secs {
-                                        // Duration increased: update stored value and use new one
-                                        tracing::debug!(
-                                            "MusicRenderer [{}]: Stream duration increased: {} -> {}",
-                                            self.info.friendly_name(),
-                                            stored_duration,
-                                            new_duration
-                                        );
-                                        state.current_track_duration = Some(new_duration.clone());
-                                    } else {
-                                        // Duration decreased or equal: keep stored value
-                                        position.track_duration = Some(stored_duration.clone());
-                                    }
+                                if crate::queue::stream_duration_increased(stored_duration, new_duration) {
+                                    tracing::debug!(
+                                        "MusicRenderer [{}]: Stream duration increased: {} -> {}",
+                                        self.info.friendly_name(),
+                                        stored_duration,
+                                        new_duration
+                                    );
+                                    state.current_track_duration = Some(new_duration.clone());
+                                } else if crate::queue::stream_duration_decreased(stored_duration, new_duration) {
+                                    // Duration decreased: keep stored value
+                                    position.track_duration = Some(stored_duration.clone());
                                 }
                             }
                             None => {
@@ -667,7 +681,7 @@ impl MusicRenderer {
         match state {
             PlaybackState::Stopped => {
                 {
-                    let s = self.state.lock().unwrap();
+                    let s = self.state.lock().expect("RendererState mutex poisoned");
                     tracing::debug!(
                         renderer = self.info.friendly_name(),
                         has_played = s.has_played_since_track_start,
@@ -700,7 +714,7 @@ impl MusicRenderer {
                     // On autorise l'auto-avance si:
                     //   1. On a bien vu PLAYING OU
                     //   2. Le titre a été lancé depuis plus de 20 secondes
-                    let track_start = self.state.lock().unwrap().track_start_time;
+                    let track_start = self.state.lock().expect("RendererState mutex poisoned").track_start_time;
                     let elapsed = track_start
                         .and_then(|t| t.elapsed().ok())
                         .unwrap_or_default();
@@ -757,7 +771,7 @@ impl MusicRenderer {
             PlaybackState::NoMedia => {
                 // Handle end of track (Chromecast returns NoMedia when track ends)
                 // This is equivalent to Stopped for auto-advance purposes
-                let s = self.state.lock().unwrap();
+                let s = self.state.lock().expect("RendererState mutex poisoned");
                 let playback_source = s.playback_source;
                 let has_played = s.has_played_since_track_start;
                 let user_stop = s.user_stop_requested;
@@ -824,7 +838,7 @@ impl MusicRenderer {
                 self.set_has_played_flag();
             }
             PlaybackState::Transitioning => {
-                let s = self.state.lock().unwrap();
+                let s = self.state.lock().expect("RendererState mutex poisoned");
                 tracing::trace!(
                     renderer = self.info.friendly_name(),
                     has_played = s.has_played_since_track_start,
@@ -998,7 +1012,7 @@ impl MusicRenderer {
     /// Get a clone of the queue Arc (for async sync operations).
     pub fn queue(&self) -> Arc<Mutex<MusicQueue>> {
         let backend = self.lock_backend_for("queue");
-        crate::music_renderer::capabilities::RendererBackend::queue(&*backend).clone()
+        crate::music_renderer::capabilities::HasQueue::queue(&*backend).clone()
     }
 
     /// Get the current queue item without advancing.
@@ -1666,13 +1680,13 @@ impl MusicRenderer {
 
     /// Gets the last known track metadata.
     pub fn last_metadata(&self) -> Option<TrackMetadata> {
-        self.state.lock().unwrap().last_metadata.clone()
+        self.state.lock().expect("RendererState mutex poisoned").last_metadata.clone()
     }
 
     /// Sets the last known track metadata.
     /// Updates track_start_time and resets current_track_duration only if the metadata actually changes.
     pub fn set_last_metadata(&self, metadata: Option<TrackMetadata>) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().expect("RendererState mutex poisoned");
         let metadata_changed = state.last_metadata != metadata;
         if metadata_changed {
             // Pour les flux continus: utiliser dc:date comme track_start_time réel de diffusion.
@@ -1693,23 +1707,23 @@ impl MusicRenderer {
 
     /// Gets the timestamp when the current track started playing.
     pub fn track_start_time(&self) -> Option<SystemTime> {
-        self.state.lock().unwrap().track_start_time
+        self.state.lock().expect("RendererState mutex poisoned").track_start_time
     }
 
     /// Gets the current playback source.
     pub fn playback_source(&self) -> PlaybackSource {
-        self.state.lock().unwrap().playback_source
+        self.state.lock().expect("RendererState mutex poisoned").playback_source
     }
 
     /// Sets the playback source.
     pub fn set_playback_source(&self, source: PlaybackSource) {
-        self.state.lock().unwrap().playback_source = source;
+        self.state.lock().expect("RendererState mutex poisoned").playback_source = source;
     }
 
     /// Checks if currently playing from queue.
     pub fn is_playing_from_queue(&self) -> bool {
         matches!(
-            self.state.lock().unwrap().playback_source,
+            self.state.lock().expect("RendererState mutex poisoned").playback_source,
             PlaybackSource::FromQueue
         )
     }
@@ -1720,7 +1734,7 @@ impl MusicRenderer {
     /// Does NOT change None -> External because that would break queue playback
     /// (the control_point will set it to FromQueue after play_from_queue succeeds).
     pub fn mark_external_if_idle(&self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().expect("RendererState mutex poisoned");
         if matches!(state.playback_source, PlaybackSource::External) {
             // Keep External if we were already playing externally
         } else {
@@ -1731,12 +1745,12 @@ impl MusicRenderer {
 
     /// Marks that the user requested a stop (to prevent auto-advance).
     pub fn mark_user_stop_requested(&self) {
-        self.state.lock().unwrap().user_stop_requested = true;
+        self.state.lock().expect("RendererState mutex poisoned").user_stop_requested = true;
     }
 
     /// Checks and clears the user stop requested flag.
     pub fn check_and_clear_user_stop_requested(&self) -> bool {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().expect("RendererState mutex poisoned");
         let was_requested = state.user_stop_requested;
         state.user_stop_requested = false;
         was_requested
@@ -1747,21 +1761,21 @@ impl MusicRenderer {
     /// Sets the has_played_since_track_start flag to true.
     /// Called when PLAYING state is detected.
     fn set_has_played_flag(&self) {
-        self.state.lock().unwrap().has_played_since_track_start = true;
+        self.state.lock().expect("RendererState mutex poisoned").has_played_since_track_start = true;
     }
 
     /// Clears the has_played_since_track_start flag.
     /// Called when stopping playback or starting a new track.
     /// This is public so that ControlPoint can reset it when jumping to a new track.
     pub fn clear_has_played_flag(&self) {
-        self.state.lock().unwrap().has_played_since_track_start = false;
+        self.state.lock().expect("RendererState mutex poisoned").has_played_since_track_start = false;
     }
 
     /// Checks and clears the has_played_since_track_start flag.
     /// Returns true if PLAYING was seen since last track start, false otherwise.
     /// Used to determine if auto-advance should be allowed.
     fn check_and_clear_has_played_flag(&self) -> bool {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().expect("RendererState mutex poisoned");
         let has_played = state.has_played_since_track_start;
         state.has_played_since_track_start = false;
         has_played
@@ -1777,7 +1791,7 @@ impl MusicRenderer {
     /// # Errors
     /// Returns an error if the duration is invalid (0 or > 7200 seconds).
     pub fn start_sleep_timer(&self, duration_seconds: u32) -> Result<u32, ControlPointError> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().expect("RendererState mutex poisoned");
         state
             .sleep_timer
             .start(duration_seconds)
@@ -1793,7 +1807,7 @@ impl MusicRenderer {
     /// # Errors
     /// Returns an error if the duration is invalid (0 or > 7200 seconds).
     pub fn update_sleep_timer(&self, duration_seconds: u32) -> Result<u32, ControlPointError> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().expect("RendererState mutex poisoned");
         state
             .sleep_timer
             .update(duration_seconds)
@@ -1804,32 +1818,32 @@ impl MusicRenderer {
 
     /// Cancels the sleep timer.
     pub fn cancel_sleep_timer(&self) {
-        self.state.lock().unwrap().sleep_timer.cancel();
+        self.state.lock().expect("RendererState mutex poisoned").sleep_timer.cancel();
     }
 
     /// Returns the remaining seconds of the sleep timer, or None if no timer is active.
     pub fn sleep_timer_remaining(&self) -> Option<u32> {
-        self.state.lock().unwrap().sleep_timer.remaining_seconds()
+        self.state.lock().expect("RendererState mutex poisoned").sleep_timer.remaining_seconds()
     }
 
     /// Returns the configured duration of the sleep timer in seconds.
     pub fn sleep_timer_duration(&self) -> u32 {
-        self.state.lock().unwrap().sleep_timer.duration_seconds()
+        self.state.lock().expect("RendererState mutex poisoned").sleep_timer.duration_seconds()
     }
 
     /// Returns true if the sleep timer is active.
     pub fn is_sleep_timer_active(&self) -> bool {
-        self.state.lock().unwrap().sleep_timer.is_active()
+        self.state.lock().expect("RendererState mutex poisoned").sleep_timer.is_active()
     }
 
     /// Returns true if the sleep timer has expired.
     pub fn is_sleep_timer_expired(&self) -> bool {
-        self.state.lock().unwrap().sleep_timer.is_expired()
+        self.state.lock().expect("RendererState mutex poisoned").sleep_timer.is_expired()
     }
 
     /// Gets the sleep timer state as a tuple (is_active, duration_seconds, remaining_seconds).
     pub fn sleep_timer_state(&self) -> (bool, u32, Option<u32>) {
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock().expect("RendererState mutex poisoned");
         (
             state.sleep_timer.is_active(),
             state.sleep_timer.duration_seconds(),
@@ -2091,7 +2105,7 @@ impl RendererFromMediaRendererInfo for MusicRendererBackend {
 /// Extracts the duration attribute from the <res> element in DIDL metadata.
 /// This is used as a fallback when the renderer doesn't provide track_duration
 /// in GetPositionInfo or similar calls.
-fn parse_didl_duration(didl_xml: &str) -> Option<String> {
+pub(crate) fn parse_didl_duration(didl_xml: &str) -> Option<String> {
     // Parse DIDL-Lite XML properly using pmodidl
     let didl = match DIDLLite::parse(didl_xml) {
         Ok(d) => d,
@@ -2129,6 +2143,37 @@ fn parse_rfc3339_to_system_time(s: &str) -> Option<SystemTime> {
     Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs as u64))
 }
 
+
+/// Dispatch a method call to the inner backend, using the UPnP field for
+/// HybridUpnpArylic.
+macro_rules! dispatch_upnp {
+    ($self:expr, $method:ident($($arg:expr),*)) => {
+        match $self {
+            MusicRendererBackend::Upnp(r) => r.$method($($arg),*),
+            MusicRendererBackend::OpenHome(r) => r.$method($($arg),*),
+            MusicRendererBackend::LinkPlay(r) => r.$method($($arg),*),
+            MusicRendererBackend::ArylicTcp(r) => r.$method($($arg),*),
+            MusicRendererBackend::Chromecast(cc) => cc.$method($($arg),*),
+            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.$method($($arg),*),
+        }
+    };
+}
+
+/// Dispatch a method call to the inner backend, using the Arylic field for
+/// HybridUpnpArylic.
+macro_rules! dispatch_arylic {
+    ($self:expr, $method:ident($($arg:expr),*)) => {
+        match $self {
+            MusicRendererBackend::Upnp(r) => r.$method($($arg),*),
+            MusicRendererBackend::OpenHome(r) => r.$method($($arg),*),
+            MusicRendererBackend::LinkPlay(r) => r.$method($($arg),*),
+            MusicRendererBackend::ArylicTcp(r) => r.$method($($arg),*),
+            MusicRendererBackend::Chromecast(cc) => cc.$method($($arg),*),
+            MusicRendererBackend::HybridUpnpArylic { arylic, .. } => arylic.$method($($arg),*),
+        }
+    };
+}
+
 /// Transport control façade that dispatches to whichever backend can fulfill
 /// the request, returning a standardized error if the backend lacks support.
 impl TransportControl for MusicRendererBackend {
@@ -2145,38 +2190,9 @@ impl TransportControl for MusicRendererBackend {
         }
     }
 
-    fn play(&self) -> Result<(), ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(upnp) => upnp.play(),
-            MusicRendererBackend::OpenHome(oh) => oh.play(),
-            MusicRendererBackend::LinkPlay(lp) => lp.play(),
-            MusicRendererBackend::ArylicTcp(ary) => ary.play(),
-            MusicRendererBackend::Chromecast(cc) => cc.play(),
-            MusicRendererBackend::HybridUpnpArylic { arylic, .. } => arylic.play(),
-        }
-    }
-
-    fn pause(&self) -> Result<(), ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(upnp) => upnp.pause(),
-            MusicRendererBackend::OpenHome(oh) => oh.pause(),
-            MusicRendererBackend::LinkPlay(lp) => lp.pause(),
-            MusicRendererBackend::ArylicTcp(ary) => ary.pause(),
-            MusicRendererBackend::Chromecast(cc) => cc.pause(),
-            MusicRendererBackend::HybridUpnpArylic { arylic, .. } => arylic.pause(),
-        }
-    }
-
-    fn stop(&self) -> Result<(), ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(upnp) => upnp.stop(),
-            MusicRendererBackend::OpenHome(oh) => oh.stop(),
-            MusicRendererBackend::LinkPlay(lp) => lp.stop(),
-            MusicRendererBackend::ArylicTcp(ary) => ary.stop(),
-            MusicRendererBackend::Chromecast(cc) => cc.stop(),
-            MusicRendererBackend::HybridUpnpArylic { arylic, .. } => arylic.stop(),
-        }
-    }
+    fn play(&self) -> Result<(), ControlPointError> { dispatch_arylic!(self, play()) }
+    fn pause(&self) -> Result<(), ControlPointError> { dispatch_arylic!(self, pause()) }
+    fn stop(&self) -> Result<(), ControlPointError> { dispatch_arylic!(self, stop()) }
 
     fn seek_rel_time(&self, hhmmss: &str) -> Result<(), ControlPointError> {
         match self {
@@ -2197,49 +2213,10 @@ impl TransportControl for MusicRendererBackend {
 /// Hybrid backends may read via Arylic TCP and write via UPnP, but callers
 /// always depend on a single [`VolumeControl`] entry point.
 impl VolumeControl for MusicRendererBackend {
-    fn volume(&self) -> Result<u16, ControlPointError> {
-        match self {
-            MusicRendererBackend::HybridUpnpArylic { arylic, .. } => arylic.volume(),
-            MusicRendererBackend::ArylicTcp(ary) => ary.volume(),
-            MusicRendererBackend::OpenHome(oh) => oh.volume(),
-            MusicRendererBackend::Upnp(upnp) => upnp.volume(),
-            MusicRendererBackend::LinkPlay(lp) => lp.volume(),
-            MusicRendererBackend::Chromecast(cc) => cc.volume(),
-        }
-    }
-
-    fn set_volume(&self, vol: u16) -> Result<(), ControlPointError> {
-        match self {
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.set_volume(vol),
-            MusicRendererBackend::ArylicTcp(ary) => ary.set_volume(vol),
-            MusicRendererBackend::OpenHome(oh) => oh.set_volume(vol),
-            MusicRendererBackend::Upnp(upnp) => upnp.set_volume(vol),
-            MusicRendererBackend::LinkPlay(lp) => lp.set_volume(vol),
-            MusicRendererBackend::Chromecast(cc) => cc.set_volume(vol),
-        }
-    }
-
-    fn mute(&self) -> Result<bool, ControlPointError> {
-        match self {
-            MusicRendererBackend::HybridUpnpArylic { arylic, .. } => arylic.mute(),
-            MusicRendererBackend::OpenHome(r) => r.mute(),
-            MusicRendererBackend::Upnp(r) => r.mute(),
-            MusicRendererBackend::LinkPlay(r) => r.mute(),
-            MusicRendererBackend::ArylicTcp(r) => r.mute(),
-            MusicRendererBackend::Chromecast(cc) => cc.mute(),
-        }
-    }
-
-    fn set_mute(&self, m: bool) -> Result<(), ControlPointError> {
-        match self {
-            MusicRendererBackend::HybridUpnpArylic { arylic, .. } => arylic.set_mute(m),
-            MusicRendererBackend::OpenHome(r) => r.set_mute(m),
-            MusicRendererBackend::Upnp(r) => r.set_mute(m),
-            MusicRendererBackend::LinkPlay(r) => r.set_mute(m),
-            MusicRendererBackend::ArylicTcp(r) => r.set_mute(m),
-            MusicRendererBackend::Chromecast(cc) => cc.set_mute(m),
-        }
-    }
+    fn volume(&self) -> Result<u16, ControlPointError> { dispatch_arylic!(self, volume()) }
+    fn set_volume(&self, vol: u16) -> Result<(), ControlPointError> { dispatch_upnp!(self, set_volume(vol)) }
+    fn mute(&self) -> Result<bool, ControlPointError> { dispatch_arylic!(self, mute()) }
+    fn set_mute(&self, m: bool) -> Result<(), ControlPointError> { dispatch_arylic!(self, set_mute(m)) }
 }
 
 /// Playback-state queries sourced from the backend best suited for the job.
@@ -2263,234 +2240,28 @@ impl PlaybackStatus for MusicRendererBackend {
 /// regardless of the backend providing the raw transport data.
 impl PlaybackPosition for MusicRendererBackend {
     fn playback_position(&self) -> Result<PlaybackPositionInfo, ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.playback_position(),
-            MusicRendererBackend::OpenHome(r) => r.playback_position(),
-            MusicRendererBackend::LinkPlay(r) => r.playback_position(),
-            MusicRendererBackend::ArylicTcp(r) => r.playback_position(),
-            MusicRendererBackend::Chromecast(cc) => cc.playback_position(),
-            MusicRendererBackend::HybridUpnpArylic { arylic, .. } => arylic.playback_position(),
-        }
+        dispatch_arylic!(self, playback_position())
     }
 }
 
-impl RendererBackend for MusicRendererBackend {
-    fn queue(&self) -> &Arc<Mutex<MusicQueue>> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.queue(),
-            MusicRendererBackend::OpenHome(r) => r.queue(),
-            MusicRendererBackend::LinkPlay(r) => r.queue(),
-            MusicRendererBackend::ArylicTcp(r) => r.queue(),
-            MusicRendererBackend::Chromecast(cc) => cc.queue(),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.queue(),
-        }
+impl HasQueue for MusicRendererBackend {
+    fn queue(&self) -> &Arc<Mutex<MusicQueue>> { dispatch_upnp!(self, queue()) }
+}
+
+impl HasContinuousStream for MusicRendererBackend {
+    fn continuous_stream(&self) -> &Arc<Mutex<bool>> {
+        dispatch_arylic!(self, continuous_stream())
     }
 }
 
 impl QueueTransportControl for MusicRendererBackend {
+    fn play_item(&self, item: &PlaybackItem) -> Result<(), ControlPointError> {
+        dispatch_upnp!(self, play_item(item))
+    }
     fn play_from_queue(&self) -> Result<(), ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.play_from_queue(),
-            MusicRendererBackend::OpenHome(r) => r.play_from_queue(),
-            MusicRendererBackend::LinkPlay(r) => r.play_from_queue(),
-            MusicRendererBackend::ArylicTcp(r) => r.play_from_queue(),
-            MusicRendererBackend::Chromecast(cc) => cc.play_from_queue(),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.play_from_queue(),
-        }
+        dispatch_upnp!(self, play_from_queue())
     }
-
-    fn play_next(&self) -> Result<(), ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.play_next(),
-            MusicRendererBackend::OpenHome(r) => r.play_next(),
-            MusicRendererBackend::LinkPlay(r) => r.play_next(),
-            MusicRendererBackend::ArylicTcp(r) => r.play_next(),
-            MusicRendererBackend::Chromecast(cc) => cc.play_next(),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.play_next(),
-        }
-    }
-
-    fn play_previous(&self) -> Result<(), ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.play_previous(),
-            MusicRendererBackend::OpenHome(r) => r.play_previous(),
-            MusicRendererBackend::LinkPlay(r) => r.play_previous(),
-            MusicRendererBackend::ArylicTcp(r) => r.play_previous(),
-            MusicRendererBackend::Chromecast(cc) => cc.play_previous(),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.play_previous(),
-        }
-    }
-
     fn play_from_index(&self, index: usize) -> Result<(), ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.play_from_index(index),
-            MusicRendererBackend::OpenHome(r) => r.play_from_index(index),
-            MusicRendererBackend::LinkPlay(r) => r.play_from_index(index),
-            MusicRendererBackend::ArylicTcp(r) => r.play_from_index(index),
-            MusicRendererBackend::Chromecast(cc) => cc.play_from_index(index),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.play_from_index(index),
-        }
-    }
-}
-
-impl QueueBackend for MusicRendererBackend {
-    fn len(&self) -> Result<usize, ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.len(),
-            MusicRendererBackend::OpenHome(r) => r.len(),
-            MusicRendererBackend::LinkPlay(r) => r.len(),
-            MusicRendererBackend::ArylicTcp(r) => r.len(),
-            MusicRendererBackend::Chromecast(cc) => cc.len(),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.len(),
-        }
-    }
-
-    fn track_ids(&self) -> Result<Vec<u32>, ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.track_ids(),
-            MusicRendererBackend::OpenHome(r) => r.track_ids(),
-            MusicRendererBackend::LinkPlay(r) => r.track_ids(),
-            MusicRendererBackend::ArylicTcp(r) => r.track_ids(),
-            MusicRendererBackend::Chromecast(cc) => cc.track_ids(),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.track_ids(),
-        }
-    }
-
-    fn id_to_position(&self, id: u32) -> Result<usize, ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.id_to_position(id),
-            MusicRendererBackend::OpenHome(r) => r.id_to_position(id),
-            MusicRendererBackend::LinkPlay(r) => r.id_to_position(id),
-            MusicRendererBackend::ArylicTcp(r) => r.id_to_position(id),
-            MusicRendererBackend::Chromecast(cc) => cc.id_to_position(id),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.id_to_position(id),
-        }
-    }
-
-    fn position_to_id(&self, id: usize) -> Result<u32, ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.position_to_id(id),
-            MusicRendererBackend::OpenHome(r) => r.position_to_id(id),
-            MusicRendererBackend::LinkPlay(r) => r.position_to_id(id),
-            MusicRendererBackend::ArylicTcp(r) => r.position_to_id(id),
-            MusicRendererBackend::Chromecast(cc) => cc.position_to_id(id),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.position_to_id(id),
-        }
-    }
-
-    fn current_track(&self) -> Result<Option<u32>, ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.current_track(),
-            MusicRendererBackend::OpenHome(r) => r.current_track(),
-            MusicRendererBackend::LinkPlay(r) => r.current_track(),
-            MusicRendererBackend::ArylicTcp(r) => r.current_track(),
-            MusicRendererBackend::Chromecast(cc) => cc.current_track(),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.current_track(),
-        }
-    }
-
-    fn current_index(&self) -> Result<Option<usize>, ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.current_index(),
-            MusicRendererBackend::OpenHome(r) => r.current_index(),
-            MusicRendererBackend::LinkPlay(r) => r.current_index(),
-            MusicRendererBackend::ArylicTcp(r) => r.current_index(),
-            MusicRendererBackend::Chromecast(cc) => cc.current_index(),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.current_index(),
-        }
-    }
-
-    fn queue_snapshot(&self) -> Result<QueueSnapshot, ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.queue_snapshot(),
-            MusicRendererBackend::OpenHome(r) => r.queue_snapshot(),
-            MusicRendererBackend::LinkPlay(r) => r.queue_snapshot(),
-            MusicRendererBackend::ArylicTcp(r) => r.queue_snapshot(),
-            MusicRendererBackend::Chromecast(cc) => cc.queue_snapshot(),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.queue_snapshot(),
-        }
-    }
-
-    fn set_index(&mut self, index: Option<usize>) -> Result<(), ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.set_index(index),
-            MusicRendererBackend::OpenHome(r) => r.set_index(index),
-            MusicRendererBackend::LinkPlay(r) => r.set_index(index),
-            MusicRendererBackend::ArylicTcp(r) => r.set_index(index),
-            MusicRendererBackend::Chromecast(cc) => cc.set_index(index),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.set_index(index),
-        }
-    }
-
-    fn replace_queue(
-        &mut self,
-        items: Vec<PlaybackItem>,
-        current_index: Option<usize>,
-    ) -> Result<(), ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.replace_queue(items, current_index),
-            MusicRendererBackend::OpenHome(r) => r.replace_queue(items, current_index),
-            MusicRendererBackend::LinkPlay(r) => r.replace_queue(items, current_index),
-            MusicRendererBackend::ArylicTcp(r) => r.replace_queue(items, current_index),
-            MusicRendererBackend::Chromecast(cc) => cc.replace_queue(items, current_index),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => {
-                upnp.replace_queue(items, current_index)
-            }
-        }
-    }
-
-    fn sync_queue(
-        &mut self,
-        items: Vec<PlaybackItem>,
-        cancel_token: &Arc<AtomicBool>,
-        on_ready: Option<Box<dyn FnOnce() + Send>>,
-    ) -> Result<(), ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.sync_queue(items, cancel_token, on_ready),
-            MusicRendererBackend::OpenHome(r) => r.sync_queue(items, cancel_token, on_ready),
-            MusicRendererBackend::LinkPlay(r) => r.sync_queue(items, cancel_token, on_ready),
-            MusicRendererBackend::ArylicTcp(r) => r.sync_queue(items, cancel_token, on_ready),
-            MusicRendererBackend::Chromecast(cc) => cc.sync_queue(items, cancel_token, on_ready),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => {
-                upnp.sync_queue(items, cancel_token, on_ready)
-            }
-        }
-    }
-
-    fn get_item(&self, index: usize) -> Result<Option<PlaybackItem>, ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.get_item(index),
-            MusicRendererBackend::OpenHome(r) => r.get_item(index),
-            MusicRendererBackend::LinkPlay(r) => r.get_item(index),
-            MusicRendererBackend::ArylicTcp(r) => r.get_item(index),
-            MusicRendererBackend::Chromecast(cc) => cc.get_item(index),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.get_item(index),
-        }
-    }
-
-    fn replace_item(&mut self, index: usize, item: PlaybackItem) -> Result<(), ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.replace_item(index, item),
-            MusicRendererBackend::OpenHome(r) => r.replace_item(index, item),
-            MusicRendererBackend::LinkPlay(r) => r.replace_item(index, item),
-            MusicRendererBackend::ArylicTcp(r) => r.replace_item(index, item),
-            MusicRendererBackend::Chromecast(cc) => cc.replace_item(index, item),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.replace_item(index, item),
-        }
-    }
-
-    fn enqueue_items(
-        &mut self,
-        items: Vec<PlaybackItem>,
-        mode: EnqueueMode,
-    ) -> Result<(), ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.enqueue_items(items, mode),
-            MusicRendererBackend::OpenHome(r) => r.enqueue_items(items, mode),
-            MusicRendererBackend::LinkPlay(r) => r.enqueue_items(items, mode),
-            MusicRendererBackend::ArylicTcp(r) => r.enqueue_items(items, mode),
-            MusicRendererBackend::Chromecast(cc) => cc.enqueue_items(items, mode),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.enqueue_items(items, mode),
-        }
+        dispatch_upnp!(self, play_from_index(index))
     }
 }

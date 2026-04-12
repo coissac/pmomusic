@@ -28,8 +28,85 @@
 //!   - This identity is used by the sync helpers to preserve the current
 //!     track across queue rebuilds when the MediaServer content changes.
 
+use crate::music_renderer::HasQueue;
+use crate::queue::MusicQueue;
 use crate::{errors::ControlPointError, PlaybackItem, QueueSnapshot};
-use std::sync::{atomic::AtomicBool, Arc};
+use std::sync::{atomic::AtomicBool, Arc, Mutex};
+
+/// Blanket implementation of QueueBackend for types that have a queue.
+/// All methods simply delegate to the underlying MusicQueue.
+impl<T: HasQueue> QueueBackend for T {
+    fn len(&self) -> Result<usize, ControlPointError> {
+        self.queue().lock().expect("queue mutex poisoned").len()
+    }
+
+    fn track_ids(&self) -> Result<Vec<u32>, ControlPointError> {
+        self.queue().lock().expect("queue mutex poisoned").track_ids()
+    }
+
+    fn id_to_position(&self, id: u32) -> Result<usize, ControlPointError> {
+        self.queue().lock().expect("queue mutex poisoned").id_to_position(id)
+    }
+
+    fn position_to_id(&self, id: usize) -> Result<u32, ControlPointError> {
+        self.queue().lock().expect("queue mutex poisoned").position_to_id(id)
+    }
+
+    fn current_track(&self) -> Result<Option<u32>, ControlPointError> {
+        self.queue().lock().expect("queue mutex poisoned").current_track()
+    }
+
+    fn current_index(&self) -> Result<Option<usize>, ControlPointError> {
+        self.queue().lock().expect("queue mutex poisoned").current_index()
+    }
+
+    fn queue_snapshot(&self) -> Result<QueueSnapshot, ControlPointError> {
+        self.queue().lock().expect("queue mutex poisoned").queue_snapshot()
+    }
+
+    fn set_index(&mut self, index: Option<usize>) -> Result<(), ControlPointError> {
+        self.queue().lock().expect("queue mutex poisoned").set_index(index)
+    }
+
+    fn replace_queue(
+        &mut self,
+        items: Vec<PlaybackItem>,
+        current_index: Option<usize>,
+    ) -> Result<(), ControlPointError> {
+        self.queue()
+            .lock()
+            .unwrap()
+            .replace_queue(items, current_index)
+    }
+
+    fn sync_queue(
+        &mut self,
+        items: Vec<PlaybackItem>,
+        cancel_token: &Arc<AtomicBool>,
+        on_ready: Option<Box<dyn FnOnce() + Send>>,
+    ) -> Result<(), ControlPointError> {
+        self.queue()
+            .lock()
+            .unwrap()
+            .sync_queue(items, cancel_token, on_ready)
+    }
+
+    fn get_item(&self, index: usize) -> Result<Option<PlaybackItem>, ControlPointError> {
+        self.queue().lock().expect("queue mutex poisoned").get_item(index)
+    }
+
+    fn replace_item(&mut self, index: usize, item: PlaybackItem) -> Result<(), ControlPointError> {
+        self.queue().lock().expect("queue mutex poisoned").replace_item(index, item)
+    }
+
+    fn enqueue_items(
+        &mut self,
+        items: Vec<PlaybackItem>,
+        mode: EnqueueMode,
+    ) -> Result<(), ControlPointError> {
+        self.queue().lock().expect("queue mutex poisoned").enqueue_items(items, mode)
+    }
+}
 
 /// High-level enqueue mode.
 ///

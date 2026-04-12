@@ -3,10 +3,13 @@ use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use crate::errors::ControlPointError;
 use crate::model::PlaybackState;
 use crate::music_renderer::capabilities::{
-    PlaybackPosition, PlaybackPositionInfo, PlaybackStatus, QueueTransportControl, RendererBackend,
-    TransportControl, VolumeControl,
+    HasContinuousStream, PlaybackPosition, PlaybackPositionInfo, PlaybackStatus,
+    QueueTransportControl, TransportControl, VolumeControl,
 };
-use crate::music_renderer::musicrenderer::{build_didl_lite_metadata, MusicRendererBackend};
+use crate::music_renderer::musicrenderer::{
+    build_didl_lite_metadata, parse_didl_duration, MusicRendererBackend,
+};
+use crate::music_renderer::HasQueue;
 use crate::music_renderer::RendererFromMediaRendererInfo;
 use crate::queue::{EnqueueMode, MusicQueue, PlaybackItem, QueueBackend, QueueSnapshot};
 use crate::upnp_clients::{
@@ -114,7 +117,7 @@ impl UpnpRenderer {
 
     /// Returns true if currently playing a continuous stream (radio without duration)
     pub fn is_continuous_stream(&self) -> bool {
-        *self.continuous_stream.lock().unwrap()
+        *self.continuous_stream.lock().expect("continuous_stream mutex poisoned")
     }
 }
 
@@ -174,80 +177,27 @@ impl RendererFromMediaRendererInfo for UpnpRenderer {
     }
 }
 
-impl RendererBackend for UpnpRenderer {
-    fn queue(&self) -> &Arc<Mutex<MusicQueue>> {
-        &self.queue
-    }
-}
 
 impl QueueTransportControl for UpnpRenderer {
-    fn play_from_queue(&self) -> Result<(), ControlPointError> {
-        let mut queue = self.queue.lock().unwrap();
-
-        // Get or initialize current index
-        let current_index = match queue.current_index()? {
-            Some(idx) => idx,
-            None => {
-                if queue.len()? > 0 {
-                    queue.set_index(Some(0))?;
-                    0
-                } else {
-                    return Err(ControlPointError::QueueError("Queue is empty".into()));
-                }
-            }
-        };
-
-        // Get the item
-        let item = queue
-            .get_item(current_index)?
-            .ok_or_else(|| ControlPointError::QueueError("Current item not found".into()))?;
-
-        drop(queue);
-
-        // Build metadata - handle optional TrackMetadata
+    fn play_item(&self, item: &PlaybackItem) -> Result<(), ControlPointError> {
         let metadata = if let Some(ref track_metadata) = item.metadata {
             build_didl_lite_metadata(track_metadata, &item.uri, &item.protocol_info)
         } else {
-            // Fallback to minimal DIDL-Lite if no metadata
             format!(
                 r#"<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/"><item id="0" parentID="-1" restricted="1"><res protocolInfo="{}">{}</res></item></DIDL-Lite>"#,
                 item.protocol_info, item.uri
             )
         };
 
-        // Détecte si l'URL est un flux continu en interrogeant le serveur HTTP
-        let is_stream = crate::music_renderer::is_continuous_stream_url(&item.uri);
-        *self.continuous_stream.lock().unwrap() = is_stream;
-
-        // Log current queue state for debugging
-        let queue_state = {
-            let queue = self.queue.lock().unwrap();
-            let idx = queue.current_index().unwrap_or(None);
-            let len = queue.len().unwrap_or(0);
-            let uri = item.uri.clone();
-            let title = item.metadata.as_ref().and_then(|m| m.title.clone());
-            (idx, len, uri, title)
-        };
-        tracing::debug!(
-            "UpnpRenderer play_from_queue: index={:?}/{}, uri={}, title={:?}, continuous_stream={}",
-            queue_state.0,
-            queue_state.1,
-            queue_state.2,
-            queue_state.3,
-            is_stream
-        );
-
-        // Parse et cache la durée du DIDL (fallback pour certains amplis)
         let duration = parse_didl_duration(&metadata);
         if let Some(ref dur) = duration {
             tracing::debug!("Caching duration from queue DIDL: {}", dur);
-            *self.cached_duration.lock().unwrap() = Some(dur.clone());
+            *self.cached_duration.lock().expect("cached_duration mutex poisoned") = Some(dur.clone());
         } else {
             tracing::debug!("No duration to cache from queue DIDL");
-            *self.cached_duration.lock().unwrap() = None;
+            *self.cached_duration.lock().expect("cached_duration mutex poisoned") = None;
         }
 
-        // UPNP: SetAVTransportURI + Play
         let avt = self.avtransport()?;
         avt.set_av_transport_uri(&item.uri, &metadata)?;
         avt.play(0, "1")?;
@@ -255,160 +205,19 @@ impl QueueTransportControl for UpnpRenderer {
         Ok(())
     }
 
-    fn play_next(&self) -> Result<(), ControlPointError> {
-        let current_idx = {
-            let queue = self.queue.lock().unwrap();
-            let idx = queue.current_index().unwrap_or(None);
-            let len = queue.len().unwrap_or(0);
-            tracing::debug!(
-                current_index = ?idx,
-                queue_len = len,
-                "play_next: attempting to advance"
-            );
-            idx
-        };
-        {
-            let mut queue = self.queue.lock().unwrap();
-            if !queue.advance()? {
-                return Err(ControlPointError::QueueError("No next track".into()));
-            }
-            let new_idx = queue.current_index().unwrap_or(None);
-            tracing::debug!(
-                previous_index = ?current_idx,
-                new_index = ?new_idx,
-                "play_next: advanced"
-            );
-        }
+}
 
-        self.play_from_queue()
-    }
-
-    fn play_previous(&self) -> Result<(), ControlPointError> {
-        {
-            let mut queue = self.queue.lock().unwrap();
-            if !queue.rewind()? {
-                return Err(ControlPointError::QueueError("No previous track".into()));
-            }
-        }
-
-        self.play_from_queue()
-    }
-
-    fn play_from_index(&self, index: usize) -> Result<(), ControlPointError> {
-        {
-            let mut queue = self.queue.lock().unwrap();
-            queue.set_index(Some(index))?;
-        }
-        // CORRECTIF: Quand on change l'index manuellement (shuffle, sélection d'un titre)
-        // on logue pour être sûr que c'est bien appelé
-        tracing::debug!(index = index, "✅ SHUFFLE / SEEK: play_from_index appelé");
-
-        self.play_from_queue()
+impl HasQueue for UpnpRenderer {
+    fn queue(&self) -> &Arc<Mutex<MusicQueue>> {
+        &self.queue
     }
 }
 
-impl QueueBackend for UpnpRenderer {
-    fn len(&self) -> Result<usize, ControlPointError> {
-        self.queue.lock().unwrap().len()
-    }
-
-    fn track_ids(&self) -> Result<Vec<u32>, ControlPointError> {
-        self.queue.lock().unwrap().track_ids()
-    }
-
-    fn id_to_position(&self, id: u32) -> Result<usize, ControlPointError> {
-        self.queue.lock().unwrap().id_to_position(id)
-    }
-
-    fn position_to_id(&self, id: usize) -> Result<u32, ControlPointError> {
-        self.queue.lock().unwrap().position_to_id(id)
-    }
-
-    fn current_track(&self) -> Result<Option<u32>, ControlPointError> {
-        self.queue.lock().unwrap().current_track()
-    }
-
-    fn current_index(&self) -> Result<Option<usize>, ControlPointError> {
-        self.queue.lock().unwrap().current_index()
-    }
-
-    fn queue_snapshot(&self) -> Result<QueueSnapshot, ControlPointError> {
-        self.queue.lock().unwrap().queue_snapshot()
-    }
-
-    fn set_index(&mut self, index: Option<usize>) -> Result<(), ControlPointError> {
-        self.queue.lock().unwrap().set_index(index)
-    }
-
-    fn replace_queue(
-        &mut self,
-        items: Vec<PlaybackItem>,
-        current_index: Option<usize>,
-    ) -> Result<(), ControlPointError> {
-        self.queue
-            .lock()
-            .unwrap()
-            .replace_queue(items, current_index)
-    }
-
-    fn sync_queue(
-        &mut self,
-        items: Vec<PlaybackItem>,
-        _cancel_token: &Arc<AtomicBool>,
-        on_ready: Option<Box<dyn FnOnce() + Send>>,
-    ) -> Result<(), ControlPointError> {
-        self.queue
-            .lock()
-            .unwrap()
-            .sync_queue(items, &Arc::new(AtomicBool::new(false)), on_ready)
-    }
-
-    fn get_item(&self, index: usize) -> Result<Option<PlaybackItem>, ControlPointError> {
-        self.queue.lock().unwrap().get_item(index)
-    }
-
-    fn replace_item(&mut self, index: usize, item: PlaybackItem) -> Result<(), ControlPointError> {
-        self.queue.lock().unwrap().replace_item(index, item)
-    }
-
-    fn enqueue_items(
-        &mut self,
-        items: Vec<PlaybackItem>,
-        mode: EnqueueMode,
-    ) -> Result<(), ControlPointError> {
-        self.queue.lock().unwrap().enqueue_items(items, mode)
+impl HasContinuousStream for UpnpRenderer {
+    fn continuous_stream(&self) -> &Arc<Mutex<bool>> {
+        &self.continuous_stream
     }
 }
-
-/// Parse le DIDL-Lite pour extraire la durée du premier élément <res>
-fn parse_didl_duration(didl: &str) -> Option<String> {
-    // Recherche de l'élément <res> (avec ou sans espace après)
-    let res_start = didl
-        .find("<res ")
-        .or_else(|| didl.find("<res>"))
-        .or_else(|| didl.find("<res\n"))
-        .or_else(|| didl.find("<res\t"))?;
-
-    let after_res = &didl[res_start..];
-
-    // Recherche de l'attribut duration dans cet élément <res>
-    // Il doit être avant la fermeture du tag (avant '>')
-    if let Some(tag_close) = after_res.find('>') {
-        let tag_attrs = &after_res[..tag_close];
-
-        if let Some(duration_start) = tag_attrs.find("duration=\"") {
-            let duration_offset = duration_start + "duration=\"".len();
-            if let Some(duration_end) = tag_attrs[duration_offset..].find('"') {
-                let duration = &tag_attrs[duration_offset..duration_offset + duration_end];
-                return Some(duration.to_string());
-            }
-        }
-    }
-
-    tracing::warn!("No duration attribute found in DIDL <res> element");
-    None
-}
-
 /// Implémentation UPnP AV de `TransportControl` pour [`UpnpRenderer`].
 ///
 /// Cette impl se base sur AVTransport (InstanceID = 0).
@@ -424,7 +233,7 @@ impl TransportControl for UpnpRenderer {
 
         // Détecte si l'URL est un flux continu en interrogeant le serveur HTTP
         let is_stream = crate::music_renderer::is_continuous_stream_url(uri);
-        *self.continuous_stream.lock().unwrap() = is_stream;
+        *self.continuous_stream.lock().expect("continuous_stream mutex poisoned") = is_stream;
         tracing::debug!(
             "UpnpRenderer play_uri: URI={}, continuous_stream={}",
             uri,
@@ -435,10 +244,10 @@ impl TransportControl for UpnpRenderer {
         let duration = parse_didl_duration(meta);
         if let Some(ref dur) = duration {
             tracing::debug!("Caching duration from DIDL: {}", dur);
-            *self.cached_duration.lock().unwrap() = Some(dur.clone());
+            *self.cached_duration.lock().expect("cached_duration mutex poisoned") = Some(dur.clone());
         } else {
             tracing::debug!("No duration to cache from DIDL");
-            *self.cached_duration.lock().unwrap() = None;
+            *self.cached_duration.lock().expect("cached_duration mutex poisoned") = None;
         }
 
         let avt = self.avtransport()?;
@@ -532,7 +341,7 @@ impl PlaybackPosition for UpnpRenderer {
         let mut track_metadata_xml = None;
         let mut track_uri = raw.track_uri.clone();
 
-        let mut queue_guard = self.queue.lock().unwrap();
+        let mut queue_guard = self.queue.lock().expect("queue mutex poisoned");
 
         // Récupérer l'item courant de la queue
         // Normalement current_index est toujours Some() si la queue n'est pas vide (règle métier)

@@ -817,7 +817,7 @@ impl OhProductClient {
 
     pub fn source_xml(&self) -> Result<Vec<OhProductSource>> {
         // Lock the cache for the entire operation to prevent race conditions
-        let mut cache = self.source_xml_cache.lock().unwrap();
+        let mut cache = self.source_xml_cache.lock().expect("source_xml_cache mutex poisoned");
 
         // Check if cache is valid
         if let Some(cached_sources) = cache.get() {
@@ -841,7 +841,7 @@ impl OhProductClient {
 
     pub fn source_index(&self) -> Result<u32, ControlPointError> {
         // Lock the cache for the entire operation to prevent race conditions
-        let mut cache = self.source_index_cache.lock().unwrap();
+        let mut cache = self.source_index_cache.lock().expect("source_index_cache mutex poisoned");
 
         // Check if cache is valid
         if let Some(cached_index) = cache.get() {
@@ -881,7 +881,7 @@ impl OhProductClient {
 
         // Invalidate cache after write operation
         if result.is_ok() {
-            let mut cache = self.source_index_cache.lock().unwrap();
+            let mut cache = self.source_index_cache.lock().expect("source_index_cache mutex poisoned");
             cache.invalidate();
         }
 
