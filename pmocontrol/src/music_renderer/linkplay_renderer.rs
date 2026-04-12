@@ -184,65 +184,8 @@ impl QueueTransportControl for LinkPlayRenderer {
     fn play_item(&self, item: &PlaybackItem) -> Result<(), ControlPointError> {
         self.play_uri(&item.uri, "")
     }
-
-    fn play_from_queue(&self) -> Result<(), ControlPointError> {
-        let mut queue = self.queue.lock().unwrap();
-
-        let current_index = match queue.current_index()? {
-            Some(idx) => idx,
-            None => {
-                if queue.len()? > 0 {
-                    queue.set_index(Some(0))?;
-                    0
-                } else {
-                    return Err(ControlPointError::QueueError("Queue is empty".into()));
-                }
-            }
-        };
-
-        let item = queue
-            .get_item(current_index)?
-            .ok_or_else(|| ControlPointError::QueueError("Current item not found".into()))?;
-
-        drop(queue);
-
-        let is_stream = crate::music_renderer::is_continuous_stream_url(&item.uri);
-        *self.continuous_stream.lock().unwrap() = is_stream;
-
-        self.play_item(&item)
-    }
-
-    fn play_next(&self) -> Result<(), ControlPointError> {
-        {
-            let mut queue = self.queue.lock().unwrap();
-            if !queue.advance()? {
-                return Err(ControlPointError::QueueError("No next track".into()));
-            }
-        }
-
-        self.play_from_queue()
-    }
-
-    fn play_previous(&self) -> Result<(), ControlPointError> {
-        {
-            let mut queue = self.queue.lock().unwrap();
-            if !queue.rewind()? {
-                return Err(ControlPointError::QueueError("No previous track".into()));
-            }
-        }
-
-        self.play_from_queue()
-    }
-
-    fn play_from_index(&self, index: usize) -> Result<(), ControlPointError> {
-        {
-            let mut queue = self.queue.lock().unwrap();
-            queue.set_index(Some(index))?;
-        }
-
-        self.play_from_queue()
-    }
 }
+
 
 impl HasQueue for LinkPlayRenderer {
     fn queue(&self) -> &Arc<Mutex<MusicQueue>> {

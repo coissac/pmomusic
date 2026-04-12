@@ -492,28 +492,6 @@ impl PlaybackPosition for OpenHomeRenderer {
         Ok(position_info)
     }
 }
-
-/// Parse duration from DIDL-Lite metadata XML (OpenHome version)
-#[allow(dead_code)]
-fn parse_didl_duration_openhome(didl: &str) -> Option<String> {
-    // Search for duration attribute in <res> element
-    let res_start = didl.find("<res ")?;
-    let after_res = &didl[res_start..];
-    let tag_close = after_res.find('>')?;
-    let tag_attrs = &after_res[..tag_close];
-
-    if let Some(duration_start) = tag_attrs.find("duration=\"") {
-        let duration_offset = duration_start + "duration=\"".len();
-        if let Some(duration_end) = tag_attrs[duration_offset..].find('"') {
-            let duration = &tag_attrs[duration_offset..duration_offset + duration_end];
-            return Some(duration.to_string());
-        }
-    }
-
-    tracing::debug!("OpenHome: No duration found in DIDL metadata");
-    None
-}
-
 pub(crate) fn map_openhome_state(raw: &str) -> PlaybackState {
     match raw.trim().to_ascii_uppercase().as_str() {
         "PLAYING" => PlaybackState::Playing,
@@ -552,50 +530,6 @@ impl QueueTransportControl for OpenHomeRenderer {
 
         let playlist = self.playlist_client_for("play_from_queue")?;
         playlist.play()
-    }
-
-    fn play_next(&self) -> Result<(), ControlPointError> {
-        {
-            let mut queue = self
-                .queue
-                .lock()
-                .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?;
-            let len = queue.len().unwrap_or(0);
-            let current = queue.current_index().ok().flatten();
-            let current_track_id = queue.current_track().ok().flatten();
-            let all_ids = queue.track_ids().ok().unwrap_or_default();
-            tracing::trace!(
-                queue_len = len,
-                current_index = ?current,
-                current_track_id = ?current_track_id,
-                all_track_ids = ?all_ids,
-                "OpenHome play_next: advancing queue"
-            );
-            if !queue.advance()? {
-                tracing::trace!(
-                    queue_len = len,
-                    current_index = ?current,
-                    "OpenHome play_next: advance() returned false — no next track"
-                );
-                return Err(ControlPointError::QueueError("No next track".into()));
-            }
-        }
-
-        self.play_from_queue()
-    }
-
-    fn play_previous(&self) -> Result<(), ControlPointError> {
-        {
-            let mut queue = self
-                .queue
-                .lock()
-                .map_err(|_| ControlPointError::QueueError("Queue mutex poisoned".into()))?;
-            if !queue.rewind()? {
-                return Err(ControlPointError::QueueError("No previous track".into()));
-            }
-        }
-
-        self.play_from_queue()
     }
 
     fn play_from_index(&self, index: usize) -> Result<(), ControlPointError> {

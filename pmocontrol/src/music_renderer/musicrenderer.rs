@@ -2091,7 +2091,7 @@ impl RendererFromMediaRendererInfo for MusicRendererBackend {
 /// Extracts the duration attribute from the <res> element in DIDL metadata.
 /// This is used as a fallback when the renderer doesn't provide track_duration
 /// in GetPositionInfo or similar calls.
-fn parse_didl_duration(didl_xml: &str) -> Option<String> {
+pub(crate) fn parse_didl_duration(didl_xml: &str) -> Option<String> {
     // Parse DIDL-Lite XML properly using pmodidl
     let didl = match DIDLLite::parse(didl_xml) {
         Ok(d) => d,
@@ -2129,6 +2129,37 @@ fn parse_rfc3339_to_system_time(s: &str) -> Option<SystemTime> {
     Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs as u64))
 }
 
+
+/// Dispatch a method call to the inner backend, using the UPnP field for
+/// HybridUpnpArylic.
+macro_rules! dispatch_upnp {
+    ($self:expr, $method:ident($($arg:expr),*)) => {
+        match $self {
+            MusicRendererBackend::Upnp(r) => r.$method($($arg),*),
+            MusicRendererBackend::OpenHome(r) => r.$method($($arg),*),
+            MusicRendererBackend::LinkPlay(r) => r.$method($($arg),*),
+            MusicRendererBackend::ArylicTcp(r) => r.$method($($arg),*),
+            MusicRendererBackend::Chromecast(cc) => cc.$method($($arg),*),
+            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.$method($($arg),*),
+        }
+    };
+}
+
+/// Dispatch a method call to the inner backend, using the Arylic field for
+/// HybridUpnpArylic.
+macro_rules! dispatch_arylic {
+    ($self:expr, $method:ident($($arg:expr),*)) => {
+        match $self {
+            MusicRendererBackend::Upnp(r) => r.$method($($arg),*),
+            MusicRendererBackend::OpenHome(r) => r.$method($($arg),*),
+            MusicRendererBackend::LinkPlay(r) => r.$method($($arg),*),
+            MusicRendererBackend::ArylicTcp(r) => r.$method($($arg),*),
+            MusicRendererBackend::Chromecast(cc) => cc.$method($($arg),*),
+            MusicRendererBackend::HybridUpnpArylic { arylic, .. } => arylic.$method($($arg),*),
+        }
+    };
+}
+
 /// Transport control façade that dispatches to whichever backend can fulfill
 /// the request, returning a standardized error if the backend lacks support.
 impl TransportControl for MusicRendererBackend {
@@ -2145,38 +2176,9 @@ impl TransportControl for MusicRendererBackend {
         }
     }
 
-    fn play(&self) -> Result<(), ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(upnp) => upnp.play(),
-            MusicRendererBackend::OpenHome(oh) => oh.play(),
-            MusicRendererBackend::LinkPlay(lp) => lp.play(),
-            MusicRendererBackend::ArylicTcp(ary) => ary.play(),
-            MusicRendererBackend::Chromecast(cc) => cc.play(),
-            MusicRendererBackend::HybridUpnpArylic { arylic, .. } => arylic.play(),
-        }
-    }
-
-    fn pause(&self) -> Result<(), ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(upnp) => upnp.pause(),
-            MusicRendererBackend::OpenHome(oh) => oh.pause(),
-            MusicRendererBackend::LinkPlay(lp) => lp.pause(),
-            MusicRendererBackend::ArylicTcp(ary) => ary.pause(),
-            MusicRendererBackend::Chromecast(cc) => cc.pause(),
-            MusicRendererBackend::HybridUpnpArylic { arylic, .. } => arylic.pause(),
-        }
-    }
-
-    fn stop(&self) -> Result<(), ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(upnp) => upnp.stop(),
-            MusicRendererBackend::OpenHome(oh) => oh.stop(),
-            MusicRendererBackend::LinkPlay(lp) => lp.stop(),
-            MusicRendererBackend::ArylicTcp(ary) => ary.stop(),
-            MusicRendererBackend::Chromecast(cc) => cc.stop(),
-            MusicRendererBackend::HybridUpnpArylic { arylic, .. } => arylic.stop(),
-        }
-    }
+    fn play(&self) -> Result<(), ControlPointError> { dispatch_arylic!(self, play()) }
+    fn pause(&self) -> Result<(), ControlPointError> { dispatch_arylic!(self, pause()) }
+    fn stop(&self) -> Result<(), ControlPointError> { dispatch_arylic!(self, stop()) }
 
     fn seek_rel_time(&self, hhmmss: &str) -> Result<(), ControlPointError> {
         match self {
@@ -2197,49 +2199,10 @@ impl TransportControl for MusicRendererBackend {
 /// Hybrid backends may read via Arylic TCP and write via UPnP, but callers
 /// always depend on a single [`VolumeControl`] entry point.
 impl VolumeControl for MusicRendererBackend {
-    fn volume(&self) -> Result<u16, ControlPointError> {
-        match self {
-            MusicRendererBackend::HybridUpnpArylic { arylic, .. } => arylic.volume(),
-            MusicRendererBackend::ArylicTcp(ary) => ary.volume(),
-            MusicRendererBackend::OpenHome(oh) => oh.volume(),
-            MusicRendererBackend::Upnp(upnp) => upnp.volume(),
-            MusicRendererBackend::LinkPlay(lp) => lp.volume(),
-            MusicRendererBackend::Chromecast(cc) => cc.volume(),
-        }
-    }
-
-    fn set_volume(&self, vol: u16) -> Result<(), ControlPointError> {
-        match self {
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.set_volume(vol),
-            MusicRendererBackend::ArylicTcp(ary) => ary.set_volume(vol),
-            MusicRendererBackend::OpenHome(oh) => oh.set_volume(vol),
-            MusicRendererBackend::Upnp(upnp) => upnp.set_volume(vol),
-            MusicRendererBackend::LinkPlay(lp) => lp.set_volume(vol),
-            MusicRendererBackend::Chromecast(cc) => cc.set_volume(vol),
-        }
-    }
-
-    fn mute(&self) -> Result<bool, ControlPointError> {
-        match self {
-            MusicRendererBackend::HybridUpnpArylic { arylic, .. } => arylic.mute(),
-            MusicRendererBackend::OpenHome(r) => r.mute(),
-            MusicRendererBackend::Upnp(r) => r.mute(),
-            MusicRendererBackend::LinkPlay(r) => r.mute(),
-            MusicRendererBackend::ArylicTcp(r) => r.mute(),
-            MusicRendererBackend::Chromecast(cc) => cc.mute(),
-        }
-    }
-
-    fn set_mute(&self, m: bool) -> Result<(), ControlPointError> {
-        match self {
-            MusicRendererBackend::HybridUpnpArylic { arylic, .. } => arylic.set_mute(m),
-            MusicRendererBackend::OpenHome(r) => r.set_mute(m),
-            MusicRendererBackend::Upnp(r) => r.set_mute(m),
-            MusicRendererBackend::LinkPlay(r) => r.set_mute(m),
-            MusicRendererBackend::ArylicTcp(r) => r.set_mute(m),
-            MusicRendererBackend::Chromecast(cc) => cc.set_mute(m),
-        }
-    }
+    fn volume(&self) -> Result<u16, ControlPointError> { dispatch_arylic!(self, volume()) }
+    fn set_volume(&self, vol: u16) -> Result<(), ControlPointError> { dispatch_upnp!(self, set_volume(vol)) }
+    fn mute(&self) -> Result<bool, ControlPointError> { dispatch_arylic!(self, mute()) }
+    fn set_mute(&self, m: bool) -> Result<(), ControlPointError> { dispatch_arylic!(self, set_mute(m)) }
 }
 
 /// Playback-state queries sourced from the backend best suited for the job.
@@ -2263,96 +2226,28 @@ impl PlaybackStatus for MusicRendererBackend {
 /// regardless of the backend providing the raw transport data.
 impl PlaybackPosition for MusicRendererBackend {
     fn playback_position(&self) -> Result<PlaybackPositionInfo, ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.playback_position(),
-            MusicRendererBackend::OpenHome(r) => r.playback_position(),
-            MusicRendererBackend::LinkPlay(r) => r.playback_position(),
-            MusicRendererBackend::ArylicTcp(r) => r.playback_position(),
-            MusicRendererBackend::Chromecast(cc) => cc.playback_position(),
-            MusicRendererBackend::HybridUpnpArylic { arylic, .. } => arylic.playback_position(),
-        }
+        dispatch_arylic!(self, playback_position())
     }
 }
 
 impl HasQueue for MusicRendererBackend {
-    fn queue(&self) -> &Arc<Mutex<MusicQueue>> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.queue(),
-            MusicRendererBackend::OpenHome(r) => r.queue(),
-            MusicRendererBackend::LinkPlay(r) => r.queue(),
-            MusicRendererBackend::ArylicTcp(r) => r.queue(),
-            MusicRendererBackend::Chromecast(cc) => cc.queue(),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.queue(),
-        }
-    }
+    fn queue(&self) -> &Arc<Mutex<MusicQueue>> { dispatch_upnp!(self, queue()) }
 }
 
 impl HasContinuousStream for MusicRendererBackend {
     fn continuous_stream(&self) -> &Arc<Mutex<bool>> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.continuous_stream(),
-            MusicRendererBackend::OpenHome(r) => r.continuous_stream(),
-            MusicRendererBackend::LinkPlay(r) => r.continuous_stream(),
-            MusicRendererBackend::ArylicTcp(r) => r.continuous_stream(),
-            MusicRendererBackend::Chromecast(cc) => cc.continuous_stream(),
-            MusicRendererBackend::HybridUpnpArylic { arylic, .. } => arylic.continuous_stream(),
-        }
+        dispatch_arylic!(self, continuous_stream())
     }
 }
 
 impl QueueTransportControl for MusicRendererBackend {
     fn play_item(&self, item: &PlaybackItem) -> Result<(), ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.play_item(item),
-            MusicRendererBackend::OpenHome(r) => r.play_item(item),
-            MusicRendererBackend::LinkPlay(r) => r.play_item(item),
-            MusicRendererBackend::ArylicTcp(r) => r.play_item(item),
-            MusicRendererBackend::Chromecast(cc) => cc.play_item(item),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.play_item(item),
-        }
+        dispatch_upnp!(self, play_item(item))
     }
-
     fn play_from_queue(&self) -> Result<(), ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.play_from_queue(),
-            MusicRendererBackend::OpenHome(r) => r.play_from_queue(),
-            MusicRendererBackend::LinkPlay(r) => r.play_from_queue(),
-            MusicRendererBackend::ArylicTcp(r) => r.play_from_queue(),
-            MusicRendererBackend::Chromecast(cc) => cc.play_from_queue(),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.play_from_queue(),
-        }
+        dispatch_upnp!(self, play_from_queue())
     }
-
-    fn play_next(&self) -> Result<(), ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.play_next(),
-            MusicRendererBackend::OpenHome(r) => r.play_next(),
-            MusicRendererBackend::LinkPlay(r) => r.play_next(),
-            MusicRendererBackend::ArylicTcp(r) => r.play_next(),
-            MusicRendererBackend::Chromecast(cc) => cc.play_next(),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.play_next(),
-        }
-    }
-
-    fn play_previous(&self) -> Result<(), ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.play_previous(),
-            MusicRendererBackend::OpenHome(r) => r.play_previous(),
-            MusicRendererBackend::LinkPlay(r) => r.play_previous(),
-            MusicRendererBackend::ArylicTcp(r) => r.play_previous(),
-            MusicRendererBackend::Chromecast(cc) => cc.play_previous(),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.play_previous(),
-        }
-    }
-
     fn play_from_index(&self, index: usize) -> Result<(), ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.play_from_index(index),
-            MusicRendererBackend::OpenHome(r) => r.play_from_index(index),
-            MusicRendererBackend::LinkPlay(r) => r.play_from_index(index),
-            MusicRendererBackend::ArylicTcp(r) => r.play_from_index(index),
-            MusicRendererBackend::Chromecast(cc) => cc.play_from_index(index),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.play_from_index(index),
-        }
+        dispatch_upnp!(self, play_from_index(index))
     }
 }

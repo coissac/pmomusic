@@ -53,14 +53,35 @@ pub trait QueueTransportControl: HasQueue + HasContinuousStream {
     }
 
     /// Play the next track from the queue.
-    fn play_next(&self) -> Result<(), ControlPointError>;
+    fn play_next(&self) -> Result<(), ControlPointError> {
+        {
+            let mut queue = self.queue().lock().unwrap();
+            if !queue.advance()? {
+                return Err(ControlPointError::QueueError("No next track".into()));
+            }
+        }
+        self.play_from_queue()
+    }
 
     /// Play the previous track from the queue.
-    #[allow(dead_code)]
-    fn play_previous(&self) -> Result<(), ControlPointError>;
+    fn play_previous(&self) -> Result<(), ControlPointError> {
+        {
+            let mut queue = self.queue().lock().unwrap();
+            if !queue.rewind()? {
+                return Err(ControlPointError::QueueError("No previous track".into()));
+            }
+        }
+        self.play_from_queue()
+    }
 
     /// Play from a specific index in the queue.
-    fn play_from_index(&self, index: usize) -> Result<(), ControlPointError>;
+    fn play_from_index(&self, index: usize) -> Result<(), ControlPointError> {
+        {
+            let mut queue = self.queue().lock().unwrap();
+            queue.set_index(Some(index))?;
+        }
+        self.play_from_queue()
+    }
 }
 
 /// Logical playback position across backends.
