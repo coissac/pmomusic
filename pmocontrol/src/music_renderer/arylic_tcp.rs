@@ -137,7 +137,7 @@ impl RendererFromMediaRendererInfo for ArylicTcpRenderer {
 impl ArylicTcpRenderer {
     /// Returns true if currently playing a continuous stream (radio without duration)
     pub fn is_continuous_stream(&self) -> bool {
-        *self.continuous_stream.lock().unwrap()
+        *self.continuous_stream.lock().expect("continuous_stream mutex poisoned")
     }
 
     /// Create an ArylicTcpRenderer with a shared queue (for HybridUpnpArylic)
@@ -268,7 +268,7 @@ impl PlaybackPosition for ArylicTcpRenderer {
 
         // Récupérer les métadonnées depuis la queue (avec protection contre diminution de durée)
         // Normalement current_index est toujours Some() si la queue n'est pas vide (règle métier)
-        let mut queue_guard = self.queue.lock().unwrap();
+        let mut queue_guard = self.queue.lock().expect("queue mutex poisoned");
         let queue_item = queue_guard.peek_current().ok().flatten();
 
         if let Some((current_item, _)) = queue_item {

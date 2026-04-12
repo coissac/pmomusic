@@ -106,7 +106,7 @@ impl MusicQueue {
         on_complete: Box<dyn Fn(usize) + Send + 'static>,
     ) -> SyncScheduleOutcome {
         let (sync_in_progress, sync_pending, sync_cancel_token) = {
-            let q = queue_arc.lock().unwrap();
+            let q = queue_arc.lock().expect("MusicQueue mutex poisoned");
             (
                 Arc::clone(&q.sync_in_progress),
                 Arc::clone(&q.sync_pending),
@@ -144,6 +144,10 @@ impl MusicQueue {
                     }
                 }
                 let _guard = Guard(Arc::clone(&sync_in_progress));
+                // Error policy: sync errors are logged by sync_worker_loop (warn level) and
+                // the thread exits normally.  No restart — a new sync can be scheduled via
+                // schedule_sync.  The Guard Drop clears sync_in_progress unconditionally,
+                // even on panic, keeping the AtomicBool protocol consistent.
                 tracing::debug!(thread = %std::thread::current().name().unwrap_or("?"), "queue-sync thread started");
                 Self::sync_worker_loop(
                     queue_arc,
@@ -204,7 +208,7 @@ impl MusicQueue {
             );
 
             let result = {
-                let mut q = queue_arc.lock().unwrap();
+                let mut q = queue_arc.lock().expect("MusicQueue mutex poisoned");
                 <MusicQueue as QueueBackend>::sync_queue(
                     &mut q,
                     current_items,
@@ -249,7 +253,7 @@ impl MusicQueue {
                         "queue-sync: completed successfully"
                     );
                     if let Some(cb) = on_complete.take() {
-                        let queue_len = queue_arc.lock().unwrap().len().unwrap_or(0);
+                        let queue_len = queue_arc.lock().expect("MusicQueue mutex poisoned").len().unwrap_or(0);
                         cb(queue_len);
                     }
                 }

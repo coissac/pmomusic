@@ -37,35 +37,35 @@ use std::sync::{atomic::AtomicBool, Arc, Mutex};
 /// All methods simply delegate to the underlying MusicQueue.
 impl<T: HasQueue> QueueBackend for T {
     fn len(&self) -> Result<usize, ControlPointError> {
-        self.queue().lock().unwrap().len()
+        self.queue().lock().expect("queue mutex poisoned").len()
     }
 
     fn track_ids(&self) -> Result<Vec<u32>, ControlPointError> {
-        self.queue().lock().unwrap().track_ids()
+        self.queue().lock().expect("queue mutex poisoned").track_ids()
     }
 
     fn id_to_position(&self, id: u32) -> Result<usize, ControlPointError> {
-        self.queue().lock().unwrap().id_to_position(id)
+        self.queue().lock().expect("queue mutex poisoned").id_to_position(id)
     }
 
     fn position_to_id(&self, id: usize) -> Result<u32, ControlPointError> {
-        self.queue().lock().unwrap().position_to_id(id)
+        self.queue().lock().expect("queue mutex poisoned").position_to_id(id)
     }
 
     fn current_track(&self) -> Result<Option<u32>, ControlPointError> {
-        self.queue().lock().unwrap().current_track()
+        self.queue().lock().expect("queue mutex poisoned").current_track()
     }
 
     fn current_index(&self) -> Result<Option<usize>, ControlPointError> {
-        self.queue().lock().unwrap().current_index()
+        self.queue().lock().expect("queue mutex poisoned").current_index()
     }
 
     fn queue_snapshot(&self) -> Result<QueueSnapshot, ControlPointError> {
-        self.queue().lock().unwrap().queue_snapshot()
+        self.queue().lock().expect("queue mutex poisoned").queue_snapshot()
     }
 
     fn set_index(&mut self, index: Option<usize>) -> Result<(), ControlPointError> {
-        self.queue().lock().unwrap().set_index(index)
+        self.queue().lock().expect("queue mutex poisoned").set_index(index)
     }
 
     fn replace_queue(
@@ -92,11 +92,11 @@ impl<T: HasQueue> QueueBackend for T {
     }
 
     fn get_item(&self, index: usize) -> Result<Option<PlaybackItem>, ControlPointError> {
-        self.queue().lock().unwrap().get_item(index)
+        self.queue().lock().expect("queue mutex poisoned").get_item(index)
     }
 
     fn replace_item(&mut self, index: usize, item: PlaybackItem) -> Result<(), ControlPointError> {
-        self.queue().lock().unwrap().replace_item(index, item)
+        self.queue().lock().expect("queue mutex poisoned").replace_item(index, item)
     }
 
     fn enqueue_items(
@@ -104,7 +104,7 @@ impl<T: HasQueue> QueueBackend for T {
         items: Vec<PlaybackItem>,
         mode: EnqueueMode,
     ) -> Result<(), ControlPointError> {
-        self.queue().lock().unwrap().enqueue_items(items, mode)
+        self.queue().lock().expect("queue mutex poisoned").enqueue_items(items, mode)
     }
 }
 

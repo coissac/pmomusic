@@ -89,7 +89,7 @@ impl OpenHomeRenderer {
 
     /// Returns true if currently playing a continuous stream (radio without duration)
     pub fn is_continuous_stream(&self) -> bool {
-        *self.continuous_stream.lock().unwrap()
+        *self.continuous_stream.lock().expect("continuous_stream mutex poisoned")
     }
 
     pub fn has_playlist(&self) -> bool {
@@ -176,14 +176,14 @@ impl OpenHomeRenderer {
     /// Plus rapide que snapshot_openhome_playlist() pour juste connaître le nombre de pistes.
     pub(crate) fn openhome_playlist_len(&self) -> Result<usize, ControlPointError> {
         // Use queue.len() which uses cached track_ids() internally
-        let queue = self.queue.lock().unwrap();
+        let queue = self.queue.lock().expect("queue mutex poisoned");
         queue.len()
     }
 
     /// Retourne les IDs des pistes de la playlist OpenHome.
     /// Plus rapide que snapshot_openhome_playlist() car ne récupère pas les métadonnées.
     pub(crate) fn openhome_playlist_ids(&self) -> Result<Vec<u32>, ControlPointError> {
-        let queue = self.queue.lock().unwrap();
+        let queue = self.queue.lock().expect("queue mutex poisoned");
         if let Some(oh_queue) = queue.as_openhome() {
             oh_queue.track_ids()
         } else {
@@ -209,7 +209,7 @@ impl OpenHomeRenderer {
         let insert_after = match after_id {
             Some(id) => id,
             None => {
-                let queue = self.queue.lock().unwrap();
+                let queue = self.queue.lock().expect("queue mutex poisoned");
                 if let Some(oh_queue) = queue.as_openhome() {
                     oh_queue
                         .track_ids()?
@@ -365,7 +365,7 @@ impl PlaybackPosition for OpenHomeRenderer {
 
         // Check cache first
         {
-            let mut cache = self.position_cache.lock().unwrap();
+            let mut cache = self.position_cache.lock().expect("position_cache mutex poisoned");
 
             // Track calls for warning detection
             cache.calls_in_last_second.push(now);
@@ -406,7 +406,7 @@ impl PlaybackPosition for OpenHomeRenderer {
         let mut track_metadata_xml = None;
 
         // Get track ID from queue (uses cached data)
-        let queue_guard_for_id = self.queue.lock().unwrap();
+        let queue_guard_for_id = self.queue.lock().expect("queue mutex poisoned");
         if let Some(oh_queue) = queue_guard_for_id.as_openhome() {
             match oh_queue.current_track() {
                 Ok(id_opt) => track_id = id_opt,
@@ -419,7 +419,7 @@ impl PlaybackPosition for OpenHomeRenderer {
         drop(queue_guard_for_id);
 
         // Use queue API to get current item with cached metadata
-        let mut queue_guard = self.queue.lock().unwrap();
+        let mut queue_guard = self.queue.lock().expect("queue mutex poisoned");
         if let Ok(Some((current_item, _))) = queue_guard.peek_current() {
             // Use metadata from queue cache (updated via OpenHome events)
             track_uri = Some(current_item.uri.clone());
@@ -436,7 +436,7 @@ impl PlaybackPosition for OpenHomeRenderer {
             }
 
             // Check if the URI has changed to detect track changes
-            let mut cached_uri = self.current_track_uri.lock().unwrap();
+            let mut cached_uri = self.current_track_uri.lock().expect("current_track_uri mutex poisoned");
             let uri_changed = cached_uri.as_ref() != Some(&current_item.uri);
 
             if uri_changed {
@@ -448,7 +448,7 @@ impl PlaybackPosition for OpenHomeRenderer {
 
                 // Détecte si la nouvelle URL est un flux continu
                 let is_stream = crate::music_renderer::is_continuous_stream_url(&current_item.uri);
-                *self.continuous_stream.lock().unwrap() = is_stream;
+                *self.continuous_stream.lock().expect("continuous_stream mutex poisoned") = is_stream;
                 tracing::debug!("OpenHome URI changed, continuous_stream={}", is_stream);
 
                 *cached_uri = Some(current_item.uri.clone());
@@ -484,7 +484,7 @@ impl PlaybackPosition for OpenHomeRenderer {
 
         // Update cache with fresh data
         {
-            let mut cache = self.position_cache.lock().unwrap();
+            let mut cache = self.position_cache.lock().expect("position_cache mutex poisoned");
             cache.last_position = Some(position_info.clone());
             cache.last_update = Some(now);
         }

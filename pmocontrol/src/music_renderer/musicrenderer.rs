@@ -46,9 +46,9 @@ use tracing::warn;
 #[derive(Clone, Debug)]
 pub struct PlaylistBinding {
     /// MediaServer that owns the playlist container.
-    pub server_id: DeviceId,
+    pub(crate) server_id: DeviceId,
     /// DIDL-Lite object id of the playlist container.
-    pub container_id: String,
+    pub(crate) container_id: String,
     /// True once at least one ContainerUpdateIDs notification has been seen.
     pub(crate) has_seen_update: bool,
     /// Flag used internally to signal that the queue should be refreshed
@@ -56,6 +56,18 @@ pub struct PlaylistBinding {
     pub(crate) pending_refresh: bool,
     /// Whether the next refresh should auto-start playback if the renderer is idle.
     pub(crate) auto_play_on_refresh: bool,
+}
+
+impl PlaylistBinding {
+    /// Returns the ID of the MediaServer that owns this playlist container.
+    pub fn server_id(&self) -> &DeviceId {
+        &self.server_id
+    }
+
+    /// Returns the DIDL-Lite object ID of the playlist container.
+    pub fn container_id(&self) -> &str {
+        &self.container_id
+    }
 }
 
 /// Backend-agnostic façade exposing transport, volume, and status contracts.
@@ -311,6 +323,14 @@ impl MusicRenderer {
     }
 
     /// Main loop for the watcher thread.
+    ///
+    /// # Error policy
+    ///
+    /// The watcher thread runs for the lifetime of the renderer and never restarts
+    /// automatically. Network/device errors during polling are logged at `debug` level
+    /// and ignored — they are transient and expected when a device is temporarily
+    /// unreachable. Panics inside `poll_and_emit_changes` are caught and logged at
+    /// `error` level so they do not kill the watcher thread.
     fn watcher_loop(&self, strategy: WatchStrategy, stop_flag: Arc<AtomicBool>) {
         let Some(base_interval) = strategy.polling_interval() else {
             // Pure push strategy - no polling needed (future implementation)
@@ -341,7 +361,16 @@ impl MusicRenderer {
             };
 
             if self.is_online() {
-                self.poll_and_emit_changes(tick);
+                // Wrap in catch_unwind so a panic in poll logic does not terminate the watcher.
+                let poll_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    self.poll_and_emit_changes(tick);
+                }));
+                if let Err(_panic) = poll_result {
+                    error!(
+                        renderer = self.info.friendly_name(),
+                        "poll_and_emit_changes panicked; watcher continues"
+                    );
+                }
                 last_activity_time = SystemTime::now();
             }
 
@@ -393,14 +422,19 @@ impl MusicRenderer {
 
         // Step 2: Do all network calls WITHOUT holding any locks
         // This prevents blocking other threads that need to read watched_state
-        let position = self.playback_position().ok();
-        let raw_state = self.playback_state().ok();
+        // Errors are logged at trace level — device temporarily unreachable is expected.
+        let position = self.playback_position()
+            .inspect_err(|e| tracing::trace!(renderer = self.info.friendly_name(), error = %e, "playback_position failed"))
+            .ok();
+        let raw_state = self.playback_state()
+            .inspect_err(|e| tracing::trace!(renderer = self.info.friendly_name(), error = %e, "playback_state failed"))
+            .ok();
 
         // Poll volume and mute every other tick (1 second at 500ms interval)
         let (volume, mute, is_stream) = if tick % 2 == 0 {
             (
-                self.volume().ok(),
-                self.mute().ok(),
+                self.volume().inspect_err(|e| tracing::trace!(renderer = self.info.friendly_name(), error = %e, "volume poll failed")).ok(),
+                self.mute().inspect_err(|e| tracing::trace!(renderer = self.info.friendly_name(), error = %e, "mute poll failed")).ok(),
                 Some(self.is_playing_a_stream()),
             )
         } else {
@@ -490,7 +524,7 @@ impl MusicRenderer {
             if let Some(stream_flag) = is_stream {
                 if stream_flag {
                     if let Some(ref new_duration) = position.track_duration {
-                        let mut state = self.state.lock().unwrap();
+                        let mut state = self.state.lock().expect("RendererState mutex poisoned");
 
                         match &state.current_track_duration {
                             Some(stored_duration) => {
@@ -647,7 +681,7 @@ impl MusicRenderer {
         match state {
             PlaybackState::Stopped => {
                 {
-                    let s = self.state.lock().unwrap();
+                    let s = self.state.lock().expect("RendererState mutex poisoned");
                     tracing::debug!(
                         renderer = self.info.friendly_name(),
                         has_played = s.has_played_since_track_start,
@@ -680,7 +714,7 @@ impl MusicRenderer {
                     // On autorise l'auto-avance si:
                     //   1. On a bien vu PLAYING OU
                     //   2. Le titre a été lancé depuis plus de 20 secondes
-                    let track_start = self.state.lock().unwrap().track_start_time;
+                    let track_start = self.state.lock().expect("RendererState mutex poisoned").track_start_time;
                     let elapsed = track_start
                         .and_then(|t| t.elapsed().ok())
                         .unwrap_or_default();
@@ -737,7 +771,7 @@ impl MusicRenderer {
             PlaybackState::NoMedia => {
                 // Handle end of track (Chromecast returns NoMedia when track ends)
                 // This is equivalent to Stopped for auto-advance purposes
-                let s = self.state.lock().unwrap();
+                let s = self.state.lock().expect("RendererState mutex poisoned");
                 let playback_source = s.playback_source;
                 let has_played = s.has_played_since_track_start;
                 let user_stop = s.user_stop_requested;
@@ -804,7 +838,7 @@ impl MusicRenderer {
                 self.set_has_played_flag();
             }
             PlaybackState::Transitioning => {
-                let s = self.state.lock().unwrap();
+                let s = self.state.lock().expect("RendererState mutex poisoned");
                 tracing::trace!(
                     renderer = self.info.friendly_name(),
                     has_played = s.has_played_since_track_start,
@@ -1646,13 +1680,13 @@ impl MusicRenderer {
 
     /// Gets the last known track metadata.
     pub fn last_metadata(&self) -> Option<TrackMetadata> {
-        self.state.lock().unwrap().last_metadata.clone()
+        self.state.lock().expect("RendererState mutex poisoned").last_metadata.clone()
     }
 
     /// Sets the last known track metadata.
     /// Updates track_start_time and resets current_track_duration only if the metadata actually changes.
     pub fn set_last_metadata(&self, metadata: Option<TrackMetadata>) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().expect("RendererState mutex poisoned");
         let metadata_changed = state.last_metadata != metadata;
         if metadata_changed {
             // Pour les flux continus: utiliser dc:date comme track_start_time réel de diffusion.
@@ -1673,23 +1707,23 @@ impl MusicRenderer {
 
     /// Gets the timestamp when the current track started playing.
     pub fn track_start_time(&self) -> Option<SystemTime> {
-        self.state.lock().unwrap().track_start_time
+        self.state.lock().expect("RendererState mutex poisoned").track_start_time
     }
 
     /// Gets the current playback source.
     pub fn playback_source(&self) -> PlaybackSource {
-        self.state.lock().unwrap().playback_source
+        self.state.lock().expect("RendererState mutex poisoned").playback_source
     }
 
     /// Sets the playback source.
     pub fn set_playback_source(&self, source: PlaybackSource) {
-        self.state.lock().unwrap().playback_source = source;
+        self.state.lock().expect("RendererState mutex poisoned").playback_source = source;
     }
 
     /// Checks if currently playing from queue.
     pub fn is_playing_from_queue(&self) -> bool {
         matches!(
-            self.state.lock().unwrap().playback_source,
+            self.state.lock().expect("RendererState mutex poisoned").playback_source,
             PlaybackSource::FromQueue
         )
     }
@@ -1700,7 +1734,7 @@ impl MusicRenderer {
     /// Does NOT change None -> External because that would break queue playback
     /// (the control_point will set it to FromQueue after play_from_queue succeeds).
     pub fn mark_external_if_idle(&self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().expect("RendererState mutex poisoned");
         if matches!(state.playback_source, PlaybackSource::External) {
             // Keep External if we were already playing externally
         } else {
@@ -1711,12 +1745,12 @@ impl MusicRenderer {
 
     /// Marks that the user requested a stop (to prevent auto-advance).
     pub fn mark_user_stop_requested(&self) {
-        self.state.lock().unwrap().user_stop_requested = true;
+        self.state.lock().expect("RendererState mutex poisoned").user_stop_requested = true;
     }
 
     /// Checks and clears the user stop requested flag.
     pub fn check_and_clear_user_stop_requested(&self) -> bool {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().expect("RendererState mutex poisoned");
         let was_requested = state.user_stop_requested;
         state.user_stop_requested = false;
         was_requested
@@ -1727,21 +1761,21 @@ impl MusicRenderer {
     /// Sets the has_played_since_track_start flag to true.
     /// Called when PLAYING state is detected.
     fn set_has_played_flag(&self) {
-        self.state.lock().unwrap().has_played_since_track_start = true;
+        self.state.lock().expect("RendererState mutex poisoned").has_played_since_track_start = true;
     }
 
     /// Clears the has_played_since_track_start flag.
     /// Called when stopping playback or starting a new track.
     /// This is public so that ControlPoint can reset it when jumping to a new track.
     pub fn clear_has_played_flag(&self) {
-        self.state.lock().unwrap().has_played_since_track_start = false;
+        self.state.lock().expect("RendererState mutex poisoned").has_played_since_track_start = false;
     }
 
     /// Checks and clears the has_played_since_track_start flag.
     /// Returns true if PLAYING was seen since last track start, false otherwise.
     /// Used to determine if auto-advance should be allowed.
     fn check_and_clear_has_played_flag(&self) -> bool {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().expect("RendererState mutex poisoned");
         let has_played = state.has_played_since_track_start;
         state.has_played_since_track_start = false;
         has_played
@@ -1757,7 +1791,7 @@ impl MusicRenderer {
     /// # Errors
     /// Returns an error if the duration is invalid (0 or > 7200 seconds).
     pub fn start_sleep_timer(&self, duration_seconds: u32) -> Result<u32, ControlPointError> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().expect("RendererState mutex poisoned");
         state
             .sleep_timer
             .start(duration_seconds)
@@ -1773,7 +1807,7 @@ impl MusicRenderer {
     /// # Errors
     /// Returns an error if the duration is invalid (0 or > 7200 seconds).
     pub fn update_sleep_timer(&self, duration_seconds: u32) -> Result<u32, ControlPointError> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().expect("RendererState mutex poisoned");
         state
             .sleep_timer
             .update(duration_seconds)
@@ -1784,32 +1818,32 @@ impl MusicRenderer {
 
     /// Cancels the sleep timer.
     pub fn cancel_sleep_timer(&self) {
-        self.state.lock().unwrap().sleep_timer.cancel();
+        self.state.lock().expect("RendererState mutex poisoned").sleep_timer.cancel();
     }
 
     /// Returns the remaining seconds of the sleep timer, or None if no timer is active.
     pub fn sleep_timer_remaining(&self) -> Option<u32> {
-        self.state.lock().unwrap().sleep_timer.remaining_seconds()
+        self.state.lock().expect("RendererState mutex poisoned").sleep_timer.remaining_seconds()
     }
 
     /// Returns the configured duration of the sleep timer in seconds.
     pub fn sleep_timer_duration(&self) -> u32 {
-        self.state.lock().unwrap().sleep_timer.duration_seconds()
+        self.state.lock().expect("RendererState mutex poisoned").sleep_timer.duration_seconds()
     }
 
     /// Returns true if the sleep timer is active.
     pub fn is_sleep_timer_active(&self) -> bool {
-        self.state.lock().unwrap().sleep_timer.is_active()
+        self.state.lock().expect("RendererState mutex poisoned").sleep_timer.is_active()
     }
 
     /// Returns true if the sleep timer has expired.
     pub fn is_sleep_timer_expired(&self) -> bool {
-        self.state.lock().unwrap().sleep_timer.is_expired()
+        self.state.lock().expect("RendererState mutex poisoned").sleep_timer.is_expired()
     }
 
     /// Gets the sleep timer state as a tuple (is_active, duration_seconds, remaining_seconds).
     pub fn sleep_timer_state(&self) -> (bool, u32, Option<u32>) {
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock().expect("RendererState mutex poisoned");
         (
             state.sleep_timer.is_active(),
             state.sleep_timer.duration_seconds(),

@@ -117,7 +117,7 @@ impl UpnpRenderer {
 
     /// Returns true if currently playing a continuous stream (radio without duration)
     pub fn is_continuous_stream(&self) -> bool {
-        *self.continuous_stream.lock().unwrap()
+        *self.continuous_stream.lock().expect("continuous_stream mutex poisoned")
     }
 }
 
@@ -192,10 +192,10 @@ impl QueueTransportControl for UpnpRenderer {
         let duration = parse_didl_duration(&metadata);
         if let Some(ref dur) = duration {
             tracing::debug!("Caching duration from queue DIDL: {}", dur);
-            *self.cached_duration.lock().unwrap() = Some(dur.clone());
+            *self.cached_duration.lock().expect("cached_duration mutex poisoned") = Some(dur.clone());
         } else {
             tracing::debug!("No duration to cache from queue DIDL");
-            *self.cached_duration.lock().unwrap() = None;
+            *self.cached_duration.lock().expect("cached_duration mutex poisoned") = None;
         }
 
         let avt = self.avtransport()?;
@@ -233,7 +233,7 @@ impl TransportControl for UpnpRenderer {
 
         // Détecte si l'URL est un flux continu en interrogeant le serveur HTTP
         let is_stream = crate::music_renderer::is_continuous_stream_url(uri);
-        *self.continuous_stream.lock().unwrap() = is_stream;
+        *self.continuous_stream.lock().expect("continuous_stream mutex poisoned") = is_stream;
         tracing::debug!(
             "UpnpRenderer play_uri: URI={}, continuous_stream={}",
             uri,
@@ -244,10 +244,10 @@ impl TransportControl for UpnpRenderer {
         let duration = parse_didl_duration(meta);
         if let Some(ref dur) = duration {
             tracing::debug!("Caching duration from DIDL: {}", dur);
-            *self.cached_duration.lock().unwrap() = Some(dur.clone());
+            *self.cached_duration.lock().expect("cached_duration mutex poisoned") = Some(dur.clone());
         } else {
             tracing::debug!("No duration to cache from DIDL");
-            *self.cached_duration.lock().unwrap() = None;
+            *self.cached_duration.lock().expect("cached_duration mutex poisoned") = None;
         }
 
         let avt = self.avtransport()?;
@@ -341,7 +341,7 @@ impl PlaybackPosition for UpnpRenderer {
         let mut track_metadata_xml = None;
         let mut track_uri = raw.track_uri.clone();
 
-        let mut queue_guard = self.queue.lock().unwrap();
+        let mut queue_guard = self.queue.lock().expect("queue mutex poisoned");
 
         // Récupérer l'item courant de la queue
         // Normalement current_index est toujours Some() si la queue n'est pas vide (règle métier)

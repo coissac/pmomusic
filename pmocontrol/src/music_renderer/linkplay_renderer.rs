@@ -91,7 +91,7 @@ impl RendererFromMediaRendererInfo for LinkPlayRenderer {
 impl LinkPlayRenderer {
     /// Returns true if currently playing a continuous stream (radio without duration)
     pub fn is_continuous_stream(&self) -> bool {
-        *self.continuous_stream.lock().unwrap()
+        *self.continuous_stream.lock().expect("continuous_stream mutex poisoned")
     }
 }
 
@@ -99,7 +99,7 @@ impl TransportControl for LinkPlayRenderer {
     fn play_uri(&self, uri: &str, _meta: &str) -> Result<(), ControlPointError> {
         // Détecte si l'URL est un flux continu
         let is_stream = crate::music_renderer::is_continuous_stream_url(uri);
-        *self.continuous_stream.lock().unwrap() = is_stream;
+        *self.continuous_stream.lock().expect("continuous_stream mutex poisoned") = is_stream;
         tracing::debug!(
             "LinkPlayRenderer play_uri: URI={}, continuous_stream={}",
             uri,
@@ -158,7 +158,7 @@ impl PlaybackPosition for LinkPlayRenderer {
         let mut position_info = self.fetch_status()?.position_info();
 
         // Use queue metadata instead of direct status metadata to benefit from duration protection
-        let mut queue_guard = self.queue.lock().unwrap();
+        let mut queue_guard = self.queue.lock().expect("queue mutex poisoned");
         let queue_item = queue_guard.peek_current().ok().flatten();
 
         if let Some((current_item, _)) = queue_item {

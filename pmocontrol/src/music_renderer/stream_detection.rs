@@ -53,7 +53,7 @@ pub fn is_continuous_stream_url(url: &str) -> bool {
 
     // Check cache first
     {
-        let cache = STREAM_CACHE.lock().unwrap();
+        let cache = STREAM_CACHE.lock().expect("stream cache mutex poisoned");
         if let Some(&cached_result) = cache.get(url) {
             trace!("Cache hit for {}: is_stream={}", url, cached_result);
             return cached_result;
@@ -62,7 +62,7 @@ pub fn is_continuous_stream_url(url: &str) -> bool {
 
     // Check if already being verified
     {
-        let mut pending = PENDING_CHECKS.lock().unwrap();
+        let mut pending = PENDING_CHECKS.lock().expect("pending checks mutex poisoned");
         if pending.contains(url) {
             debug!(
                 "Stream detection already in progress for {}, returning false temporarily",
@@ -93,13 +93,13 @@ pub fn is_continuous_stream_url(url: &str) -> bool {
 
         // Store in cache
         {
-            let mut cache = STREAM_CACHE.lock().unwrap();
+            let mut cache = STREAM_CACHE.lock().expect("stream cache mutex poisoned");
             cache.insert(url_owned.clone(), result);
         }
 
         // Remove from pending
         {
-            let mut pending = PENDING_CHECKS.lock().unwrap();
+            let mut pending = PENDING_CHECKS.lock().expect("pending checks mutex poisoned");
             pending.remove(&url_owned);
         }
 

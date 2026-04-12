@@ -233,16 +233,16 @@ impl OpenHomeQueue {
 
     /// Invalide les caches track_ids et read_list (après insert/delete sans impact sur la piste courante).
     fn invalidate_track_caches(&self) {
-        self.track_ids_cache.lock().unwrap().invalidate();
-        self.read_list_cache.lock().unwrap().invalidate();
+        self.track_ids_cache.lock().expect("track_ids_cache mutex poisoned").invalidate();
+        self.read_list_cache.lock().expect("read_list_cache mutex poisoned").invalidate();
     }
 
     /// Invalide tous les caches (après delete_all, seek, stop — opérations qui changent la piste courante).
     fn invalidate_all_caches(&self) {
-        self.track_ids_cache.lock().unwrap().invalidate();
-        self.read_list_cache.lock().unwrap().invalidate();
-        self.current_track_id_cache.lock().unwrap().invalidate();
-        self.uri_by_id.lock().unwrap().clear();
+        self.track_ids_cache.lock().expect("track_ids_cache mutex poisoned").invalidate();
+        self.read_list_cache.lock().expect("read_list_cache mutex poisoned").invalidate();
+        self.current_track_id_cache.lock().expect("current_track_id_cache mutex poisoned").invalidate();
+        self.uri_by_id.lock().expect("uri_by_id mutex poisoned").clear();
     }
 
     /// Tries to detect a simple append-only or delete-from-end pattern without ReadList.
@@ -390,8 +390,8 @@ impl OpenHomeQueue {
         new_metadata: Option<crate::model::TrackMetadata>,
         uri: &str,
     ) {
-        let mut cache = self.metadata_cache.lock().unwrap();
-        let mut uri_cache = self.uri_by_id.lock().unwrap();
+        let mut cache = self.metadata_cache.lock().expect("metadata_cache mutex poisoned");
+        let mut uri_cache = self.uri_by_id.lock().expect("uri_by_id mutex poisoned");
 
         // Update URI cache
         if !uri.is_empty() {
@@ -481,7 +481,7 @@ impl OpenHomeQueue {
         // Le cache contient les métadonnées stables mises lors de l'insertion
         // Les métadonnées de l'entry (venant de ReadList) changent pour les streams
         let metadata = {
-            let cache = self.metadata_cache.lock().unwrap();
+            let cache = self.metadata_cache.lock().expect("metadata_cache mutex poisoned");
             if let Some(cached_meta) = cache.get(&entry.id) {
                 // Utiliser les métadonnées stables du cache
                 tracing::trace!(
@@ -557,7 +557,7 @@ impl OpenHomeQueue {
             }
             if track_id as usize != playing_id {
                 self.playlist_client.delete_id_if_exists(track_id)?;
-                self.metadata_cache.lock().unwrap().remove(&track_id);
+                self.metadata_cache.lock().expect("metadata_cache mutex poisoned").remove(&track_id);
             }
         }
 
@@ -616,7 +616,7 @@ impl OpenHomeQueue {
                     track_id
                 );
                 self.playlist_client.delete_id_if_exists(track_id)?;
-                self.metadata_cache.lock().unwrap().remove(&track_id);
+                self.metadata_cache.lock().expect("metadata_cache mutex poisoned").remove(&track_id);
             }
         }
         Ok(())
@@ -858,7 +858,7 @@ impl OpenHomeQueue {
                     "Using delete_all() for complete replacement (safe - no current track or not in new playlist)"
                 );
                 self.playlist_client.delete_all()?;
-                self.metadata_cache.lock().unwrap().clear();
+                self.metadata_cache.lock().expect("metadata_cache mutex poisoned").clear();
             }
         } else {
             for idx in (0..current_track_ids.len()).rev() {
@@ -868,7 +868,7 @@ impl OpenHomeQueue {
                 if !keep_current[idx] {
                     let track_id = current_track_ids[idx];
                     self.playlist_client.delete_id_if_exists(track_id)?;
-                    self.metadata_cache.lock().unwrap().remove(&track_id);
+                    self.metadata_cache.lock().expect("metadata_cache mutex poisoned").remove(&track_id);
                 }
             }
         }
@@ -1099,7 +1099,7 @@ impl QueueBackend for OpenHomeQueue {
         self.ensure_playlist_source_selected()?;
 
         // Lock the cache for the entire operation to prevent race conditions
-        let mut cache = self.track_ids_cache.lock().unwrap();
+        let mut cache = self.track_ids_cache.lock().expect("track_ids_cache mutex poisoned");
 
         // Check if cache is valid
         if let Some(cached_ids) = cache.get() {
@@ -1147,7 +1147,7 @@ impl QueueBackend for OpenHomeQueue {
 
     fn current_track(&self) -> Result<Option<u32>, ControlPointError> {
         // Hold lock during entire operation to prevent race conditions
-        let mut cache = self.current_track_id_cache.lock().unwrap();
+        let mut cache = self.current_track_id_cache.lock().expect("current_track_id_cache mutex poisoned");
 
         // Return cached value if valid
         if let Some(cached_id) = cache.get() {
@@ -1192,7 +1192,7 @@ impl QueueBackend for OpenHomeQueue {
         const MAX_BATCH: usize = 256;
         let mut entries = Vec::with_capacity(ids.len());
         for chunk in ids.chunks(MAX_BATCH) {
-            if let Some(cached) = self.read_list_cache.lock().unwrap().get(chunk) {
+            if let Some(cached) = self.read_list_cache.lock().expect("read_list_cache mutex poisoned").get(chunk) {
                 trace!(
                     renderer = self.renderer_id.0.as_str(),
                     "ReadList cache hit for {} IDs",
@@ -1283,7 +1283,7 @@ impl QueueBackend for OpenHomeQueue {
 
         self.ensure_playlist_source_selected()?;
         self.playlist_client.delete_all()?;
-        self.metadata_cache.lock().unwrap().clear();
+        self.metadata_cache.lock().expect("metadata_cache mutex poisoned").clear();
 
         // Invalidate caches after delete_all (clears queue and current track)
         self.invalidate_all_caches();
@@ -1340,7 +1340,7 @@ impl QueueBackend for OpenHomeQueue {
                 "sync_queue: Empty playlist - clearing queue with delete_all"
             );
             self.playlist_client.delete_all()?;
-            self.metadata_cache.lock().unwrap().clear();
+            self.metadata_cache.lock().expect("metadata_cache mutex poisoned").clear();
             self.invalidate_all_caches();
 
             let post_current_track = self.playlist_client.id().ok();
@@ -1364,7 +1364,7 @@ impl QueueBackend for OpenHomeQueue {
                     .last()
                     .copied()
                     .unwrap_or(OPENHOME_PLAYLIST_HEAD_ID);
-                let mut uri_cache = self.uri_by_id.lock().unwrap();
+                let mut uri_cache = self.uri_by_id.lock().expect("uri_by_id mutex poisoned");
                 for item in &new_items {
                     if cancel_token.load(SeqCst) {
                         return Err(ControlPointError::SyncCancelled);
@@ -1583,8 +1583,8 @@ impl QueueBackend for OpenHomeQueue {
             .insert(before_id, &item.uri, &metadata)?;
 
         // Mettre à jour le cache avec les nouvelles métadonnées
-        self.metadata_cache.lock().unwrap().remove(&track_id);
-        self.uri_by_id.lock().unwrap().remove(&track_id);
+        self.metadata_cache.lock().expect("metadata_cache mutex poisoned").remove(&track_id);
+        self.uri_by_id.lock().expect("uri_by_id mutex poisoned").remove(&track_id);
         self.cache_metadata(new_id, item.metadata, &item.uri);
 
         if ci == Some(index) {

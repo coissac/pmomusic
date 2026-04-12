@@ -172,7 +172,7 @@ impl RendererFromMediaRendererInfo for ChromecastRenderer {
 impl ChromecastRenderer {
     /// Returns true if currently playing a continuous stream (radio without duration)
     pub fn is_continuous_stream(&self) -> bool {
-        *self.continuous_stream.lock().unwrap()
+        *self.continuous_stream.lock().expect("continuous_stream mutex poisoned")
     }
 
     /// Connect to the device with retry on connection failures.
@@ -205,7 +205,7 @@ impl TransportControl for ChromecastRenderer {
 
         // Détecte si l'URL est un flux continu
         let is_stream = crate::music_renderer::is_continuous_stream_url(uri);
-        *self.continuous_stream.lock().unwrap() = is_stream;
+        *self.continuous_stream.lock().expect("continuous_stream mutex poisoned") = is_stream;
         tracing::debug!(
             "ChromecastRenderer play_uri: URI={}, continuous_stream={}",
             uri,

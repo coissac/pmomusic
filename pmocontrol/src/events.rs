@@ -19,7 +19,7 @@ impl RendererEventBus {
     pub(crate) fn subscribe(&self) -> Receiver<RendererEvent> {
         let (tx, rx) = unbounded::<RendererEvent>();
         {
-            let mut subscribers = self.subscribers.lock().unwrap();
+            let mut subscribers = self.subscribers.lock().expect("event subscribers mutex poisoned");
             subscribers.push(tx);
         }
         rx
@@ -27,7 +27,7 @@ impl RendererEventBus {
 
     #[allow(dead_code)]
     pub(crate) fn broadcast(&self, event: RendererEvent) {
-        let mut subscribers = self.subscribers.lock().unwrap();
+        let mut subscribers = self.subscribers.lock().expect("event subscribers mutex poisoned");
         subscribers.retain(|tx| tx.send(event.clone()).is_ok());
     }
 }
@@ -47,14 +47,14 @@ impl MediaServerEventBus {
     pub fn subscribe(&self) -> Receiver<MediaServerEvent> {
         let (tx, rx) = unbounded::<MediaServerEvent>();
         {
-            let mut subscribers = self.subscribers.lock().unwrap();
+            let mut subscribers = self.subscribers.lock().expect("event subscribers mutex poisoned");
             subscribers.push(tx);
         }
         rx
     }
 
     pub(crate) fn broadcast(&self, event: MediaServerEvent) {
-        let mut subscribers = self.subscribers.lock().unwrap();
+        let mut subscribers = self.subscribers.lock().expect("event subscribers mutex poisoned");
         subscribers.retain(|tx| tx.send(event.clone()).is_ok());
     }
 }
