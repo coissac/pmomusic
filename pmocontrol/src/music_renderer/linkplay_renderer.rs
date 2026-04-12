@@ -10,13 +10,14 @@ use crate::linkplay_client::{
 };
 use crate::model::{PlaybackState, RendererInfo};
 use crate::music_renderer::capabilities::{
-    PlaybackPosition, PlaybackPositionInfo, PlaybackStatus, QueueTransportControl, RendererBackend,
-    TransportControl, VolumeControl,
+    HasContinuousStream, PlaybackPosition, PlaybackPositionInfo, PlaybackStatus,
+    QueueTransportControl, TransportControl, VolumeControl,
 };
 use crate::music_renderer::musicrenderer::MusicRendererBackend;
 use crate::music_renderer::time_utils::parse_hhmmss_strict;
+use crate::music_renderer::HasQueue;
 use crate::music_renderer::RendererFromMediaRendererInfo;
-use crate::queue::{EnqueueMode, HasQueue, MusicQueue, PlaybackItem, QueueBackend, QueueSnapshot};
+use crate::queue::{EnqueueMode, MusicQueue, PlaybackItem, QueueBackend};
 use crate::DeviceIdentity;
 
 const DEFAULT_HTTP_TIMEOUT_SECS: u64 = 3;
@@ -178,13 +179,12 @@ impl PlaybackPosition for LinkPlayRenderer {
     }
 }
 
-impl RendererBackend for LinkPlayRenderer {
-    fn queue(&self) -> &Arc<Mutex<MusicQueue>> {
-        &self.queue
-    }
-}
 
 impl QueueTransportControl for LinkPlayRenderer {
+    fn play_item(&self, item: &PlaybackItem) -> Result<(), ControlPointError> {
+        self.play_uri(&item.uri, "")
+    }
+
     fn play_from_queue(&self) -> Result<(), ControlPointError> {
         let mut queue = self.queue.lock().unwrap();
 
@@ -204,10 +204,12 @@ impl QueueTransportControl for LinkPlayRenderer {
             .get_item(current_index)?
             .ok_or_else(|| ControlPointError::QueueError("Current item not found".into()))?;
 
-        let uri = item.uri.clone();
         drop(queue);
 
-        self.play_uri(&uri, "")
+        let is_stream = crate::music_renderer::is_continuous_stream_url(&item.uri);
+        *self.continuous_stream.lock().unwrap() = is_stream;
+
+        self.play_item(&item)
     }
 
     fn play_next(&self) -> Result<(), ControlPointError> {
@@ -245,5 +247,11 @@ impl QueueTransportControl for LinkPlayRenderer {
 impl HasQueue for LinkPlayRenderer {
     fn queue(&self) -> &Arc<Mutex<MusicQueue>> {
         &self.queue
+    }
+}
+
+impl HasContinuousStream for LinkPlayRenderer {
+    fn continuous_stream(&self) -> &Arc<Mutex<bool>> {
+        &self.continuous_stream
     }
 }

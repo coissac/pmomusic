@@ -28,14 +28,10 @@
 //!   - This identity is used by the sync helpers to preserve the current
 //!     track across queue rebuilds when the MediaServer content changes.
 
+use crate::music_renderer::HasQueue;
 use crate::queue::MusicQueue;
 use crate::{errors::ControlPointError, PlaybackItem, QueueSnapshot};
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
-
-/// Trait for types that have aMusicQueue.
-pub trait HasQueue {
-    fn queue(&self) -> &Arc<Mutex<MusicQueue>>;
-}
 
 /// Blanket implementation of QueueBackend for types that have a queue.
 /// All methods simply delegate to the underlying MusicQueue.

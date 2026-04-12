@@ -19,10 +19,6 @@ use crate::events::RendererEventBus;
 use crate::model::RendererEvent;
 use crate::model::{PlaybackSource, PlaybackState, RendererInfo, RendererProtocol, TrackMetadata};
 use crate::music_renderer::arylic_tcp::ArylicTcpRenderer;
-use crate::music_renderer::capabilities::{
-    PlaybackPosition, PlaybackPositionInfo, PlaybackStatus, QueueTransportControl, RendererBackend,
-    TransportControl, VolumeControl,
-};
 use crate::music_renderer::chromecast_renderer::ChromecastRenderer;
 use crate::music_renderer::linkplay_renderer::LinkPlayRenderer;
 use crate::music_renderer::openhome_renderer::OpenHomeRenderer;
@@ -33,6 +29,10 @@ use crate::music_renderer::watcher::{
     WatchedState,
 };
 use crate::music_renderer::RendererFromMediaRendererInfo;
+use crate::music_renderer::{
+    HasContinuousStream, HasQueue, PlaybackPosition, PlaybackPositionInfo, PlaybackStatus,
+    QueueTransportControl, TransportControl, VolumeControl,
+};
 use crate::online::DeviceConnectionState;
 use crate::queue::{EnqueueMode, MusicQueue, PlaybackItem, QueueBackend, QueueSnapshot};
 use crate::{DeviceId, DeviceIdentity, DeviceOnline};
@@ -998,7 +998,7 @@ impl MusicRenderer {
     /// Get a clone of the queue Arc (for async sync operations).
     pub fn queue(&self) -> Arc<Mutex<MusicQueue>> {
         let backend = self.lock_backend_for("queue");
-        crate::music_renderer::capabilities::RendererBackend::queue(&*backend).clone()
+        crate::music_renderer::capabilities::HasQueue::queue(&*backend).clone()
     }
 
     /// Get the current queue item without advancing.
@@ -2274,7 +2274,7 @@ impl PlaybackPosition for MusicRendererBackend {
     }
 }
 
-impl RendererBackend for MusicRendererBackend {
+impl HasQueue for MusicRendererBackend {
     fn queue(&self) -> &Arc<Mutex<MusicQueue>> {
         match self {
             MusicRendererBackend::Upnp(r) => r.queue(),
@@ -2287,7 +2287,31 @@ impl RendererBackend for MusicRendererBackend {
     }
 }
 
+impl HasContinuousStream for MusicRendererBackend {
+    fn continuous_stream(&self) -> &Arc<Mutex<bool>> {
+        match self {
+            MusicRendererBackend::Upnp(r) => r.continuous_stream(),
+            MusicRendererBackend::OpenHome(r) => r.continuous_stream(),
+            MusicRendererBackend::LinkPlay(r) => r.continuous_stream(),
+            MusicRendererBackend::ArylicTcp(r) => r.continuous_stream(),
+            MusicRendererBackend::Chromecast(cc) => cc.continuous_stream(),
+            MusicRendererBackend::HybridUpnpArylic { arylic, .. } => arylic.continuous_stream(),
+        }
+    }
+}
+
 impl QueueTransportControl for MusicRendererBackend {
+    fn play_item(&self, item: &PlaybackItem) -> Result<(), ControlPointError> {
+        match self {
+            MusicRendererBackend::Upnp(r) => r.play_item(item),
+            MusicRendererBackend::OpenHome(r) => r.play_item(item),
+            MusicRendererBackend::LinkPlay(r) => r.play_item(item),
+            MusicRendererBackend::ArylicTcp(r) => r.play_item(item),
+            MusicRendererBackend::Chromecast(cc) => cc.play_item(item),
+            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.play_item(item),
+        }
+    }
+
     fn play_from_queue(&self) -> Result<(), ControlPointError> {
         match self {
             MusicRendererBackend::Upnp(r) => r.play_from_queue(),
@@ -2329,168 +2353,6 @@ impl QueueTransportControl for MusicRendererBackend {
             MusicRendererBackend::ArylicTcp(r) => r.play_from_index(index),
             MusicRendererBackend::Chromecast(cc) => cc.play_from_index(index),
             MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.play_from_index(index),
-        }
-    }
-}
-
-impl QueueBackend for MusicRendererBackend {
-    fn len(&self) -> Result<usize, ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.len(),
-            MusicRendererBackend::OpenHome(r) => r.len(),
-            MusicRendererBackend::LinkPlay(r) => r.len(),
-            MusicRendererBackend::ArylicTcp(r) => r.len(),
-            MusicRendererBackend::Chromecast(cc) => cc.len(),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.len(),
-        }
-    }
-
-    fn track_ids(&self) -> Result<Vec<u32>, ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.track_ids(),
-            MusicRendererBackend::OpenHome(r) => r.track_ids(),
-            MusicRendererBackend::LinkPlay(r) => r.track_ids(),
-            MusicRendererBackend::ArylicTcp(r) => r.track_ids(),
-            MusicRendererBackend::Chromecast(cc) => cc.track_ids(),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.track_ids(),
-        }
-    }
-
-    fn id_to_position(&self, id: u32) -> Result<usize, ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.id_to_position(id),
-            MusicRendererBackend::OpenHome(r) => r.id_to_position(id),
-            MusicRendererBackend::LinkPlay(r) => r.id_to_position(id),
-            MusicRendererBackend::ArylicTcp(r) => r.id_to_position(id),
-            MusicRendererBackend::Chromecast(cc) => cc.id_to_position(id),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.id_to_position(id),
-        }
-    }
-
-    fn position_to_id(&self, id: usize) -> Result<u32, ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.position_to_id(id),
-            MusicRendererBackend::OpenHome(r) => r.position_to_id(id),
-            MusicRendererBackend::LinkPlay(r) => r.position_to_id(id),
-            MusicRendererBackend::ArylicTcp(r) => r.position_to_id(id),
-            MusicRendererBackend::Chromecast(cc) => cc.position_to_id(id),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.position_to_id(id),
-        }
-    }
-
-    fn current_track(&self) -> Result<Option<u32>, ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.current_track(),
-            MusicRendererBackend::OpenHome(r) => r.current_track(),
-            MusicRendererBackend::LinkPlay(r) => r.current_track(),
-            MusicRendererBackend::ArylicTcp(r) => r.current_track(),
-            MusicRendererBackend::Chromecast(cc) => cc.current_track(),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.current_track(),
-        }
-    }
-
-    fn current_index(&self) -> Result<Option<usize>, ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.current_index(),
-            MusicRendererBackend::OpenHome(r) => r.current_index(),
-            MusicRendererBackend::LinkPlay(r) => r.current_index(),
-            MusicRendererBackend::ArylicTcp(r) => r.current_index(),
-            MusicRendererBackend::Chromecast(cc) => cc.current_index(),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.current_index(),
-        }
-    }
-
-    fn queue_snapshot(&self) -> Result<QueueSnapshot, ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.queue_snapshot(),
-            MusicRendererBackend::OpenHome(r) => r.queue_snapshot(),
-            MusicRendererBackend::LinkPlay(r) => r.queue_snapshot(),
-            MusicRendererBackend::ArylicTcp(r) => r.queue_snapshot(),
-            MusicRendererBackend::Chromecast(cc) => cc.queue_snapshot(),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.queue_snapshot(),
-        }
-    }
-
-    fn set_index(&mut self, index: Option<usize>) -> Result<(), ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.set_index(index),
-            MusicRendererBackend::OpenHome(r) => r.set_index(index),
-            MusicRendererBackend::LinkPlay(r) => r.set_index(index),
-            MusicRendererBackend::ArylicTcp(r) => r.set_index(index),
-            MusicRendererBackend::Chromecast(cc) => cc.set_index(index),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.set_index(index),
-        }
-    }
-
-    fn replace_queue(
-        &mut self,
-        items: Vec<PlaybackItem>,
-        current_index: Option<usize>,
-    ) -> Result<(), ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.replace_queue(items, current_index),
-            MusicRendererBackend::OpenHome(r) => r.replace_queue(items, current_index),
-            MusicRendererBackend::LinkPlay(r) => r.replace_queue(items, current_index),
-            MusicRendererBackend::ArylicTcp(r) => r.replace_queue(items, current_index),
-            MusicRendererBackend::Chromecast(cc) => cc.replace_queue(items, current_index),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => {
-                upnp.replace_queue(items, current_index)
-            }
-        }
-    }
-
-    fn sync_queue(
-        &mut self,
-        items: Vec<PlaybackItem>,
-        cancel_token: &Arc<AtomicBool>,
-        on_ready: Option<Box<dyn FnOnce() + Send>>,
-    ) -> Result<(), ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.sync_queue(items, cancel_token, on_ready),
-            MusicRendererBackend::OpenHome(r) => r.sync_queue(items, cancel_token, on_ready),
-            MusicRendererBackend::LinkPlay(r) => r.sync_queue(items, cancel_token, on_ready),
-            MusicRendererBackend::ArylicTcp(r) => r.sync_queue(items, cancel_token, on_ready),
-            MusicRendererBackend::Chromecast(cc) => cc.sync_queue(items, cancel_token, on_ready),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => {
-                upnp.sync_queue(items, cancel_token, on_ready)
-            }
-        }
-    }
-
-    fn get_item(&self, index: usize) -> Result<Option<PlaybackItem>, ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.get_item(index),
-            MusicRendererBackend::OpenHome(r) => r.get_item(index),
-            MusicRendererBackend::LinkPlay(r) => r.get_item(index),
-            MusicRendererBackend::ArylicTcp(r) => r.get_item(index),
-            MusicRendererBackend::Chromecast(cc) => cc.get_item(index),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.get_item(index),
-        }
-    }
-
-    fn replace_item(&mut self, index: usize, item: PlaybackItem) -> Result<(), ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.replace_item(index, item),
-            MusicRendererBackend::OpenHome(r) => r.replace_item(index, item),
-            MusicRendererBackend::LinkPlay(r) => r.replace_item(index, item),
-            MusicRendererBackend::ArylicTcp(r) => r.replace_item(index, item),
-            MusicRendererBackend::Chromecast(cc) => cc.replace_item(index, item),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.replace_item(index, item),
-        }
-    }
-
-    fn enqueue_items(
-        &mut self,
-        items: Vec<PlaybackItem>,
-        mode: EnqueueMode,
-    ) -> Result<(), ControlPointError> {
-        match self {
-            MusicRendererBackend::Upnp(r) => r.enqueue_items(items, mode),
-            MusicRendererBackend::OpenHome(r) => r.enqueue_items(items, mode),
-            MusicRendererBackend::LinkPlay(r) => r.enqueue_items(items, mode),
-            MusicRendererBackend::ArylicTcp(r) => r.enqueue_items(items, mode),
-            MusicRendererBackend::Chromecast(cc) => cc.enqueue_items(items, mode),
-            MusicRendererBackend::HybridUpnpArylic { upnp, .. } => upnp.enqueue_items(items, mode),
         }
     }
 }

@@ -2,8 +2,8 @@ use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use std::time::SystemTime;
 
 use crate::music_renderer::capabilities::{
-    PlaybackPosition, PlaybackPositionInfo, PlaybackStatus, QueueTransportControl, RendererBackend,
-    TransportControl, VolumeControl,
+    HasContinuousStream, PlaybackPosition, PlaybackPositionInfo, PlaybackStatus,
+    QueueTransportControl, TransportControl, VolumeControl,
 };
 use crate::music_renderer::time_utils::{format_hhmmss_u32, parse_time_flexible};
 use crate::DeviceIdentity;
@@ -15,8 +15,9 @@ use crate::music_renderer::openhome::{
     build_info_client, build_playlist_client, build_product_client, build_radio_client,
     build_time_client, build_volume_client,
 };
+use crate::music_renderer::HasQueue;
 use crate::music_renderer::RendererFromMediaRendererInfo;
-use crate::queue::{EnqueueMode, HasQueue, MusicQueue, PlaybackItem, QueueBackend, QueueSnapshot};
+use crate::queue::{EnqueueMode, MusicQueue, PlaybackItem, QueueBackend, QueueSnapshot};
 use crate::upnp_clients::{
     OhInfoClient, OhPlaylistClient, OhProductClient, OhRadioClient, OhTimeClient, OhVolumeClient,
     OPENHOME_PLAYLIST_HEAD_ID,
@@ -266,11 +267,6 @@ impl RendererFromMediaRendererInfo for OpenHomeRenderer {
     }
 }
 
-impl RendererBackend for OpenHomeRenderer {
-    fn queue(&self) -> &Arc<Mutex<MusicQueue>> {
-        &self.queue
-    }
-}
 
 impl TransportControl for OpenHomeRenderer {
     fn play_uri(&self, uri: &str, meta: &str) -> Result<(), ControlPointError> {
@@ -529,6 +525,11 @@ pub(crate) fn map_openhome_state(raw: &str) -> PlaybackState {
 }
 
 impl QueueTransportControl for OpenHomeRenderer {
+    fn play_item(&self, _item: &PlaybackItem) -> Result<(), ControlPointError> {
+        let playlist = self.playlist_client_for("play_item")?;
+        playlist.play()
+    }
+
     fn play_from_queue(&self) -> Result<(), ControlPointError> {
         {
             let queue = self
@@ -629,6 +630,12 @@ impl QueueTransportControl for OpenHomeRenderer {
 impl HasQueue for OpenHomeRenderer {
     fn queue(&self) -> &Arc<Mutex<MusicQueue>> {
         &self.queue
+    }
+}
+
+impl HasContinuousStream for OpenHomeRenderer {
+    fn continuous_stream(&self) -> &Arc<Mutex<bool>> {
+        &self.continuous_stream
     }
 }
 

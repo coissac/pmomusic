@@ -4,11 +4,12 @@ use crate::errors::ControlPointError;
 use crate::model::PlaybackState;
 use crate::music_renderer::capabilities::{
     HasContinuousStream, PlaybackPosition, PlaybackPositionInfo, PlaybackStatus,
-    QueueTransportControl, RendererBackend, TransportControl, VolumeControl,
+    QueueTransportControl, TransportControl, VolumeControl,
 };
 use crate::music_renderer::musicrenderer::{build_didl_lite_metadata, MusicRendererBackend};
+use crate::music_renderer::HasQueue;
 use crate::music_renderer::RendererFromMediaRendererInfo;
-use crate::queue::{EnqueueMode, HasQueue, MusicQueue, PlaybackItem, QueueBackend, QueueSnapshot};
+use crate::queue::{EnqueueMode, MusicQueue, PlaybackItem, QueueBackend, QueueSnapshot};
 use crate::upnp_clients::{
     AvTransportClient, ConnectionInfo, ConnectionManagerClient, PositionInfo, ProtocolInfo,
     RenderingControlClient,
@@ -174,17 +175,37 @@ impl RendererFromMediaRendererInfo for UpnpRenderer {
     }
 }
 
-impl RendererBackend for UpnpRenderer {
-    fn queue(&self) -> &Arc<Mutex<MusicQueue>> {
-        &self.queue
-    }
-}
 
 impl QueueTransportControl for UpnpRenderer {
+    fn play_item(&self, item: &PlaybackItem) -> Result<(), ControlPointError> {
+        let metadata = if let Some(ref track_metadata) = item.metadata {
+            build_didl_lite_metadata(track_metadata, &item.uri, &item.protocol_info)
+        } else {
+            format!(
+                r#"<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/"><item id="0" parentID="-1" restricted="1"><res protocolInfo="{}">{}</res></item></DIDL-Lite>"#,
+                item.protocol_info, item.uri
+            )
+        };
+
+        let duration = parse_didl_duration(&metadata);
+        if let Some(ref dur) = duration {
+            tracing::debug!("Caching duration from queue DIDL: {}", dur);
+            *self.cached_duration.lock().unwrap() = Some(dur.clone());
+        } else {
+            tracing::debug!("No duration to cache from queue DIDL");
+            *self.cached_duration.lock().unwrap() = None;
+        }
+
+        let avt = self.avtransport()?;
+        avt.set_av_transport_uri(&item.uri, &metadata)?;
+        avt.play(0, "1")?;
+
+        Ok(())
+    }
+
     fn play_from_queue(&self) -> Result<(), ControlPointError> {
         let mut queue = self.queue.lock().unwrap();
 
-        // Get or initialize current index
         let current_index = match queue.current_index()? {
             Some(idx) => idx,
             None => {
@@ -197,29 +218,15 @@ impl QueueTransportControl for UpnpRenderer {
             }
         };
 
-        // Get the item
         let item = queue
             .get_item(current_index)?
             .ok_or_else(|| ControlPointError::QueueError("Current item not found".into()))?;
 
         drop(queue);
 
-        // Build metadata - handle optional TrackMetadata
-        let metadata = if let Some(ref track_metadata) = item.metadata {
-            build_didl_lite_metadata(track_metadata, &item.uri, &item.protocol_info)
-        } else {
-            // Fallback to minimal DIDL-Lite if no metadata
-            format!(
-                r#"<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/"><item id="0" parentID="-1" restricted="1"><res protocolInfo="{}">{}</res></item></DIDL-Lite>"#,
-                item.protocol_info, item.uri
-            )
-        };
-
-        // Détecte si l'URL est un flux continu en interrogeant le serveur HTTP
         let is_stream = crate::music_renderer::is_continuous_stream_url(&item.uri);
         *self.continuous_stream.lock().unwrap() = is_stream;
 
-        // Log current queue state for debugging
         let queue_state = {
             let queue = self.queue.lock().unwrap();
             let idx = queue.current_index().unwrap_or(None);
@@ -237,22 +244,7 @@ impl QueueTransportControl for UpnpRenderer {
             is_stream
         );
 
-        // Parse et cache la durée du DIDL (fallback pour certains amplis)
-        let duration = parse_didl_duration(&metadata);
-        if let Some(ref dur) = duration {
-            tracing::debug!("Caching duration from queue DIDL: {}", dur);
-            *self.cached_duration.lock().unwrap() = Some(dur.clone());
-        } else {
-            tracing::debug!("No duration to cache from queue DIDL");
-            *self.cached_duration.lock().unwrap() = None;
-        }
-
-        // UPNP: SetAVTransportURI + Play
-        let avt = self.avtransport()?;
-        avt.set_av_transport_uri(&item.uri, &metadata)?;
-        avt.play(0, "1")?;
-
-        Ok(())
+        self.play_item(&item)
     }
 
     fn play_next(&self) -> Result<(), ControlPointError> {
@@ -310,6 +302,12 @@ impl QueueTransportControl for UpnpRenderer {
 impl HasQueue for UpnpRenderer {
     fn queue(&self) -> &Arc<Mutex<MusicQueue>> {
         &self.queue
+    }
+}
+
+impl HasContinuousStream for UpnpRenderer {
+    fn continuous_stream(&self) -> &Arc<Mutex<bool>> {
+        &self.continuous_stream
     }
 }
 

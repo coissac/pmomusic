@@ -1,20 +1,17 @@
 // pmocontrol/src/capabilities.rs
 use std::sync::{Arc, Mutex};
 
-use crate::queue::{HasQueue, MusicQueue};
+use crate::queue::{MusicQueue, QueueBackend};
 use crate::{errors::ControlPointError, model::PlaybackState, PlaybackItem};
+
+/// Trait for types that have access to a MusicQueue.
+pub trait HasQueue {
+    fn queue(&self) -> &Arc<Mutex<MusicQueue>>;
+}
 
 /// Trait for types that track whether they're playing a continuous stream.
 pub trait HasContinuousStream {
     fn continuous_stream(&self) -> &Arc<Mutex<bool>>;
-}
-
-/// Backend-specific operations for renderers.
-///
-/// This trait provides access to backend-specific resources like the queue.
-pub trait RendererBackend {
-    /// Returns a reference to the queue associated with this backend.
-    fn queue(&self) -> &Arc<Mutex<MusicQueue>>;
 }
 
 /// Queue-aware transport control operations.

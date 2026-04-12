@@ -185,7 +185,11 @@ fn check_stream_headers(url: &str) -> Result<bool, String> {
 
     trace!(
         "Stream detection for {}: content-length={}, chunked={}, streaming_mime={}, is_stream={}",
-        url, has_content_length, is_chunked, is_streaming_mime, is_stream
+        url,
+        has_content_length,
+        is_chunked,
+        is_streaming_mime,
+        is_stream
     );
 
     Ok(is_stream)

@@ -6,7 +6,7 @@ mod upnp_renderer;
 mod openhome;
 mod openhome_renderer;
 
-mod capabilities;
+pub mod capabilities;
 mod chromecast_renderer;
 
 mod musicrenderer;
@@ -18,13 +18,14 @@ pub mod watcher;
 use std::sync::{Arc, Mutex};
 
 pub use crate::music_renderer::capabilities::{
-    PlaybackPosition, PlaybackPositionInfo, PlaybackStatus,
+    HasContinuousStream, HasQueue, PlaybackPosition, PlaybackPositionInfo, PlaybackStatus,
+    QueueTransportControl, TransportControl, VolumeControl,
 };
 pub use crate::music_renderer::musicrenderer::{MusicRenderer, PlaylistBinding};
 pub use crate::music_renderer::sleep_timer::SleepTimer;
 pub use crate::music_renderer::stream_detection::is_continuous_stream_url;
 use crate::{
-    RendererInfo, errors::ControlPointError, music_renderer::musicrenderer::MusicRendererBackend,
+    errors::ControlPointError, music_renderer::musicrenderer::MusicRendererBackend, RendererInfo,
 };
 
 pub trait RendererFromMediaRendererInfo {
