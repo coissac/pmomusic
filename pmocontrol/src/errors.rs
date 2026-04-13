@@ -58,6 +58,15 @@ impl ControlPointError {
         ControlPointError::UpnpOperationNotSupported(operation.to_string(), service.to_string())
     }
 
+    /// Returns true if the error is a transient transport-level failure that
+    /// may succeed on retry (TCP refused, connection reset, timeout).
+    ///
+    /// Protocol-level errors (UPnP fault, HTTP 4xx/5xx with a valid body)
+    /// are **not** transient: the device understood the request and rejected it.
+    pub fn is_transient_soap_error(&self) -> bool {
+        matches!(self, ControlPointError::SoapAction(_))
+    }
+
     pub fn upnp_missing_return_value(value: &str) -> Self {
         ControlPointError::UpnpMissingReturnValue(value.to_string())
     }

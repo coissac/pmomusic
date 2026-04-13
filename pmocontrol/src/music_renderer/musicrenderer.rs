@@ -1948,6 +1948,33 @@ pub(crate) fn build_didl_lite_metadata(
     didl.to_xml()
 }
 
+/// Enriches a [`PlaybackPositionInfo`] with metadata from the backend's queue.
+///
+/// Overwrites `track_metadata` and `track_uri` with the values stored for the
+/// current queue item.  This is a no-op when the queue is empty or has no
+/// current item.
+///
+/// All backends that hold a local queue (UPnP, LinkPlay, Arylic, Chromecast)
+/// should call this after fetching the raw device position, so that callers
+/// always receive consistent, queue-authoritative metadata rather than
+/// potentially stale or absent metadata coming from the device itself.
+pub(crate) fn enrich_position_from_queue<B: HasQueue>(
+    backend: &B,
+    position: &mut PlaybackPositionInfo,
+) {
+    let mut queue = backend.queue().lock().expect("queue mutex poisoned");
+    if let Ok(Some((current_item, _))) = queue.peek_current() {
+        if let Some(ref metadata) = current_item.metadata {
+            position.track_metadata = Some(build_didl_lite_metadata(
+                metadata,
+                &current_item.uri,
+                &current_item.protocol_info,
+            ));
+        }
+        position.track_uri = Some(current_item.uri.clone());
+    }
+}
+
 impl DeviceIdentity for MusicRenderer {
     fn id(&self) -> DeviceId {
         self.info.id()

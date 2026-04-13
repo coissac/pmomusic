@@ -97,15 +97,6 @@ impl LinkPlayRenderer {
 
 impl TransportControl for LinkPlayRenderer {
     fn play_uri(&self, uri: &str, _meta: &str) -> Result<(), ControlPointError> {
-        // Détecte si l'URL est un flux continu
-        let is_stream = crate::music_renderer::is_continuous_stream_url(uri);
-        *self.continuous_stream.lock().expect("continuous_stream mutex poisoned") = is_stream;
-        tracing::debug!(
-            "LinkPlayRenderer play_uri: URI={}, continuous_stream={}",
-            uri,
-            is_stream
-        );
-
         let encoded = percent_encode(uri);
         self.send_player_command(&format!("play:{}", encoded))
     }
@@ -155,27 +146,10 @@ impl PlaybackStatus for LinkPlayRenderer {
 
 impl PlaybackPosition for LinkPlayRenderer {
     fn playback_position(&self) -> Result<PlaybackPositionInfo, ControlPointError> {
-        let mut position_info = self.fetch_status()?.position_info();
-
-        // Use queue metadata instead of direct status metadata to benefit from duration protection
-        let mut queue_guard = self.queue.lock().expect("queue mutex poisoned");
-        let queue_item = queue_guard.peek_current().ok().flatten();
-
-        if let Some((current_item, _)) = queue_item {
-            if let Some(ref metadata) = current_item.metadata {
-                position_info.track_metadata = Some(
-                    crate::music_renderer::musicrenderer::build_didl_lite_metadata(
-                        metadata,
-                        &current_item.uri,
-                        &current_item.protocol_info,
-                    ),
-                );
-            }
-            position_info.track_uri = Some(current_item.uri.clone());
-        }
-        drop(queue_guard);
-
-        Ok(position_info)
+        let mut position = self.fetch_status()?.position_info();
+        // Replace device metadata with queue metadata (queue is authoritative).
+        crate::music_renderer::musicrenderer::enrich_position_from_queue(self, &mut position);
+        Ok(position)
     }
 }
 
