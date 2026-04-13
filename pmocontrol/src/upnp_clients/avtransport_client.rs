@@ -12,7 +12,11 @@ use crate::{
 use pmoupnp::soap::SoapEnvelope;
 use xmltree::{Element, XMLNode};
 
+/// Timeout for slow/long control actions (SetAVTransportURI, SetNextAVTransportURI).
 const AVTRANSPORT_ACTION_TIMEOUT: Duration = Duration::from_secs(5);
+/// Timeout for fast polling-read actions (GetTransportInfo, GetPositionInfo).
+/// Must be well below the watcher short-interval (500 ms) to avoid cascading lateness.
+const AVTRANSPORT_POLL_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone)]
 pub struct AvTransportClient {
@@ -40,11 +44,12 @@ impl AvTransportClient {
         let instance_id_str = instance_id.to_string();
         let args = [("InstanceID", instance_id_str.as_str())];
 
-        let call_result = invoke_upnp_action(
+        let call_result = invoke_upnp_action_with_timeout(
             &self.control_url,
             &self.service_type,
             "GetTransportInfo",
             &args,
+            Some(AVTRANSPORT_POLL_TIMEOUT),
         )?;
 
         if !call_result.status.is_success() {
@@ -381,11 +386,12 @@ impl AvTransportClient {
         let instance_id_str = instance_id.to_string();
         let args = [("InstanceID", instance_id_str.as_str())];
 
-        let call_result = invoke_upnp_action(
+        let call_result = invoke_upnp_action_with_timeout(
             &self.control_url,
             &self.service_type,
             "GetPositionInfo",
             &args,
+            Some(AVTRANSPORT_POLL_TIMEOUT),
         )?;
 
         if !call_result.status.is_success() {

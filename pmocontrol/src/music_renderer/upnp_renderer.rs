@@ -231,15 +231,6 @@ impl TransportControl for UpnpRenderer {
             );
         }
 
-        // Détecte si l'URL est un flux continu en interrogeant le serveur HTTP
-        let is_stream = crate::music_renderer::is_continuous_stream_url(uri);
-        *self.continuous_stream.lock().expect("continuous_stream mutex poisoned") = is_stream;
-        tracing::debug!(
-            "UpnpRenderer play_uri: URI={}, continuous_stream={}",
-            uri,
-            is_stream
-        );
-
         // Parse le DIDL pour extraire la durée (fallback pour certains amplis)
         let duration = parse_didl_duration(meta);
         if let Some(ref dur) = duration {
@@ -326,57 +317,30 @@ impl PlaybackPosition for UpnpRenderer {
         );
 
         // Normalize "00:00:00" or "0:00:00" to None (some renderers return this for unknown duration)
-        let normalized_duration = raw.track_duration.as_ref().and_then(|d| {
-            if d == "00:00:00" || d == "0:00:00" {
-                None
-            } else {
-                Some(d.clone())
-            }
+        let track_duration = raw.track_duration.as_ref().and_then(|d| {
+            if d == "00:00:00" || d == "0:00:00" { None } else { Some(d.clone()) }
         });
 
-        let track_duration = normalized_duration;
-
-        // Récupérer les métadonnées depuis la queue (avec protection contre diminution de durée)
-        // plutôt que depuis GetPositionInfo qui peut retourner des métadonnées obsolètes
-        let mut track_metadata_xml = None;
-        let mut track_uri = raw.track_uri.clone();
-
-        let mut queue_guard = self.queue.lock().expect("queue mutex poisoned");
-
-        // Récupérer l'item courant de la queue
-        // Normalement current_index est toujours Some() si la queue n'est pas vide (règle métier)
-        let queue_item = queue_guard.peek_current().ok().flatten();
-
-        if let Some((current_item, _)) = queue_item {
-            track_uri = Some(current_item.uri.clone());
-
-            // Build DIDL metadata XML from cached/protected TrackMetadata
-            if let Some(ref metadata) = current_item.metadata {
-                track_metadata_xml = Some(
-                    crate::music_renderer::musicrenderer::build_didl_lite_metadata(
-                        metadata,
-                        &current_item.uri,
-                        &current_item.protocol_info,
-                    ),
-                );
-            }
-        }
-        drop(queue_guard);
-
-        tracing::trace!(
-            "UPnP playback_position: track_duration={:?}, rel_time={:?}, using_queue_metadata={}",
-            track_duration,
-            raw.rel_time,
-            track_metadata_xml.is_some()
-        );
-
-        Ok(PlaybackPositionInfo {
+        let mut position = PlaybackPositionInfo {
             track: Some(raw.track),
             rel_time: raw.rel_time,
             abs_time: raw.abs_time,
             track_duration,
-            track_metadata: track_metadata_xml,
-            track_uri,
-        })
+            track_metadata: None,
+            track_uri: raw.track_uri,
+        };
+
+        // Replace device metadata with queue metadata (queue is authoritative and protected
+        // against stale / decreasing durations for streams).
+        crate::music_renderer::musicrenderer::enrich_position_from_queue(self, &mut position);
+
+        tracing::trace!(
+            "UPnP playback_position: track_duration={:?}, rel_time={:?}, using_queue_metadata={}",
+            position.track_duration,
+            position.rel_time,
+            position.track_metadata.is_some()
+        );
+
+        Ok(position)
     }
 }

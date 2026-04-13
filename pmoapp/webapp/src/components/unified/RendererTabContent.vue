@@ -239,10 +239,11 @@ async function handleQueueItemClick(item: QueueItem) {
         -webkit-backdrop-filter: blur(8px);
         border-top: 1px solid rgba(255, 255, 255, 0.12);
         box-shadow: 0 -4px 32px rgba(0, 0, 0, 0.4);
-        /* Fermé: caché sauf le toggle (56px) qui dépasse au-dessus de la BottomTabBar (64px) */
-        transform: translateY(calc(100% - 56px - 64px));
+        /* Fermé: caché sauf le toggle (56px) qui dépasse au-dessus de la BottomTabBar.
+           La BottomTabBar fait 64px + env(safe-area-inset-bottom) de padding. */
+        transform: translateY(calc(100% - 56px - 64px - env(safe-area-inset-bottom, 0px)));
         transition: transform 0.3s ease;
-        z-index: 95; /* Au-dessus de la BottomTabBar (z-index: 100) */
+        z-index: 95; /* En dessous de la BottomTabBar (z-index: 100) */
         max-height: 70vh;
         display: flex;
         flex-direction: column;
@@ -251,8 +252,8 @@ async function handleQueueItemClick(item: QueueItem) {
     }
 
     .queue-drawer.open {
-        /* Ouvert: remonte mais s'arrête à 64px du bas pour laisser la BottomTabBar accessible */
-        transform: translateY(64px);
+        /* Ouvert: remonte juste au-dessus de la BottomTabBar (64px + safe area) */
+        transform: translateY(calc(64px + env(safe-area-inset-bottom, 0px)));
         pointer-events: auto; /* Ouvert: capture les clics */
     }
 
@@ -284,6 +285,8 @@ async function handleQueueItemClick(item: QueueItem) {
         max-height: calc(70vh - 56px);
         overflow-y: auto;
         padding: var(--spacing-md);
+        /* Ensure the last item clears the safe-area / system nav bar */
+        padding-bottom: max(var(--spacing-md), env(safe-area-inset-bottom, 0px));
     }
 
     .queue-drawer-backdrop {

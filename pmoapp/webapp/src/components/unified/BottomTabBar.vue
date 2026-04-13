@@ -147,7 +147,10 @@ function handleRendererDrawerClick() {
     align-items: center;
     gap: var(--spacing-md);
     height: 72px;
-    padding: 0 var(--spacing-md);
+    /* Extend background into the system navigation bar area (iOS home indicator,
+       Android gesture bar). Content stays in the 72px zone; only the visual
+       background bleeds into the safe-area below. */
+    padding: 0 var(--spacing-md) env(safe-area-inset-bottom, 0px);
     background: rgba(22, 22, 32, 0.96);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
@@ -323,7 +326,7 @@ function handleRendererDrawerClick() {
 @media (max-width: 768px) {
     .bottom-bar {
         height: 64px;
-        padding: 0 var(--spacing-sm);
+        padding: 0 var(--spacing-sm) env(safe-area-inset-bottom, 0px);
         gap: var(--spacing-sm);
     }
 

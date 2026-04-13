@@ -1,11 +1,16 @@
+use std::time::Duration;
+
 use crate::{
     errors::ControlPointError,
     soap_client::{
         ensure_success, extract_child_text, find_child_with_suffix, handle_action_response,
-        invoke_upnp_action, parse_upnp_error,
+        invoke_upnp_action, invoke_upnp_action_with_timeout, parse_upnp_error,
     },
 };
 use tracing::debug;
+
+/// Timeout for fast polling-read actions (GetVolume, GetMute).
+const RENDERING_CONTROL_POLL_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone)]
 pub struct RenderingControlClient {
@@ -30,8 +35,13 @@ impl RenderingControlClient {
             ("Channel", channel),
         ];
 
-        let call_result =
-            invoke_upnp_action(&self.control_url, &self.service_type, "GetVolume", &args)?;
+        let call_result = invoke_upnp_action_with_timeout(
+            &self.control_url,
+            &self.service_type,
+            "GetVolume",
+            &args,
+            Some(RENDERING_CONTROL_POLL_TIMEOUT),
+        )?;
 
         ensure_success("GetVolume", &call_result)?;
 
@@ -90,8 +100,13 @@ impl RenderingControlClient {
             ("Channel", channel),
         ];
 
-        let call_result =
-            invoke_upnp_action(&self.control_url, &self.service_type, "GetMute", &args)?;
+        let call_result = invoke_upnp_action_with_timeout(
+            &self.control_url,
+            &self.service_type,
+            "GetMute",
+            &args,
+            Some(RENDERING_CONTROL_POLL_TIMEOUT),
+        )?;
 
         ensure_success("GetMute", &call_result)?;
 

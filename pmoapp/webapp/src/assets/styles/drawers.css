@@ -257,6 +257,9 @@
 
 .drawer-footer {
     padding: var(--spacing-md);
+    /* On mobile, extend into the safe-area so the footer doesn't sit under
+       the system navigation bar / home indicator. */
+    padding-bottom: max(var(--spacing-md), env(safe-area-inset-bottom, 0px));
     border-top: 1px solid rgba(255, 255, 255, 0.1);
     flex-shrink: 0;
 }

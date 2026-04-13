@@ -243,61 +243,24 @@ impl PlaybackStatus for ArylicTcpRenderer {
 
 impl PlaybackPosition for ArylicTcpRenderer {
     fn playback_position(&self) -> Result<PlaybackPositionInfo, ControlPointError> {
-        let info = match self.fetch_playback_info() {
-            Ok(info) => {
-                tracing::debug!("ArylicTcp fetch_playback_info returned: {:?}", info);
-                info
-            }
-            Err(e) => {
-                tracing::warn!("ArylicTcp fetch_playback_info failed: {}", e);
-                return Err(e);
-            }
-        };
+        let info = self.fetch_playback_info().map_err(|e| {
+            tracing::warn!("ArylicTcp fetch_playback_info failed: {}", e);
+            e
+        })?;
 
-        let mut position_info = info.position_info();
+        tracing::debug!("ArylicTcp fetch_playback_info returned: {:?}", info);
+
+        let mut position = info.position_info();
         tracing::debug!(
-            "ArylicTcp position_info: track_duration={:?}, rel_time={:?}, track_metadata={:?}, track_uri={:?}",
-            position_info.track_duration,
-            position_info.rel_time,
-            position_info
-                .track_metadata
-                .as_ref()
-                .map(|s| &s[..s.len().min(100)]),
-            position_info.track_uri
+            "ArylicTcp position_info: track_duration={:?}, rel_time={:?}",
+            position.track_duration,
+            position.rel_time,
         );
 
-        // Récupérer les métadonnées depuis la queue (avec protection contre diminution de durée)
-        // Normalement current_index est toujours Some() si la queue n'est pas vide (règle métier)
-        let mut queue_guard = self.queue.lock().expect("queue mutex poisoned");
-        let queue_item = queue_guard.peek_current().ok().flatten();
+        // Replace device metadata with queue metadata (queue is authoritative).
+        crate::music_renderer::musicrenderer::enrich_position_from_queue(self, &mut position);
 
-        if let Some((current_item, _)) = queue_item {
-            // Build DIDL metadata XML from cached/protected TrackMetadata
-            if let Some(ref metadata) = current_item.metadata {
-                tracing::debug!(
-                    "ArylicTcp playback_position: using queue metadata - title={:?}, artist={:?}, duration={:?}, is_stream={}",
-                    metadata.title,
-                    metadata.artist,
-                    metadata.duration,
-                    metadata.is_continuous_stream
-                );
-                position_info.track_metadata = Some(
-                    crate::music_renderer::musicrenderer::build_didl_lite_metadata(
-                        metadata,
-                        &current_item.uri,
-                        &current_item.protocol_info,
-                    ),
-                );
-            } else {
-                tracing::warn!("ArylicTcp playback_position: queue item has no metadata");
-            }
-            position_info.track_uri = Some(current_item.uri.clone());
-        } else {
-            tracing::warn!("ArylicTcp playback_position: no current queue item");
-        }
-        drop(queue_guard);
-
-        Ok(position_info)
+        Ok(position)
     }
 }
 

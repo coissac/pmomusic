@@ -4,12 +4,17 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use pmoupnp::soap::{build_soap_request, parse_soap_envelope, SoapEnvelope};
-use tracing::{debug, trace, warn};
+use tracing::{debug, trace, warn, info};
 use ureq::Agent;
 
 use crate::errors::ControlPointError;
 
 static SOAP_AGENT: OnceLock<Arc<Agent>> = OnceLock::new();
+
+/// Number of retries for transient transport failures on control actions.
+const SOAP_CONTROL_MAX_RETRIES: usize = 2;
+/// Delay between retries (ms). Kept short: devices usually recover in <200 ms.
+const SOAP_CONTROL_RETRY_DELAY_MS: u64 = 300;
 
 fn get_soap_agent() -> Arc<Agent> {
     SOAP_AGENT
@@ -43,19 +48,44 @@ pub fn build_soap_body(
     build_soap_request(service_type, action, args)
 }
 
-/// Invoke a UPnP SOAP action on a control URL.
+/// Invoke a UPnP SOAP control action with automatic retry on transient failures.
 ///
-/// - `control_url`: full HTTP URL of the service control endpoint
-/// - `service_type`: service URN
-/// - `action`: action name
-/// - `args`: list of (name, value)
+/// Use this for **control operations** (Play, Pause, Stop, SetAVTransportURI, …)
+/// where a transient TCP error should be absorbed silently.
+///
+/// Retries are attempted only on [`ControlPointError::is_transient_soap_error`]
+/// (i.e. transport-level failures). Protocol-level errors (UPnP faults,
+/// HTTP 4xx/5xx with a valid body) propagate immediately without retry.
+///
+/// For **polling reads** (GetTransportInfo, GetPositionInfo, …) prefer
+/// [`invoke_upnp_action_with_timeout`] directly so that a slow device does
+/// not hold the watcher thread for multiple retry cycles.
 pub fn invoke_upnp_action(
     control_url: &str,
     service_type: &str,
     action: &str,
     args: &[(&str, &str)],
 ) -> Result<SoapCallResult, ControlPointError> {
-    invoke_upnp_action_with_timeout(control_url, service_type, action, args, None)
+    let retry_delay = Duration::from_millis(SOAP_CONTROL_RETRY_DELAY_MS);
+
+    for attempt in 0..=SOAP_CONTROL_MAX_RETRIES {
+        match invoke_upnp_action_with_timeout(control_url, service_type, action, args, None) {
+            Ok(result) => return Ok(result),
+            Err(e) if e.is_transient_soap_error() && attempt < SOAP_CONTROL_MAX_RETRIES => {
+                info!(
+                    url = control_url,
+                    action = action,
+                    attempt = attempt + 1,
+                    error = %e,
+                    "Transient SOAP error, retrying"
+                );
+                std::thread::sleep(retry_delay);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    // Unreachable: the loop either returns Ok or propagates Err above.
+    unreachable!()
 }
 
 pub fn invoke_upnp_action_with_timeout(

@@ -36,7 +36,7 @@ use crate::DeviceIdentity;
 use rust_cast::{
     channels::{
         heartbeat::HeartbeatResponse,
-        media::{Media, PlayerState as CastPlayerState, StreamType},
+        media::{Media, PlayerState as CastPlayerState, StatusEntry, StreamType},
         receiver::CastDeviceApp,
     },
     CastDevice, ChannelMessage,
@@ -175,6 +175,50 @@ impl ChromecastRenderer {
         *self.continuous_stream.lock().expect("continuous_stream mutex poisoned")
     }
 
+    /// Returns `(transport_id, media_entry)` for the currently active Cast session.
+    ///
+    /// This encapsulates the repeated sequence:
+    ///   connect device → get receiver status → get active app → connect to app → get media status
+    ///
+    /// Used by all transport operations (play/pause/stop/seek) and by
+    /// playback_state/playback_position to avoid duplicating this boilerplate.
+    fn get_active_media_entry<'d>(
+        &self,
+        device: &'d CastDevice<'d>,
+    ) -> Result<(String, StatusEntry), ControlPointError> {
+        let status = device.receiver.get_status().map_err(|e| {
+            ControlPointError::ChromecastError(format!("Failed to get receiver status: {}", e))
+        })?;
+
+        let app = status
+            .applications
+            .into_iter()
+            .next()
+            .ok_or_else(|| ControlPointError::ChromecastError("No active app found".into()))?;
+
+        device
+            .connection
+            .connect(app.transport_id.as_str())
+            .map_err(|e| {
+                ControlPointError::ChromecastError(format!("Failed to connect to app: {}", e))
+            })?;
+
+        let media_status = device
+            .media
+            .get_status(app.transport_id.as_str(), None)
+            .map_err(|e| {
+                ControlPointError::ChromecastError(format!("Failed to get media status: {}", e))
+            })?;
+
+        let entry = media_status
+            .entries
+            .into_iter()
+            .next()
+            .ok_or_else(|| ControlPointError::ChromecastError("No media session found".into()))?;
+
+        Ok((app.transport_id, entry))
+    }
+
     /// Connect to the device with retry on connection failures.
     /// Uses exponential backoff: 200ms, 400ms, 800ms
     fn connect_with_retry(&self) -> Result<CastDevice<'_>, ControlPointError> {
@@ -202,15 +246,6 @@ impl ChromecastRenderer {
 impl TransportControl for ChromecastRenderer {
     fn play_uri(&self, uri: &str, meta: &str) -> Result<(), ControlPointError> {
         debug!("ChromecastRenderer: play_uri({})", uri);
-
-        // Détecte si l'URL est un flux continu
-        let is_stream = crate::music_renderer::is_continuous_stream_url(uri);
-        *self.continuous_stream.lock().expect("continuous_stream mutex poisoned") = is_stream;
-        tracing::debug!(
-            "ChromecastRenderer play_uri: URI={}, continuous_stream={}",
-            uri,
-            is_stream
-        );
 
         // Signal any existing play thread to stop
         if let Ok(mut stop) = self.stop_signal.lock() {
@@ -378,186 +413,53 @@ impl TransportControl for ChromecastRenderer {
 
     fn play(&self) -> Result<(), ControlPointError> {
         debug!("ChromecastRenderer: play()");
-
         let device = self.connect_with_retry()?;
-
-        // Get receiver status to find the active app
-        let status = device.receiver.get_status().map_err(|e| {
-            ControlPointError::ChromecastError(format!("Failed to get receiver status: {}", e))
-        })?;
-
-        let app = status
-            .applications
-            .first()
-            .ok_or_else(|| ControlPointError::ChromecastError(format!("No active app found")))?;
-
-        // Connect to the app
-        device
-            .connection
-            .connect(app.transport_id.as_str())
-            .map_err(|e| {
-                ControlPointError::ChromecastError(format!("Failed to connect to app: {}", e))
-            })?;
-
-        // Get media status
-        let media_status = device
-            .media
-            .get_status(app.transport_id.as_str(), None)
-            .map_err(|e| {
-                ControlPointError::ChromecastError(format!("Failed to get media status: {}", e))
-            })?;
-
-        let media_entry = media_status
-            .entries
-            .first()
-            .ok_or_else(|| ControlPointError::ChromecastError(format!("No media session found")))?;
-
-        // Send play command
+        let (transport_id, entry) = self.get_active_media_entry(&device)?;
         device
             .media
-            .play(app.transport_id.as_str(), media_entry.media_session_id)
+            .play(transport_id.as_str(), entry.media_session_id)
             .map_err(|e| ControlPointError::ChromecastError(format!("Failed to play: {}", e)))?;
-
         Ok(())
     }
 
     fn pause(&self) -> Result<(), ControlPointError> {
         debug!("ChromecastRenderer: pause()");
-
         let device = self.connect_with_retry()?;
-
-        let status = device.receiver.get_status().map_err(|e| {
-            ControlPointError::ChromecastError(format!("Failed to get receiver status: {}", e))
-        })?;
-
-        let app = status
-            .applications
-            .first()
-            .ok_or_else(|| ControlPointError::ChromecastError(format!("No active app found")))?;
-
-        device
-            .connection
-            .connect(app.transport_id.as_str())
-            .map_err(|e| {
-                ControlPointError::ChromecastError(format!("Failed to connect to app: {}", e))
-            })?;
-
-        let media_status = device
-            .media
-            .get_status(app.transport_id.as_str(), None)
-            .map_err(|e| {
-                ControlPointError::ChromecastError(format!("Failed to get media status: {}", e))
-            })?;
-
-        let media_entry = media_status
-            .entries
-            .first()
-            .ok_or_else(|| ControlPointError::ChromecastError(format!("No media session found")))?;
-
+        let (transport_id, entry) = self.get_active_media_entry(&device)?;
         device
             .media
-            .pause(app.transport_id.as_str(), media_entry.media_session_id)
+            .pause(transport_id.as_str(), entry.media_session_id)
             .map_err(|e| ControlPointError::ChromecastError(format!("Failed to pause: {}", e)))?;
-
         Ok(())
     }
 
     fn stop(&self) -> Result<(), ControlPointError> {
         debug!("ChromecastRenderer: stop()");
 
-        // Signal the play thread to stop
+        // Signal the play thread to stop first.
+        // The thread terminates on its own; play_uri() will wait for it if needed.
         if let Ok(mut stop) = self.stop_signal.lock() {
             *stop = true;
         }
 
-        // Note: We don't wait for the thread here as stop() should be quick.
-        // The thread will terminate on its own when it checks stop_signal.
-        // If a new play_uri() is called, it will properly wait for this thread.
-
-        // Also send stop command to the device
         let device = self.connect_with_retry()?;
-
-        let status = device.receiver.get_status().map_err(|e| {
-            ControlPointError::ChromecastError(format!("Failed to get receiver status: {}", e))
-        })?;
-
-        let app = status
-            .applications
-            .first()
-            .ok_or_else(|| ControlPointError::ChromecastError(format!("No active app found")))?;
-
-        device
-            .connection
-            .connect(app.transport_id.as_str())
-            .map_err(|e| {
-                ControlPointError::ChromecastError(format!("Failed to connect to app: {}", e))
-            })?;
-
-        let media_status = device
-            .media
-            .get_status(app.transport_id.as_str(), None)
-            .map_err(|e| {
-                ControlPointError::ChromecastError(format!("Failed to get media status: {}", e))
-            })?;
-
-        let media_entry = media_status
-            .entries
-            .first()
-            .ok_or_else(|| ControlPointError::ChromecastError(format!("No media session found")))?;
-
+        let (transport_id, entry) = self.get_active_media_entry(&device)?;
         device
             .media
-            .stop(app.transport_id.as_str(), media_entry.media_session_id)
+            .stop(transport_id.as_str(), entry.media_session_id)
             .map_err(|e| ControlPointError::ChromecastError(format!("Failed to stop: {}", e)))?;
-
         Ok(())
     }
 
     fn seek_rel_time(&self, hhmmss: &str) -> Result<(), ControlPointError> {
         debug!("ChromecastRenderer: seek_rel_time({})", hhmmss);
-
         let total_seconds = parse_hhmmss_strict(hhmmss)? as f32;
-
         let device = self.connect_with_retry()?;
-
-        let status = device.receiver.get_status().map_err(|e| {
-            ControlPointError::ChromecastError(format!("Failed to get receiver status: {}", e))
-        })?;
-
-        let app = status
-            .applications
-            .first()
-            .ok_or_else(|| ControlPointError::ChromecastError(format!("No active app found")))?;
-
-        device
-            .connection
-            .connect(app.transport_id.as_str())
-            .map_err(|e| {
-                ControlPointError::ChromecastError(format!("Failed to connect to app: {}", e))
-            })?;
-
-        let media_status = device
-            .media
-            .get_status(app.transport_id.as_str(), None)
-            .map_err(|e| {
-                ControlPointError::ChromecastError(format!("Failed to get media status: {}", e))
-            })?;
-
-        let media_entry = media_status
-            .entries
-            .first()
-            .ok_or_else(|| ControlPointError::ChromecastError(format!("No media session found")))?;
-
+        let (transport_id, entry) = self.get_active_media_entry(&device)?;
         device
             .media
-            .seek(
-                app.transport_id.as_str(),
-                media_entry.media_session_id,
-                Some(total_seconds),
-                None,
-            )
+            .seek(transport_id.as_str(), entry.media_session_id, Some(total_seconds), None)
             .map_err(|e| ControlPointError::ChromecastError(format!("Failed to seek: {}", e)))?;
-
         Ok(())
     }
 }
@@ -566,125 +468,57 @@ impl PlaybackStatus for ChromecastRenderer {
     fn playback_state(&self) -> Result<PlaybackState, ControlPointError> {
         let device = self.connect_with_retry()?;
 
-        // Get receiver status to find the active app
+        // If no app is running there is no media — return NoMedia without error.
         let status = device.receiver.get_status().map_err(|e| {
             ControlPointError::ChromecastError(format!("Failed to get receiver status: {}", e))
         })?;
+        tracing::debug!("Chromecast playback_state: {} apps running", status.applications.len());
 
-        tracing::debug!(
-            "Chromecast playback_state: {} apps running",
-            status.applications.len()
-        );
+        if status.applications.is_empty() {
+            tracing::debug!("Chromecast playback_state: no apps running, returning NoMedia");
+            return Ok(PlaybackState::NoMedia);
+        }
 
-        // If no app is running, return NoMedia
-        let app = match status.applications.first() {
-            Some(app) => {
-                tracing::debug!("Chromecast playback_state: app={}", app.display_name);
-                app
-            }
-            None => {
-                tracing::debug!("Chromecast playback_state: no apps running, returning NoMedia");
-                return Ok(PlaybackState::NoMedia);
-            }
-        };
-
-        // Connect to the app
-        device
-            .connection
-            .connect(app.transport_id.as_str())
-            .map_err(|e| {
-                ControlPointError::ChromecastError(format!("Failed to connect to app: {}", e))
-            })?;
-
-        // Get media status
-        let media_status = device
-            .media
-            .get_status(app.transport_id.as_str(), None)
-            .map_err(|e| {
-                ControlPointError::ChromecastError(format!("Failed to get media status: {}", e))
-            })?;
-
-        tracing::debug!(
-            "Chromecast playback_state: {} media entries",
-            media_status.entries.len()
-        );
-
-        // If no media entry, return NoMedia
-        let media_entry = match media_status.entries.first() {
-            Some(entry) => {
+        match self.get_active_media_entry(&device) {
+            Ok((_, entry)) => {
                 tracing::debug!(
                     "Chromecast playback_state: player_state={:?}, current_time={:?}",
-                    entry.player_state,
-                    entry.current_time
+                    entry.player_state, entry.current_time
                 );
-                entry
+                Ok(map_player_state(&entry.player_state))
             }
-            None => {
-                tracing::debug!("Chromecast playback_state: no media entries, returning NoMedia");
-                return Ok(PlaybackState::NoMedia);
+            // No media session → device is idle
+            Err(_) => {
+                tracing::debug!("Chromecast playback_state: no media session, returning NoMedia");
+                Ok(PlaybackState::NoMedia)
             }
-        };
-
-        Ok(map_player_state(&media_entry.player_state))
+        }
     }
 }
 
 impl PlaybackPosition for ChromecastRenderer {
     fn playback_position(&self) -> Result<PlaybackPositionInfo, ControlPointError> {
         let device = self.connect_with_retry()?;
+        let (_, entry) = self.get_active_media_entry(&device)?;
 
-        // Get receiver status to find the active app
-        let status = device.receiver.get_status().map_err(|e| {
-            ControlPointError::ChromecastError(format!("Failed to get receiver status: {}", e))
-        })?;
+        let rel_time = entry.current_time.map(|t| format_hhmmss_f64(t as f64));
+        let track_duration = entry.media.as_ref().and_then(|m| m.duration).map(|d| format_hhmmss_f64(d as f64));
+        let track_uri = entry.media.as_ref().map(|m| m.content_id.clone());
 
-        let app = status
-            .applications
-            .first()
-            .ok_or_else(|| ControlPointError::ChromecastError(format!("No active app found")))?;
-
-        // Connect to the app
-        device
-            .connection
-            .connect(app.transport_id.as_str())
-            .map_err(|e| {
-                ControlPointError::ChromecastError(format!("Failed to connect to app: {}", e))
-            })?;
-
-        // Get media status
-        let media_status = device
-            .media
-            .get_status(app.transport_id.as_str(), None)
-            .map_err(|e| {
-                ControlPointError::ChromecastError(format!("Failed to get media status: {}", e))
-            })?;
-
-        let media_entry = media_status
-            .entries
-            .first()
-            .ok_or_else(|| ControlPointError::ChromecastError(format!("No media session found")))?;
-
-        // Extract position information
-        let rel_time = media_entry
-            .current_time
-            .map(|time| format_hhmmss_f64(time as f64));
-
-        let track_duration = media_entry
-            .media
-            .as_ref()
-            .and_then(|m| m.duration)
-            .map(|dur| format_hhmmss_f64(dur as f64));
-
-        let track_uri = media_entry.media.as_ref().map(|m| m.content_id.clone());
-
-        Ok(PlaybackPositionInfo {
+        let mut position = PlaybackPositionInfo {
             track: Some(1),
             rel_time,
             abs_time: None,
             track_duration,
-            track_metadata: None, // Chromecast doesn't use DIDL-Lite
+            track_metadata: None,
             track_uri,
-        })
+        };
+
+        // Replace device metadata with queue metadata (queue is authoritative;
+        // Chromecast does not return DIDL-Lite natively so the queue is the only source).
+        crate::music_renderer::musicrenderer::enrich_position_from_queue(self, &mut position);
+
+        Ok(position)
     }
 }
 
