@@ -2,7 +2,7 @@ use crate::{
     nodes::{AudioError, TypedAudioNode, DEFAULT_CHANNEL_SIZE},
     pipeline::{Node, NodeLogic},
     type_constraints::TypeRequirement,
-    AudioChunk, AudioPipelineNode, AudioSegment, SyncMarker, StreamType,
+    AudioChunk, AudioPipelineNode, AudioSegment, SyncMarker,
 };
 use pmoflac::{encode_flac_stream, EncoderOptions, PcmFormat};
 use std::{

@@ -113,6 +113,20 @@ watch(drawerContentRef, (el) => {
     if (el) setupObserver();
 });
 
+// Recharger quand le cache est invalidé par un événement SSE (containers_updated / global_updated)
+watch(browseData, async (data, oldData) => {
+    if (!data && oldData && currentServer.value && currentContainerId.value && !isLoading.value) {
+        isLoading.value = true;
+        try {
+            await browseContainer(currentServer.value.id, currentContainerId.value, false);
+        } catch (error) {
+            console.error("[ServerDrawer] Erreur reload après invalidation cache:", error);
+        } finally {
+            isLoading.value = false;
+        }
+    }
+});
+
 // État du menu dropdown (pour chaque item, on stocke si son menu est ouvert)
 const openMenuId = ref<string | null>(null);
 
@@ -275,8 +289,12 @@ function isPlayable(item: ContainerEntry): boolean {
 
 // Détermine si un container est navigable
 function isNavigable(item: ContainerEntry): boolean {
-    // Tous les containers sont navigables (on laisse le serveur décider si vide)
-    return item.is_container;
+    if (!item.is_container) return false;
+    // Une playlist avec un seul item : on garde le caractère jouable mais on retire
+    // la navigation pour éviter que l'utilisateur joue l'item directement et perde
+    // le bénéfice des mises à jour de métadonnées de la playlist.
+    if (isPlayable(item) && item.child_count === 1) return false;
+    return true;
 }
 
 function handleItemClick(item: ContainerEntry) {
@@ -1425,14 +1443,8 @@ function handleSettingsClick() {
 /* Mobile responsive - portrait */
 @media (max-width: 768px) and (orientation: portrait) {
     .server-drawer {
-        width: 100vw; /* Mobile portrait: 100% de l'écran */
-        background: rgba(
-            255,
-            255,
-            255,
-            0.06
-        ); /* Encore plus transparent sur mobile */
-        box-shadow: none; /* Pas d'ombre sur les côtés */
+        width: 100vw;
+        box-shadow: none;
     }
 
     .drawer-header {
