@@ -27,6 +27,12 @@ const loadingIds = reactive(new Set<string>());
 const queueRefreshingIds = reactive(new Set<string>());
 const selectedRendererId = ref<string | null>(null);
 
+// Compteur d'erreurs consécutives par renderer — on ne notifie l'utilisateur
+// qu'après SNAPSHOT_ERROR_THRESHOLD échecs d'affilée pour absorber les hoquets
+// transitoires des devices (Arylic, etc.).
+const consecutiveSnapshotErrors = new Map<string, number>();
+const SNAPSHOT_ERROR_THRESHOLD = 3;
+
 // Cache des renderers (summary)
 const renderersCache = ref<Map<string, RendererSummary>>(new Map());
 const RENDERERS_CACHE_MS = 2000;
@@ -367,19 +373,25 @@ async function fetchRendererSnapshot(
     const snapshot = await api.getRendererFullSnapshot(rendererId);
     snapshots.set(rendererId, snapshot);
     lastSnapshotAt.set(rendererId, Date.now());
-    
+    consecutiveSnapshotErrors.set(rendererId, 0);
+
   } catch (err) {
-    console.error(`[useRenderers] Erreur snapshot ${rendererId}:`, err);
-    // En cas d'erreur, on supprime le snapshot pour permettre une nouvelle tentative
-    snapshots.delete(rendererId);
-    
-    // Notifier l'utilisateur
-    const name = renderersCache.value.get(rendererId)?.friendly_name ?? rendererId;
-    uiStore.notifyError(`Impossible de récupérer l'état de « ${name} »`);
+    const count = (consecutiveSnapshotErrors.get(rendererId) ?? 0) + 1;
+    consecutiveSnapshotErrors.set(rendererId, count);
+    console.error(`[useRenderers] Erreur snapshot ${rendererId} (${count}/${SNAPSHOT_ERROR_THRESHOLD}):`, err);
+
+    // Garder le dernier snapshot connu plutôt que de le supprimer — l'UI reste
+    // affichable même si le device est momentanément muet.
+
+    // Notifier seulement après N échecs consécutifs pour absorber les hoquets passagers
+    if (count >= SNAPSHOT_ERROR_THRESHOLD) {
+      const name = renderersCache.value.get(rendererId)?.friendly_name ?? rendererId;
+      uiStore.notifyError(`Impossible de récupérer l'état de « ${name} »`);
+      // Remettre à zéro pour ne pas spammer si le device reste instable
+      consecutiveSnapshotErrors.set(rendererId, 0);
+    }
   } finally {
-    // Toujours nettoyer le flag de chargement
     loadingIds.delete(rendererId);
-    
   }
 }
 
