@@ -113,6 +113,20 @@ watch(drawerContentRef, (el) => {
     if (el) setupObserver();
 });
 
+// Recharger quand le cache est invalidé par un événement SSE (containers_updated / global_updated)
+watch(browseData, async (data, oldData) => {
+    if (!data && oldData && currentServer.value && currentContainerId.value && !isLoading.value) {
+        isLoading.value = true;
+        try {
+            await browseContainer(currentServer.value.id, currentContainerId.value, false);
+        } catch (error) {
+            console.error("[ServerDrawer] Erreur reload après invalidation cache:", error);
+        } finally {
+            isLoading.value = false;
+        }
+    }
+});
+
 // État du menu dropdown (pour chaque item, on stocke si son menu est ouvert)
 const openMenuId = ref<string | null>(null);
 
