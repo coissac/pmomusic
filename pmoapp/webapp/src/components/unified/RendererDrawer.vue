@@ -860,14 +860,8 @@ async function handleTransferQueue(event: Event, targetRendererId: string) {
 /* Mobile responsive - portrait */
 @media (max-width: 768px) and (orientation: portrait) {
     .renderer-drawer {
-        width: 100vw; /* Mobile portrait: 100% de l'écran */
-        background: rgba(
-            255,
-            255,
-            255,
-            0.06
-        ); /* Encore plus transparent sur mobile */
-        box-shadow: none; /* Pas d'ombre sur les côtés */
+        width: 100vw;
+        box-shadow: none;
     }
 
     .drawer-header {
