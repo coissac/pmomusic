@@ -289,8 +289,12 @@ function isPlayable(item: ContainerEntry): boolean {
 
 // Détermine si un container est navigable
 function isNavigable(item: ContainerEntry): boolean {
-    // Tous les containers sont navigables (on laisse le serveur décider si vide)
-    return item.is_container;
+    if (!item.is_container) return false;
+    // Une playlist avec un seul item : on garde le caractère jouable mais on retire
+    // la navigation pour éviter que l'utilisateur joue l'item directement et perde
+    // le bénéfice des mises à jour de métadonnées de la playlist.
+    if (isPlayable(item) && item.child_count === 1) return false;
+    return true;
 }
 
 function handleItemClick(item: ContainerEntry) {
