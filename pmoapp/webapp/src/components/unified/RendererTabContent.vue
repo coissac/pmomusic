@@ -231,7 +231,8 @@ async function handleQueueItemClick(item: QueueItem) {
     /* Queue drawer visible sur mobile (géré par v-if maintenant) */
     .queue-drawer {
         position: fixed;
-        bottom: 0;
+        /* Ancré juste au-dessus de la BottomTabBar (64px) et de la safe-area système */
+        bottom: calc(64px + env(safe-area-inset-bottom, 0px));
         left: 0;
         right: 0;
         background: rgba(22, 22, 32, 0.96);
@@ -239,12 +240,11 @@ async function handleQueueItemClick(item: QueueItem) {
         -webkit-backdrop-filter: blur(8px);
         border-top: 1px solid rgba(255, 255, 255, 0.12);
         box-shadow: 0 -4px 32px rgba(0, 0, 0, 0.4);
-        /* Fermé: caché sauf le toggle (56px) qui dépasse au-dessus de la BottomTabBar.
-           La BottomTabBar fait 64px + env(safe-area-inset-bottom) de padding. */
-        transform: translateY(calc(100% - 56px - 64px - env(safe-area-inset-bottom, 0px)));
+        /* Fermé: seul le toggle (56px) visible */
+        transform: translateY(calc(100% - 56px));
         transition: transform 0.3s ease;
         z-index: 95; /* En dessous de la BottomTabBar (z-index: 100) */
-        max-height: 70vh;
+        max-height: calc(100vh - 64px - env(safe-area-inset-bottom, 0px));
         display: flex;
         flex-direction: column;
         /* Fermé: ne bloque pas les clics en dehors du toggle */
@@ -252,9 +252,9 @@ async function handleQueueItemClick(item: QueueItem) {
     }
 
     .queue-drawer.open {
-        /* Ouvert: remonte juste au-dessus de la BottomTabBar (64px + safe area) */
-        transform: translateY(calc(64px + env(safe-area-inset-bottom, 0px)));
-        pointer-events: auto; /* Ouvert: capture les clics */
+        /* Ouvert: le drawer occupe toute la hauteur disponible au-dessus de la tab bar */
+        transform: translateY(0);
+        pointer-events: auto;
     }
 
     @media (prefers-color-scheme: light) {
@@ -267,6 +267,7 @@ async function handleQueueItemClick(item: QueueItem) {
     .queue-drawer-toggle {
         width: 100%;
         height: 56px;
+        flex-shrink: 0;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -282,11 +283,9 @@ async function handleQueueItemClick(item: QueueItem) {
     }
 
     .queue-drawer-content {
-        max-height: calc(70vh - 56px);
+        flex: 1;
         overflow-y: auto;
         padding: var(--spacing-md);
-        /* Ensure the last item clears the safe-area / system nav bar */
-        padding-bottom: max(var(--spacing-md), env(safe-area-inset-bottom, 0px));
     }
 
     .queue-drawer-backdrop {
@@ -295,12 +294,12 @@ async function handleQueueItemClick(item: QueueItem) {
         top: 0;
         left: 0;
         right: 0;
-        bottom: 64px; /* S'arrête au-dessus de la BottomTabBar */
+        bottom: calc(64px + env(safe-area-inset-bottom, 0px));
         background: rgba(0, 0, 0, 0.5);
         backdrop-filter: blur(4px);
         -webkit-backdrop-filter: blur(4px);
-        z-index: 94; /* Entre la BottomTabBar et le drawer */
-        pointer-events: auto; /* Capture les clics pour fermer le drawer */
+        z-index: 94;
+        pointer-events: auto;
     }
 
     .controls-column {
