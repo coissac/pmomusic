@@ -451,11 +451,11 @@ async function resumeOrPlayFromQueue(id: string) {
     return play(id);
   }
 
-  // Check if queue has content
-  if (
-    ["STOPPED", "NO_MEDIA"].includes(state.transport_state) &&
-    snapshot.queue.items.length > 0
-  ) {
+  // If queue has items, always try to play from queue regardless of transport
+  // state. After a sleep timer stop, the device may report an unknown/transient
+  // state ("load", network error → "UNKNOWN", etc.) that doesn't match the
+  // expected "STOPPED"/"NO_MEDIA" strings, yet the queue is non-empty.
+  if (snapshot.queue.items.length > 0) {
     return api.resume(id);
   }
 
