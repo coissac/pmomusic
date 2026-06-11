@@ -61,6 +61,7 @@ pmodidl = { path = "../pmodidl" }
 # Intégration avec pmoserver pour l'API HTTP
 pmoserver = { path = "../pmoserver", optional = true }
 axum = { version = "0.8", optional = true }
+tokio-util = { workspace = true, optional = true }
 rusqlite = { version = "0.37", features = ["bundled"], optional = true }
 
 # Documentation OpenAPI
@@ -76,7 +77,7 @@ pmocache = { path = "../pmocache" }
 [features]
 default = ["async-trait-support"]
 # Feature pour activer les extensions pmoserver
-pmoserver = ["dep:pmoserver", "dep:axum", "dep:utoipa"]
+pmoserver = ["dep:pmoserver", "dep:axum", "dep:utoipa", "dep:tokio-util"]
 # Feature pour activer le support serveur (cache registry)
 server = ["pmosource/server"]
 # Feature cache (deprecated - toujours actif maintenant)

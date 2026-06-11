@@ -1037,10 +1037,53 @@ impl QobuzClient {
         })
     }
 
+    /// Ouvre un flux FLAC déchiffré en mode progressif pour un track CMAF.
+    ///
+    /// Retourne un `(AsyncRead, taille_estimée)`. Le flux commence à produire
+    /// du FLAC dès que le premier segment est déchiffré — le cache peut commencer
+    /// à servir avant la fin du téléchargement (progressive caching préservé).
+    ///
+    /// C'est la méthode à utiliser pour alimenter `pmocache::add_from_reader`.
+    pub async fn open_cmaf_stream(
+        &self,
+        track_id: &str,
+    ) -> Result<(impl tokio::io::AsyncRead + Send + Unpin + 'static, u64)> {
+        let format_id = self.api.format().id() as u32;
+
+        let file_url = self
+            .call_with_auth_repair("get_cmaf_file_url", || {
+                self.api.get_cmaf_file_url(track_id, format_id)
+            })
+            .await?;
+
+        let bit_depth = file_url.resolved_bit_depth();
+        let url_template = file_url
+            .url_template
+            .ok_or_else(|| QobuzError::Other("CMAF: url_template absent".into()))?;
+        let key_str = file_url
+            .key
+            .ok_or_else(|| QobuzError::Other("CMAF: key absent".into()))?;
+
+        let (_session_id, infos) = self
+            .call_with_auth_repair("ensure_cmaf_session", || self.api.ensure_cmaf_session())
+            .await?;
+
+        crate::cmaf::open_flac_stream(
+            url_template,
+            key_str,
+            infos,
+            file_url.n_segments,
+            file_url.format_id.unwrap_or(format_id),
+            file_url.sampling_rate,
+            bit_depth,
+        )
+        .await
+    }
+
     /// Télécharge un track complet via CMAF et retourne les bytes FLAC déchiffrés.
     ///
     /// Bloquant jusqu'à la fin du téléchargement. Pour les gros fichiers Hi-Res,
-    /// préférer `get_cmaf_stream_info` + streaming segment par segment.
+    /// préférer `open_cmaf_stream` qui préserve le progressive caching.
     pub async fn download_cmaf_full(&self, track_id: &str) -> Result<Vec<u8>> {
         let format_id = self.api.format().id() as u32;
 
