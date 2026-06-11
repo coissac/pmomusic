@@ -619,6 +619,16 @@ impl QobuzApi {
             .collect())
     }
 
+    /// Retourne uniquement les totaux de chaque type pour une requête (limit=1 pour minimiser le transfert).
+    pub async fn search_totals(&self, query: &str) -> Result<(u32, u32, u32, u32)> {
+        let response: SearchResponse = self.get("/catalog/search", &[("query", query), ("limit", "1")]).await?;
+        let albums   = response.albums  .as_ref().and_then(|r| r.total).unwrap_or(0);
+        let artists  = response.artists .as_ref().and_then(|r| r.total).unwrap_or(0);
+        let tracks   = response.tracks  .as_ref().and_then(|r| r.total).unwrap_or(0);
+        let playlists= response.playlists.as_ref().and_then(|r| r.total).unwrap_or(0);
+        Ok((albums, artists, tracks, playlists))
+    }
+
     /// Recherche dans le catalogue
     pub async fn search(&self, query: &str, type_: Option<&str>) -> Result<SearchResult> {
         debug!("Searching for '{}' (type: {:?})", query, type_);
@@ -660,6 +670,50 @@ impl QobuzApi {
                 .map(|p| p.items.into_iter().map(Self::parse_playlist).collect())
                 .unwrap_or_default(),
         })
+    }
+
+    /// Recherche dans les albums uniquement (`/album/search`)
+    pub async fn search_albums(&self, query: &str, limit: u32, offset: u32) -> Result<Vec<Album>> {
+        let limit_s = limit.to_string();
+        let offset_s = offset.to_string();
+        let params = [("query", query), ("limit", &limit_s), ("offset", &offset_s)];
+        #[derive(Deserialize)]
+        struct Resp { albums: PaginatedResponse<AlbumResponse> }
+        let resp: Resp = self.get("/album/search", &params).await?;
+        Ok(resp.albums.items.into_iter().map(Self::parse_album).filter(|a| a.streamable).collect())
+    }
+
+    /// Recherche dans les tracks uniquement (`/track/search`)
+    pub async fn search_tracks(&self, query: &str, limit: u32, offset: u32) -> Result<Vec<Track>> {
+        let limit_s = limit.to_string();
+        let offset_s = offset.to_string();
+        let params = [("query", query), ("limit", &limit_s), ("offset", &offset_s)];
+        #[derive(Deserialize)]
+        struct Resp { tracks: PaginatedResponse<TrackResponse> }
+        let resp: Resp = self.get("/track/search", &params).await?;
+        Ok(resp.tracks.items.into_iter().map(|t| Self::parse_track(t, None)).filter(|t| t.streamable).collect())
+    }
+
+    /// Recherche dans les artistes uniquement (`/artist/search`)
+    pub async fn search_artists(&self, query: &str, limit: u32, offset: u32) -> Result<Vec<Artist>> {
+        let limit_s = limit.to_string();
+        let offset_s = offset.to_string();
+        let params = [("query", query), ("limit", &limit_s), ("offset", &offset_s)];
+        #[derive(Deserialize)]
+        struct Resp { artists: PaginatedResponse<ArtistResponse> }
+        let resp: Resp = self.get("/artist/search", &params).await?;
+        Ok(resp.artists.items.into_iter().map(Self::parse_artist).collect())
+    }
+
+    /// Recherche dans les playlists uniquement (`/playlist/search`)
+    pub async fn search_playlists(&self, query: &str, limit: u32, offset: u32) -> Result<Vec<Playlist>> {
+        let limit_s = limit.to_string();
+        let offset_s = offset.to_string();
+        let params = [("query", query), ("limit", &limit_s), ("offset", &offset_s)];
+        #[derive(Deserialize)]
+        struct Resp { playlists: PaginatedResponse<PlaylistResponse> }
+        let resp: Resp = self.get("/playlist/search", &params).await?;
+        Ok(resp.playlists.items.into_iter().map(Self::parse_playlist).collect())
     }
 
     // Fonctions de parsing publiques (utilisées aussi par le module user)

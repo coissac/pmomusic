@@ -155,21 +155,34 @@ pub enum CacheStatus {
     Failed { error: String },
 }
 
-/// Search filters for advanced search
-#[derive(Debug, Clone, Default)]
-pub struct SearchFilters {
-    /// Filter by artist name
-    pub artist: Option<String>,
-    /// Filter by album name
-    pub album: Option<String>,
-    /// Filter by genre
-    pub genre: Option<String>,
-    /// Minimum year
-    pub year_min: Option<u32>,
-    /// Maximum year
-    pub year_max: Option<u32>,
-    /// Maximum number of results
-    pub limit: Option<usize>,
+/// Scope of a search operation
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SearchScope {
+    /// Search the full provider catalog (Qobuz API, etc.)
+    Catalog,
+    /// Search only within the user's saved library (favorites, playlists)
+    UserLibrary,
+}
+
+/// Type of media to search for
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MediaSearchType {
+    /// All types — results grouped into navigable virtual containers
+    All,
+    Tracks,
+    Albums,
+    Artists,
+    Playlists,
+}
+
+/// Structured search request passed to `MusicSource::search()`
+#[derive(Debug, Clone)]
+pub struct SearchQuery {
+    pub text: String,
+    pub media_type: MediaSearchType,
+    pub scope: SearchScope,
+    pub limit: u32,
+    pub offset: u32,
 }
 
 /// Source statistics
@@ -321,7 +334,7 @@ impl BrowseResult {
 ///         Ok(vec![])
 ///     }
 ///
-///     async fn search(&self, query: &str) -> Result<BrowseResult> {
+///     async fn search(&self, query: &SearchQuery) -> Result<BrowseResult> {
 ///         Err(pmosource::MusicSourceError::SearchNotSupported)
 ///     }
 /// }
@@ -597,12 +610,11 @@ pub trait MusicSource: Debug + Send + Sync {
     /// # Examples
     ///
     /// ```ignore
-    /// let results = source.search("Pink Floyd").await?;
-    /// for item in results.items() {
-    ///     println!("Found: {}", item.title);
-    /// }
+    /// let q = SearchQuery { text: "Pink Floyd".into(), media_type: MediaSearchType::All,
+    ///                       scope: SearchScope::Catalog, limit: 50, offset: 0 };
+    /// let results = source.search(&q).await?;
     /// ```
-    async fn search(&self, query: &str) -> Result<BrowseResult> {
+    async fn search(&self, query: &SearchQuery) -> Result<BrowseResult> {
         let _ = query;
         Err(MusicSourceError::SearchNotSupported)
     }
@@ -888,40 +900,6 @@ pub trait MusicSource: Debug + Send + Sync {
         // Default implementation: browse all then slice (inefficient)
         let _ = (offset, limit);
         self.browse(object_id).await
-    }
-
-    /// Advanced search with filters
-    ///
-    /// Provides more fine-grained search control than basic `search()`.
-    ///
-    /// # Arguments
-    ///
-    /// * `query` - Search query string
-    /// * `filters` - Additional search filters
-    ///
-    /// # Returns
-    ///
-    /// A `BrowseResult` containing matching items/containers.
-    ///
-    /// # Errors
-    ///
-    /// Returns `MusicSourceError::SearchNotSupported` if not implemented.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let filters = SearchFilters {
-    ///     artist: Some("Pink Floyd".to_string()),
-    ///     year_min: Some(1970),
-    ///     year_max: Some(1980),
-    ///     ..Default::default()
-    /// };
-    /// let results = source.search_advanced("Wall", filters).await?;
-    /// ```
-    async fn search_advanced(&self, query: &str, filters: SearchFilters) -> Result<BrowseResult> {
-        // Default: ignore filters and call basic search
-        let _ = filters;
-        self.search(query).await
     }
 
     /// Get source statistics

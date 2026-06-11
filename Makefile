@@ -171,7 +171,9 @@ run: debug
 run-release: release
 	@echo "$(YELLOW)→ Lancement de l'application (release) via Terminal.app...$(NC)"
 	@echo "$(BLUE)  (Terminal.app est nécessaire pour le multicast sur macOS Sequoia+)$(NC)"
-	@osascript -e 'tell application "Terminal" to do script "cd \"$(CURDIR)\" && ./$(RUST_TARGET)/$(BINARY_NAME) 2>&1 | tee pmomusic.log; exit"'
+	@RUST_LOG_PREFIX=""; \
+	if [ -n "$(RUST_LOG)" ]; then RUST_LOG_PREFIX="export RUST_LOG='$(RUST_LOG)' && "; fi; \
+	osascript -e "tell application \"Terminal\" to do script \"cd '$(CURDIR)' && $${RUST_LOG_PREFIX}./$(RUST_TARGET)/$(BINARY_NAME) 2>&1 | tee pmomusic.log; exit\""
 
 ## size: Affiche la taille du binaire
 size:

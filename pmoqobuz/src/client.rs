@@ -827,6 +827,11 @@ impl QobuzClient {
     /// # Arguments
     ///
     /// * `query` - Termes de recherche
+    /// Retourne les totaux réels de chaque type (appel économique limit=1).
+    pub async fn search_totals(&self, query: &str) -> Result<(u32, u32, u32, u32)> {
+        self.call_with_auth_repair("search_totals", || self.api.search_totals(query)).await
+    }
+
     /// * `type_` - Type de recherche : None (tous), Some("albums"), Some("artists"), Some("tracks"), Some("playlists")
     pub async fn search(&self, query: &str, type_: Option<&str>) -> Result<SearchResult> {
         // Créer une clé de cache
@@ -849,28 +854,60 @@ impl QobuzClient {
         Ok(result)
     }
 
-    /// Recherche des albums
-    pub async fn search_albums(&self, query: &str) -> Result<Vec<Album>> {
-        let result = self.search(query, Some("albums")).await?;
-        Ok(result.albums)
+    /// Recherche des albums via `/album/search` (endpoint dédié, paginé)
+    pub async fn search_albums(&self, query: &str, limit: u32, offset: u32) -> Result<Vec<Album>> {
+        let cache_key = format!("albums:{}:{}:{}", query, limit, offset);
+        if let Some(r) = self.cache.get_search(&cache_key).await {
+            return Ok(r.albums);
+        }
+        let items = self
+            .call_with_auth_repair("search_albums", || self.api.search_albums(query, limit, offset))
+            .await?;
+        let result = SearchResult { albums: items.clone(), artists: vec![], tracks: vec![], playlists: vec![] };
+        self.cache.put_search(cache_key, result).await;
+        Ok(items)
     }
 
-    /// Recherche des artistes
-    pub async fn search_artists(&self, query: &str) -> Result<Vec<Artist>> {
-        let result = self.search(query, Some("artists")).await?;
-        Ok(result.artists)
+    /// Recherche des artistes via `/artist/search` (endpoint dédié, paginé)
+    pub async fn search_artists(&self, query: &str, limit: u32, offset: u32) -> Result<Vec<Artist>> {
+        let cache_key = format!("artists:{}:{}:{}", query, limit, offset);
+        if let Some(r) = self.cache.get_search(&cache_key).await {
+            return Ok(r.artists);
+        }
+        let items = self
+            .call_with_auth_repair("search_artists", || self.api.search_artists(query, limit, offset))
+            .await?;
+        let result = SearchResult { albums: vec![], artists: items.clone(), tracks: vec![], playlists: vec![] };
+        self.cache.put_search(cache_key, result).await;
+        Ok(items)
     }
 
-    /// Recherche des tracks
-    pub async fn search_tracks(&self, query: &str) -> Result<Vec<Track>> {
-        let result = self.search(query, Some("tracks")).await?;
-        Ok(result.tracks)
+    /// Recherche des tracks via `/track/search` (endpoint dédié, paginé)
+    pub async fn search_tracks(&self, query: &str, limit: u32, offset: u32) -> Result<Vec<Track>> {
+        let cache_key = format!("tracks:{}:{}:{}", query, limit, offset);
+        if let Some(r) = self.cache.get_search(&cache_key).await {
+            return Ok(r.tracks);
+        }
+        let items = self
+            .call_with_auth_repair("search_tracks", || self.api.search_tracks(query, limit, offset))
+            .await?;
+        let result = SearchResult { albums: vec![], artists: vec![], tracks: items.clone(), playlists: vec![] };
+        self.cache.put_search(cache_key, result).await;
+        Ok(items)
     }
 
-    /// Recherche des playlists
-    pub async fn search_playlists(&self, query: &str) -> Result<Vec<Playlist>> {
-        let result = self.search(query, Some("playlists")).await?;
-        Ok(result.playlists)
+    /// Recherche des playlists via `/playlist/search` (endpoint dédié, paginé)
+    pub async fn search_playlists(&self, query: &str, limit: u32, offset: u32) -> Result<Vec<Playlist>> {
+        let cache_key = format!("playlists:{}:{}:{}", query, limit, offset);
+        if let Some(r) = self.cache.get_search(&cache_key).await {
+            return Ok(r.playlists);
+        }
+        let items = self
+            .call_with_auth_repair("search_playlists", || self.api.search_playlists(query, limit, offset))
+            .await?;
+        let result = SearchResult { albums: vec![], artists: vec![], tracks: vec![], playlists: items.clone() };
+        self.cache.put_search(cache_key, result).await;
+        Ok(items)
     }
 
     // ============ Favoris ============

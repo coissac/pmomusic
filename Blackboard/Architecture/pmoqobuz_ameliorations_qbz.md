@@ -255,64 +255,98 @@ avant de retenter, au lieu du backoff fixe.
 
 ---
 
-## 8. Recherche — **À FAIRE** (priorité haute)
+## 8. Recherche UPnP contextuelle — **À FAIRE** (priorité haute)
 
-pmoqobuz n'expose aucune recherche. qbz montre que Qobuz a un vrai moteur de recherche
-multi-catégories.
+### 8a. Principe : le ContainerID détermine le scope et le type
 
-### 8a. Endpoints disponibles
+L'action UPnP `Search(ContainerID, SearchCriteria)` passe déjà le container d'origine.
+On l'utilise pour décider quoi chercher et où, plutôt que de parser `SearchCriteria`.
 
-```
-GET /album/search?query=…&limit=…&offset=…[&type=…]
-GET /track/search?query=…&limit=…&offset=…[&type=…]
-GET /artist/search?query=…&limit=…&offset=…[&type=…]
-GET /playlist/search?query=…&limit=…&offset=…
-GET /catalog/search?query=…&limit=…&offset=…     ← combiné (albums + tracks + artists + playlists)
-```
+**Mapping ContainerID → (scope, type)** :
 
-Tous non-authentifiés (pas de token requis). Signature pattern :
-`sign_search(method, query, limit, offset, search_type, timestamp, secret)`
-où les params signés sont concaténés **dans l'ordre alphabétique** :
-`limit{L}offset{O}query{Q}[type{T}]`.
+| ContainerID | Scope | Type | Endpoint Qobuz |
+|---|---|---|---|
+| `qobuz`, `qobuz:discover`, `qobuz:discover:*`, `qobuz:genres`, `qobuz:genre:*` | Catalog | All | `/catalog/search` → containers groupés |
+| `qobuz:discover:artists` | Catalog | Artists | `/artist/search` |
+| `qobuz:discover:albums:*` | Catalog | Albums | `/album/search` |
+| `qobuz:favorites` | UserLibrary | All | filtre cache → containers groupés |
+| `qobuz:favorites:albums` | UserLibrary | Albums | filtre cache albums |
+| `qobuz:favorites:tracks` | UserLibrary | Tracks | filtre cache tracks |
+| `qobuz:favorites:artists` | UserLibrary | Artists | filtre cache artistes |
+| `qobuz:favorites:playlists` | UserLibrary | Playlists | filtre cache playlists |
 
-### 8b. Paramètre `type` (filtre sémantique)
+**SearchCriteria** : extrait le texte brut — `dc:title contains "Pink Floyd"` → `"Pink Floyd"`,
+`upnp:artist contains "Miles"` → `"Miles"`, chaîne nue ou `*` → passé tel quel.
 
-Sur album/track/artist search, le param `type` affine la signification de `query` :
-- `MainArtist` — cherche dans le nom de l'artiste principal
-- `Performer` — cherche dans les performers/interprètes
-- `Composer` — cherche dans le compositeur
-- `Label` — cherche dans le nom du label
-- `ReleaseName` — cherche dans le titre de la release
-
-Sans `type`, la recherche est full-text sur tous les champs.
-
-### 8c. Structure de retour
+### 8b. Types dans `pmosource`
 
 ```rust
-pub struct SearchResultsPage<T> {
-    pub items: Vec<T>,
-    pub total: u32,
-    pub offset: u32,
+pub enum SearchScope { Catalog, UserLibrary }
+
+pub enum MediaSearchType { All, Tracks, Albums, Artists, Playlists }
+
+pub struct SearchQuery {
+    pub text: String,
+    pub media_type: MediaSearchType,
+    pub scope: SearchScope,
     pub limit: u32,
+    pub offset: u32,
 }
 ```
 
-`catalog/search` retourne un objet avec clés `albums`, `tracks`, `artists`, `playlists`,
-`most_popular` — chacun étant une `SearchResultsPage<T>` — mais qbz le désérialise en `Value`
-brut (pas de struct dédiée).
+Le trait `MusicSource::search()` passe de `&str` à `&SearchQuery`.
 
-### 8d. Ce qu'il faut implémenter dans pmoqobuz
+### 8c. Résultats groupés via containers virtuels navigables
 
-1. `signing::sign_search(method, query, limit, offset, search_type, ts, secret) -> String`
-   (signature spécifique avec ordre alpha des params)
-2. `QobuzApi::search_tracks(query, limit, offset, search_type) -> Result<SearchPage<Track>>`
-3. `QobuzApi::search_albums(query, limit, offset, search_type) -> Result<SearchPage<Album>>`
-4. `QobuzApi::search_artists(query, limit, offset) -> Result<SearchPage<Artist>>`
-5. `QobuzApi::catalog_search(query, limit, offset) -> Result<CatalogSearchResult>`
-   avec `CatalogSearchResult { albums, tracks, artists, playlists }`
-6. Exposer via `QobuzClient` + endpoint REST `/qobuz/search?q=…&type=track|album|artist|all`
+Quand `media_type = All`, `search()` retourne des containers virtuels :
 
-Priorité : **catalog_search** en premier (un seul endpoint couvre tous les cas UI).
+```
+BrowseResult::Containers([
+    Container { id: "qobuz:search:catalog:Pink Floyd:albums",   title: "Albums (12)",    ... },
+    Container { id: "qobuz:search:catalog:Pink Floyd:artists",  title: "Artistes (3)",   ... },
+    Container { id: "qobuz:search:catalog:Pink Floyd:tracks",   title: "Titres (47)",    ... },
+    Container { id: "qobuz:search:catalog:Pink Floyd:playlists",title: "Playlists (2)",  ... },
+])
+```
+
+**Format d'ID** : `qobuz:search:{scope}:{type}:{query}` — parsé avec `splitn(5, ':')` pour
+que la query puisse contenir des `:` sans ambiguïté.
+
+Quand le control point browse dans `qobuz:search:catalog:Pink Floyd:albums`, `browse()` de
+`QobuzSource` reconnaît le pattern, re-exécute `/album/search?query=Pink+Floyd` (le cache API
+absorbe les appels redondants) et retourne les items directement.
+
+### 8d. Recherche dans les favoris (UserLibrary)
+
+Pas d'endpoint Qobuz — filtre client-side sur le cache. Pour chaque type :
+- `get_favorite_albums()`, `get_favorite_tracks()`, `get_favorite_artists()`, `get_user_playlists()`
+- Filtre : `title.to_lowercase().contains(&query.to_lowercase())` ou sur `artist.name`
+
+Si le cache est chaud → instantané. Sinon charge les favoris avant de filtrer.
+
+### 8e. Endpoints Qobuz utilisés
+
+```
+GET /catalog/search?query=…&limit=…   → All types (catalog scope)
+GET /album/search?query=…             → Albums only
+GET /track/search?query=…             → Tracks only
+GET /artist/search?query=…            → Artists only
+GET /playlist/search?query=…          → Playlists only
+```
+
+Déjà partiellement implémentés : `QobuzApi::search(query, type_)` passe `type_` au param
+`type` de `/catalog/search`. Il faut ajouter les endpoints dédiés `/album/search` etc. pour
+les recherches typées — ils ont leur propre signature et des params de pagination corrects.
+
+### 8f. Fichiers à modifier
+
+| Fichier | Changement |
+|---|---|
+| `pmosource/src/lib.rs` | Ajouter `SearchQuery`, `SearchScope`, `MediaSearchType` ; changer signature `search()` |
+| `pmomediaserver/src/content_handler.rs` | Parser `container_id` → `SearchQuery` ; parser `SearchCriteria` |
+| `pmoqobuz/src/api/catalog.rs` | Ajouter `search_albums`, `search_tracks`, `search_artists`, `search_playlists` |
+| `pmoqobuz/src/client.rs` | Wrappers typés avec cache |
+| `pmoqobuz/src/source.rs` | Réécrire `search()` + étendre `browse()` pour les virtual containers |
 
 ---
 

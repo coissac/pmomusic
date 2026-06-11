@@ -11,7 +11,7 @@ use pmoaudiocache::{AudioMetadata, Cache as AudioCache};
 use pmocovers::Cache as CoverCache;
 use pmodidl::{Container, Item};
 use pmosource::SourceCacheManager;
-use pmosource::{async_trait, BrowseResult, MusicSource, MusicSourceError, Result};
+use pmosource::{async_trait, BrowseResult, MediaSearchType, MusicSource, MusicSourceError, Result, SearchQuery, SearchScope};
 use serde_json::json;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -1667,8 +1667,29 @@ impl QobuzSource {
     /// - "qobuz:playlist:{id}" → Tracks in playlist
     /// - etc.
     fn parse_object_id(&self, object_id: &str) -> ObjectIdType {
+        tracing::debug!(object_id, "parse_object_id");
         if object_id == "qobuz" || object_id == "0" {
             return ObjectIdType::Root;
+        }
+
+        // Virtual search result containers: qobuz:search:{scope}:{type}:{query}
+        // Use splitn(5) so the query (last segment) can contain ':' without ambiguity.
+        let search_parts: Vec<&str> = object_id.splitn(5, ':').collect();
+        tracing::debug!(len = search_parts.len(), parts = ?search_parts, "parse_object_id splitn");
+        if search_parts.len() == 5 && search_parts[0] == "qobuz" && search_parts[1] == "search" {
+            let scope = match search_parts[2] {
+                "favorites" => SearchScope::UserLibrary,
+                _ => SearchScope::Catalog,
+            };
+            let media_type = match search_parts[3] {
+                "albums" => MediaSearchType::Albums,
+                "tracks" => MediaSearchType::Tracks,
+                "artists" => MediaSearchType::Artists,
+                "playlists" => MediaSearchType::Playlists,
+                _ => MediaSearchType::All,
+            };
+            tracing::debug!(scope = ?scope, media_type = ?media_type, query = search_parts[4], "parse_object_id → SearchResult");
+            return ObjectIdType::SearchResult(scope, media_type, search_parts[4].to_string());
         }
 
         let parts: Vec<&str> = object_id.split(':').collect();
@@ -1755,6 +1776,10 @@ enum ObjectIdType {
     Playlist(String),
     Artist(String),
     Track(String),
+
+    // Containers virtuels de résultats de recherche
+    // (scope, media_type, query)
+    SearchResult(SearchScope, MediaSearchType, String),
 
     Unknown,
 }
@@ -1870,6 +1895,20 @@ impl MusicSource for QobuzSource {
                     .collect();
 
                 Ok(BrowseResult::Containers(containers))
+            }
+
+            ObjectIdType::SearchResult(scope, media_type, query) => {
+                tracing::debug!(scope = ?scope, media_type = ?media_type, query, "browse → execute_search");
+                let sq = SearchQuery {
+                    text: query,
+                    media_type,
+                    scope,
+                    limit: 200,
+                    offset: 0,
+                };
+                let result = self.execute_search(&sq).await;
+                tracing::debug!(ok = result.is_ok(), "execute_search returned");
+                result
             }
 
             ObjectIdType::Track(_) => {
@@ -2021,86 +2060,14 @@ impl MusicSource for QobuzSource {
         Ok(items)
     }
 
-    async fn search(&self, query: &str) -> Result<BrowseResult> {
+    async fn search(&self, query: &SearchQuery) -> Result<BrowseResult> {
         use tracing::debug;
-        debug!(query = %query, "Qobuz search started");
+        debug!(text = %query.text, scope = ?query.scope, media_type = ?query.media_type, "Qobuz search");
 
-        // Search across Qobuz catalog (albums, tracks, artists, playlists)
-        let results = self
-            .inner
-            .client
-            .search(query, None)
-            .await
-            .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
-
-        debug!(
-            albums = results.albums.len(),
-            artists = results.artists.len(),
-            tracks = results.tracks.len(),
-            playlists = results.playlists.len(),
-            "Qobuz search API results"
-        );
-
-        // Cache covers in parallel for all types
-        let (albums, tracks, artists, playlists) = tokio::join!(
-            self.cache_album_covers(results.albums),
-            self.cache_track_covers(results.tracks),
-            self.cache_artist_covers(results.artists),
-            self.cache_playlist_covers(results.playlists),
-        );
-
-        // Build containers from albums
-        let album_containers: Vec<Container> = albums
-            .into_iter()
-            .filter_map(|a| a.to_didl_container("qobuz:search").ok())
-            .collect();
-
-        // Build containers from artists (manual construction)
-        let artist_containers: Vec<Container> = artists
-            .into_iter()
-            .map(|artist| Container {
-                id: format!("qobuz:artist:{}", artist.id),
-                parent_id: "qobuz:search".to_string(),
-                restricted: Some("1".to_string()),
-                child_count: None,
-                searchable: Some("1".to_string()),
-                title: artist.name.clone(),
-                class: "object.container".to_string(),
-                artist: Some(artist.name.clone()),
-                album_art: artist.image_cached,
-                containers: vec![],
-                items: vec![],
-            })
-            .collect();
-
-        // Build containers from playlists
-        let playlist_containers: Vec<Container> = playlists
-            .into_iter()
-            .filter_map(|p| p.to_didl_container("qobuz:search").ok())
-            .collect();
-
-        // Combine all containers
-        let mut all_containers = Vec::new();
-        all_containers.extend(album_containers);
-        all_containers.extend(artist_containers);
-        all_containers.extend(playlist_containers);
-
-        // Build items from tracks
-        let track_items: Vec<Item> = tracks
-            .into_iter()
-            .filter_map(|t| t.to_didl_item("qobuz:search").ok())
-            .collect();
-
-        debug!(
-            containers = all_containers.len(),
-            items = track_items.len(),
-            "Qobuz search done"
-        );
-
-        if !all_containers.is_empty() || !track_items.is_empty() {
-            Ok(BrowseResult::Mixed { containers: all_containers, items: track_items })
+        if query.media_type == MediaSearchType::All {
+            self.search_grouped(query).await
         } else {
-            Ok(BrowseResult::Items(vec![]))
+            self.execute_search(query).await
         }
     }
 
@@ -2116,7 +2083,7 @@ impl MusicSource for QobuzSource {
             supports_high_res_audio: true,
             max_sample_rate: Some(192_000), // Qobuz supports up to 192kHz
             supports_multiple_formats: true,
-            supports_advanced_search: false, // TODO: Qobuz API supports it, not yet implemented
+            supports_advanced_search: true,
             supports_pagination: true,
         }
     }
@@ -2423,6 +2390,189 @@ impl MusicSource for QobuzSource {
         stats.cached_items = Some(cache_stats.cached_tracks);
 
         Ok(stats)
+    }
+}
+
+// Search helpers — inherent methods, called from both `search()` and `browse()`.
+impl QobuzSource {
+    /// Recherche groupée : retourne des containers virtuels navigables (un par type).
+    pub(crate) async fn search_grouped(&self, query: &SearchQuery) -> Result<BrowseResult> {
+        use tracing::debug;
+        let scope_str = match query.scope {
+            SearchScope::Catalog => "catalog",
+            SearchScope::UserLibrary => "favorites",
+        };
+
+        let counts = if query.scope == SearchScope::UserLibrary {
+            self.search_favorites_counts(&query.text).await
+        } else {
+            self.search_catalog_counts(&query.text).await
+        };
+
+        let (n_albums, n_artists, n_tracks, n_playlists) = counts;
+
+        let mk_container = |type_str: &str, title: &str, count: usize| Container {
+            id: format!("qobuz:search:{}:{}:{}", scope_str, type_str, query.text),
+            parent_id: "qobuz:search".to_string(),
+            restricted: Some("1".to_string()),
+            child_count: Some(count.to_string()),
+            searchable: None,
+            title: format!("{} ({}{})", title, count, if count >= 1000 { "+" } else { "" }),
+            class: "object.container".to_string(),
+            artist: None,
+            album_art: None,
+            containers: vec![],
+            items: vec![],
+        };
+
+        let mut containers = Vec::new();
+        if n_albums > 0 { containers.push(mk_container("albums", "Albums", n_albums)); }
+        if n_artists > 0 { containers.push(mk_container("artists", "Artistes", n_artists)); }
+        if n_tracks > 0 { containers.push(mk_container("tracks", "Titres", n_tracks)); }
+        if n_playlists > 0 { containers.push(mk_container("playlists", "Playlists", n_playlists)); }
+
+        debug!(containers = containers.len(), "Search grouped result");
+        Ok(BrowseResult::Containers(containers))
+    }
+
+    async fn search_catalog_counts(&self, text: &str) -> (usize, usize, usize, usize) {
+        match self.inner.client.search_totals(text).await {
+            Ok((albums, artists, tracks, playlists)) => {
+                tracing::debug!(albums, artists, tracks, playlists, "search_catalog_counts totals");
+                (albums as usize, artists as usize, tracks as usize, playlists as usize)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "search_catalog_counts failed");
+                (0, 0, 0, 0)
+            }
+        }
+    }
+
+    async fn search_favorites_counts(&self, text: &str) -> (usize, usize, usize, usize) {
+        let q = text.to_lowercase();
+        let albums = self.inner.client.get_favorite_albums().await.unwrap_or_default()
+            .into_iter().filter(|a| a.title.to_lowercase().contains(&q) || a.artist.name.to_lowercase().contains(&q)).count();
+        let tracks = self.inner.client.get_favorite_tracks().await.unwrap_or_default()
+            .into_iter().filter(|t| t.title.to_lowercase().contains(&q) || t.performer.as_ref().map(|p| p.name.to_lowercase().contains(&q)).unwrap_or(false)).count();
+        let artists = self.inner.client.get_favorite_artists().await.unwrap_or_default()
+            .into_iter().filter(|a| a.name.to_lowercase().contains(&q)).count();
+        let playlists = self.inner.client.get_user_playlists().await.unwrap_or_default()
+            .into_iter().filter(|p| p.name.to_lowercase().contains(&q)).count();
+        (albums, artists, tracks, playlists)
+    }
+
+    /// Exécute une recherche typée (non-All) et retourne les items/containers directement.
+    pub(crate) async fn execute_search(&self, query: &SearchQuery) -> Result<BrowseResult> {
+        use tracing::debug;
+        debug!(text = %query.text, scope = ?query.scope, media_type = ?query.media_type, "execute_search entry");
+        let text = &query.text;
+        let limit = query.limit;
+        let scope_str = match query.scope {
+            SearchScope::Catalog => "catalog",
+            SearchScope::UserLibrary => "favorites",
+        };
+        let type_str = match query.media_type {
+            MediaSearchType::Albums => "albums",
+            MediaSearchType::Artists => "artists",
+            MediaSearchType::Tracks => "tracks",
+            MediaSearchType::Playlists => "playlists",
+            MediaSearchType::All => "all",
+        };
+        let parent_id = format!("qobuz:search:{}:{}:{}", scope_str, type_str, query.text);
+
+        match (&query.scope, &query.media_type) {
+            (SearchScope::UserLibrary, MediaSearchType::Albums) => {
+                let q = text.to_lowercase();
+                let albums = self.inner.client.get_favorite_albums().await
+                    .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?
+                    .into_iter().filter(|a| a.title.to_lowercase().contains(&q) || a.artist.name.to_lowercase().contains(&q))
+                    .collect::<Vec<_>>();
+                let albums = self.cache_album_covers(albums).await;
+                Ok(BrowseResult::Containers(albums.into_iter().filter_map(|a| a.to_didl_container(&parent_id).ok()).collect()))
+            }
+            (SearchScope::UserLibrary, MediaSearchType::Tracks) => {
+                let q = text.to_lowercase();
+                let tracks = self.inner.client.get_favorite_tracks().await
+                    .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?
+                    .into_iter().filter(|t| t.title.to_lowercase().contains(&q) || t.performer.as_ref().map(|p| p.name.to_lowercase().contains(&q)).unwrap_or(false))
+                    .collect::<Vec<_>>();
+                let tracks = self.cache_track_covers(tracks).await;
+                Ok(BrowseResult::Items(tracks.into_iter().filter_map(|t| t.to_didl_item(&parent_id).ok()).collect()))
+            }
+            (SearchScope::UserLibrary, MediaSearchType::Artists) => {
+                let q = text.to_lowercase();
+                let artists = self.inner.client.get_favorite_artists().await
+                    .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?
+                    .into_iter().filter(|a| a.name.to_lowercase().contains(&q))
+                    .collect::<Vec<_>>();
+                let artists = self.cache_artist_covers(artists).await;
+                let containers = artists.into_iter().map(|a| Container {
+                    id: format!("qobuz:artist:{}", a.id),
+                    parent_id: parent_id.clone(),
+                    restricted: Some("1".to_string()),
+                    child_count: None, searchable: Some("1".to_string()),
+                    title: a.name.clone(), class: "object.container.person.musicArtist".to_string(),
+                    artist: Some(a.name.clone()), album_art: a.image_cached,
+                    containers: vec![], items: vec![],
+                }).collect();
+                Ok(BrowseResult::Containers(containers))
+            }
+
+            (SearchScope::UserLibrary, MediaSearchType::Playlists) => {
+                let q = text.to_lowercase();
+                let playlists = self.inner.client.get_user_playlists().await
+                    .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?
+                    .into_iter().filter(|p| p.name.to_lowercase().contains(&q))
+                    .collect::<Vec<_>>();
+                let playlists = self.cache_playlist_covers(playlists).await;
+                Ok(BrowseResult::Containers(playlists.into_iter().filter_map(|p| p.to_didl_container(&parent_id).ok()).collect()))
+            }
+            (SearchScope::Catalog, MediaSearchType::Albums) => {
+                let result = self.inner.client.search(text, Some("albums"))
+                    .await.map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+                let albums = self.cache_album_covers(result.albums).await;
+                let containers: Vec<Container> = albums.into_iter()
+                    .filter_map(|a| a.to_didl_container(&parent_id).ok()).collect();
+                debug!(count = containers.len(), "search albums result");
+                Ok(BrowseResult::Containers(containers))
+            }
+            (SearchScope::Catalog, MediaSearchType::Tracks) => {
+                let result = self.inner.client.search(text, Some("tracks"))
+                    .await.map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+                let tracks = self.cache_track_covers(result.tracks).await;
+                let items: Vec<Item> = tracks.into_iter()
+                    .filter_map(|t| t.to_didl_item(&parent_id).ok()).collect();
+                debug!(count = items.len(), "search tracks result");
+                Ok(BrowseResult::Items(items))
+            }
+            (SearchScope::Catalog, MediaSearchType::Artists) => {
+                let result = self.inner.client.search(text, Some("artists"))
+                    .await.map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+                let artists = self.cache_artist_covers(result.artists).await;
+                let containers: Vec<Container> = artists.into_iter().map(|a| Container {
+                    id: format!("qobuz:artist:{}", a.id),
+                    parent_id: parent_id.clone(),
+                    restricted: Some("1".to_string()),
+                    child_count: None, searchable: None,
+                    title: a.name.clone(), class: "object.container.person.musicArtist".to_string(),
+                    artist: Some(a.name.clone()), album_art: a.image_cached,
+                    containers: vec![], items: vec![],
+                }).collect();
+                let first_titles: Vec<&str> = containers.iter().take(4).map(|c| c.title.as_str()).collect();
+                debug!(count = containers.len(), first4 = ?first_titles, "search artists result");
+                Ok(BrowseResult::Containers(containers))
+            }
+            (SearchScope::Catalog, MediaSearchType::Playlists) => {
+                let result = self.inner.client.search(text, Some("playlists"))
+                    .await.map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+                let playlists = self.cache_playlist_covers(result.playlists).await;
+                let containers: Vec<Container> = playlists.into_iter()
+                    .filter_map(|p| p.to_didl_container(&parent_id).ok()).collect();
+                debug!(count = containers.len(), "search playlists result");
+                Ok(BrowseResult::Containers(containers))
+            }
+            _ => Ok(BrowseResult::Items(vec![])),
+        }
     }
 }
 

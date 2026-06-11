@@ -214,28 +214,23 @@ export function useMediaServers() {
     }
   }
 
-  // Recherche dans un serveur
-  async function searchServer(serverId: string, query: string) {
-    console.log(`[useMediaServers] searchServer called: serverId=${serverId}, query=${query}`);
-    if (!query.trim()) {
-      searchResults.value = null
-      searchQuery.value = ''
-      return
-    }
+  // Recherche dans un serveur — retourne l'ID du container virtuel de résultats
+  async function searchServer(serverId: string, query: string, context?: string): Promise<string | null> {
+    if (!query.trim()) return null
 
     try {
       loading.value = true
       error.value = null
-      searchQuery.value = query
-      console.log(`[useMediaServers] Calling API searchServer for server ${serverId}`);
 
-      const data = await api.searchServer(serverId, query)
-      console.log(`[useMediaServers] Search returned ${data.entries.length} entries, total=${data.total_count}`);
-      searchResults.value = {
-        container_id: 'search',
+      const data = await api.searchServer(serverId, query, context)
+      // data.container_id est l'ID virtuel réel (ex: "qobuz:search:catalog:all:camille")
+      const key = browseCacheKey(serverId, data.container_id)
+      browseCache.value.set(key, {
+        container_id: data.container_id,
         entries: data.entries,
         total_count: data.total_count,
-      }
+      })
+      return data.container_id
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Erreur recherche'
       console.error(`[useMediaServers] Erreur search ${serverId}:`, e)

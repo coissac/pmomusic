@@ -32,7 +32,10 @@ const searchInput = ref('');
 
 async function handleSearch() {
     if (searchInput.value.trim()) {
-        await searchServer(props.serverId, searchInput.value.trim());
+        const virtualId = await searchServer(props.serverId, searchInput.value.trim(), props.containerId);
+        if (virtualId) {
+            emit("navigate", virtualId);
+        }
     }
 }
 
