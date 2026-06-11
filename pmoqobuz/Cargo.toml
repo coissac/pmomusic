@@ -29,8 +29,16 @@ sha1 = "0.10"
 hex = "0.4"
 md-5 = "0.10"
 
+# Crypto CMAF (AES-CTR déchiffrement frames, AES-CBC dérobage clé, HKDF dérivation)
+aes = "0.8"
+cbc = "0.1"
+ctr = "0.9"
+hkdf = "0.12"
+sha2 = "0.10"
+
 # Cache en mémoire avec TTL
 moka = { version = "0.12", features = ["future"] }
+
 
 # Logging
 tracing = { workspace = true }

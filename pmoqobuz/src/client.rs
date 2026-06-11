@@ -973,6 +973,109 @@ impl QobuzClient {
         })
         .await
     }
+
+    // ============ CMAF (streaming moderne) ============
+
+    /// Prépare le streaming CMAF pour un track : dérive les clés et fetche
+    /// le segment d'initialisation. Retourne une `CmafStreamInfo` prête à l'emploi.
+    ///
+    /// Pour télécharger la totalité du FLAC déchiffré d'un coup, utilisez
+    /// plutôt `download_cmaf_full`. Pour streamer segment par segment, utilisez
+    /// les données de `CmafStreamInfo` avec `cmaf::fetch_all_segments`.
+    ///
+    /// # Erreurs
+    ///
+    /// * `QobuzError::NotFound` — track non disponible sur Qobuz
+    /// * `QobuzError::Unauthorized` — session expirée (réparée automatiquement)
+    /// * `QobuzError::Other` — erreur CMAF (clé invalide, segment init corrompu, etc.)
+    pub async fn get_cmaf_stream_info(
+        &self,
+        track_id: &str,
+    ) -> Result<crate::models::CmafStreamInfo> {
+        let format_id = self.api.format().id() as u32;
+
+        let file_url = self
+            .call_with_auth_repair("get_cmaf_file_url", || {
+                self.api.get_cmaf_file_url(track_id, format_id)
+            })
+            .await?;
+
+        let bit_depth = file_url.resolved_bit_depth();
+        let url_template = file_url
+            .url_template
+            .ok_or_else(|| QobuzError::Other("CMAF file/url: url_template absent".into()))?;
+        let key_str = file_url
+            .key
+            .ok_or_else(|| QobuzError::Other("CMAF file/url: key absent".into()))?;
+
+        let (_session_id, infos) = self
+            .call_with_auth_repair("ensure_cmaf_session", || {
+                self.api.ensure_cmaf_session()
+            })
+            .await?;
+
+        let setup = crate::cmaf::setup_streaming(
+            url_template,
+            &key_str,
+            &infos,
+            file_url.n_segments,
+            file_url.format_id.unwrap_or(format_id),
+            file_url.sampling_rate,
+            bit_depth,
+        )
+        .await?;
+
+        Ok(crate::models::CmafStreamInfo {
+            url_template: setup.url_template,
+            n_segments: setup.n_segments,
+            content_key: setup.content_key,
+            flac_header: setup.flac_header,
+            segment_table: setup.segment_table,
+            format_id: setup.format_id,
+            sampling_rate: setup.sampling_rate,
+            bit_depth: setup.bit_depth,
+        })
+    }
+
+    /// Télécharge un track complet via CMAF et retourne les bytes FLAC déchiffrés.
+    ///
+    /// Bloquant jusqu'à la fin du téléchargement. Pour les gros fichiers Hi-Res,
+    /// préférer `get_cmaf_stream_info` + streaming segment par segment.
+    pub async fn download_cmaf_full(&self, track_id: &str) -> Result<Vec<u8>> {
+        let format_id = self.api.format().id() as u32;
+
+        let file_url = self
+            .call_with_auth_repair("get_cmaf_file_url", || {
+                self.api.get_cmaf_file_url(track_id, format_id)
+            })
+            .await?;
+
+        let bit_depth = file_url.resolved_bit_depth();
+        let url_template = file_url
+            .url_template
+            .ok_or_else(|| QobuzError::Other("CMAF file/url: url_template absent".into()))?;
+        let key_str = file_url
+            .key
+            .ok_or_else(|| QobuzError::Other("CMAF file/url: key absent".into()))?;
+
+        let (_session_id, infos) = self
+            .call_with_auth_repair("ensure_cmaf_session", || {
+                self.api.ensure_cmaf_session()
+            })
+            .await?;
+
+        crate::cmaf::download_full(
+            url_template,
+            &key_str,
+            &infos,
+            file_url.n_segments,
+            file_url.format_id.unwrap_or(format_id),
+            file_url.sampling_rate,
+            bit_depth,
+            None,
+        )
+        .await
+    }
 }
 
 #[cfg(test)]

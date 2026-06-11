@@ -208,6 +208,31 @@ pub struct StreamInfo {
     pub expires_at: DateTime<Utc>,
 }
 
+/// Informations pour le streaming CMAF d'un track.
+///
+/// Retourné par `QobuzClient::get_cmaf_stream_info`.
+/// L'appelant peut ensuite appeler `pmoqobuz::cmaf::download_full` pour
+/// obtenir les bytes FLAC déchiffrés, ou streamer les segments manuellement.
+#[derive(Debug)]
+pub struct CmafStreamInfo {
+    /// Modèle d'URL des segments, avec le placeholder `$SEGMENT$`.
+    pub url_template: String,
+    /// Nombre de segments audio (hors segment init s=0).
+    pub n_segments: u8,
+    /// Clé AES-128 déchiffrée pour décoder les frames FLAC.
+    pub content_key: [u8; 16],
+    /// Header FLAC extrait du segment init (à placer en tête du flux décodé).
+    pub flac_header: Vec<u8>,
+    /// Table des segments avec taille et compte d'échantillons.
+    pub segment_table: Vec<crate::cmaf::SegmentTableEntry>,
+    /// Format ID Qobuz.
+    pub format_id: u32,
+    /// Fréquence d'échantillonnage (Hz).
+    pub sampling_rate: Option<u32>,
+    /// Profondeur de bits.
+    pub bit_depth: Option<u32>,
+}
+
 /// Format audio demandé pour le streaming
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
