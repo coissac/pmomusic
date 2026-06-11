@@ -245,6 +245,15 @@ pub trait QobuzConfigExt {
 
     /// Persiste la version du bundle après une extraction réussie.
     fn set_qobuz_bundle_version(&self, version: &str) -> Result<()>;
+
+    /// Nombre de workers concurrents pour l'enregistrement des tracks en cache.
+    ///
+    /// Contrôle le semaphore dans `register_tracks_lazy` : plus la valeur est
+    /// haute, plus les covers sont téléchargées en parallèle, mais plus la
+    /// contention sur le mutex SQLite est forte.
+    ///
+    /// Défaut : 4 (adapté à une machine sous contrainte mémoire / Docker).
+    fn get_qobuz_register_concurrency(&self) -> usize;
 }
 
 impl QobuzConfigExt for Config {
@@ -503,5 +512,14 @@ impl QobuzConfigExt for Config {
             &["accounts", "qobuz", "bundle_version"],
             Value::String(version.to_string()),
         )
+    }
+
+    fn get_qobuz_register_concurrency(&self) -> usize {
+        match self.get_value(&["accounts", "qobuz", "register_concurrency"]) {
+            Ok(Value::Number(n)) if n.as_u64().unwrap_or(0) >= 1 => {
+                n.as_u64().unwrap() as usize
+            }
+            _ => 4,
+        }
     }
 }

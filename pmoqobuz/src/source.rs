@@ -115,6 +115,9 @@ struct QobuzSourceInner {
     /// Base URL for streaming server (e.g., "http://192.168.0.138:8080")
     base_url: String,
 
+    /// Nombre de workers concurrents pour register_tracks_lazy (configurable)
+    register_concurrency: usize,
+
     /// Update tracking
     update_counter: tokio::sync::RwLock<u32>,
     last_change: tokio::sync::RwLock<SystemTime>,
@@ -142,15 +145,18 @@ impl QobuzSource {
     /// Returns an error if the caches are not initialized in the registry
     #[cfg(feature = "server")]
     pub fn from_registry(client: QobuzClient, base_url: impl Into<String>) -> Result<Self> {
+        use crate::config_ext::QobuzConfigExt;
         let cache_manager = SourceCacheManager::from_registry("qobuz".to_string())?;
         let client = Arc::new(client);
         cache_manager.register_lazy_provider(Arc::new(QobuzLazyProvider::new(client.clone())));
+        let register_concurrency = pmoconfig::get_config().get_qobuz_register_concurrency();
 
         Ok(Self {
             inner: Arc::new(QobuzSourceInner {
                 client,
                 cache_manager,
                 base_url: base_url.into(),
+                register_concurrency,
                 update_counter: tokio::sync::RwLock::new(0),
                 last_change: tokio::sync::RwLock::new(SystemTime::now()),
             }),
@@ -180,6 +186,7 @@ impl QobuzSource {
                 client,
                 cache_manager,
                 base_url: base_url.into(),
+                register_concurrency: 4,
                 update_counter: tokio::sync::RwLock::new(0),
                 last_change: tokio::sync::RwLock::new(SystemTime::now()),
             }),
@@ -1062,10 +1069,10 @@ impl QobuzSource {
     /// Pour chaque track : cache la cover, enregistre la lazy entry, stocke les métadonnées.
     /// Retourne la liste des lazy PKs enregistrés avec succès.
     async fn register_tracks_lazy(&self, tracks: &[crate::models::Track]) -> Vec<String> {
-        // Limite la concurrence pour ne pas saturer l'API Qobuz ni la connexion réseau.
-        // Les covers déjà cachées sont retournées immédiatement (pas d'HTTP), donc même
-        // 600 tracks ne génèrent que ~N_albums_uniques téléchargements réels.
-        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(16));
+        // Configurable via accounts.qobuz.register_concurrency (défaut 4).
+        // SQLite sérialise les écritures — au-delà de ~4 workers on accumule
+        // des threads en attente du mutex DB sans gain de débit.
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(self.inner.register_concurrency));
 
         // On attache l'index original à chaque future pour pouvoir retrier dans l'ordre
         // d'origine après complétion parallèle (JoinSet retourne dans l'ordre de fin).
