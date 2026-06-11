@@ -236,14 +236,32 @@ impl QobuzClient {
     /// - Quand aucun appid/secret n'est configuré
     /// - Quand les credentials configurés sont invalides/expirés
     async fn try_spoofer_fallback(config: &Config) -> Result<QobuzApi> {
+        // Vérification bon marché : si la version du bundle n'a pas changé,
+        // re-télécharger les 7 MB ne donnera pas de meilleurs secrets.
+        // On court-circuite l'extraction et on passe directement au DEFAULT_APP_ID.
+        if let Ok(Some(cached_version)) = config.get_qobuz_bundle_version() {
+            match crate::api::Spoofer::fetch_current_bundle_version().await {
+                Ok(current) if current == cached_version => {
+                    info!(
+                        "[Spoofer] Bundle inchangé ({}) — secret invalide pour une autre raison, skip extraction",
+                        current
+                    );
+                    return QobuzApi::new(DEFAULT_APP_ID);
+                }
+                Ok(new_version) => {
+                    info!("[Spoofer] Bundle rotaté : {} → {}, re-extraction", cached_version, new_version);
+                }
+                Err(e) => {
+                    debug!("[Spoofer] Impossible de vérifier la version du bundle : {}", e);
+                }
+            }
+        }
+
         if let Some((app_id, secret)) = Self::fetch_spoofer_credentials(config).await? {
-            // Use raw secret from Spoofer (no XOR)
             return QobuzApi::with_raw_secret(app_id, &secret);
         }
 
-        info!(
-            "✗ No valid secret found from Spoofer, falling back to DEFAULT_APP_ID without secret"
-        );
+        info!("✗ No valid secret found from Spoofer, falling back to DEFAULT_APP_ID without secret");
         QobuzApi::new(DEFAULT_APP_ID)
     }
 
@@ -288,18 +306,15 @@ impl QobuzClient {
                                                         timezone
                                                     );
 
-                                                    // Save both appid and the working secret
-                                                    if let Err(e) = config.set_qobuz_appid(&app_id)
-                                                    {
+                                                    // Save appid, secret, and bundle version
+                                                    if let Err(e) = config.set_qobuz_appid(&app_id) {
                                                         debug!("Could not save appid: {}", e);
                                                     }
-                                                    if let Err(e) =
-                                                        config.set_qobuz_spoofer_secret(secret)
-                                                    {
-                                                        debug!(
-                                                            "Could not save spoofer secret: {}",
-                                                            e
-                                                        );
+                                                    if let Err(e) = config.set_qobuz_spoofer_secret(secret) {
+                                                        debug!("Could not save spoofer secret: {}", e);
+                                                    }
+                                                    if let Err(e) = config.set_qobuz_bundle_version(spoofer.bundle_version()) {
+                                                        debug!("Could not save bundle version: {}", e);
                                                     }
 
                                                     return Ok(Some((

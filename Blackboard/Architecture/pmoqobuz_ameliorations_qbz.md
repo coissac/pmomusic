@@ -22,7 +22,7 @@ CMAF (Common Media Application Format) : segments AES-CTR chiffrés sur CDN Akam
 
 ---
 
-## 2. Extraction du bundle Qobuz — **À FAIRE** (priorité haute)
+## 2. Extraction du bundle Qobuz — **Fait**
 
 **Problème** : `pmoqobuz` utilise un `app_id` et un `configvalue` statiques, hardcodés ou configurés
 manuellement. Qobuz peut les invalider à tout moment en changeant son bundle JS.
@@ -112,7 +112,7 @@ sortis récemment. Utile pour le catalogue de la webapp.
 | # | Amélioration | Effort | Impact | État |
 |---|---|---|---|---|
 | 1 | Streaming CMAF | Élevé | Critique (pipeline futur) | **Fait** |
-| 2 | Bundle extraction avec cache disque | Moyen | Élevé (résilience) | À faire |
+| 2 | Bundle extraction avec cache disque | Moyen | Élevé (résilience) | **Fait** |
 | 3 | Batch `track/getList` | Faible | Élevé (performances) | À faire |
 | 4 | Pagination concurrente playlists | Faible | Moyen | À faire |
 | 5 | Release watch endpoint | Faible | Faible (catalogue) | À faire |
