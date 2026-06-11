@@ -4,6 +4,7 @@ use super::QobuzApi;
 use crate::error::{QobuzError, Result};
 use crate::models::*;
 use serde::Deserialize;
+use std::collections::HashMap;
 use tracing::debug;
 
 /// Réponse paginée de l'API
@@ -182,6 +183,17 @@ struct FileUrlResponse {
     format_id: u8,
 }
 
+/// Réponse de l'endpoint track/getList
+#[derive(Debug, Deserialize)]
+struct TrackListResponse {
+    tracks: TrackListItems,
+}
+
+#[derive(Debug, Deserialize)]
+struct TrackListItems {
+    items: Vec<TrackResponse>,
+}
+
 fn default_streamable() -> bool {
     true
 }
@@ -211,6 +223,66 @@ impl QobuzApi {
         } else {
             Ok(Vec::new())
         }
+    }
+
+    /// Récupère les détails de plusieurs tracks en une ou plusieurs requêtes batch.
+    ///
+    /// Utilise l'endpoint `track/getList` (max 50 IDs par appel). Les fenêtres
+    /// supérieures à 50 sont découpées et appellées en série. L'ordre de sortie
+    /// correspond à l'ordre des `track_ids` en entrée.
+    ///
+    /// Requiert que le secret s4 soit configuré.
+    pub async fn get_tracks_batch(&self, track_ids: &[&str]) -> Result<Vec<Track>> {
+        const MAX_PER_CALL: usize = 50;
+        if track_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        if track_ids.len() <= MAX_PER_CALL {
+            return self.get_tracks_batch_chunk(track_ids).await;
+        }
+        debug!("get_tracks_batch: {} IDs en fenêtres de {}", track_ids.len(), MAX_PER_CALL);
+        let mut all = Vec::with_capacity(track_ids.len());
+        for chunk in track_ids.chunks(MAX_PER_CALL) {
+            let mut tracks = self.get_tracks_batch_chunk(chunk).await?;
+            all.append(&mut tracks);
+        }
+        Ok(all)
+    }
+
+    async fn get_tracks_batch_chunk(&self, track_ids: &[&str]) -> Result<Vec<Track>> {
+        use super::signing;
+
+        let secret = self.secret().ok_or_else(|| {
+            QobuzError::Configuration("Secret s4 requis pour track/getList".to_string())
+        })?;
+
+        let ids_csv = track_ids.join(",");
+        let timestamp = signing::get_timestamp();
+        let signature = signing::sign_track_get_list(&ids_csv, &timestamp, &secret);
+
+        let query_params = [
+            ("request_ts", timestamp.as_str()),
+            ("request_sig", signature.as_str()),
+        ];
+
+        // Les IDs sont envoyés comme tableau d'entiers dans le body JSON
+        let ids_as_numbers: Vec<u64> = track_ids
+            .iter()
+            .filter_map(|id| id.parse().ok())
+            .collect();
+        let body = serde_json::json!({ "tracks_id": ids_as_numbers });
+
+        debug!("get_tracks_batch_chunk POST {} IDs", track_ids.len());
+        let response: TrackListResponse = self
+            .post_json_with_query("/track/getList", &query_params, body)
+            .await?;
+
+        Ok(response
+            .tracks
+            .items
+            .into_iter()
+            .map(|t| Self::parse_track(t, None))
+            .collect())
     }
 
     /// Récupère les détails d'une track
@@ -339,13 +411,20 @@ impl QobuzApi {
         Ok(Self::parse_playlist(response))
     }
 
-    /// Récupère les tracks d'une playlist
+    /// Récupère les tracks d'une playlist.
+    ///
+    /// Phase 1 : pagination de `/playlist/get?extra=tracks` pour collecter les IDs
+    /// et les données de base.
+    /// Phase 2 (si secret disponible) : enrichissement via `track/getList` pour
+    /// obtenir les métadonnées complètes (performer, sample_rate, bit_depth, channels).
     pub async fn get_playlist_tracks(&self, playlist_id: &str) -> Result<Vec<Track>> {
         debug!("Fetching tracks for playlist {}", playlist_id);
         const PAGE_SIZE: u32 = 50;
-        let mut all_tracks = Vec::new();
+        let mut ordered_ids: Vec<String> = Vec::new();
+        let mut fallback_tracks: Vec<Track> = Vec::new();
         let mut offset = 0u32;
 
+        // Phase 1 : pagination pour collecter les IDs et les tracks de base
         loop {
             let offset_str = offset.to_string();
             let limit_str = PAGE_SIZE.to_string();
@@ -360,7 +439,10 @@ impl QobuzApi {
             if let Some(tracks) = response.tracks {
                 let total = tracks.total.unwrap_or(0);
                 let count = tracks.items.len() as u32;
-                all_tracks.extend(tracks.items.into_iter().map(|t| Self::parse_track(t, None)));
+                for t in tracks.items {
+                    ordered_ids.push(t.id.clone());
+                    fallback_tracks.push(Self::parse_track(t, None));
+                }
                 offset += count;
                 if count == 0 || offset >= total {
                     break;
@@ -370,8 +452,23 @@ impl QobuzApi {
             }
         }
 
-        debug!("Fetched {} tracks total for playlist {}", all_tracks.len(), playlist_id);
-        Ok(all_tracks)
+        debug!("Fetched {} track IDs for playlist {}", ordered_ids.len(), playlist_id);
+
+        if ordered_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Phase 2 : enrichissement via track/getList pour métadonnées complètes
+        let id_refs: Vec<&str> = ordered_ids.iter().map(|s| s.as_str()).collect();
+        let full_tracks = self.get_tracks_batch(&id_refs).await?;
+        let mut track_map: HashMap<String, Track> =
+            full_tracks.into_iter().map(|t| (t.id.clone(), t)).collect();
+        let enriched: Vec<Track> = ordered_ids
+            .iter()
+            .filter_map(|id| track_map.remove(id.as_str()))
+            .collect();
+        debug!("Fetched {} tracks for playlist {} via track/getList", enriched.len(), playlist_id);
+        Ok(enriched)
     }
 
     /// Récupère la liste des genres

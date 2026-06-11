@@ -43,10 +43,21 @@ manuellement. Qobuz peut les invalider à tout moment en changeant son bundle JS
 
 ---
 
-## 3. Chargement batch de tracks — `track/getList` — **À FAIRE** (priorité haute)
+## 3. Chargement batch de tracks — `track/getList` — **FAIT**
 
-**Problème** : lors du chargement d'une playlist, `pmoqobuz` fait N requêtes `track/get` individuelles
-(une par track). Sur une playlist de 200 tracks, c'est 200 requêtes séquentielles.
+**Problème** : les tracks retournées par `/playlist/get?extra=tracks` et
+`/favorite/getUserFavorites` ont des métadonnées incomplètes (parfois sans `performer`,
+jamais de `sample_rate`/`bit_depth`/`channels`). Cela déclenchait des appels individuels
+`get_track` lazy à la lecture.
+
+**Implémentation réalisée** :
+- `signing::sign_track_get_list(ids_csv, timestamp, secret)` — signature MD5 pour `track/getList`
+- `QobuzApi::post_json_with_query` — POST avec auth headers + query sig + JSON body
+- `QobuzApi::get_tracks_batch(&[&str])` — fenêtres de 50 IDs, appels en série
+- `QobuzClient::get_tracks_batch` — wrapper avec cache (skip les IDs déjà en cache)
+- `get_playlist_tracks` : phase 1 pagination existante, phase 2 enrichissement si secret disponible
+- `get_favorite_tracks` : même enrichissement en phase 2
+- Fallback gracieux si le secret est absent ou si `track/getList` échoue
 
 **Ce que fait qbz** (`get_tracks_batch`, l.1323) :
 ```
@@ -56,9 +67,6 @@ POST /track/getList
 ```
 - Fenêtre de 50 IDs max par appel (limite API Qobuz)
 - Les fenêtres supérieures à 50 sont découpées et appelées en série (respecte les quotas)
-
-**Impact pour pmoqobuz** : réduire le temps de chargement d'une playlist de plusieurs minutes à
-quelques secondes. À brancher dans `catalog.rs` et dans le chargement des favoris.
 
 ---
 
@@ -113,7 +121,7 @@ sortis récemment. Utile pour le catalogue de la webapp.
 |---|---|---|---|---|
 | 1 | Streaming CMAF | Élevé | Critique (pipeline futur) | **Fait** |
 | 2 | Bundle extraction avec cache disque | Moyen | Élevé (résilience) | **Fait** |
-| 3 | Batch `track/getList` | Faible | Élevé (performances) | À faire |
+| 3 | Batch `track/getList` | Faible | Élevé (performances) | **Fait** |
 | 4 | Pagination concurrente playlists | Faible | Moyen | À faire |
 | 5 | Release watch endpoint | Faible | Faible (catalogue) | À faire |
 | 6 | `extra=track_ids` + batch à deux passes | Faible | Faible (optimisation) | À faire |

@@ -640,6 +640,44 @@ impl QobuzClient {
         Ok(track)
     }
 
+    /// Récupère les détails d'un batch de tracks via track/getList.
+    ///
+    /// Les tracks retournées sont mises en cache individuellement.
+    /// Voir `QobuzApi::get_tracks_batch` pour le détail du comportement.
+    pub async fn get_tracks_batch(&self, track_ids: &[&str]) -> Result<Vec<Track>> {
+        // Séparer les IDs déjà en cache de ceux à récupérer
+        let mut cached: std::collections::HashMap<String, Track> =
+            std::collections::HashMap::new();
+        let mut missing_ids: Vec<&str> = Vec::new();
+
+        for &id in track_ids {
+            if let Some(track) = self.cache.get_track(id).await {
+                cached.insert(id.to_string(), track);
+            } else {
+                missing_ids.push(id);
+            }
+        }
+
+        if !missing_ids.is_empty() {
+            let fetched = self
+                .call_with_auth_repair("get_tracks_batch", || {
+                    self.api.get_tracks_batch(&missing_ids)
+                })
+                .await?;
+
+            for track in fetched {
+                self.cache.put_track(track.id.clone(), track.clone()).await;
+                cached.insert(track.id.clone(), track);
+            }
+        }
+
+        // Restituer dans l'ordre d'entrée
+        Ok(track_ids
+            .iter()
+            .filter_map(|id| cached.remove(*id))
+            .collect())
+    }
+
     /// Récupère l'URL de streaming d'une track
     pub async fn get_stream_url(&self, track_id: &str) -> Result<String> {
         // Vérifier le cache d'abord

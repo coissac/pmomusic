@@ -274,6 +274,37 @@ impl QobuzApi {
         self.request("POST", endpoint, params).await
     }
 
+    /// Effectue un POST avec signature en query params et données en JSON body.
+    ///
+    /// Utilisé par les endpoints qui attendent une structure JSON complexe
+    /// (ex: `track/getList` avec `{"tracks_id": [...]}`).
+    pub(crate) async fn post_json_with_query<T: DeserializeOwned>(
+        &self,
+        endpoint: &str,
+        query_params: &[(&str, &str)],
+        body: serde_json::Value,
+    ) -> Result<T> {
+        let url = format!("{}{}", API_BASE_URL, endpoint);
+        debug!("POST JSON {} with {} query params", url, query_params.len());
+
+        let app_id = self.app_id.read().unwrap().clone();
+        let mut builder = self
+            .client
+            .post(&url)
+            .header("X-App-Id", &app_id)
+            .header("Accept-Language", "en,en-US;q=0.8,ko;q=0.6,zh;q=0.4,zh-CN;q=0.2")
+            .header("Access-Control-Request-Headers", "x-user-auth-token,x-app-id")
+            .query(query_params)
+            .json(&body);
+
+        if let Some(token) = self.auth_token() {
+            builder = builder.header("X-User-Auth-Token", token);
+        }
+
+        let response = builder.send().await?;
+        self.handle_response(response, endpoint, query_params).await
+    }
+
     /// Effectue une requête à l'API (générique)
     async fn request<T: DeserializeOwned>(
         &self,
