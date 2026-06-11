@@ -68,6 +68,18 @@ impl LazyProvider for QobuzLazyProvider {
 
     async fn get_url(&self, lazy_pk: &str) -> Result<String> {
         let track_id = self.track_id_from_lazy(lazy_pk)?;
+
+        // L'endpoint CMAF local n'existe que si la feature `pmoserver` est active
+        // (route /qobuz/tracks/:id/flac enregistrée). Sans cette feature, fallback
+        // sur l'ancienne API Qobuz directe.
+        #[cfg(feature = "pmoserver")]
+        {
+            let base = std::env::var("PMO_SERVER_URL")
+                .unwrap_or_else(|_| "http://localhost:8080".to_string());
+            return Ok(format!("{}/qobuz/tracks/{}/flac", base.trim_end_matches('/'), track_id));
+        }
+
+        #[cfg(not(feature = "pmoserver"))]
         self.client
             .get_stream_url(track_id)
             .await

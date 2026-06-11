@@ -88,6 +88,20 @@ pub fn sign_track_get_file_url(
 /// # Returns
 ///
 /// Signature MD5 hexadécimale
+/// Signe une requête track/getList
+///
+/// Chaîne signée : `"trackgetList" + "tracks_id" + ids_csv + timestamp + secret`
+/// où `ids_csv` est la liste des IDs séparés par des virgules.
+pub fn sign_track_get_list(ids_csv: &str, timestamp: &str, secret: &[u8]) -> String {
+    let mut hasher = Md5::new();
+    hasher.update(b"trackgetList");
+    hasher.update(b"tracks_id");
+    hasher.update(ids_csv.as_bytes());
+    hasher.update(timestamp.as_bytes());
+    hasher.update(secret);
+    format!("{:x}", hasher.finalize())
+}
+
 pub fn sign_userlib_get_albums(timestamp: &str, secret: &[u8]) -> String {
     let mut hasher = Md5::new();
 

@@ -74,6 +74,7 @@ pub fn create_router(state: QobuzState) -> Router {
         // Tracks
         .route("/tracks/:id", axum::routing::get(get_track))
         .route("/tracks/:id/stream", axum::routing::get(get_stream_url))
+        .route("/tracks/:id/flac", axum::routing::get(get_flac_stream))
         // Artists
         .route("/artists/:id/albums", axum::routing::get(get_artist_albums))
         .route(
@@ -152,6 +153,35 @@ async fn get_stream_url(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let url = state.client.get_stream_url(&id).await?;
     Ok(Json(serde_json::json!({ "url": url })))
+}
+
+/// `GET /tracks/:id/flac` — flux FLAC déchiffré en streaming progressif via CMAF.
+///
+/// Retourne les bytes FLAC directement dans le corps de la réponse HTTP, au fur
+/// et à mesure que les segments CMAF sont téléchargés et déchiffrés. Le client
+/// (typiquement `pmocache::add_from_url`) peut commencer à consommer le contenu
+/// avant la fin du téléchargement, préservant le progressive caching.
+///
+/// `Content-Length` est une estimation calculée depuis la table des segments du
+/// segment init — la valeur réelle peut différer de quelques octets.
+#[cfg(feature = "pmoserver")]
+async fn get_flac_stream(
+    State(state): State<QobuzState>,
+    Path(id): Path<String>,
+) -> Result<Response, AppError> {
+    use axum::http::header;
+    use tokio_util::io::ReaderStream;
+
+    let (reader, estimated_size) = state.client.open_cmaf_stream(&id).await?;
+    let stream = ReaderStream::new(reader);
+    let body = axum::body::Body::from_stream(stream);
+
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::OK)
+        .header(header::CONTENT_TYPE, "audio/flac")
+        .header(header::CONTENT_LENGTH, estimated_size)
+        .body(body)
+        .map_err(|e| AppError(QobuzError::Other(e.to_string())))
 }
 
 #[cfg(feature = "pmoserver")]

@@ -4,10 +4,12 @@
 
 pub mod auth;
 pub mod catalog;
+pub mod cmaf;
 pub mod signing;
 pub mod spoofer;
 pub mod user;
 
+use crate::api::cmaf::CmafSessionManager;
 use crate::error::{QobuzError, Result};
 use crate::models::AudioFormat;
 use reqwest::{Client, Response};
@@ -95,6 +97,8 @@ pub struct QobuzApi {
     user_id: RwLock<Option<String>>,
     /// Format audio par défaut
     format_id: AudioFormat,
+    /// Gestionnaire de session CMAF (renouvellement automatique thread-safe)
+    pub(crate) cmaf_session: CmafSessionManager,
 }
 
 impl QobuzApi {
@@ -114,6 +118,7 @@ impl QobuzApi {
             user_auth_token: RwLock::new(None),
             user_id: RwLock::new(None),
             format_id: AudioFormat::default(),
+            cmaf_session: CmafSessionManager::new(),
         })
     }
 
@@ -269,6 +274,37 @@ impl QobuzApi {
         self.request("POST", endpoint, params).await
     }
 
+    /// Effectue un POST avec signature en query params et données en JSON body.
+    ///
+    /// Utilisé par les endpoints qui attendent une structure JSON complexe
+    /// (ex: `track/getList` avec `{"tracks_id": [...]}`).
+    pub(crate) async fn post_json_with_query<T: DeserializeOwned>(
+        &self,
+        endpoint: &str,
+        query_params: &[(&str, &str)],
+        body: serde_json::Value,
+    ) -> Result<T> {
+        let url = format!("{}{}", API_BASE_URL, endpoint);
+        debug!("POST JSON {} with {} query params", url, query_params.len());
+
+        let app_id = self.app_id.read().unwrap().clone();
+        let mut builder = self
+            .client
+            .post(&url)
+            .header("X-App-Id", &app_id)
+            .header("Accept-Language", "en,en-US;q=0.8,ko;q=0.6,zh;q=0.4,zh-CN;q=0.2")
+            .header("Access-Control-Request-Headers", "x-user-auth-token,x-app-id")
+            .query(query_params)
+            .json(&body);
+
+        if let Some(token) = self.auth_token() {
+            builder = builder.header("X-User-Auth-Token", token);
+        }
+
+        let response = builder.send().await?;
+        self.handle_response(response, endpoint, query_params).await
+    }
+
     /// Effectue une requête à l'API (générique)
     async fn request<T: DeserializeOwned>(
         &self,
@@ -314,6 +350,57 @@ impl QobuzApi {
         // Envoyer la requête
         let response = request.send().await?;
         self.handle_response(response, endpoint, params).await
+    }
+
+    /// Retourne le client HTTP interne (utilisé par les endpoints CMAF).
+    pub(crate) fn http_client(&self) -> &Client {
+        &self.client
+    }
+
+    /// Assure qu'une session CMAF valide existe et retourne `(session_id, infos)`.
+    ///
+    /// Crée ou renouvelle automatiquement la session si elle est absente ou expire
+    /// dans moins de 60 secondes. Les appels concurrents sont sérialisés pour
+    /// éviter des sessions incohérentes.
+    pub async fn ensure_cmaf_session(&self) -> Result<(String, String)> {
+        let app_id = self.app_id.read().unwrap().clone();
+        let auth_token = self
+            .user_auth_token
+            .read()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| QobuzError::Unauthorized("Token d'authentification manquant pour CMAF".into()))?;
+
+        self.cmaf_session
+            .ensure_session(&self.client, &app_id, &auth_token)
+            .await
+    }
+
+    /// Récupère l'URL de fichier CMAF pour un track avec le format donné.
+    pub async fn get_cmaf_file_url(
+        &self,
+        track_id: &str,
+        format_id: u32,
+    ) -> Result<crate::api::cmaf::CmafFileUrlResponse> {
+        let app_id = self.app_id.read().unwrap().clone();
+        let auth_token = self
+            .user_auth_token
+            .read()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| QobuzError::Unauthorized("Token d'authentification manquant pour CMAF".into()))?;
+
+        let (session_id, _infos) = self.ensure_cmaf_session().await?;
+
+        crate::api::cmaf::get_file_url(
+            &self.client,
+            &app_id,
+            &auth_token,
+            &session_id,
+            track_id,
+            format_id,
+        )
+        .await
     }
 
     /// Traite la réponse HTTP

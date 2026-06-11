@@ -238,6 +238,13 @@ pub trait QobuzConfigExt {
 
     /// Active ou désactive le rate limiting
     fn set_qobuz_rate_limiting_enabled(&self, enabled: bool) -> Result<()>;
+
+    /// Version du bundle Qobuz extrait en dernier (ex : `"8.1.0-b019"`).
+    /// Permet de détecter une rotation de bundle sans télécharger les 7 MB.
+    fn get_qobuz_bundle_version(&self) -> Result<Option<String>>;
+
+    /// Persiste la version du bundle après une extraction réussie.
+    fn set_qobuz_bundle_version(&self, version: &str) -> Result<()>;
 }
 
 impl QobuzConfigExt for Config {
@@ -481,6 +488,20 @@ impl QobuzConfigExt for Config {
         self.set_value(
             &["accounts", "qobuz", "rate_limit", "enabled"],
             Value::Bool(enabled),
+        )
+    }
+
+    fn get_qobuz_bundle_version(&self) -> Result<Option<String>> {
+        match self.get_value(&["accounts", "qobuz", "bundle_version"]) {
+            Ok(Value::String(s)) if !s.is_empty() => Ok(Some(s)),
+            _ => Ok(None),
+        }
+    }
+
+    fn set_qobuz_bundle_version(&self, version: &str) -> Result<()> {
+        self.set_value(
+            &["accounts", "qobuz", "bundle_version"],
+            Value::String(version.to_string()),
         )
     }
 }

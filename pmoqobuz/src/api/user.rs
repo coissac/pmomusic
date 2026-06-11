@@ -5,6 +5,7 @@ use super::QobuzApi;
 use crate::error::{QobuzError, Result};
 use crate::models::*;
 use serde::Deserialize;
+use std::collections::HashMap;
 use tracing::debug;
 
 /// Réponse paginée
@@ -86,7 +87,11 @@ impl QobuzApi {
         }
     }
 
-    /// Récupère les tracks favorites de l'utilisateur
+    /// Récupère les tracks favorites de l'utilisateur.
+    ///
+    /// Si le secret s4 est disponible, les données de base retournées par
+    /// `/favorite/getUserFavorites` sont enrichies via `track/getList` pour
+    /// obtenir les métadonnées complètes (performer, sample_rate, bit_depth).
     pub async fn get_favorite_tracks(&self) -> Result<Vec<Track>> {
         let user_id = self.ensure_authenticated()?;
         debug!("Fetching favorite tracks for user {}", user_id);
@@ -99,16 +104,32 @@ impl QobuzApi {
 
         let response: FavoritesResponse = self.get("/favorite/getUserFavorites", &params).await?;
 
-        if let Some(tracks) = response.tracks {
-            Ok(tracks
+        let base_tracks: Vec<Track> = match response.tracks {
+            Some(tracks) => tracks
                 .items
                 .into_iter()
                 .map(|t| QobuzApi::parse_track(t, None))
                 .filter(|t| t.streamable)
-                .collect())
-        } else {
-            Ok(Vec::new())
+                .collect(),
+            None => return Ok(Vec::new()),
+        };
+
+        if base_tracks.is_empty() {
+            return Ok(Vec::new());
         }
+
+        // Enrichissement via track/getList pour métadonnées complètes
+        let ordered_ids: Vec<String> = base_tracks.iter().map(|t| t.id.clone()).collect();
+        let id_refs: Vec<&str> = ordered_ids.iter().map(|s| s.as_str()).collect();
+        let full_tracks = self.get_tracks_batch(&id_refs).await?;
+        let mut track_map: HashMap<String, Track> =
+            full_tracks.into_iter().map(|t| (t.id.clone(), t)).collect();
+        let enriched: Vec<Track> = ordered_ids
+            .iter()
+            .filter_map(|id| track_map.remove(id.as_str()))
+            .collect();
+        debug!("Fetched {} favorite tracks via track/getList", enriched.len());
+        Ok(enriched)
     }
 
     /// Récupère les playlists de l'utilisateur

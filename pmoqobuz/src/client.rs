@@ -236,14 +236,32 @@ impl QobuzClient {
     /// - Quand aucun appid/secret n'est configuré
     /// - Quand les credentials configurés sont invalides/expirés
     async fn try_spoofer_fallback(config: &Config) -> Result<QobuzApi> {
+        // Vérification bon marché : si la version du bundle n'a pas changé,
+        // re-télécharger les 7 MB ne donnera pas de meilleurs secrets.
+        // On court-circuite l'extraction et on passe directement au DEFAULT_APP_ID.
+        if let Ok(Some(cached_version)) = config.get_qobuz_bundle_version() {
+            match crate::api::Spoofer::fetch_current_bundle_version().await {
+                Ok(current) if current == cached_version => {
+                    info!(
+                        "[Spoofer] Bundle inchangé ({}) — secret invalide pour une autre raison, skip extraction",
+                        current
+                    );
+                    return QobuzApi::new(DEFAULT_APP_ID);
+                }
+                Ok(new_version) => {
+                    info!("[Spoofer] Bundle rotaté : {} → {}, re-extraction", cached_version, new_version);
+                }
+                Err(e) => {
+                    debug!("[Spoofer] Impossible de vérifier la version du bundle : {}", e);
+                }
+            }
+        }
+
         if let Some((app_id, secret)) = Self::fetch_spoofer_credentials(config).await? {
-            // Use raw secret from Spoofer (no XOR)
             return QobuzApi::with_raw_secret(app_id, &secret);
         }
 
-        info!(
-            "✗ No valid secret found from Spoofer, falling back to DEFAULT_APP_ID without secret"
-        );
+        info!("✗ No valid secret found from Spoofer, falling back to DEFAULT_APP_ID without secret");
         QobuzApi::new(DEFAULT_APP_ID)
     }
 
@@ -288,18 +306,15 @@ impl QobuzClient {
                                                         timezone
                                                     );
 
-                                                    // Save both appid and the working secret
-                                                    if let Err(e) = config.set_qobuz_appid(&app_id)
-                                                    {
+                                                    // Save appid, secret, and bundle version
+                                                    if let Err(e) = config.set_qobuz_appid(&app_id) {
                                                         debug!("Could not save appid: {}", e);
                                                     }
-                                                    if let Err(e) =
-                                                        config.set_qobuz_spoofer_secret(secret)
-                                                    {
-                                                        debug!(
-                                                            "Could not save spoofer secret: {}",
-                                                            e
-                                                        );
+                                                    if let Err(e) = config.set_qobuz_spoofer_secret(secret) {
+                                                        debug!("Could not save spoofer secret: {}", e);
+                                                    }
+                                                    if let Err(e) = config.set_qobuz_bundle_version(spoofer.bundle_version()) {
+                                                        debug!("Could not save bundle version: {}", e);
                                                     }
 
                                                     return Ok(Some((
@@ -623,6 +638,44 @@ impl QobuzClient {
             .await;
 
         Ok(track)
+    }
+
+    /// Récupère les détails d'un batch de tracks via track/getList.
+    ///
+    /// Les tracks retournées sont mises en cache individuellement.
+    /// Voir `QobuzApi::get_tracks_batch` pour le détail du comportement.
+    pub async fn get_tracks_batch(&self, track_ids: &[&str]) -> Result<Vec<Track>> {
+        // Séparer les IDs déjà en cache de ceux à récupérer
+        let mut cached: std::collections::HashMap<String, Track> =
+            std::collections::HashMap::new();
+        let mut missing_ids: Vec<&str> = Vec::new();
+
+        for &id in track_ids {
+            if let Some(track) = self.cache.get_track(id).await {
+                cached.insert(id.to_string(), track);
+            } else {
+                missing_ids.push(id);
+            }
+        }
+
+        if !missing_ids.is_empty() {
+            let fetched = self
+                .call_with_auth_repair("get_tracks_batch", || {
+                    self.api.get_tracks_batch(&missing_ids)
+                })
+                .await?;
+
+            for track in fetched {
+                self.cache.put_track(track.id.clone(), track.clone()).await;
+                cached.insert(track.id.clone(), track);
+            }
+        }
+
+        // Restituer dans l'ordre d'entrée
+        Ok(track_ids
+            .iter()
+            .filter_map(|id| cached.remove(*id))
+            .collect())
     }
 
     /// Récupère l'URL de streaming d'une track
@@ -971,6 +1024,152 @@ impl QobuzClient {
         self.call_with_auth_repair("add_to_playlist", || {
             self.api.add_to_playlist(playlist_id, track_id)
         })
+        .await
+    }
+
+    // ============ CMAF (streaming moderne) ============
+
+    /// Prépare le streaming CMAF pour un track : dérive les clés et fetche
+    /// le segment d'initialisation. Retourne une `CmafStreamInfo` prête à l'emploi.
+    ///
+    /// Pour télécharger la totalité du FLAC déchiffré d'un coup, utilisez
+    /// plutôt `download_cmaf_full`. Pour streamer segment par segment, utilisez
+    /// les données de `CmafStreamInfo` avec `cmaf::fetch_all_segments`.
+    ///
+    /// # Erreurs
+    ///
+    /// * `QobuzError::NotFound` — track non disponible sur Qobuz
+    /// * `QobuzError::Unauthorized` — session expirée (réparée automatiquement)
+    /// * `QobuzError::Other` — erreur CMAF (clé invalide, segment init corrompu, etc.)
+    pub async fn get_cmaf_stream_info(
+        &self,
+        track_id: &str,
+    ) -> Result<crate::models::CmafStreamInfo> {
+        let format_id = self.api.format().id() as u32;
+
+        let file_url = self
+            .call_with_auth_repair("get_cmaf_file_url", || {
+                self.api.get_cmaf_file_url(track_id, format_id)
+            })
+            .await?;
+
+        let bit_depth = file_url.resolved_bit_depth();
+        let url_template = file_url
+            .url_template
+            .ok_or_else(|| QobuzError::Other("CMAF file/url: url_template absent".into()))?;
+        let key_str = file_url
+            .key
+            .ok_or_else(|| QobuzError::Other("CMAF file/url: key absent".into()))?;
+
+        let (_session_id, infos) = self
+            .call_with_auth_repair("ensure_cmaf_session", || {
+                self.api.ensure_cmaf_session()
+            })
+            .await?;
+
+        let setup = crate::cmaf::setup_streaming(
+            url_template,
+            &key_str,
+            &infos,
+            file_url.n_segments,
+            file_url.format_id.unwrap_or(format_id),
+            file_url.sampling_rate,
+            bit_depth,
+        )
+        .await?;
+
+        Ok(crate::models::CmafStreamInfo {
+            url_template: setup.url_template,
+            n_segments: setup.n_segments,
+            content_key: setup.content_key,
+            flac_header: setup.flac_header,
+            segment_table: setup.segment_table,
+            format_id: setup.format_id,
+            sampling_rate: setup.sampling_rate,
+            bit_depth: setup.bit_depth,
+        })
+    }
+
+    /// Ouvre un flux FLAC déchiffré en mode progressif pour un track CMAF.
+    ///
+    /// Retourne un `(AsyncRead, taille_estimée)`. Le flux commence à produire
+    /// du FLAC dès que le premier segment est déchiffré — le cache peut commencer
+    /// à servir avant la fin du téléchargement (progressive caching préservé).
+    ///
+    /// C'est la méthode à utiliser pour alimenter `pmocache::add_from_reader`.
+    pub async fn open_cmaf_stream(
+        &self,
+        track_id: &str,
+    ) -> Result<(impl tokio::io::AsyncRead + Send + Unpin + 'static, u64)> {
+        let format_id = self.api.format().id() as u32;
+
+        let file_url = self
+            .call_with_auth_repair("get_cmaf_file_url", || {
+                self.api.get_cmaf_file_url(track_id, format_id)
+            })
+            .await?;
+
+        let bit_depth = file_url.resolved_bit_depth();
+        let url_template = file_url
+            .url_template
+            .ok_or_else(|| QobuzError::Other("CMAF: url_template absent".into()))?;
+        let key_str = file_url
+            .key
+            .ok_or_else(|| QobuzError::Other("CMAF: key absent".into()))?;
+
+        let (_session_id, infos) = self
+            .call_with_auth_repair("ensure_cmaf_session", || self.api.ensure_cmaf_session())
+            .await?;
+
+        crate::cmaf::open_flac_stream(
+            url_template,
+            key_str,
+            infos,
+            file_url.n_segments,
+            file_url.format_id.unwrap_or(format_id),
+            file_url.sampling_rate,
+            bit_depth,
+        )
+        .await
+    }
+
+    /// Télécharge un track complet via CMAF et retourne les bytes FLAC déchiffrés.
+    ///
+    /// Bloquant jusqu'à la fin du téléchargement. Pour les gros fichiers Hi-Res,
+    /// préférer `open_cmaf_stream` qui préserve le progressive caching.
+    pub async fn download_cmaf_full(&self, track_id: &str) -> Result<Vec<u8>> {
+        let format_id = self.api.format().id() as u32;
+
+        let file_url = self
+            .call_with_auth_repair("get_cmaf_file_url", || {
+                self.api.get_cmaf_file_url(track_id, format_id)
+            })
+            .await?;
+
+        let bit_depth = file_url.resolved_bit_depth();
+        let url_template = file_url
+            .url_template
+            .ok_or_else(|| QobuzError::Other("CMAF file/url: url_template absent".into()))?;
+        let key_str = file_url
+            .key
+            .ok_or_else(|| QobuzError::Other("CMAF file/url: key absent".into()))?;
+
+        let (_session_id, infos) = self
+            .call_with_auth_repair("ensure_cmaf_session", || {
+                self.api.ensure_cmaf_session()
+            })
+            .await?;
+
+        crate::cmaf::download_full(
+            url_template,
+            &key_str,
+            &infos,
+            file_url.n_segments,
+            file_url.format_id.unwrap_or(format_id),
+            file_url.sampling_rate,
+            bit_depth,
+            None,
+        )
         .await
     }
 }

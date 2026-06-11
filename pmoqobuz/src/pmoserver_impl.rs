@@ -29,6 +29,7 @@
 
 use crate::api_rest::{create_router, QobuzState};
 use crate::client::QobuzClient;
+use crate::config_ext::QobuzConfigExt;
 use crate::pmoserver_ext::QobuzServerExt;
 use anyhow::Result;
 use pmoconfig::Config;
