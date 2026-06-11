@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "PMOMusic"
-version = "0.3.51"
+version = "0.3.52"
 dependencies = [
  "axum 0.8.7",
  "console-subscriber",
@@ -4072,6 +4072,7 @@ dependencies = [
  "cbc",
  "chrono",
  "ctr",
+ "futures",
  "hex",
  "hkdf",
  "indexmap 2.12.0",

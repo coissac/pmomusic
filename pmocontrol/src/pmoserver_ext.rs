@@ -8,6 +8,8 @@ use crate::control_point::ControlPoint;
 #[cfg(feature = "pmoserver")]
 use crate::media_server::{MediaBrowser, playback_item_from_entry};
 #[cfg(feature = "pmoserver")]
+use crate::MediaEntry;
+#[cfg(feature = "pmoserver")]
 use crate::model::{RendererCapabilities, RendererProtocol};
 #[cfg(feature = "pmoserver")]
 use crate::openapi::{
@@ -2392,6 +2394,22 @@ struct SearchQuery {
     q: String,
 }
 
+#[cfg(feature = "pmoserver")]
+fn search_result_container_id(entries: &[ContainerEntry]) -> String {
+    entries
+        .iter()
+        .find(|entry| entry.is_container)
+        .and_then(|entry| {
+            let parts: Vec<&str> = entry.id.splitn(5, ':').collect();
+            if parts.len() == 5 && parts[0] == "qobuz" && parts[1] == "search" {
+                Some(format!("qobuz:search:{}:all:{}", parts[2], parts[4]))
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| "search".to_string())
+}
+
 /// GET /control/servers/{server_id}/search?q=<query> - Recherche dans un serveur
 #[cfg(feature = "pmoserver")]
 #[utoipa::path(
@@ -2503,8 +2521,10 @@ async fn search_server(
         })
         .collect();
 
+    let container_id = search_result_container_id(&container_entries);
+
     Ok(Json(BrowseResponse {
-        container_id: "search".to_string(),
+        container_id,
         entries: container_entries,
         total_count,
         offset: 0,

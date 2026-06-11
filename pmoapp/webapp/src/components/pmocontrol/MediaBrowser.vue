@@ -22,26 +22,23 @@ const {
     loading,
     loadingMore,
     error,
-    searchResults,
-    searchQuery,
     searchServer,
-    clearSearch,
 } = useMediaServers();
 
 const searchInput = ref('');
 
 async function handleSearch() {
     if (searchInput.value.trim()) {
-        await searchServer(props.serverId, searchInput.value.trim());
+        const virtualId = await searchServer(props.serverId, searchInput.value.trim());
+        if (virtualId) {
+            emit("navigate", virtualId);
+        }
     }
 }
 
 function handleClearSearch() {
     searchInput.value = '';
-    clearSearch();
 }
-
-const isSearchMode = computed(() => searchQuery.value !== '');
 
 const { playContent, addToQueue, attachAndPlayPlaylist, attachPlaylist } =
     useRenderers();
@@ -52,9 +49,7 @@ const sentinelRef = ref<HTMLElement | null>(null);
 let observer: IntersectionObserver | null = null;
 
 const browseData = computed(() =>
-    isSearchMode.value
-        ? searchResults.value
-        : getBrowseCached(props.serverId, props.containerId),
+    getBrowseCached(props.serverId, props.containerId),
 );
 
 const containers = computed(
@@ -65,7 +60,7 @@ const items = computed(
     () => browseData.value?.entries.filter((e) => !e.is_container) || [],
 );
 
-const canLoadMore = computed(() => !isSearchMode.value && hasMore(props.serverId, props.containerId));
+const canLoadMore = computed(() => hasMore(props.serverId, props.containerId));
 
 function setupObserver() {
     if (observer) observer.disconnect();
@@ -198,7 +193,7 @@ async function handleQueueItem(itemId: string, rendererId: string) {
                     @keyup.enter="handleSearch"
                 />
                 <button
-                    v-if="searchInput || isSearchMode"
+                    v-if="searchInput"
                     class="search-clear"
                     @click="handleClearSearch"
                     title="Effacer"
@@ -266,7 +261,7 @@ async function handleQueueItem(itemId: string, rendererId: string) {
                 v-if="!containers.length && !items.length"
                 class="browser-empty"
             >
-                <p>{{ isSearchMode ? 'Aucun résultat' : 'Ce dossier est vide' }}</p>
+                <p>{{ 'Ce dossier est vide' }}</p>
             </div>
 
             <!-- Sentinel infinite scroll -->

@@ -14,6 +14,7 @@ reqwest = { version = "0.12", features = ["json", "cookies"] }
 
 # Gestion asynchrone
 tokio = { workspace = true }
+futures = { workspace = true }
 
 # Sérialisation/Désérialisation JSON
 serde = { workspace = true }

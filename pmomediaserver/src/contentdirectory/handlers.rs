@@ -50,7 +50,7 @@ use tracing::{debug, error, info};
 pub fn browse_handler() -> ActionHandler {
     action_handler!(|data| {
         let mut data = data;
-        debug!("📂 Browse handler called");
+        tracing::warn!("━━━ BROWSE ━━━");
 
         let handler = ContentHandler::new();
 
@@ -100,6 +100,7 @@ pub fn browse_handler() -> ActionHandler {
             })?;
 
         // Définir les arguments de sortie
+        tracing::warn!(object_id, returned, total, didl_preview = &didl[..didl.len().min(300)], "━━━ BROWSE DIDL ━━━");
         set!(&mut data, "Result", didl);
         set!(&mut data, "NumberReturned", returned);
         set!(&mut data, "TotalMatches", total);
@@ -139,7 +140,7 @@ pub fn browse_handler() -> ActionHandler {
 pub fn search_handler() -> ActionHandler {
     action_handler!(|data| {
         let mut data = data;
-        debug!("🔍 Search handler called");
+        tracing::warn!("━━━ SEARCH ━━━");
 
         let handler = ContentHandler::new();
 

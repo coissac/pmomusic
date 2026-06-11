@@ -413,46 +413,100 @@ impl QobuzApi {
 
     /// Récupère les tracks d'une playlist.
     ///
-    /// Phase 1 : pagination de `/playlist/get?extra=tracks` pour collecter les IDs
-    /// et les données de base.
-    /// Phase 2 (si secret disponible) : enrichissement via `track/getList` pour
-    /// obtenir les métadonnées complètes (performer, sample_rate, bit_depth, channels).
+    /// Phase 1 — pagination concurrente :
+    ///   - Page 1 séquentielle pour obtenir `total`
+    ///   - Pages 2..N lancées en parallèle (semaphore 3) dès que `total` est connu
+    ///   - Résultats triés par offset avant fusion
+    ///
+    /// Phase 2 — enrichissement via `track/getList` pour métadonnées complètes
+    /// (performer, sample_rate, bit_depth, channels).
     pub async fn get_playlist_tracks(&self, playlist_id: &str) -> Result<Vec<Track>> {
+        use futures::future::try_join_all;
+        use std::sync::Arc;
+        use tokio::sync::Semaphore;
+
+        const PAGE_SIZE: u32 = 500;
+        const LIMIT_STR: &str = "500";
+        // Configurable via accounts.qobuz.page_concurrency (défaut 3).
+        let max_concurrent_pages = self.page_concurrency;
+
         debug!("Fetching tracks for playlist {}", playlist_id);
-        const PAGE_SIZE: u32 = 50;
-        let mut ordered_ids: Vec<String> = Vec::new();
-        let mut fallback_tracks: Vec<Track> = Vec::new();
-        let mut offset = 0u32;
 
-        // Phase 1 : pagination pour collecter les IDs et les tracks de base
-        loop {
-            let offset_str = offset.to_string();
-            let limit_str = PAGE_SIZE.to_string();
-            let params = [
-                ("playlist_id", playlist_id),
-                ("extra", "tracks"),
-                ("offset", offset_str.as_str()),
-                ("limit", limit_str.as_str()),
-            ];
-            let response: PlaylistResponse = self.get("/playlist/get", &params).await?;
+        // Page 1 — séquentielle : récupère les IDs + total
+        let first_response: PlaylistResponse = self
+            .get(
+                "/playlist/get",
+                &[
+                    ("playlist_id", playlist_id),
+                    ("extra", "tracks"),
+                    ("offset", "0"),
+                    ("limit", LIMIT_STR),
+                ],
+            )
+            .await?;
 
-            if let Some(tracks) = response.tracks {
-                let total = tracks.total.unwrap_or(0);
-                let count = tracks.items.len() as u32;
-                for t in tracks.items {
-                    ordered_ids.push(t.id.clone());
-                    fallback_tracks.push(Self::parse_track(t, None));
-                }
-                offset += count;
-                if count == 0 || offset >= total {
-                    break;
-                }
-            } else {
-                break;
-            }
+        let first_page = match first_response.tracks {
+            Some(t) => t,
+            None => return Ok(Vec::new()),
+        };
+
+        let total = first_page.total.unwrap_or(0);
+        if total == 0 || first_page.items.is_empty() {
+            return Ok(Vec::new());
         }
 
-        debug!("Fetched {} track IDs for playlist {}", ordered_ids.len(), playlist_id);
+        // Offsets des pages restantes : 500, 1000, 1500, ...
+        let remaining_offsets: Vec<u32> = (PAGE_SIZE..total)
+            .step_by(PAGE_SIZE as usize)
+            .collect();
+
+        let n_pages = 1 + remaining_offsets.len();
+
+        // Pages 2..N — concurrentes
+        let mut pages: Vec<(u32, Vec<TrackResponse>)> =
+            Vec::with_capacity(n_pages);
+        pages.push((0, first_page.items));
+
+        if !remaining_offsets.is_empty() {
+            let sem = Arc::new(Semaphore::new(max_concurrent_pages));
+
+            let futs = remaining_offsets.iter().map(|&off| {
+                let sem = sem.clone();
+                async move {
+                    let _permit = sem.acquire().await.unwrap();
+                    let offset_str = off.to_string();
+                    let response: PlaylistResponse = self
+                        .get(
+                            "/playlist/get",
+                            &[
+                                ("playlist_id", playlist_id),
+                                ("extra", "tracks"),
+                                ("offset", offset_str.as_str()),
+                                ("limit", LIMIT_STR),
+                            ],
+                        )
+                        .await?;
+                    let items = response.tracks.map(|t| t.items).unwrap_or_default();
+                    Ok::<(u32, Vec<TrackResponse>), QobuzError>((off, items))
+                }
+            });
+
+            let mut extra = try_join_all(futs).await?;
+            pages.append(&mut extra);
+        }
+
+        // Tri par offset pour garantir l'ordre de la playlist
+        pages.sort_unstable_by_key(|(off, _)| *off);
+
+        let ordered_ids: Vec<String> = pages
+            .into_iter()
+            .flat_map(|(_, items)| items.into_iter().map(|t| t.id))
+            .collect();
+
+        debug!(
+            "Fetched {} track IDs for playlist {} ({} pages)",
+            ordered_ids.len(), playlist_id, n_pages
+        );
 
         if ordered_ids.is_empty() {
             return Ok(Vec::new());
@@ -467,7 +521,10 @@ impl QobuzApi {
             .iter()
             .filter_map(|id| track_map.remove(id.as_str()))
             .collect();
-        debug!("Fetched {} tracks for playlist {} via track/getList", enriched.len(), playlist_id);
+        debug!(
+            "Fetched {} tracks for playlist {} via track/getList",
+            enriched.len(), playlist_id
+        );
         Ok(enriched)
     }
 
@@ -562,6 +619,16 @@ impl QobuzApi {
             .collect())
     }
 
+    /// Retourne uniquement les totaux de chaque type pour une requête (limit=1 pour minimiser le transfert).
+    pub async fn search_totals(&self, query: &str) -> Result<(u32, u32, u32, u32)> {
+        let response: SearchResponse = self.get("/catalog/search", &[("query", query), ("limit", "1")]).await?;
+        let albums   = response.albums  .as_ref().and_then(|r| r.total).unwrap_or(0);
+        let artists  = response.artists .as_ref().and_then(|r| r.total).unwrap_or(0);
+        let tracks   = response.tracks  .as_ref().and_then(|r| r.total).unwrap_or(0);
+        let playlists= response.playlists.as_ref().and_then(|r| r.total).unwrap_or(0);
+        Ok((albums, artists, tracks, playlists))
+    }
+
     /// Recherche dans le catalogue
     pub async fn search(&self, query: &str, type_: Option<&str>) -> Result<SearchResult> {
         debug!("Searching for '{}' (type: {:?})", query, type_);
@@ -603,6 +670,50 @@ impl QobuzApi {
                 .map(|p| p.items.into_iter().map(Self::parse_playlist).collect())
                 .unwrap_or_default(),
         })
+    }
+
+    /// Recherche dans les albums uniquement (`/album/search`)
+    pub async fn search_albums(&self, query: &str, limit: u32, offset: u32) -> Result<Vec<Album>> {
+        let limit_s = limit.to_string();
+        let offset_s = offset.to_string();
+        let params = [("query", query), ("limit", &limit_s), ("offset", &offset_s)];
+        #[derive(Deserialize)]
+        struct Resp { albums: PaginatedResponse<AlbumResponse> }
+        let resp: Resp = self.get("/album/search", &params).await?;
+        Ok(resp.albums.items.into_iter().map(Self::parse_album).filter(|a| a.streamable).collect())
+    }
+
+    /// Recherche dans les tracks uniquement (`/track/search`)
+    pub async fn search_tracks(&self, query: &str, limit: u32, offset: u32) -> Result<Vec<Track>> {
+        let limit_s = limit.to_string();
+        let offset_s = offset.to_string();
+        let params = [("query", query), ("limit", &limit_s), ("offset", &offset_s)];
+        #[derive(Deserialize)]
+        struct Resp { tracks: PaginatedResponse<TrackResponse> }
+        let resp: Resp = self.get("/track/search", &params).await?;
+        Ok(resp.tracks.items.into_iter().map(|t| Self::parse_track(t, None)).filter(|t| t.streamable).collect())
+    }
+
+    /// Recherche dans les artistes uniquement (`/artist/search`)
+    pub async fn search_artists(&self, query: &str, limit: u32, offset: u32) -> Result<Vec<Artist>> {
+        let limit_s = limit.to_string();
+        let offset_s = offset.to_string();
+        let params = [("query", query), ("limit", &limit_s), ("offset", &offset_s)];
+        #[derive(Deserialize)]
+        struct Resp { artists: PaginatedResponse<ArtistResponse> }
+        let resp: Resp = self.get("/artist/search", &params).await?;
+        Ok(resp.artists.items.into_iter().map(Self::parse_artist).collect())
+    }
+
+    /// Recherche dans les playlists uniquement (`/playlist/search`)
+    pub async fn search_playlists(&self, query: &str, limit: u32, offset: u32) -> Result<Vec<Playlist>> {
+        let limit_s = limit.to_string();
+        let offset_s = offset.to_string();
+        let params = [("query", query), ("limit", &limit_s), ("offset", &offset_s)];
+        #[derive(Deserialize)]
+        struct Resp { playlists: PaginatedResponse<PlaylistResponse> }
+        let resp: Resp = self.get("/playlist/search", &params).await?;
+        Ok(resp.playlists.items.into_iter().map(Self::parse_playlist).collect())
     }
 
     // Fonctions de parsing publiques (utilisées aussi par le module user)

@@ -12,7 +12,7 @@
 
 use pmodidl::{Container, DIDLLite};
 use pmosource::api::{get_source as get_source_from_registry, list_all_sources};
-use pmosource::{BrowseResult, MusicSource, MusicSourceError};
+use pmosource::{BrowseResult, MediaSearchType, MusicSource, MusicSourceError, SearchQuery, SearchScope};
 use pmodidl::ToXmlElement;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -43,6 +43,82 @@ fn to_didl_lite(containers: &[Container], items: &[pmodidl::Item]) -> Result<Str
     }
 
     Ok(body)
+}
+
+/// Extrait le texte de recherche depuis un critère UPnP SearchCriteria.
+///
+/// Exemples supportés :
+/// - `dc:title contains "Pink Floyd"` → `"Pink Floyd"`
+/// - `upnp:artist contains "Miles"` → `"Miles"`
+/// - `Pink Floyd` (texte nu) → `"Pink Floyd"`
+/// - `*` → `""`
+fn extract_search_text(criteria: &str) -> &str {
+    let trimmed = criteria.trim();
+    if trimmed == "*" || trimmed.is_empty() {
+        return "";
+    }
+    // Pattern : <property> contains "<query>"  (UPnP CDS search syntax)
+    if let Some(pos) = trimmed.find("contains") {
+        let after = trimmed[pos + "contains".len()..].trim();
+        if after.starts_with('"') && after.ends_with('"') && after.len() >= 2 {
+            return &after[1..after.len() - 1];
+        }
+    }
+    trimmed
+}
+
+/// Détermine le scope et le type de média depuis le ContainerID UPnP.
+fn container_to_search_context(container_id: &str) -> (SearchScope, MediaSearchType) {
+    // Containers virtuels de résultats de recherche : qobuz:search:{scope}:{type}:{query}
+    // Le CP peut appeler Search sur ces containers — on préserve leur scope+type.
+    let search_parts: Vec<&str> = container_id.splitn(5, ':').collect();
+    if search_parts.len() >= 4 && search_parts[0] == "qobuz" && search_parts[1] == "search" {
+        let scope = if search_parts[2] == "favorites" {
+            SearchScope::UserLibrary
+        } else {
+            SearchScope::Catalog
+        };
+        let media_type = match search_parts.get(3).copied().unwrap_or("") {
+            "albums" => MediaSearchType::Albums,
+            "tracks" => MediaSearchType::Tracks,
+            "artists" => MediaSearchType::Artists,
+            "playlists" => MediaSearchType::Playlists,
+            _ => MediaSearchType::All,
+        };
+        return (scope, media_type);
+    }
+
+    // Scope UserLibrary : tout ce qui est sous qobuz:favorites
+    if container_id.starts_with("qobuz:favorites") {
+        let media_type = match container_id {
+            "qobuz:favorites:albums" => MediaSearchType::Albums,
+            "qobuz:favorites:tracks" => MediaSearchType::Tracks,
+            "qobuz:favorites:artists" => MediaSearchType::Artists,
+            "qobuz:favorites:playlists" => MediaSearchType::Playlists,
+            _ => MediaSearchType::All,
+        };
+        return (SearchScope::UserLibrary, media_type);
+    }
+
+    // Un artiste spécifique → rechercher ses albums dans le catalog
+    if container_id.starts_with("qobuz:artist:") {
+        return (SearchScope::Catalog, MediaSearchType::Albums);
+    }
+
+    // Un album spécifique → rechercher ses pistes
+    if container_id.starts_with("qobuz:album:") {
+        return (SearchScope::Catalog, MediaSearchType::Tracks);
+    }
+
+    // Scope Catalog : reste de la hiérarchie
+    let media_type = if container_id.starts_with("qobuz:discover:artists") {
+        MediaSearchType::Artists
+    } else if container_id.starts_with("qobuz:discover:albums") {
+        MediaSearchType::Albums
+    } else {
+        MediaSearchType::All
+    };
+    (SearchScope::Catalog, media_type)
 }
 
 /// Handler pour le service ContentDirectory
@@ -518,13 +594,30 @@ impl ContentHandler {
             "ContentDirectory::Search"
         );
 
+        let text = extract_search_text(search_criteria);
+        let (scope, media_type) = container_to_search_context(container_id);
+        tracing::debug!(
+            container_id,
+            search_criteria,
+            extracted_text = text,
+            scope = ?scope,
+            media_type = ?media_type,
+            "ContentHandler::search resolved"
+        );
+        let query = SearchQuery {
+            text: text.to_string(),
+            media_type,
+            scope,
+            limit: 200,
+            offset: 0,
+        };
+
         let mut all_containers = Vec::new();
         let mut all_items = Vec::new();
 
-        // Rechercher dans toutes les sources qui supportent la recherche
         for source in list_all_sources().await {
             if source.capabilities().supports_search {
-                if let Ok(result) = source.search(search_criteria).await {
+                if let Ok(result) = source.search(&query).await {
                     match result {
                         BrowseResult::Containers(c) => all_containers.extend(c),
                         BrowseResult::Items(i) => all_items.extend(i),
@@ -540,7 +633,6 @@ impl ContentHandler {
         let total = (all_containers.len() + all_items.len()) as u32;
         let didl = to_didl_lite(&all_containers, &all_items)?;
 
-        // Compute a global update ID from active sources, ensure it starts at 1
         let update_id = if total > 0 {
             let sources = list_all_sources().await;
             let mut combined_id = 0u32;
