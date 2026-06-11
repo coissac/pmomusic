@@ -1898,7 +1898,8 @@ impl MusicSource for QobuzSource {
             }
 
             ObjectIdType::SearchResult(scope, media_type, query) => {
-                tracing::debug!(scope = ?scope, media_type = ?media_type, query, "browse → execute_search");
+                tracing::debug!(scope = ?scope, media_type = ?media_type, query, "browse → search");
+                let is_all_search = media_type == MediaSearchType::All;
                 let sq = SearchQuery {
                     text: query,
                     media_type,
@@ -1906,9 +1907,11 @@ impl MusicSource for QobuzSource {
                     limit: 200,
                     offset: 0,
                 };
-                let result = self.execute_search(&sq).await;
-                tracing::debug!(ok = result.is_ok(), "execute_search returned");
-                result
+                if is_all_search {
+                    self.search_grouped(&sq).await
+                } else {
+                    self.execute_search(&sq).await
+                }
             }
 
             ObjectIdType::Track(_) => {
@@ -2410,10 +2413,11 @@ impl QobuzSource {
         };
 
         let (n_albums, n_artists, n_tracks, n_playlists) = counts;
+        let parent_id = format!("qobuz:search:{}:all:{}", scope_str, query.text);
 
         let mk_container = |type_str: &str, title: &str, count: usize| Container {
             id: format!("qobuz:search:{}:{}:{}", scope_str, type_str, query.text),
-            parent_id: "qobuz:search".to_string(),
+            parent_id: parent_id.clone(),
             restricted: Some("1".to_string()),
             child_count: Some(count.to_string()),
             searchable: None,
@@ -2466,7 +2470,6 @@ impl QobuzSource {
         use tracing::debug;
         debug!(text = %query.text, scope = ?query.scope, media_type = ?query.media_type, "execute_search entry");
         let text = &query.text;
-        let limit = query.limit;
         let scope_str = match query.scope {
             SearchScope::Catalog => "catalog",
             SearchScope::UserLibrary => "favorites",

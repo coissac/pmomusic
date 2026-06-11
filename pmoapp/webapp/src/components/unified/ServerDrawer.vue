@@ -41,24 +41,33 @@ const {
     currentPath,
     setPath,
     clearPath,
-    searchResults,
-    searchQuery,
     searchServer,
-    clearSearch,
 } = useMediaServers();
 
 const searchInput = ref('');
-const isSearchMode = computed(() => searchQuery.value !== '');
 
 async function handleSearch() {
     console.log('[ServerDrawer] handleSearch called, currentServer:', currentServer.value?.id, 'searchInput:', searchInput.value);
     if (!currentServer.value || !searchInput.value.trim()) return;
-    await searchServer(currentServer.value.id, searchInput.value.trim());
+
+    const query = searchInput.value.trim();
+    isLoading.value = true;
+    try {
+        const virtualId = await searchServer(currentServer.value.id, query);
+        if (!virtualId) return;
+
+        currentContainerId.value = virtualId;
+        setPath([
+            { id: '0', title: currentServer.value.friendly_name },
+            { id: virtualId, title: `Recherche : ${query}` },
+        ]);
+    } finally {
+        isLoading.value = false;
+    }
 }
 
 function handleClearSearch() {
     searchInput.value = '';
-    clearSearch();
 }
 
 const { playContent, addToQueue, addAfterCurrent, attachAndPlayPlaylist } =
@@ -473,7 +482,7 @@ function handleSettingsClick() {
                         @keyup.enter="handleSearch"
                     />
                     <button
-                        v-if="searchInput || isSearchMode"
+                        v-if="searchInput"
                         class="search-clear-btn"
                         @click="handleClearSearch"
                         title="Effacer"
@@ -576,53 +585,6 @@ function handleSettingsClick() {
                         <div v-if="isLoading" class="loading-state">
                             <div class="spinner"></div>
                             <p>Chargement...</p>
-                        </div>
-
-                        <!-- Résultats de recherche -->
-                        <div v-else-if="isSearchMode && searchResults">
-                            <p v-if="searchResults.entries.length === 0" class="empty-state">Aucun résultat</p>
-                            <ul v-else class="content-list">
-                                <li
-                                    v-for="item in searchResults.entries"
-                                    :key="item.id"
-                                    class="content-item"
-                                    :class="{ navigable: item.is_container }"
-                                    @click="handleItemClick(item)"
-                                >
-                                    <div class="content-cover">
-                                        <img
-                                            v-if="item.album_art_uri && !getImageState(item.id).error"
-                                            :src="item.album_art_uri"
-                                            :alt="item.title"
-                                            class="cover-img"
-                                            :class="{ loaded: getImageState(item.id).loaded }"
-                                            @load="handleImageLoad(item.id)"
-                                            @error="handleImageError(item.id)"
-                                        />
-                                        <div v-else class="cover-placeholder">
-                                            <Folder v-if="item.is_container" :size="24" />
-                                            <Music v-else :size="24" />
-                                        </div>
-                                    </div>
-                                    <div class="content-info">
-                                        <p class="content-title">{{ item.title }}</p>
-                                        <p v-if="item.artist" class="content-subtitle">{{ item.artist }}</p>
-                                    </div>
-                                    <div class="item-actions" @click.stop>
-                                        <button class="action-btn play-btn" @click="handlePlayItem($event, item)" title="Lire">
-                                            <Play :size="14" />
-                                        </button>
-                                        <button class="action-btn" @click="toggleMenu(item.id, $event)" title="Plus">
-                                            <MoreVertical :size="14" />
-                                        </button>
-                                        <div v-if="openMenuId === item.id" class="item-menu">
-                                            <button @click="handleAddToQueue($event, item)"><Plus :size="14" /> Ajouter à la queue</button>
-                                            <button @click="handleAddAfterCurrent($event, item)"><Plus :size="14" /> Après le current</button>
-                                        </div>
-                                    </div>
-                                    <ChevronRight v-if="item.is_container" :size="16" class="content-chevron" />
-                                </li>
-                            </ul>
                         </div>
 
                         <!-- Contenu du serveur -->

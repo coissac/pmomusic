@@ -32,8 +32,6 @@ function browseCacheKey(serverId: string, containerId: string): string {
   return `${encodeURIComponent(serverId)}:${encodeURIComponent(containerId)}`
 }
 const currentPath = ref<BreadcrumbItem[]>([])
-const searchResults = ref<BrowseState | null>(null)
-const searchQuery = ref<string>('')
 
 const CACHE_DURATION_MS = 2000
 const BROWSE_WINDOW_SIZE = 200
@@ -215,14 +213,14 @@ export function useMediaServers() {
   }
 
   // Recherche dans un serveur — retourne l'ID du container virtuel de résultats
-  async function searchServer(serverId: string, query: string, context?: string): Promise<string | null> {
+  async function searchServer(serverId: string, query: string): Promise<string | null> {
     if (!query.trim()) return null
 
     try {
       loading.value = true
       error.value = null
 
-      const data = await api.searchServer(serverId, query, context)
+      const data = await api.searchServer(serverId, query)
       // data.container_id est l'ID virtuel réel (ex: "qobuz:search:catalog:all:camille")
       const key = browseCacheKey(serverId, data.container_id)
       browseCache.value.set(key, {
@@ -238,11 +236,6 @@ export function useMediaServers() {
     } finally {
       loading.value = false
     }
-  }
-
-  function clearSearch() {
-    searchResults.value = null
-    searchQuery.value = ''
   }
 
   // Getters
@@ -299,13 +292,9 @@ export function useMediaServers() {
     getServerById,
     getBrowseCached,
     hasMore,
-    // Search
-    searchResults,
-    searchQuery,
-    searchServer,
-    clearSearch,
     // Actions
     fetchServers,
+    searchServer,
     browseContainer,
     loadMoreBrowse,
     setPath,
