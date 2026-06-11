@@ -99,6 +99,8 @@ pub struct QobuzApi {
     format_id: AudioFormat,
     /// Gestionnaire de session CMAF (renouvellement automatique thread-safe)
     pub(crate) cmaf_session: CmafSessionManager,
+    /// Nombre de pages de playlist chargées en parallèle (configurable)
+    pub(crate) page_concurrency: usize,
 }
 
 impl QobuzApi {
@@ -119,6 +121,7 @@ impl QobuzApi {
             user_id: RwLock::new(None),
             format_id: AudioFormat::default(),
             cmaf_session: CmafSessionManager::new(),
+            page_concurrency: 3,
         })
     }
 
@@ -209,6 +212,11 @@ impl QobuzApi {
     pub fn clear_auth(&self) {
         *self.user_auth_token.write().unwrap() = None;
         *self.user_id.write().unwrap() = None;
+    }
+
+    /// Définit le nombre de pages de playlist chargées en parallèle
+    pub fn set_page_concurrency(&mut self, n: usize) {
+        self.page_concurrency = n.max(1);
     }
 
     /// Définit le format audio par défaut

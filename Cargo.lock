@@ -4072,6 +4072,7 @@ dependencies = [
  "cbc",
  "chrono",
  "ctr",
+ "futures",
  "hex",
  "hkdf",
  "indexmap 2.12.0",

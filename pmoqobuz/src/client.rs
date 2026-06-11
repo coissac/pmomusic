@@ -176,6 +176,8 @@ impl QobuzClient {
             }
         };
 
+        api.set_page_concurrency(config.get_qobuz_page_concurrency());
+
         if config.is_qobuz_auth_valid() {
             match (config.get_qobuz_auth_token(), config.get_qobuz_user_id()) {
                 (Ok(Some(token)), Ok(Some(user_id)))

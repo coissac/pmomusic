@@ -70,20 +70,17 @@ POST /track/getList
 
 ---
 
-## 4. Pagination concurrente des playlists — **À FAIRE** (priorité moyenne)
+## 4. Pagination concurrente des playlists — **FAIT**
 
-**Problème** : `pmoqobuz` charge les pages de tracks d'une playlist séquentiellement (offset=0, puis
-offset=500, etc.). Chaque requête attend la précédente.
+**Implémentation réalisée** dans `QobuzApi::get_playlist_tracks` :
+- Page size augmentée de 50 → **500** (réduit le nombre de pages de 10×)
+- Page 1 séquentielle pour obtenir `total`
+- Pages 2..N lancées en parallèle via `futures::try_join_all` + `Semaphore(3)`
+- Résultats triés par offset avant fusion — ordre playlist garanti
+- Suivi de phase 2 (`track/getList`) inchangé
 
-**Ce que fait qbz** (`get_playlist`, l.1397) :
-- Page 1 → récupère les métadonnées + `total` track count
-- Pages 2..N → lancées **concurremment** via `join_all` dès que `total` est connu
-- Résultats ré-ordonnés par offset avant fusion
-
-**Impact pour pmoqobuz** : une playlist de 2 000 tracks (4 pages de 500) passe de 4 requêtes
-séquentielles (~1,6 s) à 1 + 3 en parallèle (~0,7 s).
-
-**Note** : à implémenter avec un semaphore (comme le CMAF) pour ne pas surcharger l'API Qobuz.
+**Impact** : playlist de 2 000 tracks (4 pages de 500) → 1 séquentielle + 3 parallèles ≈ 0,7 s
+au lieu de 4 séquentielles ≈ 1,6 s. Playlists ≤ 500 tracks : 1 seule requête.
 
 ---
 
@@ -122,6 +119,6 @@ sortis récemment. Utile pour le catalogue de la webapp.
 | 1 | Streaming CMAF | Élevé | Critique (pipeline futur) | **Fait** |
 | 2 | Bundle extraction avec cache disque | Moyen | Élevé (résilience) | **Fait** |
 | 3 | Batch `track/getList` | Faible | Élevé (performances) | **Fait** |
-| 4 | Pagination concurrente playlists | Faible | Moyen | À faire |
+| 4 | Pagination concurrente playlists | Faible | Moyen | **Fait** |
 | 5 | Release watch endpoint | Faible | Faible (catalogue) | À faire |
 | 6 | `extra=track_ids` + batch à deux passes | Faible | Faible (optimisation) | À faire |

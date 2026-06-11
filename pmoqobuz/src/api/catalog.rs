@@ -413,46 +413,100 @@ impl QobuzApi {
 
     /// Récupère les tracks d'une playlist.
     ///
-    /// Phase 1 : pagination de `/playlist/get?extra=tracks` pour collecter les IDs
-    /// et les données de base.
-    /// Phase 2 (si secret disponible) : enrichissement via `track/getList` pour
-    /// obtenir les métadonnées complètes (performer, sample_rate, bit_depth, channels).
+    /// Phase 1 — pagination concurrente :
+    ///   - Page 1 séquentielle pour obtenir `total`
+    ///   - Pages 2..N lancées en parallèle (semaphore 3) dès que `total` est connu
+    ///   - Résultats triés par offset avant fusion
+    ///
+    /// Phase 2 — enrichissement via `track/getList` pour métadonnées complètes
+    /// (performer, sample_rate, bit_depth, channels).
     pub async fn get_playlist_tracks(&self, playlist_id: &str) -> Result<Vec<Track>> {
+        use futures::future::try_join_all;
+        use std::sync::Arc;
+        use tokio::sync::Semaphore;
+
+        const PAGE_SIZE: u32 = 500;
+        const LIMIT_STR: &str = "500";
+        // Configurable via accounts.qobuz.page_concurrency (défaut 3).
+        let max_concurrent_pages = self.page_concurrency;
+
         debug!("Fetching tracks for playlist {}", playlist_id);
-        const PAGE_SIZE: u32 = 50;
-        let mut ordered_ids: Vec<String> = Vec::new();
-        let mut fallback_tracks: Vec<Track> = Vec::new();
-        let mut offset = 0u32;
 
-        // Phase 1 : pagination pour collecter les IDs et les tracks de base
-        loop {
-            let offset_str = offset.to_string();
-            let limit_str = PAGE_SIZE.to_string();
-            let params = [
-                ("playlist_id", playlist_id),
-                ("extra", "tracks"),
-                ("offset", offset_str.as_str()),
-                ("limit", limit_str.as_str()),
-            ];
-            let response: PlaylistResponse = self.get("/playlist/get", &params).await?;
+        // Page 1 — séquentielle : récupère les IDs + total
+        let first_response: PlaylistResponse = self
+            .get(
+                "/playlist/get",
+                &[
+                    ("playlist_id", playlist_id),
+                    ("extra", "tracks"),
+                    ("offset", "0"),
+                    ("limit", LIMIT_STR),
+                ],
+            )
+            .await?;
 
-            if let Some(tracks) = response.tracks {
-                let total = tracks.total.unwrap_or(0);
-                let count = tracks.items.len() as u32;
-                for t in tracks.items {
-                    ordered_ids.push(t.id.clone());
-                    fallback_tracks.push(Self::parse_track(t, None));
-                }
-                offset += count;
-                if count == 0 || offset >= total {
-                    break;
-                }
-            } else {
-                break;
-            }
+        let first_page = match first_response.tracks {
+            Some(t) => t,
+            None => return Ok(Vec::new()),
+        };
+
+        let total = first_page.total.unwrap_or(0);
+        if total == 0 || first_page.items.is_empty() {
+            return Ok(Vec::new());
         }
 
-        debug!("Fetched {} track IDs for playlist {}", ordered_ids.len(), playlist_id);
+        // Offsets des pages restantes : 500, 1000, 1500, ...
+        let remaining_offsets: Vec<u32> = (PAGE_SIZE..total)
+            .step_by(PAGE_SIZE as usize)
+            .collect();
+
+        let n_pages = 1 + remaining_offsets.len();
+
+        // Pages 2..N — concurrentes
+        let mut pages: Vec<(u32, Vec<TrackResponse>)> =
+            Vec::with_capacity(n_pages);
+        pages.push((0, first_page.items));
+
+        if !remaining_offsets.is_empty() {
+            let sem = Arc::new(Semaphore::new(max_concurrent_pages));
+
+            let futs = remaining_offsets.iter().map(|&off| {
+                let sem = sem.clone();
+                async move {
+                    let _permit = sem.acquire().await.unwrap();
+                    let offset_str = off.to_string();
+                    let response: PlaylistResponse = self
+                        .get(
+                            "/playlist/get",
+                            &[
+                                ("playlist_id", playlist_id),
+                                ("extra", "tracks"),
+                                ("offset", offset_str.as_str()),
+                                ("limit", LIMIT_STR),
+                            ],
+                        )
+                        .await?;
+                    let items = response.tracks.map(|t| t.items).unwrap_or_default();
+                    Ok::<(u32, Vec<TrackResponse>), QobuzError>((off, items))
+                }
+            });
+
+            let mut extra = try_join_all(futs).await?;
+            pages.append(&mut extra);
+        }
+
+        // Tri par offset pour garantir l'ordre de la playlist
+        pages.sort_unstable_by_key(|(off, _)| *off);
+
+        let ordered_ids: Vec<String> = pages
+            .into_iter()
+            .flat_map(|(_, items)| items.into_iter().map(|t| t.id))
+            .collect();
+
+        debug!(
+            "Fetched {} track IDs for playlist {} ({} pages)",
+            ordered_ids.len(), playlist_id, n_pages
+        );
 
         if ordered_ids.is_empty() {
             return Ok(Vec::new());
@@ -467,7 +521,10 @@ impl QobuzApi {
             .iter()
             .filter_map(|id| track_map.remove(id.as_str()))
             .collect();
-        debug!("Fetched {} tracks for playlist {} via track/getList", enriched.len(), playlist_id);
+        debug!(
+            "Fetched {} tracks for playlist {} via track/getList",
+            enriched.len(), playlist_id
+        );
         Ok(enriched)
     }
 
