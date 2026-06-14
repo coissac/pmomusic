@@ -1925,6 +1925,27 @@ impl MusicSource for QobuzSource {
         }
     }
 
+    async fn get_container(&self, object_id: &str) -> Result<Option<pmodidl::Container>> {
+        use crate::didl::ToDIDL;
+        match self.parse_object_id(object_id) {
+            ObjectIdType::Album(album_id) => {
+                let album = self
+                    .inner
+                    .client
+                    .get_album(&album_id)
+                    .await
+                    .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+                // Cache la pochette si nécessaire
+                let album = self.cache_album_covers(vec![album]).await.into_iter().next().unwrap();
+                let container = album
+                    .to_didl_container("qobuz")
+                    .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+                Ok(Some(container))
+            }
+            _ => Ok(None),
+        }
+    }
+
     async fn resolve_uri(&self, object_id: &str) -> Result<String> {
         // Try cache manager first
         if let Ok(uri) = self.inner.cache_manager.resolve_uri(object_id).await {

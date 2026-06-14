@@ -4276,6 +4276,7 @@ name = "pmourlsource"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "futures",
  "pmodidl",
  "pmosource",
  "reqwest",

@@ -1,25 +1,26 @@
 use crate::handler::{ResolvedContent, ResolvedTrack, UrlHandler, UrlResolverError};
 use async_trait::async_trait;
+use futures::future::join_all;
 use reqwest::{redirect, Client};
+use std::sync::Arc;
 
 /// Handler dédié aux URLs radiofrance.fr — priorité 80.
 ///
-/// RadioFrance utilise SvelteKit (SSR). La clé `rssFeed:` est inline dans le JS
-/// de la page pour les pages podcast standard, mais vide pour les pages série.
+/// RadioFrance utilise SvelteKit (SSR).
 ///
 /// Stratégie selon le type d'URL :
 ///
-/// 1. **Page podcast** (`/podcasts/{slug}`, sans sous-chemin épisode)
-///    → chercher `rssFeed:"https://..."` → fetch + parse RSS
+/// 1. **Page podcast** (`/podcasts/{slug}`)
+///    → `rssFeed:"https://..."` inline → fetch + parse RSS
 ///
 /// 2. **Page série** (`/podcasts/serie-{slug}`)
-///    → parser le JSON-LD `ItemList` → extraire le slug du podcast sous-jacent
-///    → fetch page podcast → trouver rssFeed
+///    → JSON-LD `ItemList` → extraire les URLs d'épisodes → fetch concurrent
+///    (RadioFrance limite leur RSS à 2 éléments ; scraping direct donne tous les épisodes)
 ///
-/// 3. **Page épisode** (`/podcasts/{podcast-slug}/{episode-slug}-{id}`)
-///    → extraire l'URL MP3 directe
+/// 3. **Page épisode** (`/podcasts/{podcast}/{episode}-{id}`)
+///    → URL MP3 `media.radiofrance-podcast.net` inline
 pub struct RadioFranceUrlHandler {
-    client: Client,
+    client: Arc<Client>,
 }
 
 impl RadioFranceUrlHandler {
@@ -29,25 +30,52 @@ impl RadioFranceUrlHandler {
             .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36")
             .timeout(std::time::Duration::from_secs(20))
             .build()?;
-        Ok(Self { client })
+        Ok(Self { client: Arc::new(client) })
     }
 
     async fn resolve_inner(&self, url: &str) -> Result<ResolvedContent, UrlResolverError> {
         let html = self.fetch_html(url).await?;
 
-        // --- Cas 1 : page podcast standard → rssFeed non vide ---
+        // --- Cas 1 : page podcast → rssFeed non vide ---
         if let Some(rss_url) = extract_rss_feed_key(&html) {
-            tracing::debug!(rss_url = %rss_url, "RadioFrance: rssFeed trouvé directement");
+            tracing::debug!(rss_url = %rss_url, "RadioFrance: rssFeed trouvé");
             return self.fetch_rss(&rss_url).await;
         }
 
-        // --- Cas 2 : page série → JSON-LD ItemList → podcast sous-jacent ---
-        if let Some(podcast_url) = derive_podcast_url_from_series(&html, url) {
-            tracing::debug!(podcast_url = %podcast_url, "RadioFrance: série → page podcast");
-            let podcast_html = self.fetch_html(&podcast_url).await?;
-            if let Some(rss_url) = extract_rss_feed_key(&podcast_html) {
-                tracing::debug!(rss_url = %rss_url, "RadioFrance: rssFeed via série");
-                return self.fetch_rss(&rss_url).await;
+        // --- Cas 2 : page série → fetch concurrent des pages épisodes ---
+        let episode_urls = extract_episode_urls_from_series(&html, url);
+        if !episode_urls.is_empty() {
+            tracing::debug!(
+                count = episode_urls.len(),
+                "RadioFrance: série — fetch concurrent des épisodes"
+            );
+            let feed_title = extract_og_title(&html);
+            let feed_image = extract_og_image(&html);
+            let album = feed_title.clone().or_else(|| extract_title_tag(&html));
+
+            let client = self.client.clone();
+            let fetches: Vec<_> = episode_urls
+                .into_iter()
+                .map(|ep_url| {
+                    let client = client.clone();
+                    let album = album.clone();
+                    let feed_image = feed_image.clone();
+                    async move {
+                        match fetch_html_with_client(&client, &ep_url).await {
+                            Ok(ep_html) => episode_to_track(&ep_html, &ep_url, album.as_deref(), feed_image.as_deref()),
+                            Err(_) => None,
+                        }
+                    }
+                })
+                .collect();
+
+            let tracks: Vec<ResolvedTrack> = join_all(fetches).await.into_iter().flatten().collect();
+
+            if !tracks.is_empty() {
+                return Ok(ResolvedContent::Playlist {
+                    title: feed_title,
+                    items: tracks,
+                });
             }
         }
 
@@ -75,16 +103,7 @@ impl RadioFranceUrlHandler {
     }
 
     async fn fetch_html(&self, url: &str) -> Result<String, UrlResolverError> {
-        self.client
-            .get(url)
-            .header("Accept", "text/html,application/xhtml+xml")
-            .header("Accept-Language", "fr-FR,fr;q=0.9")
-            .send()
-            .await
-            .map_err(|e| UrlResolverError::ResolutionFailed(e.to_string()))?
-            .text()
-            .await
-            .map_err(|e| UrlResolverError::ResolutionFailed(e.to_string()))
+        fetch_html_with_client(&self.client, url).await
     }
 
     async fn fetch_rss(&self, rss_url: &str) -> Result<ResolvedContent, UrlResolverError> {
@@ -127,6 +146,21 @@ impl UrlHandler for RadioFranceUrlHandler {
     }
 }
 
+// ── HTTP helpers ─────────────────────────────────────────────────────────────
+
+async fn fetch_html_with_client(client: &Client, url: &str) -> Result<String, UrlResolverError> {
+    client
+        .get(url)
+        .header("Accept", "text/html,application/xhtml+xml")
+        .header("Accept-Language", "fr-FR,fr;q=0.9")
+        .send()
+        .await
+        .map_err(|e| UrlResolverError::ResolutionFailed(e.to_string()))?
+        .text()
+        .await
+        .map_err(|e| UrlResolverError::ResolutionFailed(e.to_string()))
+}
+
 // ── Extraction SvelteKit ─────────────────────────────────────────────────────
 
 /// Cherche `rssFeed:"https://..."` dans le JS SvelteKit inline.
@@ -144,50 +178,77 @@ fn extract_rss_feed_key(html: &str) -> Option<String> {
     }
 }
 
-/// Pour une page série, extrait les URLs d'épisodes du JSON-LD `ItemList`,
-/// déduit le slug du podcast sous-jacent et construit l'URL de sa page.
+/// Extrait toutes les URLs d'épisodes depuis le JSON-LD `ItemList` d'une page série.
 ///
-/// Exemple :
-///   épisode : `https://www.radiofrance.fr/franceculture/podcasts/les-contes-des-mille-et-une-sciences/kasparov-7422833`
-///   → page podcast : `https://www.radiofrance.fr/franceculture/podcasts/les-contes-des-mille-et-une-sciences`
-fn derive_podcast_url_from_series(html: &str, series_url: &str) -> Option<String> {
-    // Extraire la première URL d'épisode depuis le JSON-LD ItemList
+/// Filtre les URLs non-épisodes (série elle-même, images, domaine seul…).
+/// Une URL d'épisode a exactement 4 segments de path :
+///   `/{station}/podcasts/{podcast-slug}/{episode-slug}`
+fn extract_episode_urls_from_series(html: &str, series_url: &str) -> Vec<String> {
     let item_marker = "\"@type\":\"ItemList\"";
-    let list_pos = html.find(item_marker)?;
+    let list_pos = match html.find(item_marker) {
+        Some(p) => p,
+        None => return vec![],
+    };
+
+    let url_prefix = "\"url\":\"https://www.radiofrance.fr/";
     let after_list = &html[list_pos..];
+    let mut urls = Vec::new();
+    let mut search_from = 0;
 
-    // Chercher "url":"https://www.radiofrance.fr/..."
-    let url_needle = "\"url\":\"https://www.radiofrance.fr/";
-    let pos = after_list.find(url_needle)? + url_needle.len() - "https://www.radiofrance.fr/".len();
-    let from = list_pos + pos + "\"url\":\"".len();
-    let end = html[from..].find('"')? + from;
-    let episode_url = &html[from..end];
+    while let Some(rel_pos) = after_list[search_from..].find(url_prefix) {
+        let rel_pos = search_from + rel_pos;
+        let from = list_pos + rel_pos + "\"url\":\"".len();
+        let Some(end_rel) = html[from..].find('"') else { break };
+        let candidate = &html[from..from + end_rel];
 
-    // L'URL épisode : https://www.radiofrance.fr/{station}/podcasts/{podcast-slug}/{episode-slug}-{id}
-    // On veut : https://www.radiofrance.fr/{station}/podcasts/{podcast-slug}
-    // Compter les segments du path (après le domaine)
-    let _after_domain = episode_url.find("/")?..; // find the first /
-    let path = &episode_url[episode_url.find("radiofrance.fr/")? + "radiofrance.fr".len()..];
-    // path = /{station}/podcasts/{podcast-slug}/{episode-slug}
-    let segments: Vec<&str> = path.trim_start_matches('/').splitn(5, '/').collect();
-    // segments = [station, "podcasts", podcast-slug, episode-slug]
-    if segments.len() < 3 {
-        return None;
+        if is_episode_url(candidate, series_url) {
+            urls.push(candidate.to_string());
+        }
+        search_from = rel_pos + url_prefix.len();
     }
-    // Éviter de boucler sur la même URL série
-    let podcast_slug = segments[2];
-    if podcast_slug.starts_with("serie-") {
-        return None;
+    urls
+}
+
+/// Retourne true si l'URL est bien une page d'épisode (≥4 segments de path).
+fn is_episode_url(url: &str, series_url: &str) -> bool {
+    if url.trim_end_matches('/') == series_url.trim_end_matches('/') {
+        return false;
     }
-    let podcast_url = format!(
-        "https://www.radiofrance.fr/{}/{}/{}",
-        segments[0], segments[1], podcast_slug
-    );
-    // Ne pas retourner l'URL série elle-même
-    if podcast_url == series_url.trim_end_matches('/') {
-        return None;
+    if !url.contains("/podcasts/") {
+        return false;
     }
-    Some(podcast_url)
+    // Exclure fichiers statiques (images…)
+    let last = url.rsplit('/').next().unwrap_or("");
+    if last.contains('.') {
+        return false;
+    }
+    // Doit avoir ≥ 4 segments après le domaine : /station/podcasts/podcast/episode
+    let path_segments: usize = url
+        .splitn(4, "radiofrance.fr")
+        .nth(1)
+        .unwrap_or("")
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .count();
+    path_segments >= 4
+}
+
+/// Extrait un `ResolvedTrack` depuis la page HTML d'un épisode RadioFrance.
+fn episode_to_track(html: &str, url: &str, album: Option<&str>, feed_image: Option<&str>) -> Option<ResolvedTrack> {
+    let mp3_url = extract_mp3_url(html)?;
+    let title = extract_og_title(html)
+        .or_else(|| extract_title_tag(html))
+        .unwrap_or_else(|| url.to_string());
+    let album_art = extract_og_image(html).or_else(|| feed_image.map(|s| s.to_string()));
+    Some(ResolvedTrack {
+        uri: mp3_url,
+        title,
+        artist: None,
+        album: album.map(|s| s.to_string()),
+        duration: None,
+        album_art,
+        mime_type: "audio/mpeg".to_string(),
+    })
 }
 
 /// Extrait l'URL du premier fichier MP3 hébergé sur media.radiofrance-podcast.net.

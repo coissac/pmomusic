@@ -467,6 +467,18 @@ pub trait MusicSource: Debug + Send + Sync {
         ))
     }
 
+    /// Retourne les métadonnées d'un container (titre, artiste, cover, child_count)
+    /// SANS charger ses enfants — un seul appel API léger.
+    ///
+    /// Utilisé par UrlSource pour afficher un album/playlist en résultat de recherche
+    /// avec les bonnes métadonnées et le bon `class` UPnP, avant que l'utilisateur
+    /// ne navigue dedans ou ne lance la lecture.
+    ///
+    /// L'implémentation par défaut retourne None (non supporté).
+    async fn get_container(&self, _object_id: &str) -> Result<Option<Container>> {
+        Ok(None)
+    }
+
     /// Resolve the actual URI for a track
     ///
     /// This method should return the URI that can be used to stream/download
