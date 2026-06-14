@@ -1,6 +1,7 @@
 use crate::handler::{ResolvedContent, ResolvedTrack, UrlResolver, UrlResolverError};
 use async_trait::async_trait;
 use pmodidl::{Container, Item, Resource};
+use pmosource::api::get_source as get_source_from_registry;
 use pmosource::{BrowseResult, MusicSource, MusicSourceError, SearchQuery, SourceCapabilities};
 use std::time::SystemTime;
 
@@ -77,14 +78,57 @@ impl MusicSource for UrlSource {
 
         match self.resolver.resolve(url).await {
             Ok(ResolvedContent::SourceContainer {
-                source_id: _,
+                source_id,
                 container_id,
             }) => {
-                // Stub container : le content directory le route vers la source cible.
+                // Browsons la source cible pour récupérer les métadonnées réelles
+                // (titre album, artiste, pochette, nombre de pistes).
+                // On retourne un Container enrichi avec :
+                //   - parent_id = source_id  → le frontend route le browse vers la bonne source
+                //   - child_count réel        → le frontend sait que le container a du contenu
+                //   - titre/artiste/cover     → affichage correct dans l'UI
+                // Le container reste jouable comme unité (attach_queue) et navigable.
+                if let Some(source) = get_source_from_registry(&source_id).await {
+                    match source.browse(&container_id).await {
+                        Ok(BrowseResult::Items(tracks)) if !tracks.is_empty() => {
+                            let first = tracks.first();
+                            let title = first
+                                .and_then(|t| t.album.as_deref())
+                                .map(|s| s.to_string())
+                                .unwrap_or_else(|| display_title_for_url(url));
+                            let artist = first.and_then(|t| t.artist.clone());
+                            let album_art = first.and_then(|t| t.album_art.clone());
+                            let container = Container {
+                                id: container_id,
+                                parent_id: source_id,
+                                restricted: Some("1".to_string()),
+                                child_count: Some(tracks.len().to_string()),
+                                searchable: Some("0".to_string()),
+                                title,
+                                class: "object.container".to_string(),
+                                artist,
+                                album_art,
+                                containers: vec![],
+                                items: vec![],
+                            };
+                            return Ok(BrowseResult::Containers(vec![container]));
+                        }
+                        Ok(result) => return Ok(result),
+                        Err(e) => {
+                            tracing::warn!(
+                                source_id = %source_id,
+                                container_id = %container_id,
+                                error = %e,
+                                "UrlSource: browse de la source cible échoué, fallback stub"
+                            );
+                        }
+                    }
+                }
+                // Fallback : stub minimaliste si la source n'est pas disponible
                 let title = display_title_for_url(url);
                 let container = Container {
                     id: container_id,
-                    parent_id: "url".to_string(),
+                    parent_id: source_id,
                     restricted: Some("1".to_string()),
                     child_count: None,
                     searchable: Some("0".to_string()),
