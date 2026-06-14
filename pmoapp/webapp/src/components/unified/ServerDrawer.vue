@@ -66,8 +66,20 @@ async function handleSearch() {
     }
 }
 
-function handleClearSearch() {
+async function handleClearSearch() {
     searchInput.value = '';
+    if (!currentServer.value) return;
+
+    isLoading.value = true;
+    try {
+        await browseContainer(currentServer.value.id, "0");
+        currentContainerId.value = "0";
+        setPath([{ id: "0", title: currentServer.value.friendly_name }]);
+    } catch (error) {
+        console.error("[ServerDrawer] Erreur navigation racine après clear search:", error);
+    } finally {
+        isLoading.value = false;
+    }
 }
 
 const { playContent, addToQueue, addAfterCurrent, attachAndPlayPlaylist } =
@@ -175,6 +187,7 @@ watch(
             clearPath();
             closeMenu();
             imageStates.clear();
+            searchInput.value = '';
         }
     },
 );
@@ -225,6 +238,7 @@ async function handleServerClick(server: MediaServerSummary) {
 
     // Commencer la navigation dans ce serveur
     currentServer.value = server;
+    searchInput.value = '';
     isLoading.value = true;
 
     try {
@@ -244,6 +258,7 @@ function goBack() {
     currentServer.value = null;
     currentContainerId.value = null;
     clearPath();
+    searchInput.value = '';
 }
 
 async function handleContainerClick(item: ContainerEntry) {
