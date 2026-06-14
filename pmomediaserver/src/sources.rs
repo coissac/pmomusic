@@ -313,7 +313,8 @@ impl SourcesExt for Server {
             Err(e) => tracing::warn!("Failed to build GenericUrlHandler HTTP client: {}", e),
         }
 
-        let source = Arc::new(UrlSource::new(resolver));
+        let base_url = self.base_url().to_string();
+        let source = Arc::new(UrlSource::new(resolver, base_url));
         self.register_music_source(source).await;
 
         tracing::info!("✅ URL source registered successfully");

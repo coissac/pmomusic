@@ -1935,13 +1935,55 @@ impl MusicSource for QobuzSource {
                     .get_album(&album_id)
                     .await
                     .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
-                // Cache la pochette si nécessaire
                 let album = self.cache_album_covers(vec![album]).await.into_iter().next().unwrap();
                 let container = album
                     .to_didl_container("qobuz")
                     .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
                 Ok(Some(container))
             }
+
+            ObjectIdType::Playlist(playlist_id) => {
+                let playlist = self
+                    .inner
+                    .client
+                    .get_playlist(&playlist_id)
+                    .await
+                    .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+                let container = playlist
+                    .to_didl_container("qobuz")
+                    .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+                Ok(Some(container))
+            }
+
+            ObjectIdType::Artist(artist_id) => {
+                // Pas d'endpoint artist direct — on tire le nom/image depuis les albums
+                let albums = self
+                    .inner
+                    .client
+                    .get_artist_albums(&artist_id)
+                    .await
+                    .map_err(|e| MusicSourceError::BrowseError(e.to_string()))?;
+                let first = albums.first();
+                let artist_name = first
+                    .map(|a| a.artist.name.clone())
+                    .unwrap_or_else(|| format!("Artiste {}", artist_id));
+                let album_art = first.and_then(|a| a.image_cached.clone().or_else(|| a.image.clone()));
+                let container = pmodidl::Container {
+                    id: object_id.to_string(),
+                    parent_id: "qobuz".to_string(),
+                    restricted: Some("1".to_string()),
+                    child_count: Some(albums.len().to_string()),
+                    searchable: Some("1".to_string()),
+                    title: artist_name.clone(),
+                    class: "object.container.person.musicArtist".to_string(),
+                    artist: Some(artist_name),
+                    album_art,
+                    containers: vec![],
+                    items: vec![],
+                };
+                Ok(Some(container))
+            }
+
             _ => Ok(None),
         }
     }
