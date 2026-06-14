@@ -110,6 +110,9 @@ pub struct SourceCapabilities {
     pub supports_advanced_search: bool,
     /// Supports pagination in browse operations
     pub supports_pagination: bool,
+    /// Handles URL input (http/https) instead of plain text search queries.
+    /// When true, this source is called exclusively for URL-like search inputs.
+    pub handles_url_input: bool,
 }
 
 /// Audio format information
@@ -650,6 +653,7 @@ pub trait MusicSource: Debug + Send + Sync {
             supports_multiple_formats: false,
             supports_advanced_search: false,
             supports_pagination: false,
+            handles_url_input: false,
         }
     }
 

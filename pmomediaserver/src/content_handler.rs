@@ -273,11 +273,32 @@ impl ContentHandler {
                                 }
                             }
                             BrowseResult::Items(items) => {
-                                if let Some(item) = items.first() {
-                                    let didl = to_didl_lite(&[], &[item.clone()])?;
-                                    let update_id = source.update_id().await.max(1);
-                                    return Ok((didl, 1, 1, update_id));
-                                }
+                                // object_id is a container (album, playlist…) whose
+                                // browse() returns its children as Items.  BrowseMetadata
+                                // must return the container itself, not the first child.
+                                let title = items
+                                    .first()
+                                    .and_then(|i| i.album.as_deref())
+                                    .unwrap_or(object_id)
+                                    .to_string();
+                                let album_art =
+                                    items.first().and_then(|i| i.album_art.clone());
+                                let container = Container {
+                                    id: object_id.to_string(),
+                                    parent_id: "0".to_string(),
+                                    restricted: Some("1".to_string()),
+                                    child_count: Some(items.len().to_string()),
+                                    searchable: Some("0".to_string()),
+                                    title,
+                                    class: "object.container".to_string(),
+                                    artist: None,
+                                    album_art,
+                                    containers: vec![],
+                                    items: vec![],
+                                };
+                                let didl = to_didl_lite(&[container], &[])?;
+                                let update_id = source.update_id().await.max(1);
+                                return Ok((didl, 1, 1, update_id));
                             }
                             BrowseResult::Mixed { containers, items } => {
                                 if let Some(container) = containers.first() {
@@ -615,16 +636,26 @@ impl ContentHandler {
         let mut all_containers = Vec::new();
         let mut all_items = Vec::new();
 
+        // Si le texte ressemble à une URL, seules les sources qui gèrent les URLs
+        // sont interrogées — les autres (Qobuz, etc.) interpréteraient l'URL comme
+        // du texte libre et renverraient des résultats parasites.
+        let is_url_query = text.starts_with("http://") || text.starts_with("https://");
+
         for source in list_all_sources().await {
-            if source.capabilities().supports_search {
-                if let Ok(result) = source.search(&query).await {
-                    match result {
-                        BrowseResult::Containers(c) => all_containers.extend(c),
-                        BrowseResult::Items(i) => all_items.extend(i),
-                        BrowseResult::Mixed { containers, items } => {
-                            all_containers.extend(containers);
-                            all_items.extend(items);
-                        }
+            let caps = source.capabilities();
+            if !caps.supports_search {
+                continue;
+            }
+            if is_url_query && !caps.handles_url_input {
+                continue;
+            }
+            if let Ok(result) = source.search(&query).await {
+                match result {
+                    BrowseResult::Containers(c) => all_containers.extend(c),
+                    BrowseResult::Items(i) => all_items.extend(i),
+                    BrowseResult::Mixed { containers, items } => {
+                        all_containers.extend(containers);
+                        all_items.extend(items);
                     }
                 }
             }

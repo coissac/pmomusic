@@ -23,6 +23,10 @@ pub enum SourceInitError {
     #[error("Failed to initialize Radio France: {0}")]
     RadioFranceError(String),
 
+    #[cfg(feature = "urlsource")]
+    #[error("Failed to initialize URL source: {0}")]
+    UrlSourceError(String),
+
     #[error("Configuration error: {0}")]
     ConfigError(String),
 
@@ -141,6 +145,14 @@ pub trait SourcesExt {
     /// ```
     #[cfg(feature = "radiofrance")]
     async fn register_radiofrance(&mut self) -> Result<()>;
+
+    /// Enregistre la source URL / Partage
+    ///
+    /// Cette source permet de coller n'importe quelle URL (lien de partage Qobuz,
+    /// flux audio, playlist M3U…) dans la barre de recherche et de lancer la lecture
+    /// directement. Aucune authentification requise.
+    #[cfg(feature = "urlsource")]
+    async fn register_urlsource(&mut self) -> Result<()>;
 }
 
 #[async_trait::async_trait]
@@ -278,6 +290,33 @@ impl SourcesExt for Server {
             })?;
 
         tracing::info!("✅ Radio France source registered successfully");
+
+        Ok(())
+    }
+
+    #[cfg(feature = "urlsource")]
+    async fn register_urlsource(&mut self) -> Result<()> {
+        use pmourlsource::{GenericUrlHandler, QobuzUrlHandler, RadioFranceUrlHandler, UrlResolver, UrlSource};
+
+        tracing::info!("Initializing URL source...");
+
+        let mut resolver = UrlResolver::new();
+        // Handlers spécialisés (priorité haute) — résolution sans I/O ou API dédiée
+        resolver.register(Box::new(QobuzUrlHandler::new()));
+        match RadioFranceUrlHandler::new() {
+            Ok(h) => resolver.register(Box::new(h)),
+            Err(e) => tracing::warn!("Failed to build RadioFranceUrlHandler HTTP client: {}", e),
+        }
+        // Handler générique (priorité basse) — HTTP GET + scraping HTML/RSS
+        match GenericUrlHandler::new() {
+            Ok(h) => resolver.register(Box::new(h)),
+            Err(e) => tracing::warn!("Failed to build GenericUrlHandler HTTP client: {}", e),
+        }
+
+        let source = Arc::new(UrlSource::new(resolver));
+        self.register_music_source(source).await;
+
+        tracing::info!("✅ URL source registered successfully");
 
         Ok(())
     }

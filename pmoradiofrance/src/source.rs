@@ -207,6 +207,7 @@ impl MusicSource for RadioFranceSource {
             supports_multiple_formats: false,
             supports_advanced_search: false,
             supports_pagination: false,
+            handles_url_input: false,
         }
     }
 

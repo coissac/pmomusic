@@ -2088,6 +2088,7 @@ impl MusicSource for QobuzSource {
             supports_multiple_formats: true,
             supports_advanced_search: true,
             supports_pagination: true,
+            handles_url_input: false,
         }
     }
 

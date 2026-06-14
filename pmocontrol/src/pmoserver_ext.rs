@@ -2399,12 +2399,15 @@ fn search_result_container_id(entries: &[ContainerEntry]) -> String {
     entries
         .iter()
         .find(|entry| entry.is_container)
-        .and_then(|entry| {
+        .map(|entry| {
             let parts: Vec<&str> = entry.id.splitn(5, ':').collect();
             if parts.len() == 5 && parts[0] == "qobuz" && parts[1] == "search" {
-                Some(format!("qobuz:search:{}:all:{}", parts[2], parts[4]))
+                // Résultat de recherche Qobuz : reconstruire le container virtuel parent
+                // ex. "qobuz:search:catalog:albums:Beethoven" → "qobuz:search:catalog:all:Beethoven"
+                format!("qobuz:search:{}:all:{}", parts[2], parts[4])
             } else {
-                None
+                // Résultat d'une autre source (ex. UrlSource) : retourner l'ID tel quel
+                entry.id.clone()
             }
         })
         .unwrap_or_else(|| "search".to_string())

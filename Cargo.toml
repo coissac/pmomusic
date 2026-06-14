@@ -23,6 +23,7 @@ members = [
     "pmoflac",
     "pmometadata",
     "pmocontrol",
+    "pmourlsource",
 ]
 
 [workspace.dependencies]

@@ -60,6 +60,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::warn!("⚠️ Failed to register Radio France source: {}", e);
     }
 
+    // Enregistrer la source URL / Partage
+    info!("🔗 Registering URL source...");
+    if let Err(e) = server.write().await.register_urlsource().await {
+        tracing::warn!("⚠️ Failed to register URL source: {}", e);
+    }
+
     // Lister toutes les sources enregistrées
     let sources = server.read().await.list_music_sources().await;
     info!("✅ {} music source(s) registered", sources.len());
