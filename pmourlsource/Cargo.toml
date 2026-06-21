@@ -1,0 +1,15 @@
+[package]
+name = "pmourlsource"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+pmosource = { path = "../pmosource", features = ["server"] }
+pmodidl = { path = "../pmodidl" }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+futures = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip"] }
+url = "2"

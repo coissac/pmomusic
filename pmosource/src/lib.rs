@@ -110,6 +110,9 @@ pub struct SourceCapabilities {
     pub supports_advanced_search: bool,
     /// Supports pagination in browse operations
     pub supports_pagination: bool,
+    /// Handles URL input (http/https) instead of plain text search queries.
+    /// When true, this source is called exclusively for URL-like search inputs.
+    pub handles_url_input: bool,
 }
 
 /// Audio format information
@@ -464,6 +467,18 @@ pub trait MusicSource: Debug + Send + Sync {
         ))
     }
 
+    /// Retourne les métadonnées d'un container (titre, artiste, cover, child_count)
+    /// SANS charger ses enfants — un seul appel API léger.
+    ///
+    /// Utilisé par UrlSource pour afficher un album/playlist en résultat de recherche
+    /// avec les bonnes métadonnées et le bon `class` UPnP, avant que l'utilisateur
+    /// ne navigue dedans ou ne lance la lecture.
+    ///
+    /// L'implémentation par défaut retourne None (non supporté).
+    async fn get_container(&self, _object_id: &str) -> Result<Option<Container>> {
+        Ok(None)
+    }
+
     /// Resolve the actual URI for a track
     ///
     /// This method should return the URI that can be used to stream/download
@@ -650,6 +665,7 @@ pub trait MusicSource: Debug + Send + Sync {
             supports_multiple_formats: false,
             supports_advanced_search: false,
             supports_pagination: false,
+            handles_url_input: false,
         }
     }
 

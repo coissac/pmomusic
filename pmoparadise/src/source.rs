@@ -816,6 +816,7 @@ impl MusicSource for RadioParadiseSource {
             supports_multiple_formats: true,
             supports_advanced_search: false,
             supports_pagination: false,
+            handles_url_input: false,
         }
     }
 
