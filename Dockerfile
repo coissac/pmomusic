@@ -57,6 +57,7 @@ COPY pmoplaylist/ ./pmoplaylist/
 COPY pmoflac/ ./pmoflac/
 COPY pmometadata/ ./pmometadata/
 COPY pmocontrol/ ./pmocontrol/
+COPY pmourlsource/ ./pmourlsource/
 COPY pmoaudio-ext/ ./pmoaudio-ext/
 COPY pmoapp/ ./pmoapp/
 
