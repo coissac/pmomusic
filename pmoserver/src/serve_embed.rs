@@ -50,10 +50,17 @@ impl<E: RustEmbed> ServeEmbed<E> {
 
         for candidate in candidates {
             if let Some(content) = E::get(candidate) {
-                let mime = mime_guess::from_path(candidate).first_or_octet_stream();
+                // mime_guess ne connaît pas .webmanifest (trop récent)
+                let mime = if candidate.ends_with(".webmanifest") {
+                    "application/manifest+json".to_string()
+                } else {
+                    mime_guess::from_path(candidate)
+                        .first_or_octet_stream()
+                        .to_string()
+                };
                 return Some(
                     (
-                        [(header::CONTENT_TYPE, mime.as_ref())],
+                        [(header::CONTENT_TYPE, mime.as_str())],
                         content.data.into_owned(),
                     )
                         .into_response(),
