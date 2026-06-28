@@ -579,6 +579,8 @@ export function useRenderers() {
     volumeUp,
     volumeDown,
     toggleMute,
+    // Selection
+    selectedRendererId,
     // Playlist binding
     attachPlaylist,
     detachPlaylist,

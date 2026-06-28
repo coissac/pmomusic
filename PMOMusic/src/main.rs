@@ -15,14 +15,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // #[cfg(tokio_unstable)]
     // console_subscriber::init();
 
-    let server = Server::create_upnp_server().await?; // Routes personnalisées de l'application
-    server
-        .write()
-        .await
-        .add_route("/info", || async {
-            serde_json::json!({"version": "1.0.0"})
-        })
-        .await;
+    let server = Server::create_upnp_server().await?;
 
     // Initialiser le système de gestion des sources musicales avec API REST
     info!("📡 Initializing music sources management system...");
@@ -90,6 +83,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialiser les ProtocolInfo du MediaServer
     server_instance.init_protocol_info();
+
+    let local_server_id = server_instance.udn().to_string();
+
+    // Exposer les informations de base de l'instance locale
+    {
+        let local_server_id_clone = local_server_id.clone();
+        server
+            .write()
+            .await
+            .add_route("/info", move || {
+                let id = local_server_id_clone.clone();
+                async move { serde_json::json!({"version": "1.0.0", "local_server_id": id}) }
+            })
+            .await;
+    }
 
     info!(
         "✅ MediaServer ready at {}{}",
