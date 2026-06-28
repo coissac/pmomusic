@@ -32,6 +32,15 @@ export default defineConfig({
             purpose: 'any maskable',
           },
         ],
+        share_target: {
+          action: '/app/',
+          method: 'GET',
+          params: {
+            url: 'share_url',
+            title: 'share_title',
+            text: 'share_text',
+          },
+        },
       },
       workbox: {
         navigateFallback: '/app/index.html',

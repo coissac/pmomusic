@@ -172,6 +172,18 @@ export function getSourceImageUrl(sourceId: string): string {
 }
 
 /**
+ * Recherche dans une source musicale (URL, texte libre…)
+ */
+export async function searchSource(sourceId: string, query: string): Promise<BrowseResponse> {
+  const params = new URLSearchParams({ q: query })
+  const response = await fetch(`${API_BASE}/${sourceId}/search?${params.toString()}`)
+  if (!response.ok) {
+    throw new Error(`Search failed: ${response.status} ${response.statusText}`)
+  }
+  return response.json()
+}
+
+/**
  * Récupère les capacités d'une source
  */
 export async function getSourceCapabilities(sourceId: string): Promise<SourceCapabilities> {

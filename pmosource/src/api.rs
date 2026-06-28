@@ -1179,6 +1179,88 @@ async fn unregister_source_handler(Path(id): Path<String>) -> impl IntoResponse 
     }
 }
 
+/// Paramètres pour la recherche dans une source
+#[cfg(feature = "server")]
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+struct SearchParams {
+    /// Texte de recherche (URL ou termes)
+    q: String,
+}
+
+/// Recherche dans une source musicale
+#[cfg(feature = "server")]
+#[utoipa::path(
+    get,
+    path = "/{id}/search",
+    params(
+        ("id" = String, Path, description = "ID de la source"),
+        SearchParams
+    ),
+    responses(
+        (status = 200, description = "Résultats de la recherche", body = SourceBrowseResponse),
+        (status = 404, description = "Source introuvable", body = ErrorResponse),
+        (status = 500, description = "Erreur lors de la recherche", body = ErrorResponse),
+    ),
+    tag = "sources"
+)]
+async fn search_source(
+    Path(id): Path<String>,
+    Query(params): Query<SearchParams>,
+) -> impl IntoResponse {
+    match get_source(&id).await {
+        Some(source) => {
+            let query = crate::SearchQuery {
+                text: params.q,
+                media_type: crate::MediaSearchType::All,
+                scope: crate::SearchScope::Catalog,
+                limit: 50,
+                offset: 0,
+            };
+            match source.search(&query).await {
+                Ok(result) => {
+                    let (containers_raw, items_raw) = match result {
+                        crate::BrowseResult::Containers(c) => (c, Vec::new()),
+                        crate::BrowseResult::Items(i) => (Vec::new(), i),
+                        crate::BrowseResult::Mixed { containers, items } => (containers, items),
+                    };
+                    let containers: Vec<BrowseContainerInfo> =
+                        containers_raw.iter().map(BrowseContainerInfo::from).collect();
+                    let items: Vec<BrowseItemInfo> =
+                        items_raw.iter().map(BrowseItemInfo::from).collect();
+                    let returned_containers = containers.len();
+                    let returned_items = items.len();
+                    let total = returned_containers + returned_items;
+                    let update_id = source.update_id().await;
+                    let response = SourceBrowseResponse {
+                        object_id: source.id().to_string(),
+                        containers,
+                        items,
+                        returned_containers,
+                        returned_items,
+                        total,
+                        update_id,
+                    };
+                    (StatusCode::OK, Json(response)).into_response()
+                }
+                Err(e) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: format!("Search failed: {}", e),
+                    }),
+                )
+                    .into_response(),
+            }
+        }
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Source '{}' not found", id),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 /// Crée le router pour l'API des sources (endpoints de lecture uniquement)
 ///
 /// # Returns
@@ -1216,6 +1298,7 @@ pub fn create_sources_router() -> Router {
         .route("/{id}/cache/status", get(get_source_cache_status))
         .route("/{id}/cache", post(request_source_cache))
         .route("/{id}/formats", get(get_source_formats))
+        .route("/{id}/search", get(search_source))
 }
 
 /// Structure pour la documentation OpenAPI de base

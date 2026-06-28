@@ -10,7 +10,17 @@
 </template>
 
 <script setup lang="ts">
+import { watch } from 'vue'
 import NotificationToast from '@/components/NotificationToast.vue'
+import { useShareTarget } from '@/composables/useShareTarget'
+import { useUIStore } from '@/stores/ui'
+
+const ui = useUIStore()
+const { shareError } = useShareTarget()
+
+watch(shareError, (err) => {
+  if (err) ui.notifyError(err)
+})
 </script>
 
 <style scoped>
