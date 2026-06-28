@@ -1,6 +1,6 @@
 [package]
 name = "PMOMusic"
-version = "0.3.56"
+version = "0.3.59"
 edition = "2024"
 
 [dependencies]
