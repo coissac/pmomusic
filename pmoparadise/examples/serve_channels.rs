@@ -26,7 +26,7 @@ use pmoaudiocache::{
     register_audio_cache as register_global_audio_cache,
 };
 use pmocovers::{new_cache_with_consolidation as new_cover_cache, register_cover_cache};
-use pmoparadise::{channels::ALL_CHANNELS, ParadiseChannelManager, ParadiseHistoryBuilder};
+use pmoparadise::{channels::channels, ParadiseChannelManager, ParadiseHistoryBuilder};
 use pmoplaylist::register_audio_cache as register_playlist_audio_cache;
 use pmoserver::{init_logging, ServerBuilder};
 use tokio_util::io::ReaderStream;
@@ -80,8 +80,8 @@ async fn main() -> anyhow::Result<()> {
 
     let mut server = ServerBuilder::new("RadioParadiseChannels", "http://localhost", 8080).build();
 
-    for descriptor in ALL_CHANNELS.iter() {
-        let slug = descriptor.slug;
+    for descriptor in channels().iter() {
+        let slug = descriptor.slug.as_str();
         let flac_path = format!("/radioparadise/stream/{}/flac", slug);
         let ogg_path = format!("/radioparadise/stream/{}/ogg", slug);
         let icy_path = format!("/radioparadise/stream/{}/icy", slug);
@@ -161,7 +161,7 @@ async fn main() -> anyhow::Result<()> {
     info!("========================================");
     info!("Radio Paradise streaming server running on http://localhost:8080");
     info!("Available channels:");
-    for descriptor in ALL_CHANNELS.iter() {
+    for descriptor in channels().iter() {
         info!(
             "  {}: /radioparadise/stream/{}/flac (also /ogg, /icy, metadata, /historic/<client_id>/(flac|ogg))",
             descriptor.display_name, descriptor.slug
@@ -177,7 +177,7 @@ async fn main() -> anyhow::Result<()> {
 
 async fn stream_flac(
     manager: Arc<ParadiseChannelManager>,
-    channel_id: u8,
+    channel_id: u16,
 ) -> Result<Response, StatusCode> {
     let channel = manager.get(channel_id).ok_or(StatusCode::NOT_FOUND)?;
     let stream = channel.subscribe_flac();
@@ -193,7 +193,7 @@ async fn stream_flac(
 
 async fn stream_ogg(
     manager: Arc<ParadiseChannelManager>,
-    channel_id: u8,
+    channel_id: u16,
 ) -> Result<Response, StatusCode> {
     let channel = manager.get(channel_id).ok_or(StatusCode::NOT_FOUND)?;
     let stream = channel.subscribe_ogg();
@@ -209,7 +209,7 @@ async fn stream_ogg(
 
 async fn stream_icy(
     manager: Arc<ParadiseChannelManager>,
-    channel_id: u8,
+    channel_id: u16,
 ) -> Result<Response, StatusCode> {
     let channel = manager.get(channel_id).ok_or(StatusCode::NOT_FOUND)?;
     let stream = channel.subscribe_icy();
@@ -226,7 +226,7 @@ async fn stream_icy(
 
 async fn get_metadata(
     manager: Arc<ParadiseChannelManager>,
-    channel_id: u8,
+    channel_id: u16,
 ) -> Result<impl IntoResponse, StatusCode> {
     let channel = manager.get(channel_id).ok_or(StatusCode::NOT_FOUND)?;
     let metadata = channel.metadata().await;
@@ -235,7 +235,7 @@ async fn get_metadata(
 
 async fn stream_history_flac(
     manager: Arc<ParadiseChannelManager>,
-    channel_id: u8,
+    channel_id: u16,
     client_id: String,
 ) -> Result<Response, StatusCode> {
     let channel = manager.get(channel_id).ok_or(StatusCode::NOT_FOUND)?;
@@ -258,7 +258,7 @@ async fn stream_history_flac(
 
 async fn stream_history_ogg(
     manager: Arc<ParadiseChannelManager>,
-    channel_id: u8,
+    channel_id: u16,
     client_id: String,
 ) -> Result<Response, StatusCode> {
     let channel = manager.get(channel_id).ok_or(StatusCode::NOT_FOUND)?;

@@ -74,7 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
-    let channel_id: u8 = match args[1].parse() {
+    let channel_id: u16 = match args[1].parse() {
         Ok(id) if id <= 3 => id,
         _ => {
             eprintln!("Error: channel_id must be a number between 0 and 3");

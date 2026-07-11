@@ -21,7 +21,10 @@
 //! }
 //! ```
 
-use crate::{channels::ParadiseChannelKind, client::DEFAULT_CHANNEL};
+use crate::{
+    channels::{channel_by_id, resolve_channel},
+    client::DEFAULT_CHANNEL,
+};
 use anyhow::Result;
 use pmoconfig::Config;
 use serde_yaml::Value;
@@ -94,11 +97,10 @@ pub trait RadioParadiseConfigExt {
     ///
     /// # Channels disponibles
     ///
-    /// Peut être configuré comme chaîne de caractères ou nombre :
-    /// - "main" ou 0 = Main Mix (eclectic, diverse mix)
-    /// - "mellow" ou 1 = Mellow Mix (smooth, chilled music)
-    /// - "rock" ou 2 = Rock Mix (classic & modern rock)
-    /// - "eclectic" ou 3 = Eclectic Mix (global sounds)
+    /// Peut être configuré comme chaîne de caractères (slug) ou nombre (ID).
+    /// La liste des canaux est dynamique (voir `channels::channels()`) :
+    /// par exemple "main"/0, "mellow"/1, "rock"/2, "eclectic"/3, "beyond"/5,
+    /// "serenity"/42, "kfat"/945.
     ///
     /// # Exemple de configuration YAML
     ///
@@ -114,13 +116,13 @@ pub trait RadioParadiseConfigExt {
     /// let channel = config.get_paradise_default_channel()?;
     /// let client = RadioParadiseClient::builder().channel(channel).build().await?;
     /// ```
-    fn get_paradise_default_channel(&self) -> Result<u8>;
+    fn get_paradise_default_channel(&self) -> Result<u16>;
 
     /// Définit le channel par défaut
     ///
     /// # Arguments
     ///
-    /// * `channel` - Le channel (0-3)
+    /// * `channel` - L'ID du channel (doit exister dans le registre de canaux)
     ///
     /// La valeur est stockée sous forme de nom convivial ("main", "mellow", etc.)
     /// dans le fichier de configuration.
@@ -128,14 +130,10 @@ pub trait RadioParadiseConfigExt {
     /// # Exemple
     ///
     /// ```rust,ignore
-    /// use pmoparadise::channels::ParadiseChannelKind;
-    ///
     /// // Use Mellow Mix by default
-    /// config.set_paradise_default_channel(ParadiseChannelKind::Mellow.id())?;
-    /// // Or simply:
     /// config.set_paradise_default_channel(1)?;
     /// ```
-    fn set_paradise_default_channel(&self, channel: u8) -> Result<()>;
+    fn set_paradise_default_channel(&self, channel: u16) -> Result<()>;
 }
 
 impl RadioParadiseConfigExt for Config {
@@ -157,13 +155,13 @@ impl RadioParadiseConfigExt for Config {
         )
     }
 
-    fn get_paradise_default_channel(&self) -> Result<u8> {
+    fn get_paradise_default_channel(&self) -> Result<u16> {
         match self.get_value(&["sources", "radio_paradise", "default_channel"]) {
             Ok(Value::String(s)) => {
-                // Try to parse as channel name (e.g., "main", "mellow", etc.)
-                match s.parse::<ParadiseChannelKind>() {
-                    Ok(kind) => Ok(kind.id()),
-                    Err(_) => {
+                // Slug ("main", "mellow", ...) ou ID numérique en chaîne
+                match resolve_channel(&s) {
+                    Some(descriptor) => Ok(descriptor.id),
+                    None => {
                         // Invalid channel name, use default
                         self.set_paradise_default_channel(DEFAULT_CHANNEL)?;
                         Ok(DEFAULT_CHANNEL)
@@ -171,19 +169,18 @@ impl RadioParadiseConfigExt for Config {
                 }
             }
             Ok(Value::Number(n)) => {
-                // Accept numeric channel ID (0-3)
-                if let Some(ch) = n.as_u64() {
-                    if ch <= 3 {
-                        Ok(ch as u8)
-                    } else {
+                // Accept numeric channel ID (must exist in the registry)
+                match n
+                    .as_u64()
+                    .and_then(|ch| u16::try_from(ch).ok())
+                    .and_then(channel_by_id)
+                {
+                    Some(descriptor) => Ok(descriptor.id),
+                    None => {
                         // Invalid channel number, use default
                         self.set_paradise_default_channel(DEFAULT_CHANNEL)?;
                         Ok(DEFAULT_CHANNEL)
                     }
-                } else {
-                    // Not a valid number, use default
-                    self.set_paradise_default_channel(DEFAULT_CHANNEL)?;
-                    Ok(DEFAULT_CHANNEL)
                 }
             }
             _ => {
@@ -197,19 +194,14 @@ impl RadioParadiseConfigExt for Config {
         }
     }
 
-    fn set_paradise_default_channel(&self, channel: u8) -> Result<()> {
-        // Convert channel ID to user-friendly string name
-        let channel_name = match channel {
-            0 => "main",
-            1 => "mellow",
-            2 => "rock",
-            3 => "eclectic",
-            _ => return Err(anyhow::anyhow!("Invalid channel ID: {}", channel)),
-        };
+    fn set_paradise_default_channel(&self, channel: u16) -> Result<()> {
+        // Convert channel ID to user-friendly slug
+        let descriptor = channel_by_id(channel)
+            .ok_or_else(|| anyhow::anyhow!("Invalid channel ID: {}", channel))?;
 
         self.set_value(
             &["sources", "radio_paradise", "default_channel"],
-            Value::String(channel_name.to_string()),
+            Value::String(descriptor.slug),
         )
     }
 }
